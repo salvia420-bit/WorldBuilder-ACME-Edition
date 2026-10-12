@@ -15,7 +15,7 @@
 import { buildObservation } from "./observe.js";
 import { validateAction, executePlan } from "./actions.js";
 import { sanitizeAction, guardPlan } from "./safety.js";
-import { isOperatorStopLatched } from "./operator_stop.js";
+import { isOperatorStopLatched, isBotOperatorStopped } from "./operator_stop.js";
 import { enrichObservation } from "./observe_ext.js";
 import { assembleObservation } from "./observe_assemble.js";
 import { KnowledgeBase, FileKnowledgeProvider, registerKnowledge } from "./tools/knowledge.js";
@@ -604,10 +604,20 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     try {
       const combat = b?.kernel?.combat;
       if (combat) {
+        // 2026-10-12: an ENABLED combat loop can still be parked (no war
+        // spell / no usable combat mode — combat_loop status.incapable); say
+        // so, or "Hunting: ON" reads as "will fight" when it won't.
+        let parked = null;
+        try {
+          const r = combat.status?.incapable;
+          parked = typeof r === "string" && r ? r : null;
+        } catch { parked = null; }
         statusLines.push(
           combat.enabled === false
             ? "  Hunting: OFF (combat kernel standing down — hunt_start to resume)"
-            : "  Hunting: ON (combat kernel engages attackables — hunt_stop to stand down)"
+            : parked
+              ? `  Hunting: ON but STOOD DOWN (${parked}) — the kernel cannot fight right now`
+              : "  Hunting: ON (combat kernel engages attackables — hunt_stop to stand down)"
         );
       }
     } catch { /* defensive read only */ }
@@ -1009,8 +1019,16 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
         // absent in bare/unit-test bots, so an unwired director never blocks
         // execution here (matches guardPlan's fail-open-on-absent-surface
         // pattern elsewhere in this file).
+        // 2026-10-12: the bot-wide operator stop (OperatorControl / `!bot
+        // pause` kernel hold) aborts the rest of a plan too — the HUD's STOP
+        // pressed mid-plan must not let a queued goto/use walk the character.
         let stopped = false;
-        try { stopped = isOperatorStopLatched() || b?.ai?.director?.enabled === false; } catch { stopped = false; }
+        try {
+          stopped =
+            isOperatorStopLatched() ||
+            isBotOperatorStopped(b) || // control / hold / this character's latch only (review #4, review-2 #5)
+            b?.ai?.director?.enabled === false;
+        } catch { stopped = false; }
         if (stopped) {
           results.push({ type: a?.type ?? "?", ok: false, error: "aborted: operator stop" });
           continue;

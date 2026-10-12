@@ -126,15 +126,27 @@ export class HealReflex {
     this._parkedUntil = 0;
   }
 
-  /** Raw playerStats() snapshot (vitals.js's own read path) or null. */
+  /** Raw playerStats() stride arrays (vitals.js's own read path), copied out
+   *  of the wasm box and the box freed (2026-10-12: two unfreed boxes per
+   *  step before). Cached for the duration of one step() (`_statsMemo`). */
   _stats() {
+    if (this._statsMemo !== undefined) return this._statsMemo;
+    let ps = null;
+    let out = null;
     try {
       const s = this.host?.s;
-      if (!s || typeof s.playerStats !== "function") return null;
-      return s.playerStats() || null;
+      if (s && typeof s.playerStats === "function") {
+        ps = s.playerStats();
+        if (ps) out = { vitals: Array.from(ps.vitals || [], Number), skills: Array.from(ps.skills || [], Number) };
+      }
     } catch {
-      return null;
+      out = null;
+    } finally {
+      try {
+        ps?.free?.();
+      } catch { /* already freed */ }
     }
+    return out;
   }
 
   _defaultSkillOk() {
@@ -239,6 +251,8 @@ export class HealReflex {
     try {
       if (!this.cfg.enabled) return { acted: false, reason: "disabled" };
       if (inCombat) return { acted: false, reason: "combat-lock" };
+      this._statsMemo = undefined;
+      this._statsMemo = this._stats(); // one wasm stats read per step (cleared in finally)
 
       const hp = this._hpPct();
       if (hp == null) return { acted: false, reason: "hp-unknown" };
@@ -251,25 +265,28 @@ export class HealReflex {
       if (now - this.lastUseAt < this.cfg.cooldownMs) return { acted: false, reason: "cooldown" };
 
       const h = this.host;
+      const rows = (typeof h?.TryGetPlayerInventory === "function" ? h.TryGetPlayerInventory() : null) || [];
+      if (!rows.length) return { acted: false, reason: "no-inventory" };
+
       // C3 shared serializer: a kit/food use occupies the same busy/cast-
       // resolution window a spell gesture does — claim the token vitals.js/
       // buff_loop.js already use before CastSpell, so an in-flight vitals or
       // buff cast is never stomped by a consumable use this tick. Degrade
       // open if the host predates the token (mirrors vitals.js/buff_loop.js).
-      if (typeof h?.tryClaimCast === "function" && !h.tryClaimCast("heal_reflex")) {
-        return { acted: false, reason: "cast-claimed" };
-      }
-
-      const rows = (typeof h?.TryGetPlayerInventory === "function" ? h.TryGetPlayerInventory() : null) || [];
-      if (!rows.length) return { acted: false, reason: "no-inventory" };
+      // Claimed only once there is something to use (2026-10-12): claiming
+      // first held the token for its full timeout on every empty-pack tick,
+      // blocking every other caster for nothing. Released if the send fails.
+      const claim = () => typeof h?.tryClaimCast !== "function" || h.tryClaimCast("heal_reflex");
+      const unclaim = () => { if (typeof h?.releaseCast === "function") h.releaseCast("heal_reflex"); };
 
       // Best kit first (skill-gated), else food.
       const kit = this._bestKit(rows);
       if (kit && this.skillOk(h, kit)) {
         const self = (typeof h?.GetPlayerId === "function" ? h.GetPlayerId() : 0) >>> 0;
         if (typeof h?.UseItemOnTarget !== "function") return { acted: false, reason: "unavailable" };
+        if (!claim()) return { acted: false, reason: "cast-claimed" };
         const ok = h.UseItemOnTarget((kit.guid ?? 0) >>> 0, self);
-        if (!ok) return { acted: false, reason: "kit-send-failed" };
+        if (!ok) { unclaim(); return { acted: false, reason: "kit-send-failed" }; }
         this.lastUseAt = now;
         this.uses += 1;
         this.lastAction = "kit";
@@ -281,8 +298,9 @@ export class HealReflex {
       const food = this._firstFood(rows);
       if (food) {
         if (typeof h?.UseObject !== "function") return { acted: false, reason: "unavailable" };
+        if (!claim()) return { acted: false, reason: "cast-claimed" };
         const ok = h.UseObject((food.guid ?? 0) >>> 0);
-        if (!ok) return { acted: false, reason: "food-send-failed" };
+        if (!ok) { unclaim(); return { acted: false, reason: "food-send-failed" }; }
         this.lastUseAt = now;
         this.uses += 1;
         this.lastAction = "food";
@@ -294,6 +312,8 @@ export class HealReflex {
       return { acted: false, reason: "no-consumable" };
     } catch (e) {
       return { acted: false, reason: "error", error: String((e && e.message) || e) };
+    } finally {
+      this._statsMemo = undefined; // direct _hpPct()/_defaultSkillOk() calls read fresh
     }
   }
 

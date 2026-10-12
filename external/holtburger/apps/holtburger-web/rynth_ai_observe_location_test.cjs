@@ -267,6 +267,11 @@ function check(name, ok, detail) {
     bot.kernel.combat.enabled = false;
     const oOff = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
     check("Hunting: OFF rendered when combat.enabled is false", /  Hunting: OFF \(combat kernel standing down/.test(oOff.text), (oOff.text.match(/  Hunting:.*/) || [])[0]);
+
+    // 2026-10-12: enabled but parked (combat_loop status.incapable)
+    bot.kernel.combat = { enabled: true, status: { incapable: "no war spell known" } };
+    const oPark = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("Hunting: ON but STOOD DOWN names the reason", /  Hunting: ON but STOOD DOWN \(no war spell known\)/.test(oPark.text), (oPark.text.match(/  Hunting:.*/) || [])[0]);
   }
 
   // ── MOVEMENT-dead status line (2026-07-21 scope item 3) ───────────────────

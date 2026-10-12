@@ -742,6 +742,136 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("recall: spell not known -> honest recall-unavailable failure (NOT a portal-entity message)",
       r.ok === false && r.reason === "recall-unavailable" && /Lifestone Sending/.test(r.error) && !/portal entity/.test(r.error), JSON.stringify(r));
   }
+  // 2026-10-12: ACE casts an untargeted spell only in Magic mode
+  // (Player_Magic.cs:275). attemptRecallCast enters Magic explicitly first,
+  // and takes the shared cast token around the cast.
+  {
+    const FARLB = 0x40400001;
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, mode: 1, order: [], token: null };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => state.mode,
+      ChangeCombatMode: (m) => { state.order.push(`mode:${m}`); setTimeout(() => { state.mode = m; }, 3); return true; },
+      tryClaimCast: (o) => { if (state.token && state.token !== o) return false; state.token = o; state.order.push(`claim:${o}`); return true; },
+      releaseCast: (o) => { if (state.token === o) { state.token = null; state.order.push(`release:${o}`); } },
+      CastSpell: (t, id) => { state.order.push(`cast:${t}:${id}`); setTimeout(() => { state.pose = { objCellId: FARLB, x: 5, y: 5, z: 0 }; }, 4); return true; },
+    };
+    const r = await mod.attemptRecallCast({ host }, { meta: { spellId: 1636, spellName: "Lifestone Sending" } },
+      { poseTimeoutMs: 50, posePollMs: 2, recallTeleportMs: 300, teleportPollMs: 2, portalJumpM: 30, magicModeTimeoutMs: 200 });
+    check("recall: NonCombat -> ChangeCombatMode(8) before the cast -> teleport ok", r.ok === true, JSON.stringify({ r, order: state.order }));
+    check("recall: order = mode:8, claim, cast(untargeted), release",
+      state.order.join(",") === "mode:8,claim:recall,cast:0:1636,release:recall", state.order.join(","));
+  }
+  {
+    // A character that cannot enter Magic (no caster wielded): honest failure, no cast sent.
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, casts: 0, modeAsks: 0 };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => 1,
+      ChangeCombatMode: () => { state.modeAsks += 1; return true; },
+      CastSpell: () => { state.casts += 1; return true; },
+    };
+    const t0 = Date.now();
+    const r = await mod.attemptRecallCast({ host }, { meta: { spellId: 1636, spellName: "Lifestone Sending" } },
+      { poseTimeoutMs: 50, posePollMs: 2, recallTeleportMs: 300, teleportPollMs: 2, portalJumpM: 30, magicModeTimeoutMs: 30 });
+    check("recall: no Magic mode -> recall-unavailable naming Magic mode, no cast",
+      r.ok === false && r.reason === "recall-unavailable" && /Magic mode/.test(r.error) && state.casts === 0 && state.modeAsks === 1, JSON.stringify({ r, state }));
+    check("recall: mode wait bounded by magicModeTimeoutMs", Date.now() - t0 < 1000, `${Date.now() - t0}ms`);
+  }
+
+  // 2026-10-12 (second review #7): a recall called off while it waits (the
+  // Magic-mode wait, the cast-token wait) never fires — operator STOP / a
+  // cancelled route / an unwedge recovery that was handed back.
+  {
+    // Aborted during the Magic-mode wait: no cast, aborted:true.
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, casts: 0, polls: 0 };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => { state.polls += 1; return 1; }, // never reaches Magic
+      ChangeCombatMode: () => true,
+      CastSpell: () => { state.casts += 1; return true; },
+    };
+    let abort = false;
+    setTimeout(() => { abort = true; }, 15);
+    const r = await mod.attemptRecallCast({ host, isAborted: () => abort }, { meta: { spellId: 1636, spellName: "Lifestone Sending" } },
+      { poseTimeoutMs: 50, posePollMs: 2, recallTeleportMs: 300, teleportPollMs: 2, portalJumpM: 30, magicModeTimeoutMs: 5000 });
+    check("recall abort: cancelled during the Magic-mode wait -> aborted, no cast",
+      r.ok === false && r.aborted === true && r.reason === "aborted" && state.casts === 0, JSON.stringify({ r, casts: state.casts }));
+  }
+  {
+    // Aborted during the token wait (vitals holds it): no cast, no token taken.
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, casts: 0, releases: 0 };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => 8,
+      ChangeCombatMode: () => true,
+      tryClaimCast: () => false, // another caster owns the token
+      releaseCast: () => { state.releases += 1; },
+      CastSpell: () => { state.casts += 1; return true; },
+    };
+    let abort = false;
+    setTimeout(() => { abort = true; }, 15);
+    const t0 = Date.now();
+    const r = await mod.attemptRecallCast({ host, isAborted: () => abort }, { meta: { spellId: 1636, spellName: "Lifestone Sending" } },
+      { poseTimeoutMs: 50, posePollMs: 2, recallTeleportMs: 300, teleportPollMs: 2, portalJumpM: 30, castTokenWaitMs: 5000 });
+    check("recall abort: cancelled during the token wait -> aborted, no cast, returns promptly",
+      r.aborted === true && state.casts === 0 && Date.now() - t0 < 1000, JSON.stringify({ r, casts: state.casts, ms: Date.now() - t0 }));
+  }
+  {
+    // Aborted right after the token was claimed: no cast, the token is released.
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, casts: 0, token: null, released: 0 };
+    let abort = false;
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => 8,
+      tryClaimCast: (o) => { state.token = o; abort = true; return true; }, // the STOP lands as we claim
+      releaseCast: (o) => { if (state.token === o) { state.token = null; state.released += 1; } },
+      CastSpell: () => { state.casts += 1; return true; },
+    };
+    const r = await mod.attemptRecallCast({ host, isAborted: () => abort }, { meta: { spellId: 1636, spellName: "Lifestone Sending" } },
+      { poseTimeoutMs: 50, posePollMs: 2, recallTeleportMs: 300, teleportPollMs: 2, portalJumpM: 30 });
+    check("recall abort: after the claim -> aborted, no cast, token released",
+      r.aborted === true && state.casts === 0 && state.released === 1 && state.token === null, JSON.stringify({ r, state }));
+  }
+  {
+    // replayRoute: the route is cancel()led while its recall leg waits -> CANCELLED, no cast.
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 }, casts: 0 };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      GetCurrentCombatMode: () => 8,
+      tryClaimCast: () => false, // stuck waiting for the token…
+      CastSpell: () => { state.casts += 1; return true; },
+    };
+    const meta = { navType: "rcl", spellId: 1636, spellName: "Lifestone Sending" };
+    const legs = [{ lb: 0x05050001, x: 40, y: 40, z: 0, portal: true, meta }, { lb: 0x40400001, x: 5, y: 5, z: 0 }];
+    let routerState = "FAILED";
+    let failedOnce = false;
+    const router = {
+      seamJumpM: 30,
+      follow() {},
+      cancel() { routerState = "IDLE"; },
+      get status() {
+        if (!failedOnce) { failedOnce = true; return { state: "FAILED", leg: 0, walked: 0, portalBlocked: true }; }
+        return { state: routerState, leg: 0, walked: 0, portalBlocked: true };
+      },
+    };
+    setTimeout(() => router.cancel(), 20); // …when the operator presses STOP
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, castTokenWaitMs: 5000, recallTeleportMs: 300 });
+    check("recall abort: replayRoute cancelled mid-recall -> CANCELLED, no cast",
+      r.ok === false && r.state === "CANCELLED" && state.casts === 0, JSON.stringify({ r, casts: state.casts }));
+  }
 
   // ── jmp legs: jump-primitive replay (2026-07-21, DESIGN-jump-primitive
   // Phase 1) ───────────────────────────────────────────────────────────────
@@ -1175,17 +1305,19 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     // within DOOR_RETRY_RANGE_M -> opened, then the SAME edge is re-walked
     // (no detour exists) and succeeds.
     {
-      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 } };
+      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 }, doorOpen: false };
       const host = {
         TryGetPlayerPose: () => state.pose,
         s: { getCurrentCellId: () => state.pose.objCellId >>> 0 },
         calls: [],
         NearbyGuids: () => [DOOR_GUID],
         TryGetObjectDescFlags: (g) => (g === DOOR_GUID ? 0x1000 : 0),
-        TryGetObjectState: () => 0, // NOT ethereal -> closed
+        // Closed until used; ACE's open echo sets Ethereal (attemptDoorOpen
+        // now waits for it, 2026-10-12).
+        TryGetObjectState: (g) => (g === DOOR_GUID && state.doorOpen ? 0x4 : 0),
         TryGetObjectPosition: () => ({ objCellId: DA, x: 12, y: 10, z: 0 }), // ~2m from pose
         TryGetObjectName: (g) => (g === DOOR_GUID ? "Rusty Gate" : "?"),
-        UseObject: (g) => { host.calls.push(["use", g >>> 0]); return true; },
+        UseObject: (g) => { host.calls.push(["use", g >>> 0]); if (g === DOOR_GUID) setTimeout(() => { state.doorOpen = true; }, 3); return true; },
       };
       const walkCalls = [];
       const walk = async (rlegs, o = {}) => {
@@ -1202,6 +1334,35 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
       check("door-recovery: closed door opened -> same-edge retry succeeds", r.ok === true && r.state === "DONE", JSON.stringify(r));
       check("door-recovery: exactly 2 walk attempts (no detour, edge never excluded)", walkCalls.length === 2, JSON.stringify(walkCalls));
       check("door-recovery: UseObject called on the door guid", host.calls.some((c) => c[0] === "use" && c[1] === DOOR_GUID), JSON.stringify(host.calls));
+    }
+
+    // 2026-10-12: a door that NEVER reports open (locked / out of reach) is
+    // not "opened" — the ladder must not spend its attempts re-using it; the
+    // edge gets excluded and the recovery fails honestly (no detour here).
+    {
+      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 } };
+      const host = {
+        TryGetPlayerPose: () => state.pose,
+        s: { getCurrentCellId: () => state.pose.objCellId >>> 0 },
+        calls: [],
+        NearbyGuids: () => [DOOR_GUID],
+        TryGetObjectDescFlags: (g) => (g === DOOR_GUID ? 0x1000 : 0),
+        TryGetObjectState: () => 0, // stays shut whatever we do
+        TryGetObjectPosition: () => ({ objCellId: DA, x: 12, y: 10, z: 0 }),
+        TryGetObjectName: (g) => (g === DOOR_GUID ? "Locked Gate" : "?"),
+        UseObject: (g) => { host.calls.push(["use", g >>> 0]); return true; },
+      };
+      const walkCalls = [];
+      const walk = async (rlegs, o = {}) => { walkCalls.push(o.label); return { ok: false, state: "FAILED", legsWalked: 1 }; };
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? singleEdge() : null);
+      let q = [];
+      const script3 = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+      const router = { seamJumpM: 30, follow() { q = (script3.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const t0 = Date.now();
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2, doorOpenTimeoutMs: 40 });
+      check("door-recovery: never-opening door -> honest unreachable failure (edge excluded)", r.ok === false && /indoor re-path: unreachable/.test(r.error || ""), JSON.stringify(r));
+      check("door-recovery: never-opening door used once, not once per attempt", host.calls.filter((c) => c[0] === "use").length === 1, JSON.stringify(host.calls));
+      check("door-recovery: the confirm wait is bounded by doorOpenTimeoutMs", Date.now() - t0 < 2000, `${Date.now() - t0}ms`);
     }
 
     // An OPEN (ethereal) door in range must NOT be re-used; with no detour

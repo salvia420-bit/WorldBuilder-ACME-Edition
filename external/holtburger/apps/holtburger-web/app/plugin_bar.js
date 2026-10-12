@@ -149,12 +149,47 @@ export async function initPluginBar(D) {
   // BAR_SLOT_ORDER between `examine-target` and `combat-bar`.
   const AD_HOC_BAR_SLOTS = [
     {
+      // 2026-10-12: the RynthSuite HUD (plugins/rynth-hud.js — its own
+      // manifest, iconHidden; its launcher rides the toolbar). This slot
+      // stays as the plugin-bar route to the same window: clicking it
+      // opens the HUD and shows a one-line status + toggle.
       id: "rynthsuite",
       name: "RynthSuite",
       icon: "⚒",
-      panelBody:
-        "RynthSuite grind bot — boot with ?bot=1 (add ?aiPanel=1 for the AI director UI). " +
-        "Console: window.__bot.kernel.status / window.rynthAI.status(). In-game: !bot help.",
+      activate: (bodyEl) => {
+        bodyEl.innerHTML = "";
+        const status = document.createElement("div");
+        status.style.cssText = "margin-bottom:8px;color:var(--hb-text-cream,#fff);";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.style.cssText = "padding:6px 12px;background:rgba(120,84,32,0.5);color:#fff;border:1px solid #8a7544;border-radius:3px;cursor:pointer;font-family:inherit;";
+        const note = document.createElement("div");
+        note.style.cssText = "margin-top:8px;font-size:10px;color:rgba(255,255,255,0.55);font-style:italic;";
+        note.textContent = "Also: the ⚒ button beside the toolbar, or Shift+F12.";
+        const hudOpen = () => document.getElementById("hb-rynth-hud")?.dataset?.open === "1";
+        const refresh = () => {
+          if (typeof window.__toggleRynthHud !== "function") {
+            status.textContent = "RynthSuite HUD is disabled (?rynthHud=off) or still loading.";
+            btn.disabled = true;
+            btn.textContent = "Open RynthSuite";
+            return;
+          }
+          btn.disabled = false;
+          status.textContent = window.__bot
+            ? "RynthSuite bot is loaded on this character."
+            : "RynthSuite bot is not started — use START in the HUD.";
+          btn.textContent = hudOpen() ? "Close RynthSuite HUD" : "Open RynthSuite HUD";
+        };
+        btn.addEventListener("click", () => {
+          try { window.__toggleRynthHud?.(); } catch (_) {}
+          refresh();
+        });
+        try { window.__openRynthHud?.(); } catch (_) {}
+        bodyEl.appendChild(status);
+        bodyEl.appendChild(btn);
+        bodyEl.appendChild(note);
+        refresh();
+      },
     },
     {
       // Task C v2 (2026-07-02, user request): the spellbook lives in
@@ -535,6 +570,8 @@ export async function initPluginBar(D) {
     // their toggle globals (same pattern as spell-research above).
     "social-panel": () => window.__toggleSocialPanel?.(),
     "house-panel": () => window.__toggleHousePanel?.(),
+    // RynthSuite HUD (Shift+F12) — a standalone floaty, not a main-panel view.
+    "rynth-hud": () => window.__toggleRynthHud?.(),
     // BAND-B S3 (2026-06-17): F11 (train-skills manifest hotkey) opens the
     // SHARED character pane at the Skills tab instead of the retired
     // standalone view. showView (NOT toggleView) — toggleView would CLOSE

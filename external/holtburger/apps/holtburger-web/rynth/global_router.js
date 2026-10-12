@@ -36,6 +36,9 @@
 //   re-follows; portal-skipped stale legs don't inflate it.
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8767";
+// Per sidecar request: a Detour query plus the portal Dijkstra answers in well
+// under a second on the live bake; 20 s only catches a wedged sidecar.
+const REQUEST_TIMEOUT_MS = 20_000;
 
 // Off-mesh classification (2026-07-24, stream-soak diagnosis): a plan is
 // "off-mesh" — the GOAL cannot be cleanly reached over the navmesh — when the
@@ -57,6 +60,8 @@ function classifyOffMesh({ coverage, stitchedLegs, partial, legCount }) {
 // copy now lives in nav_frame.js (avoid circles are placed at a blocked leg's
 // world pose). C3 Stage-0 dedup.
 import { worldXY } from "./nav_frame.js";
+// Portal-space hold liveness for the walk poll's stall deadline (router.js).
+import { holdIsAlive } from "./portal_gate.js";
 
 // Two plans are "identical" (=> a v1 sidecar ignored our "avoid") when they have
 // the same leg count and each leg's lb + x/y agree within epsilon. Used to abort
@@ -72,9 +77,10 @@ function plansIdentical(a, b, eps = 0.5) {
 
 export class GlobalRouter {
   /** @param host RynthWebHost (pose source); opts { endpoint, log } */
-  constructor(host, { endpoint = DEFAULT_ENDPOINT, log, onPlan } = {}) {
+  constructor(host, { endpoint = DEFAULT_ENDPOINT, log, onPlan, requestTimeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     this.host = host;
     this.endpoint = endpoint.replace(/\/+$/, "");
+    this.requestTimeoutMs = requestTimeoutMs; // per sidecar request (0 = none)
     this.log = log || ((m) => console.log(`[gnav] ${m}`));
     this._active = false; // the one-goto-at-a-time busy latch
     // Optional per-plan hook: called once per accepted plan with
@@ -89,10 +95,29 @@ export class GlobalRouter {
     return this._active;
   }
 
-  /** GET /health -> {ok, tiles, portals} (throws on network failure). */
+  /** GET /health -> {ok, tiles, portals} (throws on network failure or on
+   *  the request timeout). */
   async health() {
-    const r = await fetch(`${this.endpoint}/health`);
-    return r.json();
+    return this._withTimeout(async (signal) => {
+      const r = await fetch(`${this.endpoint}/health`, signal ? { signal } : undefined);
+      return r.json();
+    });
+  }
+
+  /** Run `fn(signal)` under an abort deadline of this.requestTimeoutMs
+   *  (2026-10-12 review: route() had none — a sidecar that accepted the
+   *  connection but never answered left goto() awaiting forever with the busy
+   *  latch set and the kernel stopped, so every later goto was refused and the
+   *  bot stood still until a reload). The deadline covers the body read too. */
+  async _withTimeout(fn) {
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const ms = this.requestTimeoutMs;
+    const timer = ctl && ms > 0 ? setTimeout(() => ctl.abort(), ms) : null;
+    try {
+      return await fn(ctl ? ctl.signal : undefined);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -109,24 +134,30 @@ export class GlobalRouter {
       to,
     };
     if (Array.isArray(avoid) && avoid.length) body.avoid = avoid;
-    let r;
-    try {
-      r = await fetch(`${this.endpoint}/route`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      // In-page this is usually the sidecar being down (or CORS, if the
-      // sidecar ever stops sending its Access-Control-* headers).
-      return { ok: false, error: `sidecar unreachable at ${this.endpoint} (${e.message})` };
-    }
-    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-    try {
-      return await r.json();
-    } catch (e) {
-      return { ok: false, error: `bad JSON from sidecar (${e.message})` };
-    }
+    const timedOut = (e) => e && (e.name === "AbortError" || e.name === "TimeoutError");
+    return this._withTimeout(async (signal) => {
+      let r;
+      try {
+        r = await fetch(`${this.endpoint}/route`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          ...(signal ? { signal } : {}),
+        });
+      } catch (e) {
+        if (timedOut(e)) return { ok: false, error: `sidecar timed out after ${this.requestTimeoutMs}ms at ${this.endpoint}` };
+        // In-page this is usually the sidecar being down (or CORS, if the
+        // sidecar ever stops sending its Access-Control-* headers).
+        return { ok: false, error: `sidecar unreachable at ${this.endpoint} (${e.message})` };
+      }
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+      try {
+        return await r.json();
+      } catch (e) {
+        if (timedOut(e)) return { ok: false, error: `sidecar timed out after ${this.requestTimeoutMs}ms at ${this.endpoint}` };
+        return { ok: false, error: `bad JSON from sidecar (${e.message})` };
+      }
+    });
   }
 
   /** Wait up to timeoutMs for the host to produce a pose (null during boot
@@ -246,9 +277,12 @@ export class GlobalRouter {
           (straight ? " — STRAIGHT-LINE (unbaked region), expect obstacles" : "")
       );
       router.follow(res.legs);
-      // Walk poll with a stall deadline + external-cancel detection.
+      // Walk poll with a stall deadline + external-cancel detection. A
+      // portal-space hold the router is still ticking through counts as
+      // progress (holdIsAlive) — it can outlast stallMs on a slow build.
       let lastSig = "";
       let lastChangeAt = Date.now();
+      let lastTicks = null;
       for (;;) {
         const st = router.status;
         if (st.state === "DONE" || st.state === "FAILED") break;
@@ -264,7 +298,9 @@ export class GlobalRouter {
           };
         }
         const sig = `${st.state}:${st.leg}:${st.walked}`;
-        if (sig !== lastSig) {
+        const holdAlive = holdIsAlive(st, lastTicks);
+        lastTicks = st.ticks;
+        if (sig !== lastSig || holdAlive) {
           lastSig = sig;
           lastChangeAt = Date.now();
         } else if (Date.now() - lastChangeAt > stallMs) {

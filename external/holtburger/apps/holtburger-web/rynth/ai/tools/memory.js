@@ -32,7 +32,7 @@
 //
 // Survival invariant: every apply degrades to { ok:false, error }.
 
-import { isOperatorStopLatched, OPERATOR_STOP_KEY } from "../operator_stop.js";
+import { isOperatorStopLatched, OPERATOR_STOP_KEY, isBotStopLatched, isBotOperatorStopped, BOT_STOP_KEY } from "../operator_stop.js";
 
 const SCRATCH_KEY = "holtburger_ai_scratchpad_v1";
 const MAX_SCRATCH_CHARS = 1500;
@@ -166,7 +166,7 @@ export function registerMemory(actionsMap, state) {
  *
  * Returns { ok:true, cleared:string[], warnings:string[] }. Never throws.
  */
-export function wipeForCleanTest(ai) {
+export function wipeForCleanTest(ai, bot) {
   const cleared = [];
   const warnings = [];
   const note = (label, e) => warnings.push(`${label}: ${(e && e.message) || e}`);
@@ -240,8 +240,28 @@ export function wipeForCleanTest(ai) {
         delete state._triedTotal;
         cleared.push("_triedTotal");
       }
+      // 2026-10-12: the other per-run RAM the old wipe left behind — the
+      // undrained heard-chat ring (a pre-wipe NPC line surfacing in the
+      // first clean check-in), the deltas baseline ("moved 900m" across the
+      // wipe) and the kill-trend samples.
+      for (const k of ["_heardChat", "_lastSnapshot", "_killSamples"]) {
+        if (state[k] !== undefined) {
+          delete state[k];
+          cleared.push(k);
+        }
+      }
     }
   } catch (e) { note("_usedObjects", e); }
+
+  // 4b) Interaction-outcome memory (extensions.js "no-effect" tracker,
+  //     reached through ai.extensions.interactions.entries()).
+  try {
+    const m = ext?.interactions?.entries?.();
+    if (m && typeof m.clear === "function" && m.size) {
+      m.clear();
+      cleared.push("interactions (no-effect memory)");
+    }
+  } catch (e) { note("interactions", e); }
 
   // 5) CombatMemory RAM, only if a caller has ever wired a live instance
   //    (dark/unattached module today — see combat_memory.js — so this is
@@ -264,12 +284,22 @@ export function wipeForCleanTest(ai) {
     }
   } catch (e) { note("_lastSummary", e); }
 
-  // 7) Operator-stop latch: NEVER auto-cleared (08 B-2) — surfaced only.
+  // 7) Operator-stop latches: NEVER auto-cleared (08 B-2) — surfaced only.
   try {
     if (isOperatorStopLatched()) {
       warnings.push(
         `${OPERATOR_STOP_KEY} latch is SET — the bot stays halted after this wipe BY DESIGN; ` +
         "clear it separately (window.rynthAI.start()) if that's not what you want"
+      );
+    }
+    // The bot latch is per character since 2026-10-12: ask the bot (its
+    // control / kernel hold / THIS character's key), not the bare key.
+    let theBot = bot;
+    try { if (!theBot) theBot = ai?.director?.bot ?? null; } catch { theBot = null; }
+    if (theBot ? isBotOperatorStopped(theBot) : isBotStopLatched()) {
+      warnings.push(
+        `${BOT_STOP_KEY} latch is SET — the whole bot is operator-STOPPED and stays so after this wipe; ` +
+        "resume it from the RynthSuite HUD or window.__bot.control.resume()"
       );
     }
   } catch (e) { note("operator-stop check", e); }

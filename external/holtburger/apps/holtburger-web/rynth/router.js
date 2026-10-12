@@ -28,11 +28,26 @@
 // — but the per-leg watchdog keeps running so a dead pose source fails the
 // route instead of stalling it forever. tick() is reentrancy-guarded.
 //
-// status = { state, leg, legs, walked, stitchBlocked } — `walked` counts legs
-// actually completed (arrivals + consumed portal legs); portal-skipped stale
-// legs don't count. `stitchBlocked` is true when FAILED came from a {stitch}
-// leg's (shorter) watchdog — the plan stitched a straight line through
-// something physical; replanning from the same pose is futile.
+// status = { state, leg, legs, walked, stitchBlocked, portalBlocked,
+// portalHold, ticks } — `walked` counts legs actually completed (arrivals +
+// consumed portal legs); portal-skipped stale legs don't count. `stitchBlocked`
+// is true when FAILED came from a {stitch} leg's (shorter) watchdog — the plan
+// stitched a straight line through something physical; replanning from the
+// same pose is futile.
+//
+// PORTAL SPACE (2026-10-12): since 1aedd85c a teleport runs retail's portal-
+// space tunnel, and 0d06b92e's `?portalHoldBuild` keeps it up while the
+// destination interior builds (up to ~80 s). The movement step keeps ticking
+// underneath it, so the old fixed 4 s settle walked the body into cells whose
+// collision had not landed. The router now HOLDS while portal space is up
+// (portal_gate.js, bounded by portalSpaceMaxMs): a tunnel that starts mid-walk
+// (before the far-side pose arrives) or at a leg's start parks the route in
+// PORTAL with no further MoveToPosition; it resumes when the tunnel ends. A
+// portal leg counts as consumed only if the pose actually jumped — a tunnel
+// that ends where it began (a failed hop) re-begins the same leg.
+// `status.portalHold` is true during the hold and `status.ticks` advances on
+// every tick, so walk polls (goto_compose walkLegs, global_router) can tell a
+// live hold from a host that stopped ticking.
 //
 // This is what makes moveToPosition useful for travel: the combat/loot loops
 // move a few metres; a route moves across the world.
@@ -53,6 +68,7 @@ const SEAM_JUMP_M = 30; // world-frame jump vs last known pose >= this = telepor
 // World-frame (metres) from a full objCellId + landblock-local x,y — the ONE
 // copy now lives in nav_frame.js (C3 Stage-0 dedup).
 import { worldXY } from "./nav_frame.js";
+import { portalSpaceActive, PORTAL_SPACE_MAX_HOLD_MS } from "./portal_gate.js";
 
 export class RynthRouter {
   constructor(host, opts = {}) {
@@ -66,6 +82,20 @@ export class RynthRouter {
     this.seamJumpM = opts.seamJumpM ?? SEAM_JUMP_M;
     this.stitchTimeoutMs = opts.stitchTimeoutMs ?? STITCH_TIMEOUT_MS;
     this.portalContactMs = opts.portalContactMs ?? PORTAL_CONTACT_MS;
+    this.portalSpaceMaxMs = opts.portalSpaceMaxMs ?? PORTAL_SPACE_MAX_HOLD_MS;
+    // Test seam: opts.portalSpaceActive() replaces the host/page read.
+    this._portalSpaceFn =
+      typeof opts.portalSpaceActive === "function" ? opts.portalSpaceActive : () => portalSpaceActive(host);
+    this.ticks = 0; // monotonic _tickInner count (status.ticks — walk-poll liveness)
+    this._portalHoldSince = 0; // when the current portal-space hold began (0 = none)
+    this._portalHolding = false; // the last tick returned on the hold (status.portalHold)
+    // A flag still up past portalSpaceMaxMs is treated as stuck and ignored
+    // until it reads false once (else every _beginLeg would re-enter the hold).
+    this._portalSpaceIgnored = false;
+    this._portalNoHop = false; // hold entered without a pose jump yet — resume decides
+    this._portalFromWx = 0; // pose at that hold's entry (the no-hop resume test)
+    this._portalFromWy = 0;
+    this._portalFromValid = false;
     this.route = [];
     this.leg = 0;
     this.walked = 0; // legs actually completed (arrival or consumed portal)
@@ -90,6 +120,7 @@ export class RynthRouter {
     this.walked = 0;
     this.failedLegStitch = false;
     this.failedLegPortal = false;
+    this._clearPortalHold();
     this.state = this.route.length ? "WALK" : "DONE";
     this._beginLeg();
     return this;
@@ -97,6 +128,48 @@ export class RynthRouter {
 
   cancel() {
     this.state = "IDLE";
+    this._clearPortalHold();
+    this.host.StopCompletely();
+  }
+
+  _inPortalSpace() {
+    let up = false;
+    try {
+      up = this._portalSpaceFn() === true;
+    } catch (_) {
+      up = false;
+    }
+    if (!up) {
+      this._portalSpaceIgnored = false; // the flag cleared — honour the next tunnel
+      return false;
+    }
+    return !this._portalSpaceIgnored;
+  }
+
+  _clearPortalHold() {
+    this._portalHoldSince = 0;
+    this._portalHolding = false;
+    this._portalNoHop = false;
+  }
+
+  /** Park the route in PORTAL because portal space is up but the far-side
+   *  pose has not jumped yet (the tunnel starts with PlayerTeleport; the
+   *  destination position lands later). Resume decides hop vs no-hop. */
+  _enterPortalHold(now, pose, why) {
+    if (pose) {
+      [this._portalFromWx, this._portalFromWy] = worldXY(pose.objCellId, pose.x, pose.y);
+      this._portalFromValid = true;
+    } else {
+      this._portalFromWx = this.lastWx;
+      this._portalFromWy = this.lastWy;
+      this._portalFromValid = this._poseSeen === true; // no anchor at all -> resume decides by leg distance
+    }
+    this._portalNoHop = true;
+    this._portalHoldSince = now;
+    this._portalHolding = true;
+    this.state = "PORTAL";
+    this.legStartAt = now;
+    this.log(`portal space ${why} — holding the route until it ends`);
     this.host.StopCompletely();
   }
 
@@ -120,6 +193,12 @@ export class RynthRouter {
     if (pose) {
       this.lastLb = pose.objCellId >>> 16;
       [this.lastWx, this.lastWy] = worldXY(pose.objCellId, pose.x, pose.y);
+    }
+    // A leg that begins inside portal space (a replan right after a hop, a
+    // route started mid-teleport) issues nothing until the tunnel ends.
+    if (this._inPortalSpace()) {
+      this._enterPortalHold(Date.now(), pose, `up at leg ${this.leg + 1}/${this.route.length}`);
+      return;
     }
     this.legStartAt = Date.now();
     this.lastReissueAt = Date.now();
@@ -152,8 +231,37 @@ export class RynthRouter {
     const h = this.host;
     const now = Date.now();
     const pose = h.TryGetPlayerPose();
+    this.ticks += 1;
+    const inPortalSpace = this._inPortalSpace();
+    this._portalHolding = false;
+
+    if (this.state === "WALK" && inPortalSpace) {
+      // The tunnel started mid-walk (a portal leg's hop, a recall, a server
+      // teleport) before the far-side pose arrived — stop re-walking the old
+      // leg under it.
+      this._enterPortalHold(now, pose, "began mid-walk");
+      return;
+    }
 
     if (this.state === "PORTAL") {
+      // Portal space up: the destination may still be building — hold, bounded.
+      if (inPortalSpace) {
+        if (!this._portalHoldSince) this._portalHoldSince = now;
+        if (now - this._portalHoldSince <= this.portalSpaceMaxMs) {
+          this._portalHolding = true;
+          return;
+        }
+        this._portalSpaceIgnored = true; // stuck flag: stop honouring it until it clears
+        this.log(`portal space still up after ${Math.round(this.portalSpaceMaxMs / 1000)}s — resuming anyway`);
+      }
+      if (this._portalHoldSince) {
+        // The hold just ended: the tunnel only drops once the destination is
+        // ready, so a hold longer than the settle served it (resume on this
+        // tick); a shorter one waits out the rest of the settle. Either way the
+        // no-pose watchdog below gets a fresh window instead of the hold's age.
+        this.legStartAt = Math.max(this.legStartAt, now - this.settleMs - 1);
+        this._portalHoldSince = 0;
+      }
       // Waiting for the far side to stream in after a teleport.
       if (now - this.legStartAt <= this.settleMs) return;
       if (!pose) {
@@ -201,6 +309,7 @@ export class RynthRouter {
         this.lastLb = curLb;
         this.lastWx = wx;
         this.lastWy = wy;
+        this._clearPortalHold(); // a real hop — the resume consumes a portal leg
         this.state = "PORTAL";
         this.legStartAt = now;
         h.StopCompletely();
@@ -279,10 +388,42 @@ export class RynthRouter {
    *  world-frame position belongs to the pre-hop side are skipped. */
   _resumeAfterPortal(pose) {
     const [wx, wy] = worldXY(pose.objCellId, pose.x, pose.y);
+    // A hold entered on portal space alone (no pose jump seen yet): did a
+    // teleport actually happen under the tunnel?
+    let hopped = true;
+    if (this._portalNoHop) {
+      let jump;
+      if (this._portalFromValid) {
+        jump = Math.hypot(wx - this._portalFromWx, wy - this._portalFromWy);
+      } else {
+        // No pre-hold anchor: only a portal leg's consumption hangs on this, so
+        // measure from that leg — standing next to it means we never went in.
+        const pl = this.route[this.leg];
+        if (pl && pl.portal) {
+          const [plx, ply] = worldXY(pl.lb, pl.x, pl.y);
+          jump = Math.hypot(wx - plx, wy - ply);
+        } else {
+          jump = Infinity;
+        }
+      }
+      hopped = jump >= this.seamJumpM;
+      this.log(hopped
+        ? `teleport landed under portal space (jump ${Number.isFinite(jump) ? jump.toFixed(0) : "?"}m)`
+        : `portal space ended without a teleport (${jump.toFixed(1)}m) — re-walking leg ${this.leg + 1}`);
+    }
+    this._clearPortalHold();
     this.lastLb = pose.objCellId >>> 16;
     this.lastWx = wx;
     this.lastWy = wy;
     this._poseSeen = true;
+
+    if (!hopped) {
+      // Nothing moved us: the current leg (portal or not) is still the one to
+      // walk — re-begin it with a fresh watchdog, consume nothing.
+      this.state = "WALK";
+      this._beginLeg();
+      return;
+    }
 
     const cur = this.route[this.leg];
     const from = cur && cur.portal ? this.leg + 1 : this.leg;
@@ -339,6 +480,8 @@ export class RynthRouter {
       walked: this.walked,
       stitchBlocked: this.failedLegStitch,
       portalBlocked: !!this.failedLegPortal,
+      portalHold: this._portalHolding === true,
+      ticks: this.ticks,
     };
   }
 }

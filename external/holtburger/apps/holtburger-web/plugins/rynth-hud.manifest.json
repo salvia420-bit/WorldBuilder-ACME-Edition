@@ -1,0 +1,17 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "rynth-hud",
+  "name": "RynthSuite",
+  "author": "holtburger",
+  "version": "1.0.0",
+  "description": "RynthSuite bot dashboard (web port of the RynthAi dashboard): RUNNING/STOPPED, combat/buff/nav/loot/AI toggles, force rebuff, target + vitals, monster priorities, vitals thresholds, self-buff list, routes/goto/egress, AI director panel, log. Toolbar ⚒ button; Shift+F12 toggles; ?rynthHud=off disables.",
+  "icon": "⚒",
+  "iconHidden": true,
+  "entry": "./rynth-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"],
+  "hotkeys": [
+    { "id": "toggle", "default": "Shift+F12", "label": "Toggle RynthSuite" }
+  ],
+  "clientApi": "^1.0"
+}

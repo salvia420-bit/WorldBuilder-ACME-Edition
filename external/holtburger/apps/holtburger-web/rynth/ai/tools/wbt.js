@@ -228,9 +228,18 @@ export function fileTicketAction(oracle) {
       const p = bot?.host?.TryGetPlayerPose?.();
       if (p) position = { objCellId: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z };
     } catch {}
+    // RynthWebHost has no TryGetPlayerName (this optional call always read
+    // undefined, so every ticket shipped character:null) — resolve the name
+    // off the player guid the same way control_channel.js does; the
+    // TryGetPlayerName probe stays first for hosts that do expose it.
     let character = null;
     try {
-      const name = bot?.host?.TryGetPlayerName?.();
+      const h = bot?.host;
+      let name = typeof h?.TryGetPlayerName === "function" ? h.TryGetPlayerName() : null;
+      if (!name && typeof h?.GetPlayerId === "function" && typeof h?.TryGetObjectName === "function") {
+        const me = h.GetPlayerId();
+        if (me) name = h.TryGetObjectName(me);
+      }
       if (typeof name === "string" && name) character = name;
     } catch {}
     const r = await o.fileTicket({

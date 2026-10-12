@@ -454,6 +454,18 @@ function ensureStyles() {
     }
     #${OVERLAY_ID}.is-locked .hb-hotbar-grip { display: none; }
 
+    /* Add-on column (2026-10-12): non-retail launchers that ride the
+       toolbar — today the RynthSuite HUD button (plugins/rynth-hud.js).
+       Outside the retail 310-px frame (left:100%), so gmToolbarUI's DAT
+       rects are untouched; .flip moves it to the left side when the
+       toolbar sits at the right screen edge. */
+    #${OVERLAY_ID} .hb-hotbar-addons {
+      position: absolute; top: 0; left: 100%; margin-left: 3px;
+      display: flex; flex-direction: column; gap: 3px; z-index: 5;
+    }
+    #${OVERLAY_ID} .hb-hotbar-addons.flip { left: auto; right: 100%; margin-left: 0; margin-right: 3px; }
+    #${OVERLAY_ID} .hb-hotbar-addons:empty { display: none; }
+
     #${OVERLAY_ID} .hb-hotbar-toast {
       position: absolute; left: 50%; bottom: calc(100% + 4px);
       transform: translateX(-50%);
@@ -633,6 +645,12 @@ export function mount(ctx) {
   const field = document.createElement("div");
   field.className = "hb-hotbar-field";
   overlay.appendChild(field);
+  // Add-on column for non-retail launchers (see the .hb-hotbar-addons CSS).
+  // Its buttons are exempt from the drag handle (ignoreSelector: button) and
+  // covered by the toolbar tooltip below (root = overlay).
+  const addons = document.createElement("div");
+  addons.className = "hb-hotbar-addons";
+  overlay.appendChild(addons);
   const tooltip = createToolbarTooltip(overlay);
 
   let rowCount = loadRowCount();
@@ -1287,6 +1305,9 @@ export function mount(ctx) {
   });
 
   document.body.appendChild(overlay);
+  try {
+    document.dispatchEvent(new CustomEvent("hb-hotbar-mounted", { detail: { root: overlay, addons } }));
+  } catch (_) { /* a launcher still finds the column via __hotbar.addonSlot() */ }
 
   // One draggable window: the frame / spacer area is the handle (retail
   // drags a floaty by its border); every control opts out.
@@ -1701,6 +1722,8 @@ export function mount(ctx) {
     setRowCount(n) { return setRowCount(n); },
     setLocked(locked) { windowCtl.setLocked(!!locked); },
     resetPosition() { windowCtl.resetPosition(); },
+    /** The add-on launcher column (outside the retail frame). */
+    addonSlot() { return addons; },
   });
 
   return () => {

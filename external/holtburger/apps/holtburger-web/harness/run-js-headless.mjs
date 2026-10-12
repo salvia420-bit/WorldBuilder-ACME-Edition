@@ -839,6 +839,13 @@ const TIER5 = [
   { tier: 5, flag: "packWorkerFetchShare", file: "tests/pack_worker_fetch_share.test.mjs" },
   { tier: 5, flag: "bakeUrgentReserve", file: "tests/bake_urgent_reserve.test.mjs" },
   { tier: 5, flag: "packRingHold", file: "tests/pack_ring_hold.test.mjs" },
+  // 2026-10-12 RynthSuite update: the host seam vs the Oct client, the ?bot=1 /
+  // HUD boot config (oracle vs the pre-move block), the HUD bridge view-model +
+  // commands, and the HUD DOM smoke.
+  { tier: 5, flag: "rynthWebhostSeam", file: "rynth/test_webhost_seam_update.mjs" },
+  { tier: 5, flag: "rynthBootConfig", file: "tests/rynth_boot_config.test.mjs" },
+  { tier: 5, flag: "rynthHudBridge", file: "tests/rynth_hud_bridge.test.mjs" },
+  { tier: 5, flag: "rynthHudDom", file: "tests/rynth_hud_dom.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

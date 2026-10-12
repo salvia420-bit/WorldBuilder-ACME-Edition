@@ -10,9 +10,29 @@
 // Usage:
 //   node rynth_supervisor.cjs '[{"account":"a","password":"a","buffs":[2,24]}]'
 //
-// Bot page contract (installed via evaluate): window.__rh (RynthWebHost),
-// window.__kn (BotKernel). Health = __rh.snap freshness + __sessionHandle
-// liveness; a stalled snapshot or a dropped session triggers a rebuild.
+// Bot page contract (installed via evaluate): window.__bot (createGrindBot),
+// window.__rh (its RynthWebHost), window.__kn (its BotKernel). Health =
+// __rh.snap freshness + the live session (handle identity, link age); a
+// stalled snapshot or a dropped session triggers a rebuild.
+//
+// 2026-10-12 update (client drift since 2026-07-23):
+// - Every page is retired with SessionHandle.disconnect() (2026-10-09) before
+//   it closes. Closing a page alone leaves its ACE session alive, the relogin
+//   meets "Account In Use", and ACE drops BOTH sessions — the rebuild burned
+//   its attempt and the reap backoff for nothing.
+// - installBot builds the bot with createGrindBot (the README's one-call
+//   entrypoint) instead of hand-assembling combat/buff/loot: the old fleet
+//   bots ran with NO vitals loop (no emergency heals) and no unwedge reflex.
+//   AI director off unless the account config asks for it.
+// - Readiness is pose-first: a real getLocalPlayerPose() after in-world wins
+//   even if `__bootState` latched "error" (the 90 s scene watchdog fires on a
+//   slow-but-fine boot — STATUS.md "Readiness-gate reversal"); "error" with no
+//   pose still fails the attempt. A latched "error" no longer marks a running
+//   bot dead either.
+// - A page that reconnected in place (new __sessionHandle) gets its host
+//   re-attached instead of grinding on the freed handle while the worker
+//   heartbeat keeps the snapshot "fresh"; a link silent for LINK_DEAD_MS
+//   (sessionLastRecvAgeMs) is dead.
 
 const { chromium } = require("playwright");
 
@@ -21,7 +41,9 @@ const BASE_URL =
   "http://127.0.0.1:8765/apps/holtburger-web/index.html";
 const HEALTH_INTERVAL_MS = 5000;
 const SNAP_STALE_MS = 8000; // snapshot older than this = the tick died
-const RELOGIN_BACKOFF_MS = 20_000; // ACE session reap window
+const LINK_DEAD_MS = 45_000; // no inbound packet this long = the session is gone (ACE drops at 60 s)
+const RELOGIN_BACKOFF_MS = 20_000; // ACE session reap window (an unclean exit; a clean disconnect is immediate)
+const DISCONNECT_FLUSH_MS = 750; // let the recv loop send the DISCONNECT before the page goes
 const BOOT_ATTEMPTS = 4;
 
 // ── OPT-IN sidecar health watch (env RYNTH_SIDECAR_URL; default unset=off) ──
@@ -83,17 +105,37 @@ async function pollTrulyInWorld(page) {
     const hist = Array.isArray(window.__bootStateHistory) ? window.__bootStateHistory : [];
     const reachedInWorld =
       window.__bootState === "in-world" || hist.some((e) => e && e.state === "in-world");
-    if (window.__bootState === "error") return { ok: false, isError: true };
-    if (!reachedInWorld) return { ok: false, isError: false };
     let pose;
     try {
       const h = window.__sessionHandle;
       pose = h && typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : undefined;
+      try { pose?.free?.(); } catch (_) {}
     } catch (_) {
       pose = undefined;
     }
-    return { ok: pose !== undefined && pose !== null, isError: false };
+    const hasPose = pose !== undefined && pose !== null;
+    // Pose-first: a real pose after in-world is ready even under a latched
+    // "error" (the scene watchdog's false latch); "error" without one fails.
+    if (reachedInWorld && hasPose) return { ok: true, isError: false };
+    return { ok: false, isError: window.__bootState === "error" };
   });
+}
+
+// Retire a page: stop its bot, end the ACE session cleanly (DISCONNECT), give
+// the recv loop a moment to send it, then close. Never throws.
+async function retirePage(page) {
+  if (!page) return;
+  try {
+    await page.evaluate(() => {
+      try { window.__bot?.stop?.(); } catch (_) {}
+      try { window.__sessionHandle?.disconnect?.(); } catch (_) {}
+      return true;
+    });
+    await sleep(DISCONNECT_FLUSH_MS);
+  } catch (_) {
+    /* page already gone */
+  }
+  await page.close().catch(() => null);
 }
 
 async function bootBot(browser, cfg, log) {
@@ -118,42 +160,49 @@ async function bootBot(browser, cfg, log) {
     } catch (e) {
       log(`${cfg.account}: boot attempt ${a} threw ${String(e.message).slice(0, 80)}`);
     }
-    if (page) await page.close().catch(() => null);
+    if (page) await retirePage(page);
     await sleep(RELOGIN_BACKOFF_MS); // let ACE reap the stale session
   }
   return null;
 }
 
+// The bot config createGrindBot sees: the account entry minus credentials,
+// AI director off unless the entry asks for it.
+function botConfig(cfg) {
+  const { account: _a, password: _p, ...rest } = cfg || {};
+  return { buffs: [], ...rest, ai: rest.ai ?? false };
+}
+
 async function installBot(page, cfg) {
-  await page.evaluate(async (buffIds) => {
-    const wh = await import("/apps/holtburger-web/rynth/webhost.js");
-    const cl = await import("/apps/holtburger-web/rynth/combat_loop.js");
-    const bl = await import("/apps/holtburger-web/rynth/buff_loop.js");
-    const ll = await import("/apps/holtburger-web/rynth/loot_loop.js");
-    const kn = await import("/apps/holtburger-web/rynth/kernel.js");
-    const host = new wh.RynthWebHost(window.__sessionHandle);
-    host.nearbyRangeM = 60;
-    const known = Array.from(window.__sessionHandle.playerKnownSpells() || []).map(Number);
-    const buffs = (buffIds || []).filter((id) => known.includes(id));
-    window.__rh = host;
-    window.__kn = new kn.RynthBotKernel(host, {
-      combat: new cl.RynthCombatLoop(host),
-      buff: buffs.length ? new bl.RynthBuffLoop(host, buffs) : null,
-      loot: new ll.RynthLootLoop(host),
-    });
-    host.start(10);
-    window.__kn.start();
-  }, cfg.buffs || []);
+  await page.evaluate(async (botCfg) => {
+    const m = await import("/apps/holtburger-web/rynth/bot.js");
+    const bot = await m.createGrindBot(window.__sessionHandle, botCfg);
+    window.__bot = bot;
+    window.__rh = bot.host;
+    window.__kn = bot.kernel;
+  }, botConfig(cfg));
 }
 
 async function health(page) {
   try {
     return await page.evaluate(() => {
       const h = window.__rh;
-      const alive = !!window.__sessionHandle && !!h && !!h.snap;
+      const live = window.__sessionHandle;
+      // Reconnected in place: rebind the host (and so every loop) to the
+      // live session instead of grinding on the freed one.
+      let reattached = false;
+      if (h && live && h.s !== live && typeof h.attach === "function") {
+        try { h.attach(live); reattached = true; } catch (_) {}
+      }
+      const alive = !!live && !!h && !!h.snap;
       const snapAge = h && h.snap ? Date.now() - h.snap.tMs : Infinity;
+      let linkAgeMs = null;
+      try {
+        const v = live && typeof live.sessionLastRecvAgeMs === "function" ? live.sessionLastRecvAgeMs() : null;
+        linkAgeMs = typeof v === "number" && v < 0xffffffff ? v : null;
+      } catch (_) {}
       const st = window.__kn ? window.__kn.status : null;
-      return { alive, snapAge, status: st, boot: window.__bootState };
+      return { alive, snapAge, linkAgeMs, reattached, status: st, boot: window.__bootState };
     });
   } catch (e) {
     return { alive: false, snapAge: Infinity, error: e.message };
@@ -195,10 +244,15 @@ async function runFleet(configs, opts = {}) {
       if (!b.page) { b.page = await bootBot(browser, b.cfg, log); continue; }
       const h = await health(b.page);
       stats[b.cfg.account] = h.status;
-      const dead = !h.alive || h.snapAge > SNAP_STALE_MS || h.boot === "error";
+      if (h.reattached) log(`${b.cfg.account}: session replaced in-page — host re-attached`);
+      // A latched __bootState "error" is NOT a death signal on its own (the
+      // scene watchdog false-latches on a slow-but-fine boot); a dead
+      // snapshot or a silent link is.
+      const linkDead = typeof h.linkAgeMs === "number" && h.linkAgeMs > LINK_DEAD_MS;
+      const dead = !h.alive || h.snapAge > SNAP_STALE_MS || linkDead;
       if (dead) {
-        log(`${b.cfg.account}: UNHEALTHY (snapAge=${h.snapAge} boot=${h.boot}) — rebuilding`);
-        await b.page.close().catch(() => null);
+        log(`${b.cfg.account}: UNHEALTHY (snapAge=${h.snapAge} linkAgeMs=${h.linkAgeMs ?? "?"} boot=${h.boot}) — rebuilding`);
+        await retirePage(b.page);
         b.rebuilds++;
         b.page = await bootBot(browser, b.cfg, log);
       } else if (opts.verbose) {
@@ -207,11 +261,14 @@ async function runFleet(configs, opts = {}) {
     }
   }
   const summary = bots.map((b) => ({ account: b.cfg.account, rebuilds: b.rebuilds, status: stats[b.cfg.account] }));
-  if (!opts.keepOpen) await browser.close();
+  if (!opts.keepOpen) {
+    for (const b of bots) await retirePage(b.page);
+    await browser.close();
+  }
   return { browser, bots, summary };
 }
 
-module.exports = { runFleet, bootBot, installBot, health, sidecarHealth, pollTrulyInWorld };
+module.exports = { runFleet, bootBot, installBot, health, sidecarHealth, pollTrulyInWorld, retirePage, botConfig };
 
 if (require.main === module) {
   const configs = JSON.parse(process.argv[2] || "[]");

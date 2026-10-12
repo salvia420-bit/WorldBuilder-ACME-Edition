@@ -167,6 +167,12 @@ const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
     m.consume(attackDone("YoureTooBusy"));
     check("swings counted", m.totals.swings === 3);
     check("swing errors counted (non-None only)", m.totals.swingErrors === 1);
+    // ACE closes every repeat chain (a clean kill too) with ActionCancelled:
+    // a loop end, not an error.
+    m.consume(attackDone("ActionCancelled"));
+    check("ActionCancelled = loop end, not a swing error",
+      m.totals.loopEnds === 1 && m.totals.swingErrors === 1 && m.totals.swings === 4,
+      JSON.stringify(m.totals));
   }
 
   // ── death event (kind=29): observed-death corroboration ────────────────

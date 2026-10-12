@@ -97,4 +97,16 @@ client.events.emit("kind:48", { u32Payload: 0x12345678, u32Payload2: 0x001d });
 assert.equal(toasts.length, 1, "an item failure still toasts");
 delete window.getLocalPlayerGuid;
 
-console.log("rejection_feedback_kind48: 7/7 PASS");
+// 8. The proxy's bound-method cache follows a reassignment (2026-10-12): an
+//    untracked method stubbed on the handle AFTER its first read must take
+//    effect (a name-only cache kept returning the stale bound original — the
+//    rynth ladder smoke's stubbed spellbook was silently ignored), while an
+//    unchanged method keeps returning the same bound reference.
+rawHandle.playerKnownSpells = () => [1];
+const h8 = window.__sessionHandle;
+assert.deepEqual(h8.playerKnownSpells(), [1], "first read binds the original");
+assert.equal(h8.playerKnownSpells, h8.playerKnownSpells, "unchanged method: same bound reference");
+h8.playerKnownSpells = () => [2, 3];
+assert.deepEqual(h8.playerKnownSpells(), [2, 3], "a reassigned method takes effect through the proxy");
+
+console.log("rejection_feedback_kind48: 8/8 PASS");

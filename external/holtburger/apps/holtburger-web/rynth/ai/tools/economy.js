@@ -28,6 +28,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Use gets UseDone(success) and NO profile (live-proven vs Barkeeper
 // Wilomine 2026-07-18: outside tavern = nothing, same room = 13 items).
 import { approach } from "./world.js";
+// Retail vendor rules, shared with the vendor window (HUD overhaul
+// 2026-10-05 + OpenAC round 5 "vendor buy side" 2026-10-08) so the bot and the
+// player see the same prices and refusals. Pure module (tests/
+// commerce_logic.test.mjs runs it under node).
+//
+// PRICE DIRECTION (fixed here 2026-10-12): `buyMultiplier` is what the vendor
+// PAYS for the player's items (~0.5–0.9), `sellMultiplier` what it CHARGES
+// (~1.35–1.7). This file used to price purchases with buyMultiplier — the
+// same inversion the vendor UI had until 2026-10-05 — so the director saw
+// stock ~40 % too cheap and its affordability check passed buys ACE then
+// refused silently ("ACE refuses an unaffordable purchase with no text").
+import {
+  vendorLineCost,
+  vendorSaleCredit,
+  vendorRemaining,
+  vendorBuySlotsNeeded,
+  vendorAcceptability,
+  vendorRejectText,
+  VENDOR_ACCEPT,
+  VENDOR_NO_MONEY_TEXT,
+  VENDOR_NO_ROOM_TEXT,
+} from "../../../plugins/commerce_logic.js";
 
 function journalNote(ctx, text) {
   try {
@@ -185,16 +207,38 @@ export function openVendorAction(state) {
       );
     state.vendorGuid = vs.vendorGuid;
     state.vendorName = vs.vendorName;
-    const price = (v) => Math.ceil(v * vs.buyMultiplier);
-    const rows = vs.items.slice(0, VENDOR_TOP_N).map((i) => `${i.name} @${price(i.value)}`);
+    // Price per single unit the player PAYS (ShopSystem::SellPrice via
+    // vendorLineCost — see the PRICE DIRECTION note above).
+    const rows = vs.items.slice(0, VENDOR_TOP_N).map((i) => `${i.name} @${vendorLineCost(i, vs, 1)}`);
     journalNote(
       ctx,
-      `vendor ${vs.vendorName} (${hex(vs.vendorGuid)}) buy×${vs.buyMultiplier} sell×${vs.sellMultiplier}, ` +
-        `${vs.items.length} items: ${rows.join("; ")}`
+      `vendor ${vs.vendorName} (${hex(vs.vendorGuid)}) charges ×${vs.sellMultiplier} of value, pays ×${vs.buyMultiplier} for your items` +
+        `${buysLine(h, vs.vendorGuid)}, ${vs.items.length} items: ${rows.join("; ")}`
     );
     return { type: def.type, ok: true, result: { vendorGuid: hex(vs.vendorGuid), vendorName: vs.vendorName, items: vs.items.length } };
   });
   return def;
+}
+
+// What the vendor will BUY from the player (typed profile, when the host has
+// it): "; buys Armor/Weapons (value 10..5000)". "" when unknown.
+function buysLine(h, vendorGuid) {
+  const p = typeof h?.TryGetVendorProfile === "function" ? h.TryGetVendorProfile(vendorGuid) : null;
+  if (!p) return "";
+  const names = Array.isArray(p.buyAcceptCategoryNames) ? p.buyAcceptCategoryNames.slice(0, 6) : [];
+  const lo = p.hasNoMin === false && Number.isFinite(Number(p.minValue)) ? Number(p.minValue) : null;
+  const hi = p.hasNoMax === false && Number.isFinite(Number(p.maxValue)) ? Number(p.maxValue) : null;
+  const win = lo != null || hi != null ? ` (value ${lo ?? 0}..${hi ?? "any"})` : "";
+  return names.length ? `; buys ${names.join("/")}${win}` : win ? `; buys${win}` : "";
+}
+
+// Pyreals before -> after, with an explicit verdict when nothing moved: ACE
+// refuses an unaffordable or room-less purchase with NO text at all, and the
+// coin delta is the only signal the director gets.
+function coinVerdict(before, after) {
+  if (before == null || after == null) return `pyreals ${before ?? "?"} -> ${after ?? "?"}`;
+  if (after === before) return `pyreals unchanged at ${after} — the vendor did NOT complete the trade`;
+  return `pyreals ${before} -> ${after} (${after > before ? "+" : ""}${after - before})`;
 }
 
 /** "buy_items" — buy from the last-opened vendor by item name/guid. */
@@ -220,30 +264,52 @@ export function buyItemsAction(state) {
       const res = resolveItem(vs.items, r);
       if (res.error) return fail(res.error);
       const qty = r.qty ?? 1;
-      rows.push({ itemGuid: res.row.itemGuid, amount: qty, name: res.row.name });
-      cost += Math.ceil(res.row.value * vs.buyMultiplier) * qty;
+      const left = vendorRemaining(res.row, 0);
+      if (qty > left) return fail(`${res.row.name}: the vendor has only ${left} in stock`);
+      rows.push({ itemGuid: res.row.itemGuid, amount: qty, name: res.row.name, item: res.row });
+      cost += vendorLineCost(res.row, vs, qty);
     }
+    // Retail gmVendorUI order: money first, then room in the MAIN pack.
     const coins = typeof h.TryGetCoins === "function" ? h.TryGetCoins() : null;
-    if (coins != null && cost > coins) return fail(`estimated cost ${cost} exceeds your ${coins} pyreals`);
-    if (!h.BuyFromVendor(vs.vendorGuid, rows)) return fail("buy request failed to send");
+    if (coins != null && cost > coins) return fail(`estimated cost ${cost} exceeds your ${coins} pyreals (${VENDOR_NO_MONEY_TEXT})`);
+    const room = typeof h.TryGetPackRoom === "function" ? h.TryGetPackRoom() : null;
+    if (room) {
+      const need = vendorBuySlotsNeeded(rows.map((x) => ({ item: x.item, amount: x.amount })));
+      if (need.items > room.main.free || need.containers > room.containers.free)
+        return fail(
+          `${VENDOR_NO_ROOM_TEXT} — needs ${need.items} item / ${need.containers} pack slot(s), ` +
+            `main pack has ${room.main.free} / ${room.containers.free} free (sell or drop something first)`
+        );
+    }
+    if (!h.BuyFromVendor(vs.vendorGuid, rows.map(({ itemGuid, amount }) => ({ itemGuid, amount }))))
+      return fail("buy request failed to send");
     await sleep(1500); // let the transaction land before reading coins back
     const after = typeof h.TryGetCoins === "function" ? h.TryGetCoins() : null;
     journalNote(
       ctx,
       `buy from ${vs.vendorName}: ${rows.map((r) => `${r.name} x${r.amount}`).join(", ")} ~${cost}p ` +
-        `(pyreals ${coins ?? "?"} -> ${after ?? "?"})`
+        `(${coinVerdict(coins, after)})`
     );
     return { type: def.type, ok: true, result: { bought: rows.map((r) => ({ name: r.name, qty: r.amount })), estCost: cost, coinsAfter: after } };
   });
   return def;
 }
 
-/** "sell_items" — sell pack items to the last-opened vendor. */
+/** "sell_items" — sell pack items to the last-opened vendor.
+ *
+ * Whole stacks only: retail prices the full _stackSize
+ * (VendorProfile::VendorBuyPrice) and ACE removes and pays for the WHOLE
+ * stack whatever amount the Sell message carries (Player_Commerce
+ * TryRemoveFromInventoryWithNetworking — plugins/commerce_logic.js
+ * sellStagingPlan). A partial qty used to sell everything silently; it is now
+ * refused with the split_stack recipe. Items the vendor will not buy (wrong
+ * item type, no value, outside its value window — retail
+ * VendorProfile::InqAcceptability) are refused up front with retail's text. */
 export function sellItemsAction(state) {
   const def = {
     type: "sell_items",
-    params: { items: `array (max ${MAX_TRADE_ROWS}) of {name or guid, qty?} — from your own inventory` },
-    desc: "sell pack items to the vendor you last opened with open_vendor",
+    params: { items: `array (max ${MAX_TRADE_ROWS}) of {name or guid} — from your own inventory; each sells its WHOLE stack` },
+    desc: "sell pack items to the vendor you last opened with open_vendor (a stack always sells whole — split_stack first to sell part of one)",
     validate(a) {
       const b = baseValidate("sell_items")(a);
       return b.ok ? validateTradeRows(a) : b;
@@ -255,17 +321,42 @@ export function sellItemsAction(state) {
     if (!state.vendorGuid) return fail("no vendor open — open_vendor first");
     const inv = h.TryGetPlayerInventory?.() ?? [];
     if (!inv.length) return fail("inventory not streamed yet");
+    const profile = typeof h.TryGetVendorProfile === "function" ? h.TryGetVendorProfile(state.vendorGuid) : null;
+    const vs = typeof h.TryGetVendorState === "function" ? h.TryGetVendorState(state.vendorGuid) : null;
+    const sellable = inv.filter((i) => i.equipMask === 0 && i.wcid !== 273);
     const rows = [];
+    let credit = 0;
     for (const r of a.items) {
-      const res = resolveItem(inv.filter((i) => i.equipMask === 0 && i.wcid !== 273), r);
+      const res = resolveItem(sellable, r);
       if (res.error) return fail(res.error);
-      rows.push({ itemGuid: res.row.guid, amount: r.qty ?? 1, name: res.row.name });
+      const stack = Math.max(1, Number(res.row.stackSize) | 0);
+      if (r.qty != null && r.qty < stack)
+        return fail(
+          `${res.row.name}: a vendor takes the WHOLE stack of ${stack} (the server sells every unit whatever amount is sent) — ` +
+            `split_stack {qty: ${r.qty}} off first, then sell the new stack`
+        );
+      if (profile) {
+        const code = vendorAcceptability(profile, res.row);
+        if (code !== VENDOR_ACCEPT.OK) return fail(`${res.row.name}: ${vendorRejectText(code)}`);
+      }
+      rows.push({ itemGuid: res.row.guid, amount: stack, name: res.row.name });
+      if (vs) credit += vendorSaleCredit(res.row, vs, stack);
     }
-    if (!h.SellToVendor(state.vendorGuid, rows)) return fail("sell request failed to send");
+    const before = typeof h.TryGetCoins === "function" ? h.TryGetCoins() : null;
+    if (!h.SellToVendor(state.vendorGuid, rows.map(({ itemGuid, amount }) => ({ itemGuid, amount }))))
+      return fail("sell request failed to send");
     await sleep(1500);
     const after = typeof h.TryGetCoins === "function" ? h.TryGetCoins() : null;
-    journalNote(ctx, `sell to ${state.vendorName ?? "vendor"}: ${rows.map((r) => `${r.name} x${r.amount}`).join(", ")} (pyreals now ${after ?? "?"})`);
-    return { type: def.type, ok: true, result: { sold: rows.map((r) => ({ name: r.name, qty: r.amount })), coinsAfter: after } };
+    journalNote(
+      ctx,
+      `sell to ${state.vendorName ?? "vendor"}: ${rows.map((r) => `${r.name} x${r.amount}`).join(", ")}` +
+        `${vs ? ` ~${credit}p expected` : ""} (${coinVerdict(before, after)})`
+    );
+    return {
+      type: def.type,
+      ok: true,
+      result: { sold: rows.map((r) => ({ name: r.name, qty: r.amount })), estCredit: vs ? credit : null, coinsAfter: after },
+    };
   });
   return def;
 }

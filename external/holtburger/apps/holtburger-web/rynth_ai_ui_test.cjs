@@ -222,6 +222,61 @@ function fire(el, type) { for (const fn of el._listeners[type] || []) fn({ type,
     !!find(p5.el, (e) => String(e.textContent).includes("n/a")));
   p5.destroy();
 
+  // ---- embedded mount (2026-10-12): the RynthSuite HUD's AI tab ----
+  {
+    const container = makeEl("div");
+    const p6 = ui.mountAiPanel(director, { client, container });
+    const css6 = String(p6.el.style.cssText || "");
+    check("embedded: mounted INTO the container", container.children.includes(p6.el) && !doc.body.children.includes(p6.el));
+    check("embedded: flow layout, no fixed overlay", !/position:fixed/.test(css6) && /width:100%/.test(css6), css6.slice(0, 80));
+    p6.destroy();
+    check("embedded: destroy removes it from the container", !container.children.includes(p6.el) && intervals.size === 0);
+  }
+
+  // ---- Enable checkbox routes through OperatorControl.setAi when given ----
+  {
+    const setAiCalls = [];
+    const control = { setAi(on) { setAiCalls.push(on); return { ok: true }; }, isStopped: () => false };
+    const before = { ...dcalls };
+    const p7 = ui.mountAiPanel(director, { client, control });
+    const cb = find(p7.el, (e) => e.tagName === "INPUT" && e.type === "checkbox");
+    cb.checked = true; fire(cb, "change");
+    cb.checked = false; fire(cb, "change");
+    check("control given: Enable -> control.setAi(true/false)", JSON.stringify(setAiCalls) === "[true,false]", JSON.stringify(setAiCalls));
+    check("control given: director not driven directly", dcalls.start === before.start && dcalls.stop === before.stop);
+    p7.destroy();
+  }
+
+  // ---- no control: Enable/disable flip the durable AI latch (rynthAI semantics) ----
+  {
+    const store = new Map();
+    global.localStorage = {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+    try {
+      const p8 = ui.mountAiPanel(director, { client });
+      const cb = find(p8.el, (e) => e.tagName === "INPUT" && e.type === "checkbox");
+      cb.checked = false; fire(cb, "change");
+      check("disable latches rynthAiOperatorStop", store.get("rynthAiOperatorStop") === "1");
+      tickAll();
+      check("status names the operator stop", !!find(p8.el, (e) => String(e.textContent).includes("AI stopped by operator")));
+      const nowBefore = dcalls.checkNow;
+      const btn = find(p8.el, (e) => e.tagName === "BUTTON" && /check/i.test(e.textContent));
+      fire(btn, "click");
+      check("Check now refused while latched", dcalls.checkNow === nowBefore);
+      cb.checked = true; fire(cb, "change");
+      check("enable clears the latch and starts", !store.has("rynthAiOperatorStop") && director._enabled === true);
+      store.set("rynthBotOperatorStop", "1");
+      tickAll();
+      check("status names a stopped bot", !!find(p8.el, (e) => String(e.textContent).includes("bot STOPPED by operator")));
+      p8.destroy();
+    } finally {
+      delete global.localStorage;
+    }
+  }
+
   global.setInterval = realSI; global.clearInterval = realCI;
   delete global.document;
 

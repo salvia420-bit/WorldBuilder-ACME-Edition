@@ -116,12 +116,17 @@ function _wrapHandle(handle) {
       // setMovementInput, useObject, ...) silently dies. Bind to the
       // original handle in every case so the wasm pointer resolves.
       if (!TRACKED_METHODS.has(prop)) {
-        let bound = boundCache.get(prop);
-        if (!bound) {
-          bound = raw.bind(target);
-          boundCache.set(prop, bound);
+        // Keyed by name AND the function it bound: a method reassigned on
+        // the handle after its first read (a harness stub, a later wrapper)
+        // must take effect — a name-only cache kept returning the stale
+        // bound original (2026-10-12: rynth_ladder_smoke's stubbed spellbook
+        // was silently ignored).
+        let hit = boundCache.get(prop);
+        if (!hit || hit.raw !== raw) {
+          hit = { raw, bound: raw.bind(target) };
+          boundCache.set(prop, hit);
         }
-        return bound;
+        return hit.bound;
       }
       const idx = TRACKED_METHODS.get(prop);
       return function (...args) {

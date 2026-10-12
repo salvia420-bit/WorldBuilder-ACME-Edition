@@ -94,6 +94,30 @@ function stubFetch(responses) {
     check("case4 coverage=mixed carried on failure", res.coverage === "mixed", `coverage=${res.coverage}`);
   }
 
+  // ── Case 5 (2026-10-12 review): a sidecar that never answers must not
+  // wedge goto() — the request aborts at requestTimeoutMs, goto resolves
+  // ok:false, and the one-goto busy latch clears so the next goto can run.
+  {
+    let aborted = false;
+    global.fetch = (url, init = {}) => new Promise((resolve, reject) => {
+      const sig = init.signal;
+      if (sig) sig.addEventListener("abort", () => {
+        aborted = true;
+        const e = new Error("The operation was aborted");
+        e.name = "AbortError";
+        reject(e);
+      });
+      // never resolves on its own — a hung sidecar
+    });
+    const g = new GlobalRouter(mockHost({ objCellId: 0xa1a40011 >>> 0, x: 10, y: 10, z: 20 }), { log: () => {}, requestTimeoutMs: 30 });
+    const t0 = Date.now();
+    const res = await g.goto(mockRouter("DONE"), { ns: 1, ew: 1 }, { pollMs: 5 });
+    check("case5 hung sidecar -> goto resolves ok:false", res.ok === false && /timed out/.test(res.error || ""), JSON.stringify(res));
+    check("case5 the request was actually aborted", aborted === true);
+    check("case5 resolved near the deadline, not hung", Date.now() - t0 < 2000, `${Date.now() - t0}ms`);
+    check("case5 busy latch cleared after the timeout", g.busy === false);
+  }
+
   console.log(`GLOBALROUTE-COVERAGE: ${fails === 0 ? "PASS" : `FAIL (${fails})`}`);
   process.exit(fails === 0 ? 0 : 1);
 })().catch((e) => { console.error(`ERR ${e.stack || e.message}`); process.exit(1); });

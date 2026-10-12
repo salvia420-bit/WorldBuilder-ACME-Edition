@@ -69,9 +69,21 @@ const fmtHp = (frac) => (frac == null ? "hp=?" : `hp=${Math.round(frac * 100)}%`
  * — see extensions.js activeGoalsFor / C4-2. The structured `data` is left
  * whole regardless (observe_ext.js and others read data.vitals/kernel), so
  * this only trims the rendered prompt, never the source of truth. */
-export function buildObservation(bot, { journalTail = "", maxChars = 6000, now = Date.now(), diag = null, spend = null, showSteadyState = true } = {}) {
+export function buildObservation(bot, { journalTail = "", maxChars = 6000, now = Date.now(), diag = null, spend = null, showSteadyState = true, portalSpace = null } = {}) {
   const b = bot || {};
   journalTail = journalTail == null ? "" : String(journalTail);
+
+  // Teleport tunnel (2026-10-12, scene3d/portal_space.js — retail
+  // teleportInProgress): while it runs the world is hidden and combat-mode
+  // changes are refused, so the pos line can be the PRE-arrival cell. One
+  // ground-truth line tells the model to wait for arrival. opts.portalSpace
+  // (boolean) is the test seam; the page publishes globalThis.
+  // __isPortalSpaceActive. null = unknown (renders nothing).
+  const inPortalSpace = safe(() => {
+    if (typeof portalSpace === "boolean") return portalSpace;
+    const f = globalThis.__isPortalSpaceActive;
+    return typeof f === "function" ? f() === true : null;
+  });
 
   // ── data (each field independently null on any error) ────────────────
   const uptimeMs = safe(() => {
@@ -92,6 +104,16 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
   const kernel = safe(() => {
     const st = b.kernel.status; // kernel.js:149-157
     return { running: b.kernel.running === true, action: st.action, kills: st.kills, looted: st.looted };
+  });
+
+  // Combat stand-down (2026-10-12): combat_loop parks itself when it cannot
+  // fight at all (no war spell for a caster, no usable combat mode) and the
+  // kernel then skips Combat. Ground truth the director cannot infer from
+  // "threats" alone — a parked loop explains "monsters nearby, kills flat".
+  // Absent `status`/`incapable` (older loop) renders nothing.
+  const combatStoodDown = safe(() => {
+    const r = b.combat.status?.incapable;
+    return typeof r === "string" && r ? r : null;
   });
 
   const vitals = safe(() => {
@@ -205,6 +227,8 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
     priorities,
     netbrain,
     spend: spendData,
+    portalSpace: inPortalSpace,
+    combatStoodDown,
     journalTail,
   };
 
@@ -223,6 +247,8 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
       ? `pos: 0x${position.objCellId.toString(16).padStart(8, "0")} xyz=(${position.x.toFixed(1)},${position.y.toFixed(1)},${position.z.toFixed(1)}) loc=${fmtDeg(position.ns, "N", "S")} ${fmtDeg(position.ew, "E", "W")}`
       : `pos: ${NA}`
   );
+  if (inPortalSpace === true)
+    head.push("portal: IN PORTAL SPACE — a teleport is in progress; pos may be pre-arrival. Act after you arrive.");
   // Nav availability is GROUND TRUTH (like the pos line): live soak-13
   // showed a stale scratchpad belief ("goto fails") outliving a nav fix —
   // the model never retried. State it every check-in so beliefs can't drift.
@@ -271,6 +297,7 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
         ? `lock: 0x${lock.guid.toString(16)} "${lock.name}" ${fmtHp(lock.hp)}${lock.dist != null ? ` d=${lock.dist.toFixed(1)}m` : ""}`
         : "lock: none"
   );
+  if (combatStoodDown) head.push(`combat: STOOD DOWN — ${combatStoodDown} (the kernel will not engage until this clears)`);
 
   const threatLines =
     threats == null ? [] : threats.map((t) => `- ${t.name} d=${t.dist.toFixed(1)} ${fmtHp(t.hp)}`);

@@ -64,9 +64,14 @@ function makeHost() {
     h.appraised.add(0xa1);
     loop.tick();
     check("appraised item picked up", h.calls.some((c) => c[0] === "moveItem" && c[1] === 0xa1) && loop.state === "CONFIRM");
-    // confirm, then the next item (already appraised) is judged immediately
+    // confirm, then the next item (already appraised) is judged once the
+    // post-pickup pause (NEXT_PICKUP_DELAY_MS, the client's Loot All pacing —
+    // 2026-10-12) has passed
     h.inventory.add(0xa1);
     loop.tick(); // CONFIRM -> LOOT
+    loop.tick(); // LOOT, still inside the post-pickup pause
+    check("post-pickup pause holds the next pickup", !h.calls.some((c) => c[0] === "moveItem" && c[1] === 0xa2));
+    loop._nextPickupAt = 0; // pause elapsed
     loop.tick(); // LOOT: a2 (500 >= 100) -> pickup
     check("next appraised item flows", h.calls.some((c) => c[0] === "moveItem" && c[1] === 0xa2));
   }

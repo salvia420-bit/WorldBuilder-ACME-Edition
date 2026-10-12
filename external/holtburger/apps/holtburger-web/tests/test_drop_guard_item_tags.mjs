@@ -74,5 +74,44 @@ async function tryDrop(item, force) {
   ok(f.res.ok === true && f.dropped.includes(0x1001), "gem drops WITH force:true");
 }
 
+// ── Item 3: END TO END through the real RynthWebHost (2026-10-12) ─────────
+// The rows above are hand-written with attuned/bonded already on them — but
+// RynthWebHost.TryGetPlayerInventory never PROJECTED those two fields, so on
+// live data both the tags and the drop guard were dead since 2026-07-23.
+// Here wasm-InventoryItem-shaped boxes (getters, free()) go through the real
+// host projection first.
+{
+  const { RynthWebHost } = await import("file://" + resolvePath(__dirname, "..", "rynth/webhost.js"));
+  const freed = [];
+  const asBox = (r) => {
+    const b = { free() { freed.push(r.guid); } };
+    for (const [k, v] of Object.entries({ wcid: 1, value: 10, validLocations: 0, containerId: 0, itemsCapacity: 0, requiresBackpackSlot: false, ...r })) {
+      Object.defineProperty(b, k, { get: () => v, enumerable: true });
+    }
+    return b;
+  };
+  const dropped = [];
+  const session = {
+    playerInventory: () => INV.map(asBox),
+    dropItem: (g) => dropped.push(g >>> 0),
+  };
+  const host = new RynthWebHost(session, { entityMap: new Map(), noEventTap: true });
+  const rows = host.TryGetPlayerInventory();
+  ok(rows.find((r) => r.name === "Bound Ring")?.attuned === 1, "host projects attuned");
+  ok(rows.find((r) => r.name === "Quest Token")?.bonded === 1, "host projects bonded");
+  ok(freed.length === INV.length, "every InventoryItem box freed after the copy");
+
+  const out = enrichObservation({ host }, { text: "BASE", data: {} }, {});
+  const text = out && out.text ? out.text : "";
+  ok(text.includes("Bound Ring [attuned]") && text.includes("Quest Token [bonded]"), "live-shaped rows: observation tags attuned/bonded");
+
+  const ring = await drop.apply({ host }, { type: "drop_item", item: "Bound Ring" }, { log: () => {} });
+  ok(ring.ok === false && /attuned/i.test(ring.error || "") && dropped.length === 0, "live-shaped rows: attuned ring refused");
+  const token = await drop.apply({ host }, { type: "drop_item", item: "Quest Token" }, { log: () => {} });
+  ok(token.ok === false && /bonded/i.test(token.error || "") && dropped.length === 0, "live-shaped rows: bonded token refused");
+  const junk = await drop.apply({ host }, { type: "drop_item", item: "Rusty Junk" }, { log: () => {} });
+  ok(junk.ok === true && dropped.includes(0x1004), "live-shaped rows: junk drops through the real host");
+}
+
 console.log(`\ndrop-guard + item-tags: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

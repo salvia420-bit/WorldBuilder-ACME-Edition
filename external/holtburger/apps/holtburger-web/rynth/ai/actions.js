@@ -214,7 +214,11 @@ export async function executeAction(bot, a, { log, journal } = {}) {
         return { type, ok: true, result: { value: a.value } };
       case "pause":
         if (typeof bot?.kernel?.stop !== "function") return fail("unavailable");
-        bot.kernel.stop();
+        // pauseFor("ai") records the intent (kernel.pausedBy): an operator
+        // STOP/RESUME then leaves this kernel off instead of restarting a
+        // grind the director chose to pause (review-2 #4).
+        if (typeof bot.kernel.pauseFor === "function") bot.kernel.pauseFor("ai");
+        else bot.kernel.stop();
         return { type, ok: true, result: "paused" };
       case "resume": {
         if (typeof bot?.kernel?.start !== "function") return fail("unavailable");

@@ -8,8 +8,25 @@
 //
 // Chat lines arrive wasm-preformatted; the tell shape is
 //   `<Sender> tells you, "<body>"`
-// (src/lib.rs ClientEvent kind=2 doc). We match that, extract the body,
+// (src/chat_format.rs format_tell). We match that, extract the body,
 // and dispatch a command if it starts with `prefix`.
+//
+// SELF-TELLS (2026-10-12): since R-chat (2026-10-08, retail
+// Handle_Communication__HearDirectSpeech) a tell to yourself renders as
+//   `You think, "<body>"`
+// — no name. That is exactly the line an operator at the bot's own chat bar
+// produces with `/t <botname>, !bot pause`, and the channel's DEFAULT owner IS
+// the logged-in character, so the default configuration had silently lost its
+// only working sender. A "You think" line can only come from this session
+// (ACE's tell carries the sender guid; sender == target), so it is accepted
+// as the character itself and always authorized; replies to it are printed
+// locally (WriteToChatWindow) instead of being told back to ourselves.
+//
+// Replies go out as a direct tell (host.SendTell → wasm sendTell, 2026-10-12)
+// whenever the host has it. The old `/t <name>, <text>` InvokeChatParser path
+// is kept only for hosts without the capability (a stale pkg/ or a node test
+// fake): on a page without the slash router it falls through to sendChat — a
+// plain Talk, i.e. the reply would be said aloud.
 //
 // Hardening:
 // - SENDER ALLOWLIST (report 13 P0, fixed 2026-07-23): commands are refused
@@ -44,6 +61,12 @@
 //   stops the AI director's check-in timer; resume clears the hold and
 //   restarts the director only if it was running before the pause. `status`
 //   reads kernel.operatorHeld live, so `[PAUSED]` can never go stale.
+//   2026-10-12: when bot.js wires opts.getControl (() => bot.control, the
+//   ai/operator_stop.js OperatorControl the HUD's RUNNING/STOPPED button also
+//   drives), pause/resume/status go through it instead — one stop authority
+//   for chat, HUD and console. Behaviour change: `!bot pause` now PERSISTS
+//   across reconnect/reload reboots (the bot-wide latch), like `!bot ai off`.
+//   While paused, `goto` / `come` are refused ("paused — resume first").
 // - "ai on"/"ai off" route through the durable operator_stop.js latch
 //   (report 13 C2) so an AI stop survives a session-takeover reconnect;
 //   "ai now" and the director's own checkNow() both refuse while latched.
@@ -57,6 +80,7 @@
 
 const CHAT_KIND = 2;
 const TELL_RE = /^(.+?) tells you, "(.*)"$/;
+const SELF_TELL_RE = /^You think, "(.*)"$/; // src/chat_format.rs format_tell, sender == target
 const REPLY_WINDOW_MS = 5000; // per-sender reply rate limit window
 const REPLY_MAX_PER_WINDOW = 5;
 const MAX_LOC_DEG = 102; // the map spans ~±101.95 /loc degrees
@@ -94,11 +118,13 @@ export class RynthControlChannel {
     this.onGoto = opts.onGoto || null; // global-nav hook ("goto <ns> <ew>")
     this.onCome = opts.onCome || null; // guarded-mover hook ("come" — report 01 C2)
     this.getAi = opts.getAi || null; // lazy AI-director hook ("ai ...")
+    this.getControl = opts.getControl || null; // () => OperatorControl (bot.control) — pause/resume authority
     this.log = opts.log || ((m) => console.log(`[ctl] ${m}`));
     this.commands = [];
     this._directorWasEnabledBeforePause = false; // resume restarts the director only if pause stopped it
     this._replyLog = new Map(); // sender -> recent reply timestamps (anti-spam)
     this._unauthorizedLogged = new Set(); // sender -> already told "unauthorized" this session
+    this._selfSenders = new Set(); // names a self-tell ("You think, …") resolved to — replies print locally
     host.onEvent((e) => this._onEvent(e));
   }
 
@@ -111,12 +137,18 @@ export class RynthControlChannel {
     if (this._configuredOwner != null) {
       return Array.isArray(this._configuredOwner) ? this._configuredOwner : [this._configuredOwner];
     }
+    const me = this._selfName();
+    return me ? [me] : [];
+  }
+
+  // The logged-in character's name, or null when it can't be resolved yet.
+  _selfName() {
     try {
       const selfGuid = this.host.GetPlayerId ? this.host.GetPlayerId() : 0;
       const name = selfGuid ? this.host.TryGetObjectName(selfGuid) : null;
-      return name ? [name] : [];
+      return name || null;
     } catch {
-      return [];
+      return null;
     }
   }
 
@@ -124,21 +156,50 @@ export class RynthControlChannel {
     return this._resolvedOwners().includes(sender);
   }
 
-  // `paused` is derived LIVE from the kernel's operator-hold latch (never a
-  // locally-tracked flag) so `!bot status` can't go stale relative to what
-  // actually un-paused or re-paused the kernel (report 01 C1 / 13 C3).
+  _control() {
+    try {
+      return this.getControl ? this.getControl() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // `paused` is derived LIVE — from the OperatorControl when wired (any stop
+  // route: HUD, chat, persisted latch), else from the kernel's operator-hold
+  // latch — never a locally-tracked flag, so `!bot status` can't go stale
+  // relative to what actually un-paused or re-paused the bot (report 01 C1 /
+  // 13 C3).
   get paused() {
+    const c = this._control();
+    if (c && typeof c.isStopped === "function") {
+      try {
+        return c.isStopped() === true;
+      } catch {
+        /* fall through to the kernel latch */
+      }
+    }
     return !!(this.kernel && this.kernel.operatorHeld);
   }
 
   _onEvent(e) {
     if (e.kind !== CHAT_KIND || !e.text) return;
+    let sender;
+    let body;
+    let isSelf = false;
     const m = TELL_RE.exec(e.text);
-    if (!m) return;
-    const [, sender, body] = m;
+    if (m) {
+      [, sender, body] = m;
+    } else {
+      const s = SELF_TELL_RE.exec(e.text);
+      if (!s) return;
+      body = s[1];
+      sender = this._selfName() || "You";
+      isSelf = true;
+    }
     const trimmed = body.trim();
     if (!trimmed.toLowerCase().startsWith(this.prefix.toLowerCase())) return;
-    if (!this._isAllowed(sender)) {
+    if (isSelf) this._selfSenders.add(sender);
+    if (!isSelf && !this._isAllowed(sender)) {
       // Unauthorized: reply once per sender per session (not per attempt —
       // the reply-rate-limiter above caps REPLY volume, not whether a
       // command runs, so without this early refusal any player could still
@@ -168,17 +229,20 @@ export class RynthControlChannel {
     }
     recent.push(now);
     this._replyLog.set(sender, recent);
-    // A tell back to the sender via the retail slash-command lane
-    // (`/t <name>, <text>`). NOTE (corrected 2026-07-23, rynth-review 10
-    // D2/13): on THIS seam InvokeChatParser and WriteToChat are NOT
-    // distinct — both alias the same `sendChat` wasm export
-    // (rynth/webhost.js CAPABILITY_CANDIDATES: `WriteToChat: ["sendChat"]`,
-    // `InvokeChatParser: ["sendChat"]`), so "WriteToChat is display-only" is
-    // false here; there is no live slash-parser vs. display-text split to
-    // exploit. InvokeChatParser is used purely for the accurate verb name
-    // (this IS a slash command, `/t`) — swapping to WriteToChat would send
-    // the identical wire call.
-    this.host.InvokeChatParser(`/t ${sender}, ${text}`);
+    // Self-tell: print locally — a tell to ourselves would only echo back as
+    // another "You think" line.
+    if (this._selfSenders.has(sender) && typeof this.host.WriteToChatWindow === "function") {
+      if (this.host.WriteToChatWindow(`[${this.prefix}] ${text}`)) return;
+    }
+    // A direct tell back to the sender (see the header REPLIES note).
+    const h = this.host;
+    if (typeof h.has === "function" && h.has("SendTell") && typeof h.SendTell === "function") {
+      if (h.SendTell(sender, text)) return;
+    }
+    // Legacy lane for a host without sendTell: the routed `/t <name>, <text>`
+    // chat-bar command (InvokeChatParser tries window.__routeSlashCommand
+    // first, then sendChat).
+    h.InvokeChatParser(`/t ${sender}, ${text}`);
   }
 
   _dispatch(sender, cmd, args) {
@@ -190,6 +254,19 @@ export class RynthControlChannel {
         break;
       }
       case "pause": {
+        const ctl = this._control();
+        if (ctl && typeof ctl.stop === "function") {
+          // OperatorControl: kernel hold + director stop + movement halt +
+          // the persisted bot-wide latch, in one place (see header).
+          try {
+            ctl.stop({ reason: `!bot pause from ${sender}` });
+            this._reply(sender, "paused");
+          } catch (e) {
+            this._reply(sender, `pause failed: ${(e && e.message) || e}`);
+          }
+          this.log(`${sender}: pause`);
+          break;
+        }
         // Single stop authority (report 01 C1 / 13 C3): latch the kernel's
         // operator hold (refuses even the director's own `resume` action)
         // AND stop the director's check-in timer, so a scheduled check-in
@@ -205,6 +282,17 @@ export class RynthControlChannel {
         break;
       }
       case "resume": {
+        const ctl = this._control();
+        if (ctl && typeof ctl.resume === "function") {
+          try {
+            const st = ctl.resume();
+            this._reply(sender, st && st.stopped ? "resume refused (still held)" : "resumed");
+          } catch (e) {
+            this._reply(sender, `resume failed: ${(e && e.message) || e}`);
+          }
+          this.log(`${sender}: resume`);
+          break;
+        }
         this.kernel.releaseOperatorHold();
         this.kernel.start();
         let director = null;
@@ -217,9 +305,17 @@ export class RynthControlChannel {
       }
       case "come":
         // Walk to the sender if they're a nearby tracked entity.
+        if (this.paused) {
+          this._reply(sender, "paused — resume first");
+          break;
+        }
         this._comeToSender(sender);
         break;
       case "goto": {
+        if (this.paused) {
+          this._reply(sender, "paused — resume first");
+          break;
+        }
         // "goto <ns> <ew>" — /loc degrees (floats), routed via the RynthNav
         // sidecar when bot.js wired an onGoto (config.nav).
         const ns = parseFloat(args[0]);

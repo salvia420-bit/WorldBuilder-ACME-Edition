@@ -86,6 +86,62 @@ function makeStore(seed) {
     applyOperatorStopToCfg(afterStart, s);
     check("after start(): a later reboot runs the director again", afterStart.ai && afterStart.ai.model === "z-ai/glm-5.2");
   }
+  // (c) bot-wide latch (2026-10-12, OperatorControl.stop({persist})): its own
+  // key, independent of the AI latch; the boot cfg gains startHeld.
+  {
+    const { BOT_STOP_KEY, latchBotStop, clearBotStop, isBotStopLatched, describeOperatorStop } = mod;
+    check("bot latch key name is rynthBotOperatorStop", BOT_STOP_KEY === "rynthBotOperatorStop", `got ${BOT_STOP_KEY}`);
+    const s = makeStore();
+    check("bot latch initially clear", isBotStopLatched(s) === false);
+    latchBotStop(s);
+    check("latchBotStop sets '1'", s.getItem(BOT_STOP_KEY) === "1" && isBotStopLatched(s) === true);
+    check("bot latch does NOT set the AI latch", isOperatorStopLatched(s) === false);
+    check("describeOperatorStop reads both", JSON.stringify(describeOperatorStop(s)) === JSON.stringify({ ai: false, bot: true }));
+    const cfg = { ai: { model: "m" } };
+    const r = applyOperatorStopToCfg(cfg, s);
+    check("bot latch only: returns false (AI not suppressed)", r === false);
+    check("bot latch only: cfg.startHeld = true", cfg.startHeld === true);
+    check("bot latch only: cfg.ai untouched", cfg.ai && cfg.ai.model === "m");
+    latchOperatorStop(s);
+    const cfg2 = { ai: { model: "m" } };
+    check("both latches: returns true", applyOperatorStopToCfg(cfg2, s) === true);
+    check("both latches: ai=false AND startHeld", cfg2.ai === false && cfg2.startHeld === true);
+    clearBotStop(s);
+    clearOperatorStop(s);
+    const cfg3 = { ai: { model: "m" } };
+    applyOperatorStopToCfg(cfg3, s);
+    check("cleared: no startHeld", !("startHeld" in cfg3));
+  }
+
+  // (d) per-character bot latch (2026-10-12 review #4): localStorage is
+  // origin-wide, so the bot latch is keyed by the character's guid.
+  {
+    const { BOT_STOP_KEY, botStopKey, latchBotStop, clearBotStop, isBotStopLatched, describeOperatorStop, botScopeOf } = mod;
+    const A = 0x50000007, B = 0x50000008;
+    check("botStopKey(guid) is per character", botStopKey(A) === `${BOT_STOP_KEY}:${A >>> 0}`);
+    check("botStopKey(0/null/undefined) is the bare key", botStopKey(0) === BOT_STOP_KEY && botStopKey(null) === BOT_STOP_KEY && botStopKey() === BOT_STOP_KEY);
+    const s = makeStore();
+    latchBotStop(s, A);
+    check("scoped latch: A latched", isBotStopLatched(s, A) === true);
+    check("scoped latch: B not latched", isBotStopLatched(s, B) === false);
+    check("scoped latch: the bare key untouched", isBotStopLatched(s) === false);
+    check("describeOperatorStop(storage, scope)", describeOperatorStop(s, A).bot === true && describeOperatorStop(s, B).bot === false);
+    const cfgA = {}, cfgB = {};
+    applyOperatorStopToCfg(cfgA, s, A);
+    applyOperatorStopToCfg(cfgB, s, B);
+    check("applyOperatorStopToCfg: only the stopped character boots held", cfgA.startHeld === true && !("startHeld" in cfgB));
+    clearBotStop(s, B);
+    check("clearing B leaves A's stop", isBotStopLatched(s, A) === true);
+    clearBotStop(s, A);
+    check("clearing A clears it", isBotStopLatched(s, A) === false);
+    // botScopeOf: host snapshot first, then the raw session handle, else null.
+    check("botScopeOf: host GetPlayerId", botScopeOf({ host: { GetPlayerId: () => A } }) === A);
+    check("botScopeOf: snapshot empty -> raw handle playerGuid",
+      botScopeOf({ host: { GetPlayerId: () => 0, unsafeHandle: { playerGuid: () => B } } }) === B);
+    check("botScopeOf: unknown -> null", botScopeOf({ host: { GetPlayerId: () => 0 } }) === null && botScopeOf(null) === null);
+    check("botScopeOf: a throwing host -> null", botScopeOf({ host: { GetPlayerId() { throw new Error("x"); } } }) === null);
+  }
+
   {
     // Robustness: blocked/absent storage and bad cfg never throw.
     check("applyOperatorStopToCfg(null) -> false, no throw", applyOperatorStopToCfg(null, makeStore()) === false);

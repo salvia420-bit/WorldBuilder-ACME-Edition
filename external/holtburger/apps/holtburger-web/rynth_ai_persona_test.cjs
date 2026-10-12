@@ -35,7 +35,7 @@ check("explorer prompt demotes combat/shopping", explorerBlock.includes("NOT goa
 check("explorer prompt forbids healing/vitals", explorerBlock.includes("NEVER heal"));
 check("explorer prompt has no survival section", !explorerBlock.includes("SURVIVAL FLOOR"));
 check("explorer reply contract identical", explorerBlock.includes('"next_check_minutes": <1..30>'));
-check("bot.js kernel off-switch", /config\.kernel !== false\) kernel\.start\(\)/.test(bot));
+check("bot.js kernel off-switch", /config\.kernel !== false\)\s*\{[\s\S]{0,300}?kernel\.start\(\)/.test(bot));
 check("index.html reads ?botKernel", /botParams\.get\("botKernel"\)/.test(html));
 
 check("bot.js persona -> EXPLORER_SYSTEM_PROMPT branch",

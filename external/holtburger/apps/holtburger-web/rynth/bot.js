@@ -24,13 +24,14 @@
 // both from the served page and under file:// (node fixture tests) — the same
 // property the runtime `base` gives the dynamic sibling imports below.
 import { worldX, worldY, worldToOutdoorCell, normalizeLegWorldFrame } from "./nav_frame.js";
+import { portalSpaceActive } from "./portal_gate.js";
 
 export async function createGrindBot(sessionHandle, config = {}) {
   // Sibling-module base derived from THIS module's URL: identical to the
   // old hardcoded "/apps/holtburger-web/rynth" when served from the page,
   // and additionally resolves under file:// (node fixture tests).
   const base = new URL(".", import.meta.url).href.replace(/\/$/, "");
-  const [wh, cl, bl, ll, vt, kn, cc, rt, uw] = await Promise.all([
+  const [wh, cl, bl, ll, vt, kn, cc, rt, uw, osm] = await Promise.all([
     import(`${base}/webhost.js`),
     import(`${base}/combat_loop.js`),
     import(`${base}/buff_loop.js`),
@@ -40,17 +41,35 @@ export async function createGrindBot(sessionHandle, config = {}) {
     import(`${base}/control_channel.js`),
     import(`${base}/router.js`),
     import(`${base}/unwedge.js`),
+    // The ONE operator stop authority (ai/operator_stop.js — bot.control below).
+    // Optional: a harness that copies rynth/*.js without ai/ still boots, just
+    // without bot.control.
+    import(`${base}/ai/operator_stop.js`).catch(() => null),
   ]);
 
   const host = new wh.RynthWebHost(sessionHandle, config.hostOpts || {});
   host.nearbyRangeM = config.nearbyRangeM ?? 60;
 
-  // Filter desired buffs to the known-spell book so the buff loop never
-  // spins on a spell the character can't cast.
-  const known = new Set(
-    (sessionHandle.playerKnownSpells ? Array.from(sessionHandle.playerKnownSpells() || []) : []).map(Number)
-  );
-  const buffIds = (config.buffs || []).filter((id) => known.has(id));
+  // Desired self-buffs. config.buffs: an id list (each names a buff FAMILY —
+  // filterCastableBuffs keeps an id the book lacks when the book holds another
+  // tier of the same family, so "Strength Self I" survives a character that
+  // only kept Strength Self VI), or "auto" (RynthAi's dynamic list for this
+  // character's spellbook + trained skills). The ladder table both need is
+  // loaded only when buffing is configured; bot.setBuffs() loads it on demand.
+  const readKnownSpells = () => {
+    try {
+      return sessionHandle.playerKnownSpells ? Array.from(sessionHandle.playerKnownSpells() || [], Number) : [];
+    } catch (_) {
+      return [];
+    }
+  };
+  const wantsBuffs = config.buffs === "auto" || (Array.isArray(config.buffs) && config.buffs.length > 0);
+  if (wantsBuffs) await bl.loadSpellLadders();
+  const buffIds = !wantsBuffs
+    ? []
+    : config.buffs === "auto"
+      ? await bl.dynamicBuffsFor(sessionHandle)
+      : bl.filterCastableBuffs(config.buffs, readKnownSpells());
 
   // Persona survival wiring (WP-4, C5-2 + C5-3 / FM-2 + FM-3): an explorer
   // bot boots with combat hunting OFF and looting OFF so it never picks a
@@ -61,10 +80,12 @@ export async function createGrindBot(sessionHandle, config = {}) {
   const isExplorer =
     !!config.ai && typeof config.ai === "object" && config.ai.persona === "explorer";
 
-  const combat = new cl.RynthCombatLoop(host, { priorities: config.priorities || {} });
+  // config.combat passes RynthCombatLoop tuning through (attackHeight,
+  // meleePower, missileAccuracy, meleeChargeRangeM, missileRangeM,
+  // magicRangeM, …); priorities stay top-level as before.
+  const combat = new cl.RynthCombatLoop(host, { priorities: config.priorities || {}, ...(config.combat || {}) });
   if (isExplorer) combat.enabled = false; // hunting OFF at boot (combat_loop _scanTargets gate); hunt_start re-arms
   const buff = buffIds.length ? new bl.RynthBuffLoop(host, buffIds) : null;
-  if (buff) bl.loadSpellLadders(); // B4/B5 — preload the family tier table
   // Explicit config.loot.enabled always wins; otherwise explorer -> false,
   // grind -> true. loot_loop's own `enabled` flag makes tick() a no-op (zero
   // MoveToPosition) when off; config.loot === false drops the loop entirely.
@@ -192,7 +213,11 @@ export async function createGrindBot(sessionHandle, config = {}) {
           } catch { /* journal loss is not fatal */ }
         }
       : null;
-    globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint, onPlan });
+    globalRouter = new gr.GlobalRouter(host, {
+      endpoint: config.nav.endpoint,
+      onPlan,
+      ...(Number.isFinite(config.nav.requestTimeoutMs) ? { requestTimeoutMs: config.nav.requestTimeoutMs } : {}),
+    });
     composeGoto = gcMod.composeGoto;
   }
   // Concurrency guard for doGoto that also covers INDOOR-only compositions:
@@ -488,13 +513,23 @@ export async function createGrindBot(sessionHandle, config = {}) {
           // (it observes the whole bot surface); events only pump once the
           // host heartbeat runs, so this closure never fires before `bot`.
           getAi: () => bot.ai?.director,
+          // !bot pause/resume route through the operator control (bot.control).
+          getControl: () => bot.control,
         });
 
   host.start(config.hz ?? 10);
   // config.kernel === false: no grind loops at all (combat/loot/buff/vitals
   // stay idle — explorer persona / pure-travel sessions). goto/followRoute
   // key their kernel restore off wasRunning, so it STAYS off across routes.
-  if (config.kernel !== false) kernel.start();
+  // config.startHeld (operator_stop.applyOperatorStopToCfg: a persisted HUD or
+  // !bot STOP) boots under the operator hold; bot.control.resume() releases it.
+  if (config.kernel !== false) {
+    if (config.startHeld === true) kernel.holdForOperator();
+    else kernel.start();
+  }
+
+  const moverClaims = new Set(); // bot.claimMovement() tokens (movementClaimed reads it)
+  let setBuffsChain = Promise.resolve(); // bot.setBuffs serialization (review #10)
 
   const bot = {
     host,
@@ -508,6 +543,25 @@ export async function createGrindBot(sessionHandle, config = {}) {
     globalRouter,
     unwedge, // wedge self-recovery reflex (introspection/testing seam; null when config.unwedge === false)
     startedAt: Date.now(), // uptime anchor — ai/observe.js prefers bot.startedAt
+    startHeld: config.startHeld === true, // booted under a persisted operator stop
+    // The grind kernel is part of this bot (false: ?botKernel=off / config.kernel
+    // === false). OperatorControl reads it with movementClaimed(): a kernel a
+    // mover paused for its walk was "running" when STOP was pressed (review #1).
+    kernelEnabled: config.kernel !== false,
+    // The self-buff SPEC as the operator gave it — "auto" stays "auto" (the
+    // resolved list lives on bot.buff). A takeover rebind carries this, so an
+    // auto rig keeps picking up newly learned spells (review-2 #9).
+    buffSpec: config.buffs === "auto" ? "auto" : Array.isArray(config.buffs) ? config.buffs.slice() : null,
+    /** Register an ad-hoc mover's claim on the body (e.g. the AI's approach
+     *  walk by raw pursuit, which leaves no router/goto latch behind) so
+     *  movementClaimed() — and through it the operator stop's "was the kernel
+     *  meant to run" read and the explore-pressure gates — see it.
+     *  -> release() (idempotent). */
+    claimMovement: (tag = "mover") => {
+      const token = { tag: String(tag) };
+      moverClaims.add(token);
+      return () => { moverClaims.delete(token); };
+    },
     // One movement-claim predicate (P1 fix, 05 C1 / 17-SYNTHESIS §1 "Character
     // movement" #12): every OTHER actor that must yield while something else
     // owns the character consults THIS instead of re-deriving a subset of it
@@ -530,6 +584,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
       const rs = router.status?.state;
       if (rs === "WALK" || rs === "PORTAL") return true;
       if (loot && loot.state === "APPROACH") return true;
+      if (moverClaims.size > 0) return true; // claimMovement() holders (AI approach, …)
       return false;
     },
     /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind, restores its
@@ -595,10 +650,50 @@ export async function createGrindBot(sessionHandle, config = {}) {
     lastMission: null,  // most recent completed mission {..., endedAt, result}
     status: () => ({ ...kernel.status, router: router.status }),
     capabilities: () => host.capabilities,
+    /** Replace the self-buff set at runtime (HUD buff toggle / director):
+     *  an id list, "auto" (RynthAi's dynamic list for this character), or
+     *  []/null to stop buffing. Creates the buff loop on first use and hands
+     *  it to the kernel. -> Promise<number[]> (the resolved desired list). */
+    // Serialized (review #10): two quick calls (Buff toggle + Settings→Apply)
+    // used to both await the ladder load, both see bot.buff === null and both
+    // build a RynthBuffLoop — the loser stayed subscribed to host events
+    // forever. Each call now runs after the previous one settles; a failed
+    // call rejects only its own caller.
+    setBuffs: (ids) => {
+      const run = async () => {
+        bot.buffSpec = ids === "auto" ? "auto" : Array.isArray(ids) ? ids.slice() : [];
+        await bl.loadSpellLadders();
+        const list =
+          ids === "auto" ? await bl.dynamicBuffsFor(sessionHandle) : bl.filterCastableBuffs(ids || [], readKnownSpells());
+        if (bot.buff) return bot.buff.setDesired(list);
+        if (!list.length) return [];
+        const loop = new bl.RynthBuffLoop(host, list);
+        loop.startedAt = Date.now(); // B1 login gate anchor (kernel.start() stamps it only at boot)
+        bot.buff = loop;
+        kernel.buff = loop;
+        return list.slice();
+      };
+      const p = setBuffsChain.then(run, run);
+      setBuffsChain = p.catch(() => {});
+      return p;
+    },
     stop: () => {
       kernel.stop();
       router.cancel();
       host.stop();
+      // A stopped/replaced bot (the ?bot=1 takeover rebind) must not leave its
+      // AI layer running on the dead session: the director would keep calling
+      // the LLM (double spend) and the panel/overlay would stack up.
+      const ai = bot.ai;
+      if (ai) {
+        try {
+          if (typeof ai.director?.dispose === "function") ai.director.dispose();
+          else ai.director?.stop?.();
+        } catch { /* best-effort teardown */ }
+        try { ai.metrics?.stop?.(); } catch { /* ditto */ }
+        try { ai.overlay?.unmount?.(); } catch { /* ditto */ }
+        try { ai.destroyPanel?.(); } catch { /* ditto */ }
+      }
     },
   };
   // Bind the controller to the real bot object now that it exists — its
@@ -623,6 +718,14 @@ export async function createGrindBot(sessionHandle, config = {}) {
     } catch (e) {
       console.warn("[rynth] AI wiring failed, grinding without director:", e);
     }
+  }
+  // bot.control — the ONE operator stop/resume/state authority (HUD button,
+  // !bot pause/resume, rynthAI.start/stop). Attached after the director so its
+  // pre-stop memory sees it; also enforces a persisted bot-wide stop.
+  try {
+    osm?.getOperatorControl?.(bot);
+  } catch (e) {
+    console.warn("[rynth] operator control unavailable:", e);
   }
 
   // Console-pasteable VTank/.nav import (nav_import.js wiring, 2026-07-20):
@@ -861,15 +964,24 @@ async function wireAiDirector(bot, aiConfig, base) {
         ui.mountAiPanel(director, {
           client: aiKeyOps(lc.LlmClient),
           models: pv ? pv.modelsFor(pv.DEFAULT_PROVIDER).map((m) => m.id) : undefined,
+          // Resolved at mount: the panel's Enable goes through the operator
+          // control (durable latch, deferred while the bot is stopped).
+          // getOperatorControl is idempotent — it returns bot.control once attached.
+          control: bot.control ?? os.getOperatorControl?.(bot) ?? undefined,
         })));
+    bot.ai.destroyPanel = () => {
+      if (panel) panel.then((p) => p?.destroy?.()).catch(() => {});
+    };
     window.rynthAI = {
       setKey: (key) => lc.LlmClient.saveKey(key),
       clearKey: () => lc.LlmClient.clearKey(),
       // start/stop carry a DURABLE operator intent (operator_stop.js): stop()
       // latches so the ?bot=1 reconnect reboot won't silently re-arm the
-      // director; start() releases it. See operator_stop.js header.
-      start: () => { os.clearOperatorStop(); return director.start(); },
-      stop: () => { os.latchOperatorStop(); return director.stop(); },
+      // director; start() releases it. Both go through bot.control when it is
+      // attached (a start while the bot is operator-stopped is deferred to
+      // resume — a director must never drive a held bot).
+      start: () => { os.clearOperatorStop(); return bot.control?.setAi ? bot.control.setAi(true) : director.start(); },
+      stop: () => { os.latchOperatorStop(); return bot.control?.setAi ? bot.control.setAi(false) : director.stop(); },
       checkNow: () => director.checkNow(),
       status: () => director.status,
       journal,
@@ -879,7 +991,7 @@ async function wireAiDirector(bot, aiConfig, base) {
       // OpenRouter key and nav atlas; WARNS (never clears) an operator-stop
       // latch. Replaces the hand-typed localStorage recipe in STREAM-RIG-OPS.
       wipeForCleanTest: () =>
-        import(`${base}/ai/tools/memory.js`).then((m) => m.wipeForCleanTest(bot.ai)),
+        import(`${base}/ai/tools/memory.js`).then((m) => m.wipeForCleanTest(bot.ai, bot)),
     };
     if (wantPanel) openPanel();
     // ?thoughtOverlay=1 (2026-07-18) — stream-facing teleprompter: reveals
@@ -889,13 +1001,18 @@ async function wireAiDirector(bot, aiConfig, base) {
     try {
       if (new URLSearchParams(location.search).get("thoughtOverlay") === "1") {
         import(`${base}/ai/thought_overlay.js`)
-          .then((m) => m.mountThoughtOverlay(journal, { intervalMinutes: director.intervalMinutes }))
+          .then((m) => { bot.ai.overlay = m.mountThoughtOverlay(journal, { intervalMinutes: director.intervalMinutes }); })
           .catch((e) => console.warn("[rynthAI] thoughtOverlay mount failed:", e));
       }
     } catch { /* flag parse failure = no overlay */ }
   }
 
-  if (aiCfg?.autoStart !== false) director.start();
+  if (aiCfg?.autoStart !== false) {
+    // A bot booted under a persisted operator stop keeps its director off until
+    // bot.control.resume() (which starts it because of this flag).
+    if (bot.startHeld === true) bot.ai.deferredAutoStart = true;
+    else director.start();
+  }
 }
 
 // worldX / worldY are imported from nav_frame.js at the top of this module
@@ -1240,6 +1357,11 @@ export class ExplorePressureController {
     // degrades to exactly the checks above (no behavior change for those).
     if (this.bot.movementClaimed?.()) return false;
     if (director.isBusy()) return false; // check-in in flight (director's public busy accessor)
+    // Mid-teleport (portal_gate.js): never start an idle hop under the tunnel —
+    // the destination may still be building, and the pose is about to jump.
+    if (portalSpaceActive(this.host)) return false;
+    // Operator-STOPPED (bot.control.stop / HUD / !bot pause): no idle hops either.
+    if (this.bot.kernel?.operatorHeld === true) return false;
     if (this._standDown) return false;
     // Movement-utilization fix: inside an open cruise-chain window (a sized
     // drive just landed with director-gap time left) or the short post-
@@ -1286,6 +1408,8 @@ export class ExplorePressureController {
     // 05 C1 fix — see _gatesOpen's identical addition above.
     if (this.bot.movementClaimed?.()) return true;
     if (director.isBusy()) return true; // check-in in flight (director's public busy accessor)
+    if (portalSpaceActive(this.host)) return true; // a teleport started mid-step
+    if (this.bot.kernel?.operatorHeld === true) return true; // operator-STOPPED mid-step
     return false;
   }
 

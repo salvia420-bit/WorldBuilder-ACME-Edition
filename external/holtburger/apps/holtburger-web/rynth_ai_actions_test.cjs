@@ -195,6 +195,14 @@ function makeBot(overrides = {}) {
     check("rejecting bot call caught", r.ok === false && r.error === "async boom", JSON.stringify(r));
   }
   {
+    // review-2 #4: with kernel.pauseFor the AI pause records its intent
+    // (pausedBy "ai") instead of a plain stop.
+    const seen = [];
+    const bot = makeBot({ kernel: { start: () => seen.push("start"), stop: () => seen.push("stop"), pauseFor: (who) => seen.push(["pauseFor", who]) } });
+    const r = await executeAction(bot, { type: "pause" });
+    check("exec pause -> kernel.pauseFor('ai') when available", r.ok === true && seen.length === 1 && seen[0][0] === "pauseFor" && seen[0][1] === "ai", JSON.stringify(seen));
+  }
+  {
     const bot = makeBot({ kernel: { start: () => {}, stop: () => { throw new Error("kernel boom"); } } });
     const r = await executeAction(bot, { type: "pause" });
     check("throwing kernel.stop caught", r.ok === false && r.error === "kernel boom", JSON.stringify(r));

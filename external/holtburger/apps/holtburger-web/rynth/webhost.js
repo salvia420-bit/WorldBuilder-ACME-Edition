@@ -214,6 +214,35 @@ const CAPABILITY_CANDIDATES = {
   // roster string itself is built by plugins/loader.js::formatPluginList.
   SetPluginList: ["setPluginList"],
   GetPluginList: ["pluginList"],
+
+  // ── 2026-10-12 RynthSuite update (additive; API_VERSION 1.1.0) ─────
+  // Direct tell (TellByName). control_channel replied through
+  // InvokeChatParser("/t name, text"), which only works while the page's
+  // slash router (app/slash_commands.js) is installed: the sendChat
+  // fallback is a plain Talk — src/session/commands/social.rs SendChat arm,
+  // "`/`-prefixed slash commands are NOT parsed by GameActionTalk" — so the
+  // reply would have been SAID ALOUD in local chat.
+  SendTell: ["sendTell"],
+  // NoLongerViewingContents (0x0195) — the loot window's own close path
+  // (plugins/corpse-loot-bar.js, HUD overhaul 2026-10-05).
+  CloseContainer: ["noLongerViewingContents"],
+  // Typed vendor profile (Wave F.4): what the vendor will BUY from the
+  // player — item-type mask + value window (retail
+  // VendorProfile::InqAcceptability) — beyond getVendorState's stock list.
+  GetVendorProfile: ["getCurrentVendorProfile"],
+  // Session end (2026-10-09): a DISCONNECT packet so ACE drops the session
+  // at once; without it the next login meets "Account In Use" and ACE
+  // drops BOTH sessions. LogOff = retail CharacterLogOff (0xF653).
+  Disconnect: ["disconnect"],
+  LogOffCharacter: ["logOffCharacter"],
+  // Link health: ms since the last inbound message (u32::MAX = none yet).
+  GetLastRecvAgeMs: ["sessionLastRecvAgeMs"],
+  // Combat slice (2026-10-12): CancelAttack (0x01B7) ends ACE's
+  // auto-repeat swing loop (AutoRepeatAttacks defaults ON — one `attack`
+  // swings forever); localStickyTarget = the local sticky (melee lock) guid,
+  // 0 = none.
+  CancelAttack: ["cancelAttack"],
+  GetLocalStickyTarget: ["localStickyTarget"],
 };
 
 /**
@@ -245,6 +274,9 @@ const ENV_CAPABILITY_PROBES = Object.freeze({
   GetScreenDimensions: () => typeof globalThis.innerWidth === "number",
   // client.ui programmatic panel control (ui/bar.js mountBar return).
   OpenPanel: () => typeof globalThis.__barInstance?.openPanel === "function",
+  // Portal-space presentation (scene3d/portal_space.js publishes the read;
+  // rynth/portal_gate.js prefers this member — see IsPortalSpaceActive).
+  IsPortalSpaceActive: () => typeof globalThis.__isPortalSpaceActive === "function",
 });
 
 /**
@@ -291,6 +323,46 @@ export function probeCapabilities(handleLike) {
 const ODF_PLAYER = 0x08;
 const ODF_ATTACKABLE = 0x10;
 
+// ClientEvent kinds the host itself consumes (scene3d/client_event_kinds.js,
+// generated from src/lib.rs CLIENT_EVENT_KIND_*; inlined because this file
+// must keep zero imports — see the P6.1 note above).
+const KIND_CONFIRMATION_DONE = 71; // u32 = confirmation type, u32b = context
+// ACE ConfirmationManager.confirmationTimeout is 30 s (it then sends
+// ConfirmationDone); retained dialogs outlive it slightly as a backstop.
+const CONFIRM_TTL_MS = 35_000;
+
+/**
+ * The ONE page-wide push-event tap. app/client_events.js forwards every
+ * drained ClientEvent to `window.__rynthOnEvent`; every live host is in
+ * `window.__rynthEventHosts` and gets each event once.
+ *
+ * Before 2026-10-12 each host wrapped the previous `__rynthOnEvent` in a new
+ * closure and could never leave it, so a `?bot=1` takeover rebind (which
+ * builds a fresh bot on the new session) left the dead bot's host in the
+ * chain: its control channel kept answering `!bot` tells through a freed
+ * handle, and every reconnect made the chain one closure deeper. A host now
+ * leaves the set in `dispose()`. A non-host tap that was installed before the
+ * first host is kept and still called first.
+ */
+function installEventTap(host) {
+  const w = window;
+  let hosts = w.__rynthEventHosts;
+  if (!(hosts instanceof Set)) {
+    hosts = new Set();
+    const prev = typeof w.__rynthOnEvent === "function" ? w.__rynthOnEvent : null;
+    w.__rynthEventHosts = hosts;
+    w.__rynthOnEvent = (evt) => {
+      if (prev) {
+        try { prev(evt); } catch (_) {}
+      }
+      for (const h of Array.from(hosts)) {
+        try { h._dispatchEvent(evt); } catch (_) {}
+      }
+    };
+  }
+  hosts.add(host);
+}
+
 // Shared cast-token clock (02 C3 / synthesis streamline #6): combat's
 // CAST_RESOLUTION_TIMEOUT_MS (combat_loop.js) and buff's
 // SELF_BUFF_GIVE_UP_MS (buff_loop.js) were two independent `2500` literals
@@ -298,7 +370,22 @@ const ODF_ATTACKABLE = 0x10;
 // self-clear when UseDoneSeq is unavailable/missed; it does not replace
 // either module's own internal bookkeeping (P2 awaitingCast, B8 pending),
 // which keep their own timeout literals for their own purposes.
-const CAST_TOKEN_TIMEOUT_MS = 2500;
+// 2026-10-12 (magic slice B2): 2500 -> 12000. UseDone normally clears the
+// token first; at 2.5 s the backstop freed it MID-CAST for half the buffs and
+// most level-5+ war spells (2.9-4.4 s windups since the August casting-parity
+// windup fix; level-8 Incantations ~7 s), letting a second module's cast land
+// inside the first one's still-open window.
+const CAST_TOKEN_TIMEOUT_MS = 12_000;
+
+// Page net-pump staleness (magic slice B1): see RynthWebHost._pumpIfStale.
+// Narrowed 2026-10-12 (review #16): a HIDDEN page (rAF stopped) is pumped
+// once its frame pump is 200 ms stale; a VISIBLE page only after its pump has
+// stalled for a full second (rAF throttled/blocked). A slow but live visible
+// page (SwiftShader, ?targetFps=4) keeps its own cadence instead of getting
+// extra full pumpNetFrame passes (net drain, panel flush, input pump) between
+// its real frames — the cast it delays is at most one of its own frames.
+const PUMP_STALE_MS = 200;
+const PUMP_STALE_VISIBLE_MS = 1000;
 
 /**
  * serde_wasm_bindgen's default serializer maps every JSON object to a JS
@@ -327,18 +414,31 @@ export class RynthWebHost {
     this._onTick = [];
     this._onEvent = []; // report 04 push plane
     this._worker = null;
+    this._workerUrl = null;
     this._castToken = null; // { owner, issuedAt, useDoneAtIssue } — 02 C3 shared serializer
-    // Install the push-event tap: the page's pumpNetFrame forwards each
-    // drained ClientEvent here (default-off hook in index.html). Events
-    // are the PUSH complement to the poll snapshot — chat, kill notices,
-    // use-done — that a pure poller would miss or need to reconstruct.
-    if (typeof window !== "undefined" && !opts.noEventTap) {
-      const prev = window.__rynthOnEvent;
-      window.__rynthOnEvent = (evt) => {
-        if (prev) { try { prev(evt); } catch (_) {} }
-        this._dispatchEvent(evt);
-      };
-    }
+    this._confirms = []; // retained server confirmation dialogs (TryGetPendingConfirmations)
+    // Join the push-event tap: the page's dispatchClientEvent forwards each
+    // drained ClientEvent here (app/client_events.js). Events are the PUSH
+    // complement to the poll snapshot — chat, kill notices, use-done — that
+    // a pure poller would miss or need to reconstruct. See installEventTap.
+    if (typeof window !== "undefined" && !opts.noEventTap) installEventTap(this);
+  }
+
+  /**
+   * Retire this host: stop the heartbeat, leave the page event tap and drop
+   * every subscriber. Call it when the bot that owns the host is replaced
+   * (a reconnect rebind) — a stopped-but-subscribed host keeps answering
+   * events through its dead session. Idempotent.
+   */
+  dispose() {
+    this.stop();
+    this._stopped = true;
+    try {
+      globalThis.__rynthEventHosts?.delete?.(this);
+    } catch (_) {}
+    this._onEvent = [];
+    this._onTick = [];
+    this._disposed = true;
   }
 
   /**
@@ -378,6 +478,10 @@ export class RynthWebHost {
     this._m = m;
     this._caps = caps;
     this.snap = null;
+    // Per-session state: a cast claim or a dialog from the previous session
+    // can never resolve on the new one.
+    this._castToken = null;
+    this._confirms = [];
     return this;
   }
 
@@ -386,13 +490,20 @@ export class RynthWebHost {
     this._onEvent.push(fn);
   }
   _dispatchEvent(evt) {
-    // Normalize the wasm ClientEvent into a plain object once.
+    // A stopped/disposed bot host hears nothing (its loops would act through
+    // a session that is gone or no longer theirs).
+    if (this._stopped) return;
+    // Normalize the wasm ClientEvent into a plain object once — synchronously:
+    // app/client_events.js frees the box right after the taps return.
     const e = {
       kind: evt.kind,
       text: evt.stringPayload ?? null,
       u32: evt.u32Payload ?? 0,
       u32b: evt.u32Payload2 ?? 0,
+      f32: evt.f32Payload ?? null,
     };
+    // The server closed (answered / timed out) a confirmation dialog.
+    if (e.kind === KIND_CONFIRMATION_DONE) this._retireConfirm(e.u32 >>> 0, e.u32b >>> 0);
     for (const fn of this._onEvent) {
       try {
         fn(e, this);
@@ -509,23 +620,78 @@ export class RynthWebHost {
     const src =
       "let t=null;onmessage=(e)=>{if(e.data&&e.data.cmd==='start'){clearInterval(t);" +
       "t=setInterval(()=>postMessage(1),e.data.ms)}else{clearInterval(t)}};";
-    this._worker = new Worker(
-      URL.createObjectURL(new Blob([src], { type: "text/javascript" }))
-    );
+    // Kept so stop() can revoke it — every start() used to leak one Blob URL
+    // (a reconnect rebind or a HUD stop/start cycle starts the host again).
+    this._workerUrl = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    this._worker = new Worker(this._workerUrl);
     this._worker.onmessage = () => this._tick();
     this._worker.postMessage({ cmd: "start", ms });
+    this._stopped = false;
   }
   stop() {
     if (this._worker) {
       this._worker.terminate();
       this._worker = null;
+      // A bot whose heartbeat was stopped (bot.stop(), a takeover rebind)
+      // must not keep reacting to the push plane — see _dispatchEvent. Only
+      // a heartbeat that actually ran latches it: the plugin facade's host
+      // never starts one, and its subscribers stay live.
+      this._stopped = true;
     }
+    if (this._workerUrl) {
+      try { URL.revokeObjectURL(this._workerUrl); } catch (_) {}
+      this._workerUrl = null;
+    }
+  }
+  /** True while the heartbeat worker runs (start() called, stop() not). */
+  get running() {
+    return !!this._worker;
   }
   onTick(fn) {
     this._onTick.push(fn);
   }
 
+  /**
+   * Keep the page's net/movement pump alive while the bot runs (magic slice
+   * B1, 2026-10-12). Since 457f9de1 / fef31a95 a cast or attack queues a
+   * retail stop-completely and the action goes out only after the NEXT
+   * movement tick (session/commands/combat.rs → movement/system.rs), and with
+   * cmdInterp on by default only the page frame pump drives that tick
+   * (app/frame_pump.js; scene3d phase #0) — the wasm loop itself has just a
+   * 5 s keepalive. In a hidden/background tab without ?netDrainHz the rAF pump
+   * stops, so a bot's casts and attacks were never sent at all. The bot's own
+   * heartbeat is a Worker (not throttled), so it pumps whenever the page pump
+   * (`window.__lastPumpMs`, performance.now() domain, stamped by
+   * pumpNetFrame) is stale — PUMP_STALE_MS on a hidden page,
+   * PUMP_STALE_VISIBLE_MS (a stalled rAF) on a visible one:
+   * `window.__netFramePump()`, else the bare tickMovement. Not a page (node
+   * harness) -> no-op. Never throws.
+   */
+  _pumpIfStale() {
+    if (typeof window === "undefined") return;
+    try {
+      const now = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+      const last = window.__lastPumpMs;
+      const hidden = typeof document !== "undefined" && !!document && document.hidden === true;
+      const staleAfter = hidden ? PUMP_STALE_MS : PUMP_STALE_VISIBLE_MS;
+      if (typeof last === "number" && now - last < staleAfter) return;
+      if (typeof window.__netFramePump === "function") {
+        window.__netFramePump();
+        this._pumps = (this._pumps | 0) + 1;
+        return;
+      }
+      const tick = this._m.TickMovement;
+      if (tick) {
+        tick();
+        this._pumps = (this._pumps | 0) + 1;
+      }
+    } catch (_) {
+      /* a failing pump must never kill the heartbeat */
+    }
+  }
+
   _tick() {
+    this._pumpIfStale();
     // ONE await-free synchronous block: compose + freeze + deliver.
     const c = (cap, ...args) => {
       const f = this._m[cap];
@@ -641,7 +807,13 @@ export class RynthWebHost {
 
   // ── RynthCoreHost members: per-tick reads (snapshot-backed) ─────────
   GetPlayerId() {
-    return this.snap ? this.snap.playerGuid : 0;
+    if (this.snap) return this.snap.playerGuid;
+    // No heartbeat yet (a host used before start(), or a harness that never
+    // ticks it): read the guid live instead of answering 0 — the casters gate
+    // on a real guid (no guid = no cast, because an untargeted fallback can
+    // crash ACE; see buff_loop._castSelfBuff).
+    const v = this._live("GetPlayerId");
+    return typeof v === "number" ? v >>> 0 : 0;
   }
   GetServerTime() {
     return this.snap ? this.snap.serverTime : 0;
@@ -658,6 +830,11 @@ export class RynthWebHost {
   GetCastBusyState() {
     return this.snap ? this.snap.castBusy : 0;
   }
+  /** NOTE (magic slice, 2026-10-12): GetCastBusyState is set only by the
+   *  page's JS cast chain (noteLocalCastWindow), never by a bot cast — it is
+   *  always 0 for rynth's own casts. Casters gate on GetBusyState() === 0
+   *  (the outstanding-request count) and resolve on the registry / UseDone /
+   *  a kind=13 refusal, never on this. */
   get CanCastNow() {
     return this.GetCastBusyState() === 0;
   }
@@ -735,30 +912,31 @@ export class RynthWebHost {
     return { container, wielder, location };
   }
   /// True iff the object's description flags have actually been received.
-  /// The wasm read returns undefined/null (not 0) for an object whose
-  /// ObjectDescriptionEvent hasn't landed yet, OR when the host lacks the
-  /// GetObjectDescFlags capability at all — either way the flags are
-  /// unavailable. This is the web analogue of C#'s `HasObjectIsAttackable`
-  /// capability guard (CombatManager.cs:610), which lets attackability
-  /// degrade-open rather than fail-closed on missing data.
+  /// The wasm read (`objectDescFlags`, src/lib.rs) is `u32`, `0` for an
+  /// UNKNOWN guid (`unwrap_or(0)`) — it never answers undefined — so a 0 only
+  /// counts as data when the entity itself is tracked (`objectName` answers
+  /// `undefined` for an unknown guid). Absent capability -> false. This is the
+  /// web analogue of C#'s `HasObjectIsAttackable` capability guard
+  /// (CombatManager.cs:610), which lets attackability degrade-open rather
+  /// than fail-closed on missing data. (Corrected 2026-10-12: the old doc
+  /// claimed an undefined answer, so this read true for every guid.)
   HasObjectDescFlags(guid) {
     const flags = this._live("GetObjectDescFlags", guid);
-    return flags !== undefined && flags !== null;
+    if (typeof flags !== "number") return false;
+    if (flags !== 0) return true;
+    return this._live("GetObjectName", guid) != null;
   }
   /// Report 11 T2 filter class: attackable per the spawn description flags
-  /// (0x10). FAIL-OPEN when the flags are GENUINELY ABSENT (not yet streamed)
-  /// — RynthAi's anti-stall discipline: `if (HasObjectIsAttackable &&
-  /// !ObjectIsAttackable(id)) continue;` (CombatManager.cs:610) only excludes
-  /// a target when the flags ARE present AND the attackable bit is clear; an
-  /// object with no desc yet is treated attackable so the bot doesn't "stare
-  /// at a monster for 3s" through the post-spawn/post-login window (report 11
-  /// T4; b5.md combat T4). The prior code coalesced absent flags to 0 and
-  /// failed CLOSED, stalling on any not-yet-described creature. When flags ARE
-  /// present (a number, even 0) we still honour a clear attackable bit ->
-  /// false, so vendors/NPCs stay excluded.
+  /// (0x10). FAIL-OPEN when the flags are GENUINELY ABSENT (see
+  /// HasObjectDescFlags) — RynthAi's anti-stall discipline:
+  /// `if (HasObjectIsAttackable && !ObjectIsAttackable(id)) continue;`
+  /// (CombatManager.cs:610) only excludes a target when the flags ARE present
+  /// AND the attackable bit is clear (report 11 T4; b5.md combat T4). A
+  /// tracked object with flags 0 is a real "not attackable" (vendors/NPCs
+  /// stay excluded); an untracked guid fails open, as designed.
   ObjectIsAttackable(guid) {
-    const flags = this._live("GetObjectDescFlags", guid);
-    if (flags === undefined || flags === null) return true; // flags absent -> fail-open
+    if (!this.HasObjectDescFlags(guid)) return true; // flags absent -> fail-open
+    const flags = this._live("GetObjectDescFlags", guid) >>> 0;
     return (flags & ODF_ATTACKABLE) !== 0;
   }
   ObjectIsPlayer(guid) {
@@ -831,28 +1009,54 @@ export class RynthWebHost {
   /// Pending server confirmation dialogs -> [{confirmType, context, text}]
   /// (plain objects, [] when none). An unanswered dialog declines on a
   /// server-side timeout — see SendConfirmationResponse.
+  ///
+  /// NON-destructive (2026-10-12). The wasm `pendingConfirmations()` is a
+  /// DRAIN, and two rynth callers read it: the AI observation
+  /// (observe_ext.js probeConfirmations, every check-in) and the director's
+  /// `confirm` action (tools/world.js). The observation drained the dialog, so
+  /// the `confirm` that followed always found nothing ("no confirmation dialog
+  /// is pending"). The host is now the only drainer and RETAINS each dialog
+  /// until it is answered here, the server closes it (kind=71
+  /// ConfirmationDone, see _dispatchEvent), or CONFIRM_TTL_MS passes.
   TryGetPendingConfirmations() {
-    const raw = this._live("GetPendingConfirmations");
-    if (!raw) return [];
-    const out = [];
-    try {
+    const now = Date.now();
+    const raw = plainFromMaps(this._live("GetPendingConfirmations"));
+    if (Array.isArray(raw)) {
       for (const c of raw) {
-        out.push({
-          confirmType: Number(c.confirmType ?? c.confirm_type ?? 0),
-          context: Number(c.context ?? 0),
-          text: String(c.text ?? ""),
-        });
+        try {
+          const row = {
+            confirmType: Number(c.confirmType ?? c.confirm_type ?? 0) >>> 0,
+            context: Number(c.context ?? 0) >>> 0,
+            text: String(c.text ?? ""),
+            receivedAt: now,
+          };
+          // A re-sent (type, context) replaces the old row rather than doubling it.
+          this._retireConfirm(row.confirmType, row.context);
+          this._confirms.push(row);
+        } catch (_) {
+          /* a bad row degrades to fewer dialogs */
+        }
       }
-    } catch (_) {
-      /* partial rows degrade to fewer dialogs */
     }
-    return out;
+    this._confirms = this._confirms.filter((c) => now - c.receivedAt < CONFIRM_TTL_MS);
+    return this._confirms.map(({ confirmType, context, text }) => ({ confirmType, context, text }));
+  }
+  _retireConfirm(confirmType, context) {
+    if (!this._confirms.length) return;
+    this._confirms = this._confirms.filter((c) => !(c.confirmType === confirmType && c.context === context));
   }
 
   // ── inventory / economy reads (2026-07-17) ──────────────────────────
   /// Plain-object projection of SessionHandle.playerInventory()
   /// (Array<InventoryItem>, src/lib.rs) — wasm-bindgen rows copied field-
   /// by-field so callers never hold wasm handles. [] pre-spawn / on error.
+  ///
+  /// `containerId` is 0 for the MAIN pack (and worn items) and the side
+  /// pack's guid otherwise — the wasm maps the player's own guid to 0
+  /// (src/lib.rs inventory snapshot builder). `requiresBackpackSlot` marks a
+  /// CONTAINER-slot item (a pack/focus — retail UseBackpackSlot), not "takes
+  /// an item slot". Each InventoryItem box is freed once copied (2026-10-12;
+  /// loot's CONFIRM polls this every tick).
   TryGetPlayerInventory() {
     const raw = this._live("GetPlayerInventory");
     if (!Array.isArray(raw)) return [];
@@ -865,18 +1069,75 @@ export class RynthWebHost {
           wcid: (it.wcid ?? 0) >>> 0,
           value: Number(it.value ?? 0),
           stackSize: Number(it.stackSize ?? 1),
+          maxStackSize: Number(it.maxStackSize ?? 0),
           equipMask: (it.equipMask ?? 0) >>> 0,
           validLocations: (it.validLocations ?? 0) >>> 0,
           itemType: (it.itemType ?? 0) >>> 0,
           containerId: (it.containerId ?? 0) >>> 0,
+          placement: Number(it.placement ?? -1),
           itemsCapacity: Number(it.itemsCapacity ?? 0),
+          containersCapacity: Number(it.containersCapacity ?? 0),
           requiresBackpackSlot: !!it.requiresBackpackSlot,
+          // PropertyInt Attuned (114) / Bonded (33). observe_ext.js's item
+          // tags and tools/world.js's drop_item guard read these; they were
+          // never projected, so both were dead on live data (2026-10-12).
+          attuned: Number(it.attuned ?? 0) | 0,
+          bonded: Number(it.bonded ?? 0) | 0,
         });
       } catch (_) {
         /* one bad row must not drop the snapshot */
       }
+      try { it?.free?.(); } catch (_) { /* already released */ }
     }
     return out;
+  }
+  /// Room in the player's own packs, per container — the retail rule the
+  /// client's vendor/loot windows use (plugins/inventory_helpers.js
+  /// packCapacity): main pack = non-pack items directly on the player vs
+  /// SessionHandle.playerItemsCapacity; container slots = top-level packs vs
+  /// playerContainersCapacity (retail 102 / 7 until the stats land); each
+  /// side pack = its contents vs its own ItemsCapacity. null until the
+  /// inventory streams.
+  /// -> { main:{used,cap,free}, containers:{used,cap,free},
+  ///      packs:[{guid,name,used,cap,free}], freeItemSlots }
+  TryGetPackRoom() {
+    const inv = this.TryGetPlayerInventory();
+    if (!inv.length) return null;
+    const readCap = (prop, dflt) => {
+      try {
+        const c = this.s[prop];
+        if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
+      } catch (_) {}
+      return dflt;
+    };
+    const mainCap = readCap("playerItemsCapacity", 102);
+    const contCap = readCap("playerContainersCapacity", 7);
+    let mainUsed = 0;
+    let contUsed = 0;
+    const packs = new Map();
+    for (const i of inv) {
+      if (i.equipMask !== 0) continue;
+      if (i.containerId === 0) {
+        if (i.requiresBackpackSlot) {
+          contUsed++;
+          if (i.itemsCapacity > 0) packs.set(i.guid, { guid: i.guid, name: i.name, used: 0, cap: i.itemsCapacity });
+        } else {
+          mainUsed++;
+        }
+      }
+    }
+    for (const i of inv) {
+      const p = i.containerId !== 0 ? packs.get(i.containerId) : null;
+      if (p) p.used++;
+    }
+    const packList = [...packs.values()].map((p) => ({ ...p, free: Math.max(0, p.cap - p.used) }));
+    const main = { used: mainUsed, cap: mainCap, free: Math.max(0, mainCap - mainUsed) };
+    return {
+      main,
+      containers: { used: contUsed, cap: contCap, free: Math.max(0, contCap - contUsed) },
+      packs: packList,
+      freeItemSlots: main.free + packList.reduce((s, p) => s + p.free, 0),
+    };
   }
   /// Items currently worn/wielded (non-zero equip mask).
   TryGetEquipment() {
@@ -916,53 +1177,79 @@ export class RynthWebHost {
     const v = me ? this._live("GetObjectIntProperty", me, 5) : undefined;
     return typeof v === "number" && Number.isFinite(v) ? v : null;
   }
-  /// Free item slots, AGGREGATE across main pack + side packs: capacity
-  /// (SessionHandle.playerItemsCapacity, live 102, + unequipped packs'
-  /// itemsCapacity) minus unequipped backpack-slot items. Per-container
-  /// math is impossible today — every InventoryItem.containerId is 0 in
-  /// the current wasm snapshot (live-probed 2026-07-17). null until the
-  /// inventory streams. (observe_ext.js probes this exact name —
-  /// FREE_SLOT_GETTERS.)
+  /// Free item slots, AGGREGATE across the main pack + side packs
+  /// (TryGetPackRoom().freeItemSlots). null until the inventory streams.
+  /// (observe_ext.js probes this exact name — FREE_SLOT_GETTERS; loot_loop
+  /// pauses looting at 0.)
+  ///
+  /// Fixed 2026-10-12: the old formula subtracted the count of
+  /// `requiresBackpackSlot` rows — the PACKS, not the items — from a
+  /// capacity that included every pack, so it read ~100+ free however full
+  /// the character was (the director never saw a full pack, and the loot loop
+  /// kept issuing pickups ACE refused). Per-container math works now:
+  /// containerId separates main-pack rows (0) from side-pack rows.
   TryGetFreeSlots() {
-    const inv = this.TryGetPlayerInventory();
-    if (!inv.length) return null;
-    let cap = 0;
-    try {
-      const c = this.s.playerItemsCapacity;
-      if (typeof c === "number" && Number.isFinite(c) && c > 0) cap = c;
-    } catch (_) {}
-    if (!cap) cap = 102;
-    for (const i of inv) if (i.itemsCapacity > 0 && i.equipMask === 0) cap += i.itemsCapacity;
-    const used = inv.filter((i) => i.equipMask === 0 && i.requiresBackpackSlot).length;
-    return Math.max(0, cap - used);
+    const room = this.TryGetPackRoom();
+    return room ? room.freeItemSlots : null;
   }
   /// Vendor stock snapshot (plain objects) — populated after the vendor's
   /// profile lands (UseObject on the vendor triggers it). null until then.
+  ///
+  /// PRICE DIRECTION (plugins/commerce_logic.js "THE DIRECTION TRAP", fixed
+  /// in the vendor UI 2026-10-05): `buyMultiplier` is what the VENDOR PAYS
+  /// when it buys from the player (~0.5–0.9); `sellMultiplier` is what it
+  /// CHARGES the player (~1.35–1.7). A purchase is priced with
+  /// sellMultiplier (retail ShopSystem::SellPrice), a sale with buyMultiplier.
+  /// The VendorStateJs box and each VendorItemJs box are freed once copied.
   TryGetVendorState(vendorGuid) {
     const v = this._live("GetVendorState", vendorGuid);
     if (!v) return null;
     const items = [];
+    let out = null;
     try {
-      for (const it of v.items || []) {
-        items.push({
-          itemGuid: (it.itemGuid ?? 0) >>> 0,
-          name: it.name ?? "",
-          wcid: (it.wcid ?? 0) >>> 0,
-          value: Number(it.value ?? 0),
-          stackSize: Number(it.stackSize ?? 1),
-          itemType: (it.itemType ?? 0) >>> 0,
-        });
+      // `items` is a getter that builds a fresh array of fresh boxes.
+      const rows = v.items || [];
+      for (const it of rows) {
+        try {
+          items.push({
+            itemGuid: (it.itemGuid ?? 0) >>> 0,
+            name: it.name ?? "",
+            wcid: (it.wcid ?? 0) >>> 0,
+            value: Number(it.value ?? 0),
+            stackSize: Number(it.stackSize ?? 1),
+            maxStackSize: it.maxStackSize == null ? null : Number(it.maxStackSize),
+            itemType: (it.itemType ?? 0) >>> 0,
+            // -1 / 0 = unlimited (ACE); a positive count bounds a purchase.
+            supply: it.supply == null ? null : Number(it.supply),
+            packSlot: typeof it.packSlot === "boolean" ? it.packSlot : null,
+          });
+        } catch (_) {
+          /* partial profile degrades to fewer rows */
+        }
+        try { it?.free?.(); } catch (_) {}
       }
+      out = {
+        vendorGuid: (v.vendorGuid ?? vendorGuid) >>> 0,
+        vendorName: v.vendorName ?? "",
+        buyMultiplier: Number(v.buyMultiplier ?? 1),
+        sellMultiplier: Number(v.sellMultiplier ?? 1),
+        items,
+      };
     } catch (_) {
-      /* partial profile degrades to fewer rows */
+      out = null;
     }
-    return {
-      vendorGuid: (v.vendorGuid ?? vendorGuid) >>> 0,
-      vendorName: v.vendorName ?? "",
-      buyMultiplier: Number(v.buyMultiplier ?? 1),
-      sellMultiplier: Number(v.sellMultiplier ?? 1),
-      items,
-    };
+    try { v?.free?.(); } catch (_) {}
+    return out;
+  }
+  /// Typed vendor profile (SessionHandle.getCurrentVendorProfile, Wave F.4)
+  /// as a plain object: {vendorGuid, vendorName, buyAcceptCategories,
+  /// buyAcceptCategoryNames, dealsMagic, minValue, maxValue, hasNoMin,
+  /// hasNoMax, buyMultiplier, sellMultiplier, stock:[…]}. What the vendor
+  /// will BUY (retail VendorProfile::InqAcceptability's inputs). null until
+  /// the vendor has been opened / when the capability is absent.
+  TryGetVendorProfile(vendorGuid) {
+    const p = plainFromMaps(this._live("GetVendorProfile", vendorGuid >>> 0));
+    return p && typeof p === "object" ? p : null;
   }
 
   // ── actions (fire-and-forget through SessionHandle) ────────────────
@@ -979,6 +1266,10 @@ export class RynthWebHost {
   }
   MeleeAttack(targetGuid, attackHeight = 2, powerLevel = 0.5) {
     return this._act("MeleeAttack", targetGuid, attackHeight, powerLevel);
+  }
+  /** Stop ACE's auto-repeat attack loop (CancelAttack 0x01B7). */
+  CancelAttack() {
+    return this._act("CancelAttack");
   }
   ChangeCombatMode(mode) {
     return this._act("ChangeCombatMode", mode);
@@ -1041,6 +1332,13 @@ export class RynthWebHost {
   }
   StopStick() {
     return this._act("StopStick");
+  }
+  /** The local player's sticky (melee-lock) target guid — 0 when none
+   *  (always 0 while the wasm sticky manager is off); null when the
+   *  capability is absent. Live read. */
+  TryGetLocalStickyTarget() {
+    const v = this._live("GetLocalStickyTarget");
+    return typeof v === "number" ? v >>> 0 : null;
   }
   StopCompletely() {
     return this._act("StopCompletely");
@@ -1133,6 +1431,43 @@ export class RynthWebHost {
     if (!hooks?.outgoing?.on || typeof fn !== "function") return () => {};
     return hooks.outgoing.on("chatOutgoing", fn);
   }
+  /**
+   * Private tell to `name` (TellByName — ACE resolves the name server-wide).
+   * Falls back to the routed `/t name, text` chat-bar path, which reaches the
+   * same wasm sendTell when the page's slash router is installed. Never falls
+   * through to a plain say. @returns {boolean} sent
+   */
+  SendTell(name, text) {
+    const who = String(name ?? "").trim();
+    const msg = String(text ?? "");
+    if (!who || !msg) return false;
+    if (this._m.SendTell) return this._act("SendTell", who, msg);
+    const route = typeof globalThis !== "undefined" ? globalThis.__routeSlashCommand : null;
+    if (typeof route !== "function") return false;
+    try {
+      const routed = route(this.s, `/t ${who}, ${msg}`);
+      return !!(routed && routed.dispatched && !routed.error);
+    } catch (_) {
+      return false;
+    }
+  }
+  /** Close a container we were viewing (NoLongerViewingContents). */
+  CloseContainer(containerGuid) {
+    return this._act("CloseContainer", containerGuid >>> 0);
+  }
+  /** End the session cleanly (DISCONNECT) — call before a page goes away. */
+  Disconnect() {
+    return this._act("Disconnect");
+  }
+  /** Retail log-off (CharacterLogOff): save + leave the world. */
+  LogOffCharacter() {
+    return this._act("LogOffCharacter");
+  }
+  /** ms since the last inbound server message; null when unknown/none yet. */
+  TryGetLastRecvAgeMs() {
+    const v = this._live("GetLastRecvAgeMs");
+    return typeof v === "number" && Number.isFinite(v) && v < 0xffffffff ? v : null;
+  }
   RequestId(guid) {
     return this._act("RequestId", guid);
   }
@@ -1200,9 +1535,14 @@ export class RynthWebHost {
     return this._act("MergeStacks", srcGuid >>> 0, dstGuid >>> 0, Math.max(1, amount | 0));
   }
   /// Answer a pending server confirm dialog — confirmType/context verbatim
-  /// from TryGetPendingConfirmations.
+  /// from TryGetPendingConfirmations. A sent answer retires the retained row.
+  /// NOTE: the player-facing Yes/No modal (plugins/server-confirm.js, default
+  /// on since crafting-1 2026-10-08) is driven by the kind=70 event, not this
+  /// queue — it stays open until ACE's ConfirmationDone or its own timeout.
   SendConfirmationResponse(confirmType, context, accepted) {
-    return this._act("SendConfirmationResponse", confirmType | 0, context | 0, !!accepted);
+    const ok = this._act("SendConfirmationResponse", confirmType >>> 0, context >>> 0, !!accepted);
+    if (ok) this._retireConfirm(confirmType >>> 0, context >>> 0);
+    return ok;
   }
 
   // ── advancement plane (2026-07-17) ──────────────────────────────────
@@ -1211,6 +1551,15 @@ export class RynthWebHost {
   /// hydrates. unspentXp reassembles the levelInfo lo/hi u32 pair into a
   /// Number (XP stays well under MAX_SAFE_INTEGER). (advancement.js/observe_ext
   /// read this exact shape.)
+  ///
+  /// `nextCost` (XP to the next rank; 0 = max rank) rides every skill, and —
+  /// since training-3 (2026-10-08) added the stride-5 `attributeXp` /
+  /// `vitalXp` arrays `[type, ranks, start, spent_xp, next_rank_cost]` —
+  /// every attribute and vital too (undefined on an older pkg/). ACE REFUSES
+  /// (not caps) a raise larger than the XP left to max rank
+  /// (Player_Attributes.cs SpendAttributeXp). The PlayerStatsSnapshot box is
+  /// freed once read — its getters return copies (`.slice()`), and the
+  /// plugin facade's `client.player.stats` frees it for the same reason.
   TryGetPlayerStats() {
     let ps = null;
     try {
@@ -1227,6 +1576,13 @@ export class RynthWebHost {
       for (let i = 0; i + 3 < a.length; i += 4) attributes[a[i]] = { current: a[i + 1], base: a[i + 2], ranks: a[i + 3] };
     } catch (_) {}
     try {
+      const ax = ps.attributeXp || [];
+      for (let i = 0; i + 4 < ax.length; i += 5) {
+        const row = attributes[ax[i]];
+        if (row) { row.spentXp = ax[i + 3]; row.nextCost = ax[i + 4]; }
+      }
+    } catch (_) {}
+    try {
       const s = ps.skills || [];
       for (let i = 0; i + 5 < s.length; i += 6) skills[s[i]] = { current: s[i + 1], base: s[i + 2], ranks: s[i + 3], training: s[i + 4], nextCost: s[i + 5] };
     } catch (_) {}
@@ -1235,10 +1591,18 @@ export class RynthWebHost {
       for (let i = 0; i + 3 < v.length; i += 4) vitals[v[i]] = { current: v[i + 1], base: v[i + 2], max: v[i + 3] };
     } catch (_) {}
     try {
+      const vx = ps.vitalXp || [];
+      for (let i = 0; i + 4 < vx.length; i += 5) {
+        const row = vitals[vx[i]];
+        if (row) { row.spentXp = vx[i + 3]; row.nextCost = vx[i + 4]; }
+      }
+    } catch (_) {}
+    try {
       const li = ps.levelInfo || [];
       level = li[0] >>> 0;
       unspentXp = (li[3] >>> 0) + (li[4] >>> 0) * 4294967296;
     } catch (_) {}
+    try { ps.free?.(); } catch (_) { /* already released */ }
     return { level, unspentXp, attributes, skills, vitals };
   }
   /// Available (unspent) skill credits — SessionHandle.playerSkillCredits.
@@ -1298,9 +1662,27 @@ export class RynthWebHost {
   }
   /** LIVE (not snapshot) pose read — the namespaced `client.player.pose`
    *  view keeps retail-client "read it now" semantics; `TryGetPlayerPose()`
-   *  is the frozen per-tick read (design §2.4). */
+   *  is the frozen per-tick read (design §2.4). A plain copy: the
+   *  LocalPlayerPose box is freed here (2026-10-12 — it was handed out raw,
+   *  and no caller freed it). */
   TryGetPlayerPoseLive() {
-    return this._live("GetPlayerPose") ?? null;
+    const box = this._live("GetPlayerPose");
+    if (!box) return null;
+    let pose = null;
+    try {
+      pose = {
+        landblockId: box.landblockId >>> 0,
+        x: box.x,
+        y: box.y,
+        z: box.z,
+        heading: box.heading ?? null,
+        isOnGround: typeof box.isOnGround === "boolean" ? box.isOnGround : null,
+      };
+    } catch (_) {
+      pose = null;
+    }
+    try { box.free?.(); } catch (_) {}
+    return pose;
   }
   /** Enchantment snapshot for the local player; `[]` on absence/error. */
   TryGetEnchantments() {
@@ -1429,6 +1811,19 @@ export class RynthWebHost {
       return (em.getSelectedTarget() ?? 0) >>> 0;
     } catch (_) {
       return 0;
+    }
+  }
+
+  // ── portal space (environment capability, 2026-10-12) ──────────────
+  /** True while the client shows portal space — the teleport tunnel through
+   *  the world fade-in, including 0d06b92e's destination-build hold
+   *  (scene3d/portal_space.js `__isPortalSpaceActive`). Movers hold while it
+   *  is up (rynth/portal_gate.js). Absent page seam / throw -> false. */
+  IsPortalSpaceActive() {
+    try {
+      return globalThis.__isPortalSpaceActive?.() === true;
+    } catch {
+      return false;
     }
   }
 

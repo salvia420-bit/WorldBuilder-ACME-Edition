@@ -17,11 +17,13 @@
 // combat_loop's guid-based polling — it's already live and authoritative),
 // and either delete CombatMemory's kill/TTK bookkeeping or clearly demote it
 // to "approximate, name-keyed, corroboration-only, never compared to the
-// kernel's kill count in any observe-block." Also note (12 §1.1): kind=19
-// currently has ZERO live consumers at all — the kernel drives loops via
-// `.tick()` and never calls the `startOn()` that subscribes combat_loop's
-// own `_onCombatEvent`, so combat_loop's push-event path is ALSO presently
-// dormant (it still functions via polling). Reconcile that seam first.
+// kernel's kill count in any observe-block." The other half of the old
+// blocker (12 §1.1, the dormant seam) is RECONCILED as of 2026-10-12:
+// combat_loop now subscribes its own `_onCombatEvent` lazily from tick(), so
+// on the kernel path kind=19 (attack-loop ends, damage) and kind=29 (deaths
+// — a kill confirm there now) reach the live loop. Wiring this module would
+// therefore make it the SECOND live subscriber, not the first — the
+// kill-truth decision above is the remaining blocker.
 // ═══════════════════════════════════════════════════════════════════════
 //
 // combat_memory.js — the combat-telemetry core (Phase-2 dark module, A3-1 §D4).
@@ -172,7 +174,7 @@ export class CombatMemory {
     this.totals = {
       dealt: 0, taken: 0, hits: 0, misses: 0,
       evadesFor: 0, evadesAgainst: 0, critsDealt: 0, critsTaken: 0,
-      swings: 0, swingErrors: 0, kills: 0,
+      swings: 0, swingErrors: 0, loopEnds: 0, kills: 0,
     };
     this.observedDeaths = 0; // kind=29 count (corroboration; not name-bridged)
     this.lastDeathAt = 0;
@@ -298,7 +300,14 @@ export class CombatMemory {
 
   _onAttackDone(d, now) {
     this.totals.swings += 1;
-    if (d.error && d.error !== "None") this.totals.swingErrors += 1;
+    // ACE ends EVERY repeat chain — including a clean kill — with
+    // attackDone(ActionCancelled) (Player_Melee.cs OnAttackDone; client note
+    // in 91482717), and sends None between auto-repeat swings. So
+    // ActionCancelled is a normal loop end, not an error; only the refusal
+    // codes (YoureTooBusy, YouCantDoThatWhileInTheAir, …) are.
+    const err = d.error || "None";
+    if (err === "ActionCancelled") this.totals.loopEnds += 1;
+    else if (err !== "None") this.totals.swingErrors += 1;
   }
 
   // ── derivations (pure reads) ──────────────────────────────────────────

@@ -44,6 +44,10 @@ const inFlight = new Map();   // account -> current concurrent-attempt count
 const maxInFlight = new Map(); // account -> max concurrent-attempt count observed
 const events = [];            // { t, kind, account } trace for diagnosis on failure
 let gotoCount = 0, closeCount = 0, installCount = 0;
+// 2026-10-12: supervisor.cjs retirePage() — stop the bot + SessionHandle
+// .disconnect() BEFORE page.close(), so ACE drops the session at once instead
+// of answering the relogin "Account In Use".
+let disconnectCount = 0, closedWithoutDisconnect = 0;
 
 function accountOf(url) {
   return new URL(url).searchParams.get("account");
@@ -93,18 +97,26 @@ class FakePage {
       this._win.__kn = { status: { action: "idle", kills: 0, looted: 0 } };
       return undefined;
     }
+    if (src.includes(".disconnect")) {
+      // retirePage(): bot stop + clean session end before the close.
+      disconnectCount++;
+      this._disconnected = true;
+      return true;
+    }
     if (src.includes("window.__rh")) {
-      // health(): mirror supervisor.cjs's own evaluate body exactly.
+      // health(): mirror supervisor.cjs's own evaluate body (the fake handle
+      // has no sessionLastRecvAgeMs, so linkAgeMs stays null = unknown).
       const h = this._win.__rh;
       const alive = !!this._win.__sessionHandle && !!h && !!h.snap;
       const snapAge = h && h.snap ? Date.now() - h.snap.tMs : Infinity;
       const st = this._win.__kn ? this._win.__kn.status : null;
-      return { alive, snapAge, status: st, boot: this._win.__bootState };
+      return { alive, snapAge, linkAgeMs: null, reattached: false, status: st, boot: this._win.__bootState };
     }
     throw new Error(`FakePage.evaluate: unrecognized evaluate() shape (supervisor.cjs drifted from what this test fakes):\n${src}`);
   }
   async close() {
     closeCount++;
+    if (!this._disconnected) closedWithoutDisconnect++;
     if (!this._resolved) { this._resolved = true; bump(this._account, "close-unresolved", -1); }
   }
 }
@@ -155,6 +167,16 @@ try {
 
   check("health-driven rebuilds actually happened (summary.rebuilds > 0 — proves the stress scenario, not a no-op run)",
     summary && summary[0] && summary[0].rebuilds > 0, JSON.stringify(summary));
+
+  check("every closed page was retired with a session disconnect first (no Account-In-Use relogin)",
+    closeCount > 0 && closedWithoutDisconnect === 0 && disconnectCount >= closeCount,
+    `closes=${closeCount} disconnects=${disconnectCount} closedWithoutDisconnect=${closedWithoutDisconnect}`);
+
+  check("botConfig strips credentials and keeps the AI director off by default",
+    (() => {
+      const c = supervisor.botConfig({ account: "a", password: "p", buffs: [2] });
+      return !("account" in c) && !("password" in c) && c.ai === false && c.buffs[0] === 2;
+    })());
 
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);

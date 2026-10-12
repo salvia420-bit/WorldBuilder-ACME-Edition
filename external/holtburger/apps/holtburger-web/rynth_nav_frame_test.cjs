@@ -122,25 +122,32 @@ const eq = (a, b) => Math.abs(a - b) < 1e-9;
     check("worldToOutdoorCell clamps high to landblock 255,255", ((hi.lb >>> 24) & 0xff) === 255 && ((hi.lb >>> 16) & 0xff) === 255);
   }
 
-  // ── 3b. bot.js _worldToLandCell was byte-identical -> nav_frame reproduces it ──
+  // ── 3b. bot.js _worldToLandCell -> nav_frame.worldToOutdoorCell ──
+  // The 2026-08-03 review (F5) deliberately DIVERGED from the former bot.js
+  // body: the cell index now carries the LOWER clamp too (negative locals —
+  // the Town Network's 0x0007xxxx frames — used to wrap the OR into a garbage
+  // landblock like 0xfffffffe). This reference is the CLAMPED body; the old
+  // "byte-for-byte incl. the wrap" pin was stale and failed since F5 landed.
   {
-    // the exact former bot.js body, as a reference
     const refBot = (tx, ty, z) => {
       const lbX = Math.max(0, Math.min(255, Math.floor(tx / 192)));
       const lbY = Math.max(0, Math.min(255, Math.floor(ty / 192)));
       const lx = tx - lbX * 192, ly = ty - lbY * 192;
-      const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
+      const cellIdx = 1 + Math.min(7, Math.max(0, Math.floor(lx / 24))) * 8 + Math.min(7, Math.max(0, Math.floor(ly / 24)));
       const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
       return { lb, x: lx, y: ly, z };
     };
     let ok = true;
-    // in-range points AND pathological out-of-range (negative, over-max): the
-    // extraction is byte-for-byte the former body, wrap semantics included.
     for (const [tx, ty] of [[0, 0], [252, 100], [33456.7, 12000.2], [49151, 49151], [192, 384], [-50, -50], [256 * 192 + 500, 3]]) {
       const a = nf.worldToOutdoorCell(tx, ty, 3), b = refBot(tx, ty, 3);
       if (!(a.lb === b.lb && eq(a.x, b.x) && eq(a.y, b.y) && a.z === b.z)) ok = false;
     }
-    check("worldToOutdoorCell reproduces bot._worldToLandCell (identical, incl. out-of-range)", ok);
+    check("worldToOutdoorCell reproduces the clamped bot._worldToLandCell body (incl. out-of-range)", ok);
+    // The F5 property itself: a negative local never wraps the landblock word.
+    const neg = nf.worldToOutdoorCell(-12.5, -62.8, 0);
+    const cell = neg.lb & 0xffff;
+    check("worldToOutdoorCell: negative locals stay in landblock 0,0 with a legal cell (no wrap)",
+      (neg.lb >>> 16) === 0 && cell >= 1 && cell <= 64, `got 0x${neg.lb.toString(16)}`);
   }
 
   // ── 3c. dungeon_nav.js inline LandCell: identical for every IN-RANGE point ──

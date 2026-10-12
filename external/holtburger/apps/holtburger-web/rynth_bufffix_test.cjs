@@ -13,21 +13,16 @@
 // Run: node rynth_bufffix_test.cjs   (exits 1 on any FAIL)
 
 "use strict";
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 const RYNTH = path.join(__dirname, "rynth");
 
+// Imported IN PLACE (2026-10-12): buff_loop.js / vitals.js now import their
+// siblings (portal_gate.js, buff_loop.js), which a copy under os.tmpdir() can't
+// resolve. Node detects the ES module syntax on its own.
 async function loadEsm(file) {
-  const src = fs.readFileSync(path.join(RYNTH, file), "utf8");
-  const tmp = path.join(os.tmpdir(), `${file.replace(".js", "")}_bufffix_${process.pid}.mjs`);
-  fs.writeFileSync(tmp, src);
-  try {
-    return await import("file://" + tmp);
-  } finally {
-    fs.unlinkSync(tmp);
-  }
+  return import(pathToFileURL(path.join(RYNTH, file)).href);
 }
 
 // Spell metadata shared by the buff cases: Strength family 101 (tiers 1..7 =

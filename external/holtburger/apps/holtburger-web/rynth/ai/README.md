@@ -139,6 +139,17 @@ Spend counters: `window.rynthAI.status().spend`
   tell could run a full LLM plan through a durable stop, which defeated the point
   of a durable stop. Clear the latch (`window.rynthAI.start()` or `!bot ai on`)
   before forcing a check-in you actually want to run.
+- **`checkNow()` returns `skipped: "operator-hold"`** — the whole bot is
+  operator-STOPPED (the RynthSuite HUD's STOPPED state, `!bot pause`, or a
+  persisted `rynthBotOperatorStop` latch); no check-in may plan through a held
+  bot. Resume with the HUD's RUNNING button or `window.__bot.control.resume()`.
+- **The bot boots STOPPED after a reload/reconnect** — by design: a HUD STOP is
+  durable (`rynthBotOperatorStop` in localStorage, read by
+  `applyOperatorStopToCfg` -> `cfg.startHeld`). `window.__bot.control.state()`
+  names the reason; `.resume()` clears it.
+- **`skipped: "portal"`** — a teleport tunnel is running
+  (`globalThis.__isPortalSpaceActive()`); the check-in re-polls every ~6 s and
+  runs on arrival (capped at 2 min).
 - **Local/mock provider** — `config.ai = { baseUrl: "http://127.0.0.1:8899/v1",
   model: "mock", apiKey: "test-key" }` against
   `node rynth/ai/mock_llm_server.cjs` (used by `rynth_ai_smoke.cjs`).

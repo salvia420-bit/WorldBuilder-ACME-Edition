@@ -111,6 +111,29 @@ async function main() {
       `call arity ${call} < declared ${fn.length} — ladder would pass undefined for a required param`);
   }
 
+  // 2b. Combat-slice members (2026-10-12): combat_loop.js _cancelAttack /
+  //     _localStickyTarget call these (falling back to host.s.* on an older
+  //     webhost). Zero-arity, degrade-not-throw when the capability is absent,
+  //     and wired to the wasm cancelAttack / localStickyTarget when present.
+  for (const method of ["CancelAttack", "TryGetLocalStickyTarget"]) {
+    const fn = host[method];
+    check(`host.${method} exists as a function`, typeof fn === "function", `typeof=${typeof fn}`);
+    if (typeof fn === "function") check(`host.${method} declared arity is 0`, fn.length === 0, `Function.length=${fn.length}`);
+  }
+  check("host.CancelAttack degrades to false without the capability", host.CancelAttack() === false);
+  check("host.TryGetLocalStickyTarget degrades to null without the capability", host.TryGetLocalStickyTarget() === null);
+  {
+    const calls = [];
+    const live = new RynthWebHost(
+      { cancelAttack: () => calls.push("cancelAttack"), localStickyTarget: () => 0x80001234 },
+      { noEventTap: true }
+    );
+    check("host.CancelAttack reaches the wasm cancelAttack",
+      live.has("CancelAttack") && live.CancelAttack() === true && calls[0] === "cancelAttack");
+    check("host.TryGetLocalStickyTarget reads localStickyTarget as u32",
+      live.has("GetLocalStickyTarget") && live.TryGetLocalStickyTarget() === 0x80001234);
+  }
+
   // 3. Reverse anti-drift: scan the _escalatePortal rung (the portal-escape
   //    core, bot.js) and assert every PascalCase host member it references via
   //    `h.` / `this.host.` is IN the contract. If a new host call sneaks into

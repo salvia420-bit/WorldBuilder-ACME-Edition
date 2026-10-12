@@ -18,7 +18,10 @@ let browser;
     const host = new wh.RynthWebHost(window.__sessionHandle);
     host.nearbyRangeM = 60;
     const kernel = new kn.RynthBotKernel(host, { combat: new cl.RynthCombatLoop(host), buff: null, loot: null });
-    const channel = new ctl.RynthControlChannel(host, kernel, { prefix: "!bot" });
+    // Explicit sender allowlist: since the 2026-07-23 P0 fix the channel obeys
+    // only its owner (default = the logged-in character, refuse-all when
+    // unresolvable) — these injected tells come from "Owner" (?botCtlOwner=).
+    const channel = new ctl.RynthControlChannel(host, kernel, { prefix: "!bot", owner: ["Owner"] });
     host.start(10);
     kernel.start();
     await sleep(500);

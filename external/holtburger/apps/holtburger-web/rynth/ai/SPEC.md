@@ -345,3 +345,86 @@ appended to `rynth_ai_director_test.cjs`.
   dropped" claim (see `ai/tools/memory.js`'s header comment) actually true
   end to end, closing a gap where the comment predated the code that enforced
   it.
+
+## Addendum — ONE operator stop authority, portal-space hold, billed usage (2026-10-12, RynthSuite update; ADDITIVE)
+
+### operator_stop.js — `OperatorControl` (the stop/resume/state authority)
+The 2026-07-23 review's open P1 ("no single mechanism is authoritative over who
+owns the character") closes here. `getOperatorControl(bot, {storage?, log?})`
+returns THE control for a bot (attached as `bot.control`; idempotent; duck-
+typed so a second module instance finds it; on creation it enforces a
+persisted bot-wide stop on a bot that booted running anyway).
+- `stop({persist = true, reason})` -> `state()`: `kernel.holdForOperator()`
+  (start() refused for EVERY caller), `director.stop()`, `router.cancel()`
+  (also aborts an in-flight goto), `unwedge.cancel(reason)` (fallback: an
+  active recovery is `_finish`ed), `host.StopStick()` + `host.StopCompletely()`;
+  `persist` writes the bot-wide latch `rynthBotOperatorStop`. Idempotent; the
+  FIRST stop's pre-stop memory is kept.
+- `resume()` -> `state()`: clears the latch, releases the hold, restarts the
+  kernel / director only if each was running before the stop (unknown pre-
+  stop state + a live hold => the kernel ran; `bot.ai.deferredAutoStart` =>
+  the director would have auto-started). An AI-latched director stays off.
+- `toggle(opts)`, `setAi(on)` (the AI latch; a start while stopped is
+  deferred to resume — `{ok, deferred:true}`), `setEnabled(name, on)` for
+  `OPERATOR_SUBSYSTEMS` = combat|loot|buff|vitals|unwedge (plain `enabled`
+  flags; buff/vitals need kernel.js to honour them), `cancelTravel()`,
+  `onChange(fn) -> unsubscribe`, `isStopped()`.
+- `state()` (cheap, poll 2-4 Hz): `{ stopped, running, reason, since,
+  latched:{bot,ai}, kernel:{running,held,action,kills,looted,combat}|null,
+  ai:{enabled,busy,disposed,nextCheckAt,lastCheckAt,lastSummary,calls,errors,
+  deferredAutoStart}|null, subsystems:{combat,loot,buff,vitals,unwedge} (bool|
+  null=absent), movement:{router,goto,mission,unwedge} }`.
+- Latch helpers: `BOT_STOP_KEY`, `latchBotStop/clearBotStop/isBotStopLatched`,
+  `describeOperatorStop() -> {ai, bot}`. `applyOperatorStopToCfg(cfg)` now ALSO
+  sets `cfg.startHeld = true` when the bot latch is set (return value
+  unchanged: true iff the AI was suppressed).
+
+### director.js
+- `checkNow()` additionally refuses while the bot is operator-stopped
+  (`bot.kernel.operatorHeld === true` or the bot latch): `{plan:null,
+  results:[], skipped:"operator-hold"}`, journaled, no LLM call, no
+  reschedule (resume restarts the chain).
+- Portal-space hold: constructor opts `portalSpaceActive` (predicate; default
+  reads `globalThis.__isPortalSpaceActive`), `portalHoldPollMinutes` (0.1),
+  `maxPortalHoldMinutes` (2). In the tunnel a check-in returns `skipped:
+  "portal"` and re-polls; it applies to early checks too and keeps their
+  reason for the post-arrival fire; `checkNow({force:true})` bypasses it.
+- `dispose()` (permanent stop; `start()` becomes a no-op) + `get disposed`.
+  bot.stop() must call it so a replaced bot's director can never be revived.
+- `status` gains `operatorHeld`, `portalHold`, `disposed`.
+- $ cap counts `res.billedUsage` (falls back to `usage`) and a failed chat's
+  `e.billedUsage`.
+
+### llm_client.js
+- `chat()` results gain `billedUsage` = every billed attempt (a "length"
+  attempt whose reasoning ate max_tokens is billed by the provider); a thrown
+  error carries `.billedUsage` (+ `.model`) when any attempt billed. `spend`
+  tokens now include those attempts (`calls` still counts completed chats).
+
+### observe.js
+- `portal: IN PORTAL SPACE …` line + `data.portalSpace` (opts.portalSpace is
+  the test seam). `combat: STOOD DOWN — <reason>` line + `data.combatStoodDown`
+  from `combat.status.incapable` (absent on older loops).
+
+### ui.js
+- `mountAiPanel(director, {client, models, container, control})`: `container`
+  mounts embedded (flow layout, width 100%) instead of the fixed overlay;
+  `control` routes the Enable checkbox through `control.setAi(on)`. Without a
+  control the checkbox clears/latches the AI latch (rynthAI.start/stop
+  semantics) — it used to call start/stop bare. Check now also refuses while
+  the bot is stopped.
+
+### tools
+- world.js `approach()` pauses a RUNNING kernel for the whole walk (route legs
+  + final hop) and restores it (the client now stops the player before every
+  cast/attack request, so a kernel cast mid-hop cut the walk short).
+- wbt.js `file_ticket` resolves the character name via `GetPlayerId()` +
+  `TryGetObjectName()` (TryGetPlayerName never existed on RynthWebHost).
+- memory.js `wipeForCleanTest` also clears `_heardChat`, `_lastSnapshot`,
+  `_killSamples` and the interaction (no-effect) memory, and warns when the
+  bot latch is set (never clears it).
+
+### Suites
+`rynth_ai_operator_control_test.cjs` (new) + extended
+`rynth_ai_operator_stop_test.cjs`, `rynth_ai_ui_test.cjs`,
+`rynth_ai_observe_test.cjs`, `rynth_ai_client_test.cjs`.

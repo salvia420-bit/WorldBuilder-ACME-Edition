@@ -100,6 +100,13 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
             }));
           }
           return ok();
+        case "length-always": // reasoning eats the doubled budget too
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({
+            model: "srv-model",
+            choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "length" }],
+            usage: { prompt_tokens: 100, completion_tokens: 1024 },
+          }));
         case "401": res.writeHead(401); return res.end('{"error":{"message":"bad key"}}');
         case "not-json":
           res.writeHead(200, { "Content-Type": "text/html" });
@@ -172,6 +179,33 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const q = lastReq();
     check("length retried once then ok", state.modeHits === 2 && r.text === FENCED, `hits=${state.modeHits}`);
     check("length retry doubles max_tokens", q.body.max_tokens === 2048, JSON.stringify(q.body.max_tokens));
+    // 2026-10-12: the failed "length" attempt was BILLED — usage stays the
+    // returned completion, billedUsage adds the burnt attempt.
+    check("length: usage is the final completion only", eq(r.usage, { prompt: 100, completion: 20 }), JSON.stringify(r.usage));
+    check("length: billedUsage adds the failed attempt", eq(r.billedUsage, { prompt: 200, completion: 1044 }), JSON.stringify(r.billedUsage));
+  }
+
+  // ---- length on BOTH attempts: throws kind "length" carrying billedUsage ----
+  {
+    setMode("length-always");
+    const c = new LlmClient({ apiKey: "k", baseUrl: base, model: "m", timeoutMs: 5000, log: () => {} });
+    let err = null;
+    try { await c.chat([{ role: "user", content: "x" }], { maxTokens: 1024 }); } catch (e) { err = e; }
+    check("length-always: throws kind length", !!err && err.kind === "length", err && err.kind);
+    check("length-always: two attempts", state.modeHits === 2, `hits=${state.modeHits}`);
+    check("length-always: error carries billedUsage of both attempts",
+      !!err && eq(err.billedUsage, { prompt: 200, completion: 2048 }), JSON.stringify(err && err.billedUsage));
+    check("length-always: error names the model", !!err && err.model === "m", err && err.model);
+    check("length-always: spend counts billed tokens, no completed call",
+      eq(c.spend, { calls: 0, promptTokens: 200, completionTokens: 2048, errors: 1 }), JSON.stringify(c.spend));
+  }
+
+  // ---- plain success: billedUsage == usage ----
+  {
+    setMode("ok");
+    const c = new LlmClient({ apiKey: "k", baseUrl: base, timeoutMs: 5000, log: () => {} });
+    const r = await c.chat([{ role: "user", content: "x" }]);
+    check("ok: billedUsage equals usage", eq(r.billedUsage, r.usage) && eq(r.usage, { prompt: 100, completion: 20 }), JSON.stringify(r));
   }
 
   // ---- reasoning config passthrough ----

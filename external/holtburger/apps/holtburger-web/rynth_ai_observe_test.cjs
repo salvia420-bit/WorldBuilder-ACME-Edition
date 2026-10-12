@@ -154,6 +154,29 @@ function check(name, ok, detail) {
     check("empty bot: no spend line when not given", !r.text.includes("ai_spend"));
   }
 
+  // portal space (2026-10-12): one ground-truth line while teleporting
+  {
+    const on = ob.buildObservation({}, { now: NOW, portalSpace: true });
+    check("portal: line rendered while in portal space", /^portal: IN PORTAL SPACE/m.test(on.text) && on.data.portalSpace === true);
+    const off = ob.buildObservation({}, { now: NOW, portalSpace: false });
+    check("portal: no line when not teleporting", !off.text.includes("portal:") && off.data.portalSpace === false);
+    globalThis.__isPortalSpaceActive = () => true;
+    try {
+      const g = ob.buildObservation({}, { now: NOW });
+      check("portal: reads globalThis.__isPortalSpaceActive", g.data.portalSpace === true && g.text.includes("IN PORTAL SPACE"));
+    } finally { delete globalThis.__isPortalSpaceActive; }
+    const none = ob.buildObservation({}, { now: NOW });
+    check("portal: unknown (no predicate) renders nothing", none.data.portalSpace === null && !none.text.includes("portal:"));
+  }
+
+  // combat stand-down (combat_loop status.incapable, 2026-10-12)
+  {
+    const parked = ob.buildObservation({ combat: { locked: 0, status: { incapable: "no war spell known" } } }, { now: NOW });
+    check("stand-down: line rendered", parked.text.includes("combat: STOOD DOWN — no war spell known") && parked.data.combatStoodDown === "no war spell known");
+    const fine = ob.buildObservation({ combat: { locked: 0, status: { incapable: null } } }, { now: NOW });
+    check("stand-down: no line when combat can fight", !fine.text.includes("STOOD DOWN") && fine.data.combatStoodDown === null);
+  }
+
   // combat present but nothing locked -> "none", not n/a
   {
     const bot2 = makeBot();

@@ -15,6 +15,14 @@
 // spends SILENTLY (server Warn-log only), so we validate hard up front against
 // the live stats snapshot and journal intent + "confirm next check-in";
 // the next observation's advancement line is the confirm-by-diff.
+//
+// 2026-10-12: ACE does NOT cap a raise at the max rank — SpendAttributeXp /
+// SpendSkillXp REFUSE an amount above the XP left to max ("Your attempt to
+// raise X has failed."), and refuse outright at max rank. The old "capped at
+// max" wording invited exactly that. Max rank is now refused up front from
+// the stats snapshot's `nextCost === 0` (skills always carried it; attributes
+// and vitals carry it since training-3, 2026-10-08 — see webhost.js
+// TryGetPlayerStats).
 
 const JOURNAL_CLIP = 800;
 
@@ -100,7 +108,7 @@ function readStats(h) {
 export function raiseAttributeAction() {
   const def = {
     type: "raise_attribute",
-    params: { attribute: `one of: ${Object.keys(ATTRS).join(", ")}`, xp: "unspent XP to spend (raises as many ranks as it buys, capped at max)" },
+    params: { attribute: `one of: ${Object.keys(ATTRS).join(", ")}`, xp: "unspent XP to spend (raises as many ranks as it buys; MORE than the XP left to max rank is refused by the server)" },
     desc: "spend your unspent XP to permanently raise an attribute — raise endurance for more Health, self for more Mana. Check the advancement line for your unspent XP.",
     validate(a) {
       const b = baseValidate("raise_attribute")(a);
@@ -114,6 +122,7 @@ export function raiseAttributeAction() {
     if (typeof h?.RaiseAttribute !== "function") return fail("unavailable");
     const id = ATTRS[norm(a.attribute)];
     const st = readStats(h);
+    if (st?.attributes?.[id]?.nextCost === 0) return fail(`${norm(a.attribute)} is already at its max rank — spend the XP elsewhere`);
     if (st && Number.isFinite(st.unspentXp) && a.xp > st.unspentXp) return fail(`only ${st.unspentXp} unspent XP available (you asked to spend ${a.xp})`);
     const before = st?.attributes?.[id]?.current;
     if (!h.RaiseAttribute(id, a.xp)) return fail("raise request failed to send");
@@ -141,6 +150,7 @@ export function raiseVitalAction() {
     if (typeof h?.RaiseVital !== "function") return fail("unavailable");
     const id = VITALS[norm(a.vital)];
     const st = readStats(h);
+    if (st?.vitals?.[id]?.nextCost === 0) return fail(`max ${norm(a.vital)} is already at its max rank — spend the XP elsewhere`);
     if (st && Number.isFinite(st.unspentXp) && a.xp > st.unspentXp) return fail(`only ${st.unspentXp} unspent XP available (you asked to spend ${a.xp})`);
     const before = st?.vitals?.[id]?.max;
     if (!h.RaiseVital(id, a.xp)) return fail("raise request failed to send");
@@ -170,6 +180,7 @@ export function raiseSkillAction() {
     const st = readStats(h);
     const sk = st?.skills?.[id];
     if (sk && sk.training < 2) return fail(`${norm(a.skill)} is ${TRAINING[sk.training] ?? "untrained"} — must be Trained first (train_skill)`);
+    if (sk && sk.nextCost === 0) return fail(`${norm(a.skill)} is already at its max rank — spend the XP elsewhere`);
     if (st && Number.isFinite(st.unspentXp) && a.xp > st.unspentXp) return fail(`only ${st.unspentXp} unspent XP available (you asked to spend ${a.xp})`);
     const before = sk?.current;
     if (!h.RaiseSkill(id, a.xp)) return fail("raise request failed to send");

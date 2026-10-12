@@ -17,16 +17,35 @@
 // expects it to STAY stopped, and checkNow() itself refuses on the same
 // latch — so this is belt-and-braces against the misleading UX of a button
 // that visibly "did something" while the real call silently no-ops.
-import { isOperatorStopLatched } from "./operator_stop.js";
+//
+// Enable checkbox = the durable operator intent (2026-10-12): it used to call
+// director.start()/stop() bare, so a panel "disable" was undone by the next
+// ?bot=1 reconnect reboot and a panel "enable" while the AI latch was set
+// started a director whose every check-in then refused. It now goes through
+// the same latch as window.rynthAI.start/stop — or through the bot's
+// OperatorControl (opts.control, operator_stop.js) when the caller has one,
+// which additionally defers a start to resume() while the bot is stopped.
+//
+// Embedding (additive 2026-10-12): opts.container mounts the panel INSIDE a
+// caller-owned element (the RynthSuite HUD's AI tab) with flow layout
+// instead of the fixed bottom-right overlay.
+import {
+  isOperatorStopLatched,
+  latchOperatorStop,
+  clearOperatorStop,
+  isBotStopLatched,
+} from "./operator_stop.js";
 
 // Palette matches the app's overlay look — plugins/debug-overlay.js:84-101.
-const CSS_ROOT =
-  "position:fixed;right:8px;bottom:8px;width:280px;z-index:10000;" +
+const CSS_SKIN =
   "box-sizing:border-box;padding:6px 8px;" +
   "background:rgba(0,0,0,0.72);border:1px solid var(--hb-border-brass,#8a7544);" +
   "color:var(--hb-text-cream,#f0d8a0);" +
   "font-family:var(--hb-font-mono,ui-monospace,Menlo,Consolas,monospace);" +
   "font-size:11px;line-height:1.4;";
+const CSS_ROOT = "position:fixed;right:8px;bottom:8px;width:280px;z-index:10000;" + CSS_SKIN;
+// Embedded: flow layout, fills the host container's width, no own z-order.
+const CSS_ROOT_EMBEDDED = "position:relative;width:100%;" + CSS_SKIN;
 const CSS_TITLE = "font-weight:bold;letter-spacing:1px;margin-bottom:4px;";
 const CSS_INPUT =
   "width:100%;box-sizing:border-box;margin:2px 0;padding:2px 4px;" +
@@ -61,11 +80,18 @@ let mountSeq = 0; // unique datalist id per mount (panel is remountable)
 /** Mount the panel. -> { el, destroy() }
  * `models` (optional, additive): datalist suggestions — e.g.
  * providers.js modelsFor(DEFAULT_PROVIDER) ids; invalid/empty -> the
- * hardcoded fallback. */
-export function mountAiPanel(director, { client, models } = {}) {
+ * hardcoded fallback.
+ * `container` (optional, additive): an element to mount INTO (embedded flow
+ * layout) instead of a fixed overlay on document.body.
+ * `control` (optional, additive): the bot's OperatorControl
+ * (operator_stop.js getOperatorControl) — the Enable checkbox then calls
+ * control.setAi(on); without it the checkbox clears/latches the AI latch and
+ * starts/stops the director itself (rynthAI.start/stop semantics). */
+export function mountAiPanel(director, { client, models, container, control } = {}) {
   const modelIds = Array.isArray(models) && models.some((m) => typeof m === "string" && m)
     ? models.filter((m) => typeof m === "string" && m)
     : MODEL_SUGGESTIONS;
+  const host = container && typeof container.appendChild === "function" ? container : null;
   const make = (tag, css, text) => {
     const el = document.createElement(tag);
     if (css) try { el.style.cssText = css; } catch { /* styleless stub doc */ }
@@ -73,7 +99,7 @@ export function mountAiPanel(director, { client, models } = {}) {
     return el;
   };
 
-  const root = make("div", CSS_ROOT);
+  const root = make("div", host ? CSS_ROOT_EMBEDDED : CSS_ROOT);
   root.appendChild(make("div", CSS_TITLE, "AI DIRECTOR"));
 
   // --- API key: masked input + Save/Clear ---
@@ -153,8 +179,17 @@ export function mountAiPanel(director, { client, models } = {}) {
   enableCb.type = "checkbox";
   try { enableCb.checked = !!(director && director.status && director.status.enabled); } catch {}
   enableCb.addEventListener("change", () => {
+    const on = !!enableCb.checked;
     try {
-      if (director) (enableCb.checked ? director.start() : director.stop());
+      if (control && typeof control.setAi === "function") {
+        control.setAi(on);
+      } else if (on) {
+        clearOperatorStop();
+        if (director) director.start();
+      } else {
+        latchOperatorStop();
+        if (director) director.stop();
+      }
     } catch {}
     renderStatus();
   });
@@ -167,8 +202,13 @@ export function mountAiPanel(director, { client, models } = {}) {
     // director; the panel must never surface a rejection.
     try {
       let latched = false;
-      try { latched = isOperatorStopLatched(); } catch { latched = false; }
-      if (latched) return; // durable operator stop — see header note above
+      try {
+        latched =
+          isOperatorStopLatched() ||
+          isBotStopLatched() ||
+          !!(control && typeof control.isStopped === "function" && control.isStopped());
+      } catch { latched = false; }
+      if (latched) return; // durable operator stop / bot stopped — see header note above
       const p = director && director.checkNow ? director.checkNow() : null;
       if (p && typeof p.then === "function") p.then(renderStatus).catch(() => {});
     } catch {}
@@ -199,6 +239,13 @@ export function mountAiPanel(director, { client, models } = {}) {
         if (s.lastSummary) line += "\n" + String(s.lastSummary).slice(0, 120);
         enableCb.checked = !!s.enabled; // director may self-disable on errors
       }
+      // Why the AI is not running when an operator latch says so — the
+      // checkbox alone can't tell "off" from "stopped by the operator".
+      let latchedAi = false, botStopped = false;
+      try { latchedAi = isOperatorStopLatched(); } catch {}
+      try { botStopped = isBotStopLatched() || !!(control && control.isStopped && control.isStopped()); } catch {}
+      if (latchedAi) line += "\n[AI stopped by operator — Enable to release]";
+      if (botStopped) line += "\n[bot STOPPED by operator — AI waits for resume]";
     } catch { /* broken status getter -> keep n/a */ }
     statusEl.textContent = line;
     let tail = "";
@@ -214,7 +261,10 @@ export function mountAiPanel(director, { client, models } = {}) {
     journalEl.textContent = tail;
   }
 
-  try { if (document.body) document.body.appendChild(root); } catch {}
+  try {
+    if (host) host.appendChild(root);
+    else if (document.body) document.body.appendChild(root);
+  } catch {}
   renderStatus();
   const timer = setInterval(renderStatus, 5000); // SPEC §ui: 5 s status refresh
 

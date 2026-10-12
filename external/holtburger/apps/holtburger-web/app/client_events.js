@@ -30,6 +30,7 @@ import { emitterPosThree, threeToAc } from "../scene3d/audio/emitter_position.js
 import { radarBlankAfterEnviron } from "../scene3d/target_cycle.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
 import { characterErrorInfo, retailCharErrorsEnabled } from "./login_ui_rules.js";
+import { maybeAutoBootBot } from "../rynth/boot.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
  *  pumpNetFrame (kind 4 Disconnected): stop draining this batch. */
@@ -250,172 +251,27 @@ export function dispatchClientEvent(evt, D) {
     // director as usual. Idempotent (kind=7 refires on death
     // respawn) and try/caught: a broken bot module must never
     // take down the client.
+    // conn-fix (2026-07-18): rebind on session takeover — same
+    // handle → idempotent no-op (death respawn); changed handle
+    // → stop the old bot and boot a fresh one on the live session.
+    // 2026-10-12: the URL → config assembly and the boot itself
+    // live in rynth/boot.js (maybeAutoBootBot) so the RynthSuite
+    // HUD's START button boots the same way on a page without
+    // ?bot=1 (and a HUD-started bot is rebound on takeover too).
+    // The URL reads stay HERE — the url-flags lint and
+    // rynth_ai_persona_test pin them in the app source. Same
+    // config, globals and console lines as before.
     try {
       const botParams = new URLSearchParams(location.search);
-      // conn-fix (2026-07-18): rebind on session takeover.
-      // The old guard (`!window.__bot`) made auto-boot
-      // one-shot: after a reconnect replaced
-      // __sessionHandle, kind=7 refired but the bot stayed
-      // strapped to the DEAD handle forever. Now: same
-      // handle → idempotent no-op (death respawn); changed
-      // handle → stop the old bot and boot a fresh one on
-      // the live session.
       const botTargetHandle = window.__sessionHandle ?? handle;
-      const botNeedsBoot =
-        botParams.get("bot") === "1" &&
-        !window.__botBooting &&
-        (!window.__bot || window.__botHandle !== botTargetHandle);
-      if (botNeedsBoot) {
-        window.__botBooting = true;
-        const prevBot = window.__bot;
-        window.__bot = null;
-        import(new URL("rynth/bot.js", location.href).href)
-          .then(async (m) => {
-            try { if (prevBot && typeof prevBot.stop === "function") prevBot.stop(); } catch (_) {}
-            const cfg = botParams.get("botAi") === "off" ? { ai: false } : {};
-            // operator ai-stop latch (task #11, 2026-07-19): a
-            // reconnect reboot must NOT resurrect a director the
-            // operator stopped via rynthAI.stop(). The latch (set in
-            // rynth/ai/operator_stop.js, persisted in localStorage so
-            // it survives reloads/reconnects/browser restarts) forces
-            // cfg.ai=false here, on top of ?botAi=off. Absent latch =
-            // default behavior unchanged. Its own try/catch: a broken
-            // latch module must never block the boot.
-            try {
-              const os = await import(new URL("rynth/ai/operator_stop.js", location.href).href);
-              if (os.applyOperatorStopToCfg(cfg)) {
-                console.log("[bot] AI director suppressed: operator stop latch");
-              }
-            } catch (_) { /* latch unavailable = fall through to params */ }
-            // nav sidecar (2026-07-18): default-on. Without
-            // config.nav the bot has NO coordinate travel
-            // (goto/goto_lb return "nav not configured") and a
-            // soak strands in its spawn town — the sidecar is a
-            // standing laptop service (:8767), and an unreachable
-            // endpoint only fails individual goto calls, never
-            // the boot. ?nav=off opts out; ?navEndpoint= overrides.
-            if (botParams.get("nav") !== "off") {
-              cfg.nav = { endpoint: botParams.get("navEndpoint") || "http://127.0.0.1:8767" };
-            }
-            // Stream-rig bot tuning survives reloads via URL:
-            // ?botModel= (director LLM), ?botInterval= (check-in
-            // minutes; caps scale with it). Provider pins can't
-            // ride a URL — a reload falls back to OpenRouter
-            // default routing for the chosen model.
-            // ?botKernel=off — no grind loops (explorer/pure-travel).
-            if (botParams.get("botKernel") === "off") cfg.kernel = false;
-            // ?explorePressure=1 (task #15) — ambient idle-motion
-            // ticks between AI-director check-ins (rynth/bot.js
-            // ExplorePressureController); only fires with an
-            // enabled director, so read outside the cfg.ai guard
-            // like botKernel above (harmless without a director).
-            // Exact-match opt-in; default OFF.
-            if (botParams.get("explorePressure") === "1") cfg.explorePressure = true;
-            // ?botCtlOwner= (P0 fix, rynth-review 13 #1 / P1
-            // streamline #3, 2026-07-23): sender allowlist for
-            // the in-game control channel (RynthControlChannel,
-            // rynth/control_channel.js — refuses ALL commands
-            // when its owner can't be resolved). Comma-split
-            // into an array so a rig can name more than one
-            // trusted account (e.g. the operator's own
-            // character alongside the bot's login). Read
-            // outside the cfg.ai guard, same as botKernel/
-            // explorePressure above — the control channel is
-            // independent of the AI director. Absent -> the
-            // channel's own default applies (the logged-in
-            // character; refuse-all if that's ever
-            // unresolvable) — carrying this through a
-            // reconnect just makes that default explicit and
-            // future-proofs a multi-owner rig.
-            const botCtlOwner = botParams.get("botCtlOwner");
-            if (botCtlOwner) {
-              cfg.control = {
-                ...(cfg.control || {}),
-                owner: botCtlOwner.split(",").map((s) => s.trim()).filter(Boolean),
-              };
-            }
-            if (cfg.ai !== false) {
-              // ?botPersona=explorer etc. — base-prompt persona
-              // (rynth/ai/director.js); URL-carried so reconnect
-              // reboots keep it.
-              const bp = botParams.get("botPersona");
-              if (bp) cfg.ai = { ...(cfg.ai || {}), persona: bp };
-              const bm = botParams.get("botModel");
-              const bi = parseFloat(botParams.get("botInterval"));
-              // Model-family provider-routing table (P1 #6 /
-              // rynth-review 09 C1, 2026-07-23): the original pin
-              // was a single `bm.startsWith("z-ai/")` literal, so
-              // it silently did nothing the moment the live rig
-              // rotated onto a different model family (STREAM-
-              // RIG-OPS.md model history: z-ai/glm-5.2 ->
-              // microsoft/phi-4 -> minimax/minimax-m3, the CURRENT
-              // live model) — unpinned OpenRouter default routing
-              // + the full 120s timeout + no cost floor, exactly
-              // the fallthrough this pin exists to prevent. Add a
-              // prefix entry here whenever the rig adopts a new
-              // family; z-ai/* keeps its EXACT soak-8-proven
-              // values unchanged.
-              const PROVIDER_PIN_TABLE = [
-                // z-ai/* (soak-8, unchanged): 3 fp8 sale
-                // endpoints, fastest first (streamlake
-                // 1.08s/52tps), never falling through to
-                // 4x-price fp4 quants.
-                { prefix: "z-ai/", provider: { order: ["streamlake", "novita", "baidu"], allow_fallbacks: false } },
-                // minimax/minimax-m3 (2026-07-23): no soak-8-
-                // style provider ranking exists yet for this
-                // family — same INTENT as the z-ai pin (fast/
-                // cheap hosts first, `allow_fallbacks:false` so
-                // a bad first choice fails loud instead of
-                // silently routing to an expensive default), not
-                // the same literal providers. novita already
-                // hosts sale-priced endpoints for other Chinese-
-                // model families per the z-ai pin above; minimax
-                // (the model's first-party host) is the natural
-                // 2nd. Re-tune once minimax gets its own soak.
-                { prefix: "minimax/", provider: { order: ["novita", "minimax"], allow_fallbacks: false } },
-              ];
-              const providerPinFor = (model) => {
-                const hit = PROVIDER_PIN_TABLE.find((e) => model.startsWith(e.prefix));
-                return hit ? { provider: hit.provider } : {};
-              };
-              // 2026-07-20 latency fix: 4096-token budgets let GLM
-              // ramble ~2,400 completion tokens ≈ 50-80s per
-              // check-in at ~30-50tps — the director looked dead
-              // between calls. 1280 matches the documented
-              // discipline (soak-8 measured GLM at 400-800 tokens)
-              // and the llm_client retries once at double budget on
-              // a "length" cutoff.
-              // 2026-07-23: heavy-reasoning models (minimax-m3) burn
-              // the ENTIRE 1280 (and the 2560 retry) on hidden
-              // reasoning and return an EMPTY completion every call
-              // (finish_reason=length) — the director hit 5 such
-              // errors and auto-disabled on the live rig. Give the
-              // minimax family the room it needs; GLM/gpt-oss keep
-              // the latency-tuned 1280.
-              const bmMaxTokens = /minimax/i.test(bm) ? 8192 : 1280;
-              if (bm) cfg.ai = {
-                ...(cfg.ai || {}), model: bm, maxTokens: bmMaxTokens,
-                reasoning: { effort: "low" }, timeoutMs: 120000,
-                ...providerPinFor(bm),
-              };
-              if (Number.isFinite(bi) && bi > 0) {
-                cfg.ai = {
-                  ...(cfg.ai || {}),
-                  intervalMinutes: bi, minIntervalMinutes: bi,
-                  maxIntervalMinutes: bi * 2,
-                  maxCallsPerHour: Math.min(70, Math.ceil(70 / bi)),
-                };
-              }
-            }
-            window.__bot = await m.createGrindBot(botTargetHandle, cfg);
-            window.__botHandle = botTargetHandle;
-            console.log(prevBot
-              ? "[rynth] grind bot re-booted onto new session via ?bot=1 (takeover rebind)"
-              : "[rynth] grind bot auto-booted via ?bot=1");
-          })
-          .catch((e) => console.warn("[rynth] ?bot=1 auto-boot failed:", e))
-          .finally(() => { window.__botBooting = false; });
-      }
+      maybeAutoBootBot(botTargetHandle, {
+        bot: botParams.get("bot"), botAi: botParams.get("botAi"),
+        nav: botParams.get("nav"), navEndpoint: botParams.get("navEndpoint"),
+        botKernel: botParams.get("botKernel"), explorePressure: botParams.get("explorePressure"),
+        botCtlOwner: botParams.get("botCtlOwner"), botPersona: botParams.get("botPersona"),
+        botModel: botParams.get("botModel"), botInterval: botParams.get("botInterval"),
+        botBuffs: botParams.get("botBuffs"),
+      });
     } catch (_) { /* flag parse failure = no bot, client unaffected */ }
     // ?streamHud=1 (2026-07-18) — stream-rig dressing: open the
     // inventory pane and shift the buffs HUD below the vitals

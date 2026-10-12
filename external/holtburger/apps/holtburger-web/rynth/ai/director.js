@@ -7,11 +7,26 @@
 import { buildObservation } from "./observe.js";
 import { renderActionCatalog, validateAction, executePlan } from "./actions.js";
 import { extractJson } from "./llm_client.js";
-import { isOperatorStopLatched } from "./operator_stop.js";
+import { isOperatorStopLatched, isBotOperatorStopped } from "./operator_stop.js";
 import { estimateCost } from "./providers.js";
 
 const MIN_MS = 60_000;
 const HOUR_MS = 3_600_000;
+
+// Portal-space hold (2026-10-12): the client's teleport tunnel
+// (scene3d/portal_space.js, retail CPlayerSystem::teleportInProgress) refuses
+// combat-mode changes and hides the world until arrival — a plan decided
+// mid-tunnel reads a pre-arrival observation and its actions bounce. The page
+// publishes the predicate as globalThis.__isPortalSpaceActive; absent (node,
+// ?plugins=none builds) reads as "not in portal space".
+function defaultPortalSpaceActive() {
+  try {
+    const f = globalThis.__isPortalSpaceActive;
+    return typeof f === "function" && f() === true;
+  } catch {
+    return false;
+  }
+}
 
 // Guarded render: a broken/absent action catalog must degrade the prompt,
 // not break the director import (SPEC "every director failure path degrades
@@ -259,6 +274,12 @@ export class RynthAiDirector {
     // bypasses the hold), by holdWhile going falsy, or by the maxHoldMinutes
     // safety cap (a stuck route must not silence the director forever).
     holdWhile = null, holdPollMinutes = 0.5, maxHoldMinutes = 20,
+    // Portal-space hold (additive 2026-10-12): no LLM call while the
+    // teleport tunnel runs; re-polled every portalHoldPollMinutes, capped at
+    // maxPortalHoldMinutes. Unlike the travel-hold it also delays an early
+    // check (the "entered portal space" one fires mid-tunnel by design) —
+    // the early reason is kept and carried by the post-arrival check.
+    portalSpaceActive = defaultPortalSpaceActive, portalHoldPollMinutes = 0.1, maxPortalHoldMinutes = 2,
   } = {}) {
     this.bot = bot;
     this.client = client;
@@ -301,12 +322,19 @@ export class RynthAiDirector {
     this.maxHoldMinutes = maxHoldMinutes;
     this._holdSince = null;     // start of the current hold streak (journal once)
     this._earlyPending = null;  // reason of a granted early check — bypasses the hold
+    this.portalSpaceActive = typeof portalSpaceActive === "function" ? portalSpaceActive : null;
+    this.portalHoldPollMinutes = portalHoldPollMinutes;
+    this.maxPortalHoldMinutes = maxPortalHoldMinutes;
+    this._portalHoldSince = null; // start of the current portal-space hold streak
+    this._disposed = false;       // dispose(): this director belongs to a stopped bot
   }
 
   /** Idempotent: enables the loop and schedules the first check-in at
    * intervalMinutes; a pending timer is left untouched. Re-enabling after a
-   * disable resets the consecutive-error count (explicit user intent). */
+   * disable resets the consecutive-error count (explicit user intent). A
+   * disposed director (its bot was stopped/replaced) never restarts. */
   start() {
+    if (this._disposed) return;
     if (!this.enabled) this._consecutiveErrors = 0;
     this.enabled = true;
     if (this._timer == null) this._schedule(this.intervalMinutes);
@@ -318,6 +346,18 @@ export class RynthAiDirector {
     this._generation++; // report 10 #2: discard whatever plan an in-flight LLM call returns
     if (this._timer != null) { clearTimeout(this._timer); this._timer = null; }
     this._nextCheckAt = null;
+  }
+
+  /** Permanent stop (additive 2026-10-12): bot.stop() — a takeover rebind
+   * replacing this bot — calls it so the OLD director can never be revived by
+   * a stale panel/global/event and keep spending LLM calls on a dead session. */
+  dispose() {
+    this._disposed = true;
+    this.stop();
+  }
+
+  get disposed() {
+    return this._disposed;
   }
 
   get status() {
@@ -334,7 +374,33 @@ export class RynthAiDirector {
       // budget above — cap null means the guard is off.
       spendCapUsd: this.maxSpendPerHourUsd,
       estSpendLastHourUsd: this._costSamples.reduce((sum, s) => sum + s.usd, 0),
+      // Additive (2026-10-12): the bot is operator-stopped (check-ins refuse)
+      // / a portal-space hold is delaying the next check-in.
+      operatorHeld: this._operatorHeld(),
+      portalHold: this._portalHoldSince != null,
+      disposed: this._disposed,
     };
+  }
+
+  /** The bot-wide operator stop (operator_stop.js OperatorControl, or the
+   * `!bot pause` kernel hold) — no check-in may plan or act through it. The
+   * persisted latch is read for THIS bot's character only (review #4: an
+   * origin-wide key let a STOP in one bot tab silence every other tab). */
+  _operatorHeld() {
+    try {
+      return isBotOperatorStopped(this.bot); // control / hold / THIS character's latch — never the bare key (review-2 #5)
+    } catch {
+      return false;
+    }
+  }
+
+  _inPortalSpace() {
+    if (!this.portalSpaceActive) return false;
+    try {
+      return this.portalSpaceActive() === true;
+    } catch {
+      return false;
+    }
   }
 
   /** Public busy predicate (SPEC §director, ADDITIVE): true while a check-in
@@ -384,6 +450,32 @@ export class RynthAiDirector {
       this._journal("note", "check-in refused: operator-stop latch is set");
       return { plan: null, results: [], skipped: "operator-stop" };
     }
+    // Bot-wide operator stop (2026-10-12): the HUD's STOPPED state / `!bot
+    // pause` hold the kernel — a director check-in (scheduled, manual or
+    // early) must not plan a goto that walks a stopped character. Same
+    // no-reschedule shape as the latch above: OperatorControl.resume()
+    // restarts the director (and with it the timer chain).
+    if (this._operatorHeld()) {
+      this._journal("note", "check-in refused: the bot is operator-stopped");
+      return { plan: null, results: [], skipped: "operator-hold" };
+    }
+
+    // Portal-space hold (2026-10-12): never spend an LLM call mid-teleport.
+    // Applies to early checks too (the "entered portal space" early check
+    // fires inside the tunnel); _earlyPending is left set so the
+    // post-arrival fire still bypasses the travel-hold below. Capped.
+    if (!opts.force && this._inPortalSpace()) {
+      if (this._portalHoldSince == null) {
+        this._portalHoldSince = now;
+        this._journal("budget", "check-in held: in portal space (teleport in progress) — resumes on arrival");
+      }
+      if (now - this._portalHoldSince < this.maxPortalHoldMinutes * MIN_MS) {
+        this._schedule(this.portalHoldPollMinutes);
+        return { plan: null, results: [], skipped: "portal" };
+      }
+      // Held past the cap: fall through and check anyway.
+    }
+    this._portalHoldSince = null;
 
     // Travel-hold gate (SPEC-navatlas §3-W3.2): a plain scheduled fire while
     // the harness is mid-route burns a call to say "still walking" — skip it.
@@ -486,21 +578,20 @@ export class RynthAiDirector {
         { role: "user", content: obsText },
       ]);
     } catch (e) {
+      // A chat that finally failed may still have BILLED tokens (a reasoning
+      // model burning max_tokens on a "length" attempt) — llm_client attaches
+      // them as e.billedUsage; count them toward the $ cap (2026-10-12).
+      this._recordCost(e?.model ?? this.client?.model, e?.billedUsage);
       return this._fail("llm", e);
     }
 
     // Record this completed call's estimated cost for the rolling $ cap above
     // (09 C2/S1). Best-effort: an unknown model or missing usage just isn't
     // counted (estimateCost -> known:false) — cost tracking must never affect
-    // whether this check-in's plan gets journaled/executed.
-    try {
-      const cost = estimateCost({
-        model: res?.model ?? this.client?.model,
-        promptTokens: res?.usage?.prompt,
-        completionTokens: res?.usage?.completion,
-      });
-      if (cost.known && Number.isFinite(cost.usd)) this._costSamples.push({ t: Date.now(), usd: cost.usd });
-    } catch { /* never let cost tracking break the check-in */ }
+    // whether this check-in's plan gets journaled/executed. billedUsage
+    // (2026-10-12) = every attempt of this chat incl. a failed "length" try;
+    // usage alone is just the final completion.
+    this._recordCost(res?.model ?? this.client?.model, res?.billedUsage ?? res?.usage);
 
     // Stale generation (report 10 #2): stop() ran while the LLM call was in
     // flight (up to timeoutMs, default 120s) — discard this plan entirely.
@@ -738,6 +829,16 @@ export class RynthAiDirector {
 
   _journal(kind, text) {
     try { this.journal?.add(kind, text); } catch { /* journal loss must not stop the loop */ }
+  }
+
+  // One estimated-cost sample for the rolling $ cap. usage = {prompt,
+  // completion}; absent/zero usage or an unpriced model is simply not counted.
+  _recordCost(model, usage) {
+    try {
+      if (!usage || !(Number(usage.prompt) > 0 || Number(usage.completion) > 0)) return;
+      const cost = estimateCost({ model, promptTokens: usage.prompt, completionTokens: usage.completion });
+      if (cost.known && Number.isFinite(cost.usd)) this._costSamples.push({ t: Date.now(), usd: cost.usd });
+    } catch { /* never let cost tracking break the check-in */ }
   }
 
   _spend() {

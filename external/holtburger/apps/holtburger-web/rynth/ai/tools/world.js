@@ -30,8 +30,15 @@ import { RUN_SPEED_MS } from "../../atlas.js";
 // paths (portal-approach / egress / wedge-repath) already normalize and are
 // live-proven in this dungeon; these approach() routes were the ones left raw.
 import { normalizeLegWorldFrame } from "../../nav_frame.js";
+// Portal-space gate (2026-10-12, move fork's rynth/portal_gate.js — no
+// imports, fails to false): during a teleport tunnel the destination may not
+// be built yet and retail never moves the player, so no walking action may
+// start (or finish its final hop) in portal space.
+import { portalSpaceActive } from "../../portal_gate.js";
 
 const JOURNAL_CLIP = 800;
+const PORTAL_SPACE_REFUSAL =
+  "in portal space — a teleport is in progress; no movement issued. Retry after you arrive (your next observation shows the new pos).";
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
 const hex = (g) => `0x${(g >>> 0).toString(16).toUpperCase()}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -398,6 +405,43 @@ async function routeToward(bot, guid) {
  * unavailable — the server error now reaches the observation either way.
  */
 export async function approach(bot, guid, ms = 12000) {
+  // Kernel paused for the WHOLE approach (2026-10-12) — the cross-room legs
+  // AND the final hop, like every other mover (goto / followRoute / travel /
+  // walkRoute). A kernel swing or targeted cast mid-hop makes ACE drive the
+  // body (melee charge / cast TurnTo), and ACE's server MoveTo/TurnTo
+  // REPLACES an in-flight client MoveToPosition (verified by the move fork,
+  // 2026-10-12) — the walk was hijacked toward the mob and the interaction
+  // then failed the walk gate ("walk failed … not fired") metres from its
+  // target. kernel.start() still honours an operator hold set meanwhile (it
+  // is refused, not forced).
+  const kernel = bot?.kernel;
+  // Claim the body for the whole walk (bot.claimMovement): a raw-pursuit
+  // approach leaves no router/goto latch behind, so without the claim an
+  // operator STOP mid-approach read the paused kernel as "not running" and
+  // RESUME never restarted the grind (review-2 #3). The claim also keeps
+  // explore pressure from issuing hops meanwhile.
+  let release = null;
+  try {
+    if (typeof bot?.claimMovement === "function") release = bot.claimMovement("approach");
+  } catch { release = null; }
+  let paused = false;
+  try {
+    if (kernel?.running === true && typeof kernel.stop === "function") {
+      kernel.stop();
+      paused = true;
+    }
+  } catch { /* a broken kernel must not block the walk */ }
+  try {
+    return await approachWalk(bot, guid, ms);
+  } finally {
+    if (paused) {
+      try { kernel.start(); } catch { /* refused/broken: stays stopped */ }
+    }
+    try { if (typeof release === "function") release(); } catch { /* idempotent */ }
+  }
+}
+
+async function approachWalk(bot, guid, ms) {
   const h = bot?.host;
   // Cross-room targets first walk door-waypoint legs (routeToward above);
   // the mover below then only has to cover the final same-room hop.
@@ -420,6 +464,9 @@ export async function approach(bot, guid, ms = 12000) {
   // inside an active manual-drive slice, so it too is a no-op from standstill
   // (verified live: sticky latched, pose frozen, 1 s timeout never ticked;
   // this part still holds — StickToObject was never re-verified).
+  // The route legs above can end in a portal: never issue the final hop in
+  // portal space (the caller refuses the interaction on this tag).
+  if (portalSpaceActive(h)) return tag("portal-space");
   let mover = null;
   const pos = (() => {
     try { return h?.TryGetObjectPosition?.(guid) ?? null; } catch { return null; }
@@ -512,10 +559,25 @@ const WALK_FAIL_RANGE_M = 5;
  */
 function walkFailedTooFar(h, guid, walk) {
   const tag = finalWalkTag(walk);
+  // approach() refused the final hop in portal space: never fire through a
+  // teleport (the interaction would land wherever the tunnel drops us).
+  if (tag === "portal-space") return { blocked: true, distanceM: distanceToObject(h, guid), portal: true };
   if (tag !== "no-walk" && tag !== "timeout") return { blocked: false, distanceM: null };
   const d = distanceToObject(h, guid);
   if (d == null || d <= WALK_FAIL_RANGE_M) return { blocked: false, distanceM: d };
   return { blocked: true, distanceM: d };
+}
+
+/** The ok:false error for a blocked walk (walkFailedTooFar().blocked). */
+function walkFailMessage(walk, wf) {
+  if (wf.portal) return PORTAL_SPACE_REFUSAL;
+  return `walk failed (${walk}), target ${wf.distanceM != null ? `${wf.distanceM.toFixed(0)}m away` : "out of reach"} — not fired`;
+}
+
+/** Entry gate for every action that WALKS (2026-10-12): refuse up front in
+ *  portal space instead of resolving/approaching through a teleport. */
+function portalRefusal(bot, fail) {
+  return portalSpaceActive(bot?.host) ? fail(PORTAL_SPACE_REFUSAL) : null;
 }
 
 /** "use_object" — interact with a nearby world object (portal, NPC, door, sign…). */
@@ -535,12 +597,13 @@ export function useObjectAction() {
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
     const h = bot?.host;
     if (typeof h?.UseObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
     const wf = walkFailedTooFar(h, res.guid, walk);
     if (wf.blocked)
-      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+      return fail(walkFailMessage(walk, wf));
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
     // Interaction-outcome memory (general no-effect tracking, 2026-07-21):
@@ -587,11 +650,12 @@ export function takeItemAction(state = {}) {
     if (res.error) return fail(res.error);
     // Container loot happens at the already-opened container — no walk needed;
     // ground pickups still close the distance first.
+    if (!fromContainer) { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const walk = fromContainer ? "container" : await approach(bot, res.guid);
     if (!fromContainer) {
       const wf = walkFailedTooFar(h, res.guid, walk);
       if (wf.blocked)
-        return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+        return fail(walkFailMessage(walk, wf));
     }
     if (!h.TakeObject(res.guid)) return fail("pickup request failed to send");
     ctx.track?.(res.guid, res.name);
@@ -624,12 +688,13 @@ export function openContainerAction(state = {}) {
     const h = bot?.host;
     if (typeof h?.UseObject !== "function" || typeof h?.GetContainerContents !== "function" ||
         typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
     const wf = walkFailedTooFar(h, res.guid, walk);
     if (wf.blocked)
-      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+      return fail(walkFailMessage(walk, wf));
     if (!h.UseObject(res.guid)) return fail("open request failed to send");
     // Open-acknowledgment (2026-07-18): ViewContents with ZERO items is a
     // real server reply (a genuinely empty chest), but it left guids empty
@@ -770,6 +835,7 @@ export function useItemOnAction() {
     const h = bot?.host;
     if (typeof h?.UseItemOnTarget !== "function" || typeof h?.NearbyGuids !== "function" ||
         typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const tgt = resolveNearby(h, a.target);
     if (tgt.error) return fail(tgt.error);
     const rows = h.TryGetPlayerInventory();
@@ -780,7 +846,7 @@ export function useItemOnAction() {
     const walk = await approach(bot, tgt.guid);
     const wf = walkFailedTooFar(h, tgt.guid, walk);
     if (wf.blocked)
-      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+      return fail(walkFailMessage(walk, wf));
     if (!h.UseItemOnTarget(itemGuid, tgt.guid)) return fail("use-with-target request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(ctx, `use_item_on ${it.row.name} -> ${tgt.name} (${hex(tgt.guid)}) — walk:${walk ?? "n/a"}, sent; server verdict in 'heard' next check-in`);
@@ -900,7 +966,7 @@ export function huntStopAction() {
   const def = {
     type: "hunt_stop",
     params: {},
-    desc: "disable the combat kernel: it stops acquiring new targets (an in-progress engagement winds down over its normal scan grace, not an abrupt cutoff). Use while surveying, traveling, or anywhere you keep dying — you do not have to out-fight anything.",
+    desc: "disable the combat kernel: it stops acquiring new targets; an in-progress engagement drops its lock after the short scan grace (~1.5 s) and the server attack loop is then cancelled, so the character stops swinging. Use while surveying, traveling, or anywhere you keep dying — you do not have to out-fight anything.",
     validate: baseValidate("hunt_stop"),
   };
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
@@ -930,6 +996,7 @@ export function gotoObjectAction() {
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
     const h = bot?.host;
     if (typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     // approach() already composes the indoor door-waypoint leg walk
@@ -1004,6 +1071,7 @@ export function giveItemAction() {
     const h = bot?.host;
     if (typeof h?.GiveObject !== "function" || typeof h?.NearbyGuids !== "function" ||
         typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    { const pr = portalRefusal(bot, fail); if (pr) return pr; }
     const tgt = resolveNearby(h, a.target);
     if (tgt.error) return fail(tgt.error);
     const rows = h.TryGetPlayerInventory();
@@ -1015,7 +1083,7 @@ export function giveItemAction() {
     const walk = await approach(bot, tgt.guid);
     const wf = walkFailedTooFar(h, tgt.guid, walk);
     if (wf.blocked)
-      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+      return fail(walkFailMessage(walk, wf));
     if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(

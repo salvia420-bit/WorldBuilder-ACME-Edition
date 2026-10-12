@@ -62,6 +62,7 @@
 // rung, never the module. enabled:false makes tick() a no-op.
 
 import { worldX, worldY } from "./nav_frame.js";
+import { portalSpaceActive } from "./portal_gate.js";
 
 // ── defaults (all overridable via opts) ─────────────────────────────────────
 const SAMPLE_MS = 500; // detection/breadcrumb cadence (host ticks ~10Hz)
@@ -191,6 +192,15 @@ export class UnwedgeReflex {
     return this.state !== "MONITOR";
   }
 
+  /** Abort a recovery in flight (operator STOP / "stop moving"). An async
+   *  recall step notices the state change and exits; its kernel restore is
+   *  refused while the operator hold is set. -> true when one was cancelled. */
+  cancel(why = "cancelled") {
+    if (!this.active()) return false;
+    this._finish(false, String(why));
+    return true;
+  }
+
   /** host.onTick driver. NEVER throws into the host loop. */
   tick() {
     try {
@@ -309,6 +319,11 @@ export class UnwedgeReflex {
       const h = this.host;
       if (typeof h?.GetCastBusyState === "function" && h.GetCastBusyState() !== 0) return false;
     } catch { /* gate read is best-effort */ }
+    // Portal space (2026-10-12, portal_gate.js): the body is parked on purpose
+    // under the tunnel — router.js holds a route in PORTAL meanwhile, but a
+    // loot APPROACH (kernel-driven raw MoveToPosition) has no such hold, and a
+    // tunnel waiting on a slow interior build can outlast wedgeAfterMs.
+    if (portalSpaceActive(this.host)) return false;
     try {
       const b = this.bot;
       if (b?.router?.status?.state === "WALK") return true;
@@ -509,10 +524,13 @@ export class UnwedgeReflex {
           if (this.state !== "RECALL") return; // a teleport already finished us
           this._journal(`[unwedge] casting ${sp.name} (recall to sanctuary — last-resort extraction)`);
           const r = await gc.attemptRecallCast(
-            { host: this.host },
+            // Called off mid-wait (cancel() / operator STOP -> MONITOR): the
+            // recall must not fire into a character that was handed back.
+            { host: this.host, isAborted: () => this.state !== "RECALL" },
             { meta: { spellId: sp.id, spellName: sp.name } },
             this.recallTune,
           );
+          if (r && r.aborted) return;
           if (r && r.ok) {
             this.recalls += 1;
             if (this.state === "RECALL") this._finish(true, `recalled to sanctuary via ${sp.name}`);

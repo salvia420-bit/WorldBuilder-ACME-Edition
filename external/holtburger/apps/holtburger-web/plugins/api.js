@@ -142,8 +142,15 @@ import { RynthWebHost } from "./webhost.js";
  * changes bump minor, capability renames/re-semantics or snapshot-shape
  * changes bump major. Plugins declare a `clientApi` range in their
  * manifest (schemas/plugin-manifest.json).
+ *
+ * 1.1.0 (2026-10-12, RynthSuite update — additive): host capabilities
+ * SendTell, CloseContainer, GetVendorProfile, Disconnect, LogOffCharacter,
+ * GetLastRecvAgeMs and the IsPortalSpaceActive environment capability, plus
+ * host members TryGetPackRoom / TryGetVendorProfile / SendTell /
+ * CloseContainer / Disconnect / LogOffCharacter / TryGetLastRecvAgeMs /
+ * IsPortalSpaceActive / dispose(). `^1.0` manifests are unaffected.
  */
-export const API_VERSION = "1.0.0";
+export const API_VERSION = "1.1.0";
 
 let _componentCatalog = null;
 let _componentCatalogPromise = null;

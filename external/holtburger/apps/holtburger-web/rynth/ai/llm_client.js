@@ -103,8 +103,11 @@ export class LlmClient {
     // default routing). Non-OpenRouter backends ignore unknown body fields.
     this.provider = provider && typeof provider === "object" ? provider : null;
     this.log = log ?? null;
-    // spend: calls/tokens count COMPLETED chats (a failed 429 attempt costs
-    // nothing); errors counts chat() invocations that ultimately threw.
+    // spend: calls counts COMPLETED chats; tokens count every BILLED attempt —
+    // completed chats plus a "length" attempt whose reasoning ate max_tokens
+    // (the provider bills those tokens even though content came back empty;
+    // a 429/5xx/network attempt bills nothing). errors counts chat()
+    // invocations that ultimately threw.
     this._spend = { calls: 0, promptTokens: 0, completionTokens: 0, errors: 0 };
   }
 
@@ -127,7 +130,11 @@ export class LlmClient {
     return { ...this._spend };
   }
 
-  /** -> { text, json, usage:{prompt,completion}, model, ms }; throws Error with .kind */
+  /** -> { text, json, usage:{prompt,completion}, billedUsage:{prompt,completion}, model, ms };
+   * throws Error with .kind (and .billedUsage when any attempt billed tokens).
+   * usage = the returned completion; billedUsage = every billed attempt of
+   * this chat (adds a failed "length" attempt's tokens — additive 2026-10-12,
+   * so the director's $ cap sees what the provider actually charged). */
   async chat(messages, { model, maxTokens = this.maxTokens, temperature = 0.4 } = {}) {
     const t0 = Date.now();
     const useModel = model ?? this.model;
@@ -138,6 +145,7 @@ export class LlmClient {
     if (this.title) headers["X-Title"] = this.title;
     let tokens = maxTokens;
     let lastErr = null;
+    const billed = { prompt: 0, completion: 0 };
     for (let attempt = 0; attempt <= 1; attempt++) { // <= 1: exactly 1 retry (SPEC)
       if (attempt > 0 && lastErr.kind !== "length") {
         const backoffMs = Math.min(10_000, 500 * 2 ** (attempt - 1));
@@ -150,12 +158,21 @@ export class LlmClient {
         ...(this.provider ? { provider: this.provider } : {}),
       });
       try {
-        return await this._attempt(url, headers, body, useModel, t0);
+        const res = await this._attempt(url, headers, body, useModel, t0);
+        res.billedUsage = {
+          prompt: billed.prompt + res.usage.prompt,
+          completion: billed.completion + res.usage.completion,
+        };
+        return res;
       } catch (e) {
         lastErr = e;
         // "length": reasoning consumed the whole completion budget — the
         // deterministic fix is a bigger budget, not a backoff (2026-07-17).
         if (e.kind === "length") {
+          if (e.usage) {
+            billed.prompt += e.usage.prompt;
+            billed.completion += e.usage.completion;
+          }
           tokens = Math.min(tokens * 2, 32_000);
           this.log?.(`[llm] empty completion (reasoning ate max_tokens) — retrying at max_tokens=${tokens}`);
           continue;
@@ -164,6 +181,10 @@ export class LlmClient {
       }
     }
     this._spend.errors++;
+    if (billed.prompt || billed.completion) {
+      lastErr.billedUsage = { ...billed };
+      if (lastErr.model == null) lastErr.model = useModel;
+    }
     this.log?.(`[llm] chat failed (${lastErr.kind}): ${lastErr.message}`);
     throw lastErr;
   }
@@ -199,20 +220,23 @@ export class LlmClient {
     }
     const text = data?.choices?.[0]?.message?.content;
     const finish = data?.choices?.[0]?.finish_reason ?? null;
-    // Reasoning models (gpt-oss) share max_tokens between hidden reasoning
-    // and content; when reasoning eats it all, content comes back empty/null
-    // with finish_reason "length". Distinct kind so chat() can retry with a
-    // doubled budget instead of treating it as a malformed provider reply.
-    if ((text == null || (typeof text === "string" && !text.trim())) && finish === "length") {
-      throw kindError("length", "empty completion: reasoning consumed max_tokens (finish_reason=length)");
-    }
-    if (typeof text !== "string") {
-      throw kindError("bad-response", `no choices[0].message.content: ${clip(raw)}`);
-    }
     const usage = {
       prompt: Number(data?.usage?.prompt_tokens) || 0,
       completion: Number(data?.usage?.completion_tokens) || 0,
     };
+    // Reasoning models (gpt-oss) share max_tokens between hidden reasoning
+    // and content; when reasoning eats it all, content comes back empty/null
+    // with finish_reason "length". Distinct kind so chat() can retry with a
+    // doubled budget instead of treating it as a malformed provider reply.
+    // The attempt was still BILLED: its usage rides the error and is counted.
+    if ((text == null || (typeof text === "string" && !text.trim())) && finish === "length") {
+      this._spend.promptTokens += usage.prompt;
+      this._spend.completionTokens += usage.completion;
+      throw kindError("length", "empty completion: reasoning consumed max_tokens (finish_reason=length)", { usage });
+    }
+    if (typeof text !== "string") {
+      throw kindError("bad-response", `no choices[0].message.content: ${clip(raw)}`);
+    }
     this._spend.calls++;
     this._spend.promptTokens += usage.prompt;
     this._spend.completionTokens += usage.completion;

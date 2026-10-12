@@ -71,6 +71,7 @@ import {
 // so existing importers of goto_compose.js see no API difference.
 import { deriveRouteFlags } from "./route_flags.js";
 export { deriveRouteFlags }; // re-exported: named-export surface unchanged for existing importers
+import { holdIsAlive } from "./portal_gate.js";
 
 // World-frame metres from a full objCellId + landblock-local x/y (router.js:50).
 const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
@@ -192,6 +193,7 @@ export async function walkLegs(router, legs, { pollMs = 500, stallMs = 45_000, l
   router.follow(legs);
   let lastSig = "";
   let lastChangeAt = Date.now();
+  let lastTicks = null;
   for (;;) {
     const st = router.status;
     if (st.state === "DONE" || st.state === "FAILED") break;
@@ -200,7 +202,12 @@ export async function walkLegs(router, legs, { pollMs = 500, stallMs = 45_000, l
       return { ok: false, state: st.state, error: "route cancelled", legsWalked: st.walked ?? 0 };
     }
     const sig = `${st.state}:${st.leg}:${st.walked}`;
-    if (sig !== lastSig) {
+    // A portal-space hold (router.js) legitimately freezes the sig for up to
+    // ~90 s; while the router is still ticking through it that is progress,
+    // not a stall. A host that stopped ticking still trips the deadline.
+    const holdAlive = holdIsAlive(st, lastTicks);
+    lastTicks = st.ticks;
+    if (sig !== lastSig || holdAlive) {
       lastSig = sig;
       lastChangeAt = Date.now();
     } else if (Date.now() - lastChangeAt > stallMs) {
@@ -634,6 +641,15 @@ async function attemptMetaPortalTouch(ctx, leg, tune) {
  * Never throws.
  */
 const RECALL_TELEPORT_MS = 20_000; // server-side cast + fade animation before the hop
+const COMBAT_MODE_MAGIC = 8; // retail CombatMode.Magic (webhost GetCurrentCombatMode)
+const MAGIC_MODE_TIMEOUT_MS = 5_000; // stance change echo (~1-2 s) + slack
+const RECALL_CAST_OWNER = "recall"; // webhost tryClaimCast owner tag
+// How long the recall waits for another module's cast token: the host's token
+// self-clears on that cast's UseDone, or after webhost.js CAST_TOKEN_TIMEOUT_MS
+// (12 s since 2026-10-12 — a level-8 windup runs ~7 s), so wait out the whole
+// lifetime plus slack rather than firing into the other cast's windup ("You're
+// too busy" -> the leg fails as "did not produce a teleport").
+const RECALL_TOKEN_WAIT_MS = 13_000;
 // Exported (2026-07-24): unwedge.js's last-resort extraction reuses this as
 // THE recall primitive rather than growing a second cast-and-await-teleport.
 export async function attemptRecallCast(ctx, leg, tune) {
@@ -656,32 +672,99 @@ export async function attemptRecallCast(ctx, leg, tune) {
   }
   if (!known.includes(spellId)) return unavailable("is not in the character's spellbook");
   if (typeof host.CastSpell !== "function") return unavailable("cast API unavailable");
+  // The caller's cancellation state (operator STOP / "stop moving", a cancelled
+  // route, an unwedge recovery that was called off). The waits below can take
+  // 5-13 s; a recall must never fire into a character the operator has taken
+  // back, so every await is followed by this check and nothing is cast once
+  // it reads true.
+  const isAborted = () => {
+    try {
+      return typeof ctx.isAborted === "function" && ctx.isAborted() === true;
+    } catch (_) {
+      return false;
+    }
+  };
+  const aborted = () => ({ ok: false, aborted: true, error: `recall aborted: ${spellName} (cancelled)`, reason: "aborted" });
+  if (isAborted()) return aborted();
   const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (isAborted()) return aborted();
   if (!pose) return unavailable("could not confirm a player pose to detect the teleport");
   const pwx = worldX(pose.objCellId >>> 0, pose.x);
   const pwy = worldY(pose.objCellId >>> 0, pose.y);
+  // ACE casts an untargeted spell only in Magic mode (Player_Magic.cs:275
+  // HandleActionMagicCastUnTargetedSpell: CombatMode != Magic and
+  // LastCombatMode != Magic -> SendUseDoneEvent, no cast). The explorer persona
+  // boots combat-off, so its recall — unwedge's last rung and every rcl leg —
+  // was refused and timed out 20 s later as "did not produce a teleport".
+  // Enter Magic explicitly (vitals.js/buff_loop.js's ChangeCombatMode(8), not
+  // the equipment toggle) and wait for the server's mode; a character that
+  // can't enter it (no caster wielded — the wasm's own SetCombatMode gate)
+  // fails honestly here instead. Hosts without the mode API skip the step.
+  if (typeof host.GetCurrentCombatMode === "function" && typeof host.ChangeCombatMode === "function") {
+    try {
+      if (host.GetCurrentCombatMode() !== COMBAT_MODE_MAGIC) {
+        host.ChangeCombatMode(COMBAT_MODE_MAGIC);
+        const deadline = Date.now() + (tune.magicModeTimeoutMs ?? MAGIC_MODE_TIMEOUT_MS);
+        while (host.GetCurrentCombatMode() !== COMBAT_MODE_MAGIC && Date.now() < deadline && !isAborted()) {
+          await new Promise((r) => setTimeout(r, tune.posePollMs));
+        }
+        if (isAborted()) return aborted();
+        if (host.GetCurrentCombatMode() !== COMBAT_MODE_MAGIC) {
+          return unavailable("needs Magic mode and the character could not enter it (no caster wielded?)");
+        }
+      }
+    } catch (_) {
+      /* mode read/write is best-effort — the cast below still goes out */
+    }
+  }
   // Let an already-open cast gesture clear before issuing a new one (same
   // gate combat_loop.js/buff_loop.js respect).
   try {
     if (typeof host.GetCastBusyState === "function") {
       const deadline = Date.now() + 3000;
-      while (host.GetCastBusyState() !== 0 && Date.now() < deadline) {
+      while (host.GetCastBusyState() !== 0 && Date.now() < deadline && !isAborted()) {
         await new Promise((r) => setTimeout(r, tune.posePollMs));
       }
     }
   } catch (_) {
     /* gate read is best-effort */
   }
-  let sent = false;
-  try {
-    sent = !!host.CastSpell(0, spellId);
-  } catch (_) {
-    sent = false;
+  if (isAborted()) return aborted();
+  // C3 shared cast serializer (webhost.js tryClaimCast): vitals can still
+  // cast while a recall runs (it outranks Unwedge in the kernel), and a recall
+  // fired into its windup is refused "too busy". Wait for the token — it frees
+  // on that cast's UseDone, at the latest when the host's 12 s token timeout
+  // lapses (RECALL_TOKEN_WAIT_MS); proceed anyway past the wait — degrade-open,
+  // as the other casters do when the host predates the token.
+  const claimTok = typeof host.tryClaimCast === "function";
+  let claimed = false;
+  if (claimTok) {
+    const deadline = Date.now() + (tune.castTokenWaitMs ?? RECALL_TOKEN_WAIT_MS);
+    try {
+      while (!(claimed = host.tryClaimCast(RECALL_CAST_OWNER)) && Date.now() < deadline && !isAborted()) {
+        await new Promise((r) => setTimeout(r, tune.posePollMs));
+      }
+    } catch (_) {
+      claimed = false;
+    }
   }
-  if (!sent) return unavailable("cast was refused");
-  const jumped = await awaitTeleport(host, pwx, pwy, tune.recallTeleportMs, tune.teleportPollMs, tune.portalJumpM);
-  if (!jumped) return unavailable("cast did not produce a teleport in time");
-  return { ok: true, portal: spellName };
+  try {
+    if (isAborted()) return aborted(); // (the finally frees a claimed token)
+    let sent = false;
+    try {
+      sent = !!host.CastSpell(0, spellId);
+    } catch (_) {
+      sent = false;
+    }
+    if (!sent) return unavailable("cast was refused");
+    const jumped = await awaitTeleport(host, pwx, pwy, tune.recallTeleportMs, tune.teleportPollMs, tune.portalJumpM);
+    if (!jumped) return unavailable("cast did not produce a teleport in time");
+    return { ok: true, portal: spellName };
+  } finally {
+    if (claimed && typeof host.releaseCast === "function") {
+      try { host.releaseCast(RECALL_CAST_OWNER); } catch (_) { /* token self-expires */ }
+    }
+  }
 }
 
 /**
@@ -930,8 +1013,9 @@ async function exitToOutdoors(ctx, tune, phases, { label = "re-exit" } = {}) {
     // walk usually parks us right against it). Best-effort; opening a door
     // never hurts egress (attemptDoorOpen skips already-open doors).
     const doorPose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
-    const dr = await attemptDoorOpen(host, doorPose);
+    const dr = await attemptDoorOpen(host, doorPose, doorOpenOpts(tune));
     if (dr.opened && ctx.log) ctx.log(`${label}: opened closed door ${dr.name} — retrying (attempt ${attempt})`);
+    if (dr.unconfirmed && ctx.log) ctx.log(`${label}: door ${dr.name} never reported open (locked?) — leaving it to the edge exclusion`);
     // Remedy 2 — blame the stalled doorway edge; exclude only on the SECOND
     // wedge of the SAME edge (a first wedge may have been just the door).
     let newExclusion = false;
@@ -1081,6 +1165,7 @@ export async function composeGoto(deps, to, opts = {}) {
     portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
     // Bounded egress retry ladder (exitToOutdoors, 2026-07-23 tavern fix).
     egressAttempts: opts.egressAttempts ?? 4,
+    doorOpenTimeoutMs: opts.doorOpenTimeoutMs ?? DOOR_OPEN_TIMEOUT_MS, // attemptDoorOpen confirm wait
   };
 
   const startCell = currentCell(host);
@@ -1285,6 +1370,8 @@ function buildTune(opts = {}, router = null) {
     indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? REPLAY_INDOOR_LEG_TIMEOUT_MS,
     portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
     recallTeleportMs: opts.recallTeleportMs ?? RECALL_TELEPORT_MS,
+    magicModeTimeoutMs: opts.magicModeTimeoutMs ?? MAGIC_MODE_TIMEOUT_MS, // attemptRecallCast mode entry
+    doorOpenTimeoutMs: opts.doorOpenTimeoutMs ?? DOOR_OPEN_TIMEOUT_MS, // attemptDoorOpen confirm wait
     // Bounded indoor-wedge repath retry ladder (2026-07-20, live MatronHive
     // report #3: the one-shot repath found a real path, walked 2 of 3 legs,
     // then stalled on the 3rd and gave up entirely). See repathIndoor below.
@@ -1352,7 +1439,10 @@ export function routeHasJumps(legs) {
 const ODF_DOOR = 0x1000; // ObjectDescriptionFlag.Door (observe_ext.js ODF map)
 const PHYS_ETHEREAL = 0x4; // PhysicsState.Ethereal — set while a door stands open
 const DOOR_RETRY_RANGE_M = 10;
-const DOOR_SWING_SETTLE_MS = 1500; // door swing + physics flip before re-walking
+const DOOR_SWING_SETTLE_MS = 1500; // blind settle — only when the door state can't be read
+const DOOR_OPEN_TIMEOUT_MS = 6_000; // ACE's use approach (server MoveTo, up to ~10 m) + the open echo
+const DOOR_OPEN_POLL_MS = 150;
+const DOOR_OPEN_PAD_MS = 300; // after the Ethereal flip, before re-walking
 
 // Nearest CLOSED door within DOOR_RETRY_RANGE_M of `pose`. Returns
 // {guid,name,d} | null. Never throws.
@@ -1396,9 +1486,32 @@ function nearestClosedDoor(host, pose) {
   return best;
 }
 
-// Open the nearest closed door within reach (if any) and wait out the swing.
-// Returns {opened:true,name} | {opened:false}. Never throws.
-async function attemptDoorOpen(host, pose) {
+// attemptDoorOpen timings from a retry ladder's tune: production polls every
+// 150 ms; tests (pollMs 2) poll at their own pace so the suite stays fast.
+function doorOpenOpts(tune) {
+  const poll = Math.min(DOOR_OPEN_POLL_MS, tune?.posePollMs ?? DOOR_OPEN_POLL_MS);
+  return {
+    timeoutMs: tune?.doorOpenTimeoutMs ?? DOOR_OPEN_TIMEOUT_MS,
+    pollMs: poll,
+    padMs: Math.min(DOOR_OPEN_PAD_MS, poll * 2),
+  };
+}
+
+// Open the nearest closed door within reach (if any) and wait until it reports
+// OPEN. Returns {opened:true,name,confirmed} | {opened:false[,name,unconfirmed]}.
+// Never throws.
+//
+// 2026-10-12: a blind 1.5 s wait is no longer enough, nor safe. Since
+// 2026-10-05 (`?objCollideInTransition`, default on) a closed door really stops
+// the walk inside the movement step; ACE answers a Use from outside the use
+// radius with a server MoveTo to the door, and that MoveTo shares the local
+// MoveToManager with ours — re-walking before it lands cancels the approach and
+// the door never opens. So poll the door's PhysicsState for Ethereal (set while
+// open) up to opts.timeoutMs. A door that never reports open (locked, out of
+// reach) returns opened:false, so the retry ladders exclude its edge instead of
+// spending every attempt re-using it. A host without TryGetObjectState keeps the
+// old blind settle (opened:true, confirmed:false).
+async function attemptDoorOpen(host, pose, opts = {}) {
   const door = nearestClosedDoor(host, pose);
   if (!door || typeof host.UseObject !== "function") return { opened: false };
   try {
@@ -1406,8 +1519,27 @@ async function attemptDoorOpen(host, pose) {
   } catch (_) {
     return { opened: false };
   }
-  await new Promise((r) => setTimeout(r, DOOR_SWING_SETTLE_MS));
-  return { opened: true, name: door.name };
+  if (typeof host.TryGetObjectState !== "function") {
+    await new Promise((r) => setTimeout(r, DOOR_SWING_SETTLE_MS));
+    return { opened: true, name: door.name, confirmed: false };
+  }
+  const pollMs = Math.max(1, opts.pollMs ?? DOOR_OPEN_POLL_MS);
+  const deadline = Date.now() + (opts.timeoutMs ?? DOOR_OPEN_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    let st = 0;
+    try {
+      st = host.TryGetObjectState(door.guid) | 0;
+    } catch (_) {
+      st = 0;
+    }
+    if (st & PHYS_ETHEREAL) {
+      // Open: a short pad so the swing clears the doorway before we re-walk.
+      await new Promise((r) => setTimeout(r, opts.padMs ?? DOOR_OPEN_PAD_MS));
+      return { opened: true, name: door.name, confirmed: true };
+    }
+  }
+  return { opened: false, name: door.name, unconfirmed: true };
 }
 
 // doorwayApproach emits exactly 2 legs (30% pre-approach, 50% doorway
@@ -1490,7 +1622,8 @@ async function repathIndoor(ctx, tune, target) {
     // give up on) a route that only needed the door opened. Re-resolve the
     // pose fresh — the stalled walk may have moved us right up to the door.
     const doorPose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || null;
-    const dr = await attemptDoorOpen(host, doorPose);
+    const dr = await attemptDoorOpen(host, doorPose, doorOpenOpts(tune));
+    if (dr.unconfirmed && log) log(`repathIndoor: door ${dr.name} never reported open — treating its edge as blocked`);
     if (dr.opened) {
       lastError = `indoor re-path door(${dr.name}) opened — retrying`;
       if (log) log(`repathIndoor: opened closed door ${dr.name} — retrying attempt ${attempt}`);
@@ -1584,7 +1717,14 @@ export async function replayRoute(deps, legs, opts = {}) {
       // hub was always going to fail the entity search; see nav_import.js).
       if (failedMeta && failedMeta.navType === "rcl") {
         log(`replay: recall leg ${failIdx} — casting ${failedMeta.spellName || failedMeta.spellId}`);
-        const tr = await attemptRecallCast(ctx, failed, tune);
+        // Cancelled while the recall waits: cancel() -> IDLE, or a newer
+        // follow() took the router (WALK/PORTAL — last command wins).
+        const recallAborted = () => {
+          const rs = router.status.state;
+          return rs === "IDLE" || rs === "WALK" || rs === "PORTAL";
+        };
+        const tr = await attemptRecallCast({ ...ctx, isAborted: recallAborted }, failed, tune);
+        if (tr.aborted) return { ok: false, state: "CANCELLED", legsWalked: walkedTotal };
         if (!tr.ok) {
           return { ok: false, state: "FAILED", error: tr.error, reason: tr.reason, leg: failIdx, legsWalked: walkedTotal };
         }

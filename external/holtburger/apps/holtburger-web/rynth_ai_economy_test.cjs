@@ -30,15 +30,20 @@ const INV = [
   { guid: 0x1005, name: "Pyreal", wcid: 273, value: 900, stackSize: 900, equipMask: 0, validLocations: 0, itemType: 0x1000, containerId: 0x5001, itemsCapacity: 0, requiresBackpackSlot: false },
 ];
 
+// Live-shaped multipliers (2026-10-12): buyMultiplier = what the vendor PAYS
+// (~0.9), sellMultiplier = what it CHARGES (~1.5) — plugins/commerce_logic.js
+// "THE DIRECTION TRAP". The pre-fix fixture had them the other way round
+// (1.15 / 0.75), which is how the inverted economy.js pricing passed.
 const VENDOR = {
   vendorGuid: 0x2001,
   vendorName: "Aun Warrior Vendor",
-  buyMultiplier: 1.15,
-  sellMultiplier: 0.75,
+  buyMultiplier: 0.9,
+  sellMultiplier: 1.5,
   items: [
     { itemGuid: 0x3001, name: "Budding Wand", wcid: 200, value: 100, stackSize: 1, itemType: 0x8000 },
     { itemGuid: 0x3002, name: "Spell Components", wcid: 201, value: 5, stackSize: 1, itemType: 0x80 },
     { itemGuid: 0x3003, name: "Golden Plate Armor", wcid: 202, value: 90000, stackSize: 1, itemType: 2 },
+    { itemGuid: 0x3004, name: "Rare Trinket", wcid: 203, value: 10, stackSize: 1, itemType: 0x8, supply: 2 },
   ],
 };
 
@@ -100,7 +105,10 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
     const r = await byType.open_vendor.apply(bot, { type: "open_vendor", vendor: "aun warrior" }, { journal });
     check("open_vendor resolves by name", r.ok === true && r.result.vendorName === "Aun Warrior Vendor");
     check("open_vendor used the npc", bot.host.calls.some((c) => c[0] === "use" && c[1] === 0x2001));
-    check("open_vendor journals stock+prices", journal.entries[0].text.includes("Budding Wand @115"));
+    // ShopSystem::SellPrice: ceil(1.5 * 100 * 1 - 0.1) = 150 — the price the
+    // player PAYS (pre-fix this read @115 off buyMultiplier).
+    check("open_vendor journals retail purchase prices", journal.entries[0].text.includes("Budding Wand @150"), journal.entries[0].text);
+    check("open_vendor names both price directions", /charges ×1\.5 .*pays ×0\.9/.test(journal.entries[0].text), journal.entries[0].text);
     const miss = await byType.open_vendor.apply(bot, { type: "open_vendor", vendor: "nonexistent npc" }, { journal });
     check("open_vendor unknown name fails", miss.ok === false && /no nearby entity/.test(miss.error));
     check("open_vendor skips players", !(await byType.open_vendor.apply(bot, { type: "open_vendor", vendor: "somedude" }, { journal })).ok);
@@ -112,11 +120,24 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
     const bot = { host: makeHost() };
     await byType.open_vendor.apply(bot, { type: "open_vendor", vendor: "0x2001" }, { journal });
     const r = await byType.buy_items.apply(bot, { type: "buy_items", items: [{ name: "budding wand" }, { name: "spell components", qty: 20 }] }, { journal });
-    check("buy_items ok", r.ok === true && r.result.estCost === 115 + Math.ceil(5 * 1.15) * 20);
+    // wand: ceil(1.5*100 - 0.1) = 150; components (stackability unknown ->
+    // one lump, VendorSellPrice(pwd, 20)): ceil(1.5*5*20 - 0.1) = 150.
+    check("buy_items ok at retail prices", r.ok === true && r.result.estCost === 300, JSON.stringify(r));
     const buyCall = bot.host.calls.find((c) => c[0] === "buy");
     check("buy_items sends guid rows", buyCall && buyCall[1] === 0x2001 && buyCall[2].length === 2 && buyCall[2][1].amount === 20);
+    check("buy_items sends only {itemGuid, amount}", buyCall && Object.keys(buyCall[2][0]).sort().join(",") === "amount,itemGuid");
+    check("buy_items journals an unchanged-coins verdict", journal.entries.some((e) => /did NOT complete the trade/.test(e.text)));
     const broke = await byType.buy_items.apply(bot, { type: "buy_items", items: [{ name: "golden plate" }] }, { journal });
-    check("buy_items refuses over-budget", broke.ok === false && /exceeds your 900 pyreals/.test(broke.error));
+    check("buy_items refuses over-budget", broke.ok === false && /exceeds your 900 pyreals/.test(broke.error) && /enough money/.test(broke.error));
+    const stock = await byType.buy_items.apply(bot, { type: "buy_items", items: [{ name: "rare trinket", qty: 3 }] }, { journal });
+    check("buy_items respects a finite supply", stock.ok === false && /only 2 in stock/.test(stock.error), JSON.stringify(stock));
+    const full = makeHost();
+    full.TryGetPackRoom = () => ({ main: { used: 102, cap: 102, free: 0 }, containers: { used: 7, cap: 7, free: 0 }, packs: [], freeItemSlots: 0 });
+    const fullBot = { host: full };
+    await byType.open_vendor.apply(fullBot, { type: "open_vendor", vendor: "0x2001" }, { journal });
+    const noRoom = await byType.buy_items.apply(fullBot, { type: "buy_items", items: [{ name: "budding wand" }] }, { journal });
+    check("buy_items refuses with a full main pack (retail order: money, then room)",
+      noRoom.ok === false && /empty some slots/.test(noRoom.error) && !full.calls.some((c) => c[0] === "buy"), JSON.stringify(noRoom));
     const badName = await byType.buy_items.apply(bot, { type: "buy_items", items: [{ name: "banana" }] }, { journal });
     check("buy_items unknown item fails", badName.ok === false && /no item matching/.test(badName.error));
     check("buy_items validates qty", byType.buy_items.validate({ type: "buy_items", items: [{ name: "x", qty: 0 }] }).ok === false);
@@ -140,6 +161,33 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
     check("sell_items refuses worn items", worn.ok === false);
     const coins = await byType.sell_items.apply(bot, { type: "sell_items", items: [{ name: "pyreal" }] }, { journal });
     check("sell_items refuses coin stacks", coins.ok === false);
+    // Whole stacks only (ACE sells every unit whatever amount is sent).
+    const part = await byType.sell_items.apply(bot, { type: "sell_items", items: [{ name: "apple", qty: 2 }] }, { journal });
+    check("sell_items refuses a partial stack with the split_stack recipe",
+      part.ok === false && /WHOLE stack of 5/.test(part.error) && /split_stack/.test(part.error), JSON.stringify(part));
+    const whole = await byType.sell_items.apply(bot, { type: "sell_items", items: [{ name: "apple" }] }, { journal });
+    const sellCall = bot.host.calls.filter((c) => c[0] === "sell").pop();
+    check("sell_items sends the whole stack", whole.ok === true && sellCall && sellCall[2][0].amount === 5, JSON.stringify(sellCall));
+    // ShopSystem::BuyPrice(unit 0 (2/5 floors to 0)…) — any credit number is
+    // fine here; the expected credit rides the result when the vendor state is known.
+    check("sell_items reports an expected credit", typeof whole.result.estCredit === "number");
+  }
+
+  // --- sell_items vs the vendor's buy profile (InqAcceptability) ---------
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    // A weapons-only vendor (ItemType 0x101) that buys values 10..1000.
+    host.TryGetVendorProfile = () => ({
+      vendorGuid: 0x2001, buyAcceptCategories: 0x101, buyAcceptCategoryNames: ["Weapons"],
+      minValue: 10, maxValue: 1000, hasNoMin: false, hasNoMax: false,
+    });
+    const bot = { host };
+    await byType.open_vendor.apply(bot, { type: "open_vendor", vendor: "0x2001" }, { journal });
+    check("open_vendor journals what the vendor buys", journal.entries.some((e) => /buys Weapons \(value 10\.\.1000\)/.test(e.text)), JSON.stringify(journal.entries));
+    const cap = await byType.sell_items.apply(bot, { type: "sell_items", items: [{ name: "leather cap" }] }, { journal });
+    check("sell_items refuses an item type the vendor does not buy (retail text)",
+      cap.ok === false && /cannot be sold here/.test(cap.error) && !host.calls.some((c) => c[0] === "sell"), JSON.stringify(cap));
   }
 
   // --- equip / unequip / use ---------------------------------------------

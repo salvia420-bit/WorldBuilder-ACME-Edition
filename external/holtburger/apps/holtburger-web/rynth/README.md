@@ -34,15 +34,23 @@ against serve.py + wsbridge + ACE; boot via `rynth_boot_helper.cjs`).
 ```js
 import { createGrindBot } from "/apps/holtburger-web/rynth/bot.js";
 const bot = await createGrindBot(window.__sessionHandle, {
-  buffs: [2, 24],              // self-buff spell ids to maintain
+  buffs: [2, 24],              // self-buff spell ids (family names: B4 upgrades to the best known SELF tier), or "auto"
   priorities: { olthoi: 10 },  // T8 monster-name -> priority
   loot: { minValue: 0 },       // Value(19) loot threshold
   vitals: { healAtCombat: 60 },// B16 threshold overrides
+  combat: { magicRangeM: 15 }, // RynthCombatLoop tuning (ranges, height/power, blacklist)
   control: { prefix: "!bot" }, // in-game tell control
 });
-bot.status();  // { action, kills, looted, buffs, vitals }
-bot.stop();
+bot.status();            // { action, kills, looted, buffs, vitals, router }
+bot.control.stop();      // the ONE operator stop (durable per character) — HUD / !bot pause use it
+bot.control.resume();
+await bot.setBuffs("auto"); // replace the self-buff set at runtime ([] = none)
+bot.stop();              // tear the bot down (disposes the AI layer too)
 ```
+
+Normally you don't call this yourself: `?bot=1` boots it at first in-world, and the
+**RynthSuite HUD** (⚒ beside the toolbar, or Shift+F12) boots it on demand with START —
+both through `boot.js`.
 
 ## Modules
 
@@ -57,7 +65,31 @@ bot.stop();
 | `router.js` | Local leg executor — walk a route ([{lb,x,y,z,portal?}]) as `moveToPosition` legs with world-frame arrival detection; distinguishes on-foot seam crossings (<30 m world jump on a landblock change → keep walking) from real portals/teleports (≥30 m → settle + advance). The in-page half of report 09's nav. |
 | `global_router.js` | **GlobalRouter** — JS client for the RynthNav sidecar (`../../rynthnav-sidecar`, :8767): `route(from,to)` HTTP contract + the plan→walk→replan loop over `router.js` (fresh route from current pose on a FAILED leg). | report 09 Option A |
 | `control_channel.js` | Remote control over in-game tells (`!bot status\|pause\|resume\|come\|goto <ns> <ew>`), parsed off the push-event plane, replies via `InvokeChatParser`. `goto` needs `config.nav`. | report 04 push plane |
-| `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. `config.nav = { endpoint }` adds `bot.goto(to)` (pauses the grind, plans+walks via the sidecar, restarts the kernel on completion — unlike `travel()`, which leaves it stopped). | — |
+| `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. `config.nav = { endpoint }` adds `bot.goto(to)` (pauses the grind, plans+walks via the sidecar, restarts the kernel on completion — unlike `travel()`, which leaves it stopped). Also `bot.control` (below), `bot.setBuffs()`, `config.startHeld` (boot under a persisted operator stop). | — |
+| `portal_gate.js` | `portalSpaceActive(host)` — every mover and caster holds while the client shows portal space (teleport tunnel + destination build hold, up to ~80 s); the router parks in PORTAL instead of walking the body through cells whose collision hasn't landed. | 2026-10-12 |
+| `ai/operator_stop.js` | `OperatorControl` (`bot.control`) — the ONE stop/resume/state authority: kernel operator hold + director stop + travel cancel; a durable per-character latch (`rynthBotOperatorStop:<guid>`) makes a STOP survive reloads/reconnects. | 2026-10-12 |
+| `boot.js` | The `?bot=1` auto-boot (URL → createGrindBot config, operator-stop latch, takeover rebind with live-settings carry-over) as one function the HUD's START shares. | 2026-10-12 |
+| `hud_bridge.js` | The only file that knows the bot API for the HUD: a pure view-model snapshot + the HUD's commands. | 2026-10-12 |
+| `../plugins/rynth-hud.js` | **The RynthSuite HUD** — see below. | RynthAi dashboard |
+
+## The RynthSuite HUD (2026-10-12)
+
+A web port of the RynthAi ImGui dashboard (`LegacyUi/LegacyDashboardRenderer.cs`) in our
+retail look: a draggable framed window opened by the **⚒ button beside the toolbar**
+(`plugins/hotbar.js` add-on column, outside the retail frame), **Shift+F12**, or the
+plugin-bar ⚒ slot. `?rynthHud=off` disables it.
+
+- **RUNNING / STOPPED / START** — START boots the bot on the current character when the page
+  wasn't loaded with `?bot=1`; STOP is `bot.control.stop()` (persisted per character: a
+  reload boots the bot held until RUNNING is pressed again).
+- State / Activity lines, Profile (grind | explorer), Route (atlas routes ▶ follow), Loot ≥.
+- Combat / Buff / Nav / Loot / AI toggles, **FR** force-rebuff (right-click cancels).
+- Target name + health bar, player HP/ST/MN, kills, kills/hr, looted, buffs, uptime.
+- Tabs: Monsters (priorities), Settings (vitals thresholds, self-buff list, Auto),
+  Navigation (routes, /loc goto, exit building, stop moving), AI (the director panel), Log.
+
+It refreshes at ≤ 4 Hz only while open and visible; the launcher dot (green = running)
+polls at 1 Hz.
 
 ## Regression suite
 
@@ -66,6 +98,13 @@ bot.stop();
 long grind/loot/kernel/fullstack runs); `--only=a,b` for a subset. Prereqs: ACE +
 serve.py + wsbridge + the rynthnav sidecar (:8767, `../../rynthnav-sidecar`) + a
 **release** wasm build in `pkg/`.
+
+**Never run the smokes' local headless Chromium on the 8 GB laptop.** Run them on the 1070's
+off-screen, muted test Chrome instead: `NODE_PATH=../../scripts/perf-worker/coldboot/pw1070
+node rynth_test_all.cjs …` — the shim answers `require("playwright")`, checks the owner
+presence gate (`gate1070.sh`, needs `watch1070.sh` running), and rewrites the smokes'
+`127.0.0.1:8765` URLs to the laptop's tailnet front. Node-only unit tests:
+`node rynth_test_all_node.cjs`.
 
 ## Live-verified traps (all encoded)
 
@@ -84,6 +123,32 @@ serve.py + wsbridge + the rynthnav sidecar (:8767, `../../rynthnav-sidecar`) + a
   Avoidance comes from the sidecar's navmesh: bake with `--geom` (statics+scenery),
   never trust terrain-only tiles in towns.
 
+Added by the 2026-10-12 update (the October client):
+
+- **NEVER send an untargeted cast for a spell that isn't SelfTargeted — it crashes vanilla
+  ACE.** The untargeted path keeps a NULL cast target and only `HandleCastSpell`'s
+  `IsSelfTargeted` branch substitutes the caster; any other enchantment reaches
+  `WorldObject.CreateEnchantment(null)` (WorldObject_Magic.cs:406) and the unhandled
+  NullReferenceException on the world thread takes the whole server down. Live-hit twice:
+  a B4 tier upgrade resolved "Strength Self I" to "Incantation of Strength Other". Now
+  every bot buff/heal is cast TARGETED at the player's own guid, no guid = no cast, and
+  B4 never picks a non-self spell for a self buff.
+- Every cast and attack queues a retail stop first and is sent on the NEXT movement tick,
+  which only the page frame pump drives — a hidden tab sends nothing unless the host pumps
+  (`RynthWebHost._pumpIfStale`).
+- ACE now charges and auto-repeats melee: send ONE attack per engagement (a request while
+  the target lives is ignored), stay within 12 m (the charge fails after 15 m), cancel the
+  loop with `CancelAttack` on a re-target. Missile/magic range refusals never walk you closer.
+- A server MoveTo/TurnTo (targeted-cast turn, melee charge, use-approach) replaces an
+  in-flight client `moveToPosition` — `pursuitStatus === 2` can be someone else's arrival.
+- Level-7/8 casts take ~7 s at ACE's CastSpeed 2 — resolve casts on UseDone / the
+  registry / a kind=13 refusal, never on a fixed 2.5 s clock.
+- A target that takes no damage (e.g. a bolt-transparent admin `@create`) is blacklisted
+  after 3 no-damage casts (RynthAi `BlacklistAttempts`) or 20 s of no-damage melee.
+- Doors collide inside the movement step now (`?objCollideInTransition`): egress waits for
+  the door's Ethereal bit before walking through.
+- Tells to yourself read `You think, "…"` — the control channel accepts self-tells.
+
 ## Dark modules (quarantined)
 
 Five modules are written, unit-tested, and **NOT wired into any live path**:
@@ -101,9 +166,9 @@ the five. Do not add one without resolving that module's blocker below first.
 | Module | Status | Wiring blocker | Review |
 |---|---|---|---|
 | `loot_policy.js` | Pre-wiring fixes landed 2026-07-23 | Was 3 unsound seams vs `loot_loop.js`: (1) the appraisal gate only covers `Value(19)`, so tier/armor/rating rules silently read 0 on unstreamed items — **fixed**: non-`valueGE` rules now report `pending:true` (defer/re-appraise) instead of a false 0-comparison when the bag isn't yet appraised (see `isAppraised`/`APPRAISAL_GATED_TYPES` in the file). (2) the verdict vocabulary's only existing precedent dropped `sell` — **fixed**: `VERDICT_ACTION_MAP`/`actionForVerdict()` is now the canonical, exported verdict→action map (`keep\|salvage\|sell → pickup`, `leave → skip`) a wire must consume. (3) `greedy`'s `\|0` truncation diverged from `loot_loop`'s fractional min handling despite a "byte-for-byte" claim — **fixed**: `valueGE` now compares the raw `Number(c.min)`, matching `loot_loop.js`'s plain float compare exactly (comment corrected). Still unwired: nothing in `loot_loop.js`/`bot.js` calls into this module yet — that integration is the next step, now that the three seams above are sound. | rynth-review parts/03.md, 17-SYNTHESIS.md |
-| `ai/combat_memory.js` | Hygiene-only fixes landed 2026-07-23; **still parked** | Kill-truth conflict unresolved: `combat_loop.js`'s kernel-driven P12 polls `TryGetTargetHealthFraction===0` against a guid-locked target (authoritative, guid-keyed); `CombatMemory`'s kill count is a `KILL_SEVERITY`-crossing estimate keyed by creature **name** (approximate by the module's own admission). Wiring `attach(host)` today would make it a **second** `host.onEvent` subscriber for the same kind=19 stream, with no reconciliation between the two kill counts. Separately, kind=19 currently has **zero** live consumers at all — the kernel drives loops via `.tick()` and never calls the `startOn()` that subscribes `combat_loop`'s own `_onCombatEvent`, so even the "existing" consumer is dormant. **Added this pass:** an LRU cap (`MAX_TRACKED_NAMES=512`, same Map-insertion-order convention as `indoor_router.js`'s `_floorPlaneByCell`) on the previously-unbounded `byTarget`/`byAttacker` maps, and a header PARKED banner spelling out the conflict above. **Do not wire** until one kill-truth is picked (almost certainly `combat_loop`'s) and the `startOn()`/kernel event-subscription seam itself is reconciled. | rynth-review parts/11.md, parts/12.md §1.1, 17-SYNTHESIS.md |
+| `ai/combat_memory.js` | Hygiene-only fixes landed 2026-07-23; **still parked** | Kill-truth conflict unresolved: `combat_loop.js`'s kernel-driven P12 polls `TryGetTargetHealthFraction===0` against a guid-locked target (authoritative, guid-keyed); `CombatMemory`'s kill count is a `KILL_SEVERITY`-crossing estimate keyed by creature **name** (approximate by the module's own admission). Wiring `attach(host)` today would make it a **second** `host.onEvent` subscriber for the same kind=19 stream, with no reconciliation between the two kill counts. (2026-10-12: kind=19 DOES have a live consumer now — `combat_loop` subscribes lazily from `tick()` because the kernel never calls `startOn()` — so wiring `combat_memory` would make it a SECOND subscriber; it now also treats ACE's `attackDone(ActionCancelled)` as a loop end, not a swing error.) **Added this pass:** an LRU cap (`MAX_TRACKED_NAMES=512`, same Map-insertion-order convention as `indoor_router.js`'s `_floorPlaneByCell`) on the previously-unbounded `byTarget`/`byAttacker` maps, and a header PARKED banner spelling out the conflict above. **Do not wire** until one kill-truth is picked (almost certainly `combat_loop`'s) and the `startOn()`/kernel event-subscription seam itself is reconciled. | rynth-review parts/11.md, parts/12.md §1.1, 17-SYNTHESIS.md |
 | `ai/heal_reflex.js` | Pre-wiring fixes landed 2026-07-23 | Was: a diverged vitals accessor, no give-up valve, no shared cast-token claim — **all fixed**: `_hpPct()`/`_defaultSkillOk()` now read `host.s.playerStats()`'s raw stride arrays directly, the same path `vitals.js`'s own `_fractions()` uses (not the separate `TryGetPlayerStats()` normalization it read before); a give-up valve mirroring `vitals.js`'s `NO_PROGRESS_LIMIT`/park pattern now stops it from burning the whole kit/food stack when HP isn't actually improving; it now calls `host.tryClaimCast("heal_reflex")` before using a kit/food item, so it can't stomp an in-flight vitals/buff cast (or vice versa). It is item-based (`UseItemOnTarget`/`UseObject`), so it is NOT subject to the wasm's Magic-mode/caster-item gate the way `vitals.js`/`buff_loop.js` are — but it has its own hard limit (no kit or food in the pack ⇒ it cannot heal, same shape as a true non-caster being unhealable by a spell) and must stay consumable-only; do not extend it toward spellcasting, that walks back into the exact caster-mode refusal `vitals.js` already had to build a valve around. Still `enabled:false` by default and not registered in the kernel — remains a deliberate, gated wiring decision. | rynth-review parts/02.md, 17-SYNTHESIS.md |
-| `ai/confirm_reflex.js` | Boundary re-verified and documented 2026-07-23 | Review 02 raised (then itself resolved) a suspicion that this double-confirms what `buff_loop.js`'s B8 already confirms. Re-verified here by `rg` against the live tree: `buff_loop.js` never calls `TryGetPendingConfirmations`/`SendConfirmationResponse` anywhere — B8 confirms a landed self-buff purely by re-reading the enchantment registry ~600 ms after casting; this module answers actual server confirmation **dialogs** (allegiance/skill/attribute/augmentation/fellowship/craft/yes-no) over a disjoint host API. **No overlap, no double-confirm** — now stated directly in the module's own header (not just a review doc) as the scope boundary future changes must respect. No wiring blocker beyond the general "not yet gated into the kernel" default; kept dark. | rynth-review parts/02.md ("VERIFIED NON-ISSUE") |
+| `ai/confirm_reflex.js` | Boundary re-verified and documented 2026-07-23; **2026-10-12: the UI's `plugins/server-confirm.js` now answers the same dialogs — wiring this would double-answer** | Review 02 raised (then itself resolved) a suspicion that this double-confirms what `buff_loop.js`'s B8 already confirms. Re-verified here by `rg` against the live tree: `buff_loop.js` never calls `TryGetPendingConfirmations`/`SendConfirmationResponse` anywhere — B8 confirms a landed self-buff purely by re-reading the enchantment registry ~600 ms after casting; this module answers actual server confirmation **dialogs** (allegiance/skill/attribute/augmentation/fellowship/craft/yes-no) over a disjoint host API. **No overlap, no double-confirm** — now stated directly in the module's own header (not just a review doc) as the scope boundary future changes must respect. No wiring blocker beyond the general "not yet gated into the kernel" default; kept dark. | rynth-review parts/02.md ("VERIFIED NON-ISSUE") |
 | `suit/suit_solver.js` | **READY** — assessed exemplary dark code | No blocker found. Pure, host-free, ~0-token (`TryGetPlayerInventory()`'s `equipMask`/`validLocations` only — no appraisal surface touched), self-consistent (`IS_BODY_ARMOR` is derived from and asserted against `ARMOR_SLOTS`, so it can't silently drift), fully covered by its own test. The only caveat: the DEFERRED roadmap's next step ("suit-upgrades DFS") is **not written** — only `coverageGaps()` exists — so that follow-on is unbuilt, not merely unwired; don't assume it's a small step. | rynth-review parts/03.md ("exemplary dark code"), 17-SYNTHESIS.md |
 
 **Reconcile-then-wire order** (17-SYNTHESIS.md's "Dark-core wiring-order

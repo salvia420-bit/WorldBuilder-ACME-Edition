@@ -334,7 +334,10 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-11 (lifestone glow, `?lifestoneFx`): + scene3d/vfx/lifestone_fx.js
   // (imported by fx_showcase.js; generator --check: up to date, 391 modules)
   // → 375.
-  const NON_APP_PRELOADS = 375;
+  // 2026-10-12 (RynthSuite update): + rynth/boot.js (the ?bot=1 / HUD boot,
+  // statically imported by app/client_events.js; generator --check: up to
+  // date, 392 modules) → 376.
+  const NON_APP_PRELOADS = 376;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

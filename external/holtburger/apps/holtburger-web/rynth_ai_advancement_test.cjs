@@ -104,6 +104,23 @@ function makeHost({ credits = 10, stats = makeStats() } = {}) {
     check("raise_skill name-normalized (spaces)", r.ok && host.calls.some((c) => c[0] === "raiseSkill" && c[1] === 6), JSON.stringify(r));
   }
 
+  // --- max rank is refused up front (ACE refuses, it does not cap) --------
+  {
+    const stats = makeStats();
+    stats.attributes[2].nextCost = 0; // endurance maxed (training-3 attributeXp)
+    stats.vitals[1].nextCost = 0; // max health maxed
+    stats.skills[33].nextCost = 0; // life magic maxed
+    const host = makeHost({ stats }); const bot = { host };
+    const ra = await byType.raise_attribute.apply(bot, { type: "raise_attribute", attribute: "endurance", xp: 100 }, { journal: makeJournal() });
+    const rv = await byType.raise_vital.apply(bot, { type: "raise_vital", vital: "health", xp: 100 }, { journal: makeJournal() });
+    const rs = await byType.raise_skill.apply(bot, { type: "raise_skill", skill: "life_magic", xp: 100 }, { journal: makeJournal() });
+    check("raise_* at max rank fail before the wire",
+      !ra.ok && /max rank/.test(ra.error) && !rv.ok && /max rank/.test(rv.error) && !rs.ok && /max rank/.test(rs.error) && host.calls.length === 0,
+      JSON.stringify([ra, rv, rs]));
+    const ok = await byType.raise_attribute.apply({ host: makeHost() }, { type: "raise_attribute", attribute: "endurance", xp: 100 }, { journal: makeJournal() });
+    check("raise_attribute with unknown nextCost (older pkg/) still sends", ok.ok === true, JSON.stringify(ok));
+  }
+
   // --- train_skill --------------------------------------------------------
   {
     const journal = makeJournal(); const host = makeHost({ credits: 10 }); const bot = { host };

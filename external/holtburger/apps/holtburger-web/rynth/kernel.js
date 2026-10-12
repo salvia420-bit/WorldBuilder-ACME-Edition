@@ -14,6 +14,19 @@
 //   combat: target locked;  loot: mid OPEN/LOOT/CONFIRM/APPROACH;
 //   buff: cast pending confirmation. COMBAT preempts loot/buff pins the
 // moment a threat appears (survival beats inventory).
+//
+// Body handoff (2026-10-12): the combat loop drives the body through the
+// local stick and ACE's server-side attack loop (charge + auto-repeat), and
+// neither stops on its own when the kernel moves on. So leaving Combat
+// releases the stick and — unless Vitals is only borrowing the tick for a
+// heal — cancels a live attack loop (combat.disengage); stop() does the same
+// for every mover/pause that halts the kernel; and a Loot -> Combat preempt
+// cancels loot's in-flight corpse walk (a JS-installed MoveToPosition would
+// otherwise keep dragging the body to the corpse while combat runs up to the
+// mob — cancelPursuit ends only JS-installed pursuits, never ACE's charge).
+// A combat loop that can't fight right now (combat.canEngage() false: no war
+// spell, no combat mode) is not picked for Combat, so loot/buff aren't
+// starved behind it; Vitals still counts its threats as "in combat".
 
 export class RynthBotKernel {
   constructor(host, { combat, buff, loot, vitals, unwedge }, opts = {}) {
@@ -38,6 +51,18 @@ export class RynthBotKernel {
     // loop across reconnects via localStorage); this one gates the grind
     // kernel itself, in-memory, for the life of this bot instance.
     this._operatorHeld = false;
+    // A Vitals heal borrowed the tick MID-FIGHT: _leaveCombat("Vitals") kept
+    // ACE's attack loop on purpose (the heal returns the tick to Combat). If
+    // the kernel then goes anywhere BUT Combat — stop(), Unwedge, Loot,
+    // Buffing, Idle — that loop is still swinging/charging at the old target
+    // and must be cancelled (2026-10-12 review #5).
+    this._combatHeld = false;
+    // WHO deliberately paused the kernel (pauseFor) — distinct from a mover's
+    // temporary stop (goto/route/approach restore it when their walk ends).
+    // "ai" = the director's `pause` action: an operator STOP/RESUME must not
+    // restart a kernel the AI chose to keep off (2026-10-12 review-2 #4).
+    // Cleared by any successful start().
+    this._pausedBy = null;
   }
 
   start() {
@@ -46,6 +71,7 @@ export class RynthBotKernel {
       return false;
     }
     this._running = true;
+    this._pausedBy = null;
     if (this.buff && !this.buff.startedAt) this.buff.startedAt = Date.now();
     // Register the host closure ONCE — host.onTick has no removal API, so a
     // per-start() registration would stack one extra kernel tick per
@@ -68,9 +94,46 @@ export class RynthBotKernel {
   }
   stop() {
     this._running = false;
+    // Every caller (goto/travel/followRoute/egress, operator pause, the AI
+    // `pause`, bot.stop) hands the body to something else: release combat's
+    // stick and its live attack loop so neither drags the character back
+    // toward the old target.
+    if (this.action === "Combat" || this._combatHeld) {
+      this._leaveCombat("Stopped");
+      this.action = "Idle";
+    }
   }
   get running() {
     return this._running;
+  }
+
+  /** A deliberate pause by `who` (e.g. "ai" — the director's `pause`
+   *  action): stop() plus the intent, so OperatorControl.resume() leaves the
+   *  kernel off. A later successful start() clears it. */
+  pauseFor(who = "pause") {
+    this._pausedBy = String(who || "pause");
+    this.stop();
+  }
+  get pausedBy() {
+    return this._pausedBy;
+  }
+
+  /** Release what the combat loop is driving (stick + ACE attack loop).
+   *  `next === "Vitals"` keeps the attack loop: a heal preempt borrows the
+   *  tick, it doesn't abandon the fight (and a non-caster's heal attempt
+   *  must not cost it its swing). */
+  _leaveCombat(next) {
+    const c = this.combat;
+    const keepLoop = next === "Vitals";
+    if (c && typeof c.disengage === "function") c.disengage({ cancelAttack: !keepLoop });
+    else this.host.StopStick();
+    this._combatHeld = keepLoop;
+  }
+
+  /** Loot -> Combat: cancel the corpse walk's JS-installed MoveToPosition. */
+  _cancelLootApproach() {
+    if (!this.loot || this.loot.state !== "APPROACH") return;
+    if (typeof this.host.StopCompletely === "function") this.host.StopCompletely();
   }
 
   /** Operator-only hard hold (control_channel `!bot pause`): stops the
@@ -92,16 +155,29 @@ export class RynthBotKernel {
     return this._operatorHeld;
   }
 
-  _threatAvailable() {
-    // Reuse combat's own scanner — same filters, same truth.
+  _threatPresent() {
+    // Reuse combat's own scanner — same filters, same truth (memoized per
+    // host snapshot inside combat_loop, so the several reads a tick are one
+    // scan).
     return this.combat ? this.combat._scanTargets().length > 0 : false;
+  }
+  _threatAvailable() {
+    // A threat Combat can actually work on: a stood-down combat loop
+    // (canEngage() false) leaves the tick to loot/buff/idle.
+    if (!this.combat) return false;
+    if (typeof this.combat.canEngage === "function" && !this.combat.canEngage()) return false;
+    return this._threatPresent();
   }
   _corpseAvailable() {
     return this.loot ? !!this.loot._findCorpse() : false;
   }
   _buffNeeded() {
-    if (!this.buff) return false;
+    if (!this.buff || this.buff.enabled === false) return false;
     const st = this.buff.status;
+    // A held buff loop (missing components, no caster, …: buff_loop status
+    // `blocked`) with nothing in flight can't make progress — don't park the
+    // kernel on "Buffing" behind it.
+    if (st.blocked && st.pending === 0) return false;
     return !st.ready || st.active < st.desired || st.pending !== 0;
   }
 
@@ -119,7 +195,12 @@ export class RynthBotKernel {
     // caught on the B13 cadence. Buff expiry is handled separately by
     // buff_loop's live expiry timestamps (_isActiveReal), so this only has to
     // catch the "registry emptied while our timers still say active" gap.
-    if (this.buff && this.buff.heartbeat) this.buff.heartbeat();
+    // Per-loop `enabled` toggles (HUD / OperatorControl.setEnabled): a
+    // disabled loop gets no tick, no heartbeat and no pin — the kernel
+    // arbitrates as if it weren't there. (combat: its scan returns [] and a
+    // live lock winds down through the T10 grace; loot: _findCorpse() is null
+    // and the pin below is gated.)
+    if (this.buff && this.buff.enabled !== false && this.buff.heartbeat) this.buff.heartbeat();
 
     // Vitals FIRST — survival preempts everything (B15/B16). inCombat =
     // combat currently has a locked target or a threat is present.
@@ -132,12 +213,15 @@ export class RynthBotKernel {
     // of a pending buff. This is deliberately SAFER than the C# ordering
     // ("arguably fix C#, not JS"); the kernel's vitals-first placement is the
     // correct behavior and must not be reordered behind buffing.
-    if (this.vitals) {
-      const inCombat = (this.combat && this.combat.locked !== 0) || this._threatAvailable();
+    if (this.vitals && this.vitals.enabled !== false) {
+      // Raw threat presence, not canEngage(): a character that can't fight
+      // back is still being fought, and should heal on the in-combat
+      // thresholds.
+      const inCombat = (this.combat && this.combat.locked !== 0) || this._threatPresent();
       if (this.vitals.step(inCombat)) {
         if (this.action !== "Vitals") {
           this.log(`${this.action} -> Vitals`);
-          if (this.action === "Combat") this.host.StopStick();
+          if (this.action === "Combat") this._leaveCombat("Vitals");
           this.action = "Vitals";
         }
         return;
@@ -153,7 +237,7 @@ export class RynthBotKernel {
     if (this.unwedge && typeof this.unwedge.active === "function" && this.unwedge.active()) {
       if (this.action !== "Unwedge") {
         this.log(`${this.action} -> Unwedge`);
-        if (this.action === "Combat") this.host.StopStick();
+        if (this.action === "Combat" || this._combatHeld) this._leaveCombat("Unwedge");
         this.action = "Unwedge";
       }
       return;
@@ -161,8 +245,10 @@ export class RynthBotKernel {
 
     // Ownership pins (mid-transaction loops keep the tick)…
     const combatPinned = this.combat && this.combat.locked !== 0;
-    const lootPinned = this.loot && this.loot.state !== "SCAN";
-    const buffPinned = this.buff && this.buff.pending !== null;
+    // A loot loop switched off mid-transaction would otherwise pin "Loot"
+    // forever while its tick() is a no-op.
+    const lootPinned = this.loot && this.loot.enabled !== false && this.loot.state !== "SCAN";
+    const buffPinned = this.buff && this.buff.enabled !== false && this.buff.pending !== null;
 
     // …except COMBAT preempts everything when a threat exists.
     const threat = this._threatAvailable();
@@ -177,8 +263,15 @@ export class RynthBotKernel {
 
     if (next !== this.action) {
       this.log(`${this.action} -> ${next}`);
-      // Leaving combat mid-stick would leave the player glued to a corpse.
-      if (this.action === "Combat" && next !== "Combat") this.host.StopStick();
+      // Leaving combat mid-stick would leave the player glued to a corpse
+      // (and a live attack loop swinging at a target we've walked away from).
+      if (this.action === "Combat" && next !== "Combat") this._leaveCombat(next);
+      // Back from a mid-fight heal to something other than the fight: the
+      // attack loop Vitals deliberately kept is now orphaned — cancel it.
+      else if (this._combatHeld && next !== "Combat") this._leaveCombat(next);
+      if (next === "Combat") this._combatHeld = false; // the fight resumes its own loop
+      // Combat preempting a corpse walk: stop the walk before the run-up.
+      if (next === "Combat" && this.action === "Loot") this._cancelLootApproach();
       this.action = next;
     }
 
@@ -200,10 +293,16 @@ export class RynthBotKernel {
   get status() {
     return {
       action: this.action,
+      running: this._running,
+      operatorHeld: this._operatorHeld,
+      pausedBy: this._pausedBy,
       kills: this.combat ? this.combat.kills : 0,
       looted: this.loot ? this.loot.lootedCount : 0,
       buffs: this.buff ? this.buff.status : null,
       vitals: this.vitals ? this.vitals.status : null,
+      // Combat detail for the HUD/observers: { state, enabled, locked, kills,
+      // mode, engagedAt, incapable, warSpell } (combat_loop.js `status`).
+      combat: this.combat && this.combat.status ? this.combat.status : null,
     };
   }
 }

@@ -1043,11 +1043,14 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
         assert.equal(bot.channel.paused, true, "!bot status reads [PAUSED] live off the hold");
 
         const result = await bot.ai.director.checkNow({});
-        assert.equal(chatCalls, 1, "the stubbed client was actually invoked");
-        const resumeResult = (result.results || []).find((r) => r.type === "resume");
-        assert.ok(resumeResult, `no "resume" result in plan results: ${JSON.stringify(result.results)}`);
-        assert.equal(resumeResult.ok, false, `director's resume action must be refused: ${JSON.stringify(resumeResult)}`);
-        assert.match(String(resumeResult.error || ""), /operator hold/i, "refusal must name the operator hold");
+        // 2026-10-12 (ai/director.js checkNow): a check-in under an operator
+        // hold is refused BEFORE planning — stronger than the old "plan runs,
+        // its resume action is refused" — and spends no LLM call. Pinned
+        // strictly (review #17): the old either-branch form still passed if
+        // the up-front gate regressed and the plan ran again.
+        assert.equal(result && result.skipped, "operator-hold", `check-in under an operator hold must be refused up front: ${JSON.stringify(result)}`);
+        assert.equal(chatCalls, 0, "a refused check-in must not spend an LLM call");
+        assert.equal(bot.ai.director.status.operatorHeld, true, "director status reports the operator hold");
 
         // The wedge check itself: the kernel must still be down and still
         // held after the director's check-in executed.

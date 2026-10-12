@@ -38,6 +38,15 @@
 //     chance-of-success, generic yes/no. Casting a buff raises NO such
 //     dialog, so there is nothing here for this reflex to answer or race
 //     against B8 over.
+// SECOND CONSUMER (2026-10-12): the page now answers the same dialogs itself.
+// app/client_events.js turns ClientEvent kinds 70/71 (CONFIRMATION_REQUEST /
+// CONFIRMATION_DONE) into the retail Yes/No modal of plugins/server-confirm.js,
+// which calls sendConfirmationResponse on the player's click. Wired as-is, this
+// reflex and that modal would both answer one dialog (two 0x0275 sends for one
+// context). Before wiring: answer only while the bot owns the character, and
+// close the modal when the reflex answers (or let the modal's own handler
+// consult the reflex) — one answer per context.
+//
 // Scope going forward: this module's job is confirmation DIALOGS ONLY. It
 // must never grow a second, competing "did my buff land" check — that stays
 // buff_loop's exclusive job (B8). If a future confirm type is ever found to

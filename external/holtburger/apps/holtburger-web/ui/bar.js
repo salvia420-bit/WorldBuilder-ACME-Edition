@@ -575,7 +575,7 @@ export function mountBar({ client, root, slots: slotsOpt }) {
           id: "rynthsuite",
           name: "RynthSuite",
           icon: "⚔",
-          panelBody: "RynthSuite — combat & navigation (stub)",
+          panelBody: "RynthSuite — the bot dashboard: ⚒ beside the toolbar or Shift+F12 (plugins/rynth-hud.js).",
         },
       ];
 

@@ -9,8 +9,8 @@
 //   3. the grind persona (the default) is UNCHANGED — both loops stay on.
 //
 // Two tiers:
-//   LU* — RynthLootLoop unit tests, direct import (loot_loop.js has no
-//         relative imports), fake host records MoveToPosition calls.
+//   LU* — RynthLootLoop unit tests, direct import (loot_loop.js imports only
+//         ./portal_gate.js), fake host records MoveToPosition calls.
 //   BW* — createGrindBot integration: rynth/ staged flat to a type:module
 //         tmpdir + a FakeWorker heartbeat drive the real RynthWebHost, exactly
 //         as rynth_navsim_test.cjs does. Staging flat means wireAiDirector's

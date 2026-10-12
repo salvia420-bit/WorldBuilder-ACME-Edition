@@ -21,6 +21,68 @@ wsbridge). Run the suite with `apps/holtburger-web/rynth_test_all.cjs`.
 > per this project's doc-debt convention (see `HANDOFF-omnibus-2026-07-21.md`'s own
 > banner for the sibling case).
 
+## 2026-10-12 update — RynthSuite on the October client, code review, and the HUD
+
+The bot code had barely moved since 2026-07-24 while ~70 client commits reworked movement
+(per-object MoveTo spine, portal space, doors in the movement step), melee (ACE charge +
+auto-repeat), casting (stop-before-cast, retail cast lock, ~7 s level-8 windups) and loot.
+Six parallel slices (movement/nav, combat, magic/buffs/vitals, host/loot/economy/control,
+AI director, HUD) re-verified every seam against the current Rust/JS, fixed the drift, and
+code-reviewed their files; a `/code-review` pass over the combined diff found 17 more
+issues (all fixed except one design note). Highlights:
+
+- **Movement**: routes hold through portal space instead of walking the body into
+  unbuilt cells (`portal_gate.js`); recall enters Magic mode first; egress waits for a door
+  to really open; a hung nav sidecar can no longer freeze `goto()` (20 s timeout).
+- **Combat**: one attack per engagement on ACE's auto-repeat loop, engage ranges inside
+  the 15 m charge limit, `CancelAttack` on re-target, the combat event plane actually
+  subscribed (it was dead on the kernel path), `hunt_stop` honoured under netBrain, and a
+  RynthAi-style **no-damage blacklist** (3 casts / 20 s melee → 30 s park).
+- **Magic**: cast resolution on UseDone / registry / kind=13 refusals (no false tier walks
+  on 7 s Incantations), real tier-7/8 ladders, best-tier heals, refusal classes
+  (components / mana / place), and casts targeted at self.
+- **Host / loot / economy / control**: a hidden tab now sends casts and attacks (host
+  pump), confirmations are no longer eaten by the observation, retail vendor prices,
+  whole-stack sells, true free-slot math, loot retries on YoureTooBusy and closes corpses,
+  self-tells accepted, relogins disconnect cleanly.
+- **One operator authority**: `bot.control` (stop / resume / setAi / setEnabled /
+  state) behind the HUD, `!bot pause` and `rynthAI.start/stop`; the stop latch is per
+  character and survives reloads; a reconnect carries the live settings over and no
+  longer leaves the old director spending on a dead session.
+- **HUD**: `plugins/rynth-hud.js` — the RynthAi dashboard in our GUI, launched from the
+  ⚒ beside the toolbar (rynth/README.md §HUD).
+- **P0 found live**: a buff tier upgrade picked an "…Other" spell and sent it untargeted,
+  which crashes vanilla ACE (`CreateEnchantment(null)`); fixed in the bot (targeted-at-self
+  only, no non-self upgrades) — ACE itself is unchanged (keep-ACE-vanilla).
+
+A second `/code-review` pass over the post-review delta found 14 more (11 fixed: the
+no-damage blacklist now judges RESOLVED casts and counts evades/resists as contact and
+never parks a creature that is attacking you; STOP during an AI approach resumes
+correctly; an AI-paused kernel stays paused across STOP/RESUME; no origin-wide stop key
+is ever written; "auto" buffs survive a reconnect; recall honours STOP; three smaller
+ones). Live testing also found the combat scan's July same-landblock gate (a mob 5 m
+away across a seam was invisible) and a stale bound-method cache in the
+`rejection_feedback.js` handle proxy (monkeypatched handle methods were ignored) — both
+fixed with tests.
+
+Verification: rynth node suite **66/66** (baseline before the update: 54 pass, 1 fail);
+full JS gate **532/532** (incl. 4 newly registered rynth/HUD tests); live on the 1070
+(off-screen, muted, presence-gated) — 20 rynth smokes pass (webhost, phase1, trio, combat,
+loot, buff, bot_boot, p12, giveup, vitals, control, router, supervisor, loop, kernel,
+batch, item, ladder, melee, p3; three needed stale-smoke fixes: the control channel's
+owner allowlist, a never-started host's guid, the proxy cache), and a final recheck of
+combat/loop/buff/bot_boot/control on the finished code passes 5/5; plus HUD sessions
+(toolbar ⚒ → open → START → fight + loot → Buff → STOP → reload boots held → RUNNING)
+— screenshots + run logs in `/mnt/wbterminal1/rynth-update-2026-10-12/`.
+
+Open: the portal-space gate is still repeated per mover (a kernel-level hold would cover
+them all); `_pumpIfStale` works around a wasm send path that should flush its own queued
+stop+action; housing barriers and server-MoveTo ownership need small wasm exports
+(move-slice requests R1/R2); a non-cast UseDone landing inside a buff's pending window
+can still be credited to the buff; a HUD Restart whose createGrindBot throws leaves no
+bot (the old one is already retired, by design); vitals/buff duplicate their Magic-entry
+valve (refactor candidate); contact-by-name counts damage on a same-named creature.
+
 Bot code: `apps/holtburger-web/rynth/` — **22 top-level modules** (verified `ls
 rynth/*.js` 2026-07-23, up from the "9" this doc said through 2026-07-17: atlas, bot,
 buff_loop, combat_loop, control_channel, global_router, goto_compose, indoor_router,
