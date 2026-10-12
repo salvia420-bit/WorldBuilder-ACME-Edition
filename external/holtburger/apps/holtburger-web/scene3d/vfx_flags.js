@@ -384,6 +384,27 @@ export function terrainGrassDensity() {
   return _numFlag("terrainGrassDensity", 1, 0, 2);
 }
 
+/** `?terrainGrassReach` — how far the grass reaches, as a multiple of
+ *  `terrainGrassRadius`. 2026-10-12, owner on the 1070: the player stood in
+ *  dense grass but the hills ahead had none; "less dense grass around the
+ *  player and reassign it to further ahead of them, maybe up to 5x further
+ *  ... same budget on the grass". DEFAULT 5: the SAME blade count is spread
+ *  over nested rings that each double the reach of the last (terrain_grass.js
+ *  GRASS LOD). `1` (or `off`) restores the old single field exactly. URL-only,
+ *  read once when the provider is built. */
+export function terrainGrassReach() {
+  const v = _strFlag("terrainGrassReach");
+  if (v != null && v.toLowerCase() === "off") return 1;
+  return _numFlag("terrainGrassReach", 5, 1, 8);
+}
+
+/** `?terrainGrassNearShare` — fraction of the blade budget kept by the
+ *  innermost ring when `terrainGrassReach` > 1; the outer rings split the rest
+ *  equally. Default 0.34. URL-only A/B knob, like `terrainGrassDensity`. */
+export function terrainGrassNearShare() {
+  return _numFlag("terrainGrassNearShare", 0.34, 0.05, 0.95);
+}
+
 /** `?grassOffRoad` — keep grass blades (and rock pebbles, the other opaque
  *  ground-lying scatter) off the road the ground shader paints, with a 1.5 m
  *  thinning verge. 2026-10-07, owner report off a Holtburg video take: "see the

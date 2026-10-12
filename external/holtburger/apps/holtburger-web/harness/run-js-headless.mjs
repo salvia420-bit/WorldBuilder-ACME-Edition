@@ -530,6 +530,8 @@ const TIER5 = [
   // 2026-10-07 — grass/pebbles off the painted road (?grassOffRoad): real-DAT road masks + Holtburg.
   { tier: 5, flag: "terrain_grass_offroad", file: "test_terrain_grass_offroad.mjs" },
   { tier: 5, flag: "terrain_grass_shader", file: "test_terrain_grass_shader.mjs" },
+  // 2026-10-12 — grass LOD rings (?terrainGrassReach): same budget, 5x reach.
+  { tier: 5, flag: "terrain_grass_lod", file: "test_terrain_grass_lod.mjs" },
   { tier: 5, flag: "terrain_oracle", file: "test_terrain_oracle.mjs" },
   { tier: 5, flag: "terrain_palette", file: "test_terrain_palette.mjs" },
   { flag: "terrainCellFracClamp", file: "test_terrain_cell_frac_clamp.mjs" },

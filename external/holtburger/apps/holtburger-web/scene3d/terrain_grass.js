@@ -96,6 +96,9 @@
 //   ?terrainGrassStomp=on    the trail-map read, bisectable on its own
 //   ?terrainGrassBlades=N    the tier count itself (quality.js INT_FLAGS)
 //   ?grassOffRoad=off        2026-10-07 escape; DEFAULT-ON (see OFF-ROAD below)
+//   ?terrainGrassReach=N     2026-10-12; DEFAULT 5, 1 (or off) = the old single
+//                            field (see GRASS LOD below)
+//   ?terrainGrassNearShare=f 0.05..0.95, default 0.34 — budget kept by ring 0
 //
 // OFF-ROAD (2026-10-07, owner, Holtburg: "see the grass on the road. can we make
 // it so its not on the road"). A retail road is 2 bits on the vertex word, not a
@@ -107,6 +110,24 @@
 // rejects every blade on the road and thins them linearly over a 1.5 m verge.
 // Same deterministic per-cell hash as the rest of placement, so park/teleport
 // reproduce it exactly.
+//
+// GRASS LOD (2026-10-12, owner on the 1070: the player stood in dense grass
+// while the hills they were looking at had none — "less dense grass around the
+// player and reassign it to further ahead of them, maybe up to 5x further ...
+// same budget on the grass"). The SAME blade count is now split over nested
+// rings, each a scatter pool of its own: ring k reaches twice as far as ring
+// k-1, the outermost reaches `terrainGrassReach` x the radius (ultra: 40 m ->
+// 200 m), ring 0 keeps `nearShare` of the budget and the outer rings split the
+// rest equally. Equal counts over 4x the area per ring is a 1/d^2 density fall-
+// off — what keeps the blade count per screen pixel roughly constant on a slope
+// facing the camera, which is exactly the hill case. Two rings meet in a
+// CROSS-DISSOLVE band ([lodBlend x W, W] of the inner ring): the inner ring
+// thins to nothing across it while the next one thins in, each blade against
+// its own `aRank`, so density blends linearly and no ring edge is visible.
+// Outer-ring blades are wider (and slightly taller) so a sparser ring still
+// reads as grass instead of sub-pixel slivers — `uGrassLodScale`, live-tunable
+// through `window.__terrainGrass.setLod()`. Every ring shares ONE program (one
+// onBeforeCompile source, per-ring uniform bags).
 
 import { registerTerrainVfx, wireframeActive } from "./terrain_vfx.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
@@ -124,6 +145,8 @@ import {
   terrainGrassRadiusM,
   terrainGrassStompEnabled,
   grassOffRoadEnabled,
+  terrainGrassReach,
+  terrainGrassNearShare,
 } from "./vfx_flags.js";
 
 // ---------------------------------------------------------------------------
@@ -157,6 +180,24 @@ export const GRASS_DEFAULTS = Object.freeze({
   // edge to full density 1.5 m out (covers the retail masks' soft fringe, see
   // terrain_oracle.js ROAD_PAINT).
   roadVergeM: 1.5,
+  // 2026-10-12 — GRASS LOD (see the header). `reach` / `nearShare` are the
+  // flag fallbacks; the rest is the look of the rings, live-tunable with
+  // `window.__terrainGrass.setLod({...})`.
+  reach: 5,
+  nearShare: 0.34,
+  lodBlend: 0.6,          // a ring cross-dissolves into the next over [0.6 W, W]
+  lodSoft: 0.25,          // per-blade shrink width inside a dissolve (no pop)
+  // Tuned live on the 1070 (ultra, Holtburg's SE hill): 0.75 / 0.15 left the
+  // far slope a faint stipple; 1.0 / 0.6 read as tall grass at the crest.
+  lodWidthExp: 1.0,       // ring width x (cell_k / cell_0) ^ this
+  lodHeightGain: 0.35,    // ring height x (1 + this * k)
+  farSliceSize: 256,      // re-scatter slice of every ring but the first
+  // Round-robin scan per frame (unbaked retries / invalidations; the edge-first
+  // drain is separate). Four pools at the pool default (2048) cost 0.46 ms a
+  // frame standing on the 1070 vs 0.14 ms for the single field; these keep the
+  // total near the old 2048 with laps no longer than its 58 frames.
+  nearScanBudget: 1024,
+  farScanBudget: 512,
 });
 
 /**
@@ -269,6 +310,7 @@ export const GRASS_ATTRIBUTES = Object.freeze([
   { name: "aRot", itemSize: 1 },          // yaw, radians
   { name: "aTint", itemSize: 3 },         // per-blade colour
   { name: "aFamilyParam", itemSize: 1 },  // 0 = tall/springy .. 1 = near-mat
+  { name: "aRank", itemSize: 1 },         // 0..1 dissolve rank (GRASS LOD)
 ]);
 
 const GRASS_VERTEX_DECLS = [
@@ -288,11 +330,15 @@ const GRASS_VERTEX_DECLS = [
   "uniform float uTrailRadius;",
   "uniform float uTrailTexel;",
   "uniform float uTrailEnabled;",
+  "uniform vec4 uGrassLodBand;",
+  "uniform vec2 uGrassLodScale;",
+  "uniform float uGrassLodSoft;",
   "attribute vec2 aScale;",
   "attribute vec3 aNormal;",
   "attribute float aRot;",
   "attribute vec3 aTint;",
   "attribute float aFamilyParam;",
+  "attribute float aRank;",
   "varying vec3 vGrassTint;",
 ];
 
@@ -316,12 +362,14 @@ function _grassVertexSnippet() {
     "    // Authored blade height runs 0..1, so position.z IS the normalised",
     "    // height along the blade — no uniform, no per-model constant.",
     "    float hbH = clamp(position.z, 0.0, 1.0);",
-    "    // aScale = (heightM, widthM). Width also scales the (zero) y so a",
-    "    // future ribbon blade needs no snippet change.",
-    "    vec3 hbP = vec3(transformed.x * aScale.y, transformed.y * aScale.y, transformed.z * aScale.x);",
+    "    // aScale = (heightM, widthM), times the ring's (height, width) gain",
+    "    // (GRASS LOD: an outer ring's blades are wider). Width also scales the",
+    "    // (zero) y so a future ribbon blade needs no snippet change.",
+    "    vec2 hbS = aScale * uGrassLodScale;",
+    "    vec3 hbP = vec3(transformed.x * hbS.y, transformed.y * hbS.y, transformed.z * hbS.x);",
     "    // Static forward bow, per-blade via the procedural instance hash, so no",
     "    // two blades are identical even before the wind moves them.",
-    "    hbP.y += uGrassBow * aScale.x * hbH * hbH * (0.5 + vVfxHash);",
+    "    hbP.y += uGrassBow * hbS.x * hbH * hbH * (0.5 + vVfxHash);",
     "    // Yaw. Per-blade, from our own attribute — this is what makes an",
     "    // object-space wind direction a WORLD-space one for grass.",
     "    float hbCos = cos(aRot);",
@@ -338,7 +386,7 @@ function _grassVertexSnippet() {
     "    float hbOsc = sin(hbT + hbPhase)",
     "                + uGrassWindFlutter * sin(hbT * 3.7 + hbPhase * 1.7 + 1.3);",
     "    float hbStiff = mix(1.0, 0.25, aFamilyParam);",
-    "    hbP.xy += uGrassWindDir * (uGrassWindAmp * aScale.x * hbStiff * hbH * hbH * hbH * hbOsc);",
+    "    hbP.xy += uGrassWindDir * (uGrassWindAmp * hbS.x * hbStiff * hbH * hbH * hbH * hbOsc);",
     "    // Lean downhill with the ground normal (its xy points downslope).",
     "    hbP.xy += aNormal.xy * (hbP.z * uGrassLean);",
     "    // STOMP — read the shared trail map at this blade's own world position.",
@@ -358,7 +406,7 @@ function _grassVertexSnippet() {
     "          vec2 hbAway = hbGrad * -1.0;",
     "          float hbLen = length(hbAway);",
     "          if (hbLen > 1e-5) {",
-    "            hbP.xy += (hbAway / hbLen) * (uGrassStompSplay * aScale.x * hbH * hbStomp);",
+    "            hbP.xy += (hbAway / hbLen) * (uGrassStompSplay * hbS.x * hbH * hbStomp);",
     "          }",
     "        }",
     "      }",
@@ -366,6 +414,17 @@ function _grassVertexSnippet() {
     "    // DISTANCE BLEND — shrink to nothing over the last fadeFraction of R,",
     "    // matching terrain_scatter.js::fadeFor exactly (LINEAR, same uniforms).",
     "    hbP *= hbScatterFade(hbWorld);",
+    "    // GRASS LOD cross-dissolve: the ring's density ramps in over its inner",
+    "    // band (x..y) and out over its outer band (z..w); a blade survives while",
+    "    // its rank is under that density and shrinks over the last uGrassLodSoft",
+    "    // of it, so blades thin out one by one instead of popping. A ring with",
+    "    // no bands (the single-field layout) keeps every blade at full size.",
+    "    float hbD = length(hbWorld - uScatterCenter.xy);",
+    "    float hbKeep = min(",
+    "      clamp((hbD - uGrassLodBand.x) / max(uGrassLodBand.y - uGrassLodBand.x, 1e-4), 0.0, 1.0),",
+    "      clamp((uGrassLodBand.w - hbD) / max(uGrassLodBand.w - uGrassLodBand.z, 1e-4), 0.0, 1.0));",
+    "    float hbSoft = max(uGrassLodSoft, 1e-4);",
+    "    hbP *= clamp((hbKeep * (1.0 + hbSoft) - aRank) / hbSoft, 0.0, 1.0);",
     "    transformed = hbP;",
     "    // Per-blade colour + a free contact shadow: darken toward the base.",
     "    vGrassTint = aTint * mix(uGrassAoBase, 1.0, hbH);",
@@ -529,7 +588,8 @@ export function hasTerrainGrassShader(shader) {
  * @param {object} [overrides] explicit values (tests / callers) that win over
  *   every reader.
  * @returns {{count:number, radiusM:number, stomp:boolean, density:number,
- *   blades:number, seed:number, offRoad:boolean, source:string}|null} null ⇒ disabled at this
+ *   blades:number, seed:number, offRoad:boolean, reach:number, nearShare:number,
+ *   source:string}|null} null ⇒ disabled at this
  *   tier (the `low` contract: every effect in this plan is null on `low`).
  */
 export function resolveGrassConfig(overrides = {}) {
@@ -539,6 +599,11 @@ export function resolveGrassConfig(overrides = {}) {
   const stomp = typeof overrides.stomp === "boolean" ? overrides.stomp : terrainGrassStompEnabled();
   // 2026-10-07 — `?grassOffRoad` (default ON); explicit boolean wins (tests).
   const offRoad = typeof overrides.offRoad === "boolean" ? overrides.offRoad : grassOffRoadEnabled();
+  // 2026-10-12 — GRASS LOD (`?terrainGrassReach`, default 5; 1 = one field).
+  const reach = Number.isFinite(overrides.reach) ? Math.max(1, overrides.reach) : terrainGrassReach();
+  const nearShare = Number.isFinite(overrides.nearShare)
+    ? Math.min(0.95, Math.max(0.05, overrides.nearShare))
+    : terrainGrassNearShare();
   const count = Math.round(blades * (Number.isFinite(density) ? density : 1));
   if (!(count >= 1)) return null;
   return {
@@ -548,9 +613,116 @@ export function resolveGrassConfig(overrides = {}) {
     radiusM,
     stomp,
     offRoad,
+    reach,
+    nearShare,
     seed: Number.isFinite(overrides.seed) ? overrides.seed | 0 : GRASS_DEFAULTS.seed,
     source: Number.isFinite(overrides.blades) ? "explicit" : "flags",
   };
+}
+
+// ---------------------------------------------------------------------------
+// GRASS LOD — the ring layout (2026-10-12; see the header).
+// ---------------------------------------------------------------------------
+
+/** Band of a ring that never dissolves (the single-field layout's ring). */
+const LOD_NO_BAND = Object.freeze([-2, -1, 1e6, 2e6]);
+
+/** The look half of the layout, defaults applied. */
+export function resolveGrassLodLook(look = {}) {
+  const pick = (v, d, lo, hi) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+  return {
+    blend: pick(look.blend, GRASS_DEFAULTS.lodBlend, 0.05, 0.95),
+    soft: pick(look.soft, GRASS_DEFAULTS.lodSoft, 0.01, 1),
+    widthExp: pick(look.widthExp, GRASS_DEFAULTS.lodWidthExp, 0, 2),
+    heightGain: pick(look.heightGain, GRASS_DEFAULTS.lodHeightGain, 0, 2),
+  };
+}
+
+/**
+ * Split a resolved grass config into rings. Pure (node-tested).
+ *
+ * `reach <= 1` is the single field exactly as before 2026-10-12: one ring of
+ * `count` blades over `radiusM`, the pool's own shrink fade, no dissolve.
+ * Otherwise ring k (0..L-1) covers a square window of half-extent
+ * `W_k = reach x radiusM / 2^(L-1-k)` (L = 1 + ceil(log2 reach), so W doubles
+ * ring to ring and the last one reaches reach x radiusM), with a perfect-square
+ * share of the budget: `nearShare` for ring 0, the rest split equally. The
+ * counts are rounded DOWN, so the rings never exceed the tier's blade count.
+ *
+ * @returns {Array<{level:number, count:number, radiusM:number, cellSizeM:number,
+ *   fadeFraction:number, sliceSize:number, scanBudget?:number, seed:number, randSalt:number,
+ *   band:number[], heightMul:number, widthMul:number}>}
+ */
+export function grassLodLayout(cfg, look = {}) {
+  const lk = resolveGrassLodLook(look);
+  const R = Number.isFinite(cfg.radiusM) && cfg.radiusM > 0 ? cfg.radiusM : GRASS_DEFAULTS.radiusM;
+  const reach = Number.isFinite(cfg.reach) ? cfg.reach : 1;
+  const seed = Number.isFinite(cfg.seed) ? cfg.seed | 0 : GRASS_DEFAULTS.seed;
+  if (!(reach > 1)) {
+    const g = Math.max(1, Math.ceil(Math.sqrt(cfg.count)));
+    return [{
+      level: 0, count: cfg.count, radiusM: R, cellSizeM: (2 * R) / g,
+      fadeFraction: GRASS_DEFAULTS.fadeFraction, sliceSize: GRASS_DEFAULTS.sliceSize,
+      seed, randSalt: 0, band: LOD_NO_BAND.slice(), heightMul: 1, widthMul: 1,
+    }];
+  }
+  const L = 1 + Math.ceil(Math.log2(reach) - 1e-9);
+  const outer = R * reach;
+  const share0 = Number.isFinite(cfg.nearShare) ? cfg.nearShare : GRASS_DEFAULTS.nearShare;
+  const rings = [];
+  for (let k = 0; k < L; k += 1) {
+    const W = outer / 2 ** (L - 1 - k);
+    const share = k === 0 ? share0 : (1 - share0) / (L - 1);
+    const g = Math.max(1, Math.floor(Math.sqrt(share * cfg.count)));
+    rings.push({
+      level: k,
+      count: g * g,
+      radiusM: W,
+      cellSizeM: (2 * W) / g,
+      // The dissolve owns the rim; the pool's fade is a hard cut at W.
+      fadeFraction: 0,
+      sliceSize: k === 0 ? GRASS_DEFAULTS.sliceSize : GRASS_DEFAULTS.farSliceSize,
+      scanBudget: k === 0 ? GRASS_DEFAULTS.nearScanBudget : GRASS_DEFAULTS.farScanBudget,
+      // Ring 0 keeps the single field's seed (same blades where they overlap);
+      // the others get their own jitter and rand streams.
+      seed: k === 0 ? seed : (seed ^ Math.imul(k, 0x9e3779b9)) | 0,
+      randSalt: k,
+      band: null,
+      heightMul: 1,
+      widthMul: 1,
+    });
+  }
+  applyGrassLodLook(rings, lk);
+  return rings;
+}
+
+/**
+ * A ring's density at distance `d` from the player, 0..1 — the CPU mirror of
+ * the GLSL `hbKeep` (LINEAR ramps in over band[0..1], out over band[2..3]).
+ */
+export function grassLodKeep(band, d) {
+  const clamp01 = (v) => (v <= 0 ? 0 : (v >= 1 ? 1 : v));
+  const a = clamp01((d - band[0]) / Math.max(band[1] - band[0], 1e-4));
+  const b = clamp01((band[3] - d) / Math.max(band[3] - band[2], 1e-4));
+  return Math.min(a, b);
+}
+
+/** (Re)write the look of a layout in place: dissolve bands and blade gains. */
+export function applyGrassLodLook(rings, look) {
+  const lk = resolveGrassLodLook(look);
+  if (rings.length === 1 && rings[0].fadeFraction > 0) return rings;   // single field
+  const cell0 = rings[0].cellSizeM;
+  for (let k = 0; k < rings.length; k += 1) {
+    const r = rings[k];
+    const prevW = k > 0 ? rings[k - 1].radiusM : 0;
+    r.band = [
+      k === 0 ? -2 : lk.blend * prevW, k === 0 ? -1 : prevW,
+      lk.blend * r.radiusM, r.radiusM,
+    ];
+    r.widthMul = (r.cellSizeM / cell0) ** lk.widthExp;
+    r.heightMul = 1 + lk.heightGain * k;
+  }
+  return rings;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +759,9 @@ export function ditherCornerCode(ctx) {
   return corners[3];
 }
 
+/** Bare-patch clump size, metres (PatchyGrassland / forestfloor gaps). */
+const GRASS_CLUMP_M = 2;
+
 /**
  * Build the per-blade `fill` callback for a given seed. Deterministic: every
  * value is a pure function of the WORLD CELL and the seed (plan §5.5), so
@@ -599,9 +774,11 @@ export function makeGrassFill(seed) {
     const v = GRASS_VARIANTS[code];
     if (!v) { ctx.live = false; return; }
 
-    // Bare patches first: a coarse (~8-cell) clump hash, so PatchyGrassland
-    // gets real gaps rather than uniformly-thinner grass.
-    if (v.bare > 0 && scatterHash01(ctx.cellX >> 3, ctx.cellY >> 3, 9, seed) < v.bare) {
+    // Bare patches first: a coarse 2 m clump hash, so PatchyGrassland gets
+    // real gaps rather than uniformly-thinner grass. World metres, not pool
+    // cells (2026-10-12): every GRASS LOD ring must agree on where the gaps are.
+    if (v.bare > 0
+      && scatterHash01(Math.floor(ctx.x / GRASS_CLUMP_M), Math.floor(ctx.y / GRASS_CLUMP_M), 9, seed) < v.bare) {
       ctx.live = false;
       return;
     }
@@ -617,6 +794,7 @@ export function makeGrassFill(seed) {
     ctx.set("aRot", ctx.rand(0) * 6.283185307179586);
     ctx.set("aTint", v.tint[0] * shade * warm, v.tint[1] * shade, v.tint[2] * shade * (2 - warm));
     ctx.set("aFamilyParam", v.mat);
+    ctx.set("aRank", ctx.rand(7));
   };
 }
 
@@ -643,11 +821,14 @@ export function createTerrainGrassProvider(opts = {}) {
   const THREE = opts.THREE || null;
   const cfg = resolveGrassConfig(opts.config || {});
   const seed = cfg ? cfg.seed : GRASS_DEFAULTS.seed;
+  // 2026-10-12 — GRASS LOD: one scatter pool (+ geometry, material, uniform
+  // bag) per ring; ring 0 is what `_pool` / `stats().pool` always meant.
+  let lodLook = resolveGrassLodLook(opts.lodLook || {});
+  const layout = cfg ? grassLodLayout(cfg, lodLook) : [];
+  /** @type {Array<{ring:object, pool:object, geometry:object, material:object, uniforms:object}>} */
+  let rings = [];
 
-  let pool = null;
   let group = null;
-  let geometry = null;
-  let material = null;
   let built = false;
   let buildError = null;
   let lastCtx = null;
@@ -681,7 +862,26 @@ export function createTerrainGrassProvider(opts = {}) {
     // Shared by reference with the AO composite (ssao_marker.js): 1 while it
     // exists, so the grass is marked only when something restores the alpha.
     uSsaoGrassMarker: SSAO_GRASS_MARKER,
+    // GRASS LOD — PER RING (each ring's bag gets its own objects in build());
+    // these are the single-field values: no dissolve, unit blade gains.
+    uGrassLodBand: { value: { x: LOD_NO_BAND[0], y: LOD_NO_BAND[1], z: LOD_NO_BAND[2], w: LOD_NO_BAND[3] } },
+    uGrassLodScale: { value: { x: 1, y: 1 } },
+    uGrassLodSoft: { value: GRASS_DEFAULTS.lodSoft },
   };
+  // Uniforms each ring owns (everything else is shared by reference).
+  const RING_UNIFORMS = ["uGrassLodBand", "uGrassLodScale", "uGrassLodSoft"];
+
+  function writeRingLook(r) {
+    const u = r.uniforms;
+    const b = r.ring.band;
+    u.uGrassLodBand.value.x = b[0];
+    u.uGrassLodBand.value.y = b[1];
+    u.uGrassLodBand.value.z = b[2];
+    u.uGrassLodBand.value.w = b[3];
+    u.uGrassLodScale.value.x = r.ring.heightMul;
+    u.uGrassLodScale.value.y = r.ring.widthMul;
+    u.uGrassLodSoft.value = lodLook.soft;
+  }
 
   // Wind frame, resolved once: the SAME flags the trees read
   // (`?treeWindStrength` / `?treeWindDir`, default 135 deg = SE), so a URL that
@@ -693,7 +893,10 @@ export function createTerrainGrassProvider(opts = {}) {
     uniforms.uGrassWindAmp.value = GRASS_DEFAULTS.windAmp * treeWindStrength();
   }
 
-  function buildMaterial() {
+  // One material per ring, all with the SAME onBeforeCompile source — three's
+  // default program cache key — so the rings share one program (plan §5.4)
+  // while each binds its own uniform bag.
+  function buildMaterial(bag) {
     if (opts.material) return opts.material;
     if (!THREE || typeof THREE.MeshLambertMaterial !== "function") return null;
     const m = new THREE.MeshLambertMaterial({
@@ -706,7 +909,7 @@ export function createTerrainGrassProvider(opts = {}) {
     m.name = "terrain-grass";
     m.onBeforeCompile = (shader) => {
       shader.uniforms = shader.uniforms || {};
-      for (const key of Object.keys(uniforms)) shader.uniforms[key] = uniforms[key];
+      for (const key of Object.keys(bag)) shader.uniforms[key] = bag[key];
       injectTerrainGrassShader(shader);
     };
     return m;
@@ -727,48 +930,68 @@ export function createTerrainGrassProvider(opts = {}) {
         group.receiveShadow = false;
         if (parent && typeof parent.add === "function") parent.add(group);
       }
-      geometry = makeGrassBladeGeometry(THREE);
-      material = buildMaterial();
-      pool = createScatterPool({
-        THREE,
-        geometry,
-        material,
-        parent: group,
-        // LIVE getter — `terrain_vfx.js` documents `ctx.oracle` as a getter that
-        // must never be stashed (it is loaded on demand and can arrive after the
-        // first tick).
-        oracle: () => (lastCtx ? lastCtx.oracle : null),
-        count: cfg.count,
-        radiusM: cfg.radiusM,
-        sliceSize: GRASS_DEFAULTS.sliceSize,
-        fadeFraction: GRASS_DEFAULTS.fadeFraction,
-        // 2026-10-08 — place the whole square window, fade as a disc: see
-        // terrain_scatter.js fadeShape (blades entering at the leading edge are
-        // ready before they fade in, instead of spawning in front of a runner).
-        shape: "square",
-        fadeShape: "disc",
-        seed,
-        heightOffsetM: GRASS_DEFAULTS.heightOffsetM,
-        // NO family gate on the pool: the dithered corner draw in `fill` is what
-        // decides, and a nearest-vertex family gate would clip exactly the
-        // boundary blades the dither exists to keep (plan §8 risk 2).
-        attributes: GRASS_ATTRIBUTES.map((a) => ({ ...a })),
-        // 2026-10-07 — no blades on the painted road, a soft verge beside it
-        // (see OFF-ROAD in the header). Decided in the pool, BEFORE `fill`, so
-        // the dithered corner-code draw never even runs on the road.
-        offRoad: cfg.offRoad === true,
-        offRoadVergeM: GRASS_DEFAULTS.roadVergeM,
-        // 2026-10-08 — and none inside a building (grass_interior_mask.js).
-        exclude: indoorMask ? (x, y, z) => indoorMask.contains(x, y, z) : undefined,
-        fill: makeGrassFill(seed),
-        name: "terrain-grass",
-      });
-      // Distance blend: the pool's own uniforms, BY REFERENCE, so re-centring
-      // needs no per-frame uniform write here.
-      for (const key of Object.keys(pool.uniforms)) uniforms[key] = pool.uniforms[key];
+      for (const ring of layout) {
+        // Shared {value} objects by reference; the ring-owned ones fresh.
+        const bag = { ...uniforms };
+        bag.uGrassLodBand = { value: { x: 0, y: 0, z: 0, w: 0 } };
+        bag.uGrassLodScale = { value: { x: 1, y: 1 } };
+        bag.uGrassLodSoft = { value: lodLook.soft };
+        // The pool publishes its distance-blend uniforms INTO the bag.
+        for (const key of ["uScatterCenter", "uScatterRadius", "uScatterFadeStart", "uScatterShape"]) delete bag[key];
+        const geometry = makeGrassBladeGeometry(THREE);
+        const material = buildMaterial(bag);
+        const pool = createScatterPool({
+          THREE,
+          geometry,
+          material,
+          parent: group,
+          uniforms: bag,
+          // LIVE getter — `terrain_vfx.js` documents `ctx.oracle` as a getter that
+          // must never be stashed (it is loaded on demand and can arrive after the
+          // first tick).
+          oracle: () => (lastCtx ? lastCtx.oracle : null),
+          count: ring.count,
+          radiusM: ring.radiusM,
+          sliceSize: ring.sliceSize,
+          // undefined (the single field) = the pool default, as before.
+          scanBudget: ring.scanBudget,
+          fadeFraction: ring.fadeFraction,
+          // 2026-10-08 — place the whole square window, fade as a disc: see
+          // terrain_scatter.js fadeShape (blades entering at the leading edge are
+          // ready before they fade in, instead of spawning in front of a runner).
+          shape: "square",
+          fadeShape: "disc",
+          seed: ring.seed,
+          randSalt: ring.randSalt,
+          heightOffsetM: GRASS_DEFAULTS.heightOffsetM,
+          // NO family gate on the pool: the dithered corner draw in `fill` is what
+          // decides, and a nearest-vertex family gate would clip exactly the
+          // boundary blades the dither exists to keep (plan §8 risk 2).
+          attributes: GRASS_ATTRIBUTES.map((a) => ({ ...a })),
+          // 2026-10-07 — no blades on the painted road, a soft verge beside it
+          // (see OFF-ROAD in the header). Decided in the pool, BEFORE `fill`, so
+          // the dithered corner-code draw never even runs on the road.
+          offRoad: cfg.offRoad === true,
+          offRoadVergeM: GRASS_DEFAULTS.roadVergeM,
+          // 2026-10-08 — and none inside a building (grass_interior_mask.js).
+          exclude: indoorMask ? (x, y, z) => indoorMask.contains(x, y, z) : undefined,
+          // The BASE seed for every ring: bare patches must agree across rings.
+          fill: makeGrassFill(seed),
+          name: layout.length > 1 ? `terrain-grass-ring${ring.level}` : "terrain-grass",
+        });
+        const r = { ring, pool, geometry, material, uniforms: bag };
+        writeRingLook(r);
+        rings.push(r);
+      }
+      // Ring 0's distance-blend uniforms also live in the shared bag, as they
+      // always did (`window.__terrainGrass.uniforms.uScatterCenter`).
+      for (const key of Object.keys(rings[0].pool.uniforms)) {
+        if (RING_UNIFORMS.indexOf(key) === -1) uniforms[key] = rings[0].pool.uniforms[key];
+      }
     } catch (e) {
       buildError = e;
-      pool = null;
+      for (const r of rings) { try { r.pool.dispose(); } catch (_) {} }
+      rings = [];
     }
   }
 
@@ -808,7 +1031,7 @@ export function createTerrainGrassProvider(opts = {}) {
       lastCtx = ctx;
       if (!cfg) return;
       if (!built) build(ctx);
-      if (!pool) return;
+      if (!rings.length) return;
       if (!ctx || ctx.hasPlayer !== true) return;
       // The loaded interior cells changed (a building's interior baked or was
       // evicted). 2026-10-08: re-examine only the blades near the boxes that
@@ -817,10 +1040,11 @@ export function createTerrainGrassProvider(opts = {}) {
       // and a full invalidate() stalled the ground ahead of the player.
       if (indoorMask && indoorMask.sync(ctx.scene3d || opts.scene3d || null)) {
         const changed = typeof indoorMask.lastChanged === "function" ? indoorMask.lastChanged() : null;
+        for (const { pool } of rings) {
         if (!changed) {
           pool.invalidate();
         } else if (changed.length) {
-          const r = cfg.radiusM, pp = ctx.playerPos;
+          const r = pool.radiusM, pp = ctx.playerPos;
           const wx0 = pp.x - r, wy0 = pp.y - r, wx1 = pp.x + r, wy1 = pp.y + r;
           let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
           for (const b of changed) {
@@ -829,6 +1053,7 @@ export function createTerrainGrassProvider(opts = {}) {
             if (b[2] > x1) x1 = b[2]; if (b[3] > y1) y1 = b[3];
           }
           if (x1 >= x0) pool.invalidateRegion(Math.max(x0, wx0), Math.max(y0, wy0), Math.min(x1, wx1), Math.min(y1, wy1));
+        }
         }
       }
 
@@ -855,24 +1080,54 @@ export function createTerrainGrassProvider(opts = {}) {
       }
 
       // Placement, residency, teleport re-scatter and buffer uploads: all the
-      // pool's job (plan §3.1 "Placement (CPU, amortised)").
-      pool.update(dt, p.x, p.y, p.z);
+      // pool's job (plan §3.1 "Placement (CPU, amortised)"), once per ring.
+      for (let k = 0; k < rings.length; k += 1) rings[k].pool.update(dt, p.x, p.y, p.z);
     },
 
     dispose() {
-      if (pool) { try { pool.dispose(); } catch (_) { /* fail-soft */ } pool = null; }
+      for (const r of rings) {
+        try { r.pool.dispose(); } catch (_) { /* fail-soft */ }
+        if (r.geometry) { try { r.geometry.dispose(); } catch (_) {} }
+        if (r.material && r.material !== opts.material) { try { r.material.dispose(); } catch (_) {} }
+      }
+      rings = [];
       if (group && group.parent) { try { group.parent.remove(group); } catch (_) {} }
-      if (geometry) { try { geometry.dispose(); } catch (_) {} geometry = null; }
-      if (material && material !== opts.material) { try { material.dispose(); } catch (_) {} }
-      material = null;
       group = null;
       built = false;
       lastCtx = null;
     },
 
+    /**
+     * 2026-10-12 — retune the GRASS LOD look live (no rebuild, no recompile):
+     * `{ blend, soft, widthExp, heightGain }`, any subset. Counts and ring radii
+     * are fixed at build (`?terrainGrassReach` / `?terrainGrassNearShare`).
+     * Returns the look now in force.
+     */
+    setLodLook(look = {}) {
+      lodLook = resolveGrassLodLook({ ...lodLook, ...look });
+      applyGrassLodLook(layout, lodLook);
+      for (const r of rings) writeRingLook(r);
+      return { ...lodLook };
+    },
+
     /** Diagnostics — `window.__terrainGrass.stats()`. */
     stats() {
+      const pool = rings.length ? rings[0].pool : null;
       const ps = pool ? pool.stats() : null;
+      let live = 0, total = 0, roadRejects = 0, excludeRejects = 0;
+      const levels = rings.map((r) => {
+        const st = r.pool.stats();
+        live += st.live;
+        total += st.count;
+        roadRejects += st.roadRejects;
+        excludeRejects += st.excludeRejects;
+        return {
+          level: r.ring.level, radiusM: st.radiusM, cellSizeM: +st.cellSizeM.toFixed(4),
+          count: st.count, live: st.live, band: r.ring.band.slice(),
+          heightMul: +r.ring.heightMul.toFixed(3), widthMul: +r.ring.widthMul.toFixed(3),
+          edgePending: st.edgePending, rescatters: st.rescatters,
+        };
+      });
       return {
         id: provider.id,
         enabled: terrainGrassEnabled(),
@@ -880,23 +1135,28 @@ export function createTerrainGrassProvider(opts = {}) {
         config: cfg,
         // THE live-check field (plan §3.1): non-zero means blades actually
         // landed on grass terrain in front of the player.
-        visibleBlades: ps ? ps.live : 0,
-        blades: ps ? ps.count : 0,
+        visibleBlades: live,
+        blades: total,
         // 2026-10-07 — the live gate (setOffRoad may have flipped it) and how
         // many blade placements the road has refused so far.
         offRoad: ps ? ps.offRoad : !!(cfg && cfg.offRoad),
-        roadRejects: ps ? ps.roadRejects : 0,
+        roadRejects,
         // 2026-10-08 — blades refused inside building interiors, and the mask.
-        indoorRejects: ps ? ps.excludeRejects : 0,
+        indoorRejects: excludeRejects,
         indoorCull: indoorMask ? indoorMask.stats() : null,
-        degenerate: ps ? ps.degenerate : 0,
-        radiusM: ps ? ps.radiusM : (cfg ? cfg.radiusM : 0),
+        degenerate: total - live,
+        // Ring 0's radius (what it always reported); the reach is the last ring's.
+        radiusM: ps ? ps.radiusM : (layout.length ? layout[0].radiusM : 0),
+        // 2026-10-12 — GRASS LOD: the ring layout and the live look.
+        reachM: layout.length ? layout[layout.length - 1].radiusM : 0,
+        lodLook: { ...lodLook },
+        levels,
         stomp: !!(cfg && cfg.stomp),
         trailBound,
         stamps,
         windAmp: uniforms.uGrassWindAmp.value,
         windDirDeg: treeWindDir(),
-        hasMesh: !!(pool && pool.mesh),
+        hasMesh: rings.length > 0 && rings.every((r) => !!r.pool.mesh),
         buildError: buildError ? String(buildError.message || buildError) : null,
         pool: ps,
       };
@@ -904,8 +1164,12 @@ export function createTerrainGrassProvider(opts = {}) {
 
     // Test seams. Read-only by convention.
     _uniforms: uniforms,
-    get _pool() { return pool; },
-    get _material() { return material; },
+    get _pool() { return rings.length ? rings[0].pool : null; },
+    get _pools() { return rings.map((r) => r.pool); },
+    get _material() { return rings.length ? rings[0].material : null; },
+    get _materials() { return rings.map((r) => r.material); },
+    get _ringUniforms() { return rings.map((r) => r.uniforms); },
+    get _layout() { return layout; },
     get _group() { return group; },
   };
   return provider;
@@ -956,9 +1220,14 @@ export function initTerrainGrass(opts = {}) {
      *  converges over the next amortised laps. Returns the new state (or null
      *  before the pool exists). */
     setOffRoad: (on) => {
-      const pool = provider._pool;
-      return pool && typeof pool.setOffRoad === "function" ? pool.setOffRoad(on === true) : null;
+      const pools = provider._pools;
+      if (!pools.length) return null;
+      let state = null;
+      for (const pool of pools) state = pool.setOffRoad(on === true);
+      return state;
     },
+    /** 2026-10-12 — GRASS LOD look, live: `{ blend, soft, widthExp, heightGain }`. */
+    setLod: (look) => provider.setLodLook(look),
     unregister: () => { reg.unregister(); _handle = null; },
   };
   try {

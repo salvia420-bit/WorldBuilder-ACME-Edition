@@ -125,11 +125,18 @@ function makeCtx(x, y, opts = {}) {
 
 function makeProvider(extra = {}, oracle = makeStubOracle()) {
   const parent = new THREE.Group();
+  // These locks are about ONE field (`_pool` is the whole budget), i.e. the
+  // pre-LOD layout: `reach: 1`. The GRASS LOD rings have their own suite
+  // (test_terrain_grass_lod.mjs). An explicit `config` still REPLACES the
+  // defaults, as it always did.
+  const { config: xc, ...rest } = extra;
   const p = createTerrainGrassProvider({
     THREE: THREE_SPY,
     parent,
-    config: { blades: 1024, density: 1, radiusM: 48, stomp: false, seed: 7777, ...(extra.config || {}) },
-    ...extra,
+    config: xc
+      ? { reach: 1, ...xc }
+      : { blades: 1024, density: 1, radiusM: 48, stomp: false, seed: 7777, reach: 1 },
+    ...rest,
   });
   return { provider: p, parent, oracle };
 }
@@ -358,7 +365,7 @@ console.log("\n-- L6: the five sub-variants --");
   // `fill` is a pure function of the world cell — same ctx twice, same writes.
   {
     const fill = makeGrassFill(99);
-    const arrays = { aScale: new Float32Array(2), aRot: new Float32Array(1), aTint: new Float32Array(3), aFamilyParam: new Float32Array(1) };
+    const arrays = { aScale: new Float32Array(2), aRot: new Float32Array(1), aTint: new Float32Array(3), aFamilyParam: new Float32Array(1), aRank: new Float32Array(1) };
     const mk = () => ({
       cellX: 11, cellY: -4, x: 264.5, y: 96.25, code: 1,
       cornerCodes: Uint8Array.from([1, 1, 1, 1]),
