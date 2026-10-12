@@ -1,0 +1,7 @@
+{
+ "_comment": "VTank 'Use Dispel Items' (G:26) item fallbacks for rynth/vt/support/supplies.js. Order of use: a Consumables-tab entry of type Dispel first, then an inventory item whose wcid is in `wcids`, then an inventory item whose name matches `nameRegex` (case-insensitive). wcids/names verified in LSD weenie_summary.jsonl (9193 Gem of Stillness, 38726 Black Market Gem of Dispelling, 38727 Society Gem of Dispelling, 51216 Hive Gem of Dispelling). G:26's 'Condensed Dispel' and 'Black Potions' are not in the partial LSD dump, so the regex covers them by name (critic G4). Scrolls (ItemType Writable) never match.",
+ "v": 1,
+ "wcids": [9193, 38726, 38727, 51216],
+ "names": ["Gem of Stillness", "Black Market Gem of Dispelling", "Society Gem of Dispelling", "Hive Gem of Dispelling"],
+ "nameRegex": "gem of stillness|dispel|black potion"
+}

@@ -1,0 +1,15 @@
+~~ synthetic metaf NAV sections (W1-6 NAV fixture): vnd/tlk/flw are mis-typed or dropped by nav_file.parseAfNavs
+NAV: shop linear ~~ {
+	pnt 33.6 42.08 0.39
+	vnd 33.63 42.082 0.39 8FFF0001 {Thomas the Merchant}
+	tlk 33.65 42.084 0.39 33.655 42.0845 0.41 37 {Town Crier}
+	ptl 33.64 42.083 0.39 33.645 42.0835 0.4 14 {Portal to Holtburg}
+	rcl 33.62 42.081 0.39 {Lifestone Recall}
+	pau 0 0 0 1500
+	cht 0 0 0 {/vt echo hi}
+	chk 33.66 42.085 0.39
+	jmp 33.67 42.086 0.39 270.5 {True} 750
+~~ }
+NAV: buddy follow ~~ {
+	flw 50000001 {Leader Bob}
+~~ }

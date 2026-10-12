@@ -243,6 +243,31 @@ const CAPABILITY_CANDIDATES = {
   // 0 = none.
   CancelAttack: ["cancelAttack"],
   GetLocalStickyTarget: ["localStickyTarget"],
+
+  // ── 2026-10-12 VTank layer seam (W1-8; additive; API_VERSION 1.2.0) ──
+  // SessionHandle methods the wasm already exports that were never mapped
+  // (U4-seam §3). Every name verified in pkg/holtburger_web.d.ts this pass.
+  // DAT CSpellBase record (Wave F.1): school, category, bitfield, the
+  // SelfTargeted flag, metaSpellType — the untargeted-cast allowlist
+  // (CastUntargetedSafe) is decided from it. serde Map-shaped.
+  GetSpellRecord: ["getSpellRecord"],
+  // Every wielded item of a (remote) wielder — hasshield, offhand.
+  GetWieldedItems: ["entityWieldedItems"],
+  // Use gates (consumables, kits, lockpicks, stones).
+  CanUseObject: ["canUseObject"],
+  CanUseWith: ["canUseWith"],
+  // Fellowship management beyond create/quit/recruit (sub-opcodes 0x00A4,
+  // 0x0291, 0x0290, 0x00A6).
+  FellowshipDismiss: ["fellowshipDismiss"],
+  FellowshipChangeOpenness: ["fellowshipChangeOpenness"],
+  FellowshipAssignNewLeader: ["fellowshipAssignNewLeader"],
+  FellowshipUpdateRequest: ["fellowshipUpdateRequest"],
+  // Allegiance hometown recall (0x02AB) — a nav Recall waypoint.
+  RecallAllegianceHometown: ["recallAllegianceHometown"],
+  // The /reply target: the last PLAYER who sent a tell (markers trimmed).
+  GetLastTellerName: ["lastTellerName"],
+  // Retail TurnToObject (rate-limited face-target; no heading math).
+  TurnToObject: ["turnToEntity"],
 };
 
 /**
@@ -277,6 +302,11 @@ const ENV_CAPABILITY_PROBES = Object.freeze({
   // Portal-space presentation (scene3d/portal_space.js publishes the read;
   // rynth/portal_gate.js prefers this member — see IsPortalSpaceActive).
   IsPortalSpaceActive: () => typeof globalThis.__isPortalSpaceActive === "function",
+  // VTank Items/Consumables "Add selected" (W1-8): the inventory panel's
+  // selection (plugins/inventory.js publishes window.__inventory.selectedGuid),
+  // then the world selection — see GetSelectedItemId.
+  GetSelectedItemId: () =>
+    !!globalThis.__inventory || typeof globalThis.liveScene3d?.entityManager?.getSelectedTarget === "function",
 });
 
 /**
@@ -402,6 +432,122 @@ export function plainFromMaps(v) {
   return v;
 }
 
+// ── VTank layer seam constants (W1-8, 2026-10-12; PLAN §3.10) ──────────
+// Inlined, not imported: this file keeps ZERO imports (see the P6.1 note).
+
+// Item-action token (A19): the item-side twin of the cast token. ACE answers
+// an item action with InventoryUpdate (11), UseFailed (13), UseDone (14),
+// InventoryActionFailed (48) or a wield transition (47/49); the timeout is
+// the backstop when none of them comes.
+const ITEM_TOKEN_TIMEOUT_MS = 8_000;
+const ITEM_TOKEN_CLEAR_KINDS = new Set([11, 13, 14, 47, 48, 49]);
+// Kinds that change what playerInventory() returns (drops the per-seq memo).
+const INVENTORY_MEMO_KINDS = new Set([11, 47, 48, 49]);
+// One identical seam warning per 10 s (C3 rate limit).
+const VT_WARN_INTERVAL_MS = 10_000;
+// Spell records are DAT data (one CSpellBase per id) — cached for the page.
+const SPELL_RECORD_CACHE_MAX = 8192;
+// ≤ 1 RequestId per creature per minute (TryGetCreatureInfo).
+const CREATURE_ID_INTERVAL_MS = 60_000;
+// An item whose mana was last read by appraisal more than this ago is stale.
+const ITEM_MANA_STALE_MS = 60_000;
+// Enchantment rows: ACE's "forever" is duration -1; buff_loop.js treats a
+// duration above a year as presence-only too (its B6 sentinel).
+const PERMANENT_SENTINEL_S = 86_400 * 365;
+const ENCH_TYPE_COOLDOWN = 0x1000000; // EnchantmentTypeFlags.Cooldown
+const ENCH_TYPE_BENEFICIAL = 0x2000000; // EnchantmentTypeFlags.Beneficial
+const SPELL_ID_VITAE = 666;
+// PropertyInt / PropertyFloat ids (ACE.Entity/Enum/Properties).
+const PINT_ITEM_TYPE = 1;
+const PINT_CREATURE_TYPE = 2;
+const PINT_ITEM_CUR_MANA = 107;
+const PINT_ITEM_MAX_MANA = 108;
+const PFLOAT_MANA_RATE = 5;
+const ITEM_TYPE_ARMOR = 0x2;
+const ITEM_TYPE_CREATURE = 0x10;
+const PLAYER_GUID_MIN = 0x50000000;
+const PLAYER_GUID_MAX = 0x5fffffff;
+
+/**
+ * THE heading conversion (A14, U4 H4). Every VT API speaks COMPASS DEGREES
+ * (0 = north, clockwise); this is the one place they are turned into the wasm
+ * convention and back:
+ *
+ *   TurnToHeading(rad)  rad = norm360(turnSign * compassDeg + turnOffsetDeg) · π/180
+ *   pose.heading (rad)  compassDeg = norm360(poseSign * deg(rad) + poseOffsetDeg)
+ *
+ * The default is the convention today's live code already uses — compass
+ * radians straight into TurnToHeading, pose yaw read as a compass bearing
+ * (combat_loop.js `_faceGate`; goto_compose.js `attemptJumpLeg`). The d.ts and
+ * holtburger-common math.rs document other conventions (U4 §6), so the live
+ * probe L-H1 (PLAN §7.4) confirms or corrects THESE four numbers before any
+ * heading-bearing VT feature is trusted. Change it here, nowhere else.
+ */
+export const HEADING_CONVENTION = Object.freeze({ turnSign: 1, turnOffsetDeg: 0, poseSign: 1, poseOffsetDeg: 0 });
+
+function norm360(deg) {
+  const d = deg % 360;
+  return d < 0 ? d + 360 : d;
+}
+function compassDegToTurnRad(deg) {
+  const c = HEADING_CONVENTION;
+  return (norm360(c.turnSign * deg + c.turnOffsetDeg) * Math.PI) / 180;
+}
+function poseRadToCompassDeg(rad) {
+  const c = HEADING_CONVENTION;
+  return norm360((c.poseSign * rad * 180) / Math.PI + c.poseOffsetDeg);
+}
+
+/** Me -> pos offset (dx east, dy north, dz) with the combat_loop.js rule
+ *  (`_scanTargets`): same landblock, or both outdoors where landblocks tile
+ *  the world (global frame = landblock index * 192 + local). Indoor cells of
+ *  different landblocks are not world-contiguous -> null. */
+function vtDelta(me, pos) {
+  const a = me.objCellId >>> 0;
+  const b = pos.objCellId >>> 0;
+  const sameLb = a >>> 16 === b >>> 16;
+  const bothOutdoor = (a & 0xffff) < 0x100 && (b & 0xffff) < 0x100;
+  if (!sameLb && !bothOutdoor) return null;
+  const dz = (Number(pos.z) || 0) - (Number(me.z) || 0);
+  if (sameLb) return { dx: pos.x - me.x, dy: pos.y - me.y, dz };
+  return {
+    dx: (((b >>> 24) & 0xff) - ((a >>> 24) & 0xff)) * 192 + (pos.x - me.x),
+    dy: (((b >>> 16) & 0xff) - ((a >>> 16) & 0xff)) * 192 + (pos.y - me.y),
+    dz,
+  };
+}
+
+const finiteOr = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+const firstBool = (...vs) => {
+  for (const v of vs) if (typeof v === "boolean") return v;
+  return undefined;
+};
+
+/** Normalise a (plain) getSpellRecord result (A4). The wasm carries the
+ *  SelfTargeted bit three ways — top-level `isSelfTargeted`, `flags.selfTargeted`
+ *  (what ui/ac_cast_spell.js reads) and the raw `bitfield & 0x8` — and old
+ *  bundles / fakes carry only some of them (U4 row 15 shape drift). */
+function normalizeSpellRecord(r, id) {
+  const flags = r.flags && typeof r.flags === "object" ? r.flags : null;
+  const bitfield = finiteOr(r.bitfield, 0) >>> 0;
+  const nctt = r.nonComponentTargetType;
+  return Object.freeze({
+    id: finiteOr(r.id, id) >>> 0,
+    name: typeof r.name === "string" ? r.name : "",
+    school: finiteOr(r.school, 0),
+    category: finiteOr(r.category, 0),
+    bitfield,
+    isSelfTargeted: firstBool(r.isSelfTargeted, flags?.selfTargeted) ?? (bitfield & 0x8) !== 0,
+    isUntargeted: firstBool(r.isUntargeted) ?? (typeof nctt === "number" ? nctt === 0 : false),
+    isBeneficial: firstBool(r.isBeneficial, flags?.beneficial) ?? (bitfield & 0x4) !== 0,
+    metaSpellType: finiteOr(r.metaSpellType, 0),
+    duration: finiteOr(r.duration, 0),
+    roughLevel: finiteOr(r.roughLevel, 0),
+    baseRangeConstant: finiteOr(r.baseRangeConstant, 0),
+    baseRangeMod: finiteOr(r.baseRangeMod, 0),
+  });
+}
+
 export class RynthWebHost {
   constructor(sessionHandle, opts = {}) {
     if (!sessionHandle) throw new Error("RynthWebHost: sessionHandle required");
@@ -482,6 +628,16 @@ export class RynthWebHost {
     // can never resolve on the new one.
     this._castToken = null;
     this._confirms = [];
+    // VTank seam per-session state (W1-8): an item claim, the per-seq
+    // inventory memo, the enchantment receipt book and the appraisal rate
+    // limiter all describe the previous session. Spell records are DAT data
+    // and survive.
+    this._itemToken = null;
+    this._itemClaims = new Map();
+    this._invMemo = null;
+    this._roomMemo = null;
+    this._enchReceived = new Map();
+    this._creatureIdAt = new Map();
     return this;
   }
 
@@ -504,6 +660,14 @@ export class RynthWebHost {
     };
     // The server closed (answered / timed out) a confirmation dialog.
     if (e.kind === KIND_CONFIRMATION_DONE) this._retireConfirm(e.u32 >>> 0, e.u32b >>> 0);
+    // VTank seam (W1-8): resolve the item-action token and drop the per-seq
+    // inventory memo BEFORE subscribers run, so a subscriber reacting to this
+    // very event can claim the next action / read the new inventory.
+    if (ITEM_TOKEN_CLEAR_KINDS.has(e.kind)) this._noteItemActionEvent(e);
+    if (INVENTORY_MEMO_KINDS.has(e.kind)) {
+      this._invMemo = null;
+      this._roomMemo = null;
+    }
     for (const fn of this._onEvent) {
       try {
         fn(e, this);
@@ -1101,7 +1265,11 @@ export class RynthWebHost {
   /// -> { main:{used,cap,free}, containers:{used,cap,free},
   ///      packs:[{guid,name,used,cap,free}], freeItemSlots }
   TryGetPackRoom() {
-    const inv = this.TryGetPlayerInventory();
+    return this._packRoomFrom(this.TryGetPlayerInventory());
+  }
+  // The TryGetPackRoom computation over an inventory projection (shared with
+  // TryGetPackRoomCached, which feeds it the per-seq memo).
+  _packRoomFrom(inv) {
     if (!inv.length) return null;
     const readCap = (prop, dflt) => {
       try {
@@ -1275,7 +1443,29 @@ export class RynthWebHost {
     return this._act("ChangeCombatMode", mode);
   }
   CastSpell(targetGuid, spellId) {
-    if (!targetGuid) return this._act("CastUntargetedSpell", spellId);
+    if (!targetGuid) {
+      // A3b (W1-8, U4 H1): a falsy target silently became an UNTARGETED
+      // cast, and an untargeted non-SelfTargeted enchantment reaches ACE's
+      // CreateEnchantment(null) (WorldObject_Magic.cs:279-285 -> :406) — a
+      // server crash. When spell records are available the untargeted form is
+      // allowed only for a SelfTargeted spell (ACE substitutes the caster,
+      // :261 — every recall/sending spell the bot casts this way is one).
+      // A host without the capability (old pkg/, test fakes) keeps today's
+      // pass-through.
+      if (this.has("GetSpellRecord")) {
+        const rec = this.TryGetSpellRecord(spellId);
+        if (!rec || !rec.isSelfTargeted) {
+          const id = Number(spellId) >>> 0;
+          this._vtWarn(
+            rec
+              ? `refused untargeted cast ${id} (${rec.name}): not SelfTargeted`
+              : `refused untargeted cast ${id}: no spell record`
+          );
+          return false;
+        }
+      }
+      return this._act("CastUntargetedSpell", spellId);
+    }
     return this._act("CastSpell", targetGuid, spellId);
   }
   UseObject(guid) {
@@ -1863,6 +2053,686 @@ export class RynthWebHost {
   /** Roster currently held wasm-side, or `null` when unavailable. */
   GetPluginList() {
     return this._live("GetPluginList") ?? null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // VTank layer seam (W1-8, 2026-10-12) — PLAN §3.10 A1-A21. Purely
+  // additive: no existing member changes meaning except the A3b guard in
+  // CastSpell above. Every read degrades to its documented fallback
+  // (null / [] / false) and never throws; every wasm box is copied, then
+  // freed exactly once.
+  // ═══════════════════════════════════════════════════════════════════
+
+  /** One warning per identical text per VT_WARN_INTERVAL_MS. */
+  _vtWarn(msg) {
+    try {
+      const now = Date.now();
+      const seen = this._vtWarned || (this._vtWarned = new Map());
+      const last = seen.get(msg);
+      if (last != null && now - last < VT_WARN_INTERVAL_MS) return;
+      if (seen.size >= 256) seen.clear();
+      seen.set(msg, now);
+      (console.warn || console.log)(`[RynthWebHost] ${msg}`);
+    } catch (_) {
+      /* logging must never break a caller */
+    }
+  }
+
+  // ── A1-A3 the cast choke point (C6, V-3) ───────────────────────────
+  /**
+   * Targeted cast. NEVER falls through to an untargeted cast: a zero/absent
+   * target is refused (false + a rate-limited warning), unlike legacy
+   * `CastSpell`, whose falsy target meant "untargeted" (U4 H1).
+   * @returns {boolean} sent
+   */
+  CastSpellAt(targetGuid, spellId) {
+    const g = Number(targetGuid) >>> 0;
+    const id = Number(spellId) >>> 0;
+    if (!g) {
+      this._vtWarn(`refused targeted cast ${id}: no target guid`);
+      return false;
+    }
+    if (!id) {
+      this._vtWarn(`refused targeted cast on ${g}: no spell id`);
+      return false;
+    }
+    return this._act("CastSpell", g, id);
+  }
+  /** Self cast, targeted at the player's own guid (retail self-cast wire;
+   *  the facade's selfTargetGuidFor does the same). No guid -> refused. */
+  CastSelf(spellId) {
+    const me = Number(this.GetPlayerId()) >>> 0;
+    if (!me) {
+      this._vtWarn(`refused self cast ${Number(spellId) >>> 0}: player guid unknown`);
+      return false;
+    }
+    return this.CastSpellAt(me, spellId);
+  }
+  /**
+   * The ONLY untargeted cast VT code may issue. Allowed when the DAT record
+   * says SelfTargeted (ACE's HandleCastSpell substitutes the caster,
+   * WorldObject_Magic.cs:261 — recalls, sendings, self buffs), or — only with
+   * `allowRing` — for a War/Void Projectile ring whose formula is untargeted
+   * and that is not beneficial. Refused: no record, fellowship meta types
+   * 11-14 (SelfTargeted fellowship spells exist, e.g. 2981-2983, and ACE does
+   * NOT substitute the caster for them — critic S3), and everything else.
+   * @param {number} spellId
+   * @param {{allowRing?: boolean}} [opts]
+   * @returns {boolean} sent
+   */
+  CastUntargetedSafe(spellId, opts = {}) {
+    const id = Number(spellId) >>> 0;
+    if (!id) return false;
+    const allowRing = !!(opts && opts.allowRing);
+    const rec = this.TryGetSpellRecord(id);
+    if (!rec) {
+      this._vtWarn(`refused untargeted cast ${id}: no spell record`);
+      return false;
+    }
+    const mst = rec.metaSpellType;
+    if (mst >= 11 && mst <= 14) {
+      this._vtWarn(`refused untargeted cast ${id} (${rec.name}): fellowship spell`);
+      return false;
+    }
+    if (rec.isSelfTargeted) return this._act("CastUntargetedSpell", id);
+    if (allowRing && mst === 2 && rec.isUntargeted && (rec.school === 1 || rec.school === 5) && !rec.isBeneficial) {
+      return this._act("CastUntargetedSpell", id);
+    }
+    this._vtWarn(`refused untargeted cast ${id} (${rec.name}): not SelfTargeted`);
+    return false;
+  }
+
+  // ── A4 spell records ───────────────────────────────────────────────
+  /**
+   * Normalised DAT spell record, or null (capability absent, WorldBootstrap
+   * not loaded yet, unknown id). Frozen; cached per id — only HITS are cached,
+   * because a pre-EnteredWorld miss turns into a hit once the table loads.
+   * Shape: {id, name, school, category, bitfield, isSelfTargeted,
+   * isUntargeted, isBeneficial, metaSpellType, duration, roughLevel,
+   * baseRangeConstant, baseRangeMod}.
+   */
+  TryGetSpellRecord(spellId) {
+    const id = Number(spellId) >>> 0;
+    if (!id) return null;
+    const cache = this._spellRecords || (this._spellRecords = new Map());
+    const hit = cache.get(id);
+    if (hit) return hit;
+    let raw;
+    try {
+      raw = plainFromMaps(this._live("GetSpellRecord", id));
+    } catch (_) {
+      raw = null;
+    }
+    if (!raw || typeof raw !== "object") return null;
+    let rec;
+    try {
+      rec = normalizeSpellRecord(raw, id);
+    } catch (_) {
+      return null;
+    }
+    if (cache.size >= SPELL_RECORD_CACHE_MAX) cache.delete(cache.keys().next().value);
+    cache.set(id, rec);
+    return rec;
+  }
+
+  // ── A5/A6 self enchantments ────────────────────────────────────────
+  /**
+   * The local player's enchantments as plain rows, every PlayerEnchantmentJs
+   * box freed once copied (TryGetEnchantments keeps its raw-box semantics,
+   * Z5). null when the capability is absent or the read throws.
+   *
+   * Row: {spellId, family, layer, powerLevel, level, durationS, remainingS,
+   * permanent, isBeneficial, casterGuid, statKey, statValue, isCooldown}.
+   *
+   * remainingS — the receivedAt book ported from buff_loop.js `_readRegistry`
+   * (no import): wire startTime is RELATIVE and ≤ 0, so remaining =
+   * receivedAt + duration + min(0, startTime) − now, where receivedAt is OUR
+   * clock when a (spellId, layer) row with that startTime first appeared
+   * (carried forward while startTime is unchanged; a recast re-stamps).
+   * Expired rows are dropped. Permanent (remainingS = Infinity): duration < 0
+   * (ACE's -1), above the one-year sentinel, or 0 on a non-cooldown row (the
+   * d.ts: "0 = permanent (cantrip / equipment)").
+   */
+  TryGetSelfEnchantments() {
+    const f = this._m.GetEnchantments;
+    if (!f) return null;
+    let raw;
+    try {
+      raw = f();
+    } catch (_) {
+      return null;
+    }
+    const copies = [];
+    for (const e of Array.isArray(raw) ? raw : []) {
+      try {
+        copies.push({
+          spellId: Number(e.spellId ?? e.spell_id ?? 0) >>> 0,
+          family: Number(e.spellCategory ?? e.spell_category ?? 0) >>> 0,
+          layer: Number(e.layer ?? 0) || 0,
+          powerLevel: Number(e.powerLevel ?? e.power_level ?? 0) || 0,
+          start: Number(e.startTime ?? e.start_time ?? 0) || 0,
+          duration: Number(e.duration ?? 0) || 0,
+          type: Number(e.type ?? 0) >>> 0,
+          casterGuid: Number(e.casterGuid ?? e.caster_guid ?? 0) >>> 0,
+          statKey: Number(e.statKey ?? e.stat_key ?? 0) || 0,
+          statValue: Number(e.statValue ?? e.stat_value ?? 0) || 0,
+        });
+      } catch (_) {
+        /* one bad row must not drop the read */
+      }
+      try {
+        e?.free?.();
+      } catch (_) {
+        /* already released */
+      }
+    }
+    const book = this._enchReceived || (this._enchReceived = new Map());
+    const nowS = Date.now() / 1000;
+    const seen = new Set();
+    const rows = [];
+    for (const c of copies) {
+      const isCooldown = (c.type & ENCH_TYPE_COOLDOWN) !== 0 || (c.spellId > 0x7fff && c.spellId <= 0xffff);
+      const permanent =
+        c.duration < 0 || c.duration > PERMANENT_SENTINEL_S || (c.duration === 0 && !isCooldown);
+      let remainingS = Infinity;
+      if (!permanent) {
+        const key = `${c.spellId}:${c.layer | 0}`;
+        seen.add(key);
+        const prior = book.get(key);
+        const at = prior && prior.start === c.start ? prior.at : nowS;
+        book.set(key, { start: c.start, at });
+        remainingS = at + c.duration + Math.min(0, c.start) - nowS;
+        if (remainingS <= 0) continue;
+      }
+      const rec = isCooldown ? null : this.TryGetSpellRecord(c.spellId);
+      rows.push({
+        spellId: c.spellId,
+        family: c.family,
+        layer: c.layer,
+        powerLevel: c.powerLevel,
+        level: rec ? rec.roughLevel : 0,
+        durationS: c.duration,
+        remainingS,
+        permanent,
+        isBeneficial: c.type ? (c.type & ENCH_TYPE_BENEFICIAL) !== 0 : !!rec?.isBeneficial,
+        casterGuid: c.casterGuid,
+        statKey: c.statKey,
+        statValue: c.statValue,
+        isCooldown,
+      });
+    }
+    for (const key of book.keys()) if (!seen.has(key)) book.delete(key);
+    return rows;
+  }
+  /** Vitae multiplier: the statValue of the spell-666 row; null when there is
+   *  no vitae row (or enchantments are unreadable). */
+  TryGetVitae() {
+    const rows = this.TryGetSelfEnchantments();
+    if (!rows) return null;
+    const v = rows.find((r) => r.spellId === SPELL_ID_VITAE);
+    return v ? v.statValue : null;
+  }
+
+  // ── A7 instance-id properties ──────────────────────────────────────
+  /** Generic PropertyInstanceId read (PetOwner 44, Wielder 3, Container 2…);
+   *  `undefined` when unknown / capability absent (as the other Try*Property). */
+  TryGetObjectInstanceIdProperty(guid, stype) {
+    const v = this._live("GetObjectInstanceIdProperty", Number(guid) >>> 0, Number(stype) >>> 0);
+    return typeof v === "number" ? v >>> 0 : undefined;
+  }
+
+  // ── A8 wielded items / shield ──────────────────────────────────────
+  /** Every wielded item of `guid` as plain rows {guid, wcid, itemType,
+   *  equipMask}; each EquippedWeaponJs box freed once copied. null when the
+   *  capability is absent or throws; [] for a non-wielder. */
+  TryGetWieldedItems(guid) {
+    const f = this._m.GetWieldedItems;
+    if (!f) return null;
+    let raw;
+    try {
+      raw = f(Number(guid) >>> 0);
+    } catch (_) {
+      return null;
+    }
+    const out = [];
+    for (const it of Array.isArray(raw) ? raw : []) {
+      try {
+        out.push({
+          guid: (it.guid ?? 0) >>> 0,
+          wcid: (it.wcid ?? 0) >>> 0,
+          itemType: (it.itemType ?? 0) >>> 0,
+          equipMask: (it.equipMask ?? 0) >>> 0,
+        });
+      } catch (_) {
+        /* one bad row must not drop the read */
+      }
+      try {
+        it?.free?.();
+      } catch (_) {
+        /* already released */
+      }
+    }
+    return out;
+  }
+  /** VTank `hasshield`: any wielded object of class Armor (ItemType 0x2).
+   *  null when wielded items are unreadable. */
+  HasShield(guid) {
+    const rows = this.TryGetWieldedItems(guid);
+    if (rows === null) return null;
+    return rows.some((r) => (r.itemType & ITEM_TYPE_ARMOR) !== 0);
+  }
+
+  // ── A9 use gates ───────────────────────────────────────────────────
+  /** Is `guid` usable right now (no target)? null when unknown. */
+  CanUseObject(guid) {
+    const v = this._live("CanUseObject", Number(guid) >>> 0);
+    return typeof v === "boolean" ? v : null;
+  }
+  /** Is applying `item` to `target` legal right now? null when unknown. */
+  CanUseWith(itemGuid, targetGuid) {
+    const v = this._live("CanUseWith", Number(itemGuid) >>> 0, Number(targetGuid) >>> 0);
+    return typeof v === "boolean" ? v : null;
+  }
+
+  // ── A10 fellowship ─────────────────────────────────────────────────
+  FellowshipRecruit(guid) {
+    const g = Number(guid) >>> 0;
+    return g ? this._act("FellowshipRecruit", g) : false;
+  }
+  FellowshipCreate(name, shareXp) {
+    const n = String(name ?? "").trim();
+    return n ? this._act("FellowshipCreate", n, !!shareXp) : false;
+  }
+  FellowshipQuit(disband) {
+    return this._act("FellowshipQuit", !!disband);
+  }
+  FellowshipDismiss(guid) {
+    const g = Number(guid) >>> 0;
+    return g ? this._act("FellowshipDismiss", g) : false;
+  }
+  FellowshipSetOpen(open) {
+    return this._act("FellowshipChangeOpenness", !!open);
+  }
+  FellowshipAssignLeader(guid) {
+    const g = Number(guid) >>> 0;
+    return g ? this._act("FellowshipAssignNewLeader", g) : false;
+  }
+  FellowshipRequestUpdates(want) {
+    return this._act("FellowshipUpdateRequest", !!want);
+  }
+  /**
+   * Plain fellowship view {name, leaderGuid, open, isLocked, evenShare,
+   * members:[{guid, name, level}]}; null when not in a fellowship. Unlike
+   * TryGetFellowship (kept as is, Z5) the FellowshipSnapshotJs box and every
+   * FellowshipMemberJs box (`members` is a cloning getter — read once) are
+   * freed.
+   */
+  TryGetFellowshipInfo() {
+    const f = this._m.GetFellowship;
+    if (!f) return null;
+    let snap;
+    try {
+      snap = f();
+    } catch (_) {
+      return null;
+    }
+    if (!snap) return null;
+    let out = null;
+    try {
+      let rows = [];
+      try {
+        rows = Array.from(snap.members || []);
+      } catch (_) {
+        rows = [];
+      }
+      const members = [];
+      for (const m of rows) {
+        try {
+          members.push({ guid: (m.guid ?? 0) >>> 0, name: String(m.name ?? ""), level: Number(m.level ?? 0) || 0 });
+        } catch (_) {
+          /* partial member degrades to fewer rows */
+        }
+        try {
+          m?.free?.();
+        } catch (_) {
+          /* already released */
+        }
+      }
+      out = {
+        name: String(snap.name ?? ""),
+        leaderGuid: (snap.leaderGuid ?? 0) >>> 0,
+        open: !!snap.open,
+        isLocked: !!snap.isLocked,
+        evenShare: !!snap.evenShare,
+        members,
+      };
+    } catch (_) {
+      out = null;
+    }
+    try {
+      snap?.free?.();
+    } catch (_) {
+      /* already released */
+    }
+    return out;
+  }
+
+  // ── A11 / A13 ──────────────────────────────────────────────────────
+  RecallAllegianceHometown() {
+    return this._act("RecallAllegianceHometown");
+  }
+  /** The /reply target (last PLAYER teller, markers trimmed); null when none. */
+  GetLastTellerName() {
+    const v = this._live("GetLastTellerName");
+    return typeof v === "string" && v ? v : null;
+  }
+
+  // ── A14 headings (compass degrees at the API; HEADING_CONVENTION) ───
+  /** The player's facing as a compass bearing in degrees [0, 360); null when
+   *  the pose carries no heading. */
+  TryGetPlayerCompassHeadingDeg() {
+    const pose = this.TryGetPlayerPose() || this.TryGetPlayerPoseLive();
+    const h = pose ? pose.heading : null;
+    if (typeof h !== "number" || !Number.isFinite(h)) return null;
+    return poseRadToCompassDeg(h);
+  }
+  /** Turn to a compass bearing (degrees, 0 = N, clockwise) through the ONE
+   *  conversion (HEADING_CONVENTION). @returns {boolean} sent */
+  TurnToCompassHeading(deg) {
+    const d = Number(deg);
+    if (!Number.isFinite(d)) return false;
+    return this._act("TurnToHeading", compassDegToTurnRad(d));
+  }
+  /** Face an object: the wasm turnToEntity (retail TurnToObject — no heading
+   *  convention involved) when present, else the bearing from the pose
+   *  through TurnToCompassHeading. @returns {boolean} sent */
+  TurnToObject(guid) {
+    const g = Number(guid) >>> 0;
+    if (!g) return false;
+    if (this._m.TurnToObject) return this._act("TurnToObject", g);
+    const me = this._vtSelfPose();
+    const pos = this.TryGetObjectPosition(g);
+    const d = me && pos ? vtDelta(me, pos) : null;
+    if (!d) return false;
+    return this.TurnToCompassHeading((Math.atan2(d.dx, d.dy) * 180) / Math.PI);
+  }
+
+  // ── A15 / A16 distance and name search ─────────────────────────────
+  /** The player's pose in the snapshot frame ({objCellId, x, y, z, heading}),
+   *  falling back to a live read (cell healed like `_tick`) before the first
+   *  heartbeat. null when unknown. */
+  _vtSelfPose() {
+    const snapPose = this.TryGetPlayerPose();
+    if (snapPose) return snapPose;
+    const live = this.TryGetPlayerPoseLive();
+    if (!live) return null;
+    const cell = live.landblockId >>> 0 || this.GetCurrentCellIdLive() >>> 0;
+    if (!cell) return null;
+    return { objCellId: cell, x: live.x, y: live.y, z: live.z, heading: live.heading };
+  }
+  /** Metres from the player to `guid` (3-D), with the combat_loop.js rule:
+   *  same landblock, or both outdoors in the global frame. null when the
+   *  object or the pose is unknown, or the two are in different indoor
+   *  landblocks. */
+  TryGetObjectDistance(guid) {
+    const g = Number(guid) >>> 0;
+    if (!g) return null;
+    const me = this._vtSelfPose();
+    if (!me) return null;
+    const pos = this.TryGetObjectPosition(g);
+    if (!pos) return null;
+    const d = vtDelta(me, pos);
+    if (!d) return null;
+    const dist = Math.hypot(d.dx, d.dy, d.dz);
+    return Number.isFinite(dist) ? dist : null;
+  }
+  // Guids within `maxDistM`: the frozen snapshot list when its range covers
+  // the request (nearbyRangeM 0 = every tracked entity), else a live query.
+  _vtNearbyGuids(maxDistM) {
+    const range = Number(this.nearbyRangeM) || 0;
+    if (this.snap && (range === 0 || range >= maxDistM)) return this.NearbyGuids();
+    const v = this._live("NearbyEntityGuids", maxDistM);
+    if (v && typeof v.length === "number") return Array.from(v, (x) => x >>> 0);
+    return this.NearbyGuids();
+  }
+  /**
+   * Nearby objects named `name` (case-insensitive; `exact` = whole name, else
+   * substring), nearest first: [{guid, name, dist}]. `player` keeps players
+   * only (desc flag or the player guid range), `creature` keeps ItemType
+   * Creature only. The player itself and objects whose distance is unknown
+   * are skipped. Never throws.
+   */
+  FindNearbyByName(name, opts = {}) {
+    const want = String(name ?? "").trim().toLowerCase();
+    if (!want) return [];
+    const o = opts && typeof opts === "object" ? opts : {};
+    const player = !!o.player;
+    const creature = !!o.creature;
+    const exact = o.exact !== false;
+    const maxDistM = typeof o.maxDistM === "number" && o.maxDistM > 0 ? o.maxDistM : 250;
+    const me = Number(this.GetPlayerId()) >>> 0;
+    const out = [];
+    try {
+      for (const g0 of this._vtNearbyGuids(maxDistM)) {
+        const g = g0 >>> 0;
+        if (!g || g === me) continue;
+        const n = this.TryGetObjectName(g);
+        if (typeof n !== "string" || !n) continue;
+        const ln = n.toLowerCase();
+        if (exact ? ln !== want : !ln.includes(want)) continue;
+        if (player && !(this.ObjectIsPlayer(g) || (g >= PLAYER_GUID_MIN && g <= PLAYER_GUID_MAX))) continue;
+        if (creature && ((Number(this.TryGetObjectIntProperty(g, PINT_ITEM_TYPE)) >>> 0) & ITEM_TYPE_CREATURE) === 0) continue;
+        const dist = this.TryGetObjectDistance(g);
+        if (dist == null || dist > maxDistM) continue;
+        out.push({ guid: g, name: n, dist });
+      }
+    } catch (_) {
+      /* degrade to what was found */
+    }
+    out.sort((a, b) => a.dist - b.dist);
+    return out;
+  }
+
+  // ── A17 item mana ──────────────────────────────────────────────────
+  /**
+   * Item mana from the last appraisal: {cur, max, ratePerSec, lastIdMs,
+   * stale}. ACE never pushes ItemCurMana (U4 §7.2), so callers re-appraise
+   * (RequestId) when `stale` (never identified, or last identify > 60 s ago).
+   * `ratePerSec` is the burn rate as a POSITIVE mana/s (PropertyFloat
+   * ManaRate is stored negative); null when unknown. null when the item has
+   * no mana data at all (never appraised / not a mana item).
+   */
+  TryGetItemMana(guid) {
+    const g = Number(guid) >>> 0;
+    if (!g) return null;
+    const cur = this._live("GetObjectIntProperty", g, PINT_ITEM_CUR_MANA);
+    const max = this._live("GetObjectIntProperty", g, PINT_ITEM_MAX_MANA);
+    const hasCur = typeof cur === "number" && Number.isFinite(cur);
+    const hasMax = typeof max === "number" && Number.isFinite(max);
+    if (!hasCur && !hasMax) return null;
+    const rate = this._live("GetObjectDoubleProperty", g, PFLOAT_MANA_RATE);
+    const lastIdMs = Number(this.GetLastIdTime(g)) || 0;
+    return {
+      cur: hasCur ? cur : null,
+      max: hasMax ? max : null,
+      ratePerSec: typeof rate === "number" && Number.isFinite(rate) ? Math.abs(rate) : null,
+      lastIdMs,
+      stale: !lastIdMs || Date.now() - lastIdMs > ITEM_MANA_STALE_MS,
+    };
+  }
+
+  // ── A19 item-action token (C8, V-13) ───────────────────────────────
+  // The cast token's twin for UseObject / UseItemOnTarget / MoveItemToContainer
+  // / MergeStacks / SplitStack / WieldItem / UnwieldItem / GiveObject /
+  // DropItem: one item action in flight at a time across every VT module.
+  // Cleared by the server's answer (kinds 11/13/14/48, and 47/49 when the
+  // wielder is us — those two fire for every wielder in view) or after
+  // ITEM_TOKEN_TIMEOUT_MS.
+  _itemTokenLive(now = Date.now()) {
+    const t = this._itemToken;
+    if (!t) return false;
+    if (now - t.issuedAt > ITEM_TOKEN_TIMEOUT_MS) {
+      this._itemToken = null;
+      return false;
+    }
+    return true;
+  }
+  _noteItemActionEvent(e) {
+    try {
+      if (!this._itemToken) return;
+      if (e.kind === 47 || e.kind === 49) {
+        // u32b = the prior (47) / new (49) wielder; only OUR wield transition
+        // answers our action. Unknown player guid -> clear (fail open).
+        const me = Number(this.GetPlayerId()) >>> 0;
+        if (me && (e.u32b >>> 0) !== me) return;
+      }
+      this._itemToken = null;
+    } catch (_) {
+      /* never break event dispatch */
+    }
+  }
+  /**
+   * Claim the item-action token immediately before issuing an item action.
+   * true when the token was free, or already held by this SAME owner (the
+   * claim re-arms it: a new action, a fresh timeout). false when a different
+   * owner holds a live claim, or — with `minIntervalMs` — when this owner's
+   * previous successful claim is younger than that interval (weapon-swap
+   * pacing, REF WeaponSwapGate 3 s).
+   */
+  tryClaimItemAction(owner, opts = {}) {
+    const now = Date.now();
+    const minIntervalMs = Math.max(0, Number(opts && opts.minIntervalMs) || 0);
+    if (this._itemTokenLive(now) && this._itemToken.owner !== owner) return false;
+    const claims = this._itemClaims || (this._itemClaims = new Map());
+    if (minIntervalMs > 0) {
+      const last = claims.get(owner);
+      if (last != null && now - last < minIntervalMs) return false;
+    }
+    this._itemToken = { owner, issuedAt: now };
+    if (claims.size >= 64 && !claims.has(owner)) claims.clear();
+    claims.set(owner, now);
+    return true;
+  }
+  /** Release early once the owner's own bookkeeping saw the result. No-op
+   *  when a different owner (or nobody) holds it. */
+  releaseItemAction(owner) {
+    if (this._itemToken && this._itemToken.owner === owner) this._itemToken = null;
+  }
+  /** Read-only status: {owner, issuedAt} or null. */
+  get itemActionToken() {
+    return this._itemTokenLive() ? { ...this._itemToken } : null;
+  }
+
+  // ── A20 per-snapshot inventory memo ────────────────────────────────
+  /** TryGetPlayerInventory memoized per `snap.seq`: the wasm read (one
+   *  boundary crossing per field + a free per row) happens once per tick,
+   *  however many meta/autostack/burden polls ask. Each caller still gets
+   *  its OWN array of its own row copies (same contract as
+   *  TryGetPlayerInventory — sorting or annotating it cannot leak into
+   *  another caller). Dropped early on kinds 11/47/48/49. Before the first
+   *  heartbeat (no snapshot) it reads through. */
+  TryGetPlayerInventoryCached() {
+    const seq = this.snap ? this.snap.seq : null;
+    if (seq == null) return this.TryGetPlayerInventory();
+    return this._invRowsForSeq(seq).map((r) => ({ ...r }));
+  }
+  // The memoized (internal, never handed out) rows for `seq`.
+  _invRowsForSeq(seq) {
+    let m = this._invMemo;
+    if (!m || m.seq !== seq) {
+      m = { seq, rows: this.TryGetPlayerInventory() };
+      this._invMemo = m;
+    }
+    return m.rows;
+  }
+  /** TryGetPackRoom over the memoized inventory, memoized per `snap.seq`;
+   *  each caller gets its own copy. */
+  TryGetPackRoomCached() {
+    const seq = this.snap ? this.snap.seq : null;
+    if (seq == null) return this.TryGetPackRoom();
+    let m = this._roomMemo;
+    if (!m || m.seq !== seq) {
+      m = { seq, room: this._packRoomFrom(this._invRowsForSeq(seq)) };
+      this._roomMemo = m;
+    }
+    const r = m.room;
+    return r
+      ? {
+          main: { ...r.main },
+          containers: { ...r.containers },
+          packs: r.packs.map((p) => ({ ...p })),
+          freeItemSlots: r.freeItemSlots,
+        }
+      : null;
+  }
+
+  // ── A21 creature info ──────────────────────────────────────────────
+  /**
+   * {guid, name, wcid, creatureType, maxHp, hpFrac, dist, hasShield} for a
+   * tracked object, null for an untracked guid. creatureType: PropertyInt 2
+   * (merged by a SUCCESSFUL appraisal; not in CreateObject — U4 H13), else
+   * the appraisal's ints; maxHp: appraisal creatureProfile.health_max, or the
+   * failed-assess failedCreatureProfile.health_max; hpFrac: -1 unknown (as
+   * TryGetTargetHealthFraction); unknown fields null. With
+   * `requestAppraisal`, a missing maxHp/creatureType issues at most one
+   * RequestId per guid per CREATURE_ID_INTERVAL_MS.
+   */
+  TryGetCreatureInfo(guid, opts = {}) {
+    const g = Number(guid) >>> 0;
+    if (!g) return null;
+    try {
+      const name = this.TryGetObjectName(g);
+      const wcid = Number(this.TryGetObjectWcid(g)) >>> 0;
+      if (name == null && !wcid) return null;
+      const appraisal = this.TryGetObjectAppraisal(g);
+      let creatureType = this.TryGetObjectIntProperty(g, PINT_CREATURE_TYPE);
+      if (typeof creatureType !== "number") {
+        const ints = appraisal?.properties?.ints;
+        const v = ints ? (ints.CreatureType ?? ints[String(PINT_CREATURE_TYPE)]) : undefined;
+        creatureType = typeof v === "number" ? v : null;
+      }
+      const prof = appraisal?.creatureProfile || appraisal?.failedCreatureProfile || null;
+      const hm = prof ? (prof.health_max ?? prof.healthMax) : undefined;
+      const maxHp = typeof hm === "number" && hm > 0 ? hm : null;
+      if (opts && opts.requestAppraisal && (maxHp == null || creatureType == null)) this._vtRequestCreatureId(g);
+      return {
+        guid: g,
+        name: name ?? "",
+        wcid,
+        creatureType,
+        maxHp,
+        hpFrac: Number(this.TryGetTargetHealthFraction(g)),
+        dist: this.TryGetObjectDistance(g),
+        hasShield: this.HasShield(g),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+  _vtRequestCreatureId(g) {
+    const now = Date.now();
+    const book = this._creatureIdAt || (this._creatureIdAt = new Map());
+    const last = book.get(g);
+    if (last != null && now - last < CREATURE_ID_INTERVAL_MS) return false;
+    if (book.size >= 512) {
+      for (const [k, at] of book) if (now - at >= CREATURE_ID_INTERVAL_MS) book.delete(k);
+    }
+    book.set(g, now);
+    return this.RequestId(g);
+  }
+
+  // ── ENV selection for "Add selected" ───────────────────────────────
+  /** The inventory panel's selected item (plugins/inventory.js publishes
+   *  window.__inventory.selectedGuid), else the world selection; 0 = none. */
+  GetSelectedItemId() {
+    try {
+      const v = globalThis.__inventory?.selectedGuid;
+      const g = typeof v === "number" ? v >>> 0 : 0;
+      if (g) return g;
+    } catch (_) {
+      /* fall through to the world selection */
+    }
+    return this.GetSelectedId();
   }
 }
 

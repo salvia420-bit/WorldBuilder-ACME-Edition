@@ -1,0 +1,22 @@
+{
+ "_comment": "Harmful self-enchantment families for VTank 'Use Dispel Items' / 'Cast dispel self' (G:26-27, PLAN Q12): a row of TryGetSelfEnchantments() with !isBeneficial, a `family` (= SpellCategory) in `categories` and spell level >= `minLevel` triggers a dispel. Derived from the Appendix C debuff families; categories read from LSD spells.json (meta_spell.spell.spellCategory) for the seed ids listed in `byCategory`. Life-school rows (`lifeCategories`) are the only ones Eradicate Life Magic Self (3194) can remove, so the cast path is limited to them, and to rows whose powerLevel <= `castDispelMaxPower` (3194 \"Dispels 3-6 negative Life Magic enchantments of level 7 or lower\", LSD meta_spell max_power 350; a level-8 Incantation has power 400); a dispel item is tried for every listed category. Reviewable: add categories here, no code change needed.",
+ "v": 1,
+ "minLevel": 7,
+ "castDispelSpellId": 3194,
+ "castDispelMaxPower": 350,
+ "categories": [38, 40, 42, 102, 104, 106, 108, 110, 112, 114, 116],
+ "lifeCategories": [102, 104, 106, 108, 110, 112, 114, 116],
+ "byCategory": {
+  "38": "Vulnerability Other = melee-defense debuff (Creature; gravity family: 15, 230, 2318 Gravity Well, 4633)",
+  "40": "Defenselessness Other = missile-defense debuff (Creature; broadside family: 262, 2228 Broadside of a Barn, 4543)",
+  "42": "Magic Yield Other = magic-defense debuff (Creature; yield family: 280, 2282 Futility, 4597)",
+  "102": "Acid Vulnerability Other (Life; 521, 2162 Olthoi's Gift, 4473)",
+  "104": "Bludgeoning Vulnerability Other (Life; 1048, 2166 Tusker's Gift, 4477)",
+  "106": "Cold Vulnerability Other (Life; 1060, 2168 Gelidite's Gift, 4479)",
+  "108": "Lightning Vulnerability Other (Life; 1084, 2172 Astyrrian's Gift, 4483)",
+  "110": "Fire Vulnerability Other (Life; 21, 1104, 2170 Inferno's Gift, 4481)",
+  "112": "Piercing Vulnerability Other (Life; 1151, 2174 Archer's Gift, 4485)",
+  "114": "Blade Vulnerability Other (Life; 1127, 2164 Swordsman's Gift, 4475)",
+  "116": "Imperil Other (Life; 25, 1323-1327, 2074 Gossamer Flesh, 4312)"
+ }
+}

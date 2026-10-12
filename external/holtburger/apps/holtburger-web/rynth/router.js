@@ -324,9 +324,13 @@ export class RynthRouter {
     this.lastWy = wy;
 
     // World-frame arrival check against the leg's own lb (cross-seam safe).
+    // Per-leg arrival radius override (VTank Follow/Nav Min on VT-nav legs,
+    // rynth/vt/nav) — the per-leg `timeoutMs` precedent in _beginLeg. A leg
+    // without one keeps the router-wide radius (3.0 m) for every other mover.
+    const arriveM = Number.isFinite(l.arriveM) ? l.arriveM : this.arriveM;
     const [lwx, lwy] = worldXY(l.lb, l.x, l.y);
     const d = Math.hypot(wx - lwx, wy - lwy);
-    if (d <= this.arriveM) {
+    if (d <= arriveM) {
       if (l.portal) {
         // A portal leg's completion condition is the HOP (teleport detection
         // above), not proximity: advancing on 3m arrival let the next leg
@@ -359,7 +363,7 @@ export class RynthRouter {
     // live: routed(4) to a next-room NPC with an unchanged pose, then the
     // straight-line pursue wedged on the wall exactly as before routing).
     const ps = h.GetPursuitStatus ? h.GetPursuitStatus() : { now: 0 };
-    if (ps.now === 2 && d <= this.arriveM * 2 && !l.portal) {
+    if (ps.now === 2 && d <= arriveM * 2 && !l.portal) {
       this._advance();
       return;
     }

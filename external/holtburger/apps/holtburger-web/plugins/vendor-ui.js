@@ -399,6 +399,15 @@ function hideOverlay() {
 }
 
 function onHidden() {
+  // VTank layer seam (W1-8): ACE has no vendor-close packet in either
+  // direction (vendor UI closes on a client-side range check), so the bot's
+  // host signals learn of the close from this window event. Before the state
+  // is cleared, so the guid is still known. Guarded: never breaks the close.
+  try {
+    window.dispatchEvent(new CustomEvent("hb-vendor-closed", {
+      detail: { guid: (state.vendorState?.vendorGuid >>> 0) || 0 },
+    }));
+  } catch (_) { /* seam only */ }
   // Drop queues on close so reopening a different vendor is clean.
   state.buyQueue = [];
   state.sellQueue = [];

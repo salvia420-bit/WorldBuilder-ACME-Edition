@@ -352,7 +352,7 @@ function findNearbyPortal(host, playerWx, playerWy, targetWx, targetWy, playerMa
 // (nav_import.js meta.objName). Case-insensitive substring match, nearest
 // exact match to `targetWx,targetWy` wins on ambiguity. Returns
 // { guid, name, dTarget } | null. Never throws.
-function findEntityByName(host, name, targetWx, targetWy, maxRangeM) {
+export function findEntityByName(host, name, targetWx, targetWy, maxRangeM) {
   const want = typeof name === "string" ? name.trim().toLowerCase() : "";
   if (!want || !host || typeof host.NearbyGuids !== "function") return null;
   let guids;
@@ -578,7 +578,7 @@ async function attemptOutdoorPortalTouch(ctx, tune) {
  * touch failed: ..." message — never relies on the caller to fill one in).
  * Never throws.
  */
-async function attemptMetaPortalTouch(ctx, leg, tune) {
+export async function attemptMetaPortalTouch(ctx, leg, tune) {
   const { host, walk } = ctx;
   const stage = (s) => ({ ok: false, error: `portal touch failed: ${s}` });
   const meta = leg && leg.meta;
@@ -632,12 +632,18 @@ async function attemptMetaPortalTouch(ctx, leg, tune) {
  * MatronHive report's misleading "portal entity not found" on a recall-
  * anchored hub is exactly this: the search was always going to fail). The
  * only path to the far side is the character actually knowing and
- * successfully casting the spell. Casts untargeted/self (mirrors
- * buff_loop.js/vitals.js's CastSpell(0, spellId) convention), waits out any
- * already-open cast gesture first, then awaits the resulting teleport like a
- * portal hop. Returns {ok:true, portal:spellName} on a confirmed hop, or a
- * LOUD, correctly-labelled {ok:false, error, reason:"recall-unavailable"}
- * naming the spell on any failure — never a portal-entity-shaped message.
+ * successfully casting the spell. Casts UNTARGETED: every recall/sending spell
+ * is SelfTargeted in the DAT, so ACE substitutes the caster
+ * (WorldObject_Magic.cs HandleCastSpell). Goes through host.CastUntargetedSafe
+ * (the webhost's SelfTargeted guard) when the host has it and spell records
+ * are available, else the legacy CastSpell(0, spellId) — which the same guard
+ * limits to SelfTargeted spells whenever records exist.
+ * (buff_loop.js/vitals.js no longer cast untargeted — they target the player.)
+ * Waits out any already-open cast gesture first, then awaits the resulting
+ * teleport like a portal hop. Returns {ok:true, portal:spellName} on a
+ * confirmed hop, or a LOUD, correctly-labelled {ok:false, error,
+ * reason:"recall-unavailable"} naming the spell on any failure — never a
+ * portal-entity-shaped message.
  * Never throws.
  */
 const RECALL_TELEPORT_MS = 20_000; // server-side cast + fade animation before the hop
@@ -671,7 +677,13 @@ export async function attemptRecallCast(ctx, leg, tune) {
     known = [];
   }
   if (!known.includes(spellId)) return unavailable("is not in the character's spellbook");
-  if (typeof host.CastSpell !== "function") return unavailable("cast API unavailable");
+  // The SelfTargeted guard (CastUntargetedSafe) needs spell records; a host
+  // without them (stale pkg/) keeps the legacy CastSpell(0, id) pass-through.
+  const hasLegacyCast = typeof host.CastSpell === "function";
+  const castSafe =
+    typeof host.CastUntargetedSafe === "function" &&
+    !(hasLegacyCast && typeof host.has === "function" && host.has("GetSpellRecord") === false);
+  if (!castSafe && !hasLegacyCast) return unavailable("cast API unavailable");
   // The caller's cancellation state (operator STOP / "stop moving", a cancelled
   // route, an unwedge recovery that was called off). The waits below can take
   // 5-13 s; a recall must never fire into a character the operator has taken
@@ -752,7 +764,7 @@ export async function attemptRecallCast(ctx, leg, tune) {
     if (isAborted()) return aborted(); // (the finally frees a claimed token)
     let sent = false;
     try {
-      sent = !!host.CastSpell(0, spellId);
+      sent = castSafe ? !!host.CastUntargetedSafe(spellId) : !!host.CastSpell(0, spellId);
     } catch (_) {
       sent = false;
     }
@@ -766,6 +778,16 @@ export async function attemptRecallCast(ctx, leg, tune) {
     }
   }
 }
+
+// attemptJumpLeg's tune.direction -> [forward, strafe] axes for
+// SetMovementInput (null = none: an in-place hop).
+const JUMP_AXES = Object.freeze({
+  forward: [1, 0],
+  back: [-1, 0],
+  strafeleft: [0, -1],
+  straferight: [0, 1],
+  none: null,
+});
 
 /**
  * Fire the jump primitive for a corpus `jmp` leg (nav_import.js
@@ -803,11 +825,19 @@ export async function attemptRecallCast(ctx, leg, tune) {
  * jmp->pau(1000ms)->chk idiom independently confirms human authors treat this
  * as a real, necessary wait).
  *
- * Returns {ok:true, power, headingRad, runFlag} or a typed
+ * Launch direction (2026-10-12, VTank `/rs jump` + `addnavjump … strafeleft|
+ * straferight|forward`): `tune.direction` picks the axis held during the
+ * charge — "forward" (the default, and the only behaviour before this
+ * option: SetMovementInput(1,0,0,run)), "back" (-1,0,0,run), "strafeleft"
+ * (0,-1,0,run), "straferight" (0,1,0,run), or "none" (no movement input: an
+ * in-place hop, the VTank `/rs jump <heading> <shift> <ms>` form). Any other
+ * value reads as "forward", so replayRoute's tunes are unchanged.
+ *
+ * Returns {ok:true, power, headingRad, runFlag, direction} or a typed
  * {ok:false, error, reason:"jump-unavailable"} (mirrors attemptRecallCast's
  * typed-failure pattern) — never throws.
  */
-async function attemptJumpLeg(ctx, leg, tune) {
+export async function attemptJumpLeg(ctx, leg, tune) {
   const { host } = ctx;
   const meta = leg && leg.meta;
   const unavailable = (why) => ({ ok: false, error: `jump-unavailable: ${why}`, reason: "jump-unavailable" });
@@ -822,6 +852,9 @@ async function attemptJumpLeg(ctx, leg, tune) {
   const delayMs = Math.max(0, Number(meta.delayMs) || 0);
   const approachMs = Math.min(tune.jumpApproachMaxMs, Math.max(tune.jumpApproachMinMs, delayMs));
   const power = Math.min(1, Math.max(tune.jumpPowerMin, delayMs / 1000));
+  const wanted = tune ? tune.direction : undefined;
+  const direction = typeof wanted === "string" && Object.prototype.hasOwnProperty.call(JUMP_AXES, wanted) ? wanted : "forward";
+  const axis = JUMP_AXES[direction]; // null = in place (no movement input)
 
   const canJumpNow = () => {
     try {
@@ -849,11 +882,13 @@ async function attemptJumpLeg(ctx, leg, tune) {
   // 2. Gate, build launch velocity, fire.
   if (!canJumpNow()) return unavailable("canJumpNow() false (airborne or motion state blocks it)");
   let moving = false;
-  try {
-    host.SetMovementInput(1, 0, 0, runFlag);
-    moving = true;
-  } catch (_) {
-    moving = false;
+  if (axis) {
+    try {
+      host.SetMovementInput(axis[0], axis[1], 0, runFlag);
+      moving = true;
+    } catch (_) {
+      moving = false;
+    }
   }
   if (approachMs > 0) await new Promise((r) => setTimeout(r, approachMs));
   if (!canJumpNow()) {
@@ -887,7 +922,7 @@ async function attemptJumpLeg(ctx, leg, tune) {
   const settleMs = Math.min(delayMs, tune.jumpApproachMaxMs) + tune.jumpLandingSettlePadMs;
   await new Promise((r) => setTimeout(r, settleMs));
 
-  return { ok: true, power, headingRad, runFlag };
+  return { ok: true, power, headingRad, runFlag, direction };
 }
 
 // Scan forward from a FAILED walk leg for the nearest upcoming `jmp` leg
@@ -1357,7 +1392,7 @@ export async function composeEgress(deps, opts = {}) {
 // shared with nav_import.js. Only the replay-side consumers stay here.
 
 // Portal-transit tuning shared by composeGoto's transit and the replayer.
-function buildTune(opts = {}, router = null) {
+export function buildTune(opts = {}, router = null) {
   const pollMs = opts.pollMs ?? 500;
   return {
     poseTimeoutMs: opts.poseTimeoutMs ?? 15_000,
@@ -1511,7 +1546,7 @@ function doorOpenOpts(tune) {
 // reach) returns opened:false, so the retry ladders exclude its edge instead of
 // spending every attempt re-using it. A host without TryGetObjectState keeps the
 // old blind settle (opened:true, confirmed:false).
-async function attemptDoorOpen(host, pose, opts = {}) {
+export async function attemptDoorOpen(host, pose, opts = {}) {
   const door = nearestClosedDoor(host, pose);
   if (!door || typeof host.UseObject !== "function") return { opened: false };
   try {
@@ -1786,4 +1821,21 @@ export async function replayRoute(deps, legs, opts = {}) {
   }
 }
 
-export default { composeGoto, composeEgress, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute, attemptRecallCast };
+export default {
+  composeGoto,
+  composeEgress,
+  walkLegs,
+  deriveRouteFlags,
+  prepareReplayLegs,
+  routeHasPortals,
+  routeHasJumps,
+  replayRoute,
+  attemptRecallCast,
+  // Exported 2026-10-12 for the VTank nav executors (rynth/vt/nav): the waypoint
+  // primitives reused as-is, plus the tune they read (a bare tune yields NaN power).
+  findEntityByName,
+  attemptMetaPortalTouch,
+  attemptJumpLeg,
+  attemptDoorOpen,
+  buildTune,
+};

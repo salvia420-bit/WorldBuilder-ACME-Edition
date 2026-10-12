@@ -669,6 +669,10 @@ const HOTBAR_ACTIVATE = typeof window !== "undefined" ? defaultOnUrlFlag("hotbar
 
 if (typeof window !== "undefined") {
   if (!window.__inventory) window.__inventory = { armedGuid: 0 };
+  // VTank layer seam (W1-8): the panel's selected item, mirrored by
+  // setSelectedGuid below (0 = none / panel not mounted). Read by the host's
+  // GetSelectedItemId (rynth/webhost.js) for the VT "Add selected" buttons.
+  if (typeof window.__inventory.selectedGuid !== "number") window.__inventory.selectedGuid = 0;
   window.__inventory.setArmedItem = setArmedItem;
   window.__inventory.openPack = openPack;
   window.__inventory.selectedPack = () => lastSelectedPack;
@@ -1187,6 +1191,18 @@ function doMount(parentEl, _ctx) {
       if (cell.dataset.empty) continue;
       cell.classList.toggle("is-selected", cellGuid(cell) === selectedGuid);
     }
+    publishSelection(selectedGuid);
+  }
+  // VTank layer seam (W1-8): export the selection (it used to be private to
+  // this closure) + one window event per change. Guarded: a page-seam failure
+  // must never break the inventory click path.
+  function publishSelection(guid) {
+    try {
+      if (!window.__inventory) window.__inventory = { armedGuid: 0 };
+      if ((window.__inventory.selectedGuid >>> 0) === guid) return;
+      window.__inventory.selectedGuid = guid;
+      window.dispatchEvent(new CustomEvent("hb-inventory-selection", { detail: { guid } }));
+    } catch (_) { /* seam only */ }
   }
   function onCellClick(ev) {
     if (ev.button !== 0) return;
@@ -1771,6 +1787,7 @@ function doMount(parentEl, _ctx) {
 
   return () => {
     window.removeEventListener("keydown", onKey);
+    publishSelection(0); // the view (and its selection) is gone (W1-8 seam)
     delete window.__isInventoryItem;
     if (window.__inventoryRebuildStats === rebuildStats) delete window.__inventoryRebuildStats;
     if (window.__refreshPaperdoll === refreshPaperdollViewport) delete window.__refreshPaperdoll;

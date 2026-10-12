@@ -846,6 +846,29 @@ const TIER5 = [
   { tier: 5, flag: "rynthBootConfig", file: "tests/rynth_boot_config.test.mjs" },
   { tier: 5, flag: "rynthHudBridge", file: "tests/rynth_hud_bridge.test.mjs" },
   { tier: 5, flag: "rynthHudDom", file: "tests/rynth_hud_dom.test.mjs" },
+  // 2026-10-12 RynthSuite VTank features, Wave 1 (rynth/vt/**, not yet wired into the bot):
+  // expression engine, settings + profiles, meta engine, /rs commands, VT nav, monster list +
+  // attack planner, host seam additions, support behaviours.
+  { tier: 5, flag: "rynthVtExpr", file: "tests/rynth_vt_expr.test.mjs" },
+  { tier: 5, flag: "rynthVtExprStdlib", file: "tests/rynth_vt_expr_stdlib.test.mjs" },
+  { tier: 5, flag: "rynthVtSettings", file: "tests/rynth_vt_settings.test.mjs" },
+  { tier: 5, flag: "rynthVtProfiles", file: "tests/rynth_vt_profiles.test.mjs" },
+  { tier: 5, flag: "rynthVtMetaEngine", file: "tests/rynth_vt_meta_engine.test.mjs" },
+  { tier: 5, flag: "rynthVtMetaConditions", file: "tests/rynth_vt_meta_conditions.test.mjs" },
+  { tier: 5, flag: "rynthVtMetaViews", file: "tests/rynth_vt_meta_views.test.mjs" },
+  { tier: 5, flag: "rynthVtRsCommands", file: "tests/rynth_vt_rs_commands.test.mjs" },
+  { tier: 5, flag: "rynthVtHostFns", file: "tests/rynth_vt_host_fns.test.mjs" },
+  { tier: 5, flag: "rynthVtNavModel", file: "tests/rynth_vt_nav_model.test.mjs" },
+  { tier: 5, flag: "rynthVtActiveNav", file: "tests/rynth_vt_active_nav.test.mjs" },
+  { tier: 5, flag: "rynthVtMonsters", file: "tests/rynth_vt_monsters.test.mjs" },
+  { tier: 5, flag: "rynthVtPlanner", file: "tests/rynth_vt_planner.test.mjs" },
+  { tier: 5, flag: "rynthVtSpellTables", file: "tests/rynth_vt_spell_tables.test.mjs" },
+  { tier: 5, flag: "rynthWebhostVtSeam", file: "rynth/test_webhost_vt_seam.mjs" },
+  { tier: 5, flag: "rynthVtHostSignals", file: "tests/rynth_vt_host_signals.test.mjs" },
+  { tier: 5, flag: "rynthVtPageSeams", file: "tests/rynth_vt_page_seams.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportVitals", file: "tests/rynth_vt_support_vitals.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportInventory", file: "tests/rynth_vt_support_inventory.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportMisc", file: "tests/rynth_vt_support_misc.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

@@ -149,8 +149,18 @@ import { RynthWebHost } from "./webhost.js";
  * host members TryGetPackRoom / TryGetVendorProfile / SendTell /
  * CloseContainer / Disconnect / LogOffCharacter / TryGetLastRecvAgeMs /
  * IsPortalSpaceActive / dispose(). `^1.0` manifests are unaffected.
+ *
+ * 1.2.0 (2026-10-12, VTank layer seam W1-8 — additive): host capabilities
+ * GetSpellRecord, GetWieldedItems, CanUseObject, CanUseWith,
+ * FellowshipDismiss/ChangeOpenness/AssignNewLeader/UpdateRequest,
+ * RecallAllegianceHometown, GetLastTellerName, TurnToObject and the
+ * GetSelectedItemId environment capability, plus host members (cast choke
+ * point CastSpellAt/CastSelf/CastUntargetedSafe, spell records, plain
+ * self-enchantments, item-action token, …; rynth/webhost.js "VTank layer
+ * seam"). Legacy CastSpell(0, id) now refuses a non-SelfTargeted spell when
+ * spell records are available. `^1.x` manifests are unaffected.
  */
-export const API_VERSION = "1.1.0";
+export const API_VERSION = "1.2.0";
 
 let _componentCatalog = null;
 let _componentCatalogPromise = null;
