@@ -1,0 +1,273 @@
+# WORLD KNOWLEDGE for "lyrics → sites": the WorldBuilder.Terminal (WBT) ontology, describe-landblock, named places with teleport coordinates, acpedia lore, the wbt-sidecar, and reusable AI infra for a Node-side JEV (OpenRouter) client
+VERIFIED MAP (read 2026-10-13; HB = external/holtburger/apps/holtburger-web). WBT = /home/wbterminal/WorldBuilder-ACME-Edition/WorldBuilder.Terminal. The DLL (bin/Release/net8.0, Oct 10) is current: the only newer .cs is Vendored/AcClient/UIElementId.cs. `help` now lists 224 commands, so the "216/181" counts in MEMORY.md are out of date. One measured cold start of `--stdin` with no project, running `help`, took 0.60 s wall.
+
+Q1 — WHAT THE ONTOLOGY IS
+- Record type: OntologyEntry (WorldBuilder.Shared/Lib/OntologyEntry.cs:9). There is one per Setup (0x02) or GfxObj (0x01) DID.
+- Fields:
+  - geometry: BoundsMin/Max, MaxDimension, PartCount, PolyCount, VertexCount, AspectRatio
+  - Scale: Tiny/Small/Medium/Large/Massive
+  - Category: Structure/Scenery/Furniture/Prop/Creature/NPC/Interactive_*/Sign_Town/Unknown
+  - provenance: ClassificationSource, Confidence, ClassificationReason
+  - text: Tags[], Name, MaterialTags[], SurfaceIds, ThumbnailPath
+  - weenie links: WeenieClassId, WeenieType, ItemType, WeaponType, MaterialType, Level, CreatureType, DifficultyTier, CreatureFamilyName
+  - Architecture (Aluvian/Sho/Gharu'ndim/Viamontian/Empyrean/Neutral), Biome[], Behavior
+  - footprint: FootprintShape/Corners/FoundationZ/BasementDepth
+- Built data on disk: /home/wbterminal/projects/RetailSmoke/ontology_cache.jsonl
+  - 8,081,019 B, 21,253 lines (15,318 GfxObj + 5,935 Setup), cacheVersion 2, leading UTF-8 BOM, id stored as a decimal number.
+  - An identical copy sits in /mnt/wbterminal1/tmp/claude-scratch/wbt-testproject/. An older 7.2 MB copy is in avalon_scratch.
+  - Category counts: Prop 10,744 · Creature 2,708 · Unknown 2,641 · Scenery 2,227 · Furniture 2,174 · Structure 523 · Furniture_Storage 113 · Interactive_Portal 80 · Interactive_Switch 13 · Furniture_Light 12 · Sign_Town 10 · NPC 6 · Interactive_Door 2.
+  - Name is set on 8,706 entries; architecture/biome/behavior on 4,271; weenieClassId on 3,930.
+  - materialTags is empty everywhere. Footprint fields are not written by CacheToFile.
+  - Tags are almost all geometric or heuristic (heuristic 21,086, gfxobj, prop, tiny, lowpoly…). Semantic tags are rare: statue 7, portal 47, door 29, rock 8, dat:building 398, dat:scenery 176.
+  - Procedural scenery Setups (trees and rocks) have NO name.
+- Upstream sources:
+  - pipeline_data/enrichment/unified_ontology.json (32 MB): by_setup_did 5,935, by_gfx_obj_id 15,319, by_wcid 12,648, with names_all, parent_setups, is_building/is_scenery.
+  - canonical_enrichment.json (9.4 MB, 12,648 wcid entries).
+- Better semantic sources for lyric nouns:
+  - WorldBuilder/Data/object-tags.json (1.19 MB): 21,252 DIDs mapped to visual keyword arrays, 576 distinct tags. Examples: tree 427, tower 207, statue 32, castle 33, boat 34, ship 10, bridge 9, mountain 111, fire 20, column 113, arch 104, dome 94, roof 316, crystal 735; "ruins" = 0. Only the GUI's ObjectTagIndex reads it; WBT does not.
+  - Served dist vfx/visual_descriptors.jsonl (801 KB, 1,168 DIDs): trunk-canopy 103 (= trees), foliage-pollen 269, gem-sparkle 42, brazier 1, creature-breath 9, rigid-glint 340, tip-flex 404.
+- WBT ontology commands:
+  - scan-ontology {scanGfxObjs?} — a heavy rescan.
+  - query-ontology {category?, scale?, keyword?, objectId?(hex string), limit=50}. It does a case-insensitive substring match on tags plus name, orders by DID and takes `limit`, so results are not ranked. It needs an ontology already loaded through `load`/`-p` auto-restore or `load-ontology-cache {path}`.
+  - ontology-stats, get-object-detail {objectId}, export-ontology {outputPath} (CSV), cache-ontology.
+  - enrich-* commands mutate the ontology.
+- Finding "tree/tower/bridge/statue/fire/ship/ruins" AND where they are placed: possible, but only as an offline join. No single WBT command maps an object to its placements.
+  - (a) Keyword → DIDs: object-tags.json ∪ ontology name/tags ∪ visual-descriptor archetypes ∪ ACE weenie names.
+  - (b) Placements, source 1 — LandBlockInfo statics and buildings via WBT:
+    - list-objects {lbX,lbY}: world coords, x = lbX*192 + local.
+    - query-radius {x,y,radius,z?,includeZ?}: world coords, sorted by distance, with modelFrequency.
+    - scan-building-placements {outputPath?}: writes JSONL {setupId, setupIdHex, lbX, lbY, worldX/Y/Z, numLeaves, portalCount} for every LBI building. Default path is <projectDir>/../building_placements.jsonl; none exists on disk today.
+    - export-raw-world-facts {minX..maxY, outputPath, includeAceDb, includeLinks}.
+  - (b) Placements, source 2 — procedural scenery. Trees and rocks are NOT in LandBlockInfo. They exist only in the dist scenery bake: one JSONL per LB, records {obj_id, x,y,z (LB-local), qw..qz, scale, aabb_min/max, stable_id}. 49,562 of 65,025 LBs are non-empty.
+  - (b) Placements, source 3 — ACE server objects (statues, life stones, portals, fountains): RetailSmoke/ace_spawn_records.jsonl, or the per-LB dist/spawns/*.spawns.jsonl. Join wcid → setupDid via weenie_index.jsonl.
+  - Verified join: scenery 0xB3CC = 9 trunk-canopy + 2 foliage records.
+
+Q2 — describe-landblock
+- Args (JsonCommandProcessor.cs:2127): {lbX 0..254, lbY 0..254, includeFootprints?}.
+- It needs a loaded project (RequireProject). The gazetteer files are only auto-restored by `load` or `-p` preload (CommandEngine.Load :124; Program.cs:115-117):
+  - ontology_cache.jsonl, building_pairings.json, town_gazetteer.json, poi_gazetteer.json, wcid_acpedia_join.jsonl
+  - ace_spawn_records.jsonl, falling back to spawn_gazetteer.json
+  - region_gazetteer.json, weenie_index.jsonl
+- Without them every object is reported "Untagged" and the town/region/POI/spawn fields come back null or empty.
+- Return shape:
+  - top level: {landblock, lbX, lbY, context, terrain, body, relations[], verbal, validation}
+  - context: {regionName, regionDescription, townName, culture, gazetteerNotes, knownPoiCount, knownPois[{title,categories,description}], biome, biomeConfidence, hasRoad, settlementHint, dominantArchitecture, structureCount, dominantTerrainTypes[top 3 {type,name,vertexCount,share}]}
+  - terrain: {heightMin, heightMax, heightRange, cliffCount, vertexCount, summary}
+  - body: {objectTotal, byCategory[], structures[{index, modelId, typeDescription, origin, footprintShape, floorZ, topZ, architecture, stories, playableFloors, roofShape, attributedCellCount, materialTags, nameHint, tags, containedIndices, zBands, footprintWorld?}], looseObjectCount, looseZBands, untaggedIndices, interior{cellCount, zMin, zMax, zRange, zBandCount, cellGraphEdges, exteriorPortals, staticObjectCount}|null, namedObjects[{wcid, weenieName, acpediaTitle, acpediaCategories, acpediaDescription, tier}], spawnCount, spawns[{wcid, name, category, generator, landblockId, cell, weenieType, acpediaTitle, acpediaTier, x,y,z, isSynthetic}]}
+  - validation: {isValid, errorCount, warningCount, infoCount, diagnostics[]}
+  - ObjectIndex exists in the C# result but is NOT serialized.
+- Region assignment: the nearest of 58 town anchors (ResolveRegionForLb :1160). A region's biome overrides the biome inferred from the LB's own terrain (LandblockDescriber.cs:467).
+- Cost per call (not timed):
+  - loads the landblock, terrain and dungeon docs
+  - runs ValidateAll
+  - runs memoized shape and footprint extraction
+  - output is about 48 KB for Holtburg (docs/sample-dist desc/0xA9B4.js)
+- Batching is supported:
+  - emit-static-site already loops DescribeLandblock over every LB into projects/<slug>/desc/<hex>.js, plus search_index.js and dungeons.js.
+  - A compact full-world batch already exists: pipeline_data/reference/atlas_describe_v1.jsonl (18 MB, 38,255 LBs, 2026-04-30). Each row has region, biome, hasRoad, settlementHint, architecture, structureCount, knownPois (on 2,010 LBs), dominantTerrainTypes, townName, and body_structures[{stories, roofShape, tags, attributedCellCount}].
+- Caveat: describe-landblock goes through GetLandblockDocOrCreate / GetOrCreateDocumentAsync. For a landblock that has never been touched, this CREATES AND PERSISTS phantom landblock_XXXX / dungeon_XXXX rows in project.db. Batch against a COPY. /mnt/wbterminal1/tmp/claude-scratch/wbt-testproject is a complete self-contained RetailSmoke copy.
+- Related commands:
+  - describe-floor {lbX, lbY, floor?}, get-dungeon-info
+  - get-terrain-data (81 vertices: heightWorld/terrainType/road/scenery), get-heightmap, get-bulk-heightmap
+  - list-landblocks (heightMin/Max), terrain-info, get-region
+  - render-preview / get-tile (top-down PNG as base64)
+
+Q3 — NAMED PLACES WITH COORDINATES
+- WorldBuilder/Data/Locations.txt, ACViewer format `Name | Type | 0xCELLID [x y z] qw qx qy qz`:
+  - 3,061 lines: 3,002 Dungeon (1,489 inside EnvCells, 1,513 outdoor entrances), 43 Town, 16 POI; 1,941 unique dungeon names.
+  - Each line maps directly to `@teleloc 0xCELLID x y z qw qx qy qz`.
+- HB-sibling scripts/net-review/poi-destinations.json: the 62 @telepoi names (from ace_world points_of_interest joined to portal Destination positions) with cellHex, x/y/z, quaternion and an outdoor flag (50 outdoor, 12 indoor).
+- rynth/ai/tools/towns.js: 57 towns {name, ns, ew}.
+- town_gazetteer.json: 60 towns {lb_key, lb_hex, lb_x, lb_y, culture, notes}.
+- region_gazetteer.json: 13 regions {culture, biome, description}, plus town_to_region and 58 town_anchors.
+- poi_gazetteer.json: 8,292 acpedia POIs over 2,044 LBs {title, lat/lng + dirs, categories, description}; 925 unique place-like titles.
+- ace_spawn_records.jsonl: 725,016 instances over 38,152 LBs. Includes 253 "Life Stone" records (weenieType 25), 4,807 portal records (weenieType 7), 1,236 statue name hits, 146 fountains, plus shrines, totems and altars. Positions are exact LB-local xyz plus quaternion.
+- Dungeon names → landblocks:
+  - Locations.txt
+  - 715 acpedia articles carry a 4-hex dungeon-landblock alias (e.g. Abandoned Mine → 01C9)
+  - ACE `@teledungeon <LBhex | multi-word name>` (substring match on portal-weenie Name, first hit)
+  - WBT has no dungeon names.
+- Lore: rynth/ai/tools/knowledge.acpedia.json (6.0 MB, gitignored bake). 24,488 rows {title, text ≤300 chars (mean 194), aliases (2,619 rows)}; 1,535 carry "Coordinates:", 906 "Location: Dungeon". All 57 towns are covered. About 69% of Locations.txt dungeon names match (757 exact or alias, plus 584 after stripping " Portal"). Rebake longer text with bake_knowledge_acpedia.py --max-chars N --out <new file>; it streams the 1.44 GB history XML.
+- Teleport commands (all need Developer except @tele, which needs Advocate ≥5):
+  - `@teleloc cell x y z [qw qx qy qz]` (AdminCommands.cs:912; the order after xyz is qw qx qy qz)
+  - `@telepoi <name|list>` (:875)
+  - `@teledungeon` (DeveloperCommands.cs:2068)
+  - `@tele 42.1N 33.6E` (AdvocateCommands.cs:156): Z is snapped to terrain or building by AdjustMapCoords; refuses landblocks that are entirely water.
+- Coordinate math: global metres = (deg + 101.95) * 240 (ACE Position.cs:293). In HB, rynth/nav_frame.js provides worldToDeg / worldToOutdoorCell and rynth/nav_file.js provides degToWorld; both are dependency-free and importable from Node.
+
+Q4 — wbt-sidecar (external/holtburger/apps/wbt-sidecar/wbt_sidecar.cjs)
+- What it is: a Node HTTP server on 127.0.0.1:8768 that owns one `dotnet WBT.dll --stdin` child.
+- Endpoints:
+  - GET /health
+  - GET /catalog?filter=
+  - POST /command (the body is the flat WBT command; optional timeoutMs, default 120 s; a timeout kills and respawns the child)
+  - POST /ticket, GET /tickets
+- READ_ALLOW (lines 55-83) includes: info, get-world-info, get-height/heightmap/bulk-heightmap/terrain-data/terrain-layers, terrain-info, list-landblocks, list-objects, describe-landblock, get-dungeon-info, placement-list, get-object-detail, asset-refs, asset-used-by, query-ontology, query-radius, ontology-stats, scene-where-used, get-region, render-preview, get-tile, pvs-visibility-snapshot, the validators, and others.
+- NOT allowed: load, load-ontology-cache, describe-floor, scan-building-placements, export-raw-world-facts, analyze-dungeon-catalog, dump-lb-expectations.
+- Argument screening: out/outputPath-style args are refused; datPath/path/sceneryBakeDir-style args must resolve under WBT_DAT_ROOTS (~/ac_base_dats).
+- Env: WBT_PROJECT is needed so the child preloads a project (for describe and ontology reads). WBT_ALLOW (a comma list widens the allowlist; "all" must never be set for an LLM-facing instance). Also WBT_DENY, WBT_DLL, WBT_DOTNET, WBT_CMD_TIMEOUT.
+- Start: `node apps/wbt-sidecar/wbt_sidecar.cjs` or scripts/wbt-sidecar-boot.sh (idempotent, waits up to 60 s for ready). It is not running now and is not in crontab.
+- Direct alternative: spawn `dotnet WBT.dll --stdin -p <copy>.wbproj` from Node (env DOTNET_ROLL_FORWARD=LatestMajor) and talk lockstep JSON lines.
+  - The preload happens BEFORE the {"command":"ready"} banner. A preload error emits {"command":"startup", "success":false}.
+  - Filter response lines by the echoed `command`, as gen-outdoor-run-plans.py's Wbt class does.
+  - -p RetailSmoke parses a 255 MB spawn JSONL plus the other gazetteer files; its RSS and load time are unmeasured.
+
+Q5 — PROPOSED SITE GAZETTEER (offline, built mostly from existing files; WBT only for enrichment)
+- Record: {id, name, aliases, kind: town|dungeon|poi|landmark(lifestone/statue/portal/fountain)|wilderness, lb, cell, x, y, z, quat, indoor = (cell&0xFFFF) >= 0x100, latlng, teleport strings (teleloc always; telepoi / teledungeon / tele when applicable), region, culture, terrain (dominantTerrainTypes, hasRoad, heightMin/Max, relief, waterShare), notable (archetype counts such as trees, object-tags vocabulary present, structures with stories/roofShape, named spawns), lore (acpedia title and text), visualDescriptors}.
+- Reuse directly:
+  - Locations.txt, poi-destinations.json, town and region gazetteers, towns.js
+  - poi_gazetteer (filtered to Town/Major POI/Minor POI/Geographic Area/Dungeon/Historical Site/Settlement/Location/Landmark, de-duplicated)
+  - ace_spawn_records landmarks
+  - atlas_describe_v1 terrain/biome for wilderness clustering
+  - dist scenery × visual_descriptors (tree density, AABBs), object-tags.json, the acpedia corpus
+- Must generate:
+  - outdoor cell index where spawn cell == 0
+  - z / elevation (get-terrain-data on a project copy, or use @tele, which snaps Z)
+  - fresh describe-landblock for shortlisted landblocks only
+  - wilderness representatives (cluster landblocks by terrain type, relief and scenery density, skipping all-water)
+  - optionally a longer lore bake
+
+Q6 — AI INFRA FOR A NODE-SIDE JEV CLIENT
+Claude side: no API calls. The Claude Code session drives WBT, CDP and files itself. Only JEV makes API calls.
+- Keys:
+  - Browser: localStorage `holtburger_ai_key_v1` (llm_client.js:16 KEY_STORAGE; also used by bot.js:882 and boot.js:503).
+  - Node scripts: env OPENROUTER_KEY (rynth_guildmoot.cjs:27, rynth_ai_livesoak.cjs:22).
+  - No key env vars are set in this shell.
+- LlmClient (llm_client.js:82):
+  - POST {baseUrl}/chat/completions with Bearer auth, optional HTTP-Referer / X-Title, optional `reasoning` and `provider` pass-through.
+  - AbortController timeout, default 60 s.
+  - Errors carry .kind ∈ {auth, rate, server, network, timeout, bad-response, length}.
+  - Exactly one retry on rate/server/network. A "length" kind retries at double max_tokens (capped at 32k). Timeout and auth are not retried.
+  - Reports billedUsage and spend counters; extractJson tolerates fences and surrounding prose.
+- providers.js: PROVIDERS catalog with $/Mtok and `estimated:true`, estimateCost({model, promptTokens, completionTokens}) → {usd, known}, estimateTokens (chars/4), providerForBaseUrl.
+- director.js budget patterns: maxCallsPerHour, maxSpendPerHourUsd ($1 default), an inter-call spacing floor, and self-disable after 5 consecutive errors.
+- Testing: mock_llm_server.cjs is an OpenAI-shaped mock with scripted replies in sequence, CORS, ephemeral port, `--selftest`, and exports startMockLlmServer({port, script}). rynth/ai/eval/scenarios.js is an offline harness with canned replies. Tests import ESM modules via pathToFileURL inside .cjs files.
+- Gap: nothing in the repo references JEV, TypeSafe, a "Decisions API", or response_format/json_schema. SPEC.md calls for plain chat completions with a strict JSON reply contract and no tool-calling.
+
+## APIS
+- describe-landblock [WorldBuilder.Terminal/JsonCommandProcessor.cs:2127]  sig={"command":"describe-landblock","lbX":0..254,"lbY":0..254,"includeFootprints"?:bool} :: Living-Atlas per-LB description: context (region/town/culture/knownPois/biome/hasRoad/dominantTerrainTypes), terrain (height min/max/range, cliffs, summary), body (structures with stories/roofShape/footprints, interior, namedObjects, spawns), relations, verbal, validation. Requires a loaded project; persists phantom landblock/dungeon docs into project.db for untouched LBs; ObjectIndex is not serialized.
+- CommandEngine.DescribeLandblock / DescribeLandblockFromDocs [WorldBuilder.Terminal/CommandEngine.cs:916]  sig=LandblockDescriptionResult DescribeLandblock(uint lbX, uint lbY) :: Uses GetLandblockDoc (= GetLandblockDocOrCreate, :11112) and GetDungeonDoc (GetOrCreateDocumentAsync, :11115), runs ValidateAll, resolves region (:1160 nearest town anchor), town/poi/spawn gazetteers, then LandblockDescriber.Describe.
+- LandblockDescriber.Describe [WorldBuilder.Terminal/LandblockDescriber.cs:276]  sig=static LandblockDescriptionResult Describe(ushort lbKey, LandblockDocument, TerrainDocument, DungeonDocument?, IOntologyService, float[] heightTable, IReadOnlyDictionary<int,string>? terrainTypeNames, IDatReaderWriter?, TownContext?, List<NamedPoi>?, IReadOnlyDictionary<int,AcpediaMatch>?, List<SpawnRecord>?, ValidationOverlay?, RegionContext?) :: Pure derivation: Structure-category objects become StructureBlocks (footprint containment, shape analysis), InferBiome (:615) from terrain type NAMES, ComposeVerbal (:1081). Region biome overrides LB biome (:467).
+- list-objects [WorldBuilder.Terminal/JsonCommandProcessor.cs:2115]  sig={"command":"list-objects","lbX","lbY"} :: LandBlockInfo static objects + buildings with modelId, type Setup|GfxObj, x/y/z in WORLD coords (lb*192+local), orientation, scale; found:false when no statics.
+- query-radius [WorldBuilder.Terminal/JsonCommandProcessor.cs:2653]  sig={"command":"query-radius","x","y","radius","z"?,"includeZ"?} :: World-coord radius search over LB static objects; sorted by distance; returns density + modelFrequency. Engine CommandEngine.cs:1531.
+- query-ontology [WorldBuilder.Terminal/JsonCommandProcessor.cs:2953]  sig={"command":"query-ontology","category"?,"scale"?,"keyword"?,"objectId"?:"0x..","limit"?:50} :: Substring keyword match on tags+name, exact category/scale filter; returns objectId, datType, category, scale, source, name, weenieClassId, level, maxDimension, aspectRatio, partCount, polyCount, tags. Throws if ontology not loaded (CommandEngine.cs:2240).
+- OntologyService.Search [WorldBuilder.Shared/Services/OntologyService.cs:47]  sig=IEnumerable<OntologyEntry> Search(string? category=null, string? scale=null, string? keyword=null, int limit=100) :: Case-insensitive substring on Tags/Name, OrderBy(ObjectId).Take(limit) — unranked.
+- ontology-stats / get-object-detail / cache-ontology / load-ontology-cache [WorldBuilder.Terminal/JsonCommandProcessor.cs:2982]  sig={"command":"ontology-stats"} | {"command":"get-object-detail","objectId":"0x.."} | {"command":"cache-ontology","outputPath"?} | {"command":"load-ontology-cache","inputPath"?|"path"?} :: Ontology coverage stats; per-DID geometry+surfaces+ontology category/scale/tags (:3036); persist/restore JSONL cache (:3521/:3531).
+- scan-building-placements [WorldBuilder.Terminal/CommandEngine.cs:3812]  sig={"command":"scan-building-placements","outputPath"?} :: Walks all 255x255 LandBlockInfo records, writes JSONL {setupId, setupIdHex, lbX, lbY, worldX, worldY, worldZ, numLeaves, portalCount} for every building (default <projectDir>/../building_placements.jsonl). Handler JsonCommandProcessor.cs:3567. Not sidecar-allowed.
+- export-raw-world-facts [WorldBuilder.Terminal/JsonCommandProcessor.cs:4431]  sig={"command":"export-raw-world-facts","minX"?,"minY"?,"maxX"?,"maxY"?,"outputPath"?,"includeAceDb"?,"includeLinks"?} :: Bulk JSONL of DAT statics (+optional ACE instances/encounters/house portals) per LB window; engine CommandEngine.cs:6218 (default file raw_world_facts.jsonl). Writes a file; not sidecar-allowed.
+- get-terrain-data / get-heightmap / list-landblocks [WorldBuilder.Terminal/JsonCommandProcessor.cs:2099]  sig={"command":"get-terrain-data","lbX","lbY"} | {"command":"list-landblocks","minX"?..,"limit"?:500} :: 81 vertices {index, gridX, gridY, heightIndex, heightWorld, terrainType, road, scenery} per LB (elevation/biome source); list-landblocks (:2823) returns lb heightMin/Max.
+- get-dungeon-info / describe-floor [WorldBuilder.Terminal/JsonCommandProcessor.cs:2702]  sig={"command":"get-dungeon-info","lbX","lbY"} | {"command":"describe-floor","lbX","lbY","floor"?} :: Dungeon cells (cellNumber, environmentId, origin LB-local, portals[otherCellId,polygonId], staticObjects); describe-floor (:1674) per-Z-band verbal summary. describe-floor not in sidecar allowlist.
+- load (+ auto-restore) [WorldBuilder.Terminal/CommandEngine.cs:124]  sig={"command":"load","path":"<x>.wbproj"} or CLI --stdin -p <x>.wbproj :: Loads project and auto-restores ontology_cache.jsonl, building_pairings.json, town_gazetteer.json, poi_gazetteer.json, wcid_acpedia_join.jsonl, ace_spawn_records.jsonl (fallback spawn_gazetteer.json), region_gazetteer.json, weenie_index.jsonl from the project dir; response autoRestore{...} counts.
+- ACE @teleloc [/home/wbterminal/ace-server/Source/ACE.Server/Command/Handlers/AdminCommands.cs:912]  sig=@teleloc <cellHex ±0x> [x y z] (qw qx qy qz) :: Exact teleport; Developer. Bracketed xyz accepted; quaternion order after xyz is qw qx qy qz (Position ctor Position.cs:220 takes rx,ry,rz,rw).
+- ACE @telepoi / @teledungeon / @tele [/home/wbterminal/ace-server/Source/ACE.Server/Command/Handlers/AdminCommands.cs:875]  sig=@telepoi <name|list> · @teledungeon <LBhex | multi-word name> (DeveloperCommands.cs:2068) · @tele <ns> <ew> e.g. 42.1N 33.6E (AdvocateCommands.cs:156) :: POI → portal weenie Destination; teledungeon picks first portal destination in LB or first portal whose Name Contains() the words (DeveloperCommands.cs:2150); @tele converts lat/lng (CommandParameterHelpers.cs:559, Position.cs:293) and AdjustMapCoords snaps Z to terrain/building (PositionExtensions.cs:240), refuses all-water LBs.
+- nav_frame.js coordinate helpers [rynth/nav_frame.js:45]  sig=worldToDeg(wx,wy)->{ns,ew}; locDegrees(cellId,x,y); worldToOutdoorCell(wx,wy,z=0)->{lb(full objCellId),x,y,z} (:57); worldX/worldY (:17/:20) :: Dependency-free world-frame math; inverse degToWorld(ew,ns) lives in rynth/nav_file.js:135 (MAP_SIZE_M :149). Use to build @teleloc cells from lat/lng and to fix cell==0 spawn rows.
+- LlmClient [rynth/ai/llm_client.js:82]  sig=new LlmClient({apiKey, baseUrl='https://openrouter.ai/api/v1', model='openai/gpt-oss-120b', referer, title, timeoutMs=60000, maxTokens=1024, reasoning, provider, log}); async chat(messages,{model,maxTokens,temperature=0.4}) -> {text,json,usage,billedUsage,model,ms} :: OpenAI-compatible client; typed error .kind {auth,rate,server,network,timeout,bad-response,length}; 1 retry on rate/server/network, length->double max_tokens (cap 32k); extractJson (:23); static loadKey/saveKey/clearKey via localStorage (no-op under node).
+- providers.js cost catalog [rynth/ai/providers.js:91]  sig=estimateCost({model,promptTokens,completionTokens})->{usd,known}; estimateTokens(text); providerForBaseUrl(url); modelsFor(id); PROVIDERS (:25) :: Static deep-frozen provider/model price table (USD per Mtok, estimated:true convention); pure functions, no network.
+- mock_llm_server.cjs [rynth/ai/mock_llm_server.cjs:83]  sig=startMockLlmServer({port=8899, host, script:[string], log}) -> {server, port, url, close()}; createMockLlmServer (:38); CLI --port= --selftest :: OpenAI-shaped chat.completion mock serving scripted contents in sequence (last repeats), usage tokens, full CORS; any <prefix>/chat/completions.
+- FileKnowledgeProvider / KnowledgeBase [rynth/ai/tools/knowledge.js:66]  sig=new FileKnowledgeProvider({path|entries}).search(query,limit=3)->[{title,summary,score,url?}]; new KnowledgeBase({provider}).lookup(query,{limit}) (:156) :: Offline ranked lookup (exact title > title substring > all-words title > alias > body > partial) over knowledge.acpedia.json; node:fs lazy load; never throws.
+- bake_knowledge_acpedia.py [rynth/ai/tools/bake_knowledge_acpedia.py:211]  sig=python3 bake_knowledge_acpedia.py [--history XML] [--index jsonl] [--out path] [--max-chars 300] [--min-chars 40] :: Streams the 1.44 GB acpedia history XML, latest revision per ns=0 page, infobox facts (Coordinates/Location/Route...) + cleaned prose -> [{title,text,aliases?}].
+- WbtOracle [rynth/ai/tools/wbt.js:42]  sig=new WbtOracle({endpoint='http://127.0.0.1:8768', fetchFn}); health(); catalog(filter); query(cmdObj); fileTicket(t) :: Never-throwing fetch client for the wbt-sidecar.
+- wbt-sidecar HTTP API [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/wbt-sidecar/wbt_sidecar.cjs:406]  sig=GET /health · GET /catalog?filter= · POST /command {command,...,timeoutMs?} · POST /ticket · GET /tickets?limit= :: One serialized WBT --stdin child (WbtProc :212, respawn on timeout/crash), READ_ALLOW (:55-83), arg screening (:106-137), WBT_PROJECT preload (:301).
+- indoor_router.js dungeon graph [rynth/indoor_router.js:1268]  sig=buildGraphFromWasm(sessionHandle, depth=0, opts) ; findPath(graph, from, to) (:519) ; toLegs(graph, path) (:620) ; buildPatrolRoute(graph, start) (:938) ; buildStitchedGraphFromWasm(lbIds) (:1235) :: EnvCell portal-record graph {cellId -> {pos world-frame, neighbors, exits, doors}}; A* path and Euler patrol loop — a basis for smooth dungeon camera paths.
+- WBT lockstep Python client (pattern) [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/gen-outdoor-run-plans.py:65]  sig=class Wbt(dll, wbproj): ask(obj, expect_command) :: Popen dotnet WBT --stdin -p <wbproj>; skips banner/preload lines and matches responses by echoed command; caches per-LB get-terrain-data + list-objects; docstring gives @teleloc heading quat qw=cos(θ/2), qz=-sin(θ/2).
+- WeenieIndexEntry [WorldBuilder.Shared/Lib/WeenieIndex.cs:32]  sig=record WeenieIndexEntry(int Wcid, string ClassName, int WeenieType, bool IsServerManaged, bool IsNpc, string DisplayName, string? Title, uint? SetupDid, uint? IconDid, uint? PaletteBaseDid, int? CreatureType, int? Level, WeenieSource SourceMask, uint? ClothingBaseDid, int? PaletteTemplate, string? Inscription) :: Canonical wcid→setup identity (weenie_index.jsonl); the join key from ACE spawns to models/ontology.
+
+## SEAMS
+- [/home/wbterminal/WorldBuilder-ACME-Edition/WorldBuilder/Data/Locations.txt:1] Offline site-gazetteer builder (new Node/Python script, reads only existing files) producing film_gazetteer.jsonl => Searchable list the agent or JEV scores lyrics against. Joins Locations.txt, poi-destinations.json, town/region gazetteers, towns.js, the filtered poi_gazetteer, life stones/statues/portals/fountains from ace_spawn_records, atlas_describe_v1 terrain/biome, scenery bake × visual_descriptors (tree density, AABBs), object-tags vocabulary and acpedia lore. Every row carries a ready teleport string.
+- [WorldBuilder.Terminal/JsonCommandProcessor.cs:84] Direct WBT spawn from Node: `dotnet WorldBuilder.Terminal.dll --stdin -p <copy>.wbproj` (env DOTNET_ROLL_FORWARD=LatestMajor). The ready banner prints after the preload. => Enrich shortlisted sites: describe-landblock (structures, spawns, verbal), get-terrain-data (elevation), get-dungeon-info, describe-floor, query-radius for obstruction. Run one process at a time against the scratch copy /mnt/wbterminal1/tmp/claude-scratch/wbt-testproject so phantom-doc writes stay off RetailSmoke.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/wbt-sidecar/wbt_sidecar.cjs:55] wbt-sidecar instance for the film agent: WBT_PROJECT=<copy>.wbproj and WBT_ALLOW=describe-floor (comma list, never 'all'), on a separate port => HTTP oracle reachable from a browser page or Node during a shoot (describe-landblock, query-radius, render-preview for scouting thumbnails), reusing WbtOracle.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/multi-agent/teleport-hop-probe.mjs:20] In-page teleport and pose: window.__sessionHandle.sendChat('@teleloc 0x… x y z qw qx qy qz'); pose via __sessionHandle.getLocalPlayerPose() (call .free()) => Execute the gazetteer teleport string before each shot. Choose @telepoi, @teledungeon, @tele or @teleloc by site kind.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/battery-telepoi.mjs:454] Scene-settle detector: terrainBakedLbs.size, staticsGroup.children.length and cellContainers3d.size unchanged across 3×500 ms, with a work/floor guard => Wait for the scene to finish streaming after a teleport before recording, so no pop-in appears on camera.
+- [rynth/indoor_router.js:1268] Dungeon cell graph (indoor_router.js), plus cell_footprints.jsonl (per-EnvCell polygon, zRange, portals with wallSpan) => Smooth dungeon fly-throughs: doorway midpoints from wallSpan become spline control points; the A*/patrol route gives cell order; zRange gives ceiling clearance.
+- [/home/wbterminal/hb-serve/dist/current/scenery/0xB3CC.scenery.jsonl:] Obstruction data: scenery bake aabb_min/max per placement, ontology bMin/bMax per DID, events bake emitter anchors, describe-landblock structure footprints (includeFootprints) => Camera collision and occlusion avoidance around trees, buildings and particle emitters without a browser query.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/gen-outdoor-run-plans.py:38] @teleloc heading quaternion convention (qw=cos(θ/2), qz=−sin(θ/2) for compass heading θ clockwise from north) => Spawn the character or anchor facing the subject, so the initial camera framing is deterministic.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/outdoor-run-plans.json:] outdoor-run-plans.json: clear corridors (water, slope and statics checked) for 50 outdoor POIs => Candidate straight drone flyover or dolly lines out of towns.
+- [rynth/ai/tools/knowledge.js:66] Lore lookup via FileKnowledgeProvider over knowledge.acpedia.json, or a longer re-bake to a NEW file => Narration and lyric matching per site (town and dungeon descriptions, coordinates infobox).
+- [rynth/ai/llm_client.js:82] JEV client built from the LlmClient error taxonomy, providers.js cost entry, director budget caps, mock_llm_server scripted replies and eval/scenarios.js => Typed, fast decisions (pick a shot candidate, score lyric↔site) with $/hr caps, offline tests, and no browser exposure of the key.
+- [WorldBuilder.Terminal/JsonCommandProcessor.cs:313] render-preview / get-tile: top-down PNG as base64 => Cheap site-scouting thumbnails and storyboard maps for the agent and the owner before any GPU run.
+- [/home/wbterminal/ace-server/Source/ACE.Server/Command/Handlers/DeveloperCommands.cs:2168] ACE @dungeonname command (Developer) => Confirm the dungeon name for the current landblock while shooting.
+
+## HAZARDS
+- [WorldBuilder.Shared/Documents/DocumentManager.cs:] describe-landblock (and dump-lb-expectations) on a never-touched landblock creates and PERSISTS landblock_XXXX / dungeon_XXXX documents in project.db (GetLandblockDocOrCreate, GetOrCreateDocumentAsync → DocumentStorageService.CreateDocumentAsync and UpdateDocumentAsync). || mitig: Batch only against a project copy (e.g. /mnt/wbterminal1/tmp/claude-scratch/wbt-testproject). Never share RetailSmoke's project.db between concurrent WBT processes.
+- [WorldBuilder.Terminal/CommandEngine.cs:2245] Without `load`/`-p`, describe-landblock reports every object as Untagged and town/region/POI/spawn context as null. query-ontology and ontology-stats throw 'Ontology has not been scanned yet'. || mitig: Always start WBT with -p <wbproj> (or the sidecar with WBT_PROJECT). Check the autoRestore counts in the load/startup response.
+- [WorldBuilder.Terminal/LandblockDescriber.cs:467] Region assignment is nearest-of-58 town anchors (Voronoi). The region biome then overrides the biome inferred from the landblock's terrain (e.g. deep-sea LB (0,2) is labeled 'Viamontian Lands'/barren). || mitig: For per-site visuals use dominantTerrainTypes, waterShare and relief rather than context.biome.
+- [WorldBuilder.Shared/Services/OntologyService.cs:47] Ontology semantics are noisy. Categories mislabel (Bronze Statue → Creature, Tower Shield → Structure). Setup 0x02000001 is shared by hundreds of weenies ('Corpse'). GfxObj names are inherited from a parent setup. Procedural scenery Setups are unnamed. materialTags are empty. query-ontology is unranked (lowest DID first, default limit 50). || mitig: Use object-tags.json for visual nouns and visual_descriptors archetypes (trunk-canopy = trees) for scenery. Treat ontology names as hints only.
+- [:] poi_gazetteer and acpedia annotations are noisy:
+- knownPois lists every article mentioning the landblock (Holtburg: 75, including spell gems and quests).
+- Descriptions are raw wikitext ('== Notes == }}'); 59% of wcid_acpedia_join descriptions are junk.
+- lat/lng parse errors and duplicates: 186 entries mismatch their LB key; 371 titles span more than one landblock. || mitig: Filter by category (Town/Major POI/Minor POI/Geographic Area/Dungeon/Historical Site/Settlement/Location/Landmark). De-duplicate by title, recomputing the landblock from lat/lng. Strip wikitext.
+- [:] Outdoor ACE spawn rows often have cell = 0 (54 of 119 rows in Holtburg 0xA9B4). Positions are landblock-local and landblockId is the 16-bit key. || mitig: Rebuild the full cell via worldToOutdoorCell(lbX*192+x, lbY*192+y) (cell index = 1 + floor(x/24)*8 + floor(y/24)) before emitting @teleloc.
+- [:] @teleloc lands exactly at the given z: a wrong z leaves the character mid-air or underground, and pose.landblockId can lag while meshes re-stream (MEMORY). A ±1 m teleloc z offset is unverified. || mitig: For outdoor sites prefer @tele <ns> <ew> (the server snaps Z to terrain or building) or take z from get-terrain-data. Use Locations.txt / poi-destinations.json z for indoor sites.
+- [/home/wbterminal/ace-server/Source/ACE.Server/Command/Handlers/DeveloperCommands.cs:2068] @teledungeon tries a single-token argument as hex first (Convert.ToUInt32(param,16)), so a one-word name that is valid hex is treated as a landblock. Name search returns the first portal whose Name contains the words. || mitig: Pass the 4-hex landblock (from Locations.txt or the acpedia alias) or a multi-word name. Better still, use @teleloc with Locations.txt coordinates.
+- [/home/wbterminal/WorldBuilder-ACME-Edition/scripts/town_tele_coords.py:] scripts/town_tele_coords.py uses the approximation NS/EW = 0.8*lb − 102.4. The exact value at a landblock's origin is 0.8*lb − 101.95, so the script is about 0.45° (~108 m) off. || mitig: Use the exact (deg+101.95)*240 math (ACE Position.cs:293 / nav_frame.js worldToDeg).
+- [/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/wbt-sidecar/wbt_sidecar.cjs:55] The wbt-sidecar is not running and not in crontab. Its allowlist excludes load, load-ontology-cache, describe-floor, scan-building-placements, export-raw-world-facts, analyze-dungeon-catalog and dump-lb-expectations. Any out/outputPath argument is refused, and sceneryBakeDir/datPath must sit under ~/ac_base_dats. WBT_ALLOW=all exposes all mutating commands to whatever talks to it. || mitig: Run a dedicated instance with WBT_PROJECT plus a minimal WBT_ALLOW comma list, or spawn WBT directly for batch jobs.
+- [:] `-p RetailSmoke` preloads a 255 MB ace_spawn_records.jsonl (725k rows) plus the other gazetteer files. RSS and startup time are unmeasured on an 8 GB laptop (free ≈3.6 GB available during this run). || mitig: Measure once as the single heavy job (free -m ≥2.5 GB first, capped-build per CLAUDE.md). Never run several WBT preloads at once.
+- [WorldBuilder.Terminal/JsonCommandProcessor.cs:2273] dump-lb-expectations defaults sceneryBakeDir/eventsBakeDir to /mnt/wbterminal1/holtburger-dist-v2/{scenery,events}/, which a NOTE file marks as a frozen, no-longer-served snapshot. || mitig: Pass ~/hb-serve/dist/current/{scenery,events}/ explicitly (only possible without the sidecar's path pinning).
+- [docs/url-flags.md:1688] Two scenery bakes exist. The shipped default dist/scenery (ace-compat) disagrees with retail/ACE tree placement. ?sceneryBake=retail (opt-in, 2026-10-13 A/B, symlinked to the HDD) has +17.9% placements around Holtburg. || mitig: Build tree and obstruction data from the same scenery directory the filming client loads (scene3d/statics.js:706), and pin the flag per shoot.
+- [:] knowledge.acpedia.json is a gitignored bake with text capped at 300 chars (mean 194). The acpedia dump dates from 2021, so it includes Retired/Live Event content. The director in the page also fetches this file. || mitig: Re-bake longer lore to a NEW output path (--out). Never overwrite the director's corpus. Flag retired categories.
+- [:] pipeline_data/heightmaps/retail_heightmaps.jsonl is a Git LFS pointer (133 B), not real data. || mitig: Get elevations via WBT get-terrain-data / get-bulk-heightmap on a project copy.
+- [:] No JEV / TypeSafe / Decisions API / response_format code exists in the repo. LlmClient is plain chat completions with tolerant JSON extraction, and its localStorage key path is browser-only. || mitig: New Node client. Read the key from an env var (precedent: OPENROUTER_KEY). Never place the key in page URLs or in localStorage of a page reachable over CDP. Add a providers.js price entry so estimateCost is not known:false.
+- [:] Owner rule (memory no-agent-eyetests.md): agent-driven live-look or capture sessions only when the owner requests that run; never on the 8 GB laptop (SwiftShader wedges Chrome's GPU process). On the 1070, run off-screen with --mute-audio and kill test Chrome by --user-data-dir. || mitig: Do all gazetteer work offline. Batch GPU capture on the 1070 per the fleet runbooks.
+- [:] Parallel-agent rule: agents may read, edit and run TARGETED single tests only (node test_x.mjs). They must NOT run the full JS gate, cargo, wasm-pack or browsers. The orchestrator runs the full gate and builds ONCE, after merging, one at a time. || mitig: Put this rule verbatim in every agent prompt (~/CLAUDE.md).
+- [/mnt/wbterminal2/stream/go_live.sh:] ffmpeg PATH trap on the laptop stream rig: bare `ffmpeg` resolves to ~/bin/ffmpeg (static, no VAAPI). /usr/bin/ffmpeg has h264_vaapi with CQP-only rate control. || mitig: Call /usr/bin/ffmpeg by absolute path if any recording reuses that rig.
+
+## DATA
+- {'name': 'Ontology cache (live WBT ontology)', 'location': '/home/wbterminal/projects/RetailSmoke/ontology_cache.jsonl (copy: /mnt/wbterminal1/tmp/claude-scratch/wbt-testproject/ontology_cache.jsonl)', 'format': 'JSONL, UTF-8 BOM, 8.08 MB, 21,253 rows', 'notes': 'Row: {cacheVersion:2, id(decimal), type, bMin, bMax, maxDim, partCount, polyCount, aspectRatio, scale, category, classSource, tags, vertexCount, name?, architecture?, biome?, behavior?, weenieClassId?, weenieType?, itemType?, level?, creatureType?, difficultyTier?, creatureFamilyName?}. No footprints or materialTags.'}
+- {'name': 'Unified / canonical ontology enrichment', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/pipeline_data/enrichment/unified_ontology.json + canonical_enrichment.json', 'format': 'JSON 32 MB (by_setup_did/by_gfx_obj_id/by_wcid) + JSON 9.4 MB (entries[] by wcid)', 'notes': 'names_all, parent_setups, best_parent_setup, is_building/is_scenery, types, biomes, tags per wcid.'}
+- {'name': 'Visual keyword index', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/WorldBuilder/Data/object-tags.json', 'format': 'JSON {"0100XXXX": [keywords]} 1.19 MB, 21,252 DIDs, 576 tags', 'notes': 'Best lyric-noun → model mapping (tree 427, tower 207, statue 32, castle 33, boat 34, mountain 111). Used by the GUI only; read it directly.'}
+- {'name': 'Visual descriptors (VFX archetypes)', 'location': '/home/wbterminal/hb-serve/dist/current/vfx/visual_descriptors.jsonl (also /mnt/wbterminal2/holtburger-dist/vfx/)', 'format': "JSONL {did:'0x…', archetype, confidence, source, components[], modifiers, signals}, 1,168 rows, 801 KB", 'notes': 'trunk-canopy (103) = trees; foliage-pollen, brazier, gem-sparkle, creature-breath. Rules: WorldBuilder.Terminal/VfxData/visual_archetype_rules.jsonl.'}
+- {'name': 'Locations.txt (ACViewer location DB)', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/WorldBuilder/Data/Locations.txt', 'format': 'Text, 3,061 lines `Name | Type | 0xCELLID [x y z] qw qx qy qz`', 'notes': '3,002 Dungeon (1,489 indoor / 1,513 outdoor), 43 Town, 16 POI; @teleloc-ready. Parsed by WorldBuilder/Lib/LocationDatabase.cs.'}
+- {'name': '@telepoi destinations', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/poi-destinations.json', 'format': 'JSON array of 62 {name, cell, cellHex, x, y, z, qw, qx, qy, qz, outdoor}', 'notes': 'Exact server POI list (points_of_interest ⨝ portal Destination); 50 outdoor.'}
+- {'name': 'Town / region / POI gazetteers', 'location': '/home/wbterminal/projects/RetailSmoke/{town_gazetteer.json, region_gazetteer.json, poi_gazetteer.json}', 'format': 'JSON: 60 towns {lb_key, lb_hex, lb_x, lb_y, culture, source, notes}; {regions{13: culture, biome, description}, town_to_region, town_anchors[58]}; {"0xLLLL": [{title, lat, lat_dir, lng, lng_dir, categories, description, src}]} 2.75 MB, 8,292 POIs', 'notes': 'POI descriptions are raw wikitext. Two towns have a null LB.'}
+- {'name': 'towns.js', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/rynth/ai/tools/towns.js', 'format': 'ESM export TOWNS [{name, ns, ew}] × 57', 'notes': 'From external/DerethMaps/coords.json.'}
+- {'name': 'ACE spawn records (server-managed placements)', 'location': '/home/wbterminal/projects/RetailSmoke/ace_spawn_records.jsonl; per-LB copies /home/wbterminal/hb-serve/dist/current/spawns/0xLLLL.spawns.jsonl', 'format': 'JSONL 255 MB, 725,016 rows {wcid, name, category, generator, landblockId(16-bit), cell, x, y, z (LB-local), weenieType, isServerManaged, worldX, worldY, qw, qx, qy, qz}', 'notes': 'Life stones (weenieType 25), portals (7), statues, fountains, doors (19), NPCs. Outdoor cell is often 0.'}
+- {'name': 'Weenie index', 'location': '/home/wbterminal/projects/RetailSmoke/weenie_index.jsonl', 'format': 'JSONL 9.3 MB, 43,911 rows {wcid, className, weenieType, isServerManaged, isNpc, displayName, title?, setupDid, iconDid, paletteBaseDid, creatureType, level, sourceMask}', 'notes': 'wcid → setupDid join. No inscriptions in this ingest. Also npc_gazetteer.json (4,725), creature_gazetteer.json (7,830), housing_gazetteer.json (861) in the same dir.'}
+- {'name': 'Procedural scenery bake', 'location': '/home/wbterminal/hb-serve/dist/current/scenery/0xLLLL.scenery.jsonl (retail A/B: dist/current/scenery-retail → /mnt/wbterminal2/hb-scenery-ab-2026-10-13/retail-full-v2)', 'format': 'Per-LB JSONL {obj_id, x, y, z, qw..qz, scale, source_cell_x/y, source_obj_idx, default_script_id, stable_id, aabb_min_x..aabb_max_z} (LB-local)', 'notes': '65,025 files, 49,562 non-empty; trees and rocks are only here.'}
+- {'name': 'Event bake (ambient sound + particle emitters)', 'location': '/home/wbterminal/hb-serve/dist/current/events/0xLLLL.events.jsonl', 'format': 'Per-LB JSONL: ambient {terrain_type, scene_type, ambient_sounds[]} | physics_script_particle {default_script_id, emitter_id, part_index, anchor}', 'notes': 'Particle emitters that can obstruct shots.'}
+- {'name': 'Compact full-world describe', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/pipeline_data/reference/atlas_describe_v1.jsonl', 'format': 'JSONL 18.3 MB, 38,255 rows {lbX, lbY, context{regionName, biome, biomeConfidence, hasRoad, settlementHint?, dominantArchitecture, structureCount, knownPoiCount, knownPois?, dominantTerrainTypes[], townName?}, body_structures[{stories, roofShape, tags, attributedCellCount}]}', 'notes': '2026-04-30 snapshot. Ready base for wilderness clustering. No heights or spawns.'}
+- {'name': 'Acpedia knowledge corpus', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/rynth/ai/tools/knowledge.acpedia.json', 'format': 'JSON array 6.0 MB, 24,488 {title, text≤300, aliases?}', 'notes': "1,535 with Coordinates, 906 'Location: Dungeon', 715 with a 4-hex dungeon LB alias. Source dump: external/acpedia/acpediaorg-20210615-wikidump/acpediaorg-20210615-history.xml (1.44 GB) + acpedia_index.jsonl (37,571 rows). knowledge.grounded.json holds 6 hand-verified academy facts."}
+- {'name': 'Dungeon cell footprints', 'location': '/home/wbterminal/projects/RetailSmoke/cell_footprints.jsonl', 'format': 'JSONL 253 MB, 729,832 rows {cellId, envCellId, cellStructure, polygon[[x,y]], zRange[min,max], portals[{toCellId, wallSpan}], synthetic}', 'notes': 'Offline dungeon geometry for fly-through planning.'}
+- {'name': 'Outdoor run corridors', 'location': '/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/net-review/outdoor-run-plans.json', 'format': 'JSON {generated, params, plans[50]}', 'notes': 'Clear-heading corridors per outdoor POI (many marked usable:false).'}
+- {'name': 'VTank community routes', 'location': '/mnt/wbterminal2/met-corpus/routes-json/', 'format': '49 hb-route-v1 JSON files (world-frame metres)', 'notes': 'Low priority. Known walkable paths for dolly or follow shots.'}
+- {'name': 'RetailSmoke project copy for batch WBT work', 'location': '/mnt/wbterminal1/tmp/claude-scratch/wbt-testproject/RetailSmoke.wbproj', 'format': '.wbproj + project.db (220 MB) + dats/base + all gazetteer files', 'notes': 'Self-contained paths. Safe target for describe batches that write phantom docs. On a USB HDD, so seeks are slow.'}
+
+## RECS
+- Build film_gazetteer.jsonl OFFLINE first, with no WBT and no browser:
+- named sites from Locations.txt (dungeons/towns/POIs with exact @teleloc), poi-destinations.json (@telepoi names), towns.js and town/region gazetteers (culture, notes, region descriptions)
+- poi_gazetteer filtered to place categories and de-duplicated
+- landmarks from ace_spawn_records: life stones (weenieType 25), statues, fountains, portals, with cell fixed via worldToOutdoorCell
+- per-landblock terrain/biome from atlas_describe_v1
+- tree density and obstruction AABBs from the scenery bake × visual_descriptors (trunk-canopy)
+- notable-object keywords from object-tags.json joined over LB statics/scenery DIDs
+- lore from knowledge.acpedia.json (exact title, alias, or name with ' Portal' stripped)
+- Teleport selection per site kind:
+- town/POI: @telepoi <name> when listed
+- dungeon: @teleloc from Locations.txt (indoor EnvCell), falling back to @teledungeon <LBhex>
+- outdoor landmark/wilderness: @tele <ns> <ew> (server snaps Z), or @teleloc with z from get-terrain-data
+- always attach a heading quaternion (qw=cos θ/2, qz=−sin θ/2)
+- Use WBT only to enrich a shortlist (tens to hundreds of landblocks): describe-landblock, get-terrain-data, get-dungeon-info, describe-floor, query-radius. Run it via direct `--stdin -p` spawn against the scratch project copy, one process at a time, capped per ~/CLAUDE.md. Measure the -p preload RSS/time once before planning any full-world batch.
+- If the film agent needs a live oracle, run a SEPARATE wbt-sidecar instance (own port, WBT_PROJECT=<copy>, WBT_ALLOW listing only the extra read commands such as describe-floor). Never use WBT_ALLOW=all, and never reuse the director's instance.
+- Lyric→site matching flow:
+- the Claude session (subscription) shortlists by lexical and feature filters over the gazetteer (names, aliases, culture, region description, terrain words, object-tag nouns, lore text)
+- JEV scores the top-K with typed outputs
+- no embedding API is needed on the Claude side; if embeddings are wanted, they would have to come from the JEV/OpenRouter key
+- JEV Node client:
+- clone the LlmClient shape: typed .kind errors, a single bounded retry, billedUsage, AbortController timeout
+- read the key from an env var (precedent OPENROUTER_KEY; consider a dedicated JEV var), and never log it or put it in a page or URL
+- add the JEV model to a providers-style price table, and enforce a $/hr and calls/hr cap like director.js
+- test with startMockLlmServer({port:0, script:[…typed decision JSON…]}) in a targeted .cjs test (pathToFileURL import)
+- Re-bake longer acpedia lore with bake_knowledge_acpedia.py --max-chars 1500 --out <film-specific path> (a 2-4 min streaming job). Keep the director's knowledge.acpedia.json untouched.
+- Pin the scenery source per shoot: build obstruction and tree data from the same directory the client loads (default dist/scenery, or dist/scenery-retail with ?sceneryBake=retail) so the camera planner agrees with what is rendered.
+- For dungeon fly-throughs:
+- precompute doorway waypoints from cell_footprints.jsonl portal wallSpans (midpoints) and cell zRange (ceiling clearance) offline
+- order cells via indoor_router findPath / buildPatrolRoute on the live wasm graph during the shoot
+- Gate capture on the battery-telepoi settle criterion after every teleport, and record only on the 1070 (off-screen, muted) per the owner's capture rules.
+
+## OPENQ
+- What exactly are JEV / TypeSafe's 'Decisions API' endpoint, request schema and auth? Is it the OpenRouter /chat/completions route with a typed response schema, or a separate endpoint? Nothing in the repo references it.
+- Which ACE account and access level will film mode use? @teleloc/@telepoi/@teledungeon need Developer (memory says tailnet1 = Developer); @tele needs Advocate ≥5. Will the film character be a separate account from the playtester bot?
+- Gazetteer scope: curated sites only (about 3k Locations + 925 POIs + landmark spawns + wilderness clusters), or every one of the 38,255 described landblocks? Where should it live? The system disk is ~87% full; the scratch drives are slow HDDs.
+- Actual cost of `-p RetailSmoke` preload (RSS, seconds) and of each describe-landblock call — unmeasured here because this agent was read-only. Should the orchestrator schedule one measured run?
+- Does the owner accept the 2021 acpedia lore (it includes retired content), and the community-curated POI coordinates, for music-video site selection?
+- Which scenery bake (ace-compat default vs retail A/B) will be canonical for filming? This decides tree placement and obstruction data.
+- Should the per-landblock ontology/object-tags join cover GfxObj parts inherited from Setups (noisy names), or only top-level Setup/GfxObj placements?

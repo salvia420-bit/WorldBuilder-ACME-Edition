@@ -1,0 +1,1636 @@
+[
+ {
+  "area": "DUNGEONS / INDOOR ENVCELLS / PORTALS (holtburger-web: scene3d/cells.js + viewer_cell.js + portal_* + rynth indoor_router/dungeon_nav + wasm SessionHandle cell/portal API)",
+  "summary": "PATH CONVENTION: HB-relative (scene3d/..., rynth/..., src/lib.rs, pkg/holtburger_web.d.ts); Rust SpatialScene = external/holtburger/crates/holtburger-world/src/spatial/scene.rs (REPO-relative). Everything below was read in code unless marked otherwise.\n\n== 1. ENVCELL REPRESENTATION ==\nSource of truth = wasm. Module export fetchEnvCellsInLandblock(lbId) -> Promise<EnvCellPlacement[]> (src/lib.rs:26509, d.ts:8520). It prefetches (urgent lane) LandblockInfo (lb|0xFFFE) and ALL LandblockInfo.num_cells EnvCell records (lb|0x0100+i), the 0x0D Environments and stab geometry; triangulates each cell's Environment mesh in CELL-LOCAL coords; bakes static vertex light. SIDE EFFECTS (queued to pending piles, drained into world.scene on the next TickMovement, mirrored into collision_scene for sweeps and into CellSceneSnapshot for render walks): per-cell WORLD AABB (mesh bbox transformed by the cell frame; 1 m cube if empty, lib.rs:26967), SeenOutside bit, real portal edges (-> cell_adjacency, the WALKABLE graph) plus DAT visible_cells PVS edges (lib.rs:27050 -> cell_portal_graph, the RENDER graph = portal UNION PVS), world-space physics triangles (Environment.physics_polygons), cell-local physics BSP + membership BSP, world-space portal polygons {other_cell_id, verts, portal_side} (scene.rs:1243/1270/1277/1374).\nEnvCellPlacement (lib.rs:23729, d.ts:1510): cellId (full u32 0xXXYYcccc, ccc>=0x100), environmentId, cellOriginX/Y/Z = WORLD AC metres (x = lbX*192 + DAT origin.x, y = lbY*192 + origin.y, z raw; lib.rs:26862), cellOrientationQw/Qx/Qy/Qz (AC w-first), portalCellIdCount, staticObjectCount; ONE-SHOT takes: takeMesh() -> ModelMesh (non-indexed cell-local positions/normals/uvs, surfaces, bbox[6] cell-local, triCount); takePortalCellIds() -> Uint32Array = PORTAL RECORDS ONLY (lib.rs:26938, not PVS), full u32, leads-outdoors resolved to lb|0xFFFF; takePortalDoorways() -> Float64Array rows of 9 [otherCellId, cx,cy,cz (vertex mean), nx,ny,nz (unit, points OUT of this cell, from retail portal_side), height=zmax-zmin, bottomZ] world AC frame (lib.rs:23798/23846/23903) \u2014 no width; takeStaticObjects() -> world-frame x,y,z,qw..qz (LB origin only, never the cell frame), did, aabbLocal, defaultScriptId, defaultAnimationId.\nJS build: buildEnvCellsForLandblock(scene3d, lbId, wasmExports) (scene3d/cells.js:1622) drains placements (Pass 1, cells.js:1854), Step B surface preload, Step C static meshes, Step D per cell: cellContainer Group 'envcell-<hex>' identity transform, userData {cellId, environmentId, portalCellIds, isEnvCell:true, expectedStatics, peeledAnimated, missingStaticDids, mergedStatics?} (cells.js:2169); child meshGroup 'mesh-<hex>' position=cellOrigin, quaternion=acQuatToThree(...) (cells.js:2187) holding 1-2 fused meshes 'surfaces-fused-opaque|transparent-<hex>' (envcellFusion default on) with cell-local verts; props 'cellstatic-<cell>-<did>' (userData.isCellStatic, modelId) as world-frame children of the container. All nodes layers.set(1) (cells.js:2560); registered in scene3d.cellContainers3d Map<cellId,Group> (cells.js:2574, same Map as liveScene3d.cellContainers3d); visible=false until the tick flips it (cells.js:2461); matrices frozen matrixWorldAutoUpdate=false (cells.js:2585). Bookkeeping: envCellLoadedLbs (success only, cells.js:2712), envCellBuildInFlight, envCellBuildGen. JS keeps NO portal polygons, AABBs, floor polys or doorway rows (cells.js never calls takePortalDoorways). Inside TOWN buildings the walls you see are mostly the building GfxObj in buildingsGroup (layer 0), not EnvCell surfaces (cells.js:484-505).\nFrames: AC world Z-up metres; worldRoot.rotation.x = -PI/2 (scene3d/index.js:1554); acToThree(x,y,z)=[x,z,-y] (adapter.js:1817); acQuatToThree(w,x,y,z)=new Quaternion(x,y,z,w) (adapter.js:1395). cellsGroup is under worldRoot (AC frame); the camera is outside worldRoot (THREE Y-up). Wasm walk MVP = projection * matrixWorldInverse * worldRoot.matrixWorld, column-major Float32Array(16) (cells.js:3049-3055). Camera = PerspectiveCamera(60, aspect, 0.1, 5000) (index.js:1625).\n\n== 2. WHAT DECIDES WHAT IS DRAWN ==\nSince 2026-10-07 render decisions key off the CAMERA ('viewer') cell (?viewerCell default on, viewer_cell.js:31). Per-frame order: tickCellVisibility3D -> tickPortalStencil -> tickPortalPunch -> tickPortalSeal (loop.js:2857-2867) all BEFORE cameraSwitcher.tick (loop.js:3235) => walks use LAST frame's camera matrices (documented one-frame staleness, indoor_landscape_gate.js:30-31).\nupdateViewerCell (cells.js:2849): head = playerAcPosition (pose LB-local + lb*192, cells.js:712) + VIEWER_PIVOT_Z_M 1.5; eye = acCameraFrame(activeCamera, worldRoot) (cells.js:672); viewer = resolveViewerCell(head, eye, 0.3, playerCell) (cells.js:2860) -> setViewerCell(viewer!=player ? viewer : 0) (cells.js:2872) -> publishViewerCell; stamps scene3d._viewerCell/_viewerIndoor.\nRust resolve_viewer_cell (scene.rs:5673): player OUTDOOR -> viewer_cell_outdoors(eye) (scene.rs:5756): flood building transit cells of the 3x3 landcells around the eye (same LB, <=128 cells) for a cell containing the eye, else the outdoor landcell id. Player INDOOR -> walk head->eye at 0.25 m (<=256 steps; longer segments get coarser steps), re-seating ONLY through real portal neighbours (cell_adjacency) with membership-BSP point test then 0.3 m sphere rescue; crossing an outdoor-leading portal polygon -> viewer_cell_outdoors(eye); 'void' exit (through a wall) -> LAST carried cell; head not in player cell -> player cell.\ntickCellVisibility3D (cells.js:2926): isIndoor = viewer!=player ? isIndoorCellId(viewer) : isCurrentCellIndoor() (cells.js:3003). Render set = UNION of getRenderSetWithPView(mvp,0) (retail ClipPortals walk from walk_root = viewer cell if set, PVIEW_MAX_DEPTH 8, skips 0xFFFE/F, src/lib.rs:42553) and getRenderSetWithFrustum(mvp) (indoor root: AABB-frustum-prune the root's depth-1 set = portal UNION full DAT PVS; outdoor root: every loaded outdoor-exit cell AABB in frustum + ?stablist SeenOutside cells (100 m float cull) + outdoor PView walk seeded from on-screen exit apertures; lib.rs:42984-43228) (cells.js:3057-3077); fallback getRenderSet(1) which is PLAYER-rooted. cellId==0 (pre-spawn) -> no change (cells.js:3095). Container.visible flipped by diff; drawn set kept in scene3d._lastCellVisibleSet (cells.js:3449).\nIndoor viewer => ?indoorDepthSplit (default 'on') arms: cells set narrowed to getViewerRenderSet() UNION pview UNION viewer cell (cells.js:3219-3244); the VIEWER's landblock buildingsGroup/staticsGroup children are re-layered to layer 1 (splitLbKey cells.js:3272, _stampSplitLayers cells.js:573); pipeline: world pass layer 0 (terrain) -> full depth clear -> doorway SEAL at true depth from getPViewOutsidePortals -> cells pass layer 1 (atmosphere_pipeline.js:2044-2099). Outdoor viewer => portal PUNCH (?portalPunch on, ?punchRetail on) stamps far depth into outdoor-facing apertures (clipAperturesForPunch, cells.js:3708) so interiors win through doors. Sky/horizon follow viewerState (sky_dome.js:629).\nSTILL PLAYER-KEYED: currentDungeonHasOutdoorPortal -> terrain/buildings/statics group visibility (cells.js:3361, lib.rs:43349), sealed-evict LB (cells.js:3388), PVS/streaming ring (getRenderSet(1)/isCurrentCellIndoor, cells.js:4421), envcell streaming, LRU centre, camera collision chain (pivot + getRenderSet(1), camera.js:1769/1885).\nCases: (a) camera in another cell reachable along the STRAIGHT head->eye line through doorways -> correct root. Line crosses a wall -> root = last cell reached -> wrong walk (missing/extra cells, wrong mode). (b) camera outside, player inside: correct only if the segment exits through an outdoor portal polygon; through a wall the viewer stays the interior cell -> indoor split + seal from an outside camera ('barn door: interior vanishes, only grass' class). (c) camera in a dungeon, player outside: dungeon cells are never found (only building-transit floods) -> viewer = outdoor landcell -> outdoor branch draws only exit/SeenOutside/aperture-reached cells, terrain occludes below grade; and the dungeon LB is not streamed unless the player is there. (d) camera inside a building, player outside: works (building flood).\n\n== 3. POINT->CELL AND PORTAL GRAPH ==\nNo JS export answers 'which EnvCell contains world point P'. Rust has it privately: cell_contains_point (membership BSP else AABB, scene.rs:3986), cell_contains_sphere (scene.rs:4013), current_cell (player pose, continuity then LB AABB scan, scene.rs:3877), current_cell_for_arrival (LB scan, membership hulls first, scene.rs:4046). JS options: continuity via resolveViewerCell(prevPos, newPos, r, prevCell) (exact BSP, portal-only), segment validity via clipCameraToCellSpace(from,to,r,startCell) -> t in [0,1) when the segment leaves cell space through a wall/seam (doorway exits outdoors allowed; invalid start fails OPEN, so it cannot be used as a membership test) (scene.rs:5555); loose AABBs via rig_cell_gate.cellAcBox(container) (cached AC-space Box3) or ModelMesh.bbox; indoor_router.nearestCell (bbox-centre 2D nearest, +-8 m Z band).\nGraphs: (i) container.userData.portalCellIds (portal records incl. lb|0xFFFF); (ii) wasm cell_adjacency (walkable) / cell_portal_graph (render, PVS union) \u2014 not exported; getRenderSet ignores depth (lib.rs:42414) so it cannot enumerate a dungeon. (iii) rynth/indoor_router.js: buildGraphFromWasm(sessionHandle, depth=0, {fetchEnvCells}) (indoor_router.js:1268; requires the PLAYER in an EnvCell) and buildStitchedGraphFromWasm(lbIds, opts) (indoor_router.js:1235; any LBs, chases neighbour LBs, <=8) -> Map<cellId,{pos, neighbors, exits, doors?, floorZMin?, floorZMax?}> built by collectLandblockIntoGraph (indoor_router.js:1118), which RE-CALLS fetchEnvCellsInLandblock (second full wasm build; takes are one-shot). pos = mesh-bbox centre XY, z = bbox MIN (floor) rotated by the cell quat + origin \u2014 the 'mesh-bbox centers' fix because all EnvCells of a BUILDING share the building frame origin (identical cellOrigin) and legs collapsed. neighbors = portal ids with low word 0x0100-0xFFFD; exits = low word 0x01-0xFF or >=0xFFFE (retail other_cell_id==-1 -> lb|0xFFFF); doors = doorsFromRows(takePortalDoorways()); floorZMin/Max = world Z span of walkable tris (N.up >= FLOOR_Z 0.664).\nfindPath(graph, from, to, opts) (indoor_router.js:519): A* over node.neighbors, cost and heuristic = 2D cell-centre distance; skips isDropEdge edges (|dZ|>=0.5 and (horiz<1 m or slope>45 deg) unless a floor span covers the gap), hazards, excludeEdges; walkableOverrides; bodySized pass skips edges whose every opening is upright (|nz|<=0.7) and <1.83 m tall. Returns cell-id array or null \u2014 NO crossing points. Crossing points come from toLegs(graph, path, opts) (indoor_router.js:620): {doorways:true} -> per transition 2 legs at the doorway centroid -/+0.4 m along the door normal (XY), z = door bottom, arriveM 0.75, doorway:true (fallback 30%/50% centre lerp); {doorwayApproach}, {midpoints}, or centres. Legs = {lb: FULL cell id, x/y LANDBLOCK-LOCAL (wx - lbX*192), z world}. findExitPath (753) BFS -> {path, exitCell, outdoorId|null, exitDoor?}; getMainRouteNodes (807) + buildPatrolRoute (938) = 2-core prune + closed walk (tour sequences).\nrynth/ai/tools/dungeon_nav.js DungeonNavAdvisor (:143), planning-only, pose-anchored: describeSurroundings(bot) SYNC text (cell, counts, exits with compass + up/down + DROP, unexplored portals) (:217); suggestRoute(bot,{toCellId|toHint farthest|unexplored|patrol|up|down}) -> {ok,to,legs,reason} via findPath/toLegs centres (:280); exitRoute(bot) (:307) -> findExitPath + toLegs({midpoints}) + an outdoor leg: direct landcell id -> its centre; retail sentinel 0xFFFF (outdoorId null) -> project 9 m past the exit-cell centre along prev->exit direction, binned by worldToOutdoorCell. exit_building action prefers bot.egress.\n\n== 4. STREAMING ==\nWHOLE LANDBLOCK per build (every LandblockInfo.num_cells cell; Academy 0x8602 = 568 cells) \u2014 not PVS-limited. Portals and PVS never cross a landblock (docs/2026-08-13-indoor-outdoor-cell-architecture.md \u00a76), so one LB = the whole dungeon; dungeon cells can sit far outside the 192 m square (min_y -1590 m, z -324..650; \u00a75). Drivers, all PLAYER-keyed: world_stream.js:366 onPositionUpdate (player LB only); app/landblock_stream.js cell watchdog (555/576/952); tickPvsLoadExpansion envcellRing (default on): LBs of the player's getRenderSet(1) + radius-1 skirt, <=1 start/tick, <=2 in flight, 3 attempts/5 s, skirt waits for the own LB's build (cells.js:4388/4578); previewSpawnArea(loc) char-select warm-up, no-op once a player exists (index.js:4234); ?eagerDungeons=on = boot-only bake of Mite Maze 0x01F80000 + Holtburg Dungeon 0x01F60000 for capture scripts and it also disables ?dungeonStreamGate (index.js:2172, docs/url-flags.md:549-550). Residency: LRU centred on the player LB (always 3x3 + published PVS ring; landblock_lru.js:1156), sealed-dungeon purge keeps dungeon LB + 3x3, dungeonStreamGate blocks new outdoor streaming while the player is indoors. Consequence: once the player's dungeon LB is built, a camera can visit ANY cell of it at any distance and see geometry (visibility = per-frame walk from the viewer cell). A different LB has geometry only if resident; liveScene3d.loadEnvCellsForLandblock(lb) (index.js:3907) builds it on demand but the LRU may reclaim it and its wasm collision is purged on evict.\n\n== 5. GEOMETRY FOR CLEARANCE ==\nWasm sweeps (world AC metres, return CollisionHit {t, x,y,z, normalX/Y/Z} wasm box -> .free()): sweepSphereAgainstCellMesh(from,to,r,cellIds) = Environment physics shell (walls/floor/ceiling) of the cells you pass; sweepSphereAgainstCellStatics (stab props); sweepSphereAgainstEntities (closed doors, BSP weenies; creatures excluded); sweepSphereAgainstBuildingMesh/Statics/Scenery/cameraSweepCollision (outdoor, LB-keyed); terrainHeightAt (outdoor surface \u2014 above a dungeon it returns the SURFACE height). Vertical sweeps give floor/ceiling heights. clipCameraToCellSpace for containment. JS-side: container Box3/cellAcBox (AC AABB), fused render meshes (cell-local under meshGroup), ModelMesh.bbox, doorway rows (centroid, outward normal, height, bottom; stairwell/floor openings have |nz|>0.7), outdoor aperture polygons with full vertices via getVisiblePortalApertures{,WithCellCenter,WithSidedness}(mvp) (outdoor-facing portals of frustum-visible cells across ALL loaded LBs; pass indoor_landscape_gate.boxQueryMvp(cx,cy,cz,h) for a 'near this point' query), getPViewOutsidePortals (walk-reached outdoor portals), getPViewCellClips (per visible cell NDC clip polygon; no JS consumer). Interior (cell-to-cell) portal polygon VERTICES are not exported to JS \u2014 only the doorway rows.\n\n== 6. HAZARDS (detail in hazards[]) ==\nViewer cell is derived from a player-head walk; one-frame-stale walks; straddle drop (1.5 m) and mode flips at doorway crossings; player-keyed streaming/sealed cull; building cells share one frame origin; dungeon cells outside LB box with misleading terrainHeightAt; building interior walls are building GfxObj not EnvCells; portal bleed (punchSidedness default OFF; frustum UNION pview wider than retail -> coincident-wall z-fight); occlusion queries 1-2 frames late on cuts; one-shot takes + heavy re-fetch; drawPools moves surfaces out of containers; pre-spawn = no walks; manual setViewerCell overwritten each frame; straight-down stairwell shots hit lookAt up-vector degeneracy.",
+  "apis": [
+   {
+    "name": "fetchEnvCellsInLandblock",
+    "file": "src/lib.rs",
+    "line": 26509,
+    "signature": "fetchEnvCellsInLandblock(landblock_id: number): Promise<EnvCellPlacement[]>  (module export; d.ts:8520; in-page via liveScene3d.wasmExports)",
+    "what": "Loads + decodes EVERY EnvCell of a landblock (LandblockInfo lb|0xFFFE, cells lb|0x0100+i). Side effect: queues AABBs, SeenOutside, portal edges, PVS edges, physics tris/BSPs, portal polygons into the wasm scene (drained next TickMovement). Re-calling is idempotent for collision but re-runs the full decode + vertex light bake.",
+    "verified": true
+   },
+   {
+    "name": "EnvCellPlacement",
+    "file": "src/lib.rs",
+    "line": 23729,
+    "signature": "cellId, environmentId, cellOriginX/Y/Z (world AC m), cellOrientationQw/Qx/Qy/Qz, portalCellIdCount, staticObjectCount; takeMesh(): ModelMesh; takePortalCellIds(): Uint32Array; takePortalDoorways(): Float64Array; takeStaticObjects(): StaticObjectPlacement[]  (d.ts:1510)",
+    "what": "Per-cell bundle. All take* are ONE-SHOT moves. Portal ids are portal records only (outdoor = lb|0xFFFF). Mesh is cell-local; statics are world-frame.",
+    "verified": true
+   },
+   {
+    "name": "EnvCellPlacement.takePortalDoorways",
+    "file": "src/lib.rs",
+    "line": 23798,
+    "signature": "takePortalDoorways(): Float64Array  rows of 9: [otherCellId, cx, cy, cz, nx, ny, nz, height, bottomZ]",
+    "what": "Per CellPortal doorway: vertex-mean centroid, unit normal pointing OUT of this cell (retail portal_side), vertical extent, lowest Z; world AC frame. No width. Built by envcell_portal_doorways/portal_doorway_row (lib.rs:23903/23846).",
+    "verified": true
+   },
+   {
+    "name": "fetchEnvCellDepsInLandblock",
+    "file": "src/lib.rs",
+    "line": 26369,
+    "signature": "fetchEnvCellDepsInLandblock(landblock_id): Promise<string>  JSON {lb, numCells, cellSurfaceDids[], stabIds[]}",
+    "what": "Cheap metadata for a landblock's interior (cell count, surfaces, stab ids) without the full build.",
+    "verified": true
+   },
+   {
+    "name": "buildEnvCellsForLandblock",
+    "file": "scene3d/cells.js",
+    "line": 1622,
+    "signature": "async buildEnvCellsForLandblock(scene3d, landblockId, wasmExports) -> {landblockId, cellCount, surfaceCount, staticObjectCount, skippedZeroTri, skippedNoMesh, idempotent?, inFlight?, evictedDuringBuild?, disposables}",
+    "what": "Builds THREE containers for a whole LB, registers scene3d.cellContainers3d, layers=1, visible=false, frozen matrices; idempotent via envCellLoadedLbs / envCellBuildInFlight / envCellBuildGen.",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d.loadEnvCellsForLandblock",
+    "file": "scene3d/index.js",
+    "line": 3907,
+    "signature": "loadEnvCellsForLandblock(landblockId) -> Promise<result>",
+    "what": "Public wrapper: build + LRU track + light rescan. The on-demand way to bake a landblock's interior.",
+    "verified": true
+   },
+   {
+    "name": "tickCellVisibility3D",
+    "file": "scene3d/cells.js",
+    "line": 2926,
+    "signature": "tickCellVisibility3D(scene3d, sessionHandle)",
+    "what": "Per-frame: resolves viewer cell, computes render set (PView UNION frustum, rooted at viewer), arms indoor depth split, sealed cull, flips container.visible, stores scene3d._lastCellVisibleSet.",
+    "verified": true
+   },
+   {
+    "name": "updateViewerCell (module-private)",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "signature": "updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) -> viewerCell",
+    "what": "resolveViewerCell(player head+1.5, camera eye, 0.3, playerCell) -> setViewerCell -> publishViewerCell; sets scene3d._viewerCell/_viewerIndoor. The seam to override for a free film camera.",
+    "verified": true
+   },
+   {
+    "name": "acCameraFrame / playerAcPosition (module-private)",
+    "file": "scene3d/cells.js",
+    "line": 672,
+    "signature": "acCameraFrame(camera, worldRoot) -> bool (fills _acCamVec/_acFwdVec); playerAcPosition(sessionHandle) -> {x,y,z}|null (cells.js:712)",
+    "what": "Camera position+forward in AC world via worldRoot.worldToLocal; player world position = pose LB-local x/y + lb byte*192 (pose is a wasm box, freed).",
+    "verified": true
+   },
+   {
+    "name": "viewer_cell.js",
+    "file": "scene3d/viewer_cell.js",
+    "line": 31,
+    "signature": "VIEWER_CELL_ON; VIEWER_SPHERE_RADIUS_M=0.3 (:44); VIEWER_PIVOT_Z_M=1.5 (:51); isIndoorCellId(cell) (:54); publishViewerCell(playerCell, playerIndoor, viewerCell, seenOutside) (:75); viewerState() (:90); viewerIndoorOr(fallback) (:95); resetViewerCell() (:100)",
+    "what": "Published per-frame viewer (camera) cell state read by punch/stencil/sky/split.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.resolveViewerCell",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5983,
+    "signature": "resolveViewerCell(from_x, from_y, from_z, to_x, to_y, to_z, radius, player_cell): number",
+    "what": "Pure query: cell containing the end of a segment walked with portal continuity from start cell (scene.rs:5673). From a non-EnvCell start: building-flood around the end point else outdoor landcell. Usable frame-to-frame with the film camera's own previous position/cell.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.setViewerCell / getViewerCell / getViewerRenderSet",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6395,
+    "signature": "setViewerCell(cell: number): void; getViewerCell(): number (d.ts:4820); getViewerRenderSet(): Uint32Array (d.ts:4825)",
+    "what": "Roots getRenderSetWithPView / getRenderSetWithFrustum / getPViewOutsidePortals at the given cell (0 or player cell clears). Computes the depth-1 set (portal UNION PVS) for EnvCell viewers (lib.rs:43281).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getRenderSetWithPView",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4614,
+    "signature": "getRenderSetWithPView(mvp: Float32Array(16 col-major AC->clip), max_depth: number /*0 = 8*/): Uint32Array",
+    "what": "Retail PView ClipPortals walk from walk_root (viewer or player cell) over the snapshot portal_map (all loaded LBs), near-plane clipped; skips outdoor sentinel portals (lib.rs:42553).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getRenderSetWithFrustum",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4575,
+    "signature": "getRenderSetWithFrustum(mvp: Float32Array): Uint32Array",
+    "what": "Indoor root: frustum-pruned depth-1 set (portal UNION DAT PVS). Outdoor root: outdoor-exit cell AABBs in frustum + stablist SeenOutside cells + outdoor PView seeded at visible exit apertures (lib.rs:42984-43228).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getPViewCellClips",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4499,
+    "signature": "getPViewCellClips(mvp, max_depth): Uint32Array  [view_count, (cell_id, depth, nverts, f32bits(x0), f32bits(y0), ...) x view_count]",
+    "what": "Per visible cell, the NDC aperture polygon it is seen through (first-reached path only). No JS consumer today.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getVisiblePortalApertures{,WithCellCenter,WithSidedness}",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4851,
+    "signature": "getVisiblePortalApertures(mvp, 0): Float32Array [count,(nverts,x,y,z...)]; v2 (:4878) adds cx,cy,cz; v3 (:4913) adds cx,cy,cz,side after nverts",
+    "what": "World AC polygons of every OUTDOOR-facing portal whose owning cell AABB is in the frustum, across all loaded LBs. With an orthographic box MVP (indoor_landscape_gate.boxQueryMvp) it becomes a 'doors/windows near point' query.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getPViewOutsidePortals",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4528,
+    "signature": "getPViewOutsidePortals(mvp, max_depth): Float32Array (same wire as v1 apertures)",
+    "what": "Outdoor-facing portals of the cells the PView walk reached from the viewer cell (retail outside_view). Empty for outdoor viewer or mouthless dungeon.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getRenderSet / getCurrentCellId / isCurrentCellIndoor / isCellSeenOutside / currentDungeonHasOutdoorPortal",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4541,
+    "signature": "getRenderSet(depth): Uint32Array (depth ignored except 0); getCurrentCellId(): number (:4266); isCurrentCellIndoor(): boolean (:5011); isCellSeenOutside(cell) (:4986); currentDungeonHasOutdoorPortal(): boolean (:3752)",
+    "what": "PLAYER-rooted snapshot queries. getRenderSet(1) = player cell + portal neighbours + DAT PVS; outdoor player -> {current} only. currentDungeonHasOutdoorPortal is per player LB.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.clipCameraToCellSpace",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3621,
+    "signature": "clipCameraToCellSpace(fx,fy,fz, tx,ty,tz, radius, start_cell): number|undefined",
+    "what": "t in [0,1) when the segment would leave valid cell space through a wall/seam (0.25 m steps, portal continuity, outdoor doorway exits allowed); undefined when fine OR when start is invalid (fails open) (scene.rs:5555).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstCellMesh / CellStatics",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6522,
+    "signature": "sweepSphereAgainstCellMesh(fx,fy,fz, tx,ty,tz, radius, cell_ids: Uint32Array): CollisionHit|undefined; sweepSphereAgainstCellStatics(same) (:6540)",
+    "what": "Exact sphere sweeps against EnvCell physics shell / stab props of an EXPLICIT cell list (any resident cells, not tied to the player). CollisionHit (d.ts:752) = {t, x, y, z, normalX, normalY, normalZ}; free() it.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstEntities / BuildingMesh / Statics / Scenery / cameraSweepCollision / terrainHeightAt",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6565,
+    "signature": "sweepSphereAgainstEntities(..., radius, max_range_m) ; sweepSphereAgainstBuildingMesh(..., landblock_id) (:6505); sweepSphereAgainstStatics (:6611); sweepSphereAgainstScenery (:6598); cameraSweepCollision (:3496); terrainHeightAt(x,y) (:6652)",
+    "what": "Remaining collision layers (doors/BSP weenies; outdoor building tris, statics, scenery, terrain). Creatures are never camera obstacles.",
+    "verified": true
+   },
+   {
+    "name": "_clipCameraAgainstWorld",
+    "file": "scene3d/camera.js",
+    "line": 1769,
+    "signature": "_clipCameraAgainstWorld(playerPos, idealX, idealY, idealZ, ctx, terrainFloor) -> {x,y,z}",
+    "what": "Reference chain for camera clearance: terrain floor, building mesh, statics, scenery (outdoor only), cell mesh with getRenderSet(1), cell statics + entities (?camIndoorObjects), clipCameraToCellSpace. Player-pivot based.",
+    "verified": true
+   },
+   {
+    "name": "clipAperturesForPunch",
+    "file": "scene3d/portal_clip.js",
+    "line": 910,
+    "signature": "clipAperturesForPunch(flat, mvp, {nearPlane, camAc, sampleHeight?, withCellCenter?, withPortalSide?, losCache?, losSunkenExempt?, wantRect?, straddleEpsM?, maxScreenFrac?}) -> {flat, rect, kept, dropped}",
+    "what": "Pure aperture filter: LandCell-boundary reject, sidedness, straddle (1.5 m), near-plane clip, screen-area clamp, terrain LOS.",
+    "verified": true
+   },
+   {
+    "name": "portal_clip geometry helpers",
+    "file": "scene3d/portal_clip.js",
+    "line": 584,
+    "signature": "polygonPlane(pts) -> {nx,ny,nz,d,cx,cy,cz}|null; apertureStraddlesViewer(pts, camAc, eps=1.5) (:637); apertureFacesAwayWithSide(pts, portalSide, camAc) (:786); makeNearPlane(camAc, fwdAc, margin) (:210); isCameraBelowTerrain(sampleHeight, x,y,z, margin) (:558); clipPolygonAgainstPlane (:240); projectScreenRect (:338)",
+    "what": "Dependency-free polygon math (Newell normal, doorway-straddle, sidedness, near clip) reusable for doorway shot planning.",
+    "verified": true
+   },
+   {
+    "name": "parseApertures",
+    "file": "scene3d/portal_pass2.js",
+    "line": 159,
+    "signature": "parseApertures(flat, {withCellCenter, withPortalSide}) -> [{index, nverts, center, portalSide, pts, recStart, recEnd}]",
+    "what": "Parser for v1/v2/v3 aperture wire formats.",
+    "verified": true
+   },
+   {
+    "name": "indoor_landscape_gate helpers",
+    "file": "scene3d/indoor_landscape_gate.js",
+    "line": 251,
+    "signature": "boxQueryMvp(cx,cy,cz,h,out) ; minDistToApertures(flat,x,y,z) (:271); widenClipXY(src,k,out) (:237); hasOutdoorPortal(portalCellIds) (:168); indoorLandscapeCellState(...) (:196)",
+    "what": "Turn the frustum exports into proximity queries; distance from a point to the nearest outdoor aperture.",
+    "verified": true
+   },
+   {
+    "name": "rig_cell_gate helpers",
+    "file": "scene3d/rig_cell_gate.js",
+    "line": 172,
+    "signature": "cellAcBox(container) -> [minX,minY,minZ,maxX,maxY,maxZ]|null ; collectDrawnCellBoxes(scene3d, out) (:203); sphereTouchesBox(cx,cy,cz,r,b) (:114)",
+    "what": "Cached AC-space AABB of an EnvCell container and of all cells drawn this frame.",
+    "verified": true
+   },
+   {
+    "name": "indoor_router graph builders",
+    "file": "rynth/indoor_router.js",
+    "line": 1235,
+    "signature": "buildStitchedGraphFromWasm(lbIds, {fetchEnvCells?, expand=true, maxLandblocks=8}) -> Promise<Map|null>; buildGraphFromWasm(sessionHandle, depth=0, opts) (:1268)",
+    "what": "Cell graph {pos (bbox-centre XY, floor Z), neighbors (portal records, EnvCell ids), exits, doors, floorZMin/Max}. Stitched variant does not need the player indoors.",
+    "verified": true
+   },
+   {
+    "name": "indoor_router search",
+    "file": "rynth/indoor_router.js",
+    "line": 519,
+    "signature": "findPath(graph, from, to, {hazards, walkableOverrides, excludeEdges, bodySized}) -> cellId[]|null; toLegs(graph, path, {doorways, doorwayApproach, midpoints, exitDoor, lastCentre}) (:620); findExitPath (:753); nearestCell(graph,x,y,z) (:405); isDropEdge(a,b) (:389); getMainRouteNodes (:807); buildPatrolRoute (:938); doorsFromRows (:148); isUprightDoor (:175); doorTooLow (:180); isEnvCellId (:230); DOORWAY_ROW_STRIDE=9 (:106); OPENING_MIN_HEIGHT_M=1.83 (:110)",
+    "what": "A* over portal adjacency with 2D centre cost; legs in landblock-local x/y with full cell id as lb; doorway legs at centroid -/+0.4 m along the normal at floor height.",
+    "verified": true
+   },
+   {
+    "name": "DungeonNavAdvisor",
+    "file": "rynth/ai/tools/dungeon_nav.js",
+    "line": 143,
+    "signature": "new DungeonNavAdvisor({graph, graphSource, fetchEnvCells, log}); describeSurroundings(bot): string (:217); suggestRoute(bot,{toCellId|toHint}) (:280); exitRoute(bot) (:307); refreshGraph(bot)",
+    "what": "Pose-anchored advisory layer over indoor_router (text summary, hint targets farthest/unexplored/patrol/up/down, exit legs incl. 9 m projection for the 0xFFFF outdoor sentinel).",
+    "verified": true
+   },
+   {
+    "name": "nav_frame helpers",
+    "file": "rynth/nav_frame.js",
+    "line": 17,
+    "signature": "worldX(cellId,x); worldY(cellId,y) (:20); worldXY (:24); landblockOf (:30); worldToOutdoorCell(wx,wy,z) (:57)",
+    "what": "Landblock-local <-> world conversions shared by the nav stack.",
+    "verified": true
+   },
+   {
+    "name": "acToThree / acQuatToThree",
+    "file": "scene3d/adapter.js",
+    "line": 1817,
+    "signature": "acToThree(ax,ay,az) -> [ax, az, -ay]; acQuatToThree(qw,qx,qy,qz) -> THREE.Quaternion(qx,qy,qz,qw) (:1395)",
+    "what": "AC (Z-up) to THREE (Y-up) for objects outside worldRoot (the camera).",
+    "verified": true
+   },
+   {
+    "name": "tickPvsLoadExpansion",
+    "file": "scene3d/cells.js",
+    "line": 4388,
+    "signature": "tickPvsLoadExpansion(scene3d, sessionHandle)",
+    "what": "Player-render-set-driven streaming incl. the envcellRing interior feed; publishes scene3d._pvsEffectiveRingRadius and window.__interiorBuildPending.",
+    "verified": true
+   },
+   {
+    "name": "diag.pvs",
+    "file": "scene3d/diag/pvs.js",
+    "line": 39,
+    "signature": "__diag.pvs.currentCell(), visibleCells(), diff(oracleSet), snapshot(), transitions[]",
+    "what": "Read-only cell transition log + visible-set diff vs a WB.Terminal oracle.",
+    "verified": true
+   },
+   {
+    "name": "WB.Terminal cell-portal-graph-sweep / pvs-visibility-snapshot",
+    "file": "WorldBuilder.Terminal/JsonCommandProcessor.cs (REPO-relative)",
+    "line": 5561,
+    "signature": "{command:'cell-portal-graph-sweep', datPath, lbIds[]|lbId}; {command:'pvs-visibility-snapshot', datPath, cellId, bfsDepth=1, out?} (:5614)",
+    "what": "Offline DAT oracle for a landblock's portal graph integrity and a cell's PVS; driven by validate_cell_portal_graph.cjs.",
+    "verified": true
+   }
+  ],
+  "seams": [
+   {
+    "what": "updateViewerCell override point (cells.js:2849-2873): resolveViewerCell is called with the PLAYER head as the segment start and the result is pushed via setViewerCell every frame",
+    "filmUse": "Add a film override (e.g. scene3d.filmViewer.cell) consulted before resolveViewerCell, then still call setViewerCell + publishViewerCell so JS mode decisions (split/punch/sky) and wasm walk roots agree. Without it, a manual setViewerCell is overwritten next frame.",
+    "file": "scene3d/cells.js",
+    "line": 2849
+   },
+   {
+    "what": "Camera identity: every walk and portal tick reads scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera; atmospherePipeline.render(cam) retargets world/cells/mask passes to the passed camera",
+    "filmUse": "Install the film PerspectiveCamera as cameraSwitcher.activeCamera (or pass it to render) so PView walks, punch, seal and occlusion use it.",
+    "file": "scene3d/cells.js",
+    "line": 3021
+   },
+   {
+    "what": "Frame order: cell/portal ticks (loop.js:2857-2867) run before cameraSwitcher.tick (loop.js:3235)",
+    "filmUse": "Update the film camera pose + camera.updateMatrixWorld() BEFORE tickCellVisibility3D (pre-tick hook), or accept a 1-frame lag and discard the first frame(s) after cuts/portal crossings.",
+    "file": "scene3d/loop.js",
+    "line": 2857
+   },
+   {
+    "what": "resolveViewerCell as a continuity tracker (pure query, any start cell)",
+    "filmUse": "Each frame: cell = resolveViewerCell(prevCamPos, camPos, 0.3, prevCell). Exact membership-BSP + portal-only re-seat; small per-frame segments keep it precise. On cuts seed with the planner's target cell.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5983
+   },
+   {
+    "what": "clipCameraToCellSpace segment validator",
+    "filmUse": "Reject/clip spline segments that leave cell space through walls or seams (allowed: exits through outdoor doorways). Use start cell = tracked camera cell.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3621
+   },
+   {
+    "what": "Explicit-cell-list sweeps (sweepSphereAgainstCellMesh / CellStatics / Entities)",
+    "filmUse": "Clearance probes along candidate camera splines with cell list = path cells + their portalCellIds neighbours; vertical sweeps for floor/ceiling height; hit normal for push-off; radius >= 0.3 m.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6522
+   },
+   {
+    "what": "indoor_router graph + A* + doorway legs",
+    "filmUse": "buildStitchedGraphFromWasm([lb]) once per landblock (cache it), findPath for cell sequences (consider a camera variant that ignores isDropEdge \u2014 cameras can descend shafts), toLegs({doorways:true}) for doorway crossing anchors; convert legs to world with lbX*192/lbY*192 and raise z from door bottom to mid-height for camera use.",
+    "file": "rynth/indoor_router.js",
+    "line": 1235
+   },
+   {
+    "what": "takePortalDoorways rows (centroid, outward normal, height, bottom)",
+    "filmUse": "Doorway frames for fly-through shots (approach along -normal, exit along +normal); |nz|>0.7 rows are stairwell/floor openings for vertical crane moves; height<1.83 m upright = window/counter (good for 'through the window' shots, not fly-through).",
+    "file": "src/lib.rs",
+    "line": 23798
+   },
+   {
+    "what": "Outdoor aperture polygons with full vertices (getVisiblePortalApertures* + boxQueryMvp)",
+    "filmUse": "Find doors/windows near a point and their exact polygons (width/height, sidedness via v3 portal_side) for exterior-to-interior push-ins and window framing.",
+    "file": "scene3d/indoor_landscape_gate.js",
+    "line": 251
+   },
+   {
+    "what": "getPViewCellClips (unused export)",
+    "filmUse": "Shot validation: confirm the target room is visible through a doorway and how much screen area its aperture covers from a candidate camera pose.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4499
+   },
+   {
+    "what": "Interior readiness: liveScene3d.loadEnvCellsForLandblock, scene3d.envCellLoadedLbs, envCellBuildInFlight, window.__interiorBuildPending",
+    "filmUse": "Gate recording until the shot landblock's interior is built (walls + statics; interiorWallsFirst attaches walls before props).",
+    "file": "scene3d/index.js",
+    "line": 3907
+   },
+   {
+    "what": "scene3d.cellContainers3d + cellAcBox",
+    "filmUse": "Room bounds for framing/look-at targets and lyric-to-room site metadata; cache per landblock.",
+    "file": "scene3d/rig_cell_gate.js",
+    "line": 172
+   },
+   {
+    "what": "Diagnostics: scene3d._lastCellVisibleSet, scene3d._viewerCell, window.__indoorDepthSplit, liveScene3d._portalPunchDiag, _portalSealDiag, __diag.pvs",
+    "filmUse": "Per-shot QA telemetry (which cells drawn, split armed, apertures kept/dropped) to auto-reject bad takes.",
+    "file": "scene3d/cells.js",
+    "line": 3449
+   },
+   {
+    "what": "WB.Terminal offline oracle (pvs-visibility-snapshot, cell-portal-graph-sweep)",
+    "filmUse": "Offline dungeon ontology for the planner (cells, PVS, portal counts) before the client is even running; feeds lyric<->site matching.",
+    "file": "WorldBuilder.Terminal/JsonCommandProcessor.cs",
+    "line": 5614
+   },
+   {
+    "what": "previewSpawnArea(loc) + cameraSwitcher.setPreviewTarget(p)",
+    "filmUse": "Only pre-spawn (no-op once a player exists): could pre-warm a location at character select; not usable mid-session.",
+    "file": "scene3d/index.js",
+    "line": 4234
+   }
+  ],
+  "hazards": [
+   {
+    "what": "Viewer cell comes from a straight PLAYER-head-to-eye walk. A free camera whose line to the player crosses a wall gets the last cell reached (wrong walk root); segments >64 m get coarser than 0.25 m steps; a camera in a dungeon with the player outdoors is never resolved (only building-transit floods), so the dungeon renders as outdoor and is mostly hidden.",
+    "file": "external/holtburger/crates/holtburger-world/src/spatial/scene.rs",
+    "line": 5673,
+    "mitigation": "Film override seam in updateViewerCell + per-frame continuity tracking from the camera's own previous position/cell; seed cuts from the planner's cell."
+   },
+   {
+    "what": "Walks run before cameraSwitcher.tick, so visibility, split/punch mode and apertures are one frame stale; occlusion-query results land 1-2 frames late (hidden interiors reappear late after a cut).",
+    "file": "scene3d/loop.js",
+    "line": 2857,
+    "mitigation": "Pose the film camera before tickCellVisibility3D; pre-roll/discard 2-3 frames after every cut; optionally ?occlusionCull=off while recording."
+   },
+   {
+    "what": "Doorway crossing: punch and seal DROP any aperture the camera is within 1.5 m of (plane distance + lateral reach) and near-plane clip at 0.25 m; at the cell flip the indoor split toggles, LB buildings/statics re-layer (traverse), sky pass and horizon dissolve switch (dungeon cells black out the sky; SeenOutside building cells keep it) -> visible pops.",
+    "file": "scene3d/portal_clip.js",
+    "line": 80,
+    "mitigation": "Cross portals briskly and roughly perpendicular, never linger on the doorway plane, or hide the transition with a cut; preview the crossing frame-by-frame."
+   },
+   {
+    "what": "Player-keyed systems: streaming (whole-LB interiors only for the player's LB / render set + 1-LB skirt), LRU centre, sealed-dungeon purge, dungeonStreamGate, currentDungeonHasOutdoorPortal (terrain group visibility), camera collision chain.",
+    "file": "scene3d/cells.js",
+    "line": 3361,
+    "mitigation": "Teleport the player to the shot landblock first; keep cameras inside the player's dungeon LB; check envCellLoadedLbs before recording."
+   },
+   {
+    "what": "All EnvCells of a BUILDING share the building frame origin (cellOriginX/Y/Z identical; EnvCell 0xA9B40100 origin == BuildInfo[0] origin). Using cellOrigin as a room position collapses every room to one point.",
+    "file": "rynth/indoor_router.js",
+    "line": 1136,
+    "mitigation": "Use mesh-bbox centres (indoor_router node.pos) or cellAcBox centres for room anchors."
+   },
+   {
+    "what": "Dungeon cells extend far outside their landblock's 192 m square and below/above terrain (min_y -1590 m, z -324..650). Deriving the LB from world XY is wrong; terrainHeightAt at those XY returns unrelated SURFACE heights (camera.js notes it floors cameras through dungeon ceilings).",
+    "file": "docs/2026-08-13-indoor-outdoor-cell-architecture.md",
+    "line": 175,
+    "mitigation": "Always take the LB from the cell id high word; never apply terrain-floor clamps or below-terrain tests to indoor cameras."
+   },
+   {
+    "what": "Town-building interior walls are the building GfxObj in buildingsGroup (layer 0), not EnvCell surfaces; the camera chain's building-mesh sweep only runs when the PLAYER is outdoors (?indoorCam on), and the cell-mesh sweep covers only the Environment physics shell (props need CellStatics, doors need Entities; creatures never block).",
+    "file": "scene3d/camera.js",
+    "line": 1815,
+    "mitigation": "For film clearance in buildings sweep BOTH cell mesh and sweepSphereAgainstBuildingMesh(landblock), plus CellStatics and Entities."
+   },
+   {
+    "what": "Portal bleed: ?punchSidedness is default OFF (owner-directed), so far-side doors/windows can be depth-punched through roofs/walls; ?stablist admits unclipped SeenOutside interiors; the PView UNION frustum set is wider than retail -> cross-cell coincident two-sided wall z-fighting.",
+    "file": "scene3d/cells.js",
+    "line": 290,
+    "mitigation": "Record with ?punchSidedness=on (retail portal_side gate, measured safe); pick angles that avoid shared two-sided walls; keep ?portalStencil and ?cellBugParity off."
+   },
+   {
+    "what": "getRenderSet(depth) ignores depth (always the depth-1 snapshot) and is player-rooted; it cannot enumerate a dungeon.",
+    "file": "src/lib.rs",
+    "line": 42414,
+    "mitigation": "Enumerate cells via fetchEnvCellsInLandblock / indoor_router graph builders or cellContainers3d."
+   },
+   {
+    "what": "EnvCellPlacement takes are one-shot; graph building re-calls fetchEnvCellsInLandblock, which re-runs the full landblock decode + light bake (Academy 568 cells) on the main wasm instance and re-queues collision piles.",
+    "file": "rynth/indoor_router.js",
+    "line": 1118,
+    "mitigation": "Build the planning graph once per landblock before recording and cache it; never during a take."
+   },
+   {
+    "what": "Under ?drawPools (default off, needs several other flags) cell surface meshes move into pools and are no longer children of the cell containers, so Box3/raycasts over containers miss walls.",
+    "file": "scene3d/pool_envcells.js",
+    "line": 122,
+    "mitigation": "Use wasm sweeps for clearance; keep drawPools off for film sessions."
+   },
+   {
+    "what": "Pre-spawn / no player pose: getCurrentCellId()==0 makes every walk return empty and the visibility tick leave containers as they are.",
+    "file": "scene3d/cells.js",
+    "line": 3095,
+    "mitigation": "Film mode requires a spawned player session; gate on getLocalPlayerPoseCellResolved()."
+   },
+   {
+    "what": "Straight-down tilts through stairwell openings (doorway rows with |nz|>0.7): a lookAt with fixed up (AC +Z = THREE +Y) is degenerate at 90 deg pitch and flips.",
+    "file": "rynth/indoor_router.js",
+    "line": 112,
+    "mitigation": "Drive camera orientation with quaternion slerp / parallel-transport frames, not lookAt with a fixed up vector."
+   },
+   {
+    "what": "Terrain-LOS memo resets whenever the camera moves >0.75 m, so fast camera moves pay ~11+ terrainHeightAt calls per surviving aperture per frame.",
+    "file": "scene3d/portal_clip.js",
+    "line": 152,
+    "mitigation": "Expect higher CPU on fast outdoor dolly shots near towns; budget frame time on the 1070."
+   }
+  ],
+  "recommendations": [
+   "Add a film viewer-cell override to cells.js updateViewerCell (read e.g. scene3d.filmViewer?.cell first; still call setViewerCell + publishViewerCell). Track the film camera's cell each frame with resolveViewerCell(prevCamPos, camPos, 0.3, prevCell); on cuts seed with the planner's target cell and sanity-check it with cellAcBox containment.",
+   "Request (orchestrator, needs a wasm rebuild) a small export like cellContainingPoint(x,y,z,hintLb) wrapping SpatialScene::current_cell_for_arrival / cell_contains_point (membership BSP). There is no exact JS point->cell test today.",
+   "Run the film camera update before tickCellVisibility3D (pre-tick hook in loop.js) and call camera.updateMatrixWorld(). Otherwise discard 1-3 frames after every cut or portal crossing (walks stale by one frame, occlusion queries 1-2 frames late).",
+   "Plan dungeon moves on the portal graph: buildStitchedGraphFromWasm([lb]) once per landblock (cached), findPath with a camera-specific variant that ignores isDropEdge (cameras can fly shafts), then build splines through doorway rows: control points at centroid +/- k*normal, z = bottom + height/2. Width is not in the row, so clamp lateral offsets conservatively or take widths from aperture polygons (outdoor) / a new export (interior).",
+   "Validate every candidate spline with clipCameraToCellSpace (start = tracked cell) plus sweepSphereAgainstCellMesh/CellStatics/Entities over the path cells and their portalCellIds neighbours (radius >= 0.3 m). In town buildings also sweep sweepSphereAgainstBuildingMesh. Never use terrainHeightAt indoors.",
+   "Before a dungeon/interior take: teleport the PLAYER into the target landblock (ACE admin @teleloc/@telepoi), wait for envCellLoadedLbs.has(lb) and window.__interiorBuildPending === false, and keep the camera within that landblock. Streaming, eviction and the sealed purge all follow the player.",
+   "Recording flags: ?punchSidedness=on (retail portal_side gate, fewer far-side door bleeds); consider ?rigCellGate=on and ?particleCellGate=on so rigs and particles in undrawn rooms do not show through walls; keep ?portalStencil, ?cellBugParity and ?drawPools off; ?occlusionCull=off can remove cut-latency pops at a perf cost.",
+   "Use the WB.Terminal pvs-visibility-snapshot / cell-portal-graph-sweep commands offline to build the site ontology (dungeon cells, PVS, portal counts) that the agent/JEV match lyrics against, so the plan exists before the client boots.",
+   "Keep film helpers pure, dependency-free modules (like portal_clip.js / indoor_router.js) so they get targeted node tests (pattern: tests/viewer_cell.test.mjs, tests/portal_clip.test.mjs, tests/rynth_indoor_doorways.test.mjs, rynth_indoorsim_test.cjs). Parallel agents run only single targeted tests.",
+   "Nothing in this subsystem calls any LLM API. The Claude agent drives it over CDP through window.liveScene3d / window.__sessionHandle. JEV (OpenRouter Decisions API) can rank candidate shots, using the telemetry here (drawn-cell set, aperture screen area from getPViewCellClips, clearance margins) as typed features."
+  ],
+  "openQuestions": [
+   "Does viewer_cell_outdoors ever resolve MOUTHED dungeons (dungeon cells in a surface landblock with outdoor-facing portals but no CBldPortal building entry)? It floods only building transit cells. Unverified; this decides whether a camera can follow the player from the surface into such a dungeon without a cut.",
+   "Interior (cell-to-cell) portal polygon vertices are not exported to JS, only centroid/normal/height/bottom rows. Is a new export needed for doorway width and exact fly-through clearance, or are the cell-mesh sweeps enough?",
+   "How do the ?indoorDepthSplit relayer (viewer LB) and the player-keyed sealed cull interact when the viewer cell's landblock differs from the player's (e.g. a camera in a neighbouring LB's building)? Not exercised in code comments.",
+   "Server-side object visibility: ACE streams NPCs and creatures by the player's position. A film camera far from the player in a big dungeon may see empty rooms. This belongs to the entity subsystem, but it limits how far the camera can roam.",
+   "Are THREE.Raycaster hits on the fused cell meshes (hidden containers, frozen matrixWorld) reliable enough for cheap per-frame clearance? Not verified; the wasm sweeps are authoritative.",
+   "indoor_router's cross-landblock stitching assumes seam doorways, but docs/2026-08-13 \u00a76 says CellPortal and PVS never cross a landblock. Do any physically connected multi-LB interiors exist that film paths must stitch?",
+   "getPViewCellClips returns only the first-reached aperture per cell. Is that enough for 'room visible through doorway' shot scoring, or does a cell seen through two doors need the follow-up multi-view?"
+  ],
+  "dataSources": [
+   {
+    "name": "EnvCell / LandblockInfo / Environment DAT records",
+    "location": "wasm global manifest source keys eor/cell (lb|0xFFFE LandblockInfo, lb|0x0100+i EnvCell) and eor/portal (0x0D Environment, 0x01/0x02 stabs); source DATs ~/ac_base_dats",
+    "format": "binary DAT records, decoded in src/lib.rs fetch_env_cells_in_landblock",
+    "notes": "Whole-landblock granularity; urgent fetch lane; served dist must contain the cell layer"
+   },
+   {
+    "name": "CellSceneSnapshot (wasm)",
+    "location": "src/lib.rs publish_cell_scene_snapshot (:50027)",
+    "format": "in-memory: current_cell, is_indoor, render_set, cell_aabbs, cell_portal_polygons(from,to,flat verts,portal_side), portal_map, derived tables",
+    "notes": "Rebuilt only on a geometry-key change; covers ALL loaded landblocks; source of every render walk"
+   },
+   {
+    "name": "Live JS registry",
+    "location": "window.liveScene3d.cellContainers3d (Map cellId->Group), .cellsGroup, .worldRoot, .wasmExports, .envCellLoadedLbs; window.__sessionHandle",
+    "format": "three.js objects + SessionHandle wasm object",
+    "notes": "liveScene3d is an init snapshot object, but cellContainers3d is the same Map the builders mutate (index.js:3759)"
+   },
+   {
+    "name": "Indoor/outdoor architecture reference",
+    "location": "docs/2026-08-13-indoor-outdoor-cell-architecture.md",
+    "format": "markdown",
+    "notes": "Verified retail facts: render split on cellId<0x100, outside_view reachability, portals never cross a landblock, dungeon extents, classification by numBuildings==0"
+   },
+   {
+    "name": "WB.Terminal oracle",
+    "location": "WorldBuilder.Terminal (dotnet), commands cell-portal-graph-sweep / pvs-visibility-snapshot; driver validate_cell_portal_graph.cjs",
+    "format": "JSON over stdin",
+    "notes": "Offline portal graph integrity + per-cell PVS; heavy (dotnet) so orchestrator-only on the laptop"
+   },
+   {
+    "name": "URL flag registry",
+    "location": "docs/url-flags.md (rows for viewerCell :1121, indoorDepthSplit :300, portalPunch :292, punchSidedness :299, portalStencil :291, eagerDungeons :549, dungeonStreamGate :550, envcellRing :572, sealedCull :598, sealedEvict :601, camCellClamp :472, camIndoorObjects :473, indoorDoorways :1754)",
+    "format": "markdown table",
+    "notes": "Trust the in-code reader over the docs cell when they disagree (punchSidedness history)"
+   }
+  ]
+ },
+ {
+  "area": "CAMERA CONTROLLERS + FRAME LOOP (holtburger-web scene3d: camera.js, camera_math.js, loop.js tickPerFrame, index.js init3D/tick/render, adaptive_render_scale.js, shader_logdepth.js, frame_pose.js, harness moving_rig/moving_path, perf-worker camset.mjs)",
+  "summary": "All paths are relative to HB=$REPO/external/holtburger/apps/holtburger-web unless absolute. I read every cited line myself. Three r184 (index.html:986 importmap; node_modules/three 0.184.0); postprocessing 6.39.1.\n\n(1) CAMERASWITCHER + COORDINATE FRAME\n- Class `CameraSwitcher` (scene3d/camera.js:408) is built once in init3D (index.js:3652-3689) with persp `camera` = PerspectiveCamera(60, cssW/cssH, 0.1, 5000) (index.js:1625; layers 0 and 1, :1650) and `orthoCamera` from createOrthoCamera (camera.js:368: 100 m frustum height at zoom 1, near 0.1, far 5000, layer 1 enabled).\n- Modes are CAMERA_MODES=[\"follow\",\"topDown\",\"orbit\"] (:195). A C-key press edge cycles them (`_installModeToggle` :3196). `activeCamera` is persp in follow and orbit, ortho in topDown. The renderer draws `liveScene3d.cameraSwitcher.activeCamera ?? camera` (index.js:2722). Nothing outside scene3d drives the camera; plugins only read it.\n- Key state:\n  - followYaw is a compass bearing: AC forward = (sin yaw, cos yaw).\n  - followPitch is positive looking down, init 0.3, clamped to [FOLLOW_PITCH_MIN -0.5, FOLLOW_PITCH_MAX 1.4] (:215-216).\n  - followDistance is 6 m. The retail zoom continuum (default on) runs 0.5..10 m plus in-head.\n  - Also: keys{w,a,s,d,q,e,shift}, controls (OrbitControls only in orbit), predictedPlayerPos, _prevEyeAc, _camStiffness (null = hard lock).\n  - Flags read once in the ctor (:606-690); live setters window.__setCam*/__setAutoFollow* (:759-846); localStorage `holtburger_camera_v1` overrides (:853-881).\n- `tick(dt)` (:1179-1196) runs in this order:\n  1. `_smoothToIntegrator(dt)` (:2664): direct-assigns the wasm pose into predictedPlayerPos. This feeds entities.getLocalPlayerWorldPos (entities.js:15818-15836), and through it lighting, the shadow gate, single-shadow recentre and far-terrain fallback, plus the local rig when ?rustPose=off.\n  2. `_updateCombatTargetTracking`.\n  3. `_updateAutoFollow`, which mutates followYaw.\n  4. `this.positionCamera(dt)` (an instance property lookup, so it can be overridden per instance).\n  5. `controls.update()`.\n  6. `_dispatchMovement()`.\n- `positionCamera(dt)` (:1536-1702):\n  - p = `_safePlayerPos()` in AC world metres. With ?rustPose on by default, this is the wasm integrator pose LB-folded via `_integratorWorldPose` (:2621).\n  - follow branch: ideal eye = p - fwd*d*cos(pitch), z = p.z + d*sin(pitch) + 1.0.\n    - Under camViewerStep (default on), only the terrain floor is applied first (`_terrainFloorZ`).\n    - look = (p.x, p.y, p.z + 1.6 - sin(pitch)*4) (LOOK_LIFT_DIST_M :223), plus optional cast bias. Then guardLookHorizontal (:1645-1655).\n    - `_applyViewerStep` (:2073): lerp from the last swept eye toward the ideal by stiffnessFrac (frac 1 = hard lock), then sweep pivot\u2192sought, and publish the swept eye. Orientation is ideal-eye\u2192look via Matrix4.lookAt plus quaternion slerp(frac).\n    - Legacy path: clip-first then `persp.position.set(...acToThree)` + `persp.lookAt(...acToThree)`.\n    - Then near-fade opacity on the local player.\n  - orbit branch: only sets `controls.target = acToThree(p + 1 m)`.\n  - topDown branch: ortho at p.z + 300, `ortho.up = (0,0,-1)` (AC north up), lookAt p.\n- `?camDebug=on` (exact match, ctor :463-473; `_installCamDebug` :1457-1534) replaces `this.positionCamera` with a wrapper that returns early while `_camDebugParked`. It installs `window.__cam`:\n  - `park()` returns true. `release()` returns false. `parked` getter.\n  - `set(ex,ey,ez,tx,ty,tz)`: AC world metres; implies park. Writes `cs.activeCamera` (that is the ORTHO camera in topDown): position = acToThree(eye), `up.set(0,1,0)`, `lookAt(acToThree(target))`, `updateMatrixWorld(true)`; returns info().\n  - `orbit(tx,ty,tz,dist,azDeg,elDeg)`: eye = t + (dist*cos(el)*sin(az), dist*cos(el)*cos(az), dist*sin(el)). az is the compass bearing of the EYE from the target (deg CW from north); el is degrees above horizon.\n  - `player(dist,az,el,dz=1)`: orbit around the LIVE `world()` pose, so it drifts (moving_path.mjs:8-27).\n  - `fov(v)`: perspective only; sets fov + updateProjectionMatrix; does NOT park.\n  - `info()` returns {pos: THREE coords rounded, fov, parked, mode, world: AC}.\n  - `world()` = getLocalPlayerPose() folded, box freed.\n- \"Landblock folded\": getLocalPlayerPose returns landblock-LOCAL x,y in [0,192) plus landblockId 0xXXYYcccc (d.ts:2342-2365). World = (XX*192 + x, YY*192 + y, z). This is the same convention as @teleloc cell+local and moving_path.cellToWorld (:56-59).\n- Mapping to three.js:\n  - worldRoot (index.js:1552-1555) is a Group whose ONLY transform is rotation.x = -pi/2; there is no translation.\n  - All terrain/buildings/statics/cells/entities live inside it in ABSOLUTE AC world metres (entity root.position = AC coords).\n  - There is NO floating origin or rebasing anywhere (grep for floatingOrigin/rebase/worldRoot.position writes returned nothing).\n  - The camera is NOT parented (parent null), so the renderer auto-updates its matrixWorld at render (three.module.js:17571). camera.position and quaternion are therefore THREE world coords.\n  - three = acToThree(ax,ay,az) = [ax, az, -ay] (adapter.js:1817). Inverse is (x, -z, y) (moving_rig.mjs:62). AC east = +X, AC north = -Z, AC up = +Y.\n  - An identity camera looks AC north with AC up.\n- A film controller must write `persp.position = acToThree(eyeWorldAC)` and `persp.quaternion` in the three frame. My derivation (no repo citation): `rotation.set(-pitchDown, -bearing, roll, 'YXZ')` gives AC forward (cos p*sin b, cos p*cos b, -sin p).\n- Doc trap: the camera.js:19-23 header says camera positions are AC coords. That is stale; the code uses acToThree since the 2026-05-18 fix (:1085-1097).\n\n(2) PER-FRAME ORDER\n- index.js `tick(nowTs)` (:2487) in order:\n  1. dt: first frame 0.016. If raw dt > max(0.5 s, 1.5\u00d7frame interval), dt is forced to 0 for 10 frames (disabled under renderOnDemand). Otherwise dt = min(raw, 0.1) (:2311-2339, :2497-2514).\n  2. `await syncTickHop` (default ?syncPhysicsTick: handle.tickMovement() + one microtask). This makes tick async.\n  3. `liveScene3d.frameTime = {tsMs, tsSec, dt}` (:2532).\n  4. `tickPerFrame` (:2538), then acMoons.\n  5. Audio listener = active camera pos/quat (:2551-2592).\n  6. LRU eviction / slot grid / terrain audit / reaper (all player-LB).\n  7. ambientRuntime.\n  8. RENDER (:2722-2984):\n     - Portal space owns the frame: black + tunnel only.\n     - Composer path: `atmospherePipeline.preFrameSkySync(skyDome, activeCam)` (sky camera copies pos/quat/fov/aspect, sky_dome.js:711-721), cloud preRender, `atmospherePipeline.render(activeCam, dt)`, overlays.\n     - nullRender: exit.\n     - Direct path: sky pass, layer masks, optional indoor split, renderer.render.\n  9. Every exit goes through `_postRenderStreamSlot()` (:2360) and then `scheduleNext()` (:2403). renderOnDemand never re-arms; targetFps paces with setTimeout+rAF; portal space paces at 30 fps.\n- loop.js `tickPerFrame` (:2780) is wrapped in beginPoseFrame/endPoseFrame (frame_pose.js: one getLocalPlayerPose crossing per frame, frozen snapshot). Body order:\n  - #0 `__netFramePump` (singleDriver, :2817).\n  - #1 `tickCellVisibility3D`: viewer cell plus a frustum/PView render set from the camera MVP; stencil/punch/seal feeds (:2857-2867).\n  - #1.5 `tickFrustumCull` (:2879).\n  - #2 [RP3 PVS, 10 Hz] PVS expansion and far ring.\n  - terrain uTime, VFX oscillators, weather, terrainVfx (grass).\n  - #4 [SKY] sun dir.\n  - #5 fxLights; `tickLightingForCellState`, which includes `updateCsm(activeCam)` (lighting.js:1687-1700) and the player-centred single-shadow recentre (:1662-1676); flicker; shadow receive gate.\n  - #7-#12 [SKY, 10 Hz]: sky lighting, fog color, `atmosphereLights.tick(state, cam.position)` (:3136), IBL, atmosphereSky, `skyDome.tick(dt, activeCam)` (:3194), weather.\n  - #13 `cameraSwitcher.tick(dt)` (:3233-3243).\n  - tickPortalSpace; animated surfaces.\n  - #15/16/19 `entityManager.tick(dt)` (mixers; the default particle tick is inside), drains, remote poses, `applyLocalPlayerPoseFromIntegrator`, serverTurn.\n  - A11-S3 particle phase (only if ?particleClock).\n  - fx ribbons / weaponFx / showcase.\n  - #20 [RP3 NAME] nameplate DOM tick; selection brackets DOM.\n- Consequences:\n  - Cell visibility, viewer cell, frustum cull, CSM fit and sky all run BEFORE the camera tick. They read `camera.matrixWorldInverse` from the PREVIOUS render, so they lag the camera by one frame. Object3D.lookAt also refreshes matrixWorld with the old rotation.\n  - Entities and particles update AFTER the camera, so a tracked subject's pose is one frame old. The local player under rustPose is current.\n  - RP6 particles call `updateMatrixWorld` themselves (particle_manager.js:937-963).\n- Clocks: rAF ts drives frameTime. RP3 throttles, the shadow gate and IBL use live `performance.now()`. Particles are absolute-clock, or with ?particleClock=sim use loop dt capped at wall time.\n- Cadence flags:\n  - `?targetFps=N` paces the loop.\n  - `?renderOnDemand=1`: one boot frame, then idle. `window.__renderOnce()` (:3007) calls `tick(performance.now())` and returns before an async frame completes. adaptiveRes is off.\n  - `?nullRender=1`: full sim, no GPU submission.\n  - `?netDrainHz=N` (:3031-3084) runs the FULL tickPerFrame (camera + animation) on setInterval with its own dt, independent of renders.\n- There is NO pre/post-render hook registry; per-frame calls are hard-wired. Usable extension points: the per-instance positionCamera override (camDebug pattern), the renderer.render monkeypatch (camset.mjs), scene.onBeforeRender (fires per renderer.render call, several per composer frame), and `__renderOnce` external stepping.\n\n(3) PER-FRAME CAMERA READERS\nCamera-relative (these follow a film camera correctly):\n- FrustumCuller (culling.js:154-185, 271-319): AC-space MVP from projection\u00b7matrixWorldInverse\u00b7worldRoot. Distance cull is opt-in via ?cullDist.\n- Cell render set: `getRenderSetWithFrustum(mvp)` + `getRenderSetWithPView(mvp, 0)` (cells.js:3020-3087).\n- CSM: 3 cascades at 30/100/300 m (csm.js:59). Refit whenever camera pos/rot/fov/aspect/near/zoom changes past thresholds (:121, :140, :412+). updateCsm itself calls camera.updateMatrixWorld/updateProjectionMatrix.\n- Entity animation tick gate: 120 m from the active camera (entities.js:2887-2896, :16069-16098; ?maxTickDist).\n- Particle RP6: frustum or 220 m cap, rechecked every 6 ticks (particle_manager.js:165-193).\n- Dynamic entity LOD: reads `liveScene3d.camera` (the persp object, NOT activeCamera) at 2 Hz and respawns on band crossing (entities.js:16146-16200; ?dynLod=off).\n- Others: statics billboards / LOD diag (statics.js:4197, :4286), THREE.LOD (render camera), sky dome skyCell + sky camera, atmosphere probe altitude, audio listener, nameplate LOD, tex_upgrade_queue side planes (:437), SSAO (reads `this.camera.projectionMatrix` and `far` per frame, ssao.js:219-223), three fog (view distance).\n\nPlayer-centred (these break when the camera is far from the player):\n- Viewer cell: cells.js `updateViewerCell` (:2849-2906) calls `resolveViewerCell(player head z+1.5 \u2192 camera eye, r 0.3, seed = playerCell)`. The Rust side (scene.rs:5673) walks 0.25 m steps, max 256. A void exit (wall) keeps the last reached cell. Outdoors it floods the 3\u00d73 landcell buildings. So a film camera in a dungeon room not reachable in a straight line from the player's head gets the WRONG viewer cell, and the walks are rooted wrong.\n- Light pool cell mode: `getRenderSet(1)` plus the player reference point (lighting.js:2001-2022, 2156+).\n- Single-shadow frustum is recentred on the player (lighting.js:1662-1676).\n- Shadow-receive gate: buildings/statics within 80 m of the player (loop.js:2478; buildings.js:262; statics.js:247).\n- Grass pool is re-centred on the player (terrain_grass.js:19-24).\n- Streaming and residency: LRU current LB from the player rig (index.js:6596-6616); PVS expansion from the player render set; far ring from the player LB (far_terrain.js:1070-1086).\n\n(4) NEAR/FAR/FOV/RESIZE/LOG DEPTH\n- Projection:\n  - Perspective is near 0.1, far 5000, vertical fov 60.\n  - `?retailFov=on` (opt-in) makes fovY = gameFov / (aspect - 0.1) rad (camera_math.js:542-559, index.js:1629-1639).\n  - `logarithmicDepthBuffer: true` (index.js:1162). Custom ShaderMaterials must use shader_logdepth.js `withLogDepth`, or their depth test against the world is wrong.\n- Resize (index.js:1869-1916, debounced 150 ms) resets persp.aspect, re-derives fov under retailFov, updates the ortho left/right, and resizes the composer and clouds. Agent-mode canvas is up to 4096\u00d72160 (:881-897).\n- Animating fov per frame (`cam.fov = f; cam.updateProjectionMatrix()`, exactly what `__cam.fov` does) is safe for dolly zoom:\n  - pmndrs EffectMaterial.copyCameraSettings stores projectionMatrix/projectionMatrixInverse uniforms BY REFERENCE (postprocessing build/index.js:5122-5127), and EffectPass.render never re-copies (:15645-15655), so fov propagates.\n  - Sky camera copies fov per frame; SSAO reads the projection per frame; CSM refits every frame while fov changes (cost).\n  - `camera.userData.csmFitFov` lets CSM fit a different fov (csm.js:393).\n  - Near/far, however, are copied BY VALUE only when the camera is set or retargeted, so keep near/far constant.\n\n(5) DEGENERATE LOOK DIRECTIONS AND COLLISION\n- Three r184 `Matrix4.lookAt` (node_modules/three/build/three.core.js:10306-10346): when up is exactly parallel to the view it nudges `_z.z += 0.0001` (or `_z.x` if |up.z|=1).\n  - With `up = (0,1,0)`, exactly straight down gives screen-up = AC north; straight up gives AC south (my derivation from that code).\n  - A tilt through vertical therefore snaps yaw or flips the image.\n  - `__cam.set` always forces up = (0,1,0) and has no roll.\n- Existing guards:\n  - follow pitch clamp [-0.5, 1.4];\n  - in-head dirZ clamp \u00b10.8 (camera_math.js:72);\n  - `guardLookHorizontal` (camera_math.js:339-380, MIN_LOOK_HORIZ_M 0.5): if camera\u2192look horizontal separation < 0.5 m, it synthesises look = cam + dir*0.5, with dir from followYaw, then the near-degenerate sign, then last good, then north. It counts `_degenerateBasisFrames`, exposed via `cameraBasisGuard()` (camera.js:1148);\n  - topDown uses `up = (0,0,-1)`;\n  - retailViewerStep returns fwd=null and keeps the last orientation when look == eye.\n- Spring arm = `_clipCameraAgainstWorld` (camera.js:1769-1971). Pivot is player z+1.5 with a 0.3 m sphere and 0.02 skin (camRetailSphere default; legacy 1.6 / 0.5 / 0.2). Steps:\n  1. terrain floor (`terrainHeightAt` + 0.7, outdoors);\n  2. building AABB (opt-in);\n  3. building triangles;\n  4. statics;\n  - 4b. scenery;\n  5. EnvCell mesh over `getRenderSet(1)`;\n  - 5b. cell statics;\n  - 5c. BSP entities (doors; creatures exempt);\n  6. `clipCameraToCellSpace` (indoor).\n- Each hit sets final = start + delta*max(0, t - skin/len) (:1802-1813). Under camViewerStep, pull-in is immediate and re-extension is damped only if stiffness is set. There is NO predictive look-ahead.\n\n(6) BEST SEAM FOR A FILM CONTROLLER\n- Add a `?film=on` exact-match opt-in that installs a positionCamera wrapper in the CameraSwitcher ctor, cloning `_installCamDebug` (camera.js:1457-1465). It costs nothing when off because no wrapper is installed. Rules:\n  - Keep `tick()` running: `_smoothToIntegrator` feeds the player pose to lighting, the rig and the LRU; `_dispatchMovement` feeds input.\n  - Drive the SAME persp object; do not use a new camera.\n  - Write position + quaternion + fov, then call `updateMatrixWorld(true)`.\n  - Force follow mode.\n- For in-frame consistency (cull, cell, CSM and viewer cell seeing THIS frame's pose), add a one-line pre-tick hook in index.js tick just before `tickPerFrame` (:2532-2538). Alternatively, drive with `?renderOnDemand=1`: set the pose, call `__renderOnce`, wait, capture \u2014 exactly moving_rig's applyPose\u2192step, which works because `__cam.set` calls `updateMatrixWorld(true)` before the tick.\n- Things that fight an external camera:\n  - follow/topDown re-derive the pose every tick unless parked;\n  - OrbitControls.update() is called by tick even when parked and always rewrites position + lookAt (OrbitControls.js:688, 786-788);\n  - C toggles to topDown, which switches activeCamera to ortho;\n  - autoFollow and combat tracking keep mutating followYaw, so the camera snaps on release;\n  - the near-fade / in-head opacity latch persists while parked;\n  - resize resets aspect and fov;\n  - ?portalFovFade (opt-in) writes fov;\n  - `atmospherePipeline.render(cam)` retargets only some passes on a camera-object change; ssaoPass and layeredHaze need `setCamera` (atmosphere_pipeline.js:2131-2163 vs 2236-2249);\n  - dyn-LOD reads `liveScene3d.camera`.\n- Follow mode uses right-drag listeners, not pointer lock.\n\n(7) HARNESS PATH CODE\n- moving_path.mjs is pure, node-side:\n  - `poseTable(spec)` (:128) gives frame-indexed rows [ex,ey,ez,tx,ty,tz] in AC world metres. Modes: orbit, dolly (closed loop), hop (per-stop orbit plus an @teleloc event on each stop's first frame).\n  - Also: `cellToWorld` (:56), `normalizeSpec` (:81, validates and throws), `tableChecksum` (FNV-1a over 1 mm quantisation, :192) and `realisedChecksum` (:219).\n  - Its rules \u2014 pose is a function of frame index not wall clock, the table is built in node, the anchor is pinned \u2014 are exactly what a film take needs.\n  - Missing for film: easing/splines, roll, a fov channel, and quaternion rows (rows are lookAt targets, so they are degenerate at vertical).\n- moving_rig.mjs `movingRigSource()` (:51) installs `window.__mbench`:\n  - install(payload) sets `renderer.info.autoReset=false`;\n  - applyPose(k) calls `__cam.set`;\n  - step() runs `__renderOnce`, then a rAF yield, then up to 3 extra yields for the async syncPhysicsTick frame;\n  - run() is a warm lap then a measure lap, with a realised-pose checksum and resident-LB churn hash (`terrainBakedLbs`);\n  - `_maybeEvent` sends chat (@teleloc) and waits one rAF.\n  - Reusable as the film stepper plus \"rehearsal lap\" and \"world settled\" gates.\n- moving-bench.mjs `buildUrl` (:198-210) is the proven URL recipe: nosw, quality=mid, adaptiveRes=off, renderScale=1, camDebug=on, vfxGauge=on, autoLogin\u2026agent=1, plus renderOnDemand=1&netDrainHz=30. It also uses `acquireHeavyLock` (one heavy job per box).\n- camset.mjs (19 lines) connects over CDP to 127.0.0.1:9333, picks the page whose URL contains \"holtburger-web\", calls `__cam.set(...)`, waits 400 ms, wraps `renderer.render` to `toDataURL(\"image/jpeg\", 0.85)` after the final `getRenderTarget()===null` draw (an in-task, HUD-free canvas grab with no preserveDrawingBuffer), waits \u22643 rAF or 4 s, restores render, and releases unless `keep`. The playwright-core path is hard-coded.\n\nClient film code must not call any Anthropic API. Claude Code drives the page over CDP (`page.evaluate`); JEV/OpenRouter belongs in the orchestration layer, not in the scene3d camera module.",
+  "apis": [
+   {
+    "name": "CameraSwitcher (class)",
+    "file": "scene3d/camera.js",
+    "line": 408,
+    "signature": "new CameraSwitcher({scene3d, perspectiveCamera, orthoCamera, domElement, sessionHandle /*obj or ()=>handle*/, getPlayerWorldPos /*()=>{x,y,z} AC world m*/, getPlayerHeading})",
+    "what": "Owns follow/topDown/orbit modes, activeCamera, keystate, follow yaw/pitch/distance, the clip chain, movement dispatch. Constructed in init3D at index.js:3652; reachable as liveScene3d.cameraSwitcher (null for ~35 s after in-world, poll first).",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher.tick",
+    "file": "scene3d/camera.js",
+    "line": 1179,
+    "signature": "tick(dt)",
+    "what": "Order: _smoothToIntegrator(dt) \u2192 _updateCombatTargetTracking(dt) \u2192 _updateAutoFollow(dt) \u2192 this.positionCamera(dt) \u2192 controls.update() \u2192 _dispatchMovement(). Called from loop.js:3235 (#13).",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher.positionCamera",
+    "file": "scene3d/camera.js",
+    "line": 1536,
+    "signature": "positionCamera(dt)",
+    "what": "Per-mode pose derivation from _safePlayerPos(). follow: ideal eye behind player + look point + guardLookHorizontal + _applyViewerStep/_applyStiffness/hard set + near-fade. orbit: only controls.target. topDown: ortho 300 m above, up (0,0,-1). An INSTANCE property lookup in tick(), so it can be wrapped per instance (camDebug does).",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher.switchMode",
+    "file": "scene3d/camera.js",
+    "line": 891,
+    "signature": "switchMode(next: 'follow'|'topDown'|'orbit')",
+    "what": "Disposes the previous controller and per-mode DOM listeners, resets _prevEyeAc. follow \u2192 right-drag mouselook listeners, activeCamera=persp. orbit \u2192 new OrbitControls(damping 0.08), activeCamera=persp. topDown \u2192 activeCamera=ortho.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher.getActive / cameraBasisGuard",
+    "file": "scene3d/camera.js",
+    "line": 1137,
+    "signature": "getActive(): Camera; cameraBasisGuard(): {degenerateFrames, lastGoodDir, followYaw, followPitch, mode}",
+    "what": "Active render camera, and the LIVE-03 degenerate-basis diagnostic (camera.js:1148).",
+    "verified": true
+   },
+   {
+    "name": "window.__cam (camDebug rig)",
+    "file": "scene3d/camera.js",
+    "line": 1484,
+    "signature": "park(); release(); parked; set(ex,ey,ez,tx,ty,tz); orbit(tx,ty,tz,dist,azDeg,elDeg); player(dist,azDeg,elDeg,dz=1); fov(v); info(); world()",
+    "what": "Installed only with ?camDebug=on (exact match, camera.js:463-473). set/orbit/player imply park and write activeCamera via acToThree + up(0,1,0) + lookAt + updateMatrixWorld(true). orbit az = eye bearing from target, deg CW from north; el = deg up. fov only for perspective and does not park. info().pos is in THREE coords; info().world and world() are AC world metres (LB folded).",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._clipCameraAgainstWorld",
+    "file": "scene3d/camera.js",
+    "line": 1769,
+    "signature": "_clipCameraAgainstWorld(playerPos, idealX, idealY, idealZ, ctx=this._camClipContext(), terrainFloor=true) \u2192 {x,y,z}",
+    "what": "Spring-arm sweep chain from pivot (player z+1.5, r 0.3, skin 0.02 under camRetailSphere) to the ideal eye: terrain floor, optional building AABB, building tris, statics, scenery, EnvCell mesh over getRenderSet(1), cell statics, BSP entities, clipCameraToCellSpace. Frees each CollisionHit. All inputs in AC world metres.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._camClipContext / _terrainFloorZ",
+    "file": "scene3d/camera.js",
+    "line": 1979,
+    "signature": "_camClipContext() \u2192 {handle, landblockId, indoor}|null; _terrainFloorZ(ctx,x,y,z) \u2192 z",
+    "what": "Clip-chain context: indoor = landblockId&0xffff >= 0x100 when ?indoorCam is on. Terrain floor = terrainHeightAt + 0.5 + 0.2 outdoors (camera.js:2006).",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._applyViewerStep / _applyStiffness",
+    "file": "scene3d/camera.js",
+    "line": 2073,
+    "signature": "_applyViewerStep(dt,p,ctx,idealX,idealY,idealZ,lookX,lookY,lookZ); _applyStiffness(dt,finalX,finalY,finalZ,lookX,lookY,lookZ) (camera.js:2117)",
+    "what": "Retail smoothing. Lerps the eye by stiffnessFrac and slerps the quaternion toward the Matrix4.lookAt(pos, look, persp.up) basis. Snaps when unseeded, frac>=1, or a jump >50 m.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._applyCameraPlayerFade",
+    "file": "scene3d/camera.js",
+    "line": 2156,
+    "signature": "_applyCameraPlayerFade(opacity 0..1)",
+    "what": "Quantised (1/128), deduped push to entityManager.setLocalPlayerCameraOpacity(localGuid, q). Use it to hide or restore the cameraman avatar while keeping camera.js's dedupe cache coherent.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._integratorWorldPose / getPredictedPlayerWorldPos / getPlayerWorldPosition / _safePlayerPos / setPreviewTarget",
+    "file": "scene3d/camera.js",
+    "line": 2621,
+    "signature": "_integratorWorldPose() \u2192 {x,y,z,landblockId}|null; getPredictedPlayerWorldPos() \u2192 {x,y,z}|null (:2704); getPlayerWorldPosition(outVec3) \u2192 THREE-frame Vector3 (:3241); _safePlayerPos() \u2192 AC {x,y,z} (:3249); setPreviewTarget({x,y,z}|null) (:3286)",
+    "what": "Player pose sources. AC world metres except getPlayerWorldPosition, which returns THREE coords and is rotation-invariant (used for light sorting).",
+    "verified": true
+   },
+   {
+    "name": "createOrthoCamera",
+    "file": "scene3d/camera.js",
+    "line": 368,
+    "signature": "createOrthoCamera(canvas) \u2192 OrthographicCamera",
+    "what": "Top-down ortho: frustum height 100 m at zoom 1, near 0.1, far 5000, layer 1 enabled. Zoom range [0.2, 8] via wheel.",
+    "verified": true
+   },
+   {
+    "name": "acToThree",
+    "file": "scene3d/adapter.js",
+    "line": 1817,
+    "signature": "acToThree(ax, ay, az) \u2192 [ax, az, -ay]",
+    "what": "AC world metres to THREE world coords for objects outside worldRoot (cameras, lights). Inverse: (x, -z, y).",
+    "verified": true
+   },
+   {
+    "name": "retailViewerStep",
+    "file": "scene3d/camera_math.js",
+    "line": 426,
+    "signature": "retailViewerStep(prevEye|null, idealEye, frac, sweepFn?, look?) \u2192 {sought, eye, fwd|null, snapped}",
+    "what": "Pure retail viewer order: smooth toward the unclipped ideal, then sweep. Reusable as a boom smoother with a pluggable collision sweep.",
+    "verified": true
+   },
+   {
+    "name": "guardLookHorizontal",
+    "file": "scene3d/camera_math.js",
+    "line": 339,
+    "signature": "guardLookHorizontal(camX, camY, lookX, lookY, fallback{x,y}, lastGood{x,y}|null) \u2192 {x, y, degenerate, dirX, dirY}",
+    "what": "Ensures the camera\u2192look horizontal separation is at least MIN_LOOK_HORIZ_M=0.5 (:322). Synthesises the look point from fallback, then the near-degenerate sign, then lastGood, then north.",
+    "verified": true
+   },
+   {
+    "name": "stiffnessFrac / STIFFNESS constants",
+    "file": "scene3d/camera_math.js",
+    "line": 139,
+    "signature": "stiffnessFrac(stiffness, dt) \u2192 clamp(stiffness*dt*10, 0, 1); STIFFNESS_SNAP_DIST_M=0.0004 (:153); STIFFNESS_TELEPORT_SNAP_M=50 (:161)",
+    "what": "Retail frame-rate-dependent smoothing fraction.",
+    "verified": true
+   },
+   {
+    "name": "applyRetailFov / retailVerticalFovDeg",
+    "file": "scene3d/camera_math.js",
+    "line": 553,
+    "signature": "applyRetailFov(camera, gameFovDeg) \u2192 bool; retailVerticalFovDeg(gameFovDeg, aspect) \u2192 deg|null (:542)",
+    "what": "Retail fovY = gameFov/(aspect-0.1). The caller must call updateProjectionMatrix.",
+    "verified": true
+   },
+   {
+    "name": "trackedTargetYaw / inPlaceTurnYawDelta",
+    "file": "scene3d/camera_math.js",
+    "line": 479,
+    "signature": "trackedTargetYaw(pivot{x,y}, target{x,y}) \u2192 atan2(dx,dy)|null; inPlaceTurnYawDelta(prevH, h, {moved,keyed,dragging}) (:464)",
+    "what": "Compass-bearing yaw toward a target, in followYaw convention.",
+    "verified": true
+   },
+   {
+    "name": "readLocalPlayerPose / beginPoseFrame / endPoseFrame",
+    "file": "scene3d/frame_pose.js",
+    "line": 68,
+    "signature": "readLocalPlayerPose(handle) \u2192 frozen {x,y (LB-local 0..192), z, heading (CCW yaw; compass=-yaw), landblockId, isOnGround}|null",
+    "what": "One wasm crossing per tickPerFrame window. Frees the wasm box. Keyed on __wbg_ptr so the Proxy'd window.__sessionHandle shares the snapshot.",
+    "verified": true
+   },
+   {
+    "name": "tickPerFrame",
+    "file": "scene3d/loop.js",
+    "line": 2780,
+    "signature": "tickPerFrame(scene3d, sessionHandle, dt)",
+    "what": "Whole per-frame sim/visibility/camera/entity pass (body :2789-3462). Called by index.js tick (:2538) and by the ?netDrainHz interval (:3047).",
+    "verified": true
+   },
+   {
+    "name": "tickFrustumCull / FrustumCuller.update",
+    "file": "scene3d/culling.js",
+    "line": 271,
+    "signature": "tickFrustumCull(scene3d) \u2192 FrustumCuller|null; FrustumCuller.update(camera, worldRoot) (:154)",
+    "what": "AC-space frustum from camera.projectionMatrix \u00b7 camera.matrixWorldInverse \u00b7 worldRoot.matrixWorld. Culls statics and entities per object; terrain is opt-in. Exported, so it could be re-run after a late camera write.",
+    "verified": true
+   },
+   {
+    "name": "tickCellVisibility3D / updateViewerCell",
+    "file": "scene3d/cells.js",
+    "line": 2926,
+    "signature": "tickCellVisibility3D(scene3d, sessionHandle); updateViewerCell(scene3d, handle, playerCell, playerIndoor) (internal, :2849)",
+    "what": "Resolves the viewer cell by sweeping player head \u2192 camera eye, then calls setViewerCell. Builds the render set from getRenderSetWithFrustum \u222a getRenderSetWithPView using the camera MVP. Flips cell/group visibility.",
+    "verified": true
+   },
+   {
+    "name": "wasm resolveViewerCell / setViewerCell / getViewerCell / getViewerRenderSet",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5983,
+    "signature": "resolveViewerCell(from_x,from_y,from_z,to_x,to_y,to_z,radius,player_cell) \u2192 u32; setViewerCell(cell) (:6395); getViewerCell() (:4820); getViewerRenderSet() (:4825)",
+    "what": "Viewer-cell walk (Rust scene.rs:5673: 0.25 m steps, max 256). Seed cell plus a from-point inside it gives cur_cell continuity, so a film controller could carry its own cell by calling it with prevEye \u2192 eye and seed = previous film cell.",
+    "verified": true
+   },
+   {
+    "name": "wasm getRenderSetWithFrustum / getRenderSetWithPView / getRenderSet / getCurrentCellId",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4575,
+    "signature": "getRenderSetWithFrustum(mvp: Float32Array[16] col-major) \u2192 Uint32Array; getRenderSetWithPView(mvp, max_depth=0) (:4614); getRenderSet(depth) (:4541); getCurrentCellId() (:4266)",
+    "what": "Camera-MVP cell visibility, rooted at the current or viewer cell. Outdoor case: all loaded EnvCell AABBs in the frustum.",
+    "verified": true
+   },
+   {
+    "name": "wasm camera sweeps",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6505,
+    "signature": "sweepSphereAgainstBuildingMesh(f\u2026,t\u2026,r,lbId); sweepSphereAgainstStatics(\u2026,lbId) (:6611, 3\u00d73 ring); sweepSphereAgainstScenery(\u2026,lbId) (:6598, 3\u00d73); sweepSphereAgainstCellMesh(\u2026,cellIds: Uint32Array) (:6522); sweepSphereAgainstCellStatics(\u2026,cellIds) (:6540); sweepSphereAgainstEntities(\u2026,r,max_range_m) (:6565, BSP-only, creatures exempt); sweepSphereAgainstObjects(\u2026,r,missile_guid,exempt_local_player) (:6585); cameraSweepCollision(\u2026,lbId) (:3496); clipCameraToCellSpace(\u2026,r,start_cell) \u2192 t|undefined (:3621); terrainHeightAt(x,y) \u2192 z|undefined (:6652)",
+    "what": "AC world-metre collision and line-of-sight primitives. Return CollisionHit {t, x, y, z, normalX/Y/Z} (d.ts:752-781), which must be .free()'d.",
+    "verified": true
+   },
+   {
+    "name": "index.js window.__renderOnce",
+    "file": "scene3d/index.js",
+    "line": 3007,
+    "signature": "window.__renderOnce() \u2192 bool",
+    "what": "Runs tick(performance.now()) once: sim + render. Async under default ?syncPhysicsTick, so it returns before the frame completes. With ?renderOnDemand=1 this is the only frame driver besides an optional netDrain interval.",
+    "verified": true
+   },
+   {
+    "name": "index.js window.__setRenderScale / __setGameFov",
+    "file": "scene3d/index.js",
+    "line": 1268,
+    "signature": "__setRenderScale(n in (0,2]); __setGameFov(deg) (:1634, only with ?retailFov=on)",
+    "what": "Live pixel-ratio scale (rebuilds composer and cloud RTs) and retail game FOV.",
+    "verified": true
+   },
+   {
+    "name": "atmospherePipeline.render / setCamera",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 2131,
+    "signature": "render(cam, dt=0); setCamera(cam) (:2236); preFrameSkySync(skyDome, mainCamera, atmosphereSky) (:1904)",
+    "what": "render() retargets world/cells/aerial/mask/fx passes ONLY when the camera OBJECT changes (and not ssao/haze). setCamera() also retargets ssaoPass and layeredHaze.",
+    "verified": true
+   },
+   {
+    "name": "skyDome.syncSkyCamera / tick",
+    "file": "scene3d/sky_dome.js",
+    "line": 711,
+    "signature": "syncSkyCamera(mainCamera); tick(dt, camera) (:610)",
+    "what": "Sky camera copies position/quaternion/fov/aspect each frame before the composer render. tick re-centres skyCell on the camera, but runs in the RP3 SKY group before the camera tick.",
+    "verified": true
+   },
+   {
+    "name": "updateCsm",
+    "file": "scene3d/csm.js",
+    "line": 412,
+    "signature": "updateCsm(csmState, camera, sunDir?)",
+    "what": "Fits 3 cascades (30/100/300 m) to the active camera. Skips when pos<1e-4 m\u00b2, rot<2e-6 and the projection is unchanged. Calls camera.updateMatrixWorld/updateProjectionMatrix. Reads camera.userData.csmFitFov (:393).",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setLocalPlayerCameraOpacity / getLocalPlayerWorldPos",
+    "file": "scene3d/entities.js",
+    "line": 18991,
+    "signature": "setLocalPlayerCameraOpacity(guid, opacity 0..1); getLocalPlayerWorldPos() \u2192 AC {x,y,z} (:15818, prefers cameraSwitcher.getPredictedPlayerWorldPos)",
+    "what": "Hide the local avatar (hierarchical, includes held items). Player position for lighting, shadow gate and similar systems.",
+    "verified": true
+   },
+   {
+    "name": "three Matrix4.lookAt (degenerate up)",
+    "file": "node_modules/three/build/three.core.js",
+    "line": 10306,
+    "signature": "Matrix4.lookAt(eye, target, up)",
+    "what": "If up \u00d7 z is exactly zero it nudges z.z += 0.0001 (or z.x if |up.z|==1), giving a fixed north-up basis straight down and south-up straight up with up=(0,1,0). Object3D.lookAt (:12382) is used by all camera code.",
+    "verified": true
+   },
+   {
+    "name": "poseTable / cellToWorld / tableChecksum",
+    "file": "harness/lib/moving_path.mjs",
+    "line": 128,
+    "signature": "poseTable(spec{mode:'orbit'|'dolly'|'hop', frames, anchor{x,y,z}, dist, el, elAmp, elPeriod, az0, laps, dz, hops[{cell,x,y,z}], dwell}) \u2192 {spec, rows[[ex,ey,ez,tx,ty,tz]], events[], checksum}; cellToWorld(cell,lx,ly,lz) (:56); tableChecksum(rows, events) (:192)",
+    "what": "Deterministic frame-indexed camera path tables in AC world metres, with hop events (@teleloc) and a 1 mm-quantised FNV checksum.",
+    "verified": true
+   },
+   {
+    "name": "movingRigSource / window.__mbench",
+    "file": "harness/lib/moving_rig.mjs",
+    "line": 51,
+    "signature": "page.evaluate(movingRigSource()); __mbench.install({spec,rows,events,warmFrames,drive}); applyPose(k); realisedEye(); step(); run(); _maybeEvent(k)",
+    "what": "In-page stepper: __cam.set per row, then __renderOnce, then rAF yields that tolerate the async tick. Warm and measure laps, realised-pose checksum, resident-LB churn hash.",
+    "verified": true
+   },
+   {
+    "name": "camset.mjs",
+    "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/scripts/perf-worker/coldboot/camset.mjs",
+    "line": 1,
+    "signature": "node camset.mjs ex ey ez tx ty tz out.jpg [keep]",
+    "what": "CDP 127.0.0.1:9333 still-shot: __cam.set, then a 400 ms settle, then capture via a renderer.render wrap with toDataURL after the final null-target draw, then release unless keep.",
+    "verified": true
+   },
+   {
+    "name": "moving-bench buildUrl",
+    "file": "harness/moving-bench.mjs",
+    "line": 198,
+    "signature": "buildUrl(arm) \u2192 URL string",
+    "what": "Proven headless URL: nosw=1&quality=mid&adaptiveRes=off&renderScale=1&renderDiag=on&camDebug=on&vfxGauge=on&autoLogin=1&account=X&password=X&autoSpawn=first&agent=1 [+renderOnDemand=1&netDrainHz=30]. main() uses acquireHeavyLock and a __bootStateHistory gate.",
+    "verified": true
+   },
+   {
+    "name": "ParticleManager RP6 emitter sphere test",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1239,
+    "signature": "_rp6ShouldCull(emitter, camera) (module-private)",
+    "what": "Emitter obstruction sphere = emitter.parent.getWorldPosition() (THREE coords), radius = emitter.info.sortingSphere.radius + |emitter.parentOffset.position|. Basis for a particle-obstructs-lens test. Managers: entityManager._worldParticleManager (entities.js:14588), scene3d._staticParticleManager (statics.js:4986).",
+    "verified": true
+   }
+  ],
+  "seams": [
+   {
+    "what": "positionCamera instance override (camDebug pattern): ctor-time wrapper replacing this.positionCamera, gated on an exact-match URL flag",
+    "file": "scene3d/camera.js",
+    "line": 1460,
+    "filmUse": "Install under ?film=on. Wrapper: if film active, call film.apply(dt, this.persp) and skip follow/orbit/topDown re-derivation; otherwise call the original. Costs nothing when off because no wrapper exists. Keep tick() itself running: _smoothToIntegrator feeds player pose to lighting, rig and LRU; _dispatchMovement feeds input. Runs at loop #13, before entity tick and render."
+   },
+   {
+    "what": "Pre-tickPerFrame insertion point in index.js tick (after frameTime is stamped, before tickPerFrame)",
+    "file": "scene3d/index.js",
+    "line": 2537,
+    "filmUse": "Proposed one-line hook such as `liveScene3dRef.film?.preFrame(ts, dt)`. Writing the camera here lets cell visibility/viewer cell (#1), frustum cull (#1.5), CSM fit (#5) and sky (#7-12) see THIS frame's pose instead of last frame's. Required for clean hard cuts without throwaway frames. Off cost is one optional-chain property read."
+   },
+   {
+    "what": "window.__renderOnce external stepping (renderOnDemand)",
+    "file": "scene3d/index.js",
+    "line": 3007,
+    "filmUse": "Deterministic frame-indexed capture: set pose (updateMatrixWorld(true)), call __renderOnce, wait for the async frame, then capture. tick(nowTs) already accepts a timestamp, so a proposed __renderOnce(tsMs) variant would give a fixed film dt (=1/fps < 0.1 clamp) for mixers and sky."
+   },
+   {
+    "what": "_postRenderStreamSlot: every render exit (composer, direct, nullRender, portal-space) passes through it right after GL submission",
+    "file": "scene3d/index.js",
+    "line": 2360,
+    "filmUse": "Natural internal post-render hook site, e.g. film.postRender(renderer), for in-task canvas readback (toDataURL/readPixels/captureStream frame request) without preserveDrawingBuffer. The external alternative is the camset.mjs renderer.render wrap."
+   },
+   {
+    "what": "cells.js updateViewerCell: viewer cell = resolveViewerCell(player head \u2192 camera eye, seed player cell) then setViewerCell",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "filmUse": "Add an override so a free film camera carries its own viewer cell: resolveViewerCell(prevEye \u2192 eye, r, seed = previous film cell), then setViewerCell. Without it, dungeon shots away from the player's straight-line line-of-sight root the PView/BFS walks in the wrong cell and rooms vanish."
+   },
+   {
+    "what": "cameraSwitcher.activeCamera / liveScene3d.camera (persp) as the single render camera",
+    "file": "scene3d/index.js",
+    "line": 2722,
+    "filmUse": "Drive the existing persp object; do not introduce a new camera. Composer retarget, SSAO/haze camera refs and dyn-LOD (liveScene3d.camera) all assume this object. Force switchMode('follow') when film takes over."
+   },
+   {
+    "what": "Local avatar opacity",
+    "file": "scene3d/camera.js",
+    "line": 2156,
+    "filmUse": "cs._applyCameraPlayerFade(0) hides the cameraman character in shots (and 1 restores it), keeping camera.js's dedupe cache coherent. It wraps entityManager.setLocalPlayerCameraOpacity (entities.js:18991)."
+   },
+   {
+    "what": "wasm collision and line-of-sight sweeps plus clipCameraToCellSpace and terrainHeightAt",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6505,
+    "filmUse": "Film boom and obstruction checks. Subject-pivot \u2192 eye sphere sweeps for walls between subject and lens; prevEye \u2192 nextEye for collision-free dolly/drone moves; clipCameraToCellSpace to keep dungeon fly-throughs inside cell space; terrainHeightAt for terrain clearance. Pass the landblock and cell ids of the CAMERA segment (not the player's). Free each CollisionHit."
+   },
+   {
+    "what": "retailViewerStep + guardLookHorizontal pure math",
+    "file": "scene3d/camera_math.js",
+    "line": 426,
+    "filmUse": "Reusable boom smoother (smooth-then-sweep with immediate pull-in and damped re-extension) and horizontal-basis guard. The pure module is node-testable (tests/camera_retail_math.test.cjs pattern), so film_camera.js math should live in a similar import-free module."
+   },
+   {
+    "what": "Particle emitter obstruction sphere (RP6)",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1239,
+    "filmUse": "Test whether an emitter sphere (anchor world pos, radius sortingSphere.radius + |parentOffset|) intersects the near-plane region or the subject\u2192lens segment, so the director can avoid lens-filling particles. Emitters also freeze while culled, rechecked every 6 ticks, so pre-roll after cuts."
+   },
+   {
+    "what": "camera.userData.csmFitFov",
+    "file": "scene3d/csm.js",
+    "line": 393,
+    "filmUse": "During dolly zooms or extreme FOV, park a game fov here so CSM cascades keep fitting a sane frustum. portal_space.js already uses this trick."
+   },
+   {
+    "what": "Frame-indexed path tables + in-page stepper",
+    "file": "harness/lib/moving_path.mjs",
+    "line": 128,
+    "filmUse": "Template for film take tables (rows indexed by frame, built in node, anchor pinned, checksum of intended vs realised path, hop events for @teleloc between shots). Extend rows to eye + quaternion/yaw-pitch-roll + fov. Pair with moving_rig.mjs's step/warm-lap/LB-churn gates."
+   },
+   {
+    "what": "scene3d.frameTime",
+    "file": "scene3d/index.js",
+    "line": 2532,
+    "filmUse": "The film controller's per-frame clock {tsMs, tsSec, dt}. Note it is frozen between __renderOnce calls and is not stamped by the netDrain interval."
+   },
+   {
+    "what": "window.__setRenderScale",
+    "file": "scene3d/index.js",
+    "line": 1268,
+    "filmUse": "Supersample captures up to 2x pixel ratio. Pin ?renderScale=N in the URL so the adaptive controller cannot change resolution mid-shot."
+   }
+  ],
+  "hazards": [
+   {
+    "what": "One-frame camera lag for everything before the camera tick. tickCellVisibility3D (#1, viewer cell + render set), tickFrustumCull (#1.5), CSM fit and light sort (#5) and the sky stack (#7-12) run BEFORE cameraSwitcher.tick (#13), reading camera.matrixWorldInverse from the previous render. On a hard cut the first frame is culled and visibility-tested against the previous shot.",
+    "file": "scene3d/loop.js",
+    "line": 2879,
+    "mitigation": "Pose the camera before tickPerFrame (proposed pre-tick hook, or external __cam.set-style write + updateMatrixWorld(true) before __renderOnce). Otherwise render 1-2 discard frames after every cut."
+   },
+   {
+    "what": "Subject tracking lags one frame: remote entity poses, mixers and particles update in entityManager.tick AFTER the camera tick, so a camera aimed at an NPC uses last frame's position. The local player under default ?rustPose reads the current wasm pose.",
+    "file": "scene3d/loop.js",
+    "line": 3263,
+    "mitigation": "Extrapolate subject position by its velocity \u00d7 dt, or do a small post-entity re-aim pass. Avoid jittery look-at by smoothing the target point."
+   },
+   {
+    "what": "Viewer cell is resolved by sweeping from the PLAYER's head to the camera eye (seed = player cell). A void exit keeps the last reached cell. A film camera in a dungeon room not straight-line reachable from the player gets the wrong viewer cell, so PView/BFS walks are rooted wrong and cells disappear.",
+    "file": "scene3d/cells.js",
+    "line": 2860,
+    "mitigation": "Viewer-cell override seam carrying the film camera's own cell via resolveViewerCell(prevEye\u2192eye, seed=prev film cell), or keep the cameraman player in the filmed room."
+   },
+   {
+    "what": "Player-centred systems: streaming/LRU (player rig LB, index.js:6596), PVS expansion (player render set), far ring (far_terrain.js:1070), grass pool re-centred on the player (terrain_grass.js:19-24), shadow-receive gate 80 m around the player (loop.js:2478, buildings.js:262), single-shadow frustum recentred on the player (lighting.js:1662), light pool cell mode (player BFS + player ref point, lighting.js:2001). Shots far from the player lose content, grass, received shadows and lights.",
+    "file": "scene3d/index.js",
+    "line": 6596,
+    "mitigation": "Move the cameraman character (@teleloc/@telepoi) to each shot location and wait for streaming (resident-LB hash stable) before rolling; hide the avatar with _applyCameraPlayerFade(0)."
+   },
+   {
+    "what": "Camera-distance gates: entity animation freezes beyond 120 m from the camera (?maxTickDist); particle emitters culled beyond 220 m or out of frustum, decision re-evaluated only every 6 ticks (newly visible emitters can stay frozen up to ~6 frames after a cut or fast pan); dynamic entity LOD respawns rigs on band crossings at 2 Hz (visible pop during dollies).",
+    "file": "scene3d/entities.js",
+    "line": 2887,
+    "mitigation": "Raise ?maxTickDist for wide shots, use ?dynLod=off for hero shots, and pre-roll \u22656 frames after cuts."
+   },
+   {
+    "what": "lookAt degeneracy: three r184 Matrix4.lookAt nudges z by 1e-4 when up is exactly parallel to the view, so straight-down snaps to a north-up basis and straight-up to south-up regardless of approach yaw. Passing through vertical flips the image. __cam.set always resets up=(0,1,0) and has no roll.",
+    "file": "node_modules/three/build/three.core.js",
+    "line": 10323,
+    "mitigation": "Film controller builds the quaternion directly (yaw/pitch/roll Euler 'YXZ' or a parallel-transported up vector) and never calls lookAt near \u00b190\u00b0. Interpolate orientations with quaternion slerp/squad."
+   },
+   {
+    "what": "OrbitControls.update() is called by CameraSwitcher.tick every frame even while camDebug-parked, and always rewrites camera position and lookAt. Park therefore does not hold in orbit mode. The C key toggles to topDown (activeCamera=ortho); __cam.set would then move the ORTHO camera.",
+    "file": "scene3d/camera.js",
+    "line": 1190,
+    "mitigation": "Film mode forces switchMode('follow') and ignores or blocks the C mode toggle while active."
+   },
+   {
+    "what": "Introducing a separate camera object breaks things: atmospherePipeline.render(cam) retargets only world/cells/aerial/mask/fx passes on an object change (ssaoPass/layeredHaze only via setCamera); fx retarget can recompile on a type change; dynamic LOD reads liveScene3d.camera; CSM/culling read activeCamera.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 2131,
+    "mitigation": "Drive the existing persp camera object only."
+   },
+   {
+    "what": "Near/far must not be animated: pmndrs EffectMaterial.copyCameraSettings copies cameraNear/cameraFar BY VALUE only when mainCamera is set (projection matrices are by reference), and EffectPass.render never re-copies. Changing near/far mis-decodes depth for aerial perspective, horizon dissolve and heat haze.",
+    "file": "node_modules/postprocessing/build/index.js",
+    "line": 5122,
+    "mitigation": "Keep near=0.1/far=5000. Animate only fov via updateProjectionMatrix, which is safe."
+   },
+   {
+    "what": "Wide FOV vs collision radius: the clip chain's 0.3 m viewer sphere covers the 0.1 near-plane corner only at moderate FOV (comment camera.js:286-288). At ~120\u00b0 vertical, 16:9, the corner sits ~0.37 m out (my calculation), so the near plane can poke through walls in tight dungeons.",
+    "file": "scene3d/camera.js",
+    "line": 286,
+    "mitigation": "Film collision radius \u2265 near\u00b7sqrt(1 + tan\u00b2(fovY/2)\u00b7(1+aspect\u00b2)) + skin."
+   },
+   {
+    "what": "Adaptive resolution (default ON) changes renderScale mid-take when frames drop.",
+    "file": "scene3d/index.js",
+    "line": 1298,
+    "mitigation": "Pin ?renderScale=N (also disables adaptive) or ?adaptiveRes=off. It is already off under renderOnDemand/nullRender."
+   },
+   {
+    "what": "Time base is wall-clock: dt=min(raw,0.1), with a recovery freeze (dt=0 for 10 frames after a >0.5 s gap, disabled under renderOnDemand). __renderOnce uses performance.now(). ?netDrainHz runs the FULL tickPerFrame (camera + animation) between renders. RP3 throttles, shadow gate, IBL and particles use live performance.now(). wasm physics self-measures time. Offline capture therefore cannot be fully deterministic.",
+    "file": "scene3d/index.js",
+    "line": 2497,
+    "mitigation": "For live footage use real-time capture on the 1070 with ?targetFps. For offline, add a ts-param __renderOnce and avoid netDrainHz during takes; accept that world sim is wall-clock."
+   },
+   {
+    "what": "tick is async under default ?syncPhysicsTick, so __renderOnce returns before the frame finishes.",
+    "file": "scene3d/index.js",
+    "line": 3002,
+    "mitigation": "Wait rAF/microtasks (moving_rig step() pattern) or capture from inside the post-render slot."
+   },
+   {
+    "what": "Resize resets camera.aspect and, under ?retailFov, recomputes fov; agent-mode canvas tracks the window size (\u22644096\u00d72160).",
+    "file": "scene3d/index.js",
+    "line": 1869,
+    "mitigation": "Fix the CDP window size before takes and re-assert the film fov after any resize."
+   },
+   {
+    "what": "Parked-camera side effects: autoFollow and combat-target tracking keep mutating followYaw while parked (snap on release); the near-fade/in-head opacity latch persists while parked (player may stay ghosted or invisible).",
+    "file": "scene3d/camera.js",
+    "line": 1218,
+    "mitigation": "On film release set _prevEyeAc=null, call _applyCameraPlayerFade(1), and optionally restore the saved followYaw/followPitch."
+   },
+   {
+    "what": "In-canvas overlays end up in canvas captures: speech bubbles are always-on THREE.Sprites (no flag); nameplate sprites are default OFF but ?nameplates=on enables them (?hud=none forces off); portal space hides the world and shows a tunnel after every teleport (default on), plus a WORLD_FADEIN overlay.",
+    "file": "scene3d/speech_bubble.js",
+    "line": 20,
+    "mitigation": "Use ?hud=none; add a film flag to suppress speech bubbles; gate takes on portal space having ended."
+   },
+   {
+    "what": "Doc trap: the camera.js header claims camera positions are AC coords. They are THREE coords (acToThree). __cam.info().pos is THREE, while world() is AC.",
+    "file": "scene3d/camera.js",
+    "line": 19,
+    "mitigation": "Always convert with acToThree / threeToAc (x,-z,y)."
+   },
+   {
+    "what": "Wasm boxes leak if not freed: getLocalPlayerPose() and CollisionHit are wasm-bindgen boxes.",
+    "file": "scene3d/frame_pose.js",
+    "line": 68,
+    "mitigation": "Use readLocalPlayerPose inside the tick; call .free() on every hit after copying .t/.x/.y/.z."
+   },
+   {
+    "what": "Sweep scoping: building-mesh sweep reads only the given landblock; statics/scenery widen to that landblock's 3\u00d73 ring; cell sweeps need explicit cell id lists; sweepSphereAgainstEntities is BSP-only (creatures never block).",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6505,
+    "mitigation": "For film segments pass the camera segment's landblock (floor(x/192)<<24 | floor(y/192)<<16) and viewer render-set cells. Use sweepSphereAgainstObjects or JS entity spheres for creature obstruction."
+   },
+   {
+    "what": "CSM far cascade ends at 300 m from the camera, so aerial/drone wides lose shadows beyond that; CSM refits and re-rasters every frame the camera or fov moves (GPU cost).",
+    "file": "scene3d/csm.js",
+    "line": 59,
+    "mitigation": "Accept or tune splits for aerial takes; budget GPU on the 1070."
+   },
+   {
+    "what": "No floating origin: absolute AC world coords up to ~49 km live in THREE space. float32 ulp is ~4 mm at the map edge (my estimate), relevant only to shaders that compose modelMatrix then viewMatrix separately.",
+    "file": "scene3d/index.js",
+    "line": 1554,
+    "mitigation": "Usually negligible; watch for shimmer in custom shaders at far-east/north landblocks."
+   }
+  ],
+  "recommendations": [
+   "Implement the camera math as an import-free module, e.g. scene3d/film_camera.js (node-testable like camera_math.js): rig state (eye, quaternion, fov, roll), spline/ease evaluators, drone moves. Write orientation directly as a quaternion, e.g. camera.rotation.set(-pitchDown, -bearing, roll, 'YXZ'), which gives AC forward (cos p\u00b7sin b, cos p\u00b7cos b, -sin p) per my derivation. Never use lookAt near \u00b190\u00b0, so straight-down tilts and right-angle corridor turns are continuous; slerp/squad between keyframe quaternions.",
+   "Install the controller only under an exact-match `?film=on`, via a ctor-time positionCamera wrapper exactly like _installCamDebug (camera.js:1457-1465). Keep CameraSwitcher.tick running, drive the existing persp camera object, force switchMode('follow'), and call persp.updateMatrixWorld(true) after each write.",
+   "Add a one-line pre-tick hook in index.js tick before tickPerFrame (:2537) so visibility, cull, CSM, viewer cell and sky see the current pose. For offline takes, drive with ?renderOnDemand=1: set pose, call __renderOnce, wait, capture (moving_rig pattern), and consider adding a ts parameter to __renderOnce for a fixed film dt.",
+   "Add a viewer-cell override seam in cells.js updateViewerCell so a free film camera carries its own cell through portals via resolveViewerCell(prevEye\u2192eye, seed=prev film cell). Validate dungeon dolly segments with clipCameraToCellSpace before shooting.",
+   "Build the obstruction model from the existing primitives:\n- wasm sweeps from subject pivot to eye, and prevEye to nextEye, passing the camera segment's landblock/cells;\n- terrainHeightAt for clearance;\n- sweepSphereAgainstObjects or JS entity spheres for creatures;\n- RP6 emitter spheres (anchor + sortingSphere.radius + |parentOffset|) for particle effects in front of the lens.\nUse a collision radius \u2265 the near-plane corner distance at the shot FOV.",
+   "Treat the cameraman character as a streaming anchor: @teleloc/@telepoi it near each shot, wait until portal space ends and the resident-LB hash (liveScene3d.terrainBakedLbs) stops changing, then hide it with cs._applyCameraPlayerFade(0) and restore it after the take.",
+   "Capture URL recipe, starting from moving-bench buildUrl: nosw=1, agent=1, hud=none, autoLogin\u2026, camDebug/film flag, renderScale=1 or 2 (pins resolution and disables adaptiveRes), maxTickDist raised for wides, dynLod=off for hero shots, and frameBudget=off so sky/PVS do not defer. Avoid netDrainHz during deterministic takes because it advances animation between renders.",
+   "Grab frames in-task right after the final canvas draw (camset.mjs renderer.render wrap, or a film.postRender call in _postRenderStreamSlot) so DOM HUD is excluded and preserveDrawingBuffer is not needed. Prefer canvas.captureStream/MediaRecorder or async readPixels over per-frame JPEG toDataURL for video.",
+   "Animate only fov for dolly zoom (fov + updateProjectionMatrix; distance = subjectHeight/(2\u00b7tan(fov/2))), and set camera.userData.csmFitFov during extreme FOV. Never animate near/far (pmndrs copies them by value).",
+   "After every hard cut, render at least 6 discard or pre-roll frames: RP6 particle recheck interval is 6 ticks, PVS/SKY throttle at 10 Hz, CSM refit and shadow re-raster.",
+   "Reuse moving_path.mjs principles for take tables: frame-indexed rows built in node, pinned anchors, intended-vs-realised checksums, hop events for teleports. Extend rows with quaternion/yaw-pitch-roll and fov channels, and reuse moving_rig's warm 'rehearsal' lap to stream and compile before the recorded lap.",
+   "Film capture runs in headless Chrome, which is a heavy job: one at a time, under capped-build/acquireHeavyLock, and real-GPU takes only on the 1070, off-screen. Client film code makes no Anthropic API calls; the Claude Code session drives it over CDP (page.evaluate on a window.__film API); JEV/OpenRouter calls belong to the orchestration layer."
+  ],
+  "openQuestions": [
+   "Is a one-line pre-tick hook in index.js tick() acceptable, versus living with a one-frame cull/visibility lag plus discard frames after cuts?",
+   "What should the deterministic-time strategy be? tick(nowTs) supports a synthetic timestamp, but RP3 throttles, particles (unless ?particleClock=sim), wasm physics (self-measured) and network events stay on wall clock.",
+   "Does the takram AerialPerspectiveEffect read camera projection and world matrices per frame (FOV animation safe)? Its source in vendor/takram is unread.",
+   "sky_dome.js tick reads session.isCurrentCellIndoor() (line ~619). Is that the player's cell or the setViewerCell-rooted viewer cell inside wasm? It matters for sky and weather when a film camera is indoors and the player is not, or the reverse.",
+   "What is the ParticleManager emitter iteration API (field names for live emitters) for building a particle-obstruction query? Unread.",
+   "Does sweepSphereAgainstBuildingMesh with a non-player landblock id return hits for every resident landblock, i.e. is populateBuildingAabbsForLandblock run for all resident LBs or only near the player? Unverified in Rust.",
+   "resolveViewerCell clamps at 256 steps, so segments over 64 m use steps coarser than 0.25 m. Is that acceptable for a carried film cell across fast drone moves, or should the controller sub-step?",
+   "Should speech-bubble sprites get a film/hud suppression flag? They are always-on with no gate today.",
+   "Should film mode reuse ?camDebug's window.__cam surface (extending set() with roll and a quaternion API), or get a separate window.__film namespace?"
+  ]
+ },
+ {
+  "area": "TERRAIN, STREAMING, RESIDENCY, COORDINATES (holtburger-web; paths relative to HB=external/holtburger/apps/holtburger-web unless absolute)",
+  "summary": "VERIFIED MAP. Every file:line below was read in this pass unless an entry is marked otherwise. Bottom line: all streaming and residency is centred on the PLAYER. The camera only affects render-side things: view-cell walks, fog distance, LOD, frustum culling, and the order the far ring fetches in. A film camera more than ~1 km from the player films a void. The two workable designs are: (A) teleport the character, or a dedicated GM/camera character, near every shot; or (B) add a default-OFF 'film focus' seam at the 6 player-centre sites listed under seams.\n\nQ1 TERRAIN HEIGHT / NORMAL / WATER\n(a) wasm `SessionHandle.terrainHeightAt(world_x, world_y): number|undefined` (pkg/holtburger_web.d.ts:6652).\n- Takes GLOBAL AC world metres: +X east, +Y north, Z up.\n- Returns a triangle-plane height on the retail split diagonal.\n- Reads the collision_scene shadow, which refreshes at most every 100 ms.\n- Both arguments are bound as f32, so they are quantised by up to ~2 mm at Dereth coordinates (terrain_oracle.js:640-656).\n- Returns undefined unless the landblock is in the wasm terrain cache. The only feeder is `populateTerrain` from app/landblock_stream.js:722 `ensureTerrainAroundLandblock`. That runs for the 3\u00d73 around each landblock named by the local player's position packets (world_stream.js:329-332), and terrainPrefetchedLbs only ever grows.\n- So for landblocks 500 m\u20132 km from the player it is UNDEFINED. camera.js:2006 `_terrainFloorZ` uses it with a 0.5+0.2 m margin.\n(b) JS oracle `createTerrainOracle()` (scene3d/terrain_oracle.js:289). It does not depend on THREE.js.\n- `sample(x, y, out?)` (line 481) returns {height, normal{x,y,z}, code, family, cornerCodes[SW,SE,NW,NE], cornerRoads, roadEdgeM, lbX, lbY, lbKey, hasHeight}.\n  - `normal` is the exact AC-frame face normal.\n  - `code` is the nearest-vertex terrain code, masked with &0x1f.\n- `heightAt(x, y)` (line 659) returns a number, or null when the landblock is not cached.\n- `noteLandblock(lbKey, {codes, heights, roads, lbX, lbY})` (line 356) adds a landblock.\n- It is a JS port of terrain_subdiv: cellSwToNeCut :83, triangleHeightInCell :97, triangleGradInCell :123.\n- It matches wasm to ~1e-5 only if you pass `Math.fround(x)`, `Math.fround(y)`.\n- The live instance is `window.__terrainVfx.oracle` / `ensureOracle()` (terrain_vfx.js:624,979). It is fed on every near-ring terrain bake, survives park, and drops a landblock on evict or rebake. It returns NULL for landblocks that were never baked.\n(c) For ANY landblock, regardless of residency, use `liveScene3d.wasmExports.fetch_landblock_heightmaps(Uint32Array[(lbKey|0xFFFF)>>>0], urgent=false)`, which returns `Promise<LandblockMesh[]>` (d.ts:9033).\n- LandblockMesh fields (d.ts:2064-2142): `.heights` Float32Array(81) with idx = vx*9+vy, plus `.terrainCodes`, `.roadCodes`, `.heightMin`/`.heightMax`, and `.positions` in landblock-local coordinates.\n- You must call `.free()` on each mesh.\n- The whole batch rejects if any single id fails.\n- Cost is 6.0\u20138.8 ms per landblock cold and 0.01 ms warm (far_terrain.js:1377-1382).\n- Feeding a private oracle this way gives exact retail heights and normals for a whole flight corridor before you fly it.\n(d) The drawn surface equals the physics surface since 2026-06-26 (terrain.js:7162-7171): subdivided vertex Z is computed with triangle_height_in_cell. Only two visual deviations exist:\n- a rounding fillet of at most 8 cm (terrain_round.js:60/104);\n- water swell with an envelope of ~0.25 m, total \u22640.4 m (terrain.js:954-1000).\n(e) Water is a terrain code, not a separate plane. The default strict set is codes 16-20 (terrain.js:1042). Test with `isWaterCode(code)` (terrain_families.js:213); FAM_WATER = 8. Water surface = terrain height + swell. `retailLandNormals(heights, lbX, lbY)` (far_terrain.js:330) gives retail per-vertex lighting normals.\n\nQ2 WHAT STREAMING IS CENTRED ON: the PLAYER everywhere. There is no camera-driven residency.\n(1) PVS bake ring, `tickPvsLoadExpansion` (cells.js:4388):\n- `seen` = landblock keys of `sessionHandle.getRenderSet(1)` (cells.js:4421). That is the BFS rooted at the PLAYER's cell (d.ts:4530-4541); outdoors it is {player LB}.\n- The ring is radius `scene3d.pvsRingRadius`, default 5 (residency.js:51/187).\n- It fires terrain, statics and buildings nearest-first, with at most 6 bakes in flight.\n- It collapses to 1 indoors, to 0 when sealed, and is capped by fog (cells.js:4489-4516).\n- It publishes `_pvsEffectiveRingRadius` (:4658).\n(2) world_stream `onPositionUpdate` (world_stream.js:251), driven by the local player's KIND_POSITION packets:\n- 3\u00d73 terrain via loadTerrainRing, which goes through the FixedSlotGrid (radius 1) and EdgeParkScheduler.\n- Single-landblock buildings, statics, spawns and EnvCells.\n- 3\u00d73 collision.\n(3) LRU `getCurrentLbId` (index.js:6596-6620) = floor(rig root.position / 192). It drives `tickEviction` (index.js:2605-2631), LOD rebake (:2652), the 1 Hz terrain hole audit (:2663) and the entity reaper (:2686).\n(4) Far ring `playerLb()` (far_terrain.js:1070) = currentLandblockKey ?? playerLbKey ?? getLocalPlayerWorldPos. Camera forward only biases fetch ORDER (:1290-1320, 1359).\n(5) objRadius uses `seen` as its centres (object_radius.js:156; cells.js:4446).\n(6) Subdiv LOD reference `opts.playerLbKey` (terrain.js:5587).\n(7) Viewer cell, render only: a wasm walk from the PLAYER's head to the camera eye (cells.js:2849-2873). It re-roots render walks, not streaming (viewer_cell.js:22-27).\n(8) Server (ACE, external/ACE ObjectMaint.cs:337-355,420-445):\n- Outdoors, objects are visible for the player's current landblock + adjacent, i.e. 3\u00d73.\n- A first sighting needs a 2D distance \u2264112.5 m (InitialClamp).\n- Objects are destroyed 25 s after leaving visibility (:21).\n- The client reaper keep-zone is 8 LB (residency.js:190).\nCamera 500 m\u20132 km from the player:\n- NOTHING new loads for the camera and nothing extra unloads.\n- What the camera sees is the player's world: objects within \u22644 LB, near terrain within \u22645 LB, far albedo terrain within \u22648 LB.\n- Beyond 1632 m from the player's landblock centre there is no ground at all.\nOverride / prewarm: there is NO focus override API.\n- `liveScene3d.previewSpawnArea({cell,x,y,z})` (index.js:4234) works only before spawn; it returns null once a pose exists.\n- Per-landblock loaders are public: loadTerrainForLandblock :4002, _runTerrainRingBatch :4211, loadBuildingsForLandblock :4286, loadStaticsForLandblock :4337, loadEnvCellsForLandblock :3907, loadSpawnsForLandblock :4412. Caveats are in hazards.\n- Runtime knobs: `liveScene3d.pvsRingRadius`, which is read every tick (cells.js:4462), and `landblockLru.maxResident`.\n- Moving the player is the reliable way: `window.__sessionHandle.sendChat('@teleloc \u2026')` (d.ts:6096).\nReadiness signals:\n- `terrainBakedLbs` / `staticsBakedLbs` / `buildingsBakedLbs` / `envCellLoadedLbs`. Note the terrain mark is set BEFORE the mesh attaches (terrain.js:5955 vs 6814).\n- `_streamGuardState.inFlight` keys `terrain:<lbKey>`, `statics:<lbKey>`, `buildings:<lbKey>`.\n- `landblockLru.isParked()`.\n- `_pvsSweepIncomplete === false` (cells.js:4828/4855).\n- `_terrainAuditStats.lastPending`.\n- `window.__farTerrainState().ring`.\n- `__terrainBatch.stats().visibleRows`.\n- `__landblockLru.getStats()`.\n- `__diag.bakeWait()`.\n- `window.__groundDrawnAt`.\n- `window.__interiorBuildPending`.\n- `collisionResidencyDiag()`, whose field terrainHeightLbs counts wasm height-cache landblocks.\n\nQ3 BAKED vs STREAMED.\nClient-baked from dist via wasm, available for any landblock on demand:\n- terrain heightmaps (cell.dat 0xXXYYFFFF);\n- LandblockInfo statics and buildings (0xXXYYFFFE);\n- procedural scenery (dist/scenery/0xXXXX.scenery.jsonl, statics.js:700-714);\n- EnvCell interiors and dungeons (fetchEnvCellsInLandblock);\n- synthetic ACE spawns (dist/spawns/*.jsonl, ~38k landblocks), injected only when there is no session or with `?spawns=force` (spawns.js:123-152). Forcing it with a live session DUPLICATES every spawn.\nServer-streamed: creatures, NPCs, players, items, corpses, etc. These exist only within the player's 3\u00d73 landblocks, with a 112.5 m first-sight clamp.\nSo a far drone shot over terrain the player has not visited shows:\n- terrain plus statics, buildings and scenery only inside the player's object radius;\n- flat albedo terrain with NO trees or buildings at 5\u20138 LB;\n- NO creatures beyond about the player's 3\u00d73;\n- interiors only for the player's landblock and a radius-1 skirt (cells.js:914-938; 1 start per tick, 2 in flight).\n\nQ4 DRAW DISTANCE.\n- Camera: PerspectiveCamera(60\u00b0, near 0.1, far 5000) with logarithmicDepthBuffer (index.js:1625, 1162). `?retailFov=on` gives 90\u00b0.\n- Near ring: pvsRingRadius 5 \u2192 11\u00d711 landblocks, drawn edge (R+0.5)\u00b7192 = 1056 m. `?pvsRingRadius` accepts 0..12. LRU cap = span\u00b2+2\u00b7span+8 = 203 (index.js:6488-6512).\n- Objects: `?objRadius` default 4. Bakes happen for d \u2264 4 and objects are HIDDEN at d > 5 (object_radius.js:52-176); `?objRadius=off` restores full-ring objects.\n- Far Composite Ring (default ON; far_terrain_flags.js:72/85):\n  - radius 8 \u2192 1632 m edge, `?farRadius` 1..16;\n  - 4\u00d74-LB albedo patches, heights only, no objects;\n  - fetches only when the near ring is idle, with a 10 s starvation escape, 2 in flight;\n  - 1 patch bake per frame (~1.2 ms GPU);\n  - a patch appears only after all 16 of its landblocks have baked;\n  - patches retire at d > R+4 (far_terrain.js:1268-1350).\n- Fog: horizon band far = 0.95\u00b7(R_eff+0.5)\u00b7192 (with a 700 m floor), near = max(authored fogMin, 0.62\u00b7edge) (far_terrain_flags.js:283).\n  - With the far ring solid that is ~1012\u21921550 m; with the near ring only, ~655\u21921003 m.\n  - It is applied in loop.js:2273-2310.\n  - It is plane depth from the CAMERA; `?radialFog=on` makes it range-based.\n  - `?fogRingCap` (default ON) shrinks the bake ring to ceil(authored fogMax/192)+1 (~4 at night) (cells.js:873, 4510).\n  - The MAX_LIVE_GEOM=8000 governor can collapse the near ring to effective radius ~3 on long tours (landblock_lru.js:301; far_terrain.js:120-130).\n- From 100\u2013500 m AGL over the player: about a 2.1 km square at full detail and about 3.3 km of albedo terrain, then sky.\n- Pop and latency:\n  - near ring bakes are capped at 6 in flight and skip when the cap is hit;\n  - per-landblock statics stalls of 100\u2013500 ms were measured (bake_worker_client.js:37-45);\n  - EnvCells for Academy are ~568 cells per landblock;\n  - texture tier promotion (t1024, 68 MB) arrives after in-world (bandwidth_tier.js:322);\n  - statics swap to their degraded LOD at 100 m from the camera (statics.js:288).\n- Fast camera moves cause NO streaming. Pops come from camera-distance LOD and from player movement: ring shifts, objRadius hysteresis, and EdgeParkScheduler trailing-edge parks.\n- Bake worker (default ON): its own wasm instance and resource source, a transparent main-thread fallback, and a fetch concurrency split of 8 for the worker and 24 for the main thread (bake_worker_client.js:1-75).\n\nQ5 COORDINATES.\n- Cell id = (x_byte<<24)|(y_byte<<16)|cell.\n  - Outdoor cell = cx\u00b78+cy+1 with cx = floor(localX/24), cy = floor(localY/24), giving 1..64 (radar.js:213; d.ts:4258-4266).\n  - EnvCell ids are \u22650x100.\n  - 0xFFFE = LandblockInfo key; 0xFFFF = terrain record and `userData.lbId` form.\n- lbKey = id & 0xFFFF0000 >>> 0 (landblock_lru.js:494-500). ALWAYS apply `>>> 0`, because bitwise ops give signed int32.\n- Landblock-local x,y run 0..192 m; z is absolute altitude.\n- Global wx = lbX\u00b7192 + x and wy = lbY\u00b7192 + y (app/landblock_stream.js:221; cells.js:712-733).\n- Inverse: lbX = floor(wx/192), with an off-world guard for 0..255 (terrain_oracle.js:489-499).\n- The vertex grid is 9\u00d79 at 24 m spacing, column-major (vx*9+vy).\n- Map coordinates: ew = wx/240 \u2212 101.95 and ns = wy/240 \u2212 101.95 (plugins/map-panel.js:83-90), formatted 'NS, EW' (:108). The retail cell-quantised version is radar.js:224.\n- ACE `@tele [name] 37s,67w`:\n  - NS comes first (CommandParameterHelpers.cs:227, 559-618);\n  - it needs Advocate level \u22655 or above;\n  - it refuses landblocks that are entirely water (AdvocateCommands.cs:155-200).\n- `@teleloc <cellhex> x y z [qw qx qy qz]` uses landblock-local x,y,z and needs Developer access (AdminCommands.cs:911-956).\n- three.js mapping:\n  - worldRoot.rotation.x = \u2212\u03c0/2 (index.js:1552-1555); its children (terrain, entities) are in AC coordinates.\n  - Cameras and lights are outside worldRoot and use three-space coordinates.\n  - `acToThree(ax, ay, az)` = [ax, az, \u2212ay] (adapter.js:1817). The inverse is ac = (tx, \u2212tz, ty) (far_terrain.js:1359-1374) or `worldRoot.worldToLocal` (cells.js:672).\n  - `acQuatToThree(qw, qx, qy, qz)` returns Quaternion(qx, qy, qz, qw) for children of worldRoot (adapter.js:1395).\n- Pose heading: yaw 0 = north (+Y), counter-clockwise, \u03c0/2 = west; compass = \u2212yaw (d.ts:2337-2342).\n- `getLocalPlayerPose()` returns landblock-LOCAL x,y and is a wasm box you must `.free()`.\n- Terrain meshes are placed at (lbX\u00b7192, lbY\u00b7192, 0) in AC coordinates (terrain.js:6689).\n\nQ6 HAZARDS: see hazards[]. The biggest:\n- the player-centred world versus a free camera;\n- fog that follows the camera with a band computed from the player-centred radius, which exposes the edge;\n- terrainHeightAt and the oracle are blind to far landblocks;\n- loadTerrainRing re-centres the player's fixed grid;\n- objRadius hides prewarmed far objects;\n- the guard skip-at-cap;\n- baked marks set before attach;\n- post-teleport stale centre;\n- viewer cell rooted at the player;\n- the service-worker cache.",
+  "apis": [
+   {
+    "name": "SessionHandle.terrainHeightAt",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6652,
+    "signature": "terrainHeightAt(world_x: number, world_y: number): number | undefined",
+    "what": "Exact retail triangle-plane ground Z at GLOBAL AC world (x east, y north). f32-bound (~2 mm quantisation). Reads the collision_scene shadow (\u2264100 ms refresh). undefined unless the LB was populateTerrain'd, which only happens for the 3\u00d73 of player-visited LBs. Used by camera.js:2006 _terrainFloorZ (+0.5+0.2 m).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.populateTerrain",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5772,
+    "signature": "populateTerrain(landblock_id: number, heights: Float32Array /*81*/, terrain_codes: Uint8Array): void",
+    "what": "Feeds the wasm height/water grid used by terrainHeightAt and the integrator. Only caller is app/landblock_stream.js:722 ensureTerrainAroundLandblock (3\u00d73 around each player LB). Film mode could call it for camera LBs, but it also affects physics/water-walk.",
+    "verified": true
+   },
+   {
+    "name": "fetch_landblock_heightmaps",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 9033,
+    "signature": "fetch_landblock_heightmaps(cell_ids: Uint32Array /* (lbKey|0xFFFF)>>>0 */, urgent?: boolean|null): Promise<LandblockMesh[]>",
+    "what": "Residency-independent heights/codes for ANY landblock, read from the dist shards. Access via window.liveScene3d.wasmExports. LandblockMesh: heights Float32Array(81) idx=vx*9+vy, terrainCodes, roadCodes, heightMin/Max, positions LB-local (d.ts:2064-2142). Must .free(). Whole batch rejects on any per-id failure. 6-9 ms/LB cold.",
+    "verified": true
+   },
+   {
+    "name": "createTerrainOracle",
+    "file": "scene3d/terrain_oracle.js",
+    "line": 289,
+    "signature": "createTerrainOracle({getTerrainMeshes?, parkRescanEveryHits?}) -> {noteLandblock(lbKey,{codes,heights,roads,lbX,lbY}), invalidate, clear, sample(x,y,out?), sampleCode, heightAt(x,y), familyCoverage, hasLandblock, stats, keys}",
+    "what": "Deterministic, THREE-free height/normal/terrain-code/road sampler in global AC metres. sample() (line 481) returns {height, normal{x,y,z}, code, family, cornerCodes SW/SE/NW/NE, cornerRoads, roadEdgeM, lbX, lbY, lbKey, hasHeight}; heightAt (line 659) returns number|null. ~486 B/LB. Matches wasm to 1e-5 with Math.fround inputs.",
+    "verified": true
+   },
+   {
+    "name": "cellSwToNeCut / triangleHeightInCell / triangleGradInCell",
+    "file": "scene3d/terrain_oracle.js",
+    "line": 83,
+    "signature": "cellSwToNeCut(globalCellX,globalCellY): boolean; triangleHeightInCell(z00,z10,z01,z11,fx,fy,swNeCut): number (:97); triangleGradInCell(...): [dz/dfx, dz/dfy] (:123)",
+    "what": "Pure retail split-diagonal math (uint32 wraparound via Math.imul). Global cell = lbByte*8 + cellIdx. Use for custom terrain-following, slope, and clearance over a camera footprint.",
+    "verified": true
+   },
+   {
+    "name": "window.__terrainVfx.oracle / ensureOracle",
+    "file": "scene3d/terrain_vfx.js",
+    "line": 624,
+    "signature": "window.__terrainVfx.ensureOracle(): Promise<oracle|null>; window.__terrainVfx.oracle (getter, :979)",
+    "what": "Live shared oracle fed at every near-ring terrain bake. Survives warm-park; drops a landblock on evict/rebake. Null for never-baked LBs. VFX spine is disabled under ?wireframe=1 / ?terrainVfx=off, but ensureOracle still backfills from terrainGroup userData.",
+    "verified": true
+   },
+   {
+    "name": "isWaterCode / familyForCode",
+    "file": "scene3d/terrain_families.js",
+    "line": 213,
+    "signature": "isWaterCode(code): boolean; familyForCode(code): FAM_* (:208); FAM_WATER=8 (:31)",
+    "what": "Water test on a terrain code. Default strict set is 16-20 (?strictWaterCodes reads ON when absent). Water surface = terrain height + swell (~0.25 m envelope).",
+    "verified": true
+   },
+   {
+    "name": "retailLandNormals",
+    "file": "scene3d/far_terrain.js",
+    "line": 330,
+    "signature": "retailLandNormals(heights: Float32Array(81), lbX, lbY): Float32Array(243)",
+    "what": "Retail CLandBlockStruct::calc_lighting per-vertex normals (AC Z-up) from heights alone.",
+    "verified": true
+   },
+   {
+    "name": "acToThree / acQuatToThree",
+    "file": "scene3d/adapter.js",
+    "line": 1817,
+    "signature": "acToThree(ax,ay,az): [ax, az, -ay]; acQuatToThree(qw,qx,qy,qz): THREE.Quaternion(qx,qy,qz,qw) (:1395)",
+    "what": "AC (Z-up, +Y north) \u2192 three world for objects OUTSIDE worldRoot (cameras, lights). Inverse: ac = (tx, -tz, ty), or worldRoot.worldToLocal(v).",
+    "verified": true
+   },
+   {
+    "name": "lbKeyFromXY / lbKeyOf / lbChebyshev / isNearPlayerLb",
+    "file": "scene3d/landblock_lru.js",
+    "line": 494,
+    "signature": "lbKeyFromXY(lbX,lbY)->u32; lbKeyOf(id)->id&0xFFFF0000>>>0 (:498); lbChebyshev(a,b) (:523); isNearPlayerLb(scene3d,lbKey,radius=1) (:550); exported at :2635",
+    "what": "Canonical residency keys. isNearPlayerLb decides the urgent fetch lane (player 3\u00d73 or the server-stamped LB).",
+    "verified": true
+   },
+   {
+    "name": "worldToCoords / coordsToWorld / lbToCoords / formatCoords",
+    "file": "plugins/map-panel.js",
+    "line": 83,
+    "signature": "worldToCoords(wx,wy)->{ew,ns}; coordsToWorld(ew,ns)->{wx,wy} (:88); lbToCoords(landblockId,x,y) (:93); formatCoords(ew,ns)->'42.1N, 33.6E' (:108)",
+    "what": "Map lat/lng: ew = wx/240 - 101.95, ns = wy/240 - 101.95 (E/N positive). Same convention as ACE @loc/@tele.",
+    "verified": true
+   },
+   {
+    "name": "mapCoordsForCell / outdoorCellId / formatRadarCoords",
+    "file": "plugins/radar.js",
+    "line": 224,
+    "signature": "mapCoordsForCell(cellId)->{ew,ns}|null; outdoorCellId(landblockId,x,y) (:213); formatRadarCoords(ew,ns) (:235)",
+    "what": "Retail cell-quantised coords (null indoors). outdoorCellId: cell = cx*8 + cy + 1 with 24 m cells.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getLocalPlayerPose",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4408,
+    "signature": "getLocalPlayerPose(): LocalPlayerPose|undefined {landblockId, x, y (LB-local 0..192), z (abs), heading, isOnGround}",
+    "what": "Authoritative player pose. A wasm box: must .free(). x/y are LB-LOCAL. Heading: 0 = north, CCW, compass = -yaw (d.ts:2337-2342). World conversion pattern: cells.js:712 playerAcPosition, camera.js:1470-1482.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.getRenderSet / getCurrentCellId / isCurrentCellIndoor",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 4541,
+    "signature": "getRenderSet(depth): Uint32Array (sorted cell ids); getCurrentCellId(): number (:4266); isCurrentCellIndoor(): boolean (:5011)",
+    "what": "Player-rooted BFS render set. Its LB keys are the 'seen' set that centres the whole streaming ring (cells.js:4421).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.resolveViewerCell / setViewerCell",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5983,
+    "signature": "resolveViewerCell(fx,fy,fz,tx,ty,tz,radius,start_cell): number; setViewerCell(cell) (:6395; 0 clears)",
+    "what": "Retail viewer cell: walks a segment from a start cell. cells.js:2849 calls it each frame from player head (+1.5 m) to camera eye with r = 0.3. Roots the render walks (indoor split, portal punch, sky) only, not streaming.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.cameraSweepCollision",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3496,
+    "signature": "cameraSweepCollision(fx,fy,fz,tx,ty,tz,radius,landblock_id): CollisionHit|undefined",
+    "what": "Sphere sweep against building AABBs for the given LB. Only has data for LBs whose collision was populated (player 3\u00d73).",
+    "verified": true
+   },
+   {
+    "name": "populateBuildingAabbsForLandblock / populateStaticsAabbsForLandblock",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 10420,
+    "signature": "populateBuildingAabbsForLandblock(lb): Promise<number>; populateStaticsAabbsForLandblock(lb): Promise<number> (:10463)",
+    "what": "Free wasm exports that queue per-LB collision AABBs, applied on the next movement tick. Needed if film obstruction tests run far from the player. JS dedup lives in app/landblock_stream.js:584.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.collisionResidencyDiag",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3658,
+    "signature": "collisionResidencyDiag(): string (comma-packed; includes terrainHeightLbs)",
+    "what": "Readiness check for the wasm height/collision caches. Wrapped by __diag.collision.residency() (scene3d/diag/collision.js:195).",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d.loadTerrainForLandblock",
+    "file": "scene3d/index.js",
+    "line": 4002,
+    "signature": "loadTerrainForLandblock(lbX, lbY, prefetchedMesh?): Promise<Mesh|null> (never rejects)",
+    "what": "Per-LB guarded terrain bake. Already-baked fast path unparks and touches. Non-urgent bakes are SKIPPED (resolve null) when 6 bakes are in flight. Bake path: terrain.js:5867 bakeTerrainForLandblock.",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d._runTerrainRingBatch",
+    "file": "scene3d/index.js",
+    "line": 4211,
+    "signature": "_runTerrainRingBatch(cx, cy)",
+    "what": "Batched 3\u00d73 terrain fetch and bake around (cx,cy) (terrain_ring.js:61). Does NOT touch the player's FixedSlotGrid, so it is safe for prewarming.",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d.loadTerrainRing",
+    "file": "scene3d/index.js",
+    "line": 4132,
+    "signature": "loadTerrainRing(cx, cy)",
+    "what": "Player ring driver. Routes through FixedSlotGrid.update (fixed_grid.js:296). DO NOT call with a non-player centre (see hazards).",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d.loadStaticsForLandblock / loadBuildingsForLandblock / loadEnvCellsForLandblock / loadSpawnsForLandblock",
+    "file": "scene3d/index.js",
+    "line": 4337,
+    "signature": "loadStaticsForLandblock(lbX,lbY) (:4337); loadBuildingsForLandblock(lbX,lbY) (:4286); loadEnvCellsForLandblock(landblockId) (:3907); loadSpawnsForLandblock(lbX,lbY) (:4412)",
+    "what": "Per-LB object/interior/synthetic-spawn loaders. Statics/buildings are guarded (cap 6, cooldown 2.5 s) and run afterObjectBake, which hides objects beyond objRadius+1. EnvCells are NOT behind the guard.",
+    "verified": true
+   },
+   {
+    "name": "liveScene3d.previewSpawnArea + cameraSwitcher.setPreviewTarget",
+    "file": "scene3d/index.js",
+    "line": 4234,
+    "signature": "previewSpawnArea({cell,x,y,z}) -> diag|null; cameraSwitcher.setPreviewTarget({x,y,z}|null) (camera.js:3286)",
+    "what": "Pre-spawn only (returns null once a player pose exists). Streams the ring around a point and frames it. The pattern to copy for a film prewarm.",
+    "verified": true
+   },
+   {
+    "name": "tickPvsLoadExpansion",
+    "file": "scene3d/cells.js",
+    "line": 4388,
+    "signature": "tickPvsLoadExpansion(scene3d, sessionHandle)",
+    "what": "The ring driver (~10 Hz, loop.js:2894). Centre = render-set LBs. Fires terrain/statics/buildings nearest-first. Publishes _pvsEffectiveRingRadius (:4658) and _pvsSweepIncomplete (:4828/:4855).",
+    "verified": true
+   },
+   {
+    "name": "LandblockLRU (window.__landblockLru)",
+    "file": "scene3d/landblock_lru.js",
+    "line": 591,
+    "signature": "isParked(k) (:857), unpark(k) (:2367), park(k) (:2138), touch(k) (:984), tickEviction(cur, sealed) (:1156), getStats() (:2568), maxResident (field)",
+    "what": "Residency set (cap 203). Warm-park pool 160 MB. Ring-protect around the PLAYER only. Reclaims oldest beyond the ring when over cap or when live geometry exceeds 8000.",
+    "verified": true
+   },
+   {
+    "name": "guardedStreamBake",
+    "file": "scene3d/stream_bake_guard.js",
+    "line": 168,
+    "signature": "guardedStreamBake(state, kind, lbKey, run, {urgent, maxInFlight=6, cooldownMs=2500})",
+    "what": "Global bake gate. Skips (resolves null) when in flight, cooling down, or over the cap unless urgent. In-flight keys are `${kind}:${lbKey}` in liveScene3d._streamGuardState.inFlight.",
+    "verified": true
+   },
+   {
+    "name": "farTerrainState / window.__farTerrainState",
+    "file": "scene3d/far_terrain.js",
+    "line": 1600,
+    "signature": "window.__farTerrainState() -> {flags, fog, nearMeasuredRadiusLb, farRingSolidRadiusLb, ring:{patchesBaked, patchesFetching, patchesReady, fetchInFlight, policyOk,...}}",
+    "what": "Far-ring readiness probe plus the fog actually applied this frame.",
+    "verified": true
+   },
+   {
+    "name": "computeFogBand",
+    "file": "scene3d/far_terrain_flags.js",
+    "line": 283,
+    "signature": "computeFogBand({authoredMin, authoredMax, rEffLb, frac, floorM, floorMinLb, horizon, horizonNear}) -> {near, far, drawnEdgeM, mode}",
+    "what": "Pure fog-band math used in loop.js:2294. Film mode can reuse it with a camera-relative drawn edge.",
+    "verified": true
+   },
+   {
+    "name": "registerTerrainVfx",
+    "file": "scene3d/terrain_vfx.js",
+    "line": 231,
+    "signature": "registerTerrainVfx({id, scope:'landblock', enabled(), quality(), onLandblockReady(ctx), onLandblockPark(k), onLandblockUnpark(k,ctx), onLandblockGone(k)}) -> {id, unregister}",
+    "what": "Event-driven terrain residency notifications (attach/park/unpark/evict). ctx carries heights, codes and the oracle. Inert under wireframe.",
+    "verified": true
+   },
+   {
+    "name": "window.__cam (?camDebug=on)",
+    "file": "scene3d/camera.js",
+    "line": 1484,
+    "signature": "__cam.set(ex,ey,ez,tx,ty,tz) (AC world, parks camera); orbit(tx,ty,tz,dist,azDeg,elDeg); player(dist,az,el,dz); park(); release(); fov(v); info(); world()",
+    "what": "Existing AC-coordinate camera override (debug flag). set() uses up = (0,1,0) + lookAt, which degenerates when looking straight down.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sendChat (admin teleports)",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6096,
+    "signature": "window.__sessionHandle.sendChat('@teleloc 0xXXYYCCCC x y z [qw qx qy qz]' | '@tele 37s,67w' | '@telepoi <name>')",
+    "what": "Moves the PLAYER, which re-centres every ring. ACE handlers: /home/wbterminal/ace-server/Source/ACE.Server/Command/Handlers/AdminCommands.cs:911 (teleloc, Developer), :875 (telepoi), AdvocateCommands.cs:156 (tele, NS first).",
+    "verified": true
+   },
+   {
+    "name": "ensureSpawnsForLandblock (synthetic spawns)",
+    "file": "scene3d/spawns.js",
+    "line": 521,
+    "signature": "ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports); mode ?spawns=auto|force|off (:123)",
+    "what": "Replays pre-baked ACE spawn JSONL through the entity hook. auto = only when there is no session. force + live session = duplicated entities.",
+    "verified": true
+   }
+  ],
+  "seams": [
+   {
+    "what": "Streaming centre set `seen` (render-set LB keys) feeding ring radius, objRadius centres and nearest-first sort",
+    "file": "scene3d/cells.js",
+    "line": 4421,
+    "filmUse": "Union in film-focus LB keys behind a default-OFF flag, so the ring, object bakes and the hide/show hysteresis also cover the shot area (lines 4421-4446, 4693-4705)."
+   },
+   {
+    "what": "LRU reclaim centre and ring protection (getCurrentLbId + _wantedRingRadius + candidate filter)",
+    "file": "scene3d/landblock_lru.js",
+    "line": 1150,
+    "filmUse": "Exempt film-focus LBs from reclaim (like lbRingProtect) and touch them each tick, so prewarmed shot areas are not parked as 'oldest'. Centre resolver is at index.js:6596."
+   },
+   {
+    "what": "Far ring centre playerLb()",
+    "file": "scene3d/far_terrain.js",
+    "line": 1070,
+    "filmUse": "Optionally centre or union the far ring on the camera or focus LB for long drone flights (albedo only, cheap: ~2 KB/LB)."
+   },
+   {
+    "what": "Fog band computation (computeFogBand call in tickDistanceFogColor)",
+    "file": "scene3d/loop.js",
+    "line": 2294,
+    "filmUse": "Compute drawnEdge relative to the CAMERA (distance from camera to the nearest unloaded edge in view), or pin with ?farFogNear/?farFogFar, so off-player shots never show the void edge."
+   },
+   {
+    "what": "Viewer cell resolution (player head \u2192 camera eye)",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "filmUse": "In dungeons, track the film camera's own viewer cell incrementally along its path (resolveViewerCell(prevEye\u2192eye, 0.3, prevViewerCell) then setViewerCell), so the portal render set follows the camera around right-angle corridors."
+   },
+   {
+    "what": "Per-LB prewarm loaders on the liveScene3d facade",
+    "file": "scene3d/index.js",
+    "line": 4002,
+    "filmUse": "Prewarm a shot corridor with loadTerrainForLandblock / _runTerrainRingBatch (:4211), loadStatics (:4337), loadBuildings (:4286), loadEnvCells (:3907). Re-fire until baked, because the guard skips at cap."
+   },
+   {
+    "what": "previewSpawnArea pre-spawn warm-up pattern",
+    "file": "scene3d/index.js",
+    "line": 4234,
+    "filmUse": "Template for a film 'stage area' API: 3\u00d73 terrain + buildings + statics around a target plus a camera preview target (pre-spawn only today)."
+   },
+   {
+    "what": "Terrain residency lifecycle events",
+    "file": "scene3d/terrain_vfx.js",
+    "line": 231,
+    "filmUse": "Register a 'film.residency' provider to learn when each LB's terrain is attached, parked or evicted, and to receive its heights. Drives readiness gating and the planner's height cache."
+   },
+   {
+    "what": "Height oracle + residency-independent heightmap fetch",
+    "file": "scene3d/terrain_oracle.js",
+    "line": 289,
+    "filmUse": "A private oracle fed by fetch_landblock_heightmaps for the planned flight corridor gives exact AGL altitude, terrain following and normal-based clearance before any LB is resident."
+   },
+   {
+    "what": "Runtime draw-distance knobs",
+    "file": "scene3d/index.js",
+    "line": 3780,
+    "filmUse": "liveScene3d.pvsRingRadius is read every tick (cells.js:4462). landblockLru.maxResident can be raised at runtime. Raise both for wide aerials (keep \u22647 because of terrain-batch 256 slots)."
+   },
+   {
+    "what": "Ring readiness flags",
+    "file": "scene3d/cells.js",
+    "line": 4828,
+    "filmUse": "Gate 'action' on: _pvsSweepIncomplete===false, no guard in-flight keys, no parked focus LBs, __farTerrainState().ring.patchesFetching===0, __interiorBuildPending===false."
+   },
+   {
+    "what": "Player relocation drives every centre (world_stream onPositionUpdate)",
+    "file": "scene3d/world_stream.js",
+    "line": 251,
+    "filmUse": "Leapfrog-teleport the player or a camera character (@teleloc/@telepoi) between shots; wait for readiness after each hop and cut on teleports."
+   },
+   {
+    "what": "Collision population for far obstruction tests",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 10420,
+    "filmUse": "Before sweeping the film camera against buildings/statics away from the player, populate those LBs (populateBuildingAabbs/StaticsAabbs) and pass the camera's LB to cameraSweepCollision."
+   },
+   {
+    "what": "Synthetic spawn injector",
+    "file": "scene3d/spawns.js",
+    "line": 148,
+    "filmUse": "Offline or no-session previews can show NPC/creature placements anywhere (static, no AI). Avoid with a live session (duplicates)."
+   },
+   {
+    "what": "Camera debug override in AC coordinates",
+    "file": "scene3d/camera.js",
+    "line": 1484,
+    "filmUse": "Prototype camera rails via window.__cam.set/orbit (?camDebug=on). Film mode needs a quaternion path, not up=(0,1,0)+lookAt, for straight-down tilts."
+   }
+  ],
+  "hazards": [
+   {
+    "what": "All residency is player-centred: PVS ring, LRU, far ring, objRadius, LOD, terrain audit, entity reaper, ACE visibility. A camera >~1 km from the player sees bare albedo terrain (5\u20138 LB) and then nothing; at 2 km it is beyond the 1632 m far-ring edge.",
+    "file": "scene3d/cells.js",
+    "line": 4421,
+    "mitigation": "Keep the player (or a camera character) within ~3\u20134 LB of every camera position, or add the film-focus seam at all six centre sites."
+   },
+   {
+    "what": "Fog is measured from the CAMERA (plane depth), but its far distance is derived from the PLAYER-centred drawn-edge radius. An offset camera looking toward the near edge sees an unfogged hard terrain edge or void.",
+    "file": "scene3d/loop.js",
+    "line": 2294,
+    "mitigation": "Compute a camera-relative fog band (reuse computeFogBand) or pin ?farFogNear/?farFogFar per shot. ?radialFog=on removes yaw-dependent fog."
+   },
+   {
+    "what": "terrainHeightAt returns undefined beyond the player-visited 3\u00d73 rings. Whether LRU eviction purges the wasm height grid was not verified. The shared oracle returns null for never-baked LBs.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6652,
+    "mitigation": "Use a private createTerrainOracle fed by fetch_landblock_heightmaps for the whole flight corridor. Treat null as 'unknown' and fail closed (hold altitude)."
+   },
+   {
+    "what": "Oracle vs wasm parity requires f32-quantised inputs; raw f64 coordinates diverge by up to ~2 mm.",
+    "file": "scene3d/terrain_oracle.js",
+    "line": 640,
+    "mitigation": "Math.fround(x/y) for parity checks. Use \u22650.5 m clearance margin anyway (8 cm fillet + \u22640.4 m water swell)."
+   },
+   {
+    "what": "fetch_landblock_heightmaps rejects the WHOLE batch if any id fails, and returns wasm objects that leak unless freed.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 9033,
+    "mitigation": "Batch \u226416 (far_terrain uses 16) with a per-LB retry on rejection. Always m.free() after copying heights/codes."
+   },
+   {
+    "what": "liveScene3d.loadTerrainRing(cx,cy) with a non-player centre moves the player's FixedSlotGrid. A 1\u20132 LB offset is a SHIFT whose vacated player-side LBs are whole-LB PARKED after 2 s (EdgeParkScheduler). With ?loadPointShiftOnly the grid stays wrong until the player crosses an LB.",
+    "file": "scene3d/fixed_grid.js",
+    "line": 296,
+    "mitigation": "Prewarm with _runTerrainRingBatch(cx,cy) or per-LB loadTerrainForLandblock, never loadTerrainRing (index.js:4132)."
+   },
+   {
+    "what": "objRadius (default 4) hides statics/buildings of any LB more than 5 LB from the player, including on arrival of a prewarm bake (afterObjectBake), and never bakes objects for d>4 in the ring.",
+    "file": "scene3d/object_radius.js",
+    "line": 181,
+    "mitigation": "?objRadius=off for film sessions, or add the focus to the objRadius centres."
+   },
+   {
+    "what": "LRU reclaims the OLDEST LBs beyond the player ring when resident >203 or live geometry >8000 (MAX_LIVE_GEOM). Prewarmed off-ring LBs are never touched, so they are the first victims. The geometry governor has collapsed resident LBs 200\u219235 on long tours.",
+    "file": "scene3d/landblock_lru.js",
+    "line": 1394,
+    "mitigation": "Film-focus reclaim exemption plus touch, raise maxResident, ?maxLiveGeom tuned for the 1070, and re-check isParked before each take."
+   },
+   {
+    "what": "Stream guard skips (resolves null, no queue) non-urgent bakes when 6 are in flight, and after a failure applies a 2.5 s cooldown. One loader call is not a guarantee.",
+    "file": "scene3d/stream_bake_guard.js",
+    "line": 216,
+    "mitigation": "Poll-and-refire until baked marks are present and the guard key `${kind}:${lbKey}` is not in _streamGuardState.inFlight."
+   },
+   {
+    "what": "Half-baked LBs: terrainBakedLbs is marked BEFORE the mesh attaches (await prewarmSubtree in between). Terrain, statics/scenery, buildings, EnvCells and lights each land separately. Texture tier promotion (t1024) arrives later.",
+    "file": "scene3d/terrain.js",
+    "line": 5955,
+    "mitigation": "Readiness = baked marks + not in flight + not parked + _pvsSweepIncomplete===false + settle seconds. Force ?bandwidth=high and wait for texture promotion before recording."
+   },
+   {
+    "what": "EdgeParkScheduler parks the trailing edge of the radius-1 terrain grid 2 s after a player crossing (inside the radius-5 draw ring); the 1 Hz terrain audit / PVS re-sweep then unparks it. This can flicker behind a moving player.",
+    "file": "scene3d/fixed_grid.js",
+    "line": 504,
+    "mitigation": "Do not move the player during takes, or run film sessions with ?fixedGridPark=off (A/B first)."
+   },
+   {
+    "what": "Far ring pops in 4\u00d74-LB (768 m) patches only after all 16 LBs bake. It fetches only when the near ring is idle (10 s starvation escape) and retires at d > R+4 from the player.",
+    "file": "scene3d/far_terrain.js",
+    "line": 1268,
+    "mitigation": "Wait for farRingSolidRadiusLb \u2265 farRadius via __farTerrainState() before wide shots. Raise ?farRadius for longer aerials."
+   },
+   {
+    "what": "Post-teleport stale centre: the rig-derived LB lags the teleport (measured 17.5 s first hop under saturation; the documented pose.landblockId freeze). The reclaim gate holds up to 10 s. A teleport also flushes queued spawns of the departed area.",
+    "file": "scene3d/landblock_lru.js",
+    "line": 443,
+    "mitigation": "After any @teleloc, gate on terrainBakedLbs containing the destination 3\u00d73 plus the ring-ready flags, not on pose.landblockId."
+   },
+   {
+    "what": "Viewer cell is resolved by walking from the PLAYER's head to the camera eye. A film camera in a dungeon corridor far from or around a corner from the player gets a wrong viewer cell and render set (missing cells or wrong indoor split).",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "mitigation": "Film-camera-owned incremental viewer-cell tracking (resolveViewerCell from the previous eye/cell), then setViewerCell."
+   },
+   {
+    "what": "Dungeons: EnvCells load only for the player's LB plus a radius-1 skirt (1 start/tick, 2 in flight, 3 attempts). Sealed-dungeon purge evicts every outdoor LB. dungeonStreamGate holds outdoor streaming while indoors. Large interiors (Academy, 568 cells) take seconds.",
+    "file": "scene3d/cells.js",
+    "line": 914,
+    "mitigation": "Put the player inside the target dungeon LB, wait for envCellLoadedLbs.has(lb) and __interiorBuildPending===false, and avoid exterior shots while the player is indoors."
+   },
+   {
+    "what": "?fogRingCap (default ON) shrinks the bake ring to ceil(authoredFogMax/192)+1 (\u22484 LB at night, less in fog weather). Night or foggy aerials see less.",
+    "file": "scene3d/cells.js",
+    "line": 4510,
+    "mitigation": "?fogRingCap=off for film sessions that light or grade night scenes."
+   },
+   {
+    "what": "ACE sends creatures/NPCs only for the player's 3\u00d73 LBs, with a 112.5 m first-sight clamp; they are destroyed 25 s after leaving visibility. The client reaper keep-zone is 8 LB.",
+    "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Common/ObjectMaint.cs",
+    "line": 420,
+    "mitigation": "Stage creature shots within ~100 m of the player character. Do not expect populated far vistas."
+   },
+   {
+    "what": "Service worker v2 caches content-addressed shards/packs cache-first, boot.hba and manifest/*.bin behind a bake gate, and /scene3d/assets/ as stale-while-revalidate. Stale art can appear for one load after an asset change.",
+    "file": "service-worker.js",
+    "line": 459,
+    "mitigation": "?nosw=1 on every dev/film URL (index.html:2349 unregisters and clears caches, then reloads once)."
+   },
+   {
+    "what": "Bake worker (default ON) holds its own wasm instance and resource source, with a transparent main-thread fallback. It is stale after a wasm rebuild until reload. Fetch concurrency is split 8 worker / 24 main.",
+    "file": "scene3d/bake_worker_client.js",
+    "line": 33,
+    "mitigation": "Full reload after any rebuild. Check the console for 'main-thread fallback' before perf measurements."
+   },
+   {
+    "what": "Dual facade: liveScene3d vs scene3dForBuilders are different objects. Some fields are copied once at init (snapshot); playerLbKey is mirrored on both by the LOD reconcile.",
+    "file": "scene3d/index.js",
+    "line": 3771,
+    "mitigation": "Read from window.liveScene3d (index.js:4420) and null-guard. Never cache a field reference before the first bake."
+   },
+   {
+    "what": "Signed int32 keys: (id & 0xFFFF0000) is negative for x bytes \u2265 0x80 and silently misses Set lookups.",
+    "file": "scene3d/cells.js",
+    "line": 4428,
+    "mitigation": "Always >>> 0 (use lbKeyOf / lbKeyFromXY)."
+   },
+   {
+    "what": "getLocalPlayerPose returns LB-LOCAL x/y and a wasm box. Passing raw x/y to terrainHeightAt samples near the world origin, and not freeing it leaks every frame.",
+    "file": "scene3d/cells.js",
+    "line": 712,
+    "mitigation": "Convert lbX*192+x, lbY*192+y and free() in finally (the playerAcPosition pattern)."
+   },
+   {
+    "what": "camera.lookAt with up=(0,1,0) is degenerate for straight-down tilts (__cam.set), which causes gimbal flips at 90\u00b0 pitch.",
+    "file": "scene3d/camera.js",
+    "line": 1495,
+    "mitigation": "Drive the film camera with quaternions (slerp / parallel-transport frames), not lookAt + a fixed up vector."
+   },
+   {
+    "what": "Statics with degrade chains swap to their degraded mesh at 100 m CAMERA distance (LOD_DISTANCE_M). Drone shots show degraded props; a fast dolly crossing 100 m pops them.",
+    "file": "scene3d/statics.js",
+    "line": 288,
+    "mitigation": "Accept it, or evaluate ?retailDegrade=on bands. Avoid dollies that hover at the 100 m threshold."
+   },
+   {
+    "what": "?agentic=low forces pvsRingRadius=1 and shrinks the LRU cap. ?wireframe=1 / SwiftShader disables the terrain VFX spine and lies about all far-ring GPU behaviour.",
+    "file": "scene3d/residency.js",
+    "line": 131,
+    "mitigation": "Film runs must use real-GPU (1070) URLs without agentic=low or wireframe."
+   },
+   {
+    "what": "Doc drift: url-flags.md cites the eagerDungeons reader at index.js:1784; it is actually at index.js:2172. d.ts fetch_subdivided_landblock still says 'Catmull-Rom + noise', but terrain.js:7162 says the subdivided mesh is the faceted collision surface.",
+    "file": "docs/url-flags.md",
+    "line": 549,
+    "mitigation": "Trust code over docs. Terrain shape is identical at every LOD level."
+   }
+  ],
+  "recommendations": [
+   "Treat the PLAYER as the streaming dolly. Prefer design A for v1: teleport a dedicated camera/GM character (@teleloc/@telepoi via __sessionHandle.sendChat) to stay within ~3\u20134 LB of every camera position, and cut on teleports. Add design B (a default-OFF ?filmFocus seam) only if continuous long aerials are required.",
+   "Design B, if built, must patch all six player-centre sites together: cells.js:4421-4446 (seen/objRadius), landblock_lru.js:1150-1394 (reclaim exemption + touch), far_terrain.js:1070 (far centre), terrain.js:5587 (LOD reference, cosmetic only), loop.js:2294 (camera-relative fog edge), and cells.js:2849 (viewer cell for dungeons).",
+   "Planner heights: create a private createTerrainOracle() and feed it fetch_landblock_heightmaps for the LB corridor of every planned move (batches \u226416, per-LB retry, free() meshes). AGL = cameraZ \u2212 max(oracle height over a ~2\u20135 m footprint). Clearance \u22650.5 m plus water swell. Use sample().normal for slope-aware terrain following.",
+   "Never use loadTerrainRing for prewarm. Use _runTerrainRingBatch(cx,cy) plus loadStatics/loadBuildings per LB, and loop until baked (the guard skips at cap 6).",
+   "Readiness gate before rolling: (1) focus LBs: terrain mesh attached and !isParked, statics/buildings baked, no `${kind}:${lbKey}` in _streamGuardState.inFlight; (2) liveScene3d._pvsSweepIncomplete === false; (3) __farTerrainState().ring.patchesFetching+patchesReady === 0 and farRingSolidRadiusLb \u2265 farRadius; (4) __interiorBuildPending === false and envCellLoadedLbs.has(lb) for dungeons; (5) texture promotion settled; (6) \u22653\u20135 s settle with no new console '[terrain-audit] holes'.",
+   "Film URL preset (1070, real GPU): ?nosw=1&bandwidth=high&objRadius=off&fogRingCap=off&farRadius=12&radialFog=on, plus optionally pvsRingRadius=6\u20137 with a matching lbCap. Never agentic=low or wireframe. A/B fixedGridPark=off for in-take player movement.",
+   "Dungeon shots: the player must be inside the dungeon LB. The film camera owns an incremental viewer cell (resolveViewerCell from previous eye and cell, then setViewerCell) so right-angle corridor moves keep the correct portal render set.",
+   "Creature/NPC shots: keep the subject within ~100 m of the player character (ACE 112.5 m first-sight clamp, 3\u00d73 LB visibility). Far vistas will have no creatures.",
+   "Coordinates for the agent and JEV: plan in GLOBAL AC metres (wx=lbX*192+x, wy=lbY*192+y, z absolute). Convert map lat/lng with coordsToWorld (map-panel.js:88). Convert to three only at the camera with acToThree. Keep lbKeys unsigned (>>>0).",
+   "Camera orientation: build film camera frames from quaternions and parallel transport, not lookAt with up=(0,1,0), to survive straight-down tilts and 90\u00b0 corridor turns."
+  ],
+  "openQuestions": [
+   "Does enqueueClearLandblockCollision (fired on LRU evict) also drop the wasm terrain-height grid used by terrainHeightAt? terrainPrefetchedLbs is never cleared, so a revisit may not re-populate it. Not verified.",
+   "Which character is the 'streaming dolly' for film: the user's own character teleported around, or a dedicated GM/observer character? This affects whether @tele (Advocate \u22655) or @teleloc (Developer) access is available on the target ACE.",
+   "Does getRenderSet(1) stay player-rooted after setViewerCell(non-zero)? The d.ts says yes (getViewerRenderSet is separate), but the wasm behaviour was not checked.",
+   "terrain.js:5618 says the rounding floor roundMinLevel defaults to 2, but terrain_round.js:106 shows minLevel: 1. The effective far-LB subdivision factor is unresolved (cosmetic only, because shape is identical).",
+   "On the 1070 box, is the dist served locally (~/hb-serve/dist/current equivalent) or over the tailnet? Cold far-ring and heightmap fetch latency (6\u20139 ms/LB measured on the 1070) depends on it.",
+   "Is ACE @tele placement z (Position.AdjustMapCoords) terrain-snapped or fixed? Not read."
+  ],
+  "dataSources": [
+   {
+    "name": "Served dist (SSD copy)",
+    "location": "/home/wbterminal/hb-serve/dist/current -> holtburger-dist-hires-bc7m-xu7t2 (served at ../../dist/ relative to apps/holtburger-web via external/holtburger/scripts/serve.py)",
+    "format": "manifest.json v2 + boot.hba + shards/{prefix2}/{sha256}.bin + manifest/*.bin catalogs + index/ + packs/",
+    "notes": "Namespaces eor/cell (terrain CellLandblock XXYYFFFF, LandblockInfo XXYYFFFE, EnvCells), eor/portal, eor/local, holtburger/tex-*. Read-only inspection of manifest.json only."
+   },
+   {
+    "name": "Procedural scenery bake",
+    "location": "dist/scenery/0xXXXX.scenery.jsonl (+ .materials.json, .sha256); ?sceneryBake=retail -> dist/scenery-retail (symlink to /mnt/wbterminal2/hb-scenery-ab-2026-10-13/retail-full-v2)",
+    "format": "JSONL per LB (195k files incl. sidecars)",
+    "notes": "Loaded by fetch_landblock_scenery inside statics bakes (statics.js:700-714). World-wide."
+   },
+   {
+    "name": "Synthetic ACE spawns",
+    "location": "dist/spawns/0xXXXX.spawns.jsonl (~38k LBs; 76,309 files incl. .sha256) + dist/spawns/wcid_to_setup.json",
+    "format": "JSONL + JSON map",
+    "notes": "Injected only with no session or with ?spawns=force (duplicates with a live wire)."
+   },
+   {
+    "name": "Heightmaps for arbitrary landblocks",
+    "location": "wasm fetch_landblock_heightmaps / fetch_landblock_heightmap (pkg/holtburger_web.d.ts:9011-9033)",
+    "format": "LandblockMesh: heights Float32Array(81, idx=vx*9+vy), terrainCodes/roadCodes Uint8Array(81), positions LB-local",
+    "notes": "Residency-independent. The far ring's own fetch path (far_terrain.js:1383)."
+   },
+   {
+    "name": "Live ACE server (server-streamed content)",
+    "location": "vanilla ACE on the laptop (memory: $ACERT); visibility rules in external/ACE/Source/ACE.Server/Physics/Common/ObjectMaint.cs",
+    "format": "wire KIND_SPAWN / KIND_POSITION",
+    "notes": "Creatures, NPCs, players and items within the player's 3\u00d73 LB. 112.5 m initial clamp, 25 s destruction delay."
+   },
+   {
+    "name": "Runtime probes",
+    "location": "window.liveScene3d, window.__landblockLru, window.__farTerrainState(), window.__terrainBatch.stats(), window.__terrainVfx, window.__fixedGrid, window.__diag.bakeWait(), window.__groundDrawnAt, window.__interiorBuildPending, liveScene3d.__farFogApplied, liveScene3d._terrainAuditStats",
+    "format": "JS objects (CDP Runtime.evaluate)",
+    "notes": "All verified as installed by the cited code; none were exercised live in this pass (read-only)."
+   }
+  ]
+ }
+]

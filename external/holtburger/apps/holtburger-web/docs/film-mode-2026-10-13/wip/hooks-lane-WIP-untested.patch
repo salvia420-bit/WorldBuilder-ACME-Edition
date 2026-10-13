@@ -1,0 +1,666 @@
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/animated_scenery.js b/external/holtburger/apps/holtburger-web/scene3d/animated_scenery.js
+index bbad16d3..b713df5c 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/animated_scenery.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/animated_scenery.js
+@@ -1192,10 +1192,35 @@ let _lastDt = -1;
+ let _rafId = 0;
+ let _rafLastMs = 0;
+ let _rafDisposed = false;
++// Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): film/runtime/film_clock.js
++// routes this clock through the film clock for a stepped take
++// (`setSceneryTimeSource(() => filmMs)`), so sway advances by film time — 0
++// while the film clock is paused between steps — and restores it with null.
++// Never called with the flag off: `_nowMs()` is performance.now() as before.
++let _sceneryTimeSource = null;
++/**
++ * @param {(() => number)|null} fn  ms clock for the private rAF driver, or null
++ *   for performance.now(). A throwing / non-finite source falls back to it.
++ */
++export function setSceneryTimeSource(fn) {
++  if (fn !== null && fn !== undefined && typeof fn !== "function") {
++    throw new TypeError("setSceneryTimeSource: expected a function or null");
++  }
++  _sceneryTimeSource = fn || null;
++}
+ function _nowMs() {
++  if (_sceneryTimeSource !== null) {
++    let t = NaN;
++    try { t = _sceneryTimeSource(); } catch (_) { t = NaN; }
++    if (Number.isFinite(t)) return t;
++  }
+   return (typeof performance !== "undefined" && performance.now)
+     ? performance.now() : _rafLastMs + 16;
+ }
++/** Film mode test seam: the clock the private rAF driver reads (`_nowMs`). */
++export function _sceneryNowMsForTest() {
++  return _nowMs();
++}
+ function _disposeDidGroup(animId) {
+   const g = _didGroups.get(animId);
+   if (!g) return;
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/atmosphere_pipeline.js b/external/holtburger/apps/holtburger-web/scene3d/atmosphere_pipeline.js
+index 45fbfba3..3b91925d 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/atmosphere_pipeline.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/atmosphere_pipeline.js
+@@ -42,6 +42,7 @@ import {
+   BlendFunction,
+   BloomEffect,
+   ClearPass,
++  DepthOfFieldEffect,
+   Effect,
+   EffectAttribute,
+   EffectComposer,
+@@ -826,6 +827,95 @@ export function syncAerialSun(ap, atmosphereSky) {
+   return true;
+ }
+ 
++// ── Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF) ─────────────────────────
++// One pmndrs DepthOfFieldEffect for film takes (scene3d/film/SPEC.md §4 item 8),
++// built once at pipeline construction and ONLY under the exact-match flag:
++// absent (or `=1` / `=true` / `=ON`) nothing is constructed, no `window.__dof`
++// exists and both effect lists are unchanged. It starts NEUTRAL and costs no
++// passes until `window.__dof.enabled = true`: blend opacity 0 (mix(dst, src, 0)
++// is dst exactly) and its CoC / blur / mask / bokeh passes skipped; enabling is
++// a uniform flip, never a recompile. Depth: the CoC material decodes the
++// logarithmic depth buffer itself (pmndrs sets LOG_DEPTH in initialize() from
++// renderer.capabilities) — never hand-decode it a second time. Its near/far
++// are copied BY VALUE on a camera (re)target only, so never animate them. Focus
++// is the euclidean camera distance in metres; `target` is a THREE-world
++// Vector3 for autofocus (an AC point maps through acToThree: [x, z, -y]).
++// SAMPLER BUDGET (counted 2026-10-13 in node on the real pipeline's compound
++// shaders, defines applied): the effect adds FOUR fragment samplers (near/far
++// colour + near/far CoC; pmndrs' default MULTIPLY_RGB mask keeps the far CoC
++// texture). The legacy single fxPass at a typical ultra setup goes 12 → 16 =
++// ANGLE/D3D11's fragment limit, so one more sampler effect there (e.g.
++// `?horizonFade=on`) would fail the link; the split chain's post half
++// (`?clouds=on`) goes 4 → 8 — the roomy chain for film.
++
++/** Film mode, DEFAULT OFF: `?filmDof=on` exactly, or a boolean `opts.filmDof`. */
++function filmDofWanted(opts) {
++  if (typeof opts?.filmDof === "boolean") return opts.filmDof;
++  try {
++    if (typeof window === "undefined" || typeof location === "undefined") return false;
++    return new URLSearchParams(location.search).get("filmDof") === "on";
++  } catch (_) {
++    return false;
++  }
++}
++
++/**
++ * The film DoF effect and its `window.__dof` handle (installed by the
++ * pipeline). Setters validate: numbers must be finite (focusRange > 0, the
++ * rest ≥ 0); `target` takes a THREE.Vector3 (kept by reference, so the caller
++ * may move it every frame), an `[x, y, z]` / `{x, y, z}` (copied) or null;
++ * anything else throws.
++ */
++function createFilmDof(camera) {
++  const effect = new DepthOfFieldEffect(camera, {
++    blendFunction: BlendFunction.NORMAL,
++    focusDistance: 10,
++    focusRange: 5,
++    bokehScale: 1,
++    resolutionScale: 0.5,
++  });
++  effect.blendMode.opacity.value = 0;
++  let enabled = false;
++  // EffectPass.render calls update() on EVERY effect each frame: while
++  // disabled, skip the seven internal passes (the compound shader then mixes
++  // the effect in at opacity 0, i.e. not at all).
++  const runUpdate = effect.update.bind(effect);
++  effect.update = (renderer, inputBuffer, deltaTime) => {
++    if (enabled) runUpdate(renderer, inputBuffer, deltaTime);
++  };
++  const num = (name, v, positive) => {
++    if (typeof v !== "number" || !Number.isFinite(v) || (positive ? v <= 0 : v < 0)) {
++      throw new RangeError(`__dof.${name}: expected a finite number ${positive ? "> 0" : ">= 0"} (got ${v})`);
++    }
++    return v;
++  };
++  const handle = {
++    get enabled() { return enabled; },
++    set enabled(on) {
++      enabled = !!on;
++      effect.blendMode.opacity.value = enabled ? 1 : 0;
++    },
++    get target() { return effect.target; },
++    set target(v) {
++      if (v === null || v === undefined) { effect.target = null; return; }
++      if (v.isVector3 === true) { effect.target = v; return; }
++      const xyz = Array.isArray(v) ? v : [v.x, v.y, v.z];
++      if (xyz.length !== 3 || !xyz.every(Number.isFinite)) {
++        throw new TypeError("__dof.target: expected a THREE.Vector3, [x, y, z] or {x, y, z} (THREE world), or null");
++      }
++      effect.target = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
++    },
++    get focusDistance() { return effect.cocMaterial.focusDistance; },
++    set focusDistance(v) { effect.cocMaterial.focusDistance = num("focusDistance", v, false); },
++    get focusRange() { return effect.cocMaterial.focusRange; },
++    set focusRange(v) { effect.cocMaterial.focusRange = num("focusRange", v, true); },
++    get bokehScale() { return effect.bokehScale; },
++    set bokehScale(v) { effect.bokehScale = num("bokehScale", v, false); },
++    get effect() { return effect; },
++  };
++  return { effect, handle };
++}
++
+ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+   const {
+     skyScene,
+@@ -1517,6 +1607,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+     fog: () => (scene && scene.fog) || null,
+     ...(typeof opts?.fxDecals === "boolean" ? { enabled: opts.fxDecals } : {}),
+   });
++  // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the film depth of field
++  // (createFilmDof above), or null — then both effect lists below are exactly
++  // as before. It is appended at the TAIL of the list and carries
++  // EffectAttribute.DEPTH, so EffectPass's stable sort by attributes
++  // (CONVOLUTION, then DEPTH, then NONE) seats it right after the last DEPTH
++  // effect of the legacy list (horizonDissolve, else aerialPerspective) and
++  // first in the split chain's post half (after a lensFlare only) — ahead of
++  // fxGlow, bloom, vignette, tone mapping, grade and dithering on both.
++  const filmDof = filmDofWanted(opts) ? createFilmDof(camera) : null;
+ 
+   // Clouds in the main pass (`?cloudsMainPass=on`). The CloudOverlay is built
+   // by index.js before this pipeline (its `?clouds=on` block runs first);
+@@ -1594,6 +1693,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+     // → Dithering.
+     const atmosEffects = [heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
+     const postEffects = [fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
++    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): DoF over the finished
++    // clouds + aerial + late particles, sorted ahead of fxGlow / bloom.
++    if (filmDof) postEffects.push(filmDof.effect);
+     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
+     if (nanScrubOn) {
+       lateScrubPass = new PostChainSourcePass(camera, particlesOverCloudsPass, makeNanScrub());
+@@ -1627,6 +1729,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+       // is added after the atmosphere and before lens flare / bloom. Tier 2:
+       // fxDecals sits after the AO composite, before the clouds / aerial.
+       ...[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
++      // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): appended; the
++      // attribute sort seats it after horizonDissolve, ahead of fxGlow.
++      ...(filmDof ? [filmDof.effect] : []),
+     );
+   }
+   if (nanScrubOn) {
+@@ -1674,6 +1779,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+   installColorGradeHandle(colorGrade);
+   installSsaoHandle(ssaoPass);
+   installLayerHazeHandle(layeredHaze);
++  // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the live DoF handle —
++  // `window.__dof {enabled, target, focusDistance, focusRange, bokehScale,
++  // effect}`. Never installed with the flag off.
++  if (filmDof && typeof window !== "undefined") window.__dof = filmDof.handle;
+ 
+   // `?particlesOverClouds` runtime state. `lateArmed` is the no-reload A/B
+   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
+@@ -1778,6 +1887,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+     if (fxPostPass) fxPostPass.mainCamera = cam;
+     // `.camera`: ParticlesOverCloudsPass is a base Pass (no-op mainCamera).
+     if (particlesOverCloudsPass) particlesOverCloudsPass.camera = cam;
++    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the EffectPass setters
++    // above already fan `mainCamera` out to the DoF (its own setter re-copies
++    // near/far + PERSPECTIVE_CAMERA into the CoC material and moves the
++    // autofocus camera); set it directly too, so autofocus can never measure
++    // from a stale camera whichever pass holds the effect. Idempotent.
++    if (filmDof) filmDof.effect.mainCamera = cam;
+   }
+ 
+   // Bug 11 diag: one line per resize (rate-limited) — correlate any
+@@ -1843,6 +1958,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+     fxPass,
+     fxPostPass,
+     particlesOverCloudsPass,
++    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the DoF effect, present
++    // only with the flag (the off object keeps its exact shape).
++    ...(filmDof ? { filmDof: filmDof.effect } : null),
+ 
+     /**
+      * ?indoorDepthSplit (2026-08-04) — arm/disarm retail's indoor
+@@ -2278,6 +2396,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
+       if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;
+       if (layeredHaze) installLayerHazeHandle(null);
+       dithering.dispose?.();
++      // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the effect went with
++      // its pass above; drop the global handle while it is still this one's.
++      if (filmDof && typeof window !== "undefined" && window.__dof === filmDof.handle) delete window.__dof;
+     },
+   };
+ }
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/cells.js b/external/holtburger/apps/holtburger-web/scene3d/cells.js
+index 79239557..a8ae8361 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/cells.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/cells.js
+@@ -2846,13 +2846,39 @@ const VIEWER_CELL_TRACE_ALL = (() => {
+     return new URLSearchParams(globalThis.location?.search || "").get("diag") === "1";
+   } catch (_) { return false; }
+ })();
++/**
++ * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — the film camera's OWN
++ * viewer cell, or 0. film/runtime/camera_owner.js carries it from the previous
++ * eye (`resolveViewerCell(prevEye, eye, 0.3, prevCell)`, seeded from the plan's
++ * cell on cuts) and publishes `filmViewer = {cell}` on the scene facade the
++ * loop passes here or on `window.liveScene3d` (both are honoured). Never set
++ * with the flag off, so this costs a few property reads.
++ */
++function _filmViewerCell(scene3d) {
++  const fv = scene3d.filmViewer ?? globalThis.window?.liveScene3d?.filmViewer;
++  const c = fv?.cell;
++  return typeof c === "number" && c !== 0 ? c >>> 0 : 0;
++}
+ function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
+   let viewer = playerCell;
+   const canResolve =
+     VIEWER_CELL_ON &&
+     typeof sessionHandle.resolveViewerCell === "function" &&
+     typeof sessionHandle.setViewerCell === "function";
+-  if (canResolve) {
++  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a free film camera
++  // brings its own cell — the player-head walk below cannot reach a camera in
++  // a room it has no straight line to (the room's cells then vanish). It is
++  // rooted (`setViewerCell`) and published below exactly like a walked cell,
++  // also under `?viewerCell=off`. Flag off: `filmCell` is always 0.
++  const filmCell = _filmViewerCell(scene3d);
++  if (filmCell !== 0) {
++    viewer = filmCell;
++    if (typeof sessionHandle.setViewerCell === "function") {
++      try {
++        sessionHandle.setViewerCell(viewer !== playerCell ? viewer : 0);
++      } catch (_) {}
++    }
++  } else if (canResolve) {
+     const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+     const pp = playerAcPosition(sessionHandle);
+     if (pp && acCameraFrame(cam, scene3d.worldRoot ?? null)) {
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/entities.js b/external/holtburger/apps/holtburger-web/scene3d/entities.js
+index ca53cdbc..1a2ec29e 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/entities.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/entities.js
+@@ -2968,12 +2968,15 @@ const _omegaScratchQ = new THREE.Quaternion();
+ // composite `stateVisible && !renderCullHidden`. Both setters below funnel
+ // through `_applyEntityVisible`, which is the single writer of
+ // `root.visible`. Defaults: stateVisible=true (spawn-visible), cull clear.
++// Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) adds a third, render-only
++// producer, `inst._filmHidden` (EntityManager.setFilmHidden); it is never set
++// with the flag off, so the composite stays exactly the two terms above.
+ 
+ function _applyEntityVisible(inst) {
+   if (!inst || !inst.root) return;
+   const stateVisible = inst._stateVisible !== false; // undefined → visible
+   const cullHidden = inst._renderCullHidden === true;
+-  const want = stateVisible && !cullHidden;
++  const want = stateVisible && !cullHidden && !inst._filmHidden;
+   if (inst.root.visible !== want) inst.root.visible = want;
+ }
+ 
+@@ -5566,6 +5569,13 @@ export class EntityManager {
+       root.traverse((o) => o.layers.set(1));
+     }
+     this.entityMap.set(guid, inst);
++    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a rig rebuilt while its
++    // guid is film-hidden (the respawn fallback, visibility churn) comes back
++    // hidden. `_filmHiddenGuids` only exists once setFilmHidden has run.
++    if (this._filmHiddenGuids?.has(guid)) {
++      inst._filmHidden = true;
++      _applyEntityVisible(inst);
++    }
+     // P6/A10-O1 — the FIRST rig committing is the in-world signal: arm the
+     // one-shot archetype-matrix warm (self-guarded; later calls and
+     // `?archetypeWarm=off` no-op). Any-entity, NOT local-player-gated: the
+@@ -7136,6 +7146,56 @@ export class EntityManager {
+     }
+   }
+ 
++  /**
++   * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — hide / show a rig for a
++   * shot (the cameraman avatar, an occluding NPC) WITHOUT touching its server
++   * visibility: the third, render-only term of `_applyEntityVisible`
++   * (`root.visible = stateVisible && !renderCullHidden && !filmHidden`), so the
++   * frustum cull and NoDraw / attach state keep composing underneath it. A
++   * hidden rig casts no shadow (three skips invisible subtrees in the shadow
++   * pass) and its wielded children go with its root. Deliberately NOT routed
++   * through `setVisibility`, which plays the PS_Hidden / PS_UnHide scripts.
++   * The guid is remembered, so a rig rebuilt by a respawn comes back hidden.
++   * Pool-fed lights (a held torch) keep shining; particles keep drawing.
++   *
++   * @param {number} guid
++   * @param {boolean} on  true = hide
++   * @returns {boolean} true when the entity exists now (visibility re-applied)
++   */
++  setFilmHidden(guid, on) {
++    const g = guid >>> 0;
++    const hide = !!on;
++    if (hide) {
++      if (!this._filmHiddenGuids) this._filmHiddenGuids = new Set();
++      this._filmHiddenGuids.add(g);
++    } else if (this._filmHiddenGuids) {
++      this._filmHiddenGuids.delete(g);
++    }
++    const inst = this.entityMap.get(g);
++    if (!inst) return false;
++    inst._filmHidden = hide;
++    _applyEntityVisible(inst);
++    return true;
++  }
++
++  /**
++   * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — drop every film hide
++   * (end of a take / `world.avatar(true)` sweep) and forget the remembered
++   * guids. Returns how many live rigs were un-hidden.
++   */
++  clearAllFilmHidden() {
++    let n = 0;
++    for (const inst of this.entityMap.values()) {
++      if (inst && inst._filmHidden === true) {
++        inst._filmHidden = false;
++        _applyEntityVisible(inst);
++        n += 1;
++      }
++    }
++    if (this._filmHiddenGuids) this._filmHiddenGuids.clear();
++    return n;
++  }
++
+   /**
+    * F17-5 (bughunt 2026-06-09) — float a fading speech / emote bubble over
+    * the speaker. Driven by the wasm kind=55
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/index.js b/external/holtburger/apps/holtburger-web/scene3d/index.js
+index b1c1be95..23d60db8 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/index.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/index.js
+@@ -2358,6 +2358,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle)
+   // microtask drain, so p4 is stamped after a one-microtask hop to include
+   // them in the measured slot.
+   function _postRenderStreamSlot() {
++    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): every render-path exit
++    // reaches this slot right after the frame's final draw, in the same task —
++    // where the film recorder grabs the canvas (a WebCodecs VideoFrame; the
++    // drawing buffer is not preserved) and the stepped film clock resolves its
++    // post-render promise. Flag off: `film` is never set — one property read,
++    // no call. A throwing hook never skips the scheduleNext() that follows.
++    try {
++      liveScene3dRef?.film?.postRender?.();
++    } catch (e) {
++      if (liveScene3dRef && !liveScene3dRef._filmPostRenderWarned) {
++        liveScene3dRef._filmPostRenderWarned = true;
++        // eslint-disable-next-line no-console
++        console.warn("[film] postRender threw (loop unaffected):", e);
++      }
++    }
+     framePhaseCut(3);
+     if (!_frameWorkOn) {
+       framePhaseCut(4);
+@@ -2404,7 +2419,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle)
+     // Every tick exit runs through here after its GL submission, which is
+     // where the adaptive-res fence belongs (null unless the controller runs).
+     adaptiveGpuProbe?.frameEnd();
+-    if (renderOnDemand) return;
++    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): `film.holdLoop` (set by
++    // film_clock.js for a stepped take) parks the loop exactly as
++    // renderOnDemand does — frames then come only from __renderOnce(tsMs). A
++    // rAF already in flight when it is set still runs once. Clearing it does not
++    // re-arm by itself: the film clock re-arms with one bare `__renderOnce()`,
++    // whose exit lands back here. Flag off: `film` is never set.
++    if (renderOnDemand || liveScene3dRef?.film?.holdLoop) return;
+     // ?portalSpaceFps (2026-10-09, default 30): while the portal tunnel owns
+     // the frame (login or teleport) the loop paces to max(?targetFps interval,
+     // 1000/N); tickPerFrame (net pump, cell visibility/PVS, interior builds)
+@@ -2534,6 +2555,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle)
+         tsSec: ts * 0.001,
+         dt,
+       };
++      // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): the film camera
++      // owner (scene3d/film/runtime/camera_owner.js) poses the camera for THIS
++      // frame here, before tickPerFrame's cell visibility / viewer cell /
++      // frustum cull / CSM / sky read it (they run ahead of the camera tick).
++      // `film` is only ever set by installFilmMode, so with the flag off this
++      // is one property read and no call. A throwing hook never kills the loop.
++      try {
++        liveScene3dRef?.film?.preFrame?.(ts, dt);
++      } catch (e) {
++        if (!liveScene3dRef._filmPreFrameWarned) {
++          liveScene3dRef._filmPreFrameWarned = true;
++          // eslint-disable-next-line no-console
++          console.warn("[film] preFrame threw (frame continues):", e);
++        }
++      }
+       try {
+         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
+       } catch (e) {
+@@ -3003,11 +3039,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle)
+   // returns `true` BEFORE the frame completes (the post-hop continuation
+   // runs in a trailing microtask). Callers must allow a microtask before
+   // sampling; existing capture scripts already sleep between calls.
++  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): an optional explicit
++  // frame timestamp `tsMs` (ms, the performance.now()/rAF time base) for the
++  // stepped film clock; omitted or non-finite → performance.now(), exactly as
++  // before. tick() derives dt from consecutive timestamps as min(raw, 0.1) s,
++  // so a strictly increasing `base + k·1000/fps` at fps ≥ 10 gives dt = 1/fps
++  // exactly. The >0.5 s recovery freeze (dt = 0 for 10 frames) is off under
++  // renderOnDemand; otherwise it trips only on a gap from the LAST frame's
++  // timestamp (liveScene3d.frameTime.tsMs), so start a take's base from that
++  // timestamp rather than from a wall clock that ran on while the loop was
++  // held. A timestamp below the last one yields a negative dt (not clamped —
++  // unchanged behaviour), so timestamps must keep increasing, and the realtime
++  // loop may resume only once performance.now() is past the last one.
+   if (typeof window !== "undefined") {
+-    window.__renderOnce = () => {
++    window.__renderOnce = (tsMs) => {
+       try {
+-        tick(typeof performance !== "undefined" && performance.now
+-          ? performance.now() : Date.now());
++        tick(Number.isFinite(tsMs) ? tsMs : (typeof performance !== "undefined" && performance.now
++          ? performance.now() : Date.now()));
+         return true;
+       } catch (e) {
+         // eslint-disable-next-line no-console
+@@ -4464,6 +4512,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle)
+       .then((m) => m.installBloodDecals())
+       .catch((err) => console.warn("[blood] failed to load:", err));
+   }
++  // ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────
++  // Agentic cinematography (scene3d/film/SPEC.md). An exact-match opt-in:
++  // only `?filmMode=on` loads the film runtime; absent, `=1`, `=true` and
++  // `=ON` load nothing. The module is reached ONLY through this dynamic
++  // import (never statically), so the boot graph and the modulepreload block
++  // are unchanged. Its dependencies are injected (film page modules never
++  // import stateful scene3d modules); it installs `window.__film`.
++  if (new URLSearchParams(window.location.search).get("filmMode") === "on") {
++    import("./film/index.js")
++      .then((m) => m.installFilmMode({
++        liveScene3d,
++        THREE,
++        sessionHandle: liveScene3d.sessionHandle,
++        wasmExports: liveScene3d.wasmExports,
++      }))
++      .catch((err) => console.warn("[film] failed to load:", err));
++  }
+   // ── Terrain-VFX spine (Wave 0B, plan §2.2) ────────────────────────────
+   // Constructed HERE, immediately after `window.liveScene3d` is set, because
+   // (a) its facade-hook install must reach `window.liveScene3d` (the
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/particles/particle_fx.js b/external/holtburger/apps/holtburger-web/scene3d/particles/particle_fx.js
+index 52ccc528..0e29778d 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/particles/particle_fx.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/particles/particle_fx.js
+@@ -427,6 +427,10 @@ export const FX_UNIFORMS = {
+   uFxStretchT: { value: 0.04 },
+   uFxViewH: { value: 1080 },
+   uFxMinPx: { value: 1.5 },
++  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a global near-fade floor
++  // in metres of clip w — the shader fades with max(row nearFade, this). 0 (the
++  // default) is the per-row fade exactly. Set via setFxNearFadeMin.
++  uFxNearFadeMin: { value: 0 },
+ };
+ 
+ // ---------------------------------------------------------------------------
+@@ -513,6 +517,46 @@ export function particleFxLightFor(night, indoor, out = [0, 0, 0]) {
+   return out;
+ }
+ 
++// ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────────────
++// film/runtime/film_clock.js routes the FX shader clock through the film clock
++// for a stepped take (`setFxTimeSource(() => filmMs)`) and restores it with
++// null; it may raise the near-fade floor for fly-throughs. Never called with
++// the flag off: the source stays null and the floor 0.
++let _fxTimeSource = null;
++/**
++ * Clock for `particleFxFrame()` calls that pass no finite `nowMs` (the live
++ * path): `fn()` → milliseconds, or null for performance.now(). A source that
++ * throws or returns a non-finite value falls back to performance.now() for
++ * that frame.
++ * @param {(() => number)|null} fn
++ */
++export function setFxTimeSource(fn) {
++  if (fn !== null && fn !== undefined && typeof fn !== "function") {
++    throw new TypeError("setFxTimeSource: expected a function or null");
++  }
++  _fxTimeSource = fn || null;
++}
++function _fxSourceNowMs() {
++  let t = NaN;
++  try { t = _fxTimeSource(); } catch (_) { t = NaN; }
++  return Number.isFinite(t) ? t : (typeof performance !== "undefined" ? performance.now() : 0);
++}
++/**
++ * Set the global particle near-fade floor (metres, ≥ 0; 0 = off): every FX
++ * program fades with max(row nearFade, m), so a lens-filling cloud melts as the
++ * camera flies through it. Uniform-only — no program-key change. Returns the
++ * previous floor.
++ * @param {number} m
++ */
++export function setFxNearFadeMin(m) {
++  if (typeof m !== "number" || !Number.isFinite(m) || m < 0) {
++    throw new RangeError(`setFxNearFadeMin: expected a finite number >= 0 (got ${m})`);
++  }
++  const prev = FX_UNIFORMS.uFxNearFadeMin.value;
++  FX_UNIFORMS.uFxNearFadeMin.value = m;
++  return prev;
++}
++
+ let _lastFrameStamp = -1;
+ let _lightCountdown = 0;
+ const _lightScratch = [1, 1, 1];
+@@ -523,7 +567,9 @@ const _bufSize = new THREE.Vector2();
+  * @param {number} [nowMs] test seam
+  */
+ export function particleFxFrame(nowMs) {
+-  const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : 0);
++  const now = Number.isFinite(nowMs) ? nowMs
++    : _fxTimeSource !== null ? _fxSourceNowMs()
++    : (typeof performance !== "undefined" ? performance.now() : 0);
+   if (now === _lastFrameStamp) return;
+   _lastFrameStamp = now;
+   // Wrapped so GPU-side t·hz stays small (fract/sin precision); a jump every
+@@ -816,6 +862,7 @@ uniform float uFxAlphaCal;
+ uniform float uFxAddCal;
+ uniform highp sampler2D uFxSceneW;
+ uniform vec2 uFxInvRes;
++uniform float uFxNearFadeMin;
+ varying vec4 vFxA;
+ varying vec4 vFxB;
+ varying vec4 vFxC;
+@@ -999,7 +1046,9 @@ const FRAG_COLOR = /* glsl */`
+ 			fxA *= clamp( ( fxSceneW - vFxD.w ) / vFxD.x, 0.0, 1.0 );
+ 		}
+ 	#endif
+-		if ( vFxD.y > 0.0 ) fxA *= smoothstep( 0.35 * vFxD.y, vFxD.y, vFxD.w );
++		// near fade: the row's distance, floored by the film-mode global (0 = the row's exactly)
++		float fxNf = max( vFxD.y, uFxNearFadeMin );
++		if ( fxNf > 0.0 ) fxA *= smoothstep( 0.35 * fxNf, fxNf, vFxD.w );
+ 	#if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
+ 		#ifdef HB_FX_ADDITIVE
+ 		fxC *= vColor.r * uFxAddCal;
+@@ -1053,6 +1102,8 @@ export function patchParticleFxShader(shader) {
+   shader.uniforms.uFxAddCal = FX_UNIFORMS.uFxAddCal;
+   shader.uniforms.uFxSceneW = FX_UNIFORMS.uFxSceneW;
+   shader.uniforms.uFxInvRes = FX_UNIFORMS.uFxInvRes;
++  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): the near-fade floor (0).
++  shader.uniforms.uFxNearFadeMin = FX_UNIFORMS.uFxNearFadeMin;
+   // tier 1 (bound always; three uploads only what the program declares)
+   shader.uniforms.uFxNoise = FX_UNIFORMS.uFxNoise;
+   shader.uniforms.uFxSunWorld = FX_UNIFORMS.uFxSunWorld;
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/particles/particle_manager.js b/external/holtburger/apps/holtburger-web/scene3d/particles/particle_manager.js
+index c9b6814c..d1e5239c 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/particles/particle_manager.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/particles/particle_manager.js
+@@ -1336,6 +1336,39 @@ function _rp6ShouldCull(emitter, camera) {
+ // the current mode in addEmitter.
+ const _allManagers = new Set();
+ 
++// ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────────────
++// Read-only enumeration + a take-scoped RP6 retune for scene3d/film/ (particle
++// queries, safety). Nothing in the client calls either with the flag off.
++
++/** Every live ParticleManager — a COPY of the module-private registry (the
++ *  world manager from entities.js and the static one(s) from statics.js). */
++export function allParticleManagers() {
++  return [..._allManagers];
++}
++
++/**
++ * Retune the RP6 cull that every manager reads live: `maxDistance` (metres,
++ * > 0; the 220 m cap — `Infinity` drops the distance term) and
++ * `recheckInterval` (ticks, an integer ≥ 1; 1 re-evaluates every tick, so no
++ * emitter stays frozen after a cut). An omitted / null field is left as is;
++ * an invalid value throws a RangeError and changes nothing. Returns the
++ * PREVIOUS `{maxDistance, recheckInterval}` so the caller can restore it.
++ */
++export function setParticleCullConfig({ maxDistance, recheckInterval } = {}) {
++  const prev = { maxDistance: _RP6.maxDistance, recheckInterval: _RP6.recheckInterval };
++  const setDist = maxDistance !== undefined && maxDistance !== null;
++  const setRecheck = recheckInterval !== undefined && recheckInterval !== null;
++  if (setDist && !(typeof maxDistance === "number" && maxDistance > 0)) {
++    throw new RangeError(`setParticleCullConfig: maxDistance must be a number > 0 (got ${maxDistance})`);
++  }
++  if (setRecheck && !(Number.isInteger(recheckInterval) && recheckInterval >= 1)) {
++    throw new RangeError(`setParticleCullConfig: recheckInterval must be an integer >= 1 (got ${recheckInterval})`);
++  }
++  if (setDist) _RP6.maxDistance = maxDistance;
++  if (setRecheck) _RP6.recheckInterval = recheckInterval;
++  return prev;
++}
++
+ function _forEachParticleMaterial(fn) {
+   const seen = new Set();
+   const visit = (mat, isBucket) => {
+@@ -2336,6 +2369,17 @@ export class ParticleManager {
+ 
+       if (!emitter.updateParticles()) {
+         removeIds.push(id);
++      } else if (emitter.filmHidden === true) {
++        // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): render-only lens
++        // hide (film/runtime/safety.js — a cloud on the lens). Same shape as
++        // the cell gate below: the simulation above already ran; instanced =
++        // no append (its instances vanish with this tick's bucket reset),
++        // per-mesh = occupied slots hidden, re-asserted every tick. Clearing
++        // the flag restores both next tick (the append resumes; updateParticles
++        // re-shows live slots). Only the film runtime sets the flag.
++        if (emitter._instKey === null || emitter._instKey === undefined) {
++          _setPartsVisible(emitter, false);
++        }
+       } else if (cellGate && _emitterCellHidden(emitter, cellLookup)) {
+         // `?particleCellGate=on`: the anchor's EnvCell is not drawn this frame.
+         // The simulation above already ran (retail CObjCell::IsInView == 1 —
+diff --git a/external/holtburger/apps/holtburger-web/scene3d/statics.js b/external/holtburger/apps/holtburger-web/scene3d/statics.js
+index 7314eee6..0a5d8187 100644
+--- a/external/holtburger/apps/holtburger-web/scene3d/statics.js
++++ b/external/holtburger/apps/holtburger-web/scene3d/statics.js
+@@ -4567,6 +4567,19 @@ export function cullStaticsGroup(scene3d, culler) {
+       if (node.visible === false) node.visible = true;
+       continue;
+     }
++    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): an honoured hide
++    // marker for singleton Mesh / InstancedMesh / LOD nodes — a static occluder
++    // hidden for a shot. A bare `.visible = false` would be undone by this pass
++    // next frame, so (like `__deadBatch` above) the hide is a marker this pass
++    // honours, ahead of the light guardrail and the frustum test, counted as
++    // tested + culled. BatchedMesh nodes never get here (film hides their
++    // instances with setVisibleAt). Only the film runtime sets the marker.
++    if (ud && ud.__filmHidden === true) {
++      tested += 1;
++      culled += 1;
++      if (node.visible !== false) node.visible = false;
++      continue;
++    }
+     const sphere = _resolveStaticCullSphere(node);
+     if (!sphere) {
+       // No derivable bounds — never hide (fail-open).

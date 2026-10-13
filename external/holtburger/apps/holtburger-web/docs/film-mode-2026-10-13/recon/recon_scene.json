@@ -1,0 +1,1674 @@
+[
+ {
+  "area": "PHYSOBJS, RAYCASTING, OBSTRUCTION, OCCLUDER FADING (holtburger-web scene3d + wasm SessionHandle collision layer)",
+  "summary": "FRAME. Every world child group hangs under worldRoot (scene3d/index.js:1552-1561, rotation.x=-PI/2; children terrain/buildings/statics/cells/entities). Group-local coords are AC world metres: x east, y north, z up, global = lbX*192 + lbLocalX (lbX=(lbId>>>24)&0xff, lbY=(lbId>>>16)&0xff). three world = acToThree(ax,ay,az)=[ax,az,-ay] (adapter.js:1817); acQuatToThree(qw,qx,qy,qz)->Quaternion(qx,qy,qz,qw) (adapter.js:1395). Distances are equal in both frames. Layers: terrain/buildings/statics on layer 0; cellsGroup+entitiesGroup on layer 1 (index.js:1592-1593). The camera enables both (index.js:1650), but atmosphere_pipeline.js CameraLayerMaskPass (:111-124) rewrites camera.layers.mask mid-frame indoors, so a raycaster must set its own mask (picking.js:558 does layers.enable(1)). Heading: LocalPlayerPose.heading and EntityManager.getHeading are CCW yaw (0=north, +PI/2=west); compass = -yaw.\n\n1) ENTITY REGISTRY. window.liveScene3d.entityManager.entityMap is a Map<u32 guid, EntityInstance> (entities.js:4178; set at spawn commit :5568, deleted in remove() :13497). EntityInstance fields (:3733):\n- guid\n- root: THREE.Group named entity_<guid8hex> (:4737), child of entitiesGroup. root.position is AC world metres. root.quaternion is the AC yaw. root.scale is obj_scale.\n- parts[]: per-part Groups.\n- meta: plain copy built by loop.js toMeta (:3480). Fields: guid, modelId==setupId (0x02 Setup DID), landblockId (full cell id), x/y/z (LB-local at spawn), qw..qz, wcid, itemType, name, iconId, objScale, physicsTranslucency, paletteId, mtableId, placementId, motionCommand/Stance, vx/vy/vz, physicsScriptDid, soundTableDid, objDescFlags.\n- Private fields: _baseScale (:5436), _spawnCellId (:5412), _wireCellId, _attachedParentGuid/_attachedChildren (wielded items are their own entities, parented under the wielder's part node), _stateVisible/_renderCullHidden, _nameplateSprite, _buffBadgeSprite, _speechBubble, _selectionRing, _camFadeOpacity, _objectTranslucency, _ethereal, _wirePos.\n- GOTCHA: root.userData.modelId holds the WCID, not the setup (:4747).\n\nEntityManager accessors:\n- getHeading(guid): raw CCW yaw or null (:15988).\n- getLocalPlayerHeading(): followYaw convention, CW from north (:15938).\n- getLocalPlayerWorldPos(): returns the predicted pose first (:15818).\n- findGuidByName(name): returns the oldest live guid with that name (:7824).\n- getSelectedTarget() / setSelectedTarget(guid) (:8748) / deselectTarget() (:9654).\n- isProjectile(guid).\n\nWindow globals:\n- window.liveScene3d (scene3d/index.js:4420). Exposes the groups, worldRoot, camera (the perspective camera, the same object as cameraSwitcher.persp), cameraSwitcher, cellContainers3d (Map cellId->Group), staticsBakedLbs, buildingsBakedLbs, selectionBracketLayer, nameplateLayer.\n- window.__sessionHandle (index.html:4553).\n- window.getLocalPlayerGuid() (index.html:3516).\n- window.__lastEntityWorldPos: Map guid->{x,y,z,ts} in AC world (loop.js:3959).\n- window.__wom: WorldObjectManager (index.html:4704). get(guid).className, byClass('Creature') with taxonomy descendants, snapshot().\n\nWasm world view (does not depend on spawn gating):\n- sh.nearbyEntityGuids(maxRangeM): range measured from the LOCAL PLAYER (d.ts:5232).\n- objectPosition(guid) -> Float64Array[lbId,x,y,z] LB-local (:5400).\n- objectPartDims(guid) -> Float32Array[radius,height]: CPartArray GetRadius/GetHeight * scale; empty until the Setup is resident (:5386).\n- objectPhysicsState, objectName, objectWcid, objectIntProperty.\n\nKIND classification:\n- meta.itemType bits (nameplate_sprite.js:371-397 categoryForItemType): CREATURE 0x10, PORTAL 0x10000, LIFE_STONE 0x10000000, CONTAINER 0x200.\n- meta.objDescFlags (target_cycle.js:47-49, :135-142, :711-713): PLAYER 0x8, ATTACKABLE 0x10, PK 0x20, UI_HIDDEN 0x80, VENDOR 0x200, DOOR 0x1000, CORPSE 0x2000, LIFESTONE 0x4000, PORTAL 0x40000, BINDSTONE 0x8000000.\n- matchesSelectionType (:103).\n- GUID tiers: 0x5 players, 0x8 dynamic, 0x7 world-static.\n\nBOUNDS. object_radius.js is NOT a bounding-radius module. It implements ?objRadius=N (default 4): statics and buildings are baked only within Chebyshev N landblocks of the player and hidden beyond N+1. Real bounds sources:\n- (a) objectPartDims: cylinder r/h.\n- (b) sh.creatureSeparationTable() {setupIds, radii (first cylsphere, else first sphere; unscaled), playerRadius 0.48, epsilon 2e-4} (d.ts:835/3723). Memoised by EntityManager._refreshSeparationTable/_separationFloor (:8980/:9021).\n- (c) wasm fetchSetupSelectionSphere(setupId) -> {cx,cy,cz,radius,valid} in object-local space (d.ts:8736/6984). Cached via selection_brackets.js loadDatSelectionSphere (:624) / peekDatSelectionSphere (:614). datSelectionSphereFor(rec,root) (:666) gives the offset plus radius*scale.z. World centre = offset.applyMatrix4(root.matrixWorld) (:954-957).\n- (d) computeSelectionSphere(root): Box3 heuristic (:690).\n- (e) Fixed ENTITY_CULL_RADIUS = 6 m (entities.js:3018).\n- (f) Occlusion AABB _occEntityBox (module-private, :3250): rig Box3 + 0.6 m pad.\n\n2) STATICS / BUILDINGS. staticsGroup holds a mix of node types:\n- Singleton Mesh static-<placementKey> (statics.js:1906-1926). userData {modelId, surfaceDid, landblockId, placementKey, isBuilding:false, source:'landblockinfo'|'scenery'}. position is AC world.\n- InstancedMesh per (model, surface) (:2107-2135). userData {modelId, surfaceDid, instanceCount, source, sceneryCount, landblockInfoCount, coversLbKeys}; per-instance world matrices.\n- LOD wrappers.\n- Per-LB staticBatch BatchedMesh.\n- statBatchChunk region BatchedMeshes (DEFAULT ON).\n- Cross-LB statAtlas BatchedMeshes stat-atlas-x-<bucket> (DEFAULT ON; static_atlas.js:1342-1380; userData.__statAtlasCrossLb; no landblockId; frustumCulled=false, perObjectFrustumCulled=true).\n- Static particle meshes (userData.__particle / isParticleInstanced) and default-script anchors.\n- Animated scenery (?animScenery default ON).\n\nBuildings: buildings.js:545-625 builds Group building-<placementKey> -> part-N hinge Group -> surface-<did> Mesh, with userData {modelId, landblockId, placementKey, isBuilding:true, partGroups}. BUT ?buildingBatch is DEFAULT ON (buildings.js:127, code reads !== 'off' even though a header comment says default-off), so _feedBuildingGroupsToAtlas (:150) flattens building surfaces into the cross-LB atlas inside staticsGroup. buildingsGroup keeps only the residue. As a result, most statics and buildings lose per-placement identity: atlas membership is a module-private _lbMembership row {bucketKey, gid, iid, texUuid}.\n\nThere is NO retained JS placement index. lb_objects_shared.js is a transient cache that drops an entry after 2 reads; it cannot be queried. Ways to enumerate:\n- wasm fetch_landblock_objects_soa(Uint32Array.of(lbKey|0xFFFE)) -> LandblockObjectsSoa{len, modelIds, positions (LB-local), quaternions (qw,qx,qy,qz), scales, isBuilding, landblockIds} (d.ts:2153/9070).\n- fetch_landblock_scenery_soa -> {objIds (Setup DID), positions, quaternions, scales, defaultScriptId, ...}; it carries no AABBs (d.ts:2184/9114).\n- Raw dist/scenery/0xXXYY.scenery.jsonl: rows carry aabb_min/max_x/y/z (LB-local, full model extent including the canopy), obj_id and stable_id.\n- EnvCell statics via fetchEnvCellsInLandblock(lb)[i].takeStaticObjects() -> StaticObjectPlacement{did, x,y,z in WORLD coords, q, aabbLocal[6]} (d.ts:7406/8520).\n- Spawns via fetch_landblock_spawns_soa.\n- Introspect the batches: BatchedMesh getMatrixAt(iid) / getBoundingSphereAt(gid); InstancedMesh getMatrixAt(i).\n\nTree / rock / building distinction:\n- isBuilding.\n- source='scenery' (procedural trees/rocks/bushes) vs 'landblockinfo' (props).\n- vfx_catalog.js vfxDescriptorFor(did) (:159). Covers 1168 Setup DIDs from dist/vfx/visual_descriptors.jsonl. Archetypes: tip-flex 404, rigid-glint 340, foliage-pollen 269, trunk-canopy 103, gem-sparkle 41, creature-breath 9, brazier 1. Signals: category (Prop 550 / Scenery 437 / Unknown 159 / Interactive_Portal / Creature / Furniture), maxDimension, aspectRatio, partCount.\n- tree_wind.js isTreeDid is only a 6-DID allowlist.\n- The wasm scenery colliders know Cylinder (trunk) vs Sphere (boulder), but this is not exported to JS.\n\n3) RAYCASTING. picking.js pickEntityAt(clientX, clientY) (:948; exposed as window.__pickEntityAt :1964):\n- three r184 Raycaster on layers 0+1.\n- Tests only VISIBLE entity roots, recursive into rig parts, near-to-far; skips the local player and hidden parts.\n- Fallback: pickBySphere -> pick_math.js pickNearestSphereHit (:46) over part bounding spheres. sphereRayEntry (:20) returns -1 when the ray starts inside the sphere.\n- Statics, buildings, terrain and cells are never tested (F7 TODO at :963), and there is no BVH anywhere. So __pickEntityAt returns an NPC that is behind a wall: it is not an LOS test.\n\nthree r184 BatchedMesh.raycast (node_modules/three/src/objects/BatchedMesh.js:1382) walks EVERY active+visible instance linearly (bbox/sphere, then triangles) and sets intersect.batchId = instance id; InstancedMesh gives instanceId. A visual raycast into staticsGroup can therefore name the blocking instance, but costs O(all ring instances) per ray.\n\nragdoll_env.js _collectTargets (:461) / _castAC (:503) is the in-repo pattern for an AC-frame visual raycast against a bounded list of at most 64 meshes from cellsGroup+buildingsGroup, culled by bounding sphere.\n\nWASM SWEEPS on SessionHandle. Shared contract:\n- All endpoints are GLOBAL AC world metres.\n- Each returns a wasm-bindgen CollisionHit {t in [0,1], x,y,z hit point, normalX/Y/Z pointing back toward the origin} or undefined.\n- t~0 means the sweep started embedded. The caller must call hit.free().\n- The hit carries NO object identity.\n\nPer-layer sweeps (d.ts / src/lib.rs):\n- cameraSweepCollision(fx,fy,fz,tx,ty,tz,r,lbId): coarse building per-part AABBs (d.ts:3496 / lib.rs:43793).\n- sweepSphereAgainstBuildingMesh(...,r,lbId): physics triangles of ONE landblock, linear scan (d.ts:6505 / lib.rs:43845 / scene.rs:5854).\n- sweepSphereAgainstStatics(...,r,lbId): LandBlockInfo stab AABBs, whole-AABB slab test, over the 3x3 ring around lbId (d.ts:6611).\n- sweepSphereAgainstScenery(...,r,lbId): trunk cylspheres and boulder spheres over the 3x3 ring; canopies are not colliders (d.ts:6598 / scene.rs:4974).\n- sweepSphereAgainstCellMesh(...,r,Uint32Array cellIds): EnvCell shells (d.ts:6522).\n- sweepSphereAgainstCellStatics(...,r,cellIds): furniture BSPs (d.ts:6540).\n- sweepSphereAgainstEntities(...,r,maxRangeM): collidable HAS_PHYSICS_BSP objects, i.e. closed doors and chests. Skips the local player; creatures are excluded; open doors are ETHEREAL and skipped (d.ts:6565 / lib.rs:44053).\n- sweepSphereAgainstObjects(...,r,missileGuid,exemptLocalPlayer): creatures, players and props by Setup cylspheres/spheres at the wasm body pose. Skips guid==missileGuid, parented objects, contained objects and MISSILE/ETHEREAL objects. missileGuid's own PhysicsState sets the filter: if it is ETHEREAL, only STATIC objects count. Passing the SUBJECT's guid therefore excludes the subject (missile_sweep.rs:144-190).\n- clipCameraToCellSpace(...,r,startCell) -> t or undefined (d.ts:3621).\n- terrainHeightAt(wx,wy) -> physics z, or undefined if the landblock is not resident (d.ts:6652 / lib.rs:43725). Drawn ground = that + visual_ground.js visualGroundDeltaAt (:466), |dz| <= 8 cm.\n- resolveViewerCell / setViewerCell / getViewerCell / getViewerRenderSet / getRenderSet(depth). getRenderSet is the player-rooted BFS.\n\nRESIDENCY. Building, static and scenery collision is populated ONLY for the 3x3 landblock ring around the player: app/landblock_stream.js ensureBuildingAabbsAroundLandblock (:584) calls populateBuildingAabbsForLandblock, populateStaticsAabbsForLandblock and populateSceneryCollidersForLandblock. These are staged and land on the next TickMovement; the collision mirror refreshes at most every 100 ms. EnvCell physics triangles are staged per dungeon landblock on EnvCell load. Check with __diag.collision.residency().\n\nReference chain: camera.js _clipCameraAgainstWorld (:1769):\n- Order: terrain floor (+0.7), building AABB (off), building mesh, statics, scenery, cell mesh, cell statics, entities (range = segment length + 2 m), then indoor cell clamp.\n- Retail viewer sphere is 0.3 m from pivot z+1.5, with a 0.02 m skin (viewer_cell.js:44/51).\n- Clipping formula: final = start + delta*(t - backoff/len).\n\nprojectile_sweep.js sweepProjectileSegment(sh,p0,p1,opts) (:186) already chains the layers and reports the winning layer in opts.out.layer. projectileTerrainCrossing(p0,p1,terrainZAt,eps) (:273) is a pure terrain line-of-sight march with bisection.\n\n4) OCCLUDER FADING. There is NO system that fades or dithers occluders between the camera and the player.\n- canopy_soften.js only bends tree-canopy normals for lighting.\n- fade_alpha_state.js is a state helper for ENTITY fade owners. Call snapshotAuthoredAlpha(mat) (:71) before writing opacity and syncFadeAlpha(mat) (:94) after. While faded it sets alphaTest 0, NormalBlending, transparent, depthWrite=false; at full opacity it calls restoreAuthoredAlpha.\n\nEntity fade owners (entities.js):\n- setLocalPlayerCameraOpacity(guid,o) (:18991): one remembered slot (_localCamFade); hierarchical over held items (?camFadeHier, default ON). camera.js _applyCameraPlayerFade (:2156) pushes nearFadeOpacity each frame in follow mode under ?retailCamZoom (default ON).\n- _applyCamFadeToInst(inst,o) (:19098): works on ANY rig; snapshot keys __preCamFadeOpacity / __preCamFadeDepthWrite.\n- applyObjectTranslucency(guid,t) (:18870): owned by the server PhysicsDesc translucency; snapshot key __preObjTransOpacity.\n- _applyEtherealToEntity.\n- All of them clone per-entity materials via _getOrCloneEntityMaterial and cost a program swap when a fade starts.\n\nStatics and buildings can only be HIDDEN:\n- Per BatchedMesh instance via bm.setVisibleAt(iid,false).\n- Per landblock via parkStaticAtlasForLb / parkStaticBatchXForLb (static_atlas.js:2029, static_batch_x.js:2975; also exposed as liveScene3d._parkStaticAtlasForLb).\n- Singleton .visible is rewritten every frame by statics.js cullStaticsGroup (:4510). BatchedMesh nodes are forced visible unless userData.__deadBatch is set.\n\n5) HIDING HUD AND AVATARS.\n- ?hud=none: CSS html.no-hud hides all non-#stage DOM (index.html:536-539, 614). It also skips the DOM nameplate layer and the bracket overlay (index.js:3195-3263) and disables sprite nameplates and buff badges (nameplate_sprite.js:311).\n- Sprite nameplates are OFF by default (?nameplates=on); DOM nameplates are OFF by default (?nameplateDom=on).\n- Selection brackets are ON by default: a DOM div #selection-brackets-3d, which agent-mode CSS FORCE-SHOWS (index.html:525). Disable with ?selectionIndicator=none, or selectionBracketLayer.setDisplayOn(false) (:898; sticks until CharacterOption 0x0E changes), or setSelectedTarget(0).\n- The torus selection ring appears only in ring/both mode. ?selectionFlash is OFF; ?spellShapePreview is OFF; ?castRangeRing is OFF; the cast-stability ring is opt-in via localStorage.\n- SPEECH BUBBLES are ALWAYS ON with no flag: a Sprite named speech_bubble on root at z+3.05, depthTest false (draws through walls), 4.5 s hold + 1.2 s fade (speech_bubble.js:171/237; EntityManager.showSpeechBubble :7154).\n- Entity visibility is the composite stateVisible && !renderCullHidden, written only by _applyEntityVisible (:2972). tickEntityRenderVisibility (:3093) writes only when the cull state CHANGES and never culls the local player.\n- Do NOT use setVisibility(guid,false) to hide: via play_effect_vfx noteEntityVisibility it PLAYS the PS_Hidden script.\n- An opacity fade to 0 still CASTS SHADOWS, because shadow_caster_list.js walks only `visible`.\n\n6) PHYSICS DATA EXPOSED TO JS.\n- __diag.collision (diag/collision.js): selfTest(), residency() (19 counters), audit(), populate(lbId) (async; forces the populate for ANY landblock).\n- __diag.physics: local-player drift only.\n- __diag.entityTypes: slices __wom.\n- No BSP, cylsphere or triangle data reaches JS. Available instead: the sweeps, StaticObjectPlacement.aabbLocal, the scenery JSONL AABBs, creatureSeparationTable, objectPartDims and SetupSelectionSphere.\n\nFRAME ORDER (loop.js _tickPerFrameBody): tickCellVisibility3D (:2857; also resolves the viewer cell and runs occlusion beginFrame) -> tickFrustumCull (:2879) -> cameraSwitcher.tick (:3235) -> entityManager.tick (:3264) -> render.\n- The culls use the PREVIOUS frame's camera matrices.\n- The GPU occlusion culler (DEFAULT ON) reveals 1-2 frames late, with hide hysteresis of 3 to 24 frames. window.__occlusionCull.off disarms it; .hiddenKeys() returns 'e<guid>' keys and cell ids.\n- Entities more than 120 m from the ACTIVE camera stop ticking (MAX_TICK_DIST :2887; ?maxTickDist).\n- Every camera consumer resolves cameraSwitcher.activeCamera ?? liveScene3d.camera.",
+  "apis": [
+   {
+    "name": "EntityManager.entityMap",
+    "file": "scene3d/entities.js",
+    "line": 4178,
+    "signature": "Map<number /*u32 guid*/, EntityInstance>",
+    "what": "The live rig registry. inst.root.position is AC world metres; inst.meta holds the spawn meta (setupId, name, itemType, objDescFlags, wcid, objScale...). Reach it via window.liveScene3d.entityManager.entityMap.",
+    "verified": true
+   },
+   {
+    "name": "EntityInstance",
+    "file": "scene3d/entities.js",
+    "line": 3733,
+    "signature": "class EntityInstance { guid; root: THREE.Group; parts: THREE.Group[]; meta; setPose(x,y,z,qw,qx,qy,qz) }",
+    "what": "Per-entity rig. root is named entity_<guid8hex> (:4737). root.userData = {modelId: WCID (not setup!), landblockId, name} (:4747). _baseScale holds obj_scale.",
+    "verified": true
+   },
+   {
+    "name": "loop.js toMeta (spawn meta schema)",
+    "file": "scene3d/loop.js",
+    "line": 3480,
+    "signature": "toMeta(upd) -> {guid, modelId, setupId, landblockId, x,y,z (LB-local), qw,qx,qy,qz, wcid, itemType, name, iconId, objScale, physicsTranslucency, paletteId, mtableId, placementId, motionCommand, motionStance, vx,vy,vz, modelChanges, textureChanges, subPalettes, physicsScriptDid, soundTableDid, objDescFlags}",
+    "what": "The exact field set on inst.meta, used for subject kind classification and setup lookups.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.getHeading",
+    "file": "scene3d/entities.js",
+    "line": 15988,
+    "signature": "getHeading(guid: number): number | null",
+    "what": "Raw CCW yaw about +Z (0 = north) from root.quaternion. getLocalPlayerHeading() (:15938) returns the negated CW-from-north value.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.getLocalPlayerWorldPos",
+    "file": "scene3d/entities.js",
+    "line": 15818,
+    "signature": "getLocalPlayerWorldPos(): {x,y,z} | null",
+    "what": "Local player AC world pose. Prefers cameraSwitcher.getPredictedPlayerWorldPos(), then the rig, then the 2D map, then __lastEntityWorldPos.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.findGuidByName",
+    "file": "scene3d/entities.js",
+    "line": 7824,
+    "signature": "findGuidByName(name: string): number /*0 if none*/",
+    "what": "O(1) name->guid lookup. Returns the oldest live entity with that name; useful for resolving script subjects.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setVisibility",
+    "file": "scene3d/entities.js",
+    "line": 7092,
+    "signature": "setVisibility(guid: number, visible: boolean): void",
+    "what": "Server-state visibility (NoDraw/Hidden/Cloaked). It also calls play_effect_vfx noteEntityVisibility, which plays PS_Hidden/UnHide scripts. NOT safe for film hiding.",
+    "verified": true
+   },
+   {
+    "name": "_applyEntityVisible / _setEntityStateVisible",
+    "file": "scene3d/entities.js",
+    "line": 2972,
+    "signature": "function _applyEntityVisible(inst) /* root.visible = _stateVisible!==false && !_renderCullHidden */",
+    "what": "The single writer of rig visibility (module-private). This is the place to add a film-hide term.",
+    "verified": true
+   },
+   {
+    "name": "tickEntityRenderVisibility",
+    "file": "scene3d/entities.js",
+    "line": 3093,
+    "signature": "export function tickEntityRenderVisibility(scene3d, culler) -> {tested, culled, occluded, cellGated}",
+    "what": "Per-frame entity cull. Combines a frustum test (6 m sphere), an optional cullDist, ?rigCellGate and the GPU occlusion culler. Exempts the local player, attached children and light owners.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setLocalPlayerCameraOpacity",
+    "file": "scene3d/entities.js",
+    "line": 18991,
+    "signature": "setLocalPlayerCameraOpacity(guid: number, opacity: number /*0..1*/): void",
+    "what": "Hierarchical camera fade (body plus held items). Stores ONE remembered slot, _localCamFade, which re-applies after re-dress/respawn.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager._applyCamFadeToInst",
+    "file": "scene3d/entities.js",
+    "line": 19098,
+    "signature": "_applyCamFadeToInst(inst: EntityInstance, o: number): void",
+    "what": "Per-rig opacity fade on any entity. Uses snapshot keys __preCamFadeOpacity/__preCamFadeDepthWrite and syncFadeAlpha. Template for a film fade owner.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.applyObjectTranslucency",
+    "file": "scene3d/entities.js",
+    "line": 18870,
+    "signature": "applyObjectTranslucency(guid: number, translucency: number /*0 opaque..1 clear*/): void",
+    "what": "Whole-object translucency owner, driven by the server PhysicsDesc. Multiplicative with snapshot __preObjTransOpacity; server updates overwrite it.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setSelectedTarget / deselectTarget",
+    "file": "scene3d/entities.js",
+    "line": 8748,
+    "signature": "setSelectedTarget(guid: number /*0 clears*/): void; deselectTarget(): void /*:9654*/",
+    "what": "Drives the bracket overlay (selectionBracketLayer.setTarget) and the legacy torus. Set 0 for HUD-free capture.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.showSpeechBubble",
+    "file": "scene3d/entities.js",
+    "line": 7154,
+    "signature": "showSpeechBubble(guid: number, text: string, isEmote: boolean): void",
+    "what": "Always-on overhead speech sprite (speech_bubble.js showSpeechBubbleOnEntity :171, removeSpeechBubbleFromEntity :237). Override or gate it during takes.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstBuildingMesh",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6505,
+    "signature": "sweepSphereAgainstBuildingMesh(from_x,from_y,from_z,to_x,to_y,to_z,radius,landblock_id): CollisionHit | undefined",
+    "what": "Sweeps against building GfxObj physics triangles of ONE landblock (linear scan; scene.rs:5854). Long segments must be swept per landblock crossed.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstStatics",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6611,
+    "signature": "sweepSphereAgainstStatics(from_x,from_y,from_z,to_x,to_y,to_z,radius,landblock_id): CollisionHit | undefined",
+    "what": "LandBlockInfo stab AABB slab test over the 3x3 ring around landblock_id. Pass the landblock containing `from`, not the player's.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstScenery",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6598,
+    "signature": "sweepSphereAgainstScenery(from_x,from_y,from_z,to_x,to_y,to_z,radius,landblock_id): CollisionHit | undefined",
+    "what": "Procedural scenery trunk cylspheres and boulder spheres over the 3x3 ring (scene.rs:4974). Canopies are not colliders.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstCellMesh / sweepSphereAgainstCellStatics",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6522,
+    "signature": "sweepSphereAgainstCellMesh(from..., to..., radius, cell_ids: Uint32Array): CollisionHit | undefined; sweepSphereAgainstCellStatics(same) /*:6540*/",
+    "what": "Covers EnvCell shell triangles and stab-list furniture BSPs for an explicit cell list. The caller chooses the cells (camera uses getRenderSet(1); film can pass resident dungeon cells).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstEntities",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6565,
+    "signature": "sweepSphereAgainstEntities(from..., to..., radius, max_range_m): CollisionHit | undefined",
+    "what": "Collidable HAS_PHYSICS_BSP entities: closed doors and chests. Skips the local player and creatures; open doors are ETHEREAL and skipped (lib.rs:44053).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.sweepSphereAgainstObjects",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6585,
+    "signature": "sweepSphereAgainstObjects(from..., to..., radius, missile_guid, exempt_local_player): CollisionHit | undefined",
+    "what": "Creatures, players and props by Setup cylspheres/spheres. Skips missile_guid (so passing the subject guid excludes the subject), parented, contained, MISSILE and ETHEREAL objects (missile_sweep.rs:144).",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.cameraSweepCollision",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3496,
+    "signature": "cameraSweepCollision(from..., to..., radius, landblock_id): CollisionHit | undefined",
+    "what": "Coarse building per-part AABB sweep. Over-bounds rotated buildings by up to 4.9 m, so the camera leaves it off by default.",
+    "verified": true
+   },
+   {
+    "name": "CollisionHit",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 752,
+    "signature": "class CollisionHit { t; x; y; z; normalX; normalY; normalZ; free() }",
+    "what": "t in [0,1] (0 = embedded start), world hit point, normal pointing back toward the origin. Carries NO object id. The caller must free() it.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.clipCameraToCellSpace",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3621,
+    "signature": "clipCameraToCellSpace(from..., to..., radius, start_cell): number | undefined",
+    "what": "Indoor containment walk with portal re-seat. Returns the clamp t when the segment would leave cell space.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.terrainHeightAt",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6652,
+    "signature": "terrainHeightAt(world_x, world_y): number | undefined",
+    "what": "Physics terrain z on the retail split diagonal (lib.rs:43725). Returns undefined if the landblock is not resident.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.resolveViewerCell / setViewerCell / getViewerRenderSet / getRenderSet",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5983,
+    "signature": "resolveViewerCell(from...,to...,radius,player_cell): number; setViewerCell(cell) /*:6395*/; getViewerRenderSet(): Uint32Array /*:4825*/; getRenderSet(depth): Uint32Array /*:4541, player-rooted*/",
+    "what": "Viewer-cell and render-set walks used by indoor rendering and the camera clip. They are rooted at the player unless setViewerCell is set.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.objectPartDims / objectPosition / nearbyEntityGuids / objectPhysicsState",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 5386,
+    "signature": "objectPartDims(guid): Float32Array /*[radius,height] or empty*/; objectPosition(guid): Float64Array /*[lbId,x,y,z] LB-local*/; nearbyEntityGuids(max_range_m): Uint32Array /*from local player*/; objectPhysicsState(guid): number",
+    "what": "Wasm world-state queries, independent of render spawns. Use them for subject cylinders and scene enumeration.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle.creatureSeparationTable",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 3723,
+    "signature": "creatureSeparationTable(): CreatureSeparationTable {setupIds: Uint32Array, radii: Float32Array, playerRadius: number, epsilon: number}",
+    "what": "Per-Setup collision radii: the first cylsphere, else the first sphere, unscaled. Multiply by obj_scale.",
+    "verified": true
+   },
+   {
+    "name": "fetchSetupSelectionSphere (+ selection_brackets helpers)",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 8736,
+    "signature": "fetchSetupSelectionSphere(setup_id): Promise<SetupSelectionSphere{cx,cy,cz,radius,setupId,valid}>; loadDatSelectionSphere(fetchFn,setupId) /*selection_brackets.js:624*/; peekDatSelectionSphere(setupId) /*:614*/; datSelectionSphereFor(rec, root) -> {offset, radius, local:true} /*:666*/; computeSelectionSphere(root) /*:690*/",
+    "what": "Retail selection sphere in object space; use it for subject framing volume. Resolve the centre via offset.applyMatrix4(root.matrixWorld).",
+    "verified": true
+   },
+   {
+    "name": "pickEntityAt / window.__pickEntityAt",
+    "file": "scene3d/picking.js",
+    "line": 948,
+    "signature": "pickEntityAt(clientX: number, clientY: number): number /*guid*/ | null",
+    "what": "Screen-point entity pick. Raycasts visible entity roots only, recursive, with the sphere fallback. Ignores walls and statics, so it is NOT an LOS test.",
+    "verified": true
+   },
+   {
+    "name": "pick_math.sphereRayEntry / pickNearestSphereHit",
+    "file": "scene3d/pick_math.js",
+    "line": 20,
+    "signature": "sphereRayEntry(ox,oy,oz,dx,dy,dz,cx,cy,cz,r): number /*t or -1*/; pickNearestSphereHit(origin, dir, spheres[{guid,cx,cy,cz,r}], count?): number|null /*:46*/",
+    "what": "Import-free ray-vs-sphere maths (retail CSphere::sphere_intersects_ray). A start inside the sphere does not count as a hit.",
+    "verified": true
+   },
+   {
+    "name": "projectile_sweep.sweepProjectileSegment",
+    "file": "scene3d/projectile_sweep.js",
+    "line": 186,
+    "signature": "sweepProjectileSegment(sh, p0, p1, {radius, cells, scenery, entities, objects, missileGuid, ethereal, exemptLocalPlayer, launchWindow, out}) -> number|null",
+    "what": "Pure layered sweep chain: building mesh for both endpoint landblocks, cell mesh/statics, scenery, entities, objects. Returns the earliest stopping t and sets opts.out.layer. Template for film LOS.",
+    "verified": true
+   },
+   {
+    "name": "projectile_sweep.projectileTerrainCrossing / projectileHitStops / landblockOfWorld",
+    "file": "scene3d/projectile_sweep.js",
+    "line": 273,
+    "signature": "projectileTerrainCrossing(p0,p1,terrainZAt:(x,y)=>number|null, eps) -> {s,x,y,z}|null; projectileHitStops(t,nDotDir,inLaunchWindow) /*:143*/; landblockOfWorld(x,y) /*:125*/",
+    "what": "Terrain LOS march (0.5 m probes plus bisection), plus the embedded-hit rule and the world->landblock id helper.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher._clipCameraAgainstWorld",
+    "file": "scene3d/camera.js",
+    "line": 1769,
+    "signature": "_clipCameraAgainstWorld(playerPos, idealX, idealY, idealZ, ctx = this._camClipContext(), terrainFloor = true) -> {x,y,z}",
+    "what": "Reference camera clearance chain from the player head pivot. Retail viewer sphere 0.3 m from z+1.5 (viewer_cell.js:44/51).",
+    "verified": true
+   },
+   {
+    "name": "OcclusionCuller.want / getOcclusionCuller",
+    "file": "scene3d/occlusion_cull.js",
+    "line": 227,
+    "signature": "getOcclusionCuller(scene3d, THREE) -> OcclusionCuller|null /*:266*/; want(key, minX,minY,minZ,maxX,maxY,maxZ /*three world AABB*/): boolean",
+    "what": "Generic GPU ANY_SAMPLES_PASSED visibility verdict for an AABB. Lags 1-2 frames with hysteresis; armed outdoors only. window.__occlusionCull {off, stats, hiddenKeys()}.",
+    "verified": true
+   },
+   {
+    "name": "FrustumCuller / tickFrustumCull",
+    "file": "scene3d/culling.js",
+    "line": 154,
+    "signature": "FrustumCuller.update(camera, worldRoot): boolean; isSphereInFrustum(sphere /*AC frame*/); getDistanceSq(x,y,z); tickFrustumCull(scene3d) /*:271*/",
+    "what": "AC-space frustum built from cameraSwitcher.activeCamera ?? camera, reusable for 'is subject in frame' tests in AC coordinates.",
+    "verified": true
+   },
+   {
+    "name": "cullStaticsGroup",
+    "file": "scene3d/statics.js",
+    "line": 4510,
+    "signature": "export function cullStaticsGroup(scene3d, culler) -> {tested, culled}",
+    "what": "Per-frame writer of staticsGroup.children[i].visible. Forces BatchedMesh nodes visible unless userData.__deadBatch is set.",
+    "verified": true
+   },
+   {
+    "name": "parkStaticAtlasForLb / unparkStaticAtlasForLb / parkStaticBatchXForLb",
+    "file": "scene3d/static_atlas.js",
+    "line": 2029,
+    "signature": "parkStaticAtlasForLb(lbKey): number; unparkStaticAtlasForLb(lbKey) /*:2043*/; parkStaticBatchXForLb(lbKey) /*static_batch_x.js:2975*/",
+    "what": "Landblock-granular per-instance hide/show via BatchedMesh.setVisibleAt. Also exposed as liveScene3d._parkStaticAtlasForLb etc. (index.js:6520-6529).",
+    "verified": true
+   },
+   {
+    "name": "three BatchedMesh.raycast (r184)",
+    "file": "node_modules/three/src/objects/BatchedMesh.js",
+    "line": 1382,
+    "signature": "raycast(raycaster, intersects) /* intersect.batchId = instance id */",
+    "what": "Linear per-instance raycast over all active and visible instances. Returns batchId, which feeds setVisibleAt(batchId, false).",
+    "verified": true
+   },
+   {
+    "name": "fade_alpha_state snapshot/sync/restore",
+    "file": "scene3d/fade_alpha_state.js",
+    "line": 71,
+    "signature": "snapshotAuthoredAlpha(mat, search?): boolean; syncFadeAlpha(mat, search?): boolean /*:94*/; restoreAuthoredAlpha(mat): boolean /*:119*/",
+    "what": "Render-state discipline that any new film fade owner must follow (?fadeAlphaParity default ON).",
+    "verified": true
+   },
+   {
+    "name": "object_radius objRadiusSetting / objectRadiusHides",
+    "file": "scene3d/object_radius.js",
+    "line": 52,
+    "signature": "objRadiusSetting(): number|null; objectRadiusHides(scene3d, lbKey): boolean /*:215*/; getObjectRadiusStats(scene3d) /*:220; window.__objRadius()*/",
+    "what": "Object residency radius (default 4 landblocks from the player). Not bounding radii.",
+    "verified": true
+   },
+   {
+    "name": "fetch_landblock_objects_soa / fetch_landblock_scenery_soa",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 9070,
+    "signature": "fetch_landblock_objects_soa(cell_ids: Uint32Array): Promise<LandblockObjectsSoa{len,modelIds,positions,quaternions,scales,isBuilding,landblockIds}>; fetch_landblock_scenery_soa(cell_ids) /*:9114*/ -> LandblockScenerySoa{objIds,positions,quaternions,scales,defaultScriptId,landblockIds,sourceCellX/Y,sourceObjIdx}",
+    "what": "Bulk placement enumeration per landblock (cellId = lbKey|0xFFFE), LB-local positions. Not used by the renderer and free for film scouting.",
+    "verified": true
+   },
+   {
+    "name": "fetchEnvCellsInLandblock -> StaticObjectPlacement",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 8520,
+    "signature": "fetchEnvCellsInLandblock(landblock_id): Promise<EnvCellPlacement[]>; EnvCellPlacement.takeStaticObjects(): StaticObjectPlacement[{did,x,y,z (world),qw..qz,aabbLocal}] /*:1541,7406*/",
+    "what": "Dungeon furniture placements with model-local AABBs. The take_* calls are one-shot moves.",
+    "verified": true
+   },
+   {
+    "name": "populate*ForLandblock + __diag.collision",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 10420,
+    "signature": "populateBuildingAabbsForLandblock(lb): Promise<number>; populateSceneryCollidersForLandblock(lb) /*:10433*/; populateStaticsAabbsForLandblock(lb) /*:10463*/; __diag.collision.residency()/populate(lbId) /*diag/collision.js:195,221*/",
+    "what": "Forces collision residency for landblocks outside the player's 3x3 ring. Inserts are staged and land on the next TickMovement.",
+    "verified": true
+   },
+   {
+    "name": "vfxDescriptorFor",
+    "file": "scene3d/vfx_catalog.js",
+    "line": 159,
+    "signature": "vfxDescriptorFor(did): {archetype, componentIds, config, raw:{signals:[{name,value,weight}]}} | null",
+    "what": "Per-Setup-DID scenery/prop classification (1168 DIDs) for foliage vs rock vs prop decisions. Loaded by ensureVfxCatalog under ?visual (default ON).",
+    "verified": true
+   },
+   {
+    "name": "matchesSelectionType + ODF constants",
+    "file": "scene3d/target_cycle.js",
+    "line": 103,
+    "signature": "matchesSelectionType(meta, type: SELECTION_TYPE, opts?): boolean; ODF_PLAYER 0x8, ODF_DOOR 0x1000 (:712), ODF_LIFESTONE 0x4000, ODF_PORTAL 0x40000 ...",
+    "what": "Retail-faithful subject kind tests from meta.itemType and meta.objDescFlags.",
+    "verified": true
+   },
+   {
+    "name": "WorldObjectManager.get / byClass",
+    "file": "plugins/world-objects/world_object_manager.js",
+    "line": 188,
+    "signature": "window.__wom.get(guid) -> WorldObject{className,...}|null; byClass(className) /*:246*/",
+    "what": "ACPlugin-taxonomy class per guid (Creature/NPC/Vendor/Player/Door/Portal/Lifestone/Corpse...).",
+    "verified": true
+   },
+   {
+    "name": "SelectionBracketLayer.setDisplayOn / setTarget",
+    "file": "scene3d/selection_brackets.js",
+    "line": 898,
+    "signature": "setDisplayOn(on: boolean); setTarget(guid, follow, sphere) /*:873*/; tick(camera) /*:927*/",
+    "what": "Hides or shows the retail corner brackets. tick also contains the selection-sphere-to-screen-rect projection, useful as a framing helper.",
+    "verified": true
+   },
+   {
+    "name": "visualGroundDeltaAt / physicsGroundZAt",
+    "file": "scene3d/visual_ground.js",
+    "line": 466,
+    "signature": "visualGroundDeltaAt(acX, acY, lbKey, camDistM = Infinity, level = 0): number; physicsGroundZAt(acX, acY, lbKey) /*:480*/",
+    "what": "Drawn (rounded) terrain minus physics terrain, at most 8 cm. Use it for low-camera ground clearance.",
+    "verified": true
+   },
+   {
+    "name": "ragdoll_env _collectTargets / _castAC",
+    "file": "scene3d/ragdoll_env.js",
+    "line": 461,
+    "signature": "_collectTargets(groups, centerWorld, range, s) -> Object3D[] (<=64); _castAC(s, frame, ox,oy,oz, dx,dy,dz, far, targets) -> distance|Infinity /*:503*/",
+    "what": "Module-private pattern for a bounded, budgeted AC-frame visual raycast against cellsGroup and buildingsGroup.",
+    "verified": true
+   },
+   {
+    "name": "nameplate/hud gating",
+    "file": "scene3d/nameplate_sprite.js",
+    "line": 311,
+    "signature": "_NAMEPLATE_DISABLED (module const); ensureNameplateForEntity(inst) /*:747*/; refreshBuffBadgeForEntity(inst) /*:1007*/; tickNameplateLod(scene3d) /*:1139*/",
+    "what": "Sprite nameplates and buff badges are disabled unless ?nameplates=on, and always when ?hud=none.",
+    "verified": true
+   }
+  ],
+  "seams": [
+   {
+    "what": "Composite entity visibility, single writer: _applyEntityVisible (root.visible = stateVisible && !renderCullHidden)",
+    "file": "scene3d/entities.js",
+    "line": 2972,
+    "filmUse": "Add an inst._filmHidden term and an exported setFilmHidden(guid, bool). This hides the local avatar, other players or an occluding NPC for a shot without fighting the cull or server state, kills its shadow, and avoids the PS_Hidden script that setVisibility triggers."
+   },
+   {
+    "what": "Per-rig fade owner _applyCamFadeToInst plus fade_alpha_state snapshot/sync",
+    "file": "scene3d/entities.js",
+    "line": 19098,
+    "filmUse": "Clone it into _applyFilmFadeToInst with its own snapshot keys (e.g. __preFilmFadeOpacity) to dissolve entities between the camera and the subject. When a fade reaches ~0, also set visible=false or castShadow=false, because shadows ignore opacity."
+   },
+   {
+    "what": "cullStaticsGroup honoured-marker pattern (userData.__deadBatch)",
+    "file": "scene3d/statics.js",
+    "line": 4560,
+    "filmUse": "Add an honoured userData.__filmHidden marker so singleton or InstancedMesh occluders (signs, props) can be hidden for a shot. Writing .visible directly would be undone the next frame."
+   },
+   {
+    "what": "BatchedMesh per-instance visibility: setVisibleAt(iid) via raycast batchId; atlas and chunk park seams",
+    "file": "scene3d/static_atlas.js",
+    "line": 2029,
+    "filmUse": "Hide the specific atlas or chunk instance (tree, building wall surface) a visual raycast reports as blocking (intersect.batchId), and restore it after the take. Use park/unpark for landblock-wide clears."
+   },
+   {
+    "what": "Layered wasm sweep chain with layer attribution: sweepProjectileSegment(opts.out.layer)",
+    "file": "scene3d/projectile_sweep.js",
+    "line": 186,
+    "filmUse": "Build film_los.js on this pattern. Chunk the segment per landblock. Pass missileGuid = subject guid to sweepSphereAgainstObjects. Add projectileTerrainCrossing for terrain, and return {t, layer, point, normal} to answer 'blocked by what layer'."
+   },
+   {
+    "what": "Follow-camera clearance chain _clipCameraAgainstWorld (viewer sphere 0.3 m, skin 0.02)",
+    "file": "scene3d/camera.js",
+    "line": 1769,
+    "filmUse": "Reference for drone/dolly clearance: sweep the previous film eye to the sought eye through the same layers, clamp, then slerp orientation. It is anchored at the player pivot today, so film needs an arbitrary pivot (e.g. the last valid eye)."
+   },
+   {
+    "what": "Generic GPU occlusion query OcclusionCuller.want(key, aabb) and window.__occlusionCull",
+    "file": "scene3d/occlusion_cull.js",
+    "line": 227,
+    "filmUse": "Query 'film:<guid>:<part>' sub-boxes (head/torso/legs) of the subject for a GPU visibility verdict that includes canopies, buildings and terrain. It reveals 1-2 frames late and is disarmed indoors. Alternatively set .off=true during takes to stop NPC pop-in around corners."
+   },
+   {
+    "what": "Active-camera resolution: cameraSwitcher.activeCamera ?? liveScene3d.camera",
+    "file": "scene3d/culling.js",
+    "line": 274,
+    "filmUse": "Many subsystems read this camera: the frustum cull, entity tick gate (entities.js:16068), viewer cell (cells.js:2849), nameplate LOD and picking. The film camera must be the persp or active camera, posed BEFORE tickPerFrame, or culls lag one frame."
+   },
+   {
+    "what": "Viewer-cell resolution updateViewerCell (head->eye walk from the player cell) plus setViewerCell",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "filmUse": "For indoor shots far from the player, supply the film camera's cell explicitly (resolveViewerCell from a known-good anchor along the dolly path, or setViewerCell). Feed that cell's render set to the cell-mesh sweeps."
+   },
+   {
+    "what": "Collision residency driver ensureBuildingAabbsAroundLandblock (3x3 around the player)",
+    "file": "app/landblock_stream.js",
+    "line": 584,
+    "filmUse": "Before a drone take, populate buildings, statics and scenery colliders for every landblock on the camera path (or call __diag.collision.populate(lb)), then wait one TickMovement and verify with residency()."
+   },
+   {
+    "what": "Bracket and speech-bubble gates: SelectionBracketLayer.setDisplayOn, EntityManager.showSpeechBubble, removeSpeechBubbleFromEntity",
+    "file": "scene3d/selection_brackets.js",
+    "line": 898,
+    "filmUse": "HUD-free capture. Turn brackets off, deselect the target, and gate or override speech bubbles. Bubbles have no flag and depthTest=false, so they draw through walls."
+   },
+   {
+    "what": "URL capture flags read once at load: hud=none, agent=1, selectionIndicator=none, nameplates/nameplateDom (off), maxTickDist, objRadius, occlusionCull, nosw",
+    "file": "docs/url-flags.md",
+    "filmUse": "Recommended film boot URL: ?hud=none&agent=1&selectionIndicator=none&nosw=1&maxTickDist=<>=shot range>&objRadius=off (for vistas). Optionally use occlusionCull=off for takes."
+   },
+   {
+    "what": "Offline obstacle data: fetch_landblock_objects_soa, fetch_landblock_scenery_soa, scenery JSONL aabbs, fetchEnvCellsInLandblock statics.aabbLocal, vfxDescriptorFor",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 9070,
+    "filmUse": "Build per-site obstacle maps (trees and canopies with AABB plus archetype, rocks, props, buildings, dungeon furniture) for shot-candidate generation and JEV scoring without touching the render graph."
+   },
+   {
+    "what": "Subject framing volume: SetupSelectionSphere plus objectPartDims plus the bracket projection maths",
+    "file": "scene3d/selection_brackets.js",
+    "line": 954,
+    "filmUse": "Compute the subject's world sphere and screen rect (centre +/- r along camera right/up, then project) for rule-of-thirds, headroom and fill-ratio checks. objectPartDims gives height for eye-line placement."
+   },
+   {
+    "what": "Bounded visual raycast pattern (_collectTargets/_castAC) in the AC frame via entitiesGroup.matrixWorld",
+    "file": "scene3d/ragdoll_env.js",
+    "line": 461,
+    "filmUse": "Cast a small ray fan from the camera to subject sample points against a budgeted target list (nearby entities minus the subject, staticsGroup batches, buildingsGroup, cellsGroup). Gives visual (not physics) occlusion and identifies the occluder via batchId/instanceId/root."
+   },
+   {
+    "what": "Entity kind classification: meta.itemType/objDescFlags (target_cycle.js), __wom className",
+    "file": "scene3d/target_cycle.js",
+    "line": 103,
+    "filmUse": "Shot grammar by subject kind: NPC/vendor dialogue framing, creature action framing, portal and lifestone establishing shots, door reveals. Also choose which entity types count as soft occluders that may be faded."
+   }
+  ],
+  "hazards": [
+   {
+    "what": "root.userData.modelId is the WCID, not the Setup DID. The setup lives in inst.meta.setupId / meta.modelId.",
+    "file": "scene3d/entities.js",
+    "line": 4747,
+    "mitigation": "Always read inst.meta.setupId for Setup lookups (selection sphere, separation radii, vfx catalog)."
+   },
+   {
+    "what": "EntityManager.setVisibility(guid,false) routes to play_effect_vfx.noteEntityVisibility. That PLAYS the PS_Hidden script (portal bubbles) on an object whose server state is not NoDraw/Cloaked, and plays UnHide on show.",
+    "file": "scene3d/entities.js",
+    "line": 7128,
+    "mitigation": "Add a dedicated film visibility term in _applyEntityVisible; never reuse setVisibility for cosmetic hides."
+   },
+   {
+    "what": "Opacity fades (camera fade, object translucency, film fade) still cast full shadows: shadow_caster_list.js and three's shadow pass test only `visible`, not opacity.",
+    "file": "scene3d/shadow_caster_list.js",
+    "line": 74,
+    "mitigation": "At o<~0.05 switch to visible=false, or temporarily set castShadow=false on the faded rig's meshes."
+   },
+   {
+    "what": "Two writers of .visible: cullStaticsGroup rewrites every staticsGroup child's visible each frame and forces BatchedMesh nodes visible, so a film hide via .visible lasts one frame. object_radius.js writes the same flag.",
+    "file": "scene3d/statics.js",
+    "line": 4510,
+    "mitigation": "Use an honoured marker in cullStaticsGroup, or per-instance setVisibleAt on BatchedMesh, which this pass never touches."
+   },
+   {
+    "what": "Statics and buildings mostly lose per-placement identity. buildingBatch is DEFAULT ON (code !== 'off', despite a header comment saying default-OFF) and statAtlas/statBatchChunk are DEFAULT ON, so building Groups are flattened into ring-spanning BatchedMeshes with no landblockId/modelId per instance.",
+    "file": "scene3d/buildings.js",
+    "line": 127,
+    "mitigation": "Identify occluders via raycast batchId plus bm.getMatrixAt, or the wasm/JSONL placement data. Use ?buildingBatch=off / ?statAtlas=off only for debugging (big draw-call cost)."
+   },
+   {
+    "what": "Wasm sweep hits carry NO object identity; t~0 means an embedded start (the normal faces the start side); CollisionHit boxes leak unless freed; a stale pkg/ lacks newer exports.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 752,
+    "mitigation": "Copy fields then free(). typeof-guard every export (as projectile_sweep.js does). Apply the projectileHitStops rule for embedded hits. Resolve identity in JS afterwards."
+   },
+   {
+    "what": "Collision data exists only in the 3x3 landblock ring around the PLAYER. statics/scenery sweeps search only the 3x3 ring around the passed lbId; building-mesh sweeps read ONE landblock. A film camera far from the player, or a long LOS segment, silently passes through walls and trees.",
+    "file": "app/landblock_stream.js",
+    "line": 584,
+    "mitigation": "Chunk segments to <=192 m, passing landblockOfWorld(chunkStart). Pre-populate collision for landblocks on the camera path and check __diag.collision.residency()."
+   },
+   {
+    "what": "Physics differs from visual geometry. The statics sweep is a whole-AABB slab (over-blocks under canopies). Scenery colliders are trunks and boulders only (canopies never block). Awnings, banners and particle smoke have no colliders.",
+    "file": "scene3d/projectile_sweep.js",
+    "line": 39,
+    "mitigation": "Use physics sweeps for camera CLEARANCE, and visual raycasts or GPU queries (or the scenery JSONL AABB) for subject VISIBILITY."
+   },
+   {
+    "what": "getRenderSet(1) is rooted at the player's cell, and cells.js resolves the viewer cell by walking head->eye from the player. An indoor film camera far from the player (behind walls) gets a wrong viewer cell and wrong sweep cell sets.",
+    "file": "scene3d/cells.js",
+    "line": 2849,
+    "mitigation": "Seed the viewer cell from the film camera path and pass dungeon cell ids explicitly (e.g. resident ids from liveScene3d.cellContainers3d keys) to sweepSphereAgainstCellMesh/CellStatics."
+   },
+   {
+    "what": "Cull timing: tickCellVisibility3D and tickFrustumCull run BEFORE cameraSwitcher.tick in _tickPerFrameBody, so culls use last frame's camera matrices. GPU occlusion reveals are 1-2 frames late with 3 to 24 frame hide hysteresis, so NPCs/interiors can pop in when the camera rounds a corner or whips 90 degrees.",
+    "file": "scene3d/loop.js",
+    "line": 2857,
+    "mitigation": "Pose the film camera before tickPerFrame and call camera.updateMatrixWorld(). Set window.__occlusionCull.off=true during takes."
+   },
+   {
+    "what": "Entity animation stops for rigs more than 120 m from the ACTIVE camera (MAX_TICK_DIST). Spawn-time LOD reads window.liveScene3d.camera at spawn, and dynamic LOD respawns rigs at band crossings, so telephoto subjects freeze or swap meshes.",
+    "file": "scene3d/entities.js",
+    "line": 2887,
+    "mitigation": "Boot with ?maxTickDist=<max shot distance>. Make the film camera the persp/active camera so the LOD and tick gates measure from it."
+   },
+   {
+    "what": "?objRadius default 4: statics and buildings are baked only within 4 landblocks (Chebyshev) of the player and hidden beyond 5. Wide or aerial vistas show bare terrain past ~800 m.",
+    "file": "scene3d/object_radius.js",
+    "line": 45,
+    "mitigation": "Use ?objRadius=off (full 11x11 ring) for establishing shots, after checking memory headroom on the 8 GB laptop / 1070."
+   },
+   {
+    "what": "?skipHiddenMatrix (default ON) leaves matrixWorld of hidden (culled/occluded) nodes stale. A direct .matrixWorld read of a culled subject is wrong.",
+    "file": "scene3d/skip_hidden_matrix.js",
+    "line": 1,
+    "mitigation": "Read inst.root.position (AC frame), or call getWorldPosition/updateWorldMatrix, which refresh on demand."
+   },
+   {
+    "what": "camera.layers.mask is rewritten mid-frame by CameraLayerMaskPass indoors. Entity subtrees are re-stamped to layer 1 after every re-dress/ReplaceObject (_stampEntityIndoorLayer), so custom-layer hiding does not stick, and a raycaster that copies camera.layers can miss layer 1.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 111,
+    "mitigation": "Give film raycasters an explicit mask (enable 0 and 1). Do not hide via layers."
+   },
+   {
+    "what": "camera.js under ?retailCamZoom (default ON) pushes setLocalPlayerCameraOpacity(nearFadeOpacity) whenever its quantised value changes in follow mode. setLocalPlayerCameraOpacity keeps ONE remembered slot (_localCamFade), so using it for another guid clobbers the local fade.",
+    "file": "scene3d/camera.js",
+    "line": 2156,
+    "mitigation": "While film mode owns the camera, suspend follow positioning or use a separate film fade owner. Never call setLocalPlayerCameraOpacity for non-local entities."
+   },
+   {
+    "what": "window.__pickEntityAt ignores world geometry (it raycasts entity roots only) and skips the local player, so it reports occluded NPCs as picked.",
+    "file": "scene3d/picking.js",
+    "line": 963,
+    "mitigation": "Do not use it as an LOS oracle; combine it with sweeps or visual raycasts."
+   },
+   {
+    "what": "three r184 BatchedMesh.raycast is linear over every instance, and atlas buckets span the whole ring (frustumCulled=false). Static particle meshes are direct children of staticsGroup (userData.__particle), and occlusion proxies and blood decals have raycast=noop.",
+    "file": "node_modules/three/src/objects/BatchedMesh.js",
+    "line": 1382,
+    "mitigation": "Budget a few rays per frame and pre-filter targets by distance (ragdoll_env pattern). Skip __particle/isParticleInstanced nodes. Spread candidate evaluation over frames."
+   },
+   {
+    "what": "Rendered rig pose differs from the wasm collision pose. sweepSphereAgainstObjects/Entities use the WorldState body pose (not the dead-reckoned root.position), and installVisualGroundRoot adds visualZ-physicsZ (<=8 cm) to the rig MATRIX only.",
+    "file": "scene3d/entities.js",
+    "line": 3786,
+    "mitigation": "Pad subject and occluder radii by ~0.3 m. Treat sweep results near the subject as the subject itself."
+   },
+   {
+    "what": "Speech bubbles are always on (no flag), depthTest=false, renderOrder 11. Agent-mode CSS force-shows #selection-brackets-3d, so a selected target shows brackets in ?agent=1 captures.",
+    "file": "scene3d/speech_bubble.js",
+    "line": 171,
+    "mitigation": "Use ?hud=none or ?selectionIndicator=none, setSelectedTarget(0), and gate showSpeechBubble during takes."
+   },
+   {
+    "what": "Flag-default footguns: comments and docs say camIndoorObjects is '=on opt-in' but the code is !== 'off' (default ON). The buildingBatch header says default-OFF but the code is default ON. Trust the readers, not the comments.",
+    "file": "scene3d/camera.js",
+    "line": 676,
+    "mitigation": "Verify flag readers in code before assuming film-relevant behaviour."
+   },
+   {
+    "what": "sweepSphereAgainstEntities/Objects use RefCell try_borrow and silently return 'no hit' when a sweep lands mid-drain. Other sweeps read the collision_scene mirror, which is refreshed at most every 100 ms and only after a TickMovement drain.",
+    "file": "src/lib.rs",
+    "line": 44053,
+    "mitigation": "For critical decisions, sample over several frames and take the conservative (blocked) answer."
+   }
+  ],
+  "recommendations": [
+   "Write an import-free scene3d/film_los.js (node-testable, like pick_math.js/projectile_sweep.js). It takes (sh, camP, subjP, subjectGuid, radius). It runs a terrain march (projectileTerrainCrossing with sh.terrainHeightAt), then wasm layers per <=192 m chunk: buildingMesh(lb of chunk), statics(lb), scenery(lb), cellMesh/cellStatics(explicit cell ids), entities(range), objects(missileGuid=subjectGuid). Return {blocked, t, layer, point, normal}. Copy then free() every CollisionHit and typeof-guard exports, as projectile_sweep.js does.",
+   "Resolve 'blocked by what' in JS after a physics hit. objects/entities layer: nearest inst.root within (objectPartDims radius + 0.5 m) of the hit point. statics/scenery: a short three Raycaster probe at the hit point against staticsGroup BatchedMesh/InstancedMesh (batchId/instanceId), or containment in scenery JSONL AABBs. buildings: the same probe (buildings live in the atlas by default).",
+   "For subject VISIBILITY (not clearance), use a 5-9 ray fan from the camera to points on the subject's DAT selection sphere (center, top, bottom, left, right). Cast against a budgeted ragdoll_env-style target list with raycaster.layers 0+1, skip __particle nodes, and exclude the subject's rig. Report visible-fraction and occluder ids. Optionally cross-check with OcclusionCuller.want('film:<guid>:<k>', subBox) for GPU truth outdoors.",
+   "Add a film visibility owner in entities.js. Add inst._filmHidden to _applyEntityVisible plus an exported setFilmHidden(guid, on) and clearAllFilmHidden(). Use it to hide the local avatar and other players (shadows go too) instead of setVisibility or opacity tricks.",
+   "Add a film fade owner mirroring _applyCamFadeToInst, with its own snapshot keys and snapshotAuthoredAlpha/syncFadeAlpha. Ramp fades over >=0.3 s and pre-warm (the first fade per material costs a program swap). Below ~5% opacity, switch to film-hidden so the shadow disappears.",
+   "For static occluders, add an honoured userData.__filmHidden check in cullStaticsGroup for singletons and InstancedMesh. For BatchedMesh atlas/chunk instances, keep a list of (bm, batchId) from the visual raycast, call setVisibleAt(batchId,false) for the shot, and restore on cut. Never write .visible directly.",
+   "HUD-free capture profile: boot with ?hud=none&agent=1&selectionIndicator=none&nosw=1. Then at runtime call entityManager.setSelectedTarget(0) and override entityManager.showSpeechBubble = () => {} (or add a real ?speechBubbles=off flag) for the duration of a take. Nameplates, spell previews, range rings and selection flash are already default-off.",
+   "Capture-quality toggles: ?maxTickDist >= longest subject distance (default 120 m freezes telephoto subjects). ?objRadius=off for vistas (only if the memory budget allows). window.__occlusionCull.off=true during takes (prevents 1-2 frame NPC/interior pop-in on fast pans). Pose the film camera before tickPerFrame so culls are not one frame stale.",
+   "Before any drone or dolly path, pre-populate collision for every landblock the path crosses (populateBuildingAabbsForLandblock/populateStaticsAabbsForLandblock/populateSceneryCollidersForLandblock, or __diag.collision.populate). Wait one TickMovement and assert residency() counts are non-zero; otherwise the camera clips through walls outside the player's 3x3 ring.",
+   "Indoors, drive the viewer cell from the film camera: resolveViewerCell walked along the dolly path from a known cell, then setViewerCell. Pass explicit resident dungeon cell ids to the cell sweeps instead of getRenderSet(1), and use clipCameraToCellSpace along the path for containment.",
+   "For agent shot planning (outside the per-frame loop), build per-site obstacle maps from fetch_landblock_objects_soa, fetch_landblock_scenery_soa, the raw dist/scenery JSONL (aabb_min/max + obj_id), fetchEnvCellsInLandblock statics.aabbLocal, and vfxDescriptorFor archetypes (trunk-canopy/foliage-pollen = soft foliage, rigid-glint/tip-flex = props, buildings via isBuilding). JEV can score candidates offline from these.",
+   "Subject framing: use loadDatSelectionSphere(wasmExports.fetchSetupSelectionSphere, meta.setupId) and datSelectionSphereFor(rec, inst.root) for the framing sphere. Use objectPartDims for height (eye line ~0.9*height). Reuse the SelectionBracketLayer.tick projection (center +/- r along camera right/up) for screen-rect composition checks.",
+   "Respect the laptop rules when testing: these pieces can be unit-tested with targeted node tests (pure modules taking a mock session handle, as tests for projectile_sweep do). Leave the browser and 1070 validation to the orchestrator."
+  ],
+  "openQuestions": [
+   "Will film mode drive the existing perspective camera (cameraSwitcher.persp, through a new film mode) or a separate THREE camera? Many consumers resolve cameraSwitcher.activeCamera ?? liveScene3d.camera: culls, viewer cell, tick gate, nameplate LOD, picking. Spawn-time LOD reads window.liveScene3d.camera.position directly.",
+   "Should film hide/fade be a first-class owner? That means a new _filmHidden composite term in entities.js and an honoured __filmHidden marker in statics.js cullStaticsGroup. The alternative is runtime monkeypatching. The first touches two hot files the orchestrator must merge carefully.",
+   "Which source decides obstruction: physics sweeps (cheap, complete only near the player, blind to canopies and awnings), visual raycasts (accurate, O(instances) per ray in three r184), or GPU occlusion queries (whole render, 1-2 frames late, outdoors only, no sample counts in WebGL2)? A hybrid needs a per-shot cost budget.",
+   "How should collision residency be handled for camera paths beyond the player's 3x3 ring: proactive populate*ForLandblock calls (async, applied next TickMovement, insert-only until landblock eviction), or constraining drone paths near the player? Is there a memory cost on the 8 GB laptop / 1070 for wide populates?",
+   "Particle obstruction: no helper exposes emitter world bounds. EntityManager._worldParticleManager.particleTable (Map id->emitter with parent, parentOffset, parts[]), _particleEmittersForGuid and scene3d._staticParticleManager exist, but bounds would need to come from live part meshes. Not verified beyond the constructor fields.",
+   "Is a 'query-only' mode wanted for OcclusionCuller, giving raw per-key results without hysteresis and without hiding rigs, so film can read GPU visibility while disabling occlusion-based hiding during takes?",
+   "Should the follow camera's player-anchored clip chain (_clipCameraAgainstWorld uses the player head as the sweep start) be generalised to an arbitrary pivot for film, or should film_los.js own its own chain?"
+  ],
+  "dataSources": [
+   {
+    "name": "Procedural scenery placements with AABBs",
+    "location": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/dist/scenery/0xXXYY.scenery.jsonl (dist -> ~/hb-serve/dist/current)",
+    "format": "JSONL, one placement per line: obj_id (Setup DID hex), x,y,z (LB-local), qw,qx,qy,qz, scale, source_cell_x/y, source_obj_idx, default_script_id, stable_id, aabb_min_x/y/z, aabb_max_x/y/z (LB-local, full model extent)",
+    "notes": "The served bake carries aabb_* fields (checked on 0xA8B4). Holtburg centre 0xA9B4 is empty (town). The wasm ScenicPlacementJs/LandblockScenerySoa do NOT expose the aabbs, so read the JSONL directly for canopy volumes. Also available in wasm via fetch_landblock_scenery(_soa)."
+   },
+   {
+    "name": "VFX visual descriptor catalog (per-Setup classification)",
+    "location": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/dist/vfx/visual_descriptors.jsonl (runtime URL ../../dist/vfx/visual_descriptors.jsonl)",
+    "format": "JSONL, 1168 rows: did, archetype, confidence, source, mech, components[], modifiers[], signals[{name,value,weight}]",
+    "notes": "Archetypes: tip-flex 404, rigid-glint 340, foliage-pollen 269, trunk-canopy 103, gem-sparkle 41, creature-breath 9, brazier 1. category signal: Prop 550, Scenery 437, Unknown 159, Interactive_Portal 9, Creature 9, Furniture 3. The first line starts with a UTF-8 BOM. Accessed via scene3d/vfx_catalog.js vfxDescriptorFor(did)."
+   },
+   {
+    "name": "LandBlockInfo placements (stabs and buildings)",
+    "location": "wasm fetch_landblock_objects / fetch_landblock_objects_soa (pkg/holtburger_web.d.ts:9055/9070)",
+    "format": "ObjectPlacement[] or LandblockObjectsSoa (modelIds, positions LB-local, quaternions qw-first, scales, isBuilding, landblockIds)",
+    "notes": "Input cellId = lbKey|0xFFFE. Cached wasm-side, so re-fetching for scouting is cheap after the renderer has baked the landblock."
+   },
+   {
+    "name": "EnvCell (dungeon/interior) cells and static objects",
+    "location": "wasm fetchEnvCellsInLandblock(lb) -> EnvCellPlacement[] (pkg/holtburger_web.d.ts:8520, 1510)",
+    "format": "Per cell: cellId, origin, orientation, environmentId, takeMesh(), takePortalCellIds(), takePortalDoorways() (9 floats per portal: otherCellId,cx,cy,cz,nx,ny,nz,height,bottomZ), takeStaticObjects() -> StaticObjectPlacement{did, x,y,z world, q, aabbLocal[6]}",
+    "notes": "take_* calls are one-shot moves. Portal doorways are useful for dungeon camera routing through doors."
+   },
+   {
+    "name": "ACE spawn records",
+    "location": "wasm fetch_landblock_spawns / fetch_landblock_spawns_soa (pkg/holtburger_web.d.ts:9147/9154)",
+    "format": "LandblockSpawnsSoa: cells, landblockIds, names[], positions, quaternions, isServerManaged, wcid/weenie_type",
+    "notes": "Gives expected NPC names and positions per site before they spawn; useful for lyric-to-site matching and subject scouting."
+   },
+   {
+    "name": "World-object class taxonomy",
+    "location": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/chorizite/world-object-taxonomy.json (loaded by index.html:4707 into window.__wom.taxonomy)",
+    "format": "JSON {classes:[{name, baseClass, relativePath, itemTypeTags, objectClassTags}]}",
+    "notes": "Backs window.__wom.byClass(name) and WorldObject.className."
+   },
+   {
+    "name": "Live collision residency counters",
+    "location": "window.__diag.collision.residency() -> SessionHandle.collisionResidencyDiag()",
+    "format": "Comma-packed string parsed into 19 named counters (scene3d/diag/collision.js RESIDENCY_FIELDS)",
+    "notes": "Use before a take to confirm buildings, statics, scenery and cells are collidable along the camera path."
+   },
+   {
+    "name": "URL flag registry",
+    "location": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/docs/url-flags.md",
+    "format": "Markdown tables",
+    "notes": "Cross-checked: occlusionCull, skipHiddenMatrix, canopySoften, nameplates, nameplateDom, selectionIndicator, maxTickDist, objRadius, buildingBatch, statAtlas, statBatchChunk, viewerCell, camIndoorObjects, camScenery, fadeAlphaParity, camFadeHier, pickSphereFallback, spellShapePreview, castRangeRing. The code readers are authoritative where the docs disagree."
+   }
+  ]
+ },
+ {
+  "area": "PARTICLES/VFX, ATMOSPHERE, TIME OF DAY, WEATHER, POST-PROCESSING LOOK, CLOCKS (holtburger-web scene3d)",
+  "summary": "Paths below are relative to HB (apps/holtburger-web) unless they start with external/. Everything listed is reachable from page JS via CDP Runtime.evaluate, so none of it needs the Anthropic API.\n\n1) PARTICLE RUNTIME AND ENUMERATION FOR OBSTRUCTION SCORING\n- There are two ParticleManager instances.\n  - World manager: `window.liveScene3d.entityManager._worldParticleManager`. Created at scene3d/entities.js:14588 with scene = entitiesGroup. It holds entity, PlayEffect and cast emitters.\n  - Static manager: `scene3d._staticParticleManager`, created at scene3d/statics.js:4986 with scene = staticsGroup. It holds default_script fountains, braziers, torches, the foliage ambient emitters, the sky chain and the terrain families. It is stamped on the internal `scene3dForBuilders` facade, so it is often NOT present on `window.liveScene3d` (see the facade check at scene3d/index.js:4920-4924).\n- `_allManagers` (scene3d/particles/particle_manager.js:1337) is module-private. The reliable discovery path is the owner facade `ownerRegistry` (scene3d/particles/owner_registry.js:549, default ON):\n  - `_owners`: Map ownerKey \u2192 {ids: Map<emitterId, manager>, scoped, pending}.\n  - `_byMgr` (line 185): WeakMap manager \u2192 Map<emitterId, ownerKey>, giving an O(1) reverse owner lookup.\n  - Reach it with `await import('./scene3d/particles/owner_registry.js')`. index.html imports scene3d/index.js with a `?v=` query, but the submodules resolve to canonical URLs, so the import returns the same module instance.\n- Owner keys:\n  - an entity guid (a number); PlayEffects register under the TARGET's guid;\n  - `static:<lbKey decimal>` for outdoor and cell default_script anchors (vfx/particle_attach.js staticOwnerKeyForLb);\n  - `static:<seq>` as the fallback;\n  - `sky:<pesId>` for the camera-following sky chain;\n  - `static:<lbKey>:volcano|swamp|\u2026` for the terrain families.\n- Static anchors are THREE.Group objects under staticsGroup with `userData {isStaticScriptAnchor, defaultScriptId, landblockId, particleOwnerKey, [isCellStaticScriptAnchor, cellId]}` (scene3d/statics.js:5433, :5574).\n- Per manager, `mgr.particleTable` is a Map<id, ParticleEmitter> (particle_manager.js:1420). Per emitter:\n  - `parent`: the anchor Object3D (entity rig or static Group).\n  - `partIndex`, and `parentOffset.position/quaternion` (the static offset).\n  - `info`: a ParticleEmitterInfo with `id` (the 0x32 DID), `hwGfxObjId`, `emitterType`, `particleType`, `birthrate`, `maxParticles`, `initialParticles`, `totalParticles`, `totalSeconds`, `lifespan`, `lifespanRand`, `minOffset/maxOffset`, `a/b/c`, `minA/maxA`, `startScale/finalScale`, `startTrans/finalTrans`, `isParentLocal`, `billboard`, `fxProfile`, and `sortingSphere.radius = max(maxOffset, maxA*lifespan)` (particle_emitter_info.js:125-138). The sphere ignores the B and C acceleration terms, so it underestimates gravity arcs and fountains.\n  - `numParticles`, `stopped`.\n  - `parts[i]`: the live slot meshes. `mesh.position` and `mesh.scale` (setScalar, lerped startScale\u2192finalScale) are in `_scene`-local space; `mesh.userData.__op` is the opacity (1\u2212translucency).\n  - `particles[i].lifetime/lifespan`.\n  - `_baseIsAdditive`: true means additive glow, drawn UNFOGGED (particles/additive_fog.js); false means alpha smoke (`_instAlpha`, alphaTest 0.1, depthWrite on, sorted back to front).\n  - `skyGlow`: true for kilometre-scale sky sheets; exclude these.\n  - `_instKey` (the gfxobj bucket), `renderLayer` (0 = world, 1 = indoor), `_rp6Culled`, `degradeDistance`, `_forceDegrade`, `_bbMode`.\n  - A persistent emitter is one with `info.totalParticles==0 && totalSeconds==0`.\n  - A projectile anchor has `parent.userData.__ballistic`.\n- Coordinates: `_scene` is entitiesGroup or staticsGroup under worldRoot (rotation.x = \u2212\u03c0/2, scene3d/index.js:1552-1562), so `_scene`-local is the AC frame (Z up, metres).\n  - The default path is the instanced path (`?particleInstancing` and `?particleInstancingAlpha` are both ON). There, slot meshes are DETACHED transform carriers (onMeshActive = _NOOP).\n  - For a particle's world position, use `mgr._scene.localToWorld(v.copy(mesh.position))`. `mesh.getWorldPosition` returns AC-local coordinates, and `__diag.probeNearestParticle` (scene3d/index.js:4707) has exactly this bug.\n  - The anchor's world position is `parent.getWorldPosition()`; the cull adds `parentOffset.position.length()` to the radius.\n  - Particle size = `geometry.boundingSphere.radius \u00d7 mesh.scale.x`. The geometry is shared per gfxobj (`emitter._instGeom`).\n- Classification oracle: data/particle-fx-catalog.json maps every 0x32 DID to {family, behavior, note, params incl. nearFade, surface, gfx}.\n  - 2051 emitters in 44 families (fire, flame_tongue, smoke_dark, smoke_add, smoke_light, gas_alpha, mist_*, star, glow_orb, \u2026).\n  - 11 behaviours: swarm, standing, burst, trail, flash, plume, stream, fountain, implode, puff, drift.\n- Visual extent that is NOT in particleTable: fxKids GPU children (`mgr._kids`), PlayEffect placeholder bursts (the `_activeBursts` Map in play_effect_vfx.js:573 is private and short-lived), fxLights point lights, fxDistort screen warp, the fxGlow halo buffer, fxDecals, and ground fog cards.\n\n2) SUPPRESSING PARTICLES (NEAR FADE AND PER-EMITTER HIDE)\n- Near fade:\n  - It exists only per profile row, on the instanced FX shader: `if (vFxD.y>0) fxA *= smoothstep(0.35*nearFade, nearFade, clipW)` (particles/particle_fx.js:1002).\n  - Catalog nearFade values are small (2000 of 2051 are >0, max 3.0 m, typically \u22480.2 m).\n  - There is no global floor or override. Soft particles apply only in the late particlesOverClouds pass.\n- Per-emitter cull authority is RP6 inside `_tickLatched` (particle_manager.js:2156).\n  - The cull is re-evaluated every 6 ticks (line 171) against the frustum and a 220 m cap (line 177, `slack = 220 + radius`).\n  - A culled emitter:\n    - skips `_appendInstances` (its instances vanish that tick);\n    - has its per-mesh slots hidden on every tick;\n    - is frozen if persistent (thawed on re-entry);\n    - virtual-emits if finite, and a count-bounded one is force-stopped after 30 s culled.\n  - Hide hack: set `e._forceDegrade = true; e.degradeDistance = 0`, plus `e._rp6Culled = true` so it takes effect immediately. `_rp6ShouldCull` (line 1239) ORs in the degrade term. Restore with the saved values (the defaults are `Infinity`/`undefined`).\n  - Ballistic anchors return before that term, so they cannot be hidden this way.\n- Render-only hide (the simulation keeps running) exists only as the cell gate: `?particleCellGate=on` or `__setParticleCellGate(true)`. It applies to static anchors with `userData.cellId`, through `mgr._cellLookup`.\n- Kill controls:\n  - `mgr.stopParticleEmitter(id)` (line 2730) stops gracefully.\n  - `mgr.destroyParticleEmitter(id)` (line 2739) removes immediately.\n  - `ownerRegistry.stopSome`, `destroySome` and `destroyAllForOwner` work per owner.\n- Bucket-level hide: `mgr._instBuckets` (key `${gfx}|${layer}[|a][|sky]` \u2192 {im, n, alpha}). `im.visible = false` hides every emitter sharing that gfxobj, but the fxGlow twin still draws (vfx/fx_glow_effect.js:139 checks ancestors only).\n- Global switches:\n  - `__particlesOverClouds.set(false)`\n  - `__particleFx(false)` (neutral rows)\n  - `__additiveFogBlack('retail'|'fade'|'off')`\n  - `__setParticleInstancing(on)`\n  - `?particleBillboard=off`\n\n3) TIME OF DAY AND WEATHER\n- Sky clock (wasm):\n  - `SessionHandle.getSkyState()` \u2192 src/lib.rs:23531 `evaluate_sky_now()` reads JS `Date.now()` (wasm-bindgen glue calls the global at call time).\n  - The evaluator (external/holtburger/crates/holtburger-world/src/sky.rs) computes `world_time = (now \u2212 anchor) + zero_time_of_year`.\n  - The anchor is the server PortalYearTicks from ConnectRequest and every TimeSync, forward-only, under `?skyServerClock` (default ON). `=off` uses the legacy 1999-11-02 wall anchor.\n  - `day_length` = 7620 s (11.34\u00d7 compression).\n  - `timeOfDayNormalized` \u2208 [0,1); \u00d724 gives the hour, and 0.5 is Midsong.\n  - The DayGroup (weather/sky set) comes from an LCG on (day, year).\n  - The authored sun never sets: dirPitch floors at 0.9\u00b0 from 23:02 to 03:50h and peaks at 90\u00b0 at 14:40h. `?nightRamp` remaps elevation to \u221214\u00b0 for the sky only.\n- Runtime overrides:\n  - `__sessionHandle.setSkyTimeOverride(t)` (d.ts:6366). NaN clears it. It returns false until `populateSkyDescFromRegion` has run, and is lost when EnteredWorld replaces the evaluator.\n  - `setGameDayOverride(day, year)` (d.ts:6276) forces the DayGroup; `(0xFFFFFFFF, 0xFFFFFFFF)` clears it.\n  - Read-backs: `getSkyPortalTicks`, `getSkyObjectStates` (weather objects have props & 0x04), `derethCalendarAt`.\n- `?skytime` (index.html:6311-6345, driven in pumpNetFrame at :6487-6512):\n  - `accel` gives a 5-minute day via a per-pump override.\n  - A number (hour 0-24, or a 0-1 fraction) is a one-shot sticky pin (`window.__skyTimePin`).\n  - With no `?skytime`, the Always-daylight driver (CharacterOption 0x05, always_daylight.js:82) pins 0.5 on every 250 ms poll and NaN-clears on the off edge. It will fight a runtime override.\n- Time-lapse is possible by calling `setSkyTimeOverride` each frame, with these caveats:\n  - The RP3 SKY group (terrain sun push, `skyLightingController._lastState` snapshot, fog colour and band, atmosphereLights, atmosphereSky, skyDome, weather) runs at 10 Hz on the wall clock (loop.js:2667, :2995). `?frameBudget=off` or `?deferHz=60` makes it run every frame.\n  - The terrain Gouraud light re-lights only on the 15 s `retailLightTick` (retail_light_tick.js:154). `__setTerrainLightScale(cur)` calls `invalidate()`.\n  - The IBL environment refreshes every 15 s (`?iblRefreshMs`, minimum 1000).\n  - The colour-grade night blend is smoothed by exp(\u22124\u00b7dt).\n  - The takram moon and stars follow `getSkyPortalTicks` (Date.now; `portal_ticks_at` IGNORES the time-of-day override, sky.rs:485).\n  - The AC moons orbit on the rAF timestamp \u00d7 `?moonSpeed`.\n  - The AC sky-object UV scroll runs on session-relative Date.now.\n  - The DayGroup does not advance when the overridden time wraps past midnight.\n- Weather:\n  - Retail weather means DayGroup SkyObjects with props 0x04, plus PES chains: the moon nebula 0x330007DB and the storm lightning box 0x33000453, realized by skyDome.updateSkyParticleChains (`?skyBirds`, default ON).\n  - Streak billboards draw only with `?skyWeather=on`.\n  - NO rain or snow precipitation particle system exists; the weather/manager.js named in comments is absent from the tree.\n  - Runtime knobs:\n    - `__setWeather({is_storm, temperature_C, dewpoint_C, \u2026})`: sticky per-field overrides (weather_state.js:250) that drive the takram storm look (`?clouds=on` only) and the VFX weather uniforms;\n    - `__clearWeatherOverride()`;\n    - `__setWeatherProfile(idx, partial)` (the 20-entry table is INFERRED, not retail).\n- Fog:\n  - `scene.fog` is a linear THREE.Fog rewritten every sky tick by loop.js:2016 tickDistanceFogColor. The band comes from SkyState fogMin/fogMax, re-anchored to the drawn ring edge; the colour comes from the horizon sky radiance probe.\n  - Only `?farFogNear` and `?farFogFar` pin it. These are read from `location.search` on every call (far_terrain_flags.js:317-329).\n  - Client-side override: `window.__environFogOverride = environFogFor(1..6)` (environ_override.js:81; Red, Blue, White, Green, Black, Black2). It must be a fresh object; it fades in over about 20 s in 0.8 s ticks; null clears it.\n  - The character options \"Disable distance fog\" and \"Disable most weather effects\" kill fog and weather respectively.\n\n4) LOOK CONTROLS\nThe `__set*` helpers in scene3d/index.js are installed in the same synchronous callback that fires bootState 'ready' (index.js:6290 \u2192 6323-6366). They are absent under `?wireframe=1`.\n\n| Area | Controls |\n|---|---|\n| Exposure and light | `__setExposure(v)` (`?exposure`, default 5, range 0.1-20); `__setWorldLightScale(v)` (default 0.4); `__setTerrainLightScale(v)` (default 0.55); `__setAmbTintSat(v)` |\n| Bloom and vignette | `__setBloomIntensity` / `__setBloomThreshold` (0.55 / 1.1); `__setVignetteDarkness` / `__setVignetteOffset` (0.3 / 0.5). These return null unless the preset built bloom (mid+) or vignette (high+). |\n| Sun, moon, sky glow | `__setSunSize(rad)`, `__setMoonSize(rad)`; `__setMoon*` (ac_moons.js:1539-1615); `__skyGlow` |\n| Colour grade | `__grade` {day, night, off, reset(), state()} (color_grade.js:194); GRADE_DAY and GRADE_NIGHT are blended by night fraction |\n| Tone curve | `?tone=neutral|agx|aces` is URL-only. At runtime, `__atmospherePipeline.toneMapping.mode` (pmndrs) can be set, which recompiles. |\n| AO and haze | `__ssao` {params, set(o), off, stats} (high/ultra or `?ssao=on`); `__layerHaze` {strength, params} (default 0.4) |\n| FX effects | `__fxGlow` {intensity, strength, radius}; `__fxDistort` {amplitude}; `__fxDecals`; `__fxTier2` {stretchT (particle motion-streak shutter), minPx} |\n| Clouds (`?clouds=on` only) | `__setCloudCoverage`, `__setCloudQuality`, `__setLightShafts`, `__setCloudShadowStrength`, `__setCloudShadowEnabled`, `__applyCloudWeather`, `__resetCloudLayers` |\n| Shadows | CSM has no window setter. It uses `liveScene3d.csmState`, `invalidateCsm`, `DEFAULT_CSM_SPLITS` [30, 100, 300], fit to `cameraSwitcher.activeCamera` (lighting.js:1688) |\n| Fog | `?radialFog=on` makes fog range-based, so it does not change with camera yaw (pans) |\n| Render | `__setRenderScale(n)` |\n\n5) POST-PROCESSING\n- The composer is built in scene3d/atmosphere_pipeline.js `createAtmospherePipeline` (:829), with `new EffectComposer(renderer, {frameBufferType: HalfFloat, multisampling: msaa(2), stencilBuffer: flag})` at :939.\n- Pass order:\n  1. [sky RenderPass]\n  2. CameraLayerMask\n  3. world RenderPass (:1141)\n  4. [portal punch / seal]\n  5. depth ClearPass\n  6. cellsMask, cells RenderPass (:1330), mask restore\n  7. NanScrub EffectPass (:1634)\n  8. [SsaoPass] (:1638)\n  9. [LayeredHaze, if the chain is unsplit]\n  10. fxPass (:1641)\n  11. split chain only: ParticlesOverClouds, late scrub, LayeredHaze, fxPostPass (:1648)\n- Legacy single fxPass (:1609/:1629), which is the default boot when clouds are off: [HeatHaze?, FxDistort?, SsaoComposite?, FxDecals?, Clouds?, AerialPerspective, HorizonDissolve(off), FxGlow?, LensFlare(off, `?lensFlare=on`), Bloom?, Vignette?, ToneMapping(Neutral), ColorGrade, Dithering].\n- Split chain, only with `?clouds=on` + cloudsMainPass + particlesOverClouds (:1595-1602): atmosEffects into late target T, then postEffects [FxGlow, LensFlare, Bloom, Vignette, ToneMapping, ColorGrade, Dithering].\n- Not present: depth of field / bokeh, motion blur, chromatic aberration, grain, SMAA/FXAA (MSAA only), LUT, and god rays (except takram lightShafts when clouds are on). The CDN postprocessing@6.39.1 (index.html:995; the same build is in node_modules) ships DepthOfFieldEffect (build/index.js:5430), BokehEffect, RealisticBokehEffect, ChromaticAberrationEffect, NoiseEffect, TiltShiftEffect, LUT3DEffect, GodRaysEffect and SMAAEffect.\n- Adding DoF for rack focus:\n  1. Build `new DepthOfFieldEffect(camera, {focusDistance, focusRange, bokehScale, resolutionScale})`.\n  2. Put it before fxGlow/bloom: postEffects at :1596 (split), or after horizonDissolve in the legacy list at :1629.\n  3. The effect's EffectAttribute.DEPTH makes the pass request depth. The CoC shader decodes logarithmic depth itself (`USE_LOGARITHMIC_DEPTH_BUFFER` block, build/index.js:4937). The renderer uses logarithmicDepthBuffer:true (index.js:1162). Never hand-decode log depth a second time; see the history at atmosphere_pipeline.js:288-306.\n  4. Rack focus: animate `dof.cocMaterial.focusDistance`, or set `dof.target` to a THREE-world Vector3 for autofocus (calculateFocusDistance :5642 measures euclidean distance from the camera).\n  5. Camera switch: `set mainCamera` (:5513) re-copies near/far, and `retargetFxPass` (:1773) fans out to `fxPass` and `fxPostPass.mainCamera`.\n- pmndrs gotcha: the base Pass `mainCamera` setter is a no-op. LayeredHazePass, SsaoPass, ParticlesOverCloudsPass and PortalPunchPass keep their own `.camera`/`setCamera`. `pipeline.render(cam)`'s camera-switch branch (:2131-2141) does NOT retarget SSAO or LayeredHaze; only `pipeline.setCamera` (:2236) does, and nothing calls it.\n\n6) CLOCKS\nThere is no shared clock and no global time scale. The sources are:\n\n| Clock | What it drives |\n|---|---|\n| rAF timestamp \u2192 `tick(nowTs)` (index.js:2487). dt is clamped to 0.1 (:2512) with a recovery freeze; recovery is disabled under renderOnDemand. Published as `liveScene3d.frameTime` {tsMs, tsSec, dt} (:2532). | terrain water and lava uTime (loop.js:1146); the VFX master clock VFX_GLOBALS.uTime, which drives grass and tree wind sway, oscillators, weather inputs and flame flicker (loop.js:1190); ground fog; AC moons (ts); entity mixers, camera and ambient audio (dt); composer dt, which drives takram cloud advection plus TAA jitter and colour-grade smoothing |\n| Particle simulation and PhysicsScript queues: `time_rng.currentTime()` (latched per manager tick) | Default `?particleClock=off` uses `performance.now()/1000`. `=sim` installs `liveScene3d._particleSimNowS += clamped dt`, bounded by wall time (index.js:5431, loop.js:3354). RNG comes from `rng()` = Math.random. Both are overridable through the `setCurrentTime` and `setRng` module exports. |\n| `performance.now` (wall clock) | particle FX shader time (`particleFxFrame()` :525, called with no arguments); the static manager's PRIVATE rAF loop in `particleClock=off` (statics.js:5771); animated_scenery's private rAF; PlayEffect burst rAF and one-shot setTimeout reapers; fx_lights; the RP3 throttles; retail light (15 s) and fog (0.8 s) ticks; the IBL cadence; `?skytime=accel` |\n| `Date.now` | wasm sky time of day and DayGroup; moon and star date; AC sky UV scroll |\n| `document.timeline.currentTime` | shared alpha bucket frame id |\n| wasm physics | its own self-measured dt |\n\n- `__renderOnce()` (index.js:3007) ignores its arguments and passes `performance.now()`, so a fixed dt per captured frame needs either a small code change (accept an explicit ts) or a page-level `performance.now`/`Date.now`/rAF virtualization.",
+  "apis": [
+   {
+    "name": "ParticleManager",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1410,
+    "signature": "new ParticleManager({scene, geometryFactory, materialFactory, degradeInfoFactory?, cellLookup?, instancing?})",
+    "what": "Emitter coordinator. Fields: particleTable (Map<id, ParticleEmitter>, line 1420), _scene, _instBuckets (Map key `${gfx}|${layer}[|a][|sky]` \u2192 {im, n, alpha}, line 1448), _kids, onEmitterRemoved, cellHiddenLastTick, _rp6Frame. Two instances exist: world (entities.js:14588) and static (statics.js:4986).",
+    "verified": true
+   },
+   {
+    "name": "ParticleManager.addEmitter",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1764,
+    "signature": "async addEmitter({emitterInfo, parent, partIndex=-1, parentOffset=null, emitterId=0, blocking=false, renderLayer=0, skyGlow=false}) \u2192 Promise<id|0>",
+    "what": "Installs an emitter from a wasm ParticleEmitterJs or a POJO. Stamps renderLayer, _fxRow, skyGlow, _baseIsAdditive, _instKey and _instAlpha. Foliage POJOs with degradeDistanceMeters get _forceDegrade=true (line 2122-2123). Film mode can use it to spawn its own atmospheric emitters (dust, embers, mist).",
+    "verified": true
+   },
+   {
+    "name": "ParticleManager.tick / _tickLatched",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 2147,
+    "signature": "tick() \u2192 void (holds the time latch; _tickLatched at 2156)",
+    "what": "Per-frame update. RP6 frustum and 220 m cull rechecked every 6 ticks; billboarding against _rp6ResolveCamera() (cameraSwitcher.activeCamera ?? camera); cell gate; instanced append; bucket finalize with back-to-front alpha sort; retirement of finished emitters.",
+    "verified": true
+   },
+   {
+    "name": "ParticleManager.stopParticleEmitter / destroyParticleEmitter",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 2730,
+    "signature": "stopParticleEmitter(id) \u2192 bool; destroyParticleEmitter(id) \u2192 bool (line 2739)",
+    "what": "Graceful stop (sets stopped and drains live particles) or immediate removal (meshes removed, slot materials reclaimed).",
+    "verified": true
+   },
+   {
+    "name": "_rp6ShouldCull (private)",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1239,
+    "signature": "_rp6ShouldCull(emitter, camera) \u2192 bool",
+    "what": "Per-emitter cull authority. Ballistic anchors are exempt. Distance cap is _RP6.maxDistance (220, line 177) + sortingSphere.radius + |parentOffset|. Degrade OR-term: (?particleDegrade=retail || emitter._forceDegrade) && distSq > degradeDistance\u00b2. Then a frustum test on the sphere.",
+    "verified": true
+   },
+   {
+    "name": "ParticleEmitter",
+    "file": "scene3d/particles/particle_emitter.js",
+    "line": 112,
+    "signature": "fields: id, parent, partIndex, parentOffset{position,quaternion}, info, particles[], parts[], partStorage[], numParticles, totalEmitted, stopped, lastEmitTime, degradeDistance(=Infinity, line 155); updateParticles() line 505; _resolveAnchorFrame() line 182",
+    "what": "Per-emitter state. parts[i] are live slot meshes. On the instanced path they are detached carriers holding _scene-local matrices and userData.__op opacity.",
+    "verified": true
+   },
+   {
+    "name": "ParticleEmitterInfo.sortingSphere",
+    "file": "scene3d/particles/particle_emitter_info.js",
+    "line": 125,
+    "signature": "info.sortingSphere = {center:(0,0,0), radius:max(maxOffset, maxA*lifespan)} (initEnd line 130)",
+    "what": "Conservative reach radius around the anchor. Ignores the B and C accelerations. Use it for coarse segment-vs-sphere obstruction tests.",
+    "verified": true
+   },
+   {
+    "name": "setTranslucency",
+    "file": "scene3d/particles/particle.js",
+    "line": 179,
+    "signature": "setTranslucency(mesh, translucency)",
+    "what": "Sets mesh.visible (false when translucency>=1) and userData.__op = 1\u2212translucency on every particle update. Any external mesh.visible write is overwritten on the next update.",
+    "verified": true
+   },
+   {
+    "name": "time_rng clock and RNG hooks",
+    "file": "scene3d/particles/time_rng.js",
+    "line": 54,
+    "signature": "currentTime() (line 44); setCurrentTime(fn|null) (54); setRng(fn|null) (66); holdTimeLatch()/releaseTimeLatch() (34/39); particleClockMode() \u2192 'off'|'loop'|'sim' (100)",
+    "what": "The single clock for particle simulation, emission and PhysicsScript queues. Defaults to performance.now()/1000 and Math.random. Override with deterministic functions for frame-stepped capture and repeatable takes.",
+    "verified": true
+   },
+   {
+    "name": "ownerRegistry",
+    "file": "scene3d/particles/owner_registry.js",
+    "line": 549,
+    "signature": "addEmitter(ownerKey, manager, req) (240); destroyEmitter(ownerKey, handle, opts) (391); stopEmitter(ownerKey, handle, opts) (422); stopSome(ownerKey, ids) (461); destroySome(ownerKey, ids) (482); destroyAllForOwner(ownerKey) (503); ownerKeys(); emitterCountForOwner(k); _owners Map; _byMgr WeakMap (185)",
+    "what": "Owner facade (default ON). Maps an entity guid or static/sky key to {manager, emitter id}. `_byMgr.get(mgr)?.get(id)` gives the emitter's owner. This is the reliable way to discover the static manager.",
+    "verified": true
+   },
+   {
+    "name": "window.__diag.particles",
+    "file": "scene3d/index.js",
+    "line": 4675,
+    "signature": "__diag.particles() \u2192 {liveEmitters, staticEmitters, worldEmitters, owners, byOwner}",
+    "what": "Counts only, read off the scene3dForBuilders facade. probeNearestParticle (line 4707) returns wrong-frame coordinates on the instanced path.",
+    "verified": true
+   },
+   {
+    "name": "particle FX profile uniforms and near fade",
+    "file": "scene3d/particles/particle_fx.js",
+    "line": 405,
+    "signature": "FX_UNIFORMS {uFxTime, uFxLight, uFxAlphaCal, uFxAddCal, uFxStretchT, uFxMinPx, uFxViewH, \u2026}; particleFxFrame(nowMs?) (525); window.__particleFx(on?) (1488); window.__fxTier2 {stretchT, minPx} (1507)",
+    "what": "Shared FX shader uniforms. The per-row nearFade term is at line 1002. uFxTime is driven from performance.now when no argument is passed. Calibration follows renderer.toneMappingExposure.",
+    "verified": true
+   },
+   {
+    "name": "collectParticlesOverClouds / window.__particlesOverClouds",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 1690,
+    "signature": "__particlesOverClouds {flag, built, armed, activeThisFrame, set(on), stats(), passes(), reset()}",
+    "what": "Late particle draw toggle. passes() lists the composer pass and effect order, which is useful for checking an inserted DoF.",
+    "verified": true
+   },
+   {
+    "name": "createAtmospherePipeline",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 829,
+    "signature": "createAtmospherePipeline(renderer, scene, camera, {skyScene, skyCamera, atmosphereRuntime, bloom, vignette, ssao, msaa, lensFlare, portalPunch, punchRetail, \u2026}) \u2192 {composer, aerialPerspective, bloom, vignette, toneMapping, colorGrade, ssaoPass, layeredHaze, dithering, fxPass, fxPostPass, particlesOverCloudsPass, cloudsMainPass, preFrameSkySync, setSunDirection, render(cam, dt) (2131), setCamera(cam) (2236), setSize, getSceneDepthTexture}",
+    "what": "The pmndrs composer and all post effects. Live instance at window.__atmospherePipeline and liveScene3d.atmospherePipeline. The DoF insertion point is postEffects (line 1596) or the legacy list (line 1629).",
+    "verified": true
+   },
+   {
+    "name": "look setters",
+    "file": "scene3d/index.js",
+    "line": 6323,
+    "signature": "__setExposure(v); __setWorldLightScale(v) (6333); __setBloomIntensity(v) (6343); __setBloomThreshold(v) (6349); __setVignetteDarkness(v) (6356); __setVignetteOffset(v) (6362); __setSunSize(rad) (6051); __setMoonSize(rad) (6055); __setRenderScale(n) (1268)",
+    "what": "Installed right after bootState 'ready' on the atmosphere composer path. The bloom and vignette setters return null if the preset did not build those effects.",
+    "verified": true
+   },
+   {
+    "name": "cloud setters",
+    "file": "scene3d/index.js",
+    "line": 5713,
+    "signature": "__setCloudCoverage(0..1); __setCloudQuality('low'|'medium'|'high'|'ultra') (5721); __setLightShafts(on) (5729); cloud_volume.js: __applyCloudWeather (602), __resetCloudLayers (609), __setCloudShadowStrength (627), __setCloudShadowEnabled (642)",
+    "what": "Volumetric takram clouds. Exist only with ?clouds=on (index.js:5619).",
+    "verified": true
+   },
+   {
+    "name": "window.__grade",
+    "file": "scene3d/color_grade.js",
+    "line": 194,
+    "signature": "__grade {day, night (mutable param objects: wb, tint, lift, gain, gamma, contrast, pivot, saturation, vibrance), off, reset(), state(), effect}",
+    "what": "Display-referred colour grade after the tone curve. Day and night sets are blended by the night fraction from the authored sun pitch, smoothed by exp(\u22124\u00b7dt).",
+    "verified": true
+   },
+   {
+    "name": "window.__ssao / window.__layerHaze",
+    "file": "scene3d/ssao.js",
+    "line": 295,
+    "signature": "__ssao {params, set(o), off, stats(), pass}; __layerHaze {strength, params, stats()} (layered_haze.js:163)",
+    "what": "SSAO (high/ultra presets) and the layered distance/altitude haze (default 0.4).",
+    "verified": true
+   },
+   {
+    "name": "terrain light and environ handles",
+    "file": "scene3d/loop.js",
+    "line": 1361,
+    "signature": "__setTerrainLightScale(v) (calls retailLightTick.invalidate()); __setAmbTintSat(v) (1366); __terrainLightState() (1371); __retailLightTickState() (1373); __environOverrideState() (1375)",
+    "what": "Terrain Gouraud light scale. Calling it each frame forces the 15 s retail light tick to re-light, which a time-lapse needs.",
+    "verified": true
+   },
+   {
+    "name": "SessionHandle sky API",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6366,
+    "signature": "setSkyTimeOverride(t:number /*[0,1), NaN clears*/): boolean; setGameDayOverride(day, year): boolean (6276; 0xFFFFFFFF pair clears); getSkyState(): SkyState|undefined (4699); getSkyPortalTicks(): number (4675); getSkyObjectStates(): SkyObjectState[] (4657); derethCalendarAt(ticks) (3779); isCharacterOptionEnabled(opt) (5005)",
+    "what": "Wasm sky evaluator controls via window.__sessionHandle. getSkyState is evaluated against Date.now() (src/lib.rs:23531). The time-of-day override does not move the moon or stars (sky.rs:485).",
+    "verified": true
+   },
+   {
+    "name": "SkyLightingController._lastState",
+    "file": "scene3d/sky_lighting.js",
+    "line": 88,
+    "signature": "liveScene3d.skyLightingController._lastState = {dirColorArgb, dirBright, dirHeading, dirPitch, ambColorArgb, ambBright, fogColorArgb, fogColorArgbLerp, fogMin, fogMax, worldFog, timeOfDayNormalized, dayGroupIndex} (snapshotSkyState line 44; tick line 114)",
+    "what": "Per-sky-tick snapshot (10 Hz) used by every atmosphere consumer. Convert to a THREE-world sun with sunDirFromHeadingPitch(h, p) \u2192 (cos p\u00b7sin h, sin p, \u2212cos p\u00b7cos h) (sun_direction.js:49).",
+    "verified": true
+   },
+   {
+    "name": "createAlwaysDaylight / window.__alwaysDaylight",
+    "file": "scene3d/always_daylight.js",
+    "line": 82,
+    "signature": "tick(handle, nowMs); state() \u2192 {on, pinned, lightResets}",
+    "what": "CharacterOption 0x05 driver. Pins setSkyTimeOverride(0.5) every 250 ms poll while the option is on, and NaN-clears on the off edge. Runs only when there is no ?skytime pin or accel (index.html:6508).",
+    "verified": true
+   },
+   {
+    "name": "retailLightTick",
+    "file": "scene3d/retail_light_tick.js",
+    "line": 154,
+    "signature": "retailLightTick.{sync(stateTick), due(stateTick), reset(stateTick?), invalidate(), stats()}",
+    "what": "The shared 15 s landscape re-light clock (terrain Gouraud and pebbles), on performance.now().",
+    "verified": true
+   },
+   {
+    "name": "weather overrides",
+    "file": "scene3d/weather_state.js",
+    "line": 250,
+    "signature": "window.__setWeather(partial {latitude_deg, longitude_deg, temperature_C, dewpoint_C, surface_pressure_hPa, season, is_storm}); __getWeather(); __clearWeatherOverride(field?) (270); daygroup_weather.js: __setWeatherProfile(idx, partial) (252), __getWeatherProfiles()",
+    "what": "Sticky per-field overrides. DayGroup updates skip overridden fields. Drives the takram storm look (clouds) and VFX weather uniforms. It does not create rain.",
+    "verified": true
+   },
+   {
+    "name": "environFogFor / window.__environFogOverride",
+    "file": "scene3d/environ_override.js",
+    "line": 81,
+    "signature": "environFogFor(option 1..6) \u2192 {option, name, fogRgb, fogMin, fogMax, ambRgb, ambLevel} | null; read each tick at loop.js:2039",
+    "what": "Client-side AdminEnvirons fog. Assign a fresh object to window.__environFogOverride for Red, Blue, White, Green or Black fog plus ambient. Fades in over about 25 \u00d7 0.8 s; null clears it.",
+    "verified": true
+   },
+   {
+    "name": "tickDistanceFogColor",
+    "file": "scene3d/loop.js",
+    "line": 2016,
+    "signature": "tickDistanceFogColor(scene3d, env)",
+    "what": "Rewrites scene.fog color, near and far every sky tick. The band is anchored to the drawn ring edge and pinned only by ?farFogNear and ?farFogFar, which are read live from location.search (far_terrain_flags.js:317).",
+    "verified": true
+   },
+   {
+    "name": "AtmosphereSky.tick / setSunAngularRadius",
+    "file": "scene3d/atmosphere_sky.js",
+    "line": 285,
+    "signature": "tick(state); setSunAngularRadius(rad) (350); setMoonAngularRadius(rad)",
+    "what": "Sun direction from SkyState with nightRamp applied. Moon and stars come from gameDateMsNow(handle, Date.now()) (sky_game_date.js:51), which uses portal ticks and ignores the time-of-day override.",
+    "verified": true
+   },
+   {
+    "name": "SkyDome.syncSkyCamera",
+    "file": "scene3d/sky_dome.js",
+    "line": 711,
+    "signature": "syncSkyCamera(mainCamera)",
+    "what": "Copies the main camera's LOCAL position and quaternion, plus fov and aspect, to the sky camera every frame (from preFrameSkySync). Quaternion copy means it is gimbal-free, but the camera must be unparented.",
+    "verified": true
+   },
+   {
+    "name": "updateCsm / invalidateCsm",
+    "file": "scene3d/csm.js",
+    "line": 412,
+    "signature": "updateCsm(csmState, camera, sunDir?); invalidateCsm(csmState) (380); DEFAULT_CSM_SPLITS [30,100,300] (60)",
+    "what": "Cascaded shadows fit per frame to cameraSwitcher.activeCamera (lighting.js:1688-1699). Perspective cameras only. Skip-cache on camera position and orientation deltas.",
+    "verified": true
+   },
+   {
+    "name": "__renderOnce / tick",
+    "file": "scene3d/index.js",
+    "line": 3007,
+    "signature": "window.__renderOnce() \u2192 bool (calls tick(performance.now())); internal async tick(nowTs) (2487)",
+    "what": "Steps one frame (simulation plus render) under ?renderOnDemand=1. dt is the wall-clock delta clamped to 0.1, so it is not fixed per frame.",
+    "verified": true
+   },
+   {
+    "name": "DepthOfFieldEffect (postprocessing 6.39.1)",
+    "file": "node_modules/postprocessing/build/index.js",
+    "line": 5430,
+    "signature": "new DepthOfFieldEffect(camera, {focusDistance=3, focusRange=2, bokehScale=1, resolutionScale=0.5, resolutionX, resolutionY}); .target (Vector3 autofocus); .cocMaterial.focusDistance/focusRange; set mainCamera (5513); update reads target at 5667",
+    "what": "Not yet used anywhere. The CoC shader handles the log depth buffer (4937). Load it via the import map 'postprocessing' (index.html:995, the same CDN version) so it is the same instance as the pipeline.",
+    "verified": true
+   },
+   {
+    "name": "playEffect event bus",
+    "file": "scene3d/play_effect_vfx.js",
+    "line": 3476,
+    "signature": "window.__pluginClient.events.emit('playEffect', {targetGuid, scriptId, speed, synthetic:true})  (same shape as entities.js:10585)",
+    "what": "Triggers retail PhysicsScript VFX, or the placeholder fallback, on an entity client-side. synthetic:true plays visuals only. Usable for staged spectacle.",
+    "verified": true
+   },
+   {
+    "name": "particle FX catalog",
+    "file": "data/particle-fx-catalog.json",
+    "line": 1,
+    "signature": "{version, layout, families{44}, emitters{'0x32xxxxxx': {family, behavior, note, params{\u2026nearFade\u2026}, surface, gfx, tags}}, synthesized{14}}",
+    "what": "Per-emitter semantic classification (fire, smoke_dark, mist, star, \u2026; plume, standing, burst, \u2026) for obstruction scoring and shot dressing. Keyed by emitter.info.id.",
+    "verified": true
+   }
+  ],
+  "seams": [
+   {
+    "what": "Active-camera resolution. Every subsystem reads `liveScene3d.cameraSwitcher.activeCamera ?? camera` per frame: the particle RP6 cull, billboards and alpha sort (particle_manager.js:925); CSM (lighting.js:1688); the composer render (index.js:2722/2779); skyDome.tick (loop.js:3198); and AC moons.",
+    "filmUse": "Install the film camera as activeCamera, or drive the boot liveScene3d.camera object directly (the simplest option). Set its pose BEFORE tickPerFrame's camera, entity and particle phases so billboards and cull use this frame's pose. Keep it unparented, since the sky sync and billboards treat camera.position/quaternion as world values. If it is a new camera object, also call __atmospherePipeline.setCamera(cam).",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 2236
+   },
+   {
+    "what": "Emitter enumeration for obstruction: ownerRegistry._owners / _byMgr plus mgr.particleTable plus emitter.info and parts[].",
+    "filmUse": "Each frame (after the particle tick, before render), build a list of {worldCenter = parent.getWorldPosition() + parentOffset, radius = sortingSphere.radius, live particle world positions via mgr._scene.localToWorld(mesh.position), size = geom.boundingSphere.radius*mesh.scale.x, opacity = userData.__op, additive = _baseIsAdditive, family = catalog[info.id], ownerKey}. Score camera\u2192subject segment intersections (smoke and gas families occlude; additive fire brightens) and particles within about 2 m of the eye (a cloud on the lens).",
+    "file": "scene3d/particles/owner_registry.js",
+    "line": 185
+   },
+   {
+    "what": "Per-emitter hide via the cull path: emitter._forceDegrade, degradeDistance and _rp6Culled.",
+    "filmUse": "Hide an obstructing emitter for one shot by setting _forceDegrade=true, degradeDistance=0, _rp6Culled=true, then restoring the saved values afterwards. Better: add a render-only `filmHidden` check beside the cell-gate branch in _tickLatched (skip _appendInstances, run _setPartsVisible(false)) so the simulation keeps running.",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 2156
+   },
+   {
+    "what": "Global particle near fade. A shader term already exists per row at particle_fx.js:1002, fed from FX_UNIFORMS (line 405).",
+    "filmUse": "Add a uniform-only floor, e.g. uFxNearFadeMin, and compute nearFade = max(vFxD.y, uFxNearFadeMin). This kills screen-filling smoke quads during dolly-throughs without a program-key change (respects the VFX write invariant). Only the instanced path is covered, which is the default.",
+    "file": "scene3d/particles/particle_fx.js",
+    "line": 1002
+   },
+   {
+    "what": "RP6 220 m particle distance cap (`_RP6.maxDistance`, read live from a module-level object).",
+    "filmUse": "Export a setter and raise it to 600-1500 m during aerial establishing shots. Otherwise all fires, smoke and portal swirls beyond 220 m + radius from the camera are frozen and hidden.",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 177
+   },
+   {
+    "what": "Time-of-day override API: SessionHandle.setSkyTimeOverride / setGameDayOverride.",
+    "filmUse": "Golden hour or night shots: call setSkyTimeOverride(h/24) EVERY frame (cheap, and survives evaluator replacement). Time-lapse: t = t0 + rate\u00b7filmTime, with ?frameBudget=off and __setTerrainLightScale(cur) each frame. Weather: pick the DayGroup with setGameDayOverride(day, year) after a sweep that reads getSkyState().dayGroupIndex and getSkyObjectStates() props&4.",
+    "file": "pkg/holtburger_web.d.ts",
+    "line": 6366
+   },
+   {
+    "what": "Client fog override via window.__environFogOverride (read each sky tick).",
+    "filmUse": "Dramatic fog on demand without server admin: window.__environFogOverride = environFogFor(3) (WhiteFog, 30 m band). It fades over about 20 s; ?environRetail=off snaps. Clear with null.",
+    "file": "scene3d/loop.js",
+    "line": 2039
+   },
+   {
+    "what": "Composer post-effect slot lists.",
+    "filmUse": "Insert DepthOfFieldEffect (rack focus via dof.target = subject world position or animated cocMaterial.focusDistance). Optionally add ChromaticAberration or Noise in postEffects. After insertion, verify the order with __particlesOverClouds.passes().",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 1596
+   },
+   {
+    "what": "Look handles: __setExposure, __grade, __setBloom*, __setVignette*, __ssao, __layerHaze, __fxGlow, __setWorldLightScale, __setSunSize.",
+    "filmUse": "Per-shot grading presets (warm noon, cool night, high-contrast storm) and exposure ramps for interior\u2194exterior transitions. Apply after bootState 'ready'; gate on __sceneReadyEverFired.",
+    "file": "scene3d/index.js",
+    "line": 6323
+   },
+   {
+    "what": "Deterministic clock injection: time_rng.setCurrentTime/setRng, tick(nowTs), and __renderOnce.",
+    "filmUse": "Frame-stepped capture: boot with ?renderOnDemand=1&particleClock=sim&frameBudget=off. Change __renderOnce to accept an explicit tsMs (dt = 1/fps). Set setCurrentTime(() => filmClockSec) and setRng(seeded) via dynamic import of ./scene3d/particles/time_rng.js. Route particleFxFrame, animated_scenery, fx_lights and the moon/star date to the film clock.",
+    "file": "scene3d/index.js",
+    "line": 3007
+   },
+   {
+    "what": "Sun direction snapshot for shot planning.",
+    "filmUse": "Backlight, rim-light or golden-hour framing: sun = sunDirFromHeadingPitch(_lastState.dirHeading, _lastState.dirPitch) in THREE world, or __atmosphereLights.sun.sunDirection. Choose the camera azimuth relative to the sun and avoid lens-flare angles.",
+    "file": "scene3d/sky_lighting.js",
+    "line": 88
+   },
+   {
+    "what": "PlayEffect client-side trigger bus.",
+    "filmUse": "Staged spectacle (portal swirls, spell bursts, level-up effects) on chosen entities for music-video beats, with synthetic:true (silent visuals).",
+    "file": "scene3d/play_effect_vfx.js",
+    "line": 3476
+   },
+   {
+    "what": "Semantic emitter catalog (data/particle-fx-catalog.json).",
+    "filmUse": "Score lyric\u2194site matches (fire, mist, magic, water families near a site) and obstruction weights by family. JEV can take the family/behavior/note text as typed decision features.",
+    "file": "data/particle-fx-catalog.json",
+    "line": 1
+   }
+  ],
+  "hazards": [
+   {
+    "what": "Instanced slot meshes (the default path) are detached carriers, so mesh.getWorldPosition() returns _scene-local AC coordinates, not THREE world. __diag.probeNearestParticle uses getWorldPosition and is wrong on the default path.",
+    "file": "scene3d/index.js",
+    "line": 4744,
+    "mitigation": "Convert with mgr._scene.localToWorld(v.copy(mesh.position)), or mgr._scene.matrixWorld \u00d7 mesh.matrix."
+   },
+   {
+    "what": "The static ParticleManager is stamped on scene3dForBuilders. window.liveScene3d._staticParticleManager can be undefined, or a second instance if a lazy LB bake ran against the window facade.",
+    "file": "scene3d/statics.js",
+    "line": 4895,
+    "mitigation": "Discover managers via ownerRegistry._owners (rec.ids values) plus entityManager._worldParticleManager, or export an allParticleManagers() accessor from particle_manager.js."
+   },
+   {
+    "what": "The default ?particleClock=off ticks static emitters on a PRIVATE rAF loop. That loop is registered before the main tick, so it likely runs before the main tick's camera update: static billboards, alpha sort and cull use the previous frame's camera, and static particles keep simulating between __renderOnce calls. (Ordering inferred from rAF semantics; not measured.)",
+    "file": "scene3d/statics.js",
+    "line": 5771,
+    "mitigation": "Boot film sessions with ?particleClock=sim (or loop) so both managers tick in tickPerFrame after cameraSwitcher.tick."
+   },
+   {
+    "what": "The RP6 cull hides and freezes every emitter beyond 220 m + radius from the CAMERA, and rechecks only every 6 ticks. Aerial and drone wide shots lose all distant fire, smoke and portal effects, and fast pans can pop emitters in for up to 6 frames.",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 177,
+    "mitigation": "Raise _RP6.maxDistance and set recheckInterval to 1 during film (needs a small exported setter)."
+   },
+   {
+    "what": "Forcing the cull to hide an emitter has side effects. Persistent emitters freeze (ages thaw on re-entry). Finite emitters virtual-emit and are force-stopped after 30 s culled, so they may never return. Ballistic projectile emitters are exempt and cannot be hidden this way.",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1249,
+    "mitigation": "Prefer a new render-only filmHidden flag mirroring the cell-gate branch. Keep hides under 30 s, or restore before they expire."
+   },
+   {
+    "what": "setTranslucency rewrites mesh.visible on every particle update, so a per-mesh hide written from outside is undone on the next tick.",
+    "file": "scene3d/particles/particle.js",
+    "line": 179,
+    "mitigation": "Hide through the manager (cull or flag path), or re-assert after the particle tick and before render."
+   },
+   {
+    "what": "Hiding an instanced bucket via im.visible=false still leaves its fxGlow halo. The glow twin checks ancestors only, not the bucket itself.",
+    "file": "scene3d/vfx/fx_glow_effect.js",
+    "line": 139,
+    "mitigation": "Use emitter-level hiding, or also set __fxGlow.strength=0 during the shot."
+   },
+   {
+    "what": "Retail mode-2 billboards skip the update when the viewer line is parallel to world up, and spin rapidly near nadir. Synthesized sprites use setFromUnitVectors, whose roll is unstable near the anti-normal. Straight-down drone tilts over waterfalls, fires or portals show spinning or frozen quads.",
+    "file": "scene3d/particles/particle_manager.js",
+    "line": 1197,
+    "mitigation": "Keep top-down shots a few degrees off nadir, or add a film-mode stable-up override (e.g. use the camera's up vector) for billboards."
+   },
+   {
+    "what": "pipeline.render(cam)'s camera-switch branch does not retarget SsaoPass or LayeredHazePass, and pipeline.setCamera() is never called. A separate film camera object gets AO and haze computed from the boot camera's pose and projection. Base pmndrs Pass.mainCamera is a no-op.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 2131,
+    "mitigation": "Call __atmospherePipeline.setCamera(filmCam) once on switch, or drive the boot camera object itself."
+   },
+   {
+    "what": "Many independent clocks. Wall performance.now: particle sim default, particle FX shader time, fx_lights, animated_scenery private rAF, PlayEffect burst rAF and setTimeout reapers, RP3 10 Hz sky throttle, 15 s retail light tick, 0.8 s fog tick, IBL 15 s. Date.now: wasm sky time and DayGroup, moon and stars, AC sky UV scroll. rAF timestamp: water, VFX uTime (grass and tree sway), AC moons, mixers. Composer dt: cloud advection, TAA, grade smoothing. __renderOnce always passes performance.now().",
+    "file": "scene3d/index.js",
+    "line": 2487,
+    "mitigation": "For deterministic capture, either virtualize performance.now, Date.now and rAF at page level (Page.addScriptToEvaluateOnNewDocument or CDP virtual time), or add explicit film-clock plumbing (tsMs into __renderOnce, plus setCurrentTime, particleFxFrame(nowMs), and the moon-date override)."
+   },
+   {
+    "what": "In ?particleClock=sim the simulation clock is min(prev+dt, wallNow), so a virtual clock running ahead of wall time is clamped. The manager-phase double-call guard keys on performance.now(), so a frozen virtual performance.now would skip particle ticks.",
+    "file": "scene3d/loop.js",
+    "line": 3354,
+    "mitigation": "Under film mode, bypass the wall clamp and key the guard on a frame counter, or install setCurrentTime(filmClock) after boot (it overrides the sim install)."
+   },
+   {
+    "what": "Time-lapse inconsistencies under setSkyTimeOverride: moon and stars ignore the override (portal ticks come from Date.now); the DayGroup does not change across the overridden midnight; terrain re-lights only every 15 s; the sky stack updates at 10 Hz; IBL every 15 s; colour-grade night blend lags (exp \u22124\u00b7dt).",
+    "file": "external/holtburger/crates/holtburger-world/src/sky.rs",
+    "line": 485,
+    "mitigation": "Use ?frameBudget=off (or ?deferHz=60), ?iblRefreshMs=1000, __setTerrainLightScale(cur) per frame, advance setGameDayOverride manually across midnight, and add a moon/star date override in sky_game_date.js for film."
+   },
+   {
+    "what": "The Always-daylight character option re-pins time of day to 0.5 every 250 ms (and NaN-clears on the off edge), fighting film overrides. The ?skytime pin is one-shot and is lost when populateSkyDescFromRegion replaces the evaluator. setSkyTimeOverride returns false before the SkyDesc lands.",
+    "file": "scene3d/always_daylight.js",
+    "line": 82,
+    "mitigation": "Boot with ?skytime=<h> (disables the daylight driver) or ensure option 0x05 is off. Re-assert the override every frame and check the boolean return."
+   },
+   {
+    "what": "The look setters (__setExposure, bloom, vignette, sun and moon size) only exist after the atmosphere composer reports 'ready'. They are absent with ?wireframe=1. Bloom is null at quality=low, vignette below high, SSAO below high. 'ready' and 'in-world' can arrive in either order on the one scalar.",
+    "file": "scene3d/index.js",
+    "line": 6290,
+    "mitigation": "Film sessions use ?quality=ultra (or ?bloom=on&vignette=on&ssao=on). Wait on window.__sceneReadyEverFired===true plus __bootStateHistory containing 'in-world', and null-check every setter's return."
+   },
+   {
+    "what": "The renderer uses logarithmicDepthBuffer. pmndrs readDepth already decodes it for Effects with EffectAttribute.DEPTH; hand-decoding again previously replaced the whole town with sky. CoC near/far are copied by value.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 288,
+    "mitigation": "For DoF, use the stock DepthOfFieldEffect (CoC handles log depth) and getViewZ in custom effects. Re-set fxPostPass.mainCamera after changing camera.near or far."
+   },
+   {
+    "what": "Adding, removing or reordering effects in an EffectPass, or changing the tone-mapping mode, recompiles the merged program (about 3 s per program on the 1070). Changing light counts or per-instance program keys violates the VFX write invariant.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 1609,
+    "mitigation": "Build the DoF (and any lens effects) once at pipeline construction behind a film flag. Animate only uniforms (focusDistance, bokehScale, blendMode.opacity) per shot."
+   },
+   {
+    "what": "scene.fog near, far and colour are overwritten every sky tick. The horizon fog band is anchored to the drawn streaming-ring edge, so drone shots far from the player can expose fog walls or unloaded edges. Planar fog makes distant objects gain and lose fog during pans unless ?radialFog=on.",
+    "file": "scene3d/loop.js",
+    "line": 2306,
+    "mitigation": "Use ?radialFog=on for film. Pin via ?farFogNear/?farFogFar (read live from location.search) or add a film fog override. Coordinate with the streaming subsystem for camera-centred residency."
+   },
+   {
+    "what": "No rain or snow precipitation system exists (the weather/manager.js referenced in comments is absent). Weather visuals are limited to DayGroup sky objects, ?skyWeather streak billboards, the storm lightning sky chain, takram storm clouds (?clouds=on) and fog.",
+    "file": "scene3d/loop.js",
+    "line": 1538,
+    "mitigation": "Treat 'rain' shots as fog, storm clouds or lightning, or add a film-side precipitation emitter via ParticleManager.addEmitter."
+   },
+   {
+    "what": "Additive particles are drawn unfogged, matching retail, so fires and portals glow at full strength through heavy fog. Alpha smoke is fogged.",
+    "file": "scene3d/particles/additive_fog.js",
+    "line": 1,
+    "mitigation": "Account for this in fog-heavy compositions, or use __additiveFogBlack('fade') per shot."
+   },
+   {
+    "what": "The particlesOverClouds split chain (particles drawn after clouds and aerial perspective) exists only with ?clouds=on. On split frames (indoor depth split, punch) particles stay in the world or cells pass, and soft particles are off.",
+    "file": "scene3d/atmosphere_pipeline.js",
+    "line": 1585,
+    "mitigation": "Know which chain is live (__particlesOverClouds.stats().why) before inserting DoF. Test DoF on both the legacy and split chains."
+   }
+  ],
+  "recommendations": [
+   "Film boot URL baseline: ?quality=ultra&frameBudget=off&particleClock=sim&radialFog=on&iblRefreshMs=1000&nosw=1, plus ?renderOnDemand=1 for frame-stepped capture. Add ?clouds=on only on the 1070, since SwiftShader zero-bakes the cloud 3D textures.",
+   "Drive the existing boot camera (liveScene3d.camera), or call __atmospherePipeline.setCamera(filmCam) on switch. Set the pose before tickPerFrame's particle and entity phases, keep the camera unparented, and build orientation from quaternions (slerp or parallel-transport). Never use lookAt at \u00b190\u00b0 pitch.",
+   "Add film-only exports in particle_manager.js: allParticleManagers(), setParticleCullConfig({maxDistance, recheckInterval}), and an emitter.filmHidden render-only flag handled next to the cell-gate branch (skip _appendInstances / _setPartsVisible(false)).",
+   "Add a global FX_UNIFORMS.uFxNearFadeMin (uniform-only) and use max(rowNearFade, uFxNearFadeMin) at particle_fx.js:1002 to prevent particle clouds on the lens. Scale the floor by camera speed and particle size.",
+   "Build the obstruction scorer from ownerRegistry + particleTable: sphere = anchor world position + |parentOffset|, radius = max(sortingSphere.radius, live particle extent), weight by catalog family (smoke_dark, gas_alpha, mist_white occlude; additive fire, star, glow only distract), numParticles and mean userData.__op. Exclude skyGlow emitters. Also test the near-eye volume (particles within about 2 m of the camera).",
+   "Construct DepthOfFieldEffect at pipeline build time behind a ?filmDof flag: in postEffects before fxGlow/bloom (split chain), and after horizonDissolve in the legacy list. Expose window.__dof {target, focusDistance, focusRange, bokehScale}. Rack focus = animate focusDistance, or set target to the subject's THREE-world position.",
+   "Add a film clock: __renderOnce(tsMs) passing an explicit ts; setCurrentTime and setRng (seeded) from time_rng.js; particleFxFrame(filmMs); animated_scenery and fx_lights reading the same clock; a sky_game_date override so moon and stars follow setSkyTimeOverride. Motion blur can then be done by accumulating N sub-frames in the capture tool (pmndrs has no motion blur effect).",
+   "For time of day and time-lapse, call setSkyTimeOverride every frame plus __setTerrainLightScale(__terrainLightState().scale) to force a terrain re-light. Advance setGameDayOverride across midnight. Pre-sweep (day, year) \u2192 dayGroupIndex and weather SkyObjects (props&0x04) once per session to get a weather menu for the planner.",
+   "Use the documented look handles (__setExposure, __grade.day/.night, bloom, vignette, __ssao, __layerHaze, __fxGlow) for per-shot grading. Snapshot their current values before a shot and restore them after.",
+   "Use window.__environFogOverride = environFogFor(n) for client-only fog moods instead of the server @setlbenviron command, which affects every player in the landblock. Budget the ~20 s fade-in, or use ?environRetail=off for a snap."
+  ],
+  "openQuestions": [
+   "Does CDP Emulation.setVirtualTimePolicy, or a page-level performance.now/Date.now/rAF virtualization, keep the live ACE session healthy? Concerns: the keepalive worker, TimeSync forward-only anchoring, the 4 s pump watchdog and WebSocket timing. This has not been tested.",
+   "Is the static ParticleManager present on window.liveScene3d in the current 1070 build? Run `await __diag.portalEmitterState()` and check its .facade field.",
+   "Should DoF run before or after the late particle draw (blurred particles vs sharp ones)? How does it interact with 2\u00d7 MSAA and the alpha-particle depth writes into composer.depthTexture inside the late pass?",
+   "What is an acceptable RP6 cull distance and recheck interval for film on the GTX 1070 (perf budget for hundreds of town emitters at 1 km)?",
+   "Which (day, year) pairs yield storm or foggy DayGroups in retail Dereth, and do the server's DayGroup and the client override stay consistent for other observers? (The override is client-only.)",
+   "Should film mode own a separate camera object (cleaner, but needs pipeline.setCamera plus CSM, IBL and cloud retargeting) or hijack the boot camera? This decision belongs to the camera-subsystem recon.",
+   "Exact rAF callback ordering between statics.js _spLoop and the main tick on headless Chrome under renderOnDemand. This determines whether static billboards lag the camera by a frame even with particleClock=off."
+  ],
+  "dataSources": [
+   {
+    "name": "Particle FX catalog",
+    "location": "apps/holtburger-web/data/particle-fx-catalog.json (+ particle-fx-tier1.json, particle-fx-tier2.json; compiled into scene3d/particles/particle_fx_profiles.js)",
+    "format": "JSON {families{44}, emitters{'0x32xxxxxx': {family, behavior, note, params, surface, gfx, tags}}, synthesized{14}}",
+    "notes": "2051 retail emitters; nearFade>0 on 2000 of them (max 3.0 m). Keyed by emitter.info.id. Semantic classes for obstruction weighting and lyric/site matching."
+   },
+   {
+    "name": "Live particle tables",
+    "location": "window.liveScene3d.entityManager._worldParticleManager.particleTable; static manager via ownerRegistry (import ./scene3d/particles/owner_registry.js)",
+    "format": "Map<id, ParticleEmitter>",
+    "notes": "Positions are _scene-local AC frame (Z up). Convert with mgr._scene.localToWorld."
+   },
+   {
+    "name": "Sky state snapshot",
+    "location": "window.liveScene3d.skyLightingController._lastState; window.__sessionHandle.getSkyState()/getSkyObjectStates()/getSkyPortalTicks()",
+    "format": "POJO {dirHeading, dirPitch, dirBright, ambColorArgb, fogMin, fogMax, fogColorArgbLerp, worldFog, timeOfDayNormalized, dayGroupIndex}",
+    "notes": "Refreshed at 10 Hz unless ?frameBudget=off. Weather objects are those with properties & 0x04."
+   },
+   {
+    "name": "URL flag registry",
+    "location": "apps/holtburger-web/docs/url-flags.md (rows: skytime :974, skyServerClock :1566, exposure :985, tone :986, grade :987, layerHaze :979, clouds :255, particlesOverClouds :264, particleClock :532, frameBudget :539, deferHz :540, radialFog :1758, environRetail :1757)",
+    "format": "Markdown table",
+    "notes": "Trust the code readers over the doc text (some doc pointers are stale)."
+   }
+  ]
+ },
+ {
+  "area": "On-screen elements (DOM HUD + in-canvas overlays), input, audio and output resolution in holtburger-web (HB = external/holtburger/apps/holtburger-web)",
+  "summary": "Every file:line below was read unless an item is marked otherwise. Paths are relative to HB.\n\n(1) WHAT CAN APPEAR ON SCREEN. Four layers, with a different way to hide each one.\nA) Page chrome: direct <body> children without an hb- id, in index.html:620-967. These are h1/p/h2, #results (the smoke-check text), #login-form (which includes the #render-scale select), #login-status, #selection (#character-ul, plus #post-spawn holding the legacy #chat-panel / #vitals-panel / #inventory-panel), #create-*, #render-status and #stage. #stage contains #canvas-column (#fullscreen-btn :937, #canvas :938, #virtual-keypad :945) and #stage-info :965. Agent-mode hides all of this. ?hud=none on its own does NOT: it hides only body>*:not(#stage), so #fullscreen-btn, the keypad and #stage-info stay visible, and the canvas keeps its non-agent size of min(innerW-32,1920) x min(innerH-320,1080).\nB) HUD DOM: direct body children whose id starts with hb-, or that carry .hb-bar / .hb-pill / .hb-panel.\n - Toolbar .hb-bar (ui/bar.js:648; mounted on document.body at app/plugin_bar.js:645).\n - Vitals orbs #hb-vitals-orb-hp/-stam/-mana plus #hb-vitals-orbs-defs (plugins/vitals-orbs.js:1004/1388).\n - #hb-radar (radar.js:651/708), #hb-buffs-hud (buffs-hud.js:1175/1222), #hb-chat-panel (chat-panel.js:420/567), #hb-status-indicators and #hb-portal-storm-pulse (status-indicators.js:464/440/671), #hb-hotbar (hotbar.js:764/1458), #hb-spell-strip (combat-bar.js:1141/1504).\n - #hb-combat-hud and the \"You died.\" narrative #hb-combat-hud-death (combat-hud.js:533/914).\n - #hb-main-panel, #hb-hover-tooltip (hover-tooltip.js:140), #hb-radial-menu, #hb-examine-floaty, #hb-corpse-loot-bar, #hb-vendor-bar, #hb-modal-dialog.\n - Spew-box / rejection toasts #hb-rejection-toast-N (plugins/rejection_feedback.js:295-299). Each lasts 5 s, at most 4 at once. Transient lines, including server replies to teleports, land here.\n - #hb-jump-charge (index.html:5498-5503; only while Space is held).\n - #hb-portal-space-notice, which reads \"In Portal Space - Please Wait...\" (scene3d/portal_space.js:1028-1036).\n - #hb-thought-overlay (rynth/ai/thought_overlay.js:50; only with ?thoughtOverlay=1 and the rynth AI director running).\n - #hb-charselect (only with autoSpawn=select or a manual Connect).\n Agent-mode leaves ALL of these visible. ?hud=none hides them with CSS only: the plugins still install and tick. ?plugins=none skips bar/HUD mounting entirely (index.html:1914-1929), and window.__pluginClient is still created (index.html:4660-4662). The disconnect banner #hbDisconnectBanner (app/dom_utils.js:21-29) has no hyphen in its id, so both agent-mode and hud=none hide it.\nC) DOM overlays inside #canvas-column:\n - #selection-brackets-3d (scene3d/selection_brackets.js:1099-1119, z-index 11). ON by default. Agent-mode explicitly re-shows it (index.html:525, display:block !important). It is not constructed under ?hud=none or ?selectionIndicator=none (scene3d/index.js:3245-3262). At runtime, layer.setDisplayOn(false) (:898) hides it and stays hidden, because the CharacterOption 0x0E poll only re-applies on a change (:910-920).\n - #nameplate-layer-3d (scene3d/hud.js:372-399). OFF by default; enabled with ?nameplateDom=on (scene3d/index.js:3213-3233).\nD) Inside the canvas (three.js; no CSS reaches these):\n - Speech/emote bubbles: a THREE.Sprite on inst.root, 4.5 s hold then 1.2 s fade (scene3d/speech_bubble.js:171-235). ALWAYS ON with no flag. Driven by kind=55 OVERHEAD_SPEECH (app/client_events.js:1568-1593) through EntityManager.showSpeechBubble (scene3d/entities.js:7154).\n - Nameplate sprites and buff badges: OFF by default; ?nameplates=on enables them and ?hud=none forces them off (nameplate_sprite.js:311-320, 747-748, 1007-1008).\n - Spell-shape preview (?spellShapePreview=on, spell_shape_preview.js:88) and cast-range ring (?castRangeRing=on, :742): both off by default.\n - The legacy selection torus appears only with ?selectionIndicator=ring|both. The ?selectionFlash=on click blink is off by default.\n - The portal tunnel replaces the entire world frame (scene3d/index.js:2738-2743; portal_space.js:1734-1780), followed by a black fade-in quad (portal_space.js:1783; called at scene3d/index.js:2783 and :2965).\n - A permanent orange 2 m \"hello-cube\" sits at AC world (0,0,5) (scene3d/index.js:1598-1606; liveScene3d.helloCube). It is only visible near landblock 0x0000.\n - The local player's own rig. If the player avatar is the camera operator, it will be in shot.\n No FPS, stall or perf DOM overlay exists. stall_probe, diag and latency_diag only write to the console or window objects, and plugins/debug-overlay.js is orphaned: it is not listed in plugins/index.json.\n\n(2) ?agent=1 AS A CLEAN-FRAME BASE. index.html:604-619 adds the agent-mode class when ?agent=1 OR ?autoLogin=1, and the no-hud class when ?hud=none. The kill rule is at index.html:484, verbatim:\n`html.agent-mode body > *:not(#stage):not([id^=\"hb-\"]):not(.hb-bar):not(.hb-pill):not(.hb-panel) { display: none !important; }`\nSupporting rules:\n - :456 body has margin 0, overflow hidden, black background.\n - :485-501 #stage is fixed at 100vw x 100vh; #stage>*:not(#canvas-column) and #canvas-column>*:not(#canvas) are hidden; #canvas is 100% !important.\n - :507-516 hides legacy ids (#plugin-bar, #chat-panel, #inventory-panel, #spellbook-panel, #combat-bar, #vitals-hud, #nameplate-layer-3d, #post-spawn, .floating-panel).\n - :525 re-shows #selection-brackets-3d.\nWhat it leaves visible: every hb-* HUD in section B (the comment at :473-483 says this is intentional, so a person can play from the 1070 desktop shortcut), the brackets, all in-canvas items in D, and the 1px #ccc border on the canvas. That border comes from `#stage canvas { border:1px solid #ccc; image-rendering:pixelated; cursor:grab }` at :160; the agent #canvas rule at :497-501 never resets it, so it should show on the top and left edges in compositor screenshots (not in captureStream) \u2014 reasoned from the CSS, not observed.\nVerdict: agent-mode alone is not a clean film frame. The minimum is ?agent=1&hud=none at load time. This matters because the canvas-sizing decision _isAgentMode is latched once in preInit3D (scene3d/index.js:881-887) and reused by the resize handler (:1872-1873), so adding the class later does not resize the canvas. On top of that, film mode needs runtime CSS for the border, cursor and pixelated scaling, and must suppress speech bubbles, clear the selection, and handle the local player rig.\n\n(3) TELEPORTS. Every PlayerTeleport, including @teleloc, @tele and @telepoi, raises kind=33 PORTAL_SPACE_ENTERED (app/client_events.js:873-940). That emits 'portalSpaceEntered' on window.__pluginClient.events, then startPortalSpace(window.liveScene3d, {enterDid, loopDid, onExit}), which is DEFAULT ON.\nRetail tunnel state machine (portal_space.js:113-131 constants, sequencer :473-594):\n - TUNNEL (state 3): the world is not drawn; the tunnel Setup 0x02000306 plays at 40 fps on black with a random camera roll.\n - The tunnel holds until kind=66 TELEPORT_ARRIVED (client_events.js:941-948 calls signalPortalArrived({cellId})) AND the destination cells are resident. Readiness is destinationCellsReady (:601: EnvCell container for indoor cells, terrainBakedLbs for outdoor).\n - Failsafes: 6 s after arrival; up to 60 s while an indoor build is still in flight (?portalHoldBuild); 20 s with no arrival at all; plus up to 1.5 s of shader-warm hold.\n - CONTINUE (state 4): at least 2 s and at most 5 s, leaving inside an animation-frame window.\n - TUNNEL_FADEOUT (state 5): 1 s.\n - WORLD_FADEIN (state 6): 1 s black quad.\n Total is arrival plus load plus about 4-7 s. While the tunnel owns the frame, the render loop is paced to 30 fps (?portalSpaceFps, scene3d/index.js:2413).\nSounds: an enter whoosh (UI SoundType 0x6A), a drone (?portalDrone), and an exit whoosh (0x6B) at the start of the fade-in. The exit whoosh has no URL override.\nThe notice DOM element is hb-* (see B).\nSuppressing it: ?portalSpace=off. This is read from location.search on each kind=33 event (client_events.js:912-915), so history.replaceState can toggle it at runtime. endPortalSpace() (:1826) force-ends a running tunnel. The login tunnel is skipped for ?agent=1, but teleport tunnels are not (loginPortalSpaceSkipReason :191-205). With the tunnel off, the world stays drawn: the camera jumps immediately because camera.js:2664-2695 assigns the pose directly, and terrain/cells visibly pop in. The tunnel's background shader warm-up (?tunnelWorldWarm) also only runs while the tunnel owns the frame, so the first frames after arrival can hitch.\nReadiness signals:\n - window.__portalSpace {state, arrived, arrivalCell, reason, t:{start, cells, ready, reveal, done}} (:1170-1199).\n - globalThis.__isPortalSpaceActive() (:1594), true from TUNNEL through WORLD_FADEIN.\n - Bus event 'portalSpaceExited' via onExit (client_events.js:934-936).\n - The exports destinationCellsReady and destinationBuildInFlight (:601/:617), and globalThis.__interiorBuildPending.\nThe recorder must pause during the tunnel window (cut around it), or run with portalSpace=off and gate on those readiness signals plus a frame-time settle.\n\n(4) INPUT.\nKeyboard: one funnel, ui/input-funnel.js (?inputFunnelV2, default ON). It is a single document capture-phase keydown/keyup pair (:635-711) behind one gate, injected at index.html:5409 as `() => enteredWorld && !isTypingInForm()`. Inside it:\n - Movement keystate (index.html:5633 and :5920, priority 100).\n - The camera keystate mirror and PageUp/PageDown zoom (camera.js:3154-3160).\n - The C camera-mode cycle follow > topDown > orbit (camera.js:3217-3221).\n - Picking's attack-abort and Escape handling (picking.js:2068-2071), the escape_action module, the hotbar, combat keys, spellbook, selection keys and emote keys.\n Raw edges reach wasm through handle.handleKeyAction (cmdInterp, default ON).\n window.__inputFunnel.poison(\"gate\") blocks every gameplay keydown while keyups still clear state; unpoison() restores it. releaseHeld(reason) (:567) synthesizes keyups for all held keys except Space.\nOutside the funnel:\n - F-key panel hotkeys: window keydown at app/plugin_bar.js:587.\n - Per-plugin Escape/Enter handlers.\n - Window blur handlers: index.html:6047-6093 (release movement, abort jump charge), camera.js:3142-3149 / 3168, and the funnel ledger at :701.\n - The virtual keypad, which fires synthetic KeyboardEvents (index.html:6242-6291).\nMouse (none of it goes through the funnel):\n - Follow-mode right-drag mouselook: canvas contextmenu/mousedown plus document mousemove/mouseup (camera.js:1067-1076). Pitch is clamped to [-0.5, 1.4] rad at :215-216, so a straight-down view is impossible in follow mode.\n - Wheel zoom (topDown, and follow only under the retailCamZoom flag) on the canvas (camera.js:3174-3192).\n - OrbitControls on the canvas in orbit mode (camera.js:1105).\n - Picking: click selects, double-click Uses (which can walk the player into a portal), drag-drop gives items, plus pointermove hover (picking.js:1451/1474/1488).\n - Hover tooltip: canvas mousemove plus window mousedown/keydown capture (plugins/hover-tooltip.js:266-270).\n - Input funnel: document capture mousedown and contextmenu suppression (:673-684).\nThere is no pointer lock anywhere; only stale comments mention it. Touch input exists only via OrbitControls and the keypad.\nRecommended lock: releaseHeld(\"film\") then poison(\"gate\"), plus a window capture-phase blocker that calls stopImmediatePropagation and preventDefault on keydown, keyup, keypress, pointer*, mouse*, click, dblclick, auxclick, contextmenu, wheel (passive:false), touch*, dragstart and drop. A window capture listener runs before the document-capture funnel and before every element listener; only window-capture listeners registered earlier still run, and those are benign. Also call cameraSwitcher._endFollowDrag?.() and zero cameraSwitcher.keys. To restore, remove the blockers and call unpoison(). A DOM \"shield\" div is not viable: under agent-mode plus no-hud, any new body child or #stage/#canvas-column child is display:none !important.\n\n(5) CURSOR, FOCUS AND RESOLUTION.\nCursor: body uses the AC sprite cursor (index.html:149). The canvas uses grab/grabbing (:160-161) and the use-targeting reticules (:163-171). OS-level grabs would capture the cursor; film CSS should set cursor:none !important.\nFocus: losing focus releases keys (see above). AudioManager mutes and refuses sounds when the page is hidden or unfocused (see 6).\nFullscreen: needs a user gesture. ?fullscreen=1 arms on the first click or keypress (index.html:3286-3299). Do not use fullscreen for film.\nCanvas sizing:\n - In preInit3D, agent-mode gives cssW = min(innerWidth, 4096) and cssH = min(innerHeight, 2160); non-agent gives min(innerW-32, 1920) x min(innerH-320, 1080) (scene3d/index.js:881-897).\n - pixelRatio = min(devicePixelRatio, 2) x renderScale (:1245, :1262). renderer.setSize(cssW, cssH, false) (:1288), so drawing buffer = viewport x pixelRatio.\n - ?renderScale in (0, 2] pins the value and disables BOTH the smart initial cap and the adaptive controller (:1235-1262, :1298-1334).\n - Without a pin, computeInitialRenderScale caps the frame near 2.6 Mpx (adaptive_render_scale.js:206-223), so a 3840x2160 viewport starts at about 0.56. The controller can then lower it to 0.35 under load (:1307-1331); ?adaptiveRes=off disables both.\n - Runtime setter: window.__setRenderScale(n) (:1268-1286); it re-reads DPR and resizes the atmosphere pipeline and cloud overlay. Readback: window.__renderScaleState() reports drawingBuffer [w,h] and its source (adaptive_render_scale.js:240-283).\n - The 150 ms-debounced resize handler (:1869-1916) resizes from innerWidth/innerHeight but never re-applies pixelRatio, so call __setRenderScale after changing the device scale factor.\n - Quality order: URL ?quality, then localStorage holtburger_graphics_v1, then a GPU probe, then mid/low (quality.js:956-1052). The GTX 1070 does not match GPU_HIGH_RE (:826), so it defaults to mid unless ?quality=high|ultra is passed.\nExact output size: set the viewport with CDP Emulation.setDeviceMetricsOverride and pin renderScale.\n - 1080p: 1920x1080, DSF 1, renderScale=1.\n - 4K: 1920x1080 with DSF 2 and renderScale=1. This gives a 3840x2160 buffer whose compositor screenshots are 1:1.\n - 4K alternative: renderScale=2 at DSF 1 also gives a 3840x2160 buffer, but compositor screenshots are downsampled with image-rendering:pixelated. canvas.captureStream records the native buffer either way.\n - There is no API to set a canvas size independent of the window; the resize handler would overwrite a manual setSize on the next resize event.\n\n(6) AUDIO. AudioManager (scene3d/audio/audio_manager.js:147) is built in init3D only when wireframe is off (or ?diag=1) and fetchWave exists (scene3d/index.js:6395-6416). It is exposed as liveScene3d.audioManager.\n - The AudioContext is created only by notifyUserGesture() (:253), hooked to the first window pointerdown/keydown (scene3d/index.js:6410-6416). Before that, play() is a no-op.\n - Graph: BufferSource, then a per-voice Gain, then an HRTF Panner (or the retail stereo-pan nodes), then _effectMaster or _ambientMaster, then _master, then ctx.destination (:387-421, :840-917). There is a 16-voice pool.\n - The listener is set every frame from cameraSwitcher.activeCamera (scene3d/index.js:2551-2562). Ambient gathering is centred on the player (ambient_runtime.js:166).\n - The default \"play only when active\" setting (:185-196, :294-317) ramps _master to 0 and refuses new sounds whenever document.hidden is true or document.hasFocus() is false. Fix it with ?audioWhenInactive=on or setPlayOnlyWhenActive(false) (:336).\n - Mute: setMasterGain(0) (:443) or pauseAll() (:1046).\n - Capture: dest = am._ctx.createMediaStreamDestination(); am._master.connect(dest). To keep sound off the 1070's speakers, also call am._master.disconnect(am._ctx.destination). Combine dest.stream's audio track with renderer.domElement.captureStream() in a MediaRecorder.\n\nPrior art: capture_canvas_video.cjs (HB root) is an old Playwright script. It used headed Chrome because headless gave a blank software GL context, plus the anti-throttle flags and --autoplay-policy=no-user-gesture-required. It pinned the canvas fixed (an off-screen canvas produced empty frames) and ran a setInterval renderer.render() fallback, which bypasses the composer \u2014 do not copy that part.\n\nNote on the user's relayed constraint: nothing here calls an LLM. The film agent is Claude Code (subscription) driving CDP evaluate. The in-page rynth AI director and #hb-thought-overlay (OpenRouter providers, rynth/ai/providers.js) are separate and must stay off: no ?bot=1 and no ?thoughtOverlay.",
+  "apis": [
+   {
+    "name": "window.__inputFunnel.poison",
+    "file": "ui/input-funnel.js",
+    "line": 724,
+    "signature": "poison(mode = \"throw\"|\"gate\") -> mode",
+    "what": "'gate' forces the single gameplay gate closed: every keydown stops before raw subscribers and actions (movement, camera C/PageUp/PageDown, hotbar, combat, spellbook, picking Esc). Keyups still reach rawUp subscribers. 'throw' also blocks keyups. Singleton at window.__inputFunnel (getInputFunnel :760-768).",
+    "verified": true
+   },
+   {
+    "name": "window.__inputFunnel.unpoison",
+    "file": "ui/input-funnel.js",
+    "line": 728,
+    "signature": "unpoison() -> true",
+    "what": "Re-opens the funnel after a film-mode input lock.",
+    "verified": true
+   },
+   {
+    "name": "window.__inputFunnel.releaseHeld",
+    "file": "ui/input-funnel.js",
+    "line": 567,
+    "signature": "releaseHeld(reason: string) -> string[]",
+    "what": "Synthesizes a keyup for every key in the held ledger except Space. This clears the camera keystate, the index gameplay keystate and the cmdInterp edges. Call it before poisoning so nothing stays held (prevents stuck autorun or walking).",
+    "verified": true
+   },
+   {
+    "name": "window.__inputFunnel.snapshot / setGate",
+    "file": "ui/input-funnel.js",
+    "line": 734,
+    "signature": "snapshot() -> {v2, installed, gate:{injected, open}, fault, stats, perAction, perRaw}; setGate(fn) at :351",
+    "what": "Diagnostics, and the gate injection point (index.html:5409 injects enteredWorld && !isTypingInForm()). Calling setGate from outside REPLACES the closure and cannot restore it; use poison/unpoison instead.",
+    "verified": true
+   },
+   {
+    "name": "window.__setRenderScale",
+    "file": "scene3d/index.js",
+    "line": 1268,
+    "signature": "(scale: number in (0,2]) -> void",
+    "what": "Sets pixelRatio = min(devicePixelRatio, 2) * scale and calls renderer.setSize(canvas.clientWidth, clientHeight, false), atmospherePipeline.setSize and cloudOverlay.setSize. It is the only path that re-reads DPR after boot. Defined in preInit3D, so it exists before login.",
+    "verified": true
+   },
+   {
+    "name": "window.__renderScaleState",
+    "file": "scene3d/adaptive_render_scale.js",
+    "line": 240,
+    "signature": "() -> {renderScale, devicePixelRatio, upscalingFrom, drawingBuffer:[w,h], adaptiveEnabled, settleEnabled, urlPin, source}",
+    "what": "Live readback used to assert the exact output resolution (drawingBuffer is canvas.width x canvas.height). Always installed (:275-283).",
+    "verified": true
+   },
+   {
+    "name": "window.__adaptiveRenderScale.stop/start",
+    "file": "scene3d/adaptive_render_scale.js",
+    "line": 604,
+    "signature": "start(); stop(); gpuState()",
+    "what": "The adaptive-resolution controller instance (published at scene3d/index.js:1332). It exists only when no explicit ?renderScale is set, adaptiveRes is on, and neither nullRender nor renderOnDemand is set. stop() freezes the resolution in the middle of a session.",
+    "verified": true
+   },
+   {
+    "name": "window.__renderOnce",
+    "file": "scene3d/index.js",
+    "line": 3007,
+    "signature": "() -> boolean",
+    "what": "Advances one tick (sim and render) under ?renderOnDemand=1. dt still comes from the wall clock (performance.now), clamped to 0.1 s. Under the default-on syncPhysicsTick it returns BEFORE the frame completes.",
+    "verified": true
+   },
+   {
+    "name": "AudioManager (liveScene3d.audioManager)",
+    "file": "scene3d/audio/audio_manager.js",
+    "line": 147,
+    "signature": "notifyUserGesture() :253; resume() :428; setMasterGain(v) :443; setEffectGain/setAmbientGain; setPlayOnlyWhenActive(on) :336; setActive(b) :260; setListener(posThree, quatThree) :514; play(did, worldPos, opts) :710; playFromCenter(did, vol, opts) :769; pauseAll() :1046",
+    "what": "The game's only WebAudio graph. Private nodes _ctx, _master (to ctx.destination), _effectMaster and _ambientMaster (to _master) are created by _initContext at :387-421 only after notifyUserGesture. Constructed at scene3d/index.js:6397 and assigned to liveScene3d.audioManager at :6403.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.showSpeechBubble",
+    "file": "scene3d/entities.js",
+    "line": 7154,
+    "signature": "showSpeechBubble(guid, text, isEmote)",
+    "what": "The only entry point for overhead speech/emote sprites. Called from app/client_events.js:1583-1592, which checks typeof === 'function' on every event, so swapping in a no-op instance method suppresses bubbles at runtime.",
+    "verified": true
+   },
+   {
+    "name": "showSpeechBubbleOnEntity / removeSpeechBubbleFromEntity",
+    "file": "scene3d/speech_bubble.js",
+    "line": 171,
+    "signature": "showSpeechBubbleOnEntity(inst, text, isEmote) -> Sprite|null; removeSpeechBubbleFromEntity(inst) at :237",
+    "what": "Bakes and attaches the bubble sprite (renderOrder 11, 3.05 m above the rig, 4.5 s hold plus 1.2 s fade). removeSpeechBubbleFromEntity purges a live bubble; iterate entityManager.entityMap to clear all of them.",
+    "verified": true
+   },
+   {
+    "name": "SelectionBracketLayer.setDisplayOn / setTarget",
+    "file": "scene3d/selection_brackets.js",
+    "line": 898,
+    "signature": "setDisplayOn(on: boolean); setTarget(guid, follow, sphere) at :873",
+    "what": "Hides or shows the retail corner brackets and the off-screen arrow. The setting stays put: the CharacterOption 0x0E poll only re-applies on an option change (:910-920). Available as liveScene3d.selectionBracketLayer, or null under ?hud=none or ?selectionIndicator=none.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setSelectedTarget / getSelectedTarget",
+    "file": "scene3d/entities.js",
+    "line": 8748,
+    "signature": "setSelectedTarget(guid) ; guid 0 clears",
+    "what": "Clears the selection, which removes the brackets, the legacy torus and the range check. Film mode should call setSelectedTarget(0) when it starts.",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setLocalPlayerCameraOpacity",
+    "file": "scene3d/entities.js",
+    "line": 18991,
+    "signature": "setLocalPlayerCameraOpacity(guid, opacity 0..1)",
+    "what": "Applies a hierarchical camera fade (body plus held children, re-applied across re-dress and respawn) to the local rig. Opacity 0 hides the camera-operator avatar. The guid comes from window.getLocalPlayerGuid().",
+    "verified": true
+   },
+   {
+    "name": "EntityManager.setVisibility",
+    "file": "scene3d/entities.js",
+    "line": 7092,
+    "signature": "setVisibility(guid, visible)",
+    "what": "Sets state-authoritative rig visibility (normally driven by kind=17). It also calls noteEntityVisibility, which can play Hidden/UnHide scripts for genuine HIDDEN bits. A server SetState can flip it back.",
+    "verified": true
+   },
+   {
+    "name": "portal_space exports",
+    "file": "scene3d/portal_space.js",
+    "line": 1434,
+    "signature": "startPortalSpace(scene3d, opts) :1434; signalPortalArrived({cellId}) :1578; isPortalSpaceActive() :1589; portalSpaceOwnsFrame() :1597; endPortalSpace() :1826; destinationCellsReady(scene3d, cellId) :601; destinationBuildInFlight(scene3d, cellId) :617",
+    "what": "The teleport tunnel state machine. globalThis.__isPortalSpaceActive is installed at :1594 and window.__portalSpace diagnostics are published at :1170-1199. Importable with import('./scene3d/portal_space.js'), the same module instance that client_events uses.",
+    "verified": true
+   },
+   {
+    "name": "window.__cam (camDebug free camera)",
+    "file": "scene3d/camera.js",
+    "line": 1484,
+    "signature": "park(); release(); parked; set(ex,ey,ez,tx,ty,tz); orbit(tx,ty,tz,dist,azDeg,elDeg); player(dist,azDeg,elDeg,dz); fov(v); info(); world()",
+    "what": "Installed only with ?camDebug=on (:463-473). park() suspends positionCamera so the active camera keeps a pose set by a script. Coordinates are AC world metres. set() uses cam.up=(0,1,0) plus lookAt (:1496-1497), which breaks down at +/-90 degree pitch.",
+    "verified": true
+   },
+   {
+    "name": "CameraSwitcher",
+    "file": "scene3d/camera.js",
+    "line": 408,
+    "signature": "switchMode(next) :891; tick(dt) :1179; activeCamera (prop); keys {w,a,s,d,q,e,shift}; _endFollowDrag(); getActive() :1137; dispose() :3294",
+    "what": "Owns follow/topDown/orbit, the per-mode DOM listeners (_listeners) and the global ones (_globalListeners / _funnelUnbinds). activeCamera is what the frame renders, what the audio listener follows and what the brackets project through.",
+    "verified": true
+   },
+   {
+    "name": "boot readiness globals",
+    "file": "index.html",
+    "line": 4265,
+    "signature": "window.__bootState; window.__bootStateHistory[]; window.__sceneReadyEverFired; window.__setBootState(state,msg); event 'holtburger:state'",
+    "what": "States run init, connecting, in-world, ready. 'ready' fires after the atmosphere pipeline and the first shader prewarm (scene3d/index.js:6289-6292). __sceneReadyEverFired stays latched even if 'in-world' overwrites the scalar.",
+    "verified": true
+   },
+   {
+    "name": "plugin event bus portalSpaceEntered/Exited",
+    "file": "app/client_events.js",
+    "line": 882,
+    "signature": "window.__pluginClient.events.on('portalSpaceEntered'|'portalSpaceExited', fn)",
+    "what": "Entered fires on kind=33 even with ?portalSpace=off. Exited fires only through the tunnel's onExit (:934-936). __pluginClient exists even under ?plugins=none.",
+    "verified": true
+   },
+   {
+    "name": "renderer / capture canvas",
+    "file": "scene3d/index.js",
+    "line": 1159,
+    "signature": "new THREE.WebGLRenderer({canvas, antialias, logarithmicDepthBuffer:true})",
+    "what": "liveScene3d.renderer.domElement is #canvas. It has no preserveDrawingBuffer, and alpha uses the three r184 default of false (node_modules/three/src/renderers/WebGLRenderer.js:77). Composer path at :2764-2797, direct path at :2799-2984.",
+    "verified": true
+   },
+   {
+    "name": "canvas.captureStream / MediaRecorder output size",
+    "file": "capture_canvas_video.cjs",
+    "line": 245,
+    "signature": "canvas.captureStream(fps) -> MediaStream",
+    "what": "Prior art: records the canvas drawing buffer, so resolution equals canvas.width x canvas.height. That this is browser behaviour, not repo code, is NOT verified here.",
+    "verified": false
+   }
+  ],
+  "seams": [
+   {
+    "what": "Boot-time agent-mode and no-hud classes, with their CSS (index.html:604-619 toggle; :456-525 agent rules; :536-539 no-hud rules). The canvas-size branch _isAgentMode is latched in preInit3D (scene3d/index.js:881-887) and passed to the resize handler (:1872-1873).",
+    "filmUse": "Launch film sessions with ?agent=1 (or ?autoLogin=1) at load; adding the class later does not resize the canvas. Use ?hud=none at load, or classList.add('no-hud') at runtime, to hide all hb-* HUD. Add a film-mode class with CSS such as `html.film-mode body #canvas{border:0!important;cursor:none!important;image-rendering:auto!important}` and `html.film-mode, html.film-mode *{cursor:none!important}`. Brackets need specificity above (2 ids, 1 class, 2 elements) or setDisplayOn(false).",
+    "file": "index.html",
+    "line": 484
+   },
+   {
+    "what": "Speech-bubble dispatch: the kind=55 handler calls window.liveScene3d.entityManager.showSpeechBubble, which is looked up on every event.",
+    "filmUse": "Film start: save the method, replace it with a no-op, and remove live bubbles (removeSpeechBubbleFromEntity, or set inst._speechBubble.visible=false over entityMap). Film end: restore the method. Optionally keep bubbles for dialogue shots.",
+    "file": "app/client_events.js",
+    "line": 1568
+   },
+   {
+    "what": "Selection indicator: SelectionBracketLayer.setDisplayOn and EntityManager.setSelectedTarget.",
+    "filmUse": "setSelectedTarget(0) plus selectionBracketLayer?.setDisplayOn(false) during film; reverse afterwards. Brackets also auto-appear when auto-targeting in melee/missile mode (index.html:4679-4689).",
+    "file": "scene3d/selection_brackets.js",
+    "line": 898
+   },
+   {
+    "what": "Input funnel singleton window.__inputFunnel: one gate, poison/unpoison, releaseHeld.",
+    "filmUse": "Reversible keyboard lock: releaseHeld('film') then poison('gate'); undo with unpoison(). Covers movement, the camera C/PageUp/PageDown keys, hotbar, combat, spellbook and picking Esc.",
+    "file": "ui/input-funnel.js",
+    "line": 724
+   },
+   {
+    "what": "Window capture phase is the earliest dispatch point for any listener registered after page boot. The funnel listens at document capture; the camera, picking, OrbitControls and hover tooltip listen on the canvas or document.",
+    "filmUse": "Register window capture blockers that call stopImmediatePropagation and preventDefault for key*, pointer*, mouse*, click, dblclick, auxclick, contextmenu, wheel (passive:false), touch*, dragstart and drop. Also call cameraSwitcher._endFollowDrag?.() and zero cameraSwitcher.keys. Remove the blockers on exit. A DOM shield div does not work because agent-mode and no-hud CSS hide it.",
+    "file": "scene3d/camera.js",
+    "line": 1067
+   },
+   {
+    "what": "Render resolution controls: window.__setRenderScale, window.__renderScaleState, window.__adaptiveRenderScale, the ?renderScale and ?adaptiveRes URL pins, and the debounced resize handler.",
+    "filmUse": "Before recording: set the CDP viewport and DSF, call __setRenderScale(n) to re-read DPR, assert __renderScaleState().drawingBuffer equals the target and source is 'url', and call __adaptiveRenderScale?.stop() if it exists.",
+    "file": "scene3d/index.js",
+    "line": 1268
+   },
+   {
+    "what": "cameraSwitcher.activeCamera is the single camera read by the render (scene3d/index.js:2722), the audio listener (:2552), the bracket projection (loop.js:3451) and the portal FOV fade (portal_space.js:1132).",
+    "filmUse": "Drive the film camera through activeCamera, or through __cam.park plus writing the persp camera's position and quaternion directly. Render, spatial audio and overlays then stay consistent. A camera kept outside activeCamera would leave the audio listener on the player camera.",
+    "file": "scene3d/index.js",
+    "line": 2722
+   },
+   {
+    "what": "Per-frame render exits all call recordRenderDiag(renderer, scene): composer at :2784, direct path at :2966, portal at :2739. There is no public post-render hook.",
+    "filmUse": "Add a film hook (for example window.__filmOnFrame?.()) next to recordRenderDiag so it calls videoTrack.requestFrame() on canvas.captureStream(0), giving exactly one captured frame per rendered frame. Or wrap liveScene3d.atmospherePipeline.render (assigned at :5926) without a source edit.",
+    "file": "scene3d/index.js",
+    "line": 572
+   },
+   {
+    "what": "Portal-space controls. Diagnostics: window.__portalSpace, globalThis.__isPortalSpaceActive. Bus events portalSpaceEntered/Exited. Exports endPortalSpace, destinationCellsReady, destinationBuildInFlight. The ?portalSpace, ?portalSound and ?portalDrone URL params are re-read per event or per start.",
+    "filmUse": "Option A: keep the tunnel on and MediaRecorder.pause() while __isPortalSpaceActive() is true; resume about 1.5 s after it turns false, which clears the exit whoosh, plus a settle on frame time. Option B: history.replaceState to add portalSpace=off, then gate on kind=66 plus destinationCellsReady && !destinationBuildInFlight && !__interiorBuildPending plus N stable frames.",
+    "file": "scene3d/portal_space.js",
+    "line": 1170
+   },
+   {
+    "what": "Audio graph tap through the private AudioManager fields _ctx and _master, plus setPlayOnlyWhenActive.",
+    "filmUse": "Sequence: am.setPlayOnlyWhenActive(false); am.notifyUserGesture(); await am.resume(); create dest with am._ctx.createMediaStreamDestination(); am._master.connect(dest). On the 1070 also am._master.disconnect(am._ctx.destination). Record new MediaStream([canvasTrack, ...dest.stream.getAudioTracks()]).",
+    "file": "scene3d/audio/audio_manager.js",
+    "line": 387
+   },
+   {
+    "what": "Local player rig visibility: setLocalPlayerCameraOpacity(guid, o), setVisibility(guid, v), and window.getLocalPlayerGuid.",
+    "filmUse": "Hide the camera-operator avatar (and its held items) during b-roll shots; restore to 1 or true afterwards. Prefer the opacity path, which is client-only. Confirm separately whether the faded rig still casts a shadow.",
+    "file": "scene3d/entities.js",
+    "line": 18991
+   },
+   {
+    "what": "Scene readiness: __sceneReadyEverFired / __bootState==='ready' (index.html:4275), liveScene3d.atmospherePipeline non-null (scene3d/index.js:5926), liveScene3d.cloudOverlay (:5700, only with ?clouds=on).",
+    "filmUse": "Wait for all of these before the first take. Until the pipeline exists, frames take the direct path and look different (no aerial perspective, bloom or tone curve).",
+    "file": "scene3d/index.js",
+    "line": 6289
+   },
+   {
+    "what": "?camDebug=on free-camera rig, window.__cam.",
+    "filmUse": "A ready-made way to take over the camera (park, set, orbit, fov). Write quaternions directly rather than calling set() to avoid the lookAt singularity at straight-down tilts.",
+    "file": "scene3d/camera.js",
+    "line": 1457
+   }
+  ],
+  "hazards": [
+   {
+    "what": "?agent=1 is not clean: the kill rule allowlists every id^='hb-' body child plus .hb-bar/.hb-pill/.hb-panel. All gameplay HUDs, toasts, #hb-portal-space-notice, #hb-jump-charge and #hb-thought-overlay therefore stay visible, and #selection-brackets-3d is forced visible.",
+    "file": "index.html",
+    "line": 484,
+    "mitigation": "Use ?agent=1&hud=none (optionally &plugins=none) at load, or classList.add('no-hud') at runtime, plus selectionBracketLayer.setDisplayOn(false)."
+   },
+   {
+    "what": "Speech/emote bubbles are in-canvas THREE.Sprites with no URL flag (?speechBubbles was removed). Neither hud=none nor agent-mode hides them.",
+    "file": "scene3d/speech_bubble.js",
+    "line": 171,
+    "mitigation": "Replace entityManager.showSpeechBubble with a no-op during film and purge live bubbles."
+   },
+   {
+    "what": "The canvas keeps `border:1px solid #ccc; image-rendering:pixelated; cursor:grab` from `#stage canvas` in agent-mode, because the agent #canvas rule (:497-501) never resets border. Expect a 1px line on the top and left edges of compositor screenshots (reasoned from the CSS, not observed). Supersampled buffers are downscaled nearest-neighbour.",
+    "file": "index.html",
+    "line": 160,
+    "mitigation": "Film CSS: border:0, image-rendering:auto and cursor:none with !important on #canvas. Prefer canvas.captureStream, which records the raw buffer."
+   },
+   {
+    "what": "The canvas-size mode (_isAgentMode) is latched once in preInit3D. Non-agent pages cap the canvas at 1920x1080 CSS minus 32/320 px of page chrome; agent pages cap it at 4096x2160.",
+    "file": "scene3d/index.js",
+    "line": 881,
+    "mitigation": "Load the page with ?agent=1 or ?autoLogin=1; a runtime class toggle will not fix sizing."
+   },
+   {
+    "what": "Without an explicit ?renderScale, the smart default caps the initial frame near 2.6 Mpx (a 4K viewport starts at about 0.56). The adaptive controller can then drop to 0.35 in the middle of a recording, changing resolution between frames.",
+    "file": "scene3d/adaptive_render_scale.js",
+    "line": 206,
+    "mitigation": "Always pass ?renderScale=1 (or 2), or ?adaptiveRes=off. Verify with __renderScaleState().source==='url' and the drawingBuffer size."
+   },
+   {
+    "what": "The resize handler never re-applies pixelRatio, so a CDP DPR or DSF change after boot leaves a stale pixel ratio.",
+    "file": "scene3d/index.js",
+    "line": 1869,
+    "mitigation": "Call window.__setRenderScale(n) after any viewport or DSF change, then re-check __renderScaleState()."
+   },
+   {
+    "what": "Every teleport, including admin @teleloc/@tele, plays the portal tunnel (the world is not drawn). It lasts arrival plus load plus about 4-7 s: CONTINUE 2-5 s, 1 s fade-out, 1 s black fade-in. Enter, drone and exit sounds play, and the loop is paced to 30 fps. Agent-mode skips only the LOGIN tunnel.",
+    "file": "scene3d/portal_space.js",
+    "line": 113,
+    "mitigation": "Pause the recorder while __isPortalSpaceActive() is true and resume after a settle, or set ?portalSpace=off and gate on the readiness checks."
+   },
+   {
+    "what": "With ?portalSpace=off the camera jumps instantly, terrain/EnvCells/entities pop in on screen, and program warm-up (which only runs while the tunnel owns the frame) can cause hitches in the first frames.",
+    "file": "app/client_events.js",
+    "line": 912,
+    "mitigation": "Do not record from the teleport command until destinationCellsReady && !destinationBuildInFlight && !__interiorBuildPending hold, plus about 1-2 s of stable frame times."
+   },
+   {
+    "what": "After a frame gap over 0.5 s, the sim freezes for 10 frames (dt=0). Shader-link stalls therefore produce visible micro-freezes in footage.",
+    "file": "scene3d/index.js",
+    "line": 2501,
+    "mitigation": "Pre-warm by holding the camera on the shot for a few seconds before recording, and discard takes whose frame-time log shows gaps."
+   },
+   {
+    "what": "AudioContext does not exist until notifyUserGesture(); play() is a no-op before it. The default 'play only when active' mutes _master and refuses new sounds whenever the tab is hidden or unfocused, which is likely in headless or off-screen Chrome.",
+    "file": "scene3d/audio/audio_manager.js",
+    "line": 194,
+    "mitigation": "Use ?audioWhenInactive=on or setPlayOnlyWhenActive(false), call notifyUserGesture() then resume(), and launch Chrome with --autoplay-policy=no-user-gesture-required."
+   },
+   {
+    "what": "On the 1070 a person uses the machine, and no sound may reach them. A default graph plays into ctx.destination, even from a headless or off-screen tab.",
+    "file": "scene3d/audio/audio_manager.js",
+    "line": 398,
+    "mitigation": "Call am._master.disconnect(am._ctx.destination) and record only through a MediaStreamDestination. Also launch Chrome with --mute-audio after checking that capture still receives samples."
+   },
+   {
+    "what": "?wireframe=1 (without ?diag=1) never constructs AudioManager and skips the atmosphere, clouds, sky and CSM.",
+    "file": "scene3d/index.js",
+    "line": 948,
+    "mitigation": "Never use wireframe for film; the laptop's SwiftShader cannot produce film output, so real-GPU takes run on the 1070."
+   },
+   {
+    "what": "The audio listener follows the active camera, but ambient sound gathering is centred on the player. A drone shot far from the avatar hears the player's ambience, attenuated and panned from far away.",
+    "file": "scene3d/audio/ambient_runtime.js",
+    "line": 166,
+    "mitigation": "Either keep the avatar near the shot (teleport it), or record game audio separately or replace it with the music track."
+   },
+   {
+    "what": "Persisted localStorage prefs change the look and sound on a reused Chrome profile: holtburger_graphics_v1 (quality preset and flags), holtburger_camera_v1 (stiffness, FOV, distance, autofollow), hb.options.audio.v1 (gains, play-only-when-active).",
+    "file": "scene3d/quality.js",
+    "line": 924,
+    "mitigation": "Use a dedicated --user-data-dir for film and pass explicit URL flags (?quality=ultra etc.)."
+   },
+   {
+    "what": "The GTX 1070 is not matched by GPU_HIGH_RE, so the auto preset resolves to 'mid'.",
+    "file": "scene3d/quality.js",
+    "line": 826,
+    "mitigation": "Pass ?quality=high or ?quality=ultra explicitly."
+   },
+   {
+    "what": "Mouse input is outside the keyboard funnel: right-drag mouselook, the wheel, OrbitControls, picking clicks (a double-click can Use a portal or door) and the hover tooltip. F-key panel hotkeys are also outside it.",
+    "file": "scene3d/picking.js",
+    "line": 1451,
+    "mitigation": "Install window capture-phase blockers for all pointer, mouse, wheel and key events in addition to poison('gate')."
+   },
+   {
+    "what": "Follow-mode pitch is clamped to [-0.5, 1.4] rad, and __cam.set uses up=(0,1,0) plus lookAt, which is degenerate at +/-90 degree pitch. A straight-down tilt flips or jitters.",
+    "file": "scene3d/camera.js",
+    "line": 1496,
+    "mitigation": "Film camera: build orientation from quaternions (slerp or swing-twist) and write camera.quaternion directly; never lookAt at the poles."
+   },
+   {
+    "what": "The disconnect banner id hbDisconnectBanner has no hyphen, so agent-mode hides it and a dead session looks normal in footage.",
+    "file": "app/dom_utils.js",
+    "line": 24,
+    "mitigation": "Watch __bootState / kind=4 DISCONNECTED in the film controller and abort the take."
+   },
+   {
+    "what": "The old capture script found that headless Chrome on Windows gave a blank software GL context, an off-screen canvas gave empty captureStream frames, and its setInterval renderer.render() fallback bypassed the composer (wrong look).",
+    "file": "capture_canvas_video.cjs",
+    "line": 57,
+    "mitigation": "Use the runbook's 1070 off-screen CDP Chrome with a real GPU, keep agent-mode so the canvas fills the viewport, add the anti-throttle flags, and never call renderer.render directly."
+   },
+   {
+    "what": "A 2 m orange MeshStandard 'hello-cube' sits permanently at AC world (0,0,5) under worldRoot.",
+    "file": "scene3d/index.js",
+    "line": 1603,
+    "mitigation": "Set liveScene3d.helloCube.visible=false in film mode; it only matters near landblock 0x0000."
+   },
+   {
+    "what": "__renderOnce returns before the frame completes under the default-on syncPhysicsTick, and dt is wall-clock. Offline fixed-timestep rendering is not supported, and the server-driven world keeps moving in real time.",
+    "file": "scene3d/index.js",
+    "line": 3002,
+    "mitigation": "Capture in real time at a sustainable resolution and quality; use renderOnDemand only for stills."
+   },
+   {
+    "what": "The player proxy (:7080/tunnel) can serve the bundled shell (index-bundled.html plus shell/app-<hash>.js). serve.py (:8765) always serves live sources.",
+    "file": "index-bundled.html",
+    "line": 1022,
+    "mitigation": "Drive film sessions through serve.py with ?nosw=1, or check the x-hb-shell response header."
+   }
+  ],
+  "recommendations": [
+   "Base film URL: ?autoLogin=1&account=..&password=..&autoSpawn=first&agent=1&hud=none&plugins=none&selectionIndicator=none&quality=ultra&renderScale=1&audioWhenInactive=on&nosw=1&camDebug=on. Nameplates are already off by default; nameplates=on and nameplateDom=on must be absent. Do not pass bot or thoughtOverlay. Keep portalSpace on and cut around teleports; replaceState can toggle it at runtime.",
+   "Chrome launch flags, from capture_canvas_video.cjs prior art: --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-features=CalculateNativeWinOcclusion --autoplay-policy=no-user-gesture-required, plus --mute-audio and a dedicated --user-data-dir on the 1070.",
+   "Exact resolution: CDP Emulation.setDeviceMetricsOverride gives the viewport. 1080p is 1920x1080, DSF 1, renderScale=1. 4K is 1920x1080, DSF 2, renderScale=1 (the buffer then matches compositor screenshots), or renderScale=2 at DSF 1 for captureStream only. After the override call window.__setRenderScale(n), then assert __renderScaleState().drawingBuffer and source==='url'.",
+   "Film-mode enter, in order:\n1. releaseHeld('film'), then __inputFunnel.poison('gate').\n2. Install the window capture-phase input blockers.\n3. cameraSwitcher._endFollowDrag?.(), and clear autorun (window.__autoRunOn) and the camera keys.\n4. Add the no-hud and film-mode classes (border, cursor and image-rendering fixes).\n5. entityManager.setSelectedTarget(0) and selectionBracketLayer?.setDisplayOn(false).\n6. Patch showSpeechBubble and purge existing bubbles.\n7. Optionally setLocalPlayerCameraOpacity(localGuid, 0) and helloCube.visible=false.\nExit reverses every step. Keep the saved originals in a closure.",
+   "Capture: renderer.domElement.captureStream(0) with videoTrack.requestFrame() called from a new post-render hook beside recordRenderDiag at scene3d/index.js:2739/2784/2966, which gives one captured frame per rendered frame. Fallback: captureStream(fps). Mux the AudioManager MediaStreamDestination track into the same MediaRecorder. Stream chunks out via CDP rather than one huge blob download.",
+   "Gate the first take on __sceneReadyEverFired, liveScene3d.atmospherePipeline, an idle streaming backlog and a few seconds of stable frame times. Gate each take after a teleport on __portalSpace.state===0, plus a settle of at least 1.5 s so the exit whoosh is not recorded, plus stable frame times. Abort on __bootState==='error' or kind=4.",
+   "Implement a new film-mode module as a default-off ?filmMode=on opt-in exposing window.__film {enter(), exit(), setResolution(), shield on/off, audioTap()}. Keep all hiding reversible and runtime-only, so normal play is byte-identical when the flag is off. Under the repo's default-on-no-eyetest-gate rule it becomes a candidate to flip on once validated.",
+   "For 90-degree tilts and corridor turns, the film camera must own orientation as a quaternion (slerp or squad between keyframes) and write activeCamera.quaternion directly. Never route through camera.js lookAt with up=(0,1,0), and never route through follow mode (its pitch is clamped to 1.4 rad)."
+  ],
+  "openQuestions": [
+   "Does the 1070's off-screen or headless Chrome (CDP :9333) get a real-GPU WebGL context today? capture_canvas_video.cjs recorded a blank software context in headless on Windows. The answer decides headless-new vs headed-off-screen for film.",
+   "Does Chrome --mute-audio also silence MediaStreamAudioDestinationNode capture, or only device output? Disconnecting _master from ctx.destination is the code-level guarantee either way.",
+   "Does document.hasFocus() return true in the chosen headless or off-screen mode? If not, does CDP Emulation.setFocusEmulationEnabled(true) keep AudioManager active? (?audioWhenInactive=on sidesteps this.)",
+   "Timing of requestFrame() on a captureStream(0) track relative to the cloud overlay and portal fade quad, which draw AFTER composer.render (scene3d/index.js:2779-2783): does the captured frame always include the final overlay draws?",
+   "Real-time headroom on the GTX 1070 at 4K ultra (composer, clouds, CSM) plus MediaRecorder encoding: can it hold 30 or 60 fps, or should 4K be produced by upscaling 1440p/1080p captures?",
+   "Does postprocessing's atmospherePipeline.setSize(cssW, cssH) allocate composer buffers at CSS size times renderer.getPixelRatio()? Not read; affects 4K sharpness under renderScale=2.",
+   "Does setLocalPlayerCameraOpacity(guid, 0) also remove the avatar's shadow (CSM caster) and attached particle emitters? Should the film module hide the rig through setVisibility instead (risk of a server SetState override)?",
+   "Should film footage ever include speech bubbles for in-world dialogue scenes? If so, it needs a styled, filmable variant instead of the gameplay sprite."
+  ],
+  "dataSources": [
+   {
+    "name": "URL flag table",
+    "location": "docs/url-flags.md",
+    "format": "markdown table (2057 lines)",
+    "notes": "Rows for agent, hud, plugins, renderScale, adaptiveRes, portalSpace, loginPortalSpace, nameplates, nameplateDom, selectionIndicator, audioWhenInactive, audioRetailPan, portalSound, portalDrone, fullscreen, camDebug, thoughtOverlay, streamHud. Line anchors are stale: the agent row says index.html:556, but the code is at 604-619. Trust the code readers."
+   },
+   {
+    "name": "ClientEventKind numbers",
+    "location": "scene3d/client_event_kinds.js",
+    "format": "JS const object",
+    "notes": "DISCONNECTED=4, ENTERED_WORLD=7, ENTITY_VISIBILITY_CHANGED=17, PORTAL_SPACE_ENTERED=33, OVERHEAD_SPEECH=55, TELEPORT_ARRIVED=66 (lines 9/12/20/36/53/60)."
+   },
+   {
+    "name": "Persisted prefs",
+    "location": "localStorage keys holtburger_graphics_v1 (scene3d/quality.js:927), holtburger_camera_v1 (scene3d/camera.js:855, scene3d/index.js:848), hb.options.audio.v1 (scene3d/audio/audio_manager.js:74)",
+    "format": "JSON strings",
+    "notes": "Override the defaults on a reused profile; clear them or use a fresh user-data-dir for film."
+   },
+   {
+    "name": "Runtime diagnostics",
+    "location": "window.__portalSpace, window.__renderScaleState(), window.__inputFunnelStats / __inputFunnel.snapshot(), window.__bootStateHistory, window.__diag.selectionBrackets",
+    "format": "live JS objects",
+    "notes": "Readiness and verification surfaces for the CDP-driven film controller."
+   },
+   {
+    "name": "Prior canvas-recording harness",
+    "location": "capture_canvas_video.cjs",
+    "format": "Playwright Node script",
+    "notes": "MediaRecorder plus canvas.captureStream recipe and Chrome anti-throttle flags. Stale page URL and flags (?renderer=3d), and a composer-bypassing forced-render hack to avoid."
+   }
+  ]
+ }
+]
