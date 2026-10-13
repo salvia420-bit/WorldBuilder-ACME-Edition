@@ -169,15 +169,19 @@ export function applyOperatorStopToCfg(cfg, storage, scope) {
 // Loops the HUD may toggle. Each resolves on the bot surface first (bot.js
 // puts every loop on the bot object) and on the kernel second (the shape a
 // bare kernel-only harness builds). `enabled` is a plain property: combat /
-// loot / unwedge already gate on it; buff / vitals need kernel.js to honor it
-// (see the module report — until then their toggle reads back but does not
-// stop the loop).
+// loot / unwedge gate on it themselves and kernel.js honours it for buff /
+// vitals (its tick skips a disabled loop). nav / meta are the VTank layer's
+// ActiveNav and MetaEngine (bot.vt, PLAN §5): their `enabled` getter/setter
+// goes through VtOptions (EnableNavigation / EnableMeta); null without the
+// layer, exactly like an absent loop.
 const SUBSYSTEM_LOOKUP = {
   combat: (b) => b?.combat ?? b?.kernel?.combat ?? null,
   loot: (b) => b?.loot ?? b?.kernel?.loot ?? null,
   buff: (b) => b?.buff ?? b?.kernel?.buff ?? null,
   vitals: (b) => b?.vitals ?? b?.kernel?.vitals ?? null,
   unwedge: (b) => b?.unwedge ?? b?.kernel?.unwedge ?? null,
+  nav: (b) => b?.vt?.nav ?? null,
+  meta: (b) => b?.vt?.meta ?? null,
 };
 export const OPERATOR_SUBSYSTEMS = Object.freeze(Object.keys(SUBSYSTEM_LOOKUP));
 
@@ -494,8 +498,15 @@ export class OperatorControl {
   }
 
   /** Cancel any travel in flight (router walk / goto / route / unwedge
-   *  retreat) WITHOUT stopping the loops — the HUD's "stop moving". */
+   *  retreat) WITHOUT stopping the loops — the HUD's "stop moving". A VTank
+   *  route is PAUSED too (critic B1, V-21): otherwise its slot re-issues the
+   *  leg on the next tick. It stays paused until Nav is re-enabled / `nav
+   *  start`. stop() does not pause it — RESUME continues the route. */
   cancelTravel() {
+    try {
+      const nav = this.bot?.vt?.nav;
+      if (nav && typeof nav.pause === "function" && nav.hasRoute?.() !== false) nav.pause("operator cancel");
+    } catch { /* the layer is optional */ }
     this._haltMovement("operator cancel");
     this._notify();
     return this.state();

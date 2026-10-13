@@ -254,6 +254,63 @@ export class RynthCombatLoop {
     this._lastAttempt = null; // { target, at } — last cast resolved as an attempt
     this._attackers = new Map(); // creature name -> last time it hit / swung at us
     this.blacklisted = 0; // targets parked for no contact (status)
+    // VTank layer hooks (PLAN §3.14) — all inert at their defaults, so the
+    // scan/war path below is byte-identical without the layer:
+    //   monsterRangeM   the acquire perimeter (VTank AttackDistance); 40 m is
+    //                   the old literal.
+    //   acquireRangeFn  (m) => perimeter, set by the VT layer whether or not
+    //                   a planner is attached (Approach Range while navigating,
+    //                   critic G9); null = monsterRangeM.
+    //   vt              the attack planner (rynth/vt/combat/attack_planner.js)
+    //                   while the Monsters/Items tabs are in use; null = the
+    //                   legacy war pick + CastSpell, exactly as before.
+    this.monsterRangeM = opts.monsterRangeM ?? 40;
+    this.acquireRangeFn = null;
+    this.vt = null;
+    this._castKind = null; // planner cast kind in flight ("debuff"|"ring"|"dot"|"attack"), null = legacy
+  }
+
+  /** Force the next _scanTargets() to rescan this snapshot (a planner
+   *  verdict, the perimeter or the attach state changed). */
+  invalidateScan() {
+    this._scanEpoch++;
+  }
+
+  /** A creature hit or swung at us within the attacker grace (the same
+   *  memory that keeps the no-contact blacklist off a lock that fights back).
+   *  Ensures the event tap the answer depends on — on the kernel path it is
+   *  otherwise installed only by the first combat tick. */
+  underAttack(now = Date.now()) {
+    this._ensureEventTap();
+    for (const at of this._attackers.values()) if (now - at <= this.attackerGraceMs) return true;
+    return false;
+  }
+
+  /** this.vt[name](...args); a throw reads as undefined (= the legacy
+   *  behaviour for every hook) so the planner can never stall the loop. */
+  _vtCall(name, ...args) {
+    const vt = this.vt;
+    const f = vt && vt[name];
+    if (typeof f !== "function") return undefined;
+    try {
+      return f.apply(vt, args);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  /** The acquire perimeter for this scan: acquireRangeFn(monsterRangeM),
+   *  falling back to monsterRangeM (then 40) on a bad value or a throw. */
+  _perimeterM() {
+    const m = Number.isFinite(this.monsterRangeM) ? this.monsterRangeM : 40;
+    const f = this.acquireRangeFn;
+    if (typeof f !== "function") return m;
+    try {
+      const r = f(m);
+      return typeof r === "number" && Number.isFinite(r) ? r : m;
+    } catch (_) {
+      return m;
+    }
   }
 
   /** Portal space (tunnel through world fade-in) — mirror of
@@ -825,6 +882,11 @@ export class RynthCombatLoop {
     if (!me) return [];
     const now = Date.now();
     const out = [];
+    // Acquire perimeter (VTank AttackDistance / Approach Range; 40 m default)
+    // and the planner's per-candidate verdict (P = -1 ignore, debuff-only
+    // exclusion, P×1000 lexicographic bias) — both inert without the layer.
+    const perim = this._perimeterM();
+    const vt = this.vt;
     for (const g of h.NearbyGuids()) {
       // T2 exclusion classes, in order:
       if (h.ObjectIsPlayer(g) || (g >= PLAYER_GUID_MIN && g <= PLAYER_GUID_MAX)) continue;
@@ -851,11 +913,22 @@ export class RynthCombatLoop {
       const bothOutdoor = (pos.objCellId & 0xffff) < 0x100 && (me.objCellId & 0xffff) < 0x100;
       if (!sameLb && !bothOutdoor) continue;
       const d = sameLb ? Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z) : globalDist(me, pos);
-      if (d > 40) continue;
+      if (d > perim) continue;
+      let v = null;
+      if (vt) {
+        try {
+          v = vt.scanVerdict(g, d);
+        } catch (_) {
+          v = null;
+        }
+        if (v && v.ignore) continue;
+      }
       // Natural "fastest-to-attack" scoring: nearer = higher, plus T8's
       // opt-in monster-priority term: (priority-1)*5 when the name
       // substring-matches a configured rule.
-      out.push({ guid: g, score: 100 - d + this._priorityTerm(g), dist: d });
+      let score = 100 - d + this._priorityTerm(g);
+      if (v && typeof v.scoreBias === "number" && Number.isFinite(v.scoreBias)) score += v.scoreBias;
+      out.push({ guid: g, score, dist: d });
     }
     out.sort((a, b) => b.score - a.score);
     Object.freeze(out); // shared by every caller of this snapshot's memo
@@ -977,12 +1050,12 @@ export class RynthCombatLoop {
         QW: hasPose ? Math.cos(me.heading / 2) : 1.0,
         QZ: hasPose ? -Math.sin(me.heading / 2) : 0.0,
       },
-      // MonsterRange 40 matches the JS hardcoded perimeter (:187) — feeding
-      // C#'s default 50 would make every 40-50m mob a guaranteed filter
-      // divergence and drown the real signal (the T2 range delta is already
-      // documented in the spike README).
+      // MonsterRange = the JS perimeter (monsterRangeM, 40 m by default) —
+      // feeding C#'s default 50 would make every 40-50m mob a guaranteed
+      // filter divergence and drown the real signal (the T2 range delta is
+      // already documented in the spike README).
       Config: {
-        MonsterRange: 40.0,
+        MonsterRange: this.monsterRangeM,
         MonsterDisengageRange: 0.0,
         MonsterRules: Object.entries(this.priorities).map(([k, v]) => ({ Name: k, Priority: v })),
       },
@@ -1126,11 +1199,16 @@ export class RynthCombatLoop {
    *  no-contact watch of the lock it was aimed at; a refusal never does. */
   _resolveCast(attempt = false) {
     this.awaitingCast = false;
+    // A VT debuff or ring never damages its target, so it is no evidence of
+    // "no contact" (three debuffs must not blacklist the lock); war bolts,
+    // DoTs and the legacy pick (kind null) count as before.
+    const kind = this._castKind;
+    this._castKind = null;
     if (attempt) {
       const at = Date.now();
       this._lastAttempt = { target: this._castTarget, at };
       const w = this._watch;
-      if (w && w.target === this._castTarget) w.misses.push(at);
+      if (w && w.target === this._castTarget && kind !== "debuff" && kind !== "ring") w.misses.push(at);
     }
     const h = this.host;
     if (typeof h.releaseCast === "function") h.releaseCast("combat");
@@ -1324,6 +1402,10 @@ export class RynthCombatLoop {
     // mode that WON'T establish at all. (The wasm toggle predicts its own
     // un-echoed request for 2 s — combat_toggle.rs — so a re-toggle at the
     // 3 s cadence reads the confirmed mode and can't flip itself back.)
+    // VT planner loadout (per-monster weapon / debuff wand): hold the lock
+    // while a wield is in flight — the mode toggle guard below is not
+    // charged for a stance the swap itself is changing.
+    if (this.vt && this._vtCall("ensureLoadout", target, now) === "busy") return;
     this.mode = h.GetCurrentCombatMode();
     // A mode change ended ACE's repeat loop on its own (Player_Melee.cs
     // Attack: CombatMode != Melee -> OnAttackDone) — e.g. vitals/buff
@@ -1372,6 +1454,13 @@ export class RynthCombatLoop {
 
   // Melee / missile: ONE request per engagement (header, 2026-10-12).
   _attackStep(target, dist, now) {
+    // VT Monsters tab "A" column off: never swing at it (the planner's scan
+    // verdict keeps it out of the next scan while it stays non-attacking).
+    if (this.vt && this._vtCall("attackAllowed", target) === false) {
+      this._dropLock("vt: attack off");
+      this.invalidateScan();
+      return;
+    }
     const h = this.host;
     const missile = this.mode === 4;
     const g = this._engage && this._engage.target === target ? this._engage : null;
@@ -1452,7 +1541,27 @@ export class RynthCombatLoop {
     // UseDone) is the gate that sees vitals'/buff's/loot's in-flight actions.
     if (typeof h.GetBusyState === "function" && h.GetBusyState() !== 0) return;
     if (this._castHoldUntil > now) return; // mana-refusal backoff
-    const spell = this._pickWarSpell();
+    // VT attack planner (Monsters tab: debuffs, DoTs, rings, per-monster war
+    // spell). null plan = the legacy war pick below; {done} = a debuff-only
+    // monster has nothing left to cast — drop it (its scan verdict now
+    // excludes it, so the memoized scan of this snapshot is refreshed too).
+    const vt = this.vt;
+    let plan = null;
+    if (vt) {
+      try {
+        plan = vt.nextCast(target, { mode: 8, dist, now });
+      } catch (_) {
+        plan = null;
+      }
+      if (plan && plan.done) {
+        this._dropLock("vt: nothing left to cast");
+        this.invalidateScan();
+        return;
+      }
+      if (plan && plan.skip) return;
+      if (plan && !plan.spellId) plan = null;
+    }
+    const spell = plan ? plan.spellId : this._pickWarSpell();
     if (!spell) {
       // Was `this.stop()` — inert on the kernel path (the kernel ticks the
       // loop directly), so it logged this every tick and held Combat
@@ -1476,7 +1585,33 @@ export class RynthCombatLoop {
     // the token (contract 0.1).
     if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("combat")) return;
     this._castTarget = target; // the no-contact watch counts this cast when it resolves
-    h.CastSpell(target, spell);
+    if (!vt) {
+      h.CastSpell(target, spell);
+    } else {
+      // The layer casts only through the safe members (PLAN C6/V-3):
+      // targeted at the lock, or a gated untargeted ring.
+      this._castKind = plan ? plan.kind || "attack" : "attack";
+      let sent = false;
+      try {
+        if (plan && plan.untargeted) {
+          sent = typeof h.CastUntargetedSafe === "function" && h.CastUntargetedSafe(spell, { allowRing: true }) !== false;
+        } else {
+          sent = typeof h.CastSpellAt === "function" && h.CastSpellAt(target, spell) !== false;
+        }
+      } catch (_) {
+        sent = false;
+      }
+      try {
+        vt.onCastIssued(target, plan, sent);
+      } catch (_) {
+        /* the planner's bookkeeping never blocks the loop */
+      }
+      if (!sent) {
+        this._castKind = null;
+        if (typeof h.releaseCast === "function") h.releaseCast("combat");
+        return;
+      }
+    }
     this._markCastIssued();
   }
 }

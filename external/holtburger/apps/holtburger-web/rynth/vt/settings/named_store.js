@@ -199,6 +199,11 @@ export class NamedStore {
     this.now = typeof now === "function" ? now : Date.now;
     this.log = makeLogger(log, () => this.now(), "[vt:settings]");
     this._kv = createKv(storage, this.log);
+    // list() memo: key → { fp, entry } — a record is re-parsed only when its
+    // stored text changed (fingerprint = length + head + tail: every put()
+    // rewrites savedAt in the head), so a panel refreshing every 500 ms does
+    // not JSON.parse a whole meta library each time (review runtime-7).
+    this._listMemo = new Map();
   }
 
   _name(name) {
@@ -213,8 +218,11 @@ export class NamedStore {
   }
 
   _read(key) {
-    const raw = this._kv.get(key);
-    if (raw === null) return null;
+    return this._parse(key, this._kv.get(key));
+  }
+
+  _parse(key, raw) {
+    if (raw === null || raw === undefined) return null;
     try {
       const rec = JSON.parse(raw);
       if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, "value")) return { rec, bytes: raw.length };
@@ -228,12 +236,26 @@ export class NamedStore {
   /** → Array<{ name, savedAt, bytes }> sorted by name (case-insensitive). */
   list() {
     const out = [];
+    const seen = new Set();
     for (const key of this._kv.keys(this.prefix)) {
-      const r = this._read(key);
-      if (!r) continue;
-      const name = typeof r.rec.name === "string" && r.rec.name ? r.rec.name : key.slice(this.prefix.length);
-      out.push({ name, savedAt: Number(r.rec.savedAt) || 0, bytes: r.bytes });
+      seen.add(key);
+      const raw = this._kv.get(key);
+      if (raw === null || raw === undefined) continue;
+      const fp = `${raw.length}:${raw.slice(0, 256)}\u0000${raw.slice(-64)}`;
+      let m = this._listMemo.get(key);
+      if (!m || m.fp !== fp) {
+        const r = this._parse(key, raw);
+        let entry = null;
+        if (r) {
+          const name = typeof r.rec.name === "string" && r.rec.name ? r.rec.name : key.slice(this.prefix.length);
+          entry = { name, savedAt: Number(r.rec.savedAt) || 0, bytes: r.bytes };
+        }
+        m = { fp, entry };
+        this._listMemo.set(key, m);
+      }
+      if (m.entry) out.push({ ...m.entry });
     }
+    for (const k of [...this._listMemo.keys()]) if (!seen.has(k)) this._listMemo.delete(k);
     out.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.name.localeCompare(b.name));
     return out;
   }
@@ -246,9 +268,10 @@ export class NamedStore {
     return r ? r.rec.value : null;
   }
 
+  /** True when get(name) would return a record (an unreadable one is skipped, as in list()). */
   has(name) {
     const n = this._name(name);
-    return !!n && this._kv.get(this._key(n)) !== null;
+    return !!n && this._read(this._key(n)) !== null;
   }
 
   /** Overwrite. → { ok: true } | { ok: false, error } (nothing changes on failure). */

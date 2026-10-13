@@ -118,6 +118,15 @@ export class RynthLootLoop {
     // combat_loop's `enabled` hunt toggle. `!== false` so any truthy/absent
     // opts.enabled keeps the ON default.
     this.enabled = opts.enabled !== false;
+    // VTank layer hooks (PLAN §3.14; inert at their defaults):
+    //   corpseRangeM  how far a corpse may be to be looted (VTank
+    //                 CorpseApproachRange-Max, a live settings cell); 30 m is
+    //                 the old literal.
+    //   classify      (item, { host, now }) => "pickup" | "skip" | "pending" |
+    //                 null — a loaded VT loot profile (.utl). null (no profile,
+    //                 or the profile has no verdict) = today's Value(19) floor.
+    this.corpseRangeM = opts.corpseRangeM ?? 30;
+    this.classify = opts.classify ?? null;
     this._assessAt = new Map(); // item guid -> first-hold ts (appraisal gate)
     this.log = opts.log || ((m) => console.log(`[loot] ${m}`));
     this.state = "SCAN"; // SCAN | APPROACH | OPEN | LOOT | CONFIRM
@@ -256,6 +265,7 @@ export class RynthLootLoop {
     const me = h.TryGetPlayerPose();
     if (!me) return null;
     const now = Date.now();
+    const maxD = Number.isFinite(this.corpseRangeM) ? this.corpseRangeM : 30;
     let best = null;
     for (const g of h.NearbyGuids()) {
       const t = this.looted.get(g);
@@ -264,10 +274,23 @@ export class RynthLootLoop {
       const pos = h.TryGetObjectPosition(g);
       if (!pos) continue;
       const d = horizontalDistance(me, pos);
-      if (d == null || d > 30) continue;
+      if (d == null || d > maxD) continue;
       if (!best || d < best.d) best = { guid: g, d, pos };
     }
     return best;
+  }
+
+  /** The VT loot-profile verdict for one corpse item: "pickup" | "skip" |
+   *  "pending", or null (no verdict / a throw / anything else) = the Value
+   *  floor decides as before. */
+  _classifyItem(item, now) {
+    try {
+      const v = this.classify(item, { host: this.host, now });
+      return v === "pickup" || v === "skip" || v === "pending" ? v : null;
+    } catch (e) {
+      this.log(`loot profile threw on ${item.toString(16)}: ${(e && e.message) || e}`);
+      return null;
+    }
   }
 
   _hasInInventory(guid) {
@@ -477,6 +500,41 @@ export class RynthLootLoop {
         const me = h.GetPlayerId();
         while (this.items.length) {
           const item = this.items[0];
+          // VT loot profile verdict first (null = today's Value rule below).
+          if (this.classify) {
+            const v = this._classifyItem(item, now);
+            if (v === "pending") {
+              // Appraisal-gated rule: hold the item at the head like the
+              // Value(19) gate below — one RequestId, the same timeout — then
+              // skip it unjudged.
+              const heldSince = this._assessAt.get(item);
+              if (heldSince === undefined) {
+                this._assessAt.set(item, now);
+                h.RequestId?.(item);
+                return;
+              }
+              if (now - heldSince < APPRAISE_TIMEOUT_MS) return;
+              this.log(`appraisal timeout on ${item.toString(16)} — loot profile skips it`);
+              this.items.shift();
+              this._assessAt.delete(item);
+              continue;
+            }
+            if (v === "skip") {
+              this.items.shift();
+              this._assessAt.delete(item);
+              continue;
+            }
+            if (v === "pickup") {
+              this.items.shift();
+              this._assessAt.delete(item);
+              if (!this._pickup(item, me)) continue;
+              this._pickupTries.set(item, (this._pickupTries.get(item) || 0) + 1);
+              this.pendingItem = item;
+              this._pendingFailed = null;
+              this._setState("CONFIRM");
+              return;
+            }
+          }
           const raw = h.TryGetObjectIntProperty(item, 19); // Value
           // Appraisal gate (LootScoring finding #1): with a value floor set,
           // an item whose Value hasn't streamed yet is HELD at the head —

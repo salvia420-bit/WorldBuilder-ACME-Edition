@@ -294,7 +294,11 @@ function fakeActions() {
     calls,
     lootReady: false,
     findInventoryByName: (name, o) => inv.filter((r) => matches(r.name, name, o)).map((r) => ({ guid: r.guid, name: r.name, stack: r.stackSize, wcid: r.wcid, containerId: 0 })),
-    findNearestByName: (name, o) => land.filter((x) => matches(x.name, name, o)).sort((a, b) => a.dist - b.dist)[0] ?? null,
+    findNearestByName: (name, o = {}) =>
+      land
+        .filter((x) => matches(x.name, name, o))
+        .filter((x) => o.objectClass === undefined || o.objectClass === null || classes[x.guid] === o.objectClass)
+        .sort((a, b) => a.dist - b.dist)[0] ?? null,
     findAllByName: (name, o) => land.filter((x) => matches(x.name, name, o)),
     inventory: () => inv.slice(),
     landscape: () => land.slice(),
@@ -527,6 +531,29 @@ await check("jump disambiguation: /ub jumpsw 90 500 (UB), /ra jump 90 (= hold 90
   assert.equal(parseJumpArgs("jump", ["1", "2", "3"]).ok, false);
 });
 
+await check("/vt jump <n> reads the heading like /rs addnavjump <n> (G:220-221); the integer-is-hold quirk stays on /ra, /ub and the lettered verbs (review guide-6)", () => {
+  const W = world();
+  W.run("/vt jump 90");
+  assert.deepEqual(W.nav.calls.at(-1), ["requestJump", { headingDeg: 90, shift: false, ms: 0, direction: "none" }]);
+  W.run("/rs jump 180");
+  assert.deepEqual(W.nav.calls.at(-1)[1], { headingDeg: 180, shift: false, ms: 0, direction: "none" });
+  W.run("/rs jump 90 500");
+  assert.deepEqual(W.nav.calls.at(-1)[1], { headingDeg: 90, shift: false, ms: 500, direction: "none" }, "heading + charge");
+  W.run("/vt jump 137 true 648");
+  assert.deepEqual(W.nav.calls.at(-1)[1], { headingDeg: 137, shift: true, ms: 648, direction: "none" }, "the corpus form is unchanged");
+  assert.match(W.run("/vt jump 360").error, /heading/);
+  W.run("/rs addnavjump 90");
+  assert.equal(W.nav.calls.at(-1)[2].headingDeg, 90, "the sibling verb agrees");
+  W.run("/ra jump 90");
+  assert.deepEqual(W.nav.calls.at(-1)[1], { headingDeg: null, shift: false, ms: 90, direction: "none" }, "/ra keeps the C# quirk");
+  W.run("/ub jump 90");
+  assert.equal(W.nav.calls.at(-1)[1].ms, 90, "/ub keeps the quirk");
+  W.run("/rs jumpsw 90");
+  assert.deepEqual(W.nav.calls.at(-1)[1], { headingDeg: null, shift: true, ms: 90, direction: "forward" }, "lettered verbs keep the UB form");
+  assert.equal(parseJumpArgs("jump", ["90"], { prefix: "vt" }).headingDeg, 90);
+  assert.equal(parseJumpArgs("jump", ["90"]).ms, 90, "no prefix: the UB form (unchanged export)");
+});
+
 await check("G:221-222 /rs addnavjump [heading] [shift] [charge] [direction]", () => {
   const W = world();
   W.run("/rs addnavjump 90 true 500");
@@ -537,6 +564,16 @@ await check("G:221-222 /rs addnavjump [heading] [shift] [charge] [direction]", (
   assert.deepEqual(W.nav.calls.at(-1)[2], { holdShift: false, delayMs: 0 }, "heading omitted → ActiveNav uses the current heading");
   const r = W.run("/rs addnavjump 90 sideways");
   assert.match(r.error, /sideways/);
+});
+
+await check("R22: `/vt opt get RouteReversed` reads the route's reverse flag (read-only; a set is refused) (review guide-3)", () => {
+  const W = world();
+  assert.equal(lastLine(W.run("/vt opt get RouteReversed")), "[RynthSuite] RouteReversed = false (read-only)");
+  W.run("/rs reverseroute true");
+  assert.equal(lastLine(W.run("/rs opt get routereversed")), "[RynthSuite] RouteReversed = true (read-only)");
+  const r = W.run("/vt opt set RouteReversed false");
+  assert.match(r.error, /read-only/);
+  assert.equal(W.run("/rs reverseroutequery").lines[0].text, "true", "the refused set changed nothing");
 });
 
 await check("G:223-224 /rs reverseroute true|false|toggle + reverseroutequery", () => {
@@ -636,6 +673,11 @@ await check("opt get (VTank units) / list / remember / restore", () => {
   assert.equal(W.options.store.MeleeAttackPower, 0.6);
   assert.ok(W.session.ext.rsRemembered instanceof Map, "remembered values live in the page session (survive rebinds)");
   assert.match(W.run("/rs opt restore EnableMeta").error, /nothing remembered/);
+  // remember/restore echo VTank units like get/set (lbf), and restore writes the canonical value back
+  assert.equal(lastLine(W.run("/rs opt remember AttackDistance")), "[RynthSuite] remembered AttackDistance = 0.1666667");
+  W.run("/rs opt set AttackDistance 0.5");
+  assert.equal(lastLine(W.run("/rs opt restore AttackDistance")), "[RynthSuite] restored AttackDistance = 0.1666667");
+  assert.equal(W.options.store.MonsterRange, 40);
 });
 
 await check("setattackbar sets both attack powers", () => {
@@ -823,6 +865,67 @@ await check("/mt loot waits for the container (pump), /ra givea queues paced giv
   W.rs.pump(W.advance(50)); // < 150 ms gap → nothing
   W.rs.pump(W.advance(150));
   assert.equal(W.actions.calls.filter((c) => c[0] === "give").length - before, 2);
+  // a give that has to wait (portal space / busy item token → retry) stays queued; a hard error drops it
+  const R = world();
+  const answers = [{ ok: false, error: "give waits: in portal space", retry: true }, { ok: true }, { ok: false, error: "give was not sent" }];
+  const gives = [];
+  R.actions.give = (...a) => (gives.push(a), answers.shift() ?? { ok: true });
+  R.run("/ra giveap a to Bob");
+  R.rs.pump(R.advance(200));
+  R.rs.pump(R.advance(200));
+  assert.deepEqual(gives.map((g) => g[0]), [0x70000001, 0x70000001], "retried the same stack");
+  R.rs.pump(R.advance(200));
+  assert.ok(R.texts().some((t) => /give .*: give was not sent/.test(t)), "a hard failure is reported and dropped");
+  R.rs.pump(R.advance(200));
+  assert.equal(gives.length, 4);
+  assert.notEqual(gives[3][0], gives[2][0], "the failed stack was dropped, the queue moved on");
+});
+
+await check("/ra givea|giveap|giveaxp|giveapp|gap|givear stop cancels the queued gives (C# CancelGiveQueue, review safety-1)", () => {
+  const W = world();
+  const gives = () => W.actions.calls.filter((c) => c[0] === "give").length;
+  const r0 = W.run("/ra giveap a to Bob"); // 5 matching stacks
+  assert.equal(r0.error, undefined);
+  W.rs.pump(W.advance(200));
+  assert.equal(gives(), 1, "one paced give went out");
+  const r = W.run("/ra giveap stop");
+  assert.equal(r.error, undefined, "stop is a sub-command, not a usage error");
+  assert.match(lastLine(r), /Give queue cancelled \(4 item\(s\) remaining\)/);
+  for (let i = 0; i < 40; i++) W.rs.pump(W.advance(150));
+  assert.equal(gives(), 1, "nothing more is given after stop");
+  for (const verb of ["givea", "giveap", "giveaxp", "giveapp", "gap", "givear"]) {
+    const e = W.run(`/ra ${verb} STOP`);
+    assert.equal(e.error, undefined, verb);
+    assert.match(lastLine(e), /Give queue is already empty/, verb);
+  }
+  // V-7 kept: a held queue still waits for RESUME, and stop clears it meanwhile.
+  const H = world({ held: true });
+  assert.match(lastLine(H.run("/ra giveap a to Bob")), /queued 5 stack/);
+  H.rs.pump(H.advance(200));
+  assert.equal(H.actions.calls.filter((c) => c[0] === "give").length, 0, "held: the queue waits");
+  assert.match(lastLine(H.run("/ra gap stop")), /cancelled \(5 item\(s\) remaining\)/);
+  for (let i = 0; i < 10; i++) H.rs.pump(H.advance(200));
+  assert.equal(H.actions.calls.filter((c) => c[0] === "give").length, 0);
+  // `stop` is not a sub-command of the single give verbs.
+  assert.match(W.run("/ra give stop").error, /usage/);
+});
+
+await check("canQueue:false (a dispatcher nothing pumps — the page one without the VTank layer): /ub delay, a multi-stack /ra give…, a /mt loot retry refuse; direct verbs still run (review runtime-5 / wiring-4)", () => {
+  const W = world();
+  const rs = createRsDispatcher({ getCtx: () => W.ctx, canQueue: false });
+  for (const line of ["/ub delay 0 /rs echo x", "/ra giveap a to Bob", "/ra givea Pyreal to Bob", "/mt loot Brood Jaw"]) {
+    const r = rs.run(line);
+    assert.match(r.error || "", /needs the VTank layer/, line);
+    assert.ok(!r.lines.some((l) => /queued|waiting for it to appear/.test(l.text)), `${line}: ${JSON.stringify(r.lines)}`);
+  }
+  assert.equal(rs.pendingDelayed(), 0);
+  const before = W.actions.calls.filter((c) => c[0] === "give").length;
+  for (let i = 0; i < 20; i++) rs.pump(W.advance(200));
+  assert.equal(W.actions.calls.filter((c) => c[0] === "give").length, before, "nothing was queued");
+  assert.match(lastLine(rs.run("/ra givea stop")), /already empty/, "stop still answers");
+  assert.equal(rs.run("/rs echo hi").error, undefined, "a direct verb still runs");
+  // The default dispatcher still queues.
+  assert.match(lastLine(W.run("/ra giveap a to Bob")), /queued 5 stack/);
 });
 
 await check("/ra power, clearbusy, panic, myquests; /mt logoff", () => {
@@ -983,6 +1086,15 @@ await check("follow <name>|leader|off sets the Follow target and enables navigat
   W.run("/ub follow off");
   assert.deepEqual(W.nav.calls.at(-1), ["setFollowTarget", null]);
   assert.match(W.run("/rs follow Ghost").error, /not in sight/);
+  // a Follow target is a player (R3): an NPC with that exact name is not followed
+  const n = W.nav.calls.filter((c) => c[0] === "setFollowTarget").length;
+  assert.match(W.run("/rs follow Behdo Yii").error, /not in sight/);
+  assert.equal(W.nav.calls.filter((c) => c[0] === "setFollowTarget").length, n);
+  // without the host finder the fallback still finds the player by name
+  const N = world();
+  N.host.FindNearbyByName = undefined;
+  assert.equal(N.run("/rs follow Bob").error, undefined);
+  assert.deepEqual(N.nav.calls.find((c) => c[0] === "setFollowTarget"), ["setFollowTarget", { guid: 0x50000042, name: "Bob" }]);
 });
 
 await check("ui [tab] opens the panel (pending); tell source returns lines without printing", async () => {

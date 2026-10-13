@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 
 const sig = await import("../rynth/vt/host_signals.js");
-const { createHostSignals, parseCastLine, parseTell, SIGNAL_TYPES, VENDOR_CLOSE_RANGE_M, VENDOR_SAFETY_MS } = sig;
+const { createHostSignals, parseCastLine, parseTell, SIGNAL_TYPES, VENDOR_CLOSE_RANGE_M, VENDOR_SAFETY_MS, PORTAL_OUT_STUCK_MS } = sig;
 const { RynthWebHost } = await import("../rynth/webhost.js");
 
 let pass = 0;
@@ -327,6 +327,50 @@ await check("portal: no portalOut without a transit; a missed falling edge recov
   assert.deepEqual(c.types(), ["portalOut"]);
 });
 
+await check("a presentation flag stuck up after the arrival (hidden tab) ends the transit for the metas after PORTAL_OUT_STUCK_MS — exactly one portalOut; never without kind 66 (review runtime-4)", () => {
+  assert.equal(PORTAL_OUT_STUCK_MS, 90_000, "the router's PORTAL_SPACE_MAX_HOLD_MS");
+  const a = setup({ portal: false });
+  a.host.emit(33, { u32: 1 });
+  a.host.state.portal = true;
+  a.s.sample();
+  a.host.emit(66, { u32: 0x01250105 });
+  for (let i = 0; i < 89; i++) {
+    a.clock.add(1000);
+    a.s.sample();
+  }
+  assert.deepEqual(a.types(), ["portalIn", "teleportArrived"], "89 s: still in transit");
+  for (let i = 0; i < 2; i++) {
+    a.clock.add(1000);
+    a.s.sample();
+  }
+  assert.deepEqual(a.types(), ["portalIn", "teleportArrived", "portalOut"], "91 s: one synthesized portalOut");
+  assert.ok(a.logs.some((m) => /portalOut synthesized/.test(m)));
+  for (let i = 0; i < 30; i++) {
+    a.clock.add(1000);
+    a.s.sample();
+  }
+  a.host.state.portal = false; // the flag finally drops
+  a.s.sample();
+  assert.equal(a.types().filter((x) => x === "portalOut").length, 1, "exactly one per transit");
+  // Without the arrival: the transit is not over.
+  const b = setup({ portal: false });
+  b.host.emit(33, { u32: 2 });
+  b.host.state.portal = true;
+  for (let i = 0; i < 200; i++) {
+    b.clock.add(1000);
+    b.s.sample();
+  }
+  assert.deepEqual(b.types(), ["portalIn"], "no kind 66: no portalOut");
+  // A new transit while the flag is still stuck arms again.
+  a.host.state.portal = true;
+  a.s.sample();
+  a.host.emit(33, { u32: 3 });
+  a.host.emit(66, { u32: 0x01250106 });
+  a.clock.add(91_000);
+  a.s.sample();
+  assert.equal(a.types().filter((x) => x === "portalOut").length, 2);
+});
+
 // ── vendor session ─────────────────────────────────────────────────────
 await check("vendorClose via the window event plugins/vendor-ui.js dispatches (hb-vendor-closed)", () => {
   const win = fakeWin();
@@ -359,6 +403,33 @@ await check(`vendorClose when the player is > ${VENDOR_CLOSE_RANGE_M} m from the
   assert.deepEqual(got[1], { type: "vendorClose", guid: VENDOR, reason: "range" });
   s.sample();
   assert.equal(got.length, 2, "closed once");
+});
+
+await check("vendor range on a host WITHOUT TryGetObjectDistance: the inline rule (same LB / both outdoor global frame; cell 0 never closes)", () => {
+  const handlers = [];
+  const st = { me: { objCellId: 0xa9b40021, x: 100, y: 1, z: 10 }, v: { objCellId: 0xa9b30039, x: 100, y: 190, z: 10 } };
+  const host = {
+    onEvent: (fn) => handlers.push(fn),
+    GetPlayerId: () => SELF,
+    TryGetPlayerPose: () => st.me,
+    TryGetObjectPosition: (g) => (g === VENDOR ? st.v : null),
+  };
+  const got = [];
+  const s = createHostSignals(host, { log: () => {} });
+  s.on("*", (x) => got.push(x));
+  for (const fn of handlers) fn({ kind: 12, u32: VENDOR, u32b: 0, text: "Vendor Bob" });
+  s.sample();
+  assert.equal(got.length, 1, "3 m across the A9B3/A9B4 seam (global frame) stays open");
+  st.me = { objCellId: 0, x: 100, y: 1, z: 10 };
+  s.sample();
+  assert.equal(got.length, 1, "own cell unknown (0) -> no distance -> no close");
+  st.me = { objCellId: 0xa9b40021, x: 100, y: 1, z: 10 };
+  st.v = { objCellId: 0xa9b40105, x: 100, y: 1, z: 10 }; // an EnvCell of the SAME landblock: same-LB rule
+  s.sample();
+  assert.equal(got.length, 1);
+  st.v = { objCellId: 0xa9b40021, x: 109, y: 1, z: 10 };
+  s.sample();
+  assert.deepEqual(got[1], { type: "vendorClose", guid: VENDOR, reason: "range" });
 });
 
 await check("vendorClose on portal (kind 33 or a rising presentation edge), another container, another vendor", () => {
@@ -462,6 +533,31 @@ await check("real RynthWebHost: one subscriber added; normalized wasm events bec
   assert.deepEqual(got, ["chat", "tell", "vendorOpen", "useDone", "portalIn", "vendorClose", "teleportArrived", "portalOut"]);
   assert.equal(tokenAtUseDone, null, "the host resolved the item token before subscribers ran");
   assert.equal(s.latest("tell").name, "Torval");
+});
+
+await check("real RynthWebHost: vendor range close through the host's TryGetObjectDistance (snapshot pose; cell 0 never closes)", () => {
+  const st = { pose: { landblockId: 0xa9b40021, x: 100, y: 100, z: 10, heading: 0 }, vendor: [0xa9b40021, 102, 100, 10] };
+  const host = new RynthWebHost({
+    playerGuid: () => SELF,
+    getLocalPlayerPose: () => ({ ...st.pose }),
+    objectPosition: (g) => (g === VENDOR ? st.vendor : undefined),
+    nearbyEntityGuids: () => Uint32Array.from([VENDOR]),
+  }, { entityMap: new Map(), noEventTap: true });
+  host._tick();
+  const s = createHostSignals(host, { log: () => {} });
+  const got = [];
+  s.on("*", (x) => got.push(x));
+  host._dispatchEvent({ kind: 12, u32Payload: VENDOR, stringPayload: "Vendor Bob" });
+  s.sample();
+  assert.equal(got.length, 1, "2 m: open");
+  st.pose = { landblockId: 0, x: 100, y: 100, z: 10, heading: 0 }; // login/teleport gap: no cell known
+  host._tick();
+  s.sample();
+  assert.equal(got.length, 1, "own cell unknown -> no distance -> stays open");
+  st.pose = { landblockId: 0xa9b40021, x: 115, y: 100, z: 10, heading: 0 };
+  host._tick();
+  s.sample();
+  assert.deepEqual(got[1], { type: "vendorClose", guid: VENDOR, reason: "range" });
 });
 
 console.log(fail === 0 ? `rynth_vt_host_signals: all ${pass} checks passed` : `rynth_vt_host_signals: ${fail} FAILED (${pass} passed)`);

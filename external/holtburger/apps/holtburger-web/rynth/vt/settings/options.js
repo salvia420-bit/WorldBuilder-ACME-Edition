@@ -33,7 +33,7 @@ import {
   buildIndex, findRowIn, coerce, present, displayName,
 } from "./schema.js";
 import { makeLogger, clone, deepEqual, canonicalJson } from "./named_store.js";
-import { PROFILE_OWNED_CELLS } from "./cells.js";
+import { PROFILE_OWNED_CELLS, BOOT_UNCARRIED_CELLS } from "./cells.js";
 
 const AUTOSAVE_MS = 2000;
 const EXPLICIT_SOURCES = new Set(["ui", "command", "meta", "hud", "preset", "import"]);
@@ -120,6 +120,15 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
   let pinned = new Set();
   let lastAutosaveAt = -Infinity;
   let baseline = null;
+  // bot.setBuffs() is async and serialised (bot.js sets bot.buffSpec when a
+  // call's turn RUNS, after the previous call's spell-ladder load), so right
+  // after a push bot.buffSpec still shows the outgoing spec. The spec handed
+  // over last is the live one until then — reads, the immediate save and a
+  // revert must not see (or persist) the old one. { spec (normalised), from? }:
+  // without `from` it is a push of ours, cleared when that call settles; with
+  // `from` (noteLegacyEdit: the HUD pushed, no promise here) it is cleared as
+  // soon as bot.buffSpec moves away from `from`.
+  let buffsAhead = null;
 
   // ── reads ───────────────────────────────────────────────────────────────
   const rec = () => profiles.record();
@@ -156,12 +165,45 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     return LIST_DEFAULTS[name] ?? null;
   }
 
+  /** The bot's buff spec as it is about to be (normalised): an in-flight push
+   *  (buffsAhead), else bot.buffSpec. undefined = no buffs cell on this bot. */
+  function liveBuffSpec() {
+    const live = cellValue("buffs");
+    if (!live || typeof live !== "object") return undefined;
+    const now = normBuffSpec(live.spec);
+    if (buffsAhead && buffsAhead.from !== undefined && !deepEqual(now, buffsAhead.from)) buffsAhead = null;
+    return buffsAhead ? clone(buffsAhead.spec) : now;
+  }
+
+  /** A bot.setBuffs(spec) call of ours is in flight until `pending` settles. */
+  function trackBuffsPush(spec, pending) {
+    const s = normBuffSpec(spec);
+    if (s === null || !pending || typeof pending.then !== "function") return;
+    const token = { spec: s };
+    buffsAhead = token;
+    const done = () => {
+      if (buffsAhead === token) buffsAhead = null;
+    };
+    Promise.resolve(pending).then(done, done);
+  }
+
+  /** The HUD pushed `spec` itself (noteLegacyEdit): treat it as live until the
+   *  bot shows a change (no promise to wait on here). */
+  function expectBuffSpec(spec) {
+    const s = normBuffSpec(spec);
+    const live = cellValue("buffs");
+    if (s === null || !live || typeof live !== "object") return;
+    const now = normBuffSpec(live.spec);
+    if (deepEqual(now, s)) return;
+    buffsAhead = { spec: s, from: now };
+  }
+
   function liveList(name) {
     const stored = recordList(name);
     if (name === "buffs") {
-      const live = cellValue("buffs");
+      const live = liveBuffSpec();
       const base = { ...clone(LIST_DEFAULTS.buffs), ...(stored && typeof stored === "object" ? clone(stored) : {}) };
-      if (live && typeof live === "object") base.spec = clone(live.spec ?? null);
+      if (live !== undefined) base.spec = live;
       return base;
     }
     if (name === "legacyPriorities") {
@@ -172,7 +214,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
   }
 
   function ctx() {
-    return { getValue, recordList };
+    return { getValue, recordList, buffSpec: liveBuffSpec };
   }
 
   function emit(evt) {
@@ -255,6 +297,13 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     return r.ok ? null : r.error;
   }
 
+  /** Before switching away from / copying a user profile (C# SwitchProfile,
+   *  SaveAsProfile): persist its live state, incl. cell drift the 2 s autosave
+   *  has not written yet (ProfileStore only flushes edits made through patch). */
+  function flushOutgoing() {
+    if (profiles.isUserProfileActive()) saveNow();
+  }
+
   // ── cell pushes ─────────────────────────────────────────────────────────
   function pushSetting(row, v, { force = false } = {}) {
     if (!boundCells || !row.cell || !boundCells.has(row.key)) return { ok: true, pushed: false };
@@ -267,6 +316,9 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     if (cur === undefined && deepEqual(v, row.dflt) && !PROFILE_OWNED_CELLS.includes(row.key)) {
       return { ok: true, pushed: false }; // no loop + default: nothing to do (never builds a loop implicitly)
     }
+    // EnableBuffing false with no buff loop: nothing to stop (keepBuffingOff
+    // re-applies it once a buff list builds the loop).
+    if (row.key === "EnableBuffing" && cur === undefined && v !== true) return { ok: true, pushed: false };
     let r;
     try {
       r = boundCells.set(row.key, v, ctx()) || { ok: true };
@@ -274,6 +326,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
       r = { ok: false, error: errText(e) };
     }
     if (!r.ok) say(`cannot apply ${row.key}: ${r.error}`);
+    if (r.ok && r.pending && row.key === "EnableBuffing") trackBuffsPush(r.spec, r.pending);
     return { ...r, pushed: !!r.ok };
   }
 
@@ -285,7 +338,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
       if (live === undefined ? Object.keys(v).length === 0 : deepEqual(normPriorities(live), v)) return { ok: true, pushed: false };
     } else if (name === "buffs") {
       const spec = normBuffSpec(value?.spec);
-      if (spec === null || live === undefined || deepEqual(normBuffSpec(live.spec), spec)) return { ok: true, pushed: false };
+      if (spec === null || live === undefined || deepEqual(liveBuffSpec(), spec)) return { ok: true, pushed: false };
     }
     let r;
     try {
@@ -294,7 +347,28 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
       r = { ok: false, error: errText(e) };
     }
     if (!r.ok) say(`cannot apply list ${name}: ${r.error}`);
+    if (name === "buffs" && r.ok && r.pending) {
+      trackBuffsPush(r.spec ?? value?.spec, r.pending);
+      keepBuffingOff(r.pending);
+    }
     return { ...r, pushed: !!r.ok };
+  }
+
+  /** bot.setBuffs() (a profile/Buffs-tab buff list) may BUILD the buff loop,
+   *  and a new loop starts enabled. When the active profile stores
+   *  EnableBuffing=false (and it is not URL-pinned), switch the loop off once
+   *  it exists — otherwise selecting such a profile turns buffing on and the
+   *  next autosave persists that. Promise continuation, not a timer (C4). */
+  function keepBuffingOff(pending) {
+    const row = index.byKey.get("EnableBuffing");
+    if (!row || pinned.has("EnableBuffing") || storedValue(row) !== false) return;
+    Promise.resolve(pending).then(() => {
+      try {
+        if (!pinned.has("EnableBuffing") && storedValue(row) === false) pushSetting(row, false);
+      } catch (e) {
+        say(`cannot keep buffing off: ${errText(e)}`);
+      }
+    }, () => {});
   }
 
   function noteOwners() {
@@ -318,18 +392,24 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     return pushed;
   }
 
-  /** Push every key of the active profile (selectProfile / external reload). */
-  function pushAll() {
+  /** Push every key of the active profile (selectProfile / external reload).
+   *  `skip` = keys left alone (the URL pins on an external reload; an explicit
+   *  selectProfile lifts them and passes none). */
+  function pushAll({ skip = null } = {}) {
     if (!boundCells) return [];
     const pushed = [];
     const r = rec();
+    const skipped = (k) => !!skip && skip.has(k);
     const buffsList = has(r.lists, "buffs") ? r.lists.buffs : null;
-    if (buffsList && normBuffSpec(buffsList.spec) !== null && pushList("buffs", buffsList).pushed) pushed.push("buffs");
-    if (pushList("legacyPriorities", has(r.lists, "legacyPriorities") ? r.lists.legacyPriorities : {}).pushed) {
+    if (!skipped("buffs") && buffsList && normBuffSpec(buffsList.spec) !== null && pushList("buffs", buffsList).pushed) {
+      pushed.push("buffs");
+    }
+    if (!skipped("legacyPriorities")
+      && pushList("legacyPriorities", has(r.lists, "legacyPriorities") ? r.lists.legacyPriorities : {}).pushed) {
       pushed.push("legacyPriorities");
     }
     for (const row of rows) {
-      if (!row.cell) continue;
+      if (!row.cell || skipped(row.key)) continue;
       if (pushSetting(row, storedValue(row)).pushed) pushed.push(row.key);
     }
     boundCells.refreshDerived?.(ctx());
@@ -355,13 +435,17 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
           r = { ok: false, error: errText(e) };
         }
         if (!r.ok) return { ok: false, error: r.error };
+        if (r.pending && row.key === "EnableBuffing") trackBuffsPush(r.spec, r.pending);
       }
       if (PROFILE_OWNED_CELLS.includes(row.key) && typeof boundCells.owner === "function") {
         pushedOwner.set(row.key, boundCells.owner(row.key) || null);
       }
     }
     profiles.patch({ settings: { [row.key]: deepEqual(v, row.dflt) ? undefined : v } });
-    if (row.key === "ApproachRange" && boundCells) boundCells.refreshDerived?.(ctx());
+    // host.nearbyRangeM = max(base, MonsterRange+5, ApproachRange+5): re-derive
+    // once the new value is readable (MonsterRange with no combat loop reads it
+    // from the record).
+    if ((row.key === "ApproachRange" || row.key === "MonsterRange") && boundCells) boundCells.refreshDerived?.(ctx());
     const shown = fmtValue(present(row, v, { viaVt }));
     const inert = row.consumer === "inert";
     const echo = `[RynthSuite] Set option ${String(name).trim()} = ${shown}${inert ? " (not implemented on web)" : ""}`;
@@ -392,7 +476,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
   try {
     profiles.onExternalChange?.((evt) => {
       if (!evt || evt.kind !== "reload") return;
-      pushAll();
+      pushAll({ skip: pinned }); // another tab's save is not an operator action here: the URL pins hold
       resetBaseline();
       const before = evt.before || { settings: {}, lists: {}, refs: {} };
       const after = evt.after || rec();
@@ -449,28 +533,36 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
 
     /** Profile/overlay value (or default), ignoring live cells. */
     storedValue(key) {
-      const row = rowOf(key);
-      return row ? storedValue(row) : undefined;
+      try {
+        const row = rowOf(key);
+        return row ? storedValue(row) : undefined;
+      } catch {
+        return undefined;
+      }
     },
 
     list(filter) {
-      const f = String(filter ?? "").trim().toLowerCase();
       const out = [];
-      for (const row of rows) {
-        if (f) {
-          const hay = [row.key, ...row.vt, row.label, row.group, row.page].map((s) => String(s).toLowerCase());
-          if (!hay.some((s) => s.includes(f))) continue;
+      try {
+        const f = typeof filter === "string" || typeof filter === "number" ? String(filter).trim().toLowerCase() : "";
+        for (const row of rows) {
+          if (f) {
+            const hay = [row.key, ...row.vt, row.label, row.group, row.page].map((s) => String(s).toLowerCase());
+            if (!hay.some((s) => s.includes(f))) continue;
+          }
+          const value = getValue(row.key);
+          out.push({
+            key: row.key,
+            vtName: displayName(row),
+            value,
+            vtValue: present(row, value, { viaVt: row.vt.length > 0 }),
+            dflt: row.dflt,
+            inert: row.consumer === "inert",
+            row,
+          });
         }
-        const value = getValue(row.key);
-        out.push({
-          key: row.key,
-          vtName: displayName(row),
-          value,
-          vtValue: present(row, value, { viaVt: row.vt.length > 0 }),
-          dflt: row.dflt,
-          inert: row.consumer === "inert",
-          row,
-        });
+      } catch (e) {
+        say(`list failed: ${errText(e)}`);
       }
       return out;
     },
@@ -496,8 +588,12 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     },
 
     getRef(name) {
-      const v = rec().refs[name];
-      return typeof v === "string" && v ? v : null;
+      try {
+        const v = rec().refs[name];
+        return typeof v === "string" && v ? v : null;
+      } catch {
+        return null;
+      }
     },
 
     setRef(name, value, { source = "ui" } = {}) {
@@ -515,6 +611,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     bindCells(c) {
       boundCells = c && typeof c.has === "function" && typeof c.get === "function" && typeof c.set === "function" ? c : null;
       pushedOwner.clear();
+      buffsAhead = null; // an in-flight spec belonged to the previous bot
     },
 
     /** §4.5 attach-time push. → { pushed: string[] } */
@@ -524,33 +621,28 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
         pinned = urlPinned instanceof Set ? new Set(urlPinned) : new Set(Array.isArray(urlPinned) ? urlPinned : []);
         if (!boundCells) return { pushed };
         const r = rec();
-        let buffsPending = null;
         if (legacy) {
+          // (a buff list that builds the loop also re-applies a stored
+          // EnableBuffing=false once the loop exists: pushList → keepBuffingOff)
           for (const name of ["buffs", "legacyPriorities"]) {
             if (pinned.has(name) || !has(r.lists, name)) continue;
             if (name === "buffs" && normBuffSpec(r.lists.buffs?.spec) === null) continue;
             const p = pushList(name, r.lists[name]);
             if (p.pushed) pushed.push(name);
-            if (name === "buffs" && p.pending) buffsPending = p.pending;
           }
         }
         for (const row of rows) {
           if (!row.cell) continue;
           if (PROFILE_OWNED_CELLS.includes(row.key)) {
             if (pushSetting(row, storedValue(row)).pushed) pushed.push(row.key);
-          } else if (legacy && has(r.settings, row.key) && !pinned.has(row.key)) {
+          } else if ((legacy || BOOT_UNCARRIED_CELLS.includes(row.key)) && has(r.settings, row.key) && !pinned.has(row.key)) {
+            // legacy:false still re-applies the stored keys no boot path carries
+            // to a rebuilt bot (cells.js BOOT_UNCARRIED_CELLS)
             if (pushSetting(row, r.settings[row.key]).pushed) pushed.push(row.key);
           }
         }
         boundCells.refreshDerived?.(ctx());
         noteOwners();
-        // A profile that stores buffs AND EnableBuffing=false: the loop built by
-        // setBuffs() above appears later — switch it off once it exists.
-        if (buffsPending && legacy && has(r.settings, "EnableBuffing") && r.settings.EnableBuffing === false
-          && !pinned.has("EnableBuffing")) {
-          const row = index.byKey.get("EnableBuffing");
-          Promise.resolve(buffsPending).then(() => pushSetting(row, false), () => {});
-        }
       } catch (e) {
         say(`applyToCells failed: ${errText(e)}`);
       }
@@ -577,7 +669,8 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     autosaveTick(nowMs) {
       try {
         const t = Number.isFinite(nowMs) ? nowMs : clock();
-        if (t - lastAutosaveAt < AUTOSAVE_MS) return;
+        // (a clock stepped backwards must not stall the autosave until it catches up)
+        if (t >= lastAutosaveAt && t - lastAutosaveAt < AUTOSAVE_MS) return;
         lastAutosaveAt = t;
         syncCells();
         if (!profiles.isUserProfileActive()) return;
@@ -600,6 +693,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
       try {
         const current = snapshot({ forSave: true });
         const before = profiles.active();
+        flushOutgoing();
         const r = profiles.select(name, kind, { current });
         if (!r.ok) return { ok: false, error: r.error };
         const after = profiles.active();
@@ -618,6 +712,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
 
     saveAs(name, { mineOnly = false } = {}) {
       try {
+        flushOutgoing();
         const r = profiles.saveAs(name, { mineOnly, current: snapshot({ forSave: true }) });
         if (r.ok) resetBaseline();
         return r.ok ? { ok: true, active: profiles.active() } : { ok: false, error: r.error };
@@ -628,6 +723,7 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
 
     setMineOnly(on) {
       try {
+        flushOutgoing();
         const r = profiles.setMineOnly(!!on, { current: snapshot({ forSave: true }) });
         if (r.ok) resetBaseline();
         return r.ok ? { ok: true, active: profiles.active() } : { ok: false, error: r.error };
@@ -707,6 +803,8 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
             break;
           case "buffs": {
             const spec = normBuffSpec(value);
+            // the HUD's own bot.setBuffs() may not have run yet (async)
+            if (boundCells) expectBuffSpec(spec);
             r = setListInternal("buffs", { ...recordList("buffs"), spec }, "hud", { push: false });
             break;
           }

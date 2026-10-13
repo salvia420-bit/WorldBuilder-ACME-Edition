@@ -53,7 +53,7 @@ import {
   minDistM,
 } from "./route_model.js";
 import { parseNavVt, validateNavName } from "./nav_profiles.js";
-import { makeExecutor, posWorld, runJob, jumpArgs, NAV_TUNING } from "./executors.js";
+import { makeExecutor, posWorld, runJob, jumpArgs, NAV_TUNING, BUDGET_ANCHORS } from "./executors.js";
 
 export const FOLLOW_START_M = 8; // CS/NavigationEngine.cs:1344-1345 (Q21: fixed 8/5 m)
 export const FOLLOW_STOP_M = 5;
@@ -100,6 +100,8 @@ export class ActiveNav {
     runChat = null,
     gotoCompose = null,
     onNpcTell = null,
+    onReversed = null,
+    onResult = null,
     log,
     now = Date.now,
     print = null,
@@ -112,6 +114,11 @@ export class ActiveNav {
     this.runChat = typeof runChat === "function" ? runChat : null;
     this.gotoCompose = gotoCompose;
     this.onNpcTell = typeof onNpcTell === "function" ? onNpcTell : null;
+    // Meta-visible nav state (PLAN R22 / R9, review guide-3): INT-2 stores
+    // them as the session vars `navreversed` (1/0) and `navlastresult`
+    // ("DONE:<type>", "WARN:…", "SKIPPED:0:stuck", "FAILED:<type>:<reason>").
+    this.onReversed = typeof onReversed === "function" ? onReversed : null;
+    this.onResult = typeof onResult === "function" ? onResult : null;
     this.now = typeof now === "function" ? now : Date.now;
     this.log = makeLog(log, () => this.now());
     this._print = typeof print === "function" ? print : null;
@@ -137,6 +144,11 @@ export class ActiveNav {
     this._jumpReq = null;
     this._jumpJob = null;
     this._jumpRelease = null;
+    // A Point/Jump executor's attemptJumpLeg job still in flight when that
+    // executor was reset (pause/resume/setActive/route edit): it cannot be
+    // cancelled and keeps driving input, so no new executor runs and no
+    // `/rs jump` starts until it settles (review runtime-2).
+    this._orphanJob = null;
 
     this.signalsLatest = { vendorOpen: null, tell: null, useDone: null, portalIn: null, portalOut: null, teleportArrived: null };
     this._unsubs = [];
@@ -291,6 +303,7 @@ export class ActiveNav {
     if (r.paused) return `paused: ${r.paused.reason}`;
     if (portalSpaceActive(this.host)) return "portal space";
     if (this.bot && this.bot.kernel && this.bot.kernel.operatorHeld === true) return "operator hold";
+    if (this._orphanBusy()) return "a previous jump is still landing";
     if (this._yieldedTo) return `yielded to ${this._yieldedTo}`;
     return null;
   }
@@ -300,7 +313,9 @@ export class ActiveNav {
     this._cancelLeg();
     this._stopFollow();
     this._resetExec();
+    const wasReversed = !!(this.state.route && this.state.route.reversed);
     this.state.route = r;
+    if (!!r.reversed !== wasReversed) this._notify(this.onReversed, !!r.reversed);
     this.state.generation += 1;
     this.state.stuckSkips = 0;
     this.state.follow = { moving: false, lastIssueAt: 0 };
@@ -401,7 +416,10 @@ export class ActiveNav {
       r = { ok: false, error: msg(e) };
     }
     if (!r || r.ok === false) return { ok: false, error: (r && r.error) || "save failed" };
+    // Saving stores the on-screen order and clears the flag (Q4); tell the meta var like a load does.
+    const wasReversed = !!this.state.route.reversed;
     this.state.route = { ...this.state.route, name: v.name, dirty: false, reversed: false };
+    if (wasReversed) this._notify(this.onReversed, false);
     try {
       this.options?.setRef?.("navProfile", v.name, { source: "ui" });
     } catch (_) {
@@ -411,13 +429,19 @@ export class ActiveNav {
   }
 
   /** Insert a waypoint (End / Above / Below the selected row). → index, or -1 if invalid. */
-  add(point, { mode = "end", selected = null } = {}) {
-    const p = normalizePoint(point);
-    if (!p) return -1;
-    const { route, index } = routeInsert(this.state.route, p, mode, selected);
-    this.state.route = route;
-    this.state.generation += 1;
-    return index;
+  add(point, opts = {}) {
+    try {
+      const { mode = "end", selected = null } = opts || {};
+      const p = normalizePoint(point);
+      if (!p) return -1;
+      const { route, index } = routeInsert(this.state.route, p, mode, selected);
+      this.state.route = route;
+      this.state.generation += 1;
+      return index;
+    } catch (e) {
+      this.log(`add threw: ${msg(e)}`);
+      return -1;
+    }
   }
 
   /**
@@ -428,8 +452,9 @@ export class ActiveNav {
    * 9 {headingDeg?, holdShift?, delayMs?, direction?}; any {ew, ns, z} override.
    * In a Follow route, "Add" with a target sets the follow target (G:199).
    */
-  addHere(type, fields = {}, { mode = "end", selected = null } = {}) {
+  addHere(type, fields = {}, opts = {}) {
     try {
+      const { mode = "end", selected = null } = opts || {};
       const f = fields && typeof fields === "object" ? fields : {};
       const t = Number(type);
       const target = Number(f.guid ?? f.targetGuid ?? 0) >>> 0;
@@ -612,7 +637,23 @@ export class ActiveNav {
   /** `/rs reverseroute [true|false]` → the new `reversed`. */
   reverse(flag) {
     this.state.route = routeReverse(this.state.route, boolArg(flag));
-    return !!this.state.route.reversed;
+    const v = !!this.state.route.reversed;
+    this._notify(this.onReversed, v);
+    return v;
+  }
+
+  /** Run a meta-visibility callback; a throwing one is logged, never fatal. */
+  _notify(fn, v) {
+    if (!fn) return;
+    try {
+      fn(v);
+    } catch (e) {
+      this.log(`nav callback threw: ${msg(e)}`);
+    }
+  }
+  _setResult(text) {
+    this.state.lastResult = text;
+    this._notify(this.onResult, text);
   }
 
   // ── /rs jump ────────────────────────────────────────────────────────────
@@ -621,12 +662,18 @@ export class ActiveNav {
    * Refused while operator-held, in portal space, or — with the kernel not
    * running — while another mover owns the body (critic B10).
    */
-  requestJump({ headingDeg = null, shift = false, ms = 0, direction = "none" } = {}) {
+  requestJump(args = {}) {
     try {
+      const { headingDeg = null, shift = false, ms = 0, direction = "none" } = args || {};
       const kernel = this.bot && this.bot.kernel;
       if (kernel && kernel.operatorHeld === true) return { ok: false, error: "the bot is held by the operator" };
       if (portalSpaceActive(this.host)) return { ok: false, error: "in portal space" };
       if (this._jumpBusy()) return { ok: false, error: "a jump is already in progress" };
+      // A nav Jump waypoint (or the Point stuck-ladder jump) is in the air: a
+      // second attemptJumpLeg would drive SetMovementInput/Jump concurrently.
+      const ex = this._exec;
+      if (ex && ex.pinned && (ex.type === POINT.Jump || ex.type === POINT.Point)) return { ok: false, error: "a nav jump is already in progress" };
+      if (this._orphanBusy()) return { ok: false, error: "a nav jump is already in progress" };
       const gc = this.gotoCompose;
       if (!gc || typeof gc.attemptJumpLeg !== "function") return { ok: false, error: "jump primitive unavailable" };
       let h = headingDeg === null || headingDeg === undefined || headingDeg === "" ? this._compassDeg() : Number(headingDeg);
@@ -754,10 +801,13 @@ export class ActiveNav {
     const s = this._legState(this._issuedLeg);
     return s === "WALK" || s === "PORTAL";
   }
-  /** Leave the slot: cancel OUR router leg only, keep the index + executor memory. */
+  /** Leave the slot: cancel OUR router leg only, keep the index + executor memory.
+   *  The executor's budget clock stops until it next runs (_resumeClock). */
   yield(reason) {
     try {
       this._yieldedTo = reason == null ? "other" : String(reason);
+      const mem = this.state.exec && this.state.exec.mem;
+      if (mem && typeof mem === "object" && !Number.isFinite(mem.awayAt)) mem.awayAt = this.now();
       if (this._exec) {
         try {
           this._exec.cancel();
@@ -790,7 +840,21 @@ export class ActiveNav {
 
   // ── kernel slot ─────────────────────────────────────────────────────────
   _pinned() {
-    return !!(this._exec && this._exec.pinned);
+    // A disabled/paused slot never reads pinned (a recall cast before
+    // `nav stop` must not keep the kernel on a slot that will not tick).
+    return !!((this._exec && this._exec.pinned) || this._orphanBusy()) && this.slot.enabled();
+  }
+  /** True while a reset executor's jump job is still in the air. */
+  _orphanBusy() {
+    const j = this._orphanJob;
+    if (j && !j.settled) return true;
+    this._orphanJob = null;
+    return false;
+  }
+  /** Keep an executor's unsettled jump job before the executor is dropped. */
+  _keepOrphan(ex) {
+    const j = ex && ex.job;
+    if (j && !j.settled) this._orphanJob = j;
   }
   _wants(ctx) {
     if (this._disposed || !this.slot.enabled()) return false;
@@ -798,9 +862,17 @@ export class ActiveNav {
     if (portalSpaceActive(this.host)) return false;
     const rank = this._rank();
     const c = ctx || {};
-    if (rank === "beforeCombat" && c.underAttack) return false;
-    // D39: boost outranks attacking and looting, never buffing.
-    if (rank !== "beforeIdle" && (c.buffPinned || c.buffNeeded)) return false;
+    // D39: boost outranks attacking and looting, never buffing. "Looting"
+    // means a corpse not yet started: a loot transaction already in flight
+    // (lootPinned: APPROACH/OPEN/LOOT) finishes first, bounded by its own
+    // approach/open/pickup limits — taking the tick from it would freeze
+    // loot.state, which movementClaimed / the unwedge reflex / doFollowRoute
+    // read as live (review regress-1).
+    if (rank !== "beforeIdle" && (c.buffPinned || c.buffNeeded || c.lootPinned)) return false;
+    // Gentle boost fights back: under attack it declines only when the ladder
+    // below has a fight (or the after-kill corpse) to run — with nothing to
+    // fight it keeps walking instead of falling through to Idle (logic-2).
+    if (rank === "beforeCombat" && c.underAttack && (c.threat || c.corpse)) return false;
     return true;
   }
   _tick(ctx) {
@@ -822,6 +894,9 @@ export class ActiveNav {
       this._lastTick = null;
       return;
     }
+    // A reset executor's jump is still driving input: the new executor (a
+    // re-tried jump, a router leg, a cast) waits until it lands.
+    if (this._orphanBusy()) return;
     this._detectTeleport(now);
     if (st.route.routeType === ROUTE.Follow) {
       this._tickFollow(now);
@@ -829,6 +904,7 @@ export class ActiveNav {
     }
     const exec = this._ensureExec();
     if (!exec) return;
+    this._resumeClock(now);
     const gen = st.generation;
     let res;
     try {
@@ -851,6 +927,7 @@ export class ActiveNav {
     if (!p) return null;
     if (this._exec && this._exec.point === p) return this._exec;
     if (this._exec) {
+      this._keepOrphan(this._exec);
       try {
         this._exec.cancel();
       } catch (_) {
@@ -866,8 +943,21 @@ export class ActiveNav {
     this._exec = makeExecutor(p, this._execCtx(mem));
     return this._exec;
   }
+  /** The active waypoint runs again after a yield (combat, buffing, an
+   *  operator hold, portal space, a rebind): the time away does not count
+   *  toward its budgets (executors.js BUDGET_ANCHORS). Deadlines are kept,
+   *  not restarted; signal/teleport anchors (tele.at, armedAt) stay real. */
+  _resumeClock(now) {
+    const mem = this.state.exec && this.state.exec.mem;
+    if (!mem || typeof mem !== "object" || !Number.isFinite(mem.awayAt)) return;
+    const away = now - mem.awayAt;
+    delete mem.awayAt;
+    if (!(away > 0)) return;
+    for (const k of BUDGET_ANCHORS) if (Number.isFinite(mem[k])) mem[k] += away;
+  }
   _resetExec() {
     if (this._exec) {
+      this._keepOrphan(this._exec);
       try {
         this._exec.cancel();
       } catch (_) {
@@ -916,7 +1006,7 @@ export class ActiveNav {
 
   _onDone(exec) {
     const st = this.state;
-    st.lastResult = exec.warning ? `WARN:${exec.type}:${exec.warning}` : `DONE:${exec.type}`;
+    this._setResult(exec.warning ? `WARN:${exec.type}:${exec.warning}` : `DONE:${exec.type}`);
     if (exec.warning) this.log(`nav: ${POINT_NAMES[exec.type]} waypoint: ${exec.warning}`);
     st.stuckSkips = 0;
     this._advanceRoute();
@@ -942,13 +1032,13 @@ export class ActiveNav {
       st.stuckSkips < MAX_STUCK_SKIPS
     ) {
       st.stuckSkips += 1;
-      st.lastResult = "SKIPPED:0:stuck";
+      this._setResult("SKIPPED:0:stuck");
       this._alert(`nav: stuck at ${where} — skipping to the next waypoint`);
       this._cancelLeg();
       this._advanceRoute();
       return;
     }
-    st.lastResult = `FAILED:${exec.type}:${reason}`;
+    this._setResult(`FAILED:${exec.type}:${reason}`);
     this._resetExec();
     this._cancelLeg();
     st.route = { ...st.route, paused: { reason, at: now } };
@@ -972,7 +1062,7 @@ export class ActiveNav {
     if (this._teleportExpected()) return;
     const r = this.state.route;
     if (r.routeType !== ROUTE.Circular && r.routeType !== ROUTE.Linear) {
-      this.log("external teleport: Once route holds its waypoint");
+      this.log(`external teleport: ${ROUTE_NAMES[r.routeType] || "the"} route holds its ${r.routeType === ROUTE.Follow ? "target" : "waypoint"}`);
       return;
     }
     const i = nearestPointIndex(r, w);
@@ -984,7 +1074,7 @@ export class ActiveNav {
     }
   }
   _teleportExpected() {
-    return !!(this._exec && this._exec.expectsTeleport) || !!this._jumpJob;
+    return !!(this._exec && this._exec.expectsTeleport) || !!this._jumpJob || this._orphanBusy();
   }
 
   _onSignal(type, sig) {

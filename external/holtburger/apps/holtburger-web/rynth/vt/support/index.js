@@ -52,6 +52,7 @@ export { createIdle, IDLE_TUNING } from "./idle.js";
  * → { consumables, supplies, manaStones, inventory, pets, fellow, doors, buffItems, idle, status(), dispose() }
  */
 export function createSupport(deps = {}) {
+  const ownConsumables = !deps.consumables;
   const consumables =
     deps.consumables || new ConsumablesModel({ options: deps.options ?? null, host: deps.host ?? null, log: deps.log, now: deps.now });
   const common = { ...deps, consumables };
@@ -86,6 +87,13 @@ export function createSupport(deps = {}) {
       for (const v of Object.values(parts)) {
         try {
           v.dispose?.();
+        } catch (_) {
+          /* best effort */
+        }
+      }
+      if (ownConsumables) {
+        try {
+          consumables.dispose?.();
         } catch (_) {
           /* best effort */
         }

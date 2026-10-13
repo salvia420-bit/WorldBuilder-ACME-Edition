@@ -11,8 +11,9 @@
 //   * parseAfNavsVt — nav_file.parseAfNavs + the three `.af` fixes: `vnd` → type 5
 //                    with its hex vendor guid, `tlk` → type 7 with the object
 //                    position/class/name of the metaf `tlk` layout (nav_file reads
-//                    both as PortalNPC 6, U7b H9), and `flw <hexGuid> {name}` →
-//                    a Follow route (nav_file drops it).
+//                    both as PortalNPC 6, U7b H9), the hex `prt` guid (nav_file
+//                    reads it as decimal), and `flw <hexGuid> {name}` → a Follow
+//                    route (nav_file drops it).
 //   * writeNavVt   — nav_file.writeNav (raw lines verbatim ⇒ byte-stable), the
 //                    Follow form, signed Int32 guids for freshly-made points
 //                    (VTank/metaf Int32.Parse, U7b H18), and `ext.*` dropped with a
@@ -185,7 +186,7 @@ function scanAfSections(text) {
     if (t.startsWith("NAV:")) {
       const parts = stripComment(t.slice("NAV:".length)).trim().split(/\s+/).filter(Boolean);
       const name = parts[0] || "";
-      const sec = { kind: "NAV", flw: null, fixes: [] };
+      const sec = { kind: "NAV", flw: null, fixes: [], prt: [] };
       i++;
       while (i < lines.length) {
         const b = lines[i].trimStart();
@@ -202,6 +203,11 @@ function scanAfSections(text) {
             // metaf NOpenVendor: vnd myx myy myz tgtGUID(hex) {tgtName}
             const g = parseInt(tok[4], 16);
             sec.fixes.push({ kw: "vnd", vendorId: Number.isFinite(g) ? g >>> 0 : 0, name: tok.length >= 6 ? tok[5] : null });
+          } else if (tok[0] === "prt" && tok.length >= 5) {
+            // metaf NPortal: prt myx myy myz GUIDHEX (`{_guid:X8}`, NPortal.cs:54/60);
+            // nav_file reads that guid as DECIMAL.
+            const g = parseInt(tok[4], 16);
+            sec.prt.push(Number.isFinite(g) ? g >>> 0 : 0);
           } else if (tok[0] === "tlk" && tok.length >= 5) {
             // metaf NNPCTalk: tlk myx myy myz tgtx tgty tgtz tgtObjectClass {tgtName}
             sec.fixes.push(
@@ -247,9 +253,11 @@ export function parseAfNavsVt(text) {
     const parsed = base[name];
     if (!parsed && !(sec && sec.flw)) continue;
     const fixes = sec ? sec.fixes.slice() : [];
+    const prts = sec && Array.isArray(sec.prt) ? sec.prt.slice() : [];
     const points = [];
     for (const p0 of parsed ? parsed.points : []) {
       let p = retypeAfPoint(p0);
+      if (p0.type === POINT.PortalLegacy && prts.length) p = { ...p, guid: prts.shift() };
       if (p !== p0 && fixes.length) {
         const f = fixes[0];
         if ((f.kw === "vnd" && p.type === POINT.OpenVendor) || (f.kw === "tlk" && p.type === POINT.NpcTalk)) {

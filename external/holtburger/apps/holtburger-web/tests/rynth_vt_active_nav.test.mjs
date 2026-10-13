@@ -1042,19 +1042,159 @@ await check("Boost Nav: gentle yields when attacked; strict does not; both yield
   const s = env.nav.slot;
   assert.equal(s.rank(), "beforeIdle");
   assert.equal(s.wants({ buffNeeded: true }), true, "unboosted: the kernel ladder already ranks buffing first");
+  assert.equal(s.wants({ lootPinned: true }), true, "unboosted: the ladder already ranks an in-flight loot first");
   env.options.v.BoostNavPriority = true;
   assert.equal(s.rank(), "beforeCombat");
   assert.equal(s.wants({}), true);
-  assert.equal(s.wants({ underAttack: true }), false);
+  assert.equal(s.wants({ underAttack: true, threat: true }), false, "gentle: a fight-back declines");
+  assert.equal(s.wants({ underAttack: true, corpse: true }), false, "gentle: the after-kill corpse is looted first");
+  assert.equal(s.wants({ underAttack: true }), true, "gentle: attacked with nothing to fight keeps walking (logic-2)");
+  assert.equal(s.wants({ threat: true }), true, "gentle: boost outranks attacking when not attacked");
+  assert.equal(s.wants({ corpse: true }), true, "gentle: boost outranks a corpse not yet started");
   assert.equal(s.wants({ buffNeeded: true }), false);
   assert.equal(s.wants({ buffPinned: true }), false);
+  assert.equal(s.wants({ lootPinned: true }), false, "gentle: a loot in flight finishes first (regress-1)");
   env.options.v.BoostNavStrict = true;
   assert.equal(s.rank(), "beforeCombatPinned");
   assert.equal(s.wants({ underAttack: true }), true);
+  assert.equal(s.wants({ underAttack: true, threat: true }), true);
   assert.equal(s.wants({ buffNeeded: true }), false);
   assert.equal(s.wants({ buffPinned: true }), false);
+  assert.equal(s.wants({ lootPinned: true }), false, "strict: a loot in flight finishes first (regress-1)");
   assert.equal(s.wants({ inCombat: true, threat: true }), true);
 });
+// The REAL kernel + loot loop + unwedge reflex around a gentle-boosted
+// ActiveNav (review regress-1 / logic-2): the aux ladder, the loot
+// transaction and the "commanded movement" reads all interact.
+async function makeKernelRig({ corpse = true, route = "pause" } = {}) {
+  const { RynthBotKernel } = await import("../rynth/kernel.js");
+  const { RynthLootLoop } = await import("../rynth/loot_loop.js");
+  const { UnwedgeReflex } = await import("../rynth/unwedge.js");
+  const world = makeWorld();
+  Object.assign(world.host, {
+    IsPlayerReady: () => true,
+    onTick() {},
+    onEvent() {},
+    StopStick() {},
+    GetCastBusyState: () => 0,
+    GetGroundContainerId: () => 0, // the corpse never opens: OPEN runs to its own retry limit
+    GetContainerContents: () => [],
+    CloseContainer: () => true,
+    TryGetObjectWcid: (g) => world.objects.get(g >>> 0)?.wcid ?? null,
+  });
+  const logs = [];
+  const router = new RynthRouter(world.host, { log: () => {} });
+  const options = fakeOptions({ BoostNavPriority: true });
+  const loot = new RynthLootLoop(world.host, { log: (m) => logs.push(`[loot] ${m}`) });
+  const bot = fakeBot();
+  bot.router = router;
+  bot.loot = loot;
+  bot.kernel = null;
+  // bot.js movementClaimed, the parts reachable here.
+  bot.movementClaimed = () => {
+    const rs = router.status && router.status.state;
+    return rs === "WALK" || rs === "PORTAL" || loot.state === "APPROACH" || bot.claims.size > 0;
+  };
+  const nav = new ActiveNav({ host: world.host, router, bot, options, profiles: await makeProfiles(), state: {}, subscribe: () => () => {}, gotoCompose: goto, log: (m) => logs.push(`[nav] ${m}`), now });
+  const rig = { world, router, loot, nav, logs, underAttack: true, actions: [] };
+  const combat = { locked: 0, enabled: true, _scanTargets: () => [], canEngage: () => true, disengage() {}, tick() {}, underAttack: () => rig.underAttack };
+  const buff = { enabled: true, pending: null, status: { ready: true, active: 1, desired: 1, pending: 0, blocked: false }, heartbeat() {}, tick() {} };
+  const aux = { slots: [nav.slot], idleHooks: [], policy: { boostLoot: () => false }, status: () => ({}) };
+  const unwedge = new UnwedgeReflex(world.host, { log: (m) => logs.push(`[unwedge] ${m}`), livelockRecall: false, adminTeleFallback: false, now });
+  const k = new RynthBotKernel(world.host, { combat, buff, loot, vitals: null, unwedge, aux }, { log: (m) => logs.push(`[kernel] ${m}`) });
+  bot.kernel = k;
+  unwedge.bot = bot;
+  k._running = true;
+  rig.kernel = k;
+  rig.unwedge = unwedge;
+  if (route === "pause") nav.load({ routeType: ROUTE.Circular, points: [P(0, 0), { type: POINT.Pause, ew: 0, ns: 0, z: 0, pauseMs: 30_000 }, P(0, 1)] });
+  else nav.load({ routeType: ROUTE.Circular, points: [P(0, 40), P(0, -40)] });
+  if (corpse) {
+    world.addObject(0xc0, "Corpse of Drudge", 15, 0);
+    world.objects.get(0xc0).wcid = 21;
+  }
+  rig.tick = async (n = 1) => {
+    for (let i = 0; i < n; i++) {
+      clock.t += 100;
+      world.step(100);
+      router.tick();
+      unwedge.tick();
+      k.tick();
+      rig.actions.push([k.action, loot.state]);
+      await flush();
+    }
+  };
+  return rig;
+}
+await check("gentle Boost Nav: a loot already in flight finishes before Navigate takes the tick; no false unwedge recovery during a VT Pause (regress-1)", async () => {
+  const rig = await makeKernelRig({ corpse: true, route: "pause" });
+  await rig.tick(21); // 2 s of corpse walk while the attacker grace runs
+  assert.equal(rig.kernel.action, "Loot");
+  assert.equal(rig.loot.state, "APPROACH");
+  rig.underAttack = false; // the grace ends mid-approach
+  await rig.tick(600); // 60 s
+  const navWhileLooting = rig.actions.filter(([a, l]) => a === "Navigate" && l !== "SCAN");
+  assert.equal(navWhileLooting.length, 0, `Navigate ran with loot.state ${navWhileLooting[0] && navWhileLooting[0][1]}`);
+  assert.equal(rig.loot.state, "SCAN", "the loot transaction ended by its own limits");
+  assert.equal(rig.kernel.action, "Navigate", "then the boosted route resumes");
+  const wedged = rig.logs.filter((l) => /WEDGED/.test(l));
+  assert.deepEqual(wedged, [], "no unwedge recovery during the Pause dwell");
+  assert.equal(rig.unwedge.state, "MONITOR");
+});
+await check("gentle Boost Nav: attacked with nothing to fight keeps walking instead of idling (logic-2)", async () => {
+  const rig = await makeKernelRig({ corpse: false, route: "walk" });
+  await rig.tick(20);
+  assert.equal(rig.kernel.action, "Navigate", "not Idle");
+  assert.equal(rig.router.status.state, "WALK");
+  assert.ok(rig.world.calls.some((c) => c[0] === "MoveToPosition"), "a router leg is issued");
+});
+await check("meta-visible nav state (R22/R9): onReversed on reverse and on a load that changes the flag; onResult with DONE/FAILED (review guide-3)", async () => {
+  const seenRev = [];
+  const seenRes = [];
+  const world = makeWorld();
+  const router = new RynthRouter(world.host, { log: () => {} });
+  const gc = { buildTune: goto.buildTune, attemptJumpLeg: async () => ({ ok: false, error: "jump-unavailable: canJumpNow() false" }) };
+  const nav = new ActiveNav({
+    host: world.host,
+    router,
+    bot: fakeBot(),
+    options: fakeOptions(),
+    profiles: await makeProfiles(),
+    state: {},
+    subscribe: () => () => {},
+    gotoCompose: gc,
+    onReversed: (v) => seenRev.push(v),
+    onResult: (t) => seenRes.push(t),
+    log: () => {},
+    now,
+  });
+  nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Jump, ...at(0), z: 0, headingDeg: 0, holdShift: false, delayMs: 100 }] });
+  assert.deepEqual(seenRev, [], "a load that keeps reversed=false says nothing");
+  assert.equal(nav.reverse(true), true);
+  assert.equal(nav.reverse(false), false);
+  nav.reverse(true);
+  assert.deepEqual(seenRev, [true, false, true]);
+  nav.load({ routeType: ROUTE.Circular, points: [P(10), P(20)] });
+  assert.deepEqual(seenRev, [true, false, true, false], "a load resets the flag and says so");
+  nav.reverse(true);
+  assert.equal(nav.save("revsaved").ok, true);
+  assert.equal(nav.status().reversed, false, "save stores the on-screen order and clears the flag (Q4)");
+  assert.deepEqual(seenRev, [true, false, true, false, true, false], "a save that clears the flag says so");
+  assert.equal(nav.save("revsaved2").ok, true);
+  assert.deepEqual(seenRev, [true, false, true, false, true, false], "a save of an unreversed route says nothing");
+  nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Jump, ...at(0), z: 0, headingDeg: 0, holdShift: false, delayMs: 100 }] });
+  for (let i = 0; i < 5; i++) {
+    clock.t += 100;
+    nav.slot.tick({});
+    await flush();
+  }
+  assert.ok(seenRes.some((t) => /^FAILED:9:/.test(t)), JSON.stringify(seenRes));
+  assert.equal(nav.status().lastResult, seenRes.at(-1));
+  assert.ok(nav.paused, "FAILED pauses navigation");
+  const throwing = new ActiveNav({ host: world.host, router, bot: fakeBot(), options: fakeOptions(), state: {}, onReversed: () => { throw new Error("boom"); }, log: () => {}, now });
+  assert.equal(throwing.reverse(true), true, "a throwing callback is isolated");
+});
+
 await check("requestJump: refused while held, in portal space, or (kernel stopped) while another mover owns the body (critic B10)", async () => {
   const calls = [];
   const gc = { buildTune: goto.buildTune, attemptJumpLeg: async (c, leg, tune) => (calls.push({ leg, tune }), { ok: true }) };
@@ -1171,6 +1311,199 @@ await check("ACCEPTANCE: guide death example — Once 'runback' runs to empty, t
   assert.equal(env.nav.isEmpty(), false, "a Circular route never empties");
   assert.equal(env.nav.paused, null);
   assert.deepEqual(lines.slice(0, 3), ["/vt nav load runback", "/vt opt set enablenav true", "/vt nav load fighting"]);
+});
+
+// ── verifier additions (W1-6 review) ───────────────────────────────────────
+await check("time outside the slot (combat) never consumes a waypoint's budget: Recall before its cast, OpenVendor after its use", async () => {
+  const env = await makeEnv();
+  env.world.busy = 1; // the recall waits on the busy gate: not cast, not pinned
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Recall, ew: 0, ns: 0, z: 0, spellId: 1635 }, P(20)] });
+  await env.tick();
+  assert.equal(count(env.world, "CastUntargetedSafe"), 0);
+  assert.equal(env.nav.slot.pinned(), false);
+  env.nav.slot.onLeave("Combat");
+  clock.t += 70_000; // a 70 s fight
+  env.world.busy = 0;
+  env.nav.slot.tick({});
+  assert.equal(env.state.lastResult, null, "not FAILED for time it was not running");
+  assert.equal(env.nav.paused, null);
+  assert.equal(count(env.world, "CastUntargetedSafe"), 1, "casts on resume");
+  // OpenVendor: used, then a 30 s fight before the window opens
+  const env2 = await makeEnv();
+  const VG = 0x90000011;
+  env2.world.addObject(VG, "Thomas the Merchant", 2, 0, 0x200);
+  env2.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.OpenVendor, ...at(1), z: 0, vendorId: VG, name: "Thomas the Merchant" }, P(40)] });
+  await env2.tick();
+  assert.equal(count(env2.world, "UseObject"), 1);
+  env2.nav.slot.onLeave("Combat");
+  clock.t += 30_000;
+  env2.nav.slot.tick({});
+  assert.equal(env2.state.lastResult, null, "the 20 s vendor wait did not expire during the fight");
+  assert.equal(count(env2.world, "UseObject"), 2, "re-uses the vendor on resume");
+  env2.signals.emit("vendorOpen", { guid: VG, name: "Thomas the Merchant" });
+  env2.nav.slot.tick({});
+  assert.equal(env2.state.lastResult, "DONE:5");
+  // the budget still runs while the slot is selected (20 s active ⇒ FAILED)
+  const env3 = await makeEnv();
+  env3.world.addObject(VG, "Thomas the Merchant", 2, 0, 0x200);
+  env3.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.OpenVendor, ...at(1), z: 0, vendorId: VG, name: "Thomas the Merchant" }] });
+  await env3.run(10_000);
+  env3.nav.slot.onLeave("Vitals");
+  clock.t += 5_000;
+  await env3.run(10_500);
+  assert.match(env3.state.lastResult, /^FAILED:5:vendor did not open/, "10 s + 10.5 s active");
+});
+await check("without a portal-space presentation (nullRender) the settle waits for the transit to end (portalOut), not the PlayerTeleport", async () => {
+  const env = await makeEnv(); // world.portal stays false: no presentation
+  const G = 0x7a000031;
+  env.world.addObject(G, "Portal to Holtburg", 2, 0, 0x40000);
+  env.world.onUse = () => {
+    env.world.onUse = null;
+    env.signals.emit("portalIn", { seq: 7 }); // kind 33: the transit starts, the pose has not moved
+  };
+  const ptl = { type: POINT.PortalNPC, ...at(1), z: 0, name: "Portal to Holtburg", objectClass: 14, isTie: false, exitEW: at(2).ew, exitNS: at(2).ns, exitZ: 0 };
+  env.nav.load({ routeType: ROUTE.Once, points: [ptl, P(5010)] });
+  await env.tick();
+  assert.equal(count(env.world, "UseObject"), 1);
+  await env.run(6_000); // longer than PostPortalDelaySec: the far side has not landed yet
+  assert.equal(env.nav.route().activeIndex, 0, "still in transit");
+  env.world.objects.delete(G);
+  env.world.setPoseRel(5000, 0);
+  env.signals.emit("teleportArrived", { cell: env.world.pose.objCellId });
+  env.signals.emit("portalOut", {}); // host_signals: kind 66 with no presentation
+  await env.run(3_500);
+  assert.equal(env.nav.route().activeIndex, 0, "settling PostPortalDelaySec from the arrival");
+  await env.run(1_000);
+  assert.equal(env.nav.route().activeIndex, 1);
+  assert.equal(env.state.lastResult, "DONE:6");
+});
+await check("Portal/NPC: walking into the portal on the approach completes the waypoint (ACE Portal.OnCollideObject), even on a Once route", async () => {
+  const env = await makeEnv();
+  const G = 0x7a000032;
+  env.world.addObject(G, "Portal to Holtburg", 20, 0, 0x40000);
+  const ptl = { type: POINT.PortalNPC, ...at(18), z: 0, name: "Portal to Holtburg", objectClass: 14, isTie: false, exitEW: at(20).ew, exitNS: at(20).ns, exitZ: 0 };
+  env.nav.load({ routeType: ROUTE.Once, points: [ptl, P(5010)] });
+  let hopped = false;
+  const end = clock.t + 30_000;
+  while (clock.t < end && env.nav.route().activeIndex === 0) {
+    await env.tick();
+    const p = env.world.poseW();
+    const portal = W(20);
+    if (!hopped && Math.hypot(p.wx - portal.wx, p.wy - portal.wy) < 3.6) { // a large portal: touched before the 3 m use range
+      hopped = true;
+      env.world.portal = true; // the presentation runs this time
+      env.signals.emit("portalIn", { seq: 9 });
+      env.world.objects.delete(G);
+      env.world.setPoseRel(5000, 0);
+      await env.run(2_000);
+      env.world.portal = false;
+      env.signals.emit("portalOut", {});
+    }
+  }
+  assert.ok(hopped, "walked into the portal");
+  assert.equal(count(env.world, "UseObject"), 0, "never needed a use");
+  assert.equal(env.nav.route().activeIndex, 1, "advanced to the far-side waypoint");
+  assert.equal(env.state.lastResult, "DONE:6");
+  assert.ok(!env.logs.some((l) => /external teleport/.test(l)), "not treated as an external teleport");
+});
+await check("slot.pinned() is false once navigation is disabled mid-recall (no kernel pin on a slot that will not tick)", async () => {
+  const env = await makeEnv();
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Recall, ew: 0, ns: 0, z: 0, spellId: 1635 }] });
+  await env.tick();
+  assert.equal(env.nav.slot.pinned(), true, "casting");
+  env.nav.setEnabled(false);
+  assert.equal(env.nav.slot.enabled(), false);
+  assert.equal(env.nav.slot.pinned(), false);
+  assert.equal(env.nav.slot.wants({}), false);
+});
+await check("a jump job still in the air when its executor is reset (pause/resume, setActive) is waited for: no second attemptJumpLeg, no /rs jump until it lands (review runtime-2)", async () => {
+  const resolvers = [];
+  const gc = { buildTune: goto.buildTune, attemptJumpLeg: () => new Promise((r) => resolvers.push(r)) };
+  const env = await makeEnv({ gotoCompose: gc });
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Jump, ...at(0), z: 0, headingDeg: 0, holdShift: false, delayMs: 300 }, P(30)] });
+  await env.tick();
+  assert.equal(resolvers.length, 1, "job 1 started");
+  env.nav.pause("test");
+  env.nav.resume();
+  await env.run(2000);
+  assert.equal(resolvers.length, 1, "no second attemptJumpLeg while job 1 is in the air");
+  assert.equal(env.nav.slot.pinned(), true, "the slot stays pinned meanwhile");
+  assert.equal(env.nav.status().blockedBy, "a previous jump is still landing");
+  const r = env.nav.requestJump({ headingDeg: 90 });
+  assert.equal(r.ok, false, "/rs jump refused");
+  assert.match(r.error, /jump is already in progress/);
+  env.nav.setActive(0);
+  await env.run(500);
+  assert.equal(resolvers.length, 1, "setActive does not start a second job either");
+  assert.equal(count(env.world, "MoveToPosition"), 0, "nor a router leg");
+  resolvers[0]({ ok: true });
+  await flush();
+  await env.tick();
+  assert.equal(resolvers.length, 2, "then the waypoint is retried fresh (resume semantics)");
+  assert.equal(env.nav.status().blockedBy, null);
+  resolvers[1]({ ok: true });
+  await flush();
+  await env.tick();
+  assert.equal(env.nav.route().activeIndex, 1, "the jump waypoint completes");
+  // The Point stuck-rung jump is kept the same way.
+  const res2 = [];
+  const gc2 = { buildTune: goto.buildTune, attemptJumpLeg: () => new Promise((r2) => res2.push(r2)) };
+  const env2 = await makeEnv({ gotoCompose: gc2 });
+  env2.world.frozen = true;
+  env2.nav.load({ routeType: ROUTE.Once, points: [P(40)] });
+  assert.ok(await env2.until(() => res2.length === 1, 120_000), "the stuck ladder reaches its jump");
+  const legs = count(env2.world, "MoveToPosition");
+  env2.nav.pause("test");
+  env2.nav.resume();
+  await env2.run(1500);
+  assert.equal(count(env2.world, "MoveToPosition"), legs, "no new router leg while the stuck jump is in the air");
+  assert.equal(env2.nav.requestJump({ headingDeg: 10 }).ok, false);
+  res2[0]({ ok: false, error: "jump-unavailable" });
+  await flush();
+  await env2.tick();
+  assert.ok(count(env2.world, "MoveToPosition") > legs, "a fresh leg once it has landed");
+});
+
+await check("requestJump is refused while a nav Jump waypoint is in the air (no concurrent attemptJumpLeg)", async () => {
+  let jobs = 0;
+  const gc = { buildTune: goto.buildTune, attemptJumpLeg: () => (jobs++, new Promise(() => {})) };
+  const env = await makeEnv({ gotoCompose: gc });
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Jump, ...at(0), z: 0, headingDeg: 0, holdShift: false, delayMs: 300 }] });
+  await env.tick();
+  assert.equal(jobs, 1);
+  const r = env.nav.requestJump({ headingDeg: 90, ms: 200 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /nav jump/);
+  env.nav.jumpSlot.tick({});
+  assert.equal(jobs, 1);
+});
+await check("an action waypoint far away: the walk to it does not consume its 60 s find budget", async () => {
+  const VG = 0x90000021;
+  const env = await makeEnv({ world: makeWorld({ speed: 2 }) }); // 200 m at 2 m/s = 100 s (leg watchdog 120 s)
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.OpenVendor, ...at(200), z: 0, vendorId: VG, name: "Far Vendor" }] });
+  let seen = false;
+  const end = clock.t + 150_000;
+  while (clock.t < end && count(env.world, "UseObject") === 0) {
+    await env.tick(200);
+    const p = env.world.poseW();
+    const v = W(201);
+    if (!seen && Math.hypot(p.wx - v.wx, p.wy - v.wy) < 20) {
+      seen = true; // comes into view (NearbyGuids) only when close
+      env.world.addObject(VG, "Far Vendor", 201, 0, 0x200);
+    }
+  }
+  assert.ok(seen, "walked to the waypoint");
+  assert.equal(env.state.lastResult, null, `not FAILED on the way (${env.state.lastResult})`);
+  assert.equal(count(env.world, "UseObject"), 1);
+  env.signals.emit("vendorOpen", { guid: VG, name: "Far Vendor" });
+  await env.tick();
+  assert.equal(env.state.lastResult, "DONE:5");
+});
+await check("C9: add/addHere/requestJump never throw on a null options argument", async () => {
+  const env = await makeEnv();
+  assert.equal(env.nav.add(P(1), null), 0);
+  assert.equal(env.nav.addHere(POINT.Point, {}, null).ok, true);
+  assert.equal(typeof env.nav.requestJump(null).ok, "boolean");
 });
 
 Date.now = realNow;

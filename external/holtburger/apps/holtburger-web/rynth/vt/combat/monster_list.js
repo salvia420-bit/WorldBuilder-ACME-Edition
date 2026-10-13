@@ -24,7 +24,9 @@
 // setting_*/calls/$vars) has its verdict cached per (list revision, guid),
 // but only once every static variable it references (name, typeid, species,
 // maxhp) has resolved — species/maxhp arrive asynchronously via appraisal, and
-// a verdict taken while they were unknown would freeze a wrong answer.
+// a verdict taken while they were unknown would freeze a wrong answer. The
+// cache remembers the name it was taken for and is dropped when the guid
+// names another object (ACE recycles dynamic guids).
 // Dynamic entries are re-evaluated once per scan (memo per snapshot seq).
 //
 // The expression engine is INJECTED (C2: no import of rynth/vt/expr):
@@ -210,7 +212,7 @@ export class MonsterList {
     this._rev = 0;
     this._entries = [Object.freeze({ ...DEFAULT_ENTRY })];
     this._parsed = [null];
-    this._static = new Map(); // guid -> Map(entryIndex -> bool)
+    this._static = new Map(); // guid -> { name, v: Map(entryIndex -> bool) }
     this._memo = { seq: undefined, map: new Map() }; // per-scan resolution memo
     this._warned = new Set();
     this.setEntries(entries);
@@ -318,11 +320,18 @@ export class MonsterList {
       return vars;
     };
     let statics = this._static.get(g);
+    // ACE recycles dynamic guids (GuidManager recycleTime, 6 h): a cached
+    // verdict belongs to the object that had this guid then — drop it when
+    // the guid now names another object.
+    if (statics && statics.name !== safeGet(getVars(), "name")) {
+      this._static.delete(g);
+      statics = undefined;
+    }
     for (let i = 1; i < n; i++) {
       const e = this._entries[i];
       if (!e.enabled) continue;
       let verdict;
-      if (statics && statics.has(i)) verdict = statics.get(i);
+      if (statics && statics.v.has(i)) verdict = statics.v.get(i);
       else {
         const v = getVars();
         const p = this._parsed[i];
@@ -335,10 +344,10 @@ export class MonsterList {
         if (st.cacheable) {
           if (!statics) {
             if (this._static.size >= CACHE_GUIDS_MAX) this._static.clear();
-            statics = new Map();
+            statics = { name: safeGet(v, "name"), v: new Map() };
             this._static.set(g, statics);
           }
-          statics.set(i, verdict);
+          statics.v.set(i, verdict);
         }
       }
       if (verdict) return { entry: e, index: i };

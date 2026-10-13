@@ -43,7 +43,7 @@ function makeLog(log, now) {
       t = 0;
     }
     const last = seen.get(m);
-    if (last !== undefined && t - last < 10_000) return;
+    if (last !== undefined && t >= last && t - last < 10_000) return; // a clock that went back never mutes a line
     if (seen.size > 256) seen.clear();
     seen.set(m, t);
     try {

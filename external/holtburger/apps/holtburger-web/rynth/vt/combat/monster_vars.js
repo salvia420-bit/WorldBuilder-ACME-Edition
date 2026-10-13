@@ -13,7 +13,8 @@
 //                  per-wcid profile); "" when unknown, so `maxhp<1000` does not
 //                  match a monster we never appraised (U6 §5.3)
 //   range          DYNAMIC world-frame metres (= VTank yards); "" when unknown
-//   hasshield      DYNAMIC host.HasShield (any wielded Armor); "" when unknown
+//   hasshield      DYNAMIC host.HasShield (a wielded Armor-class item in the
+//                  Shield slot — every Armor row of another wielder); "" when unknown
 //   setting_<Name> DYNAMIC options.get(Name, {exactCase:true, vtUnits:true}),
 //                  then case-insensitive with ONE warning per name (G:133 says
 //                  case-sensitive); an unknown option = literal text

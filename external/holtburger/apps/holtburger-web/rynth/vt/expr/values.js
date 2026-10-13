@@ -16,8 +16,9 @@
 //   toStr:   Bool "1"/"0"; numbers like .NET "G" (shortest round-trip, upper
 //            case E, exponent form outside 1e-5 .. 1e15); None "".
 //   equals:  numeric when both sides parse as numbers (after trim), Bool vs
-//            Number uses 1/0, wobj vs wobj by guid, else case-insensitive
-//            string compare (G:147).
+//            Number uses 1/0, wobj vs wobj by guid, None is 0 against a
+//            number/Bool (the `finder[]==0` "not found" idiom) and "" against
+//            text, else case-insensitive string compare (G:147).
 
 export const V = Object.freeze({
   none: null,
@@ -246,6 +247,19 @@ export function equals(a, b) {
   }
   if (ta === "coords" && tb === "coords") return a.ns === b.ns && a.ew === b.ew && a.z === b.z;
   if (ta !== undefined && ta === tb && (ta === "list" || ta === "dict" || ta === "sw") && a === b) return true;
+  // None (null) is 0 against a number / Bool / numeric string and "" against
+  // other text: CMD's finders return None for "not found" where RynthAi/UB
+  // returned 0, and metas test that with `==0` (corpus ColRings
+  // `wobjectfindnearestbytemplatetype[34441]==0`, blodetetdict3
+  // `wobjectgetselection[]!=0`; C# ExpressionReference "== 0 → true if none").
+  if (a === null || b === null) {
+    const o = a === null ? b : a;
+    if (o === null) return true;
+    if (typeof o === "boolean") return o === false;
+    const n = numericOf(o);
+    if (n !== null) return n === 0;
+    return toStr(o) === "";
+  }
   if (typeof a === "boolean" || typeof b === "boolean") {
     const bv = typeof a === "boolean" ? a : b;
     const o = typeof a === "boolean" ? b : a;

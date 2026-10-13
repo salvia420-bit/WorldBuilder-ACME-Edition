@@ -114,7 +114,8 @@ export function formatDotNet(n, fmt) {
   let m;
   if (f === "" || /^[gGrR]$/.test(f)) return formatNumber(x);
   if ((m = /^[gG](\d{1,2})$/.exec(f))) {
-    const p = Math.max(1, Number(m[1]));
+    if (Number(m[1]) === 0) return formatNumber(x); // .NET: precision 0 = the default "G"
+    const p = Number(m[1]);
     const e = x === 0 ? 0 : Math.floor(Math.log10(Math.abs(x)));
     if (e >= -5 && e < p) return formatNumber(Number(x.toPrecision(p)));
     const [mant, ex] = x.toExponential(p - 1).split("e");

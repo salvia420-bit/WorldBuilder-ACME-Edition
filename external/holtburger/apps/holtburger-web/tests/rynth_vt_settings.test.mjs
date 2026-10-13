@@ -327,6 +327,13 @@ await check("resolver order: key > VTank name > case-insensitive key > alias; fi
   const { options } = mk();
   assert.equal(options.get("attackdistance", { exactCase: true }).ok, false);
   assert.equal(options.get("AttackDistance", { exactCase: true, vtUnits: true }).value, 40 / 240);
+  // an alias that is a lower-case VTank lbf name converts like that name, also on the exact-case path
+  // (setting_navclosestoprange must not read metres where /vt opt get navclosestoprange reads lbf)
+  assert.deepStrictEqual([findRow("navclosestoprange", { exactCase: true }).row.key,
+    findRow("navclosestoprange", { exactCase: true }).viaVt], ["FollowNavMin", true]);
+  assert.equal(options.get("navclosestoprange", { exactCase: true, vtUnits: true }).value, 0.0125);
+  assert.equal(options.get("navclosestoprange", { vtUnits: true }).value, 0.0125);
+  assert.equal(findRow("manastonekeepcount", { exactCase: true }).viaVt, false, "a RynthAi-name alias never converts");
 });
 
 await check("unknown option ⇒ error and NO write; meta bag holds unknown names", () => {
@@ -437,6 +444,29 @@ await check("cells: MonsterRange → combat.monsterRangeM + host.nearbyRangeM ru
   mk({ bot: b0 }).options.set("MonsterRange", 150);
   assert.equal(b0.host.nearbyRangeM, 0, "0 = every tracked entity stays unlimited");
   assert.equal(b0.combat.monsterRangeM, 150);
+});
+
+await check("cells: a configured nearbyRangeM below MonsterRange+5 is kept at Default; only a range beyond its schema default widens it (V-2, review regress-2)", () => {
+  const b30 = fakeBot({ nearby: 30 });
+  const { options } = mk({ bot: b30 });
+  options.applyToCells({}); // the attach-time push at Default
+  assert.equal(b30.combat.monsterRangeM, 40);
+  assert.equal(b30.host.nearbyRangeM, 30, "attach at Default keeps the configured 30 m");
+  options.set("MonsterRange", 50);
+  assert.equal(b30.host.nearbyRangeM, 55, "a profile range beyond 40 m widens the scan");
+  options.set("MonsterRange", 40);
+  assert.equal(b30.host.nearbyRangeM, 30, "back at the default: the configured base again");
+  options.set("ApproachRange", 10);
+  assert.equal(b30.host.nearbyRangeM, 30, "10+5 < 30");
+  options.set("ApproachRange", 40);
+  assert.equal(b30.host.nearbyRangeM, 45);
+  options.set("ApproachRange", 4);
+  assert.equal(b30.host.nearbyRangeM, 30);
+  for (const n of [44, 45, 50, 60]) {
+    const b = fakeBot({ nearby: n });
+    mk({ bot: b }).options.applyToCells({});
+    assert.equal(b.host.nearbyRangeM, n, `configured ${n} m unchanged at Default`);
+  }
 });
 
 await check("cells: BlacklistTimeoutSec ×1000, power/height/attempts, loot fields, legacyPriorities copy", () => {
@@ -707,9 +737,10 @@ await check("importHud(): refused on Default; imports the HUD blob into the acti
 
 await check("selectProfile(): pushes every key of the new profile, fires onChange{kind:'profile'}, loads no refs", () => {
   const bot = fakeBot();
-  const m = mk({ bot });
+  const m = mk(); // the profile is made before the bot exists (panel, no bot)
   userProfile(m, "Main"); // now active
   m.options.selectProfile("Default");
+  m.options.bindCells(createLiveCells(bot)); // the bot attaches under Default
   const events = [];
   m.options.onChange((e) => events.push(e));
   bot.combat.enabled = true;
@@ -740,11 +771,44 @@ await check("selectProfile(): pushes every key of the new profile, fires onChang
   assert.equal(events.length, n);
 });
 
+await check("re-selecting Default pushes the schema defaults, not the edits an earlier Default session made (PLAN §4.5(4), G:48, review guide-2)", () => {
+  const bot = fakeBot();
+  const m = mk({ bot });
+  m.options.applyToCells({});
+  // Edits under Default live in the session overlay (nothing is written).
+  m.options.set("HealAt", 80);
+  m.options.set("EnableNavigation", true);
+  assert.equal(bot.vitals.cfg.healAtCombat, 80);
+  assert.equal(m.options.getValue("EnableNavigation"), true);
+  assert.equal(m.storage.writes.length, 0, "Default never writes");
+  assert.equal(m.options.saveAs("Hunt").ok, true, "Save As copies the overlay into Hunt");
+  m.options.set("HealAt", 55);
+  assert.equal(m.options.selectProfile("Default").ok, true);
+  assert.equal(bot.vitals.cfg.healAtCombat, 60, "the schema default, not the old overlay's 80");
+  assert.equal(m.options.getValue("EnableNavigation"), false, "enable flags do not come back with Default");
+  assert.deepStrictEqual(m.profiles.overlay().settings, {}, "a fresh overlay");
+  assert.equal(m.options.selectProfile("Hunt").ok, true);
+  assert.equal(bot.vitals.cfg.healAtCombat, 55, "Hunt keeps its own values");
+  assert.equal(m.options.getValue("EnableNavigation"), true);
+  // Removing the active profile falls back to a fresh Default too.
+  m.options.selectProfile("Default");
+  m.options.set("HealAt", 75);
+  m.options.saveAs("Tmp");
+  assert.equal(m.profiles.remove("Tmp").ok, true);
+  assert.equal(m.profiles.active().kind, "default");
+  assert.deepStrictEqual(m.profiles.overlay().settings, {}, "remove()'s fall-back starts a fresh overlay");
+  // Edits made under Default stay for the session while Default stays active.
+  m.options.set("HealAt", 70);
+  assert.equal(m.options.selectProfile("Default").ok, true, "same profile: a no-op");
+  assert.equal(m.options.getValue("HealAt"), 70);
+});
+
 await check("an explicit selectProfile() lifts the URL pins; a cell with no loop is never reported as pushed", () => {
   const bot = fakeBot({ buff: false });
-  const m = mk({ bot });
+  const m = mk(); // the profile is made before the bot exists
   userProfile(m, "Main");
   m.options.selectProfile("Default");
+  m.options.bindCells(createLiveCells(bot)); // the bot attaches under Default
   bot.combat.enabled = false; // ?botPersona=explorer boot
   const r0 = m.options.applyToCells({ legacy: true, urlPinned: new Set(["EnableCombat", "EnableLooting"]) });
   assert.ok(!r0.pushed.includes("RebuffSecondsRemaining"), "no buff loop ⇒ nothing pushed");
@@ -777,6 +841,234 @@ await check("syncCells: a buff loop that appears later gets the profile's Rebuff
   await b2.setBuffs("auto");
   assert.deepStrictEqual(d.options.syncCells(), ["RebuffSecondsRemaining"]);
   assert.equal(b2.buff.rebuffSecondsRemaining, 900);
+});
+
+await check("switching away from / copying a user profile first persists its unsaved cell drift (C# SwitchProfile)", () => {
+  T += 10_000;
+  const bot = fakeBot();
+  const m = mk({ bot });
+  assert.equal(m.options.saveAs("Main").ok, true); // record = the live values
+  m.options.autosaveTick(T);
+  bot.loot.minValue = 777; // director set_loot_min_value, < 2 s before the switch (no autosave in between)
+  bot.combat.priorities = { olthoi: 7 };
+  assert.equal(m.options.selectProfile("Default").ok, true);
+  let rec = readRecord(m.storage, sharedKey("Main"));
+  assert.equal(rec.settings.LootMinValue, 777, "drift saved into the outgoing profile");
+  assert.deepStrictEqual(rec.lists.legacyPriorities, { olthoi: 7 });
+  assert.equal(bot.loot.minValue, 0, "then Default is pushed");
+  assert.equal(m.options.selectProfile("Main").ok, true);
+  assert.equal(bot.loot.minValue, 777, "and it comes back with the profile");
+  bot.vitals.cfg.healAtCombat = 66;
+  assert.equal(m.options.saveAs("Copy").ok, true);
+  assert.equal(readRecord(m.storage, sharedKey("Main")).settings.HealAt, 66, "Save As keeps the outgoing drift too");
+  assert.equal(readRecord(m.storage, sharedKey("Copy")).settings.HealAt, 66);
+  // Default is still never written by a switch
+  const d = mk({ bot: fakeBot() });
+  d.options.selectProfile("[By char]");
+  d.options.selectProfile("Default");
+  const w = d.storage.writes.length;
+  d.options.selectProfile("Default");
+  assert.equal(d.storage.writes.length, w);
+});
+
+/** bot.js setBuffs: the buff loop appears only after the ladder load (async). */
+function asyncBuffBot() {
+  const bot = fakeBot({ buff: false });
+  bot.setBuffs = function (spec) {
+    this.setBuffsCalls.push(spec);
+    return Promise.resolve().then(() => {
+      this.buffSpec = spec === "auto" ? "auto" : Array.isArray(spec) ? spec.slice() : [];
+      if (!this.buff) this.buff = { enabled: true, rebuffSecondsRemaining: 300 };
+      return [];
+    });
+  };
+  return bot;
+}
+const settle = () => new Promise((r) => setImmediate(r));
+
+await check("a buff list that builds the loop keeps a stored EnableBuffing=false (attach, selectProfile, Buffs tab)", async () => {
+  const noBuff = { settings: { EnableBuffing: false }, lists: { buffs: { spec: [2, 24], disabled: [], itemSpells: {} } }, refs: {} };
+  // selectProfile at runtime
+  const m = mk(); // the profile exists before the bot
+  m.profiles.saveAs("NoBuff", { current: noBuff });
+  m.options.selectProfile("Default");
+  const bot = asyncBuffBot();
+  m.options.bindCells(createLiveCells(bot));
+  m.options.selectProfile("NoBuff");
+  assert.deepStrictEqual(bot.setBuffsCalls, [[2, 24]]);
+  await settle();
+  assert.ok(bot.buff, "the loop was built");
+  assert.equal(bot.buff.enabled, false, "and switched off: the profile says EnableBuffing false");
+  assert.equal(m.options.getValue("EnableBuffing"), false);
+  // first attach (applyToCells legacy:true)
+  const b1 = asyncBuffBot();
+  const m1 = mk();
+  m1.profiles.saveAs("NoBuff", { current: noBuff });
+  m1.options.bindCells(createLiveCells(b1));
+  m1.options.applyToCells({ legacy: true });
+  await settle();
+  assert.equal(b1.buff.enabled, false);
+  // Buffs-tab edit while buffing is off and no loop exists
+  const b2 = asyncBuffBot();
+  const m2 = mk({ bot: b2 });
+  m2.options.saveAs("Off");
+  m2.options.set("EnableBuffing", false, { source: "ui" });
+  m2.options.setList("buffs", { spec: "auto" }, { source: "ui" });
+  assert.deepStrictEqual(b2.setBuffsCalls, ["auto"]);
+  await settle();
+  assert.equal(b2.buff.enabled, false);
+  // EnableBuffing at its default (true): the new loop stays on
+  const b3 = asyncBuffBot();
+  const m3 = mk({ bot: b3 });
+  m3.options.setList("buffs", { spec: "auto" }, { source: "ui" });
+  await settle();
+  assert.equal(b3.buff.enabled, true);
+});
+
+/** bot.js setBuffs exactly: calls are serialised on a chain and bot.buffSpec is
+ *  set when a call's turn RUNS, then the run awaits the spell-ladder load. */
+function chainedBuffBot(initialSpec = "auto") {
+  const bot = fakeBot();
+  bot.buffSpec = initialSpec;
+  let release;
+  const ladder = new Promise((r) => { release = r; });
+  let chain = Promise.resolve();
+  bot.setBuffs = function (ids) {
+    this.setBuffsCalls.push(ids);
+    const run = async () => {
+      bot.buffSpec = ids === "auto" ? "auto" : Array.isArray(ids) ? ids.slice() : [];
+      await ladder;
+      return [];
+    };
+    const p = chain.then(run, run);
+    chain = p.catch(() => {});
+    return p;
+  };
+  return { bot, release: () => release() };
+}
+const drain = async () => {
+  for (let i = 0; i < 20; i++) await settle();
+};
+
+await check("async bot.setBuffs: reads, the immediate save and a revert see the pushed spec, not bot.buffSpec's old one", async () => {
+  T += 10_000;
+  const { bot, release } = chainedBuffBot("auto");
+  const m = mk({ bot });
+  m.options.saveAs("Main");
+  const disk = () => readRecord(m.storage, sharedKey("Main")).lists.buffs?.spec;
+  assert.equal(m.options.setList("buffs", { spec: [2] }, { source: "ui" }).ok, true);
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [2], "before bot.buffSpec changes");
+  assert.deepStrictEqual(disk(), [2], "the immediate save writes the operator's spec");
+  await settle(); // run #1 starts (bot.buffSpec = [2]) and waits for the ladder
+  assert.equal(m.options.setList("buffs", { spec: [2, 24] }, { source: "ui" }).ok, true); // queued behind run #1
+  assert.deepStrictEqual(bot.buffSpec, [2], "the bot still shows the previous spec");
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [2, 24]);
+  assert.deepStrictEqual(disk(), [2, 24]);
+  // the Buffs tab reverts to the value bot.buffSpec shows right now: it must still be pushed
+  assert.equal(m.options.setList("buffs", { spec: [2] }, { source: "ui" }).ok, true);
+  assert.deepStrictEqual(bot.setBuffsCalls, [[2], [2, 24], [2]]);
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [2]);
+  release();
+  await drain();
+  assert.deepStrictEqual(bot.buffSpec, [2], "the operator's last choice wins");
+  T += 5000;
+  m.options.autosaveTick(T);
+  assert.deepStrictEqual(disk(), [2]);
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [2], "after settling the bot is read again");
+  bot.buffSpec = "auto"; // e.g. the director / HUD changed it later
+  assert.equal(m.options.getList("buffs").spec, "auto");
+  // EnableBuffing true with no loop builds it through the same async call
+  const c2 = chainedBuffBot(null);
+  c2.bot.buff = null;
+  const m2 = mk({ bot: c2.bot });
+  m2.options.saveAs("Main");
+  m2.options.set("EnableBuffing", false, { source: "ui" });
+  m2.options.set("EnableBuffing", true, { source: "ui" });
+  assert.deepStrictEqual(c2.bot.setBuffsCalls, ["auto"]);
+  assert.equal(m2.options.getList("buffs").spec, "auto", "the spec being applied, not null");
+  c2.release();
+  await drain();
+  // a rebind drops an in-flight spec of the previous bot
+  const c3 = chainedBuffBot([7]);
+  const m3 = mk({ bot: c3.bot });
+  m3.options.setList("buffs", { spec: [8] });
+  m3.options.bindCells(createLiveCells(fakeBot()));
+  assert.equal(m3.options.getList("buffs").spec, null, "the new bot's own spec");
+  c3.release();
+  await drain();
+});
+
+await check("noteLegacyEdit('buffs') before the HUD's own bot.setBuffs ran: the save writes the HUD's spec", async () => {
+  T += 10_000;
+  const { bot, release } = chainedBuffBot("auto");
+  const m = mk({ bot });
+  m.options.saveAs("Main");
+  // hud_bridge.setBuffs: persist() (→ noteLegacyEdit) runs before `await b.setBuffs(list)`
+  m.options.noteLegacyEdit("buffs", [2, 24]);
+  assert.deepStrictEqual(readRecord(m.storage, sharedKey("Main")).lists.buffs.spec, [2, 24]);
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [2, 24]);
+  const p = bot.setBuffs([2, 24]);
+  await settle();
+  assert.deepStrictEqual(bot.buffSpec, [2, 24]);
+  bot.buffSpec = [9]; // anything that changes the bot afterwards is read live again
+  assert.deepStrictEqual(m.options.getList("buffs").spec, [9]);
+  release();
+  await p;
+});
+
+await check("a later attach (legacy:false) re-applies the stored keys no boot path carries; Default stays untouched", () => {
+  T += 10_000;
+  const win = {};
+  const storage = spyStorage();
+  const s = S.getVtSession(win, 1001, { storage, now, log: quiet });
+  const b1 = fakeBot();
+  s.options.bindCells(createLiveCells(b1));
+  s.options.applyToCells({ legacy: s.attachCount++ === 0 });
+  s.options.saveAs("Main");
+  for (const [k, v] of [["MeleeAttackPower", 0.9], ["MissileAttackPower", 0.4], ["AttackHeight", 3],
+    ["BlacklistAttempts", 7], ["BlacklistTimeoutSec", 60], ["HealAt", 70]]) s.options.set(k, v, { source: "ui" });
+  // takeover rebind / HUD Restart: dispose, a fresh bot at the ctor defaults, later attach
+  s.options.flushNow();
+  s.options.bindCells(null);
+  const b2 = fakeBot();
+  const again = S.getVtSession(win, 1001, { storage, now, log: quiet });
+  again.options.bindCells(createLiveCells(b2));
+  const r = again.options.applyToCells({ legacy: again.attachCount++ === 0 });
+  assert.deepStrictEqual(r.pushed.sort(),
+    ["AttackHeight", "BlacklistAttempts", "BlacklistTimeoutSec", "MeleeAttackPower", "MissileAttackPower"]);
+  assert.deepStrictEqual([b2.combat.meleePower, b2.combat.missileAccuracy, b2.combat.attackHeight, b2.combat.blacklistAttempts,
+    b2.combat.blacklistTimeoutMs], [0.9, 0.4, 3, 7, 60_000]);
+  assert.equal(b2.vitals.cfg.healAtCombat, 60, "vitals ride the boot carry-over / hudBootOverrides, not this push");
+  T += 5000;
+  again.options.autosaveTick(T);
+  const rec = readRecord(storage, sharedKey("Main")).settings;
+  assert.deepStrictEqual([rec.MeleeAttackPower, rec.AttackHeight, rec.BlacklistAttempts, rec.BlacklistTimeoutSec], [0.9, 3, 7, 60],
+    "the profile keeps them through the rebind");
+  // Default with an empty overlay: a later attach pushes nothing (V-2)
+  const b3 = fakeBot();
+  b3.combat.meleePower = 0.8; // a programmatic config.combat value
+  const d = mk({ bot: b3 });
+  assert.deepStrictEqual(d.options.applyToCells({ legacy: false }).pushed, []);
+  assert.equal(b3.combat.meleePower, 0.8);
+});
+
+await check("autosave survives a clock stepped backwards; EnableBuffing false with no loop is not reported as pushed", () => {
+  const bot = fakeBot({ buff: false });
+  const m = mk({ bot });
+  m.options.saveAs("Main");
+  m.options.autosaveTick(5_000_000);
+  m.options.autosaveTick(1_000_000); // the wall clock stepped back
+  bot.loot.minValue = 42;
+  m.options.autosaveTick(1_002_500);
+  assert.equal(readRecord(m.storage, sharedKey("Main")).settings.LootMinValue, 42);
+  const p = mk();
+  p.profiles.saveAs("Off", { current: { settings: { EnableBuffing: false }, lists: {}, refs: {} } });
+  const b2 = fakeBot({ buff: false });
+  p.options.bindCells(createLiveCells(b2));
+  const r = p.options.applyToCells({ legacy: true });
+  assert.ok(!r.pushed.includes("EnableBuffing"), "nothing to switch off");
+  assert.deepStrictEqual(b2.setBuffsCalls, []);
+  assert.equal(p.options.getValue("EnableBuffing"), false);
 });
 
 await check("lists and refs: getList/setList/getRef/setRef; live buff spec merged over the profile list", () => {
@@ -824,6 +1116,45 @@ await check("snapshot() equals the live loop values at Default; list() exposes V
   assert.equal(options.list().length, SCHEMA.length);
   assert.ok(options.list("vitals").every((r) => r.row.page === "vitals" || /vitals/i.test(r.row.group)));
   assert.ok(options.list("Not on web").every((r) => r.inert));
+});
+
+await check("NamedStore.list() re-parses a record only when its stored text changed (a 500 ms panel refresh over a big meta library, review runtime-7)", () => {
+  const storage = spyStorage();
+  const store = new S.NamedStore({ storage, prefix: "rynth.vt.v1.meta.", now, log: quiet });
+  const big = { rules: Array.from({ length: 400 }, (_, i) => ({ id: `r${i}`, cond: { t: "Expr", expr: `getvar[x]==${i}` } })) };
+  for (const n of ["Alpha", "Beta", "Gamma"]) assert.equal(store.put(n, big).ok, true);
+  const realParse = JSON.parse;
+  let parses = 0;
+  JSON.parse = (...a) => (parses++, realParse(...a));
+  try {
+    const first = store.list();
+    assert.deepStrictEqual(first.map((e) => e.name), ["Alpha", "Beta", "Gamma"]);
+    const n1 = parses;
+    const second = store.list();
+    assert.equal(parses, n1, "an unchanged library parses nothing");
+    assert.deepStrictEqual(second, first, "same listing");
+    second[0].name = "mutated";
+    assert.equal(store.list()[0].name, "Alpha", "callers get copies");
+    T += 5000;
+    assert.equal(store.put("Delta", { rules: [] }).ok, true);
+    const n2 = parses;
+    const third = store.list();
+    assert.equal(parses - n2, 1, "only the new record is parsed");
+    assert.deepStrictEqual(third.map((e) => e.name), ["Alpha", "Beta", "Delta", "Gamma"]);
+    // Another tab rewrites Beta (same key): re-parsed, the new savedAt shows.
+    T += 5000;
+    storage.setItem("rynth.vt.v1.meta.beta", JSON.stringify({ name: "Beta", savedAt: T, value: { rules: [] } }));
+    const fourth = store.list();
+    assert.equal(fourth.find((e) => e.name === "Beta").savedAt, T);
+    assert.ok(fourth.find((e) => e.name === "Beta").bytes < first[1].bytes);
+    assert.equal(store.remove("Alpha").ok, true);
+    assert.deepStrictEqual(store.list().map((e) => e.name), ["Beta", "Delta", "Gamma"], "a removed record leaves the listing");
+    // A record corrupted in place is skipped, as before.
+    storage.setItem("rynth.vt.v1.meta.gamma", "{not json");
+    assert.deepStrictEqual(store.list().map((e) => e.name), ["Beta", "Delta"]);
+  } finally {
+    JSON.parse = realParse;
+  }
 });
 
 await check("never throws on garbage input", () => {

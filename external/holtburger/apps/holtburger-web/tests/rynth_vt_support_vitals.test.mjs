@@ -432,6 +432,38 @@ await run.check("dispel waits for its data (harmful_families not loaded ⇒ feat
   assert.equal(w.host.calls.length, 1);
 });
 
+await run.check("a failed data load is not retried on every tick (lazy kick ≤ 1 per SUPPORT_DATA_RETRY_MS); an explicit load always retries", async () => {
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  };
+  C.setSupportData("harmful_families", null);
+  let reads = 0;
+  C.setSupportDataReader(async () => {
+    reads++;
+    throw new Error("404");
+  });
+  try {
+    const w = world({ values: { UseDispelItems: true }, consumables: [E(GEM, "Gem of Stillness", "Dispel")], inv: [F.row(GEM, "Gem of Stillness")] });
+    w.host.ench = [VULN7];
+    w.tick(); // the lazy kick
+    await settle();
+    assert.equal(reads, 1);
+    for (let i = 0; i < 50; i++) {
+      w.tick();
+      await settle();
+    }
+    assert.equal(reads, 1, "no fetch per tick after a failure");
+    assert.equal(w.host.calls.length, 0, "still not ready");
+    assert.equal(C.SUPPORT_DATA_RETRY_MS >= 10_000, true);
+    assert.equal(await C.loadSupportJson("harmful_families"), null);
+    assert.equal(reads, 2, "an explicit load retries at once");
+  } finally {
+    C.setSupportDataReader(null);
+  }
+  assert.ok(await C.loadSupportJson("harmful_families"), "the real table loads again");
+  assert.ok(C.supportData("harmful_families"));
+});
+
 // ── grenades ──────────────────────────────────────────────────────────────
 await run.check("grenades: gated off at GrenadeMinMonsters 0; on: ≥ N monsters within RingRange → UseItemOnTarget(grenade, lock)", () => {
   const combat = F.makeCombat({ locked: MOB, targets: [{ guid: MOB, dist: 3 }, { guid: MOB + 1, dist: 4 }, { guid: MOB + 2, dist: 9 }] });

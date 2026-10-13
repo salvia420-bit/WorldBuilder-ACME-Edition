@@ -4,8 +4,12 @@
 // `host.onEvent` registration (this one, I-12 / V-9) and fans the numeric
 // ClientEvent kinds out as typed Signals in JS. Two signals have no server
 // packet and are SYNTHESIZED here: `portalOut` (the falling edge of the
-// portal-space presentation, or kind 66 when no presentation runs) and
+// portal-space presentation, or kind 66 when no presentation runs, or — once
+// the arrival is in — a presentation flag stuck up for PORTAL_OUT_STUCK_MS,
+// e.g. a hidden tab whose frame loop never ends the tunnel) and
 // `vendorClose` (ACE never tells the client a vendor closed — U4 row 19).
+// The stuck-flag portalOut only tells metas (ExitPortal); every movement gate
+// still reads IsPortalSpaceActive itself.
 //
 // Event-kind sources (normative, PLAN §3.2):
 //   2  chat (+ tell when u32b === 2 TELL, or the self-tell line; + castLine)
@@ -49,6 +53,10 @@ const SIGNAL_TYPE_SET = new Set(SIGNAL_TYPES);
 export const VENDOR_CLOSE_RANGE_M = 8;
 /** Safety: a vendor session with no kind-12 refresh for this long is closed. */
 export const VENDOR_SAFETY_MS = 300_000;
+/** A presentation flag still up this long after the arrival (kind 66) ends
+ *  the transit for the metas: the router's cap (portal_gate.js
+ *  PORTAL_SPACE_MAX_HOLD_MS, mirrored — this module imports nothing). */
+export const PORTAL_OUT_STUCK_MS = 90_000;
 /** The window event plugins/vendor-ui.js dispatches from onHidden. */
 export const VENDOR_CLOSED_EVENT = "hb-vendor-closed";
 
@@ -183,6 +191,7 @@ function distanceTo(host, guid) {
   if (!me || !pos) return null;
   const a = me.objCellId >>> 0;
   const b = pos.objCellId >>> 0;
+  if (!a || !b) return null; // cell 0 = no cell known: never a (false) range close
   const sameLb = a >>> 16 === b >>> 16;
   const bothOutdoor = (a & 0xffff) < 0x100 && (b & 0xffff) < 0x100;
   if (!sameLb && !bothOutdoor) return null;
@@ -213,7 +222,9 @@ export function createHostSignals(host, opts = {}) {
   // previous sample of the presentation.
   let portalPending = false;
   let arrived = false;
+  let arrivedAt = null;
   let lastActive = false;
+  const stuckMs = Number.isFinite(o.portalStuckMs) && o.portalStuckMs > 0 ? o.portalStuckMs : PORTAL_OUT_STUCK_MS;
   // the one open vendor session (kind 12 only): { guid, name, at }
   let vendor = null;
 
@@ -259,6 +270,7 @@ export function createHostSignals(host, opts = {}) {
   function emitPortalOut() {
     portalPending = false;
     arrived = false;
+    arrivedAt = null;
     emit({ type: "portalOut" });
   }
 
@@ -338,6 +350,7 @@ export function createHostSignals(host, opts = {}) {
         // presentation to drop.
         if (portalPending) {
           arrived = true;
+          arrivedAt = now();
           if (!presentationActive()) emitPortalOut();
         }
         break;
@@ -426,6 +439,13 @@ export function createHostSignals(host, opts = {}) {
           // falling edge, or the arrival came while the hold was up and the
           // hold is over now (a sample that missed the edge itself)
           if (!active && portalPending && (lastActive || arrived)) emitPortalOut();
+          else if (active && portalPending && arrived && arrivedAt !== null && now() - arrivedAt > stuckMs) {
+            // The arrival is in but the presentation flag never dropped (its
+            // sequencer only advances on rendered frames: a hidden tab). One
+            // portalOut for the metas; the movement gates keep their own read.
+            log(`portal presentation still up ${Math.round((now() - arrivedAt) / 1000)} s after the arrival — portalOut synthesized`);
+            emitPortalOut();
+          }
           lastActive = active;
         } else {
           lastActive = false;

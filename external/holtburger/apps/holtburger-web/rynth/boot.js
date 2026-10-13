@@ -23,10 +23,11 @@
 // import.meta.url, which points into shell/ once scripts/build-shell.mjs
 // bundles the app.
 
-/** Every URL param the boot reads, in the order the original block read them. */
+/** Every URL param the boot reads, in the order the original block read them
+ *  (later additions appended: botBuffs 2026-10-12, botVt 2026-10-13). */
 export const BOT_URL_PARAM_NAMES = Object.freeze([
   "bot", "botAi", "nav", "navEndpoint", "botKernel", "explorePressure",
-  "botCtlOwner", "botPersona", "botModel", "botInterval", "botBuffs",
+  "botCtlOwner", "botPersona", "botModel", "botInterval", "botBuffs", "botVt",
 ]);
 
 /** URLSearchParams | search string → { name: string|null } for BOT_URL_PARAM_NAMES.
@@ -99,6 +100,12 @@ export function applyBotUrlParams(cfg, p) {
   // the chosen model.
   // ?botKernel=off — no grind loops (explorer/pure-travel).
   if (p.botKernel === "off") cfg.kernel = false;
+  // ?botVt=off (2026-10-13, VTank layer escape hatch, PLAN D2): the bot boots
+  // without rynth/vt/ (no `/rs` layer on the bot, the kernel's literal
+  // ladder). Default ON = the layer loads (createGrindBot, unless
+  // config.vt === false). Absent → cfg untouched (byte-identical). Read
+  // outside the cfg.ai guard, like botKernel.
+  if (p.botVt === "off") cfg.vt = false;
   // ?explorePressure=1 (task #15) — ambient idle-motion ticks between
   // AI-director check-ins (rynth/bot.js ExplorePressureController); only
   // fires with an enabled director, so read outside the cfg.ai guard like

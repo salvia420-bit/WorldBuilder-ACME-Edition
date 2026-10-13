@@ -22,16 +22,27 @@
 //  2. Cp / Cs: a DoT attack when not active (window = its duration) → kind "dot".
 //  3. A off and R off ⇒ {done:true}; scanVerdict then excludes the guid while —
 //     re-evaluated every scan, never latched — its CURRENT entry is
-//     non-attacking and every selected family is active or unavailable.
+//     non-attacking and every selected family is active or unavailable. An
+//     A-off entry is also excluded while this character cannot cast at all
+//     (no Magic stance, no caster, no debuff-wand swap): it could only be
+//     dropped again by the melee/missile attackAllowed gate.
 //  4. R ⇒ ring (untargeted) only when AllowUntargetedRings; otherwise the
 //     entry's bolt/streak with a one-time warning.
 //  5. attack: shape = S ? streak : (arc ? arc : bolt), element = resolved
 //     Damage Type, highest castable rung. WarSpellMode "legacy" + DEFAULT entry
-//     ⇒ null (combat_loop's legacy _pickWarSpell).
+//     with its S / arc / Damage Type unedited ⇒ null (combat_loop's legacy
+//     _pickWarSpell); an edited attack column on DEFAULT is planned like any row.
 //  6. three fizzles of one id ⇒ excluded 10 min.
 
 import * as spellTables from "./spell_tables.js";
 import { DebuffLedger } from "./debuff_ledger.js";
+import { DEFAULT_ENTRY } from "./monster_list.js";
+
+/** The DEFAULT row's attack columns (S, arc, Damage Type) are unedited. */
+function defaultAttackShape(entry) {
+  const dt = String(entry.damageType ?? DEFAULT_ENTRY.damageType).toLowerCase();
+  return !!entry.S === DEFAULT_ENTRY.S && !!entry.arc === DEFAULT_ENTRY.arc && dt === String(DEFAULT_ENTRY.damageType).toLowerCase();
+}
 
 const MODE_MAGIC = 8;
 const MODE_MISSILE = 4;
@@ -107,8 +118,15 @@ export class AttackPlanner {
     getNav = null,
     now = Date.now,
     log,
+    state = null,
   } = {}) {
     if (!monsters) throw new Error("AttackPlanner: monsters (MonsterList) required");
+    // Page-session memory that must outlive a layer rebind (D6; HUD Restart,
+    // the reconnect takeover): the loadout before a debuff-wand swap. INT-2
+    // passes session.ext.plannerState; without it the memory is per planner
+    // (review runtime-3).
+    this._st = state && typeof state === "object" ? state : {};
+    if (!("saved" in this._st)) this._st.saved = null;
     this.host = host;
     this.options = options;
     this.monsters = monsters;
@@ -133,7 +151,6 @@ export class AttackPlanner {
     this._ringRefusedUntil = 0;
     this._swap = null; // { op: "wield"|"unwield", item, at, purpose }
     this._failedItems = new Map(); // guid -> untilMs
-    this._saved = null; // { main, offhand, kind } — the loadout before a debuff-wand swap
     this._stance = null; // { want, since, lastAt }
     this._warned = new Set();
     this._unsubs = [];
@@ -158,6 +175,15 @@ export class AttackPlanner {
       on("equip", (sig) => this._onEquip(sig));
     }
     if (this.spells && typeof this.spells.isLoaded === "function" && !this.spells.isLoaded()) this._kickLoad();
+  }
+
+  /** { main, offhand, kind } — the loadout before a debuff-wand swap (kept in
+   *  the injected page-session state, so a rebind can still put it back). */
+  get _saved() {
+    return this._st.saved || null;
+  }
+  set _saved(v) {
+    this._st.saved = v || null;
   }
 
   dispose() {
@@ -434,12 +460,34 @@ export class AttackPlanner {
     return true;
   }
 
-  /** Can this character cast debuffs right now (or swap to a wand for them)? */
-  _canDebuffNow() {
+  /** Can this character cast right now (Magic stance or a caster in hand)? */
+  _canCastNow() {
     if (this._mode() === MODE_MAGIC) return true;
     const cw = this._casterWielded();
-    if (cw === true || cw === null) return true; // unreadable ⇒ do not exclude on a guess
+    return cw === true || cw === null; // unreadable ⇒ do not exclude on a guess
+  }
+
+  /** Would ensureLoadout swap to a caster for pending debuffs (SwitchWandsToDebuff + a wand)? */
+  _wandSwapAvailable() {
     return this._opt("SwitchWandsToDebuff", false) === true && this._findWand() !== 0;
+  }
+
+  /**
+   * The scan exclusion for an entry with A off (step 3, M8). Such an entry acts
+   * only by casting, so it is excluded while — re-evaluated every scan — it has
+   * nothing left to cast (every selected family active, unavailable or with no
+   * castable rung; R off) or this character cannot cast at all now (no Magic
+   * stance, no caster in hand, no debuff-wand swap). An R entry (ring / standard
+   * war, G:83) stays admitted while the character can cast. Admitting an entry
+   * the character cannot act on would make INT-1's `_attackStep` gate
+   * (attackAllowed false) drop and re-lock it every tick.
+   */
+  _nonAttackingExcluded(g, entry, t) {
+    if (entry.A === true) return false;
+    const castNow = this._canCastNow();
+    if (entry.R === true && castNow) return false;
+    if (this._familiesSettled(g, entry, t)) return true;
+    return !(castNow || this._wandSwapAvailable());
   }
 
   // ── public API ───────────────────────────────────────────────────────
@@ -489,7 +537,7 @@ export class AttackPlanner {
       let v;
       if (this.spells.isLoaded()) this._known(); // book change ⇒ unavailable marks cleared before they are read
       if (entry.priority === -1) v = IGNORE;
-      else if (!this._attacks(entry) && (!this._canDebuffNow() || this._familiesSettled(g, entry, t))) v = IGNORE;
+      else if (this._nonAttackingExcluded(g, entry, t)) v = IGNORE;
       else v = { scoreBias: entry.priority * 1000 };
       if (seq !== undefined) this._svMemo.map.set(g, v);
       return v;
@@ -539,8 +587,10 @@ export class AttackPlanner {
         const ring = this._ringPlan(g, entry, t);
         if (ring) return this._remember(ring);
       }
-      // 5. attack
-      if (index === 0 && this._opt("WarSpellMode", "legacy") !== "vtank") return this._remember(null);
+      // 5. attack — an UNEDITED attack shape on the DEFAULT row keeps the
+      // legacy war pick (WarSpellMode legacy); an explicit S / arc / Damage
+      // Type on DEFAULT is honoured like on any named row (G:84/G:93, guide-4).
+      if (index === 0 && this._opt("WarSpellMode", "legacy") !== "vtank" && defaultAttackShape(entry)) return this._remember(null);
       const shape = entry.S ? "streak" : entry.arc ? "arc" : "bolt";
       const el = this._element(entry, g, t);
       const fam = `${shape}:${el.toLowerCase()}`;
@@ -731,6 +781,10 @@ export class AttackPlanner {
     if (!this.spells.isLoaded()) return false;
     const fams = this._debuffFamilies(entry, g, now).concat(this._dotFamilies(entry));
     for (const fam of fams) {
+      // A cast of it still in flight (sent, no result line yet) keeps the wand:
+      // swapping back now would race our own spell, and a cast lost that way is
+      // recast after the pending window — wand → cast → swap → recast, forever.
+      if (typeof this.ledger.isPending === "function" && this.ledger.isPending(g, fam)) return true;
       if (this.ledger.isActive(g, fam) || this.ledger.isUnavailable(fam)) continue;
       if (this._best(fam, now)) return true;
     }

@@ -53,6 +53,7 @@ import {
   itemTokenHeldByOther,
   loopOf,
   consumableEntries,
+  resolveOwned,
   isWandLike,
   isContainerRow,
   lc,
@@ -153,6 +154,16 @@ export function createManaStones(deps = {}) {
     if (!text || st.state === "idle") return;
     const t = now();
     if (st.state === "tapping") {
+      if (text.includes("The Mana Stone gives")) {
+        // The "empty" stone was really charged (stale appraisal): ACE POURED it
+        // into the item (ManaStone.cs:192-221, ItemCurMana = null afterwards)
+        // instead of draining. Not a drain; the stone is empty now. C# resets
+        // on this line in every state (MSM:164-207).
+        if (st.stone) st.book.set(st.stone, { state: "empty", at: t });
+        log(`stone ${st.stone} poured into ${st.item} instead of draining it (it was charged)`);
+        reset();
+        return;
+      }
       if (text.includes("The Mana Stone drains") || text.includes("is destroyed") || text.includes("has been destroyed")) {
         if (st.stone) st.book.set(st.stone, { state: "charged", at: t });
         st.drains++;
@@ -318,7 +329,14 @@ export function createManaStones(deps = {}) {
     const min = Math.max(1, optNum(options, "ManaTankMinimumMana", 2500));
     const stoneSet = new Set(stones.map((r) => Number(r.guid) >>> 0));
     const tab = itemsTabGuids();
-    const listed = new Set(consumableEntries(consumables).map((e) => e.guid));
+    // Consumable-listed items by their LIVE identity (guid, else name + wcid —
+    // an entry saved on another character has another guid, §3.2).
+    const listed = new Set();
+    for (const e of consumableEntries(consumables)) {
+      if (e.guid) listed.add(e.guid);
+      const g = resolveOwned(host, e, inv);
+      if (g) listed.add(g);
+    }
     let best = 0;
     let bestMana = -1;
     for (const r of inv) {
@@ -447,8 +465,9 @@ export function createManaStones(deps = {}) {
       if (st.state !== "idle") return;
       if (inPortal(host)) return;
       if (!held) {
+        // §3.11 defence in depth: only when the tick info SAYS Idle/Navigate.
         const action = info && info.kernelAction;
-        if (action != null && action !== "Idle" && action !== "Navigate") return;
+        if (action !== "Idle" && action !== "Navigate") return;
         const loot = loopOf(bot, "loot");
         if (loot && loot.enabled !== false && loot.state != null && loot.state !== "SCAN") return;
       }

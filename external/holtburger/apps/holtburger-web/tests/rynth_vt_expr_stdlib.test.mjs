@@ -98,6 +98,8 @@ const CASES = [
   [["cstrf"], "cstrf[0.5,`#.00`]", ".50"],
   [["cstrf"], "cstrf[0.256,P1]", "25.6 %"],
   [["cstrf"], "cstrf[7,unknown]", "7"],
+  [["cstrf"], "cstrf[1234.5678,G3]", "1.23E+03"],
+  [["cstrf"], "cstrf[1234.5678,G0]", "1234.5678", ".NET: G0 = the default G"],
   [["cstrf"], "setvar[fmt,F1];cstrf[2.25,$fmt]", "2.3"],
   [["cnumber"], "cnumber[3.14159]", 3.14159],
   [["cnumber"], "cnumber[abc]", 0],
@@ -387,6 +389,49 @@ await check("VarStore: default storage is in-memory; setScope flushes the old ch
   v.setScope("22");
   assert.deepStrictEqual(JSON.parse(storage.getItem("rynth.vt.v1.pvars.11")), { k: 1 });
   assert.equal(v.get("p", "k"), undefined, "the new character starts with its own pvars");
+});
+
+await check("VarStore: gvars across two tabs — a read sees the other tab's flush; a flush merges and never drops the other tab's keys (review logic-4)", () => {
+  const storage = fakeStorage();
+  const KEY = "rynth.vt.v1.gvars";
+  const A = new VarStore({ storage, scope: "1", now: () => 0 });
+  const B = new VarStore({ storage, scope: "2", now: () => 0 });
+  A.set("g", "aDone", 1);
+  assert.equal(B.get("g", "muleReady"), undefined);
+  B.set("g", "muleReady", 1);
+  assert.equal(B.flush({ force: true }), true);
+  assert.equal(A.get("g", "muleReady"), 1, "A sees B's write without a reload");
+  assert.equal(A.has("g", "muleready"), true);
+  assert.equal(A.get("g", "aDone"), 1, "A's unwritten edit survives the re-load");
+  assert.equal(A.flush({ force: true }), true);
+  assert.deepStrictEqual(JSON.parse(storage.getItem(KEY)), { muleReady: 1, aDone: 1 }, "A's flush keeps B's key");
+  A.clear("g", "aDone");
+  A.flush({ force: true });
+  assert.deepStrictEqual(JSON.parse(storage.getItem(KEY)), { muleReady: 1 }, "A's clear removes only its own key");
+  assert.equal(B.get("g", "aDone"), undefined, "B sees the clear");
+  // B's view is stale when A writes another key: both writes are kept.
+  B.set("g", "muleReady", 2);
+  A.set("g", "x", 5);
+  B.flush({ force: true });
+  A.flush({ force: true });
+  assert.deepStrictEqual(JSON.parse(storage.getItem(KEY)), { muleReady: 2, x: 5 });
+  assert.equal(A.get("g", "muleReady"), 2);
+  // Session-only (non-scalar) values survive another tab's write.
+  const lst = { t: "list", items: [1] };
+  A.set("g", "lst", lst);
+  B.set("g", "y", 1);
+  B.flush({ force: true });
+  assert.equal(A.get("g", "lst"), lst);
+  assert.equal(A.get("g", "y"), 1);
+  A.flush({ force: true });
+  assert.deepStrictEqual(JSON.parse(storage.getItem(KEY)), { muleReady: 2, x: 5, y: 1 }, "a list is never persisted");
+  assert.equal(A.get("g", "lst"), lst, "…but stays for the session");
+  // clearallgvars keeps its meaning: every gvar goes.
+  A.clearAll("g");
+  A.flush({ force: true });
+  assert.equal(storage.getItem(KEY), null);
+  assert.equal(B.get("g", "y"), undefined);
+  assert.equal(A.get("g", "lst"), undefined);
 });
 
 await check("VarStore: exportSession/importSession keep values by reference (page-level session, D6)", () => {

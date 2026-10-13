@@ -237,6 +237,23 @@ function readEnchantmentRows(s) {
   return rows;
 }
 
+// B7 confirm line for a NAMED item: ACE WorldObject_Magic.cs:1422 "You cast
+// <spell> on <target><suffix>", suffix "" | ", surpassing X" | ", refreshing X"
+// | ", but it is surpassed by X" (:411-420). The name must end the line or
+// precede the suffix comma, so "Shield" never matches "Shield Golem".
+// Case-insensitive: an Items-tab name typed by hand may differ in case.
+const ITEM_CAST_RE_CACHE = new Map();
+function itemCastLine(name) {
+  let re = ITEM_CAST_RE_CACHE.get(name);
+  if (!re) {
+    const esc = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    re = new RegExp(`^You cast .+ on ${esc}(?:,|\\s*$)`, "i");
+    if (ITEM_CAST_RE_CACHE.size > 256) ITEM_CAST_RE_CACHE.clear();
+    ITEM_CAST_RE_CACHE.set(name, re);
+  }
+  return re;
+}
+
 // serde_wasm_bindgen hands getSpellRecord back as a Map; older bundles and
 // test fakes use plain objects.
 function recordField(rec, key) {
@@ -301,6 +318,16 @@ export class RynthBuffLoop {
     // phantom "active" buff whenever a cast silently failed).
     this.itemBuffs = (opts.itemBuffs || []).slice();
     this.itemRecastMs = opts.itemRecastMs ?? 25 * 60_000; // conservative
+    // VTank layer hooks (PLAN §3.14; inert at their defaults):
+    //   rebuffSecondsRemaining  the B3 threshold (VTank RebufTimeRemainingSeconds,
+    //                           a live settings cell); 300 = REBUFF_SECONDS_REMAINING.
+    //   idleRebuffWindowS       extra seconds added to the threshold in
+    //                           _isActiveReal ONLY — the "Rebuff When Idle" slot
+    //                           raises it for exactly one tick() and restores 0;
+    //                           capped per family at half the landed duration
+    //                           (_idleWindowFor).
+    this.rebuffSecondsRemaining = opts.rebuffSecondsRemaining ?? REBUFF_SECONDS_REMAINING;
+    this.idleRebuffWindowS = 0;
     this._itemLastCast = new Map(); // "spellId:itemGuid" -> confirmed ts
     this._itemPending = null; // { spellId, itemGuid, issuedAt }
     this._running = false;
@@ -385,7 +412,12 @@ export class RynthBuffLoop {
   // matching confirmation stamps the timer — never optimistic.
   _onChat(e) {
     if (e.kind !== 2 || !e.text || !this._itemPending) return;
-    if (/^You cast .+ on /.test(e.text)) {
+    // An item buff projected by the VT layer carries its item's name (U2 H5):
+    // only "You cast <spell> on <that item>[, suffix]" confirms it, so a
+    // debuff/other-target line can no longer confirm a pending item enchant.
+    // Without a name, today's any-target form.
+    const itemName = this._itemPending.itemName;
+    if (itemName ? itemCastLine(itemName).test(e.text) : /^You cast .+ on /.test(e.text)) {
       const key = `${this._itemPending.spellId}:${this._itemPending.itemGuid}`;
       this._itemLastCast.set(key, Date.now());
       this.log(`item enchant confirmed: ${e.text.slice(0, 60)}`);
@@ -609,7 +641,9 @@ export class RynthBuffLoop {
       // LATER expiry (max-remaining) — more defensible against reordered/stale
       // rows. CONFIRMED-no-change: the JS choice stands.
       if (!prev || expiresAtMs > prev.expiresAtMs) {
-        out.set(family, { spellId, expiresAtMs, permanent });
+        // durationS: the landed spell's full duration (s) — caps the
+        // idle-rebuff window per family (_idleWindowFor, review safety-3).
+        out.set(family, { spellId, expiresAtMs, permanent, durationS: duration });
       }
       this.spellFamily.set(spellId, family);
     }
@@ -724,7 +758,79 @@ export class RynthBuffLoop {
     // is held active while present so the batch doesn't rebatch it forever;
     // it's recast only once it fully drops from the registry.
     if (family !== undefined && this._shortDurationFamilies.has(family)) return true;
-    return remainingS > REBUFF_SECONDS_REMAINING;
+    return remainingS > this._rebuffThresholdS() + this._idleWindowFor(entry);
+  }
+
+  /** The idle-rebuff window (s) for one landed family entry: the raised
+   *  window, capped so the windowed threshold never exceeds HALF the landed
+   *  duration (or the base threshold, whichever is higher). "Running low"
+   *  (G:37) is never a buff with more than half its time left: without the
+   *  cap, RebuffSecondsRemaining + IdleRebuffWindowSec >= a buff's duration
+   *  (in-schema, e.g. 1200 + 600 on 1800 s Level I-V buffs) read every fresh
+   *  landing as "below", and the idle slot recast the whole set every
+   *  ~1.75 s forever (review safety-3). Unchanged at the defaults (300 + 600)
+   *  for any buff of 1800 s or more; an entry without a known duration keeps
+   *  the full window. */
+  _idleWindowFor(entry) {
+    const win = this._idleWindowS();
+    if (!(win > 0)) return 0;
+    const d = entry ? entry.durationS : undefined;
+    if (typeof d !== "number" || !Number.isFinite(d) || d <= 0) return win;
+    return Math.min(win, Math.max(0, d / 2 - this._rebuffThresholdS()));
+  }
+
+  /** B3 threshold (s): the live rebuffSecondsRemaining cell, else 300. */
+  _rebuffThresholdS() {
+    const v = this.rebuffSecondsRemaining;
+    return typeof v === "number" && Number.isFinite(v) ? v : REBUFF_SECONDS_REMAINING;
+  }
+
+  /** The idle-rebuff window (s) currently raised by the VT IdleRebuff slot. */
+  _idleWindowS() {
+    const v = this.idleRebuffWindowS;
+    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
+  /** "Does the buff loop want the tick?" — with extraWindowS 0 EXACTLY the
+   *  kernel's _buffNeeded() predicate (kernel.js: enabled, not blocked with
+   *  nothing pending, `!ready || active < desired || pending`), so meta
+   *  NeedToBuff and the kernel agree (critic C10). With extraWindowS > 0 it is
+   *  also true when a desired, non-parked buff would be recast by a tick()
+   *  under that window — remaining ≤ rebuffSecondsRemaining + extraWindowS,
+   *  the window capped per family by _idleWindowFor (permanent and
+   *  short-duration-held families never count). */
+  needsBuff({ extraWindowS = 0 } = {}) {
+    if (this.enabled === false) return false;
+    const st = this.status;
+    if (st.blocked && st.pending === 0) return false;
+    if (!st.ready || st.active < st.desired || st.pending !== 0) return true;
+    const extra = Number(extraWindowS);
+    if (!(extra > 0) || !Number.isFinite(extra)) return false;
+    const prev = this.idleRebuffWindowS;
+    this.idleRebuffWindowS = extra;
+    try {
+      const now = Date.now();
+      return this.desired.some((id) => !this._isParked(id, now) && !this._isActiveReal(id));
+    } finally {
+      this.idleRebuffWindowS = prev;
+    }
+  }
+
+  /** Replace the B7 item-enchant list (the VT Items/Buffs tabs projection):
+   *  `[{ spellId, itemGuid, itemName }]`. Confirmations already seen for a
+   *  spell+item pair are kept (no recast storm on a re-projection); an empty
+   *  list is today's dormant B7. Returns the accepted count. */
+  setItemBuffs(list) {
+    const out = [];
+    for (const ib of Array.isArray(list) ? list : []) {
+      const spellId = Number(ib && ib.spellId) >>> 0;
+      const itemGuid = Number(ib && ib.itemGuid) >>> 0;
+      if (!spellId || !itemGuid) continue;
+      const itemName = typeof ib.itemName === "string" ? ib.itemName.trim() : "";
+      out.push(itemName ? { spellId, itemGuid, itemName } : { spellId, itemGuid });
+    }
+    this.itemBuffs = out;
+    return out.length;
   }
 
   _isActive(spellId) {
@@ -1027,7 +1133,7 @@ export class RynthBuffLoop {
       NowMs: now,
       Config: {
         EnableBuffing: true,
-        RebuffSecondsRemaining: REBUFF_SECONDS_REMAINING,
+        RebuffSecondsRemaining: this._rebuffThresholdS(),
         SpellCastIntervalMs: SPELL_CAST_INTERVAL_MS,
         HealAt: v?.cfg?.healAtCombat ?? 60, RestamAt: v?.cfg?.restamAtCombat ?? 30,
         GetManaAt: v?.cfg?.getManaAtCombat ?? 40,
@@ -1198,7 +1304,7 @@ export class RynthBuffLoop {
           // finding 9: landed BELOW the rebuff threshold -> hold it active so
           // the batch doesn't rebatch this short-duration buff forever (the
           // deliberate improvement over C#, which rebatches endlessly here).
-          if (famEntry && !famEntry.permanent && this._remainingS(famEntry) <= REBUFF_SECONDS_REMAINING) {
+          if (famEntry && !famEntry.permanent && this._remainingS(famEntry) <= this._rebuffThresholdS()) {
             if (!this._shortDurationFamilies.has(fam)) {
               this.log(`family ${fam} lands below rebuff threshold — holding active (finding 9, no rebatch)`);
             }
@@ -1388,6 +1494,7 @@ export class RynthBuffLoop {
         spellId: ib.spellId, itemGuid: ib.itemGuid, issuedAt: now,
         useDoneAtIssue: itemUseDoneAtIssue, useDoneEvents: 0, refusal: null,
       };
+      if (ib.itemName) this._itemPending.itemName = String(ib.itemName); // tightened B7 confirm (_onChat)
       this.lastCastAt = now;
       return true;
     }

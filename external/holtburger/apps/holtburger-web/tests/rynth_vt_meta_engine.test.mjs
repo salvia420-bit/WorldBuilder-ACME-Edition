@@ -900,6 +900,50 @@ await check("T-ME-EX: the G:296-319 death/runback meta runs to completion; no li
   assert.equal(h.engine.state, "dead");
 });
 
+await check("one clock per tick: entries/watchdog stamped with the heartbeat's nowMs even when the injected clock lags", () => {
+  // The injected clock is frozen at 0 while the heartbeat passes nowMs.
+  const h = makeEngine({ m: meta([R("Default", C.secs(2), A.chat("/x two")), R("Default", C.always, A.wd(5, 3, "stuck"))]) });
+  h.engine.now = () => 0;
+  h.run(1000);
+  assert.deepEqual(h.w.chat, [], "Seconds in State measured on the tick clock (not now − 0)");
+  assert.ok(h.engine.snapshot().watchdog, "armed");
+  h.run(1200);
+  assert.deepEqual(h.w.chat, ["/x two"]);
+  assert.equal(h.engine.state, "Default", "watchdog counts tick time, not a 1 s-per-tick clamp");
+  h.run(1000);
+  assert.equal(h.engine.state, "stuck");
+  // outside a tick the injected clock is used again
+  h.engine.enterState("Default", "manual");
+  assert.equal(h.state.enteredAt, 0);
+});
+
+await check("a clock that steps back neither stalls passes nor mutes the logger", () => {
+  const h = makeEngine({ m: meta([R("Default", C.expr("count[p]"), A.chat("/x never"))]) });
+  h.run(1000);
+  const k0 = h.expr.stats.counters.get("p");
+  h.clock.t -= 3_600_000; // the system clock jumps an hour back
+  h.run(1000);
+  const n = h.expr.stats.counters.get("p") - k0;
+  assert.ok(n >= 3, `passes continue after the step back (${n})`);
+  const lines = [];
+  const clk = { t: 50_000 };
+  const log = M.makeMetaLog((m) => lines.push(m), () => clk.t);
+  log("same");
+  log("same");
+  clk.t = 10_000;
+  log("same");
+  assert.equal(lines.length, 2, "rate-limited forward, printed again after the clock went back");
+});
+
+await check("a rule id \"__proto__\" is renumbered (its fired flag would never stick and it would re-fire every pass)", () => {
+  const h = makeEngine({ m: meta([{ id: "__proto__", state: "Default", enabled: true, cond: C.always, act: A.chat("/x once") }]) });
+  h.run(3000);
+  assert.deepEqual(h.w.chat, ["/x once"]);
+  const id = h.engine.meta().rules[0].id;
+  assert.match(id, /^r\d+$/);
+  assert.ok(normalizeMeta({ rules: [{ id: "__proto__", cond: C.always, act: A.chat("x") }] }).warnings.some((w) => /reserved/.test(w)));
+});
+
 await check("acceptance: imports stay inside rynth/vt/meta/; no timers, DOM, host casts or server chat in the package", () => {
   const files = readdirSync(META_DIR).filter((f) => f.endsWith(".js"));
   assert.deepEqual(files.sort(), ["actions.js", "conditions.js", "engine.js", "index.js", "meta_fns.js", "views.js"]);
@@ -912,6 +956,136 @@ await check("acceptance: imports stay inside rynth/vt/meta/; no timers, DOM, hos
     assert.equal(/setTimeout|setInterval|requestAnimationFrame/.test(src), false, `${f} uses a timer`);
     assert.equal(/CastSpell\(|CastUntargetedSpell\(|castTargetedSpell|castUntargetedSpell|WriteToChat\(/.test(src), false, `${f} names a host cast / server chat`);
     assert.equal(/\bdocument\b|\bwindow\b|innerHTML|DOMParser/.test(src), false, `${f} touches the DOM`);
+  }
+});
+
+await check("host effects (setmotion keys) are released on the running→held edge, on portalIn and on destroy — never while running (I-3, V-12, review runtime-1)", () => {
+  const h = makeEngine({ m: meta([R("Default", C.never, A.chat("/x"))]) });
+  const reasons = [];
+  h.expr.functions = { release: (why) => reasons.push(why) };
+  h.run(1000);
+  assert.deepEqual(reasons, [], "nothing released while running");
+  h.tick(100, { running: false });
+  assert.deepEqual(reasons, ["hold"], "the operator-hold edge");
+  h.run(1000, 100, { running: false });
+  assert.deepEqual(reasons, ["hold"], "once per edge");
+  h.run(500);
+  h.engine.pushEvent({ type: "portalIn" });
+  assert.deepEqual(reasons, ["hold", "portal"]);
+  h.engine.pushEvent({ type: "portalOut" });
+  assert.equal(reasons.length, 2, "portalOut releases nothing");
+  h.engine.destroy();
+  assert.deepEqual(reasons, ["hold", "portal", "detach"]);
+  h.engine.destroy();
+  assert.equal(reasons.length, 3, "destroy is idempotent");
+  // A runtime without a function registry (or without release) is fine.
+  const bare = makeEngine({ m: meta([R("Default", C.never, A.chat("/x"))]) });
+  bare.run(300);
+  bare.tick(100, { running: false });
+  bare.engine.pushEvent({ type: "portalIn" });
+  bare.engine.destroy();
+});
+
+await check("integration (REAL createGrindBot + a real meta rule): a setmotion[] key is released by operator STOP within one heartbeat, refused while held and in portal space, released by bot.stop() (review runtime-1)", async () => {
+  class FakeWorker {
+    constructor() {
+      this.onmessage = null;
+    }
+    postMessage() {}
+    terminate() {}
+  }
+  if (typeof globalThis.Worker !== "function") globalThis.Worker = FakeWorker;
+  if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob:vt-meta-engine";
+  if (typeof URL.revokeObjectURL !== "function") URL.revokeObjectURL = () => {};
+  const realNow = Date.now;
+  const realLog = console.log;
+  const realWarn = console.warn;
+  let NOW = 1_760_000_000_000;
+  Date.now = () => NOW;
+  console.log = () => {};
+  console.warn = () => {};
+  let bot = null;
+  try {
+    const { createGrindBot } = await import("../rynth/bot.js");
+    const guid = 0x50000e01;
+    const calls = [];
+    const rec = (n) => (...a) => calls.push(`${n}(${a.join(",")})`);
+    const session = {
+      isPlayerReady: () => true,
+      playerGuid: () => guid,
+      getLocalPlayerPose: () => ({ landblockId: 0xa9b40015, x: 100, y: 100, z: 0, heading: 0, free() {} }),
+      objectName: (g) => ((g >>> 0) === guid ? "Tester" : undefined),
+      moveToPosition: rec("moveToPosition"),
+      cancelPursuit: rec("cancelPursuit"),
+      stopStick: rec("stopStick"),
+      pursuitStatus: () => 0,
+      sendChat: rec("sendChat"),
+      sendTell: rec("sendTell"),
+      nearbyEntityGuids: () => [],
+      playerKnownSpells: () => [],
+      setMovementInput: rec("setMovementInput"),
+      turnToHeading: rec("turnToHeading"),
+    };
+    bot = await createGrindBot(session, { hz: 10, ai: false });
+    const tick = (n = 1) => {
+      for (let i = 0; i < n; i++) {
+        NOW += 250;
+        bot.host._tick();
+      }
+    };
+    const smiSince = (k) => calls.slice(k).filter((c) => c.startsWith("setMovementInput"));
+    tick(10);
+    const L = bot.vt;
+    assert.ok(L, "the VT layer is attached");
+    const m = meta([
+      R("Default", C.expr("getvar[go] == 1"), A.all(A.doExpr("setmotion[forward, 1] && setvar[go, 0]"), A.set("Push"))),
+      R("Default", { t: "IntoPortal" }, A.doExpr("setmotion[forward, 1]")),
+    ], { name: "mv" });
+    assert.equal(L.library.importMeta("mv", JSON.stringify(m), "json").ok, true);
+    assert.equal(L.library.loadMeta("mv").ok, true);
+    L.options.set("EnableMeta", true, { source: "ui" });
+    tick(4);
+    let k = calls.length;
+    L.vars.set("session", "go", 1);
+    tick(4);
+    assert.equal(L.meta.state, "Push");
+    assert.deepEqual(smiSince(k), ["setMovementInput(1,0,0,true)"], "the meta pressed forward");
+    k = calls.length;
+    bot.control.stop({ persist: false, reason: "test" });
+    tick(1);
+    assert.deepEqual(smiSince(k), ["setMovementInput(0,0,0,false)"], "STOP lets go within one heartbeat");
+    k = calls.length;
+    assert.equal(Number(L.expr.evaluate("setmotion[forward, 1]")), 0, "pressing a key while held is refused");
+    tick(20);
+    assert.deepEqual(smiSince(k), [], "nothing pressed while held");
+    bot.control.resume();
+    tick(4);
+    k = calls.length;
+    globalThis.__isPortalSpaceActive = () => true;
+    try {
+      bot.host._dispatchEvent({ kind: 33, stringPayload: "", u32Payload: 1, u32Payload2: 0 });
+      tick(4);
+      assert.equal(smiSince(k).filter((c) => c.startsWith("setMovementInput(1")).length, 0, "the IntoPortal setmotion is refused in portal space");
+    } finally {
+      globalThis.__isPortalSpaceActive = undefined;
+    }
+    tick(2);
+    assert.equal(Number(L.expr.evaluate("setmotion[forward, 1]")), 1);
+    k = calls.length;
+    bot.stop();
+    assert.ok(smiSince(k).includes("setMovementInput(0,0,0,false)"), "bot.stop() (layer dispose) lets go");
+    bot = null;
+  } finally {
+    if (bot) {
+      try {
+        bot.stop();
+      } catch (_) {
+        /* best effort */
+      }
+    }
+    Date.now = realNow;
+    console.log = realLog;
+    console.warn = realWarn;
   }
 });
 

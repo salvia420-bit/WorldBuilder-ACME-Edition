@@ -11,7 +11,8 @@
 //   c.chat(line)         the local chain: /rs-family → /ls → /ah → InvokeChatParser
 //   c.motionRefused(label)  true (and prints) while operator-held / in portal space
 //   c.actions() c.host() c.options() c.quests() c.vt()
-//   c.queueDelay(ms, line) c.queueLoot(name, partial) c.queueGives(items, target)
+//   c.queueDelay(ms, line) c.queueLoot(name, partial) c.queueGives(items, target) c.cancelGives()
+//   c.canQueue (false: nothing pumps this dispatcher) c.noQueue(what) — the refusal
 //
 // What each prefix covers (corpus-used verbs first; U5 §4.1, U7b §3):
 //   /ra  forcebuff cancelforcebuff power cast mexec follow use* select* give*
@@ -148,12 +149,19 @@ function selectCmd({ inv, land, partial }) {
 /**
  * /ra give* — `[count] <item> to <player>`, split on the LAST " to ".
  * item: exact | partial | regex; player: exact | partial; all = every matching stack.
+ * The give-all verbs also take `stop`: cancel the queued gives (C# CancelGiveQueue).
  */
 function raGiveCmd({ item = "exact", partialPlayer = false, all = false }) {
   return (c) => {
+    if (all && c.rest.trim().toLowerCase() === "stop") {
+      const n = typeof c.cancelGives === "function" ? c.cancelGives() : 0;
+      return c.out(n > 0 ? `[RynthSuite] Give queue cancelled (${n} item(s) remaining).` : "[RynthSuite] Give queue is already empty.");
+    }
     const acts = c.actions();
     const parts = split2(c.rest, " to ", { last: true });
-    if (!parts || !parts[0] || !parts[1]) return c.fail(`usage: /${c.prefix} ${c.verb} [count] <item> to <player>`);
+    if (!parts || !parts[0] || !parts[1]) {
+      return c.fail(`usage: /${c.prefix} ${c.verb} ${all ? "<item> to <player> | stop" : "[count] <item> to <player>"}`);
+    }
     let [itemPart, playerPart] = parts;
     let maxCount = all ? Infinity : 1;
     const m = /^(\d+)\s+(.+)$/.exec(itemPart);
@@ -168,6 +176,7 @@ function raGiveCmd({ item = "exact", partialPlayer = false, all = false }) {
       .slice(0, Number.isFinite(maxCount) ? maxCount : undefined);
     if (!rows.length) return c.fail(`no items found matching '${itemPart}'`);
     if (all || rows.length > 1) {
+      if (c.canQueue === false) return c.noQueue(`/${c.prefix} ${c.verb} of ${rows.length} stack(s)`);
       c.queueGives(
         rows.map((r) => ({ guid: r.guid, name: r.name, amount: r.stack })),
         { guid: target.guid, name: target.name },
@@ -202,6 +211,7 @@ function lootCmd({ partial }) {
     const r = acts.lootFromOpen(name, { partial });
     if (r.ok) return c.out(`[RynthSuite] looting ${r.name} (${hex(r.guid)})`);
     if (r.retry) {
+      if (c.canQueue === false) return c.noQueue(`/${c.prefix} ${c.verb} (waiting for '${name}' to appear)`);
       c.queueLoot(name, partial);
       const what = r.contents && r.contents.length ? ` (open container holds: ${r.contents.slice(0, 8).join(", ")})` : "";
       return c.out(`[RynthSuite] loot '${name}': waiting for it to appear${what}`);
@@ -369,7 +379,7 @@ function mtFellow(c) {
         guid = Number(found[0].guid) >>> 0;
         name = found[0].name || rest;
       } else {
-        const o = c.actions()?.findNearestByName(rest, { partial: false });
+        const o = c.actions()?.findNearestByName(rest, { partial: false, objectClass: OBJECT_CLASS.Player });
         if (o) {
           guid = o.guid;
           name = o.name;
@@ -455,7 +465,7 @@ const RA = new VerbTable("ra", "RynthAi", [
   ["selectp", { run: selectCmd({ inv: true, land: true, partial: true }) }],
   ["selectpi|selectip", { run: selectCmd({ inv: true, land: false, partial: true }) }],
   ["selectlp|selectpl", { run: selectCmd({ inv: false, land: true, partial: true }) }],
-  ["give", { run: raGiveCmd({}), help: "give[a][p|xp|pp|r] [count] <item> to <player>" }],
+  ["give", { run: raGiveCmd({}), help: "give[a][p|xp|pp|r] [count] <item> to <player>; give-all (givea…): <item> to <player> | stop" }],
   ["givep", { run: raGiveCmd({ item: "partial" }) }],
   ["givexp", { run: raGiveCmd({ partialPlayer: true }) }],
   ["givepp", { run: raGiveCmd({ item: "partial", partialPlayer: true }) }],

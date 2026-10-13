@@ -23,6 +23,19 @@
 // not import.meta.url (see boot.js header). Tests inject `importer` +
 // `moduleUrl` and a fake `win`. The one static import (portal_gate.js) has
 // no imports of its own.
+//
+// VTank layer hooks (2026-10-13, PLAN INT-3 §4.5): everything goes through
+// window.__rynthVt (rynth/vt/rs_entry.js, installed lazily) and is inert when
+// it is absent — the HUD then behaves exactly as before:
+//   • start()/restart() boot with the provider's hudBootOverrides() (+ the
+//     HUD persona) while a USER profile is active, else botOverrides()
+//     (always botOverrides() on a ?botVt=off page — no layer on that bot);
+//   • the legacy setters (priorities, loot floor, vitals, buff list) keep
+//     writing the HUD blob and then call provider.noteLegacyEdit(field, the
+//     blob field's new full value);
+//   • the Nav toggle drives bot.vt.nav when a VTank route is loaded (else the
+//     legacy atlas follow / cancel), and the view model reports it;
+//   • vm.vt = bot.vt.statusLine(); openVt(tab) opens the VTank panel.
 
 import { portalSpaceActive } from "./portal_gate.js";
 
@@ -239,6 +252,13 @@ export function buildViewModel(input = {}) {
     activityLine = "Hands off — you have control";
   }
 
+  // ── VTank layer (INT-3): a loaded VTank route drives the Nav toggle ─────
+  // (on = navigation enabled, a route loaded and not paused — a HUD "stop
+  // moving" pauses it, so the toggle reads off until Nav is clicked again).
+  const vtNav = safe(() => bot?.vt?.nav ?? null);
+  const vtRoute = !!(vtNav && safe(() => vtNav.hasRoute() === true, false));
+  const vtNavOn = vtRoute && safe(() => vtNav.enabled === true && !vtNav.paused, false);
+
   // ── subsystem toggles ──────────────────────────────────────────────────
   const sub = (loop, extra = {}) => {
     if (!loop) return { available: false, on: false, ...extra };
@@ -258,8 +278,9 @@ export function buildViewModel(input = {}) {
     loot: sub(loot, { hint: loot ? null : "Looting disabled at boot (config.loot = false)" }),
     nav: {
       available: !!bot,
-      on: !!(mission || walking),
+      on: !!(mission || walking) || vtNavOn,
       hint: bot ? null : "Start the bot first",
+      vtRoute,
     },
     ai: {
       available: !!director,
@@ -364,6 +385,12 @@ export function buildViewModel(input = {}) {
     gotoAvailable: !!safe(() => bot?.globalRouter),
     combatMode: num(ks?.combat?.mode),
     combatIncapable: ks?.combat?.incapable ?? null,
+    // The VTank layer's one-line status (profile · nav · meta · loot), or null
+    // when the bot has no layer (?botVt=off, no bot).
+    vt: safe(() => {
+      const layer = bot?.vt ?? null;
+      return layer && typeof layer.statusLine === "function" ? String(layer.statusLine()) : null;
+    }, null),
   };
 }
 
@@ -472,6 +499,21 @@ export function createHudBridge(env = {}) {
   };
   const persist = () => saveHudSettings(storage, settings);
   const note = (text) => log.push(now(), text);
+  // VTank layer (INT-3) — window.__rynthVt (rs_entry.js); null when absent.
+  const vtApi = () => safe(() => win.__rynthVt ?? null);
+  const vtProvider = (h = getHandle()) => safe(() => {
+    const api = vtApi();
+    return api && typeof api.hudProvider === "function" ? api.hudProvider(h) ?? null : null;
+  });
+  /** A HUD legacy setter just wrote the blob: tell the active VT profile
+   *  (Default ⇒ the session overlay). `value` = the blob field's new full
+   *  value. Never throws, never changes the setter's result. */
+  const noteVtLegacyEdit = (field, value) => {
+    safe(() => {
+      const p = vtProvider();
+      if (p && typeof p.noteLegacyEdit === "function") p.noteLegacyEdit(field, value);
+    });
+  };
   const navResult = (text, okFlag) => {
     lastNav = { text: String(text), ok: !!okFlag, at: now() };
     note(text);
@@ -584,7 +626,7 @@ export function createHudBridge(env = {}) {
     // (its director autoStart would otherwise wait for a resume()). Another
     // character's stop (another tab) is left alone.
     safe(() => opMod?.clearBotStop?.(storage ?? undefined, latchScopeOf(h)));
-    const nb = await boot.bootBotFromHud(h, botOverrides(), { win });
+    const nb = await boot.bootBotFromHud(h, bootOverrides(h, boot), { win });
     if (!nb) return fail("bot boot failed — see the console");
     // Belt and braces: a bot that still came up held (a latch written in
     // between, an older operator_stop.js) is resumed — START means go.
@@ -619,7 +661,14 @@ export function createHudBridge(env = {}) {
     const b = getBot();
     if (!b) return fail("start the bot first");
     if (name === "ai") return setAi(on);
-    if (name === "nav") return on ? followRoute(settings.route ?? null) : cancelTravel();
+    if (name === "nav") {
+      // A VTank route is loaded: the toggle is that route's navigation
+      // (EnableNavigation + resume a paused route). Otherwise, as before:
+      // ON follows the selected atlas route, OFF cancels travel.
+      const vtNav = safe(() => b.vt?.nav ?? null);
+      if (vtNav && safe(() => vtNav.hasRoute() === true, false)) return setVtNav(b, vtNav, on);
+      return on ? followRoute(settings.route ?? null) : cancelTravel();
+    }
     if (name === "buff" && on) {
       // No loop yet, or an empty list: bot.setBuffs() builds/fills it from
       // the saved HUD list, else "auto" (the known self-buffs).
@@ -675,6 +724,33 @@ export function createHudBridge(env = {}) {
     return ok();
   }
 
+  /** The Nav toggle over a loaded VTank route (PLAN §5, hud_bridge row):
+   *  ON = EnableNavigation on (through OperatorControl.setEnabled("nav") when
+   *  the control has it) + resume() — which also clears a HUD "stop moving"
+   *  pause (V-21); OFF = EnableNavigation off (VT nav yields its own router
+   *  leg and keeps the index) and, as the legacy toggle always did, any other
+   *  travel still walking (a goto / atlas route) is cancelled too. */
+  async function setVtNav(b, nav, on) {
+    await loadOp();
+    const c = getControl(b);
+    const r = c && typeof c.setEnabled === "function"
+      ? safe(() => c.setEnabled("nav", !!on), null)
+      : safe(() => (typeof nav.setEnabled === "function" ? nav.setEnabled(!!on) : ((nav.enabled = !!on), { ok: true })), null);
+    if (!r) return fail("VTank navigation toggle failed");
+    if (r.ok === false) return fail(r.error || "refused");
+    if (on) {
+      safe(() => nav.resume?.());
+      note("VT nav on (HUD)");
+      return ok({ vt: true });
+    }
+    const rs = safe(() => b.router?.status?.state ?? null);
+    const otherTravel = !!safe(() => b.mission ?? null)
+      || ((rs === "WALK" || rs === "PORTAL") && !safe(() => nav.ownsRouterWalk?.() === true, false));
+    if (otherTravel) await cancelTravel();
+    note("VT nav off (HUD)");
+    return ok({ vt: true });
+  }
+
   function forceRebuff() {
     const buff = safe(() => getBot()?.buff ?? null);
     if (!buff || typeof buff.forceRebuff !== "function") return fail("force rebuff is not available on this bot");
@@ -701,10 +777,13 @@ export function createHudBridge(env = {}) {
     persist();
     const combat = safe(() => getBot()?.combat ?? null);
     if (combat) safe(() => { combat.priorities = { ...(combat.priorities || {}), [key]: v }; });
+    // After the live write: a bound VT cell is read live when the profile saves.
+    noteVtLegacyEdit("priorities", { ...settings.priorities });
     return ok({ live: !!combat });
   }
   function removePriority(name) {
     const key = String(name ?? "").trim().toLowerCase();
+    const blobHad = !!settings.priorities;
     if (settings.priorities) {
       const { [key]: _drop, ...rest } = settings.priorities;
       settings.priorities = rest;
@@ -717,6 +796,7 @@ export function createHudBridge(env = {}) {
         combat.priorities = rest;
       });
     }
+    if (blobHad) noteVtLegacyEdit("priorities", { ...settings.priorities });
     return ok();
   }
   function setLootMin(value) {
@@ -726,6 +806,7 @@ export function createHudBridge(env = {}) {
     persist();
     const loot = safe(() => getBot()?.loot ?? null);
     if (loot) safe(() => { loot.minValue = n; });
+    noteVtLegacyEdit("lootMin", n);
     return ok({ live: !!loot });
   }
   function setVitalsThreshold(key, value) {
@@ -736,6 +817,7 @@ export function createHudBridge(env = {}) {
     persist();
     const v = safe(() => getBot()?.vitals ?? null);
     if (v && v.cfg) safe(() => { v.cfg[key] = n; });
+    noteVtLegacyEdit("vitals", { ...settings.vitals });
     return ok({ live: !!(v && v.cfg) });
   }
   /** Buff list: live when buff_loop exposes setDesired(), else saved for the
@@ -748,6 +830,9 @@ export function createHudBridge(env = {}) {
       : [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((x) => Number.isInteger(x) && x > 0 && x <= 0xFFFFFFFF))];
     settings.buffs = list;
     persist();
+    // Before the (async) bot.setBuffs: SET's noteLegacyEdit("buffs") expects
+    // the HUD's own push (either order is safe, SET review F1).
+    noteVtLegacyEdit("buffs", list === "auto" ? "auto" : list.slice());
     const b = getBot();
     if (b && typeof b.setBuffs === "function") {
       // bot.js: builds the loop when there is none, resolves "auto".
@@ -797,6 +882,26 @@ export function createHudBridge(env = {}) {
     if (settings.persona) o.persona = settings.persona;
     return o;
   }
+  /** The overrides a HUD (re)boot uses (PLAN §4.5 rule 5): while a VTank USER
+   *  profile is active, the profile's legacy values (hudBootOverrides(): the
+   *  applyHudOverrides shape — buffs / priorities / lootMin / vitals) plus the
+   *  HUD persona; otherwise (no layer, Default profile) today's botOverrides().
+   *  On a ?botVt=off page the bot boots without the layer, so the HUD boot is
+   *  today's too (V-1) — read exactly as bootBotFromHud reads it. */
+  function bootOverrides(h, bootMod = null) {
+    const vtOff = safe(() => typeof bootMod?.readBotUrlParams === "function"
+      && bootMod.readBotUrlParams(win.location?.search ?? "")?.botVt === "off", false);
+    const p = vtOff ? null : vtProvider(h);
+    if (p && safe(() => p.isUserProfileActive() === true, false)) {
+      const po = safe(() => p.hudBootOverrides(), null);
+      if (po && typeof po === "object") {
+        const o = { ...po };
+        if (settings.persona) o.persona = settings.persona;
+        return o;
+      }
+    }
+    return botOverrides();
+  }
 
   /** Restart the bot with the HUD settings (stops the current one; the
    *  operator-stop latch, if set, still boots it held). */
@@ -811,7 +916,7 @@ export function createHudBridge(env = {}) {
       return fail(`boot module failed to load: ${e?.message ?? e}`);
     }
     note("RESTART with HUD settings");
-    const nb = await boot.bootBotFromHud(h, botOverrides(), { win });
+    const nb = await boot.bootBotFromHud(h, bootOverrides(h, boot), { win });
     if (!nb) return fail("bot boot failed — see the console");
     applyPersonaRuntime(nb);
     return ok({ booted: true });
@@ -912,6 +1017,29 @@ export function createHudBridge(env = {}) {
     return ok();
   }
 
+  // ── VTank panel (INT-3) ────────────────────────────────────────────────
+  /** Open the VTank panel (plugins/rynth-vt/panel.js, lazy) at `tab` through
+   *  window.__rynthVt.openPanel, installing the page entry (rynth/vt/
+   *  rs_entry.js) first when nothing has yet. → { ok, error? }; never throws. */
+  async function openVt(tab) {
+    let api = vtApi();
+    if (!api || typeof api.openPanel !== "function") {
+      try {
+        const m = await importer(moduleUrl("rynth/vt/rs_entry.js"));
+        api = m && typeof m.installRsEntry === "function" ? m.installRsEntry(win) : null;
+      } catch (e) {
+        return fail(`VTank layer unavailable: ${e?.message ?? e}`);
+      }
+      if (!api || typeof api.openPanel !== "function") return fail("VTank layer unavailable");
+    }
+    try {
+      await api.openPanel(tab == null ? undefined : String(tab));
+    } catch (e) {
+      return fail(`VTank panel failed to open: ${e?.message ?? e}`);
+    }
+    return ok();
+  }
+
   // ── spell catalog (self-buff picker) ───────────────────────────────────
   function loadCatalog() {
     if (catalog) return Promise.resolve(catalog);
@@ -978,6 +1106,7 @@ export function createHudBridge(env = {}) {
     knownSelfBuffs,
     loadCatalog,
     spellName,
+    openVt,
     getSettings: () => ({ ...settings }),
     note,
   };

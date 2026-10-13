@@ -344,7 +344,8 @@ await run.check("doors: locked with no lockpick (or AutoUnlockDoors off) → 5 s
   w.tick(600);
   w.tick();
   assert.equal(w.doors.status().state, "cooldown");
-  assert.equal(w.doors.slot.wants(F.ctx()), true, "cooldown blocks nav briefly (C#)");
+  assert.equal(w.doors.slot.wants(F.ctx()), false, "the cooldown never holds the tick: navigation walks on (logic-3)");
+  assert.equal(w.doors.status().state, "cooldown", "…while it runs on the clock");
   w.tick(5100);
   assert.equal(w.doors.status().state, "none");
   assert.equal(w.tick(), false, "the failed door is skipped for 60 s");
@@ -356,6 +357,108 @@ await run.check("doors: locked with no lockpick (or AutoUnlockDoors off) → 5 s
   for (let i = 0; i < 20; i++) slow.tick(1000);
   assert.equal(slow.host.actions("UseObject").length, 3, "max 3 attempts");
   assert.ok(["cooldown", "none"].includes(slow.doors.status().state));
+});
+
+await run.check("doors: the FSM is frozen while another slot holds the tick; a door left behind meanwhile is dropped, never re-used (no walk back)", () => {
+  const w = doorWorld({ values: { AutoUnlockDoors: true }, lists: { consumables: [{ guid: PICK, name: "Lockpick", wcid: 0, type: "Lockpick" }] } });
+  w.tick();
+  assert.deepEqual(w.host.calls, [["UseObject", DOOR]]);
+  // A fight takes the tick for 30 s (the Doors slot is not ticked) and drags
+  // the player 40 m away from the door.
+  w.clock.advance(30_000);
+  w.host.dist.set(DOOR, 40);
+  assert.equal(w.tick(), false, "no longer wants the tick for that door");
+  assert.equal(w.doors.status().state, "none");
+  for (let i = 0; i < 10; i++) w.tick(1000);
+  assert.equal(w.host.calls.length, 1, "neither a second UseObject nor a lockpick on the far door");
+  // Back within range (the route returns): targeted again, not skipped as failed.
+  w.host.dist.set(DOOR, 3);
+  assert.equal(w.tick(600), true, "next scan (500 ms cadence) finds it again");
+  assert.deepEqual(w.host.calls.at(-1), ["UseObject", DOOR]);
+});
+
+await run.check("doors + Boost Nav (logic-3): an in-progress door yields a gentle fight-back to Combat and buffing (both modes) to Buffing — the real kernel picks them; the door is re-targeted after, not failed", async () => {
+  const { RynthBotKernel } = await import("../rynth/kernel.js");
+  for (const rank of ["beforeCombat", "beforeCombatPinned"]) {
+    const w = doorWorld({ rank });
+    const s = { threat: false, attacked: false, needBuff: false };
+    const combat = { locked: 0, enabled: true, _scanTargets: () => (s.threat ? [{ guid: 0x8000d001 }] : []), canEngage: () => true, disengage() {}, tick() {}, underAttack: () => s.attacked };
+    const buff = {
+      enabled: true,
+      pending: null,
+      get status() {
+        return { ready: true, active: s.needBuff ? 0 : 1, desired: 1, pending: 0, blocked: false };
+      },
+      heartbeat() {},
+      tick() {},
+    };
+    const loot = { enabled: true, state: "SCAN", _findCorpse: () => null, tick() {} };
+    // ActiveNav._wants' decline rules (the nav slot itself yields the same way).
+    const navSlot = {
+      name: "Navigate",
+      rank: () => rank,
+      enabled: () => true,
+      pinned: () => false,
+      wants: (c) => !(c.buffPinned || c.buffNeeded || c.lootPinned || (rank === "beforeCombat" && c.underAttack && (c.threat || c.corpse))),
+      tick() {},
+    };
+    const aux = { slots: [w.doors.slot, navSlot], idleHooks: [], policy: {}, status: () => ({}) };
+    const k = new RynthBotKernel({ IsPlayerReady: () => true }, { combat, buff, loot, vitals: null, unwedge: null, aux }, { log: () => {} });
+    k._running = true;
+    const tick = () => {
+      w.clock.advance(300);
+      k.tick();
+      return k.action;
+    };
+    assert.equal(tick(), "Doors", rank);
+    assert.equal(w.doors.status().state, "opening");
+    w.host.busy = 1; // the use stays busy: the FSM sits in "opening"
+    assert.equal(tick(), "Doors", `${rank}: the door holds the tick while nothing outranks it`);
+    s.attacked = true; // attacked, nothing to fight yet: the door keeps the tick
+    assert.equal(tick(), "Doors", `${rank}: attacked with no threat`);
+    s.threat = true;
+    if (rank === "beforeCombat") {
+      assert.equal(tick(), "Combat", "gentle: the fight-back takes the tick from the door");
+      assert.equal(w.doors.status().state, "none", "the door is dropped");
+      assert.equal(w.host.itemActionToken, null, "the vtdoors item token is released");
+    } else {
+      assert.equal(tick(), "Doors", "strict: the door keeps the tick over a fight (C#-literal)");
+      s.needBuff = true;
+      s.threat = false;
+      s.attacked = false;
+      assert.equal(tick(), "Buffing", "strict: buffing takes the tick from the door (D39)");
+      assert.equal(w.doors.status().state, "none");
+      s.needBuff = false;
+    }
+    s.threat = false;
+    s.attacked = false;
+    s.needBuff = false;
+    w.host.busy = 0;
+    assert.equal(tick(), "Doors", `${rank}: re-targeted when nav wants the tick again (not marked failed)`);
+    assert.equal(w.host.actions("UseObject").length, 2);
+  }
+  // Gentle + buffing (no attack) also yields.
+  const g = doorWorld({ rank: "beforeCombat" });
+  assert.equal(g.tick(), true);
+  g.host.busy = 1;
+  assert.equal(g.doors.slot.wants(F.ctx({ buffNeeded: true })), false, "gentle: buffing");
+  assert.equal(g.doors.status().state, "none");
+  // Unboosted the ladder already ranks those first: the door keeps its state.
+  const u = doorWorld({ rank: "beforeIdle" });
+  assert.equal(u.tick(), true);
+  u.host.busy = 1;
+  assert.equal(u.doors.slot.wants(F.ctx({ buffNeeded: true, underAttack: true, threat: true })), true);
+  assert.equal(u.doors.status().state, "opening");
+  // …but when navigation itself steps aside (navWants false: a due BuffItem,
+  // nav switched off), an in-progress door does too — dropped, not failed.
+  u.nav = false;
+  assert.equal(u.doors.slot.wants(F.ctx()), false);
+  assert.equal(u.doors.status().state, "none");
+  assert.equal(u.host.itemActionToken, null);
+  u.nav = true;
+  u.host.busy = 0;
+  assert.equal(u.tick(600), true, "re-targeted, not skipped as failed");
+  assert.equal(u.host.actions("UseObject").length, 2);
 });
 
 // ── idle: peace mode + idle rebuff ────────────────────────────────────────
@@ -488,6 +591,17 @@ await run.check("IdleRebuff / BuffItems enabled() false when EnableBuffing is of
   assert.equal(bi.slot.enabled(), false);
   const bi2 = X.createBuffItems({ ...w.deps, buff: () => ({ enabled: true }) });
   assert.equal(bi2.slot.enabled(), true);
+  // Without an injected `buff` getter (createSupport with only `bot`), both
+  // read bot.buff — the EnableBuffing gate must still hold (critic G12).
+  w.bot.buff = F.makeBuff({ enabled: false, needs: () => true });
+  w.options.set("RebuffWhenIdle", true);
+  const sup = X.createSupport({ ...w.deps });
+  assert.equal(sup.buffItems.slot.enabled(), false, "BuffItems via createSupport: bot.buff.enabled === false");
+  assert.equal(sup.idle.rebuffSlot.enabled(), false, "IdleRebuff via createSupport: bot.buff.enabled === false");
+  w.bot.buff.enabled = true;
+  assert.equal(sup.buffItems.slot.enabled(), true);
+  assert.equal(sup.idle.rebuffSlot.enabled(), true);
+  sup.dispose();
 });
 
 // ── the whole suite at defaults (Z2) ──────────────────────────────────────
@@ -518,6 +632,54 @@ await run.check("Z2: createSupport at the schema defaults with empty lists — e
   sup.dispose();
   assert.equal(w.bus.count("tell"), 0, "dispose detaches every subscription");
   assert.equal(w.bus.count("chat"), 0);
+});
+
+await run.check("Consumables rows are cached: slot enabled() every heartbeat re-reads (JSON-clones) the list at most every 5 s; an edit, a list event or a profile change re-reads at once; dispose detaches (review runtime-6)", () => {
+  const w = base({ lists: { consumables: [{ guid: 0x8000a001, name: "Healing Kit", wcid: 0, type: "HealthKit" }] } });
+  const listeners = new Set();
+  let reads = 0;
+  const getList = w.options.getList;
+  w.options.getList = (n) => (n === "consumables" && reads++, getList(n));
+  w.options.onChange = (fn) => (listeners.add(fn), () => listeners.delete(fn));
+  const fire = (e) => [...listeners].forEach((fn) => fn(e));
+  const sup = X.createSupport({ ...w.deps, consumables: undefined, buff: () => ({ enabled: true }), combat: () => w.bot.combat });
+  assert.equal(listeners.size, 1, "one onChange subscription");
+  for (let i = 0; i < 100; i++) {
+    sup.supplies.slot.enabled();
+    sup.buffItems.slot.enabled();
+  }
+  assert.ok(reads <= 1, `100 heartbeats, ${reads} list reads`);
+  assert.equal(sup.supplies.slot.enabled(), true, "the cached rows are the real list");
+  // An edit through the model re-reads at once.
+  w.host.inv.push(F.row(0x8000a002, "Mana Potion"));
+  assert.equal(sup.consumables.add({ guid: 0x8000a002, type: "ManaPotion" }).ok, true);
+  assert.ok(sup.consumables.list().some((e) => e.guid === 0x8000a002), "the new row is visible");
+  // A list change elsewhere (Consumables tab, another tab) and a profile switch.
+  w.options._l.consumables = [];
+  assert.equal(sup.supplies.slot.enabled(), true, "still cached");
+  fire({ kind: "list", key: "consumables" });
+  assert.equal(sup.supplies.slot.enabled(), false, "a list event re-reads");
+  w.options._l.consumables = [{ guid: 0x8000a001, name: "Healing Kit", wcid: 0, type: "HealthKit" }];
+  fire({ kind: "setting", key: "HealAt" });
+  assert.equal(sup.supplies.slot.enabled(), false, "unrelated events keep the cache");
+  fire({ kind: "profile", key: "Hunt" });
+  assert.equal(sup.supplies.slot.enabled(), true, "a profile change re-reads");
+  // Without an event the cache still expires (a safety net).
+  w.options._l.consumables = [];
+  w.clock.advance(4900);
+  assert.equal(sup.supplies.slot.enabled(), true, "within 5 s: cached");
+  w.clock.advance(100);
+  assert.equal(sup.supplies.slot.enabled(), false, "5 s safety expiry");
+  // Callers get copies: editing one never touches the cache.
+  w.options._l.consumables = [{ guid: 0x8000a001, name: "Healing Kit", wcid: 0, type: "HealthKit", spellIds: [1] }];
+  fire({ kind: "list", key: "consumables" });
+  const a = sup.consumables.list();
+  a[0].name = "edited";
+  a[0].spellIds.push(2);
+  assert.equal(sup.consumables.list()[0].name, "Healing Kit");
+  assert.deepEqual(sup.consumables.list()[0].spellIds, [1]);
+  sup.dispose();
+  assert.equal(listeners.size, 0, "dispose detaches from VtOptions (it outlives the layer)");
 });
 
 console.log(run.fail === 0 ? `rynth_vt_support_misc: all ${run.pass} checks passed` : `rynth_vt_support_misc: ${run.fail} FAILED (${run.pass} passed)`);

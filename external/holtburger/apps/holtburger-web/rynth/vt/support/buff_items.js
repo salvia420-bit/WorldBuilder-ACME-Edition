@@ -36,6 +36,7 @@ import {
   releaseItem,
   itemTokenHeldByOther,
   castTokenBusy,
+  loopOf,
   consumableEntries,
   resolveOwned,
 } from "./consumables.js";
@@ -52,8 +53,11 @@ export const BUFF_ITEM_TUNING = Object.freeze({
 const T = BUFF_ITEM_TUNING;
 
 export function createBuffItems(deps = {}) {
-  const { host = null, options = null, consumables = null } = deps;
-  const buffLoop = typeof deps.buff === "function" ? deps.buff : () => null;
+  const { host = null, bot = null, options = null, consumables = null } = deps;
+  // Without an injected getter, read bot.buff (as idle.js does and as
+  // createSupport documents) — never "no buff loop", which would skip the
+  // EnableBuffing gate (critic G12) for a caller that only passed `bot`.
+  const buffLoop = typeof deps.buff === "function" ? deps.buff : () => loopOf(bot, "buff");
   const now = typeof deps.now === "function" ? deps.now : Date.now;
   const log = makeLogger(deps.log, "buffitems", now);
 

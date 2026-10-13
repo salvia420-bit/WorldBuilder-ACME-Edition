@@ -869,6 +869,21 @@ const TIER5 = [
   { tier: 5, flag: "rynthVtSupportVitals", file: "tests/rynth_vt_support_vitals.test.mjs" },
   { tier: 5, flag: "rynthVtSupportInventory", file: "tests/rynth_vt_support_inventory.test.mjs" },
   { tier: 5, flag: "rynthVtSupportMisc", file: "tests/rynth_vt_support_misc.test.mjs" },
+  // Wave 1, last two packages: .met / .af / view XML / .utl formats, and the VT bridge + panel.
+  { tier: 5, flag: "rynthVtFormatsMeta", file: "tests/rynth_vt_formats_meta.test.mjs" },
+  { tier: 5, flag: "rynthVtFormatsUtl", file: "tests/rynth_vt_formats_utl.test.mjs" },
+  { tier: 5, flag: "rynthVtBridge", file: "tests/rynth_vt_bridge.test.mjs" },
+  { tier: 5, flag: "rynthVtPanelDom", file: "tests/rynth_vt_panel_dom.test.mjs" },
+  // Wave 2 (wiring): INT-1 kernel aux ladder (T-K1 frozen oracle, T-K2 64-case equivalence) + loop-hook goldens.
+  { tier: 5, flag: "rynthVtKernelAux", file: "tests/rynth_vt_kernel_aux.test.mjs" },
+  { tier: 5, flag: "rynthVtLoopHooks", file: "tests/rynth_vt_loop_hooks.test.mjs" },
+  // INT-2 composition root + bot wiring, and T-P1: the Default layer vs config.vt=false, identical traces.
+  { tier: 5, flag: "rynthVtLayer", file: "tests/rynth_vt_layer.test.mjs" },
+  { tier: 5, flag: "rynthVtWiring", file: "tests/rynth_vt_wiring.test.mjs" },
+  { tier: 5, flag: "rynthVtParity", file: "tests/rynth_vt_parity.test.mjs" },
+  // INT-3 page entry: the /rs /vt /ra /mt /ub chat branch (never reaches ACE) and the HUD VT button / provider.
+  { tier: 5, flag: "rynthVtSlash", file: "tests/rynth_vt_slash.test.mjs" },
+  { tier: 5, flag: "rynthVtHudIntegration", file: "tests/rynth_vt_hud_integration.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

@@ -6,8 +6,10 @@
 // retail look:
 //
 //   header   RUNNING/STOPPED macro button + status dot, "State" (RynthAi's
-//            Meta State) and "Activity" (Bot Activity); Profile / Route /
-//            Loot selectors where RynthAi had Profile / Nav / Loot / Meta.
+//            Meta State) and "Activity" (Bot Activity); Persona / Route /
+//            Loot selectors where RynthAi had Profile / Nav / Loot / Meta, and
+//            a VT button that opens the VTank panel (settings profiles,
+//            monsters, items, route, meta — plugins/rynth-vt/, lazy).
 //   panel    Combat · Buff · Nav · Loot toggles + a wide AI toggle (RynthAi's
 //            MACRO) + FR force-rebuff; target name + segmented health bar;
 //            player HP / ST / MN.
@@ -27,6 +29,13 @@
 // reason in its tooltip. Cheap by construction: the window refreshes at 4 Hz
 // only while open and the page is visible; the launcher dot polls at 1 Hz.
 // Escape: ?rynthHud=off (exact match) mounts nothing.
+//
+// VTank layer (2026-10-13, PLAN INT-3): mount() lazily installs the page
+// entry rynth/vt/rs_entry.js (window.__rynthVt — the `/rs` router and the
+// profile hooks hud_bridge.js uses), location.href-relative and never
+// statically imported (I-26/I-27); a failed load leaves the HUD as it was.
+// The VT button (selectors row; the titlebar keeps its four buttons) opens
+// the VTank panel; the disposer closes that panel when its module was loaded.
 
 import { makeTitlebar } from "../ui/hud_kit.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
@@ -53,6 +62,12 @@ const SECTIONS = Object.freeze([
   { id: "log", label: "Log" },
 ]);
 const SP = "./data/ui-sprites";
+// VTank layer modules (page-relative, lazy — never statically imported).
+const VT_ENTRY_PATH = "rynth/vt/rs_entry.js";
+const VT_PANEL_PATH = "plugins/rynth-vt/panel.js";
+const VT_PANEL_ROOT_ID = "hb-rynth-vt"; // = plugins/rynth-vt/styles.js VT_ROOT_ID
+const VT_UI_KEY = "rynth.vt.ui.v1"; // = plugins/rynth-vt/panel.js VT_UI_KEY
+const VT_BTN_TIP = "VTank — options, profiles, vitals, monsters, items, consumables, buffs, route and meta (/rs ui)";
 
 /** ?rynthHud=off (exact match) disables the whole plugin. */
 export function rynthHudDisabled(search) {
@@ -166,6 +181,7 @@ function ensureStyles() {
   #${ROOT_ID} .rhud-selectors > label { color: var(--hbk-text-dim, #a8a090); }
   #${ROOT_ID} .rhud-selectors select, #${ROOT_ID} .rhud-selectors input { width: 100%; min-height: 18px; font-size: 11px; padding: 1px 4px; }
   #${ROOT_ID} .rhud-selectors .rhud-span2 { grid-column: span 2; }
+  #${ROOT_ID} .rhud-selectors .rhud-vt { grid-column: 1 / -1; height: 18px; margin: 1px 0 0; letter-spacing: 2px; }
   #${ROOT_ID} .rhud-panel {
     display: grid; grid-template-columns: 76px 1fr; gap: 8px; padding: 6px;
     border: 1px solid var(--hbk-gold-deep, #4e3f1f); background: rgba(0, 0, 0, 0.35);
@@ -250,6 +266,7 @@ const S = {
   buffsLoaded: false,
   onHotbarMounted: null,
   onVisibility: null,
+  vtPanelUsed: false, // this HUD opened (or reopened) the VTank panel
 };
 
 // ── the window ─────────────────────────────────────────────────────────
@@ -299,7 +316,7 @@ function buildWindow() {
   left.append(runWrap, stateKv, actKv);
 
   const sel = el("div", "rhud-selectors");
-  const profLbl = el("label", null, "Profile");
+  const profLbl = el("label", null, "Persona");
   const profile = el("select", "hbk-select rhud-span2");
   for (const [v, t] of [["grind", "Grind"], ["explorer", "Explorer"]]) {
     const o = el("option", null, t);
@@ -318,7 +335,10 @@ function buildWindow() {
   lootMin.step = "1";
   lootMin.placeholder = "0";
   lootMin.title = "Minimum item value (pyreals) the loot loop picks up. 0 = everything.";
-  sel.append(profLbl, profile, routeLbl, route, routeGo, lootLbl, lootMin);
+  // VTank panel (INT-3): appended LAST so the selectors' input/select order
+  // (loot floor, persona, route) is unchanged.
+  const vtBtn = btn("rhud-hdr-btn rhud-vt", "VT", VT_BTN_TIP);
+  sel.append(profLbl, profile, routeLbl, route, routeGo, lootLbl, lootMin, vtBtn);
   head.append(left, sel);
   body.appendChild(head);
 
@@ -451,6 +471,12 @@ function buildWindow() {
     const r = S.bridge.setLootMin(lootMin.value === "" ? 0 : lootMin.value);
     report(r, (x) => (x.live ? "Loot floor set" : "Loot floor saved for the next start"));
   });
+  vtBtn.addEventListener("click", async (e) => {
+    e.stopPropagation?.();
+    const r = await S.bridge.openVt();
+    if (r && r.ok) S.vtPanelUsed = true;
+    report(r);
+  });
   root.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const tag = (e.target?.tagName || "").toUpperCase();
@@ -460,7 +486,7 @@ function buildWindow() {
 
   S.root = root;
   S.refs = { root, bar, title, lockBtn, minBtn, miniRun, miniState, run, dot, stateV: stateKv.lastChild, actV: actKv.lastChild,
-    profile, route, routeGo, lootMin, tgl, fr, tName, tPct, seg, segs, meters, statEls, hold, msg, tabBtns, sections };
+    profile, route, routeGo, lootMin, vtBtn, tgl, fr, tName, tPct, seg, segs, meters, statEls, hold, msg, tabBtns, sections };
   if (S.ui.section && sections[S.ui.section]) openSection(S.ui.section);
   return root;
 }
@@ -885,6 +911,7 @@ function render(vm) {
   }
   R.lootMin.disabled = vm.present && vm.lootMin == null;
   R.routeGo.disabled = !vm.present;
+  setTitle(R.vtBtn, vm.vt ? `${vm.vt}\n${VT_BTN_TIP}` : VT_BTN_TIP);
   fillRoutes(false);
 
   // Toggles.
@@ -894,7 +921,7 @@ function render(vm) {
     b.classList.toggle("is-on", !!t.on && vm.phase !== "stopped");
     b.classList.toggle("is-deferred", !!t.deferred);
     b.disabled = !vm.present || !t.available;
-    const base = { combat: "Combat", buff: "Buffing", nav: "Navigation (follow the selected route)", loot: "Looting", ai: "AI director" }[key];
+    const base = { combat: "Combat", buff: "Buffing", nav: t.vtRoute ? "Navigation (the loaded VTank route)" : "Navigation (follow the selected route)", loot: "Looting", ai: "AI director" }[key];
     setTitle(b, t.hint ? `${base} — ${t.hint}` : `${base}: ${t.on ? "on" : "off"} — click to turn ${t.on ? "off" : "on"}`);
   }
   R.fr.hidden = !vm.forceRebuff.available;
@@ -1112,6 +1139,47 @@ function launcherTick() {
   } catch { /* layout read failed — leave as is */ }
 }
 
+// ── VTank layer (INT-3) ────────────────────────────────────────────────
+function vtModuleUrl(rel) {
+  try { return new URL(rel, globalThis.location?.href).href; } catch { return null; }
+}
+/** The VTank panel was left open last session (plugins/rynth-vt/panel.js
+ *  keeps `{open}` in rynth.vt.ui.v1; the module itself never auto-opens). */
+function vtPanelWasOpen() {
+  try {
+    const o = JSON.parse(localStorage.getItem(VT_UI_KEY) || "null");
+    return !!(o && typeof o === "object" && o.open === true);
+  } catch {
+    return false;
+  }
+}
+/** Install window.__rynthVt (lazy, location.href-relative); reopen the
+ *  VTank panel when it was left open. Failure = the HUD as it was. */
+function installVtEntry() {
+  const url = vtModuleUrl(VT_ENTRY_PATH);
+  if (!url) return;
+  import(url)
+    .then((m) => {
+      if (!S.bridge || !m || typeof m.installRsEntry !== "function") return;
+      const api = m.installRsEntry(window);
+      if (api && typeof api.openPanel === "function" && vtPanelWasOpen()) {
+        S.vtPanelUsed = true;
+        Promise.resolve(api.openPanel()).catch(() => {});
+      }
+    })
+    .catch(() => { /* no VTank layer on this page: /rs reports it, the HUD works as before */ });
+}
+/** HUD dispose: close + dispose the VTank panel when its module was loaded
+ *  (this HUD opened it, or its window is in the page). The import is the
+ *  already-loaded module instance (same URL); nothing is fetched otherwise. */
+function disposeVtPanelIfLoaded() {
+  let loaded = S.vtPanelUsed;
+  try { loaded = loaded || !!document.getElementById(VT_PANEL_ROOT_ID); } catch { /* no document */ }
+  const url = loaded ? vtModuleUrl(VT_PANEL_PATH) : null;
+  if (!url) return;
+  import(url).then((m) => { try { m.disposeVtPanel?.(); } catch { /* ignore */ } }).catch(() => {});
+}
+
 // ── plugin lifecycle ───────────────────────────────────────────────────
 export function mount() {
   if (rynthHudDisabled(globalThis.location?.search)) return () => {};
@@ -1135,19 +1203,21 @@ export function mount() {
     bridge: S.bridge,
   });
   if (S.ui.open) openHud();
+  installVtEntry();
   return () => {
     stopTimer();
     clearInterval(S.launcherTimer);
     clearTimeout(S.msgTimer);
     document.removeEventListener("hb-hotbar-mounted", S.onHotbarMounted);
     destroyAiPanel();
+    disposeVtPanelIfLoaded();
     try { S.root?.remove(); } catch { /* ignore */ }
     try { S.launcher?.remove(); } catch { /* ignore */ }
     try { document.getElementById(FLOAT_ID)?.remove(); } catch { /* ignore */ }
     for (const k of ["__toggleRynthHud", "__openRynthHud", "__closeRynthHud", "__rynthHud"]) {
       try { delete window[k]; } catch { window[k] = undefined; }
     }
-    Object.assign(S, { bridge: null, root: null, refs: null, launcher: null, lastVm: null, lastVmAt: 0, launcherTimer: 0, aiPanel: null });
+    Object.assign(S, { bridge: null, root: null, refs: null, launcher: null, lastVm: null, lastVmAt: 0, launcherTimer: 0, aiPanel: null, vtPanelUsed: false });
   };
 }
 

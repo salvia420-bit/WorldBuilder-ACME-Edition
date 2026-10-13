@@ -12,7 +12,9 @@
 //   properties.ints.CreatureType (or "2"), creatureProfile.health_max (or the
 //   failedCreatureProfile of a failed assess), properties.floats.Resist<El>
 //   (or ids 64-70, 166 — ACE PropertyFloat.cs). Resist values are damage
-//   multipliers: lower = weaker to that element.
+//   multipliers (ACE Creature_Properties.cs `(ResistFire ?? 1.0) * …`,
+//   SpellProjectile.cs `* resistanceMod`): HIGHER = more damage taken = weaker
+//   to that element; 0 = immune; unset = 1.0.
 
 import { ELEMENTS } from "./spell_tables.js";
 
@@ -181,22 +183,37 @@ export class CreatureProfiles {
   }
 
   /**
-   * The element this wcid resists least (lowest multiplier), restricted to
-   * `among` when given; null without learned resists or without a real
-   * weakness (lowest multiplier ≥ 1.0 — RynthAi GetWeakest's "< 1.0" rule).
+   * The element this wcid resists least: the HIGHEST damage multiplier (an
+   * element the appraisal did not carry counts as ACE's 1.0; a tie prefers a
+   * learned value, then ELEMENTS order), restricted to `among` when given.
+   * null without learned resists, or when every allowed multiplier is equal
+   * (no information). No "> 1" bar: an Ice Golem (Cold 0, Fire 1) must get
+   * Fire, not a cold weapon's element. Deliberately NOT C# GetWeakest, which
+   * picks the lowest multiplier below 1.0 — the most RESISTED element under
+   * ACE's semantics (review guide-5); creaturegetweakest uses this too.
    */
   weakest(wcid, among) {
     const res = this.resists(wcid);
     if (!res) return null;
     const allowed = Array.isArray(among) && among.length ? new Set(among) : null;
     let best = null;
+    let bestV = 0;
+    let bestKnown = false;
+    let lo = Infinity;
+    let hi = -Infinity;
     for (const el of ELEMENTS) {
       if (allowed && !allowed.has(el)) continue;
-      const v = res[el];
-      if (typeof v !== "number") continue;
-      if (best === null || v < res[best]) best = el;
+      const known = typeof res[el] === "number";
+      const v = known ? res[el] : 1;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+      if (best === null || v > bestV || (v === bestV && known && !bestKnown)) {
+        best = el;
+        bestV = v;
+        bestKnown = known;
+      }
     }
-    return best !== null && res[best] < 1 ? best : null;
+    return best !== null && hi > lo ? best : null;
   }
 
   /** Species display name: learned CreatureType, else the offline table; null when unknown. */

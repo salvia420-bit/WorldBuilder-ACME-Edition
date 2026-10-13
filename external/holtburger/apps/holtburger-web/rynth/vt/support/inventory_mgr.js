@@ -67,10 +67,13 @@ export const INVENTORY_TUNING = Object.freeze({
 });
 const T = INVENTORY_TUNING;
 
-/** Max stack size: the property, else C#'s name fallbacks (IM:389-414); 0 = never stacks. */
+/** Max stack size: the property, else C#'s name fallbacks (IM:389-414); 0 = never stacks.
+ *  The wasm reports 0 for "not stackable / unknown"; an explicit 1 is a real
+ *  MaxStackSize (never stacks), so the name fallback applies only to 0. */
 export function maxStackOf(row) {
   const m = Number(row && row.maxStackSize);
   if (m > 1) return m;
+  if (m === 1) return 0;
   const name = String((row && row.name) ?? "");
   if (/salvage/i.test(name)) return 0;
   if (/^pyreals?$/i.test(name.trim())) return 25000;
@@ -362,8 +365,10 @@ export function createInventoryMgr(deps = {}) {
       prune(t);
       if (st.pending) return;
       if (t < st.nextAt) return;
+      // §3.11 defence in depth: act only when the tick info SAYS Idle/Navigate
+      // (a missing kernelAction is not "Idle").
       const action = info && info.kernelAction;
-      if (action != null && action !== "Idle" && action !== "Navigate") return;
+      if (action !== "Idle" && action !== "Navigate") return;
       const loot = loopOf(bot, "loot");
       if (loot && loot.enabled !== false && loot.state != null && loot.state !== "SCAN") return;
       if ((Number(call(host, "GetGroundContainerId")) >>> 0) !== 0) return;

@@ -139,7 +139,7 @@ const SKILLS = { 31: { current: 400, training: 3 }, 32: { current: 400, training
 const knownOf = (...fams) => fams.flatMap((f) => T.familyLadder(f).map((r) => r.id));
 const ALL_FAMS = T.familyNames();
 
-function makeWorld({ known = knownOf(...ALL_FAMS), entries = [], opts = {}, wielded = [[WAND, IT.caster, EM.held]], mode = 8 } = {}) {
+function makeWorld({ known = knownOf(...ALL_FAMS), entries = [], opts = {}, wielded = [[WAND, IT.caster, EM.held]], mode = 8, state = undefined } = {}) {
   const objs = new Map([
     [DRUDGE, { name: "Drudge Skulker", wcid: 1002, dist: 20, ct: 3 }],
     [SHRETH, { name: "Blood Shreth", wcid: 1001, dist: 12, ct: 32 }],
@@ -269,19 +269,23 @@ function makeWorld({ known = knownOf(...ALL_FAMS), entries = [], opts = {}, wiel
     },
   };
   let nav = null;
-  planner = new AttackPlanner({
-    host,
-    options,
-    monsters,
-    spells: T,
-    items,
-    creatures,
-    subscribe,
-    getCombat: () => combat,
-    getNav: () => nav,
-    now,
-    log: (m) => logs.push(m),
-  });
+  // A fresh planner (and, like createVtLayer, a fresh ledger) per layer bind.
+  const mkPlanner = () =>
+    new AttackPlanner({
+      host,
+      options,
+      monsters,
+      spells: T,
+      items,
+      creatures,
+      subscribe,
+      getCombat: () => combat,
+      getNav: () => nav,
+      now,
+      log: (m) => logs.push(m),
+      ...(state !== undefined ? { state } : {}),
+    });
+  planner = mkPlanner();
   const w = {
     host,
     options,
@@ -297,6 +301,14 @@ function makeWorld({ known = knownOf(...ALL_FAMS), entries = [], opts = {}, wiel
     setNav: (n) => (nav = n),
     tick() {
       host.snap = { seq: host.snap.seq + 1 };
+    },
+    /** A layer rebind: the old planner is disposed, a new one is built. */
+    rebind() {
+      planner.dispose();
+      planner = mkPlanner();
+      w.planner = planner;
+      w.tick();
+      return planner;
     },
     // one magic cycle: plan → issue (sent) → the server's verdict line
     cast(target, outcome = "landed") {
@@ -534,12 +546,13 @@ await check("AllowUntargetedRings false (default) ⇒ the entry's bolt/streak, o
 await check("Damage Type: Auto ⇒ Fire; Electric ⇒ Lightning; learned weakest resist among castable; explicit element; arc shape", () => {
   const w = makeWorld({ entries: [E("Drudge Skulker", { damageType: "Auto" })], opts: { WarSpellMode: "vtank" } });
   assert.equal(w.cast(DRUDGE).family, "bolt:fire", "Auto with nothing learned ⇒ Fire");
-  w.creatures.noteAppraisal(DRUDGE, 1002, "Drudge Skulker", { properties: { floats: { ResistElectric: 0.5, ResistFire: 1.2, ResistCold: 0.8 } } });
+  // ACE ResistX are damage MULTIPLIERS: the highest one is the weakness.
+  w.creatures.noteAppraisal(DRUDGE, 1002, "Drudge Skulker", { properties: { floats: { ResistElectric: 1.5, ResistFire: 0.6, ResistCold: 1.2 } } });
   w.tick();
-  assert.equal(w.cast(DRUDGE).family, "bolt:lightning", "ResistElectric 0.5 ⇒ Lightning");
+  assert.equal(w.cast(DRUDGE).family, "bolt:lightning", "ResistElectric 1.5 (takes the most damage) ⇒ Lightning");
   w.host.known = knownOf("bolt:fire", "bolt:cold");
   w.tick();
-  assert.equal(w.cast(DRUDGE).family, "bolt:cold", "weakest AMONG castable elements");
+  assert.equal(w.cast(DRUDGE).family, "bolt:cold", "weakest AMONG castable elements (Cold 1.2 > Fire 0.6)");
   w.monsters.setEntries([E("Drudge Skulker", { damageType: "Electric" })]);
   w.host.known = knownOf(...ALL_FAMS);
   w.tick();
@@ -588,6 +601,36 @@ await check("WarSpellMode legacy + DEFAULT ⇒ null (legacy _pickWarSpell); DEFA
   w.host.known = [];
   w.tick();
   assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }), null);
+});
+
+await check("Auto Damage Type on an LSD Ice Golem with Cold and Fire castable ⇒ Fire, not the immune Cold (review guide-5)", () => {
+  const w = makeWorld({ entries: [E("Drudge Skulker", { damageType: "Auto" })], opts: { WarSpellMode: "vtank" } });
+  w.host.known = knownOf("bolt:fire", "bolt:cold");
+  w.creatures.noteAppraisal(DRUDGE, 1002, "Ice Golem", { properties: { floats: { 64: 0.83, 65: 0.83, 66: 0.8, 67: 1.0, 68: 0.0, 69: 0.83, 70: 0.8 } } });
+  w.tick();
+  assert.equal(w.cast(DRUDGE).family, "bolt:fire");
+});
+
+await check("WarSpellMode legacy: an edited S / arc / Damage Type on the DEFAULT row is honoured; a debuff-only edit still leaves the war pick to legacy (G:84/G:93, review guide-4)", () => {
+  const w = makeWorld();
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, S: true, damageType: "Cold" }]);
+  w.tick();
+  const p = w.cast(DRUDGE);
+  assert.equal(p && p.kind, "attack", "DEFAULT S + Cold under legacy plans the attack");
+  assert.equal(p.family, "streak:cold");
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, damageType: "Cold" }]);
+  w.tick();
+  assert.equal(w.cast(DRUDGE).family, "bolt:cold", "an explicit Damage Type alone");
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, S: true }]);
+  w.tick();
+  assert.equal(w.cast(DRUDGE).family.split(":")[0], "streak", "an explicit S alone");
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, I: true }]);
+  w.tick();
+  assert.equal(w.cast(DRUDGE).family, "imperil");
+  assert.equal(w.cast(DRUDGE), null, "debuff-only edit: then the legacy war pick");
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, damageType: "auto" }]);
+  w.tick();
+  assert.equal(w.cast(DRUDGE), null, "Auto in any case is the default");
 });
 
 await check("three fizzles of one id ⇒ excluded 10 min; another module's refusal is not counted", () => {
@@ -718,6 +761,83 @@ await check("non-attacking entry on a character that cannot debuff (no caster, n
   assert.deepEqual(w.planner.scanVerdict(DRUDGE, 20), { scoreBias: 1000 }, "a wand swap makes it debuffable");
 });
 
+await check("R-only (A off) entry: admitted while the character can cast; excluded on a melee/missile character that cannot (no lock thrash)", () => {
+  const melee = makeWorld({ entries: [E("Drudge Skulker", { R: true, A: false })], wielded: [[SWORD, IT.melee, EM.melee]], mode: 2 });
+  assert.equal(melee.planner.attackAllowed(DRUDGE), false, "the melee gate would drop it");
+  assert.deepEqual(melee.planner.scanVerdict(DRUDGE, 3), { ignore: true }, "nothing it can do: never locked");
+  melee.values.SwitchWandsToDebuff = true;
+  melee.items.add({ guid: WAND });
+  melee.tick();
+  assert.deepEqual(melee.planner.scanVerdict(DRUDGE, 3), { ignore: true }, "a wand swap is for debuffs only: still excluded without debuff columns");
+  melee.monsters.setEntries([E("Drudge Skulker", { R: true, A: false, Y: true })]);
+  melee.tick();
+  assert.deepEqual(melee.planner.scanVerdict(DRUDGE, 3), { scoreBias: 1000 }, "pending debuff + wand swap ⇒ admitted");
+  const mage = makeWorld({ entries: [E("Drudge Skulker", { R: true, A: false })] });
+  assert.deepEqual(mage.planner.scanVerdict(DRUDGE, 3), { scoreBias: 1000 }, "a caster rings / wars (G:83)");
+  assert.equal(mage.cast(DRUDGE).kind, "attack", "R-only with no R monster in ring range ⇒ standard war");
+});
+
+await check("SwitchWandsToDebuff: the wand stays while our debuff is still in flight (no swap back mid-cast)", () => {
+  const w = makeWorld({ entries: [E("Drudge Skulker", { Y: true, A: true })], wielded: [[BOW, IT.missile, EM.missile]], mode: 4, opts: { SwitchWandsToDebuff: true } });
+  w.items.add({ guid: WAND });
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  w.host.wielded = [];
+  w.emit({ type: "equip", item: BOW, wielder: SELF, failed: false });
+  NOW += 3000;
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  w.host.wielded = [{ guid: WAND, itemType: IT.caster, equipMask: EM.held }];
+  w.host.mode = 8;
+  w.emit({ type: "equip", item: WAND, wielder: SELF, failed: false });
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "ok");
+  const p = w.planner.nextCast(DRUDGE, { mode: 8, now: NOW });
+  assert.equal(p.family, "yield");
+  w.planner.onCastIssued(DRUDGE, p, true); // sent; the result line has not arrived yet
+  NOW += 3100;
+  w.tick();
+  const n = w.host.actions.length;
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "ok", "in flight ⇒ keep the wand");
+  assert.equal(w.host.actions.length, n, "no unwield/wield while our cast is out");
+  w.emit({ type: "castLine", spellName: T.nameOf(p.spellId), targetName: "Drudge Skulker", outcome: "landed", raw: "" });
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy", "landed ⇒ the bow goes back");
+  assert.deepEqual(w.host.actions.at(-1), ["wield", BOW, 0]);
+});
+
+await check("SwitchWandsToDebuff: the pre-swap loadout lives in the injected page-session state, so a layer rebind mid-debuff still puts the bow back (review runtime-3)", () => {
+  const session = {}; // session.ext.plannerState
+  const w = makeWorld({ entries: [E("Drudge Skulker", { Y: true, A: true })], wielded: [[BOW, IT.missile, EM.missile]], mode: 4, opts: { SwitchWandsToDebuff: true }, state: session });
+  w.items.add({ guid: WAND });
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  assert.deepEqual(w.host.actions.at(-1), ["unwield", BOW]);
+  w.host.wielded = [];
+  w.emit({ type: "equip", item: BOW, wielder: SELF, failed: false });
+  NOW += 3000;
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  assert.deepEqual(w.host.actions.at(-1), ["wield", WAND, 0]);
+  w.host.wielded = [{ guid: WAND, itemType: IT.caster, equipMask: EM.held }];
+  w.host.mode = 8;
+  w.emit({ type: "equip", item: WAND, wielder: SELF, failed: false });
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "ok");
+  assert.equal(session.saved && session.saved.main, BOW, "the saved loadout is in the session state");
+  // HUD Restart / reconnect takeover: a new planner (and a new, empty ledger).
+  const p2 = w.rebind();
+  assert.deepEqual(p2.status().saved, { main: BOW, offhand: 0, kind: "missile" }, "the new planner sees it");
+  // The debuffs land (the new ledger learns them from the cast lines).
+  const plan = w.cast(DRUDGE);
+  assert.equal(plan.family, "yield");
+  NOW += 3100;
+  w.tick();
+  assert.equal(p2.ensureLoadout(DRUDGE, NOW), "busy", "debuffs on ⇒ restore");
+  assert.deepEqual(w.host.actions.at(-1), ["wield", BOW, 0], "the bow goes back after the rebind");
+  // Without an injected state the memory is per planner (the old behaviour).
+  const solo = makeWorld({ wielded: [[BOW, IT.missile, EM.missile]], mode: 4 });
+  assert.equal(solo.planner.status().saved, null);
+});
+
 await check("attackAllowed: the A column (DEFAULT true); never throws", () => {
   const w = makeWorld({ entries: [E("Drudge Skulker", { A: false, Y: true })] });
   assert.equal(w.planner.attackAllowed(DRUDGE), false);
@@ -786,6 +906,8 @@ await check("ItemsModel: classify, add from inventory (kind/element), Add (No Bu
   assert.equal(it.classify(w.host.inventory[3]), "shield");
   assert.equal(it.classify({ name: "Lesser Fire Essence", itemType: 0x80 }), "pet");
   assert.equal(it.classify({ name: "Leather Boots", itemType: IT.armor, validLocations: 0x100 }), null);
+  assert.equal(it.classify({ name: "Arrow", itemType: IT.missile, validLocations: 0x00800000 }), null, "ammunition is not a missile weapon");
+  assert.equal(it.classify({ name: "Throwing Dart", itemType: IT.missile, validLocations: 0x00c00000 }), "missile", "thrown weapon (weapon + ammo slots)");
   const a = it.add({ guid: WAND });
   assert.equal(a.ok, true);
   assert.deepEqual(a.entry, { guid: WAND, name: "Fire Baton", wcid: 2001, kind: "caster", element: "Fire", noBuffs: false });
@@ -822,13 +944,23 @@ await check("CreatureProfiles: appraisal → maxHp/resists/weakest; species; LRU
   const p = new CP.CreatureProfiles({ storage, now });
   p.noteAppraisal(DRUDGE, 1002, "Drudge Skulker", {
     creatureProfile: { health_max: 140 },
-    properties: { ints: { CreatureType: 3 }, floats: { ResistSlash: 1, ResistElectric: 0.6, 67: 0.9 } },
+    properties: { ints: { CreatureType: 3 }, floats: { ResistSlash: 0.7, ResistElectric: 1.4, 67: 1.1 } },
   });
   assert.equal(p.maxHp(1002), 140);
-  assert.deepEqual(p.resists(1002), { Slash: 1, Lightning: 0.6, Fire: 0.9 });
-  assert.equal(p.weakest(1002), "Lightning");
+  assert.deepEqual(p.resists(1002), { Slash: 0.7, Lightning: 1.4, Fire: 1.1 });
+  assert.equal(p.weakest(1002), "Lightning", "the highest damage multiplier");
   assert.equal(p.weakest(1002, ["Fire", "Slash"]), "Fire");
-  assert.equal(p.weakest(1002, ["Slash"]), null, "no real weakness (≥ 1.0)");
+  assert.equal(p.weakest(1002, ["Slash"]), null, "one element: no comparison, no information");
+  assert.equal(p.weakest(1002, ["Cold", "Acid"]), null, "both unset (1.0 each): no information");
+  // Real LSD floatStats (ACE PropertyFloat 64-70): Ice Golem wcid 196, Fire Wisp wcid 5748.
+  p.noteAppraisal(1, 196, "Ice Golem", { properties: { floats: { 64: 0.83, 65: 0.83, 66: 0.8, 67: 1.0, 68: 0.0, 69: 0.83, 70: 0.8 } } });
+  assert.equal(p.weakest(196, ["Cold", "Fire"]), "Fire", "Ice Golem: Fire, never the immune Cold");
+  assert.equal(p.weakest(196), "Fire", "a learned 1.0 beats an unset (Nether) 1.0");
+  p.noteAppraisal(2, 5748, "Fire Wisp", { properties: { floats: { 64: 1.0, 65: 1.0, 66: 0.18, 67: 0.0, 68: 0.18, 69: 0.75, 70: 0.18 } } });
+  assert.equal(p.weakest(5748, ["Fire", "Cold", "Acid", "Lightning"]), "Acid", "Fire Wisp among the war elements");
+  assert.notEqual(p.weakest(5748), "Fire", "never the element it is immune to");
+  p.noteAppraisal(3, 7777, "Drudge", { properties: { floats: {} }, creatureProfile: { health_max: 50 } });
+  assert.equal(p.weakest(7777), null, "a vanilla-ACE appraisal carries no resist floats");
   assert.equal(p.species(1002), "Drudge", "learned type");
   assert.equal(p.species(11039), "Olthoi", "offline table (LSD Olthoi Noble)");
   assert.equal(p.species(4_000_000), null);

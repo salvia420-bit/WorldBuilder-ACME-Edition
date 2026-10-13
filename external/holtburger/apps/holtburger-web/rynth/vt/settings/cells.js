@@ -13,8 +13,11 @@
 //                                 no loop ⇒ bot.setBuffs(profile spec ?? "auto")
 //   MonsterRange                  combat.monsterRangeM (+ host.nearbyRangeM =
 //                                 max(base, MonsterRange+5, ApproachRange+5),
-//                                 base = host.nearbyRangeM at creation, 0 =
-//                                 unlimited ⇒ untouched; combat.invalidateScan())
+//                                 each term only when that range exceeds its
+//                                 schema default (40 / 4 m: Default never moves
+//                                 a configured base), base = host.nearbyRangeM
+//                                 at creation, 0 = unlimited ⇒ untouched;
+//                                 combat.invalidateScan())
 //   HealAt … ManaRechargeStamFloor vitals.cfg[field]
 //   LootMinValue / CorpseApproachRangeMax   loot.minValue / loot.corpseRangeM
 //   RebuffSecondsRemaining        buff.rebuffSecondsRemaining
@@ -24,9 +27,11 @@
 //   list legacyPriorities         combat.priorities (assigned a copy)
 //
 // set(key, value, ctx) — ctx (supplied by VtOptions) = { getValue(key),
-// recordList(name) }. Never throws; → { ok: true, pending? } | { ok: false, error }.
+// recordList(name), buffSpec() /* the spec the bot is about to have, or undefined */ }.
+// Never throws; → { ok: true, pending?, spec? } | { ok: false, error } (`pending` =
+// the bot.setBuffs() promise, `spec` = the spec handed to it).
 
-import { VITALS_FIELD_KEYS } from "./schema.js";
+import { VITALS_FIELD_KEYS, findRow } from "./schema.js";
 
 const LOOPS = {
   combat: (b) => b?.combat ?? b?.kernel?.combat ?? null,
@@ -57,6 +62,16 @@ for (const [field, key] of Object.entries(VITALS_FIELD_KEYS)) VITALS[key] = fiel
  *  always pushed with their resolved value (§4.5) and re-pushed when their
  *  loop appears or is replaced (VtOptions.syncCells). */
 export const PROFILE_OWNED_CELLS = Object.freeze(["MonsterRange", "CorpseApproachRangeMax", "RebuffSecondsRemaining"]);
+/** Legacy cells NO boot path carries to a rebuilt bot: the takeover carry-over
+ *  (boot.js captureLiveSettings) and hudBootOverrides() cover the enable flags,
+ *  priorities, loot floor, buffs and vitals, but a new bot always starts these
+ *  at the combat_loop ctor defaults. A later attach (legacy:false) therefore
+ *  re-pushes the value the active profile / Default overlay STORES — else the
+ *  2 s autosave would drop it from the profile (nothing stored ⇒ no push, so
+ *  Default with an empty overlay stays byte-identical). */
+export const BOOT_UNCARRIED_CELLS = Object.freeze([
+  "MeleeAttackPower", "MissileAttackPower", "AttackHeight", "BlacklistAttempts", "BlacklistTimeoutSec",
+]);
 export const CELL_LISTS = Object.freeze(["buffs", "legacyPriorities"]);
 export const CELL_KEYS = Object.freeze([...Object.keys(ENABLE), ...Object.keys(FIELDS), ...Object.keys(VITALS)]);
 
@@ -72,6 +87,12 @@ function safe(fn, dflt = undefined) {
 }
 
 const errText = (e) => String(e && e.message ? e.message : e);
+
+/** The schema defaults of the two ranges that derive host.nearbyRangeM. */
+const RANGE_DFLT = Object.freeze({
+  monster: Number(findRow("MonsterRange")?.row?.dflt ?? 40),
+  approach: Number(findRow("ApproachRange")?.row?.dflt ?? 4),
+});
 
 function sameSpec(a, b) {
   if (a === b) return true;
@@ -146,7 +167,11 @@ export function createLiveCells(bot) {
       let ar = Number(ctx.getValue?.("ApproachRange"));
       if (!Number.isFinite(mr)) mr = 0;
       if (!Number.isFinite(ar)) ar = 0;
-      const want = Math.max(nearbyBase, mr + 5, ar + 5);
+      // Only a range beyond the schema default (the old literals the bot
+      // shipped with) widens the scan: at Default a configured nearbyRangeM
+      // below MonsterRange+5 stays exactly as configured (V-2, review regress-2).
+      const need = Math.max(mr > RANGE_DFLT.monster ? mr + 5 : 0, ar > RANGE_DFLT.approach ? ar + 5 : 0);
+      const want = Math.max(nearbyBase, need);
       if (host.nearbyRangeM !== want) host.nearbyRangeM = want;
     } catch {
       /* ignore */
@@ -171,11 +196,12 @@ export function createLiveCells(bot) {
       }
     }
     if (key === "EnableBuffing" && on && bot && typeof bot.setBuffs === "function") {
-      const spec = safe(() => ctx.recordList?.("buffs")?.spec, null);
+      const rs = safe(() => ctx.recordList?.("buffs")?.spec, null);
+      const spec = rs === "auto" || Array.isArray(rs) ? rs : "auto";
       try {
-        const p = bot.setBuffs(spec === "auto" || Array.isArray(spec) ? spec : "auto");
+        const p = bot.setBuffs(Array.isArray(spec) ? spec.slice() : spec);
         if (p && typeof p.catch === "function") p.catch(() => {});
-        return { ok: true, pending: p };
+        return { ok: true, pending: p, spec };
       } catch (e) {
         return { ok: false, error: `${key}: ${errText(e)}` };
       }
@@ -214,10 +240,15 @@ export function createLiveCells(bot) {
         const spec = value && typeof value === "object" ? value.spec : null;
         if (spec !== "auto" && !Array.isArray(spec)) return { ok: true }; // no buff list in the profile: leave the bot's
         if (!bot || typeof bot.setBuffs !== "function") return { ok: true };
-        if (sameSpec(safe(() => bot.buffSpec, null), spec)) return { ok: true };
+        // bot.setBuffs() is async and serialised (bot.buffSpec changes when a
+        // call's turn runs): compare with the spec the bot is GOING to have
+        // (ctx.buffSpec, VtOptions' in-flight push) so a revert to the value
+        // bot.buffSpec still shows is not swallowed.
+        const ahead = typeof ctx.buffSpec === "function" ? safe(() => ctx.buffSpec(), undefined) : undefined;
+        if (sameSpec(ahead !== undefined ? ahead : safe(() => bot.buffSpec, null), spec)) return { ok: true };
         const p = bot.setBuffs(Array.isArray(spec) ? spec.slice() : spec);
         if (p && typeof p.catch === "function") p.catch(() => {});
-        return { ok: true, pending: p };
+        return { ok: true, pending: p, spec: Array.isArray(spec) ? spec.slice() : spec };
       }
       return { ok: false, error: `no live cell for ${key}` };
     } catch (e) {

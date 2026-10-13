@@ -63,6 +63,7 @@ const IT_CASTER = 0x8000;
 const EM_MELEE = 0x00100000;
 const EM_SHIELD = 0x00200000;
 const EM_MISSILE = 0x00400000;
+const EM_MISSILE_AMMO = 0x00800000;
 const EM_TWO_HANDED = 0x02000000;
 // PropertyInt.DamageType (45) flags (ACE DamageType): the element shown for a
 // weapon, highest-priority flag first (RynthAi LegacyWeaponsUi.cs:272-289).
@@ -103,6 +104,9 @@ export function classifyItem(invItem, { isPetDevice = null } = {}) {
     }
   }
   if (it & IT_CASTER) return "caster";
+  // Arrows/quarrels are ItemType MissileWeapon too (LSD 47513 "Arrow": 256) but
+  // fit only the ammo slot: ammunition, not a weapon to wield.
+  if (vl & EM_MISSILE_AMMO && !(vl & EM_MISSILE)) return null;
   if (it & IT_MISSILE || vl & EM_MISSILE) return "missile";
   if (it & IT_MELEE || vl & (EM_MELEE | EM_TWO_HANDED)) return "melee";
   if (it & IT_ARMOR && vl & EM_SHIELD) return "shield";

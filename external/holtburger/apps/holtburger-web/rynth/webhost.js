@@ -464,6 +464,7 @@ const PINT_ITEM_CUR_MANA = 107;
 const PINT_ITEM_MAX_MANA = 108;
 const PFLOAT_MANA_RATE = 5;
 const ITEM_TYPE_ARMOR = 0x2;
+const EQUIP_MASK_SHIELD = 0x200000; // ACE EquipMask.Shield
 const ITEM_TYPE_CREATURE = 0x10;
 const PLAYER_GUID_MIN = 0x50000000;
 const PLAYER_GUID_MAX = 0x5fffffff;
@@ -501,10 +502,15 @@ function poseRadToCompassDeg(rad) {
 /** Me -> pos offset (dx east, dy north, dz) with the combat_loop.js rule
  *  (`_scanTargets`): same landblock, or both outdoors where landblocks tile
  *  the world (global frame = landblock index * 192 + local). Indoor cells of
- *  different landblocks are not world-contiguous -> null. */
+ *  different landblocks are not world-contiguous -> null. Cell 0 is "no
+ *  cell known" (the login/teleport-into-dungeon gap `_tick` heals when it
+ *  can), not landblock 0x0000 — it would read as "outdoors at the map's
+ *  corner" and give a ~kilometre distance (a false vendor `range` close) ->
+ *  null. */
 function vtDelta(me, pos) {
   const a = me.objCellId >>> 0;
   const b = pos.objCellId >>> 0;
+  if (!a || !b) return null;
   const sameLb = a >>> 16 === b >>> 16;
   const bothOutdoor = (a & 0xffff) < 0x100 && (b & 0xffff) < 0x100;
   if (!sameLb && !bothOutdoor) return null;
@@ -515,6 +521,58 @@ function vtDelta(me, pos) {
     dy: (((b >>> 16) & 0xff) - ((a >>> 16) & 0xff)) * 192 + (pos.y - me.y),
     dz,
   };
+}
+
+/**
+ * Page-level selection clock (GetSelectedItemId, INT-2 fix 2026-10-13): which
+ * selection the player made LAST — the inventory panel's
+ * (`hb-inventory-selection` window event, plugins/inventory.js) or the world's
+ * (`selectionChanged` on the plugin bus, scene3d/entities.js / SelectObject).
+ * The inventory selection is never cleared by a world click, so preferring it
+ * unconditionally sent spells at a stale pack item (impl/cmd-review.md §5.1).
+ * One clock per page (`globalThis.__rynthSelClock`), shared by every host
+ * instance — listeners are attached once, the bus hook again only when the
+ * bus object changes (the plugin client attaches after login). Off-page / no
+ * event sources ⇒ null and GetSelectedItemId keeps the old order. Never throws.
+ * A dynamic-LOD swap of the selected rig (scene3d/entities.js) releases it
+ * (`{guid: 0, lodRespawn: true}`) and re-selects the SAME guid a tick later:
+ * the player selected nothing new, so neither half is stamped.
+ */
+function selectionClock() {
+  try {
+    const g = globalThis;
+    let c = g.__rynthSelClock;
+    if (!c || typeof c !== "object") {
+      c = { seq: 0, invAt: 0, worldAt: 0, invHooked: false, bus: null, lodGuid: 0 };
+      g.__rynthSelClock = c;
+    }
+    if (!c.invHooked && typeof g.addEventListener === "function") {
+      g.addEventListener("hb-inventory-selection", () => {
+        c.invAt = ++c.seq;
+      });
+      c.invHooked = true;
+    }
+    const bus = g.__pluginClient?.events;
+    if (bus && c.bus !== bus && typeof bus.on === "function") {
+      bus.on("selectionChanged", (e) => {
+        const guid = Number(e && e.guid) >>> 0;
+        if (e && e.lodRespawn === true) {
+          c.lodGuid = Number(e.prevGuid) >>> 0; // the LOD release half
+          return;
+        }
+        if (c.lodGuid && guid === c.lodGuid) {
+          c.lodGuid = 0; // ... and its re-select of the same guid
+          return;
+        }
+        c.lodGuid = 0;
+        c.worldAt = ++c.seq;
+      });
+      c.bus = bus;
+    }
+    return c;
+  } catch (_) {
+    return null;
+  }
 }
 
 const finiteOr = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
@@ -568,6 +626,9 @@ export class RynthWebHost {
     // complement to the poll snapshot — chat, kill notices, use-done — that
     // a pure poller would miss or need to reconstruct. See installEventTap.
     if (typeof window !== "undefined" && !opts.noEventTap) installEventTap(this);
+    // Start the page's selection clock early so selections made before the
+    // first GetSelectedItemId() are ordered too (no-op off-page).
+    if (typeof window !== "undefined") selectionClock();
   }
 
   /**
@@ -2314,12 +2375,19 @@ export class RynthWebHost {
     }
     return out;
   }
-  /** VTank `hasshield`: any wielded object of class Armor (ItemType 0x2).
+  /** VTank `hasshield`: any wielded object of class Armor (ItemType 0x2) —
+   *  in the Shield slot when the row's equip mask is known. ACE streams only
+   *  Selectable wielded items (weapons, shields, ammo) of OTHER wielders
+   *  (Player_Tracking.cs:121), so for them every Armor row is the shield; the
+   *  local player's index also lists worn armour (chest, helm …, ItemType
+   *  Armor too), which the slot check keeps from reading as a shield.
    *  null when wielded items are unreadable. */
   HasShield(guid) {
     const rows = this.TryGetWieldedItems(guid);
     if (rows === null) return null;
-    return rows.some((r) => (r.itemType & ITEM_TYPE_ARMOR) !== 0);
+    return rows.some(
+      (r) => (r.itemType & ITEM_TYPE_ARMOR) !== 0 && (r.equipMask === 0 || (r.equipMask & EQUIP_MASK_SHIELD) !== 0)
+    );
   }
 
   // ── A9 use gates ───────────────────────────────────────────────────
@@ -2460,10 +2528,11 @@ export class RynthWebHost {
   // ── A15 / A16 distance and name search ─────────────────────────────
   /** The player's pose in the snapshot frame ({objCellId, x, y, z, heading}),
    *  falling back to a live read (cell healed like `_tick`) before the first
-   *  heartbeat. null when unknown. */
+   *  heartbeat, or when the snapshot carried no cell (objCellId 0). null when
+   *  unknown. */
   _vtSelfPose() {
     const snapPose = this.TryGetPlayerPose();
-    if (snapPose) return snapPose;
+    if (snapPose && snapPose.objCellId >>> 0) return snapPose;
     const live = this.TryGetPlayerPoseLive();
     if (!live) return null;
     const cell = live.landblockId >>> 0 || this.GetCurrentCellIdLive() >>> 0;
@@ -2630,11 +2699,20 @@ export class RynthWebHost {
    *  its OWN array of its own row copies (same contract as
    *  TryGetPlayerInventory — sorting or annotating it cannot leak into
    *  another caller). Dropped early on kinds 11/47/48/49. Before the first
-   *  heartbeat (no snapshot) it reads through. */
+   *  heartbeat (no snapshot) and once the heartbeat has stopped it reads
+   *  through (see _vtMemoSeq). */
   TryGetPlayerInventoryCached() {
-    const seq = this.snap ? this.snap.seq : null;
+    const seq = this._vtMemoSeq();
     if (seq == null) return this.TryGetPlayerInventory();
     return this._invRowsForSeq(seq).map((r) => ({ ...r }));
+  }
+  // The snapshot seq the A20 memos are keyed on, or null = read through: no
+  // heartbeat yet, or the heartbeat was stopped / the host disposed. A
+  // stopped host's seq never advances and _dispatchEvent no longer drops the
+  // memo, so it would otherwise answer with its last tick's inventory forever
+  // while TryGetPlayerInventory reads live.
+  _vtMemoSeq() {
+    return this.snap && !this._stopped ? this.snap.seq : null;
   }
   // The memoized (internal, never handed out) rows for `seq`.
   _invRowsForSeq(seq) {
@@ -2648,7 +2726,7 @@ export class RynthWebHost {
   /** TryGetPackRoom over the memoized inventory, memoized per `snap.seq`;
    *  each caller gets its own copy. */
   TryGetPackRoomCached() {
-    const seq = this.snap ? this.snap.seq : null;
+    const seq = this._vtMemoSeq();
     if (seq == null) return this.TryGetPackRoom();
     let m = this._roomMemo;
     if (!m || m.seq !== seq) {
@@ -2722,17 +2800,23 @@ export class RynthWebHost {
   }
 
   // ── ENV selection for "Add selected" ───────────────────────────────
-  /** The inventory panel's selected item (plugins/inventory.js publishes
-   *  window.__inventory.selectedGuid), else the world selection; 0 = none. */
+  /** The player's most recent selection: the inventory panel's item
+   *  (plugins/inventory.js publishes window.__inventory.selectedGuid) or the
+   *  world selection, whichever was made LAST (the page selection clock);
+   *  without the clock's ordering (off-page / neither event seen) the
+   *  inventory selection first, then the world one; 0 = none. */
   GetSelectedItemId() {
+    const c = selectionClock(); // attaches the page listeners on first use
+    let inv = 0;
     try {
       const v = globalThis.__inventory?.selectedGuid;
-      const g = typeof v === "number" ? v >>> 0 : 0;
-      if (g) return g;
+      inv = typeof v === "number" ? v >>> 0 : 0;
     } catch (_) {
-      /* fall through to the world selection */
+      inv = 0;
     }
-    return this.GetSelectedId();
+    const world = this.GetSelectedId();
+    if (inv && world) return c && c.worldAt > c.invAt ? world : inv;
+    return inv || world;
   }
 }
 

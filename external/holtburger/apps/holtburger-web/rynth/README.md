@@ -9,7 +9,8 @@ integration/`, which does not exist — off by one directory AND missing the
 `workflow-reports/` subdir):
 - **Current state, start here** — `../../../docs/rynth-integration/STATUS.md` (delivery
   status, refreshed 2026-07-23: module counts, the AI director/stream/NavAtlas/omnibus
-  sections, and a pointer into the 2026-07-23 remediation review below).
+  sections, and a pointer into the 2026-07-23 remediation review below; newest sections at
+  the top — 2026-10-12 the October client + HUD, 2026-10-13 the VTank feature set in `vt/`).
 - **Original porting-strategy synthesis** (the "16-synthesis.md" this pointer used to
   mean) — `../../../docs/rynth-integration/workflow-reports/16-synthesis.md`, plus the
   full 15-report fan-out in that same `workflow-reports/` directory.
@@ -40,12 +41,14 @@ const bot = await createGrindBot(window.__sessionHandle, {
   vitals: { healAtCombat: 60 },// B16 threshold overrides
   combat: { magicRangeM: 15 }, // RynthCombatLoop tuning (ranges, height/power, blacklist)
   control: { prefix: "!bot" }, // in-game tell control
+  // vt: false,                // no VTank layer (default: loaded; ?botVt=off) — vt/README.md
 });
 bot.status();            // { action, kills, looted, buffs, vitals, router }
 bot.control.stop();      // the ONE operator stop (durable per character) — HUD / !bot pause use it
 bot.control.resume();
 await bot.setBuffs("auto"); // replace the self-buff set at runtime ([] = none)
-bot.stop();              // tear the bot down (disposes the AI layer too)
+bot.vt?.statusLine();    // the VTank layer (vt/README.md): "VT · profile Default · …"
+bot.stop();              // tear the bot down (disposes the AI layer and the VTank layer too)
 ```
 
 Normally you don't call this yourself: `?bot=1` boots it at first in-world, and the
@@ -71,6 +74,8 @@ both through `boot.js`.
 | `boot.js` | The `?bot=1` auto-boot (URL → createGrindBot config, operator-stop latch, takeover rebind with live-settings carry-over) as one function the HUD's START shares. | 2026-10-12 |
 | `hud_bridge.js` | The only file that knows the bot API for the HUD: a pure view-model snapshot + the HUD's commands. | 2026-10-12 |
 | `../plugins/rynth-hud.js` | **The RynthSuite HUD** — see below. | RynthAi dashboard |
+| `vt/` | **The VTank layer** (2026-10-13): settings profiles, the VTank monster list + expressions, items, consumables, buffs, routes, metas, loot profiles and the `/rs` `/vt` `/ra` `/mt` `/ub` commands, added to the kernel as optional `aux` slots and loop hooks that are inert at the Default profile. `?botVt=off` boots without it. See `vt/README.md`. | PLAN (`/mnt/wbterminal1/rynth-vtank-2026-10-12/design/PLAN.md`) |
+| `../plugins/rynth-vt/` | The VTank panel (9 tabs; opened by the HUD's **VT** button or `/rs ui`), loaded lazily. | VTank / RynthAi windows |
 
 ## The RynthSuite HUD (2026-10-12)
 
@@ -82,14 +87,22 @@ plugin-bar ⚒ slot. `?rynthHud=off` disables it.
 - **RUNNING / STOPPED / START** — START boots the bot on the current character when the page
   wasn't loaded with `?bot=1`; STOP is `bot.control.stop()` (persisted per character: a
   reload boots the bot held until RUNNING is pressed again).
-- State / Activity lines, Profile (grind | explorer), Route (atlas routes ▶ follow), Loot ≥.
-- Combat / Buff / Nav / Loot / AI toggles, **FR** force-rebuff (right-click cancels).
+- State / Activity lines, Persona (grind | explorer), Route (atlas routes ▶ follow), Loot ≥,
+  and **VT** — opens the VTank panel (its tooltip carries the layer's status line).
+- Combat / Buff / Nav / Loot / AI toggles, **FR** force-rebuff (right-click cancels). With a
+  VTank route loaded, **Nav** is that route's navigation (Stop moving pauses it until Nav is
+  clicked again); otherwise it follows the selected atlas route.
 - Target name + health bar, player HP/ST/MN, kills, kills/hr, looted, buffs, uptime.
 - Tabs: Monsters (priorities), Settings (vitals thresholds, self-buff list, Auto),
   Navigation (routes, /loc goto, exit building, stop moving), AI (the director panel), Log.
 
 It refreshes at ≤ 4 Hz only while open and visible; the launcher dot (green = running)
 polls at 1 Hz.
+
+With a VTank **user** profile selected, START / Restart boot with that profile's values (plus the
+HUD persona), and the HUD's own edits (priorities, loot floor, vitals, buff list) are also saved
+into the profile; on the Default profile the HUD behaves exactly as before, and on a
+`?botVt=off` page START / Restart always use the HUD's own saved settings (`vt/README.md`).
 
 ## Regression suite
 
@@ -111,8 +124,12 @@ presence gate (`gate1070.sh`, needs `watch1070.sh` running), and rewrites the sm
 - ACE silently reverts a Melee-mode request when a bow/wand is wielded → use the
   equipment-derived suggested-mode toggle, never a blind `setCombatMode`.
 - Untargeted (self-buff) casts also require Magic mode (`Player_Magic.cs:279`).
-- Enchantment `start_time`/`duration` are **Derethian-epoch** seconds → remaining time via
-  the `Enchantment.cs:100-104` receivedAt formula, not `serverTime` diffs.
+- Enchantment `startTime` is **relative seconds, ≤ 0** — NOT a Derethian-epoch timestamp (this
+  note said so until 2026-10-13; `pkg/holtburger_web.d.ts` `PlayerEnchantmentJs.startTime`).
+  ACE sends 0 at cast and counts it down per 5 s heartbeat, so a relog re-send arrives as
+  `-age`. Remaining = `receivedAt + duration + startTime` with `receivedAt` stamped on OUR clock
+  when the row is first seen (`buff_loop.js`, `webhost.js` `TryGetSelfEnchantments`) — never
+  a `Date.now()` / `serverTime` diff.
 - `?autoLogin=1` is single-shot; the Account-In-Use kick dance needs reload-retry.
 - Release wasm (`--release`) before headless campaigns — the 18 MB dev wasm's memory
   tax destabilizes the tab.
@@ -147,7 +164,37 @@ Added by the 2026-10-12 update (the October client):
   after 3 no-damage casts (RynthAi `BlacklistAttempts`) or 20 s of no-damage melee.
 - Doors collide inside the movement step now (`?objCollideInTransition`): egress waits for
   the door's Ethereal bit before walking through.
-- Tells to yourself read `You think, "…"` — the control channel accepts self-tells.
+- Tells to yourself read `You think, "…"` — the control channel accepts self-tells. Since
+  2026-10-13 it reads a tell only from a chat line of the TELL category (2), or category 0,
+  which a host without the category reports: another player's emote (category 4) can print the
+  same text (`control_channel.js` `CHAT_CATEGORY_TELL`).
+
+Added by the VTank layer (2026-10-13; `vt/README.md`):
+
+- **`/rs` `/vt` `/ra` `/mt` `/ub` never reach ACE.** `app/slash_commands.js` hands them (the
+  chat bar and every `host.InvokeChatParser` line) to `window.__rynthVt`; meta Chat actions and
+  nav Chat points run them through the same dispatcher. An unknown verb is a local error, not
+  `@verb`. `@rs …` is still sent to the server as typed.
+- **VT code casts only through `host.CastSpellAt` / `CastSelf` / `CastUntargetedSafe`** (the
+  last refuses anything that is not SelfTargeted — the crash class above — except a War/Void
+  ring behind the off-by-default `AllowUntargetedRings` gate), and writes chat only
+  with `WriteToChatWindow` — a grep test (T-S1) keeps `CastSpell(` / `WriteToChat(` out of
+  `rynth/vt/**` and `plugins/rynth-vt/**`. Item actions take the item-action token.
+- The layer runs off the host Worker heartbeat, not page timers (a hidden tab keeps ticking —
+  but see the portal-space note below; the only timers are the Jump waypoint's wrapped jump
+  and the 3 s boot race), and nothing in it acts while the operator has the bot STOPPED
+  (except Mana Charges When Off refills). STOP, portal space and `bot.stop()` also let go of
+  any movement key a meta's `setmotion[]` pressed.
+- A hidden tab does NOT end portal space after a teleport: `scene3d/portal_space.js` advances
+  only on the page's frame loop, so VT nav and the base combat / loot / buff / vitals loops hold
+  until the tab is shown (only `router.js` has its own 90 s cap) — pre-existing, an owner
+  follow-up (STATUS.md 2026-10-13, gap 2). The VT signals synthesize one `portalOut` 90 s
+  after the arrival so metas see the exit.
+- With the layer absent (`?botVt=off`), `!bot rs …` runs on the page-level `/rs` dispatcher
+  when the page has one, else answers "rs unavailable — the VTank layer is not loaded". That
+  dispatcher handles settings and profiles, runs the item / cast / face verbs through the bot's
+  host, answers "start the bot first" for route / meta / jump / follow verbs and refuses verbs
+  that queue work.
 
 ## Dark modules (quarantined)
 

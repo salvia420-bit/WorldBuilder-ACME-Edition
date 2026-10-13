@@ -393,8 +393,16 @@ const DATA_FILES = Object.freeze({
 });
 const DATA = new Map();
 const LOADING = new Map();
+const FAILED_AT = new Map(); // name -> Date.now() of the last failed load
+/** supportData() is read on the tick path (dispel, pets, classify): after a
+ *  failed load (404, missing file) the LAZY kick retries at most this often, so
+ *  a missing table never turns into one fetch per tick. Explicit
+ *  loadSupportJson()/loadSupportData() calls always try. */
+export const SUPPORT_DATA_RETRY_MS = 30_000;
+let READER = null; // test hook (setSupportDataReader)
 
 async function readJson(url) {
+  if (READER) return READER(url);
   // node (tests, tools) has no fetch for file: URLs.
   if (url.startsWith("file:")) {
     const fs = await import("node:fs/promises");
@@ -416,16 +424,19 @@ export function loadSupportJson(name) {
     } catch (_) {
       return Promise.resolve(null);
     }
+    const failed = () => {
+      LOADING.delete(name); // allow a later retry (lazy kicks wait SUPPORT_DATA_RETRY_MS)
+      FAILED_AT.set(name, Date.now());
+      return null;
+    };
     const p = readJson(url)
       .then((j) => {
-        if (j && typeof j === "object" && j.v === 1) DATA.set(name, Object.freeze(j));
-        else LOADING.delete(name);
-        return DATA.get(name) ?? null;
+        if (!(j && typeof j === "object" && j.v === 1)) return failed();
+        DATA.set(name, Object.freeze(j));
+        FAILED_AT.delete(name);
+        return DATA.get(name);
       })
-      .catch(() => {
-        LOADING.delete(name); // allow a later retry
-        return null;
-      });
+      .catch(failed);
     LOADING.set(name, p);
   }
   return LOADING.get(name);
@@ -436,19 +447,28 @@ export function loadSupportData() {
   return Promise.all(Object.keys(DATA_FILES).map((n) => loadSupportJson(n))).then(() => undefined);
 }
 
-/** The cached table, or null (kicks off the lazy load on first ask). */
+/** The cached table, or null (kicks off the lazy load on first ask; after a
+ *  failed load, at most once per SUPPORT_DATA_RETRY_MS). */
 export function supportData(name) {
   if (DATA.has(name)) return DATA.get(name);
-  loadSupportJson(name);
+  const f = FAILED_AT.get(name);
+  const t = Date.now();
+  if (f == null || t < f || t - f >= SUPPORT_DATA_RETRY_MS) loadSupportJson(name);
   return null;
 }
 
 /** Test hook: install a table directly (fixtures), or drop one (null). */
 export function setSupportData(name, value) {
+  FAILED_AT.delete(name);
   if (value == null) {
     DATA.delete(name);
     LOADING.delete(name);
   } else DATA.set(name, value);
+}
+
+/** Test hook: replace the JSON reader ((url) => Promise<json>), or restore it (null). */
+export function setSupportDataReader(fn) {
+  READER = typeof fn === "function" ? fn : null;
 }
 
 // ── classification ────────────────────────────────────────────────────────
@@ -576,6 +596,12 @@ export function normalizeConsumable(e) {
   return out;
 }
 
+/** The normalized Consumables rows are re-read from VtOptions at most this
+ *  often unless an edit, a list event or a profile change invalidates them
+ *  first (slot enabled() reads them every heartbeat: review runtime-6). The
+ *  expiry is only a safety net for a change that fires no VtOptions event. */
+const CONSUMABLES_CACHE_MS = 5000;
+
 export class ConsumablesModel {
   constructor({ options = null, host = null, log, now = Date.now } = {}) {
     this.options = options;
@@ -583,13 +609,32 @@ export class ConsumablesModel {
     this.now = typeof now === "function" ? now : Date.now;
     this.log = makeLogger(log, "consumables", this.now);
     this._mem = []; // used only without options
+    this._cache = null; // normalized rows read from options (never handed out)
+    this._cacheAt = -Infinity;
+    this._off = null;
+    if (options && typeof options.onChange === "function") {
+      try {
+        const off = options.onChange((e) => {
+          if (e && (e.kind === "profile" || (e.kind === "list" && e.key === "consumables"))) this._cache = null;
+        });
+        this._off = typeof off === "function" ? off : null;
+      } catch (_) {
+        this._off = null;
+      }
+    }
   }
 
   _read() {
     try {
       if (this.options && typeof this.options.getList === "function") {
-        const v = this.options.getList("consumables");
-        return Array.isArray(v) ? v.map(normalizeConsumable).filter((e) => e.type) : [];
+        const t = Number(this.now());
+        const fresh = this._cache && t - this._cacheAt < CONSUMABLES_CACHE_MS && t >= this._cacheAt;
+        if (!fresh) {
+          const v = this.options.getList("consumables");
+          this._cache = Array.isArray(v) ? v.map(normalizeConsumable).filter((e) => e.type) : [];
+          this._cacheAt = t;
+        }
+        return this._cache.map(normalizeConsumable); // fresh copies: callers may edit them
       }
     } catch (_) {
       /* fall through */
@@ -599,6 +644,7 @@ export class ConsumablesModel {
 
   _write(list, source = "ui") {
     const rows = list.map((e) => ({ ...e }));
+    this._cache = null;
     try {
       if (this.options && typeof this.options.setList === "function") {
         const r = this.options.setList("consumables", rows, { source });
@@ -609,6 +655,20 @@ export class ConsumablesModel {
     }
     this._mem = rows;
     return { ok: true };
+  }
+
+  /** Detach from VtOptions (it outlives the layer). Idempotent. */
+  dispose() {
+    const off = this._off;
+    this._off = null;
+    this._cache = null;
+    if (off) {
+      try {
+        off();
+      } catch (_) {
+        /* already detached */
+      }
+    }
   }
 
   list() {

@@ -375,7 +375,7 @@ await check("E5 TryGetEnchantments keeps its raw semantics (Z5)", () => {
 });
 
 // ── W  wielded items / shield ──────────────────────────────────────────
-await check("W1 TryGetWieldedItems copies + frees; HasShield = any ItemType Armor (0x2) row", () => {
+await check("W1 TryGetWieldedItems copies + frees; HasShield = an ItemType Armor (0x2) row in the Shield slot", () => {
   const boxes = [];
   const items = {
     [MOB]: [{ guid: 0x7000, wcid: 3, itemType: 0x1, equipMask: 0x100000, name: "Axe" }, { guid: 0x7001, wcid: 4, itemType: 0x2, equipMask: 0x200000, name: "Buckler" }],
@@ -390,6 +390,29 @@ await check("W1 TryGetWieldedItems copies + frees; HasShield = any ItemType Armo
   assert.ok(boxes.length === 5 && boxes.every((b) => b.freedCount === 1), "every EquippedWeaponJs freed once");
   assert.equal(mk({}).TryGetWieldedItems(MOB), null);
   assert.equal(mk({}).HasShield(MOB), null);
+});
+
+await check("W2 HasShield: worn armour (ItemType Armor outside the Shield slot) is not a shield; the shield slot is", () => {
+  // The local player's wielder index lists worn armour too (ACE streams only
+  // Selectable items of OTHER wielders): a chest piece / helm is ItemType
+  // Armor but not in EquipMask.Shield (0x200000).
+  const items = {
+    [SELF]: [
+      { guid: 0x7100, wcid: 10, itemType: 0x2, equipMask: 0x200 }, // ChestArmor
+      { guid: 0x7101, wcid: 11, itemType: 0x2, equipMask: 0x1 }, // HeadWear
+      { guid: 0x7102, wcid: 12, itemType: 0x1, equipMask: 0x100000 }, // sword
+    ],
+    [MOB]: [{ guid: 0x7103, wcid: 13, itemType: 0x2, equipMask: 0x200000 }], // a buckler
+    0x80000004: [{ guid: 0x7104, wcid: 14, itemType: 0x1, equipMask: 0x200000 }], // dual-wield offhand weapon
+    0x80000005: [{ guid: 0x7105, wcid: 15, itemType: 0x2, equipMask: 0 }], // mask not streamed: Armor counts
+  };
+  const h = mk({ entityWieldedItems: (g) => (items[g] || []).map((r) => box(r)) });
+  assert.equal(h.HasShield(SELF), false, "armoured, no shield");
+  assert.equal(h.HasShield(MOB), true);
+  assert.equal(h.HasShield(0x80000004), false, "an offhand WEAPON in the shield slot is not a shield");
+  assert.equal(h.HasShield(0x80000005), true);
+  items[SELF].push({ guid: 0x7106, wcid: 16, itemType: 0x2, equipMask: 0x200000 });
+  assert.equal(h.HasShield(SELF), true, "armoured + a shield");
 });
 
 // ── T  item-action token ───────────────────────────────────────────────
@@ -456,6 +479,12 @@ await check("T4 events clear it: kinds 11, 13 (USE_FAILED), 14, 48; 47/49 only f
   h._dispatchEvent({ kind: 2, stringPayload: "chat" });
   h._dispatchEvent({ kind: 42, u32Payload: 5 });
   assert.equal(h.itemActionToken?.owner, "vtinv", "unrelated kinds leave it");
+  // Our own guid unknown (no playerGuid capability, no snapshot): a wield
+  // transition clears it — fail open rather than wedge until the timeout.
+  const blind = mk({});
+  blind.tryClaimItemAction("vtloadout");
+  blind._dispatchEvent({ kind: 49, u32Payload: 0x7000, u32Payload2: 0x50000999 });
+  assert.equal(blind.itemActionToken, null, "unknown own guid -> 47/49 clear");
 });
 
 await check("T5 a subscriber of the clearing event can claim the next action; attach() drops the claim", () => {
@@ -511,6 +540,22 @@ await check("M1 TryGetPlayerInventoryCached / TryGetPackRoomCached read playerIn
   assert.equal(reads, 2, "kind 11 drops the memo mid-seq");
 });
 
+await check("M2 a stopped / disposed host reads through (its seq never advances and events no longer drop the memo)", () => {
+  let reads = 0;
+  let rows = [{ guid: 2, name: "Gem", containerId: 0, equipMask: 0 }];
+  const h = mk({ playerInventory: () => { reads++; return rows.map((r) => box(r)); }, playerItemsCapacity: 102 });
+  h._tick();
+  h.TryGetPlayerInventoryCached();
+  h.TryGetPlayerInventoryCached();
+  assert.equal(reads, 1, "memoized while the heartbeat runs");
+  h.dispose(); // stop() + _stopped: _dispatchEvent ignores every later event
+  rows = [...rows, { guid: 3, name: "Kit", containerId: 0, equipMask: 0 }];
+  h._dispatchEvent({ kind: 11 });
+  assert.deepEqual(h.TryGetPlayerInventoryCached().map((r) => r.guid), [2, 3], "live, not the last tick's memo");
+  assert.equal(h.TryGetPackRoomCached().main.used, 2);
+  assert.deepEqual(h.TryGetPackRoomCached(), h.TryGetPackRoom());
+});
+
 // ── N  distance + name search ──────────────────────────────────────────
 function worldHandle(objs, { pose = { landblockId: 0xa9b40021, x: 100, y: 100, z: 10, heading: 0 }, range } = {}) {
   const calls = [];
@@ -546,6 +591,34 @@ await check("N1 TryGetObjectDistance: same landblock 3-D, outdoor seam in the gl
   assert.equal(host.TryGetObjectDistance(0x80000012), null);
   assert.equal(host.TryGetObjectDistance(0x80009999), null, "untracked");
   assert.equal(host.TryGetObjectDistance(0), null);
+});
+
+await check("N1b cell 0 = no cell known -> distance null (never 'outdoors at the map corner'); the live heal is used when it can", () => {
+  const objs = {
+    0x80000013: { name: "A", cell: 0xa9b40021, x: 103, y: 104, z: 10 },
+    0x80000014: { name: "NoCell", cell: 0, x: 5, y: 5, z: 10 },
+  };
+  let curCell = 0;
+  const calls = [];
+  const s = {
+    playerGuid: () => SELF,
+    getLocalPlayerPose: () => ({ landblockId: 0, x: 100, y: 0, z: 10, heading: 0 }),
+    getCurrentCellId: () => curCell,
+    objectPosition: (g) => (objs[g] ? [objs[g].cell >>> 0, objs[g].x, objs[g].y, objs[g].z] : undefined),
+    nearbyEntityGuids: () => Uint32Array.from(Object.keys(objs).map(Number)),
+    objectName: (g) => objs[g]?.name,
+    turnToHeading: (r) => calls.push(r),
+  };
+  const host = mk(s);
+  host._tick(); // no cell anywhere: the snapshot pose carries objCellId 0
+  assert.equal(host.TryGetPlayerPose().objCellId, 0);
+  assert.equal(host.TryGetObjectDistance(0x80000013), null, "unknown own cell");
+  assert.deepEqual(host.FindNearbyByName("a"), [], "unknown distance is skipped");
+  assert.equal(host.TurnToObject(0x80000013), false, "no bearing without a cell");
+  assert.deepEqual(calls, []);
+  curCell = 0xa9b40021; // the cell resolves before the next heartbeat: the live heal answers
+  assert.ok(Math.abs(host.TryGetObjectDistance(0x80000013) - Math.hypot(3, 104)) < 1e-9);
+  assert.equal(host.TryGetObjectDistance(0x80000014), null, "an object with no cell");
 });
 
 await check("N2 FindNearbyByName: exact vs substring, case-insensitive, nearest first, self excluded, maxDistM", () => {
@@ -612,6 +685,14 @@ await check("F1 TryGetFellowshipInfo: plain shape; the snapshot box and every me
   assert.ok(memberBoxes.length === 2 && memberBoxes.every((b) => b.freedCount === 1));
   assert.equal(mk({ playerFellowship: () => undefined }).TryGetFellowshipInfo(), null, "not in a fellowship");
   assert.equal(mk({}).TryGetFellowshipInfo(), null);
+  // A throwing `members` getter degrades to no members — the snapshot box is
+  // still freed exactly once (no leak on the error path).
+  let freed = 0;
+  const bad = { get members() { throw new Error("null pointer"); }, name: "F", leaderGuid: SELF, open: false, isLocked: true, evenShare: false, free() { freed++; } };
+  assert.deepEqual(mk({ playerFellowship: () => bad }).TryGetFellowshipInfo(), {
+    name: "F", leaderGuid: SELF, open: false, isLocked: true, evenShare: false, members: [],
+  });
+  assert.equal(freed, 1);
 });
 
 await check("F2 fellowship actions map to the wasm methods; zero guids / empty names refused", () => {

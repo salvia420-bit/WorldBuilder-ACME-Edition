@@ -39,7 +39,8 @@ export const NAV_TUNING = Object.freeze({
   entitySearchM: 30,
   approachM: 3,
   approachArriveM: 2.5,
-  findBudgetMs: 60_000,
+  findBudgetMs: 60_000, // to find/approach the object, counted once at the waypoint (not while walking to it)
+  approachJumpGapMs: 1_500, // tick-to-tick teleport test on a portal approach (= active_nav EXTERNAL_TELEPORT_TICK_GAP_MS)
   portalWaitMs: 20_000,
   portalRetryMs: 4_000,
   recallTimeoutMs: 60_000, // CS ActionTimeoutMs
@@ -57,6 +58,14 @@ export const NAV_TUNING = Object.freeze({
   jumpRebindGraceMs: 12_000,
   movingEpsM: 0.3,
 });
+
+// The `mem` fields that anchor an executor's time budgets (find/approach,
+// recall 60 s, post-use waits, checkpoint 10 s). ActiveNav shifts them by the
+// time the waypoint spent outside the slot (combat, buffing, an operator hold,
+// a rebind), so a waypoint never fails for time it was not running — C# resets
+// its portal/recall action state whenever nav stops (NavigationEngine.cs
+// ResetPortalState). Pause keeps its own remaining time (lastAt).
+export const BUDGET_ANCHORS = Object.freeze(["startedAt", "firstUseAt"]);
 
 export const CAST_OWNER = "vtnav";
 export const ITEM_OWNER = "vtnav";
@@ -176,14 +185,46 @@ function teleported(ctx, t) {
   return false;
 }
 
+// A transit whose far-side pose has not landed yet: a portalIn (kind 33,
+// PlayerTeleport) newer than the last portalOut (host_signals synthesizes it
+// from the presentation's falling edge, or from kind 66 TeleportArrived when no
+// presentation runs: nullRender / ?portalSpace=off pages, where inPortal() never
+// reads true). Bounded by portalWaitMs so a lost portalOut cannot park nav.
+function transitPending(ctx, now) {
+  const s = ctx.signalsLatest || {};
+  const pin = s.portalIn;
+  if (!pin || !Number.isFinite(pin.at)) return false;
+  const out = s.portalOut && Number.isFinite(s.portalOut.at) ? s.portalOut.at : -Infinity;
+  return out < pin.at && now - pin.at < NAV_TUNING.portalWaitMs;
+}
+
 // Post-teleport settle (PostPortalDelaySec, CS PostTeleportSettle): counted
-// from the END of portal space, so a long tunnel still gets its settle.
+// from the END of portal space (or of the transit, without a presentation), so
+// a long tunnel still gets its settle and the next waypoint never starts from
+// the pre-teleport pose.
 function settling(ctx, mem, now) {
-  if (inPortal(ctx)) {
+  if (inPortal(ctx) || transitPending(ctx, now)) {
     mem.teleAt = now;
     return true;
   }
   return now - mem.teleAt < ctx.postPortalDelayMs();
+}
+
+// Before the first use of a Portal/NPC waypoint's PORTAL the body can still go
+// through it by walking into it (ACE Portal.OnCollideObject → OnActivate; the
+// approach walks to within 2.5 m of the portal's centre). Armed (mem.armedAt)
+// once the portal object is resolved and the approach toward it begins. Only
+// portal space, a teleport signal since arming, or a tick-to-tick jump count
+// here: the armed pose is no reference, the approach itself walks away from it.
+function teleportedOnApproach(ctx, mem, now) {
+  if (mem.armedAt == null) return false;
+  if (inPortal(ctx)) return true;
+  const s = ctx.signalsLatest || {};
+  if ((s.portalIn && s.portalIn.at >= mem.armedAt) || (s.teleportArrived && s.teleportArrived.at >= mem.armedAt)) return true;
+  const w = posWorld(ctx.pose());
+  const prev = mem.walkPrev;
+  mem.walkPrev = w ? { wx: w.wx, wy: w.wy, at: now } : null;
+  return !!(prev && w && now - prev.at <= NAV_TUNING.approachJumpGapMs && Math.hypot(w.wx - prev.wx, w.wy - prev.wy) >= NAV_TUNING.teleportJumpM);
 }
 
 function claimItem(ctx) {
@@ -355,6 +396,9 @@ function pointExecutor(point, ctx) {
   const st = { leg: null, job: null };
   const ex = base(point, ctx);
   Object.defineProperty(ex, "pinned", { get: () => !!(st.job && !st.job.settled) });
+  // The stuck-rung jump job (cannot be cancelled): ActiveNav keeps an
+  // unsettled one when it resets this executor (review runtime-2).
+  Object.defineProperty(ex, "job", { get: () => st.job });
   Object.defineProperty(ex, "label", {
     get: () => {
       if (st.job && !st.job.settled) return "Point: unstick jump";
@@ -468,7 +512,7 @@ function portalLegacyExecutor(point, ctx) {
       if (p) guid = p.guid;
     }
     if (!guid) {
-      walkToPoint(ctx, st, point);
+      if (walkToPoint(ctx, st, point)) mem.startedAt = now; // the find budget starts at the waypoint
       return "running";
     }
     if (st.leg) ctx.cancelLeg(st.leg);
@@ -716,7 +760,7 @@ function openVendorExecutor(point, ctx) {
       }
     }
     if (!guid || !pos) {
-      walkToPoint(ctx, st, point);
+      if (walkToPoint(ctx, st, point)) mem.startedAt = now; // the find budget starts at the waypoint
       return "running";
     }
     mem.guid = guid;
@@ -746,7 +790,8 @@ function portalNpcExecutor(point, ctx) {
   const isNpc = Number(point.objectClass) === 37;
   const waiting = () => (mem.uses || 0) > 0 || mem.phase === "settle";
   Object.defineProperty(ex, "pinned", { get: waiting });
-  Object.defineProperty(ex, "expectsTeleport", { get: waiting });
+  // A portal (not an NPC) can be walked into on the approach (teleportedOnApproach).
+  Object.defineProperty(ex, "expectsTeleport", { get: () => waiting() || (!isNpc && mem.armedAt != null) });
   Object.defineProperty(ex, "label", {
     get: () =>
       `PortalNPC: ${point.name || "?"}${mem.phase === "settle" ? " (settling)" : waiting() ? (isNpc ? " (used)" : " (waiting for the teleport)") : ""}`,
@@ -760,6 +805,12 @@ function portalNpcExecutor(point, ctx) {
     }
     const used = (mem.uses || 0) > 0;
     if (used && teleported(ctx, mem.tele)) {
+      mem.phase = "settle";
+      mem.teleAt = now;
+      return "running";
+    }
+    if (!used && !isNpc && teleportedOnApproach(ctx, mem, now)) {
+      if (st.leg) ctx.cancelLeg(st.leg);
       mem.phase = "settle";
       mem.teleAt = now;
       return "running";
@@ -803,10 +854,11 @@ function portalNpcExecutor(point, ctx) {
     }
     const pos = guid ? objectPos(ctx, guid) : null;
     if (!guid || !pos) {
-      if (!used) walkToPoint(ctx, st, point);
+      if (!used && walkToPoint(ctx, st, point)) mem.startedAt = now; // the find budget starts at the waypoint
       return "running";
     }
     mem.guid = guid;
+    if (!used && !isNpc && mem.armedAt == null) mem.armedAt = now; // approaching the portal: walking into it counts
     if (!used && approach(ctx, mem, st, pos) === "walking") return "running";
     if (mem.lastUseAt != null && now - mem.lastUseAt < NAV_TUNING.portalRetryMs) return "running";
     if (!claimItem(ctx)) return "running";
@@ -865,7 +917,7 @@ function npcTalkExecutor(point, ctx) {
     }
     const pos = guid ? objectPos(ctx, guid) : null;
     if (!guid || !pos) {
-      if (mem.firstUseAt == null) walkToPoint(ctx, st, point);
+      if (mem.firstUseAt == null && walkToPoint(ctx, st, point)) mem.startedAt = now; // the find budget starts at the waypoint
       return "running";
     }
     mem.guid = guid;
@@ -943,6 +995,7 @@ function jumpExecutor(point, ctx) {
   const ex = base(point, ctx);
   const running = () => !!(st.job && !st.job.settled) || (mem.startedAt != null && !st.job && !mem.finished);
   Object.defineProperty(ex, "pinned", { get: running });
+  Object.defineProperty(ex, "job", { get: () => st.job });
   Object.defineProperty(ex, "expectsTeleport", { get: running });
   Object.defineProperty(ex, "label", {
     get: () => `Jump: heading ${Number(point.headingDeg) || 0}, ${Number(point.delayMs) || 0} ms${point.ext?.direction ? `, ${point.ext.direction}` : ""}`,
@@ -984,12 +1037,14 @@ function jumpExecutor(point, ctx) {
  *   host, router, bot, options, runChat, gotoCompose, onNpcTell, log,
  *   signalsLatest — { vendorOpen, tell, useDone, portalIn, portalOut,
  *                     teleportArrived }, each the last signal plus `at`,
- *   mem — the persistent per-waypoint memory (session state),
+ *   mem — the persistent per-waypoint memory (session state; ActiveNav shifts
+ *         its BUDGET_ANCHORS by the time spent outside the slot),
  *   now(), pose(), inPortalSpace(), arriveM(), postPortalDelayMs(),
  *   issueLeg(leg), legState(leg), cancelLeg(leg?), ownsRouterWalk(),
  *   claimMovement(tag), lastChatAt(), setLastChatAt(t), spellName?(id).
  * → { point, type, step(nowMs) → "running"|"done"|"failed", cancel(), label,
- *     pinned, expectsTeleport, failReason, warning }
+ *     pinned, expectsTeleport, failReason, warning, job? (Point/Jump: the
+ *     attemptJumpLeg job in flight, { settled, result, promise }) }
  */
 export function makeExecutor(point, ctx) {
   if (!ctx.mem || typeof ctx.mem !== "object") ctx.mem = {};
@@ -1022,4 +1077,4 @@ export function makeExecutor(point, ctx) {
   }
 }
 
-export default { makeExecutor, NAV_TUNING, CAST_OWNER, ITEM_OWNER, legTimeoutMs, pointLeg, bearingDeg, posWorld, runJob, jumpArgs };
+export default { makeExecutor, NAV_TUNING, BUDGET_ANCHORS, CAST_OWNER, ITEM_OWNER, legTimeoutMs, pointLeg, bearingDeg, posWorld, runJob, jumpArgs };

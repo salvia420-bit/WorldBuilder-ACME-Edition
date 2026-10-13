@@ -20,7 +20,14 @@
 // only working sender. A "You think" line can only come from this session
 // (ACE's tell carries the sender guid; sender == target), so it is accepted
 // as the character itself and always authorized; replies to it are printed
-// locally (WriteToChatWindow) instead of being told back to ourselves.
+// locally (WriteToChatWindow) instead of being told back to ourselves. Only a
+// line of the TELL chat category counts: another player's emote can print the
+// same text (2026-10-13 review safety-5, CHAT_CATEGORY_TELL below).
+//
+// VTANK COMMANDS (2026-10-13, PLAN §5): `<prefix> rs <line>` / `<prefix> vt
+// <line>` run `/rs <line>` through the VTank command layer (opts.onRs, wired
+// by bot.js) with the text after the verb untouched; the first three result
+// lines are the reply. Without onRs they get the default unknown-command reply.
 //
 // Replies go out as a direct tell (host.SendTell → wasm sendTell, 2026-10-12)
 // whenever the host has it. The old `/t <name>, <text>` InvokeChatParser path
@@ -81,6 +88,17 @@
 const CHAT_KIND = 2;
 const TELL_RE = /^(.+?) tells you, "(.*)"$/;
 const SELF_TELL_RE = /^You think, "(.*)"$/; // src/chat_format.rs format_tell, sender == target
+// The chat line's category (event u32b, src/lib.rs CHAT_CATEGORY_*). A real
+// tell — incoming or a "You think" self-tell — is CHAT_CATEGORY_TELL (2). Any
+// OTHER known category is refused before the text is even matched: another
+// player's emote renders `<name> <text>` (category EMOTE 4), so a character
+// named "You" emoting `think, "!bot rs …"` printed a line identical to a
+// self-tell, and the channel ran it as the character itself — with `!bot rs`
+// that is item gives, chat and logoff (review safety-5). Category 0 (SYSTEM)
+// is still accepted: it is also what a host without the category reports (the
+// webhost maps a missing u32Payload2 to 0, a stale pkg/, the node fakes).
+const CHAT_CATEGORY_SYSTEM = 0;
+const CHAT_CATEGORY_TELL = 2;
 const REPLY_WINDOW_MS = 5000; // per-sender reply rate limit window
 const REPLY_MAX_PER_WINDOW = 5;
 const MAX_LOC_DEG = 102; // the map spans ~±101.95 /loc degrees
@@ -119,6 +137,9 @@ export class RynthControlChannel {
     this.onCome = opts.onCome || null; // guarded-mover hook ("come" — report 01 C2)
     this.getAi = opts.getAi || null; // lazy AI-director hook ("ai ...")
     this.getControl = opts.getControl || null; // () => OperatorControl (bot.control) — pause/resume authority
+    // `!bot rs|vt <line>` → the VTank command layer (bot.js wires
+    // (line) => RsResult|null; PLAN §5). Unset → `rs`/`vt` get the default reply.
+    this.onRs = typeof opts.onRs === "function" ? opts.onRs : null;
     this.log = opts.log || ((m) => console.log(`[ctl] ${m}`));
     this.commands = [];
     this._directorWasEnabledBeforePause = false; // resume restarts the director only if pause stopped it
@@ -183,6 +204,8 @@ export class RynthControlChannel {
 
   _onEvent(e) {
     if (e.kind !== CHAT_KIND || !e.text) return;
+    const cat = Number(e.u32b ?? CHAT_CATEGORY_SYSTEM) >>> 0;
+    if (cat !== CHAT_CATEGORY_TELL && cat !== CHAT_CATEGORY_SYSTEM) return; // not a tell (see CHAT_CATEGORY_TELL)
     let sender;
     let body;
     let isSelf = false;
@@ -213,8 +236,36 @@ export class RynthControlChannel {
     }
     const rest = trimmed.slice(this.prefix.length).trim();
     const [cmd, ...args] = rest.split(/\s+/);
+    // The untouched text after the verb (`!bot rs mexec 1  +  2` keeps its
+    // spacing — args.join(" ") would collapse it; critic B9).
+    const rawRest = rest.slice((cmd || "").length).replace(/^\s+/, "");
     this.commands.push({ sender, cmd: (cmd || "").toLowerCase(), args, at: Date.now() });
-    this._dispatch(sender, (cmd || "").toLowerCase(), args);
+    this._dispatch(sender, (cmd || "").toLowerCase(), args, rawRest);
+  }
+
+  // `!bot rs|vt <line>`: the VTank dispatcher runs `/<cmd> <rawRest>` locally
+  // (source "tell": it does not print; we reply with the first 3 lines). Same
+  // allowlist, rate limit and self-tell local print as every other command.
+  _runRs(sender, cmd, rawRest) {
+    const line = `/${cmd}${rawRest ? ` ${rawRest}` : ""}`;
+    let r = null;
+    try {
+      r = this.onRs(line);
+    } catch (e) {
+      r = { lines: [], error: `${cmd} failed: ${(e && e.message) || e}` };
+    }
+    this.log(`${sender}: ${line}`);
+    if (!r || typeof r !== "object") {
+      this._reply(sender, `${cmd} unavailable — the VTank layer is not loaded`);
+      return;
+    }
+    const lines = (Array.isArray(r.lines) ? r.lines : [])
+      .map((l) => String(l && typeof l === "object" ? l.text ?? "" : l ?? ""))
+      .filter((t) => t.trim() !== "")
+      .slice(0, 3);
+    if (!lines.length && r.error) lines.push(String(r.error));
+    if (!lines.length) lines.push("ok");
+    for (const t of lines) this._reply(sender, t);
   }
 
   _reply(sender, text) {
@@ -245,7 +296,11 @@ export class RynthControlChannel {
     h.InvokeChatParser(`/t ${sender}, ${text}`);
   }
 
-  _dispatch(sender, cmd, args) {
+  _dispatch(sender, cmd, args, rawRest = null) {
+    if ((cmd === "rs" || cmd === "vt") && this.onRs) {
+      this._runRs(sender, cmd, rawRest ?? args.join(" "));
+      return;
+    }
     switch (cmd) {
       case "status": {
         const s = this.kernel.status;

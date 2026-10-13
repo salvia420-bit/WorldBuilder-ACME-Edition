@@ -20,6 +20,9 @@
 //   * session vars are flushed (throttled by the VarStore) ALWAYS;
 //   * the delayexec queue is pumped ONLY while running — an operator hold
 //     makes queued entries wait and run after RESUME (V-7, critic S1);
+//   * running true→false (an operator hold) lets go of every host effect a
+//     meta function engaged (expr.functions.release(): setmotion keys, I-3);
+//     so do a portalIn event (V-12) and destroy();
 //   * running false→true is the macro-start edge: enterState(cur,
 //     "macroStart") re-arms every rule and resets Seconds-in-State but NOT
 //     Seconds-in-State (P) (GUIDE:252/268, fixes B7);
@@ -101,7 +104,7 @@ export function makeMetaLog(log, now = Date.now) {
       t = 0;
     }
     const last = seen.get(m);
-    if (last !== undefined && t - last < 10_000) return;
+    if (last !== undefined && t >= last && t - last < 10_000) return; // a clock that went back never mutes a line
     if (seen.size > 256) seen.clear();
     seen.set(m, t);
     try {
@@ -162,6 +165,13 @@ export function normalizeMeta(meta) {
       return;
     }
     let id = typeof r.id === "string" && r.id.trim() ? r.id.trim() : null;
+    if (id === "__proto__") {
+      // The fired map is a plain JSON object: this key would hit the
+      // prototype setter, the flag would never stick and the rule would
+      // re-fire on every pass.
+      warnings.push(`rule #${i + 1}: id "__proto__" is reserved (renumbered)`);
+      id = null;
+    }
     if (id && used.has(id)) {
       warnings.push(`rule #${i + 1}: duplicate id "${id}" (renumbered)`);
       id = null;
@@ -267,6 +277,7 @@ export class MetaEngine {
     this._pending = [];
     this._decideNow = true;
     this._lastPass = -Infinity;
+    this._tickNow = null; // the heartbeat's nowMs while tick() runs (see _clock)
     this._entrySeq = 0;
     this._lastAction = null;
     this._vendor = null;
@@ -278,7 +289,12 @@ export class MetaEngine {
     this._metaListeners = new Set();
   }
 
+  // Inside tick() every timestamp (enteredAt, the watchdog's lastAt, error
+  // times) is the heartbeat's nowMs, the same clock the pass measures
+  // Seconds-in-State and the watchdog with; outside a tick (manual / command
+  // entries) it is the injected clock.
   _clock() {
+    if (typeof this._tickNow === "number") return this._tickNow;
     try {
       const t = Number(this.now());
       return Number.isFinite(t) ? t : 0;
@@ -614,6 +630,10 @@ export class MetaEngine {
           e = { type, guid: Number(evt.guid) >>> 0 };
           this._vendor = null;
           break;
+        case "portalIn":
+          this._releaseHostEffects("portal"); // V-12: no movement key held into portal space
+          e = { type };
+          break;
         default:
           e = { type };
       }
@@ -641,8 +661,10 @@ export class MetaEngine {
 
   tick(nowMs, { running = true } = {}) {
     if (this._destroyed) return;
+    const outerTickNow = this._tickNow;
     try {
       const now = finite(nowMs) ? nowMs : this._clock();
+      this._tickNow = now;
       const run = running !== false;
       const st = this.st;
       this._flushVars(false); // ALWAYS (throttled inside the VarStore)
@@ -651,7 +673,10 @@ export class MetaEngine {
       const wasRunning = st.running === true;
       st.running = run;
       if (!run) {
-        if (wasRunning) this._flushVars(true); // persist pending vars on stop
+        if (wasRunning) {
+          this._flushVars(true); // persist pending vars on stop
+          this._releaseHostEffects("hold"); // I-3: STOP lets go of setmotion keys
+        }
         this._closedGate(now);
         return;
       }
@@ -661,10 +686,14 @@ export class MetaEngine {
         return;
       }
       this._watchdogStep(now, !this._portalActive());
-      if (!this._decideNow && now - this._lastPass < PASS_INTERVAL_MS) return;
+      const since = now - this._lastPass;
+      // A clock that stepped back (since < 0) must not stall passes until it catches up.
+      if (!this._decideNow && since >= 0 && since < PASS_INTERVAL_MS) return;
       this._pass(now);
     } catch (e) {
       this.log(`tick failed: ${errText(e)}`);
+    } finally {
+      this._tickNow = outerTickNow;
     }
   }
 
@@ -673,6 +702,17 @@ export class MetaEngine {
   _closedGate(now) {
     this._watchdogStep(now, false);
     if (this._pending.length) this._pending = [];
+  }
+
+  // Let go of what host functions engaged (setmotion keys; FunctionRegistry
+  // release hooks): on the running→held edge, portalIn and destroy.
+  _releaseHostEffects(reason) {
+    try {
+      const f = this.expr && this.expr.functions;
+      if (f && typeof f.release === "function") f.release(reason);
+    } catch (e) {
+      this.log(`release (${reason}) failed: ${errText(e)}`);
+    }
   }
 
   _flushVars(force) {
@@ -919,6 +959,7 @@ export class MetaEngine {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._releaseHostEffects("detach");
     this._destroyViews();
     this._flushVars(true);
     this._pending = [];

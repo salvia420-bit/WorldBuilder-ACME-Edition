@@ -11,7 +11,7 @@ export {
   ProfileStore, PROFILE_NAME_RE, DEFAULT_NAME, BYCHAR_NAME, HUD_BLOB_KEY, SHARED_PREFIX, ACTIVE_PREFIX, charPrefix,
 } from "./profile_store.js";
 export { createVtOptions } from "./options.js";
-export { createLiveCells, CELL_KEYS, CELL_LISTS, PROFILE_OWNED_CELLS } from "./cells.js";
+export { createLiveCells, CELL_KEYS, CELL_LISTS, PROFILE_OWNED_CELLS, BOOT_UNCARRIED_CELLS } from "./cells.js";
 export {
   getVtSession, peekVtSession, normaliseScope, SESSION_REGISTRY_KEY, NAV_STORE_PREFIX, META_STORE_PREFIX,
   LOOT_STORE_PREFIX,

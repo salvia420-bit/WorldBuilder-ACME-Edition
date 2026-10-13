@@ -341,6 +341,35 @@ await check("storage events: the active record reloads when this tab has no unsa
   assert.equal(p2._win.handlers.get("storage").size, 0);
 });
 
+await check("storage-event reload: this tab's URL pins hold (another tab's save is not an operator action here)", () => {
+  const storage = spyStorage();
+  const win = fakeWin();
+  const p = store(storage, "1001", { win });
+  const o = createVtOptions({ profiles: p, now, log: quiet });
+  o.saveAs("Main"); // made before the bot: record = defaults
+  const bot = { host: { nearbyRangeM: 60 }, combat: { enabled: false, priorities: {} }, loot: { enabled: false, minValue: 0 },
+    vitals: { cfg: { healAtCombat: 60 } }, buffSpec: null }; // ?botPersona=explorer boot
+  o.bindCells(createLiveCells(bot));
+  o.applyToCells({ legacy: true, urlPinned: new Set(["EnableCombat", "EnableLooting"]) });
+  assert.equal(bot.combat.enabled, false);
+  // another tab (no pins there) saves the shared profile: HealAt 80, Enable* at their defaults (true)
+  const other = JSON.parse(storage.getItem(sharedKey("Main")));
+  other.settings = { HealAt: 80 };
+  other.rev += 1;
+  const text = JSON.stringify(other);
+  storage.m.set(sharedKey("Main"), text);
+  win.fire("storage", { key: sharedKey("Main"), newValue: text });
+  assert.equal(bot.vitals.cfg.healAtCombat, 80, "unpinned keys follow the other tab");
+  assert.equal(bot.combat.enabled, false, "EnableCombat stays URL-pinned");
+  assert.equal(bot.loot.enabled, false, "EnableLooting stays URL-pinned");
+  // and the next autosave does not write the pinned live values into the profile
+  T += 5000;
+  o.autosaveTick(T);
+  const rec = JSON.parse(storage.getItem(sharedKey("Main")));
+  assert.equal("EnableCombat" in rec.settings, false);
+  assert.equal(rec.settings.HealAt, 80);
+});
+
 await check("migrateHudBlob: read-only conversion of rynth.hud.settings.v1 (D27)", () => {
   const storage = spyStorage();
   assert.equal(ProfileStore.migrateHudBlob(storage, "1001", { now: T }), null, "no blob");
@@ -422,6 +451,7 @@ await check("NamedStore: overwrite, case-insensitive names, sorted list, remove,
   // a corrupt record is skipped
   storage.setItem("rynth.vt.v1.nav.broken", "{nope");
   assert.equal(ns.get("broken"), null);
+  assert.equal(ns.has("broken"), false, "has() agrees with get()/list() on an unreadable record");
   assert.ok(!ns.list().some((e) => e.name === "broken"));
 });
 
@@ -477,6 +507,11 @@ await check("getVtSession: one session per scope on win.__rynthVtSessions; attac
   assert.equal(getVtSession(win, 0x80000001, { storage, now }).scope, "2147483649", "guid → decimal string");
   assert.equal(getVtSession(win, "", { storage, now }).scope, "pending");
   assert.equal(getVtSession(win, undefined, { storage, now }).scope, "pending");
+  // the botScopeOf convention (x >>> 0) also for decimal strings: one session per character
+  assert.equal(getVtSession(win, "-5", { storage, now }), getVtSession(win, -5, { storage, now }));
+  assert.equal(getVtSession(win, "4294967291", { storage, now }), getVtSession(win, -5, { storage, now }));
+  assert.equal(getVtSession(win, " 1001 ", { storage, now }), s1);
+  assert.deepStrictEqual(["0", 0, 2 ** 32, "pending", "abc"].map(S.normaliseScope), ["pending", "pending", "pending", "pending", "abc"]);
   // shape
   for (const k of ["scope", "charName", "options", "profiles", "stores", "navState", "metaState", "meta", "varsSession",
     "attachCount", "createdAt", "ext"]) assert.ok(k in s1, `session.${k}`);

@@ -48,12 +48,21 @@ function registry(win, create) {
   return reg;
 }
 
-/** Scope = player guid as a decimal string (`x >>> 0`), else "pending". */
+/** Scope = player guid as a decimal string (`x >>> 0`, the botScopeOf /
+ *  rynthBotOperatorStop:<guid> convention), else "pending". A decimal string
+ *  is normalised the same way, so "-5", -5 and "4294967291" are one session. */
 export function normaliseScope(scope) {
-  if (typeof scope === "number" && Number.isFinite(scope) && scope !== 0) return String(scope >>> 0);
+  if (typeof scope === "number" && Number.isFinite(scope)) {
+    const g = scope >>> 0;
+    return g ? String(g) : "pending";
+  }
   if (typeof scope === "string") {
     const s = scope.trim();
-    if (s && s !== "0") return s;
+    if (/^[+-]?\d+$/.test(s)) {
+      const g = Number(s) >>> 0;
+      return g ? String(g) : "pending";
+    }
+    if (s) return s;
   }
   return "pending";
 }

@@ -191,6 +191,14 @@ export class ProfileStore {
     this._dirty = false;
   }
 
+  /** Enter Default from a user profile: a fresh, empty overlay, so Default
+   *  means the schema defaults again (PLAN §4.5(4), G:48) — never the edits a
+   *  previous Default session made before switching away (review guide-2). */
+  _enterDefault() {
+    this._overlay = emptySection();
+    this._activate("default", DEFAULT_NAME, null, null);
+  }
+
   _writeMarker() {
     if (this._active.kind === "default") return this._kv.remove(this._activeMarkerKey());
     return this._kv.set(this._activeMarkerKey(), JSON.stringify({ name: this._active.name, kind: this._active.kind }));
@@ -247,7 +255,8 @@ export class ProfileStore {
     return this._rec;
   }
 
-  /** The Default-session overlay (edits made while Default is active). */
+  /** The Default-session overlay (edits made while Default is active; a
+   *  fresh one each time Default is re-entered from a user profile). */
   overlay() {
     return this._overlay;
   }
@@ -288,7 +297,7 @@ export class ProfileStore {
       if (!f.ok) this.log(`switching profile with unsaved edits in "${a.name}": ${f.error}`);
     }
     if (t.kind === "default") {
-      this._activate("default", DEFAULT_NAME, null, null);
+      this._enterDefault();
       this._writeMarker();
       return { ok: true, record: this.record() };
     }
@@ -368,7 +377,7 @@ export class ProfileStore {
     const r = this._kv.remove(key);
     if (!r.ok) return { ok: false, error: r.error };
     if (this._active.key === key) {
-      this._activate("default", DEFAULT_NAME, null, null);
+      this._enterDefault();
       this._writeMarker();
     }
     return { ok: true };

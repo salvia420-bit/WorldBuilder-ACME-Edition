@@ -12,6 +12,8 @@
 //     UnwieldItem / DropItem / TakeObject claim the host item token (owner
 //     "vtcmd") first when the host has one; the token clears on the server's
 //     answer (kinds 11/13/14/48) or its 8 s timeout.
+//   * V-12: casts and item actions hold in portal space (castById → 1, an
+//     item action → {ok:false, retry:true}); a busy item token is also retry.
 //   * C9 never throws: every public member wraps its body.
 //   * The host may be passed as the object or as a getter (rebinds).
 //
@@ -253,10 +255,12 @@ export function createVtActions({ host = null, getBot = () => null, print = null
   }
   function itemTypeOf(guid) {
     const g = guid >>> 0;
-    const row = inventory().find((r) => Number(r.guid) >>> 0 === g);
-    if (row && Number.isFinite(Number(row.itemType))) return Number(row.itemType) >>> 0;
+    // The live property first: the inventory fallback copies every pack row,
+    // and class filters call this once per nearby object.
     const v = call(H(), "TryGetObjectIntProperty", g, PINT_ITEM_TYPE);
-    return typeof v === "number" ? v >>> 0 : 0;
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) return v >>> 0;
+    const row = inventory().find((r) => Number(r.guid) >>> 0 === g);
+    return row && Number.isFinite(Number(row.itemType)) ? Number(row.itemType) >>> 0 : 0;
   }
   function descFlagsOf(guid) {
     const v = call(H(), "TryGetObjectDescFlags", guid >>> 0);
@@ -336,6 +340,16 @@ export function createVtActions({ host = null, getBot = () => null, print = null
     return findInventoryByName(name, opts).reduce((s, r) => s + r.stack, 0);
   }
 
+  // V-12: every VT caster and item action holds in portal space (the server
+  // refuses them there anyway, and a refused action would park the item token).
+  function inPortalSpace(h) {
+    try {
+      return h?.IsPortalSpaceActive?.() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── item actions (C8) ──────────────────────────────────────────────────
   function claimItem(h, minIntervalMs = 0) {
     if (typeof h?.tryClaimItemAction !== "function") return true;
@@ -356,7 +370,8 @@ export function createVtActions({ host = null, getBot = () => null, print = null
     const h = H();
     if (!h) return { ok: false, error: "not in the world" };
     if (typeof h[member] !== "function") return { ok: false, error: `${label} is not available on this client` };
-    if (!claimItem(h, minIntervalMs)) return { ok: false, error: "another item action is in progress — try again" };
+    if (inPortalSpace(h)) return { ok: false, error: `${label} waits: in portal space`, retry: true };
+    if (!claimItem(h, minIntervalMs)) return { ok: false, error: "another item action is in progress — try again", retry: true };
     let r;
     try {
       r = h[member](...args);
@@ -478,7 +493,7 @@ export function createVtActions({ host = null, getBot = () => null, print = null
   }
   /**
    * Try to cast `spellId` (UB actiontrycastbyid semantics).
-   * @returns {0|1|2} 0 = the cast was sent; 1 = a step was taken / busy, try again;
+   * @returns {0|1|2} 0 = the cast was sent; 1 = a step was taken / busy / in portal space, try again;
    *                  2 = impossible (bad id, unknown spell, no target for a non-self spell, no cast API)
    */
   function castById(spellId, targetGuid = null) {
@@ -495,6 +510,7 @@ export function createVtActions({ host = null, getBot = () => null, print = null
       if (rec && rec.isSelfTargeted) form = "self";
       else if (tgt) form = "target";
       else return 2; // not known to be SelfTargeted and no target: impossible (never untargeted, PLAN §6 W1-5)
+      if (inPortalSpace(h)) return 1; // V-12: hold, retry after the portal
       if (Number(call(h, "GetCurrentCombatMode")) !== 8) {
         stepToMagic(h);
         return 1;
@@ -535,6 +551,15 @@ export function createVtActions({ host = null, getBot = () => null, print = null
     face,
     // additive helpers (stdlib_host / compat verbs)
     host: H,
+    /** The operator hold (Run Macro off) of the bot getBot() returns. */
+    operatorHeld: () => {
+      try {
+        const b = typeof getBot === "function" ? getBot() : null;
+        return !!(b && b.kernel && b.kernel.operatorHeld === true);
+      } catch (_) {
+        return false;
+      }
+    },
     playerGuid,
     objName,
     inventory,

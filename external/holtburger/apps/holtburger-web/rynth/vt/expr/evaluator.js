@@ -82,6 +82,26 @@ export class FunctionRegistry {
   names() {
     return [...this._fns.keys()].sort();
   }
+
+  /** A function library registers how to release what its functions engaged
+   *  in the game (setmotion's held movement keys, cmd/stdlib_host.js). */
+  onRelease(fn) {
+    if (typeof fn !== "function") return;
+    if (!this._release) this._release = [];
+    this._release.push(fn);
+  }
+
+  /** Run every release hook (the meta engine: operator hold, portal space,
+   *  detach). Never throws. */
+  release(reason) {
+    for (const fn of this._release || []) {
+      try {
+        fn(reason);
+      } catch (e) {
+        this.log(`functions: a release hook failed: ${e && e.message ? e.message : e}`);
+      }
+    }
+  }
 }
 
 // ── bitwise helpers (64-bit, truncated) ─────────────────────────────────

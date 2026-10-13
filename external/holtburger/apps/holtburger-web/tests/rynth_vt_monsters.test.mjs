@@ -346,6 +346,16 @@ await check("static cache: cached per (rev, guid) only once every referenced sta
   assert.equal(evalCalls, 1, "invalidate() drops the cache");
 });
 
+await check("static cache is dropped when the guid names another object (ACE recycles dynamic guids)", () => {
+  const { list, host } = makeList({ entries: [E("Drudge Skulker", { priority: 4 })] });
+  assert.equal(list.priorityOf(DRUDGE, { seq: 1 }), 4);
+  assert.equal(list.priorityOf(DRUDGE, { seq: 2 }), 4, "cached");
+  host.objs.set(DRUDGE, { name: "Mosswart", wcid: 1006, dist: 5, ct: 4, shield: false });
+  assert.equal(list.priorityOf(DRUDGE, { seq: 3 }), 1, "a recycled guid is not the old Drudge Skulker");
+  host.objs.set(DRUDGE, { name: "Drudge Skulker", wcid: 1002, dist: 5, ct: 3, shield: false });
+  assert.equal(list.priorityOf(DRUDGE, { seq: 4 }), 4);
+});
+
 await check("dynamic entries re-evaluate once per scan (snap.seq), memoised within one scan", () => {
   const { list, host } = makeList({ entries: [E("range>5", { Y: true, A: false })] });
   evalCalls = 0;

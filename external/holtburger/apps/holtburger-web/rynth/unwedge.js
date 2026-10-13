@@ -42,6 +42,9 @@
 //          this same character physically stood on this session. On a
 //          non-admin character the command is refused server-side and the
 //          recovery ends FAILED (cooldown, then re-detection).
+//        Both RECALL and ADMIN are gated by `allowEscalation()` (optional;
+//          the VTank layer sets it while its nav owns a live route, PLAN D26):
+//          false ends the recovery FAILED + cooldown instead.
 //   4. AVOID SET — the wedge position is recorded into the shared
 //      ExploreMemory (markWedge) so frontier()/frontierChain() stop offering
 //      tiles at the wedge and the explorer doesn't path straight back in.
@@ -161,6 +164,12 @@ export class UnwedgeReflex {
     };
 
     this.bot = null; // set by createGrindBot once the bot object exists
+    // Escalation gate (PLAN D26): `() => boolean`, consulted before the RECALL
+    // and ADMIN rungs; false ends the recovery FAILED (+ cooldown) instead of
+    // a lifestone recall / @teleloc. The VTank layer sets it while its nav owns
+    // a live route (its own stuck ladder runs first). null = today's ladder.
+    // Settable later (bot.unwedge.allowEscalation = fn).
+    this.allowEscalation = typeof opts.allowEscalation === "function" ? opts.allowEscalation : null;
 
     // state machine: MONITOR (watching) | RETREAT (walking a crumb) | RECALL
     this.state = "MONITOR";
@@ -481,8 +490,24 @@ export class UnwedgeReflex {
     }
   }
 
+  /** True when the escalation gate (allowEscalation) forbids RECALL/ADMIN now. */
+  _escalationSuppressed() {
+    const f = this.allowEscalation;
+    if (typeof f !== "function") return false;
+    try {
+      return f() === false;
+    } catch {
+      return false; // a broken gate never blocks recovery
+    }
+  }
+
   _startRecall() {
     if (this._recallBusy) return;
+    if (this._escalationSuppressed()) {
+      this._journal("[unwedge] recall/teleport escalation suppressed — the VTank route's own stuck handling owns the body");
+      this._finish(false, "escalation suppressed (VT nav)");
+      return;
+    }
     this._recallBusy = true;
     void this._doRecall()
       .catch((e) => {
@@ -550,6 +575,10 @@ export class UnwedgeReflex {
       // Absolute last resort: admin-teleport to the OLDEST breadcrumb — open
       // ground this character physically stood on this session. Refused
       // server-side on a non-admin character (recovery then ends FAILED).
+      if (this.adminTeleFallback && this._crumbs.length && this._escalationSuppressed()) {
+        if (this.state === "RECALL") this._finish(false, "escalation suppressed (VT nav)");
+        return;
+      }
       if (this.adminTeleFallback && this._crumbs.length) {
         const c = this._crumbs[0];
         const cmd = `@teleloc 0x${(c.cell >>> 0).toString(16).toUpperCase()} ${c.x.toFixed(2)} ${c.y.toFixed(2)} ${c.z.toFixed(2)}`;

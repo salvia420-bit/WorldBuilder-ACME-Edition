@@ -29,7 +29,13 @@
 // HostFnContext (built by INT-2 glue/host_fn_context.js) =
 //   { host, actions: VtActions, options: VtOptions, print(text, cat), runChat(line),
 //     quests: QuestTracker, creatures: CreatureProfiles|null, nav: {status(), isEmpty()}|null, now() }
-//   + optional (additive): log(msg), getRegex(pattern, flags) (EXPR's .NET-dialect cache).
+//   + optional (additive): log(msg), getRegex(pattern, flags) (EXPR's .NET-dialect cache),
+//     operatorHeld() (else VtActions.operatorHeld()).
+//
+// Movement keys (setmotion/clearmotion): pressing one is refused while the
+// operator holds the bot or in portal space; registry.release() (run by the
+// meta engine on the hold edge, portalIn and destroy) lets go of every key
+// pressed with one SetMovementInput(0,0,0,false).
 
 import { createVtActions, OBJECT_CLASS, ODF } from "./actions_lib.js";
 import { poseToCoords } from "./coords.js";
@@ -61,12 +67,11 @@ function parseNum(s) {
   return null;
 }
 
-/** Numeric view of a value (non-numeric → 0), like EXPR toNum. */
+/** Numeric view of a value (non-numeric → 0), like EXPR toNum (a WorldObject is 0 there too; use guidOfValue for ids). */
 export function valueToNumber(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "string") return parseNum(v) ?? 0;
-  if (tagOf(v) === "wobj") return v.guid;
   return 0;
 }
 
@@ -412,8 +417,11 @@ const SPEC = [
       if (!g) return 0;
       if (prop === EXT_PROP_TEMPLATE_TYPE) return E.wcidOf(g);
       if (prop === EXT_PROP_CONTAINER) {
+        // The host reports containerId 0 for the MAIN pack (and worn items);
+        // Decal's Container of a main-pack item is the player itself.
         const row = E.inv().find((r) => r.guid === g);
-        return row ? row.containerId : E.num(E.hc("TryGetObjectInstanceIdProperty", g, 2));
+        if (row) return row.containerId || (row.equipMask ? 0 : E.me());
+        return E.num(E.hc("TryGetObjectInstanceIdProperty", g, 2));
       }
       return E.num(E.hc("TryGetObjectIntProperty", g, prop));
     },
@@ -567,7 +575,14 @@ const SPEC = [
     (E) => (a) => {
       const m = s0(a, 0).toLowerCase();
       if (!MOTIONS.includes(m)) return 0;
-      E.motion.set(m, n0(a, 1) !== 0);
+      const on = n0(a, 1) !== 0;
+      // I-3/V-7/V-12: no movement key is pressed while the operator holds the
+      // bot or in portal space (releasing one is always allowed).
+      if (on && (E.held() || E.inPortal())) {
+        E.log(`setmotion[${m}] refused: ${E.held() ? "the bot is paused (Run Macro is off)" : "in portal space"}`);
+        return 0;
+      }
+      E.motion.set(m, on);
       return b01(E.applyMotion());
     },
   ],
@@ -697,6 +712,9 @@ function errText(e) {
 export function registerHostFunctions(registry, hctx = {}) {
   if (!registry || typeof registry.define !== "function") return [];
   const E = buildEnv(hctx || {});
+  // setmotion[] keys are released on an operator hold, in portal space and on
+  // detach (the meta engine runs registry.release(); review runtime-1).
+  if (typeof registry.onRelease === "function") registry.onRelease(() => E.releaseMotion());
   const defined = [];
   for (const [name, factory, opts] of SPEC) {
     const impl = factory(E);
@@ -964,6 +982,27 @@ function buildEnv(ctx) {
     return deg < 0 ? deg + 360 : deg;
   };
   const motion = new Map();
+  const held = () => {
+    try {
+      if (typeof ctx.operatorHeld === "function") return ctx.operatorHeld() === true;
+      const a = actions();
+      return typeof a?.operatorHeld === "function" ? a.operatorHeld() === true : false;
+    } catch (_) {
+      return false;
+    }
+  };
+  const inPortal = () => hc("IsPortalSpaceActive") === true;
+  /** Let go of every movement key a setmotion[] pressed: one
+   *  SetMovementInput(0,0,0,false) when any is down. → true when sent. */
+  const releaseMotion = () => {
+    let down = false;
+    for (const v of motion.values()) if (v === true) down = true;
+    motion.clear();
+    if (!down) return false;
+    const h = host();
+    if (typeof h?.SetMovementInput !== "function") return false;
+    return hc("SetMovementInput", 0, 0, 0, false) !== false;
+  };
   const applyMotion = () => {
     const h = host();
     if (typeof h?.SetMovementInput !== "function") return false;
@@ -981,9 +1020,22 @@ function buildEnv(ctx) {
       log(`echo failed: ${errText(e)}`);
     }
   };
+  // Read-only, option-like values derived from live state (PLAN R22):
+  // `RouteReversed` = the loaded route's reverse flag (/rs reverseroute).
+  const derived = (name) => {
+    if (String(name).trim().toLowerCase() !== "routereversed") return undefined;
+    try {
+      const st = ctx.nav && typeof ctx.nav.status === "function" ? ctx.nav.status() : null;
+      return !!(st && st.reversed);
+    } catch (_) {
+      return false;
+    }
+  };
   const getSetting = (name) => {
     const o = ctx.options;
     if (!name) return "";
+    const d = derived(name);
+    if (d !== undefined) return d;
     try {
       const r = o?.get?.(name, { vtUnits: true });
       if (r && r.ok) return r.value === undefined ? "" : r.value;
@@ -998,6 +1050,10 @@ function buildEnv(ctx) {
   };
   const setSetting = (name, value) => {
     const o = ctx.options;
+    if (derived(name) !== undefined) {
+      log(`${name} is read-only (use /rs reverseroute)`);
+      return 0;
+    }
     if (!name || !o) return 0;
     const v = toScalar(value);
     try {
@@ -1056,6 +1112,9 @@ function buildEnv(ctx) {
     bearingTo,
     motion,
     applyMotion,
+    held,
+    inPortal,
+    releaseMotion,
     print,
     quests: () => ctx.quests || null,
     getSetting,

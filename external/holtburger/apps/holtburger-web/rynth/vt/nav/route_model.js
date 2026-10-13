@@ -340,8 +340,11 @@ export function step(route, delta) {
 /**
  * `/rs reverseroute [true|false]` (G:223, Q4 defaults): `true`/`false` are
  * idempotent, no argument toggles. A reversal reverses the points, mirrors
- * the index (`n-1-i`, CS/Meta/MetaManager.cs:1012-1023) and flips the Linear
- * direction so the walk turns around.
+ * the index (`n-1-i`, CS/Meta/MetaManager.cs:1012-1023) and leaves `linearDir`
+ * alone, as C# does, so the walk turns around on every route type (G:223). The
+ * plan text (R21 / §3.8) also flipped `linearDir`, which on a Linear route
+ * cancelled the turn-around; dropped by the orchestrator after the W1-6 review
+ * (Q4's "flip" = the walk changes direction).
  */
 export function reverse(route, flag) {
   const want = flag === true ? true : flag === false ? false : !route.reversed;
@@ -351,7 +354,6 @@ export function reverse(route, flag) {
     ...route,
     points: route.points.slice().reverse(),
     activeIndex: n > 0 ? n - 1 - Math.min(Math.max(route.activeIndex | 0, 0), n - 1) : 0,
-    linearDir: route.linearDir === -1 ? 1 : -1,
     reversed: want,
   };
 }

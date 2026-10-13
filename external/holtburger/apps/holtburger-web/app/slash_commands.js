@@ -35,6 +35,14 @@
 // messagetypes run locally (app/social_commands.js) instead of going to
 // the server as `@verb` (vanilla ACE has none of them). `?retailSocialCmds=off`
 // restores the forward.
+//
+// VTank layer (2026-10-13, PLAN INT-3, D13): `/rs` `/vt` `/ra` `/mt` `/ub`
+// are the RynthSuite command family. routeSlashCommand hands every such line
+// to window.__rynthVt.route (rynth/vt/rs_entry.js) — the chat bar AND every
+// host.InvokeChatParser line come through here — and NEVER sends it to ACE
+// (ACE has none of these commands). The entry module is loaded lazily from
+// location.href when nothing installed it yet; no static import (I-27).
+// `@rs …` / `@vt …` are server lines and still go to the server verbatim.
 
 import { CHAT_CATEGORY } from "./chat_log.js";
 import { SOCIAL_CLIENT_VERBS, runSocialCommand, retailSocialCmdsEnabled } from "./social_commands.js";
@@ -161,6 +169,74 @@ export const RETAIL_CLIENT_VERBS = new Set([
 ]);
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+// ── RynthSuite / VTank command family (PLAN §5, D13) ──────────────────────
+/** Slash verbs the RynthSuite VTank layer owns. Never sent to ACE. */
+export const RS_PREFIX_SET = new Set(["rs", "vt", "ra", "mt", "ub"]);
+/** Page-relative path of the layer's page entry (installRsEntry). */
+export const RS_ENTRY_PATH = "rynth/vt/rs_entry.js";
+export const RS_UNAVAILABLE_TEXT = "[RynthSuite] command layer unavailable";
+
+// The chat category the chat bar uses for routed errors (index.html's
+// `[Chat] …` lines; rs_entry.js CAT_ERROR).
+const RS_ERROR_CATEGORY = 10;
+
+let rsEntryLoad = null; // in-flight lazy import of rs_entry.js (reset on failure)
+
+function rsPrint(text, category = CHAT_CATEGORY.SYSTEM) {
+  try {
+    const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
+    if (append) { append(String(text), category); return; }
+  } catch (_) { /* fall through to the console */ }
+  try { console.warn(String(text)); } catch (_) { /* no console */ }
+}
+
+function rsRoute(api, handle, line) {
+  try { api.route(handle, line); }
+  catch (e) { rsPrint(`[RynthSuite] command failed: ${e?.message || e}`, RS_ERROR_CATEGORY); }
+}
+
+/**
+ * Route one `/rs` `/vt` `/ra` `/mt` `/ub` line to the VTank layer. Always
+ * answers `{ dispatched: true, echo: null }` synchronously: the dispatcher
+ * prints its own result lines (errors included), so the caller adds nothing
+ * (a returned error would be printed twice — CMD review §5.2). With no layer
+ * installed yet the page entry is imported lazily (location.href-relative,
+ * I-26); if that fails the line is dropped with a local SYSTEM notice —
+ * it is never spoken and never sent to the server.
+ */
+function routeRynthCommand(handle, line) {
+  const installed = (() => {
+    try { return window.__rynthVt ?? null; } catch (_) { return null; }
+  })();
+  if (installed && typeof installed.route === "function") {
+    rsRoute(installed, handle, line);
+    return { dispatched: true, echo: null };
+  }
+  if (!rsEntryLoad) {
+    let url = null;
+    try { url = new URL(RS_ENTRY_PATH, window.location.href).href; } catch (_) { url = null; }
+    if (!url) {
+      rsPrint(RS_UNAVAILABLE_TEXT);
+      return { dispatched: true, echo: null };
+    }
+    rsEntryLoad = import(url).then((m) => {
+      if (!m || typeof m.installRsEntry !== "function") throw new Error("rs_entry.js has no installRsEntry");
+      return m;
+    });
+    rsEntryLoad.catch(() => { rsEntryLoad = null; }); // a later line retries
+  }
+  rsEntryLoad.then(
+    (m) => {
+      let api = null;
+      try { api = m.installRsEntry(window); } catch (_) { api = null; }
+      if (api && typeof api.route === "function") rsRoute(api, handle, line);
+      else rsPrint(RS_UNAVAILABLE_TEXT);
+    },
+    () => rsPrint(RS_UNAVAILABLE_TEXT),
+  );
+  return { dispatched: true, echo: null };
+}
 
 /**
  * Split a prefixed command line into `{ rawCmd, cmd, rest }`. `rawCmd` is the
@@ -346,6 +422,13 @@ export function initSlashCommands() {
     const norm = normalizeChatLine(message);
     if (norm.kind !== "command") return { dispatched: false };
     const { rawCmd, cmd, rest } = parseCommandLine(norm.line);
+
+    // RynthSuite / VTank (PLAN INT-3, D13): /rs /vt /ra /mt /ub → the VTank
+    // layer, synchronously handled, never sent to ACE. A retail-trimmed
+    // trailing comma (`/rs, help`) is normalised so the layer parses it.
+    if (RS_PREFIX_SET.has(cmd)) {
+      return routeRynthCommand(handle, rawCmd === cmd ? norm.line : `/${cmd}${rest ? ` ${rest}` : ""}`);
+    }
 
     // Tells: `/tell <name>, <msg>` (comma-delimited, retail-
     // strict). ACE echoes `You tell X, "…"` (OutgoingTell) back.

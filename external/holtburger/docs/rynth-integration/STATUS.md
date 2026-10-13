@@ -21,6 +21,260 @@ wsbridge). Run the suite with `apps/holtburger-web/rynth_test_all.cjs`.
 > per this project's doc-debt convention (see `HANDOFF-omnibus-2026-07-21.md`'s own
 > banner for the sibling case).
 
+## 2026-10-13 update — the VTank feature set
+
+Goal: every feature in the VTank guide (`/mnt/wbterminal1/rynth-vtank-2026-10-12/vtank_guide.txt`,
+cited `G:<line>`) on the web RynthSuite bot, all working together, **without breaking anything
+the bot already did**. The plan is the contract: `/mnt/wbterminal1/rynth-vtank-2026-10-12/design/PLAN.md`
+(§1 decisions D1-D39, §2 feature matrix, §2.11 not deliverable client-side, §7 tests and the
+live checklist, §8 invariants, §9.2 owner questions). Every package, review and gate report
+sits next to it (`impl/`, `review/`, `ORCHESTRATOR_LOG.md`). Base `a33dcb16`; the first eight
+Wave-1 modules landed as `008a22ae`. The reviewed tree after the final gate is snapshotted in
+`snapshots/review-final-*` (tracked patch, untracked tar, SHA256SUMS). User docs:
+`apps/holtburger-web/rynth/vt/README.md`.
+
+**How it is layered.**
+
+- All new bot code is the **VT layer**, `apps/holtburger-web/rynth/vt/` (68 `.js` files), plus
+  the VTank panel `apps/holtburger-web/plugins/rynth-vt/` (13 files). `createGrindBot` imports
+  `vt/index.js` dynamically (`rynth/bot.js:52`) and attaches `createVtLayer()` after the bot is
+  built, bounded to 3 s: a slow or failing layer never blocks the boot.
+- **Default-on, with an escape hatch.** `?botVt=off` (`rynth/boot.js:108` → `cfg.vt = false`)
+  boots the bot without the layer: no `bot.vt`, no kernel `aux` slots, the literal grind
+  ladder (`docs/url-flags.md` `botVt` row).
+- **The Default profile is today's behaviour, byte for byte.** Every new option defaults to
+  what the bot did before (D3). The parity oracle T-P1 (`tests/rynth_vt_parity.test.mjs`) runs
+  one scripted world with and without the layer and compares every kernel action and every
+  host action call: zero divergence. VTank's own defaults are one action away (Profiles →
+  Apply VTank defaults, or `/rs settings preset vtank`, on a user profile).
+- The layer reaches the bot only through hooks that are absent or inert at Default: the
+  kernel's `aux` slots (Supplies, JumpNow, Pets, Doors, Navigate, BuffItems, IdleRebuff, and
+  the PeaceMode idle hook), `combat.vt` / `combat.acquireRangeFn`, `loot.classify`,
+  `buff.setItemBuffs`, `unwedge.allowEscalation`. It runs off the host Worker heartbeat (a
+  pre-tick before the kernel, a 2 Hz post-tick after it), never page timers.
+- Existing files edited (19 code files): `rynth/{kernel,combat_loop,buff_loop,loot_loop,
+  router,goto_compose,webhost,bot,boot,hud_bridge,unwedge,control_channel}.js`,
+  `rynth/ai/operator_stop.js`, `app/{slash_commands,client_events}.js`,
+  `plugins/{rynth-hud,api,inventory,vendor-ui}.js` (`API_VERSION` 1.2.0); plus the gate
+  registry `harness/run-js-headless.mjs` and the docs. All additive; three changes also apply
+  without the layer: the legacy untargeted `CastSpell(0, id)` refuses a spell that is not
+  SelfTargeted (D12, the ACE crash class), the control channel reads tells only from the TELL
+  chat category (2, or 0 from a host without the category; review safety-5), and the kernel
+  installs its tick closure on a held boot too (review wiring-2; inert while held). The HUD's
+  grind | explorer selector is now labelled "Persona" instead of "Profile".
+
+| Package | Path | Delivers | Guide |
+|---|---|---|---|
+| W1-1 EXPR | `rynth/vt/expr/` | One expression language for the Monsters list and metas: lexer, parser, values, .NET→JS regex, vars (session / persistent / global), pure function library | G:101-150, G:226-319 |
+| W1-2 SET | `rynth/vt/settings/` | `VtOptions`, the one settings authority: schema rows (Advanced Options), live cells over the loop fields, profiles (Default, `[By char]`, shared, `[Char]`), named stores, the page session | G:1-42, G:44-58, G:60-66 |
+| W1-3 FMT | `rynth/vt/formats/` | VTank `.met`, metaf `.af`, view XML, VT Classic Looter `.utl` (parse + write, round trip) | G:57, G:226-319 |
+| W1-4 META | `rynth/vt/meta/` | The meta engine: states, rules, conditions, actions, call stack, watchdog, views | G:226-319 |
+| W1-5 CMD | `rynth/vt/cmd/` | The `/rs` (= `/vt`) dispatcher, the `/ra` `/mt` `/ub` compat tables, world/inventory actions, meta host functions, quest tracker | G:7-11, G:123, G:214-224 |
+| W1-6 NAV | `rynth/vt/nav/` (+ `router.js` per-leg arrival, `goto_compose.js` exports) | Circular / Linear / Follow / Once routes, `.nav` profiles, `ActiveNav` as the kernel's Navigate slot, one tick-driven executor per waypoint type (10 types) | G:17, G:56, G:185-224 |
+| W1-7 CMB | `rynth/vt/combat/` (+ `data/combat_spells.json`, `creature_species.json`) | Monster list (P −1..4, debuff and attack columns, expressions), monster variables, spell tables, debuff ledger, attack planner, Items, creature profiles | G:14-16, G:68-166, G:183 |
+| W1-8 SEAM | `rynth/webhost.js` (new members), `rynth/vt/host_signals.js`, `plugins/{api,inventory,vendor-ui}.js` | Safe casts (`CastSpellAt`, `CastSelf`, `CastUntargetedSafe`), selection / vendor / enchantment reads, one `host.onEvent` → typed signals | G:156 and every tab |
+| W1-9 SUP | `rynth/vt/support/` (+ `data/{pet_essences,dispel_items,harmful_families}.json`) | Supplies (kits, food, potions, grenades), dispel, mana stones, autostack / autocram / peas, pets, fellowship, doors, buff items, peace mode, idle rebuff | G:24-31, G:36-42, G:168-181 |
+| W1-10 UI | `rynth/vt/bridge/`, `plugins/rynth-vt/` | The 9-tab VTank panel and the meta view renderer | every tab |
+| INT-1 | `rynth/kernel.js`, `combat_loop.js`, `buff_loop.js`, `loot_loop.js` | Kernel `aux` slots and ranks, loop hooks (all inert at Default) | G:34-37 |
+| INT-2 | `rynth/vt/index.js`, `rs_entry.js`, `glue/`; `bot.js`, `ai/operator_stop.js`, `unwedge.js`, `control_channel.js` | Composition root (`createVtLayer`), the page entry `window.__rynthVt`, `!bot rs` / `!bot vt` | — |
+| INT-3 | `app/slash_commands.js`, `app/client_events.js`, `rynth/boot.js`, `rynth/hud_bridge.js`, `plugins/rynth-hud.js` | The `/rs /vt /ra /mt /ub` chat branch, the HUD VT button, `?botVt=off`, docs | — |
+
+**How a user reaches it.**
+
+- **Chat commands** — `/rs …` and `/vt …` (the VTank verbs), `/ra`, `/mt`, `/ub` (RynthAi /
+  Mag-Tools / UtilityBelt subsets). `app/slash_commands.js:429` (`RS_PREFIX_SET`, `:175`) hands
+  all five prefixes to `window.__rynthVt`; they are **never sent to ACE**, and an unknown verb is
+  a local error line.
+  `@rs …` still goes to the server as typed. Meta Chat actions, nav Chat points and
+  `host.InvokeChatParser` lines use the same dispatcher; `!bot rs|vt <line>` tells reply with
+  the first 3 result lines. `/rs help` lists every verb.
+- **The HUD** — the **VT** button in the selectors row (`plugins/rynth-hud.js:340`) or
+  `/rs ui [tab]` opens the VTank panel: Options (+ Advanced) · Profiles · Vitals · Monsters ·
+  Items · Consumables · Buffs · Route · Meta. With a VTank route loaded the HUD **Nav** toggle
+  drives that route.
+- **Profiles** — Default is read-only: edits live in a page overlay, lost on reload or when
+  you switch to a user profile and back. Save As (no spaces, G:54), Mine Only, `[By char]`. A
+  user profile saves on every edit and, when selected, loads its route, meta and loot
+  profile; HUD START / Restart then boot with its values.
+- Settings and profiles work without a bot (the page session). Route, jump, follow, meta and
+  `/rs loot` verbs need the bot with the layer ("start the bot first"); item, cast and face
+  verbs need a bot (they use its host, so they also work on a `?botVt=off` page); verbs that
+  queue work (`/ub delay`, a multi-stack `/ra give…`, a `/mt loot` retry) need the layer.
+
+**Not deliverable client-side** (PLAN §2.11), and what ships instead:
+
+| Item | Why | Substitute |
+|---|---|---|
+| Debuffs on monsters (incl. other players' casts) | ACE sends enchantment updates to player targets only | Our own debuff ledger from "You cast X on Y" / resist / fail lines + DAT durations |
+| Live item mana | ACE never pushes it | Re-appraisal (≤ 3 `RequestId` / 30 s, worn items first), extrapolated with ManaRate between appraisals |
+| Species / max HP without an assess | Not in CreateObject | One `RequestId` per guid; offline wcid → CreatureType table |
+| Vendor-close packet | None exists | Client vendor session (panel hide, range > 8 m, portal, another container, 300 s) |
+| Tell sender guid | Dropped by the wasm | Name → guid among visible players; "come closer" reply |
+| Checkpoint "server verified position" | No seam | Pose stable ≥ 750 ms, 10 s cap |
+| `/mp`, `/hr` in chat waypoints | No SessionHandle export | Fall through to ACE `@mp` / `@hr` |
+| Alinco3 loot connector | No format reference | `.utl` + the Value floor |
+| Show Editor | Deprecated in VTank | Disabled checkbox |
+| Client-renderer advanced options (FPS, radar, nav line width) | No retail renderer | Inert schema rows, round-tripped, greyed |
+| Jump strafe direction in `.nav` | No known encoding | Web extension field, dropped on export with a warning |
+| Meta functions needing client memory (Dereth clock) or monster enchantments | Not readable | An error value (`unsupported: <name>`), logged once per name — never a silent `""` |
+
+**Verification.**
+
+- **Wave 1** (10 parallel packages): each implemented, then adversarially verified by a
+  separate agent against the plan and the real sibling modules — all ten PASS_WITH_FIXES
+  (83 verifier fixes; the items they left open were owner decisions, live-only checks or
+  documented `.met` / `.af` format limits).
+  **Wave 2** (INT-1 → INT-2 → INT-3, strictly sequential): each verified PASS_WITH_FIXES.
+  INT-3's verifier caught a V-1 break (HUD START on a `?botVt=off` page booted with the VTank
+  profile's values; it now uses the HUD blob, as before the layer).
+- **Whole-diff review**, 6 lenses (regressions, ACE safety, guide fidelity, runtime /
+  hidden tab, logic, wiring), every finding adversarially verified: **30 findings → 27
+  confirmed and fixed, 2 refuted** (safety-2, safety-4: hardening only, same as C#), **1
+  uncertain** (guide-7, waits for live L-H1). A fix audit read every fix, re-ran every
+  check against the pre-fix file (each new check fails without its fix) and found 0
+  regressions (24 fixes correct, 3 incomplete). Two of the incomplete ones (guide-3,
+  runtime-3: wiring in `rynth/vt/index.js`) were finished by a follow-up fix + verify; that
+  verifier's one residual (`nav save` left `navreversed` at 1) was fixed in `active_nav.js`
+  `save()`. The third (runtime-4) keeps the plan's VT-only stopgap; its root cause is
+  pre-existing (gap 2). Reports: `/mnt/wbterminal1/rynth-vtank-2026-10-12/review/` (`find-*`,
+  `verify-*`, `fix-A.md`, `fix-B.md`, `audit.md`, `followup-*.md`).
+  `review/fix-A-bside-rs_commands.patch` is superseded (fixer B landed that change): do not
+  apply it.
+- **Gate after the review** (alone, under `capped-build`): JS gate **563 passed / 0 failed**
+  = 532 before + the 31 new TIER5 rows (`rynthVt*`, `rynthWebhostVtSeam`,
+  `harness/run-js-headless.mjs:852-886`); plain-node runner **68 passed / 0 failed / 32
+  skipped** = 66 + `rynth_vt_corpus_test.cjs` and `rynth_vt_spell_tables_test.cjs`;
+  modulepreload up to date (392 modules); url-flags lint 0 undocumented readers. Logs:
+  `final2_jsgate.log`, `final2_rynth_node.log`, `final2_lints.log` in the project folder.
+- **Zero pre-existing test files edited**: `git diff --diff-filter=M a33dcb16` lists no test
+  file (the orchestrator log counts 609 pre-existing test files, 0 edited).
+
+**Decisions taken after the plan** (`ORCHESTRATOR_LOG.md`, `review/fix-A.md`, `review/fix-B.md`):
+
+| Topic | Rule now | Anchor |
+|---|---|---|
+| `/rs reverseroute` | Reverses the points and the index but no longer flips `linearDir` (C# `MetaManager.cs:1012-1023`), so the walk turns around on Circular and Linear routes. PLAN R21 / Q4 said "flip". | `rynth/vt/nav/route_model.js:349` |
+| Profile names | Keep the no-spaces rule (G:54). The corpus line `/vt settings loadchar Quest Profile` errors locally. | `rynth/vt/settings/profile_store.js:37` |
+| Selected item | `GetSelectedItemId` = the most recent selection, inventory or world. | `rynth/webhost.js:527` |
+| `!bot rs` without the layer | Runs on the page-level dispatcher when the page has one; otherwise replies "rs unavailable — the VTank layer is not loaded" instead of the generic help. | `rynth/bot.js:566-574`, `rynth/control_channel.js:259` |
+| `pinnedFirst` | While a VT-nav step that cannot be cancelled is in flight (recall cast, portal / NPC use, a jump) Navigate keeps the tick ahead of Combat, below only Vitals / Unwedge. Never true at Default. | `rynth/vt/index.js:852` |
+| Boost Nav vs loot (D39 / O17 narrowed) | Boost outranks a corpse not yet started; a loot already in flight (approach / open / pickup) finishes first, gentle and strict. | `rynth/vt/nav/active_nav.js:871` |
+| Gentle Boost Nav under attack | Declines only when there is a fight or the after-kill corpse to run; with nothing to fight it keeps walking. | `rynth/vt/nav/active_nav.js:875` |
+| Doors under boost | An in-progress door yields whatever boosted nav yields to and is dropped, not failed, when nav steps aside; its 5 s cooldown never holds the tick. | `rynth/vt/support/doors.js:293`, `:308` |
+| Buff items vs a route | Navigate, boosted or not, declines while a Consumables buff item (beer, food) is due, unless a nav step is in flight (V-23 extended). | `rynth/vt/index.js:555-561` |
+| Re-selecting Default | Entering Default from a user profile starts a fresh overlay (schema defaults, G:48). | `rynth/vt/settings/profile_store.js:197` |
+| `host.nearbyRangeM` | Raised only for MonsterRange > 40 m or ApproachRange > 4 m (to that range + 5 m), never below the configured base; Default never moves it. PLAN O5 still says `max(60, …)`. | `rynth/vt/settings/cells.js:173` |
+| `weakest()` / `creaturegetweakest` | The element with the HIGHEST ACE damage multiplier (deliberately not C# GetWeakest, which picks the most resisted one). | `rynth/vt/combat/creature_profiles.js:195` |
+| `/rs jump <n>`, `/vt jump <n>` | `<n>` is the heading (G:220, like `/rs addnavjump <n>`); `/ra`, `/ub` and `jump[swzxc]` keep the UB hold-time reading. PLAN R18 updated. | `rynth/vt/cmd/rs_commands.js:158` |
+| Give-all stop | `/ra givea… stop` (`givea`, `giveap`, `giveaxp`, `giveapp` / `gap`, `givear`) cancels the queued gives (C# CancelGiveQueue). | `rynth/vt/cmd/compat_commands.js:156` |
+| Legacy WarSpellMode | The bot's own war pick runs only while the DEFAULT row's S / arc / Damage Type are unedited; an edit is honoured. PLAN §3.9 step 5 updated. | `rynth/vt/combat/attack_planner.js:593` |
+| Rebuff When Idle | The idle window is capped at `duration/2 − RebuffSecondsRemaining` per landed buff, so large settings never recast fresh buffs in a loop. | `rynth/buff_loop.js:774` |
+| Tells | A chat line of any known category other than TELL (2) is not read as a tell (an emote can print `You think, "…"`); category 0 is still accepted (hosts without the category, the read-only self-tell test). | `rynth/control_channel.js:207-208` |
+| Profile switch vs the running meta | A profile that names the meta already running leaves it running (state, call stack, timers); a different meta still loads. | `rynth/vt/index.js:721-725` |
+
+Other review fixes that change what a user sees: a meta `setmotion[]` cannot press a key
+while the bot is STOPPED or in portal space, and every pressed key is released on STOP, on
+entering portal space and on `bot.stop()` (`rynth/vt/cmd/stdlib_host.js:580-583`); the
+page-level dispatcher (no bot, or `?botVt=off`) refuses `/ub delay`, a multi-stack
+`/ra give…` and a `/mt loot` retry, because nothing pumps its queue (`rynth/vt/rs_entry.js:185`);
+the SwitchWandsToDebuff pre-swap weapon lives in the page session, so a rebind mid-debuff
+still puts it back (`rynth/vt/index.js:372`); metas see `getvar[navreversed]` and
+`getvar[navlastresult]` (`rynth/vt/index.js:416-417`; `nav save` clears the reversed flag and
+the var, `rynth/vt/nav/active_nav.js:420-422`); `delayexec[]` is an error in a monster
+expression (`rynth/vt/index.js:194-198`); global meta variables merge across tabs.
+Kept at the plan's behaviour, owner may flip (HANDOFF §4): `&&` / `||` yield a Bool;
+bitwise operators bind below comparisons; the meta watchdog distance is 3-D; `GetOpt` of an
+unknown option stores 0; `'' < 5` is true; `/ub opt set VTank.PatchExpressionEngine true` is an
+unknown option.
+
+**Known gaps and owner follow-ups.**
+
+1. **Pre-existing B11 buff stall** (`impl/int2-review.md` R6; the same code is at `a33dcb16`):
+   after the login batch rebuff lands, the kernel stops selecting Buffing before the pass
+   ends, so `_forceRebuffing` stays set and a desired buff no longer rebuffs on its timer
+   until `setBuffs` / `forceRebuff` / `cancelForceRebuff`. Owner: `buff_loop.js`.
+2. **Hidden tab after a teleport** (review runtime-4): `scene3d/portal_space.js` advances
+   only on the page's frame loop (rAF, or the opt-in `?netDrainHz` interval), so on a hidden
+   tab the portal-space flag stays up after the arrival and the combat, loot, buff and vitals
+   loops and VT nav hold until the tab is shown (only the base router has its own 90 s cap,
+   `rynth/portal_gate.js` `PORTAL_SPACE_MAX_HOLD_MS`). VT-only stopgap: one synthesized
+   `portalOut` 90 s after the arrival (`rynth/vt/host_signals.js:59`), so metas see the exit;
+   movers still hold. Root fix (tick the sequencer from the hidden-tab pump) is outside
+   `rynth/vt`.
+3. **Inventory re-click**: clicking the same inventory item again after a world click emits
+   no selection event (`plugins/inventory.js` early return, pinned by
+   `tests/rynth_vt_page_seams.test.mjs`), so `/mt cast` without "on" keeps the world
+   selection. Fix: a separate per-click event.
+4. **Decal synthetic `.utl` keys** are only partly mapped (`rynth/vt/glue/loot_ctx.js`); an
+   unknown one reads as unknown (logged once).
+5. **IdleRebuff starts a full B11 batch**: one windowed buff tick that finds a buff inside
+   the window starts the existing batch rule, which recasts every desired buff to align
+   timers (`impl/int1.md` open issue 2; live L-O5).
+6. **Jump heading** (guide-7, uncertain): jumps turn with the raw `TurnToHeading` in
+   `goto_compose.js` `attemptJumpLeg` (`:840`, `:877`), outside `webhost.js`
+   `HEADING_CONVENTION` (`:487`). Identical while the convention is the identity; if L-H1
+   changes the constant, switch `attemptJumpLeg` to `TurnToCompassHeading`.
+7. **Live-only questions** (HANDOFF §5): the heading convention and whether wasm
+   `turnToEntity` works without `?wasmPursuit=on` (L-H1); the recall cast form (Q19, L-N2);
+   jump shift = walk or run (Q2); the vendor window on both laps; ACE's "You cast" line for
+   Corruption / Corrosion only on a hit; the stance after wand swaps (L-M5); buffed vs base
+   skill for the school cap; the empty mana-stone appraisal and destroy text (L-O9); pet
+   strings and PetOwner (L-O10); enchantment `level` populated and Eradicate removing the
+   vuln (L-O7); the door Ethereal flip, lockpicks, grenades and peas on vanilla ACE (L-C2);
+   peace-mode thrash (L-O4); indoor routes (L-N4); untargeted rings (L-R1; off by default
+   because an untargeted non-SelfTargeted cast crashes vanilla ACE).
+8. Smaller: the gitignored `shell/` bundle predates the `webhost.js` edits — run live checks
+   through serve.py or with `?shell=off`; every HUD page now lazily imports `rs_entry.js` and
+   the `cmd/` and `settings/` modules after mount (measure in L-PERF); a category-0 chat line
+   that starts `You think, "` is still read as a self-tell (no ACE path found).
+
+### Live verification (PLAN §7.4)
+
+**PENDING.** The 1070 was offline on the night of 2026-10-12/13 (tailscale "offline", ssh
+timeout; `watch1070.sh` reported UNREACHABLE and `gate1070.sh` refused), so nothing was
+launched. The run uses the 1070's off-screen, muted test Chrome behind the presence gate,
+local ACE with `ACE_Log.txt` tailed for the whole campaign (any unhandled exception fails
+the item and stops the run), L0 first and L-R1 last. Runbook: `live/LIVE_PLAN.md` in the
+project folder (results go to `live/RESULTS.md`, not written yet). The orchestrator fills in
+this table after the live run.
+
+| ID | Check → pass criterion | Result |
+|---|---|---|
+| L0 | `rynth_test_all.cjs` fast set on the 1070, then 10 min grind with the default layer vs `?botVt=off` → smokes green, action histograms within noise, no new console errors | pending |
+| L-H1 | `TurnToCompassHeading(0/90/180/270)`, then step forward → bearing within 10°; confirms or corrects `HEADING_CONVENTION` (and `attemptJumpLeg`, gap 6) | pending |
+| L-CMD | `/rs help`, `/vt opt get AttackDistance`, `/rs opt set AttackDistance 0.0833` from the chat bar, a nav Chat point, a meta Chat action and `!bot rs …`; `/mt foo` → no `@rs`/`@vt`/`@mt`/`@ub`/`@ra` in the ACE log; MonsterRange 20 takes effect | pending |
+| L-O1 | Run Macro from the panel, the HUD and `!bot pause`; Force Buff, pause mid-sequence, resume → resumes where it left off (G:10) | pending |
+| L-O2 | Boost Loot, two mobs, kill one → its corpse is looted before the second is engaged (G:35) | pending |
+| L-O3 | Boost Nav gentle, then strict, on a Circular route through a spawn; a buff drops below threshold mid-lap; HUD "stop moving" mid-leg → gentle walks past unlocked mobs and fights back when hit, strict walks; both stop to rebuff and let a loot already started finish, then resume the lap; "stop moving" leaves VT nav paused until Nav / `nav start` | pending |
+| L-O4 | Peace Mode When Idle → NonCombat after the kill; ≤ 1 stance change per idle period with top-off and buffs pending | pending |
+| L-O5 | Rebuff When Idle (window 600 s) → batch recasts while idle when < 15 min remain | pending |
+| L-O6 | Autostack / Autocram with test stacks → merges respect max stack; items go to the emptiest side pack; Items-tab items stay | pending |
+| L-O7 | A second account casts a level-7 vuln on us → gem used / Eradicate Life Magic Self cast targeted at self; ACE log clean | pending |
+| L-O8 | A second account tells `xp` → recruited when visible; "come closer" when not | pending |
+| L-O9 | Bot held, a worn item < 25 % mana, a charged stone in the pack → refilled while held; empty stones never used on gear | pending |
+| L-O10 | Summon Pets with two essence elements and the PetDmg column → summons at ≥ PetMinMonsters within pet range; element matches | pending |
+| L-P1 | Edit on Default (banner; lost on reload); Save As; `[By char]`; Mine Only; reload with `?bot=1` and with HUD START; two characters in two tabs → values persist and apply; per-character isolation; Default never written | pending |
+| L-V1 | Melee alt with kits, TopOffHP 95 → kits used when spells are unavailable; the valve stops on no progress | pending |
+| L-M1 | P −1 on one mob; P 4 vs a closer P 1; expression `range>5` switching entries → never engages the P −1 mob (nor counts it as "in combat"); P 4 first; the entry switches with range (G:109) | pending |
+| L-M2 | Caster: I, V(Fire), F, B, G, Y, WC / FC / DC + Cp / Cs → debuffs land in order, all targeted; no 30 s blacklist after 3 debuffs; recast after expiry; ACE log clean | pending |
+| L-M3 | A off (debuff-only) → the kernel unpins after the debuffs; target revisited after expiry | pending |
+| L-M4 | S streak, Damage Type Cold, Ex. Vuln Acid, WarSpellMode vtank → correct spell names in chat | pending |
+| L-M5 | Weapon / Offhand per monster; SwitchWandsToDebuff on the melee alt → wand → debuffs → weapon back; ≥ 3 s between swaps; no mode-toggle stand-down | pending |
+| L-R1 | **Crash risk, run LAST, ACE restart procedure ready:** `AllowUntargetedRings=true`, WR with ≥ 4 mobs in RingRange → the ring casts and ACE stays up; on any ACE exception keep the default off and record the stack | pending |
+| L-I1 | Items: Add from the inventory selection; Add (No Buffs); the re-click order (gap 3) → entry has kind / element; no item buffs on the No-Buffs item | pending |
+| L-C1 | A buff item < 5 min; a ≥ 5 min item when its family runs low → rejected / used | pending |
+| L-C2 | Grenades, pea splitting, a lockpick door (OpenDoors + AutoUnlockDoors) → each works or is recorded as unverified on vanilla ACE | pending |
+| L-N1 | Circular, Linear (A B C B A), Once (route empties, nav stays enabled), Follow (second account) → per PLAN §2.8 | pending |
+| L-N2 | Pause, Chat (`/rs echo hi`, `/ls`, plain text), Open Vendor on a Circular route (same vendor, two laps), Portal/NPC, NPC Talk, Recall (fires without walking), Checkpoint, Jump (+ strafe) → each completes; the vendor window really opens on both laps; Pause never triggers unwedge; no `@rs` in the ACE log | pending |
+| L-N3 | Vitals and combat while walking a VT route → heals and fights mid-route, resumes at the same index | pending |
+| L-N4 | Insert Above / Below, green arrow, ▲▼, delete the active row; nav save / load overwrite; a corpus `.nav` with `jmp` + `chk`; an indoor dungeon route → correct; indoor arrival works or is recorded as a known gap | pending |
+| L-ME1 | The guide runback meta (G:296-319) built in the panel; die to an `@create` mob → full cycle Default → dead → back → Default | pending |
+| L-ME2 | Corpus metas (BGAugGem, ColRings, blodetetdict3) → start in Default; CallState returns to `ret`; ChatCapture vars; ColRings view buttons work; DestroyAllViews closes | pending |
+| L-ME3 | Watchdog during a portal tunnel and while held → no false fire | pending |
+| L-S1 | Operator STOP mid-route and mid-meta; reload ⇒ held; RESUME; takeover rebind mid-route → nothing moves while held; SecsInState resets, (P) does not; same nav index and meta state after the rebind | pending |
+| L-S2 | Hidden tab 10 min with a meta and a route running → cadence and progress continue (Worker heartbeat; after a teleport see gap 2) | pending |
+| L-PERF | Bot off / panel closed, then bot on at Default → rAF frame time unchanged; host tick handler < 1 ms at Default; the HUD's lazy `rs_entry.js` import measured | pending |
+
 ## 2026-10-12 update — RynthSuite on the October client, code review, and the HUD
 
 The bot code had barely moved since 2026-07-24 while ~70 client commits reworked movement
@@ -100,7 +354,7 @@ director stack** under `rynth/ai/` — **17 top-level `.js` + 10 `ai/tools/*.js`
 | **1 — stub host + walking skeleton** | login → world model → one attack | ✅ DONE | `rynth_phase1_smoke`, `rynth_combat_smoke` (first seam-driven kill) |
 | **2 — combat loop** | full debugged combat behavior | ✅ DONE | `rynth_loop_smoke` (2 autonomous kills); report-11 contract below |
 | **3 — buff / loot / nav** | buff maintain, corpse loot, point-to-point nav | ✅ DONE | `rynth_buff_smoke`, `rynth_loot_smoke`, `rynth_router_smoke` |
-| **4 — parity** | beyond the four loops | 🟡 PARTIAL | vitals, fleet, control, fellowship done; meta-scripting deferred |
+| **4 — parity** | beyond the four loops | 🟡 PARTIAL | vitals, fleet, control, fellowship done; meta-scripting deferred — STALE 2026-10-13: meta scripting and the rest of the VTank guide are built in `rynth/vt/` (gate green, live checklist pending; §2026-10-13 update) |
 
 ## Report-by-report
 
@@ -352,6 +606,9 @@ picture of open work.
 
 (none load-bearing — the combat + buff contracts are complete)
 2. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
+   **STALE 2026-10-13:** built — the expression engine (`rynth/vt/expr/`) and the meta
+   engine (`rynth/vt/meta/`) are part of the VTank layer; the live meta checks (L-ME1..3)
+   are pending (§2026-10-13 update).
 3. ~~RynthNav global router sidecar~~ **DONE 2026-07-16** (`apps/rynthnav-sidecar`,
    live-verified end to end). Remaining nav depth: full-map bake (only the 5×5
    Holtburg region A7–AB×B2–B6 is baked; buildbox fan-out job), indoor cell-graph

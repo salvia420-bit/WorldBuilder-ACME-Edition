@@ -131,7 +131,7 @@ await check("start index = nearest Point for Circular/Linear; 0 for Once/Follow"
 });
 
 // ── reverse ────────────────────────────────────────────────────────────────
-await check("reverse(true): points reversed, index mirrored, linearDir flipped (R21)", () => {
+await check("reverse(true): points reversed, index mirrored, linearDir kept so the walk turns around (R21, C#)", () => {
   let r = makeRoute({ routeType: ROUTE.Linear, points: [pt(1, 1), pt(2, 2), pt(3, 3), pt(4, 4)] });
   r = setActive(r, 1);
   const a = r.points[1];
@@ -140,7 +140,13 @@ await check("reverse(true): points reversed, index mirrored, linearDir flipped (
   assert.equal(rr.activeIndex, 2);
   assert.equal(rr.points[2], a, "same waypoint object stays active");
   assert.deepEqual(rr.points.map((p) => p.ew), [4, 3, 2, 1]);
-  assert.equal(rr.linearDir, -1);
+  assert.equal(rr.linearDir, r.linearDir, "linearDir untouched (CS/Meta/MetaManager.cs:1012-1023)");
+  // Before: at waypoint 2 heading for 3. After the reversal the next waypoint is 1: the walk turned around.
+  assert.equal(advance(r).points[advance(r).activeIndex].ew, 3);
+  assert.equal(advance(rr).points[advance(rr).activeIndex].ew, 1, "Linear walk turns around");
+  const c = setActive(makeRoute({ routeType: ROUTE.Circular, points: [pt(1, 1), pt(2, 2), pt(3, 3), pt(4, 4)] }), 1);
+  const cr = reverse(c, true);
+  assert.equal(advance(cr).points[advance(cr).activeIndex].ew, 1, "Circular walk turns around");
 });
 await check("reverse true/false are idempotent; no argument toggles", () => {
   const r = route3(ROUTE.Circular);
@@ -358,6 +364,15 @@ await check("parseAfNavsVt fixes vnd/tlk (guid, name, object position) and reads
   assert.equal(shop.points[8].holdShift, true);
   assert.equal(navs.buddy.routeType, ROUTE.Follow);
   assert.deepEqual(navs.buddy.followTarget, { guid: 0x50000001, name: "Leader Bob" });
+});
+await check("parseAfNavsVt reads the metaf prt guid as HEX (NPortal X8; nav_file parses it as decimal)", () => {
+  const af = "NAV: gate linear ~~ {\r\n\tpnt 1 2 0\r\n\tprt 1.5 2.5 0 7B000001\r\n\tprt 3 4 0 00000010\r\n~~ }\r\n";
+  const navs = parseAfNavsVt(af);
+  assert.deepEqual(navs.gate.points.map((p) => p.type), [0, 1, 1]);
+  assert.equal(navs.gate.points[1].guid, 0x7b000001);
+  assert.equal(navs.gate.points[2].guid, 0x10);
+  const back = parseNavVt(writeNavVt(navs.gate).text);
+  assert.equal(back.route.points[1].guid, 0x7b000001, "round-trips through .nav (signed Int32 on disk)");
 });
 await check("parseAfNavsVt reads a Follow NAVDATA block", () => {
   const af = "NAVDATA: lead 4 ~~ {\r\nuTank2 NAV 1.2\r\n3\r\nAlice\r\n1342177282\r\n~~ }\r\n";

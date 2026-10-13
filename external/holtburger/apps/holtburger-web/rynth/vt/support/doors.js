@@ -17,9 +17,16 @@
 //   checking  AutoUnlockDoors and a Consumables "Lockpick" in the pack ⇒
 //             UseItemOnTarget(lockpick, door) (unlocking), else cooldown.
 //   unlocking after the answer ⇒ retry = UseObject(door) again.
-//   cooldown  5 s, then back to none. A door that ends in cooldown is skipped
+//   cooldown  5 s on the clock, then back to none; it never holds the tick
+//             (navigation walks on). A door that ends in cooldown is skipped
 //             for 60 s (so a locked door with no pick cannot block the route
 //             forever — the C# controller re-targets it every 5 s).
+// An in-progress door yields whatever a boosted nav yields to (buffing, a
+// loot in flight, a gentle-mode fight-back) and whenever navWants() turns
+// false: it is dropped, not failed.
+// The FSM only advances while this slot holds the tick: a door the player has
+// moved away from meanwhile (beyond OpenDoorRange + 2 m) is dropped, never
+// re-used (ACE would walk the bot back to it).
 // Opened doors are skipped for 60 s. Doors: static guids (< 0x80000000) with
 // the ObjectDescriptionFlag Door bit (0x1000), else a door/gate/hatch/
 // portcullis name when the desc flags are unreadable. Item token owner
@@ -54,6 +61,10 @@ export const DOOR_TUNING = Object.freeze({
   FAILED_SKIP_MS: 60_000,
   MAX_ATTEMPTS: 3,
   SCAN_INTERVAL_MS: 500,
+  // The FSM only advances while the slot holds the tick (C# ticks it every
+  // frame). A door left behind meanwhile (a fight moved the player) is dropped
+  // instead of re-used — ACE would walk the bot back to it.
+  REACH_SLACK_M: 2,
 });
 const T = DOOR_TUNING;
 const ODF_DOOR = 0x1000;
@@ -144,6 +155,21 @@ export function createDoors(deps = {}) {
   function attemptTimeout() {
     return T.ATTEMPT_TIMEOUT_MS + T.ATTEMPT_TIMEOUT_PER_M_MS * Math.max(0, st.doorDist || 0);
   }
+  /** Is the targeted door still within OpenDoorRange (+ slack)? Unknown = yes
+   *  (the attempt limit bounds it). */
+  function doorInReach() {
+    const d = distanceTo(host, st.door);
+    if (d == null) return true;
+    return d <= Math.max(0.5, optNum(options, "OpenDoorRange", 5)) + T.REACH_SLACK_M;
+  }
+  /** Drop an in-progress door the player has moved away from (not marked
+   *  failed: it is targeted again if the route brings us back). */
+  function dropIfLeftBehind() {
+    if (st.state === "none" || st.state === "cooldown" || doorInReach()) return false;
+    log(`door ${st.doorName || st.door} left behind — dropped`);
+    reset();
+    return true;
+  }
 
   function reset() {
     if (st.state !== "none") releaseItem(host, OWNER);
@@ -208,6 +234,7 @@ export function createDoors(deps = {}) {
       if (t - st.actionAt >= T.COOLDOWN_MS) reset();
       return;
     }
+    if (dropIfLeftBehind()) return;
     // Timeout guard for the action-waiting states.
     if ((st.state === "opening" || st.state === "unlocking" || st.state === "retry") && t - st.actionAt > attemptTimeout()) {
       if (isOpen(st.door)) return markOpened(t);
@@ -259,18 +286,55 @@ export function createDoors(deps = {}) {
     }
   }
 
+  /** Why a boosted nav would decline this tick (ActiveNav._wants' rules,
+   *  D39 / D8): buffing, a loot already in flight, or a gentle-mode
+   *  fight-back (the after-kill corpse included). null = nav keeps the tick.
+   *  Unboosted (beforeIdle) the ladder already ranks all of those first. */
+  function boostYield(ctx) {
+    let rank = "beforeIdle";
+    try {
+      rank = rankFn();
+    } catch (_) {
+      rank = "beforeIdle";
+    }
+    if (rank === "beforeIdle") return null;
+    const c = ctx || {};
+    if (c.buffPinned || c.buffNeeded) return "buffing";
+    if (c.lootPinned) return "a loot in progress";
+    if (rank === "beforeCombat" && c.underAttack && (c.threat || c.corpse)) return "a fight-back";
+    return null;
+  }
+
   function wants(ctx) {
     if (!enabled()) return false;
     if (inPortal(host)) return false;
     const t = now();
-    if (st.state !== "none") return true;
-    let nav = false;
-    try {
-      nav = navWants(ctx) === true;
-    } catch (_) {
-      nav = false;
+    // The cooldown runs on the clock and never holds the tick: the failed
+    // door is already skipped for 60 s, so navigation walks on (logic-3).
+    if (st.state === "cooldown") {
+      if (t - st.actionAt < T.COOLDOWN_MS && t >= st.actionAt) return false;
+      reset();
     }
-    if (!nav) return false;
+    const navOk = () => {
+      try {
+        return navWants(ctx) === true;
+      } catch (_) {
+        return false;
+      }
+    };
+    if (st.state !== "none" && !dropIfLeftBehind()) {
+      // An in-progress door shares the boosted nav rank, but never holds it
+      // past what nav itself yields to: drop it (not marked failed; it is
+      // re-targeted when nav wants the tick again) and let the ladder run.
+      // navWants() also carries the composition root's own nav declines (a
+      // due Consumables BuffItem).
+      const why = boostYield(ctx) || (navOk() ? null : "navigation stepping aside");
+      if (!why) return true;
+      log(`door ${st.doorName || st.door} dropped — yielding to ${why}`);
+      reset();
+      return false;
+    }
+    if (!navOk()) return false;
     if (busyCount(host) !== 0 || itemTokenHeldByOther(host, OWNER)) return false;
     if (t - st.scanAt < T.SCAN_INTERVAL_MS && t >= st.scanAt) return st.scanHit !== 0;
     st.scanAt = t;

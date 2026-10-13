@@ -232,6 +232,17 @@ await run.check("critic B4 / V-22: the inventory reflex does nothing while the k
   portal.host.portal = true;
   portal.tick();
   assert.equal(portal.host.calls.length, 0, "portal space (V-12)");
+  // §3.11 defence in depth: the reflex acts only when its tick info SAYS
+  // Idle/Navigate — a missing kernelAction is not "Idle".
+  for (const info of [{ held: false, running: true }, {}, undefined]) {
+    const w = mk();
+    w.clock.advance(600);
+    w.mgr.reflex.tick(w.clock.t, info);
+    assert.equal(w.host.calls.length, 0, `info ${JSON.stringify(info)}`);
+  }
+  // An explicit MaxStackSize 1 never stacks, whatever the name fallback says.
+  assert.equal(INV.maxStackOf(F.row(1, "Arrow", { maxStackSize: 1 })), 0);
+  assert.equal(INV.maxStackOf(F.row(1, "Arrow", { maxStackSize: 0 })), 250, "0 = unknown → the C# name fallback");
 });
 
 // ── mana stones ───────────────────────────────────────────────────────────
@@ -379,6 +390,38 @@ await run.check("mana reflex gates: kernel Loot/Combat (B4), loot mid-transactio
   u.tick();
   assert.equal(u.host.actions("UseItemOnTarget").length, 0, "an unappraised stone is never used");
   assert.ok(u.host.actions("RequestId").some((c) => c[1] === STONE_E), "…it is appraised first");
+  // §3.11 defence in depth: no kernelAction in the tick info ⇒ not Idle ⇒ nothing.
+  const n = manaWorld({ values: { EnableManaTapping: true } });
+  n.clock.advance(700);
+  n.mana.reflex.tick(n.clock.t, { held: false, running: true });
+  assert.equal(n.host.calls.length, 0, "missing kernelAction");
+});
+
+await run.check("mana tapping answered by 'The Mana Stone gives …' (the 'empty' stone was charged): resolved at once, stone known empty, no drain counted, no cooldown", () => {
+  const w = manaWorld({ values: { EnableManaTapping: true } });
+  w.tick();
+  assert.deepEqual(w.host.actions("UseItemOnTarget"), [["UseItemOnTarget", STONE_E, LOOT]]);
+  // ACE poured the stone into the ring instead (ManaStone.cs:192-221).
+  w.bus.emit({ type: "chat", text: "The Mana Stone gives 1,200 points of mana to the Gold Ring.", chatType: 0, cat: 0 });
+  w.host.answer();
+  assert.equal(w.mana.status().state, "idle", "no 8 s wait for a timeout");
+  assert.equal(w.mana.status().drains, 0);
+  assert.equal(w.mana.stoneState(STONE_E), "empty");
+  w.tick();
+  assert.equal(w.host.actions("UseItemOnTarget").length, 2, "the (now really empty) stone drains the ring next — neither was parked");
+  assert.deepEqual(w.host.actions("UseItemOnTarget")[1], ["UseItemOnTarget", STONE_E, LOOT]);
+});
+
+await run.check("drain exclusion of a consumable-listed item follows its live identity (name + wcid on another character)", () => {
+  const RING2 = 0x8000a0ff;
+  const w = manaWorld({
+    values: { EnableManaTapping: true },
+    inv: [stone(STONE_E), F.row(RING2, "Gold Ring", { itemType: 0x8, wcid: 4242 })],
+    lists: { consumables: [{ guid: 0x80001234, name: "Gold Ring", wcid: 4242, type: "General" }] },
+  });
+  w.host.mana.set(RING2, { cur: 4000, max: 4000, lastIdMs: w.clock.t });
+  w.tick();
+  assert.equal(w.host.actions("UseItemOnTarget").length, 0, "listed by name + wcid ⇒ never drained");
 });
 
 await run.check("re-appraisal budget: ≤ 3 RequestId per 30 s, stale worn items first; the same guid at most once per 60 s", () => {

@@ -400,6 +400,16 @@ await check("equality table: numeric strings, case-insensitive strings, bool vs 
   assert.equal(equals(true, "true"), true);
   assert.equal(equals(true, 2), false);
   assert.equal(equals(null, ""), true);
+  assert.equal(equals(null, 0), true, "None is 0 against a number (the `finder[]==0` not-found idiom)");
+  assert.equal(equals(0, undefined), true);
+  assert.equal(equals(null, "0"), true);
+  assert.equal(equals(null, false), true);
+  assert.equal(equals(null, null), true);
+  assert.equal(equals(null, 5), false);
+  assert.equal(equals(null, true), false);
+  assert.equal(equals(null, "abc"), false);
+  assert.equal(equals(null, V.list([])), false);
+  assert.equal(equals(null, V.wobj(7, "a")), false);
   assert.equal(equals(V.wobj(7, "a"), V.wobj(7, "b")), true, "wobj by guid");
   assert.equal(equals(V.wobj(7, "a"), V.wobj(8, "a")), false);
   assert.equal(equals(V.wobj(7, "a"), 0), false);
@@ -602,6 +612,40 @@ await check("corpus semantics: BGAugGem addnavpt chat line and the blodetetdict3
   assert.equal(ev(rt, "`/vt setattackbar `+setvar[AP,dictgetitem[dictgetitem[$mobs,$mob],AP]]"), "/vt setattackbar 0.5");
   vars.set("session", "lastAP", 0.5);
   assert.equal(ev(rt, "iif[$lastAP!=setvar[AP,dictgetitem[dictgetitem[$mobs,$mob],AP]],`/vt setattackbar `+$AP,``]"), "");
+});
+
+await check("corpus semantics: not-found finders (None, CMD D-10) satisfy the `==0` / `!=0` idioms", () => {
+  const { rt, functions } = makeRt();
+  let near = null;
+  let sel = null;
+  functions.define("wobjectfindnearestbytemplatetype", () => near);
+  functions.define("wobjectgetselection", () => sel);
+  functions.define("wobjectgetobjectclass", (a) => (a[0] && a[0].t === "wobj" ? 5 : 0));
+  const colRings = CORPUS_EXPRESSIONS.find((s) => s === "wobjectfindnearestbytemplatetype[34441]==0");
+  assert.ok(colRings, "the ColRings line is in the corpus list");
+  assert.equal(ev(rt, colRings), true, "ColRings: no ring NPC nearby ⇒ ==0 is true");
+  near = V.wobj(0x80001f7b, "Ring NPC");
+  assert.equal(ev(rt, colRings), false, "found ⇒ ==0 is false");
+  assert.equal(ev(rt, "wobjectgetselection[]!=0&&wobjectgetobjectclass[wobjectgetselection[]]==5"), false, "blodetetdict3: nothing selected");
+  sel = V.wobj(0x80000001, "Drudge");
+  assert.equal(ev(rt, "wobjectgetselection[]!=0&&wobjectgetobjectclass[wobjectgetselection[]]==5"), true);
+  assert.equal(ev(rt, "getobjectinternaltype[wobjectfindnearestbytemplatetype[1]]==7"), true, "the ==7 idiom still tells found from not found");
+});
+
+await check("FunctionRegistry release hooks: onRelease/release run every hook, a throwing hook is logged and the rest still run (review runtime-1)", () => {
+  const logs = [];
+  const r = new FunctionRegistry({ log: (m) => logs.push(m) });
+  r.release("none registered"); // no hooks: a no-op
+  const seen = [];
+  r.onRelease((why) => seen.push(["a", why]));
+  r.onRelease(() => {
+    throw new Error("boom");
+  });
+  r.onRelease((why) => seen.push(["c", why]));
+  r.onRelease("not a function");
+  r.release("hold");
+  assert.deepStrictEqual(seen, [["a", "hold"], ["c", "hold"]]);
+  assert.ok(logs.some((m) => /release hook failed: boom/.test(m)), JSON.stringify(logs));
 });
 
 await check("acceptance: no import outside rynth/vt/expr/, no Date.now inside evaluate/stdlib bodies", () => {

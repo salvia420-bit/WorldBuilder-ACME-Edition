@@ -31,7 +31,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // old hardcoded "/apps/holtburger-web/rynth" when served from the page,
   // and additionally resolves under file:// (node fixture tests).
   const base = new URL(".", import.meta.url).href.replace(/\/$/, "");
-  const [wh, cl, bl, ll, vt, kn, cc, rt, uw, osm] = await Promise.all([
+  const [wh, cl, bl, ll, vt, kn, cc, rt, uw, osm, vtMod] = await Promise.all([
     import(`${base}/webhost.js`),
     import(`${base}/combat_loop.js`),
     import(`${base}/buff_loop.js`),
@@ -45,6 +45,11 @@ export async function createGrindBot(sessionHandle, config = {}) {
     // Optional: a harness that copies rynth/*.js without ai/ still boots, just
     // without bot.control.
     import(`${base}/ai/operator_stop.js`).catch(() => null),
+    // The VTank layer (rynth/vt/, PLAN §3.15) — default on; config.vt === false
+    // (?botVt=off) skips it. Bound to `vtMod`: the local `vt` above is the
+    // vitals module. Optional like ai/: a flat rynth/*.js copy (no vt/) or a
+    // broken layer still boots the bot exactly as before (no aux, no hooks).
+    config.vt === false ? Promise.resolve(null) : import(`${base}/vt/index.js`).catch(() => null),
   ]);
 
   const host = new wh.RynthWebHost(sessionHandle, config.hostOpts || {});
@@ -107,7 +112,15 @@ export async function createGrindBot(sessionHandle, config = {}) {
       ? null
       : new uw.UnwedgeReflex(host, typeof config.unwedge === "object" && config.unwedge ? config.unwedge : {});
 
-  const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals, unwedge });
+  // VTank kernel slots (PLAN §3.13): an empty shell the layer fills once it
+  // exists. Absent layer ⇒ aux undefined ⇒ the kernel's literal ladder.
+  let vtAux;
+  try {
+    vtAux = vtMod && typeof vtMod.createAuxShell === "function" ? vtMod.createAuxShell() : undefined;
+  } catch (_) {
+    vtAux = undefined;
+  }
+  const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals, unwedge, aux: vtAux });
 
   // netBrain (D1 path A′): opt-in .NET-wasm brain slices behind the same
   // seam — config.netBrain ("shadow"|"on") wins over the ?netBrain URL flag;
@@ -170,6 +183,15 @@ export async function createGrindBot(sessionHandle, config = {}) {
     });
     host.onTick(() => explorePressure.tick());
   }
+
+  // VTank layer pre-tick (PLAN §3.3): registered here — after router/unwedge/
+  // explore pressure, BEFORE the kernel's own closure (kernel.start() below)
+  // — so meta rules, the command queue and host signals run "before normal
+  // operation" (G:237) on every heartbeat. vtPre is set once the layer
+  // attaches (bounded boot race below); one closure per bot.
+  let vtPre = null;
+  let vtStopped = false; // bot.stop() ran: a late layer is disposed, never attached
+  if (vtMod) host.onTick(() => { if (vtPre) vtPre(); });
 
   // Global nav (report 09 sidecar): config.nav = { endpoint } wires a
   // GlobalRouter so bot.goto(to) plans a cross-world route via the RynthNav
@@ -421,8 +443,31 @@ export async function createGrindBot(sessionHandle, config = {}) {
         !(unwedge && unwedge.active()) &&
         (rs === "WALK" || rs === "PORTAL") &&
         !(loot && loot.state === "APPROACH");
-      if (!cruiseOnly) return { ok: false, error: "goto active" };
-      router.cancel();
+      // The same last-command-wins over a VTank route (D36, V-11): the only
+      // claims are VT nav's own — the router leg it issued, a Pause dwell
+      // ("vt-nav"), a Follow pursuit ("vt-nav-follow"). A direct /rs jump
+      // ("rs-jump", an uncancellable ≤ 10 s job) or any other mover still
+      // refuses. VT nav yields (index kept) and resumes when the route's
+      // kernel restore lets its slot run again.
+      const vtNav = bot.vt?.nav;
+      const vtOwnsWalk = vtNav?.ownsRouterWalk?.() === true;
+      let vtClaims = 0;
+      let otherClaims = 0;
+      for (const c of moverClaims) {
+        if (c && (c.tag === "vt-nav" || c.tag === "vt-nav-follow")) vtClaims++;
+        else otherClaims++;
+      }
+      const vtNavOnly =
+        !!vtNav && (vtOwnsWalk || vtClaims > 0) && otherClaims === 0 &&
+        !(globalRouter && globalRouter.busy) && !composeActive && !followBusy &&
+        !(unwedge && unwedge.active()) &&
+        (!(rs === "WALK" || rs === "PORTAL") || vtOwnsWalk) &&
+        !(loot && loot.state === "APPROACH");
+      if (!cruiseOnly && !vtNavOnly) return { ok: false, error: "goto active" };
+      if (vtNavOnly) {
+        try { vtNav.yield?.("mover"); } catch { /* yield is best-effort; the cancel below still frees the router */ }
+      }
+      if (cruiseOnly || rs === "WALK" || rs === "PORTAL") router.cancel();
     }
     if (!Array.isArray(legs) || !legs.length) return { ok: false, error: "empty route" };
     // Contract v2 (task #17): derive portal/indoor flags (legacy routes replay
@@ -515,6 +560,18 @@ export async function createGrindBot(sessionHandle, config = {}) {
           getAi: () => bot.ai?.director,
           // !bot pause/resume route through the operator control (bot.control).
           getControl: () => bot.control,
+          // `!bot rs|vt <line>` (PLAN §5): this bot's VTank command dispatcher
+          // (source "tell": the channel replies with lines[0..2]); the page
+          // entry as a fallback. null (no layer) → the channel's default reply.
+          onRs: (line) => {
+            try {
+              const rs = bot.vt?.rs;
+              if (rs && typeof rs.run === "function") return rs.run(line, { source: "tell" });
+              return globalThis.__rynthVt?.dispatch?.(line, { source: "tell" }) ?? null;
+            } catch {
+              return null;
+            }
+          },
         });
 
   host.start(config.hz ?? 10);
@@ -678,6 +735,10 @@ export async function createGrindBot(sessionHandle, config = {}) {
       return p;
     },
     stop: () => {
+      // The VTank layer first (PLAN §5): flush its session, detach its hooks
+      // and listeners; a layer still booting is disposed when it lands.
+      vtStopped = true;
+      try { bot.vt?.dispose?.(); } catch { /* best-effort teardown */ }
       kernel.stop();
       router.cancel();
       host.stop();
@@ -726,6 +787,43 @@ export async function createGrindBot(sessionHandle, config = {}) {
     osm?.getOperatorControl?.(bot);
   } catch (e) {
     console.warn("[rynth] operator control unavailable:", e);
+  }
+
+  // The VTank layer (rynth/vt/index.js createVtLayer, PLAN §3.15) — attached
+  // after the operator control so its commands see bot.control. The await is
+  // BOUNDED (critic B5): a layer that has not resolved within
+  // config.vtBootTimeoutMs (3 s) lets the bot finish booting and attaches
+  // late; one that lands after bot.stop() is disposed. A failing layer leaves
+  // the bot exactly as without it (bot.vt stays undefined). This one-shot
+  // boot timer is not tick logic (V-8 exception).
+  if (vtMod && typeof vtMod.createVtLayer === "function") {
+    const attach = (layer) => {
+      if (!layer) return;
+      if (vtStopped) {
+        try { layer.dispose?.(); } catch { /* best-effort */ }
+        return;
+      }
+      bot.vt = layer;
+      vtPre = () => layer.preTick();
+    };
+    let raceTimer = null;
+    const TIMED_OUT = {};
+    try {
+      const pending = Promise.resolve().then(() => vtMod.createVtLayer(bot, { aux: vtAux }));
+      const timeoutMs = Number.isFinite(config.vtBootTimeoutMs) ? Math.max(0, config.vtBootTimeoutMs) : 3000;
+      const timeout = new Promise((resolve) => { raceTimer = setTimeout(() => resolve(TIMED_OUT), timeoutMs); });
+      const first = await Promise.race([pending, timeout]);
+      if (first === TIMED_OUT) {
+        console.warn("[rynth] VTank layer still loading — the bot runs without it until it attaches");
+        pending.then(attach, (e) => console.warn("[rynth] VTank layer unavailable:", e));
+      } else {
+        attach(first);
+      }
+    } catch (e) {
+      console.warn("[rynth] VTank layer unavailable:", e);
+    } finally {
+      clearTimeout(raceTimer);
+    }
   }
 
   // Console-pasteable VTank/.nav import (nav_import.js wiring, 2026-07-20):
@@ -1340,6 +1438,11 @@ export class ExplorePressureController {
   // aborts instantly if something else claims movement mid-step.
   _gatesOpen(now) {
     if (!this.bot) return false;
+    // A VTank route is enabled (EnableNavigation + a loaded, unpaused route):
+    // the route owns idle movement — the pressure never fights VT nav.
+    try {
+      if (this.bot.vt?.nav?.slot?.enabled?.() === true) return false;
+    } catch { /* an unreadable layer reads as "no VT route" */ }
     const director = this.bot.ai?.director;
     if (!director || director.enabled !== true) return false; // manual bot: never fires
     try {

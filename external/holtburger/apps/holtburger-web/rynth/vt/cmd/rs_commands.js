@@ -28,7 +28,7 @@
 
 import { parseCoords, poseToCoords, coordsToText } from "./coords.js";
 import { COMPAT, CAT_INFO, CAT_ERROR } from "./compat_commands.js";
-import { createVtActions } from "./actions_lib.js";
+import { createVtActions, OBJECT_CLASS } from "./actions_lib.js";
 import { valueToString, valueTypeName } from "./stdlib_host.js";
 
 class ReadonlySet extends Set {
@@ -149,10 +149,16 @@ function fmtOpt(v) {
  * otherwise the UB form `jump[swzxc] [heading] [hold]` where ONE integer is the
  * hold time (C# RynthAiCommands.cs:986-990 quirk) and one non-integer is the
  * heading. Letters: w forward, x back, z strafe left, c strafe right, s shift.
+ * `opts.prefix` "rs"/"vt" with a bare `jump` reads the VTank grammar of G:220
+ * (the same as `/rs addnavjump <n>`, G:221): one number is the HEADING — the
+ * integer-is-hold quirk is kept only for /ra, /ub and the lettered verbs
+ * (review guide-6; C# has no /vt jump to stay compatible with).
  * @returns {{ok:true, headingDeg:number|null, shift:boolean, ms:number, direction:string, form:"vtank"|"ub"} | {ok:false, error:string}}
  */
-export function parseJumpArgs(verb, args) {
+export function parseJumpArgs(verb, args, opts = {}) {
+  const prefix = String((opts && opts.prefix) || "").toLowerCase();
   const letters = String(verb ?? "").toLowerCase().replace(/^jump/, "");
+  const vtankGrammar = !letters && (prefix === "rs" || prefix === "vt");
   if (/[^swzxc]/.test(letters)) return { ok: false, error: `unknown jump letters "${letters}" (use s w z x c)` };
   let direction = "none";
   for (const ch of letters) {
@@ -181,6 +187,11 @@ export function parseJumpArgs(verb, args) {
       if (before.length) headingDeg = num(before[0], "heading");
       shift = words[boolAt].toLowerCase() === "true";
       if (after.length) ms = num(after[0], "charge time");
+    } else if (vtankGrammar) {
+      form = "vtank";
+      if (words.length > 2) return { ok: false, error: "usage: jump [heading] [true|false] [ms]" };
+      if (words.length >= 1) headingDeg = num(words[0], "heading");
+      if (words.length === 2) ms = num(words[1], "charge time");
     } else {
       form = "ub";
       if (words.length > 2) return { ok: false, error: "usage: jump[swzxc] [heading] [holdMs]" };
@@ -321,6 +332,11 @@ verb("opt", "opt list [filter] | opt get <name> | opt set <name> <value> | opt r
   const name = (c.args[1] ?? "").trim();
   if (sub === "get") {
     if (!name) return c.fail(`usage: /${c.prefix} opt get <name>`);
+    if (name.toLowerCase() === "routereversed") {
+      // R22: read-only, derived from the loaded route (/rs reverseroute sets it).
+      const nav = c.vt()?.nav;
+      return c.out(`${RS_TAG} RouteReversed = ${nav && nav.route && nav.route().reversed ? "true" : "false"} (read-only)`);
+    }
     const r = o.get(name, { vtUnits: true });
     if (r && r.ok) return c.out(`${RS_TAG} ${name} = ${fmtOpt(r.value)}`);
     if (o.bag?.has?.(name)) return c.out(`${RS_TAG} ${name} = ${fmtOpt(o.bag.get(name))} (meta option)`);
@@ -329,17 +345,24 @@ verb("opt", "opt list [filter] | opt get <name> | opt set <name> <value> | opt r
   if (sub === "set") {
     const value = after.replace(/^\S+\s*/, "");
     if (!name || value === "") return c.fail(`usage: /${c.prefix} opt set <name> <value>`);
+    if (name.toLowerCase() === "routereversed") return c.fail(`RouteReversed is read-only (use /${c.prefix} reverseroute true|false)`);
     const r = o.set(name, value.trim(), { source: "command" });
     if (!r || !r.ok) return c.fail(r?.error || `unknown option ${name}`);
     if (r.saveError) c.out(`${RS_TAG} (not saved: ${r.saveError})`, CAT_ERROR);
     return c.out(r.echo || `${RS_TAG} Set option ${name} = ${fmtOpt(r.value)}`);
   }
+  // remember/restore store the CANONICAL value (set back by key, no unit
+  // conversion) but echo it in VTank units like get/set (lbf for AttackDistance).
+  const shownAs = (fallback) => {
+    const v = o.get(name, { vtUnits: true });
+    return fmtOpt(v && v.ok ? v.value : fallback);
+  };
   if (sub === "remember") {
     if (!name) return c.fail(`usage: /${c.prefix} opt remember <name>`);
     const r = o.get(name);
     if (!r || !r.ok) return c.fail(r?.error || `unknown option ${name}`);
     c.remembered().set(String(r.key ?? r.row?.key ?? name).toLowerCase(), { key: r.key ?? r.row?.key ?? name, value: r.value });
-    return c.out(`${RS_TAG} remembered ${name} = ${fmtOpt(r.value)}`);
+    return c.out(`${RS_TAG} remembered ${name} = ${shownAs(r.value)}`);
   }
   if (sub === "restore") {
     if (!name) return c.fail(`usage: /${c.prefix} opt restore <name>`);
@@ -349,7 +372,7 @@ verb("opt", "opt list [filter] | opt get <name> | opt set <name> <value> | opt r
     if (!saved) return c.fail(`nothing remembered for ${name}`);
     const r = o.set(saved.key, saved.value, { source: "command" });
     if (!r || !r.ok) return c.fail(r?.error || "restore failed");
-    return c.out(`${RS_TAG} restored ${name} = ${fmtOpt(r.value)}`);
+    return c.out(`${RS_TAG} restored ${name} = ${shownAs(r.value)}`);
   }
   return c.fail(`usage: /${c.prefix} opt list|get|set|remember|restore …`);
 });
@@ -558,7 +581,7 @@ verb("addnavjump", "addnavjump [heading] [true|false] [charge] [strafeleft|straf
 
 // R18 jump (VTank and UB forms).
 function jumpVerb(c) {
-  const p = parseJumpArgs(c.verb, c.args);
+  const p = parseJumpArgs(c.verb, c.args, { prefix: c.prefix });
   if (!p.ok) return c.fail(`jump: ${p.error}`);
   if (c.motionRefused("jump")) return undefined;
   const nav = c.needNav();
@@ -616,8 +639,9 @@ verb("follow", "follow <name>|leader|off|status", (c) => {
     const m = Array.isArray(f.members) ? f.members.find((x) => (Number(x.guid) >>> 0) === guid) : null;
     name = (m && m.name) || h?.TryGetObjectName?.(guid) || "";
   } else {
+    // A Follow target is a player (PLAN R3): the fallback keeps the Player class filter.
     const found = typeof h?.FindNearbyByName === "function" ? h.FindNearbyByName(arg, { player: true }) : null;
-    const hit = Array.isArray(found) && found.length ? found[0] : c.actions()?.findNearestByName(arg, { partial: false });
+    const hit = Array.isArray(found) && found.length ? found[0] : c.actions()?.findNearestByName(arg, { partial: false, objectClass: OBJECT_CLASS.Player });
     if (!hit) return c.fail(`follow: ${arg} is not in sight`);
     guid = Number(hit.guid) >>> 0;
     name = hit.name || arg;
@@ -833,12 +857,18 @@ function normCtx(raw) {
 // ── the dispatcher ─────────────────────────────────────────────────────────
 
 /**
- * @param {{getCtx: () => object}} deps  RsCtx (PLAN §3.7) — every member optional.
+ * @param {{getCtx: () => object, canQueue?: boolean}} deps  RsCtx (PLAN §3.7) — every member optional.
+ *   canQueue false: nothing will ever pump() this dispatcher (the page-level one
+ *   on a page without the VTank layer), so the verbs that queue work — `/ub
+ *   delay`, a multi-stack `/ra give…`, a `/mt loot` retry — refuse with "needs
+ *   the VTank layer" instead of reporting work that never runs (review
+ *   runtime-5 / wiring-4).
  * @returns {{run(line:string, opts?:{source?:string}): object, wouldHandle(line:string): boolean,
  *            help(): string[], pump(nowMs:number): void, runChat(line:string, opts?:{source?:string}): object,
  *            pendingDelayed(): number}}
  */
-export function createRsDispatcher({ getCtx } = {}) {
+export function createRsDispatcher({ getCtx, canQueue = true } = {}) {
+  const queues = canQueue !== false;
   const fallbackRemembered = new Map();
   const delayQueue = []; // {due, seq, line, source}
   let delaySeq = 0;
@@ -990,17 +1020,33 @@ export function createRsDispatcher({ getCtx } = {}) {
         for (const l of table.helpLines()) c.out(l);
         return undefined;
       },
+      /** False on a dispatcher nothing pumps: queueing verbs refuse (c.noQueue). */
+      canQueue: queues,
+      noQueue(what) {
+        return c.fail(`${what} needs the VTank layer: nothing runs this page's command queue`);
+      },
       queueDelay(ms, line) {
+        if (!queues) return c.noQueue(`/${parsed.prefix} delay`);
         if (delayQueue.length >= DELAY_QUEUE_MAX) return c.fail("delay queue is full");
         delayQueue.push({ due: C.now() + ms, seq: ++delaySeq, line, source: st.source });
         delayQueue.sort((a, b) => a.due - b.due || a.seq - b.seq);
         return undefined;
       },
       queueLoot(name, partial) {
+        if (!queues) return c.noQueue(`/${parsed.prefix} ${parsed.verb}`);
         pendingLoot = { name, partial: !!partial, until: C.now() + LOOT_WAIT_MS, source: st.source };
+        return undefined;
       },
       queueGives(items, target) {
+        if (!queues) return c.noQueue(`/${parsed.prefix} ${parsed.verb}`);
         for (const item of items) giveQueue.push({ item, target, source: st.source });
+        return undefined;
+      },
+      /** Empty the give-all queue (`/ra givea stop`, C# CancelGiveQueue) → how many were waiting. */
+      cancelGives() {
+        const n = giveQueue.length;
+        giveQueue.length = 0;
+        return n;
       },
     };
     try {
@@ -1106,7 +1152,7 @@ export function createRsDispatcher({ getCtx } = {}) {
         if (r.ok) {
           lastGiveAt = t;
           giveQueue.shift();
-        } else if (!/in progress/.test(String(r.error))) {
+        } else if (!r.retry && !/in progress/.test(String(r.error))) {
           giveQueue.shift();
           if (g.source !== "tell") C.print(`${RS_TAG} give ${g.item.name}: ${r.error}`, CAT_ERROR);
         }

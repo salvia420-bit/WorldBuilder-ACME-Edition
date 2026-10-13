@@ -270,7 +270,7 @@ export function dispatchClientEvent(evt, D) {
         botKernel: botParams.get("botKernel"), explorePressure: botParams.get("explorePressure"),
         botCtlOwner: botParams.get("botCtlOwner"), botPersona: botParams.get("botPersona"),
         botModel: botParams.get("botModel"), botInterval: botParams.get("botInterval"),
-        botBuffs: botParams.get("botBuffs"),
+        botBuffs: botParams.get("botBuffs"), botVt: botParams.get("botVt"),
       });
     } catch (_) { /* flag parse failure = no bot, client unaffected */ }
     // ?streamHud=1 (2026-07-18) — stream-rig dressing: open the

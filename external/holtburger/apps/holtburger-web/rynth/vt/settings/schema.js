@@ -266,10 +266,14 @@ export function buildIndex(rows = SCHEMA) {
       byVtCI.set(n.toLowerCase(), row);
     }
   }
+  // alias → { row, viaVt }: an alias that is a lower-case spelling of one of
+  // the row's VTank names (navclosestoprange) converts like that name, so an
+  // exact-case lookup (which reaches the alias step) and a case-insensitive
+  // one (which reaches the VTank-name step first) agree on the unit.
   const aliases = new Map();
   for (const [a, key] of Object.entries(LEGACY_ALIASES)) {
     const row = byKey.get(key);
-    if (row) aliases.set(a, row);
+    if (row) aliases.set(a, { row, viaVt: (row.vt || []).some((n) => n.toLowerCase() === a) });
   }
   return { rows, byKey, byKeyCI, byVt, byVtCI, aliases };
 }
@@ -290,16 +294,16 @@ export function findRowIn(index, name, { exactCase = false } = {}) {
   row = index.byVt.get(n);
   if (row) return { row, viaVt: true };
   if (exactCase) {
-    row = index.aliases.get(n);
-    return row ? { row, viaVt: false } : null;
+    const a = index.aliases.get(n);
+    return a ? { row: a.row, viaVt: a.viaVt } : null;
   }
   const lower = n.toLowerCase();
   row = index.byVtCI.get(lower);
   if (row) return { row, viaVt: true };
   row = index.byKeyCI.get(lower);
   if (row) return { row, viaVt: false };
-  row = index.aliases.get(lower);
-  return row ? { row, viaVt: false } : null;
+  const a = index.aliases.get(lower);
+  return a ? { row: a.row, viaVt: a.viaVt } : null;
 }
 
 /** Resolve an option name → { row, viaVt } | null. Order: exact key → VTank

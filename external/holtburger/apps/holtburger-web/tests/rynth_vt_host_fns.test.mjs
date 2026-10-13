@@ -114,13 +114,13 @@ function fakeHost(over = {}) {
     0x50000042: { name: "Bob", pos: { objCellId: 0xa9b40019, x: 80, y: 12, z: 48 }, df: 0x8, it: 0x10, wcid: 1 },
   };
   const inventory = [
-    { guid: 0x70000001, name: "Mana Stone", wcid: 2434, stackSize: 1, itemType: 0x80000, equipMask: 0, containerId: ME },
-    { guid: 0x70000002, name: "Pyreal", wcid: 273, stackSize: 25, itemType: 0x40, equipMask: 0, containerId: ME },
+    { guid: 0x70000001, name: "Mana Stone", wcid: 2434, stackSize: 1, itemType: 0x80000, equipMask: 0, containerId: 0 },
+    { guid: 0x70000002, name: "Pyreal", wcid: 273, stackSize: 25, itemType: 0x40, equipMask: 0, containerId: 0 },
     { guid: 0x70000003, name: "Pyreal", wcid: 273, stackSize: 10, itemType: 0x40, equipMask: 0, containerId: 0x70000010 },
-    { guid: 0x70000004, name: "Insatiable Eater Jaw", wcid: 34441, stackSize: 1, itemType: 0x80, equipMask: 0, containerId: ME },
-    { guid: 0x70000005, name: "Wand of Frost", wcid: 5000, stackSize: 1, itemType: 0x8000, equipMask: 0x1000000, containerId: ME },
-    { guid: 0x70000006, name: "Facility Hub Portal Gem", wcid: 43020, stackSize: 2, itemType: 0x800, equipMask: 0, containerId: ME },
-    { guid: 0x70000010, name: "Pack", wcid: 136, stackSize: 1, itemType: 0x200, equipMask: 0, containerId: ME },
+    { guid: 0x70000004, name: "Insatiable Eater Jaw", wcid: 34441, stackSize: 1, itemType: 0x80, equipMask: 0, containerId: 0 },
+    { guid: 0x70000005, name: "Wand of Frost", wcid: 5000, stackSize: 1, itemType: 0x8000, equipMask: 0x1000000, containerId: 0 },
+    { guid: 0x70000006, name: "Facility Hub Portal Gem", wcid: 43020, stackSize: 2, itemType: 0x800, equipMask: 0, containerId: 0 },
+    { guid: 0x70000010, name: "Pack", wcid: 136, stackSize: 1, itemType: 0x200, equipMask: 0, containerId: 0 },
   ];
   const spells = {
     2931: { id: 2931, name: "Recall Aphus Lassel", isSelfTargeted: true },
@@ -194,7 +194,8 @@ function fakeHost(over = {}) {
     TryGetPlayerStats: () => S.stats,
     TryGetPlayerCompassHeadingDeg: () => 123.5,
     TryGetFellowshipInfo: () => S.fellowship,
-    IsPortalSpaceActive: () => false,
+    portal: false,
+    IsPortalSpaceActive: () => S.portal,
     GetCurrentCombatMode: () => S.combatMode,
     GetBusyState: () => S.busy,
     GetSelectedId: () => S.selected,
@@ -393,6 +394,29 @@ await check("castById without spell records: only the given target (CastSpellAt)
   assert.equal(F.host.castOwner, null);
 });
 
+await check("V-12: casts and item actions hold in portal space (retry), then go through", () => {
+  const E = env();
+  E.host.portal = true;
+  assert.equal(E.reg.call("actiontrycastbyid", 2931), 1, "cast waits (1 = retry), not impossible");
+  assert.equal(E.actions.castById(9999), 2, "an impossible cast is still 2 in portal space");
+  assert.equal(E.reg.call("actiontryapplyitem", VAL.wobj(0x70000001), VAL.wobj(ME)), 0);
+  const u = E.actions.use(0x70000006);
+  assert.equal(u.ok, false);
+  assert.equal(u.retry, true);
+  assert.equal(E.actions.give(0x70000002, 0x50000042, 25).retry, true);
+  assert.deepEqual(castCalls(E.host), []);
+  assert.deepEqual(E.host.calls.filter((c) => ["UseObject", "UseItemOnTarget", "GiveObject", "tryClaimItemAction", "ChangeCombatMode"].includes(c[0])), []);
+  E.host.portal = false;
+  assert.equal(E.reg.call("actiontrycastbyid", 2931), 0);
+  assert.deepEqual(castCalls(E.host), [["CastSelf", 2931]]);
+  assert.equal(E.actions.use(0x70000006).ok, true);
+  // a foreign item-token holder is a retry as well
+  E.host.itemOwner = "vtsupplies";
+  const busy = E.actions.drop(0x70000006);
+  assert.equal(busy.ok, false);
+  assert.equal(busy.retry, true);
+});
+
 // ── settings (P) ─────────────────────────────────────────────────────────────
 await check("settings functions use VtOptions (VT units) and the meta bag for unknown names", () => {
   const E = env();
@@ -517,6 +541,8 @@ await check("world getters: name, id, wcid, class, int/double props (incl. UB ex
   assert.equal(E.reg.call("wobjectgetintprop", jaw, 218103808), 34441, "UB TEMPLATE_TYPE");
   assert.equal(E.reg.call("wobjectgetintprop", jaw, 19), 500);
   assert.equal(E.reg.call("wobjectgetintprop", VAL.wobj(0x70000003), 218103810), 0x70000010, "Decal Container");
+  assert.equal(E.reg.call("wobjectgetintprop", jaw, 218103810), ME, "main pack (host containerId 0) → the player");
+  assert.equal(E.reg.call("wobjectgetintprop", VAL.wobj(0x70000005), 218103810), 0, "a worn item is in no container");
   assert.equal(E.reg.call("wobjectgetdoubleprop", jaw, 167772169), 7.5, "UB WORKMANSHIP → 280");
   assert.equal(E.reg.call("wobjectgetobjectclass", VAL.wobj(0x80000103)), OBJECT_CLASS.Vendor);
   assert.equal(E.reg.call("wobjectgetobjclass", VAL.wobj(0x70000005)), OBJECT_CLASS.WandStaffOrb);
@@ -589,6 +615,68 @@ await check("setmotion / getmotion / clearmotion drive SetMovementInput", () => 
   assert.equal(E.reg.call("setmotion", "Fly", 1), 0);
   E.reg.call("clearmotion");
   assert.deepEqual(E.host.calls.at(-1), ["SetMovementInput", 0, 0, 0, true]);
+});
+
+await check("setmotion: refused while the operator holds the bot or in portal space; the registry release hook lets go of every key (I-3, V-7, V-12, review runtime-1)", () => {
+  let held = false;
+  const host = fakeHost();
+  const hooks = [];
+  const reg = fakeRegistry();
+  reg.onRelease = (fn) => hooks.push(fn);
+  const release = () => hooks.forEach((f) => f("test"));
+  registerHostFunctions(reg, { host, actions: createVtActions({ host }), operatorHeld: () => held, log: () => {} });
+  assert.equal(hooks.length, 1, "one release hook registered");
+  const smi = () => host.calls.filter((c) => c[0] === "SetMovementInput");
+  release();
+  assert.equal(smi().length, 0, "no key pressed: the release sends nothing");
+  assert.equal(reg.call("setmotion", "forward", 1), 1);
+  assert.deepEqual(smi().at(-1), ["SetMovementInput", 1, 0, 0, true]);
+  held = true;
+  assert.equal(reg.call("setmotion", "turnleft", 1), 0, "held: refused");
+  assert.equal(smi().length, 1, "nothing sent while held");
+  assert.equal(reg.call("getmotion", "turnleft"), 0, "a refused key is not recorded");
+  release();
+  assert.deepEqual(smi().at(-1), ["SetMovementInput", 0, 0, 0, false], "the release lets go of forward");
+  assert.equal(reg.call("getmotion", "forward"), 0, "the key map is cleared");
+  release();
+  assert.equal(smi().length, 2, "a second release sends nothing");
+  assert.equal(reg.call("clearmotion"), 1, "clearmotion stays allowed while held");
+  held = false;
+  host.portal = true;
+  const n = smi().length;
+  assert.equal(reg.call("setmotion", "forward", 1), 0, "portal space: refused");
+  assert.equal(smi().length, n);
+  host.portal = false;
+  // Without hctx.operatorHeld: VtActions reads the bot's kernel hold.
+  const bot = { kernel: { operatorHeld: true } };
+  const host2 = fakeHost();
+  const reg2 = fakeRegistry();
+  registerHostFunctions(reg2, { host: host2, actions: createVtActions({ host: host2, getBot: () => bot }), log: () => {} });
+  assert.equal(reg2.call("setmotion", "forward", 1), 0, "kernel.operatorHeld via VtActions");
+  bot.kernel.operatorHeld = false;
+  assert.equal(reg2.call("setmotion", "forward", 1), 1);
+  bot.kernel.operatorHeld = true;
+  assert.equal(reg2.call("setmotion", "forward", 0), 1, "letting go of a key is allowed while held");
+  assert.deepEqual(host2.calls.filter((c) => c[0] === "SetMovementInput").at(-1), ["SetMovementInput", 0, 0, 0, true]);
+});
+
+await check("R22: vtgetsetting[RouteReversed] reads nav.status().reversed; every set form is refused (read-only) (review guide-3)", () => {
+  let reversed = false;
+  const host = fakeHost();
+  const reg = fakeRegistry();
+  const options = fakeOptions();
+  const logs = [];
+  registerHostFunctions(reg, { host, actions: createVtActions({ host }), options, nav: { status: () => ({ reversed }), isEmpty: () => false }, log: (m) => logs.push(m) });
+  assert.equal(reg.call("vtgetsetting", "RouteReversed"), false);
+  reversed = true;
+  assert.equal(reg.call("vtgetsetting", "RouteReversed"), true);
+  assert.equal(reg.call("ragetsetting", "routereversed"), true, "case-insensitive");
+  for (const f of ["vtsetsetting", "rasetsetting", "raoptset", "uboptset"]) assert.equal(reg.call(f, "RouteReversed", 0), 0, f);
+  assert.equal(options.calls.filter((c) => c[0] === "set" || c[0] === "bag.set").length, 0, "never reaches VtOptions or the meta bag");
+  assert.equal(reg.call("vtgetsetting", "RouteReversed"), true);
+  const bare = fakeRegistry();
+  registerHostFunctions(bare, { host, actions: createVtActions({ host }), options, log: () => {} });
+  assert.equal(bare.call("vtgetsetting", "RouteReversed"), false, "no nav: false");
 });
 
 await check("fellowship functions read TryGetFellowshipInfo", () => {
@@ -746,6 +834,9 @@ await check("value helpers: guid forms, string/type views", () => {
   assert.equal(valueToString(VAL.list([1, "a", true])), "[1,a,1]");
   assert.equal(valueToString(VAL.coords(-12.3, 41.5, 0.2)), "12.30S, 41.50E, 0.20Z");
   assert.equal(valueToString(1e21), "1E+21");
+  assert.equal(M.valueToNumber(VAL.wobj(0x80000104, "X")), 0, "a WorldObject is 0 as a number, like EXPR toNum");
+  assert.equal(M.valueToNumber(" 0x1F "), 31);
+  assert.equal(M.valueToNumber(true), 1);
   assert.equal(valueTypeName(null), "None");
   assert.equal(valueTypeName(VAL.wobj(1)), "WorldObject");
   assert.equal(valueTypeName({ t: "err", msg: "x" }), "Error");
