@@ -403,6 +403,16 @@ CLI `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-ro
 - Output: project dirs default `/mnt/wbterminal2/film-projects/<name>/`; ffmpeg `/home/wbterminal/bin/ffmpeg`
   (override `--ffmpeg`/`FILM_FFMPEG`).
 
+## 5.1 Owner decisions (2026-10-13 — binding)
+- Film account: `phase4demo` (ACE accessLevel 5 = Admin; verified). The CLI defaults `--account=phase4demo`; the
+  password is a run-time argument only — never in docs, plans, logs or commits.
+- **Depth of field ships in v1**: seam §4.8 (`?filmDof=on`) is required, the CLI `boot` URL always adds
+  `filmDof=on`, `classic.rack-focus` must visibly pull focus (runtime drives `window.__dof` from the Pose `focus`
+  channel; `look.dof` sets range/bokeh). The flag stays default-OFF for normal play.
+- Gazetteer home: `/mnt/wbterminal2/film-projects/_gazetteer/`; 2021 acpedia lore is acceptable.
+- Scenery bake: open (default ace-compat vs `?sceneryBake=retail` A/B); film reads obstruction data from whatever
+  bake the client loaded, so code must not assume either.
+
 ## 6. Rules for every implementer
 - Parallel agents may read, edit and run TARGETED single tests only (`node test_x.mjs`). They must NOT run the full
   JS gate, cargo, wasm-pack or browsers. The orchestrator runs the full gate and builds ONCE, after merging, one at

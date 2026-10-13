@@ -107,16 +107,28 @@ only; orchestrator runs gate/builds once, capped). The parallel-agent rule is al
    `--strict`); `node ../../scripts/audit-flag-defaults.mjs`; `node ../../scripts/lint-event-consumers.mjs`;
    `node ../../scripts/lint-harness-params.mjs`; `node scripts/gen-modulepreload.mjs --check`.
 7. **1070 eye-test batch** — owner-requested run only (memory `no-agent-eyetests`), off-screen + `--mute-audio`,
-   bot account (never `tailnet1`, the human's account there). Checklist in §8.
+   film account `phase4demo` (§6; never `tailnet1`, the human's account there). Checklist in §8.
 
-## 6. Owner decisions still open
-1. Which ACE account is the film character? It needs Developer access (`@teleloc`, `@telepoi`, `@teledungeon`,
-   `@createliveops`) and Sentinel+ for `@cloak on`; Advocate+ for `@attackable off` / `@tele`.
-2. Canonical scenery bake for filming: default `dist/scenery` (ace-compat) or `?sceneryBake=retail` (+17.9% trees
-   around Holtburg)? Obstruction data must come from the same bake the client loads.
-3. Depth of field (`?filmDof=on`, rack focus) in v1, or later? (Recipe in recon_particles; costs a ~3 s shader
-   compile on the 1070.)
-4. Gazetteer home: `/mnt/wbterminal2/film-projects/_gazetteer/` OK? 2021 acpedia lore (includes retired content) OK?
+## 6. Owner decisions (answered 2026-10-13, after the pause)
+1. **Film account = `phase4demo`** (owner). Verified read-only against `ace_auth.account`: accessLevel **5 (Admin)**,
+   which covers `@teleloc` / `@telepoi` / `@teledungeon` / `@createliveops` (Developer), `@cloak on` (Sentinel) and
+   `@attackable off` / `@tele` (Advocate). The password is supplied at run time (CLI `--account/--password`) and
+   is NEVER written into docs, plans or commits. It is a single-login account: nobody else may be logged in on it
+   during a shoot (~25–65 s gap after a disconnect; `SessionHandle.disconnect()` shortens it).
+2. **Depth of field is IN v1** (owner). Integration seam 8 (`?filmDof=on` → one `DepthOfFieldEffect` +
+   `window.__dof`) is required, the CLI `boot` URL always adds `filmDof=on`, `classic.rack-focus` must be visibly
+   working, and §8 item 8 is a mandatory 1070 check. The flag itself stays default-OFF for normal play (zero cost,
+   avoids the ~3 s shader compile outside film sessions).
+3. **Gazetteer home `/mnt/wbterminal2/film-projects/_gazetteer/` approved; 2021 acpedia lore approved** (owner).
+4. **Scenery bake — still open** (owner asked what the difference is; answered in chat 2026-10-13). Default
+   `dist/scenery` is the shipped *ace-compat* bake; `?sceneryBake=retail` is today's opt-in A/B that follows
+   acclient.c `CLandBlock::get_land_scenes` exactly (frequency gate, 5 m road band, building-cell and slope tests,
+   retail orientation): +17.9% placements around Holtburg (denser forests, no trees on roads / steep slopes /
+   building cells) and it matches where live ACE places its physics scenery; it lives on the scratch HDD and is
+   pending the owner's A/B eye-test (url-flags.md §`sceneryBake`). Recommendation: film on **retail** once that A/B
+   passes and the bake is moved into the SSD dist (`scripts/dist_ssd.py stage --activate`); until then use the
+   default. Film obstruction data is always taken from whatever bake the client loaded (the wasm scenery colliders
+   follow the same files), so either choice is internally consistent.
 
 ## 7. Prompts for the two lanes not yet written (paste into a workflow with the PRE text from 2-build-tools.js)
 **CLI lane** — files `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-rolled `--key=value`
@@ -127,7 +139,7 @@ disk); `project init <name>` (default root `/mnt/wbterminal2/film-projects`); `t
 (import `scene3d/film/shots/index.js`); `song analyze <audio> [--lyrics] [--out]`; `sites build|search|show`;
 `plan validate|compile` (real registry; prints `estimateShootTime`); `jev ping|decide`; `browser check`;
 `boot` (connectOverCDP default `http://127.0.0.1:9333`; open the film URL
-`?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&autoLogin=1&account=…&password=…&autoSpawn=first&quality=…&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off`;
+`?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1&account=phase4demo&password=…&autoSpawn=first&quality=…&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off`;
 `Emulation.setDeviceMetricsOverride` for exact output size; gate on `__bootStateHistory` in-world +
 `__sceneReadyEverFired` + `liveScene3d` + `__film`; install the JEV broker (`exposeFunction('__filmJev')`) BEFORE
 takes; `__film.clean(true)`, `own()`, `world.avatar(false)`, `@cloak on`, `@attackable off`); `go <site|@cmd>`
@@ -151,7 +163,7 @@ movement), and how to write **standing orders** for JEV (one concrete sentence w
 name what may be faded vs avoided).
 
 ## 8. 1070 eye-test checklist (queued; owner-run)
-Boot: the CLI `boot` URL above at 1920×1080, `quality=high`, bot account. For each item record pass/fail + the
+Boot: the CLI `boot` URL above at 1920×1080, `quality=high`, account `phase4demo`. For each item record pass/fail + the
 `__film.status()` JSON.
 1. HUD-free frame: no toolbar/radar/chat/brackets/bubbles/cursor/canvas border; canvas exactly 1920×1080
    (`__renderScaleState().drawingBuffer`).
@@ -165,7 +177,8 @@ Boot: the CLI `boot` URL above at 1920×1080, `quality=high`, bot account. For e
 6. Stepped take 10 s @30 fps: 300 frames, playable mp4, foliage/water/particles animate at real speed (film clock),
    no hitch after the cut (pre-roll).
 7. Teleport + readiness: `go` to a second site, ready report ≤ ~15 s, no pop-in in the next take.
-8. `?filmDof=on` rack focus (if adopted): focus pulls, no depth artefacts (log depth).
+8. **Mandatory (DoF is in v1):** `?filmDof=on` + `classic.rack-focus` — focus pulls foreground → subject, no depth
+   artefacts (log depth), no change at all with the flag off, compile hitch only on first use.
 
 ## 9. What this commit contains
 - `scene3d/film/SPEC.md`; partial `scene3d/film/core/*.js`; partial `tools/film/{audio,lib,sites}/*.mjs`.
