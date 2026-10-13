@@ -410,7 +410,8 @@ CLI `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-ro
   `filmDof=on`, `classic.rack-focus` must visibly pull focus (runtime drives `window.__dof` from the Pose `focus`
   channel; `look.dof` sets range/bokeh). The flag stays default-OFF for normal play.
 - Gazetteer home: `/mnt/wbterminal2/film-projects/_gazetteer/`; 2021 acpedia lore is acceptable.
-- Scenery bake: open (default ace-compat vs `?sceneryBake=retail` A/B); film reads obstruction data from whatever
+- Scenery bake: the shipped default (ace-compat) for now; the owner handles any retail promotion separately. Film
+  reads obstruction data from whatever
   bake the client loaded, so code must not assume either.
 
 ## 6. Rules for every implementer

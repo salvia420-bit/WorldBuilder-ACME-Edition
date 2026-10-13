@@ -120,7 +120,8 @@ only; orchestrator runs gate/builds once, capped). The parallel-agent rule is al
    working, and §8 item 8 is a mandatory 1070 check. The flag itself stays default-OFF for normal play (zero cost,
    avoids the ~3 s shader compile outside film sessions).
 3. **Gazetteer home `/mnt/wbterminal2/film-projects/_gazetteer/` approved; 2021 acpedia lore approved** (owner).
-4. **Scenery bake — still open** (owner asked what the difference is; answered in chat 2026-10-13). Default
+4. **Scenery bake — DEFAULT for now** (owner, 2026-10-13: "default … ill deal with that later"; the retail
+   promotion is the owner's separate task, not part of film mode). Default
    `dist/scenery` is the shipped *ace-compat* bake; `?sceneryBake=retail` is today's opt-in A/B that follows
    acclient.c `CLandBlock::get_land_scenes` exactly (frequency gate, 5 m road band, building-cell and slope tests,
    retail orientation): +17.9% placements around Holtburg (denser forests, no trees on roads / steep slopes /
