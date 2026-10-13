@@ -152,9 +152,11 @@ pub struct ObjectInfo {
     /// (`CSetup::sphere`, what `SPHEREPATH::init_sphere` is fed). For the
     /// local player these are the verbatim Setup `0x02000001` spheres
     /// ([`PLAYER_SETUP_SPHERE_LOW_Z`]/[`PLAYER_SETUP_SPHERE_HIGH_Z`] at
-    /// [`PLAYER_SETUP_SPHERE_RADIUS`]); vanilla ACE collides the player
-    /// with exactly these, so the faithful driver MUST too or the server
-    /// rejects the client's settled poses (the TN market-stall wedge).
+    /// [`PLAYER_SETUP_SPHERE_RADIUS`]) until its own Setup is resident,
+    /// then that Setup's ([`ObjectInfo::apply_setup_body`],
+    /// `?setupPlayerBody`); vanilla ACE collides the player with exactly
+    /// these, so the faithful driver MUST too or the server rejects the
+    /// client's settled poses (the TN market-stall wedge).
     pub capsule: [(f32, f32); 2],
     /// The mover's own guid — excluded from the entity-collider sweep.
     pub self_guid: Guid,
@@ -193,6 +195,152 @@ impl ObjectInfo {
             ],
             self_guid,
         }
+    }
+
+    /// physics-collision-2 (2026-10-13) — replace the body (sphere pair,
+    /// radius, height, both step heights) with a Setup-derived one
+    /// ([`mover_body_from_setup`]). State bits, `ethereal` and `self_guid`
+    /// are left alone.
+    pub fn apply_setup_body(&mut self, body: &SetupMoverBody) {
+        self.capsule = body.capsule;
+        self.radius = body.radius;
+        self.height = body.height;
+        self.step_up_height = body.step_up_height;
+        self.step_down_height = body.step_down_height;
+    }
+}
+
+/// physics-collision-2 (2026-10-13) — a mover's collision body as retail
+/// builds it from the mover's OWN Setup on every transition:
+/// `CPhysicsObj::transition` (acclient.c:320061-320102) feeds
+/// `CTransition::init_sphere(GetNumSphere, GetSphere, m_scale)` (or the
+/// `dummy_sphere` at scale 1.0 when the Setup has none), and
+/// `OBJECTINFO::init` (:314118-314129) caches
+/// `CPartArray::GetStepUpHeight`/`GetStepDownHeight` =
+/// `setup->step_*_height * scale.z` (:325400-325424). ACE
+/// `PhysicsObj.transition` / `PartArray.GetStepUpHeight` do the same, and
+/// `PlayerFactory` gives each heritage/sex its own Setup — so a non-human
+/// or scaled player swept with the human constants parks where ACE starts
+/// embedded (the TN-wedge class, see [`PLAYER_SETUP_SPHERE_RADIUS`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SetupMoverBody {
+    /// `(centre_z, radius)` pairs, feet-local — [`ObjectInfo::capsule`].
+    pub capsule: [(f32, f32); 2],
+    pub radius: f32,
+    pub height: f32,
+    pub step_up_height: f32,
+    pub step_down_height: f32,
+}
+
+impl SetupMoverBody {
+    /// Setup `0x02000001` (human male; human female `0x0200004E` carries
+    /// the same bytes) — exactly what [`ObjectInfo::for_local_player`]
+    /// hardcodes, and the body an unresolved Setup keeps.
+    pub const HUMAN: Self = Self {
+        capsule: [
+            (PLAYER_SETUP_SPHERE_LOW_Z, PLAYER_SETUP_SPHERE_RADIUS),
+            (PLAYER_SETUP_SPHERE_HIGH_Z, PLAYER_SETUP_SPHERE_RADIUS),
+        ],
+        radius: PLAYER_SETUP_SPHERE_RADIUS,
+        height: PLAYER_SETUP_HEIGHT,
+        step_up_height: PLAYER_STEP_UP_HEIGHT,
+        step_down_height: PLAYER_STEP_DOWN_HEIGHT,
+    };
+}
+
+/// A Setup's `(step_up, step_down)` × `scale` (`CPartArray::GetStepUpHeight`
+/// / `GetStepDownHeight`, acclient.c:325400-325424), or `None` when the
+/// pair was not recorded or is not a usable height.
+pub fn scaled_setup_step_heights(
+    shapes: &super::obj_collision::SetupCollisionShapes,
+    scale: f32,
+) -> Option<(f32, f32)> {
+    let (up, down) = shapes.step_heights?;
+    (up.is_finite() && down.is_finite() && up >= 0.0 && down >= 0.0)
+        .then_some((up * scale, down * scale))
+}
+
+/// The retail mover body for a Setup's collision primitives (see
+/// [`SetupMoverBody`]). `setup_height` is the raw `CSetup::height`
+/// (`CPartArray::GetHeight` = `setup->height * scale.z`); `scale` is the
+/// object's `m_scale` (wire `obj_scale`).
+///
+/// - `shapes == None` (Setup not resident): [`SetupMoverBody::HUMAN`].
+/// - Spheres: the FIRST `min(2, n)` in Setup order, centre and radius ×
+///   `scale` (`SPHEREPATH::init_sphere`, acclient.c:313647) — not sorted
+///   by z and no cylsphere stand-in (that is the remote path's
+///   approximation). One sphere fills both capsule slots (the faithful
+///   driver always inits two; the volume is the same). None: the
+///   `dummy_sphere` (r [`physics_globals::DUMMY_SPHERE_RADIUS`] at z = r,
+///   scale 1.0, acclient.c:784578-784581). A non-finite or non-positive
+///   sphere keeps the human pair.
+/// - Step heights: [`scaled_setup_step_heights`], else the human pair.
+///
+/// Setup `0x02000001` at scale 1.0 gives [`SetupMoverBody::HUMAN`] bit for
+/// bit (its DAT floats are the `f32` literals of the `PLAYER_*` consts).
+pub fn mover_body_from_setup(
+    shapes: Option<&super::obj_collision::SetupCollisionShapes>,
+    setup_height: Option<f32>,
+    scale: f32,
+) -> SetupMoverBody {
+    let Some(shapes) = shapes else {
+        return SetupMoverBody::HUMAN;
+    };
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let usable = |(z, r): (f32, f32)| z.is_finite() && r.is_finite() && r > 0.0;
+    let mut spheres = shapes
+        .spheres
+        .iter()
+        .map(|s| (s.center.z * scale, s.radius * scale));
+    let capsule = match (spheres.next(), spheres.next()) {
+        (None, _) => {
+            let dummy = (
+                physics_globals::DUMMY_SPHERE_RADIUS,
+                physics_globals::DUMMY_SPHERE_RADIUS,
+            );
+            [dummy, dummy]
+        }
+        (Some(only), None) if usable(only) => [only, only],
+        (Some(low), Some(high)) if usable(low) && usable(high) => [low, high],
+        _ => SetupMoverBody::HUMAN.capsule,
+    };
+    let height = match setup_height {
+        Some(h) if h.is_finite() && h > 0.0 => h * scale,
+        // No `CSetup::height` on record: the top of the sphere stack, never
+        // under the human height (the remote path's same fallback).
+        _ => (capsule[0].0 + capsule[0].1)
+            .max(capsule[1].0 + capsule[1].1)
+            .max(PLAYER_SETUP_HEIGHT * scale.min(1.0)),
+    };
+    let (step_up_height, step_down_height) = scaled_setup_step_heights(shapes, scale)
+        .unwrap_or((PLAYER_STEP_UP_HEIGHT, PLAYER_STEP_DOWN_HEIGHT));
+    SetupMoverBody {
+        capsule,
+        radius: capsule[0].1.max(capsule[1].1),
+        height,
+        step_up_height,
+        step_down_height,
+    }
+}
+
+impl WorldState {
+    /// physics-collision-2 — `guid`'s collision body from its own resident
+    /// Setup ([`mover_body_from_setup`] over the entity's `0x02` Setup DID,
+    /// its `obj_scale` and the Setup's `CSetup::height`). `None` while the
+    /// entity is unknown, carries no Setup, or its SetupModel has not been
+    /// parsed yet — the caller keeps its fallback body.
+    pub fn setup_mover_body(&self, guid: Guid) -> Option<SetupMoverBody> {
+        use holtburger_common::properties::WorldObjectExt as _;
+        let entity = self.entities.get(guid)?;
+        let setup_id = WorldState::entity_setup_did(entity)?;
+        let shapes = self.scene.setup_collision_shapes(setup_id)?;
+        let scale = entity.obj_scale().map(|s| s as f32).unwrap_or(1.0);
+        let setup_height = self.setup_part_dims.get(&setup_id).map(|&(_, h)| h);
+        Some(mover_body_from_setup(Some(&*shapes), setup_height, scale))
     }
 }
 

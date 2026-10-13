@@ -91,6 +91,24 @@ import {
   viewerIndoorOr,
   viewerState,
 } from "./viewer_cell.js";
+// cells-portals-1 — `?rigCellGate=on` (OPT-IN): tickPortalSeal publishes the
+// walk's outside-view count for the gate's landcell-rig clause.
+import { rigCellGateEnabled } from "./rig_cell_gate.js";
+// cells-portals-2 — `?indoorLandscapeGate=on` (OPT-IN): tickPortalSeal decides
+// whether the armed indoor frame may skip the landscape (retail LScape::draw
+// runs only under `outside_view.view_count`, acclient.c:461476).
+import {
+  indoorLandscapeGateEnabled,
+  indoorLandscapeSkip,
+  indoorLandscapeCellState,
+  widenClipXY,
+  boxQueryMvp,
+  minDistToApertures,
+  INDOOR_LANDSCAPE_GATE_STATS,
+  INDOOR_LANDSCAPE_MIN_ZERO_FRAMES,
+  INDOOR_LANDSCAPE_NEAR_PORTAL_M,
+  INDOOR_LANDSCAPE_WIDE_CLIP,
+} from "./indoor_landscape_gate.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -751,9 +769,17 @@ function heightSamplerFor(sessionHandle) {
 // shared `getCached` material whenever the bake is unavailable, which is what
 // makes a pre-RND-04 wasm bundle a no-op rather than a blackout.
 function cellMaterialFor(scene3d, group, baked) {
-  return baked
-    ? scene3d.materialCache.getCachedCellBaked(group.surfaceDid)
-    : scene3d.materialCache.getCached(group.surfaceDid);
+  const mc = scene3d.materialCache;
+  const mat = baked
+    ? mc.getCachedCellBaked(group.surfaceDid)
+    : mc.getCached(group.surfaceDid);
+  // lighting-materials-7 — `?envDetailTex=on` (default OFF): retail's
+  // environment detail pass on the cell STRUCTURE only
+  // (RenderDeviceD3D::DrawEnvCell, acclient.c:456894; the statics inside a cell
+  // draw without it). Same object back when the flag is off.
+  return typeof mc.applyEnvDetail === "function"
+    ? mc.applyEnvDetail(mat, "environment", group.surfaceDid)
+    : mat;
 }
 
 /**
@@ -772,6 +798,13 @@ function cellMaterialFor(scene3d, group, baked) {
  * `?envcellFusion=off` path's) and the only one a pool can express.
  */
 function _offerCellSurfaces(scene3d, snap, meshGroup, resolved, cellsShadow, lbKey) {
+  // lighting-materials-7 (`?envDetailTex=on`, default OFF) — a pooled surface
+  // draws with its class material, which would drop the env-detail patch, so a
+  // cell carrying it stays on the legacy producer (null = "pools not armed").
+  // Flag off: no material carries the marker.
+  if (resolved.some((e) => e && e.material && e.material.userData && e.material.userData.__envDetailKind)) {
+    return null;
+  }
   try {
     meshGroup.updateMatrix();
     return offerCellSurfacesToPools(scene3d, {
@@ -2342,6 +2375,9 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           // :876) so the interior owner key can be `static:<lbKey>` and LB
           // eviction reaps these emitters via `_evictStaticParticlesForLb`.
           landblockId,
+          // particles-scripts-3: the owning EnvCell (the `cellContainers3d`
+          // key) — statics.js stamps it on the anchor for `?particleCellGate`.
+          cellId: snap.cellId >>> 0,
         });
       }
       // Task #9 — peel animated interior props (flag-gated) to the world-frame
@@ -2888,6 +2924,10 @@ function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
  * be able to run a render loop.
  */
 export function tickCellVisibility3D(scene3d, sessionHandle) {
+  // ?indoorLandscapeGate: this tick's drawn-set state, rebuilt below only when
+  // the split arms; null (any early return) fails the gate open.
+  const lsGate = indoorLandscapeGateEnabled();
+  if (lsGate) _lsCellState = null;
   if (!scene3d || !sessionHandle) return;
   if (
     typeof sessionHandle.getCurrentCellId !== "function" ||
@@ -2949,6 +2989,8 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // so the armed path reuses it instead of paying a second
   // `getRenderSetWithPView` (a depth-8 portal-clipped BFS) every frame.
   let pviewSetThisTick = null;
+  // ?indoorLandscapeGate: the frustum-pruned depth-1 set from the same block.
+  let frustumSetThisTick = null;
   try {
     cellId = sessionHandle.getCurrentCellId() >>> 0;
     const playerIndoor = !!sessionHandle.isCurrentCellIndoor();
@@ -3013,6 +3055,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         // geometry. Union = correctness; intersection would be
         // tighter but lose near-portal cells.
         const frustumSet = sessionHandle.getRenderSetWithFrustum(mvp);
+        frustumSetThisTick = frustumSet ?? null;
         if (typeof sessionHandle.getRenderSetWithPView === "function") {
           // 2026-05-25 diag(pvs) parametric depth: wasm `getRenderSetWithPView`
           // now takes an optional `max_depth: u8`. Production caller passes
@@ -3170,6 +3213,8 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     // terrain in 2026-05-29.
     try {
       const portalSet = new Set();
+      // ?indoorLandscapeGate: whichever walk feeds the union below.
+      let splitWalk = pviewSetThisTick;
       // Bug 4: the depth-1 set of the VIEWER cell (the walk root).
       const bfs = typeof sessionHandle.getViewerRenderSet === "function"
         ? sessionHandle.getViewerRenderSet()
@@ -3193,11 +3238,27 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
           for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
           const pv = sessionHandle.getRenderSetWithPView(mvp, 0);
           if (pv) for (const v of pv) portalSet.add(v >>> 0);
+          splitWalk = pv ?? null;
         }
       }
       portalSet.add((viewerCell || cellId) >>> 0); // never lose the "where am I" anchor
       if (portalSet.size) renderSetArr = Array.from(portalSet);
       else splitArmed = false; // nothing to draw → don't wipe depth for nothing
+      // ?indoorLandscapeGate (cells-portals-2): residency + BFS-only doorway
+      // state of exactly the set the cells pass draws. Pooled cell surfaces
+      // and ?cellBugParity (every EnvCell drawn) are not modelled → unknown.
+      if (lsGate && splitArmed) {
+        _lsCellState = envCellPoolsActive() || CELL_BUG_PARITY
+          ? null
+          : indoorLandscapeCellState(
+            scene3d.cellContainers3d,
+            portalSet,
+            bfs,
+            splitWalk,
+            frustumSetThisTick,
+            viewerCell || cellId,
+          );
+      }
     } catch (_) {
       splitArmed = false;
     }
@@ -3958,6 +4019,196 @@ function resolveSealPass(scene3d) {
  */
 let _sealStalePkgWarned = false;
 export function tickPortalSeal(scene3d, sessionHandle) {
+  // ?indoorLandscapeGate=on (cells-portals-2): the seal body captures its
+  // walk's raw outside-view count, then the gate decides this tick's landscape
+  // skip whichever way the body returned. Flag off: the body alone (plus one
+  // `false` to the pipeline if a runtime toggle left a skip set).
+  if (!indoorLandscapeGateEnabled()) {
+    if (_lsSkipPushed) _pushIndoorLandscapeSkip(scene3d, false);
+    _tickPortalSealBody(scene3d, sessionHandle);
+    return;
+  }
+  _lsRawCount = null;
+  _lsCapture = true;
+  try {
+    _tickPortalSealBody(scene3d, sessionHandle);
+  } finally {
+    _lsCapture = false;
+    tickIndoorLandscapeGate(scene3d, sessionHandle, _lsRawCount);
+  }
+}
+
+// ── ?indoorLandscapeGate (cells-portals-2) ─────────────────────────────────
+// Per-client state, like the seal pass itself. `_lsCellState` is rebuilt each
+// tick by tickCellVisibility3D (null unless the split armed this tick).
+let _lsCellState = null;
+let _lsRawCount = null;
+let _lsCapture = false;
+let _lsZeroTicks = 0;
+let _lsSkipPushed = false;
+const _lsWideMvp = new Float32Array(16);
+const _lsBoxMvp = new Float32Array(16);
+
+function _pushIndoorLandscapeSkip(scene3d, skip) {
+  _lsSkipPushed = !!skip;
+  try {
+    scene3d?.atmospherePipeline?.setIndoorLandscapeSkip?.(!!skip);
+  } catch (_) {}
+}
+
+// Aperture count of a flat `[count, …]` walk result; null when unreadable.
+function _lsFlatCount(flat) {
+  if (!flat || !(flat.length > 0)) return null;
+  const n = Number(flat[0]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+/**
+ * ?indoorLandscapeGate=on — may this tick's armed indoor frame skip the
+ * landscape (retail draws LScape::draw only under `outside_view.view_count`,
+ * PView::DrawCells acclient.c:461476)? Hands the answer to the pipeline
+ * (`setIndoorLandscapeSkip`, honoured only on an armed indoor frame) and
+ * mirrors it into INDOOR_LANDSCAPE_GATE_STATS. Every clause fails open; see
+ * scene3d/indoor_landscape_gate.js.
+ *
+ * @param {number|null} rawCount the seal walk's `flat[0]` this tick (null =
+ *   the seal did not walk: split not armed, stale pkg, a throw)
+ */
+export function tickIndoorLandscapeGate(scene3d, sessionHandle, rawCount) {
+  const st = INDOOR_LANDSCAPE_GATE_STATS;
+  st.ticks++;
+  const cells = _lsCellState;
+  st.count = null;
+  st.wideCount = null;
+  st.nearOutdoorPlaneM = null;
+  st.allResident = cells ? cells.allResident : null;
+  st.bfsOutdoor = cells ? cells.bfsOutdoor : null;
+  st.drawnCells = cells ? cells.drawnCells : 0;
+  let count = null;
+  let reason = "";
+  try {
+    if (!scene3d || scene3d._indoorSplitArmed !== true) reason = "not-armed";
+    else if (rawCount == null) reason = "count-unknown";
+    else if (rawCount > 0) {
+      count = rawCount;
+      reason = "outside-view";
+    } else {
+      // The walk ran before cameraSwitcher.tick (one frame stale): a doorway
+      // turning into view this frame is caught by the same walk through a
+      // wider frustum. `_psMvpArr` is this tick's seal MVP (rawCount != null
+      // means the body composed it).
+      let wide = null;
+      if (typeof sessionHandle?.getPViewOutsidePortals === "function") {
+        widenClipXY(_psMvpArr, INDOOR_LANDSCAPE_WIDE_CLIP, _lsWideMvp);
+        wide = _lsFlatCount(sessionHandle.getPViewOutsidePortals(_lsWideMvp, 0));
+      }
+      st.wideCount = wide;
+      if (wide == null) reason = "count-unknown";
+      else {
+        count = rawCount + wide;
+        if (wide > 0) reason = "outside-view-wide";
+      }
+    }
+  } catch (_) {
+    count = null;
+    reason = "threw";
+  }
+  st.count = count;
+  _lsZeroTicks = count === 0 ? _lsZeroTicks + 1 : 0;
+  st.zeroFrames = _lsZeroTicks;
+  let near = null;
+  if (!reason) {
+    if (!cells) reason = "cells-unknown";
+    else if (cells.allResident !== true) reason = "not-resident";
+    else if (cells.bfsOutdoor !== false) reason = "bfs-doorway";
+    else if (_lsZeroTicks < INDOOR_LANDSCAPE_MIN_ZERO_FRAMES) reason = "settling";
+    else {
+      // Last (it costs a wasm call): every outdoor portal of the cells within
+      // reach of the camera — a box query through the frustum aperture export.
+      try {
+        const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+        if (
+          typeof sessionHandle?.getVisiblePortalApertures === "function" &&
+          acCameraFrame(camera, scene3d.worldRoot ?? null)
+        ) {
+          boxQueryMvp(
+            _acCamVec.x, _acCamVec.y, _acCamVec.z,
+            INDOOR_LANDSCAPE_NEAR_PORTAL_M + 0.5,
+            _lsBoxMvp,
+          );
+          near = minDistToApertures(
+            sessionHandle.getVisiblePortalApertures(_lsBoxMvp, 0),
+            _acCamVec.x, _acCamVec.y, _acCamVec.z,
+          );
+        }
+      } catch (_) {
+        near = null;
+      }
+      st.nearOutdoorPlaneM = near;
+      if (near == null) reason = "near-unknown";
+    }
+  }
+  const skip = indoorLandscapeSkip({
+    flag: true,
+    count,
+    zeroFrames: _lsZeroTicks,
+    allResident: cells ? cells.allResident : null,
+    bfsOutdoor: cells ? cells.bfsOutdoor : null,
+    nearOutdoorPlaneM: near,
+  });
+  st.skip = skip;
+  st.reason = skip ? "skip" : reason || "near-portal";
+  if (scene3d) scene3d._indoorLandscapeGate = st;
+  _pushIndoorLandscapeSkip(scene3d, skip);
+  return skip;
+}
+
+/**
+ * ?rigCellGate=on — the outside-view count the gate's landcell clause reads:
+ * the walk's raw `flat[0]`, except that a 0 is only trusted when the camera is
+ * NOT within INDOOR_LANDSCAPE_NEAR_PORTAL_M of an outdoor portal. A doorway
+ * closer than the 0.1 m near plane projects to nothing (pview_project_polygon
+ * near-clips the whole polygon), so the walk reports 0 while the outdoors fills
+ * the screen — the same case ?indoorLandscapeGate guards with this distance.
+ * Near a portal, or unmeasurable (no box-query export, no camera frame, an
+ * empty / malformed result, a throw) → null, which fails the clause open.
+ */
+function _rigGateOutsideCount(flat, sessionHandle, camera, worldRoot) {
+  const n = flat && flat.length > 0 ? Number(flat[0]) : 0;
+  const count = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  if (count > 0) return count;
+  let near = null;
+  try {
+    if (
+      typeof sessionHandle.getVisiblePortalApertures === "function" &&
+      acCameraFrame(camera, worldRoot)
+    ) {
+      boxQueryMvp(
+        _acCamVec.x, _acCamVec.y, _acCamVec.z,
+        INDOOR_LANDSCAPE_NEAR_PORTAL_M + 0.5,
+        _lsBoxMvp,
+      );
+      near = minDistToApertures(
+        sessionHandle.getVisiblePortalApertures(_lsBoxMvp, 0),
+        _acCamVec.x, _acCamVec.y, _acCamVec.z,
+      );
+    }
+  } catch (_) {
+    near = null;
+  }
+  return typeof near === "number" && near > INDOOR_LANDSCAPE_NEAR_PORTAL_M ? 0 : null;
+}
+
+function _tickPortalSealBody(scene3d, sessionHandle) {
+  // ?rigCellGate=on (cells-portals-1): retail's `outside_view.view_count` for
+  // the gate's landcell-rig clause (rig_cell_gate.js) — the raw count of the
+  // walk's outside portals, before the punch clip below drops straddles. Reset
+  // every frame; null (unknown: no seal pass, stale pkg, a throw, or a 0 with
+  // the camera near an outdoor portal — see _rigGateOutsideCount) fails the
+  // clause open. Flag off: never written.
+  const rigGate = !!scene3d && rigCellGateEnabled();
+  if (rigGate) scene3d._rigGateOutsideViewCount = null;
   const pass = resolveSealPass(scene3d);
   if (!pass || !sessionHandle) return;
   const hasOutside = typeof sessionHandle.getPViewOutsidePortals === "function";
@@ -3981,6 +4232,11 @@ export function tickPortalSeal(scene3d, sessionHandle) {
     const flat = hasOutside
       ? sessionHandle.getPViewOutsidePortals(_psMvpArr, 0)
       : sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    // ?indoorLandscapeGate: the RAW walk count, like the rig gate's below.
+    if (_lsCapture && hasOutside) _lsRawCount = _lsFlatCount(flat);
+    if (rigGate && hasOutside) {
+      scene3d._rigGateOutsideViewCount = _rigGateOutsideCount(flat, sessionHandle, camera, worldRoot);
+    }
     const nearPlane = acCameraFrame(camera, worldRoot)
       ? makeNearPlane(_acCamVec, _acFwdVec)
       : null;
@@ -4091,12 +4347,15 @@ export function markOutdoorEntities(scene3d) {
  * entity that spawned indoors and walked out stayed "indoor" for the seal's
  * pre-draw forever). Called by loop.js `_armPosition` on every KIND_POSITION
  * with the update's full cell id (`landblockId`, `0xXXYYcccc`); keeps the low
- * 16 bits, the landcell (`< 0x100` = outdoor).
+ * 16 bits, the landcell (`< 0x100` = outdoor), and the full id in
+ * `_wireCellId` for `?rigCellGate` (the cell-container registry is keyed by
+ * the full id; rig_cell_gate.js).
  */
 export function noteEntityLandcell(em, guid, cellId) {
   const inst = em?.entityMap?.get?.(guid >>> 0);
   if (!inst) return false;
   inst._wireCellIdx = (cellId >>> 0) & 0xffff;
+  inst._wireCellId = cellId >>> 0;
   return true;
 }
 

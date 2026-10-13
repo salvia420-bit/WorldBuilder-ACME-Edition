@@ -399,10 +399,14 @@ pub fn gfx_relief_diag() -> String {
 #[wasm_bindgen]
 pub fn url_flag_diag() -> String {
     format!(
-        "{{\"search\":{:?},\"fetchConcurrency\":{},\"verifyShards\":{}}}",
+        "{{\"search\":{:?},\"fetchConcurrency\":{},\"verifyShards\":{},\"negFaceRetail\":{},\"negFacePerPolyCull\":{}}}",
         flag_search(),
         holtburger_resource_http::configured_fetch_concurrency(),
         holtburger_resource_http::shard_verify_enabled(),
+        // dat-parser-2: what THIS instance's triangulators resolved (the main
+        // thread and the bake worker each log this line).
+        neg_face_retail_enabled(),
+        neg_face_per_poly_cull_enabled(),
     )
 }
 
@@ -827,6 +831,20 @@ fn parse_airborne_contact_flag(search: &str) -> bool {
 fn parse_walkable_ground_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "walkableGround=off")
+}
+
+/// physics-collision-2 (2026-10-13): parse `?setupPlayerBody=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, the local player's transition body
+/// (sphere pair, step-up/step-down) comes from its OWN resident Setup ×
+/// `obj_scale` — retail `CPhysicsObj::transition` `init_sphere` +
+/// `OBJECTINFO::init` (acclient.c:320061, :314118), what ACE collides it with
+/// — instead of the human Setup `0x02000001` constants. Human characters
+/// (`0x02000001` / `0x0200004E`) are byte-identical either way. Native
+/// carrier: `USE_SETUP_PLAYER_BODY` (movement/system.rs).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_setup_player_body_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "setupPlayerBody=off")
 }
 
 /// R1 motioninterp-1 (2026-10-08): parse `?jumpLaunchCap=off` (or `&…`).
@@ -1508,6 +1526,29 @@ fn parse_maint_prune_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "maintPrune=off")
 }
 
+/// streaming-residency-1 (2026-10-13, WebAC comparison): parse
+/// `?aceObjMaint=on`. OPT-IN — `true` ONLY when `aceObjMaint=on` is present.
+/// When on, the wasm world's out-of-visibility prune (`liveness.rs`, the
+/// source `?maintPrune` forwards) arms its deadline from ACE's visible set
+/// (`ObjectMaint.GetVisibleObjects` ∪ `EnvCell.IsVisibleIndoors`) instead of
+/// the conservative 3x3-landblocks-or-384 m set: outdoors the player's
+/// landblock + adjacents minus objects in non-SeenOutside EnvCells; in an
+/// EnvCell its own cell + VisibleCells, plus the landblock + adjacents when
+/// that cell is SeenOutside. The deadline is 30 s (ACE 25 s +
+/// the `REAP_GRACE_MS` margin; retail `CObjectMaint::AddObjectToBeDestroyed`
+/// +25 s, acclient.c:310651). Without it, objects ACE stopped tracking stay as
+/// frozen ghosts (a dead monster never becomes a corpse, a recalled player
+/// keeps standing there) because ACE sends nothing more about them. Falls
+/// back to the conservative set while the player's EnvCell record is not
+/// loaded; an unloaded SeenOutside bit counts as visible. Shipped dormant: a
+/// predicate bug would drop a live monster mid-fight. Carrier
+/// `WorldState::set_ace_object_maint_enabled`. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_ace_obj_maint_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "aceObjMaint=on")
+}
+
 /// A1-O2 (2026-06-11, unification survey): parse
 /// `?posePublishPostTick=on` (or `&posePublishPostTick=on`). Same shape
 /// as `parse_unified_tick_flag`. When on, the TickMovement arm publishes
@@ -1635,6 +1676,42 @@ fn parse_remote_turn_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "remoteTurn=off")
 }
 
+/// motion-remote-2 (2026-10-13): `?remoteRestHeading=off` (also `=0` /
+/// `=false`) stops a remote body adopting the wire heading when an
+/// UpdatePosition lands within 0.05 m of it (retail
+/// `InterpolationManager::InterpolateTo` → `set_heading`,
+/// acclient.c:389129-389136; holtburger-world
+/// `spatial::remote_rest_heading_enabled`). DEFAULT-ON; rides the effective
+/// `remoteInterp` composite (no remote bodies otherwise). Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_rest_heading_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "remoteRestHeading=off" | "remoteRestHeading=0" | "remoteRestHeading=false"
+        )
+    })
+}
+
+/// motion-remote-3 (2026-10-13): `?remoteLeash=off` (also `=0` / `=false`)
+/// takes the remote `ConstraintManager` leash back to interpolation only:
+/// root motion unleashed and re-armed only when a node queues, so a remote
+/// whose positions stop runs on until its DeleteObject. ON, retail: the leash
+/// re-arms after every accepted `MoveOrTeleport` arm and scales the object's
+/// own motion — 10 m (5 m indoors) at full speed, halted by 50 m (20 m)
+/// (acclient.c:145223-145227, 388287-388304; holtburger-world
+/// `spatial::remote_leash_enabled`). DEFAULT-ON; rides the effective
+/// `remoteInterp` composite. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_leash_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "remoteLeash=off" | "remoteLeash=0" | "remoteLeash=false")
+    })
+}
+
 /// OpenAC comparison 2026-10-04 (remote motion D5): `?remoteMoveTo=off`
 /// disables the client-side MoveTo steer for remote bodies (the core
 /// `drive_remote_movetos` pump + the scene's realization). DEFAULT-ON (owner
@@ -1655,6 +1732,24 @@ fn parse_remote_moveto_flag(search: &str) -> bool {
 fn parse_remote_spine_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "remoteSpine=off")
+}
+
+/// motion-remote-1 (2026-10-13): `?remoteRootScale=off` (also `=0` /
+/// `=false`) moves every remote by its motion at its UNSCALED speed — the
+/// pre-fix spine. Default ON: a remote's root motion travels at its
+/// ObjScale × the motion's speed, as retail's `UpdatePositionInternal`
+/// scales the offset origin by `m_scale` (acclient.c:320014-320020;
+/// `SpatialScene::set_remote_root_scale_enabled`). Needs the spine
+/// (`?remoteSpine`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_root_scale_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "remoteRootScale=off" | "remoteRootScale=0" | "remoteRootScale=false"
+        )
+    })
 }
 
 /// MoveTo refactor phase G (2026-10-10): `?targetVoyeur=off` — a MoveTo
@@ -2020,6 +2115,20 @@ mod prefetch;
 #[cfg(target_arch = "wasm32")]
 mod world_bootstrap_cache;
 
+// maps-chargen-barber-1 (2026-10-13): `barberInit` / `barberApply` — the
+// barber page's wasm glue over `holtburger_core::barber` (CharGen + PalSet
+// fetch and cache). The FinishBarber send is `SessionHandle.finishBarber`.
+#[cfg(target_arch = "wasm32")]
+mod barber;
+
+// maps-chargen-barber-3 (2026-10-13): `chargenGearColors` /
+// `chargenColorWheel` — the chargen Appearance page's colour rows over
+// `holtburger_core::chargen_colors` (ClothingTable fetch and cache; the
+// PalSet / Palette cache is the barber's). The cached tables also give
+// `sendCharGenResult` each gear's own colour keys.
+#[cfg(target_arch = "wasm32")]
+mod chargen_colors;
+
 // F.37 walk-result dedup primitive. Native test target needs the
 // `walk_dedup` module too (the unit tests live in it) — gated
 // `wasm32 OR test` so `cargo test` can exercise the dedup primitive
@@ -2050,6 +2159,42 @@ mod combat_toggle;
 mod chat_format;
 #[cfg(any(target_arch = "wasm32", test))]
 mod death_chat;
+
+// inventory-session-6 (2026-10-13): retail's AccountBoot line
+// (`CPlayerSystem::Handle_AccountBooted`) and the kind=4 boot marker. Same
+// `wasm32 OR test` gate so `cargo test -p holtburger-web --lib account_boot`
+// runs natively; session/messages/login.rs and `start_session` only call in.
+#[cfg(any(target_arch = "wasm32", test))]
+mod account_boot;
+
+// inventory-session-7 (2026-10-13): the LastOutsideDeath position slot
+// (PlayerDescription + PrivateUpdatePosition) behind the retail `@corpse`
+// command. Same `wasm32 OR test` gate so `cargo test -p holtburger-web --lib
+// last_outside_death` runs natively; session/messages/mod.rs only calls in.
+#[cfg(any(target_arch = "wasm32", test))]
+mod last_outside_death;
+
+// messages-objects-1 (2026-10-13): retail's pending inventory request
+// (`ACCWeenieObject::RecordRequest` / `RecordResponse`) and the
+// InventoryServerSaveFailed (0x00A0) line built from it. Same
+// `wasm32 OR test` gate so `cargo test -p holtburger-web --lib
+// inventory_request` runs natively; session/ only calls in.
+#[cfg(any(target_arch = "wasm32", test))]
+mod inventory_request;
+
+// hud-ui-1 (2026-10-13): the HouseData / HouseProfile buy + rent
+// `HousePayment` lists for the house panel (gmHouseUI / gmSlumlordUI). Same
+// `wasm32 OR test` gate so `cargo test -p holtburger-web --lib
+// house_payments` runs the wire → snapshot copy natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod house_payments;
+
+// input-options-2 (2026-10-13): the recv loop's copy of the 8 spell-bar
+// favourite lists (retail PlayerModule::AddSpellFavorite /
+// RemoveSpellFavorite with ACE's insert rules). Same `wasm32 OR test` gate
+// (`cargo test -p holtburger-web --lib spell_favorites`).
+#[cfg(any(target_arch = "wasm32", test))]
+mod spell_favorites;
 
 // §2.1a (SCOPE-2.1 §1c) — the pool-facing decode handle that keeps the
 // `!Send` fetch machinery unreachable from worker threads. Same
@@ -2087,11 +2232,33 @@ mod motion_sequence;
 #[cfg(target_arch = "wasm32")]
 mod net_worker;
 
+// net-transport-2 (2026-10-13): the net_worker's outbound dispatch, including
+// the TX_KIND_DISCONNECT that lets `?netWorker` sessions end the ACE session.
+// Same `wasm32 OR test` gate as `session_liveness` so it is unit-tested
+// natively against a real `Session`.
+#[cfg(any(target_arch = "wasm32", test))]
+mod net_worker_outbound;
+
 // net-1 (R2-net 2026-10-08): the recv loop's dead-session decision (retail
 // 140 s server silence + client-stall guard). Same `wasm32 OR test` gate as
 // `walk_dedup` so the decision is unit-tested natively.
 #[cfg(any(target_arch = "wasm32", test))]
 mod session_liveness;
+
+// net-transport-6 (2026-10-13): the keepalive ping's RTT clock (counts the
+// in-world pings still unanswered, stamps a send only when none is out)
+// shared by the direct-mode recv loop and the net_worker. Same `wasm32 OR test` gate as `session_liveness`
+// (`cargo test -p holtburger-web --lib ping_round_trip`).
+#[cfg(any(target_arch = "wasm32", test))]
+mod ping_round_trip;
+
+// test-tooling-3 (2026-10-13): log-only per-opcode wire-integrity counters
+// for the recv loop's inbound unpack (undecodable / unknown / short read /
+// overrun), exported as `wire_integrity_json` for `__diag.wire.integrity()`.
+// Same `wasm32 OR test` gate so the classifier is unit-tested natively
+// (`cargo test -p holtburger-web --lib wire_integrity`).
+#[cfg(any(target_arch = "wasm32", test))]
+mod wire_integrity;
 
 // RND-04 — retail static-light vertex bake (`SetStaticLightingVertexColors`
 // acclient.c:454918 / `calc_point_light` acclient.c:454579). Gate mirrors
@@ -2212,13 +2379,22 @@ pub fn build_info() -> String {
 // diagnostics-only): + free fn `movementPendingMotionsDiag` (the local
 // registry minterp's pending completion-node count, stored per
 // TickMovement) — live A/B legs assert the retail wire enqueue +
-// completion-clock drain with it; no product JS consumes it.
+// completion-clock drain with it (since combat-magic-5, 2026-10-13, also the
+// motions_pending input of ui/combat_mode_pending.js).
 // v7 (2026-07-27, P6.1 plugin-manifest wire): + `SessionHandle.setPluginList`
 // (JS loader publishes the `id@version` roster used to answer GameEvent
 // 0x02AE) + `SessionHandle.pluginList` (diagnostic read-back). index.html's
 // EXPECTED stays 1 — `__publishPluginList` typeof-guards `setPluginList`, so a
 // v6 pkg soft-degrades to the retail "3rd party API not in use." reply (the
 // documented v2..v6 precedent).
+// maps-chargen-barber-1 (2026-10-13) RIDES v7 (no bump — additive):
+// + `SessionHandle.{finishBarber, barberInit, barberApply}`.
+// plugins/barber-panel.js typeof-guards all three and stays closed on an
+// older pkg/ (StartBarber then only logs, as before).
+// hud-ui-1 (2026-10-13) RIDES v7 (no bump — additive): + `HouseDataJs.{buy,
+// rent}` / `HouseProfileJs.{buy, rent}` getters. plugins/house-panel.js
+// reads them only when they are arrays (an older pkg/ shows no price / rent
+// lines and keeps the old "any item staged" Buy gate).
 pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 7;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
@@ -2235,7 +2411,10 @@ pub fn wasm_export_manifest_version() -> u32 {
 /// `player_motions_pending` seam's queue term), stored by the TickMovement
 /// arm each tick. Lets live A/B legs assert the retail wire enqueue +
 /// completion-clock drain against real ACE wire data: a cast stomp raises
-/// it, the authored budget drains it. Not consumed by product JS.
+/// it, the authored budget drains it. combat-magic-5 (2026-10-13): product
+/// JS reads it too — ui/combat_mode_pending.js uses it as retail's
+/// `motions_pending` (`ClientCombatSystem::PlayerInReadyPosition`) to park a
+/// user combat-mode change; keep the name and the queue-only meaning.
 static MOVEMENT_PENDING_MOTIONS_DIAG: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
@@ -2253,6 +2432,9 @@ pub fn movement_pending_motions_diag() -> u32 {
 ///   bit2  slide_cast_enabled
 ///   bits4-5 forward-slot occupancy: 0=none 1=walk 2=run 3=substate
 ///   bits16-31 low16 of the held substate cmd (when occupancy==3)
+/// combat-magic-5 (2026-10-13): ui/combat_mode_pending.js reads bits 4-5 as
+/// retail's missile-mode `forward_command == Ready` test (0 = Ready); keep
+/// that layout.
 static CAST_ARBITRATION_DIAG: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
@@ -2419,6 +2601,18 @@ pub fn slow_run_diag_count() -> u32 {
 #[wasm_bindgen(js_name = slowRunDiagClear)]
 pub fn slow_run_diag_clear() {
     holtburger_core::slow_run_diag::clear()
+}
+
+/// chat-errors-2 (2026-10-13): retail `HandleFailureEvent`'s text for a
+/// WeenieError `code` (acclient.c:413716, via the generated
+/// `holtburger_core::retail_failure_table`) with `param` in every `%s` slot
+/// — the same words the recv loop's failure chat line prints. `undefined`
+/// for a code retail prints nothing for, so `plugins/weenie_error_messages.js`
+/// keeps its own wording there. Additive (no manifest bump); JS reaches it
+/// typeof-guarded through `window.__hbWasm.weenieErrorText`.
+#[wasm_bindgen(js_name = weenieErrorText)]
+pub fn weenie_error_text(code: u32, param: Option<String>) -> Option<String> {
+    holtburger_core::errors::retail_failure_line(code, param.as_deref())
 }
 
 /// AC's stateless 32-bit packet header checksum, exposed for callers
@@ -3463,6 +3657,63 @@ impl TerrainDetailTextures {
     #[wasm_bindgen(js_name = codeTiling)]
     pub fn code_tiling(&self) -> Vec<u32> {
         self.code_tiling.clone()
+    }
+}
+
+/// lighting-materials-7 — the Region's BUILDING and ENVIRONMENT detail
+/// surfaces (retail "Environment Detail Textures"), returned by
+/// [`fetch_region_detail_surfaces`] for `scene3d/materials.js`'s
+/// `?envDetailTex=on` patch on building shells + EnvCell structure.
+///
+/// `textures` are the **unique** decoded detail textures (retail Dereth ships
+/// one, `0x05001787`, for both kinds); each one's `terrain_type` field is
+/// repurposed as its index, like [`TerrainDetailTextures`]. `*_slice` is the
+/// index into `textures` for that kind, or `255` when the Region has none;
+/// `*_tiling` is its `detail_tex_tiling` (detail UV = tiling × UV set 0,
+/// `D3DPolyRender::SetDetailTiling`), `*_gid` the SurfaceTexture DID (0 = none).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct RegionDetailSurfaces {
+    textures: Vec<TerrainTexture>,
+    building_slice: u32,
+    building_tiling: u32,
+    building_gid: u32,
+    environment_slice: u32,
+    environment_tiling: u32,
+    environment_gid: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl RegionDetailSurfaces {
+    /// Take ownership of the unique decoded detail textures. JS calls this once.
+    #[wasm_bindgen(js_name = takeTextures)]
+    pub fn take_textures(&mut self) -> Vec<TerrainTexture> {
+        std::mem::take(&mut self.textures)
+    }
+    #[wasm_bindgen(getter, js_name = buildingSlice)]
+    pub fn building_slice(&self) -> u32 {
+        self.building_slice
+    }
+    #[wasm_bindgen(getter, js_name = buildingTiling)]
+    pub fn building_tiling(&self) -> u32 {
+        self.building_tiling
+    }
+    #[wasm_bindgen(getter, js_name = buildingGid)]
+    pub fn building_gid(&self) -> u32 {
+        self.building_gid
+    }
+    #[wasm_bindgen(getter, js_name = environmentSlice)]
+    pub fn environment_slice(&self) -> u32 {
+        self.environment_slice
+    }
+    #[wasm_bindgen(getter, js_name = environmentTiling)]
+    pub fn environment_tiling(&self) -> u32 {
+        self.environment_tiling
+    }
+    #[wasm_bindgen(getter, js_name = environmentGid)]
+    pub fn environment_gid(&self) -> u32 {
+        self.environment_gid
     }
 }
 
@@ -6470,6 +6721,291 @@ pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, Js
     })
 }
 
+/// lighting-materials-7 — `LScape::SetDetailTexturing` (acclient.c:308209)
+/// reads the Region's detail surfaces by `terrain_desc` LIST index:
+/// 0 landscape, 1 building, 2 environment, 3 object.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const REGION_DETAIL_BUILDING: usize = 1;
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const REGION_DETAIL_ENVIRONMENT: usize = 2;
+
+/// lighting-materials-7 — `(detail_texture_id, detail_tex_tiling)` for each
+/// `TMTerrainDesc`, in LIST order (the order retail indexes, see
+/// [`region_detail_surface_picks`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn region_detail_entries(
+    terrain_desc: &[holtburger_dat::file_type::region::TMTerrainDesc],
+) -> Vec<(u32, u32)> {
+    terrain_desc
+        .iter()
+        .map(|td| {
+            (
+                td.terrain_tex.detail_texture_id,
+                td.terrain_tex.detail_tex_tiling,
+            )
+        })
+        .collect()
+}
+
+/// lighting-materials-7 — `LScape::SetDetailTexturing`'s reads of the Region
+/// (acclient.c:308209-308270): the detail SurfaceTexture DID + tiling at each
+/// of the four `terrain_desc` list indices (0 landscape, 1 building,
+/// 2 environment, 3 object). `TexMerge::GetDetailTex` / `GetDetailTiling`
+/// (acclient.c:304939, 304957) index `terrain_desc.m_data[n]` directly — the
+/// list POSITION, not the entry's `terrain_type`. `entries` is
+/// `(detail_texture_id, detail_tex_tiling)` per entry in list order.
+///
+/// `None` when `n` is past the list (retail: invalid DID / tiling 0), the DID
+/// is 0 / `0xFFFFFFFF` (`LScape::GenerateDetailSurface` returns null), or the
+/// tiling is 0 (a zero factor switches detailing off in
+/// `D3DPolyRender::RenderMeshSubset`). Pure (no DAT / no wasm) so it is
+/// host-unit-testable.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn region_detail_surface_picks(entries: &[(u32, u32)]) -> [Option<(u32, u32)>; 4] {
+    let mut out: [Option<(u32, u32)>; 4] = [None; 4];
+    for (n, slot) in out.iter_mut().enumerate() {
+        if let Some(&(gid, tiling)) = entries.get(n)
+            && gid != 0
+            && gid != u32::MAX
+            && tiling != 0
+        {
+            *slot = Some((gid, tiling));
+        }
+    }
+    out
+}
+
+/// lighting-materials-7 — fetch the Region's BUILDING (`terrain_desc[1]`) and
+/// ENVIRONMENT (`terrain_desc[2]`) detail surfaces and decode each unique one
+/// to RGBA8 (SurfaceTexture → highest-res Texture → palette, the same pipeline
+/// as [`fetch_terrain_detail_textures`]). Retail wraps them in custom
+/// CSurfaces (`LScape::GenerateDetailSurface`, acclient.c:307691) and draws
+/// them as a second DESTCOLOR/INVSRCALPHA pass over building shells
+/// (`RenderDeviceD3D::DrawBuilding`, acclient.c:456943) and EnvCell structure
+/// (`RenderDeviceD3D::DrawEnvCell`, acclient.c:456894).
+///
+/// Opt-in: `scene3d/materials.js` only calls this under `?envDetailTex=on`,
+/// so the default boot pays nothing. Normal fetch lane — the layer is
+/// cosmetic, and JS flips a shared uniform when it lands (no relink).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchRegionDetailSurfaces)]
+pub async fn fetch_region_detail_surfaces() -> Result<RegionDetailSurfaces, JsValue> {
+    use holtburger_dat::file_type::{
+        Palette, Region, SurfaceTexture, Texture, TextureDecodeError,
+    };
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+    ensure_region_resident(&source).await;
+
+    // 1. Region → the building / environment (DID, tiling) picks.
+    let region_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
+        .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
+    let region = Region::unpack(&mut std::io::Cursor::new(&region_bytes[..]))
+        .map_err(|e| JsValue::from_str(&format!("Region::unpack: {e}")))?;
+    let entries = region_detail_entries(&region.terrain_info.land_surfaces.tex_merge.terrain_desc);
+    let picks = region_detail_surface_picks(&entries);
+    let building = picks[REGION_DETAIL_BUILDING];
+    let environment = picks[REGION_DETAIL_ENVIRONMENT];
+
+    // Unique DIDs, building first (retail Dereth shares one between the two).
+    let mut unique_ids: Vec<u32> = Vec::new();
+    for (gid, _) in [building, environment].into_iter().flatten() {
+        if !unique_ids.contains(&gid) {
+            unique_ids.push(gid);
+        }
+    }
+
+    // 2. Prefetch the SurfaceTextures, their highest-res Textures, then any
+    //    palettes (mirrors fetch_terrain_detail_textures' levels).
+    let mut textures = Vec::with_capacity(unique_ids.len());
+    if !unique_ids.is_empty() {
+        let surf_keys: Vec<ResourceKey<'_>> = unique_ids
+            .iter()
+            .map(|id| ResourceKey::new("eor/portal", *id))
+            .collect();
+        source.prefetch(&surf_keys).await.map_err(|e| {
+            JsValue::from_str(&format!("prefetch region detail SurfaceTextures: {e}"))
+        })?;
+
+        let mut tex_ids: Vec<u32> = Vec::with_capacity(unique_ids.len());
+        for &surf_id in &unique_ids {
+            if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+                && let Ok(s) = SurfaceTexture::unpack(&b)
+                && let Some(t) = s.highest_res()
+            {
+                tex_ids.push(t);
+            }
+        }
+        let tex_keys: Vec<ResourceKey<'_>> = tex_ids
+            .iter()
+            .map(|id| ResourceKey::new("eor/portal", *id))
+            .collect();
+        source.prefetch(&tex_keys).await.map_err(|e| {
+            JsValue::from_str(&format!("prefetch region detail Textures: {e}"))
+        })?;
+
+        let mut pal_ids: Vec<u32> = Vec::new();
+        for &tex_id in &tex_ids {
+            if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+                && let Ok(t) = Texture::unpack(&b)
+                && let Some(pid) = t.default_palette_id
+            {
+                pal_ids.push(pid);
+            }
+        }
+        if !pal_ids.is_empty() {
+            let pal_keys: Vec<ResourceKey<'_>> = pal_ids
+                .iter()
+                .map(|id| ResourceKey::new("eor/portal", *id))
+                .collect();
+            source.prefetch(&pal_keys).await.map_err(|e| {
+                JsValue::from_str(&format!("prefetch region detail Palettes: {e}"))
+            })?;
+        }
+
+        // 3. Decode each unique detail texture to RGBA8 (raw bytes — JS keeps
+        //    them un-decoded; retail's D3D pass blended in gamma space).
+        for (slice_idx, surf_id) in unique_ids.iter().copied().enumerate() {
+            let surf_bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+                .map_err(|e| {
+                    JsValue::from_str(&format!("region detail SurfaceTexture {surf_id:#010X}: {e}"))
+                })?;
+            let surf = SurfaceTexture::unpack(&surf_bytes).map_err(|e| {
+                JsValue::from_str(&format!(
+                    "region detail SurfaceTexture::unpack {surf_id:#010X}: {e}"
+                ))
+            })?;
+            let tex_id = surf.highest_res().ok_or_else(|| {
+                JsValue::from_str(&format!(
+                    "region detail SurfaceTexture {surf_id:#010X}: empty mip list"
+                ))
+            })?;
+            let tex_bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+                .map_err(|e| {
+                    JsValue::from_str(&format!("region detail Texture {tex_id:#010X}: {e}"))
+                })?;
+            let tex = Texture::unpack(&tex_bytes).map_err(|e| {
+                JsValue::from_str(&format!("region detail Texture::unpack {tex_id:#010X}: {e}"))
+            })?;
+            let rgba = tex
+                .to_rgba8(|pal_id| {
+                    let pal_bytes = source
+                        .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                        .map_err(|e| {
+                            TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}"))
+                        })?;
+                    Palette::unpack(&pal_bytes).map_err(|e| {
+                        TextureDecodeError::PaletteFetch(format!(
+                            "Palette::unpack {pal_id:#010X}: {e}"
+                        ))
+                    })
+                })
+                .map_err(|e| {
+                    JsValue::from_str(&format!("region detail Texture::to_rgba8 {tex_id:#010X}: {e}"))
+                })?;
+            textures.push(TerrainTexture {
+                terrain_type: slice_idx as u32,
+                width: tex.width as u32,
+                height: tex.height as u32,
+                pixels: rgba,
+            });
+        }
+    }
+
+    let slice_of = |pick: Option<(u32, u32)>| -> u32 {
+        pick.and_then(|(gid, _)| unique_ids.iter().position(|&u| u == gid))
+            .map(|i| i as u32)
+            .unwrap_or(255)
+    };
+    Ok(RegionDetailSurfaces {
+        building_slice: slice_of(building),
+        building_tiling: building.map_or(0, |(_, t)| t),
+        building_gid: building.map_or(0, |(g, _)| g),
+        environment_slice: slice_of(environment),
+        environment_tiling: environment.map_or(0, |(_, t)| t),
+        environment_gid: environment.map_or(0, |(g, _)| g),
+        textures,
+    })
+}
+
+#[cfg(test)]
+mod tests_region_detail_surfaces {
+    use super::*;
+    use holtburger_dat::file_type::region::{TMTerrainDesc, TerrainTex};
+
+    fn desc(terrain_type: u32, detail_texture_id: u32, detail_tex_tiling: u32) -> TMTerrainDesc {
+        TMTerrainDesc {
+            terrain_type,
+            terrain_tex: TerrainTex {
+                texture_id: 0x0500_0000 | terrain_type,
+                tex_tiling: 2,
+                max_vert_bright: 100,
+                min_vert_bright: 90,
+                max_vert_saturate: 100,
+                min_vert_saturate: 90,
+                max_vert_hue: 0,
+                min_vert_hue: 0,
+                detail_tex_tiling,
+                detail_texture_id,
+            },
+        }
+    }
+
+    /// **lighting-materials-7.** A synthetic Region `terrain_desc` with
+    /// entries 0..3 (plus a per-type tail) yields list index 1 as the
+    /// building pick and index 2 as the environment pick — by POSITION, even
+    /// when the entries' `terrain_type` values are out of order (retail's
+    /// `TexMerge::GetDetailTex` indexes `m_data[n]`).
+    #[test]
+    fn picks_building_and_environment_by_list_index() {
+        let terrain_desc = vec![
+            desc(0, 0x0500_1786, 4),
+            desc(7, 0x0500_1787, 4), // list index 1 = building
+            desc(3, 0x0500_1788, 8), // list index 2 = environment
+            desc(1, 0x0500_1789, 2), // list index 3 = object
+            desc(9, 0x0500_12AF, 1),
+        ];
+        let picks = region_detail_surface_picks(&region_detail_entries(&terrain_desc));
+        assert_eq!(picks[REGION_DETAIL_BUILDING], Some((0x0500_1787, 4)));
+        assert_eq!(picks[REGION_DETAIL_ENVIRONMENT], Some((0x0500_1788, 8)));
+        assert_eq!(picks[0], Some((0x0500_1786, 4)));
+        assert_eq!(picks[3], Some((0x0500_1789, 2)));
+    }
+
+    /// An empty or short `terrain_desc` yields `None` past its end (retail:
+    /// invalid DID / tiling 0 → no detail surface).
+    #[test]
+    fn empty_or_short_terrain_desc_yields_none() {
+        let none: [Option<(u32, u32)>; 4] = [None; 4];
+        assert_eq!(region_detail_surface_picks(&[]), none);
+        assert_eq!(region_detail_surface_picks(&region_detail_entries(&[])), none);
+
+        let short = region_detail_surface_picks(&[(0x0500_1786, 4), (0x0500_1787, 4)]);
+        assert_eq!(short[REGION_DETAIL_BUILDING], Some((0x0500_1787, 4)));
+        assert_eq!(short[REGION_DETAIL_ENVIRONMENT], None);
+        assert_eq!(short[3], None);
+    }
+
+    /// A null / invalid DID or a zero tiling is "no detail surface".
+    #[test]
+    fn null_did_or_zero_tiling_yields_none() {
+        let picks = region_detail_surface_picks(&[
+            (0x0500_1786, 4),
+            (0, 4),
+            (0xFFFF_FFFF, 4),
+            (0x0500_1789, 0),
+        ]);
+        assert_eq!(picks[0], Some((0x0500_1786, 4)));
+        assert_eq!(picks[REGION_DETAIL_BUILDING], None);
+        assert_eq!(picks[REGION_DETAIL_ENVIRONMENT], None);
+        assert_eq!(picks[3], None);
+    }
+}
+
 /// Phase 3 step 3.6 — fetch the retail TexMerge alpha masks (corner,
 /// side, road) and decode each to RGBA8. Mirrors
 /// [`fetch_terrain_textures`] but for the PFID_A8 mask textures the
@@ -7074,7 +7610,8 @@ impl ModelMesh {
     #[wasm_bindgen(getter, js_name = sideKinds)]
     pub fn side_kinds(&self) -> Vec<u8> { self.side_kinds.clone() }
     /// geom-audit — record misses on the FINAL decode (0 = complete;
-    /// >0 = mesh is decode-starved partial/empty). See the struct field.
+    /// >0 = mesh is decode-starved partial/empty). Catalog-proven absences
+    /// are not misses (`MissCountingSource`). See the struct field.
     #[wasm_bindgen(getter, js_name = decodeMisses)]
     pub fn decode_misses(&self) -> u32 { self.decode_misses }
     /// RND-33 — per-surface-subset texture-address flags (`Uint8Array`, length
@@ -7105,7 +7642,9 @@ impl ModelMesh {
 /// - `Negative` — the polygon's negative (back) face: reversed winding +
 ///   negated normals + `neg_surface` material. Emitted only for two-sided
 ///   polys (`sides_type == CullMode::Clockwise`) with a DISTINCT back
-///   surface (see `append_gfx_tris_with_tex_swaps`).
+///   surface (see `append_gfx_tris_with_tex_swaps`). Under `?negFace=retail`
+///   the reversed form is never emitted; a `Negative` tri there is retail's
+///   SAME-winding neg copy (`?perPolyCull=on` front-copy rule).
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7190,6 +7729,153 @@ fn tri_stipple_bits(stippling: u8, side_kind: SideKind) -> u8 {
     bits
 }
 
+// ---------------------------------------------------------------------------
+// dat-parser-2 (2026-10-13) — `?negFace=retail` (DEFAULT OFF, exact value)
+// ---------------------------------------------------------------------------
+//
+// Retail builds a SidesType-2 polygon's negative side in
+// `D3DPolyRender::ConstructMesh` (acclient.c:455780, emit pass) as a second
+// SIDE, not a second WINDING: `numSidesThisPoly = 2` only for `sides_type ==
+// 2`, `numWindingsThisPoly = 2` only for `sides_type == 1`, and the index
+// reversal `2 - v63` is keyed on the winding loop. The neg copy therefore takes
+// `neg_surface` + `neg_uv_indices` and negated normals but KEEPS the pos
+// winding. `RenderMeshSubset` (acclient.c:454683) culls every subset
+// CULLMODE_CW, so the copy is never seen from behind; from the front it is
+// coplanar with the pos face under DEPTHTEST_LESS (acclient.c:45772), with
+// batches drawn in surface-index order (`DrawMesh`, acclient.c:455154).
+// Buildings take the BSP poly path (`DrawPolyInternal`, acclient.c:455306),
+// which draws `pos_surface` only. Retail never shows `neg_surface` from behind,
+// so the reversed `SideKind::Negative` tri the default path emits (Phase 7 #7,
+// G16 fix-2) has no retail counterpart.
+//
+// Under the flag:
+//  * the reversed back tri is not emitted (GfxObj + EnvCell triangulators; the
+//    HBG1 env assembly drops its `ENV_BACKFACE` subsets; model bundles fall
+//    back to this runtime decode — `geom_bundles.rs`);
+//  * with `?perPolyCull=on` too (FrontSide, so a same-winding copy is
+//    front-only like retail), a GfxObj poly whose neg batch draws FIRST
+//    (`neg_surface < pos_surface`) with both surfaces opaque shows its neg side
+//    from the front — LESS keeps the first-drawn face — so its pos tri is
+//    REPLACED by the same-winding neg copy;
+//  * a GfxObj `NoPos` poly (stippling 0x4 = no POSITIVE UV INDICES,
+//    acclient.c:359869 `CPolygon::UnPack`) on a TEXTURED pos surface is drawn
+//    with UV slot 0 as `ConstructMesh` / `DrawPolyInternal` draw it, instead of
+//    skipped.
+// Off, every triangulator output is byte-identical to before.
+
+/// `?negFace=retail` — the exact pair only (house rule: no `1`/`on` aliases).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_neg_face_retail_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "negFace=retail")
+}
+
+/// `?perPolyCull=on` as the JS reader resolves it (scene3d/index.js:
+/// `v.toLowerCase() === "on"`), so the triangulator and the adapter agree on
+/// which polys render FrontSide.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_per_poly_cull_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| {
+        kv.split_once('=')
+            .is_some_and(|(k, v)| k == "perPolyCull" && v.eq_ignore_ascii_case("on"))
+    })
+}
+
+/// The `?negFace=retail` gate, parsed once per wasm instance over the seeded
+/// `flag_search()` (the bake worker decodes geometry in its own instance).
+#[cfg(target_arch = "wasm32")]
+fn neg_face_retail_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_neg_face_retail_flag(&flag_search()))
+}
+
+/// `?perPolyCull=on`, read by Rust only for the `?negFace=retail` front-copy
+/// rule above.
+#[cfg(target_arch = "wasm32")]
+fn neg_face_per_poly_cull_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_per_poly_cull_flag(&flag_search()))
+}
+
+// Native tests drive both gates per test thread (default OFF).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+thread_local! {
+    static NEG_FACE_RETAIL_OVERRIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NEG_FACE_PER_POLY_CULL_OVERRIDE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn neg_face_retail_enabled() -> bool {
+    NEG_FACE_RETAIL_OVERRIDE.with(|c| c.get())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn neg_face_per_poly_cull_enabled() -> bool {
+    NEG_FACE_PER_POLY_CULL_OVERRIDE.with(|c| c.get())
+}
+
+/// Test hook: set this thread's `?negFace=retail` / `?perPolyCull=on` gates.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn set_neg_face_for_test(retail: bool, per_poly_cull: bool) {
+    NEG_FACE_RETAIL_OVERRIDE.with(|c| c.set(retail));
+    NEG_FACE_PER_POLY_CULL_OVERRIDE.with(|c| c.set(per_poly_cull));
+}
+
+/// `?negFace=retail`: Surface `type` bits by Surface DID, for the two retail
+/// draw rules the triangulators need but cannot read off a DID — "textured"
+/// (`type & 6`, `DrawPolyInternal` / `DrawMesh`) and "alpha-delayed". Same join
+/// as `SURFACE_HEIGHT`: callers holding a source prime it (only under the
+/// flag), the triangulators read it, and a miss keeps the default decision.
+#[cfg(any(target_arch = "wasm32", test))]
+static SURFACE_TYPE_BITS: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<u32, u32>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// Surface types retail draws in the delayed alpha pass. `ConstructMesh`
+/// (acclient.c:455950-455968) maps Alpha|InvAlpha|Additive (0x10300) to mask 2,
+/// Base1ClipMap (0x4) to 8 and Translucent (0x10) to 4, and `DrawMesh` defers
+/// any subset whose mask meets `s_AlphaDelayMask` (= 14, acclient.c:45763).
+#[cfg(any(target_arch = "wasm32", test))]
+const SURFACE_TYPE_ALPHA_DELAYED: u32 = 0x0001_0300 | 0x4 | 0x10;
+
+/// Prime [`SURFACE_TYPE_BITS`] for a part's surface table. No-op unless
+/// `?negFace=retail` (the default path reads nothing extra). Tex-swap aliases
+/// need no entry of their own: they resolve to a base in this same table.
+#[cfg(any(target_arch = "wasm32", test))]
+fn prime_surface_types<S: holtburger_dat::ResourceSource + ?Sized>(source: &S, surfaces: &[u32]) {
+    if !neg_face_retail_enabled() {
+        return;
+    }
+    for did in surfaces.iter().copied() {
+        if did == 0 || SURFACE_TYPE_BITS.read().map(|m| m.contains_key(&did)).unwrap_or(false) {
+            continue;
+        }
+        // A miss is not cached, so a record that arrives later is still read.
+        let Ok(bytes) =
+            source.get_file_by_key(holtburger_dat::ResourceKey::new("eor/portal", did))
+        else {
+            continue;
+        };
+        let Ok(surf) = holtburger_dat::file_type::Surface::unpack(&bytes) else {
+            continue;
+        };
+        if let Ok(mut m) = SURFACE_TYPE_BITS.write() {
+            m.insert(did, surf.surface_type);
+        }
+    }
+}
+
+/// The primed `type` bits of the Surface a triangle draws with. A tex-swap
+/// alias reads its BASE record — render state stays the base's
+/// (`fetch_surface_pixels_impl`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_type_bits(did: u32) -> Option<u32> {
+    let base = resolve_tex_swap_alias(did).map_or(did, |(base, _)| base);
+    SURFACE_TYPE_BITS.read().ok()?.get(&base).copied()
+}
+
 /// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
 /// `(part_rot, part_offset)`, and append to `tris`. Mirrors the C#
 /// `AppendGfxTris` line-for-line. Equivalent to the
@@ -7248,6 +7934,10 @@ fn append_gfx_tris_with_tex_swaps(
     const CULL_CLOCKWISE: i32 = 0x2;
     // Resolved once per model, not per polygon.
     let relief_cfg = gfx_relief_config();
+    // dat-parser-2 `?negFace=retail` (see `parse_neg_face_retail_flag`); both
+    // false by default, which leaves every branch below on its old path.
+    let neg_face_retail = neg_face_retail_enabled();
+    let neg_front_copy = neg_face_retail && neg_face_per_poly_cull_enabled();
 
     // Sort polygon ids for deterministic output (HashMap iteration is
     // not stable; PIXI.Mesh draw order matches whatever order we feed
@@ -7257,8 +7947,12 @@ fn append_gfx_tris_with_tex_swaps(
     for pid in poly_ids {
         let poly: &Polygon = &gfx.polygons[&pid];
         if poly.vertex_ids.len() < 3 { continue; }
-        // Skip "no positive surface" polygons — same as C# `NoPos` skip.
-        if (poly.stippling & NO_POS) != 0 { continue; }
+        // `NoPos` (0x4) means NO POSITIVE UV INDICES (acclient.c:359869
+        // `CPolygon::UnPack` reads `pos_uv_indices` only when !(stippling & 4)),
+        // not "no positive surface". The default path skips these polys, as the
+        // C# reference does; `?negFace=retail` keeps the textured ones (below).
+        let no_pos = (poly.stippling & NO_POS) != 0;
+        if no_pos && !neg_face_retail { continue; }
 
         let raw_pos_surface_did = if poly.pos_surface >= 0
             && (poly.pos_surface as usize) < gfx.surfaces.len()
@@ -7280,6 +7974,17 @@ fn append_gfx_tris_with_tex_swaps(
         let pos_surface_did = tex_swaps
             .iter()
             .fold(raw_pos_surface_did, |did, (old, new)| if did == *old { *new } else { did });
+        // `?negFace=retail`: a NoPos poly draws (UV slot 0 — `pos_uv_indices`
+        // is empty) only on a textured pos surface: `DrawPolyInternal`
+        // (acclient.c:455306) and `DrawMesh`'s building/EnvCell rule
+        // (acclient.c:455172) both drop untextured ones. Unknown type → skip.
+        if no_pos
+            && !surface_type_bits(pos_surface_did).is_some_and(|t| {
+                (t & holtburger_dat::file_type::surface::SURFACE_TYPE_TEXTURE_MASK) != 0
+            })
+        {
+            continue;
+        }
 
         // Two-sided detection. The parser populates `neg_uv_indices`
         // only when `sides_type == 0x2 && (stippling & NoNeg) == 0`.
@@ -7311,9 +8016,37 @@ fn append_gfx_tris_with_tex_swaps(
         // differs from the front. When `neg_surface_did == pos_surface_did`,
         // a single DoubleSide draw is cheaper; the materials.js decoder
         // applies DoubleSide as the default for the front-face tri.
-        let emit_back_face = has_back_face
+        // `?negFace=retail`: never — retail has no reversed neg winding.
+        let emit_back_face = !neg_face_retail
+            && has_back_face
             && neg_surface_did != 0
             && neg_surface_did != pos_surface_did;
+        // `?negFace=retail` + `?perPolyCull=on`: retail's same-winding neg copy
+        // (ConstructMesh side 1 — emitted whatever the NoNeg bit, UVs then
+        // from slot 0) sits in batch `neg_surface`. When that batch draws
+        // BEFORE the pos batch and neither is alpha-delayed, DEPTHTEST_LESS
+        // keeps it and the coplanar pos face never lands, so the poly shows
+        // its neg side from the front. Emitting only the copy reproduces that
+        // without depending on three.js material order. `0` = rule not met
+        // (always, by default).
+        let front_copy_neg_did = if neg_front_copy
+            && poly.sides_type == CULL_CLOCKWISE
+            && poly.neg_surface >= 0
+            && poly.neg_surface < poly.pos_surface
+            && (poly.neg_surface as usize) < gfx.surfaces.len()
+            && pos_surface_did != 0
+        {
+            let did = tex_swaps.iter().fold(
+                gfx.surfaces[poly.neg_surface as usize],
+                |did, (old, new)| if did == *old { *new } else { did },
+            );
+            let opaque = |d: u32| {
+                surface_type_bits(d).is_some_and(|t| (t & SURFACE_TYPE_ALPHA_DELAYED) == 0)
+            };
+            if did != 0 && opaque(did) && opaque(pos_surface_did) { did } else { 0 }
+        } else {
+            0
+        };
 
         // Resolve ring of (position, pos_uv, neg_uv, normal) per vertex.
         let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
@@ -7339,7 +8072,9 @@ fn append_gfx_tris_with_tex_swaps(
             } else {
                 [vert.uvs[uv_pos_idx].u, vert.uvs[uv_pos_idx].v]
             };
-            let uv_neg = if emit_back_face && i < poly.neg_uv_indices.len() {
+            let uv_neg = if (emit_back_face || front_copy_neg_did != 0)
+                && i < poly.neg_uv_indices.len()
+            {
                 let mut uv_neg_idx = poly.neg_uv_indices[i] as usize;
                 if uv_neg_idx >= vert.uvs.len() {
                     uv_neg_idx = 0;
@@ -7349,6 +8084,9 @@ fn append_gfx_tris_with_tex_swaps(
                 } else {
                     [vert.uvs[uv_neg_idx].u, vert.uvs[uv_neg_idx].v]
                 }
+            } else if front_copy_neg_did != 0 && !vert.uvs.is_empty() {
+                // NoNeg (0x8): no neg UV table, so ConstructMesh reads slot 0.
+                [vert.uvs[0].u, vert.uvs[0].v]
             } else {
                 [0.0, 0.0]
             };
@@ -7385,6 +8123,24 @@ fn append_gfx_tris_with_tex_swaps(
             let n0 = ring_normal[0].unwrap_or(face);
             let n1 = ring_normal[i - 1].unwrap_or(face);
             let n2 = ring_normal[i].unwrap_or(face);
+            // `?negFace=retail` front-copy rule (`front_copy_neg_did`): the
+            // same-winding neg copy — ABC order, neg UVs, normals x -1 as in
+            // ConstructMesh's copyVert — stands in for the pos tri. Never by
+            // default.
+            let front_copy = front_copy_neg_did != 0;
+            if front_copy {
+                let neg = |v: [f32; 3]| [-v[0], -v[1], -v[2]];
+                tris.push(Tri {
+                    pos: [a, b, c],
+                    uv: [ring_uv_neg[0], ring_uv_neg[i - 1], ring_uv_neg[i]],
+                    normals: [neg(n0), neg(n1), neg(n2)],
+                    surface_did: front_copy_neg_did,
+                    sides_type: poly.sides_type as u8,
+                    polygon_id: pid,
+                    side_kind: SideKind::Negative,
+                    stippling: poly.stippling,
+                });
+            }
             // Per-texture 3D amplification. When relief is on and this
             // surface has a seam-height field, subdivide the triangle and
             // displace each sub-vertex outward by `amplitude * height(uv)`;
@@ -7402,7 +8158,7 @@ fn append_gfx_tris_with_tex_swaps(
             // Fine detail belongs in the (now seam-derived) normal map, which is
             // per-pixel and has no sampling floor.
             if let (Some(rcfg), Some(hf)) = (
-                relief_cfg.filter(|c| c.subdiv.level > 0),
+                relief_cfg.filter(|c| c.subdiv.level > 0 && !front_copy),
                 surface_height(pos_surface_did),
             ) {
                 use holtburger_dat::gfx_subdiv::{
@@ -7455,7 +8211,7 @@ fn append_gfx_tris_with_tex_swaps(
                     emitted = true;
                 }
             }
-            if !emitted {
+            if !emitted && !front_copy {
                 tris.push(Tri {
                     pos: [a, b, c],
                     uv: [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
@@ -7659,6 +8415,7 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
         None,
         |_pi, gfx, offset, rot, swaps| {
             prime_surface_heights(source, &gfx.surfaces);
+            prime_surface_types(source, &gfx.surfaces);
             append_gfx_tris_with_tex_swaps(tris, gfx, offset, rot, swaps);
         },
     )
@@ -7696,6 +8453,7 @@ fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
         |pi, gfx, offset, rot, swaps| {
             if let Some(slot) = buckets.get_mut(pi) {
                 prime_surface_heights(source, &gfx.surfaces);
+                prime_surface_types(source, &gfx.surfaces);
                 append_gfx_tris_with_tex_swaps(slot, gfx, offset, rot, swaps);
             }
         },
@@ -7788,6 +8546,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
                 // Append with identity so vertices stay part-local; the
                 // rest pose travels separately above.
                 prime_surface_heights(source, &gfx.surfaces);
+                prime_surface_types(source, &gfx.surfaces);
                 append_gfx_tris_with_tex_swaps(
                     slot,
                     gfx,
@@ -10238,6 +10997,13 @@ pub(crate) fn model_tri_cache_clear_all() -> u32 {
     if let Ok(mut m) = DID_DEGRADE_MEMO.lock() {
         m.clear();
     }
+    // render-perf-2: the entity-degrade memos are DAT-derived the same way.
+    if let Ok(mut m) = DEGRADE_BASE_GFX_MEMO.lock() {
+        m.clear();
+    }
+    if let Ok(mut m) = DEGRADE_LEVELS_MEMO.lock() {
+        m.clear();
+    }
     model_tri_cache().clear()
 }
 
@@ -10296,10 +11062,36 @@ fn model_tri_cache() -> std::sync::RwLockWriteGuard<'static, ModelTriLru> {
 /// (live symptom 2026-07-02: portal-space donut Setup 0x02000306 →
 /// triCount=0 → no portal animation). Counting misses at the source lets
 /// the memo insert require a fully-resident decode.
+///
+/// streaming-residency-3 (2026-10-13): a miss is a record that SHOULD have
+/// hydrated and didn't — the same rule as `DecodeAuditSource`. A
+/// catalog-PROVEN absence (`key_known_absent`: a loaded catalog that lists
+/// every record and lacks this key) will never arrive, so it is not a miss:
+/// a dangling part / degrade / surface ref no longer marks the model starved
+/// on every bake (3 wasted JS retry cycles + a partial-bake warn per
+/// landblock) or keeps it out of the memo. An unprovable key (catalog not
+/// loaded, v1 / convention-URL mode) still counts — absence and
+/// not-fetched-yet err identically there. Memos admitted on a proof cannot
+/// outlive it: `init_resource_source` re-init clears them
+/// (`model_tri_cache_clear_all`). `?provenAbsentExempt=off` restores
+/// count-every-Err.
 #[cfg(any(target_arch = "wasm32", test))]
 struct MissCountingSource<'a, S: ?Sized> {
     inner: &'a S,
     misses: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<S: holtburger_dat::ResourceSource + ?Sized> MissCountingSource<'_, S> {
+    /// Count a failed read unless the catalog proves the record absent (see
+    /// the type doc). Only consulted on the error path.
+    fn note_failed_read(&self, key: holtburger_dat::ResourceKey<'_>) {
+        if proven_absent_exempt_flag() && self.inner.key_known_absent(key) {
+            return;
+        }
+        self.misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -10312,8 +11104,7 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
     ) -> holtburger_dat::Result<Vec<u8>> {
         let r = self.inner.get_file_by_key(key);
         if r.is_err() {
-            self.misses
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.note_failed_read(key);
         }
         r
     }
@@ -10327,8 +11118,7 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
     ) -> holtburger_dat::Result<std::sync::Arc<Vec<u8>>> {
         let r = self.inner.get_file_shared(key);
         if r.is_err() {
-            self.misses
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.note_failed_read(key);
         }
         r
     }
@@ -10340,6 +11130,48 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
     }
     fn has_namespace(&self, namespace: &str) -> bool {
         self.inner.has_namespace(namespace)
+    }
+    /// Forward the provability probe (the trait default is `false`). Decode
+    /// impls run INSIDE this wrapper — relief priming
+    /// (`prime_surface_heights` → `fetch_surface_pixels_impl`) included — and
+    /// gate the R-7 surface negative-cache insert on it; unforwarded, that
+    /// insert could never fire on the model path.
+    fn key_known_absent(&self, key: holtburger_dat::ResourceKey<'_>) -> bool {
+        self.inner.key_known_absent(key)
+    }
+}
+
+/// streaming-residency-3: parse `?provenAbsentExempt`. DEFAULT-ON, off-escape:
+/// `provenAbsentExempt=off|0|false|no` makes `MissCountingSource` count every
+/// failed read again (catalog-proven absences included — the pre-2026-10-13
+/// rule).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_proven_absent_exempt_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "provenAbsentExempt=off"
+                | "provenAbsentExempt=0"
+                | "provenAbsentExempt=false"
+                | "provenAbsentExempt=no"
+        )
+    })
+}
+
+/// The `?provenAbsentExempt` gate, parsed once per wasm instance over the
+/// seeded `flag_search()` (the bake worker decodes models in its own
+/// instance). Native tests always take the default (ON).
+#[cfg(any(target_arch = "wasm32", test))]
+fn proven_absent_exempt_flag() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| parse_proven_absent_exempt_flag(&flag_search()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
     }
 }
 
@@ -10578,6 +11410,7 @@ fn triangulate_model_uncached<S: holtburger_dat::ResourceSource + ?Sized>(
                 .ok()?;
             let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
             prime_surface_heights(&counting, &gfx.surfaces);
+            prime_surface_types(&counting, &gfx.surfaces);
             append_gfx_tris(
                 &mut tris,
                 &gfx,
@@ -10716,17 +11549,29 @@ fn resolve_did_degrade_cached<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
 ) -> u32 {
-    if let Ok(m) = DID_DEGRADE_MEMO.lock() {
-        if let Some(&v) = m.get(&model_id) {
-            return v;
-        }
+    resolve_did_degrade_cached_checked(source, model_id).0
+}
+
+/// render-perf-2: [`resolve_did_degrade_cached`] that also says whether the
+/// answer is AUTHORITATIVE — a memo hit, or a lookup that read every record
+/// it needed. `(0, false)` means "a record was missing", which a caller that
+/// memoises the answer itself (the JS side of `entity_degrade_chain_id`)
+/// must not take for "no degrade chain".
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_did_degrade_cached_checked<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> (u32, bool) {
+    if let Some(v) = did_degrade_memo_get(model_id) {
+        return (v, true);
     }
     let counting = MissCountingSource {
         inner: source,
         misses: std::sync::atomic::AtomicU32::new(0),
     };
     let v = resolve_did_degrade(&counting, model_id);
-    if counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+    let complete = counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0;
+    if complete {
         if let Ok(mut m) = DID_DEGRADE_MEMO.lock() {
             if m.len() >= DID_DEGRADE_MEMO_CAP {
                 m.clear();
@@ -10734,7 +11579,214 @@ fn resolve_did_degrade_cached<S: holtburger_dat::ResourceSource + ?Sized>(
             m.insert(model_id, v);
         }
     }
+    (v, complete)
+}
+
+/// render-perf-2: memo-only probe of [`DID_DEGRADE_MEMO`] — reads no records,
+/// so an async caller can skip its prefetch walk on a hit.
+#[cfg(any(target_arch = "wasm32", test))]
+fn did_degrade_memo_get(model_id: u32) -> Option<u32> {
+    DID_DEGRADE_MEMO
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&model_id).copied())
+}
+
+/// render-perf-2: the full-detail GfxObj the entity degrade pick compares a
+/// band against — the GfxObj [`resolve_did_degrade`] resolved the chain FROM.
+/// A raw 0x01 GfxObj is its own base; a SINGLE-part 0x02 setup's base is
+/// `parts[0]`, the part the spawn's band pick swaps (entities.js
+/// `lodPartSwap`). Multi-part setups, other prefixes and failed reads → 0
+/// (none of them has a chain to pick from). Retail chains open with the base
+/// itself — 0x11000001 names its base 0x0100376A in bands 0 AND 1, and every
+/// chain-carrying GfxObj in the base portal.dat starts with band 0 = self —
+/// so a band naming this id is full detail, not a substitute.
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_degrade_base_gfx<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> u32 {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    match (model_id >> 24) as u8 {
+        0x01 => model_id,
+        0x02 => {
+            let Ok(bytes) =
+                source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+            else {
+                return 0;
+            };
+            let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                return 0;
+            };
+            // Same single-part guard as resolve_did_degrade (4453d5a5).
+            if setup.parts.len() != 1 {
+                return 0;
+            }
+            match setup.parts.first() {
+                Some(&part) if (part >> 24) as u8 == 0x01 => part,
+                _ => 0,
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// render-perf-2: memo of [`resolve_degrade_base_gfx`] for 0x02 setups (the
+/// only prefix that reads a record), stored only on a clean read — the same
+/// gate as [`DID_DEGRADE_MEMO`]. Cleared with the tri memo.
+#[cfg(any(target_arch = "wasm32", test))]
+static DEGRADE_BASE_GFX_MEMO: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u32, u32>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Memo-only probe of [`resolve_degrade_base_gfx`]: 0x01 and non-model ids
+/// answer without a record, 0x02 answers from [`DEGRADE_BASE_GFX_MEMO`].
+#[cfg(any(target_arch = "wasm32", test))]
+fn degrade_base_gfx_memo_get(model_id: u32) -> Option<u32> {
+    match (model_id >> 24) as u8 {
+        0x01 => Some(model_id),
+        0x02 => DEGRADE_BASE_GFX_MEMO
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&model_id).copied()),
+        _ => Some(0),
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_degrade_base_gfx_cached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> u32 {
+    if let Some(v) = degrade_base_gfx_memo_get(model_id) {
+        return v;
+    }
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
+    let v = resolve_degrade_base_gfx(&counting, model_id);
+    if counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        if let Ok(mut m) = DEGRADE_BASE_GFX_MEMO.lock() {
+            if m.len() >= DID_DEGRADE_MEMO_CAP {
+                m.clear();
+            }
+            m.insert(model_id, v);
+        }
+    }
     v
+}
+
+/// render-perf-2: parsed GfxObjDegradeInfo (0x11) levels keyed by chain id.
+/// Retail loads a part's chain once (`CPhysicsPart::LoadGfxObjArray`,
+/// acclient.c:314892) and picks a level with a pure function over it
+/// (`GfxObjDegradeInfo::get_degrade`, :332356); the T9 dynamic-LOD tick
+/// re-unpacked the record for every entity twice a second. Inserted only
+/// after a successful read + unpack. A chain is a handful of 20-byte levels
+/// and the base portal.dat has ~4.1k chain-carrying GfxObjs.
+#[cfg(any(target_arch = "wasm32", test))]
+static DEGRADE_LEVELS_MEMO: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<u32, Vec<holtburger_dat::file_type::GfxObjInfo>>,
+    >,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Bound on [`DEGRADE_LEVELS_MEMO`]: about twice the chains the base
+/// portal.dat holds; past it the map is dropped and refilled.
+#[cfg(any(target_arch = "wasm32", test))]
+const DEGRADE_LEVELS_MEMO_CAP: usize = 8_192;
+
+/// Pick from a memoised chain; `None` when `chain_id` is not memoised yet.
+#[cfg(any(target_arch = "wasm32", test))]
+fn degrade_levels_memo_pick(chain_id: u32, base_gfx: u32, distance: f32) -> Option<u32> {
+    let m = DEGRADE_LEVELS_MEMO.lock().ok()?;
+    let levels = m.get(&chain_id)?;
+    Some(pick_entity_degrade(levels, base_gfx, distance))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn degrade_levels_memo_insert(
+    chain_id: u32,
+    levels: Vec<holtburger_dat::file_type::GfxObjInfo>,
+) {
+    if let Ok(mut m) = DEGRADE_LEVELS_MEMO.lock() {
+        if m.len() >= DEGRADE_LEVELS_MEMO_CAP {
+            m.clear();
+        }
+        m.insert(chain_id, levels);
+    }
+}
+
+/// render-perf-2: the entity band pick as a pure function over a parsed
+/// chain. The first band whose `[min_dist, max_dist)` window holds `distance`
+/// wins (the pick `fetch_entity_degrade_for_distance` always made). A band
+/// that names the entity's own full-detail GfxObj (`base_gfx`) answers 0, so
+/// "base" and "same geometry" compare equal: crossing 0x11000001's 10 m edge
+/// (band 0 = the base 0x0100376A) no longer remove()+spawn()s the entity onto
+/// identical geometry. No band → 0 (full detail), unchanged here; clamping
+/// to the last drawable level past the final band is a separate, render-
+/// visible change.
+#[cfg(any(target_arch = "wasm32", test))]
+fn pick_entity_degrade(
+    levels: &[holtburger_dat::file_type::GfxObjInfo],
+    base_gfx: u32,
+    distance: f32,
+) -> u32 {
+    if !distance.is_finite() || distance <= 0.0 {
+        return 0;
+    }
+    for band in levels {
+        if distance >= band.min_dist && distance < band.max_dist {
+            return if band.gfx_obj_id == base_gfx { 0 } else { band.gfx_obj_id };
+        }
+    }
+    0
+}
+
+/// render-perf-2: memo-only entity pick — `Some` when the chain id, the base
+/// GfxObj and the chain's levels are all memoised (no record read, no
+/// prefetch round), else `None`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn entity_degrade_pick_memoized(setup_id: u32, distance: f32) -> Option<u32> {
+    let chain = did_degrade_memo_get(setup_id)?;
+    if chain == 0 {
+        return Some(0);
+    }
+    let base = degrade_base_gfx_memo_get(setup_id)?;
+    degrade_levels_memo_pick(chain, base, distance)
+}
+
+/// render-perf-2: the entity pick over RESIDENT records — chain id (cached
+/// resolver) → base GfxObj (cached) → levels (memo, else read + unpack +
+/// memoise) → [`pick_entity_degrade`]. Safe inside a prefetch walk closure:
+/// a missing record reads as 0 and is recorded for the next round, and none
+/// of the memos admit an answer built on a miss.
+#[cfg(any(target_arch = "wasm32", test))]
+fn entity_degrade_pick_resident<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    distance: f32,
+) -> u32 {
+    use holtburger_dat::file_type::GfxObjDegradeInfo;
+    use holtburger_dat::ResourceKey;
+    let chain = resolve_did_degrade_cached(source, setup_id);
+    if chain == 0 {
+        return 0;
+    }
+    let base = resolve_degrade_base_gfx_cached(source, setup_id);
+    if let Some(pick) = degrade_levels_memo_pick(chain, base, distance) {
+        return pick;
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", chain)) else {
+        return 0;
+    };
+    let Ok(di) = GfxObjDegradeInfo::unpack(&bytes) else {
+        return 0;
+    };
+    let pick = pick_entity_degrade(&di.degrades, base, distance);
+    degrade_levels_memo_insert(chain, di.degrades);
+    pick
 }
 
 /// Pack a triangle slice into the wasm-bindgen-friendly [`ModelMesh`]
@@ -13969,24 +15021,33 @@ mod tests_surface_walk_lite {
     }
 }
 
-// === Render-completeness audit (2026-05-29) — animated SurfaceTextures ===
+// === Render-completeness audit (2026-05-29) — "animated" SurfaceTextures ===
 //
-// A SurfaceTexture (0x05) holds a LIST of RenderSurface (0x06) ids. The
-// hot decode path (`fetch_surface_pixels_impl`) takes only `highest_res()`
-// (the last entry), so animated surfaces render frozen on one frame. In
-// ToD ~2284 SurfaceTextures hold 2 DISTINCT, same-dimension consecutive
-// frames (the classic AC water/lava/effect cycle); ~740 are `[id, id]`
-// duplicate no-ops, and any with differing dimensions are a mip stack (use
-// highest_res, NOT animation). This is an ADDITIVE second path — it does
-// NOT touch the hot single-frame decode, so non-animated surfaces (all
-// terrain/static/UI materials) are completely unaffected (zero blast
-// radius). JS cycles the decoded frames on the shared material's `.map`
-// (correct: all instances of an animated surface animate in sync).
+// ⚠ 2026-10-13 (dat-parser-1): the premise of this path is not retail. A
+// SurfaceTexture (0x05, retail `ImgTex`) lists 1 or 2 DETAIL LEVELS of one
+// image, not animation frames, and retail draws exactly one (acclient.c
+// `ImgTex::GetSurfaceDID`, :366232): 1 level → level[0]; 2 levels →
+// level[0] (the HiFi level from `client_highres.dat`) unless
+// `Render::ShouldDropHighDetail()` (:379978 — HiFi not on disk, or texture
+// detail lowered), then level[1]; any other count is a data error. No
+// retail path cycles levels. The "~2284 distinct pairs" once counted here
+// as water/lava frames are exactly the HiFi pairs: the degrade-chain audit
+// (WorldBuilder docs/dat-patch/reports/degrade-chain-audit-2026-08-17.md) measured
+// retail's 3,024 two-level lists as 2,284 with level[0] ABSENT from
+// client_portal.dat, 740 `[id, id]`, and 0 with two distinct
+// portal-resident levels; a HiFi level is also 2× its portal sibling, so it
+// fails the same-dimension check even when mounted. On a base-DAT bake this
+// path therefore never yields frames. The hot decode path
+// (`fetch_surface_pixels_impl`) takes `highest_res()` (the last entry =
+// retail's level without HiFi), which is correct and untouched. JS only
+// calls the export below under `?surfaceAnim=on` (scene3d/surface_anim_flag.js,
+// default OFF); kept for a live census before it is retired.
 
-/// Decoded frames of one animated surface. `pixels` is `frame_count`
+/// Decoded frames of one "animated" surface. `pixels` is `frame_count`
 /// concatenated RGBA8 buffers, each `width*height*4` bytes. `frame_count
-/// == 0` ⇒ the surface is NOT animated (single frame, duplicate frames, or
-/// a mip stack) — JS leaves it static.
+/// == 0` ⇒ nothing to cycle (single level, duplicate levels, a missing
+/// level, or levels of differing size — a retail detail pair) — JS leaves
+/// it static.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct SurfaceAnimFrames {
@@ -14010,10 +15071,12 @@ impl SurfaceAnimFrames {
     pub fn take_pixels(&mut self) -> Vec<u8> { std::mem::take(&mut self.pixels) }
 }
 
-/// Pure helper (native+test reachable): decode every frame of an animated
-/// surface. Returns `(width, height, Vec<rgba_per_frame>)`; an empty frame
-/// vec means "not animated" — single/duplicate frames, decode failure, or a
-/// dimension mismatch (mip stack, not animation). Fail-soft throughout.
+/// Pure helper (native+test reachable): decode every level of a surface's
+/// SurfaceTexture as a "frame". Returns `(width, height, Vec<rgba_per_frame>)`;
+/// an empty frame vec means "nothing to cycle" — single/duplicate levels, a
+/// level missing from the source (the HiFi level[0] on a base-DAT bake, which
+/// bails before anything is decoded), decode failure, or a dimension mismatch
+/// (a retail 2:1 detail pair). Fail-soft throughout.
 #[cfg(any(target_arch = "wasm32", test))]
 fn collect_surface_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -14046,8 +15109,11 @@ fn collect_surface_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         let (w, h) = tex.actual_dimensions();
         match dims {
             None => dims = Some((w, h)),
-            // Differing dimensions ⇒ a mip stack, not an animation. Bail to
-            // static (the hot path's highest_res handles those correctly).
+            // Differing dimensions ⇒ a retail detail pair (HiFi level[0] is
+            // 2× level[1]), not an animation. Bail to static (the hot path's
+            // highest_res handles those correctly). NB the previous level was
+            // already fully decoded by then — a wasted decode if HiFi is
+            // ever mounted.
             Some((dw, dh)) => {
                 if dw != w || dh != h {
                     return none;
@@ -14070,9 +15136,10 @@ fn collect_surface_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     (w, h, frames)
 }
 
-/// Wasm export: decode all animation frames of a surface (or report
-/// `frameCount == 0` when it isn't animated). JS calls this once per unique
-/// surface DID; on `frameCount >= 2` it slices `takePixels()` into N
+/// Wasm export: decode all "animation frames" of a surface (or report
+/// `frameCount == 0` when there is nothing to cycle). Under `?surfaceAnim=on`
+/// only (default OFF — see the block comment above), JS calls this once per
+/// unique surface DID; on `frameCount >= 2` it slices `takePixels()` into N
 /// DataTextures and cycles them on the shared material's `.map`.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchSurfaceAnimFrames)]
@@ -14104,6 +15171,259 @@ pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFr
         frame_count,
         pixels,
     })
+}
+
+/// dat-parser-1 (2026-10-13): a 2-level SurfaceTexture is a retail detail pair
+/// (acclient.c `ImgTex::GetSurfaceDID`), so every shape retail ships must come
+/// back from `collect_surface_anim_frames` with ZERO frames — which is what
+/// makes defaulting `?surfaceAnim` OFF invisible. Shapes per the degrade-chain
+/// audit: `[hifi_absent, base]` (2,284), `[id, id]` (740), and a mounted HiFi
+/// level that is 2× its sibling.
+#[cfg(test)]
+mod tests_surface_anim_detail_pair {
+    use super::collect_surface_anim_frames;
+    use holtburger_dat::{DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    const NS: &str = "eor/portal";
+
+    struct MockSource {
+        files: HashMap<u32, Vec<u8>>,
+    }
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files.get(&key.file_id).cloned().ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            namespace == NS
+        }
+    }
+
+    /// Logs every read, hits and misses alike.
+    struct ReadLog<'a> {
+        inner: &'a MockSource,
+        reads: Mutex<Vec<u32>>,
+    }
+    impl ResourceSource for ReadLog<'_> {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.reads.lock().unwrap().push(key.file_id);
+            self.inner.get_file_by_key(key)
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.inner.get_metadata_by_key(key)
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.inner.has_namespace(namespace)
+        }
+    }
+
+    // Wire-format packers (same layouts as tests_surface_walk_lite's).
+    /// `R8G8B8` (format 20, stored B,G,R) texture of `w`×`h` pixels, every
+    /// pixel `bgr`. Non-paletted, so no palette read follows it.
+    fn pack_rgb_texture(id: u32, w: i32, h: i32, bgr: [u8; 3]) -> Vec<u8> {
+        let px = (w * h) as usize;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&w.to_le_bytes());
+        buf.extend_from_slice(&h.to_le_bytes());
+        buf.extend_from_slice(&20u32.to_le_bytes());
+        buf.extend_from_slice(&((px * 3) as i32).to_le_bytes());
+        for _ in 0..px {
+            buf.extend_from_slice(&bgr);
+        }
+        buf
+    }
+    fn pack_surface_texture(id: u32, levels: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.push(0u8);
+        buf.extend_from_slice(&(levels.len() as i32).to_le_bytes());
+        for &t in levels {
+            buf.extend_from_slice(&t.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_textured_surface(surface_type: u32, tex_id: u32, pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&tex_id.to_le_bytes());
+        buf.extend_from_slice(&pal_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+
+    /// One Surface → one SurfaceTexture listing `levels`; `textures` are the
+    /// RESIDENT 0x06 records (a level not in it is absent from the source).
+    fn fixture(levels: &[u32], textures: &[(u32, Vec<u8>)]) -> MockSource {
+        let mut files: HashMap<u32, Vec<u8>> = HashMap::new();
+        files.insert(0x0800_B001, pack_textured_surface(0x2, 0x0500_B001, 0));
+        files.insert(0x0500_B001, pack_surface_texture(0x0500_B001, levels));
+        for (id, bytes) in textures {
+            files.insert(*id, bytes.clone());
+        }
+        MockSource { files }
+    }
+
+    fn run(src: &MockSource) -> ((u32, u32, Vec<Vec<u8>>), Vec<u32>) {
+        let log = ReadLog { inner: src, reads: Mutex::new(Vec::new()) };
+        let out = collect_surface_anim_frames(&log, 0x0800_B001);
+        (out, log.reads.into_inner().unwrap())
+    }
+
+    #[test]
+    fn hifi_absent_pair_yields_no_frames_and_never_reads_the_base_level() {
+        // Retail's dominant shape: level[0] lives in client_highres.dat (absent
+        // from a base-DAT bake), level[1] is the portal-resident base level.
+        let src = fixture(
+            &[0x0600_B0FF, 0x0600_B002],
+            &[(0x0600_B002, pack_rgb_texture(0x0600_B002, 1, 1, [1, 2, 3]))],
+        );
+        let ((w, h, frames), reads) = run(&src);
+        assert!(frames.is_empty(), "HiFi-absent pair must yield no frames");
+        assert_eq!((w, h), (0, 0));
+        // Bails on the level[0] miss: the base level is never read, so never
+        // decoded.
+        assert_eq!(reads, vec![0x0800_B001, 0x0500_B001, 0x0600_B0FF]);
+    }
+
+    #[test]
+    fn duplicate_pair_yields_no_frames() {
+        let src = fixture(
+            &[0x0600_B002, 0x0600_B002],
+            &[(0x0600_B002, pack_rgb_texture(0x0600_B002, 1, 1, [1, 2, 3]))],
+        );
+        let ((w, h, frames), reads) = run(&src);
+        assert!(frames.is_empty(), "[id, id] must yield no frames");
+        assert_eq!((w, h), (0, 0));
+        assert_eq!(reads, vec![0x0800_B001, 0x0500_B001], "no level is read");
+    }
+
+    #[test]
+    fn single_level_yields_no_frames() {
+        let src = fixture(
+            &[0x0600_B002],
+            &[(0x0600_B002, pack_rgb_texture(0x0600_B002, 1, 1, [1, 2, 3]))],
+        );
+        let ((_, _, frames), reads) = run(&src);
+        assert!(frames.is_empty());
+        assert_eq!(reads, vec![0x0800_B001, 0x0500_B001]);
+    }
+
+    #[test]
+    fn mounted_double_size_hifi_pair_yields_no_frames() {
+        // HiFi mounted: level[0] is 2× level[1] in each dimension. Fails the
+        // same-dimension check (after level[0] was decoded — the documented
+        // wasted decode).
+        let src = fixture(
+            &[0x0600_B001, 0x0600_B002],
+            &[
+                (0x0600_B001, pack_rgb_texture(0x0600_B001, 2, 2, [9, 9, 9])),
+                (0x0600_B002, pack_rgb_texture(0x0600_B002, 1, 1, [1, 2, 3])),
+            ],
+        );
+        let ((w, h, frames), reads) = run(&src);
+        assert!(frames.is_empty(), "2:1 detail pair must yield no frames");
+        assert_eq!((w, h), (0, 0));
+        assert_eq!(reads, vec![0x0800_B001, 0x0500_B001, 0x0600_B001, 0x0600_B002]);
+    }
+
+    #[test]
+    fn opt_in_path_still_decodes_two_distinct_same_size_resident_levels() {
+        // Positive control for `?surfaceAnim=on`: the shape retail never ships
+        // (0 of 3,024 in the audit) still decodes, in list order.
+        let src = fixture(
+            &[0x0600_B001, 0x0600_B002],
+            &[
+                (0x0600_B001, pack_rgb_texture(0x0600_B001, 1, 1, [0x10, 0x20, 0x30])),
+                (0x0600_B002, pack_rgb_texture(0x0600_B002, 1, 1, [0x40, 0x50, 0x60])),
+            ],
+        );
+        let ((w, h, frames), _) = run(&src);
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(frames.len(), 2);
+        // R8G8B8 is stored B,G,R → decoded R,G,B,A.
+        assert_eq!(frames[0], vec![0x30, 0x20, 0x10, 0xFF]);
+        assert_eq!(frames[1], vec![0x60, 0x50, 0x40, 0xFF]);
+    }
+
+    /// One-off census (`--ignored`; needs a real portal DAT): over EVERY 0x08
+    /// Surface, `collect_surface_anim_frames` must yield zero frames — i.e.
+    /// the default-OFF `?surfaceAnim` flip changes no pixel. Defaults to
+    /// `~/ac_base_dats/client_portal.dat`; point `HB_SURFACE_ANIM_CENSUS_DAT`
+    /// at the served eor-portal (bake-source.sha256) to census the bake.
+    /// Also prints the SurfaceTexture level-shape histogram for the ledger.
+    #[test]
+    #[ignore]
+    fn census_real_portal_yields_no_cycling_surfaces() {
+        use holtburger_dat::DatDatabase;
+        use holtburger_dat::file_type::SurfaceTexture;
+        let path = std::env::var("HB_SURFACE_ANIM_CENSUS_DAT").unwrap_or_else(|_| {
+            format!("{}/ac_base_dats/client_portal.dat", std::env::var("HOME").unwrap())
+        });
+        let portal = DatDatabase::new(&path).expect("open portal dat");
+        struct DatSrc(DatDatabase);
+        impl ResourceSource for DatSrc {
+            fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+                self.0.get_file(key.file_id)
+            }
+            fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, ns: &str) -> bool {
+                ns == NS
+            }
+        }
+        let mut ids: Vec<u32> = portal.files.keys().copied().collect();
+        ids.sort_unstable();
+        let src = DatSrc(portal);
+
+        // Level-shape histogram over every 0x05 SurfaceTexture.
+        let (mut one, mut dup, mut hifi_absent, mut two_resident, mut other) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        for &id in ids.iter().filter(|&&id| (id >> 24) == 0x05) {
+            let Ok(bytes) = src.0.get_file(id) else { continue };
+            let Ok(st) = SurfaceTexture::unpack(&bytes) else { continue };
+            match st.textures.as_slice() {
+                [_] => one += 1,
+                [a, b] if a == b => dup += 1,
+                [a, _] if !src.0.files.contains_key(a) => hifi_absent += 1,
+                [_, _] => two_resident += 1,
+                _ => other += 1,
+            }
+        }
+
+        // The actual gate: no Surface yields frames.
+        let mut surfaces = 0usize;
+        let mut cycling: Vec<u32> = Vec::new();
+        for &id in ids.iter().filter(|&&id| (id >> 24) == 0x08) {
+            surfaces += 1;
+            let (_, _, frames) = collect_surface_anim_frames(&src, id);
+            if !frames.is_empty() {
+                cycling.push(id);
+            }
+        }
+        println!(
+            "surface-anim census {path}: SurfaceTexture levels — 1:{one} [id,id]:{dup} \
+             [hifi_absent,base]:{hifi_absent} two-resident:{two_resident} other:{other}; \
+             {surfaces} Surfaces, {} yield frames",
+            cycling.len()
+        );
+        assert!(surfaces > 0, "no 0x08 Surfaces found in {path}");
+        assert!(
+            cycling.is_empty(),
+            "{} surfaces would cycle (first: {:08X?})",
+            cycling.len(),
+            &cycling[..cycling.len().min(16)]
+        );
+    }
 }
 
 /// SYNCHRONOUS memo-only accessor for one surface's decoded planes
@@ -15544,6 +16864,8 @@ pub async fn fetch_particle_degrade_distance(hw_gfx_obj_id: u32) -> Result<f32, 
 /// contains the input distance, returns 0 and the caller falls back
 /// to the original setup. Matches the statics path that already
 /// substitutes via `resolve_did_degrade` at spawn time.
+/// render-perf-2: a band naming the entity's own base GfxObj also
+/// returns 0 — same geometry IS full detail (`pick_entity_degrade`).
 ///
 /// Distance is in meters (camera-to-entity horizontal in AC world
 /// frame). 0.0 returns the original setup (no substitution); callers
@@ -15591,49 +16913,335 @@ async fn fetch_entity_degrade_for_distance_inner(
     setup_id: u32,
     distance: f32,
 ) -> Result<u32, JsValue> {
-    use holtburger_dat::{ResourceKey, ResourceSource};
-    use holtburger_dat::file_type::GfxObjDegradeInfo;
+    use holtburger_dat::ResourceKey;
     if !distance.is_finite() || distance <= 0.0 {
         return Ok(0);
     }
+    // render-perf-2 (2026-10-13): the T9 dynamic-LOD tick calls this for every
+    // entity twice a second. It ran the UNCACHED resolve_did_degrade twice per
+    // call (walk closure + final read: two SetupModel parses, plus a whole
+    // GfxObj for a single-part setup) and re-unpacked the GfxObjDegradeInfo
+    // every time. A warm setup now answers from the memos with no record read
+    // and no prefetch round; a band naming the base GfxObj answers 0 (see
+    // `pick_entity_degrade`).
+    if let Some(pick) = entity_degrade_pick_memoized(setup_id, distance) {
+        return Ok(pick);
+    }
     let source = global_source::global_source();
-    // Prefetch the source setup chain so resolve_did_degrade can walk
-    // SetupModel → first GfxObj. Matches the prefetch shape used by
-    // fetch_entity_animation_keyframes ahead of its own degrade reads.
+    // Prefetch the source setup chain so the resolvers can walk SetupModel →
+    // first GfxObj → GfxObjDegradeInfo. 2026-06-19: warm what the pick
+    // actually reads — for a 0x02 SetupModel it derives parts[0] (a 0x01
+    // GfxObj) and does a SECOND get_file_by_key on it, NOT covered by
+    // initial=[setup_id]; an empty closure left that part uncached and
+    // single-part setups with a real chain silently returned 0 (mirrors
+    // a0e0a0c1). The same walk now also discovers the chain record itself
+    // (it was a second ensure_walk_prefetched).
     let initial = [ResourceKey::new("eor/portal", setup_id)];
-    // 2026-06-19: warm what resolve_did_degrade actually reads. For a 0x02
-    // SetupModel it derives parts[0] (a 0x01 GfxObj) at bake time and does a SECOND
-    // get_file_by_key on it — NOT covered by initial=[setup_id]. The empty closure
-    // left that part uncached, so single-part 0x02 setups with a real degrade chain
-    // silently returned 0 (no LOD substitution). Running resolve_did_degrade in the
-    // walk touches the part too (mirrors a0e0a0c1). The degrade chain itself is
-    // still walked via initial2 below.
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-        let _ = resolve_did_degrade(s, setup_id);
+        let _ = entity_degrade_pick_resident(s, setup_id, distance);
     })
     .await?;
-    let degrade_id = resolve_did_degrade(source.as_ref(), setup_id);
-    if degrade_id == 0 {
-        return Ok(0);
+    Ok(entity_degrade_pick_resident(source.as_ref(), setup_id, distance))
+}
+
+/// render-perf-2 (2026-10-13): the setup's GfxObjDegradeInfo chain DID — the
+/// first thing [`fetch_entity_degrade_for_distance`] resolves — so JS can drop
+/// an entity that can never substitute from the T9 dynamic-LOD tick instead
+/// of band-querying it twice a second. 0 = no chain: the part carries no
+/// `did_degrade`, the setup is MULTI-part (`resolve_did_degrade`'s
+/// `parts.len() != 1` bail — most creatures), or the id is not a model.
+/// Rejects when a record could not be read, so a missing record is never
+/// memoised JS-side as "no chain".
+///
+/// ADDITIVE export: the JS caller (entities.js `_gateLodChain`) is
+/// typeof-guarded, so a stale pkg/ keeps the per-tick query for every entity.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn entity_degrade_chain_id(setup_id: u32) -> Result<u32, JsValue> {
+    use holtburger_dat::ResourceKey;
+    if let Some(v) = did_degrade_memo_get(setup_id) {
+        return Ok(v);
     }
-    // Prefetch the chain itself before unpack — the source might not
-    // have walked into it during the setup-only prefetch above.
-    let initial2 = [ResourceKey::new("eor/portal", degrade_id)];
-    prefetch::ensure_walk_prefetched(&source, &initial2, |_| {}).await?;
-    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", degrade_id)) {
-        Ok(b) => b,
-        Err(_) => return Ok(0),
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = resolve_did_degrade_cached(s, setup_id);
+    })
+    .await?;
+    match resolve_did_degrade_cached_checked(source.as_ref(), setup_id) {
+        (v, true) => Ok(v),
+        (_, false) => Err(JsValue::from_str(
+            "entity_degrade_chain_id: a degrade record is not resident",
+        )),
+    }
+}
+
+/// render-perf-2 — the entity degrade pick + its memos (native; the wasm
+/// entry points above are thin async shells around these).
+#[cfg(test)]
+mod render_perf_2_entity_degrade_tests {
+    use super::*;
+    use holtburger_common::properties::GfxObjFlags;
+    use holtburger_common::{Sphere, Vector3};
+    use holtburger_dat::file_type::{GfxObj, GfxObjDegradeInfo, SetupModel};
+    use holtburger_dat::graphics::CVertexArray;
+    use holtburger_dat::{
+        DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult,
     };
-    let di = match GfxObjDegradeInfo::unpack(&bytes) {
-        Ok(d) => d,
-        Err(_) => return Ok(0),
-    };
-    for band in &di.degrades {
-        if distance >= band.min_dist && distance < band.max_dist {
-            return Ok(band.gfx_obj_id);
+    use std::collections::HashMap;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Retail GfxObjDegradeInfo 0x11000001, first two levels (count patched
+    /// to 2) — the real bytes pinned in holtburger-dat degrade_info.rs. Both
+    /// levels name 0x0100376A, the base GfxObj itself.
+    const DEGRADE_0X11000001_2: &[u8] = &[
+        0x01, 0x00, 0x00, 0x11, // id
+        0x02, 0x00, 0x00, 0x00, // num_degrades = 2
+        // level 0: GfxObj 0x0100376A, mode 1, 10 / 25 / 50 m
+        0x6A, 0x37, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x20, 0x41, // 10.0
+        0x00, 0x00, 0xC8, 0x41, // 25.0
+        0x00, 0x00, 0x48, 0x42, // 50.0
+        // level 1: same GfxObj, 25 / 50 / 100 m
+        0x6A, 0x37, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0xC8, 0x41, // 25.0
+        0x00, 0x00, 0x48, 0x42, // 50.0
+        0x00, 0x00, 0xC8, 0x42, // 100.0
+    ];
+    const BASE_0X0100376A: u32 = 0x0100_376A;
+
+    struct CountingSource {
+        files: HashMap<u32, Vec<u8>>,
+        reads: AtomicU32,
+    }
+
+    impl CountingSource {
+        fn new(files: HashMap<u32, Vec<u8>>) -> Self {
+            Self { files, reads: AtomicU32::new(0) }
+        }
+        fn reads(&self) -> u32 {
+            self.reads.load(Ordering::Relaxed)
         }
     }
-    Ok(0)
+
+    impl ResourceSource for CountingSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.files
+                .get(&key.file_id)
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files
+                .get(&key.file_id)
+                .map(|data| FileMetadata { id: key.file_id, size: data.len() as u32, is_pruned: false })
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            namespace == "eor/portal"
+        }
+    }
+
+    fn gfx_with_degrade(id: u32, degrade: Option<u32>) -> Vec<u8> {
+        let gfx = GfxObj {
+            id,
+            flags: GfxObjFlags::empty(),
+            surfaces: vec![],
+            vertex_array: CVertexArray { vertex_type: 1, vertices: HashMap::new() },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons: HashMap::new(),
+            drawing_bsp: None,
+            did_degrade: degrade,
+        };
+        let mut data = Vec::new();
+        gfx.pack(&mut Cursor::new(&mut data)).unwrap();
+        data
+    }
+
+    fn setup_with_parts(setup_id: u32, parts: &[u32]) -> Vec<u8> {
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: parts.to_vec(),
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut data = Vec::new();
+        setup.pack(&mut Cursor::new(&mut data)).unwrap();
+        data
+    }
+
+    fn levels_0x11000001() -> Vec<holtburger_dat::file_type::GfxObjInfo> {
+        GfxObjDegradeInfo::unpack(DEGRADE_0X11000001_2)
+            .expect("real 0x11000001 prefix parses")
+            .degrades
+    }
+
+    /// 0x11000001: 5 m is inside no band (full detail, 0); 12 m and 30 m pick
+    /// level 0 and 75 m picks level 1 — both the base 0x0100376A, so all
+    /// answer 0 ("same geometry" == "base"). Past the last band stays 0.
+    #[test]
+    fn pick_entity_degrade_collapses_bands_naming_the_base() {
+        let levels = levels_0x11000001();
+        assert_eq!(levels.len(), 2);
+        for d in [5.0f32, 12.0, 30.0, 75.0, 150.0] {
+            assert_eq!(
+                pick_entity_degrade(&levels, BASE_0X0100376A, d),
+                0,
+                "{d} m: a band naming the base GfxObj must answer 0"
+            );
+        }
+        assert_eq!(pick_entity_degrade(&levels, BASE_0X0100376A, 0.0), 0);
+        assert_eq!(pick_entity_degrade(&levels, BASE_0X0100376A, f32::NAN), 0);
+        assert_eq!(pick_entity_degrade(&levels, BASE_0X0100376A, f32::INFINITY), 0);
+    }
+
+    /// A band naming a DIFFERENT GfxObj is still returned verbatim, with the
+    /// unchanged first-band-wins `[min, max)` window.
+    #[test]
+    fn pick_entity_degrade_keeps_real_substitutes() {
+        let levels = levels_0x11000001();
+        let other_base: u32 = 0x0100_0001;
+        assert_eq!(pick_entity_degrade(&levels, other_base, 5.0), 0, "below band 0");
+        assert_eq!(pick_entity_degrade(&levels, other_base, 12.0), BASE_0X0100376A);
+        assert_eq!(pick_entity_degrade(&levels, other_base, 49.9), BASE_0X0100376A);
+        assert_eq!(pick_entity_degrade(&levels, other_base, 50.0), BASE_0X0100376A, "band 1");
+        assert_eq!(pick_entity_degrade(&levels, other_base, 100.0), 0, "max is exclusive");
+    }
+
+    #[test]
+    fn degrade_base_gfx_resolves_what_the_chain_was_resolved_from() {
+        let single: u32 = 0x02F2_0001;
+        let multi: u32 = 0x02F2_0002;
+        let part_a: u32 = 0x01F2_0001;
+        let part_b: u32 = 0x01F2_0002;
+        let mut files = HashMap::new();
+        files.insert(single, setup_with_parts(single, &[part_a]));
+        files.insert(multi, setup_with_parts(multi, &[part_a, part_b]));
+        let src = CountingSource::new(files);
+        assert_eq!(resolve_degrade_base_gfx(&src, single), part_a, "single-part -> parts[0]");
+        assert_eq!(resolve_degrade_base_gfx(&src, multi), 0, "multi-part -> 0");
+        assert_eq!(resolve_degrade_base_gfx(&src, part_b), part_b, "raw GfxObj is its own base");
+        assert_eq!(resolve_degrade_base_gfx(&src, 0x0D00_0001), 0, "not a model");
+        assert_eq!(resolve_degrade_base_gfx(&src, 0x02F2_00FF), 0, "missing setup");
+    }
+
+    /// The memoised resolvers are hit on the second call: no record is read
+    /// again for the chain id or the base GfxObj.
+    #[test]
+    fn degrade_resolvers_memo_hit_on_second_call() {
+        let setup_id: u32 = 0x02F2_0010;
+        let part: u32 = 0x01F2_0010;
+        let chain: u32 = 0x11F2_0010;
+        let mut files = HashMap::new();
+        files.insert(setup_id, setup_with_parts(setup_id, &[part]));
+        files.insert(part, gfx_with_degrade(part, Some(chain)));
+        let src = CountingSource::new(files);
+
+        assert_eq!(resolve_did_degrade_cached(&src, setup_id), chain);
+        assert_eq!(resolve_degrade_base_gfx_cached(&src, setup_id), part);
+        let after_first = src.reads();
+        assert!(after_first >= 3, "first calls read setup + part (+ setup again for the base)");
+        assert_eq!(resolve_did_degrade_cached(&src, setup_id), chain);
+        assert_eq!(resolve_degrade_base_gfx_cached(&src, setup_id), part);
+        assert_eq!(src.reads(), after_first, "second calls must be memo hits");
+        assert_eq!(resolve_did_degrade_cached_checked(&src, setup_id), (chain, true));
+    }
+
+    /// An incomplete lookup is reported as such and memoised by nobody.
+    #[test]
+    fn checked_resolver_reports_incomplete_lookups() {
+        let setup_id: u32 = 0x02F2_0020;
+        let part: u32 = 0x01F2_0020;
+        let mut files = HashMap::new();
+        files.insert(setup_id, setup_with_parts(setup_id, &[part]));
+        let partial = CountingSource::new(files.clone());
+        assert_eq!(resolve_did_degrade_cached_checked(&partial, setup_id), (0, false));
+        assert_eq!(did_degrade_memo_get(setup_id), None, "a miss must not be memoised");
+
+        files.insert(part, gfx_with_degrade(part, None));
+        let full = CountingSource::new(files);
+        assert_eq!(
+            resolve_did_degrade_cached_checked(&full, setup_id),
+            (0, true),
+            "a part without did_degrade is an authoritative no-chain"
+        );
+    }
+
+    /// The whole entity pipeline over resident records — chain id → base →
+    /// levels → pick — and the memo-only fast path the async export takes on
+    /// the next tick. Multi-part setups answer 0 without touching a chain.
+    #[test]
+    fn entity_degrade_pick_resident_then_memoized() {
+        let setup_id: u32 = 0x02F2_0030;
+        let chain: u32 = 0x11F2_0030;
+        let mut files = HashMap::new();
+        files.insert(setup_id, setup_with_parts(setup_id, &[BASE_0X0100376A]));
+        files.insert(BASE_0X0100376A, gfx_with_degrade(BASE_0X0100376A, Some(chain)));
+        files.insert(chain, DEGRADE_0X11000001_2.to_vec());
+        let src = CountingSource::new(files);
+
+        assert_eq!(entity_degrade_pick_memoized(setup_id, 12.0), None, "cold");
+        assert_eq!(entity_degrade_pick_resident(&src, setup_id, 12.0), 0, "band 0 = base");
+        let warm_reads = src.reads();
+        for d in [5.0f32, 12.0, 30.0, 75.0] {
+            assert_eq!(entity_degrade_pick_memoized(setup_id, d), Some(0), "{d} m");
+            assert_eq!(entity_degrade_pick_resident(&src, setup_id, d), 0, "{d} m");
+        }
+        assert_eq!(src.reads(), warm_reads, "warm picks read no records");
+
+        let multi: u32 = 0x02F2_0031;
+        let mut mfiles = HashMap::new();
+        mfiles.insert(multi, setup_with_parts(multi, &[0x01F2_0031, 0x01F2_0032]));
+        let msrc = CountingSource::new(mfiles);
+        assert_eq!(entity_degrade_pick_resident(&msrc, multi, 12.0), 0);
+        assert_eq!(entity_degrade_pick_memoized(multi, 12.0), Some(0), "chainless is memoised");
+    }
+
+    /// A chain whose level names a different GfxObj still substitutes, and a
+    /// missing chain record answers 0 without poisoning the levels memo.
+    #[test]
+    fn entity_degrade_pick_resident_substitutes_and_skips_missing_chain() {
+        let setup_id: u32 = 0x02F2_0040;
+        let part: u32 = 0x01F2_0040;
+        let chain: u32 = 0x11F2_0040;
+        let mut files = HashMap::new();
+        files.insert(setup_id, setup_with_parts(setup_id, &[part]));
+        files.insert(part, gfx_with_degrade(part, Some(chain)));
+        let no_chain = CountingSource::new(files.clone());
+        assert_eq!(entity_degrade_pick_resident(&no_chain, setup_id, 12.0), 0);
+        assert_eq!(degrade_levels_memo_pick(chain, part, 12.0), None, "missing chain not memoised");
+
+        files.insert(chain, DEGRADE_0X11000001_2.to_vec());
+        let full = CountingSource::new(files);
+        assert_eq!(
+            entity_degrade_pick_resident(&full, setup_id, 12.0),
+            BASE_0X0100376A,
+            "a level naming another GfxObj is a real substitute"
+        );
+        assert_eq!(entity_degrade_pick_memoized(setup_id, 75.0), Some(BASE_0X0100376A));
+        assert_eq!(entity_degrade_pick_memoized(setup_id, 5.0), Some(0));
+    }
 }
 
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
@@ -15931,6 +17539,678 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             #[cfg(not(target_arch = "wasm32"))]
             let _ = &e;
             empty
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// models-camera-3 Step 0 (2026-10-13): the retail part-palette-match census.
+//
+// Retail recolours a part only when it was authored on the ObjDesc palette:
+// - `CPartArray::DoObjDescChanges` calls `SetPalette` only when there are
+//   subpalettes (acclient.c:326721).
+// - `CPartArray::SetPalette` returns on a null PaletteID (:326467) and
+//   `UsePalette`s only the parts whose `CPhysicsPart::original_palette_id ==
+//   palID` (:326505).
+// - `CPhysicsPart::DetermineBasePal` (:314865) takes that id from the part
+//   GfxObj's FIRST surface with a non-zero `CSurface::orig_palette_id`.
+//   `SetGfxObjArray` re-runs it (:315287), so AnimPartChange swaps count.
+// - That surface id is the DAT `Surface.OrigPaletteId` (`CSurface::Serialize`
+//   :358266), UNLESS the texture is paletted. `CSurface::InitEnd` (:358180-
+//   358191) reads `ImgTex+104` (= `m_pPalette`, which
+//   `ImgTex::CreateFromRenderSurface_Internal` :366387 loads from the
+//   RenderSurface's palette DID). On SurfaceInitLoading it overwrites
+//   `orig_palette_id` with that palette's DID. (`ImgTex+40` is
+//   `DBObj::m_DID`, the SurfaceTexture DID, stored to `indexed_texture_id`.)
+//
+// Holtburger composes EVERY surface of a recoloured rig
+// (`fetch_entity_surface_pixels_impl` puts the base override on all of
+// them). So a paletted surface is recoloured where retail leaves it alone
+// when it sits on a part whose original palette != PaletteID, or when the
+// PaletteID is 0 but subpalettes exist. This module pins the retail
+// predicate and holds the `--ignored` census that sizes that gap before any
+// `?palPartMatch` work (verifier Step B) is justified. No runtime code reads
+// these helpers.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests_pal_part_match_census {
+    use holtburger_dat::file_type::{
+        CharGen, ClothingTable, GfxObj, SetupModel, Surface, SurfaceTexture, Texture,
+    };
+    use holtburger_dat::{DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult};
+    use std::collections::{HashMap, HashSet};
+
+    const NS: &str = "eor/portal";
+
+    /// The palette DID that retail's `ImgTex` for a SurfaceTexture carries: the
+    /// RenderSurface palette, once `DBObj::Get` has loaded it. The level is
+    /// `highest_res()`, i.e. `ImgTex::GetSurfaceDID` without client_highres
+    /// (`ImgTex::InitLoad`). Returns `None` for a non-paletted level, a missing
+    /// level, or a Palette record that fails to load (`m_pPalette` stays null).
+    fn imgtex_palette_id<S: ResourceSource + ?Sized>(source: &S, surface_texture_id: u32) -> Option<u32> {
+        let st_bytes = source.get_file_by_key(ResourceKey::new(NS, surface_texture_id)).ok()?;
+        let st = SurfaceTexture::unpack(&st_bytes).ok()?;
+        let level = st.highest_res()?;
+        let tex_bytes = source.get_file_by_key(ResourceKey::new(NS, level)).ok()?;
+        let tex = Texture::unpack(&tex_bytes).ok()?;
+        let palette_id = tex.default_palette_id.filter(|&p| p != 0)?;
+        source.get_file_by_key(ResourceKey::new(NS, palette_id)).ok()?;
+        Some(palette_id)
+    }
+
+    /// `CSurface::orig_palette_id` after load. It is the DAT
+    /// `Surface.OrigPaletteId` (read only for Base1Image | Base1ClipMap
+    /// surfaces), overwritten by the ImgTex palette when the texture is
+    /// paletted (`CSurface::InitEnd`, SurfaceInitLoading). A solid, missing
+    /// or unparseable surface gives 0.
+    fn retail_surface_original_palette_id<S: ResourceSource + ?Sized>(source: &S, surface_did: u32) -> u32 {
+        let Ok(bytes) = source.get_file_by_key(ResourceKey::new(NS, surface_did)) else {
+            return 0;
+        };
+        let Ok(surface) = Surface::unpack(&bytes) else {
+            return 0;
+        };
+        let Some((surface_texture_id, dat_palette_id)) = surface.textured() else {
+            return 0;
+        };
+        imgtex_palette_id(source, surface_texture_id).unwrap_or(dat_palette_id)
+    }
+
+    /// `CPhysicsPart::DetermineBasePal`: the first surface, in GfxObj order,
+    /// with a non-zero original palette, else 0.
+    fn retail_part_original_palette_id<S: ResourceSource + ?Sized>(source: &S, surface_dids: &[u32]) -> u32 {
+        surface_dids
+            .iter()
+            .map(|&did| retail_surface_original_palette_id(source, did))
+            .find(|&pal| pal != 0)
+            .unwrap_or(0)
+    }
+
+    /// `CPartArray::DoObjDescChanges` → `SetPalette`: does this part take the
+    /// ObjDesc's composite palette?
+    fn retail_part_takes_objdesc_palette(part_original_palette_id: u32, palette_id: u32, has_subpalettes: bool) -> bool {
+        has_subpalettes && palette_id != 0 && part_original_palette_id == palette_id
+    }
+
+    /// Does holtburger's composed decode run its palette closure for this
+    /// surface? That closure is the only place the base/subpalette override
+    /// changes pixels. Mirrors `fetch_entity_surface_pixels_impl`: the surface
+    /// is textured and its `highest_res()` level is P8/Index16 (`has_palette`).
+    fn holtburger_surface_is_paletted<S: ResourceSource + ?Sized>(source: &S, surface_did: u32) -> bool {
+        let Ok(bytes) = source.get_file_by_key(ResourceKey::new(NS, surface_did)) else {
+            return false;
+        };
+        let Ok(surface) = Surface::unpack(&bytes) else {
+            return false;
+        };
+        let Some((surface_texture_id, _)) = surface.textured() else {
+            return false;
+        };
+        let Ok(st_bytes) = source.get_file_by_key(ResourceKey::new(NS, surface_texture_id)) else {
+            return false;
+        };
+        let Ok(st) = SurfaceTexture::unpack(&st_bytes) else {
+            return false;
+        };
+        let Some(level) = st.highest_res() else {
+            return false;
+        };
+        let Ok(tex_bytes) = source.get_file_by_key(ResourceKey::new(NS, level)) else {
+            return false;
+        };
+        Texture::unpack(&tex_bytes).map(|t| t.format().needs_palette()).unwrap_or(false)
+    }
+
+    // --- fixtures (same wire packers as tests_surface_cache) ----------------
+
+    struct MockSource {
+        files: HashMap<u32, Vec<u8>>,
+    }
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files.get(&key.file_id).cloned().ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            namespace == NS
+        }
+    }
+
+    fn pack_palette(id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&16i32.to_le_bytes());
+        for i in 0..16u32 {
+            buf.extend_from_slice(&(0xFF00_0000 | (i * 0x0001_0101)).to_le_bytes());
+        }
+        buf
+    }
+    fn pack_texture_1x1(id: u32, format: u32, data: &[u8], default_palette_id: Option<u32>) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&format.to_le_bytes());
+        buf.extend_from_slice(&(data.len() as i32).to_le_bytes());
+        buf.extend_from_slice(data);
+        if let Some(pal) = default_palette_id {
+            buf.extend_from_slice(&pal.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_surface_texture(id: u32, level: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.push(0u8);
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&level.to_le_bytes());
+        buf
+    }
+    fn pack_textured_surface(surface_type: u32, surface_texture_id: u32, orig_palette_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&surface_texture_id.to_le_bytes());
+        buf.extend_from_slice(&orig_palette_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+    fn pack_solid_surface(argb: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x1u32.to_le_bytes());
+        buf.extend_from_slice(&argb.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+
+    /// The texture's own palette (what the ImgTex carries).
+    const PAL_TEX: u32 = 0x0400_C301;
+    /// A different palette written into `Surface.OrigPaletteId`.
+    const PAL_DAT: u32 = 0x0400_C302;
+    /// A P8 default palette with no Palette record.
+    const PAL_ABSENT: u32 = 0x0400_C3FF;
+    /// P8 texture, DAT OrigPaletteId = PAL_DAT.
+    const SURF_P8: u32 = 0x0800_C301;
+    /// R8G8B8 texture, DAT OrigPaletteId = PAL_DAT.
+    const SURF_RGB_PAL: u32 = 0x0800_C302;
+    /// R8G8B8 texture, DAT OrigPaletteId = 0.
+    const SURF_RGB: u32 = 0x0800_C303;
+    const SURF_SOLID: u32 = 0x0800_C304;
+    /// ClipMap P8 texture whose default palette record is absent.
+    const SURF_P8_NO_PAL_RECORD: u32 = 0x0800_C305;
+
+    fn fixture() -> MockSource {
+        let mut files = HashMap::new();
+        files.insert(PAL_TEX, pack_palette(PAL_TEX));
+        files.insert(PAL_DAT, pack_palette(PAL_DAT));
+        files.insert(0x0500_C301, pack_surface_texture(0x0500_C301, 0x0600_C301));
+        files.insert(0x0600_C301, pack_texture_1x1(0x0600_C301, 41, &[1], Some(PAL_TEX)));
+        files.insert(0x0500_C302, pack_surface_texture(0x0500_C302, 0x0600_C302));
+        files.insert(0x0600_C302, pack_texture_1x1(0x0600_C302, 20, &[1, 2, 3], None));
+        files.insert(0x0500_C303, pack_surface_texture(0x0500_C303, 0x0600_C303));
+        files.insert(0x0600_C303, pack_texture_1x1(0x0600_C303, 41, &[1], Some(PAL_ABSENT)));
+        files.insert(SURF_P8, pack_textured_surface(0x2, 0x0500_C301, PAL_DAT));
+        files.insert(SURF_RGB_PAL, pack_textured_surface(0x2, 0x0500_C302, PAL_DAT));
+        files.insert(SURF_RGB, pack_textured_surface(0x2, 0x0500_C302, 0));
+        files.insert(SURF_SOLID, pack_solid_surface(0xFF11_2233));
+        files.insert(SURF_P8_NO_PAL_RECORD, pack_textured_surface(0x4, 0x0500_C303, PAL_DAT));
+        MockSource { files }
+    }
+
+    #[test]
+    fn surface_original_palette_follows_csurface_initend() {
+        let src = fixture();
+        // Paletted texture: InitEnd overwrites the DAT value with the ImgTex palette.
+        assert_eq!(retail_surface_original_palette_id(&src, SURF_P8), PAL_TEX);
+        // Non-paletted texture: the DAT Surface.OrigPaletteId stands.
+        assert_eq!(retail_surface_original_palette_id(&src, SURF_RGB_PAL), PAL_DAT);
+        assert_eq!(retail_surface_original_palette_id(&src, SURF_RGB), 0);
+        // Solid surfaces carry no orig_palette_id on disk.
+        assert_eq!(retail_surface_original_palette_id(&src, SURF_SOLID), 0);
+        // A palette that fails to load leaves m_pPalette null: no override.
+        assert_eq!(retail_surface_original_palette_id(&src, SURF_P8_NO_PAL_RECORD), PAL_DAT);
+        assert_eq!(retail_surface_original_palette_id(&src, 0x0800_DEAD), 0, "absent Surface");
+    }
+
+    #[test]
+    fn part_original_palette_is_first_nonzero_surface() {
+        let src = fixture();
+        assert_eq!(
+            retail_part_original_palette_id(&src, &[SURF_SOLID, SURF_RGB, SURF_P8, SURF_RGB_PAL]),
+            PAL_TEX,
+            "zero surfaces are skipped; the first non-zero one wins"
+        );
+        assert_eq!(retail_part_original_palette_id(&src, &[SURF_RGB_PAL, SURF_P8]), PAL_DAT);
+        assert_eq!(retail_part_original_palette_id(&src, &[SURF_SOLID, SURF_RGB]), 0);
+        assert_eq!(retail_part_original_palette_id(&src, &[]), 0);
+    }
+
+    #[test]
+    fn objdesc_palette_reaches_only_matching_parts() {
+        assert!(retail_part_takes_objdesc_palette(PAL_TEX, PAL_TEX, true));
+        assert!(
+            !retail_part_takes_objdesc_palette(PAL_TEX, PAL_TEX, false),
+            "no subpalettes: DoObjDescChanges never calls SetPalette"
+        );
+        assert!(
+            !retail_part_takes_objdesc_palette(0, 0, true),
+            "null PaletteID: SetPalette returns before any part"
+        );
+        assert!(!retail_part_takes_objdesc_palette(PAL_DAT, PAL_TEX, true), "authored on another palette");
+        assert!(!retail_part_takes_objdesc_palette(0, PAL_TEX, true), "part with no original palette");
+    }
+
+    #[test]
+    fn paletted_predicate_agrees_with_entity_decode_has_palette() {
+        let src = fixture();
+        assert!(holtburger_surface_is_paletted(&src, SURF_P8));
+        assert!(holtburger_surface_is_paletted(&src, SURF_P8_NO_PAL_RECORD));
+        assert!(!holtburger_surface_is_paletted(&src, SURF_RGB_PAL));
+        assert!(!holtburger_surface_is_paletted(&src, SURF_SOLID));
+        // Same answer as the decode the census is sizing.
+        for did in [SURF_P8, SURF_RGB_PAL, SURF_RGB, SURF_SOLID] {
+            let sp = super::fetch_entity_surface_pixels_impl(&src, did, 0, &[]);
+            assert_eq!(sp.has_palette, holtburger_surface_is_paletted(&src, did), "surface {did:08X}");
+        }
+    }
+
+    // --- census (real DATs) --------------------------------------------------
+
+    struct DatSrc(holtburger_dat::DatDatabase);
+    impl ResourceSource for DatSrc {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.0.get_file(key.file_id)
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, ns: &str) -> bool {
+            ns == NS
+        }
+    }
+
+    fn setup_parts(src: &DatSrc, setup_id: u32) -> Vec<u32> {
+        src.0
+            .get_file(setup_id)
+            .ok()
+            .and_then(|b| SetupModel::unpack(&mut std::io::Cursor::new(&b)).ok())
+            .map(|s| s.parts)
+            .unwrap_or_default()
+    }
+
+    /// ACE's "null" part (`Creature.AddSetupAsClothingBase`): a 3-vertex,
+    /// one-surface placeholder GfxObj that fills empty Setup slots. Its one
+    /// paletted surface diverges on nearly every rig but draws nothing
+    /// visible, so it is counted apart from the real gap.
+    const NULL_PART_GFX: u32 = 0x0100_01EC;
+
+    #[derive(Default)]
+    struct Tally {
+        parts: usize,
+        /// Null-part slots, skipped (see [`NULL_PART_GFX`]).
+        null_parts: usize,
+        /// Parts retail does not recolour (original palette != PaletteID).
+        mismatched_parts: usize,
+        /// ...of which carry paletted surfaces that holtburger recolours anyway.
+        divergent_parts: usize,
+        divergent_surface_refs: usize,
+        divergent_surfaces: HashSet<u32>,
+        /// Original palette of each divergent part → count.
+        part_palettes: HashMap<u32, usize>,
+        /// Divergent part GfxObj → count.
+        part_gfx: HashMap<u32, usize>,
+        examples: Vec<String>,
+    }
+    impl Tally {
+        fn summary(&self, label: &str) -> String {
+            fn top(map: &HashMap<u32, usize>) -> Vec<String> {
+                let mut v: Vec<(u32, usize)> = map.iter().map(|(&k, &n)| (k, n)).collect();
+                v.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                v.truncate(8);
+                v.iter().map(|(k, n)| format!("{k:08X}x{n}")).collect()
+            }
+            format!(
+                "{label}: {} parts (+{} null-part slots skipped), {} not on the ObjDesc palette, \
+                 {} of those with paletted surfaces that holtburger recolours and retail does not \
+                 ({} surface refs, {} distinct DIDs); top original palettes {:?}; top GfxObjs {:?}",
+                self.parts,
+                self.null_parts,
+                self.mismatched_parts,
+                self.divergent_parts,
+                self.divergent_surface_refs,
+                self.divergent_surfaces.len(),
+                top(&self.part_palettes),
+                top(&self.part_gfx)
+            )
+        }
+    }
+
+    /// Per-GfxObj memo: (retail original palette, paletted surface DIDs).
+    struct Census<'a> {
+        src: &'a DatSrc,
+        parts: HashMap<u32, (u32, Vec<u32>)>,
+        paletted: HashMap<u32, bool>,
+    }
+    impl<'a> Census<'a> {
+        fn new(src: &'a DatSrc) -> Self {
+            Self { src, parts: HashMap::new(), paletted: HashMap::new() }
+        }
+
+        fn part(&mut self, gfx_id: u32) -> (u32, Vec<u32>) {
+            if let Some(hit) = self.parts.get(&gfx_id) {
+                return hit.clone();
+            }
+            let surfaces: Vec<u32> = self
+                .src
+                .0
+                .get_file(gfx_id)
+                .ok()
+                .and_then(|b| GfxObj::unpack(&mut std::io::Cursor::new(&b)).ok())
+                .map(|g| g.surfaces)
+                .unwrap_or_default();
+            let original = retail_part_original_palette_id(self.src, &surfaces);
+            let mut paletted = Vec::new();
+            for &did in &surfaces {
+                let is_paletted = match self.paletted.get(&did) {
+                    Some(&v) => v,
+                    None => {
+                        let v = holtburger_surface_is_paletted(self.src, did);
+                        self.paletted.insert(did, v);
+                        v
+                    }
+                };
+                if is_paletted {
+                    paletted.push(did);
+                }
+            }
+            let out = (original, paletted);
+            self.parts.insert(gfx_id, out.clone());
+            out
+        }
+
+        /// Tallies one part of a rig that carries subpalettes, i.e. one that
+        /// holtburger sends down the composed path. Returns (original palette,
+        /// paletted surface count) when holtburger recolours paletted surfaces
+        /// that retail leaves alone.
+        fn tally(&mut self, t: &mut Tally, gfx_id: u32, palette_id: u32) -> Option<(u32, usize)> {
+            if (gfx_id >> 24) != 0x01 {
+                return None;
+            }
+            if gfx_id == NULL_PART_GFX {
+                t.null_parts += 1;
+                return None;
+            }
+            let (original, paletted) = self.part(gfx_id);
+            t.parts += 1;
+            if retail_part_takes_objdesc_palette(original, palette_id, true) {
+                return None;
+            }
+            t.mismatched_parts += 1;
+            if paletted.is_empty() {
+                return None;
+            }
+            t.divergent_parts += 1;
+            t.divergent_surface_refs += paletted.len();
+            t.divergent_surfaces.extend(paletted.iter().copied());
+            *t.part_palettes.entry(original).or_insert(0) += 1;
+            *t.part_gfx.entry(gfx_id).or_insert(0) += 1;
+            Some((original, paletted.len()))
+        }
+    }
+
+    fn lsd_stat<'a>(w: &'a serde_json::Value, table: &str, key: u64) -> Option<&'a serde_json::Value> {
+        w.get(table)?
+            .as_array()?
+            .iter()
+            .find(|s| s.get("key").and_then(serde_json::Value::as_u64) == Some(key))?
+            .get("value")
+    }
+    fn did_stat(w: &serde_json::Value, key: u64) -> Option<u32> {
+        lsd_stat(w, "didStats", key).and_then(serde_json::Value::as_u64).map(|v| v as u32)
+    }
+
+    struct LsdRig {
+        parts: Vec<u32>,
+        palette_id: u32,
+        has_subpalettes: bool,
+    }
+
+    /// ACE `WorldObject.CalculateObjDesc` + `AddBaseModelData` for an LSD
+    /// weenie with nothing equipped (LSD has no live wield state): the Setup
+    /// parts, HeadObject at 0x10, and the ClothingBase base effect for its
+    /// Setup. PaletteID = PaletteBase. Subpalettes come from Hair/Eyes/Skin
+    /// palettes and from the chosen CloSubPalEffect, which needs a
+    /// PaletteTemplate or Shade. The fallback is the first key in DAT order,
+    /// as in ACE's `Keys.ElementAt(0)`.
+    fn lsd_rig(src: &DatSrc, w: &serde_json::Value) -> Option<LsdRig> {
+        let setup_id = did_stat(w, 1).filter(|&s| s != 0)?;
+        let mut parts = match setup_id >> 24 {
+            0x02 => setup_parts(src, setup_id),
+            0x01 => vec![setup_id],
+            _ => return None,
+        };
+        if parts.is_empty() {
+            return None;
+        }
+        // HeadObject (PropertyDataId 18) only with a non-Gearknight
+        // HeritageGroup (PropertyInt 188); ACE's custom Hairstyle never
+        // appears in LSD. It precedes the clothing APChanges, which win.
+        let heritage = lsd_stat(w, "intStats", 188).and_then(serde_json::Value::as_i64);
+        if let (Some(head), Some(h)) = (did_stat(w, 18), heritage) {
+            if h != 6 {
+                if let Some(slot) = parts.get_mut(0x10) {
+                    *slot = head;
+                }
+            }
+        }
+        // HairPalette / EyesPalette / SkinPalette (PropertyDataId 15/16/17).
+        let mut has_subpalettes = [15u64, 16, 17].iter().any(|&k| did_stat(w, k).is_some());
+        let table = did_stat(w, 7)
+            .and_then(|cb| src.0.get_file(cb).ok())
+            .and_then(|b| ClothingTable::unpack(&b).ok());
+        if let Some(table) = table {
+            if let Some(effect) = table.clothing_base_effects.get(&setup_id) {
+                for e in &effect.clo_object_effects {
+                    if let Some(slot) = parts.get_mut(e.index as usize) {
+                        *slot = e.model_id;
+                    }
+                }
+                let template = lsd_stat(w, "intStats", 3).and_then(serde_json::Value::as_i64);
+                let shade = lsd_stat(w, "floatStats", 12).is_some();
+                if !table.clothing_sub_pal_effects.is_empty() && (template.is_some() || shade) {
+                    let key = template.unwrap_or(0) as u32;
+                    let chosen = table.clothing_sub_pal_effects.get(&key).or_else(|| {
+                        table
+                            .clothing_sub_pal_effect_keys
+                            .first()
+                            .and_then(|k| table.clothing_sub_pal_effects.get(k))
+                    });
+                    if chosen.is_some_and(|c| c.clo_sub_palettes.iter().any(|p| !p.ranges.is_empty())) {
+                        has_subpalettes = true;
+                    }
+                }
+            }
+        }
+        Some(LsdRig { parts, palette_id: did_stat(w, 6).unwrap_or(0), has_subpalettes })
+    }
+
+    /// One-off census (`--ignored --nocapture`). It needs a real portal DAT
+    /// and, for the creature half, the LSD weenie dump. It sizes the gap the
+    /// tests above pin, in four parts:
+    /// (0) Surfaces whose DAT OrigPaletteId differs from the ImgTex palette
+    ///     that retail keeps.
+    /// (1) CharGen naked bodies against their heritage base palette.
+    /// (2) Every ClothingTable base effect on every CharGen wearer setup. This
+    ///     covers player armour and NPC wielded clothing, which use the same
+    ///     tables on the same setups.
+    /// (3) LSD weenies with subpalettes.
+    /// Defaults are `~/ac_base_dats/client_portal.dat` and the vendored LSD
+    /// dump. Override them with `HB_PAL_PART_CENSUS_DAT` /
+    /// `HB_PAL_PART_CENSUS_LSD`. Not modelled: CloTextureEffect texture swaps
+    /// (they change which texture is paletted, not the part's original
+    /// palette), ACE's alternate-setup remap, and Gear Knight body styles.
+    #[test]
+    #[ignore]
+    fn census_real_portal_part_palette_match() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = std::env::var("HB_PAL_PART_CENSUS_DAT")
+            .unwrap_or_else(|_| format!("{home}/ac_base_dats/client_portal.dat"));
+        let lsd_dir = std::env::var("HB_PAL_PART_CENSUS_LSD").unwrap_or_else(|_| {
+            format!("{home}/WorldBuilder-ACME-Edition/external/LSD-Partial-2025-02-23_16-15/weenies")
+        });
+        let portal = holtburger_dat::DatDatabase::new(&path).expect("open portal dat");
+        let mut ids: Vec<u32> = portal.files.keys().copied().collect();
+        ids.sort_unstable();
+        let src = DatSrc(portal);
+        let mut census = Census::new(&src);
+
+        // (0) Surface level.
+        let (mut paletted_surfaces, mut dat_pal_differs) = (0usize, 0usize);
+        let mut dat_pal_examples: Vec<String> = Vec::new();
+        for &id in ids.iter().filter(|&&id| (id >> 24) == 0x08) {
+            let Ok(bytes) = src.0.get_file(id) else { continue };
+            let Ok(surface) = Surface::unpack(&bytes) else { continue };
+            let Some((surface_texture_id, dat_pal)) = surface.textured() else { continue };
+            let Some(tex_pal) = imgtex_palette_id(&src, surface_texture_id) else { continue };
+            paletted_surfaces += 1;
+            if dat_pal != 0 && dat_pal != tex_pal {
+                dat_pal_differs += 1;
+                if dat_pal_examples.len() < 8 {
+                    dat_pal_examples.push(format!("{id:08X}: dat {dat_pal:08X} imgtex {tex_pal:08X}"));
+                }
+            }
+        }
+        assert!(paletted_surfaces > 0, "no paletted 0x08 Surfaces in {path}");
+
+        // (1) + (2) CharGen wearers.
+        let chargen_bytes = src.0.get_file(CharGen::FILE_ID).expect("CharGen record");
+        let chargen = CharGen::read(&mut std::io::Cursor::new(chargen_bytes)).expect("CharGen parses");
+        let mut wearers: Vec<(u32, u32)> = chargen
+            .heritage_groups
+            .values()
+            .flat_map(|hg| hg.genders.values())
+            .filter(|g| g.setup_id != 0)
+            .map(|g| (g.setup_id, g.base_palette))
+            .collect();
+        wearers.sort_unstable();
+        wearers.dedup();
+        assert!(!wearers.is_empty(), "no CharGen wearer setups");
+
+        let mut naked = Tally::default();
+        for &(setup, base) in &wearers {
+            for (index, gfx) in setup_parts(&src, setup).into_iter().enumerate() {
+                if let Some((orig, n)) = census.tally(&mut naked, gfx, base) {
+                    if naked.examples.len() < 8 {
+                        naked.examples.push(format!(
+                            "setup {setup:08X} part {index} gfx {gfx:08X}: orig {orig:08X} != base {base:08X} ({n} paletted)"
+                        ));
+                    }
+                }
+            }
+        }
+
+        let mut clothing = Tally::default();
+        let (mut tables, mut table_effects) = (0usize, 0usize);
+        for &id in ids.iter().filter(|&&id| (id >> 24) == 0x10) {
+            let Ok(bytes) = src.0.get_file(id) else { continue };
+            let Ok(table) = ClothingTable::unpack(&bytes) else { continue };
+            tables += 1;
+            for &(setup, base) in &wearers {
+                let Some(effect) = table.clothing_base_effects.get(&setup) else { continue };
+                table_effects += 1;
+                for e in &effect.clo_object_effects {
+                    if let Some((orig, n)) = census.tally(&mut clothing, e.model_id, base) {
+                        if clothing.examples.len() < 16 {
+                            clothing.examples.push(format!(
+                                "table {id:08X} setup {setup:08X} part {} gfx {:08X}: orig {orig:08X} != base {base:08X} ({n} paletted)",
+                                e.index, e.model_id
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(tables > 0, "no 0x10 ClothingTables in {path}");
+
+        // (3) LSD weenies.
+        let mut creatures = Tally::default();
+        let (mut weenies, mut recoloured, mut pal0, mut divergent_weenies) = (0usize, 0usize, 0usize, 0usize);
+        // Paletted surface refs on PaletteID-0 rigs: retail's SetPalette
+        // returns early, holtburger still splices the subpalettes.
+        let mut pal0_surface_refs = 0usize;
+        match std::fs::read_dir(&lsd_dir) {
+            Err(e) => println!("[pal-part census] LSD half SKIPPED ({lsd_dir}: {e})"),
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+                    let Ok(w) = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+                    else {
+                        continue;
+                    };
+                    weenies += 1;
+                    let Some(rig) = lsd_rig(&src, &w) else { continue };
+                    if !rig.has_subpalettes {
+                        // No subpalettes: ACE sends no PaletteID, so both clients
+                        // take the palette-free path.
+                        continue;
+                    }
+                    recoloured += 1;
+                    if rig.palette_id == 0 {
+                        pal0 += 1;
+                    }
+                    let mut hit = false;
+                    for (index, &gfx) in rig.parts.iter().enumerate() {
+                        if let Some((orig, n)) = census.tally(&mut creatures, gfx, rig.palette_id) {
+                            hit = true;
+                            if rig.palette_id == 0 {
+                                pal0_surface_refs += n;
+                            }
+                            if creatures.examples.len() < 16 {
+                                let wcid = w.get("wcid").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                                let name = lsd_stat(&w, "stringStats", 1)
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("?");
+                                creatures.examples.push(format!(
+                                    "wcid {wcid} {name}: part {index} gfx {gfx:08X}: orig {orig:08X} != PaletteID {:08X} ({n} paletted)",
+                                    rig.palette_id
+                                ));
+                            }
+                        }
+                    }
+                    if hit {
+                        divergent_weenies += 1;
+                    }
+                }
+            }
+        }
+
+        println!("[pal-part census] {path}");
+        println!(
+            "  (0) surfaces: {paletted_surfaces} paletted with a loadable ImgTex palette; \
+             {dat_pal_differs} carry a DAT OrigPaletteId != that palette (retail keeps the ImgTex one) \
+             e.g. {dat_pal_examples:?}"
+        );
+        println!("  (1) {}", naked.summary(&format!("CharGen naked bodies, {} wearer setups", wearers.len())));
+        println!(
+            "  (2) {}",
+            clothing.summary(&format!("ClothingTables, {tables} tables, {table_effects} wearer effects"))
+        );
+        println!(
+            "  (3) {}",
+            creatures.summary(&format!(
+                "LSD weenies, {weenies} read, {recoloured} with subpalettes, {pal0} of them PaletteID 0 \
+                 ({pal0_surface_refs} divergent surface refs), {divergent_weenies} with a divergent part"
+            ))
+        );
+        for example in naked.examples.iter().chain(&clothing.examples).chain(&creatures.examples) {
+            println!("      {example}");
         }
     }
 }
@@ -16739,7 +19019,7 @@ pub async fn fetch_model_meshes(
             );
         } else if tris_opt.is_none() && matches!((id >> 24) as u8, 0x01 | 0x02) {
             log::warn!(
-                "[geom-audit] fetch_model_meshes 0x{id:08X}: model failed to decode (parse failure) — mesh will be empty"
+                "[geom-audit] fetch_model_meshes 0x{id:08X}: model failed to decode (parse failure or catalog-absent record) — mesh will be empty"
             );
         }
         let tris = tris_opt.unwrap_or_default();
@@ -16853,7 +19133,9 @@ impl BuildingPlacement {
 
     /// streamFix retryability (2026-07-02): record misses left after the
     /// counted decode + walk retry. 0 = complete; >0 = one or more parts
-    /// are empty/partial (fetch starvation or permanently-absent records).
+    /// are empty/partial from fetch starvation (or an UNPROVABLE absence).
+    /// Catalog-proven absences are not counted since streaming-residency-3
+    /// (`MissCountingSource`): nothing more will arrive for them.
     /// JS treats >0 as "do not cache cross-LB; leave the LB retryable".
     #[wasm_bindgen(getter, js_name = decodeMisses)]
     pub fn decode_misses(&self) -> u32 {
@@ -18003,6 +20285,8 @@ fn triangulate_model_per_part_buckets<S: holtburger_dat::ResourceSource + ?Sized
                 .get_file_shared(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
             let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
+            // `?negFace=retail` only (no-op by default).
+            prime_surface_types(source, &gfx.surfaces);
             let mut tris = Vec::new();
             append_gfx_tris(
                 &mut tris,
@@ -18886,16 +21170,37 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// PR-SS.1 2026-05-23: send timestamp for the most-recently-sent
-/// `GameAction::PingRequest`. Cleared by the matching
-/// `GameEvent::PingResponse` arm after computing RTT, or on
-/// send-failure. Thread-local because the wasm bundle is single-
-/// threaded and both writers (the 5s keepalive arm and the response
-/// arm) live in the same `recv_loop` task.
+/// PR-SS.1 2026-05-23: the keepalive `GameAction::PingRequest` RTT clock
+/// for the link-status indicator. net-transport-6 (2026-10-13): was a bare
+/// `Option<Instant>` that every send overwrote (three drivers: the 5 s arm
+/// and `ForceKeepalive` from both the 2.5 s setInterval and the keepalive
+/// worker), so overlapping pings measured from the wrong send. Now in-world
+/// pings are counted until answered and a send is stamped only when none is
+/// out (see `ping_round_trip`); the PlayerCreate arm forgets what is still
+/// out. Stamped in direct mode only: under `?netWorker` the worker owns the clock and
+/// posts its RTT (`SessionHandle::net_worker_link_status`). Thread-local
+/// because the wasm bundle is single-threaded and every writer lives in the
+/// `recv_loop` task.
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static PING_SEND_INSTANT: std::cell::RefCell<Option<web_time::Instant>> =
-        std::cell::RefCell::new(None);
+    static PING_ROUND_TRIP: std::cell::RefCell<ping_round_trip::PingRoundTrip> =
+        const { std::cell::RefCell::new(ping_round_trip::PingRoundTrip::new()) };
+}
+
+/// net-transport-6: a keepalive `PingRequest` just went out on `session`
+/// (the 5 s arm or `SessionCommand::ForceKeepalive`). Starts the RTT clock
+/// in direct mode; only an in-world ping counts, because ACE drops every
+/// GameAction until the player exists (InboundMessageManager.cs
+/// `HandleGameAction`), and such a ping is never answered.
+#[cfg(target_arch = "wasm32")]
+fn note_keepalive_ping_sent(session: &net_worker::LoopSession, state: &LoopState) {
+    if !session.is_direct() {
+        return;
+    }
+    let in_world = matches!(state, LoopState::InWorld { .. });
+    PING_ROUND_TRIP.with(|c| {
+        c.borrow_mut().note_sent(web_time::Instant::now(), in_world);
+    });
 }
 
 /// Pending SetupModel collision radii queued by `fetch_entity_model_render`
@@ -21433,6 +23738,9 @@ pub struct EnvCellPlacement {
     cell_orientation_qz: f32,
     static_objects: Vec<StaticObjectPlacement>,
     portal_cell_ids: Vec<u32>,
+    // rynth-macro-nav-5: one `PORTAL_DOORWAY_STRIDE` row per CellPortal
+    // whose polygon resolved (see `envcell_portal_doorways`).
+    portal_doorways: Vec<f64>,
     mesh: ModelMesh,
 }
 
@@ -21478,6 +23786,18 @@ impl EnvCellPlacement {
     pub fn take_portal_cell_ids(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.portal_cell_ids)
     }
+    /// rynth-macro-nav-5: move the per-portal DOORWAY geometry out, a flat
+    /// `Float64Array` of `PORTAL_DOORWAY_STRIDE` (9) values per CellPortal
+    /// whose polygon resolved: `[otherCellId, cx, cy, cz, nx, ny, nz,
+    /// height, bottomZ]`. World frame like `cellOriginX/Y` (landblock
+    /// origin pre-added); the normal points OUT of this cell; `otherCellId`
+    /// is the full u32 (`resolved_other_cell_id`, outdoors = lb|0xFFFF),
+    /// exact in an f64. Consumed by rynth/indoor_router.js
+    /// (`?indoorDoorways=on`). One-shot like the other `take_*`.
+    #[wasm_bindgen(js_name = takePortalDoorways)]
+    pub fn take_portal_doorways(&mut self) -> Vec<f64> {
+        std::mem::take(&mut self.portal_doorways)
+    }
     /// Move the cell mesh (Environment polygons triangulated in cell-
     /// local coords) out. PIXI applies the cell origin + orientation
     /// transform when placing the rendered tile in the scene.
@@ -21502,6 +23822,321 @@ impl EnvCellPlacement {
             // RND-33: no surfaces -> no per-subset flags.
             subset_stippled: Vec::new(),
         })
+    }
+}
+
+/// rynth-macro-nav-5: f64 values per `EnvCellPlacement::takePortalDoorways`
+/// row — `[otherCellId, cx, cy, cz, nx, ny, nz, height, bottomZ]`.
+#[cfg(any(target_arch = "wasm32", test))]
+pub const PORTAL_DOORWAY_STRIDE: usize = 9;
+
+/// rynth-macro-nav-5: one CellPortal's doorway for the rynth indoor router,
+/// from its polygon's vertices (any frame; the row comes back in the same
+/// one). Centroid = the vertex mean; normal = the Newell normal (the same
+/// accumulation as holtburger-dat `tests/cell_portal_flags_parity.rs` and
+/// retail `CPolygon::make_plane`'s orientation), flipped so it points OUT of
+/// the owning cell: `interior_on_negative_side` is
+/// `holtburger_dat::file_type::CellPortal::portal_side()` — retail's
+/// `portal_side` names the owning room's interior halfspace (measured
+/// 1,855,363 / 1,855,363 against the cell's own centroid in that test).
+/// `height` = the opening's vertical extent, `bottomZ` = its lowest point
+/// (where feet pass through an upright doorway). `None` for a degenerate
+/// polygon (fewer than 3 points, or no area).
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn portal_doorway_row(
+    other_cell_id: u32,
+    verts: &[holtburger_common::Vector3],
+    interior_on_negative_side: bool,
+) -> Option<[f64; PORTAL_DOORWAY_STRIDE]> {
+    let n = verts.len();
+    if n < 3 {
+        return None;
+    }
+    let (mut nx, mut ny, mut nz) = (0.0f64, 0.0f64, 0.0f64);
+    let (mut cx, mut cy, mut cz) = (0.0f64, 0.0f64, 0.0f64);
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+    for i in 0..n {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        let (ax, ay, az) = (a.x as f64, a.y as f64, a.z as f64);
+        let (bx, by, bz) = (b.x as f64, b.y as f64, b.z as f64);
+        nx += (ay - by) * (az + bz);
+        ny += (az - bz) * (ax + bx);
+        nz += (ax - bx) * (ay + by);
+        cx += ax;
+        cy += ay;
+        cz += az;
+        z_min = z_min.min(az);
+        z_max = z_max.max(az);
+    }
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if !len.is_finite() || len < 1e-9 {
+        return None;
+    }
+    // Newell's normal is the polygon's front (positive) side; the interior
+    // on the negative side means it already points out of the cell.
+    let out = if interior_on_negative_side { 1.0 / len } else { -1.0 / len };
+    let k = n as f64;
+    Some([
+        other_cell_id as f64,
+        cx / k,
+        cy / k,
+        cz / k,
+        nx * out,
+        ny * out,
+        nz * out,
+        z_max - z_min,
+        z_min,
+    ])
+}
+
+/// rynth-macro-nav-5: the flat doorway rows (`PORTAL_DOORWAY_STRIDE` each,
+/// CellPortal order) for one EnvCell. Each portal's polygon comes from the
+/// cell's CellStruct DRAWING polygons at `polygon_id` and goes through the
+/// same cell-local -> world transform as the PView portal-polygon walk in
+/// `fetch_env_cells_in_landblock` (`cell_origin` + `cell_orientation
+/// .rotate_vector`). A portal whose polygon or a vertex is missing, or
+/// whose polygon is degenerate, has no row — the router then falls back to
+/// its cell-centre legs for that edge.
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn envcell_portal_doorways(
+    portals: &[holtburger_dat::file_type::CellPortal],
+    cell_struct: &holtburger_dat::file_type::CellStruct,
+    landblock_high: u32,
+    cell_origin: holtburger_common::Vector3,
+    cell_orientation: holtburger_common::Quaternion,
+) -> Vec<f64> {
+    let mut rows: Vec<f64> = Vec::with_capacity(portals.len() * PORTAL_DOORWAY_STRIDE);
+    for portal in portals {
+        let Some(poly) = cell_struct.polygons.get(&portal.polygon_id) else {
+            continue;
+        };
+        let mut world_verts: Vec<holtburger_common::Vector3> =
+            Vec::with_capacity(poly.vertex_ids.len());
+        let mut all_ok = true;
+        for &vid in &poly.vertex_ids {
+            let Some(sw) = cell_struct.vertex_array.vertices.get(&(vid as u16)) else {
+                all_ok = false;
+                break;
+            };
+            let rotated = cell_orientation.rotate_vector(sw.origin);
+            world_verts.push(holtburger_common::Vector3::new(
+                cell_origin.x + rotated.x,
+                cell_origin.y + rotated.y,
+                cell_origin.z + rotated.z,
+            ));
+        }
+        if !all_ok {
+            continue;
+        }
+        if let Some(row) = portal_doorway_row(
+            portal.resolved_other_cell_id(landblock_high),
+            &world_verts,
+            portal.portal_side(),
+        ) {
+            rows.extend_from_slice(&row);
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests_portal_doorways {
+    use super::{PORTAL_DOORWAY_STRIDE, envcell_portal_doorways, portal_doorway_row};
+    use holtburger_common::{Quaternion, Vector3};
+    use holtburger_dat::file_type::{CellPortal, CellStruct, EnvCell, Environment};
+    use holtburger_dat::graphics::{CVertexArray, Polygon, SWVertex};
+    use std::collections::HashMap;
+    use std::io::Cursor;
+
+    fn v(x: f32, y: f32, z: f32) -> Vector3 {
+        Vector3 { x, y, z }
+    }
+
+    /// A 2 m wide, 2.5 m tall upright doorway in the x = 1 plane. Wound so
+    /// its Newell normal is +x.
+    fn door_quad() -> Vec<Vector3> {
+        vec![v(1.0, 0.0, 0.0), v(1.0, 2.0, 0.0), v(1.0, 2.0, 2.5), v(1.0, 0.0, 2.5)]
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn row_is_centroid_newell_normal_height_and_bottom() {
+        let r = portal_doorway_row(0xA9B4_0153, &door_quad(), true).expect("row");
+        assert_eq!(r[0], 0xA9B4_0153u32 as f64, "other cell id is exact in an f64");
+        assert!(close(r[1], 1.0) && close(r[2], 1.0) && close(r[3], 1.25), "centroid {:?}", &r[1..4]);
+        assert!(close(r[4], 1.0) && close(r[5], 0.0) && close(r[6], 0.0), "normal {:?}", &r[4..7]);
+        assert!(close(r[7], 2.5), "height {}", r[7]);
+        assert!(close(r[8], 0.0), "bottom {}", r[8]);
+    }
+
+    #[test]
+    fn row_normal_flips_with_the_interior_side() {
+        // portal_side false = the interior is the POSITIVE halfspace, so the
+        // outward normal is the reverse of Newell's.
+        let r = portal_doorway_row(1, &door_quad(), false).expect("row");
+        assert!(close(r[4], -1.0) && close(r[5], 0.0) && close(r[6], 0.0), "normal {:?}", &r[4..7]);
+    }
+
+    #[test]
+    fn degenerate_polygons_have_no_row() {
+        assert!(portal_doorway_row(1, &[v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0)], true).is_none());
+        let collinear = [v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0)];
+        assert!(portal_doorway_row(1, &collinear, true).is_none());
+    }
+
+    fn sw(p: Vector3) -> SWVertex {
+        SWVertex { num_uvs: 0, origin: p, normal: v(1.0, 0.0, 0.0), uvs: vec![] }
+    }
+
+    fn poly(ids: Vec<i16>) -> Polygon {
+        Polygon {
+            num_pts: ids.len() as u8,
+            stippling: 0x4, // NoPos: no UV indices
+            sides_type: 0,
+            pos_surface: 0,
+            neg_surface: 0,
+            vertex_ids: ids,
+            pos_uv_indices: vec![],
+            neg_uv_indices: vec![],
+        }
+    }
+
+    #[test]
+    fn envcell_rows_go_through_the_cell_frame_and_resolve_flags() {
+        let mut vertices = HashMap::new();
+        for (i, p) in door_quad().into_iter().enumerate() {
+            vertices.insert(i as u16, sw(p));
+        }
+        let cell = CellStruct {
+            cell_struct_id: 0,
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            polygons: HashMap::from([(7u16, poly(vec![0, 1, 2, 3])), (8u16, poly(vec![0, 1, 9]))]),
+            portal_poly_ids: vec![7, 8],
+            physics_polygons: HashMap::new(),
+            cell_bsp: None,
+            physics_bsp: None,
+            drawing_bsp: None,
+        };
+        let portals = vec![
+            // Interior on the negative side (flags bit 1 CLEAR), to 0x0105.
+            CellPortal { flags: 0, polygon_id: 7, other_cell_id: 0x0105, other_portal_id: 0 },
+            // Polygon 8 names a missing vertex (9): no row.
+            CellPortal { flags: 0, polygon_id: 8, other_cell_id: 0x0106, other_portal_id: 0 },
+            // No such polygon: no row.
+            CellPortal { flags: 0, polygon_id: 99, other_cell_id: 0x0107, other_portal_id: 0 },
+            // Leads outdoors (bit 2): the wire id is discarded for lb|0xFFFF.
+            CellPortal { flags: 0x4, polygon_id: 7, other_cell_id: 0x0123, other_portal_id: 0 },
+        ];
+        let lb_high = 0xA9B4_0000u32;
+        let origin = v(32448.0 + 10.0, 34560.0 + 20.0, 94.0);
+        // +90 degrees about z: (x, y) -> (-y, x).
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let q = Quaternion { w: h, x: 0.0, y: 0.0, z: h };
+        let rows = envcell_portal_doorways(&portals, &cell, lb_high, origin, q);
+        assert_eq!(rows.len(), 2 * PORTAL_DOORWAY_STRIDE, "{rows:?}");
+        let a = &rows[..PORTAL_DOORWAY_STRIDE];
+        assert_eq!(a[0], 0xA9B4_0105u32 as f64);
+        // Local centroid (1, 1, 1.25) -> (-1, 1, 1.25) + origin.
+        assert!((a[1] - (32458.0 - 1.0)).abs() < 0.01, "cx {}", a[1]);
+        assert!((a[2] - (34580.0 + 1.0)).abs() < 0.01, "cy {}", a[2]);
+        assert!((a[3] - 95.25).abs() < 1e-3, "cz {}", a[3]);
+        // Local normal +x -> world +y.
+        assert!(a[4].abs() < 1e-4 && (a[5] - 1.0).abs() < 1e-4 && a[6].abs() < 1e-4, "n {:?}", &a[4..7]);
+        assert!((a[7] - 2.5).abs() < 1e-4 && (a[8] - 94.0).abs() < 1e-4);
+        let b = &rows[PORTAL_DOORWAY_STRIDE..];
+        assert_eq!(b[0], 0xA9B4_FFFFu32 as f64, "outdoor portal keeps the landblock, low word 0xFFFF");
+    }
+
+    /// Retail data: the Holtburg tavern (landblock 0xA9B4). Cell 0x0155 (the
+    /// bar room) opens onto 0x015C over the counter (an 8-point, 1.8 m
+    /// opening with a 1 m sill) and onto 0x0153 through a real 2.5 m door;
+    /// 0x0164's outdoor portal is a 2.5 m door facing +x. Every row's normal
+    /// points away from its own cell's vertex centroid. Skips (passes)
+    /// without the base DATs.
+    #[test]
+    fn retail_holtburg_tavern_doorways() {
+        let Some(home) = std::env::var("HOME").ok() else {
+            return;
+        };
+        let base = std::path::PathBuf::from(home).join("ac_base_dats");
+        let (cell_p, portal_p) = (base.join("client_cell_1.dat"), base.join("client_portal.dat"));
+        if !cell_p.exists() || !portal_p.exists() {
+            eprintln!("[nav5] SKIP — base DATs missing under {}", base.display());
+            return;
+        }
+        let (Ok(cell_db), Ok(portal_db)) = (
+            holtburger_dat::DatDatabase::new(&cell_p),
+            holtburger_dat::DatDatabase::new(&portal_p),
+        ) else {
+            eprintln!("[nav5] SKIP — cannot open the base DATs");
+            return;
+        };
+        let lb_high = 0xA9B4_0000u32;
+        let lb_origin = v(0xA9 as f32 * 192.0, 0xB4 as f32 * 192.0, 0.0);
+        // Rows + the cell's world-frame vertex centroid.
+        let doorways = |cell_id: u32| -> (Vec<[f64; PORTAL_DOORWAY_STRIDE]>, [f64; 3]) {
+            let bytes = cell_db.get_file(cell_id).expect("tavern EnvCell");
+            let envcell = EnvCell::unpack(&mut Cursor::new(&bytes)).expect("parse EnvCell");
+            let env_id = 0x0D00_0000u32 | envcell.environment_id as u32;
+            let env_bytes = portal_db.get_file(env_id).expect("Environment");
+            let env = Environment::unpack(&mut Cursor::new(&env_bytes)).expect("parse Environment");
+            let cs = env.cells.get(&(envcell.cell_structure as u32)).expect("CellStruct");
+            let p = &envcell.position;
+            let origin = v(p.origin.x + lb_origin.x, p.origin.y + lb_origin.y, p.origin.z);
+            let flat = envcell_portal_doorways(&envcell.portals, cs, lb_high, origin, p.orientation);
+            assert_eq!(flat.len() % PORTAL_DOORWAY_STRIDE, 0);
+            let rows = flat
+                .chunks(PORTAL_DOORWAY_STRIDE)
+                .map(|c| {
+                    let mut r = [0.0f64; PORTAL_DOORWAY_STRIDE];
+                    r.copy_from_slice(c);
+                    r
+                })
+                .collect();
+            let mut c = [0.0f64; 3];
+            for sv in cs.vertex_array.vertices.values() {
+                let w = p.orientation.rotate_vector(sv.origin);
+                c[0] += (origin.x + w.x) as f64;
+                c[1] += (origin.y + w.y) as f64;
+                c[2] += (origin.z + w.z) as f64;
+            }
+            let k = cs.vertex_array.vertices.len().max(1) as f64;
+            (rows, [c[0] / k, c[1] / k, c[2] / k])
+        };
+        let upright = |r: &[f64; PORTAL_DOORWAY_STRIDE]| r[6].abs() <= 0.7;
+        let find = |rows: &[[f64; PORTAL_DOORWAY_STRIDE]], other: u32| {
+            *rows
+                .iter()
+                .find(|r| r[0] == other as f64)
+                .unwrap_or_else(|| panic!("no doorway to 0x{other:08X}: {rows:?}"))
+        };
+        for cell_id in [0xA9B4_0155u32, 0xA9B4_0164] {
+            let (rows, centre) = doorways(cell_id);
+            assert!(!rows.is_empty(), "0x{cell_id:08X}: no doorway rows");
+            for r in &rows {
+                let n_len = (r[4] * r[4] + r[5] * r[5] + r[6] * r[6]).sqrt();
+                assert!((n_len - 1.0).abs() < 1e-3, "0x{cell_id:08X}: normal not unit {r:?}");
+                let out = (r[1] - centre[0]) * r[4] + (r[2] - centre[1]) * r[5] + (r[3] - centre[2]) * r[6];
+                assert!(out > 0.0, "0x{cell_id:08X}: normal points INTO the cell {r:?} centre {centre:?}");
+                assert!(r[7] >= 0.0 && r[8] <= r[3] + 1e-6, "0x{cell_id:08X}: height/bottom {r:?}");
+            }
+            if cell_id == 0xA9B4_0155 {
+                let counter = find(&rows, 0xA9B4_015C);
+                let door = find(&rows, 0xA9B4_0153);
+                assert!(upright(&counter) && counter[7] < 1.83, "counter opening {counter:?}");
+                assert!(upright(&door) && door[7] >= 2.4, "door {door:?}");
+                assert!(counter[8] - door[8] > 0.5, "the counter has a sill: {counter:?} vs {door:?}");
+            } else {
+                let exit = find(&rows, 0xA9B4_FFFF);
+                assert!(upright(&exit) && exit[7] >= 1.83, "outdoor door {exit:?}");
+                assert!(exit[4] > 0.9, "the outdoor door faces +x (east): {exit:?}");
+            }
+        }
     }
 }
 
@@ -21554,11 +24189,20 @@ fn append_environment_tris(
         const NO_POS: u8 = 0x04;
         const NO_NEG: u8 = 0x08;
         const CULL_CLOCKWISE: i32 = 0x2;
+        // dat-parser-2 `?negFace=retail`: no reversed back face (see
+        // `parse_neg_face_retail_flag`). EnvCell tris always render DoubleSide
+        // here, so the `?perPolyCull` front-copy rule never applies.
+        let neg_face_retail = neg_face_retail_enabled();
         let mut poly_ids: Vec<u16> = cell.polygons.keys().copied().collect();
         poly_ids.sort_unstable();
         for pid in poly_ids {
             let poly: &Polygon = &cell.polygons[&pid];
             if poly.vertex_ids.len() < 3 { continue; }
+            // `NoPos` (0x4) = no positive UV INDICES (acclient.c:359869), not
+            // "no positive surface". Kept skipped under every flag: `DrawMesh`
+            // drops an EnvCell's untextured batches (acclient.c:455172), where
+            // the NoPos portal faces sit (holtburger-dat
+            // tests/neg_face_census.rs counts any textured exceptions).
             if (poly.stippling & NO_POS) != 0 { continue; }
 
             let surface_did = if poly.pos_surface >= 0
@@ -21588,7 +24232,8 @@ fn append_environment_tris(
             } else {
                 0
             };
-            let emit_back_face = has_back_face
+            let emit_back_face = !neg_face_retail
+                && has_back_face
                 && neg_surface_did != 0
                 && neg_surface_did != surface_did;
 
@@ -21741,6 +24386,344 @@ fn append_environment_tris(
                 });
             }
         }
+    }
+}
+
+/// dat-parser-2 (2026-10-13) — `?negFace=retail` triangulator rules (see
+/// `parse_neg_face_retail_flag`). The gates are per test thread
+/// (`set_neg_face_for_test`); the Surface-type cache is global, so every test
+/// uses its own DIDs.
+#[cfg(test)]
+mod tests_neg_face_retail {
+    use super::*;
+    use holtburger_common::properties::GfxObjFlags;
+    use holtburger_common::{Quaternion, Vector3};
+    use holtburger_dat::file_type::environment::CellStruct;
+    use holtburger_dat::file_type::{Environment, GfxObj};
+    use holtburger_dat::graphics::{CVertexArray, Polygon, SWVertex, Vec2Duv};
+    use std::collections::HashMap;
+
+    /// Puts both gates back to the default when a test ends (even on panic).
+    struct FlagReset;
+    impl Drop for FlagReset {
+        fn drop(&mut self) {
+            set_neg_face_for_test(false, false);
+        }
+    }
+
+    const BASE_TYPE_IMAGE: u32 = 0x2;
+    const BASE_TYPE_SOLID: u32 = 0x1;
+    const BASE_TYPE_CLIPMAP: u32 = 0x4;
+    const TYPE_TRANSLUCENT: u32 = 0x10;
+
+    /// One triangle's worth of vertices; UV slot 0 = the position, slot 1 =
+    /// a distinct value so neg-UV reads are visible.
+    fn verts() -> HashMap<u16, SWVertex> {
+        let mk = |x: f32, y: f32, s1: f32| SWVertex {
+            num_uvs: 2,
+            origin: Vector3 { x, y, z: 0.0 },
+            normal: Vector3 { x: 0.0, y: 0.0, z: 1.0 },
+            uvs: vec![Vec2Duv { u: x, v: y }, Vec2Duv { u: s1, v: s1 }],
+        };
+        let mut v = HashMap::new();
+        v.insert(0u16, mk(0.0, 0.0, 0.5));
+        v.insert(1u16, mk(1.0, 0.0, 0.6));
+        v.insert(2u16, mk(0.0, 1.0, 0.7));
+        v
+    }
+
+    fn poly(stippling: u8, sides_type: i32, pos_surface: i16, neg_surface: i16) -> Polygon {
+        let no_pos = (stippling & 0x4) != 0;
+        let has_neg = sides_type == 2 && (stippling & 0x8) == 0;
+        Polygon {
+            num_pts: 3,
+            stippling,
+            sides_type,
+            pos_surface,
+            neg_surface,
+            vertex_ids: vec![0, 1, 2],
+            pos_uv_indices: if no_pos { vec![] } else { vec![0, 0, 0] },
+            neg_uv_indices: if has_neg { vec![1, 1, 1] } else { vec![] },
+        }
+    }
+
+    fn gfx(p: Polygon, surfaces: Vec<u32>) -> GfxObj {
+        GfxObj {
+            id: 0x0100_DA02,
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces,
+            vertex_array: CVertexArray { vertex_type: 1, vertices: verts() },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons: HashMap::from([(0u16, p)]),
+            drawing_bsp: None,
+            did_degrade: None,
+        }
+    }
+
+    fn tris_of(g: &GfxObj) -> Vec<Tri> {
+        let mut tris = Vec::new();
+        append_gfx_tris_with_tex_swaps(&mut tris, g, Vector3::zero(), Quaternion::identity(), &[]);
+        tris
+    }
+
+    fn set_type(did: u32, ty: u32) {
+        SURFACE_TYPE_BITS.write().unwrap().insert(did, ty);
+    }
+
+    const A: [f32; 3] = [0.0, 0.0, 0.0];
+    const B: [f32; 3] = [1.0, 0.0, 0.0];
+    const C: [f32; 3] = [0.0, 1.0, 0.0];
+
+    #[test]
+    fn neg_face_flag_parse_is_exact() {
+        assert!(parse_neg_face_retail_flag("?negFace=retail"));
+        assert!(parse_neg_face_retail_flag("?nosw=1&negFace=retail&wireframe=1"));
+        assert!(parse_neg_face_retail_flag("negFace=retail"));
+        for s in ["", "?negFace=on", "?negFace=1", "?negFace=Retail", "?negFace=retail2", "?xnegFace=retail"] {
+            assert!(!parse_neg_face_retail_flag(s), "{s:?} must not enable");
+        }
+        // perPolyCull mirrors the JS reader: case-insensitive `on`, nothing else.
+        assert!(parse_per_poly_cull_flag("?perPolyCull=on"));
+        assert!(parse_per_poly_cull_flag("?a=1&perPolyCull=ON"));
+        for s in ["", "?perPolyCull=1", "?perPolyCull=off", "?perPolyCull=true", "?perPolyCull"] {
+            assert!(!parse_per_poly_cull_flag(s), "{s:?} must not enable");
+        }
+    }
+
+    /// (a) Default: the reversed back tri is still emitted — [pos ABC, neg ACB].
+    #[test]
+    fn default_still_emits_reversed_neg_tri() {
+        let _r = FlagReset;
+        let g = gfx(poly(0, 2, 0, 1), vec![0x08DA_1001, 0x08DA_1002]);
+        let tris = tris_of(&g);
+        assert_eq!(tris.len(), 2);
+        assert_eq!(tris[0].side_kind, SideKind::Positive);
+        assert_eq!(tris[0].pos, [A, B, C]);
+        assert_eq!(tris[0].surface_did, 0x08DA_1001);
+        assert_eq!(tris[1].side_kind, SideKind::Negative);
+        assert_eq!(tris[1].pos, [A, C, B]);
+        assert_eq!(tris[1].surface_did, 0x08DA_1002);
+        assert_eq!(tris[1].uv, [[0.5, 0.5], [0.7, 0.7], [0.6, 0.6]]);
+    }
+
+    /// (b) Retail mode: no reversed `Negative` tri, the pos tri is unchanged.
+    #[test]
+    fn retail_drops_reversed_neg_tri() {
+        let _r = FlagReset;
+        let g = gfx(poly(0, 2, 0, 1), vec![0x08DA_1101, 0x08DA_1102]);
+        let default = tris_of(&g);
+        set_neg_face_for_test(true, false);
+        let tris = tris_of(&g);
+        assert_eq!(tris.len(), 1, "retail has no reversed neg winding");
+        assert_eq!(tris[0].side_kind, SideKind::Positive);
+        assert_eq!(tris[0].pos, default[0].pos);
+        assert_eq!(tris[0].uv, default[0].uv);
+        assert_eq!(tris[0].normals, default[0].normals);
+        assert_eq!(tris[0].surface_did, 0x08DA_1101);
+    }
+
+    /// (b) Retail + perPolyCull, neg batch first (neg idx 0 < pos idx 1), both
+    /// opaque: the same-winding neg copy replaces the pos tri — ABC order,
+    /// neg UVs, normals negated.
+    #[test]
+    fn retail_per_poly_cull_neg_first_emits_same_winding_copy() {
+        let _r = FlagReset;
+        let (neg_did, pos_did) = (0x08DA_1201, 0x08DA_1202);
+        set_type(neg_did, BASE_TYPE_IMAGE);
+        set_type(pos_did, BASE_TYPE_IMAGE);
+        let g = gfx(poly(0, 2, 1, 0), vec![neg_did, pos_did]);
+        set_neg_face_for_test(true, true);
+        let tris = tris_of(&g);
+        assert_eq!(tris.len(), 1);
+        let t = &tris[0];
+        assert_eq!(t.side_kind, SideKind::Negative);
+        assert_eq!(t.surface_did, neg_did);
+        assert_eq!(t.pos, [A, B, C], "same index order as the pos face");
+        assert_eq!(t.uv, [[0.5, 0.5], [0.6, 0.6], [0.7, 0.7]], "neg_uv_indices, ABC order");
+        assert_eq!(t.normals, [[0.0, 0.0, -1.0]; 3], "normals x -1 (copyVert)");
+        assert_eq!(t.sides_type, 2, "renders FrontSide under perPolyCull");
+    }
+
+    /// NoNeg (0x8): retail still builds side 1, reading UV slot 0.
+    #[test]
+    fn retail_per_poly_cull_front_copy_without_neg_uvs_reads_slot0() {
+        let _r = FlagReset;
+        let (neg_did, pos_did) = (0x08DA_1301, 0x08DA_1302);
+        set_type(neg_did, BASE_TYPE_IMAGE);
+        set_type(pos_did, BASE_TYPE_SOLID);
+        let g = gfx(poly(0x8, 2, 1, 0), vec![neg_did, pos_did]);
+        set_neg_face_for_test(true, true);
+        let tris = tris_of(&g);
+        assert_eq!(tris.len(), 1);
+        assert_eq!(tris[0].side_kind, SideKind::Negative);
+        assert_eq!(tris[0].uv, [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+    }
+
+    /// The front copy needs ALL of: retail, perPolyCull, neg idx < pos idx and
+    /// two known-opaque surfaces. Otherwise the pos face wins (LESS keeps the
+    /// first-drawn opaque face; an alpha-delayed batch draws after it).
+    #[test]
+    fn retail_front_copy_needs_neg_first_and_both_opaque() {
+        let _r = FlagReset;
+        let check = |label: &str, p: Polygon, surfaces: Vec<u32>, per_poly_cull: bool, want_did: u32| {
+            set_neg_face_for_test(true, per_poly_cull);
+            let tris = tris_of(&gfx(p, surfaces));
+            assert_eq!(tris.len(), 1, "{label}");
+            assert_eq!(tris[0].side_kind, SideKind::Positive, "{label}");
+            assert_eq!(tris[0].surface_did, want_did, "{label}");
+            assert_eq!(tris[0].pos, [A, B, C], "{label}");
+        };
+        let (o1, o2) = (0x08DA_1401, 0x08DA_1402);
+        set_type(o1, BASE_TYPE_IMAGE);
+        set_type(o2, BASE_TYPE_IMAGE);
+        // neg batch draws later (neg idx 1 > pos idx 0).
+        check("neg later", poly(0, 2, 0, 1), vec![o1, o2], true, o1);
+        // neg first but no perPolyCull (DoubleSide).
+        check("no perPolyCull", poly(0, 2, 1, 0), vec![o1, o2], false, o2);
+        // neg first, neg is a clipmap (alpha-delayed).
+        let clip = 0x08DA_1403;
+        set_type(clip, BASE_TYPE_CLIPMAP);
+        check("neg clipmap", poly(0, 2, 1, 0), vec![clip, o2], true, o2);
+        // neg first, pos translucent (alpha-delayed).
+        let tr = 0x08DA_1404;
+        set_type(tr, BASE_TYPE_IMAGE | TYPE_TRANSLUCENT);
+        check("pos translucent", poly(0, 2, 1, 0), vec![o1, tr], true, tr);
+        // neg first, neg type never primed.
+        let unknown = 0x08DA_1405;
+        check("unknown type", poly(0, 2, 1, 0), vec![unknown, o2], true, o2);
+    }
+
+    /// (c) NoPos (0x4 = no pos UV indices): skipped by default; in retail mode
+    /// drawn with UV slot 0 when the pos surface is textured.
+    #[test]
+    fn no_pos_poly_skipped_by_default_drawn_with_slot0_in_retail() {
+        let _r = FlagReset;
+        let (tex, solid, unknown) = (0x08DA_1501, 0x08DA_1502, 0x08DA_1503);
+        set_type(tex, BASE_TYPE_IMAGE);
+        set_type(solid, BASE_TYPE_SOLID);
+        let textured = gfx(poly(0x4, 1, 0, -1), vec![tex]);
+        assert!(tris_of(&textured).is_empty(), "default skips NoPos");
+
+        set_neg_face_for_test(true, false);
+        let tris = tris_of(&textured);
+        assert_eq!(tris.len(), 1);
+        assert_eq!(tris[0].side_kind, SideKind::Positive);
+        assert_eq!(tris[0].surface_did, tex);
+        assert_eq!(tris[0].uv, [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "UV slot 0");
+        assert_eq!(tris[0].pos, [A, B, C]);
+
+        assert!(tris_of(&gfx(poly(0x4, 1, 0, -1), vec![solid])).is_empty(), "untextured stays skipped");
+        assert!(tris_of(&gfx(poly(0x4, 1, 0, -1), vec![unknown])).is_empty(), "unknown type stays skipped");
+    }
+
+    /// A tex-swap alias reads its base Surface's type (render state is the
+    /// base's).
+    #[test]
+    fn surface_type_bits_resolves_tex_swap_alias() {
+        let base = 0x08DA_1601;
+        set_type(base, BASE_TYPE_CLIPMAP);
+        let alias = tex_swap_alias_for(base, 0x05DA_1601);
+        assert_eq!(surface_type_bits(alias), Some(BASE_TYPE_CLIPMAP));
+        assert_eq!(surface_type_bits(0x08DA_16FF), None);
+    }
+
+    /// `prime_surface_types` reads nothing by default and caches the Surface
+    /// `type` under the flag.
+    #[test]
+    fn prime_surface_types_is_flag_gated() {
+        struct OneSurface {
+            did: u32,
+            bytes: Vec<u8>,
+        }
+        impl holtburger_dat::ResourceSource for OneSurface {
+            fn get_file_by_key(
+                &self,
+                key: holtburger_dat::ResourceKey<'_>,
+            ) -> holtburger_dat::Result<Vec<u8>> {
+                if key.namespace == "eor/portal" && key.file_id == self.did {
+                    Ok(self.bytes.clone())
+                } else {
+                    Err(holtburger_dat::DatError::NotFound(key.file_id))
+                }
+            }
+            fn get_metadata_by_key(
+                &self,
+                _key: holtburger_dat::ResourceKey<'_>,
+            ) -> Option<holtburger_dat::FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, _namespace: &str) -> bool {
+                true
+            }
+        }
+        let _r = FlagReset;
+        let did = 0x08DA_1701;
+        // Textured Surface body: type | orig_texture_id | orig_palette_id |
+        // translucency | luminosity | diffuse (surface.rs).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(BASE_TYPE_IMAGE | TYPE_TRANSLUCENT).to_le_bytes());
+        bytes.extend_from_slice(&0x0500_1234u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        for f in [0.5f32, 0.0, 1.0] {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+        let src = OneSurface { did, bytes };
+        prime_surface_types(&src, &[did]);
+        assert_eq!(surface_type_bits(did), None, "no read with the flag off");
+        set_neg_face_for_test(true, false);
+        prime_surface_types(&src, &[did, 0x08DA_17FF]);
+        assert_eq!(surface_type_bits(did), Some(BASE_TYPE_IMAGE | TYPE_TRANSLUCENT));
+        assert_eq!(surface_type_bits(0x08DA_17FF), None, "a miss is not cached");
+    }
+
+    fn env_two_sided(stippling: u8) -> Environment {
+        let cell = CellStruct {
+            cell_struct_id: 0,
+            vertex_array: CVertexArray { vertex_type: 1, vertices: verts() },
+            polygons: HashMap::from([(0u16, poly(stippling, 2, 0, 1))]),
+            portal_poly_ids: vec![],
+            physics_polygons: HashMap::new(),
+            cell_bsp: None,
+            physics_bsp: None,
+            drawing_bsp: None,
+        };
+        Environment { id: 0x0D00_DA02, cells: HashMap::from([(0u32, cell)]) }
+    }
+
+    /// EnvCell path: default keeps the G16 fix-2 reversed back tri; retail
+    /// drops it, with or without perPolyCull (EnvCell tris are DoubleSide).
+    #[test]
+    fn env_retail_drops_reversed_neg_tri() {
+        let _r = FlagReset;
+        let env = env_two_sided(0);
+        let surfaces = [0x08DA_1801u32, 0x08DA_1802];
+        let run = || {
+            let mut tris = Vec::new();
+            append_environment_tris(&mut tris, &env, &surfaces, 0);
+            tris
+        };
+        let default = run();
+        assert_eq!(default.len(), 2);
+        assert_eq!(default[1].side_kind, SideKind::Negative);
+        assert_eq!(default[1].pos, [A, C, B]);
+
+        for per_poly_cull in [false, true] {
+            set_neg_face_for_test(true, per_poly_cull);
+            let tris = run();
+            assert_eq!(tris.len(), 1, "perPolyCull={per_poly_cull}");
+            assert_eq!(tris[0].side_kind, SideKind::Positive);
+            assert_eq!(tris[0].pos, default[0].pos);
+            assert_eq!(tris[0].uv, default[0].uv);
+            assert_eq!(tris[0].surface_did, 0x08DA_1801);
+        }
+
+        // EnvCell NoPos polys stay skipped under the flag.
+        let nopos = env_two_sided(0x4);
+        let mut tris = Vec::new();
+        append_environment_tris(&mut tris, &nopos, &surfaces, 0);
+        assert!(tris.is_empty());
     }
 }
 
@@ -24084,6 +27067,9 @@ pub async fn fetch_env_cells_in_landblock(
         // `env_record_cache` above — sibling cells sharing an
         // environment_id (a Holtburg dungeon sub-section uses one
         // Environment for many cells) no longer re-fetch + re-parse it.
+        // rynth-macro-nav-5: filled from the same CellStruct below; stays
+        // empty when the Environment / CellStruct doesn't resolve.
+        let mut portal_doorways: Vec<f64> = Vec::new();
         {
             use holtburger_dat::ResourceKey;
             use holtburger_dat::file_type::Environment;
@@ -24104,6 +27090,16 @@ pub async fn fetch_env_cells_in_landblock(
                     if let Some(cell_struct) =
                         env.cells.get(&(envcell.cell_structure as u32))
                     {
+                        // rynth-macro-nav-5: per-portal doorway rows for the
+                        // indoor router (`takePortalDoorways`). Data only —
+                        // nothing in the render/physics path reads them.
+                        portal_doorways = envcell_portal_doorways(
+                            &envcell.portals,
+                            cell_struct,
+                            landblock_high,
+                            cell_origin,
+                            cell_orientation,
+                        );
                         // Walk physics polygons, fan-triangulate,
                         // transform to world coords. Skip degenerate
                         // / missing-vertex polygons silently — a
@@ -24513,6 +27509,7 @@ pub async fn fetch_env_cells_in_landblock(
             cell_orientation_qz: cell_orientation.z,
             static_objects,
             portal_cell_ids,
+            portal_doorways,
             mesh,
         });
     }
@@ -27482,74 +30479,10 @@ fn damage_type_label(damage_type: holtburger_common::properties::DamageType) -> 
     }
 }
 
-/// F10-2 — retail per-hit damage VERB. In retail the CLIENT (not the
-/// server) picks the adjective from the damage TYPE and SEVERITY
-/// (damage / MaxHealth), per `acclient.c` `GetDamageAdjective`. Four
-/// severity tiers split at 0.1 / 0.25 / 0.5. `plural` selects the
-/// "X mangles you" defender form vs the "You mangle X" attacker form.
-#[cfg(target_arch = "wasm32")]
-fn damage_severity_verb(
-    damage_type: holtburger_common::properties::DamageType,
-    severity: f64,
-    plural: bool,
-) -> &'static str {
-    use holtburger_common::properties::DamageType;
-    // tier index: 0 = ≤0.1, 1 = >0.1, 2 = >0.25, 3 = >0.5.
-    let tier = if severity > 0.5 {
-        3
-    } else if severity > 0.25 {
-        2
-    } else if severity > 0.1 {
-        1
-    } else {
-        0
-    };
-    // [tier0, tier1, tier2, tier3] as (singular, plural) — verbatim from
-    // acclient.c. Verb chosen by the dominant damage-type bit.
-    let table: [(&str, &str); 4] = if damage_type.contains(DamageType::SLASH) {
-        [("scratch", "scratches"), ("cut", "cuts"), ("slash", "slashes"), ("mangle", "mangles")]
-    } else if damage_type.contains(DamageType::PIERCE) {
-        [("nick", "nicks"), ("stab", "stabs"), ("impale", "impales"), ("gore", "gores")]
-    } else if damage_type.contains(DamageType::BLUDGEON) {
-        [("graze", "grazes"), ("bash", "bashes"), ("smash", "smashes"), ("crush", "crushes")]
-    } else if damage_type.contains(DamageType::COLD) {
-        [("numb", "numbs"), ("chill", "chills"), ("frost", "frosts"), ("freeze", "freezes")]
-    } else if damage_type.contains(DamageType::FIRE) {
-        [("singe", "singes"), ("scorch", "scorches"), ("burn", "burns"), ("incinerate", "incinerates")]
-    } else if damage_type.contains(DamageType::ACID) {
-        [("blister", "blisters"), ("sear", "sears"), ("corrode", "corrodes"), ("dissolve", "dissolves")]
-    } else if damage_type.contains(DamageType::ELECTRIC) {
-        [("spark", "sparks"), ("shock", "shocks"), ("jolt", "jolts"), ("blast", "blasts")]
-    } else if damage_type.contains(DamageType::HEALTH) {
-        [("drain", "drains"), ("exhaust", "exhausts"), ("siphon", "siphons"), ("deplete", "depletes")]
-    } else {
-        [("hit", "hits"), ("hit", "hits"), ("hit", "hits"), ("hit", "hits")]
-    };
-    let (singular, plural_form) = table[tier];
-    if plural { plural_form } else { singular }
-}
-
-/// F10-2 — retail attack-message prefix: "Critical hit!  " then
-/// "Sneak Attack! " then "Recklessness! ", in that order
-/// (`acclient.c:408411-408417`). Empty when none apply.
-#[cfg(target_arch = "wasm32")]
-fn attack_conditions_prefix(
-    critical: bool,
-    attack_conditions: holtburger_protocol::messages::combat::types::AttackConditions,
-) -> String {
-    use holtburger_protocol::messages::combat::types::AttackConditions;
-    let mut s = String::new();
-    if critical {
-        s.push_str("Critical hit!  ");
-    }
-    if attack_conditions.contains(AttackConditions::SNEAK_ATTACK) {
-        s.push_str("Sneak Attack! ");
-    }
-    if attack_conditions.contains(AttackConditions::RECKLESSNESS) {
-        s.push_str("Recklessness! ");
-    }
-    s
-}
+// combat-magic-3 (2026-10-13): the F10-2 hit-line helpers
+// (`damage_severity_verb`, `attack_conditions_prefix`) moved to the
+// native-tested `chat_format` (`combat_hit_adjectives`,
+// `attacker_hit_prefix` / `defender_hit_prefix`, `format_*_hit_line`).
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
@@ -28282,8 +31215,10 @@ const CLIENT_EVENT_KIND_ENTITY_DETACHED: u32 = 47;
 /// `u32_payload_2` = `WeenieError` discriminant; JS callers resolve to
 /// English via `weenieErrorMessage(u32_payload_2)` from
 /// `plugins/weenie_error_messages.js`.
-/// `string_payload` = the `WeenieError` Debug label (diagnostic only;
-/// the user-facing lookup happens JS-side), or None.
+/// `string_payload` = messages-objects-1 (2026-10-13): retail's composed
+/// `ServerSaysAttemptFailed` line ("The Pyreal can't be picked up - action
+/// cancelled"; `""` when retail prints none — `inventory_request`); under
+/// `?retailAttemptFailed=off` the `WeenieError` Debug label, as before.
 /// `f32_payload` = None.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED: u32 = 48;
@@ -28996,6 +31931,30 @@ enum SessionCommand {
     RemoveShortcut {
         index: u32,
     },
+    /// input-options-2 (2026-10-13): spell-bar favourite add. Sends
+    /// `GameAction::AddSpellFavorite` (0x01E3) — retail
+    /// `SpellCastSubMenu::AddSpellToPlayerModule` →
+    /// `CM_Character::Event_AddSpellFavorite(spell, index, list)`. ACE
+    /// persists it (`CharacterPropertiesSpellBar`) and echoes the 8 lists
+    /// in the next PlayerDescription.
+    AddSpellFavorite {
+        spell_id: u32,
+        index: u32,
+        list: u32,
+    },
+    /// input-options-2: spell-bar favourite remove. Sends
+    /// `GameAction::RemoveSpellFavorite` (0x01E4) — retail
+    /// `SpellCastSubMenu::RemoveSpellFromPlayerModule`.
+    RemoveSpellFavorite {
+        spell_id: u32,
+        list: u32,
+    },
+    /// input-options-2: spellbook filter word. Sends
+    /// `GameAction::SpellbookFilter` (0x0286) — retail
+    /// `gmSpellbookUI::UpdateFilter` → `Event_SpellbookFilterEvent`.
+    SpellbookFilter {
+        filters: u32,
+    },
     /// PR-LL 2026-05-23: drag-and-drop give from inventory onto an
     /// NPC / player target. Maps 1:1 to `GameAction::GiveObjectRequest`
     /// (sub-opcode 0x00CD).
@@ -29249,6 +32208,13 @@ enum SessionCommand {
     TitleSet {
         title_id: u32,
     },
+    /// maps-chargen-barber-1 (2026-10-13): the barber page's Apply —
+    /// `GameAction::FinishBarber` (0x0311, retail
+    /// `CM_Character::Event_FinishBarber`) with the 16 StartBarber-layout
+    /// fields in wire order.
+    FinishBarber {
+        fields: [u32; 16],
+    },
     /// Allegiance: set the allegiance MOTD / name. Maps to
     /// `GameAction::SetAllegianceName` (sub-opcode 0x0033). Single
     /// string16 payload; ACE owns monarch/officer permission checks.
@@ -29297,6 +32263,14 @@ enum SessionCommand {
     /// pk-4: `@pklarena` / `@pla` — `DoPKLArena` → `Event_TeleToPKLArena`
     /// (0x0026, :698389). No payload.
     TeleToPklArena,
+    /// chat-errors-8 (2026-10-13): `/age` — retail
+    /// `ClientCommunicationSystem::DoAge` → `CM_Character::Event_QueryAge`
+    /// (0x01C2, acclient.c:697985) with target 0 (the selected-object
+    /// target is PSR-only, and ACE ignores the field).
+    QueryAge,
+    /// chat-errors-8: `/birth` — `DoBirth` → `Event_QueryBirth` (0x01C4,
+    /// :698035) with target 0.
+    QueryBirth,
     /// Allegiance: add `target_name` to the allegiance ban list. Maps
     /// to `GameAction::AddAllegianceBan` (sub-opcode 0x02A1). Single
     /// string16 payload; ACE owns monarch/officer permission checks.
@@ -29558,6 +32532,9 @@ enum SessionCommand {
 ///   `GameEvent::VictimNotification`, `GameEvent::KillerNotification`.
 /// - `kind = 4` — Disconnected. `stringPayload` = the error message
 ///   from `recv_message` (transport error, server hangup, etc.).
+///   `u32Payload` is unset, except on a server AccountBoot (0xF7DC):
+///   then it is `0xF7DC` and `stringPayload` is retail's
+///   "You have been booted from Asheron's Call…" line (account_boot.rs).
 /// - `kind = 5` — CharacterCreated (Phase 4 step 2a.5).
 ///   `stringPayload` = new character's name; `u32Payload` = new
 ///   GUID. Fired when ACE returns
@@ -31173,6 +34150,14 @@ struct VendorStateItem {
     /// BF_REQUIRES_PACKSLOT, or an items / containers capacity (the test
     /// gmVendorUI::BuySingleItem uses, acclient.c:244716).
     pack_slot: bool,
+    /// hud-ui-3: the rest of the retail icon composite
+    /// (`IconData::RenderIcons`, acclient.c:437901) — PublicWeenieDesc
+    /// `_effects` (UiEffects), `_iconOverlayID`, `_iconUnderlayID`; 0 when
+    /// absent. Vendor stock never reaches the entity store, so the vendor
+    /// list can only read these here.
+    ui_effects: u32,
+    icon_overlay: u32,
+    icon_underlay: u32,
 }
 
 /// JS-facing snapshot of one vendor's trade state. Returned by
@@ -31231,6 +34216,9 @@ impl VendorStateJs {
                     supply: i.supply,
                     max_stack_size: i.max_stack_size,
                     pack_slot: i.pack_slot,
+                    ui_effects: i.ui_effects,
+                    icon_overlay: i.icon_overlay,
+                    icon_underlay: i.icon_underlay,
                 })
                 .collect(),
         }
@@ -31303,6 +34291,9 @@ pub struct VendorItemJs {
     supply: i32,
     max_stack_size: u32,
     pack_slot: bool,
+    ui_effects: u32,
+    icon_overlay: u32,
+    icon_underlay: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31344,6 +34335,16 @@ impl VendorItemJs {
     /// vendor-buy-1: a purchase needs a container slot (packs, quivers).
     #[wasm_bindgen(getter, js_name = packSlot)]
     pub fn pack_slot(&self) -> bool { self.pack_slot }
+    /// hud-ui-3: UiEffects bitfield (PublicWeenieDesc `_effects`, 0 when
+    /// absent) — picks the tile that replaces the icon's white key.
+    #[wasm_bindgen(getter, js_name = uiEffects)]
+    pub fn ui_effects(&self) -> u32 { self.ui_effects }
+    /// hud-ui-3: custom icon overlay DID (`_iconOverlayID`, 0 when absent).
+    #[wasm_bindgen(getter, js_name = iconOverlay)]
+    pub fn icon_overlay(&self) -> u32 { self.icon_overlay }
+    /// hud-ui-3: custom icon underlay DID (`_iconUnderlayID`, 0 when absent).
+    #[wasm_bindgen(getter, js_name = iconUnderlay)]
+    pub fn icon_underlay(&self) -> u32 { self.icon_underlay }
 }
 
 /// PR-JJ 2026-05-23 + Wave F.2 2026-05-27: Internal cache shape for
@@ -32412,7 +35413,10 @@ impl HouseStatusJs {
 /// flag, payment item lists, and the dwelling's world position. Per
 /// `HouseData.cs::Write`: u32 BuyTime, u32 RentTime, u32 HouseType,
 /// u32 MaintenanceFree (0/1), List<HousePayment> Buy, List<HousePayment>
-/// Rent, Position.
+/// Rent, Position. hud-ui-1 (2026-10-13): the Buy / Rent lists are kept
+/// (`house_payments`) — gmHouseUI::DisplayHouseData (acclient.c:219515)
+/// prints both and keys "next due" + the paid / unpaid warning on
+/// `HousePaymentList::IsPaidInFull(rent)`.
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 struct HouseData {
@@ -32424,6 +35428,8 @@ struct HouseData {
     pos_x: f32,
     pos_y: f32,
     pos_z: f32,
+    buy: Vec<house_payments::HousePay>,
+    rent: Vec<house_payments::HousePay>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -32438,6 +35444,8 @@ pub struct HouseDataJs {
     pos_x: f32,
     pos_y: f32,
     pos_z: f32,
+    buy: Vec<house_payments::HousePay>,
+    rent: Vec<house_payments::HousePay>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -32459,6 +35467,14 @@ impl HouseDataJs {
     pub fn pos_y(&self) -> f32 { self.pos_y }
     #[wasm_bindgen(getter, js_name = posZ)]
     pub fn pos_z(&self) -> f32 { self.pos_z }
+    /// hud-ui-1: the purchase price — `[{num, paid, weenieId, name,
+    /// pluralName}]` (gmHouseUI::DisplayBuyPayment, acclient.c:219114).
+    #[wasm_bindgen(getter)]
+    pub fn buy(&self) -> js_sys::Array { house_payments::house_payments_js(&self.buy) }
+    /// hud-ui-1: the maintenance list, `paid` = what is already paid this
+    /// period (gmHouseUI::DisplayRentPayment, acclient.c:219170).
+    #[wasm_bindgen(getter)]
+    pub fn rent(&self) -> js_sys::Array { house_payments::house_payments_js(&self.rent) }
 }
 
 /// Wave M3 (2026-05-26): owner-side house profile data — the deeper
@@ -32468,8 +35484,10 @@ impl HouseDataJs {
 /// then the profile: u32 DwellingID, u32 OwnerID, u32 Bitmask, i32×4
 /// level/rank requirements, u32 MaintenanceFree, u32 HouseType,
 /// string16L OwnerName, List<HousePayment> Buy, List<HousePayment> Rent.
-/// We surface the scalar header fields + OwnerName for the panel; the
-/// payment lists are unused in this snapshot.
+/// We surface the scalar header fields + OwnerName for the panel, and
+/// (hud-ui-1, 2026-10-13) the Buy / Rent payment lists: gmSlumlordUI::
+/// RefreshHouse (acclient.c:250255) shows HouseProfile::ComposeText(Buy)
+/// on the Buy page and ComposeText2(Rent) on the Maintenance page.
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 struct HouseProfile {
@@ -32480,6 +35498,14 @@ struct HouseProfile {
     house_type: u32,
     maintenance_free: u32,
     owner_name: String,
+    buy: Vec<house_payments::HousePay>,
+    rent: Vec<house_payments::HousePay>,
+    /// messages-objects-3 (2026-10-13): receipt counter, 1 for the first
+    /// HouseProfile of the session. Retail re-shows gmSlumlordUI (and
+    /// re-registers its 9 m range check) on EVERY HouseProfile
+    /// (RecvNotice_UpdateHouseProfile, acclient.c:250593); using the same
+    /// crystal again changes no other field, so house-panel.js keys on it.
+    seq: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -32493,6 +35519,9 @@ pub struct HouseProfileJs {
     house_type: u32,
     maintenance_free: u32,
     owner_name: String,
+    buy: Vec<house_payments::HousePay>,
+    rent: Vec<house_payments::HousePay>,
+    seq: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -32512,6 +35541,18 @@ impl HouseProfileJs {
     pub fn maintenance_free(&self) -> bool { self.maintenance_free != 0 }
     #[wasm_bindgen(getter, js_name = ownerName)]
     pub fn owner_name(&self) -> String { self.owner_name.clone() }
+    /// hud-ui-1: the purchase requirements — `[{num, paid, weenieId, name,
+    /// pluralName}]` (HouseProfile::ComposeText(Buy_House), acclient.c:486547).
+    #[wasm_bindgen(getter)]
+    pub fn buy(&self) -> js_sys::Array { house_payments::house_payments_js(&self.buy) }
+    /// hud-ui-1: the maintenance requirements (HouseProfile::ComposeText2
+    /// (Rent_House), acclient.c:486567).
+    #[wasm_bindgen(getter)]
+    pub fn rent(&self) -> js_sys::Array { house_payments::house_payments_js(&self.rent) }
+    /// messages-objects-3: how many HouseProfiles this session has received
+    /// (1 = the first) — a new one reopens the slumlord window.
+    #[wasm_bindgen(getter)]
+    pub fn seq(&self) -> u32 { self.seq }
 }
 
 /// Wave M3 (2026-05-26): house guest-list + open-status snapshot. ACE
@@ -34487,6 +37528,20 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
     }
 
+    /// streaming-residency-1 (2026-10-13): `?aceObjMaint` is a strict
+    /// OPT-IN — only an exact `aceObjMaint=on` enables it.
+    #[test]
+    fn ace_obj_maint_flag_is_strict_opt_in() {
+        use super::parse_ace_obj_maint_flag;
+        assert!(!parse_ace_obj_maint_flag(""));
+        assert!(!parse_ace_obj_maint_flag("?renderer=3d"));
+        assert!(!parse_ace_obj_maint_flag("?aceObjMaint=off"));
+        assert!(!parse_ace_obj_maint_flag("?aceObjMaint=1"));
+        assert!(!parse_ace_obj_maint_flag("?aceObjMaint"));
+        assert!(parse_ace_obj_maint_flag("?aceObjMaint=on"));
+        assert!(parse_ace_obj_maint_flag("?nosw=1&aceObjMaint=on"));
+    }
+
     /// SLOW-RUN (2026-10-11): `?apPlaneResend` and `?castLockRevive` are both
     /// DEFAULT-ON (`=off` disables).
     #[test]
@@ -34566,6 +37621,21 @@ mod wire_state_packs_routing_tests {
         assert!(parse_remote_spine_flag("?remoteSpineDiag=off"));
         assert!(!parse_remote_spine_flag("?remoteSpine=off"));
         assert!(!parse_remote_spine_flag("?nosw=1&remoteSpine=off"));
+    }
+
+    /// motion-remote-1: `?remoteRootScale` parse shape — DEFAULT-ON; only
+    /// an explicit `=off` / `=0` / `=false` disables.
+    #[test]
+    fn remote_root_scale_flag_defaults_on_unless_off() {
+        use super::parse_remote_root_scale_flag;
+        assert!(parse_remote_root_scale_flag(""));
+        assert!(parse_remote_root_scale_flag("?remoteRootScale=on"));
+        assert!(parse_remote_root_scale_flag("?remoteRootMotion=off"));
+        assert!(parse_remote_root_scale_flag("?remoteSpine=off"));
+        assert!(!parse_remote_root_scale_flag("?remoteRootScale=off"));
+        assert!(!parse_remote_root_scale_flag("?remoteRootScale=0"));
+        assert!(!parse_remote_root_scale_flag("?remoteRootScale=false"));
+        assert!(!parse_remote_root_scale_flag("?nosw=1&remoteRootScale=off"));
     }
 
     /// NETSYNC-3 (2026-10-07): `?remoteTurn` parse shape — DEFAULT-ON;
@@ -34753,6 +37823,20 @@ mod wire_state_packs_routing_tests {
         assert!(parse_ap_retail_gate_flag("?apRetailGate=on"));
     }
 
+    /// physics-collision-2 (2026-10-13): `?setupPlayerBody` — DEFAULT-ON;
+    /// only an exact `=off` disables (the movement-flag house shape).
+    #[test]
+    fn setup_player_body_flag_defaults_on_unless_off() {
+        use super::parse_setup_player_body_flag as parse;
+        assert!(parse(""));
+        assert!(parse("?nosw=1"));
+        assert!(parse("?setupPlayerBody=on"));
+        assert!(parse("?walkableGround=off"), "another flag's =off must not match");
+        assert!(!parse("?setupPlayerBody=off"));
+        assert!(!parse("?nosw=1&setupPlayerBody=off"));
+        assert!(!parse("setupPlayerBody=off"));
+    }
+
     /// F2 (2026-07-27): `?serverMoveToDriver` / `?stickyIdleStep` parse
     /// shapes — DEFAULT-ON; only an explicit `=off` disables (the
     /// movement-flag house shape).
@@ -34881,6 +37965,36 @@ mod wire_state_packs_routing_tests {
         // DEFAULT-ON: absent flag reads enabled.
         assert!(parse_faithful_entity_collision_flag("?faithfulTransition=on"));
         assert!(parse_faithful_entity_collision_flag(""));
+    }
+
+    /// motion-remote-2: `?remoteRestHeading=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn remote_rest_heading_flag_defaults_on_off_escape() {
+        use super::parse_remote_rest_heading_flag;
+        assert!(parse_remote_rest_heading_flag(""));
+        assert!(parse_remote_rest_heading_flag("?renderer=3d"));
+        assert!(parse_remote_rest_heading_flag("?remoteRestHeading=on"));
+        assert!(!parse_remote_rest_heading_flag("?remoteRestHeading=off"));
+        assert!(!parse_remote_rest_heading_flag("?remoteRestHeading=0"));
+        assert!(!parse_remote_rest_heading_flag("?remoteRestHeading=false"));
+        assert!(!parse_remote_rest_heading_flag("?nosw=1&remoteRestHeading=off"));
+        // A neighbouring flag's escape is not this one's.
+        assert!(parse_remote_rest_heading_flag("?remoteSpineHeading=off"));
+    }
+
+    /// motion-remote-3: `?remoteLeash=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn remote_leash_flag_defaults_on_off_escape() {
+        use super::parse_remote_leash_flag;
+        assert!(parse_remote_leash_flag(""));
+        assert!(parse_remote_leash_flag("?renderer=3d"));
+        assert!(parse_remote_leash_flag("?remoteLeash=on"));
+        assert!(!parse_remote_leash_flag("?remoteLeash=off"));
+        assert!(!parse_remote_leash_flag("?remoteLeash=0"));
+        assert!(!parse_remote_leash_flag("?remoteLeash=false"));
+        assert!(!parse_remote_leash_flag("?nosw=1&remoteLeash=off"));
+        // The local player's leash flag is a different switch.
+        assert!(parse_remote_leash_flag("?retailLeash=off"));
     }
 
     /// landdefs-terrain-2: `?houseBarriers=off` DEFAULT-ON off-escape shape.
@@ -36266,6 +39380,12 @@ pub struct SessionHandle {
     /// snapshot, refreshed by the recv loop on each Sanctuary
     /// PrivateUpdatePosition. JS reads via [`SessionHandle::player_sanctuary`].
     latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
+    /// inventory-session-7 (2026-10-13): the player's LastOutsideDeath
+    /// position, replaced by each PlayerDescription and set by a
+    /// LastOutsideDeath PrivateUpdatePosition (`last_outside_death::observe`).
+    /// JS reads via [`SessionHandle::player_last_outside_death`].
+    latest_last_outside_death:
+        std::rc::Rc<std::cell::RefCell<Option<last_outside_death::LastOutsideDeathJs>>>,
     /// HUD rec #68 (2026-06-16): server language context from the
     /// DddInterrogation handshake packet. JS reads via
     /// [`SessionHandle::localization`].
@@ -36742,7 +39862,9 @@ pub struct SessionHandle {
     /// PR-SS.1 2026-05-23: most-recent measured round-trip time in
     /// milliseconds, from `PingRequest` send to `PingResponse` recv.
     /// Updated by the recv loop's `GameEvent::PingResponse` arm using
-    /// the send timestamp stashed in `PING_SEND_INSTANT`. JS prefers
+    /// the send timestamp kept in `PING_ROUND_TRIP` (direct mode), or by
+    /// the net_worker's own measurement through
+    /// [`SessionHandle::net_worker_link_status`] (`?netWorker`). JS prefers
     /// this over the recv-staleness fallback when available (real
     /// RTT is more accurate; staleness is only useful when there's no
     /// active ping in flight or no response yet). `None` until the
@@ -37556,6 +40678,16 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerSanctuary)]
     pub fn player_sanctuary(&self) -> Option<SanctuaryJs> {
         self.latest_sanctuary.borrow().clone()
+    }
+
+    /// inventory-session-7 (2026-10-13): the player's LastOutsideDeath
+    /// position `{ cellId, x, y, z }` (PlayerDesc position 0xE), or `None`
+    /// when the PlayerDescription carried none and no outdoor death has been
+    /// recorded since. Read by the retail `@corpse` / `@cor` command
+    /// (app/slash_commands.js, `ClientCommunicationSystem::DoCorpse`).
+    #[wasm_bindgen(js_name = playerLastOutsideDeath)]
+    pub fn player_last_outside_death(&self) -> Option<last_outside_death::LastOutsideDeathJs> {
+        self.latest_last_outside_death.borrow().clone()
     }
 
     /// HUD rec #68 (2026-06-16): the server's language context (langId,
@@ -38532,6 +41664,33 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = sessionLastPingRttMs)]
     pub fn session_last_ping_rtt_ms(&self) -> u32 {
         self.last_ping_rtt_ms.borrow().unwrap_or(u32::MAX)
+    }
+
+    /// net-transport-6 (2026-10-13): retail's Link Status packet-loss
+    /// figure (`LinkStatusHolder::GetPacketLossPercentage`,
+    /// acclient.c:77339): `2 * (NAKed + retransmitted) / (received + sent)`
+    /// over the last 40 two-second snapshots
+    /// (`holtburger_session::link_status`). Retail's `gmLinkStatusUI::Update`
+    /// prints this doubled ratio with 2 decimals and a "%" without scaling
+    /// it, and the link-status tooltip does the same. `0.0` until the first
+    /// snapshot. Direct mode reads the main-thread `Session`; `?netWorker`
+    /// mode the figure the worker last posted.
+    #[wasm_bindgen(js_name = sessionPacketLossPct)]
+    pub fn session_packet_loss_pct(&self) -> f32 {
+        net_worker::link_packet_loss()
+    }
+
+    /// net-transport-6: `?netWorker` relay only. `net_worker_client.js` calls
+    /// this with the worker's own link numbers (`RX_KIND_LINK_STATUS`): the
+    /// last ping RTT in ms (`u32::MAX` = none measured yet) and the
+    /// packet-loss figure. In worker mode the main thread never stamps a
+    /// ping, so this is where `sessionLastPingRttMs` gets its value.
+    #[wasm_bindgen(js_name = netWorkerLinkStatus)]
+    pub fn net_worker_link_status(&self, rtt_ms: u32, packet_loss: f32) {
+        if rtt_ms != u32::MAX {
+            *self.last_ping_rtt_ms.borrow_mut() = Some(rtt_ms);
+        }
+        net_worker::set_link_packet_loss(packet_loss);
     }
 
     /// PR-HH 2026-05-23: contents (item GUIDs) of the most-recently
@@ -40936,6 +44095,57 @@ impl SessionHandle {
         Some(CollisionHit::from_generic(best?))
     }
 
+    /// physics-collision-1 (2026-10-13): sweep a ballistic MISSILE's sphere
+    /// against the solid OBJECTS around it — creatures, players (the local
+    /// one included unless `exempt_local_player`), chests, dynamic props — by
+    /// their Setup cylspheres / spheres at the client body pose
+    /// (`WorldState::sweep_missile_against_objects`). The object layer of
+    /// `scene3d/projectile_sweep.js`; HAS_PHYSICS_BSP objects stay on
+    /// `sweepSphereAgainstEntities`.
+    ///
+    /// Retail `OBJECTINFO::missile_ignore` (acclient.c:314070) exempts a
+    /// creature only when `targetID != 0`, and the client only ever writes
+    /// `targetID = 0` (:311603, :312155) — so every solid body stops a
+    /// missile locally, not just ACE's target. The missile's own
+    /// PhysicsState is read here: an ETHEREAL missile passes every
+    /// non-STATIC object (`FindObjCollisions` :316201-316212).
+    ///
+    /// `try_borrow` like `sweepSphereAgainstEntities`: a projectile tick that
+    /// lands mid-drain degrades to "no hit". `None` on a clean miss.
+    #[wasm_bindgen(js_name = sweepSphereAgainstObjects)]
+    pub fn sweep_sphere_against_objects(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        missile_guid: u32,
+        exempt_local_player: bool,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::{Guid, Vector3};
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let world = self.world.try_borrow().ok()?;
+        let world = world.as_ref()?;
+        let missile = Guid(missile_guid);
+        let missile_state = world
+            .entities
+            .get(missile)
+            .map_or(0, |e| e.physics_state.bits());
+        let hit = world.sweep_missile_against_objects(
+            start,
+            end,
+            radius,
+            missile,
+            missile_state,
+            exempt_local_player,
+        )?;
+        Some(CollisionHit::from_generic(hit))
+    }
+
     /// CAM-SEAM (2026-08-02): clamp a camera segment to valid indoor cell
     /// space (step 6 of the JS `_clipCameraAgainstWorld` chain). Walks
     /// `from → to` with retail-style cur_cell continuity seeded at
@@ -42292,6 +45502,84 @@ impl SessionHandle {
             .collect()
     }
 
+    /// input-options-2 (2026-10-13): put `spell_id` on spell bar `list`
+    /// (0..7) at list position `index` — retail
+    /// `SpellCastSubMenu::AddSpellToPlayerModule` →
+    /// `CM_Character::Event_AddSpellFavorite`. Routes through
+    /// `SessionCommand::AddSpellFavorite` → `GameAction::AddSpellFavorite`
+    /// (0x01E3); the recv loop also updates `playerSpellBars()` with ACE's
+    /// rules (insert at `min(index, count)`, a duplicate or unknown spell is
+    /// ignored).
+    #[wasm_bindgen(js_name = addSpellFavorite)]
+    pub fn add_spell_favorite(&self, spell_id: u32, index: u32, list: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddSpellFavorite { spell_id, index, list })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addSpellFavorite: cmd channel closed ({e})"))
+            })
+    }
+
+    /// input-options-2: take `spell_id` off spell bar `list` — retail
+    /// `SpellCastSubMenu::RemoveSpellFromPlayerModule` →
+    /// `CM_Character::Event_RemoveSpellFavorite` (`GameAction` 0x01E4).
+    #[wasm_bindgen(js_name = removeSpellFavorite)]
+    pub fn remove_spell_favorite(&self, spell_id: u32, list: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveSpellFavorite { spell_id, list })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("removeSpellFavorite: cmd channel closed ({e})"))
+            })
+    }
+
+    /// input-options-2: store the spellbook filter word — retail
+    /// `gmSpellbookUI::UpdateFilter` → `CM_Character::
+    /// Event_SpellbookFilterEvent` (`GameAction` 0x0286). Pass the whole
+    /// word (bits without a FilterBox button, e.g. Level_9 0x1000, kept).
+    #[wasm_bindgen(js_name = setSpellbookFilters)]
+    pub fn set_spellbook_filters(&self, filters: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SpellbookFilter { filters })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setSpellbookFilters: cmd channel closed ({e})"))
+            })
+    }
+
+    /// input-options-2: the local player's 8 spell-bar favourite lists
+    /// (retail `PlayerModule::GetFavoriteSpellsList`, PlayerDescription
+    /// `SpellLists8`), as an `Array` of 8 `Uint32Array`s in list order. The
+    /// recv loop keeps them current with `addSpellFavorite` /
+    /// `removeSpellFavorite`. Empty `Array` when no world exists
+    /// (pre-login). plugins/spellbook.js hydrates the spell-bar tabs from it.
+    #[wasm_bindgen(js_name = playerSpellBars)]
+    pub fn player_spell_bars(&self) -> js_sys::Array {
+        let out = js_sys::Array::new();
+        let Ok(world) = self.world.try_borrow() else { return out; };
+        let Some(w) = world.as_ref() else { return out; };
+        for i in 0..8 {
+            let list: &[u32] = w.player.hotbar_spells.get(i).map(|l| l.as_slice()).unwrap_or(&[]);
+            out.push(&js_sys::Uint32Array::from(list).into());
+        }
+        out
+    }
+
+    /// input-options-2: the local player's spellbook filter word (retail
+    /// `PlayerModule::GetSpellbookFilters`, PlayerDescription
+    /// `SpellbookFilters`; `0x3FFF` = retail default when none arrived).
+    #[wasm_bindgen(js_name = playerSpellbookFilters)]
+    pub fn player_spellbook_filters(&self) -> u32 {
+        use holtburger_protocol::messages::player::events::DEFAULT_SPELLBOOK_FILTERS;
+        match self.world.try_borrow() {
+            Ok(world) => world
+                .as_ref()
+                .map(|w| w.player.spellbook_filters)
+                .unwrap_or(DEFAULT_SPELLBOOK_FILTERS),
+            Err(_) => DEFAULT_SPELLBOOK_FILTERS,
+        }
+    }
+
     /// P0-2 follow-up (2026-06-05): read the current state of a single
     /// `CharacterOption` from the cached `LatestStats` snapshot. The
     /// snapshot is hydrated by `PlayerDescription` (server-authoritative,
@@ -42952,6 +46240,33 @@ impl SessionHandle {
             })
     }
 
+    /// chat-errors-8 (2026-10-13): `/age` — sends `GameAction::QueryAge`
+    /// (0x01C2, retail `CM_Character::Event_QueryAge`) with target 0. ACE
+    /// replies with QueryAgeResponse, printed as retail's "You have played
+    /// for …." line (kind=2, System).
+    #[wasm_bindgen(js_name = queryAge)]
+    pub fn query_age(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::QueryAge)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("queryAge: cmd channel closed ({e})"))
+            })
+    }
+
+    /// chat-errors-8: `/birth` — sends `GameAction::QueryBirth` (0x01C4,
+    /// retail `CM_Character::Event_QueryBirth`) with target 0. ACE answers
+    /// with a Broadcast line ("You were born on …").
+    #[wasm_bindgen(js_name = queryBirth)]
+    pub fn query_birth(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::QueryBirth)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("queryBirth: cmd channel closed ({e})"))
+            })
+    }
+
     // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
     /// Lifestone — recall to the player's attuned Sanctuary position.
     /// Sends `GameAction::TeleToLifestone` (sub-opcode 0x0063). No
@@ -43305,9 +46620,10 @@ impl SessionHandle {
     /// Wave M2 (2026-05-26): owner-side house metadata snapshot —
     /// `None` until ACE pushes `GameEvent::HouseData` (opcode 0x0225)
     /// from `HandleActionQueryHouse`. Carries buy/rent timestamps,
-    /// dwelling type, maintenance-free flag, and the dwelling's world
-    /// position. Sync getter — no bus event; UI plugins poll on
-    /// `playerStatsUpdated` or their own timer.
+    /// dwelling type, maintenance-free flag, the dwelling's world
+    /// position and (hud-ui-1) the `buy` / `rent` payment lists. Sync
+    /// getter — no bus event; UI plugins poll on `playerStatsUpdated` or
+    /// their own timer.
     #[wasm_bindgen(js_name = playerHouseData)]
     pub fn player_house_data(&self) -> Option<HouseDataJs> {
         self.latest_house_data.borrow().as_ref().map(|s| HouseDataJs {
@@ -43319,6 +46635,8 @@ impl SessionHandle {
             pos_x: s.pos_x,
             pos_y: s.pos_y,
             pos_z: s.pos_z,
+            buy: s.buy.clone(),
+            rent: s.rent.clone(),
         })
     }
 
@@ -43335,6 +46653,9 @@ impl SessionHandle {
             house_type: s.house_type,
             maintenance_free: s.maintenance_free,
             owner_name: s.owner_name.clone(),
+            buy: s.buy.clone(),
+            rent: s.rent.clone(),
+            seq: s.seq,
         })
     }
 
@@ -43454,6 +46775,59 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("setTitle: cmd channel closed ({e})"))
             })
+    }
+
+    /// maps-chargen-barber-1 (2026-10-13): the barber page's Apply. Sends
+    /// `GameAction::FinishBarber` (0x0311, retail
+    /// `CM_Character::Event_FinishBarber`) with `fields` — 16 u32 in the
+    /// StartBarber wire order (base palette, head object, hair texture +
+    /// default, eyes, nose, mouth textures + defaults, skin / hair / eyes
+    /// palette, setup, option1, option2). Build them with `barberApply`;
+    /// ACE silently ignores a request whose DIDs fail its checks.
+    #[wasm_bindgen(js_name = finishBarber)]
+    pub fn finish_barber(&self, fields: Vec<u32>) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        let fields: [u32; 16] = fields.as_slice().try_into().map_err(|_| {
+            JsValue::from_str(&format!(
+                "finishBarber: expected 16 fields, got {}",
+                fields.len()
+            ))
+        })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FinishBarber { fields })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("finishBarber: cmd channel closed ({e})"))
+            })
+    }
+
+    /// maps-chargen-barber-1 (2026-10-13): gmBarberUI::InitializePage
+    /// (acclient.c:270582) for the player's heritage / gender (PropertyInt
+    /// 188 / 113) and the 16 StartBarber fields. Resolves to a JSON string
+    /// `{ heritage, gender, option, optionToken, gearOlthoi, counts, face,
+    /// spots }` (src/barber.rs); rejects on an unknown heritage / gender or
+    /// a missing CharGen record. Does not touch the session.
+    #[wasm_bindgen(js_name = barberInit)]
+    pub fn barber_init(&self, heritage: u32, gender: u32, fields: Vec<u32>) -> js_sys::Promise {
+        wasm_bindgen_futures::future_to_promise(async move {
+            crate::barber::barber_init_json(heritage, gender, fields)
+                .await
+                .map(JsValue::from)
+        })
+    }
+
+    /// maps-chargen-barber-1 (2026-10-13): gmBarberUI Apply
+    /// (acclient.c:270145-270366) for an edited `face` (the `face` object of
+    /// `barberInit`). Resolves to a JSON string `{ fields: [16]|null,
+    /// effects: { motionTableId, destroyParticles, playScript }, problems }`
+    /// — `problems` are the fields ACE's HandleActionFinishBarber would
+    /// reject. Sends nothing; pass `fields` to `finishBarber`.
+    #[wasm_bindgen(js_name = barberApply)]
+    pub fn barber_apply(&self, heritage: u32, gender: u32, face: JsValue) -> js_sys::Promise {
+        wasm_bindgen_futures::future_to_promise(async move {
+            crate::barber::barber_apply_json(heritage, gender, face)
+                .await
+                .map(JsValue::from)
+        })
     }
 
     /// Phase 4 step 3.6 — JS-driven physics tick.
@@ -44045,7 +47419,12 @@ fn build_test_character_request(
 
     let character_slot = first_available_character_slot(occupied_slots);
 
-    let builder = CharacterGenBuilder::new(catalog.clone());
+    let mut builder = CharacterGenBuilder::new(catalog.clone());
+    // maps-chargen-barber-3: gear-valid colour rolls and keys when the
+    // ClothingTables are already cached.
+    if let Some(tables) = crate::chargen_colors::clothing_tables_snapshot() {
+        builder = builder.with_clothing_tables(tables);
+    }
     let appearance = builder.randomize_appearance(heritage.heritage_id, gender_id);
 
     let attribute_values = template.attribute_values();
@@ -44190,6 +47569,10 @@ pub async fn start_session(
     // HUD rec #56 (2026-06-16): Sanctuary bind snapshot.
     let latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // inventory-session-7 (2026-10-13): LastOutsideDeath position (`@corpse`).
+    let latest_last_outside_death: std::rc::Rc<
+        std::cell::RefCell<Option<last_outside_death::LastOutsideDeathJs>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // HUD rec #68 (2026-06-16): server language context (DddInterrogation).
     let latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -44500,6 +47883,8 @@ pub async fn start_session(
         let latest_server_info_inner = latest_server_info.clone();
         // HUD rec #56 (2026-06-16) — clone for recv_loop param.
         let latest_sanctuary_inner = latest_sanctuary.clone();
+        // inventory-session-7 (2026-10-13) — clone for recv_loop param.
+        let latest_last_outside_death_inner = latest_last_outside_death.clone();
         // HUD rec #68 (2026-06-16) — clone for recv_loop param.
         let latest_localization_inner = latest_localization.clone();
         let entity_updates = entity_updates.clone();
@@ -44590,6 +47975,8 @@ pub async fn start_session(
                 latest_server_info_inner,
                 // === HUD rec #56 — sanctuary bind (2026-06-16) ===
                 latest_sanctuary_inner,
+                // === inventory-session-7 — LastOutsideDeath (2026-10-13) ===
+                latest_last_outside_death_inner,
                 // === HUD rec #68 — localization (2026-06-16) ===
                 latest_localization_inner,
                 cell_scene_snapshot,
@@ -44681,7 +48068,25 @@ pub async fn start_session(
     .await
     {
         futures::future::Either::Left((r, _)) => r.map_err(|_| {
-            JsValue::from_str("recv loop exited before CharacterList arrived")
+            // inventory-session-6 (2026-10-13): an AccountBoot before
+            // CharacterList (ACE: wrong password, client version, DAT
+            // mismatch) ends the recv loop with a boot-marked kind=4 event
+            // nobody will drain. Reject with retail's line from it instead
+            // of the generic exit (session/messages/login.rs).
+            let booted = queued_events
+                .borrow()
+                .iter()
+                .rev()
+                .find(|e| {
+                    e.kind == CLIENT_EVENT_KIND_DISCONNECTED
+                        && e.u32_payload == Some(account_boot::ACCOUNT_BOOT_DISCONNECT_MARKER)
+                })
+                .and_then(|e| e.string_payload.clone());
+            JsValue::from_str(
+                booted
+                    .as_deref()
+                    .unwrap_or("recv loop exited before CharacterList arrived"),
+            )
         })?,
         futures::future::Either::Right((_, _)) => {
             return Err(JsValue::from_str(
@@ -44698,6 +48103,7 @@ pub async fn start_session(
         plugin_list,
         latest_server_info,
         latest_sanctuary,
+        latest_last_outside_death,
         latest_localization,
         account_name,
         catalog,
@@ -47473,6 +50879,12 @@ async fn recv_loop(
     // HUD rec #56 (2026-06-16): shared sanctuary snapshot — recv loop
     // overwrites on each Sanctuary PrivateUpdatePosition.
     latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
+    // inventory-session-7 (2026-10-13): shared LastOutsideDeath slot — recv
+    // loop replaces on PlayerDescription, sets on a LastOutsideDeath
+    // PrivateUpdatePosition.
+    latest_last_outside_death: std::rc::Rc<
+        std::cell::RefCell<Option<last_outside_death::LastOutsideDeathJs>>,
+    >,
     // HUD rec #68 (2026-06-16): shared localization snapshot — recv loop
     // overwrites on DddInterrogation.
     latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>>,
@@ -47544,6 +50956,15 @@ async fn recv_loop(
     holtburger_world::spatial::house_barrier::set_house_barriers(parse_house_barriers_flag(
         &flag_search(),
     ));
+    // motion-remote-2: `?remoteRestHeading=off` (default ON) — an at-rest
+    // remote body adopts the wire heading (see `parse_remote_rest_heading_flag`).
+    holtburger_world::spatial::set_remote_rest_heading(parse_remote_rest_heading_flag(
+        &flag_search(),
+    ));
+    // motion-remote-3: `?remoteLeash=off` (default ON) — the remote leash on
+    // root motion, re-armed after every accepted correction (see
+    // `parse_remote_leash_flag`).
+    holtburger_world::spatial::set_remote_leash(parse_remote_leash_flag(&flag_search()));
     // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
     // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
     movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
@@ -47586,6 +51007,10 @@ async fn recv_loop(
     movement.set_terrain_plane_frame(parse_terrain_plane_frame_flag(&flag_search()));
     movement.set_airborne_check_contact(parse_airborne_contact_flag(&flag_search()));
     movement.set_walkable_landing_ground(parse_walkable_ground_flag(&flag_search()));
+    // physics-collision-2 (2026-10-13): `?setupPlayerBody=off` — sweep every
+    // player as the human Setup 0x02000001 again (default ON: its own Setup's
+    // spheres + step heights × scale); see `parse_setup_player_body_flag`.
+    movement.set_setup_player_body(parse_setup_player_body_flag(&flag_search()));
     // R1 (2026-10-08): `?jumpLaunchCap=off` / `?jumpLoadGate=off` /
     // `?apRetailGate=off` — the retail jump-launch cap, the CanJump burden
     // gate and the retail AutonomousPosition cadence (all default ON). See the
@@ -47890,6 +51315,16 @@ async fn recv_loop(
     // and the TickMovement arm.
     let maint_prune_on: bool =
         unified_tick_on && parse_maint_prune_flag(&flag_search());
+    // streaming-residency-1 (2026-10-13): `?aceObjMaint=on` (OPT-IN) — the
+    // ACE-parity visible set + 30 s deadline for the prune above; installed
+    // on the world at creation (login.rs / lifecycle.rs). See
+    // `parse_ace_obj_maint_flag`.
+    let ace_obj_maint_on: bool = parse_ace_obj_maint_flag(&flag_search());
+    if ace_obj_maint_on {
+        console_log_str(
+            "[maint] aceObjMaint ON — ACE-parity visibility prune (30 s), see liveness.rs",
+        );
+    }
     // A1-O2 (2026-06-11): `?posePublishPostTick=on` — publish the
     // pose/can-jump/cell-scene shadows AFTER the integrator tick
     // (retail post-update callback order, acclient.c:311375). Default
@@ -47941,6 +51376,7 @@ async fn recv_loop(
     let remote_motion_keep_on: bool = parse_remote_motion_keep_flag(&flag_search());
     let remote_turn_on: bool = parse_remote_turn_flag(&flag_search());
     let remote_spine_on: bool = parse_remote_spine_flag(&flag_search());
+    let remote_root_scale_on: bool = parse_remote_root_scale_flag(&flag_search());
     let remote_sweep_on: bool = parse_remote_sweep_flag(&flag_search());
     let target_voyeur_on: bool = parse_target_voyeur_flag(&flag_search());
     let remote_moveto_begin_on: bool = parse_remote_moveto_begin_flag(&flag_search());
@@ -48080,6 +51516,7 @@ async fn recv_loop(
         identify_meta_index,
         latest_server_info,
         latest_sanctuary,
+        latest_last_outside_death,
         latest_localization,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -48114,6 +51551,7 @@ async fn recv_loop(
         cached_time_sync,
         js_spawned_guids,
         seq_tracker,
+        inventory_requests: inventory_request::InventoryRequestTracker::default(),
         flags: session::LoopFlags {
             seq_debug,
             spawn_motion_state_on,
@@ -48130,6 +51568,7 @@ async fn recv_loop(
             world_lifecycle_on,
             unified_tick_on,
             maint_prune_on,
+            ace_obj_maint_on,
             pose_publish_post_tick_on,
             wire_state_packs_stage1_on,
             routine_pos_guard_on,
@@ -48140,6 +51579,7 @@ async fn recv_loop(
             remote_motion_keep_on,
             remote_turn_on,
             remote_spine_on,
+            remote_root_scale_on,
             remote_sweep_on,
             target_voyeur_on,
             remote_moveto_begin_on,
@@ -48283,27 +51723,22 @@ async fn recv_loop(
                 {
                     use holtburger_protocol::messages::misc::actions::PingRequestActionData;
                     use holtburger_protocol::messages::GameAction;
-                    // PR-SS.1 2026-05-23: stamp send time so the
-                    // matching GameEvent::PingResponse arm can
-                    // compute RTT. Cleared on response — a None
-                    // means "no ping in flight, fall back to
-                    // staleness". Empty payload on both ends, so we
-                    // can't multiplex (one in flight at a time).
-                    PING_SEND_INSTANT.with(|c| {
-                        *c.borrow_mut() = Some(web_time::Instant::now());
-                    });
-                    if let Err(e) = session
+                    match session
                         .send_action(GameAction::PingRequest(Box::new(
                             PingRequestActionData,
                         )))
                         .await
                     {
-                        // Clear on send failure so we don't
-                        // mis-attribute the next response.
-                        PING_SEND_INSTANT.with(|c| { *c.borrow_mut() = None; });
-                        log::warn!(
-                            "recv_loop: keepalive PingRequest send failed: {e}"
-                        );
+                        // PR-SS.1 2026-05-23 / net-transport-6: start the RTT
+                        // clock the GameEvent::PingResponse arm reads, once
+                        // the ping is actually out (nothing to undo on a
+                        // failed send).
+                        Ok(()) => note_keepalive_ping_sent(session, state),
+                        Err(e) => {
+                            log::warn!(
+                                "recv_loop: keepalive PingRequest send failed: {e}"
+                            );
+                        }
                     }
                 }
             }
@@ -48662,6 +52097,9 @@ pub struct AnimationJs {
     frames: Vec<f32>,
     /// SetOmega (hook 22) axis carried by the clip, `[x, y, z]`, or empty.
     set_omega: Vec<f32>,
+    /// cells-portals-5: the clip's Sound (1) / SoundTweaked (21) hooks
+    /// ([`animation_sound_hooks`]).
+    sound_hooks: AnimationSoundHooks,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -48695,6 +52133,25 @@ impl AnimationJs {
     #[wasm_bindgen(getter, js_name = setOmega)]
     pub fn set_omega(&self) -> Vec<f32> {
         self.set_omega.clone()
+    }
+    /// cells-portals-5: frame index (into the clip's frames) of each Sound /
+    /// SoundTweaked hook, DAT order; parallel to `soundHookWaves` /
+    /// `soundHookMeta`. Empty Uint32Array when the clip has none.
+    #[wasm_bindgen(getter, js_name = soundHookFrames)]
+    pub fn sound_hook_frames(&self) -> Vec<u32> {
+        self.sound_hooks.frames.clone()
+    }
+    /// cells-portals-5: the Wave DID each sound hook plays, as a Uint32Array
+    /// (ids such as 0x0A000316 exceed 2^24 and would round in a Float32Array).
+    #[wasm_bindgen(getter, js_name = soundHookWaves)]
+    pub fn sound_hook_waves(&self) -> Vec<u32> {
+        self.sound_hooks.waves.clone()
+    }
+    /// cells-portals-5: 4 floats per sound hook,
+    /// `[hookType, direction, volume, probability]`.
+    #[wasm_bindgen(getter, js_name = soundHookMeta)]
+    pub fn sound_hook_meta(&self) -> Vec<f32> {
+        self.sound_hooks.meta.clone()
     }
 }
 
@@ -48753,13 +52210,156 @@ pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
             }
         }
     }
+    let sound_hooks = animation_sound_hooks(&anim.part_frames);
     Ok(AnimationJs {
         num_parts: anim.num_parts,
         num_frames: anim.num_frames,
         flags: anim.flags.bits(),
         frames,
         set_omega,
+        sound_hooks,
     })
+}
+
+/// cells-portals-5 (2026-10-13): an Animation's Sound (1) / SoundTweaked (21)
+/// hooks, flattened for `AnimationJs` — `frames[i]` is the hook's frame index
+/// (into `part_frames`), `waves[i]` its Wave DID, `meta[4i..4i+4]`
+/// `[hookType, direction, volume, probability]`. The portal-space tunnel
+/// (`scene3d/portal_space.js`) plays them: retail runs the tunnel object's
+/// animation as a normal CSequence (gmSmartBoxUI::UseTime ->
+/// `set_sequence_animation(teleportObj, …, 40.0)`, acclient.c:262444), so
+/// `CSequence::execute_hooks` (339683) fires frame 2's SoundTweaked (Wave
+/// 0x0A000316, vol 0.3) every loop — the portal drone. Payloads decode
+/// through `AnimationHook::decode` (setup_model_hooks.rs, retail
+/// `SoundTweakedHook::UnPack` order gid@0 prob@4 prio@8 vol@12,
+/// acclient.c:343123). A plain SoundHook has no volume / probability (1.0 /
+/// 1.0; `SoundHook::Execute` -> `PlaySoundA(gid, obj)`, acclient.c:342188).
+/// A hook whose payload fails to decode is skipped.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default, Clone, PartialEq)]
+struct AnimationSoundHooks {
+    frames: Vec<u32>,
+    waves: Vec<u32>,
+    meta: Vec<f32>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn animation_sound_hooks(
+    part_frames: &[holtburger_dat::file_type::setup_model::AnimationFrame],
+) -> AnimationSoundHooks {
+    use holtburger_dat::file_type::AnimationHookData;
+    let mut out = AnimationSoundHooks::default();
+    for (fi, pf) in part_frames.iter().enumerate() {
+        for h in &pf.hooks {
+            if h.hook_type != 1 && h.hook_type != 21 {
+                continue;
+            }
+            let (wave, volume, probability) = match h.decode() {
+                Ok(AnimationHookData::Sound { id }) => (id, 1.0f32, 1.0f32),
+                Ok(AnimationHookData::SoundTweaked { sound }) => {
+                    (sound.sound_id, sound.volume, sound.probability)
+                }
+                _ => continue,
+            };
+            out.frames.push(fi as u32);
+            out.waves.push(wave);
+            out.meta.extend_from_slice(&[
+                h.hook_type as f32,
+                h.direction as f32,
+                volume,
+                probability,
+            ]);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests_animation_sound_hooks {
+    use super::{animation_sound_hooks, AnimationSoundHooks};
+    use holtburger_dat::file_type::setup_model::{AnimationFrame, AnimationHook};
+    use holtburger_dat::file_type::setup_model_hooks::SoundTweaked;
+    use holtburger_dat::file_type::AnimationHookData;
+
+    fn frame(hooks: Vec<AnimationHook>) -> AnimationFrame {
+        AnimationFrame { frames: Vec::new(), hooks }
+    }
+
+    #[test]
+    fn sound_hooks_keep_u32_wave_ids_and_retail_fields() {
+        let tweaked = AnimationHookData::SoundTweaked {
+            sound: SoundTweaked {
+                sound_id: 0x0A00_0316,
+                probability: 1.0,
+                priority: 1.0,
+                volume: 0.3,
+            },
+        }
+        .to_hook(0)
+        .expect("encode SoundTweaked");
+        let plain = AnimationHookData::Sound { id: 0x0A00_0245 }
+            .to_hook(-1)
+            .expect("encode Sound");
+        let other = AnimationHookData::Ethereal { ethereal: 1 }
+            .to_hook(0)
+            .expect("encode Ethereal");
+        // A truncated SoundTweaked payload must be skipped, not mis-read.
+        let short = AnimationHook {
+            hook_type: 21,
+            direction: 0,
+            data: vec![0x16, 0x03, 0x00],
+        };
+        let frames = vec![
+            frame(Vec::new()),
+            frame(vec![other]),
+            frame(vec![tweaked]),
+            frame(vec![plain, short]),
+        ];
+        let h = animation_sound_hooks(&frames);
+        assert_eq!(h.frames, vec![2u32, 3]);
+        assert_eq!(h.waves, vec![0x0A00_0316u32, 0x0A00_0245]);
+        // The reason the ids travel as u32: an f32 rounds 0x0A000316.
+        assert_eq!(h.waves[0], 167_772_950);
+        assert_ne!(0x0A00_0316u32 as f32 as u32, 0x0A00_0316u32);
+        assert_eq!(h.meta, vec![21.0f32, 0.0, 0.3, 1.0, 1.0, -1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn no_sound_hooks_is_empty() {
+        let frames = vec![frame(Vec::new()), frame(Vec::new())];
+        assert_eq!(animation_sound_hooks(&frames), AnimationSoundHooks::default());
+        assert_eq!(animation_sound_hooks(&[]), AnimationSoundHooks::default());
+    }
+
+    /// The real tunnel clip (DID-by-enum 0x10000002/7 = 0x030005AC on the
+    /// retail portal.dat): 120 frames, ONE hook — frame 2, SoundTweaked, Both,
+    /// Wave 0x0A000316, prob 1, vol 0.3. Skips (passes) without the base DATs.
+    #[test]
+    fn retail_portal_tunnel_drone_hook() {
+        let Some(home) = std::env::var("HOME").ok() else {
+            return;
+        };
+        let p = std::path::PathBuf::from(home).join("ac_base_dats/client_portal.dat");
+        if !p.exists() {
+            eprintln!("[cells-portals-5] SKIP — {} missing", p.display());
+            return;
+        }
+        let Ok(db) = holtburger_dat::DatDatabase::new(&p) else {
+            eprintln!("[cells-portals-5] SKIP — cannot open {}", p.display());
+            return;
+        };
+        let bytes = db.get_file(0x0300_05AC).expect("tunnel animation 0x030005AC");
+        let anim = holtburger_dat::file_type::Animation::unpack(&bytes).expect("parse 0x030005AC");
+        assert_eq!(anim.num_frames, 120);
+        let h = animation_sound_hooks(&anim.part_frames);
+        assert_eq!(h.frames, vec![2u32]);
+        assert_eq!(h.waves, vec![0x0A00_0316u32]);
+        assert_eq!(h.meta.len(), 4);
+        assert_eq!(h.meta[0], 21.0);
+        assert_eq!(h.meta[1], 0.0);
+        assert!((h.meta[2] - 0.3).abs() < 1e-6, "volume {}", h.meta[2]);
+        assert_eq!(h.meta[3], 1.0);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -48967,7 +52567,8 @@ pub async fn fetch_physics_script_table(did: u32) -> Result<String, JsValue> {
 // ============================================================
 //
 // JS-side AudioManager calls fetchWave(did), reads
-// `wave.riffBytes` (already wrapped as a standard RIFF/WAV blob),
+// `wave.riffBytes` (already wrapped as a standard RIFF/WAV blob, or the
+// bare MPEG stream for the one MP3 wave 0x0A000393),
 // and passes that to `AudioContext.decodeAudioData` which returns
 // an `AudioBuffer` for positional playback via `AudioBufferSourceNode
 // + PannerNode`. The decoded sample-rate / channels / bits getters
@@ -49001,6 +52602,8 @@ impl WaveJs {
     /// One-shot drain — returns the wrapped RIFF/WAV blob as a
     /// `Uint8Array` that can be passed directly to
     /// `AudioContext.decodeAudioData`. Subsequent calls return empty.
+    /// For the one MP3 wave (0x0A000393) the bytes are the bare MPEG
+    /// stream, not a RIFF; decodeAudioData takes either.
     #[wasm_bindgen(js_name = takeRiffBytes)]
     pub fn take_riff_bytes(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.riff_bytes)
@@ -49014,7 +52617,8 @@ impl WaveJs {
 
 /// H3: fetch + parse a Wave (0x0Axxxxxx) audio record. Wraps the
 /// (header, data) pair in a RIFF/WAV blob the browser's
-/// `AudioContext.decodeAudioData` understands.
+/// `AudioContext.decodeAudioData` understands (the MP3 wave 0x0A000393
+/// comes back as its bare MPEG stream instead; `Wave::to_browser_bytes`).
 ///
 /// JS-side flow:
 ///   const wave = await fetchWave(0x0A000002);
@@ -49023,19 +52627,37 @@ impl WaveJs {
 ///   // play via AudioBufferSourceNode + PannerNode at a world position
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchWave)]
-pub async fn fetch_wave(did: u32) -> Result<WaveJs, JsValue> {
+pub async fn fetch_wave(
+    did: u32,
+    // audio-1 (2026-10-13): PLAYER-BLOCKING hint. The AudioManager fetches a
+    // wave only when it is about to play it, so a cold wave on the normal
+    // lane took a `fetch_sem` permit at `FetchPriority::Low` behind the ring
+    // bakers and the sound started seconds after its event. Retail never
+    // loads at play time (SoundManager::GetSound acclient.c:383433 only looks
+    // in sound_hash_). `Some(true)` = one small record on the urgent lane,
+    // like `fetch_physics_script`. Absent/false = the pre-fix lane, which the
+    // opt-in `?wavePrefetch=on` background queue keeps using.
+    urgent: Option<bool>,
+) -> Result<WaveJs, JsValue> {
     use holtburger_dat::file_type::Wave;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
     let key = ResourceKey::new("eor/portal", did);
-    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    if urgent.unwrap_or(false) {
+        prefetch::ensure_walk_prefetched_urgent(&source, &[key], |_| {}).await?;
+    } else {
+        prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    }
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", did))
         .map_err(|e| JsValue::from_str(&format!("fetchWave 0x{did:08X}: fetch failed: {e:?}")))?;
     let wave = Wave::unpack(&bytes)
         .map_err(|e| JsValue::from_str(&format!("fetchWave 0x{did:08X}: parse failed: {e:?}")))?;
     let fmt = wave.pcm_format();
-    let riff = wave.to_riff_wav();
+    // audio-4 (2026-10-13): RIFF wrap for PCM, the bare MPEG stream for the
+    // one MP3 wave (0x0A000393, format tag 0x55). Firefox's WAV demuxer
+    // rejects MP3-in-WAV; every engine decodes raw MP3. See `Wave::to_browser_bytes`.
+    let riff = wave.to_browser_bytes();
     Ok(WaveJs {
         id: wave.id,
         sample_rate: fmt.map(|f| f.sample_rate).unwrap_or(0),
@@ -49114,6 +52736,9 @@ pub struct SoundTableJs {
     /// SoundEntry × `total_entries` (probe_all sweep reported tens of
     /// thousands of entries across 190 retail tables → well under 4 MB).
     sounds: std::collections::HashMap<u32, Vec<SoundEntryJs>>,
+    /// audio-1: distinct sorted Wave DIDs the table names
+    /// (`holtburger_dat::file_type::wave::sound_table_wave_ids`).
+    wave_ids: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -49141,6 +52766,15 @@ impl SoundTableJs {
     /// table in retail).
     #[wasm_bindgen(js_name = soundKeys)]
     pub fn sound_keys(&self) -> Vec<u32> { self.sound_keys.clone() }
+    /// audio-1 (2026-10-13): the distinct Wave DIDs this table names,
+    /// sorted. This is retail's load set: SoundTableData::UnPack
+    /// (acclient.c:385486-385488) calls SoundManager::CreateSound for each
+    /// non-zero variant. The opt-in `?wavePrefetch=on` queue
+    /// (scene3d/audio/wave_prefetch.js) prefetches these when the table is
+    /// installed. One call per table, so it avoids a `soundKeys` +
+    /// `entriesForSound` walk.
+    #[wasm_bindgen(js_name = waveIds)]
+    pub fn wave_ids(&self) -> Vec<u32> { self.wave_ids.clone() }
     /// Resolve a `Sound` enum value (e.g. `0x46` for `Sound.Ambient1`)
     /// to the list of weighted Wave references attached to it.
     /// Returns an empty array if no mapping exists for this enum.
@@ -49203,12 +52837,24 @@ impl SoundTableJs {
 ///   }
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchSoundTable)]
-pub async fn fetch_sound_table(did: u32) -> Result<SoundTableJs, JsValue> {
+pub async fn fetch_sound_table(
+    did: u32,
+    // audio-1 (2026-10-13): PLAYER-BLOCKING hint, see `fetch_wave`.
+    // `sound_table_cache.js` passes `Some(true)` only when a play path
+    // (`resolveSound`) misses the cache. The entity-spawn prewarm
+    // (`soundTableCache.get`) stays on the normal lane. Absent/false = the
+    // pre-fix lane.
+    urgent: Option<bool>,
+) -> Result<SoundTableJs, JsValue> {
     use holtburger_dat::file_type::SoundTable;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
     let key = ResourceKey::new("eor/portal", did);
-    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    if urgent.unwrap_or(false) {
+        prefetch::ensure_walk_prefetched_urgent(&source, &[key], |_| {}).await?;
+    } else {
+        prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    }
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", did))
         .map_err(|e| {
@@ -49221,6 +52867,8 @@ pub async fn fetch_sound_table(did: u32) -> Result<SoundTableJs, JsValue> {
             "fetchSoundTable 0x{did:08X}: parse failed: {e:?}"
         ))
     })?;
+    // audio-1: read the wave load set before `st.sounds` is consumed below.
+    let wave_ids = holtburger_dat::file_type::wave::sound_table_wave_ids(&st);
     // Project SoundData → Vec<SoundEntryJs> per key for cheap JS
     // resolution. The trailing `SoundData::unknown` i32 is dropped —
     // its semantics are unmapped (see Task A module docs) and no
@@ -49250,6 +52898,7 @@ pub async fn fetch_sound_table(did: u32) -> Result<SoundTableJs, JsValue> {
         num_sounds,
         sound_keys,
         sounds,
+        wave_ids,
     })
 }
 
@@ -51423,6 +55072,148 @@ mod tests_animation_keyframes_batch {
         // Complete answers ARE memoized: no records needed any more.
         let none = MockSource { files: HashMap::new() };
         assert_eq!(resolve_did_degrade_cached(&none, setup_id), degrade);
+    }
+
+    /// streaming-residency-3: `MockSource` plus a catalog authority. Ids in
+    /// `absent` are what a loaded catalog LACKS (`key_known_absent` = true);
+    /// any other id missing from `files` is cataloged-but-unhydrated — the
+    /// transient case, which must stay a miss.
+    struct CatalogMock {
+        files: HashMap<(String, u32), Vec<u8>>,
+        absent: std::collections::HashSet<u32>,
+    }
+
+    impl ResourceSource for CatalogMock {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .map(|data| FileMetadata { id: key.file_id, size: data.len() as u32, is_pruned: false })
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.keys().any(|(ns, _)| ns == namespace)
+        }
+        fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+            self.absent.contains(&key.file_id)
+        }
+    }
+
+    /// Setup with one resident part and one second part that is either
+    /// catalog-proven absent (`proven = true`) or merely not hydrated yet.
+    fn two_part_catalog_source(setup_id: u32, present: u32, gone: u32, proven: bool) -> CatalogMock {
+        let mut files = HashMap::new();
+        files.insert(("eor/portal".to_string(), setup_id), synth_setup_no_mt(setup_id, &[present, gone]));
+        files.insert(("eor/portal".to_string(), present), synth_gfx(present, 0xAAF0_030A, 0.0));
+        let mut absent = std::collections::HashSet::new();
+        if proven {
+            absent.insert(gone);
+        }
+        CatalogMock { files, absent }
+    }
+
+    /// streaming-residency-3: a part the catalog PROVES absent (a dangling
+    /// DAT ref) is not a decode miss — nothing more will ever arrive, so the
+    /// decode is as complete as it can be: `misses == 0` (the JS bakers stop
+    /// spending their starved-retry ladder on it) and the memo admits it.
+    #[test]
+    fn proven_absent_part_is_not_a_miss_and_memoizes() {
+        let setup_id: u32 = 0x02F0_030A;
+        let present: u32 = 0x01F0_030A;
+        let gone: u32 = 0x01F0_130A;
+        let src = two_part_catalog_source(setup_id, present, gone, true);
+
+        // The memo-insert gate itself (`complete`), read straight off the
+        // decode so a concurrent memo clear in another test cannot race it.
+        let (tris, complete) =
+            triangulate_model_uncached(&src, setup_id, &[], &[], None).expect("decode");
+        assert!(!tris.is_empty(), "the resident part still triangulates");
+        assert!(complete, "a proven-absent part must not block the memo insert");
+
+        // The counted entry point the bakers read (`decodeMisses`).
+        let (shared, misses) = triangulate_model_counted(&src, setup_id);
+        assert_eq!(misses, 0, "a catalog-proven absence is not a miss");
+        assert!(!shared.expect("decode").is_empty());
+
+        // Read through the wrapper directly: both read paths skip the count.
+        let counting = MissCountingSource {
+            inner: &src,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let key = ResourceKey::new("eor/portal", gone);
+        assert!(counting.get_file_by_key(key).is_err());
+        assert!(counting.get_file_shared(key).is_err());
+        assert_eq!(counting.misses.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// The other half of the rule: a part the catalog lists but that has not
+    /// hydrated yet (a dropped fetch, an unfinished walk) is still a miss and
+    /// the partial decode is still kept out of the memo.
+    #[test]
+    fn unhydrated_part_still_counts_and_is_not_memoized() {
+        let setup_id: u32 = 0x02F0_030B;
+        let present: u32 = 0x01F0_030B;
+        let gone: u32 = 0x01F0_130B;
+        let src = two_part_catalog_source(setup_id, present, gone, false);
+
+        let (_tris, complete) =
+            triangulate_model_uncached(&src, setup_id, &[], &[], None).expect("decode");
+        assert!(!complete, "an unprovable gap must keep the decode out of the memo");
+
+        let (_shared, misses) = triangulate_model_counted(&src, setup_id);
+        assert_eq!(misses, 1, "the unhydrated part is one miss");
+
+        let counting = MissCountingSource {
+            inner: &src,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        assert!(counting.get_file_shared(ResourceKey::new("eor/portal", gone)).is_err());
+        assert_eq!(counting.misses.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// Area note MISSED-1: `MissCountingSource` must FORWARD the provability
+    /// probe (the trait default is `false`). Decode impls run inside it —
+    /// relief priming's `fetch_surface_pixels_impl` gates the R-7 surface
+    /// negative-cache insert on this probe — and `triangulate_model_counted`
+    /// nests one counter inside another, so the forward must survive nesting.
+    #[test]
+    fn miss_counting_source_forwards_key_known_absent() {
+        let src = two_part_catalog_source(0x02F0_030C, 0x01F0_030C, 0x01F0_130C, true);
+        let outer = MissCountingSource {
+            inner: &src,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let nested = MissCountingSource {
+            inner: &outer,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let gone = ResourceKey::new("eor/portal", 0x01F0_130C);
+        let present = ResourceKey::new("eor/portal", 0x01F0_030C);
+        assert!(outer.key_known_absent(gone), "forwarded, not the trait default");
+        assert!(nested.key_known_absent(gone), "forwarded through a nested counter");
+        assert!(!nested.key_known_absent(present), "a resident key is not absent");
+        assert!(nested.get_file_by_key(gone).is_err());
+        assert_eq!(nested.misses.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(outer.misses.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// `?provenAbsentExempt`: default ON; only `off|0|false|no` restores the
+    /// count-every-Err rule.
+    #[test]
+    fn proven_absent_exempt_flag_defaults_on_with_off_0_false_no_escape() {
+        assert!(parse_proven_absent_exempt_flag(""));
+        assert!(parse_proven_absent_exempt_flag("?foo=bar"));
+        assert!(parse_proven_absent_exempt_flag("?provenAbsentExempt=on"));
+        assert!(parse_proven_absent_exempt_flag("?provenAbsentExempt=1"));
+        for off in ["off", "0", "false", "no"] {
+            assert!(!parse_proven_absent_exempt_flag(&format!("?provenAbsentExempt={off}")));
+            assert!(!parse_proven_absent_exempt_flag(&format!("?a=b&provenAbsentExempt={off}&c=d")));
+        }
+        assert!(proven_absent_exempt_flag(), "native builds take the default");
     }
 
     /// **T5 — SetupModel per-part default_scale (flag 0x02).** ACE applies
@@ -55202,7 +58993,13 @@ impl SessionHandle {
             is_sentinel: false,
         };
 
-        let builder = CharacterGenBuilder::new(catalog.clone());
+        let mut builder = CharacterGenBuilder::new(catalog.clone());
+        // maps-chargen-barber-3: with the gears' ClothingTables loaded (the
+        // wizard's colour rows, or getCharacterGenAppearanceStrips' warm-up)
+        // each clothing colour goes out as that gear's own key.
+        if let Some(tables) = crate::chargen_colors::clothing_tables_snapshot() {
+            builder = builder.with_clothing_tables(tables);
+        }
         let request = builder.build_request(build).map_err(|errors| {
             JsValue::from_str(&format!(
                 "sendCharGenResult: validation: {errors:?}"
@@ -55372,7 +59169,57 @@ impl SessionHandle {
             "eyeColors": appearance.eye_color_ids,
             "clothingColors": appearance.clothing_color_ids,
         });
+        // maps-chargen-barber-3: start loading this sex's gear
+        // ClothingTables in the background (the returned value is
+        // unchanged), so a build sent soon after — the wizard's or
+        // RynthSuite's CreateCharacter — carries each gear's own colour key.
+        crate::chargen_colors::warm_clothing_tables(&catalog, heritage_id, gender_id);
         serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+    }
+
+    /// maps-chargen-barber-3 (2026-10-13): every gear style's colour list
+    /// for one sex — `CharGenState::StoreColorInformation` (acclient.c:
+    /// 495905) on each gear's ClothingTable. Resolves to a JSON string
+    /// `{ heritage, gender, headgear, shirt, trousers, footwear }`, each an
+    /// array per style of `{ templateIds, palSetIds }` (or `null` when that
+    /// table did not load); see src/chargen_colors.rs. Rejects before the
+    /// catalog has loaded or for an unknown heritage / gender.
+    #[wasm_bindgen(js_name = chargenGearColors)]
+    pub fn chargen_gear_colors(&self, heritage_id: u32, gender_id: u32) -> js_sys::Promise {
+        let catalog = self.catalog.borrow().clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let catalog = catalog.ok_or_else(|| {
+                JsValue::from_str("chargenGearColors: catalog not loaded yet")
+            })?;
+            crate::chargen_colors::gear_colors_json(catalog, heritage_id, gender_id)
+                .await
+                .map(JsValue::from)
+        })
+    }
+
+    /// maps-chargen-barber-3 (2026-10-13): one part's colour wheel —
+    /// `gmCGAppearancePage::SetSelection` (acclient.c:186939). `part` is
+    /// `"hair"`, `"eyes"`, `"nose"`, `"mouth"`, `"skin"`, `"headgear"`,
+    /// `"shirt"`, `"trousers"` or `"footwear"`; `style` is the gear index
+    /// for the clothing parts. Resolves to a JSON string `{ part, style,
+    /// shade, count, spots: [[r,g,b]|null…], templateIds }`.
+    #[wasm_bindgen(js_name = chargenColorWheel)]
+    pub fn chargen_color_wheel(
+        &self,
+        heritage_id: u32,
+        gender_id: u32,
+        part: String,
+        style: u32,
+    ) -> js_sys::Promise {
+        let catalog = self.catalog.borrow().clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let catalog = catalog.ok_or_else(|| {
+                JsValue::from_str("chargenColorWheel: catalog not loaded yet")
+            })?;
+            crate::chargen_colors::color_wheel_json(catalog, heritage_id, gender_id, part, style)
+                .await
+                .map(JsValue::from)
+        })
     }
 
     // === Wave 1.D — SetWielded port (2026-05-27) ===

@@ -1287,6 +1287,173 @@ fn test_magic_purge_enchantments_preserves_vitae_only() {
     assert_eq!(latest_derived_vitae, Some(0.88));
 }
 
+/// combat-magic-1 fixture: a Strength cantrip from worn gear (ACE BuildEntry
+/// equip branch: `Duration = -1.0`, deliberately NOT flagged BENEFICIAL so
+/// only the duration rule can keep it) and a shared-cooldown entry (ACE
+/// StartCooldown: StatModType Cooldown, spell id 0x8000 + cooldown id).
+const PURGE_CANTRIP_SPELL: u16 = 2000;
+const PURGE_COOLDOWN_SPELL: u16 = 0x8001;
+
+fn push_item_spell_and_cooldown(player: &mut PlayerState) {
+    player.enchantments.push(Enchantment {
+        spell_id: PURGE_CANTRIP_SPELL,
+        layer: 1,
+        spell_category: 400,
+        duration: -1.0,
+        stat_mod_type: (EnchantmentTypeFlags::ATTRIBUTE | EnchantmentTypeFlags::ADDITIVE).bits(),
+        stat_mod_key: stats::AttributeType::StrengthAttr as u32,
+        stat_mod_value: 10.0,
+        ..Default::default()
+    });
+    player.enchantments.push(Enchantment {
+        spell_id: PURGE_COOLDOWN_SPELL,
+        layer: 1,
+        spell_category: 0x8000,
+        has_spell_set_id: 1,
+        duration: 30.0,
+        stat_mod_type: EnchantmentTypeFlags::COOLDOWN.bits(),
+        ..Default::default()
+    });
+}
+
+#[test]
+fn test_magic_purge_keeps_item_spells_and_cooldowns() {
+    use holtburger_protocol::messages::{
+        GameEvent, GameEventMessage, MagicPurgeEnchantmentsEventData,
+    };
+
+    let mut state = WorldState::synthetic();
+    state.player.guid = Guid(0x50000001);
+    set_attr(&mut state.player, stats::AttributeType::StrengthAttr, 100);
+
+    push_item_spell_and_cooldown(&mut state.player);
+    // Timed cast buff: the full purge removes it.
+    state.player.enchantments.push(Enchantment {
+        spell_id: 100,
+        layer: 1,
+        spell_category: 100,
+        duration: 1800.0,
+        stat_mod_type: (EnchantmentTypeFlags::ATTRIBUTE
+            | EnchantmentTypeFlags::ADDITIVE
+            | EnchantmentTypeFlags::BENEFICIAL)
+            .bits(),
+        stat_mod_key: stats::AttributeType::StrengthAttr as u32,
+        stat_mod_value: 15.0,
+        ..Default::default()
+    });
+    assert_eq!(
+        state
+            .player
+            .get_attribute_current(stats::AttributeType::StrengthAttr),
+        125
+    );
+
+    let msg = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: state.player.guid,
+        sequence: 1,
+        event: GameEvent::MagicPurgeEnchantments(Box::new(MagicPurgeEnchantmentsEventData {
+            target: state.player.guid,
+            sequence: 1,
+        })),
+    }));
+    let events = state.handle_message(&msg);
+
+    let ids: Vec<u16> = state
+        .player
+        .enchantments
+        .iter()
+        .map(|e| e.spell_id)
+        .collect();
+    assert!(ids.contains(&PURGE_CANTRIP_SPELL), "item spell purged: {ids:?}");
+    assert!(ids.contains(&PURGE_COOLDOWN_SPELL), "cooldown purged: {ids:?}");
+    assert!(!ids.contains(&100), "timed buff survived: {ids:?}");
+    assert_eq!(
+        state
+            .player
+            .get_attribute_current(stats::AttributeType::StrengthAttr),
+        110
+    );
+
+    let mirrored = events.iter().find_map(|e| match e {
+        WorldEvent::PlayerEnchantmentsUpdated { enchantments } => Some(enchantments),
+        _ => None,
+    });
+    let mirrored = mirrored.expect("purge emits PlayerEnchantmentsUpdated");
+    assert!(mirrored.iter().any(|e| e.spell_id == PURGE_CANTRIP_SPELL));
+    assert!(mirrored.iter().any(|e| e.spell_id == PURGE_COOLDOWN_SPELL));
+}
+
+#[test]
+fn test_magic_purge_bad_keeps_item_spells_and_cooldowns() {
+    use holtburger_protocol::messages::{
+        GameEvent, GameEventMessage, MagicPurgeBadEnchantmentsEventData,
+    };
+
+    let mut state = WorldState::synthetic();
+    state.player.guid = Guid(0x50000001);
+    set_attr(&mut state.player, stats::AttributeType::StrengthAttr, 100);
+
+    push_item_spell_and_cooldown(&mut state.player);
+    // BENEFICIAL timed buff: kept by the bad purge.
+    state.player.enchantments.push(Enchantment {
+        spell_id: 100,
+        layer: 1,
+        spell_category: 100,
+        duration: 1800.0,
+        stat_mod_type: (EnchantmentTypeFlags::ATTRIBUTE
+            | EnchantmentTypeFlags::ADDITIVE
+            | EnchantmentTypeFlags::BENEFICIAL)
+            .bits(),
+        stat_mod_key: stats::AttributeType::StrengthAttr as u32,
+        stat_mod_value: 15.0,
+        ..Default::default()
+    });
+    // Timed debuff: removed by the bad purge.
+    state.player.enchantments.push(Enchantment {
+        spell_id: 200,
+        layer: 1,
+        spell_category: 200,
+        duration: 1800.0,
+        stat_mod_type: (EnchantmentTypeFlags::ATTRIBUTE | EnchantmentTypeFlags::ADDITIVE).bits(),
+        stat_mod_key: stats::AttributeType::StrengthAttr as u32,
+        stat_mod_value: -20.0,
+        ..Default::default()
+    });
+    assert_eq!(
+        state
+            .player
+            .get_attribute_current(stats::AttributeType::StrengthAttr),
+        105
+    );
+
+    let msg = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: state.player.guid,
+        sequence: 1,
+        event: GameEvent::MagicPurgeBadEnchantments(Box::new(MagicPurgeBadEnchantmentsEventData {
+            target: state.player.guid,
+            sequence: 1,
+        })),
+    }));
+    state.handle_message(&msg);
+
+    let ids: Vec<u16> = state
+        .player
+        .enchantments
+        .iter()
+        .map(|e| e.spell_id)
+        .collect();
+    assert!(ids.contains(&PURGE_CANTRIP_SPELL), "item spell purged: {ids:?}");
+    assert!(ids.contains(&PURGE_COOLDOWN_SPELL), "cooldown purged: {ids:?}");
+    assert!(ids.contains(&100), "beneficial buff purged: {ids:?}");
+    assert!(!ids.contains(&200), "debuff survived: {ids:?}");
+    assert_eq!(
+        state
+            .player
+            .get_attribute_current(stats::AttributeType::StrengthAttr),
+        125
+    );
+}
+
 #[test]
 fn test_update_position_from_server_caches_grounded_state() {
     let mut player = PlayerState::new();

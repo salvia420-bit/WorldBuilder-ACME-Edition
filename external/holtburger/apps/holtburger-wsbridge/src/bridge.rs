@@ -6,8 +6,20 @@
 //! the hostname, replies with the resolved IP, and only then enters
 //! binary forwarding mode. The binary frame format itself
 //! (`[port:u16][payload]`, see `frame.rs`) is unchanged.
+//!
+//! When a connection ends, however it ends, the bridge sends ACE a
+//! Disconnect for the session it carried (see `disconnect.rs`).
+//!
+//! Admission (connection caps, Origin, the target allowlist) is in
+//! `admission.rs`; the binary runs [`run_admitted`] with the policy its
+//! flags describe.
 
+use crate::admission::{
+    Admission, ConnLimiter, FrameBucket, HANDSHAKE_TIMEOUT, MAX_WS_MESSAGE_BYTES, TargetPolicy,
+};
+use crate::capture::{Direction, PcapCapture};
 use crate::config::Config;
+use crate::disconnect::{self, SessionIdSlot};
 use crate::frame;
 use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
 use anyhow::{anyhow, Context, Result};
@@ -17,6 +29,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::{lookup_host, TcpListener, TcpStream, UdpSocket};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 // conn-fix (2026-07-18): liveness limits. A WS connection whose ACE
@@ -49,6 +63,9 @@ struct LinkState {
     last_udp_in_ms: AtomicU64,
     /// Last WS frame (any kind) received from the browser.
     last_ws_in_ms: AtomicU64,
+    /// net-transport-2: the ACE session id from the last S2C
+    /// ConnectRequest, for the Disconnect sent at teardown.
+    session: SessionIdSlot,
 }
 
 impl LinkState {
@@ -57,6 +74,7 @@ impl LinkState {
             epoch: Instant::now(),
             last_udp_in_ms: AtomicU64::new(0),
             last_ws_in_ms: AtomicU64::new(0),
+            session: SessionIdSlot::new(),
         };
         s.last_ws_in_ms.store(1, Ordering::Relaxed);
         s
@@ -118,22 +136,84 @@ impl ConnTarget {
     }
 }
 
-/// Bind the WS listen socket and accept connections forever.
+/// test-tooling-4: where a connection's relayed datagrams are recorded. The
+/// client side of every record is the connection's own UDP socket — the
+/// address ACE sees.
+#[derive(Clone)]
+struct CaptureTap {
+    capture: Arc<PcapCapture>,
+    local: SocketAddr,
+}
+
+/// Bind the WS listen socket and accept connections forever, under the
+/// default admission policy ([`Admission::default`]).
 pub async fn run(cfg: Config) -> Result<()> {
+    run_with_capture(cfg, None).await
+}
+
+/// [`run`], recording every relayed datagram to `capture` when it is `Some`
+/// (opt-in `--capture` / `HB_BRIDGE_CAPTURE`, see `capture.rs`). `None`
+/// relays exactly as [`run`].
+pub async fn run_with_capture(cfg: Config, capture: Option<Arc<PcapCapture>>) -> Result<()> {
+    run_admitted(cfg, Admission::default(), capture).await
+}
+
+/// [`run_with_capture`] under an explicit admission policy (the binary's
+/// `--allow-*` / `--max-*` flags, see `admission.rs`).
+pub async fn run_admitted(
+    cfg: Config,
+    admission: Admission,
+    capture: Option<Arc<PcapCapture>>,
+) -> Result<()> {
     let listener = TcpListener::bind(cfg.listen)
         .await
         .with_context(|| format!("bind {}", cfg.listen))?;
-    accept_loop(cfg, listener).await
+    accept_loop_admitted(cfg, admission, listener, capture).await
 }
 
+/// Test seam: accept on a pre-bound listener with NO admission control
+/// ([`Admission::unrestricted`]: any Origin, any target, no caps).
 pub async fn accept_loop(cfg: Config, listener: TcpListener) -> Result<()> {
+    accept_loop_with_capture(cfg, listener, None).await
+}
+
+/// [`accept_loop`] with an optional capture shared by every connection.
+pub async fn accept_loop_with_capture(
+    cfg: Config,
+    listener: TcpListener,
+    capture: Option<Arc<PcapCapture>>,
+) -> Result<()> {
+    accept_loop_admitted(cfg, Admission::unrestricted(), listener, capture).await
+}
+
+/// Accept connections forever under `admission`, recording to `capture`
+/// when it is `Some`.
+pub async fn accept_loop_admitted(
+    cfg: Config,
+    admission: Admission,
+    listener: TcpListener,
+    capture: Option<Arc<PcapCapture>>,
+) -> Result<()> {
     log::info!(
         "listening on ws://{}  (per-connection routing; default world-port offset = {:+})",
         listener.local_addr()?,
         cfg.default_world_port_offset,
     );
+    log::info!("admission: {admission}");
+    if let Some(capture) = &capture {
+        log::info!(
+            "capturing every relayed datagram to {} (pcap, LINKTYPE_RAW)",
+            capture.path().display()
+        );
+    }
 
     let cfg = Arc::new(cfg);
+    // net-transport-5: --max-conns / --max-conns-per-ip, checked before the
+    // upgrade so a flood of sockets costs one accept each, not a task.
+    let limiter = ConnLimiter::new(admission.max_conns, admission.max_conns_per_ip);
+    let admission = Arc::new(admission);
+    let mut refused_since_report: u64 = 0;
+    let mut last_refusal_report: Option<Instant> = None;
     loop {
         let (tcp, peer) = match listener.accept().await {
             Ok(pair) => pair,
@@ -142,9 +222,29 @@ pub async fn accept_loop(cfg: Config, listener: TcpListener) -> Result<()> {
                 continue;
             }
         };
+        let slot = match limiter.try_acquire(peer.ip()) {
+            Ok(slot) => slot,
+            Err(refusal) => {
+                // At most one line a second, however hard the flood.
+                refused_since_report += 1;
+                if last_refusal_report.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+                    log::warn!(
+                        "[{peer}] refused: {refusal} ({refused_since_report} since the last report)"
+                    );
+                    refused_since_report = 0;
+                    last_refusal_report = Some(Instant::now());
+                }
+                drop(tcp);
+                continue;
+            }
+        };
         let cfg = Arc::clone(&cfg);
+        let admission = Arc::clone(&admission);
+        let capture = capture.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(cfg, tcp, peer).await {
+            // Held for the handler's whole life, however it ends.
+            let _slot = slot;
+            if let Err(err) = handle_connection(cfg, admission, tcp, peer, capture).await {
                 log::info!("[{peer}] connection ended: {err:#}");
             } else {
                 log::info!("[{peer}] connection closed");
@@ -153,7 +253,23 @@ pub async fn accept_loop(cfg: Config, listener: TcpListener) -> Result<()> {
     }
 }
 
-async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -> Result<()> {
+/// net-transport-5: the WebSocket limits for every connection — one message
+/// or frame is one AC packet or the JSON hello (see [`MAX_WS_MESSAGE_BYTES`]).
+#[allow(clippy::field_reassign_with_default)]
+fn ws_config() -> WebSocketConfig {
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
+    config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
+    config
+}
+
+async fn handle_connection(
+    cfg: Arc<Config>,
+    admission: Arc<Admission>,
+    tcp: TcpStream,
+    peer: SocketAddr,
+    capture: Option<Arc<PcapCapture>>,
+) -> Result<()> {
     log::info!("[{peer}] accepted; upgrading to ws");
     // latency (2026-10-05): TCP_NODELAY. Each WS frame carries one small AC
     // datagram; with Nagle on, a frame written while its predecessor is
@@ -164,13 +280,39 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
     if let Err(err) = tcp.set_nodelay(true) {
         log::warn!("[{peer}] set_nodelay failed (continuing with Nagle): {err}");
     }
-    let ws =tokio_tungstenite::accept_async(tcp)
-        .await
-        .with_context(|| format!("[{peer}] websocket handshake"))?;
+    // net-transport-5: the Origin check runs on the upgrade request (403 on
+    // a miss), and the upgrade is bounded so a socket that never upgrades
+    // cannot hold a connection slot.
+    let origins = &admission.origins;
+    let origin_gate = move |request: &Request, response: Response| {
+        match origins.check_upgrade(request) {
+            Ok(()) => Ok::<Response, ErrorResponse>(response),
+            Err(refusal) => {
+                log::warn!(
+                    "[{peer}] refused websocket upgrade: {}",
+                    refusal.body().as_deref().unwrap_or("forbidden")
+                );
+                Err(refusal)
+            }
+        }
+    };
+    let ws = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        tokio_tungstenite::accept_hdr_async_with_config(tcp, origin_gate, Some(ws_config())),
+    )
+    .await
+    .map_err(|_| anyhow!("[{peer}] websocket upgrade timed out after {HANDSHAKE_TIMEOUT:?}"))?
+    .with_context(|| format!("[{peer}] websocket handshake"))?;
 
     let (mut ws_sink, mut ws_stream) = ws.split();
 
-    let target = match read_handshake(&cfg, &mut ws_stream).await {
+    let handshake = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        read_handshake(&cfg, &admission.targets, &mut ws_stream),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow!("no handshake within {HANDSHAKE_TIMEOUT:?}")));
+    let target = match handshake {
         Ok(t) => t,
         Err(e) => {
             let reply = ServerHello::err(format!("{e:#}"));
@@ -214,9 +356,16 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
     }
     let local = udp.local_addr().ok();
     log::info!("[{peer}] udp socket bound to {local:?}");
+    let tap = capture.map(|capture| CaptureTap {
+        capture,
+        local: local.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
+    });
     let udp = Arc::new(udp);
     let target = Arc::new(target);
     let link = Arc::new(LinkState::new());
+    // net-transport-2: kept past the pumps for the teardown Disconnect.
+    let bye_udp = Arc::clone(&udp);
+    let bye_tap = tap.clone();
 
     let to_udp = forward_ws_to_udp(
         Arc::clone(&target),
@@ -224,11 +373,20 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
         ws_stream,
         peer,
         Arc::clone(&link),
+        tap.clone(),
+        admission.max_frames_per_sec,
     );
-    let to_ws = forward_udp_to_ws(Arc::clone(&target), udp, ws_sink, peer, Arc::clone(&link));
+    let to_ws = forward_udp_to_ws(
+        Arc::clone(&target),
+        udp,
+        ws_sink,
+        peer,
+        Arc::clone(&link),
+        tap,
+    );
     let watchdog = liveness_watchdog(Arc::clone(&link), peer);
 
-    tokio::select! {
+    let res = tokio::select! {
         res = to_udp => {
             log::debug!("[{peer}] ws→udp half exited: {res:?}");
             res
@@ -241,10 +399,51 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
             log::debug!("[{peer}] liveness watchdog exited: {res:?}");
             res
         }
+    };
+    end_ace_session(&bye_udp, &target, &link, peer, bye_tap.as_ref()).await;
+    res
+}
+
+/// net-transport-2 (2026-10-13): after a connection ends, whichever half or
+/// the watchdog ended it, send ACE one cleartext Disconnect for the session
+/// it carried, from the session's own UDP socket to the login port (see
+/// `disconnect.rs`). Without it ACE holds the session for its 60 s timeout.
+/// Nothing is sent before a ConnectRequest has assigned a session id. Bounded
+/// and best-effort: a failure is logged and the socket is dropped anyway.
+async fn end_ace_session(
+    udp: &UdpSocket,
+    target: &ConnTarget,
+    link: &LinkState,
+    peer: SocketAddr,
+    tap: Option<&CaptureTap>,
+) {
+    let Some(session_id) = link.session.get() else {
+        log::debug!("[{peer}] no ACE session was set up; no Disconnect to send");
+        return;
+    };
+    let dst = SocketAddr::new(target.ip, target.login_port);
+    let packet = disconnect::disconnect_packet(session_id);
+    if let Some(tap) = tap {
+        tap.capture.record(Direction::ToServer, tap.local, dst, &packet);
+    }
+    match tokio::time::timeout(disconnect::DISCONNECT_SEND_TIMEOUT, udp.send_to(&packet, dst)).await
+    {
+        Ok(Ok(_)) => log::info!("[{peer}] sent ACE a Disconnect for session id {session_id} → {dst}"),
+        Ok(Err(err)) => {
+            log::warn!("[{peer}] Disconnect for session id {session_id} → {dst} failed: {err}")
+        }
+        Err(_) => log::warn!(
+            "[{peer}] Disconnect for session id {session_id} → {dst} timed out after {:?}",
+            disconnect::DISCONNECT_SEND_TIMEOUT
+        ),
     }
 }
 
-async fn read_handshake<S>(cfg: &Config, ws_stream: &mut S) -> Result<ConnTarget>
+async fn read_handshake<S>(
+    cfg: &Config,
+    targets: &TargetPolicy,
+    ws_stream: &mut S,
+) -> Result<ConnTarget>
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
@@ -302,7 +501,24 @@ where
         }
     };
 
+    // net-transport-5: only allow-listed ACE targets. The ports are checked
+    // first (no DNS for a pair no entry has), then the resolved address.
+    if !targets.permits_ports(hello.login_port, world_port) {
+        return Err(anyhow!(
+            "target ports {}/{} are not on this bridge's --allow-target list ({targets})",
+            hello.login_port,
+            world_port,
+        ));
+    }
     let ip = resolve_host(&hello.host, hello.login_port).await?;
+    if !targets.permits(&hello.host, ip, hello.login_port, world_port).await {
+        return Err(anyhow!(
+            "target {} ({ip}:{}/{}) is not on this bridge's --allow-target list ({targets})",
+            hello.host,
+            hello.login_port,
+            world_port,
+        ));
+    }
 
     Ok(ConnTarget {
         host: hello.host,
@@ -334,10 +550,15 @@ async fn forward_ws_to_udp<S>(
     mut ws_stream: S,
     peer: SocketAddr,
     link: Arc<LinkState>,
+    tap: Option<CaptureTap>,
+    max_frames_per_sec: u32,
 ) -> Result<()>
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    // net-transport-5: opt-in --max-frames-per-sec; `None` relays every frame.
+    let mut bucket = FrameBucket::new(max_frames_per_sec, Instant::now());
+    let mut over_rate: u64 = 0;
     while let Some(msg) = ws_stream.next().await {
         let msg = msg.with_context(|| format!("[{peer}] ws read"))?;
         link.stamp(&link.last_ws_in_ms);
@@ -353,10 +574,28 @@ where
                         target.world_port
                     ));
                 }
+                let rate_limited = bucket
+                    .as_mut()
+                    .is_some_and(|bucket| !bucket.try_take(Instant::now()));
+                if rate_limited {
+                    over_rate += 1;
+                    if over_rate == 1 || over_rate.is_multiple_of(1000) {
+                        log::warn!(
+                            "[{peer}] over --max-frames-per-sec {max_frames_per_sec}: \
+                             {over_rate} frame(s) dropped so far"
+                        );
+                    }
+                    continue;
+                }
                 let dst = SocketAddr::new(target.ip, port);
                 // Seed the ACE-silence clock on the first outbound send
                 // so a flow ACE never answers still trips the reaper.
                 link.seed_if_zero(&link.last_udp_in_ms);
+                // test-tooling-4: recorded BEFORE the send so the capture
+                // keeps wire order against the reply the udp→ws pump records.
+                if let Some(tap) = &tap {
+                    tap.capture.record(Direction::ToServer, tap.local, dst, payload);
+                }
                 let sent = udp
                     .send_to(payload, dst)
                     .await
@@ -390,6 +629,7 @@ async fn forward_udp_to_ws<S>(
     mut ws_sink: S,
     peer: SocketAddr,
     link: Arc<LinkState>,
+    tap: Option<CaptureTap>,
 ) -> Result<()>
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
@@ -423,6 +663,11 @@ where
         link.stamp(&link.last_udp_in_ms);
 
         let payload = &buf[..len];
+        // net-transport-2: a ConnectRequest names the session to end at teardown.
+        link.session.observe_s2c(payload);
+        if let Some(tap) = &tap {
+            tap.capture.record(Direction::ToClient, src, tap.local, payload);
+        }
         let frame = frame::encode_frame(src.port(), payload)
             .with_context(|| format!("[{peer}] encode ws frame from {src}"))?;
         // conn-fix (2026-07-18): bound the send. A stalled browser

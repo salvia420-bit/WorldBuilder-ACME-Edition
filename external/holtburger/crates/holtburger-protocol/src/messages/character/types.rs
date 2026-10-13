@@ -433,9 +433,15 @@ impl ProtocolUnpack for CharacterCreateResponseData {
         if *offset + 4 > data.len() {
             return None;
         }
+        // An unknown code is read as Undef instead of failing the whole
+        // message, so the client still sees a rejection (retail
+        // gmCharGenMainUI::RecvNotice_CharGenVerificationResponse sends every
+        // code other than 1/3/4/7 to its default ID_Character_Err_NameDBDown
+        // arm). Undef has no Ok payload, so nothing further is read.
         let response = CharacterGenerationVerificationResponse::from_repr(LittleEndian::read_u32(
             &data[*offset..*offset + 4],
-        ))?;
+        ))
+        .unwrap_or(CharacterGenerationVerificationResponse::Undef);
         *offset += 4;
 
         let (guid, name, seconds_disabled) =
@@ -710,6 +716,36 @@ mod tests {
             test_fixtures::CHARACTER_CREATE_RESPONSE_NAME_IN_USE,
             &expected,
         );
+    }
+
+    #[test]
+    fn character_create_response_unknown_code_unpacks_as_undef() {
+        // maps-chargen-barber-2: a code outside 0..=8 used to fail the whole
+        // unpack, so no rejection event reached the client and the wizard
+        // waited in Submitting forever.
+        let data: [u8; 8] = [0x43, 0xF6, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00];
+        let mut offset = 0;
+        let msg = GameMessage::unpack(&data, &mut offset).expect("unknown code still unpacks");
+        assert_eq!(
+            msg,
+            GameMessage::CharacterCreateResponse(Box::new(CharacterCreateResponseData {
+                response: CharacterGenerationVerificationResponse::Undef,
+                guid: None,
+                name: None,
+                seconds_disabled: None,
+            }))
+        );
+        assert_eq!(offset, data.len());
+
+        let mut offset = 0;
+        let direct = CharacterCreateResponseData::unpack(&0xDEAD_BEEFu32.to_le_bytes(), &mut offset)
+            .expect("unknown code unpacks without the opcode too");
+        assert_eq!(direct.response, CharacterGenerationVerificationResponse::Undef);
+        assert_eq!(offset, 4);
+
+        // A short buffer is still a failure.
+        let mut offset = 0;
+        assert!(CharacterCreateResponseData::unpack(&[0x09, 0x00], &mut offset).is_none());
     }
 
     #[test]

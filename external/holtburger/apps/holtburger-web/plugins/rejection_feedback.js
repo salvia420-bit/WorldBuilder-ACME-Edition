@@ -28,6 +28,9 @@
 
 import { weenieErrorMessage } from "./weenie_error_messages.js";
 import { ClientEventKind } from "../scene3d/client_event_kinds.js";
+import {
+  createSpewStack, isSpewLine, spewBoxEnabled, SPEW_ITEM_LIFETIME_MS,
+} from "../ui/spew_box.js";
 
 const STYLE_ID = "hb-rejection-feedback-style";
 const RECENT_ACTION_TTL_MS = 2000;
@@ -93,6 +96,10 @@ const TRACKED_METHODS = new Map([
   ["removeShortcut", -1],      // no item GUID — slot-only; skip ring
 ]);
 
+// The proxy answers this registered symbol with the raw handle it wraps (the
+// same `Symbol.for` key as ui/combat_mode_pending.js RAW_SESSION_HANDLE).
+const RAW_SESSION_HANDLE = Symbol.for("holtburger.rawSessionHandle");
+
 function _wrapHandle(handle) {
   if (!handle || typeof handle !== "object") return handle;
   if (handle.__hbWrappedForRejection) return handle;
@@ -106,6 +113,10 @@ function _wrapHandle(handle) {
   const boundCache = new Map();
   const proxy = new Proxy(handle, {
     get(target, prop, receiver) {
+      // The session's identity: callers that kept the RAW handle (index.html's
+      // `handle`) and readers of this proxied global must agree they hold the
+      // same session (ui/combat_mode_pending.js sessionIdentity()).
+      if (prop === RAW_SESSION_HANDLE) return target;
       const raw = Reflect.get(target, prop, receiver);
       if (typeof raw !== "function") return raw;
       // wasm-bindgen exported methods read private class fields
@@ -242,8 +253,76 @@ function _flashSlotForGuid(itemGuid) {
   }
 }
 
+// chat-errors-6 (2026-10-13): the toast surface is retail's spew box
+// (gmSpewBoxUI, ui/spew_box.js): newest row on top, an identical top row
+// replaced, at most 4 rows, each removed 5 s after it went in. Every row keeps
+// the old toast's class and an `hb-` id, so the look is unchanged; rows stack
+// down from the old toast's `top` (64px). app/chat_log.js sends every
+// transient chat line here through `window.__hbSpewBox`. `?spewBox=off`
+// restores the single replace-in-place toast below.
+const SPEW_ROW_TOP_PX = 64;
+const SPEW_ROW_GAP_PX = 4;
+const SPEW_ROW_FALLBACK_H = 28;
+const _spew = createSpewStack();
+const _spewRows = new Map(); // item id → { el, timer }
+
+function _spewDropRow(id) {
+  const row = _spewRows.get(id);
+  if (!row) return;
+  _spewRows.delete(id);
+  clearTimeout(row.timer);
+  try { row.el.remove(); } catch (_) {}
+}
+
+function _spewLayout() {
+  let y = SPEW_ROW_TOP_PX;
+  for (const item of _spew.items) {
+    const row = _spewRows.get(item.id);
+    if (!row) continue;
+    const st = row.el.style;
+    if (st) st.top = `${y}px`;
+    y += (Number(row.el.offsetHeight) || SPEW_ROW_FALLBACK_H) + SPEW_ROW_GAP_PX;
+  }
+}
+
+function _pushSpew(message) {
+  if (!message) return;
+  const res = _spew.push(message, Date.now());
+  if (!res) return;
+  _ensureStyles();
+  for (const gone of res.removed) _spewDropRow(gone.id);
+  const id = res.item.id;
+  const t = document.createElement("div");
+  t.id = `hb-rejection-toast-${id}`;
+  t.className = "hb-rejection-toast";
+  t.textContent = res.item.text;
+  document.body.appendChild(t);
+  const timer = setTimeout(() => {
+    _spew.remove(id);
+    _spewDropRow(id);
+    _spewLayout();
+  }, SPEW_ITEM_LIFETIME_MS);
+  _spewRows.set(id, { el: t, timer });
+  _spewLayout();
+}
+
+// app/chat_log.js appendChatLine → spew box (the retail AddTextToScroll
+// 0x1A hop). Registered at load; chat_log keeps the log copy without it.
+// This is the LIVE route of every transient chat line (the page never relays
+// kind=2 on the plugin bus), so the 0x00A0 arm's paired line is matched here:
+// the kind=48 row already shows it (chat-errors-5, _takePairedChat below).
+// The log copy still follows the "Errors" option.
+window.__hbSpewBox = Object.freeze({
+  push: (text) => {
+    const line = String(text ?? "");
+    if (_takePairedChat(line)) return;
+    _pushSpew(line);
+  },
+});
+
 function _renderToast(message) {
   if (!message) return;
+  if (spewBoxEnabled()) { _pushSpew(message); return; }
   _ensureStyles();
   // HUD overhaul 2026-10-05: an `hb-` id keeps the toast visible in
   // ?autoLogin=1 agent-mode (index.html hides id-less body children).
@@ -271,16 +350,79 @@ const INVENTORY_RELATED_CODES = new Set([
   0x0510, 0x0514, 0x0515, 0x054D, 0x058A, 0x0594,
 ]);
 
-// The 0x00A0 recv arm also pushes a TRANSIENT chat line ("[Wield failed]
-// <Label>") right after kind=48 in the same poll batch; _onChatReceived
-// would toast it a second time. Suppress exactly that one follow-up.
+// The 0x00A0 recv arm also pushes a TRANSIENT chat line (retail's "The
+// <item> can't be <verb>…" — messages-objects-1) right after kind=48 in the
+// same poll batch; the transient route would stack it a second time. Suppress
+// exactly that one follow-up. The live route is app/chat_log.js →
+// `window.__hbSpewBox.push` (above); _onChatReceived (a bus that emits
+// 'kind:2') consults the same one-shot. With `?spewBox=off` the line goes to
+// the chat log only, so nothing is doubled and the arm just expires.
+// chat-errors-5 (2026-10-13): armed only when a line will follow, so an
+// unrelated transient inside the window is never swallowed. `text` is the
+// line to swallow; null = whichever transient comes next (a payload that
+// cannot say what follows). See _pairedChatText.
 const PAIRED_CHAT_SUPPRESS_MS = 250;
-let _suppressTransientUntil = 0;
+let _pairedChat = null; // { text: string|null, until: number }
 
-function _renderRejection(itemGuid, code) {
-  const message = weenieErrorMessage(code >>> 0).replace(/_/g, "that item");
+// `text` undefined (no line will follow) disarms: the newest kind=48 decides.
+function _armPairedChat(text) {
+  _pairedChat = text === undefined ? null : { text, until: Date.now() + PAIRED_CHAT_SUPPRESS_MS };
+}
+
+// One-shot: true when `msg` is the armed paired line (the kind=48 toast
+// already showed it).
+function _takePairedChat(msg) {
+  const p = _pairedChat;
+  if (!p) return false;
+  if (Date.now() >= p.until) { _pairedChat = null; return false; }
+  if (p.text !== null && String(msg ?? "").trimEnd() !== p.text) return false;
+  _pairedChat = null;
+  return true;
+}
+
+// What follows a kind=48 on the chat route, given its toast `message`:
+//   - a current pkg (stringPayload = retail's line, "" = none —
+//     src/inventory_request.rs attempt_failed_lines): the line itself comes
+//     first; with no line, at most the code's own HandleFailureEvent text
+//     (none for e.g. 0x426 AttunedItem). Only a line that repeats the toast
+//     word for word is swallowed; "" with nothing toasted arms nothing.
+//   - a WeenieError Debug label (an older pkg, or ?retailAttemptFailed=off):
+//     chat_format::inventory_save_failed_chat_line's line, whatever it says —
+//     except for the player's own guid (vendor-buy-2), which gets none.
+//   - no stringPayload (the pre-kind-48 kind:13 reroute): unknown, so the
+//     next transient line, as before.
+//   In those two cases an item failure that toasted nothing (code 0) leaves
+//   its line alone: "You can't wield that!" is then the only notice.
+// Returns undefined when no line will follow (or none may be swallowed).
+function _pairedChatText(stringPayload, message, isPlayer) {
+  const toast = String(message ?? "").trimEnd();
+  if (typeof stringPayload === "string" &&
+      (stringPayload === "" || _attemptFailedLine(stringPayload))) {
+    return toast ? toast : undefined;
+  }
+  if (isPlayer) return typeof stringPayload === "string" ? undefined : null;
+  return toast ? null : undefined;
+}
+
+// messages-objects-1 (2026-10-13): a current pkg sends retail's composed
+// ServerSaysAttemptFailed line (acclient.c:439317) in kind=48's stringPayload
+// ("The Pyreal can't be picked up - action cancelled"; "" when retail prints
+// none). An older pkg (or ?retailAttemptFailed=off) sent the WeenieError Debug
+// label there — one identifier, never a space — and the fallback's synthetic
+// re-emit sends none; those keep the code's own toast.
+function _attemptFailedLine(stringPayload) {
+  return typeof stringPayload === "string" && /\s/.test(stringPayload) ? stringPayload : "";
+}
+
+function _renderRejection(itemGuid, code, line = "") {
+  // The retail line wins. Code 0 (ACE's default "no reason") with no line
+  // toasts nothing — retail prints nothing, not "WeenieError 0x0000".
+  const message = line || ((code >>> 0)
+    ? weenieErrorMessage(code >>> 0).replace(/_/g, "that item")
+    : "");
   _renderToast(message);
   if (itemGuid >>> 0) _flashSlotForGuid(itemGuid >>> 0);
+  return message;
 }
 
 // PRIMARY — authoritative kind=48 from index.html.
@@ -293,18 +435,19 @@ function _onInventoryActionFailed(evt) {
   // this event naming the PLAYER (code 0). Retail shows nothing for a
   // refused shop event (ServerSaysAttemptFailed has no IR_SHOP_EVENT case),
   // so no "WeenieError 0x0000" toast and no flash. The paired transient line
-  // (an older pkg still sends one) is swallowed too.
+  // (an older pkg still sends one) is swallowed too — only when one follows
+  // (chat-errors-5: a current pkg's line, if any, shows on its own).
   let me = 0;
   try { me = (window.getLocalPlayerGuid?.() >>> 0) || 0; } catch (_) { me = 0; }
   if (itemGuid && me && itemGuid === me) {
-    _suppressTransientUntil = Date.now() + PAIRED_CHAT_SUPPRESS_MS;
+    _armPairedChat(_pairedChatText(payload.stringPayload, "", true));
     return;
   }
   // The server attributed this failure; don't let the fallback ring
   // attribute a later GUID-less kind:13 to the same action.
   if (itemGuid) _recent.delete(itemGuid);
-  _renderRejection(itemGuid, code);
-  _suppressTransientUntil = Date.now() + PAIRED_CHAT_SUPPRESS_MS;
+  const message = _renderRejection(itemGuid, code, _attemptFailedLine(payload.stringPayload));
+  _armPairedChat(_pairedChatText(payload.stringPayload, message, false));
 }
 
 // FALLBACK — kind:13 has no item GUID; guess from the recent-action ring.
@@ -367,15 +510,19 @@ function _onClientActionRejected(evt) {
 // reverts the stance). Retail renders transient strings as prominent
 // action text, not just a chat line — mirror that with the shared
 // toast surface. The chat-log copy still renders independently.
+// chat-errors-6 (2026-10-13): the page never relays kind=2 on the plugin bus
+// (plugins/api.js coverage table: "bus-relayed via chat appender"), so the
+// live route for transient lines is app/chat_log.js → `window.__hbSpewBox`
+// (which also takes the kind=48 paired line); this listener serves a bus that
+// does emit 'kind:2'. A line that rides TRANSIENT but is a retail chat line
+// (ui/spew_box.js isSpewLine) is not stacked.
 const CHAT_CATEGORY_TRANSIENT = 9;
 function _onChatReceived(evt) {
   const payload = evt?.detail ?? evt ?? {};
   if (((payload.u32Payload2 >>> 0) || 0) !== CHAT_CATEGORY_TRANSIENT) return;
-  if (Date.now() < _suppressTransientUntil) {
-    _suppressTransientUntil = 0; // the kind=48 toast already covered it
-    return;
-  }
   const msg = payload.stringPayload;
+  if (_takePairedChat(msg)) return; // the kind=48 toast already covered it
+  if (msg && spewBoxEnabled() && !isSpewLine(msg, CHAT_CATEGORY_TRANSIENT)) return;
   if (msg) _renderToast(msg);
 }
 

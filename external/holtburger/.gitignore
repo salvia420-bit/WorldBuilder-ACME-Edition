@@ -56,6 +56,8 @@ scripts/.http2-cert/
 /*.bin
 /go.html
 apps/holtburger-web/harness/*.json
+# ...except the source-pin ratchet baseline (harness/test_suite_hygiene.mjs).
+!apps/holtburger-web/harness/source-pin-baseline.json
 apps/holtburger-web/scratchpad/
 
 # T2 PBR terrain atlas sources (~30 MB, regenerable): baked from the CC0

@@ -20,9 +20,10 @@
 //   B14 pacing: 400 ms cast interval + the cast/busy gates.
 //   B4  tier-upgrade: a desired buff is resolved to the highest-tier spell
 //       in its family the character knows (via spell_ladders.json).
-//   B5  incantation tier-cap: cap the target at the highest tier OBSERVED
-//       landing for the family (skill-capped incantations don't recast
-//       forever chasing their nominal tier).
+//   B5  incantation tier-cap: cap the target at the tier OUR OWN cast was
+//       seen landing at when it landed BELOW the cast tier, and the upgrade
+//       test at the highest tier seen landing at all (skill-capped
+//       incantations don't recast forever chasing their nominal tier).
 //   B10 hard-reject cooldown: a family that can't land is parked 120s and
 //       the batch respects it. B11 auto batch-rebuff: any buff below
 //       threshold recasts ALL buffs in one pass (aligned timers). B12 force
@@ -87,8 +88,47 @@
 //     TargetCategory.Self and IsWithinAngle(self) is 0 (Player_Magic.cs:148,
 //     :721), so they don't replace a client MoveTo the way a targeted cast at
 //     another object does (move fork contract note, 2026-10-12).
+//
+// Tier lock fix (rynth-macro-nav-1, 2026-10-13):
+//   * B5 was seeded from EVERY registry row on the first refresh — the login
+//     snapshot included — and _buildLadders caps the cast target with it, so a
+//     lower tier standing at login re-resolved `desired` down to that tier and
+//     the family never upgraded for the life of the bot (nor after a relog: the
+//     old tier is rebuffed before it lapses). Registry rows now feed only the
+//     _isActiveReal flap guard (_familySeenTier — C# IsBuffActive, so the
+//     upgrade waits for the old tier's rebuff window); the ladder cap is learned
+//     only from our own cast landing below its cast tier (_recordOwnLanding).
+//   * B8 confirm of an UPGRADE over a lower tier: the family-keyed confirm read
+//     the old entry as the new landing, so a fizzled upgrade "confirmed" at
+//     600 ms and its fizzles never counted. The pending cast now remembers the
+//     entry it was cast over (pending.prior) and waits while that one stands.
+//     B2 keeps the LATER-expiry row per family, so a prior that outlives the
+//     upgrade (a permanent item V, a fellow's longer V) still stands after the
+//     upgrade LANDS; then the cast's own row is the landing when it was first
+//     stamped after the send, or stands and ACE answered clean (its successful
+//     UseDone, no refusal — a same-spell refresh is never re-stamped). It used
+//     to read as a silent no-show and walk the tier off for good (review
+//     Y-R1). _isActiveReal likewise judges a desired spell standing UNDER such
+//     a lower tier by its own row, not as an upgrade to recast every tick.
+//   * A tier walked down after FIZZLE_WALK_LIMIT fizzles comes back on the
+//     ladder after FIZZLE_WALK_RETRY_MS (fizzles are odds, not a ceiling; C#
+//     retries them with no blacklist, BuffManager.cs:570). Unknown-spell and
+//     silent no-show walks stay permanent.
+//
+// Opt-in skill cap (rynth-macro-nav-4, 2026-10-13; opts.skillCap /
+// setSkillCap, off by default): B4 resolves each family to the highest known
+// tier the buffed skill of the spell's school reaches (skill_cap.js; RynthAi
+// GetDynamicSelfBuffId starts at GetHighestBuffSpellTier). ACE fails a cast
+// outright below Power − 50 and rolls a 0.07 sigmoid above it, and any trained
+// character can learn a level 7/8 scroll, so the highest KNOWN tier is often
+// one it can't cast before Focus / Willpower / its masteries land — each
+// fizzle burned mana and 3-7 s until the walk. No known tier within the cap
+// keeps today's pick. When a school's castable tier moves the ladders are
+// re-resolved; a rise also returns that school's fizzle-walked tiers it now
+// covers (_checkSkillCap).
 
 import { portalSpaceActive } from "./portal_gate.js";
+import { buffSchoolOf, capRose, capsBySchool } from "./skill_cap.js";
 
 // Lazy-loaded family tier ladder (id -> [category, tier, flags, power],
 // self-beneficial spells, baked from the spell DAT — rynth_spell_ladders_test
@@ -172,6 +212,14 @@ const SELF_BUFF_HARD_CAP_MS = 12_000;
 // (BuffManager.cs:551); every read builds one wasm box per enchantment.
 const SELF_BUFF_POLL_MS = 250;
 const FIZZLE_WALK_LIMIT = 3;
+// A fizzle-walked tier is retried after this long — the combat planner's
+// EXCLUDE_MS (vt/combat/attack_planner.js). Three fizzles in a row are bad
+// luck at skill ≈ power (ACE SkillCheck sigmoid), not a skill ceiling.
+const FIZZLE_WALK_RETRY_MS = 10 * 60_000;
+// Slack for "the lower-tier entry an upgrade was cast over still stands": ACE
+// ticks StartTime down in 5 s heartbeats (EnchantmentManager.HeartBeat), so a
+// re-sent aged row can move the computed expiry by up to one heartbeat.
+const UPGRADE_PRIOR_SLACK_MS = 5_000;
 const COMPONENTS_PARK_MS = 5 * 60_000;
 const MANA_BACKOFF_MS = 15_000;
 const TRANSIENT_BACKOFF_MS = 1_000;
@@ -278,12 +326,23 @@ export class RynthBuffLoop {
     this.desired = desiredSpellIds.slice(); // resolved lazily on first tick
     this._laddersBuilt = false;
     this._familyOfSpell = new Map(); // spellId -> category
-    this._familyAchievedTier = new Map(); // category -> highest landed tier (B5)
+    // B5, two maps (rynth-macro-nav-1):
+    //   _familyAchievedTier  category -> tier our own cast landed at below its
+    //                        cast tier (_recordOwnLanding). The LADDER cap:
+    //                        _buildLadders never targets above it.
+    //   _familySeenTier      category -> highest tier seen in ANY registry row
+    //                        (C# RecordAchievedTier). Only the _isActiveReal
+    //                        upgrade flap guard reads it, never the target.
+    this._familyAchievedTier = new Map();
+    this._familySeenTier = new Map();
     this._spellTier = new Map(); // spellId -> roughLevel
     // B9 tier-walk-down (finding 5): spell ids that silently no-showed are
     // marked unresolvable and excluded from the ladder, so the family
     // re-resolves to the next lower known tier instead of parking unbuffed.
     this._unresolvable = new Set();
+    // spellId -> ts: the fizzle-walked members of _unresolvable, which go
+    // back on the ladder at ts (FIZZLE_WALK_RETRY_MS). Ids absent here stay.
+    this._unresolvableUntil = new Map();
     // B8×B3 (finding 9): families whose buff confirmed landing but whose
     // natural duration is below the rebuff threshold — held "active" while
     // present so the batch doesn't rebatch them forever.
@@ -297,10 +356,14 @@ export class RynthBuffLoop {
     this.lastCountAt = 0;
     // B2 state: family -> { spellId, remainingS, permanent } (refreshed)
     this.families = new Map();
+    // spellId -> its later-expiry TIMED row of the last read, with receivedAtS
+    // (the B2 receivedAt stamp): a spell standing under a longer-lived lower
+    // tier the family map keeps instead (Y-R1 — _ownLanding, _isActiveReal).
+    this._spellRows = new Map();
     this.spellFamily = new Map(); // spellId -> family (learned from landings)
     this.lastRefreshAt = 0;
     // B8/B9 state
-    this.pending = null; // { spellId, issuedAt }
+    this.pending = null; // { spellId, issuedAt, …, prior? } (prior: _upgradeFrom)
     this.noShows = new Map(); // spellId -> consecutive count
     this.parkedUntil = new Map(); // spellId -> ts
     this.lastCastAt = 0;
@@ -328,6 +391,12 @@ export class RynthBuffLoop {
     //                           (_idleWindowFor).
     this.rebuffSecondsRemaining = opts.rebuffSecondsRemaining ?? REBUFF_SECONDS_REMAINING;
     this.idleRebuffWindowS = 0;
+    //   skillCap                fn(school) -> highest castable level (skill_cap.js
+    //                           createHostSkillCap; RynthAi BuffMinSkillLevelTierN),
+    //                           or null = the highest known tier (setSkillCap).
+    this.skillCap = typeof opts.skillCap === "function" ? opts.skillCap : null;
+    this._skillCapsBuilt = null; // capsBySchool() the ladders were built under
+    this._schoolOf = new Map(); // spellId -> MagicSchool (memo, skill cap only)
     this._itemLastCast = new Map(); // "spellId:itemGuid" -> confirmed ts
     this._itemPending = null; // { spellId, itemGuid, issuedAt }
     this._running = false;
@@ -520,11 +589,15 @@ export class RynthBuffLoop {
   // B4/B5 — build family tier ladders from the known-spell book. For each
   // raw desired buff, find its family (category) and the highest-tier spell
   // in that family the character actually knows; that becomes the target.
-  // B5: cap at the highest tier we've OBSERVED landing for the family (an
-  // Incantation nominally tier 8 that lands skill-capped at 6 must not
-  // recast forever chasing 8).
+  // B5: cap at the tier our own cast was seen landing at below its cast tier
+  // (an Incantation nominally tier 8 that lands skill-capped at 6 must not
+  // recast forever chasing 8) — _recordOwnLanding. With the opt-in skill cap,
+  // the best rung within the cap of its school (header).
   _buildLadders() {
     this._laddersBuilt = true;
+    // [War, Life, Item, Creature, Void] castable levels, one read per build.
+    const caps = this.skillCap ? capsBySchool(this.skillCap) : null;
+    this._skillCapsBuilt = caps;
     const s = this.host.s;
     const known = s.playerKnownSpells ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
     this._knownCount = known.length;
@@ -566,7 +639,10 @@ export class RynthBuffLoop {
         .get(fam)
         .filter((e) => e.tier <= cap)
         .sort((a, b) => b.tier - a.tier || b.power - a.power);
-      const best = ladder[0] ? ladder[0].id : rawId;
+      // Opt-in skill cap: the best rung its school's buffed skill reaches
+      // (RynthAi GetDynamicSelfBuffId); none within it keeps today's pick.
+      const pick = caps ? ladder.find((e) => e.tier <= caps[this._spellSchool(e.id) - 1]) || ladder[0] : ladder[0];
+      const best = pick ? pick.id : rawId;
       // Log a resolution once, not on every rebuild (B5 rebuilds after each
       // family's first landing — the same 4 lines used to repeat per confirm).
       if (!this._ladderLogged) this._ladderLogged = new Map();
@@ -579,21 +655,178 @@ export class RynthBuffLoop {
     this.desired = resolved;
   }
 
-  // B5 — record the tier a family actually landed at (from the registry),
-  // and if a capped tier changes, rebuild ladders.
-  _recordAchievedTiers(reg) {
+  // B5 flap guard — the highest tier each family has been SEEN at in the
+  // registry, from any row (C# RecordAchievedTier, BuffManager.cs:1251-1256,
+  // fed from RefreshFromLiveMemory :1383). _isActiveReal caps the upgrade test
+  // with it, as C# IsBuffActive does (:1207-1209), so a lower tier standing at
+  // login is upgraded at its rebuff window rather than at once. It is NOT a
+  // ladder cap (rynth-macro-nav-1): it used to be, and a lower tier standing at
+  // login re-resolved `desired` down to itself — the higher tier was never cast
+  // again to lift the cap, so the family stayed locked for the life of the bot
+  // and across relogs. C#'s target resolver (GetDynamicSelfBuffId) never reads
+  // it either. The ladders are still rebuilt when a family's seen tier rises,
+  // as before (cheap; the V-1 golden replay pins this host-call cadence).
+  _recordSeenTiers(reg) {
     if (!reg) return;
     let changed = false;
     for (const [family, entry] of reg) {
       const tier = this._spellTier.get(entry.spellId);
       if (tier == null) continue;
-      const prev = this._familyAchievedTier.get(family) ?? 0;
+      const prev = this._familySeenTier.get(family) ?? 0;
       if (tier > prev) {
-        this._familyAchievedTier.set(family, tier);
+        this._familySeenTier.set(family, tier);
         changed = true;
       }
     }
     if (changed && this.tierLadders) this._buildLadders();
+  }
+
+  // The upgrade flap-guard cap for a family: the highest tier observed landing,
+  // own skill-capped landing or registry row alike; undefined when neither.
+  _flapCap(family) {
+    const own = this._familyAchievedTier.get(family);
+    const seen = this._familySeenTier.get(family);
+    if (own == null) return seen;
+    return seen == null ? own : Math.max(own, seen);
+  }
+
+  // B5 ladder cap — record the tier OUR OWN confirmed cast landed at, and
+  // rebuild the ladders when that sets the cap (rynth-macro-nav-1). Only a
+  // landing BELOW the cast tier says the family has a ceiling: the skill-capped
+  // Incantation B5 exists for (cast at 8, lands as VI). On ACE a cast lands at
+  // its own tier, so no cap is set and the target stays the best known tier.
+  // A landing at the cast tier doesn't set it either — after a fizzle walk it
+  // would hold the family below the tier that comes back at
+  // FIZZLE_WALK_RETRY_MS.
+  _recordOwnLanding(fam, castId, entry) {
+    if (fam === undefined || !entry) return;
+    const landedTier = this._tierOf(entry.spellId);
+    const castTier = this._tierOf(castId);
+    if (landedTier == null || castTier == null || landedTier >= castTier) return;
+    const prev = this._familyAchievedTier.get(fam);
+    if (prev != null && prev >= landedTier) return;
+    this._familyAchievedTier.set(fam, landedTier);
+    this.log(`family ${fam}: cast at tier ${castTier} landed at ${landedTier} — capping its ladder there (B5)`);
+    if (this.tierLadders) this._buildLadders();
+  }
+
+  // B8 upgrade baseline: when `spellId` is a tier UPGRADE over a lower tier the
+  // family already holds, the entry it is cast over ({spellId, expiresAtMs});
+  // else null. The confirm is family-keyed, so without it the old entry read
+  // as the new landing: a fizzled upgrade "confirmed" at 600 ms, its fizzles
+  // never counted toward the walk, and the next tick cast it again.
+  _upgradeFrom(spellId, fam) {
+    if (fam === undefined) return null;
+    const entry = this.families.get(fam);
+    if (!entry) return null;
+    const castTier = this._tierOf(spellId);
+    const heldTier = this._tierOf(entry.spellId);
+    if (castTier == null || heldTier == null || heldTier >= castTier) return null;
+    return { spellId: entry.spellId, expiresAtMs: entry.expiresAtMs };
+  }
+
+  // Is `entry` still the lower-tier entry `prior` the upgrade was cast over
+  // (same spell, same expiry within one ACE heartbeat)?
+  _isPriorEntry(prior, entry) {
+    if (!prior || !entry || entry.spellId !== prior.spellId) return false;
+    const a = entry.expiresAtMs;
+    const b = prior.expiresAtMs;
+    return a === b || Math.abs(a - b) <= UPGRADE_PRIOR_SLACK_MS; // === covers permanent (Infinity)
+  }
+
+  // Y-R1 — an upgrade cast over a `prior` that OUTLIVES it (a permanent item V,
+  // a fellow's longer V): the landed tier is a second row in the family and B2
+  // keeps the prior (later expiry), so the prior still stands after a real
+  // landing. The cast's own row is then the landing when
+  //   * it first appeared after the cast was sent (a new layer — receivedAt is
+  //     stamped on first sight of a spell/layer/start), or
+  //   * it stands and ACE answered clean (a same-spell refresh keeps its
+  //     spell/layer/start-0 key, so it is never re-stamped): ACE applies the
+  //     enchantment BEFORE the cast's successful UseDone (DoCastSpell_Inner,
+  //     then FinishCast) and reports a fizzle/refusal ahead of it (kind 13,
+  //     _onRefusal) — at the moment a missing landing reads as a no-show (the
+  //     same grace / give-up clocks).
+  // No row of the cast spell at all is still a silent no-show (B9 walk).
+  // Returns that row, or null.
+  _ownLanding(p, now, age) {
+    const row = this._spellRows.get(p.spellId);
+    if (!row || !(this._remainingS(row) > 0)) return null;
+    const sent = p.prior ? p.prior.sentAtS : undefined;
+    if (typeof sent === "number" && row.receivedAtS > sent) return row;
+    if (p.refusal || !((p.useDoneEvents || 0) > 0) || age <= SELF_BUFF_GIVE_UP_MS) return null;
+    const answered = p.useDoneAt ? now - p.useDoneAt > SELF_BUFF_USE_DONE_GRACE_MS : p.useDoneAtIssue == null;
+    return answered ? row : null;
+  }
+
+  // Put fizzle-walked tiers whose retry time has come back on the ladder and
+  // re-resolve `desired` (it climbs back to them). Not under an in-flight cast.
+  _expireFizzleWalks(now) {
+    if (!this._unresolvableUntil.size || this.pending) return;
+    let changed = false;
+    for (const [id, until] of this._unresolvableUntil) {
+      if (now < until) continue;
+      this._unresolvableUntil.delete(id);
+      this._unresolvable.delete(id);
+      changed = true;
+      this.log(`tier ${id} back on the ladder (fizzle walk expired)`);
+    }
+    if (changed && this.tierLadders && this._laddersBuilt) this._buildLadders();
+  }
+
+  /** Opt-in skill cap (rynth-macro-nav-4): `fn(school) → highest castable
+   *  level` (skill_cap.js createHostSkillCap), or null/absent for today's
+   *  highest known tier. The ladders re-resolve at the next tick/heartbeat. */
+  setSkillCap(fn) {
+    this.skillCap = typeof fn === "function" ? fn : null;
+  }
+
+  // MagicSchool of a laddered spell: the live catalog's own `school` when the
+  // session has one, else by category (skill_cap.js buffSchoolOf — RynthAi
+  // BuffManager.SkillForBuff's split). Memoised; read only under a skill cap.
+  _spellSchool(id) {
+    let school = this._schoolOf.get(id);
+    if (school !== undefined) return school;
+    let recSchool = null;
+    const s = this.host.s;
+    if (s && typeof s.getSpellRecord === "function") {
+      try {
+        recSchool = recordField(s.getSpellRecord(id >>> 0), "school");
+      } catch (_) {
+        /* category fallback */
+      }
+    }
+    school = buffSchoolOf(this._familyOfSpell.get(id) ?? this._spellMeta(id)?.category, recSchool);
+    this._schoolOf.set(id, school);
+    return school;
+  }
+
+  // Opt-in skill cap: re-resolve the ladders when a school's castable tier
+  // moved since they were built (Focus / Willpower / a mastery landing or
+  // lapsing; the host cap re-reads the skills every few seconds). A RISE also
+  // returns that school's fizzle-walked tiers it now covers — the odds they
+  // were walked under are gone. A tier still above the cap stays walked: back
+  // on the ladder it could only become the no-tier-within-cap fallback again.
+  // Not under an in-flight cast. A no-op while no cap is set.
+  _checkSkillCap() {
+    if (!this.tierLadders || !this._laddersBuilt || this.pending) return;
+    if (!this.skillCap) {
+      if (this._skillCapsBuilt) this._buildLadders(); // switched off: today's pick again
+      return;
+    }
+    const before = this._skillCapsBuilt;
+    const after = capsBySchool(this.skillCap);
+    if (before && after.every((v, i) => v === before[i])) return;
+    if (before) {
+      for (const id of [...this._unresolvableUntil.keys()]) {
+        const school = this._spellSchool(id);
+        const tier = this._tierOf(id);
+        if (tier == null || !capRose(before, after, school) || tier > after[school - 1]) continue;
+        this._unresolvableUntil.delete(id);
+        this._unresolvable.delete(id);
+        this.log(`tier ${id} back on the ladder (school ${school} skill tier ${before[school - 1]} -> ${after[school - 1]})`);
+      }
+    }
+    this._buildLadders();
   }
 
   _readRegistry() {
@@ -615,6 +848,7 @@ export class RynthBuffLoop {
     if (!rows) return null;
     const nowS = Date.now() / 1000;
     const out = new Map();
+    const bySpell = new Map(); // -> this._spellRows
     const seen = new Set();
     for (const { spellId, family, start, duration, layer } of rows) {
       // Finding 2: store an ABSOLUTE expiry timestamp (wall-clock ms), NOT a
@@ -634,6 +868,10 @@ export class RynthBuffLoop {
         // F1: `+ start` per ACE (start ≤ 0; clamp guards synthetic > 0).
         expiresAtMs = (receivedAt + duration + Math.min(0, start)) * 1000;
         if (expiresAtMs - nowS * 1000 <= 0) continue; // B2: drop expired
+        const own = bySpell.get(spellId);
+        if (!own || expiresAtMs > own.expiresAtMs) {
+          bySpell.set(spellId, { spellId, expiresAtMs, permanent: false, durationS: duration, receivedAtS: receivedAt });
+        }
       }
       const prev = out.get(family);
       // B2 last-wins quirk (finding 10): C# keeps the LAST wire row for a
@@ -648,6 +886,7 @@ export class RynthBuffLoop {
       this.spellFamily.set(spellId, family);
     }
     this._pruneReceived(seen);
+    this._spellRows = bySpell;
     return out;
   }
 
@@ -674,7 +913,9 @@ export class RynthBuffLoop {
     const reg = this._readRegistry();
     if (reg) this.families = reg;
     this.lastRefreshAt = Date.now();
-    this._recordAchievedTiers(reg); // B5
+    // B5 flap guard only — the ladder cap is never learned from a registry
+    // read, which holds rows we didn't cast (see _recordOwnLanding).
+    this._recordSeenTiers(reg);
     // finding 9 cleanup: a short-duration family that has fully dropped from
     // the registry is eligible to recast again — forget its "held active" mark.
     if (reg) {
@@ -696,9 +937,15 @@ export class RynthBuffLoop {
   // fights on unbuffed forever. Buff EXPIRY is handled separately by the live
   // expiry timestamps in _isActiveReal, so this only closes the "registry
   // emptied while our timers still say active" gap.
+  // It also returns fizzle-walked tiers to the ladder when their retry time
+  // comes: a family walked down to a tier that then landed reads all-active,
+  // so the kernel would never tick this loop to notice. Likewise a skill-cap
+  // move (opt-in): a family re-resolved UP reads inactive and wakes the kernel.
   heartbeat() {
     if (!this.registryReady) return; // login gate owns the pre-ready window
     if (Date.now() - this.lastRefreshAt > PERIODIC_REFRESH_INTERVAL_MS) this._refresh();
+    this._expireFizzleWalks(Date.now());
+    this._checkSkillCap();
   }
 
   _familyForSpell(spellId) {
@@ -743,7 +990,7 @@ export class RynthBuffLoop {
     const desiredTier = this._tierOf(spellId);
     const landedTier = this._tierOf(entry.spellId);
     if (family !== undefined && desiredTier != null && landedTier != null) {
-      const cap = this._familyAchievedTier.get(family);
+      const cap = this._flapCap(family);
       const effectiveTarget = cap != null ? Math.min(desiredTier, cap) : desiredTier;
       // A landed spell with at least the desired spell's Power already wins
       // ACE's stacking (higher power holds the category) — recasting a lower
@@ -751,7 +998,15 @@ export class RynthBuffLoop {
       const landedPower = this._spellMeta(entry.spellId)?.power || 0;
       const desiredPower = this._spellMeta(spellId)?.power || 0;
       const outpowers = landedPower > 0 && desiredPower > 0 && landedPower >= desiredPower;
-      if (landedTier < effectiveTarget && !outpowers) return false; // upgrade
+      if (landedTier < effectiveTarget && !outpowers) {
+        // Y-R1: the desired spell's own row can stand UNDER a lower tier that
+        // outlives it (B2 keeps the later expiry — a permanent item V over our
+        // VII). That is no upgrade to recast every tick: judge its own timer.
+        const own = this._spellRows.get(spellId);
+        if (!own || this._remainingS(own) <= 0) return false; // upgrade
+        if (this._shortDurationFamilies.has(family)) return true;
+        return this._remainingS(own) > this._rebuffThresholdS() + this._idleWindowFor(own);
+      }
     }
     if (entry.permanent) return true;
     // B8×B3 (finding 9): a family confirmed landing below the rebuff threshold
@@ -944,18 +1199,36 @@ export class RynthBuffLoop {
   // MarkSpellUnresolvable + FindBestSpellId tier-drop). Only when NO lower tier
   // remains do we fall through to the silent-no-show park. `walk: false` (the
   // cast was never answered) skips the walk and only counts toward the park.
-  _noShow(spellId, fam, now, { walk = true } = {}) {
+  // `retryAfterMs` (the fizzle walk) puts the tier back on the ladder after
+  // that long instead of for good (_expireFizzleWalks).
+  // Under the opt-in skill cap a walk must go DOWN: with no other tier within
+  // the cap left, the re-resolution falls back to the highest known tier, and
+  // walking UP from a fizzled tier to it is no walk — undo, let B9 park.
+  _noShow(spellId, fam, now, { walk = true, retryAfterMs = 0 } = {}) {
     let walked = false;
     if (walk && this.tierLadders && fam !== undefined && !this._unresolvable.has(spellId)) {
       this._unresolvable.add(spellId);
       this._buildLadders(); // re-resolve desired excluding unresolvable ids
+      const from = this.skillCap ? this._tierOf(spellId) : null;
       walked = this.desired.some(
-        (id) => id !== spellId && !this._unresolvable.has(id) && this._familyForSpell(id) === fam
+        (id) =>
+          id !== spellId &&
+          !this._unresolvable.has(id) &&
+          this._familyForSpell(id) === fam &&
+          (from == null || !(this._tierOf(id) > from))
       );
-      if (!walked) this._unresolvable.delete(spellId); // no lower tier — undo, let B9 park
+      if (!walked) {
+        this._unresolvable.delete(spellId); // no lower tier — undo, let B9 park
+        if (this.skillCap) this._buildLadders(); // the cap's fallback resolved up: back to spellId
+      }
     }
     if (walked) {
-      this.log(`tier-down ${spellId} unresolvable -> family ${fam} walking to a lower tier`);
+      if (retryAfterMs > 0) this._unresolvableUntil.set(spellId, now + retryAfterMs);
+      else this._unresolvableUntil.delete(spellId);
+      this.log(
+        `tier-down ${spellId} unresolvable -> family ${fam} walking to a lower tier` +
+          (retryAfterMs > 0 ? ` (retried in ${Math.round(retryAfterMs / 60_000)} min)` : "")
+      );
       this.pending = null;
       this._release();
       return;
@@ -1005,7 +1278,7 @@ export class RynthBuffLoop {
         if (n >= FIZZLE_WALK_LIMIT) {
           this._fizzles.delete(spellId);
           this.log(`${spellId} fizzled ${n}x in a row — treating as skill-capped`);
-          this._noShow(spellId, fam, now);
+          this._noShow(spellId, fam, now, { retryAfterMs: FIZZLE_WALK_RETRY_MS });
         } else {
           this._fizzles.set(spellId, n);
           this.log(`fizzle ${spellId} (${n}/${FIZZLE_WALK_LIMIT}) — retry`);
@@ -1174,7 +1447,11 @@ export class RynthBuffLoop {
         ForceRebuffCastFamilies: [...this._forceRebuffCast],
         NoShowCounts: [...this.noShows].map(([id, n]) => ({ Family: this._familyForSpell(id) ?? 0, Value: n })),
         FailCooldownUntil: [...this._rejectParkedUntil].map(([f, t]) => ({ Family: f, UntilMs: t })),
-        AchievedTier: [...this._familyAchievedTier].map(([f, t]) => ({ Family: f, Value: t })),
+        // C#'s one map = our seen tiers merged with the own-landing ladder caps.
+        AchievedTier: [...new Set([...this._familySeenTier.keys(), ...this._familyAchievedTier.keys()])].map((f) => ({
+          Family: f,
+          Value: this._flapCap(f),
+        })),
         UnresolvableIds: [...this._unresolvable],
         RamTimers: [...this.families].map(([f, e]) => ({
           Family: f, SpellName: this._nbSpellName(e.spellId, f),
@@ -1294,7 +1571,20 @@ export class RynthBuffLoop {
       // registry with remaining > 0 (C# tests `st.Expiration > now`, NOT the
       // rebuff threshold — so a short-duration buff still confirms, finding 9).
       const famEntry = fam !== undefined ? this.families.get(fam) : null;
-      const landed = famEntry ? this._remainingS(famEntry) > 0 : this._isActiveReal(spellId);
+      // An UPGRADE has not landed while the lower-tier entry it was cast over
+      // still stands unchanged (rynth-macro-nav-1): fall through to the
+      // refusal / UseDone answer, so a fizzle counts and the walk can run.
+      // A pending without `prior` (same-tier recast, empty family) confirms as before.
+      // A prior that OUTLIVES the upgrade still stands after it lands (Y-R1):
+      // there the cast's own row is the landing (_ownLanding), and only that
+      // row (never the prior) feeds finding 9 / the B5 cap.
+      const overPrior = this._isPriorEntry(p.prior, famEntry);
+      const landedEntry = overPrior ? this._ownLanding(p, now, age) : famEntry;
+      const landed = overPrior
+        ? !!landedEntry
+        : famEntry
+          ? this._remainingS(famEntry) > 0
+          : this._isActiveReal(spellId);
       if (landed) {
         this.noShows.delete(spellId);
         // B12 — mark the family recast this cycle so the force-rebuff pass
@@ -1304,7 +1594,7 @@ export class RynthBuffLoop {
           // finding 9: landed BELOW the rebuff threshold -> hold it active so
           // the batch doesn't rebatch this short-duration buff forever (the
           // deliberate improvement over C#, which rebatches endlessly here).
-          if (famEntry && !famEntry.permanent && this._remainingS(famEntry) <= this._rebuffThresholdS()) {
+          if (landedEntry && !landedEntry.permanent && this._remainingS(landedEntry) <= this._rebuffThresholdS()) {
             if (!this._shortDurationFamilies.has(fam)) {
               this.log(`family ${fam} lands below rebuff threshold — holding active (finding 9, no rebatch)`);
             }
@@ -1316,6 +1606,9 @@ export class RynthBuffLoop {
         this._fizzles.delete(spellId);
         this._lastLoggedBlock = null;
         this._release();
+        // B5 ladder cap (may re-resolve desired). Not with a refusal on record:
+        // our cast didn't land, so what stands is someone else's buff.
+        if (!p.refusal) this._recordOwnLanding(fam, spellId, landedEntry);
         return;
       }
       if (p.refusal) {
@@ -1338,6 +1631,11 @@ export class RynthBuffLoop {
       }
       return;
     }
+
+    // B9 — a fizzle-walked tier whose retry time has come is a target again.
+    this._expireFizzleWalks(now);
+    // B4 under the opt-in skill cap: a school's castable tier moved.
+    this._checkSkillCap();
 
     // Casting requires Magic combat mode (ACE Player_Magic mismatch gate —
     // the untargeted arm at :279 mirrors the targeted one; B14's
@@ -1419,6 +1717,13 @@ export class RynthBuffLoop {
       }
       this.lastCastAt = now;
       this.pending = { spellId, issuedAt: now, useDoneAtIssue, useDoneAt: 0, refusal: null, useDoneEvents: 0 };
+      const prior = this._upgradeFrom(spellId, fam); // B8 upgrade baseline
+      if (prior) {
+        // Rows first stamped after this are this cast's (_ownLanding). Read
+        // after the send, in the same seconds form _readRegistry stamps with.
+        prior.sentAtS = Date.now() / 1000;
+        this.pending.prior = prior;
+      }
       this._lastPendingPollAt = 0;
       return;
     }

@@ -109,6 +109,8 @@ impl Session {
             self.retransmit_sequences(&sequences)?;
         }
 
+        // net-transport-4: log only on this unordered, unvalidated path; the
+        // ordered path (`process_received_packet_metadata`) records the ids.
         if (header.flags & packet_flags::REJECT_RETRANSMIT) != 0
             && let Some(sequences) =
                 self.read_sequence_list(header.flags, &data, packet_flags::REJECT_RETRANSMIT)
@@ -154,6 +156,12 @@ impl Session {
                 "Server rejected retransmit for S2C sequences: {:?}",
                 sequences
             );
+            // net-transport-4 (2026-10-13): was log-only, so ordering waited
+            // on the rejected id until the retransmit give-up (~180 s) ended
+            // the session. Runs before ordering on purpose: ACE gives the
+            // reject its own fresh sequence, which is buffered behind the
+            // very gap it reports.
+            self.note_rejected_server_sequences(&sequences);
         }
 
         Ok(())
@@ -241,6 +249,9 @@ impl Session {
     }
 
     fn take_pending_server_packet(&mut self) -> Option<ReceivedPacket> {
+        // net-transport-4: step over ids the server rejected first, so the
+        // packets held behind them drain.
+        self.skip_lost_server_sequences();
         let expected = self.next_expected_server_sequence();
         self.pending_server_packets.remove(&expected)
     }
@@ -249,6 +260,9 @@ impl Session {
         if self.should_order_server_packet(&packet.header) {
             self.last_server_seq = packet.header.sequence;
             self.has_server_seq = true;
+            // net-transport-4: a rejected id whose packet arrived after all
+            // is no longer lost.
+            self.lost_server_seqs.remove(&self.last_server_seq);
             // conn-fix (2026-07-18): ordering progressed — reset the
             // retransmit give-up counter (see send_request_retransmit).
             self.retransmit_requests_since_progress = 0;
@@ -334,6 +348,16 @@ impl Session {
             return Ok(None);
         }
 
+        // net-transport-6 (2026-10-13): retail counters 3/4/5 —
+        // `SharedNet::SplitPacketData` counts every checksum-valid packet
+        // received (duplicates and out-of-order ones included).
+        self.link_status.heartbeat(Instant::now());
+        self.link_status.count_received();
+
+        // net-transport-3: a validated server packet may end the
+        // ConnectResponse re-sends (retail `cs_Connected`).
+        self.note_server_packet_for_handshake(&header);
+
         self.process_received_packet_metadata(&header, &data)?;
 
         let packet = ReceivedPacket { header, data };
@@ -396,16 +420,25 @@ impl Session {
                 continue;
             }
 
-            // Wake for whichever comes first: the next deferred control packet
-            // or (net-4) the next re-NAK. Both are `None` on an idle, in-order
-            // session, which then blocks on the socket alone as before.
-            let deadline = match (
+            // net-transport-3 (2026-10-13): timer-driven ConnectResponse
+            // re-send until the server answers the handshake (queued here,
+            // flushed at the loop top).
+            if self.resend_connect_response_if_due()? {
+                continue;
+            }
+
+            // Wake for whichever comes first: the next deferred control
+            // packet, (net-4) the next re-NAK or (net-transport-3) the next
+            // ConnectResponse re-send. All are `None` on an idle, in-order,
+            // connected session, which then blocks on the socket alone.
+            let deadline = [
                 self.next_pending_control_deadline(),
                 self.next_retransmit_deadline(),
-            ) {
-                (Some(control), Some(renak)) => Some(control.min(renak)),
-                (control, renak) => control.or(renak),
-            };
+                self.next_handshake_deadline(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
 
             if let Some(deadline) = deadline {
                 // Native: `web_time::Instant` re-exports `std::time::Instant`,
@@ -471,8 +504,12 @@ impl Session {
             if offset + transport::CONNECT_REQUEST_SIZE <= data.len() {
                 let crd = ConnectRequestData::unpack(&data, &mut offset)
                     .ok_or_else(|| anyhow!("Failed to unpack connect request"))?;
-                let server_time = self.handle_handshake_request(crd)?;
-                events.push(SessionEvent::TimeSync(server_time));
+                // net-transport-3: `None` = a duplicate of the ConnectRequest
+                // that keyed this session; it changes nothing and carries a
+                // stale server time, so no TimeSync either.
+                if let Some(server_time) = self.handle_handshake_request(crd)? {
+                    events.push(SessionEvent::TimeSync(server_time));
+                }
             }
         }
 

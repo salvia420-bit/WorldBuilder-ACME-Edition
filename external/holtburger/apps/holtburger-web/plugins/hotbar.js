@@ -30,8 +30,10 @@
 //   - Drag a spell (application/x-hb-spell-id) or an item
 //     (application/x-hb-inv-guid) onto a slot to bind it; drag slot↔slot
 //     to swap (application/x-hb-hotbar-slot). Server-persisted via
-//     AddShortcut/RemoveShortcut, cached in localStorage.
-//   - Click a bound slot or press 1-9 to fire it (decideFireAction):
+//     AddShortcut/RemoveShortcut, cached in localStorage per server +
+//     account + character (inventory-session-3, hotbarStorageKey).
+//   - Click a bound slot or press 1-9 / Ctrl+1-9 to fire it, Alt+1-9 for
+//     row 2 (retail gmDefaultMap Quickslot 1-18) (decideFireAction):
 //       * item                    → retail UseObject (inventory.js
 //                                   activateItem: wield / wear / target /
 //                                   salvage / Use)
@@ -39,9 +41,10 @@
 //       * untargeted spell (ring) → CastUntargetedSpell, selection ignored
 //       * targeted spell + target → cast on the selected entity
 //       * targeted spell, none    → chat hint, no packet
-//   - In Magic mode the digits belong to the spell bar (retail per-mode
+//   - In Magic mode the bare digits belong to the spell bar (retail per-mode
 //     input map) and the slot numbers are drawn ghosted
-//     (gmToolbarUI::RecvNotice_SetCombatMode → SetShortcutNum _ghosted).
+//     (gmToolbarUI::RecvNotice_SetCombatMode → SetShortcutNum _ghosted);
+//     Ctrl+1-9 and Alt+1-9 keep firing the slots there.
 // Retail click→fire chain: gmToolbarUI::UseShortcut(slot, i_bUse)
 // (acclient.c) — armed-spell + selected-target vs ItemHolder::UseObject.
 
@@ -50,8 +53,10 @@ import {
   matchesBinding,
   formatBinding,
   LOCAL_ACTION_IDS,
+  quickslotModDefault,
 } from "../ui/keymap.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
+import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { hudRect, hudViewport, toHudPx } from "../ui/hud_scale.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
@@ -72,6 +77,7 @@ import { castSpellViaHandleResult } from "../ui/ac_cast_spell.js";
 import { announceCastRefusal, MSG_NO_SELECTION } from "../ui/ac_spell_target_compat.js";
 import { castNeedsNoSelection } from "../ui/ac_spell_target_type.js";
 import { mountToolbarControls, lookupObjectName, formatTipLabel } from "./target-bar.js";
+import { lastLocationKey } from "../app/spawn_preview.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const TIP_ID = "hb-toolbar-tip";
@@ -93,6 +99,13 @@ const ROW_COUNT = 2;                 // slots that exist / persist (server indic
 const SLOT_COUNT = SLOTS_PER_ROW * ROW_COUNT;
 
 const LS_KEY = "holtburger_hotbar_v1";
+// inventory-session-3 (2026-10-13): the shortcut cache is kept per server +
+// account + character under `${LS_KEY}|…` (hotbarStorageKey). LS_KEY itself
+// was one browser-wide cache, so after /logout → another character the last
+// character's bindings came back on the new bar. It is now read only under
+// `?hotbarPerChar=off`, and once, when it is handed to the first character
+// that logs in (this flag marks the hand-over as done).
+const LS_PER_CHAR_MIGRATED = "hb.hotbar.perChar.migrated.v1";
 const LS_ROWS_KEY = "hb.hotbar.rows.v1";
 // One-time reset of the saved toolbar position (HUD overhaul 2026-10-05):
 // saves made before unification measured a 132-px frame centred with a
@@ -276,6 +289,107 @@ export function staleBindingAction(binding, invGuids, seenGuids, neverSeenMayGo)
   if (invGuids?.has?.(g)) return "keep";
   if (!seenGuids?.has?.(g) && !neverSeenMayGo) return "keep";
   return "clear";
+}
+
+// ── Per-character shortcut cache (inventory-session-3) ───────────────
+
+/** `?hotbarPerChar` — default ON; `off`/`0`/`false` restore the
+ *  browser-wide cache read at mount (LS_KEY). */
+export function hotbarPerCharEnabled(search) {
+  return defaultOnUrlFlag("hotbarPerChar", search);
+}
+
+/** Storage key for one character's cached bar on one server + account
+ *  (the same normalisation as app/spawn_preview.js lastLocationKey).
+ *  null until the character is known. */
+export function hotbarStorageKey({ server = "", account = "", charId = 0 } = {}) {
+  const id = Number(charId) >>> 0;
+  if (!id) return null;
+  return `${LS_KEY}|${lastLocationKey({ server, account, charId: id })}`;
+}
+
+/** This character's cached bar from `storage` (older 9-slot saves pad to
+ *  18). The first character loaded after the switch to per-character keys
+ *  is handed the old browser-wide cache (copied to its key); no later
+ *  character is. */
+export function loadCharacterHotbar(storage, key) {
+  if (!storage || !key) return emptyState();
+  try {
+    let raw = storage.getItem(key);
+    if (raw == null && !storage.getItem(LS_PER_CHAR_MIGRATED)) {
+      const legacy = storage.getItem(LS_KEY);
+      storage.setItem(LS_PER_CHAR_MIGRATED, "1");
+      if (legacy != null) {
+        storage.setItem(key, legacy);
+        raw = legacy;
+      }
+    }
+    return parseState(raw);
+  } catch (_) { return emptyState(); }
+}
+
+/**
+ * Retail gmToolbarUI::UpdateFromPlayerDesc (acclient.c:241958): FlushShortcuts,
+ * then AddShortcut for each of the 18 PlayerModule slots — the bar becomes
+ * exactly the character's list, nothing kept from before. ACE stores only
+ * (index, objectId) per shortcut (Player_Character.HandleActionAddShortcut),
+ * so a cached SPELL binding fills a slot the server left empty; a cached item
+ * binding the server does not list is flushed.
+ *
+ * `serverFlat` = playerShortcuts() triples `[index, objectGuid, (layer << 16) |
+ * spellId]`. A non-empty list is authoritative; an empty one only once
+ * PlayerDescription has landed (`pdReceived`) — before that the wasm returns
+ * [] too, so this returns null (nothing to reconcile yet). `wcidOf(guid)`
+ * stamps item bindings with their weenie class (0 when unknown).
+ */
+export function reconcileSlots(serverFlat, cachedSlots, { pdReceived = false, wcidOf = null } = {}) {
+  const flat = serverFlat || [];
+  if (flat.length === 0 && !pdReceived) return null;
+  const serverSlots = Array(SLOT_COUNT).fill(null);
+  for (let k = 0; k + 2 < flat.length; k += 3) {
+    const idx = flat[k] >>> 0;
+    const objectGuid = flat[k + 1] >>> 0;
+    const packed = flat[k + 2] >>> 0;
+    const spellId = packed & 0xFFFF;
+    if (idx >= SLOT_COUNT) continue;
+    if (spellId > 0) serverSlots[idx] = { spellId };
+    else if (objectGuid > 0) serverSlots[idx] = { itemGuid: objectGuid };
+  }
+  const merged = Array(SLOT_COUNT).fill(null);
+  for (let idx = 0; idx < SLOT_COUNT; idx++) {
+    const s = serverSlots[idx];
+    const l = cachedSlots?.[idx];
+    if (s) {
+      // Persist wcid alongside guid so post-restart objectGuid reuse can
+      // be validated against the inventory snapshot's wcid.
+      if (s.itemGuid) {
+        let wcid = 0;
+        try { wcid = (typeof wcidOf === "function" ? wcidOf(s.itemGuid) >>> 0 : 0) || 0; } catch (_) {}
+        merged[idx] = { itemGuid: s.itemGuid, wcid };
+      } else {
+        merged[idx] = s;
+      }
+    } else if (l?.spellId) {
+      merged[idx] = l; // preserve local spell binding (server is item-only)
+    }
+  }
+  return merged;
+}
+
+/** PlayerDescription has landed: the wasm publishes its shortcut list in the
+ *  same playerStats() snapshot as the attributes, which only it fills. */
+export function playerDescriptionLanded(handle) {
+  if (typeof handle?.playerStats !== "function") return false;
+  let snap = null;
+  try {
+    snap = handle.playerStats();
+    const attrs = snap?.attributes;
+    return !!attrs && attrs.length > 0;
+  } catch (_) {
+    return false;
+  } finally {
+    try { snap?.free?.(); } catch (_) {}
+  }
 }
 
 export const manifest = {
@@ -488,19 +602,28 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
-function loadState() {
-  const fallback = () => ({ slots: Array(SLOT_COUNT).fill(null) });
+function emptyState() {
+  return { slots: Array(SLOT_COUNT).fill(null) };
+}
+function parseState(raw) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(LS_KEY)) || fallback();
+    const parsed = JSON.parse(raw) || emptyState();
     // Migrate older 9-slot saves to 18 slots — pad with nulls so
     // row 2 starts empty without forcing the user to re-bind row 1.
     if (!Array.isArray(parsed.slots)) parsed.slots = [];
     while (parsed.slots.length < SLOT_COUNT) parsed.slots.push(null);
     return parsed;
-  } catch (_) { return fallback(); }
+  } catch (_) { return emptyState(); }
 }
-function saveState(s) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (_) {}
+/** The browser-wide cache (`?hotbarPerChar=off`). */
+function loadState() {
+  try { return parseState(localStorage.getItem(LS_KEY)); } catch (_) { return emptyState(); }
+}
+function writeState(key, s) {
+  try { localStorage.setItem(key, JSON.stringify(s)); } catch (_) {}
+}
+function browserStorage() {
+  try { return typeof localStorage !== "undefined" ? localStorage : null; } catch (_) { return null; }
 }
 function loadRowCount() {
   try { return normalizeRowCount(localStorage.getItem(LS_ROWS_KEY)); } catch (_) { return 1; }
@@ -664,7 +787,27 @@ export function mount(ctx) {
   // Examine, backpack) — plugins/target-bar.js.
   const controls = mountToolbarControls(field, { root: overlay });
 
-  const state = loadState();
+  // inventory-session-3: per character, the cache is read only once the
+  // character is known (already in the world at mount — a re-mount — or
+  // when PlayerDescription lands, reconcileWithServer) and saves go nowhere
+  // until then. `?hotbarPerChar=off`: the browser-wide cache, read now.
+  const perChar = hotbarPerCharEnabled();
+  let stateKey = perChar ? characterStorageKey() : LS_KEY;
+  const state = !perChar ? loadState()
+    : stateKey ? loadCharacterHotbar(browserStorage(), stateKey)
+    : emptyState();
+  function saveState(s) {
+    if (stateKey) writeState(stateKey, s);
+  }
+  /** This character's cache key, or null before the character is known. */
+  function characterStorageKey() {
+    let charId = 0;
+    try { charId = (window.getLocalPlayerGuid?.() >>> 0) || 0; } catch (_) {}
+    if (!charId) {
+      try { charId = (window.__sessionHandle?.playerGuid?.() >>> 0) || 0; } catch (_) {}
+    }
+    return hotbarStorageKey({ ...(window.__hbLoginKey || {}), charId });
+  }
   const slotEls = [];
 
   // P1-6 follow-up: server-side persistence for hotbar bindings.
@@ -817,7 +960,7 @@ export function mount(ctx) {
     const n = (idx % SLOTS_PER_ROW) + 1;
     const b = row === 0
       ? resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${n}`], `Digit${n}`)
-      : resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${n}`], null);
+      : resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${n}`], quickslotModDefault(n, "alt"));
     return b?.code ? formatBinding(b) : "";
   }
   function boundName(bound) {
@@ -1051,8 +1194,10 @@ export function mount(ctx) {
 
     const num = document.createElement("ac-text");
     num.className = "hb-hotbar-slot-num";
-    // Retail draws 1..9 on ShortcutBar; ShortcutBar2 has no default keys
-    // (user assigns them via Options → Controls), so it stays unlabeled.
+    // Retail draws 1..9 on ShortcutBar. ShortcutBar2's keys are Alt+1..9
+    // (retail gmDefaultMap Quickslot 10-18; the tooltip names them). Its
+    // number art comes from SetShortcutNum's per-slot DAT image array, not
+    // checked yet, so row 2 stays unlabeled.
     num.textContent = r.row === 0 ? String(r.col + 1) : "";
     el.appendChild(num);
 
@@ -1061,9 +1206,15 @@ export function mount(ctx) {
       if (el._dragging) return;
       fireSlot(i);
     });
+    // input-options-1: only a fresh, unconsumed Enter/Space fires a focused
+    // slot (the funnel already used Space for the jump), and a mouse click
+    // or drag does not leave the slot holding the keyboard (ui/hud_focus.js).
     el.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); if (!ev.repeat) fireSlot(i); }
+      if (!hudKeyActivates(ev)) return;
+      ev.preventDefault();
+      fireSlot(i);
     });
+    releaseMouseFocus(el);
 
     // Drag-drop MIMEs accepted by hotbar slots:
     //   application/x-hb-spell-id      from spellbook + combat-bar
@@ -1315,45 +1466,54 @@ export function mount(ctx) {
     windowId: WINDOW_ID.HOTBAR,
     dragHandle: overlay,
     ignoreSelector: "button, [role='button'], .hb-hotbar-grip",
+    // gmFloatyToolbarUI::UpdateLockedStatus reads PlayerModule::LockUI.
+    obeysGlobalLock: true,
     onLockChange: (locked) => overlay.classList.toggle("is-locked", !!locked),
   });
   // attachWindowPosition stamps an inline `cursor: move` on the handle;
   // let the stylesheet decide (no move cursor while locked).
   overlay.style.cursor = "";
 
-  // Hotbar slot keys: row 1 = Digit1..Digit9 by default, row 2 = no
-  // default binding (retail leaves these unbound — user assigns via
-  // Options → Controls → Local Actions). Suppress while focused on a
+  // Hotbar slot keys = retail gmDefaultMap Quickslot 1-18 (input map
+  // 0x1000000C): row 1 = Digit1..9 plus the Ctrl+1..9 aliases, row 2 =
+  // Alt+1..9 (input-options-3; `?retailQuickslotMods=off` leaves the Ctrl
+  // and Alt rows unbound). Each row is rebindable via Options → Controls.
+  // [labelHash, default binding, slot index]
+  const slotKeyRows = [];
+  for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+    slotKeyRows.push([LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`, slot - 1]);
+  }
+  for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+    slotKeyRows.push([LOCAL_ACTION_IDS[`HOTBAR_CTRL_${slot}`], quickslotModDefault(slot, "ctrl"), slot - 1]);
+  }
+  for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+    slotKeyRows.push([
+      LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`], quickslotModDefault(slot, "alt"), SLOTS_PER_ROW + slot - 1,
+    ]);
+  }
+  // Retail per-mode input-map partition (Task C v2, 2026-07-02): in MAGIC
+  // stance the number row belongs to `UseSpellSlot_1..9` (MagicCombat map
+  // 0x10000005 — combat-bar's spell strip), NOT the quickslots. That map
+  // binds only the BARE digits, so only an unmodified digit binding yields
+  // there; Ctrl/Alt+digit and non-digit hotbar keys work in every stance.
+  const isBareDigit = (b) => /^Digit[1-9]$/.test(b?.code || "")
+    && !b.shift && !b.ctrl && !b.alt && !b.meta;
+  // Legacy listener (`?inputFunnelV2=off`). Suppress while focused on a
   // text input (chat send, etc.).
   function onKey(ev) {
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    // Retail per-mode input-map partition (Task C v2, 2026-07-02): in
-    // MAGIC stance the number row belongs to `UseSpellSlot_1..9`
-    // (MagicCombat map — handled by combat-bar's spell strip), NOT the
-    // quickslots. A hotbar binding on a digit yields there; rebound
-    // non-digit hotbar keys keep working in every stance.
     const inMagicStance = (() => {
       try { return window.__getCurrentStanceLow?.() === 0x49; } catch (_) { return false; }
     })();
-    const digitInMagic = (b) => inMagicStance && /^Digit[1-9]$/.test(b?.code || "");
-    // Row 1
-    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
-      const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`);
-      if (matchesBinding(ev, binding)) {
-        if (digitInMagic(binding)) return; // spell strip owns digits in magic
-        if (ev.repeat) return; // a held slot key uses the item once
-        fireSlot(slot - 1);
-        return;
-      }
-    }
-    // Row 2 — `HOTBAR_R2_1`..`HOTBAR_R2_9`, no default code (null).
-    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
-      const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`], null);
+    for (const [id, def, idx] of slotKeyRows) {
+      const binding = resolveLocalBinding(id, def);
       if (binding && matchesBinding(ev, binding)) {
-        if (digitInMagic(binding)) return;
-        if (ev.repeat) return;
-        fireSlot(SLOTS_PER_ROW + slot - 1);
+        if (inMagicStance && isBareDigit(binding)) return; // spell strip owns digits in magic
+        // Ctrl/Alt+digit are browser tab-switch combos — keep them ours.
+        if (binding.ctrl || binding.alt || binding.meta) ev.preventDefault();
+        if (ev.repeat) return; // a held slot key uses the item once
+        fireSlot(idx);
         return;
       }
     }
@@ -1361,32 +1521,22 @@ export function mount(ctx) {
   // P-unification (2026-07-28): each quickslot is its own ACTION on the ONE
   // funnel (rebindable via Options → Controls, per-slot dispatch counters in
   // `__diag.input()`), sharing WASD's gate. The retail per-mode input-map
-  // partition survives as the action's `when`: in MAGIC stance a digit
-  // binding yields to combat-bar's `UseSpellSlot_N`. `?inputFunnelV2=off`
-  // restores the single legacy listener, byte-identical.
+  // partition survives as the action's `when`: in MAGIC stance a bare-digit
+  // binding yields to combat-bar's `UseSpellSlot_N`. A matched action is
+  // preventDefault-ed by the funnel (so Ctrl/Alt+digit do not switch browser
+  // tabs). `?inputFunnelV2=off` restores the single legacy listener.
   const funnelUnbinds = [];
   if (inputFunnelV2On()) {
     const funnel = getInputFunnel();
-    const notDigitInMagic = (id, def) => () => {
+    const notBareDigitInMagic = (id, def) => () => {
       const b = resolveLocalBinding(id, def);
       if (!b || !b.code) return false;
-      if (!/^Digit[1-9]$/.test(b.code)) return true;
+      if (!isBareDigit(b)) return true;
       try { return window.__getCurrentStanceLow?.() !== 0x49; } catch (_) { return true; }
     };
-    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
-      const id = LOCAL_ACTION_IDS[`HOTBAR_${slot}`];
-      const def = `Digit${slot}`;
-      const idx = slot - 1;
+    for (const [id, def, idx] of slotKeyRows) {
       funnelUnbinds.push(funnel.bindAction(id, def, () => fireSlot(idx), {
-        when: notDigitInMagic(id, def),
-        source: "hotbar",
-      }));
-    }
-    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
-      const id = LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`];
-      const idx = SLOTS_PER_ROW + slot - 1;
-      funnelUnbinds.push(funnel.bindAction(id, null, () => fireSlot(idx), {
-        when: notDigitInMagic(id, null),
+        when: notBareDigitInMagic(id, def),
         source: "hotbar",
       }));
     }
@@ -1400,48 +1550,34 @@ export function mount(ctx) {
   // exactly one merge on first non-empty result. After reconciliation,
   // per-bind sync (sendAdd/RemoveShortcut) keeps both sides in sync, so
   // no further polling is needed.
+  // inventory-session-3: per character, the merge also runs on an EMPTY
+  // list once PlayerDescription has landed (a character with no saved
+  // shortcuts), against this character's cache only (reconcileSlots —
+  // retail gmToolbarUI::UpdateFromPlayerDesc flushes the whole bar).
   function reconcileWithServer() {
     if (inDragPauseWindow()) return false;
     const handle = window.__sessionHandle ?? null;
     if (!handle || typeof handle.playerShortcuts !== "function") return false;
     const flat = handle.playerShortcuts();
-    if (!flat || flat.length === 0) return false;
-    // Server is objectGuid-only; we keep local spell bindings + wcid.
-    // Build server snapshot first, then merge: server item bindings WIN
-    // when objectGuid is present; local spell bindings persist where the
-    // server slot is empty (server never sends spell-only on relogin).
-    const serverSlots = Array(SLOT_COUNT).fill(null);
-    for (let k = 0; k + 2 < flat.length; k += 3) {
-      const idx = flat[k] >>> 0;
-      const objectGuid = flat[k + 1] >>> 0;
-      const packed = flat[k + 2] >>> 0;
-      const spellId = packed & 0xFFFF;
-      if (idx >= SLOT_COUNT) continue;
-      if (spellId > 0) serverSlots[idx] = { spellId };
-      else if (objectGuid > 0) serverSlots[idx] = { itemGuid: objectGuid };
+    const wcidOf = (guid) => {
+      const inv = handle.playerInventory?.() ?? [];
+      return inv.find((x) => (x.guid >>> 0) === (guid >>> 0))?.wcid;
+    };
+    let merged = null;
+    if (!perChar) {
+      merged = reconcileSlots(flat, state.slots, { pdReceived: false, wcidOf });
+    } else {
+      const pdReceived = (!!flat && flat.length > 0) || playerDescriptionLanded(handle);
+      if (!pdReceived) return false;
+      const key = characterStorageKey();
+      if (!key) return false; // whose cache is unknown yet — retry
+      // Already loaded at mount (a re-mount in the world) → keep that
+      // state; else this character's cache, never another's.
+      const cached = key === stateKey ? state.slots : loadCharacterHotbar(browserStorage(), key).slots;
+      stateKey = key;
+      merged = reconcileSlots(flat, cached, { pdReceived: true, wcidOf });
     }
-    const merged = Array(SLOT_COUNT).fill(null);
-    for (let idx = 0; idx < SLOT_COUNT; idx++) {
-      const s = serverSlots[idx];
-      const l = state.slots[idx];
-      if (s) {
-        // Persist wcid alongside guid so post-restart objectGuid reuse can
-        // be validated against the inventory snapshot's wcid.
-        if (s.itemGuid) {
-          let wcid = 0;
-          try {
-            const inv = handle.playerInventory?.() ?? [];
-            const it = inv.find((x) => (x.guid >>> 0) === (s.itemGuid >>> 0));
-            wcid = (it?.wcid >>> 0) || 0;
-          } catch (_) {}
-          merged[idx] = { itemGuid: s.itemGuid, wcid };
-        } else {
-          merged[idx] = s;
-        }
-      } else if (l?.spellId) {
-        merged[idx] = l; // preserve local spell binding (server is item-only)
-      }
-    }
+    if (!merged) return false;
     state.slots = merged;
     saveState(state);
     for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i);
@@ -1645,22 +1781,53 @@ export function mount(ctx) {
     client?.events?.on?.("sharedCooldownChanged", onSharedCooldown);
   } catch (_) {}
   let neverSeenSweepTimer = null;
+  let serverMerged = false;
+  let statsBus = null;     // per character: the playerStatsUpdated retry (below)
+  let disposed = false;
+  function finishReconcile(merged) {
+    reconcileDone = true;
+    reconcileDoneAt = Date.now();
+    // PlayerDescription landed, so the player is in the world even if no
+    // landblockChanged has been seen by this mount yet.
+    if (merged) { inWorld = true; serverMerged = true; unsubscribeStatsReconcile(); }
+    pruneStaleItemBindings();
+    // One sweep once the never-seen grace has passed: a dead shortcut
+    // restored from the server may see no inventory change for minutes.
+    if (neverSeenSweepTimer) clearTimeout(neverSeenSweepTimer);
+    neverSeenSweepTimer = setTimeout(pruneStaleItemBindings, NEVER_SEEN_GRACE_MS + 500);
+  }
   const reconcileTimer = setInterval(() => {
     reconcileAttempts++;
     const merged = reconcileWithServer();
     if (merged || reconcileAttempts > 30) {
       clearInterval(reconcileTimer);
-      reconcileDone = true;
-      reconcileDoneAt = Date.now();
-      // PlayerDescription landed, so the player is in the world even if no
-      // landblockChanged has been seen by this mount yet.
-      if (merged) inWorld = true;
-      pruneStaleItemBindings();
-      // One sweep once the never-seen grace has passed: a dead shortcut
-      // restored from the server may see no inventory change for minutes.
-      neverSeenSweepTimer = setTimeout(pruneStaleItemBindings, NEVER_SEEN_GRACE_MS + 500);
+      finishReconcile(merged);
     }
   }, 1000);
+  // inventory-session-3: the bar mounts at page load, so a character picked
+  // after the 30 s poll gave up never reconciled. Per character, every
+  // playerStatsUpdated (PlayerDescription's own among them) retries until
+  // one merge lands. The bus exists only after login (__pluginClientReady).
+  const onStatsReconcile = () => {
+    if (serverMerged || disposed) return;
+    if (!reconcileWithServer()) return;
+    clearInterval(reconcileTimer);
+    finishReconcile(true);
+  };
+  function unsubscribeStatsReconcile() {
+    if (!statsBus) return;
+    try { statsBus.off?.("playerStatsUpdated", onStatsReconcile); } catch (_) {}
+    statsBus = null;
+  }
+  if (perChar) {
+    const subscribeStats = (c) => {
+      if (disposed || serverMerged || statsBus || !c?.events?.on) return;
+      statsBus = c.events;
+      try { statsBus.on("playerStatsUpdated", onStatsReconcile); } catch (_) { statsBus = null; }
+    };
+    if (client?.events?.on) subscribeStats(client);
+    else window.__pluginClientReady?.then?.(subscribeStats);
+  }
 
   // Opaque API for the context menu (Add To Hotbar flyout) and console.
   // All methods return COPIES of slot data to prevent external mutation;
@@ -1732,6 +1899,8 @@ export function mount(ctx) {
     if (cdTimer) clearInterval(cdTimer);
     for (const un of funnelUnbinds) { try { un?.(); } catch (_) {} }
     clearInterval(reconcileTimer);
+    disposed = true;
+    unsubscribeStatsReconcile();
     if (neverSeenSweepTimer) clearTimeout(neverSeenSweepTimer);
     clearTimeout(migrateTimer);
     try {

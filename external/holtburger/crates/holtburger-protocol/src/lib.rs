@@ -8,6 +8,16 @@ pub mod crypto;
 pub mod test_fixtures;
 pub mod traits;
 
+/// **TEST-ONLY.** Absolute path of the build.rs output that [`generated`]
+/// `include!()`s — `$OUT_DIR/messages_generated.rs` of THIS compile.
+/// `tests/generated_parity.rs` reads the generated source text through it, so
+/// it inspects exactly the file it was compiled against under any target dir
+/// or profile. (Its old locator walked `current_exe()` up to a directory
+/// literally named `target` and assumed `debug/`; under a symlinked target dir
+/// the walk failed and 5 of its 71 tests failed with it.)
+#[doc(hidden)]
+pub const GENERATED_RS_PATH: &str = concat!(env!("OUT_DIR"), "/messages_generated.rs");
+
 /// **TEST-ONLY — QUARANTINED (A13-W5).** The runtime wire codec is the
 /// hand-written `messages::*` tree (`messages/movement/actions.rs` for the
 /// movement packs, `messages/game_action.rs` for dispatch). Nothing outside

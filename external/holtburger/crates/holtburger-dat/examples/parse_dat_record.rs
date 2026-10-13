@@ -211,7 +211,18 @@ fn dispatch_parse(id: u32, bytes: &[u8], dat_path: &str) -> ParseOutcome {
     if id == 0xFFFF0001 {
         let mut c = std::io::Cursor::new(bytes);
         return match Iteration::read(&mut c) {
-            Ok(v) => ParseOutcome::ok("Iteration", "holtburger_dat::file_type::Iteration", &v),
+            Ok(v) => {
+                let mut out =
+                    ParseOutcome::ok("Iteration", "holtburger_dat::file_type::Iteration", &v);
+                // `fields` carries the raw `total` + `runs`; add the ACE-side
+                // readings (DRW/Chorizite report `CurrentIteration` and a
+                // start -> consecutive map) so the two oracles line up.
+                if let Some(serde_json::Value::Object(m)) = out.fields.as_mut() {
+                    m.insert("totalIterations".into(), v.total_iterations().into());
+                    m.insert("isComplete".into(), v.is_complete().into());
+                }
+                out
+            }
             Err(e) => ParseOutcome::err(
                 "Iteration",
                 "holtburger_dat::file_type::Iteration",

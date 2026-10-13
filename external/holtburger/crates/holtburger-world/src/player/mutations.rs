@@ -766,14 +766,20 @@ impl PlayerState {
             return false;
         }
 
+        // Retail CEnchantmentRegistry::PurgeEnchantments / PurgeBadEnchantments
+        // (acclient.c) purge only `_mult_list` + `_add_list`, so `_vitae` and
+        // `_cooldown_list` survive; PurgeEnchantmentList skips `_duration ==
+        // -1.0` (item spells from worn gear) and PurgeBadEnchantmentList also
+        // skips BENEFICIAL (0x2000000). ACE RemoveAllEnchantments agrees
+        // (`Duration == -1 || SpellId > short.MaxValue`) and never re-sends
+        // the survivors, so dropping them here loses cantrip stats until relog.
         self.enchantments.retain(|e| {
             let flags = EnchantmentTypeFlags::from_bits_truncate(e.stat_mod_type);
-            if keep_bad {
-                flags.contains(EnchantmentTypeFlags::BENEFICIAL)
-                    || flags.contains(EnchantmentTypeFlags::VITAE)
-            } else {
-                flags.contains(EnchantmentTypeFlags::VITAE)
-            }
+            flags.contains(EnchantmentTypeFlags::VITAE)
+                || flags.contains(EnchantmentTypeFlags::COOLDOWN)
+                || e.spell_id > 0x7FFF
+                || e.duration == -1.0
+                || (keep_bad && flags.contains(EnchantmentTypeFlags::BENEFICIAL))
         });
         self.prune_enchantment_abs_start();
 

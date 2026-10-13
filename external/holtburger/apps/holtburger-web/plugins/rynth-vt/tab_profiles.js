@@ -3,8 +3,9 @@
 //   Macro Settings dropdown: Default, [By char], shared profiles, "[Char] …"
 //     (this character's own); every change is saved at once to the current
 //     profile — Default is read-only (banner) and needs a Save As first (G:48).
-//   Save As (no spaces) + Mine Only (G:54-55), Delete, Apply VTank defaults
-//     (PRESETS.vtank, D3), Import HUD settings (D27).
+//   Save As (no spaces) + Mine Only (G:54-55), Delete, Apply VTank/RynthAi
+//     defaults (PRESETS.vtank, D3: RynthAi's LegacyUiSettings values, not
+//     read from a VTank-written defaultsettings.usd), Import HUD settings (D27).
 //   Enable Auto-Navigation + the Nav profile select + "Save route as…"
 //     ("Routes are created on the Route tab and saved on the Profile tab",
 //     G:56, critic G3).
@@ -22,6 +23,8 @@ import {
 
 const NEW_RULE = () => ({ name: "New rule", enabled: true, priority: 0, action: "Keep", conditions: [] });
 const baseName = (fileName) => String(fileName || "").replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "").replace(/\s+/g, "_");
+// PRESETS.vtank is RynthAi's set (PLAN D3), not VTank's own file values.
+const PRESET_TITLE = "RynthAi defaults (D3): Autostack, Autocram, Peace Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells, pet refill — into the current profile";
 
 export function createProfilesTab(ctx) {
   const { doc, bridge } = ctx;
@@ -40,7 +43,7 @@ export function createProfilesTab(ctx) {
   const saveAs = btn(doc, "Save As", "Save the current settings under a new name and select it (G:54)");
   const mine = checkbox(doc, "Mine Only", "Profile for this character only (G:55)");
   root.appendChild(row(doc, saveName, saveAs, mine.lab));
-  const preset = btn(doc, "Apply VTank defaults", "Autostack, Autocram, Peace Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells, pet refill — into the current profile");
+  const preset = btn(doc, "Apply VTank/RynthAi defaults", PRESET_TITLE);
   const importHud = btn(doc, "Import HUD settings", "Copy the RynthSuite HUD's saved vitals, loot floor, buffs and priorities into the current profile");
   root.appendChild(row(doc, preset, importHud));
 
@@ -130,7 +133,7 @@ export function createProfilesTab(ctx) {
     ctx.refresh({ force: true });
   });
   preset.addEventListener("click", async () => {
-    ctx.report(await bridge.opt.applyPreset("vtank"), "VTank defaults applied");
+    ctx.report(await bridge.opt.applyPreset("vtank"), "VTank/RynthAi defaults applied");
     ctx.refresh({ force: true });
   });
   importHud.addEventListener("click", async () => {
@@ -319,7 +322,7 @@ export function createProfilesTab(ctx) {
     setTitle(mine.cb, activeKind === "default" ? "Save As creates a [Char] profile for this character only (G:55)" : "Profile for this character only (G:55)");
     preset.disabled = !active || active.readOnly;
     importHud.disabled = !active || active.readOnly;
-    preset.title = active && active.readOnly ? "Default is read-only — Save As first" : "Autostack, Autocram, Peace Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells, pet refill — into the current profile";
+    preset.title = active && active.readOnly ? "Default is read-only — Save As first" : PRESET_TITLE;
 
     const tg = v.toggles || {};
     setValue(navOn.cb, !!tg.EnableNavigation?.value);

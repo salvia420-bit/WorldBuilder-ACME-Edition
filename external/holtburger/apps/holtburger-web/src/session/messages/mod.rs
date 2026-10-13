@@ -53,6 +53,7 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         entity_enchantments_index,
         identify_meta_index,
         latest_sanctuary,
+        latest_last_outside_death,
         door_part_snapshot,
         rynth_id_times,
         last_recv_instant,
@@ -62,6 +63,7 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         cached_time_sync,
         js_spawned_guids,
         rynth_ground_container,
+        inventory_requests,
         ..
     } = &mut *ctx;
     // PR-SS 2026-05-23: stamp the recv timestamp for the
@@ -104,7 +106,13 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         }
     };
     let mut offset = 0;
-    let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
+    let parsed = GameMessage::unpack(&bytes, &mut offset);
+    // test-tooling-3 (2026-10-13): tally the decode per opcode (undecodable /
+    // unknown / short read / overrun) BEFORE the `else` return, so a dropped
+    // message is counted instead of vanishing. Log-only: dispatch below is
+    // unchanged. `__diag.wire.integrity()`, ci-smoke S7.
+    crate::wire_integrity::observe(&bytes, parsed.as_ref(), offset);
+    let Some(message) = parsed else {
         return LoopFlow::Continue;
     };
 
@@ -154,6 +162,22 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
     {
         *cached_player_description = Some(message.clone());
     }
+
+    // inventory-session-7 (2026-10-13): the LastOutsideDeath slot behind the
+    // retail `@corpse` command (`ClientCommunicationSystem::DoCorpse`,
+    // acclient.c:418186, reads PlayerDesc position 0xE). A PlayerDescription
+    // replaces it; a LastOutsideDeath PrivateUpdatePosition (ACE sends one
+    // after an outdoor death) sets it. Read straight off the packet, like the
+    // Sanctuary arm below — PrivateUpdatePosition stays un-routed on wasm —
+    // and whether or not `world` exists yet. JS: `playerLastOutsideDeath()`.
+    crate::last_outside_death::observe(latest_last_outside_death, &message);
+
+    // messages-objects-1 (2026-10-13): retail `ACCWeenieObject::RecordResponse`
+    // (acclient.c:437402) — the server's answer to an inventory request (a
+    // container move / wield / 3-D placement, a removal, a stack-size change,
+    // a container view, a vendor refresh) clears the request it names. The
+    // 0x00A0 failure is answered in its own arm (game_event.rs).
+    inventory_requests.observe_response(&message);
 
     // Phase 4 step 4 follow-on (vitals + inventory panels):
     // route stat / inventory / GameEvent messages through the
@@ -1360,6 +1384,16 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                         idx.insert(g_u32, new_did);
                     }
                 }
+                // messages-objects-2 (2026-10-13): retail re-creates an
+                // updated object, so a player-owned pack item lands in
+                // its container's first slot (acclient.c
+                // ACCObjectMaint::SetWeenieDesc → ServerSaysMoveItem at
+                // place 0; ACE MoveItemToFirstContainerSlot). Any
+                // player-owned subject also refreshes the inventory
+                // snapshot (name / icon / ui-effects may have changed).
+                if w.note_update_object(guid) {
+                    inventory_changed = true;
+                }
                 // FU-1 (2026-06-11): UpdateObject (0xF7DB) is one
                 // of the two paths (the other is ParentEvent
                 // below) that carries a Wielder /
@@ -1621,7 +1655,8 @@ async fn dispatch_game_message(ctx: &mut LoopCtx, message: GameMessage) -> LoopF
         | GameMessage::PlayerCreate { .. }
         | GameMessage::ServerName { .. }
         | GameMessage::DddInterrogation { .. }
-        | GameMessage::CharacterError { .. }) => login::handle(ctx, m).await,
+        | GameMessage::CharacterError { .. }
+        | GameMessage::AccountBoot { .. }) => login::handle(ctx, m).await,
         m => misc::handle(ctx, m).await,
     }
 }

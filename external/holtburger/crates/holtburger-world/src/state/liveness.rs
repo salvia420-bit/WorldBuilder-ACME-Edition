@@ -10,6 +10,42 @@ use crate::state::WorldState;
 
 const ACE_DESTRUCTION_TIMEOUT_SECS: f64 = 25.0;
 const CONSERVATIVE_VISIBILITY_DISTANCE_M: f32 = 384.0;
+/// streaming-residency-1 (2026-10-13): the prune deadline under
+/// `?aceObjMaint=on` — ACE's 25 s `ObjectMaint.DestructionTime` plus the same
+/// margin as entities.js `REAP_GRACE_MS` (30 s). ACE expires its queue in
+/// `DestroyObjects`, which runs on the player's cell change and on the ~5 s
+/// player `Heartbeat` (Player_Tick.cs), so it forgets an object 25-30 s after
+/// the leave. The ACE-parity set is narrow, so the client must land on the
+/// late side: a late prune is harmless (once ACE has forgotten the object it
+/// re-sends ObjectCreate on re-entry), an early one is not (ACE still knows it
+/// and never re-creates it).
+const ACE_OBJECT_MAINT_DESTRUCTION_TIMEOUT_SECS: f64 = 30.0;
+
+/// Same range as `spatial::scene::is_envcell_id` (private to `spatial`):
+/// EnvCell stabs are `0x0100..=0xFFFD`; outdoor land cells are `1..=64`, and
+/// `0xFFFE`/`0xFFFF` are landblock markers, not cells.
+#[inline]
+fn is_envcell_id(cell_id: u32) -> bool {
+    (0x100..=0xFFFD).contains(&(cell_id & 0xFFFF))
+}
+
+/// streaming-residency-1 (2026-10-13): the player half of ACE's visible set
+/// (`ObjectMaint.GetVisibleObjects`, ACE.Server Physics/Common/ObjectMaint.cs),
+/// resolved once per maint pass by [`WorldState::ace_object_maint_view`].
+struct AceObjectMaintView {
+    /// The player's full ObjCellID.
+    player_cell: u32,
+    /// The player's landblock grid coordinates (ObjCellID bytes 3 and 2).
+    landblock_x: i32,
+    landblock_y: i32,
+    /// Player in an EnvCell: that cell plus its visibility neighbours
+    /// (`SpatialScene::cell_visibility_neighbours` = portals ∪ the DAT
+    /// `visible_cells[]`, a superset of ACE's `EnvCell.VisibleCells`).
+    /// `None` = the player is outdoors.
+    env_cells: Option<HashSet<u32>>,
+    /// The player's EnvCell is SeenOutside (always `false` outdoors).
+    seen_outside: bool,
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct EntityLifecycleState {
@@ -31,6 +67,15 @@ impl EntityLifecycleState {
 #[derive(Debug, Default)]
 pub(crate) struct EntityLifecycleStore {
     by_guid: HashMap<Guid, EntityLifecycleState>,
+    /// streaming-residency-1 (2026-10-13) — runtime carrier of
+    /// `?aceObjMaint=on` (OPT-IN, default OFF). ON: the visibility prune arms
+    /// its deadline from the ACE-parity visible set
+    /// (`WorldState::is_ace_visible_world_entity`) with a 30 s deadline
+    /// instead of the conservative 3x3-or-384 m set. Set once at world
+    /// creation by the wasm bundle; native keeps the default. Kept on the
+    /// lifecycle store (the CObjectMaint-style owner); it is not per-guid
+    /// state, so `tracked_guids` / `compact` never see it.
+    ace_object_maint: bool,
 }
 
 impl EntityLifecycleStore {
@@ -122,6 +167,22 @@ impl WorldState {
             return HashSet::new();
         };
 
+        // streaming-residency-1 (2026-10-13): `?aceObjMaint=on` with the
+        // player's cell data loaded → the ACE-parity set. Flag off (the
+        // default), or an EnvCell whose record has not arrived yet → the
+        // conservative set below, unchanged.
+        if let Some(view) = self.ace_object_maint_view() {
+            return self
+                .entities
+                .iter()
+                .filter(|entity| entity.guid != self.player.guid)
+                .filter(|entity| entity.position.landblock_id != Guid::NULL)
+                .filter(|entity| self.is_entity_world_participant(entity.guid))
+                .filter(|entity| self.is_ace_visible_world_entity(entity, &view))
+                .map(|entity| entity.guid)
+                .collect();
+        }
+
         let nearby_guids = self.scene.get_nearby_entities(player_landblock);
 
         self.entities
@@ -134,6 +195,107 @@ impl WorldState {
             .collect()
     }
 
+    /// streaming-residency-1 (2026-10-13): install `?aceObjMaint=on`
+    /// (see `EntityLifecycleStore::ace_object_maint`). The wasm bundle calls
+    /// this once at world creation; native keeps the default (OFF).
+    pub fn set_ace_object_maint_enabled(&mut self, enabled: bool) {
+        self.entity_lifecycle.ace_object_maint = enabled;
+    }
+
+    pub fn ace_object_maint_enabled(&self) -> bool {
+        self.entity_lifecycle.ace_object_maint
+    }
+
+    /// streaming-residency-1 (2026-10-13): resolve the player side of ACE's
+    /// `ObjectMaint.GetVisibleObjects(cell)` from the player's full ObjCellID
+    /// (the server-authoritative `player_position()`, which is also the cell
+    /// ACE decides from). `None` = use the conservative predicate: the flag
+    /// is off, there is no player pose, or the player stands in an EnvCell
+    /// whose record (SeenOutside bit + visible edges, queued together by
+    /// `fetchEnvCellsInLandblock`) has not been loaded — the native CLI never
+    /// loads one.
+    fn ace_object_maint_view(&self) -> Option<AceObjectMaintView> {
+        if !self.entity_lifecycle.ace_object_maint {
+            return None;
+        }
+        let cell = self.player_landblock()?.0;
+        let landblock_x = ((cell >> 24) & 0xFF) as i32;
+        let landblock_y = ((cell >> 16) & 0xFF) as i32;
+        if !is_envcell_id(cell) {
+            return Some(AceObjectMaintView {
+                player_cell: cell,
+                landblock_x,
+                landblock_y,
+                env_cells: None,
+                seen_outside: false,
+            });
+        }
+        let seen_outside = self.scene.cell_seen_outside_opt(cell)?;
+        let mut env_cells: HashSet<u32> = self
+            .scene
+            .cell_visibility_neighbours(cell)
+            .iter()
+            .copied()
+            .collect();
+        env_cells.insert(cell);
+        Some(AceObjectMaintView {
+            player_cell: cell,
+            landblock_x,
+            landblock_y,
+            env_cells: Some(env_cells),
+            seen_outside,
+        })
+    }
+
+    /// streaming-residency-1 (2026-10-13): ACE-parity visibility of one world
+    /// entity. ACE judges it with two rules and keeps whichever ran last: the
+    /// set rebuilt on the PLAYER's cell change (`ObjectMaint.GetVisibleObjects`
+    /// in `handle_visible_cells`) and the pair test run on the OBJECT's cell
+    /// change (`ObjCell.IsVisible` / `EnvCell.IsVisibleIndoors` in
+    /// `handle_visible_obj`). Neither re-runs while both stand still, so this
+    /// takes their UNION — pruning earlier than ACE forgets would lose the
+    /// object for good (no re-create while ACE still knows it):
+    /// - player in an EnvCell: the entity is in that cell or one of its
+    ///   VisibleCells; or the player's cell is SeenOutside and the entity's
+    ///   landblock is within 1 (IsVisibleIndoors does not filter the
+    ///   entity's cell, so a cellar seen from a building interior stays);
+    /// - player outdoors: the entity's landblock is within 1
+    ///   (`CurLandblock.GetServerObjects(true)`) AND the entity is outdoors or
+    ///   in a SeenOutside EnvCell (an unloaded bit counts as visible), or it
+    ///   is in an EnvCell of the same landblock whose VisibleCells hold the
+    ///   player's cell.
+    ///
+    /// No 384 m term. ACE culls an object 25 s after it leaves this set and
+    /// then sends nothing about it — no UpdatePosition, no DeleteObject — just
+    /// as retail drops an object whose cell it releases
+    /// (`CObjectMaint::AddObjectToBeDestroyed` +25 s, acclient.c:310651;
+    /// `CLandBlock::notify_change_size` → `release_objs`, acclient.c:352430).
+    /// A dungeon landblock has no adjacents in ACE, but a sealed-cell player
+    /// never takes the adjacency clause, so no IsDungeon test is needed.
+    fn is_ace_visible_world_entity(&self, entity: &Entity, view: &AceObjectMaintView) -> bool {
+        let cell = entity.position.landblock_id.0;
+        let dx = ((cell >> 24) & 0xFF) as i32 - view.landblock_x;
+        let dy = ((cell >> 16) & 0xFF) as i32 - view.landblock_y;
+        let block_dist = dx.abs().max(dy.abs());
+        match &view.env_cells {
+            Some(cells) => cells.contains(&cell) || (view.seen_outside && block_dist <= 1),
+            None => {
+                if block_dist > 1 {
+                    return false;
+                }
+                if !is_envcell_id(cell) {
+                    return true;
+                }
+                self.scene.cell_seen_outside_opt(cell) != Some(false)
+                    || (block_dist == 0
+                        && self
+                            .scene
+                            .cell_visibility_neighbours(cell)
+                            .contains(&view.player_cell))
+            }
+        }
+    }
+
     // TODO: Replace this conservative approximation with ACE-parity cell visibility.
     // ACE decides visibility from the current ObjCell, not just from landblock adjacency.
     // Proper parity here requires consulting cell.dat envcell records so we can:
@@ -142,6 +304,10 @@ impl WorldState {
     // 3. union the current envcell with its VisibleCells,
     // 4. merge outdoor landblock-neighborhood visibility only for SeenOutside envcells.
     // Until we wire that up, prefer retaining too much over pruning too aggressively.
+    // streaming-residency-1 (2026-10-13): that predicate now exists behind
+    // `?aceObjMaint=on` (`is_ace_visible_world_entity`). This one stays the
+    // default, and the fallback while the player's EnvCell is unloaded,
+    // until a live walk-away + dungeon room-to-room soak clears the flip.
     fn is_conservatively_visible_world_entity(
         &self,
         entity: &Entity,
@@ -165,6 +331,13 @@ impl WorldState {
             return;
         }
         let visible_guids = self.current_visible_world_guids();
+        // streaming-residency-1: 30 s under `?aceObjMaint=on` (see
+        // `ACE_OBJECT_MAINT_DESTRUCTION_TIMEOUT_SECS`); 25 s by default.
+        let destruction_timeout = if self.entity_lifecycle.ace_object_maint {
+            ACE_OBJECT_MAINT_DESTRUCTION_TIMEOUT_SECS
+        } else {
+            ACE_DESTRUCTION_TIMEOUT_SECS
+        };
         let world_entity_guids: Vec<_> = self
             .entities
             .iter()
@@ -193,7 +366,7 @@ impl WorldState {
                 .and_then(|state| state.prune_deadline)
                 .is_none()
             {
-                self.set_entity_prune_deadline(guid, now + ACE_DESTRUCTION_TIMEOUT_SECS);
+                self.set_entity_prune_deadline(guid, now + destruction_timeout);
             }
         }
     }

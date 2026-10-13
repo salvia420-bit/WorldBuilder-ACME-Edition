@@ -650,13 +650,27 @@ export function readRoster(handle) {
   return next;
 }
 
+/** HouseType.Apartment (ACE.Entity.Enum.HouseType: Undef, Cottage, Villa,
+ *  Mansion, Apartment). */
+export const HOUSE_TYPE_APARTMENT = 4;
+
+/** HouseData snapshot → "Your house" marker coords, or null.
+ *  acclient.c gmMapUI::RecvNotice_UpdateHouseData: m_type == 4
+ *  (Apartment) clears m_HousePosition; any other type stores
+ *  m_pos.objcell_id + frame. */
+export function houseMarkerCoords(d) {
+  if (!d) return null;
+  if ((d.houseType >>> 0) === HOUSE_TYPE_APARTMENT) return null;
+  const lb = (d.landblockId >>> 0) || 0;
+  if (!lb) return null;
+  return lbToCoords(lb, d.posX, d.posY);
+}
+
 function readHouse(handle) {
   let d = null;
   try {
     d = handle?.playerHouseData?.() ?? null;
-    const lb = (d?.landblockId >>> 0) || 0;
-    if (!lb) return null;
-    return lbToCoords(lb, d.posX, d.posY);
+    return houseMarkerCoords(d);
   } catch (_) {
     return null;
   } finally {

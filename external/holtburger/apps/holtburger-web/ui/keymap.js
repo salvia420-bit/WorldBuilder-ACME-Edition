@@ -9,8 +9,9 @@
  *     so handlers work out of the box; users can override via the
  *     Options → Controls tab.
  *   - Retail-ActionMap actions: keyed by labelHash from the retail
- *     0x26000000 record. Read-only labels today — server-side
- *     dispatch isn't wired yet.
+ *     0x26000000 record. Only the ones a handler really dispatches
+ *     are rebindable (input-options-6, `retailActionStatus`): those
+ *     rebind the handler's own key; the rest show read-only.
  *
  * Both share the same localStorage table at LS_KEY_KEYBINDINGS so
  * the UI can manage them with one rebind flow.
@@ -22,6 +23,63 @@
 import { getActionMap } from "./ac_strings.js";
 
 export const LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1";
+
+/**
+ * input-options-3 (2026-10-13) — `?retailQuickslotMods` (DEFAULT-ON;
+ * `=off`/`0`/`false` disables): retail's modifier quickslot defaults,
+ * Ctrl+1..9 = Quickslot 1-9 and Alt+1..9 = Quickslot 10-18 (gmDefaultMap,
+ * portal 0x14000000, input map 0x1000000C). Off = those rows ship unbound
+ * (the pre-2026-10-13 keys). An escape in case a browser keeps Ctrl/Alt+digit
+ * for tab switching despite the funnel's preventDefault. Never throws.
+ */
+export function readRetailQuickslotModsFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "";
+    const v = new URLSearchParams(s).get("retailQuickslotMods");
+    if (v == null) return true;
+    const lc = v.toLowerCase();
+    return !(lc === "off" || lc === "0" || lc === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
+let _retailQuickslotMods = null;
+/** Cached flag accessor (parse once per page load). */
+export function retailQuickslotModsOn() {
+  if (_retailQuickslotMods === null) _retailQuickslotMods = readRetailQuickslotModsFlag();
+  return _retailQuickslotMods;
+}
+/** Test seam. */
+export function _resetRetailQuickslotModsForTest() {
+  _retailQuickslotMods = null;
+}
+
+/**
+ * Default binding of a modifier quickslot row: `{code: "Digit<n>", <mod>: true}`
+ * (`mod` = "ctrl" | "alt"), or null (unbound) with `?retailQuickslotMods=off`.
+ * Pass `search` to read that query string instead of the cached flag.
+ */
+export function quickslotModDefault(n, mod, search) {
+  const on = typeof search === "string" ? readRetailQuickslotModsFlag(search) : retailQuickslotModsOn();
+  return on ? { code: `Digit${n}`, [mod]: true } : null;
+}
+
+// A LOCAL_ACTIONS row whose default is a modifier quickslot key. The default
+// is a getter, read per use, so the flag holds for every reader of the table
+// (Options → Controls and the hotbar alike).
+function quickslotModRow(labelHash, label, n, mod) {
+  return {
+    labelHash,
+    label,
+    get defaultCode() { return quickslotModDefault(n, mod); },
+  };
+}
 
 /**
  * The local-action table — the keys the JS-side code actually
@@ -42,18 +100,37 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000007", label: "Hotbar Slot 7", defaultCode: "Digit7" },
   { labelHash: "0xFF000008", label: "Hotbar Slot 8", defaultCode: "Digit8" },
   { labelHash: "0xFF000009", label: "Hotbar Slot 9", defaultCode: "Digit9" },
-  // Row 2 (ShortcutBar2 in retail / Chorizite). Retail leaves these
-  // unbound by default — players opt in via Options → Controls. Null
-  // defaultCode = no default binding.
-  { labelHash: "0xFF00000A", label: "Hotbar Row 2 Slot 1", defaultCode: null },
-  { labelHash: "0xFF00000B", label: "Hotbar Row 2 Slot 2", defaultCode: null },
-  { labelHash: "0xFF00000C", label: "Hotbar Row 2 Slot 3", defaultCode: null },
-  { labelHash: "0xFF00000D", label: "Hotbar Row 2 Slot 4", defaultCode: null },
-  { labelHash: "0xFF00000E", label: "Hotbar Row 2 Slot 5", defaultCode: null },
-  { labelHash: "0xFF00000F", label: "Hotbar Row 2 Slot 6", defaultCode: null },
-  { labelHash: "0xFF000012", label: "Hotbar Row 2 Slot 7", defaultCode: null },
-  { labelHash: "0xFF000013", label: "Hotbar Row 2 Slot 8", defaultCode: null },
-  { labelHash: "0xFF000014", label: "Hotbar Row 2 Slot 9", defaultCode: null },
+  // input-options-3 — retail binds Quickslot 1-9 twice, DigitN AND Ctrl+DigitN
+  // (same action, map 0x1000000C, registered for the whole session by
+  // ClientUISystem::OnBeginCharacterSession). The magic map 0x10000005
+  // (ClientCombatSystem::RegisterInputMaps, magic mode only) takes the BARE
+  // digits for Spell Slot 1-9 and has no Ctrl+digit rows, so Ctrl+N is how
+  // retail reaches hotbar row 1 in magic stance. Separate rebindable rows,
+  // like the Magic First/Last Ctrl variants below.
+  quickslotModRow("0xFF000040", "Hotbar Slot 1 (Ctrl)", 1, "ctrl"),
+  quickslotModRow("0xFF000041", "Hotbar Slot 2 (Ctrl)", 2, "ctrl"),
+  quickslotModRow("0xFF000042", "Hotbar Slot 3 (Ctrl)", 3, "ctrl"),
+  quickslotModRow("0xFF000043", "Hotbar Slot 4 (Ctrl)", 4, "ctrl"),
+  quickslotModRow("0xFF000044", "Hotbar Slot 5 (Ctrl)", 5, "ctrl"),
+  quickslotModRow("0xFF000045", "Hotbar Slot 6 (Ctrl)", 6, "ctrl"),
+  quickslotModRow("0xFF000046", "Hotbar Slot 7 (Ctrl)", 7, "ctrl"),
+  quickslotModRow("0xFF000047", "Hotbar Slot 8 (Ctrl)", 8, "ctrl"),
+  quickslotModRow("0xFF000048", "Hotbar Slot 9 (Ctrl)", 9, "ctrl"),
+  // Row 2 (ShortcutBar2 in retail / Chorizite) = retail Quickslot 10-18,
+  // bound to Alt+1..Alt+9 in gmDefaultMap (checked against the portal.dat
+  // 0x14000000 bytes, 2026-10-13; an older note here said retail left them
+  // unbound). Alt+1..4 are also retail's Toggle Floating Chat Window 1-4
+  // (map 0x10000009); this client has no floating chat windows, so the
+  // quickslots keep them.
+  quickslotModRow("0xFF00000A", "Hotbar Row 2 Slot 1", 1, "alt"),
+  quickslotModRow("0xFF00000B", "Hotbar Row 2 Slot 2", 2, "alt"),
+  quickslotModRow("0xFF00000C", "Hotbar Row 2 Slot 3", 3, "alt"),
+  quickslotModRow("0xFF00000D", "Hotbar Row 2 Slot 4", 4, "alt"),
+  quickslotModRow("0xFF00000E", "Hotbar Row 2 Slot 5", 5, "alt"),
+  quickslotModRow("0xFF00000F", "Hotbar Row 2 Slot 6", 6, "alt"),
+  quickslotModRow("0xFF000012", "Hotbar Row 2 Slot 7", 7, "alt"),
+  quickslotModRow("0xFF000013", "Hotbar Row 2 Slot 8", 8, "alt"),
+  quickslotModRow("0xFF000014", "Hotbar Row 2 Slot 9", 9, "alt"),
   { labelHash: "0xFF000010", label: "Close Panel / Popover", defaultCode: "Escape" },
   { labelHash: "0xFF000011", label: "Delete Selected Spell", defaultCode: "Delete" },
   // A14-I3 (?retailRunKeys=on) — autorun toggle (retail
@@ -70,9 +147,10 @@ export const LOCAL_ACTIONS = [
   //   CombatPrevSpell     Delete     CombatFirstSpell     Ctrl+Delete
   //   CombatNextSpell     PageDown   CombatLastSpell      Ctrl+PageDown
   //   CombatCastCurrentSpell  End
-  //   UseSpellSlot_1..9   Digit1..9 (magic stance takes the digits;
-  //                       the hotbar's quickslots yield — retail's
-  //                       per-mode map partition)
+  //   UseSpellSlot_1..9   Digit1..9 (magic stance takes the bare
+  //                       digits; the hotbar's quickslots yield —
+  //                       retail's per-mode map partition — but
+  //                       Ctrl+1..9 / Alt+1..9 still reach them)
   // Only the BASE key is stored/rebindable here; the Ctrl+<same key>
   // first/last variants derive from it in combat-bar.js, exactly like
   // retail bound First/Last to the same physical key + metakey 0x2
@@ -93,7 +171,7 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF00001D", label: "Magic: First Spell", defaultCode: { code: "Delete", ctrl: true } },
   { labelHash: "0xFF00001E", label: "Magic: Last Spell", defaultCode: { code: "PageDown", ctrl: true } },
   // UseSpellSlot_1..9 — retail's magic-mode number row (the hotbar's
-  // quickslot digits yield to these in magic stance).
+  // bare quickslot digits yield to these in magic stance).
   { labelHash: "0xFF00001F", label: "Magic: Use Spell Slot 1", defaultCode: "Digit1" },
   { labelHash: "0xFF000020", label: "Magic: Use Spell Slot 2", defaultCode: "Digit2" },
   { labelHash: "0xFF000021", label: "Magic: Use Spell Slot 3", defaultCode: "Digit3" },
@@ -103,14 +181,18 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000025", label: "Magic: Use Spell Slot 7", defaultCode: "Digit7" },
   { labelHash: "0xFF000026", label: "Magic: Use Spell Slot 8", defaultCode: "Digit8" },
   { labelHash: "0xFF000027", label: "Magic: Use Spell Slot 9", defaultCode: "Digit9" },
-  // C2 (2026-07-12) — retail target-cycling binds (CPlayerSystem::SelectNext,
-  // acclient.c:397944; action names NextMonster/PreviousMonster/
-  // ClosestMonster at acclient.c:43724-43730). Retail binds NextMonster to
-  // Tab; PreviousMonster to Shift+Tab. ClosestMonster has no retail default,
-  // so we bind KeyT ("Target") — free in our map (movement uses WASDQE;
-  // digits are hotbar/magic slots; T is only a chat command alias). All
-  // three consult liveScene3d.entityManager.cycleTarget via the index.html
-  // keydown dispatch; input-triggered only, gated by `?targetCycle` (off).
+  // C2 (2026-07-12) — target-cycling binds (CPlayerSystem::SelectNext,
+  // acclient.c:397944; Select Closest/Previous/Next Monster = ClientAction
+  // 0x10000035/36/37). Tab / Shift+Tab / T are this client's own modern
+  // defaults, not retail's: gmDefaultMap (portal.dat 0x14000000) binds
+  // Closest/Previous/Next Monster to ' / L / ; and Tab to Enter/Exit Chat
+  // Mode (0x10000024), which this client does not have (input-options-7
+  // correction, 2026-10-13). T is free here (movement uses WASDQE; digits
+  // are hotbar/magic slots). All three consult liveScene3d.entityManager.
+  // cycleTarget via the index.html keydown dispatch; input-triggered only,
+  // `?targetCycle=off` disables them. The other retail selection keys (P,
+  // Home, the player / item / compass / fellow cycles) are input-funnel
+  // actions bound under their ClientAction ids: ui/selection_keys.js.
   { labelHash: "0xFF000028", label: "Next Monster",     defaultCode: "Tab" },
   { labelHash: "0xFF000029", label: "Previous Monster", defaultCode: { code: "Tab", shift: true } },
   { labelHash: "0xFF00002A", label: "Closest Monster",  defaultCode: "KeyT" },
@@ -144,6 +226,16 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   HOTBAR_7: "0xFF000007",
   HOTBAR_8: "0xFF000008",
   HOTBAR_9: "0xFF000009",
+  // input-options-3 — Ctrl+1..9 aliases of row 1 (retail Quickslot 1-9).
+  HOTBAR_CTRL_1: "0xFF000040",
+  HOTBAR_CTRL_2: "0xFF000041",
+  HOTBAR_CTRL_3: "0xFF000042",
+  HOTBAR_CTRL_4: "0xFF000043",
+  HOTBAR_CTRL_5: "0xFF000044",
+  HOTBAR_CTRL_6: "0xFF000045",
+  HOTBAR_CTRL_7: "0xFF000046",
+  HOTBAR_CTRL_8: "0xFF000047",
+  HOTBAR_CTRL_9: "0xFF000048",
   HOTBAR_R2_1: "0xFF00000A",
   HOTBAR_R2_2: "0xFF00000B",
   HOTBAR_R2_3: "0xFF00000C",
@@ -249,9 +341,13 @@ export function setBinding(labelHashHex, binding) {
  * conflict. Pass `excludeLabelHash` to exclude the row being
  * captured (so a no-op rebind doesn't report itself).
  *
- * Only the user-override cache is scanned today; retail-default
- * bindings live in `loadRetailKeyMap`'s ActionMap and a cross-table
- * scan is a follow-on.
+ * input-options-6 — the live DEFAULTS are scanned too: every
+ * LOCAL_ACTIONS row the player has not overridden (Autorun's R) and
+ * the keys this client hard-codes for retail actions
+ * (RETAIL_ACTION_FIXED_KEYS — WASD/QE movement, combat, chat). Those
+ * entries carry `isDefault: true` (`fixed: true` for the hard-coded
+ * ones). Retail's own KeyMap defaults are NOT conflicts here: most
+ * retail actions have no handler in this client.
  *
  * @param {string} code        — `KeyboardEvent.code` (e.g. "KeyR")
  * @param {boolean} [shift]
@@ -259,7 +355,7 @@ export function setBinding(labelHashHex, binding) {
  * @param {boolean} [alt]
  * @param {boolean} [meta]
  * @param {string} [excludeLabelHash] — labelHash to skip
- * @returns {Array<{labelHash:string,label:string,binding:object}>}
+ * @returns {Array<{labelHash:string,label:string,binding:object,isDefault?:boolean,fixed?:boolean}>}
  */
 export function findConflictingBindings(code, shift, ctrl, alt, meta, excludeLabelHash) {
   if (!code) return [];
@@ -286,6 +382,24 @@ export function findConflictingBindings(code, shift, ctrl, alt, meta, excludeLab
         label: action?.label ?? `Action ${labelHash}`,
         binding: { ...binding },
       });
+    }
+  }
+  // input-options-6 — the defaults that are live right now.
+  for (const action of LOCAL_ACTIONS) {
+    const id = action.labelHash;
+    if (id === excludeLabelHash) continue;
+    if (cache[id] && cache[id].code) continue; // its override was scanned above
+    const def = normalizeBinding(action.defaultCode);
+    if (def && sameBinding(def, want)) {
+      conflicts.push({ labelHash: id, label: action.label, binding: def, isDefault: true });
+    }
+  }
+  for (const [actionHash, fixed] of RETAIL_ACTION_FIXED_KEYS) {
+    const id = retailActionBindingId(actionHash);
+    if (id === excludeLabelHash) continue;
+    const def = normalizeBinding(fixed.code);
+    if (def && sameBinding(def, want)) {
+      conflicts.push({ labelHash: id, label: fixed.label, binding: def, isDefault: true, fixed: true });
     }
   }
   return conflicts;
@@ -348,6 +462,271 @@ export function resolveLocalBinding(labelHashHex, defaultCode) {
     };
   }
   return { code: defaultCode, shift: false, ctrl: false, alt: false, meta: false };
+}
+
+// ---------------------------------------------------------------------
+// input-options-6 (2026-10-13) — which retail ActionMap actions this
+// client really dispatches.
+//
+// Options → Controls lists every labelled action of the retail ActionMap
+// (0x26000000). Retail's Configure Keyboard rows are commands its input
+// manager dispatches (UIOption_ActionKeyMap::RefreshMappings; the handlers
+// are ACCmdInterp::OnAction acclient.c:435951 and CPlayerSystem::OnAction).
+// Here most rows had no handler: Bind stored a key under the row's
+// labelHash that nothing read, and the default shown was retail's even
+// where this client uses another key (Turn Left showed A, which strafes
+// here). The tables below say what IS live, keyed by the ActionMap inner
+// key (`actionHash` = the retail InputAction / ClientAction id):
+//
+//   RETAIL_ACTION_LOCAL_IDS         rebindable: the LOCAL_ACTIONS row whose
+//                                   handler implements the action. The
+//                                   Controls row rebinds THAT row's key.
+//   RETAIL_ACTION_FIXED_KEYS        works, on a key this client hard-codes
+//                                   (movement = index.html CMD_INTERP_ACTIONS,
+//                                   combat-hud attack keys, backquote, Enter).
+//   RETAIL_ACTION_MANIFEST_HOTKEYS  panel toggles owned by a plugin manifest
+//                                   hotkey (read from the live manifest table).
+//
+// A handler keyed by the retail id itself goes live with no table edit: a
+// LOCAL_ACTIONS row whose labelHash is that id (`retailActionBindingId`) or
+// that carries `retailAction: <id>`, or an input-funnel action bound under
+// that id (`window.__inputFunnel.actions`).
+
+/** The canonical binding id of a retail action id, e.g. "0x10000037". */
+export function retailActionBindingId(actionHash) {
+  return `0x${(actionHash >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+}
+
+/** retail actionHash → the LOCAL_ACTIONS labelHash whose handler runs it. */
+export const RETAIL_ACTION_LOCAL_IDS = (() => {
+  const L = LOCAL_ACTION_IDS;
+  const m = new Map();
+  for (let n = 1; n <= 9; n++) {
+    m.set(0x10000041 + n, L[`HOTBAR_${n}`]); // Quickslot 1-9 (map 0x1000000C)
+    m.set(0x10000064 + n, L[`MAGIC_SLOT_${n}`]); // Spell Slot 1-9 (map 0x10000005)
+  }
+  // Quickslot 10-12 (0x1000004B-4D) and 13-18 (0x10000132-37) = hotbar row 2.
+  for (let n = 1; n <= 3; n++) m.set(0x1000004A + n, L[`HOTBAR_R2_${n}`]);
+  for (let n = 4; n <= 9; n++) m.set(0x1000012E + n, L[`HOTBAR_R2_${n}`]);
+  // MagicCombat (map 0x10000005) — combat-bar.js installSpellBarHotkeys.
+  m.set(0x10000060, L.MAGIC_CAST);
+  m.set(0x10000061, L.MAGIC_PREV_SPELL);
+  m.set(0x10000062, L.MAGIC_NEXT_SPELL);
+  m.set(0x10000063, L.MAGIC_PREV_TAB);
+  m.set(0x10000064, L.MAGIC_NEXT_TAB);
+  m.set(0x10000102, L.MAGIC_FIRST_SPELL);
+  m.set(0x10000103, L.MAGIC_LAST_SPELL);
+  m.set(0x10000104, L.MAGIC_FIRST_TAB);
+  m.set(0x10000105, L.MAGIC_LAST_TAB);
+  // Selection (map 0x10000007) — index.html target-cycle / corpse keys.
+  m.set(0x10000035, L.CLOSEST_MONSTER);
+  m.set(0x10000036, L.PREV_MONSTER);
+  m.set(0x10000037, L.NEXT_MONSTER);
+  m.set(0x1000003E, L.USE_CLOSEST_UNOPENED_CORPSE);
+  m.set(0x1000003F, L.USE_NEXT_UNOPENED_CORPSE);
+  m.set(0x10000121, L.CLOSEST_UNOPENED_CORPSE);
+  m.set(0x10000122, L.NEXT_UNOPENED_CORPSE);
+  // Movement (map 0x00000004) — index.html retailRunKeys autorun toggle.
+  m.set(0x00000030, L.AUTORUN);
+  return m;
+})();
+
+const fixedKey = (label, code) => Object.freeze({ label, code });
+/**
+ * retail actionHash → the key this client hard-codes for it. Labels are the
+ * retail StringTable 0x23000005 text (used by findConflictingBindings).
+ */
+export const RETAIL_ACTION_FIXED_KEYS = new Map([
+  // Movement (map 0x00000004): index.html CMD_INTERP_ACTIONS forwards these
+  // keys (matched on ev.key) as the retail InputAction ids. WASD/QE is a
+  // deliberate modernization (survey A14 §8); retail turns on A/D, strafes
+  // on Z/C and backs up on X.
+  [0x29, fixedKey("Move Forward", "KeyW")],
+  [0x2A, fixedKey("Move Backward", "KeyS")],
+  [0x2C, fixedKey("Strafe Right", "KeyD")],
+  [0x2D, fixedKey("Strafe Left", "KeyA")],
+  [0x2E, fixedKey("Turn Right", "KeyE")],
+  [0x2F, fixedKey("Turn Left", "KeyQ")],
+  [0x31, fixedKey("Jump", "Space")],
+  [0x32, fixedKey("Toggle Run/Walk", "ShiftLeft")],
+  // Camera (maps 0x5 / 0x6): scene3d/camera.js A12-C2 zoom notches.
+  [0x33, fixedKey("Zoom Camera In", "PageUp")],
+  [0x34, fixedKey("Zoom Camera Out", "PageDown")],
+  // Combat: index.html backquote toggle; combat-hud.js HEIGHTS / POWER_KEYS
+  // (melee map 0x10000003, missile map 0x10000004).
+  [0x1000005A, fixedKey("Toggle Combat Mode", "Backquote")],
+  [0x1000005B, fixedKey("Decrease Power", "Insert")],
+  [0x1000005C, fixedKey("Increase Power", "PageUp")],
+  [0x1000005D, fixedKey("Low Attack", "Delete")],
+  [0x1000005E, fixedKey("Medium Attack", "End")],
+  [0x1000005F, fixedKey("High Attack", "PageDown")],
+  [0x100000EF, fixedKey("Decrease Accuracy", "Insert")],
+  [0x100000F0, fixedKey("Increase Accuracy", "PageUp")],
+  [0x100000F1, fixedKey("Low Attack", "Delete")],
+  [0x100000F2, fixedKey("Medium Attack", "End")],
+  [0x100000F3, fixedKey("High Attack", "PageDown")],
+  // Chat (map 0x1000000A): chat-panel.js Enter opens the chat bar.
+  [0x10000023, fixedKey("Begin Chat Mode", "Enter")],
+]);
+
+/** retail actionHash → the "<plugin-id>::<hotkey-id>" manifest hotkey. */
+export const RETAIL_ACTION_MANIFEST_HOTKEYS = new Map([
+  [0x1000000D, "social-panel::toggle"],
+  [0x1000000E, "allegiance-panel::toggle"],
+  [0x1000000F, "fellowship-panel::toggle"],
+  [0x10000011, "spellbook::toggle"],
+  [0x10000017, "map-panel::toggle"],
+  [0x10000018, "house-panel::toggle"],
+  [0x10000019, "inventory::toggle"],
+  [0x1000001A, "options-panel::toggle"],
+  [0x1000012E, "contracts-panel::toggle"],
+]);
+
+/** `"KeyR"` / `{code, ctrl, …}` / null → a full binding shape, or null. */
+function normalizeBinding(def) {
+  if (!def) return null;
+  if (typeof def === "string") {
+    return { code: def, shift: false, ctrl: false, alt: false, meta: false };
+  }
+  if (typeof def === "object" && def.code) {
+    return { code: def.code, shift: !!def.shift, ctrl: !!def.ctrl, alt: !!def.alt, meta: !!def.meta };
+  }
+  return null;
+}
+
+/** True when two binding shapes name the same key + modifiers. */
+export function sameBinding(a, b) {
+  if (!a || !b || !a.code || !b.code) return false;
+  return a.code === b.code
+    && !!a.shift === !!b.shift
+    && !!a.ctrl === !!b.ctrl
+    && !!a.alt === !!b.alt
+    && !!a.meta === !!b.meta;
+}
+
+function idMatchesRetailAction(id, actionHash) {
+  if (typeof id === "number") return (id >>> 0) === actionHash;
+  if (typeof id !== "string" || !/^0x[0-9a-f]+$/i.test(id.trim())) return false;
+  return (Number.parseInt(id.trim(), 16) >>> 0) === actionHash;
+}
+
+/** A manifest key-string's key ("F4", "I", "1") → a KeyboardEvent.code. */
+function manifestKeyToCode(key) {
+  if (/^[a-z]$/i.test(key)) return `Key${key.toUpperCase()}`;
+  if (/^[0-9]$/.test(key)) return `Digit${key}`;
+  return key;
+}
+
+function defaultFunnelActions() {
+  try {
+    const list = globalThis.window?.__inputFunnel?.actions;
+    return Array.isArray(list) ? list : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * How this client handles one retail action. `status`:
+ *   "rebindable"  — a handler reads `bindingId`; `binding` is its effective
+ *                   key (override, else `defaultBinding`).
+ *   "fixed"       — works on the hard-coded / manifest key `binding`.
+ *   "unavailable" — nothing dispatches it.
+ *
+ * @param {number} actionHash — ActionMap inner key (retail action id).
+ * @param {{funnelActions?: Array<{labelHash: string, defaultBinding: any}>}} [opts]
+ *   funnel registrations to consider (default `window.__inputFunnel.actions`).
+ * @returns {{actionHash: number, status: string, source: string|null,
+ *   bindingId: string|null, defaultBinding: object|null, binding: object|null}}
+ */
+export function retailActionStatus(actionHash, opts = {}) {
+  const ah = actionHash >>> 0;
+  const out = (status, source, bindingId, defaultBinding, binding) => ({
+    actionHash: ah, status, source, bindingId, defaultBinding, binding,
+  });
+  const rebindable = (source, id, def) => {
+    const dflt = normalizeBinding(def);
+    const user = load()[id];
+    return out("rebindable", source, id, dflt, user && user.code ? normalizeBinding(user) : dflt);
+  };
+  const localId = RETAIL_ACTION_LOCAL_IDS.get(ah);
+  const localRow = LOCAL_ACTIONS.find((a) => (localId != null && a.labelHash === localId)
+    || a.retailAction === ah || idMatchesRetailAction(a.labelHash, ah));
+  if (localRow) return rebindable("local", localRow.labelHash, localRow.defaultCode);
+  const funnelActions = Array.isArray(opts.funnelActions) ? opts.funnelActions : defaultFunnelActions();
+  const funnelRow = funnelActions.find((a) => idMatchesRetailAction(a?.labelHash, ah));
+  if (funnelRow) return rebindable("funnel", String(funnelRow.labelHash), funnelRow.defaultBinding);
+  const fixed = RETAIL_ACTION_FIXED_KEYS.get(ah);
+  if (fixed) return out("fixed", "fixed", null, normalizeBinding(fixed.code), normalizeBinding(fixed.code));
+  const hotkey = RETAIL_ACTION_MANIFEST_HOTKEYS.get(ah);
+  if (hotkey) {
+    for (const e of manifestBindings.values()) {
+      if (`${e.pluginId}::${e.hotkeyId}` !== hotkey || !e.match) continue;
+      const b = normalizeBinding({ ...e.match, code: manifestKeyToCode(e.match.key) });
+      return out("fixed", "manifest", null, b, b);
+    }
+  }
+  return out("unavailable", null, null, null, null);
+}
+
+function defaultActionList() {
+  const am = getActionMap();
+  if (Array.isArray(am?.actions) && am.actions.length > 0) return am.actions;
+  try {
+    const list = globalThis.window?.__acKeybindings;
+    return Array.isArray(list) ? list : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Find a retail ActionMap row by its labelHash (number or "0x…" string —
+ * the Controls rows' key) or by its label text ("Turn Left").
+ *
+ * @param {number|string} ref
+ * @param {Array<{inputMap:number, actionHash:number, labelHash:number, label:string|null}>} [actions]
+ *   defaults to the loaded ActionMap / `window.__acKeybindings`.
+ */
+export function retailActionForLabel(ref, actions) {
+  const list = Array.isArray(actions) ? actions : defaultActionList();
+  if (!list) return null;
+  const isHex = typeof ref === "string" && /^0x[0-9a-f]+$/i.test(ref.trim());
+  if (typeof ref === "number" || isHex) {
+    const want = (typeof ref === "number" ? ref : Number.parseInt(ref.trim(), 16)) >>> 0;
+    if (want === 0) return null; // unlabelled rows all carry labelHash 0
+    return list.find((a) => (a?.labelHash >>> 0) === want) ?? null;
+  }
+  if (typeof ref !== "string") return null;
+  const want = ref.trim().toLowerCase();
+  if (!want) return null;
+  return list.find((a) => typeof a?.label === "string" && a.label.trim().toLowerCase() === want) ?? null;
+}
+
+/**
+ * True when this client dispatches the retail action behind a Controls row
+ * (labelHash or label). Unknown rows are not live.
+ *
+ * @param {number|string} labelHash
+ * @param {{actions?: Array, funnelActions?: Array}} [opts]
+ */
+export function isRetailActionLive(labelHash, opts = {}) {
+  const a = retailActionForLabel(labelHash, opts.actions);
+  if (!a) return false;
+  return retailActionStatus(a.actionHash, opts).status !== "unavailable";
+}
+
+/** The key that fires a retail action in this client (binding shape), or null. */
+export function effectiveBindingFor(labelOrHash, opts = {}) {
+  const a = retailActionForLabel(labelOrHash, opts.actions);
+  if (!a) return null;
+  const b = retailActionStatus(a.actionHash, opts).binding;
+  return b ? { ...b } : null;
+}
+
+/** `effectiveBindingFor(...)?.code` — e.g. effectiveKeyFor("Turn Left") → "KeyQ". */
+export function effectiveKeyFor(labelOrHash, opts = {}) {
+  return effectiveBindingFor(labelOrHash, opts)?.code ?? null;
 }
 
 // ---------------------------------------------------------------------
@@ -457,7 +836,7 @@ export function qualifiedControlToBinding(mapping, devices) {
   // can render the retail default ("Mouse:Left", "Joystick:Button 4")
   // as read-only metadata.
   if (dev.type === 2) { // Mouse
-    return { code: mouseCode(ofsKey), ...modifiers };
+    return { code: mouseCode(ofsKey, (mapping.key >>> 8) & 0xFF), ...modifiers };
   }
   if (dev.type >= 3) { // Joystick / GamePad family
     return { code: joystickCode(ofsKey), ...modifiers };
@@ -465,17 +844,24 @@ export function qualifiedControlToBinding(mapping, devices) {
   return null;
 }
 
+// input-options-6 — a mouse control's `ofsKey` is a DirectInput mouse data
+// offset (ControlNameMapper::LoadSemantics acclient.c:674995: DIMOFS_X 0,
+// DIMOFS_Y 4, DIMOFS_Z / DIMOFS_WHEEL 8, DIMOFS_BUTTON0-7 0xC-0x13), not a
+// button index; the wheel's sub-control (key bits 8-15) is 1 = up, 2 = down.
+// DefaultMap 0x14000002 binds DIMOFS_BUTTON2 (middle) to Toggle Mouselook.
 const MOUSE_BUTTON_LABEL = Object.freeze({
-  0: "Mouse:Left",
-  1: "Mouse:Right",
-  2: "Mouse:Middle",
-  3: "Mouse:X1",
-  4: "Mouse:X2",
-  5: "Mouse:WheelUp",
-  6: "Mouse:WheelDown",
+  0x0C: "Mouse:Left",
+  0x0D: "Mouse:Right",
+  0x0E: "Mouse:Middle",
+  0x0F: "Mouse:X1",
+  0x10: "Mouse:X2",
 });
-function mouseCode(ofs) {
-  return MOUSE_BUTTON_LABEL[ofs] ?? `Mouse:${ofs}`;
+function mouseCode(ofs, sub = 0) {
+  if (ofs === 0x08) return sub === 1 ? "Mouse:WheelUp" : sub === 2 ? "Mouse:WheelDown" : "Mouse:Wheel";
+  if (ofs === 0x00) return "Mouse:X";
+  if (ofs === 0x04) return "Mouse:Y";
+  if (ofs >= 0x0C && ofs <= 0x13) return MOUSE_BUTTON_LABEL[ofs] ?? `Mouse:Button${ofs - 0x0C}`;
+  return `Mouse:${ofs}`;
 }
 function joystickCode(ofs) {
   // DirectInput offsets: low byte = button index, high byte = sub-axis
@@ -491,12 +877,73 @@ function joystickCode(ofs) {
 let retailKeyMapPromise = null;
 let retailKeyMapCache = null;
 
+/** "gmDefaultMap" — the game key map (portal 0x14000000). */
+export const RETAIL_GAME_KEYMAP_ID = 0x14000000;
+/** "DefaultMap" — the engine key map retail merges after it (0x14000002). */
+export const RETAIL_ENGINE_KEYMAP_ID = 0x14000002;
+
+/**
+ * Index parsed KeyMap records (`fetch_key_map` JSON), in merge order, into
+ * `{ raw, raws, byActionHash, byCategoryAction }` (see loadRetailKeyMap).
+ * Each record's mappings decode against ITS OWN `devices[]`. A
+ * (category, action) default already set by an earlier map is kept
+ * (input-options-6: gmDefaultMap wins over DefaultMap on a duplicate);
+ * `byActionHash` collects every distinct binding of every map. Pure.
+ *
+ * @param {object|Array<object>} raws
+ */
+export function indexRetailKeyMaps(raws) {
+  const maps = (Array.isArray(raws) ? raws : [raws]).filter((r) => r && Array.isArray(r.mappings));
+  const byActionHash = new Map();
+  const byCategoryAction = new Map();
+  for (const raw of maps) {
+    const mine = new Map(); // this map's bindings, for its primaries
+    for (const m of raw.mappings) {
+      const binding = qualifiedControlToBinding(m, raw.devices);
+      if (!binding) continue;
+      const enriched = { inputMap: m.input_map >>> 0, ...binding };
+      const ah = m.action_hash >>> 0;
+      let arr = mine.get(ah);
+      if (!arr) { arr = []; mine.set(ah, arr); }
+      arr.push(enriched);
+      let all = byActionHash.get(ah);
+      if (!all) { all = []; byActionHash.set(ah, all); }
+      if (!all.some((b) => b.inputMap === enriched.inputMap && sameBinding(b, enriched))) all.push(enriched);
+    }
+    for (const [actionHash, bindings] of mine) {
+      // Group bindings by inputMap (same action may have variants in
+      // multiple categories), then pick a primary per category.
+      const byCat = new Map();
+      for (const b of bindings) {
+        let arr = byCat.get(b.inputMap);
+        if (!arr) { arr = []; byCat.set(b.inputMap, arr); }
+        arr.push(b);
+      }
+      for (const [cat, arr] of byCat) {
+        const key = `${cat}:${actionHash}`;
+        if (byCategoryAction.has(key)) continue; // an earlier map's default stands
+        const plain = arr.find((b) => !b.shift && !b.ctrl && !b.alt && !b.meta);
+        byCategoryAction.set(key, plain ?? arr[0]);
+      }
+    }
+  }
+  return { raw: maps[0] ?? null, raws: maps, byActionHash, byCategoryAction };
+}
+
+/** Test seam — drop the cached retail KeyMap. */
+export function _resetRetailKeyMapForTest() {
+  retailKeyMapCache = null;
+  retailKeyMapPromise = null;
+}
+
 /**
  * Load + index the retail KeyMap (DAT type 0x14). Default record is
- * `0x14000000` ("gmDefaultMap"), the factory binding set.
+ * `0x14000000` ("gmDefaultMap"), the factory binding set; loading it also
+ * merges DefaultMap `0x14000002` after it, as retail does.
  *
- * Returns `{ raw, byActionHash, byCategoryAction }`:
- *   - `raw` is the wasm JSON output verbatim.
+ * Returns `{ raw, raws, byActionHash, byCategoryAction }`:
+ *   - `raw` is the wasm JSON output verbatim (the requested record);
+ *     `raws` lists every merged record in merge order.
  *   - `byActionHash` is a Map<number, Array<binding>>; a single action
  *      may have N bindings (W + UpArrow both move forward).
  *   - `byCategoryAction` is a Map<string, binding-with-category> keyed
@@ -508,7 +955,7 @@ let retailKeyMapCache = null;
  * pattern as `loadActionMap()`.
  *
  * @param {number} [id=0x14000000]
- * @returns {Promise<null | {raw: object, byActionHash: Map<number, Array>, byCategoryAction: Map<string, object>}>}
+ * @returns {Promise<null | {raw: object, raws: Array<object>, byActionHash: Map<number, Array>, byCategoryAction: Map<string, object>}>}
  */
 export async function loadRetailKeyMap(id = 0x14000000) {
   if (retailKeyMapCache) return retailKeyMapCache;
@@ -539,34 +986,31 @@ export async function loadRetailKeyMap(id = 0x14000000) {
         retailKeyMapCache = null;
         return null;
       }
-      const byActionHash = new Map();
-      for (const m of raw.mappings) {
-        const binding = qualifiedControlToBinding(m, raw.devices);
-        if (!binding) continue;
-        const enriched = { inputMap: m.input_map >>> 0, ...binding };
-        let arr = byActionHash.get(m.action_hash >>> 0);
-        if (!arr) { arr = []; byActionHash.set(m.action_hash >>> 0, arr); }
-        arr.push(enriched);
-      }
-      const byCategoryAction = new Map();
-      for (const [actionHash, bindings] of byActionHash) {
-        // Group bindings by inputMap (same action may have variants in
-        // multiple categories), then pick a primary per category.
-        const byCat = new Map();
-        for (const b of bindings) {
-          let arr = byCat.get(b.inputMap);
-          if (!arr) { arr = []; byCat.set(b.inputMap, arr); }
-          arr.push(b);
-        }
-        for (const [cat, arr] of byCat) {
-          const plain = arr.find((b) => !b.shift && !b.ctrl && !b.alt && !b.meta);
-          byCategoryAction.set(`${cat}:${actionHash}`, plain ?? arr[0]);
+      const raws = [raw];
+      // input-options-6 — retail merges the engine DefaultMap after
+      // gmDefaultMap (gmKeyboardUI::InitOptions acclient.c:268397:
+      // DBObj::GetByEnum(0x10000001, 10, 0x1D), then CMasterInputMap::Merge
+      // with GetByEnum(1, 10, 0x1D)). It carries the camera keys (numpad
+      // rotate / zoom / views, middle-button mouselook) gmDefaultMap lacks.
+      // Best-effort: if it fails, gmDefaultMap alone is still shown (and
+      // cached, so the Controls page does not re-fetch on every render).
+      if ((id >>> 0) === RETAIL_GAME_KEYMAP_ID) {
+        try {
+          const json2 = await wasm.fetch_key_map(RETAIL_ENGINE_KEYMAP_ID);
+          const raw2 = json2 === "null" ? null : JSON.parse(json2);
+          if (raw2) raws.push(raw2);
+        } catch (err) {
+          console.warn("[keymap] retail DefaultMap 0x14000002 load failed (showing gmDefaultMap only):", err);
         }
       }
-      retailKeyMapCache = { raw, byActionHash, byCategoryAction };
+      const { byActionHash, byCategoryAction } = indexRetailKeyMaps(raws);
+      retailKeyMapCache = { raw, raws, byActionHash, byCategoryAction };
       try {
         window.__diag?.input?.onRetailKeyMapLoaded?.({
-          id, mappings: raw.mappings.length, actions: byActionHash.size,
+          id,
+          mappings: raws.reduce((n, r) => n + r.mappings.length, 0),
+          actions: byActionHash.size,
+          merged: raws.map((r) => r.id >>> 0),
         });
       } catch (_) {}
       return retailKeyMapCache;

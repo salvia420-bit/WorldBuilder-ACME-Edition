@@ -102,9 +102,12 @@ impl ProtocolUnpack for StartBarberEventData {
     }
 }
 
-impl ProtocolPack for StartBarberEventData {
-    fn pack(&self, buf: &mut Vec<u8>) {
-        for v in [
+impl StartBarberEventData {
+    /// maps-chargen-barber-1: the 16 fields in wire order (the order
+    /// `gmBarberUI::InitializePage` takes them and
+    /// `CM_Character::Event_FinishBarber` sends them back, acclient.c:270300).
+    pub fn to_fields(&self) -> [u32; 16] {
+        [
             self.palette_base_did,
             self.head_object_did,
             self.hair_texture,
@@ -121,7 +124,35 @@ impl ProtocolPack for StartBarberEventData {
             self.setup_table_id,
             self.option1,
             self.option2,
-        ] {
+        ]
+    }
+
+    /// Inverse of [`Self::to_fields`].
+    pub fn from_fields(f: &[u32; 16]) -> Self {
+        Self {
+            palette_base_did: f[0],
+            head_object_did: f[1],
+            hair_texture: f[2],
+            default_hair_texture: f[3],
+            eyes_texture_did: f[4],
+            default_eyes_texture_did: f[5],
+            nose_texture_did: f[6],
+            default_nose_texture_did: f[7],
+            mouth_texture_did: f[8],
+            default_mouth_texture_did: f[9],
+            skin_palette_did: f[10],
+            hair_palette_did: f[11],
+            eyes_palette_did: f[12],
+            setup_table_id: f[13],
+            option1: f[14],
+            option2: f[15],
+        }
+    }
+}
+
+impl ProtocolPack for StartBarberEventData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        for v in self.to_fields() {
             buf.write_u32::<LittleEndian>(v).unwrap();
         }
     }

@@ -14,12 +14,22 @@
 // ground / chest pickup and every drop played twice — and a refused action
 // (too far, encumbered, already taken) played a sound for nothing. Now the
 // item cues (0x8C-0x90) are left to the 0xF750 handler; `?retailItemSounds=off`
-// (or 0/false) restores the click-time prediction. The UI cues below (error,
-// slider) are never echoed by the server and still play here. The call sites
+// (or 0/false) restores the click-time prediction. The call sites
 // (item_drag.js, radial-menu.js, inventory.js) are unchanged: one gate here.
 //
+// audio-2 (2026-10-13) — RETAIL NEVER PLAYS THE UI CUES EITHER. The error
+// buzz (0x6D) and slider grab/release (0x73 / 0x74) are enum values only:
+// acclient.c has no PlaySoundFromCenter / PlaySoundA path that reaches them
+// (scene3d/audio/retail_sound_rules.js retailUiSoundsEnabled has the caller
+// list). By default `playOptimistic` refuses them before any claim,
+// `playUiError` is a no-op (the callers keep their toasts and flashes) and
+// range inputs are silent; `?retailUiSounds=off` (or 0/false) plays them.
+//
 // Retail parity (2026-10-05):
-//   - UI_* cues (error, slider grab/release) are UI sounds: retail
+//   - UI_* cues (error, slider grab/release) play only under
+//     `?retailUiSounds=off` (audio-2 above: retail has no caller for them,
+//     they are acclient.h enum values only). When that escape plays them, it
+//     uses the path retail uses for its real UI sounds:
 //     PlaySoundFromCenter(stype, GetUISoundTable()) (acclient.c:383569-383589,
 //     401286) — UI SoundTable, no position, row probability + row volume.
 //   - inventory-action cues are the local prediction of the server's
@@ -43,14 +53,18 @@ export const SOUND = Object.freeze({
   RECEIVE:  0x8E,
   PICKUP:   0x8F,
   DROP:     0x90,
-  // UI_GeneralError — fires on user-action rejections (cannot equip,
-  // unequip-first, invalid drop target). Same play path as the action
-  // sounds; resolved against the local player's SoundTable.
+  // UI_GeneralError — the user-action refusal buzz (cannot equip,
+  // unequip-first, invalid drop target). Plays only under
+  // `?retailUiSounds=off`: retail never plays it (acclient.h enum value
+  // only, no caller; audio-2 header). When it plays, it goes through the
+  // UI SoundTable from the centre (playUiSound).
   UI_ERROR: 0x6D,
   // Rec #190 — slider grab/release. ACE Sound.UI_GrabSlider (0x73) +
-  // UI_ReleaseSlider (0x74); retail fires on input/range mousedown +
-  // mouseup. Resolved against the local player's SoundTable just like
-  // every other UI cue, so a missing entry soft-degrades to silence.
+  // UI_ReleaseSlider (0x74), on input/range pointerdown + pointerup. Plays
+  // only under `?retailUiSounds=off`: retail has no caller for either
+  // (acclient.h enum values only; retail sliders are silent, audio-2
+  // header). When it plays, it goes through the UI SoundTable from the
+  // centre, so a missing entry soft-degrades to silence.
   UI_GRAB:    0x73,
   UI_RELEASE: 0x74,
 });
@@ -64,7 +78,8 @@ export const SOUND = Object.freeze({
 // preferences) are covered without re-registration. The seen-set
 // keys on the slider element so a single pointer interaction only
 // fires GRAB once even if a nested handler also dispatches it.
-import { playUiSound, rollProbability } from "../scene3d/audio/retail_sound_rules.js";
+// audio-2: only under `?retailUiSounds=off` — retail sliders are silent.
+import { playUiSound, rollProbability, retailUiSoundsEnabled } from "../scene3d/audio/retail_sound_rules.js";
 
 // UI_* sounds go through the UI SoundTable from the centre (see header).
 const UI_SOUNDS = new Set([0x6D, 0x73, 0x74]);
@@ -90,6 +105,9 @@ const _slidersHeld = new WeakSet();
 // for every SUBSEQUENT interaction with that same slider.
 let _sliderHeldRef = null;
 function _onWindowPointerDown(ev) {
+  // audio-2: retail has no slider sound (header) — nothing is held, so the
+  // pointerup below finds nothing to release either.
+  if (retailUiSoundsEnabled()) return;
   const t = ev.target;
   if (!t || t.tagName !== "INPUT" || t.type !== "range") return;
   if (_slidersHeld.has(t)) return;
@@ -141,7 +159,9 @@ if (typeof window !== "undefined" && !window.__audio_sliderListenersInstalled) {
 // of remembering the magic 0x6D. Falls back to the local player guid as
 // the second argument when none is provided so the ring-key matches the
 // (eventual) server echo.
+// audio-2: a no-op by default — retail plays no Sound_UI_GeneralError.
 export function playUiError(playerGuid) {
+  if (retailUiSoundsEnabled()) return;
   const lpg = (playerGuid >>> 0)
     || ((typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
         ? (window.getLocalPlayerGuid() >>> 0) : 0);
@@ -182,17 +202,19 @@ export function shouldSuppressEcho(soundId, playerGuid) {
 }
 
 /**
- * Play a UI cue from the centre, or — only under `?retailItemSounds=off` —
- * an inventory-action sound at the local player's position: resolves the
- * wave through the entity's SoundTable + the shared SoundTableCache, plays
- * via the global AudioManager and records the fire in the recent ring so the
- * matching server broadcast can be suppressed. By default an item cue is a
- * no-op (audio-1).
+ * Play a UI cue from the centre — only under `?retailUiSounds=off` — or —
+ * only under `?retailItemSounds=off` — an inventory-action sound at the local
+ * player's position: resolves the wave through the entity's SoundTable + the
+ * shared SoundTableCache, plays via the global AudioManager and records the
+ * fire in the recent ring so the matching server broadcast can be
+ * suppressed. By default both are no-ops (audio-1, audio-2).
  */
 export async function playOptimistic(soundId, itemGuid) {
   // audio-1: an item cue is the server's to play (header). Before any claim
   // is recorded, so the genuine echo is never suppressed.
   if (!UI_SOUNDS.has(soundId >>> 0) && !_predictItemSounds()) return;
+  // audio-2: neither does any UI cue here (header), unless the escape is set.
+  if (UI_SOUNDS.has(soundId >>> 0) && retailUiSoundsEnabled()) return;
   try {
     const live = window.liveScene3d;
     const audioMgr = live?.audioManager;

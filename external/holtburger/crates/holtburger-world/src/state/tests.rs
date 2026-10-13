@@ -3304,6 +3304,202 @@ fn test_remove_entity_prunes_item_and_container_placements() {
     assert_eq!(state.inventory_placement(Guid(3)), Some(1));
 }
 
+/// messages-objects-2 (2026-10-13) — an ObjectCreate through the real
+/// inventory handler (files player ownership the way the live stream does);
+/// returns the description so the test can re-send it as an UpdateObject.
+fn update_object_first_slot_create(
+    state: &mut WorldState,
+    guid: Guid,
+    container: Option<Guid>,
+    wielder: Option<Guid>,
+    wielded_location: Option<u32>,
+    items_capacity: Option<u32>,
+) -> ObjectDescriptionData {
+    let mut data = ObjectDescriptionData::with_guid(guid);
+    data.public_weenie_desc.name = Some(format!("Obj{:08X}", u32::from(guid)));
+    data.public_weenie_desc.container_id = container;
+    data.public_weenie_desc.wielder_id = wielder;
+    data.public_weenie_desc.currently_wielded_location = wielded_location;
+    data.public_weenie_desc.items_capacity = items_capacity;
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(data.clone())));
+    data
+}
+
+/// The wasm session's UpdateObject (0xF7DB) arm, in order:
+/// `Entity::apply_description`, then `WorldState::note_update_object`.
+fn update_object_first_slot_apply(state: &mut WorldState, data: &ObjectDescriptionData) -> bool {
+    let guid = data.public_weenie_desc.guid;
+    state
+        .entities
+        .get_mut(guid)
+        .expect("UpdateObject subject must exist")
+        .apply_description(data);
+    state.note_update_object(guid)
+}
+
+/// messages-objects-2 (2026-10-13) — retail re-creates an updated object
+/// (acclient.c SmartBox::HandleUpdateObject → HandleCreateObject
+/// force_recreate), so ACCObjectMaint::SetWeenieDesc files a pack item at
+/// place 0 of its container (ACE MoveItemToFirstContainerSlot mirrors it).
+/// The siblings ahead of it shift down one; those behind it keep their rank.
+#[test]
+fn test_update_object_moves_player_pack_item_to_first_slot() {
+    let mut state = WorldState::synthetic();
+    let player = Guid(0x5000_0001);
+    state.player.guid = player;
+    let mut descs = Vec::new();
+    for i in 1..=4u32 {
+        descs.push(update_object_first_slot_create(
+            &mut state,
+            Guid(i),
+            Some(player),
+            None,
+            None,
+            None,
+        ));
+    }
+    assert!(state.player.inventory.contains(&Guid(3)), "precondition: pack item is owned");
+    state.seed_inventory_placement(
+        player,
+        (1..=4u32).map(|i| (Guid(i), false)).collect::<Vec<_>>(),
+    );
+    let order: Vec<_> = (1..=4u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(0), Some(1), Some(2), Some(3)]);
+
+    // Item 3 (rank 2) is updated (a tinker / dye / imbue result) → front.
+    assert!(update_object_first_slot_apply(&mut state, &descs[2]));
+    let order: Vec<_> = (1..=4u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(1), Some(2), Some(0), Some(3)]);
+
+    // Updating the item already at the front is a no-op for the order.
+    assert!(update_object_first_slot_apply(&mut state, &descs[2]));
+    let order: Vec<_> = (1..=4u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(1), Some(2), Some(0), Some(3)]);
+}
+
+/// A wielded item has no container slot (retail SetWeenieDesc takes the
+/// wielder branch; ACE skips the move when CurrentWieldedLocation is set):
+/// placements stay as they were, but the call still reports a player-owned
+/// subject so the inventory snapshot refreshes (name / icon may change).
+#[test]
+fn test_update_object_leaves_wielded_item_placements_unchanged() {
+    let mut state = WorldState::synthetic();
+    let player = Guid(0x5000_0001);
+    state.player.guid = player;
+    for i in 1..=2u32 {
+        let _ = update_object_first_slot_create(&mut state, Guid(i), Some(player), None, None, None);
+    }
+    let sword = Guid(0x10);
+    let sword_desc = update_object_first_slot_create(
+        &mut state,
+        sword,
+        None,
+        Some(player),
+        Some(EquipMask::MELEE_WEAPON.bits()),
+        None,
+    );
+    assert!(
+        state.player.equipment.contains_key(&sword),
+        "precondition: wielded item is equipped"
+    );
+    state.seed_inventory_placement(player, vec![(Guid(1), false), (Guid(2), false)]);
+    let before = state.container_placement.clone();
+
+    assert!(update_object_first_slot_apply(&mut state, &sword_desc));
+    assert_eq!(state.container_placement, before);
+    assert_eq!(state.inventory_placement(sword), None);
+    assert_eq!(state.inventory_placement(Guid(1)), Some(0));
+    assert_eq!(state.inventory_placement(Guid(2)), Some(1));
+}
+
+/// An item in a side pack moves to rank 0 of THAT pack only; the main
+/// pack's item and pack lists are untouched. A side pack that is itself
+/// updated moves to the front of the pack (containers) list, which is
+/// ordered independently of the item list (retail GetPlaceInContainersList).
+#[test]
+fn test_update_object_side_pack_item_moves_within_its_own_pack() {
+    let mut state = WorldState::synthetic();
+    let player = Guid(0x5000_0001);
+    state.player.guid = player;
+    let (a, b) = (Guid(1), Guid(2));
+    let (pack1, pack2) = (Guid(0x50), Guid(0x51));
+    let (c, d, e) = (Guid(3), Guid(4), Guid(5));
+    for item in [a, b] {
+        let _ = update_object_first_slot_create(&mut state, item, Some(player), None, None, None);
+    }
+    let _ = update_object_first_slot_create(&mut state, pack1, Some(player), None, None, Some(24));
+    let pack2_desc =
+        update_object_first_slot_create(&mut state, pack2, Some(player), None, None, Some(24));
+    let mut side_descs = Vec::new();
+    for item in [c, d, e] {
+        side_descs.push(update_object_first_slot_create(
+            &mut state,
+            item,
+            Some(pack1),
+            None,
+            None,
+            None,
+        ));
+    }
+    assert!(state.player.inventory.contains(&e), "precondition: side-pack item is owned");
+    state.seed_inventory_placement(
+        player,
+        vec![(a, false), (b, false), (pack1, true), (pack2, true)],
+    );
+    state.seed_inventory_placement(pack1, vec![(c, false), (d, false), (e, false)]);
+
+    // E (rank 2 of pack1) is updated → front of pack1.
+    assert!(update_object_first_slot_apply(&mut state, &side_descs[2]));
+    assert_eq!(state.inventory_placement(e), Some(0));
+    assert_eq!(state.inventory_placement(c), Some(1));
+    assert_eq!(state.inventory_placement(d), Some(2));
+    assert_eq!(state.inventory_placement(a), Some(0));
+    assert_eq!(state.inventory_placement(b), Some(1));
+    assert_eq!(state.inventory_placement(pack1), Some(0));
+    assert_eq!(state.inventory_placement(pack2), Some(1));
+
+    // pack2 (rank 1 of the pack list) is updated → front of the pack list;
+    // the main pack's item list keeps its order.
+    assert!(update_object_first_slot_apply(&mut state, &pack2_desc));
+    assert_eq!(state.inventory_placement(pack2), Some(0));
+    assert_eq!(state.inventory_placement(pack1), Some(1));
+    assert_eq!(state.inventory_placement(a), Some(0));
+    assert_eq!(state.inventory_placement(b), Some(1));
+    assert_eq!(state.inventory_placement(e), Some(0));
+}
+
+/// World and other-owner subjects (a ground item, an open chest's contents)
+/// are not touched: the call reports `false` and no placement changes.
+#[test]
+fn test_update_object_ignores_subjects_the_player_does_not_own() {
+    let mut state = WorldState::synthetic();
+    let player = Guid(0x5000_0001);
+    state.player.guid = player;
+    let chest = Guid(0x60);
+    let _ = update_object_first_slot_create(&mut state, chest, None, None, None, Some(120));
+    let mut chest_descs = Vec::new();
+    for i in 1..=3u32 {
+        chest_descs.push(update_object_first_slot_create(
+            &mut state,
+            Guid(i),
+            Some(chest),
+            None,
+            None,
+            None,
+        ));
+    }
+    let ground_desc =
+        update_object_first_slot_create(&mut state, Guid(0x70), None, None, None, None);
+    state.seed_inventory_placement(chest, (1..=3u32).map(|i| (Guid(i), false)).collect::<Vec<_>>());
+    let before = state.container_placement.clone();
+
+    assert!(!update_object_first_slot_apply(&mut state, &chest_descs[2]));
+    assert!(!update_object_first_slot_apply(&mut state, &ground_desc));
+    assert_eq!(state.container_placement, before);
+    let order: Vec<_> = (1..=3u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(0), Some(1), Some(2)]);
+}
+
 #[test]
 fn test_inventory_put_object_in_3d() {
     let mut state = WorldState::synthetic();
@@ -4949,6 +5145,259 @@ fn test_indoor_player_keeps_nearby_outdoor_entity_visible_under_conservative_heu
         state
             .entity_lifecycle_state(target_guid)
             .is_none_or(|lifecycle| lifecycle.prune_deadline.is_none())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// streaming-residency-1 (2026-10-13): `?aceObjMaint=on` — the ACE-parity
+// visibility prune (ACE `ObjectMaint.GetVisibleObjects`; retail
+// `CObjectMaint::AddObjectToBeDestroyed` +25 s, acclient.c:310651). ACE sends
+// nothing about an object once it leaves that set, so anything the client
+// keeps past it is a frozen ghost.
+
+fn aom_pos(cell: u32, x: f32, y: f32, z: f32) -> WorldPosition {
+    WorldPosition {
+        landblock_id: Guid(cell),
+        coords: Vector3::new(x, y, z),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    }
+}
+
+/// A world with the server clock at 100 s and the local player seeded at
+/// `player`; `ace_object_maint` is the `?aceObjMaint` carrier.
+fn aom_world(ace_object_maint: bool, player: WorldPosition) -> WorldState {
+    let mut state = WorldState::synthetic();
+    state.set_ace_object_maint_enabled(ace_object_maint);
+    state.server_time = Some(ServerTimeSync {
+        server_time: 100.0,
+        local_time: Instant::now(),
+    });
+    state.seed_local_player_entity(Guid(0x50000140), "Player", player);
+    state
+}
+
+fn aom_add(state: &mut WorldState, guid: u32, pos: WorldPosition) -> Guid {
+    let guid = Guid(guid);
+    state.add_entity(Entity::new(guid, "Target".to_string(), pos));
+    guid
+}
+
+fn aom_deadline(state: &WorldState, guid: Guid) -> Option<f64> {
+    state
+        .entity_lifecycle_state(guid)
+        .and_then(|lifecycle| lifecycle.prune_deadline)
+}
+
+#[test]
+fn test_ace_object_maint_defaults_off_with_the_25_second_deadline() {
+    let state = WorldState::synthetic();
+    assert!(!state.ace_object_maint_enabled(), "?aceObjMaint is opt-in");
+
+    let mut state = aom_world(false, aom_pos(0x0A0A_0035, 150.0, 96.0, 0.0));
+    let far = aom_add(&mut state, 0x6000_0141, aom_pos(0x2020_0001, 10.0, 10.0, 0.0));
+    let _ = state.tick();
+    let deadline = aom_deadline(&state, far).expect("far entity gets a deadline");
+    assert!(
+        (125.0..130.0).contains(&deadline),
+        "default deadline stays ACE's 25 s, got {deadline}"
+    );
+}
+
+#[test]
+fn test_ace_object_maint_prunes_chebyshev_two_landblock_inside_384m() {
+    // Player outdoors in 0x0A0A (cell 0x35, local 150/96); target outdoors in
+    // 0x0C0A (Chebyshev 2, cell 0x0D, local 30/96): 264 m away — inside the
+    // conservative 384 m term, outside ACE's landblock + adjacents.
+    let player = aom_pos(0x0A0A_0035, 150.0, 96.0, 0.0);
+    let target_pos = aom_pos(0x0C0A_000D, 30.0, 96.0, 0.0);
+    assert!(player.distance_to(&target_pos) < 384.0);
+
+    // Default: the conservative set keeps it (the ghost band).
+    let mut off = aom_world(false, player);
+    let off_target = aom_add(&mut off, 0x6000_0140, target_pos);
+    let _ = off.tick();
+    assert!(aom_deadline(&off, off_target).is_none());
+
+    // aceObjMaint=on: a 30 s deadline, then the sweep removes it.
+    let mut on = aom_world(true, player);
+    let target = aom_add(&mut on, 0x6000_0140, target_pos);
+    let events = on.tick();
+    assert!(events.is_empty());
+    let deadline = aom_deadline(&on, target).expect("Chebyshev-2 entity gets a deadline");
+    assert!(deadline >= 130.0, "30 s deadline under aceObjMaint, got {deadline}");
+
+    on.server_time = Some(ServerTimeSync {
+        server_time: deadline - 1.0,
+        local_time: Instant::now(),
+    });
+    let _ = on.tick();
+    assert!(on.entities.get(target).is_some(), "held until the deadline");
+
+    on.server_time = Some(ServerTimeSync {
+        server_time: deadline + 1.0,
+        local_time: Instant::now(),
+    });
+    let events = on.tick();
+    assert!(on.entities.get(target).is_none());
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::EntityDespawned(guid) if *guid == target))
+    );
+}
+
+#[test]
+fn test_ace_object_maint_outdoor_player_prunes_non_seen_outside_envcell() {
+    let mut state = aom_world(true, aom_pos(0x0A0A_0035, 150.0, 96.0, 0.0));
+    state.scene.insert_cell_seen_outside(0x0A0A_0105, false);
+    state.scene.insert_cell_seen_outside(0x0A0A_0106, true);
+    // A non-SeenOutside cell whose VisibleCells list the player's outdoor
+    // cell: ACE `EnvCell.IsVisibleIndoors` (same landblock) keeps it.
+    state.scene.insert_cell_seen_outside(0x0A0A_0107, false);
+    state.scene.insert_cell_visible_edge(0x0A0A_0107, 0x0A0A_0035);
+    let sealed = aom_add(&mut state, 0x6000_0142, aom_pos(0x0A0A_0105, 100.0, 100.0, -6.0));
+    let building = aom_add(&mut state, 0x6000_0143, aom_pos(0x0A0A_0106, 100.0, 100.0, 2.0));
+    let outdoor = aom_add(&mut state, 0x6000_0144, aom_pos(0x0B0A_0001, 10.0, 10.0, 0.0));
+    let sees_player = aom_add(&mut state, 0x6000_0147, aom_pos(0x0A0A_0107, 140.0, 96.0, -2.0));
+
+    let _ = state.tick();
+
+    assert!(aom_deadline(&state, sealed).is_some(), "non-SeenOutside EnvCell is not visible");
+    assert!(aom_deadline(&state, building).is_none(), "SeenOutside EnvCell stays");
+    assert!(aom_deadline(&state, outdoor).is_none(), "adjacent outdoor stays");
+    assert!(aom_deadline(&state, sees_player).is_none(), "its VisibleCells hold the player");
+}
+
+#[test]
+fn test_ace_object_maint_unknown_seen_outside_bit_keeps_entity() {
+    let mut state = aom_world(true, aom_pos(0x0A0A_0035, 150.0, 96.0, 0.0));
+    // No EnvCell record loaded for either cell: the bit is unknown, which
+    // must read as visible (the existing `cell_seen_outside` folds it to
+    // false = sealed).
+    assert_eq!(state.scene.cell_seen_outside_opt(0x0A0A_0105), None);
+    let same_lb = aom_add(&mut state, 0x6000_0145, aom_pos(0x0A0A_0105, 100.0, 100.0, -6.0));
+    let adjacent_lb = aom_add(&mut state, 0x6000_0146, aom_pos(0x0B0B_0110, 10.0, 10.0, -6.0));
+
+    let _ = state.tick();
+
+    assert!(aom_deadline(&state, same_lb).is_none());
+    assert!(aom_deadline(&state, adjacent_lb).is_none());
+}
+
+#[test]
+fn test_ace_object_maint_sealed_cell_player_sees_only_its_visible_cells() {
+    let player = aom_pos(0x0A0A_0100, 10.0, 10.0, -6.0);
+    let mut state = aom_world(true, player);
+    for cell in [0x0A0A_0100, 0x0A0A_0101, 0x0A0A_0102] {
+        state.scene.insert_cell_seen_outside(cell, false);
+    }
+    state.scene.insert_cell_visible_edge(0x0A0A_0100, 0x0A0A_0101);
+
+    let same_cell = aom_add(&mut state, 0x6000_0150, aom_pos(0x0A0A_0100, 12.0, 10.0, -6.0));
+    let visible = aom_add(&mut state, 0x6000_0151, aom_pos(0x0A0A_0101, 20.0, 10.0, -6.0));
+    let hidden_room = aom_add(&mut state, 0x6000_0152, aom_pos(0x0A0A_0102, 30.0, 10.0, -6.0));
+    let outdoor_same_lb = aom_add(&mut state, 0x6000_0153, aom_pos(0x0A0A_0001, 10.0, 10.0, 0.0));
+    let adjacent_dungeon = aom_add(&mut state, 0x6000_0154, aom_pos(0x0B0A_0100, 10.0, 10.0, -6.0));
+
+    let _ = state.tick();
+
+    assert!(aom_deadline(&state, same_cell).is_none());
+    assert!(aom_deadline(&state, visible).is_none());
+    assert!(aom_deadline(&state, hidden_room).is_some(), "non-visible room is pruned");
+    assert!(aom_deadline(&state, outdoor_same_lb).is_some(), "sealed cell: no outdoor clause");
+    assert!(aom_deadline(&state, adjacent_dungeon).is_some(), "sealed cell: no adjacents");
+
+    // Default: everything in the 3x3 is kept.
+    let mut off = aom_world(false, player);
+    for cell in [0x0A0A_0100, 0x0A0A_0101, 0x0A0A_0102] {
+        off.scene.insert_cell_seen_outside(cell, false);
+    }
+    off.scene.insert_cell_visible_edge(0x0A0A_0100, 0x0A0A_0101);
+    let off_hidden = aom_add(&mut off, 0x6000_0152, aom_pos(0x0A0A_0102, 30.0, 10.0, -6.0));
+    let off_adjacent = aom_add(&mut off, 0x6000_0154, aom_pos(0x0B0A_0100, 10.0, 10.0, -6.0));
+    let _ = off.tick();
+    assert!(aom_deadline(&off, off_hidden).is_none());
+    assert!(aom_deadline(&off, off_adjacent).is_none());
+}
+
+#[test]
+fn test_ace_object_maint_sealed_cell_without_cell_data_falls_back() {
+    // The player's EnvCell record is not loaded (native CLI, or a cell not
+    // fetched yet): the conservative 3x3-or-384 m set applies unchanged.
+    let mut state = aom_world(true, aom_pos(0x0A0A_0100, 10.0, 10.0, -6.0));
+    let same_lb = aom_add(&mut state, 0x6000_0155, aom_pos(0x0A0A_0102, 30.0, 10.0, -6.0));
+    let adjacent = aom_add(&mut state, 0x6000_0156, aom_pos(0x0B0A_0100, 10.0, 10.0, -6.0));
+    let far = aom_add(&mut state, 0x6000_0157, aom_pos(0x2020_0001, 10.0, 10.0, 0.0));
+
+    let _ = state.tick();
+
+    assert!(aom_deadline(&state, same_lb).is_none());
+    assert!(aom_deadline(&state, adjacent).is_none());
+    let deadline = aom_deadline(&state, far).expect("far entity still pruned on the fallback");
+    assert!(deadline >= 130.0, "fallback keeps the aceObjMaint 30 s deadline");
+}
+
+#[test]
+fn test_ace_object_maint_seen_outside_player_unions_visible_cells() {
+    // A building interior (SeenOutside) with a cellar (not SeenOutside) in
+    // its VisibleCells: ACE unions the VisibleCells BEFORE the SeenOutside
+    // branch (ObjectMaint.cs GetVisibleObjects(EnvCell)), so the cellar
+    // stays visible even though the outdoor filter alone would drop it.
+    // ACE's per-object test (`EnvCell.IsVisibleIndoors`: SeenOutside &&
+    // block distance <= 1, no filter on the object's cell) also keeps any
+    // other non-SeenOutside cell within one landblock, so the union does too.
+    let mut state = aom_world(true, aom_pos(0x0A0A_0100, 100.0, 100.0, 2.0));
+    state.scene.insert_cell_seen_outside(0x0A0A_0100, true);
+    state.scene.insert_cell_seen_outside(0x0A0A_0101, false);
+    state.scene.insert_cell_seen_outside(0x0A0A_0102, false);
+    state.scene.insert_cell_seen_outside(0x0C0A_0100, false);
+    state.scene.insert_cell_visible_edge(0x0A0A_0100, 0x0A0A_0101);
+
+    let cellar = aom_add(&mut state, 0x6000_0160, aom_pos(0x0A0A_0101, 100.0, 104.0, -4.0));
+    let outdoor = aom_add(&mut state, 0x6000_0161, aom_pos(0x0A0A_0001, 10.0, 10.0, 0.0));
+    let adjacent_outdoor = aom_add(&mut state, 0x6000_0162, aom_pos(0x0B0A_0001, 10.0, 10.0, 0.0));
+    let other_cell = aom_add(&mut state, 0x6000_0163, aom_pos(0x0A0A_0102, 120.0, 100.0, -4.0));
+    let chebyshev_two = aom_add(&mut state, 0x6000_0164, aom_pos(0x0C0A_0001, 10.0, 10.0, 0.0));
+    let chebyshev_two_cell =
+        aom_add(&mut state, 0x6000_0166, aom_pos(0x0C0A_0100, 10.0, 10.0, -4.0));
+
+    let _ = state.tick();
+
+    assert!(aom_deadline(&state, cellar).is_none(), "VisibleCells union");
+    assert!(aom_deadline(&state, outdoor).is_none());
+    assert!(aom_deadline(&state, adjacent_outdoor).is_none());
+    assert!(aom_deadline(&state, other_cell).is_none(), "IsVisibleIndoors union");
+    assert!(aom_deadline(&state, chebyshev_two).is_some());
+    assert!(aom_deadline(&state, chebyshev_two_cell).is_some());
+}
+
+#[test]
+fn test_ace_object_maint_reentry_clears_deadline() {
+    let mut state = aom_world(true, aom_pos(0x0A0A_0035, 150.0, 96.0, 0.0));
+    let target = aom_add(&mut state, 0x6000_0165, aom_pos(0x0C0A_000D, 30.0, 96.0, 0.0));
+
+    let _ = state.tick();
+    assert!(aom_deadline(&state, target).is_some());
+
+    state.server_time = Some(ServerTimeSync {
+        server_time: 110.0,
+        local_time: Instant::now(),
+    });
+    let mut events = Vec::new();
+    let _ = state.apply_public_position_update(
+        target,
+        PositionType::Location,
+        aom_pos(0x0B0A_000D, 30.0, 96.0, 0.0),
+        &mut events,
+    );
+    let tick_events = state.tick();
+
+    assert!(state.entities.get(target).is_some());
+    assert!(state.entity_lifecycle_state(target).is_none());
+    assert!(
+        !tick_events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::EntityDespawned(guid) if *guid == target))
     );
 }
 

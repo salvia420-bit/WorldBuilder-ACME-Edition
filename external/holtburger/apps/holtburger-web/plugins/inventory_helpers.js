@@ -231,9 +231,13 @@ export function suggestedCombatModeFromInventory(snapshot) {
  * Build a derived equip-state snapshot from the wasm playerInventory()
  * array. Mirrors ACE Player_Inventory.cs:1746-1902 inputs.
  *
+ * inventory-session-2: `opts.retailWieldLegal` marks the state for
+ * canEquipInSlot's retail branch (CPlayerSystem::AutoWieldIsLegal) and
+ * carries the rows it reads the weapon-ready slot from.
+ *
  * @param {Array<object>} snapshot  Result of handle.playerInventory().
- * @param {object}        opts      {stance?: number, inCombatMode?: boolean}
- * @returns {{equippedByMask:Object, mainWeapon:object|null, offhand:object|null, stance:number, inCombatMode:boolean}}
+ * @param {object}        opts      {stance?: number, inCombatMode?: boolean, retailWieldLegal?: boolean}
+ * @returns {{equippedByMask:Object, mainWeapon:object|null, offhand:object|null, stance:number, inCombatMode:boolean, retailWieldLegal?:true, rows?:Array<object>}}
  */
 export function buildPlayerEquipState(snapshot, opts) {
   const inv = Array.isArray(snapshot) ? snapshot : [];
@@ -245,6 +249,10 @@ export function buildPlayerEquipState(snapshot, opts) {
     stance: (o.stance >>> 0) || 0,
     inCombatMode: !!o.inCombatMode,
   };
+  if (o.retailWieldLegal) {
+    out.retailWieldLegal = true;
+    out.rows = inv;
+  }
   for (const it of inv) {
     const m = (it?.equipMask >>> 0) || 0;
     if (m === 0) continue;
@@ -271,6 +279,10 @@ export function buildPlayerEquipState(snapshot, opts) {
  *   - Caster requires non-combat (cannot hold caster while in combat
  *     with a melee weapon equipped)
  *   - Ammo: ammoType must match the equipped MissileWeapon's expected ammo
+ *
+ * A state built with `retailWieldLegal` (inventory.js `?retailWieldLegal`,
+ * default ON) skips that cascade for retail CPlayerSystem::AutoWieldIsLegal
+ * (retailWieldVerdict below); the pending-attributes guard stays first.
  */
 export function canEquipInSlot(item, slotMask, playerEquipState) {
   if (!item) return { ok: false, reason: "No item." };
@@ -288,6 +300,7 @@ export function canEquipInSlot(item, slotMask, playerEquipState) {
     }
     return { ok: true, speculative: true, reason: "" };
   }
+  if (playerEquipState?.retailWieldLegal) return retailWieldVerdict(item, slot, playerEquipState);
   if (slot !== 0 && (vl & slot) === 0) {
     return { ok: false, reason: "This item cannot be worn in that slot." };
   }
@@ -545,6 +558,58 @@ export function mergeAmount(src, dst, amount) {
   return 0;
 }
 
+/** inventory-session-4 — retail text of ItemHolder::AttemptPlaceIn3D
+ *  (acclient.c:433163) and IsMergeAttemptLegal's loud branch (:432033). */
+export const PLACE_IN_3D_TEXT = Object.freeze({
+  stackFull: "The destination stack is already full.",
+  mergeTypes: "You cannot merge different types of items.",
+  splitToSell: "You must split the stack before selling it.",
+  midAir: "You cannot do that in mid air",
+});
+
+/** `?retailPlace3D` — the retail 3D drop rules in decideItemDrop's WORLD
+ *  case (default ON; off/0/false = the old drop / give). */
+export function retailPlace3DEnabled(search) {
+  return defaultOnUrlFlag("retailPlace3D", search);
+}
+
+/**
+ * inventory-session-4 — the merge a 3D drop tries first: AttemptPlaceIn3D
+ * calls ItemHolder::AttemptMerge(obj, target, quiet 0) (acclient.c:433237 →
+ * :432468). IsMergeAttemptLegal (:432033) stays quiet unless BOTH objects
+ * are stackables (MaxStackSize > 1); then the same wcid with room merges
+ * min(amount, max − held), a full stack or another wcid prints its line and
+ * the drop carries on. Unlike mergeAmount (the inventory's guess when
+ * MaxStackSize is missing), every input must be known: a world object
+ * without a wcid or MaxStackSize is never merged into.
+ * @param {object} src  the dragged item: guid, wcid, maxStackSize
+ * @param {object} dst  the world object: guid, wcid, stackSize, maxStackSize
+ * @param {number} amount  how many the drop carries
+ * @returns {null | {amount:number, held:number} | {notice:string}}
+ *   null = not a merge (quiet)
+ */
+export function place3DMerge(src, dst, amount) {
+  if (!src || !dst) return null;
+  if ((src.guid >>> 0) === (dst.guid >>> 0)) return null;
+  const srcMax = Number(src.maxStackSize);
+  const dstMax = Number(dst.maxStackSize);
+  if (!(srcMax > 1) || !(dstMax > 1)) return null;
+  const sw = (src.wcid >>> 0) || 0;
+  const dw = (dst.wcid >>> 0) || 0;
+  if (!sw || !dw) return null;
+  if (sw !== dw) return { notice: PLACE_IN_3D_TEXT.mergeTypes };
+  // AttemptMerge counts an unset StackSize as 1.
+  const held = Math.max(1, Number(dst.stackSize) | 0 || 1);
+  if (held >= dstMax) return { notice: PLACE_IN_3D_TEXT.stackFull };
+  return { amount: Math.max(1, Math.min(amount | 0 || 1, dstMax - held)), held };
+}
+
+/** A ctx predicate hook that may be absent or throw: true only on `true`. */
+function ctxTrue(fn, ...args) {
+  if (typeof fn !== "function") return false;
+  try { return fn(...args) === true; } catch (_) { return false; }
+}
+
 /**
  * Retail list index math (UIElement_ItemList::AcceptDragObject): the drop
  * cell's index `dropIndex` in the target list; when the item already sits
@@ -564,6 +629,10 @@ export function retailPlacement(sourceIndex, dropIndex, sameList, isSplit, listC
 }
 
 const NOOP = Object.freeze({ op: "noop" });
+// inventory-session-2: a no-op the target refused — retail paints the drag
+// reject state over it (gmPaperDollUI::OnItemListDragOver, acclient.c:220401)
+// but the release says nothing (HandleDropRelease :220960).
+const QUIET_REFUSAL = Object.freeze({ op: "noop", refused: true });
 function reject(message) { return { op: "reject", message }; }
 
 /**
@@ -578,15 +647,20 @@ function reject(message) { return { op: "reject", message }; }
  * @param {object} target
  *   kind (DROP_TARGET), listKey, listKind ("inventory"|"ext"), index,
  *   count (items in that list), item (occupant row), packGuid, packName,
- *   slotMask, entity {guid, isSelf, isCreature, isPlayer, isOpenContainer, name}
+ *   slotMask, entity {guid, isSelf, isCreature, isPlayer, isOpenContainer, name,
+ *   and (inventory-session-4, optional) isVendor, wcid, stackSize, maxStackSize}
  * @param {object} ctx
  *   playerGuid, canUseWith(src,dst)→bool|null, capacity(key)→{used,cap}|null,
  *   isCorpse(guid)→bool, containerName(key)→string,
- *   canEquip(item, mask)→{ok,reason}, packWithRoom(excludeKey)→guid|0,
+ *   canEquip(item, mask)→{ok,reason,silent?}, packWithRoom(excludeKey)→guid|0,
  *   autoMergeTarget(item, amount, key)→guid|0, and (items-4, optional)
  *   wearPlan(item)→planWear result, readySlotOccupant(mask)→row|null,
- *   (charopt-4) dragOnPlayerOpensTrade
- * @returns {object} { op: "noop"|"reject"|"merge"|"usewith"|"move"|"wield"|"wear"|"give"|"trade"|"drop", … }
+ *   (charopt-4) dragOnPlayerOpensTrade, (inventory-session-4) retailPlace3D
+ *   (false = old 3D drop), isBeingTraded(guid)→bool, playerOnGround
+ *   (bool | ()→bool|null; false = airborne)
+ * @returns {object} { op: "noop"|"reject"|"merge"|"usewith"|"move"|"wield"|"wear"|"give"|"trade"|"sell3d"|"drop", … }
+ *   (a "noop" with `refused: true` = the target quietly refused the item;
+ *   a "drop" may carry `notice`, a line retail prints before dropping)
  */
 export function decideItemDrop(drag, target, ctx = {}) {
   const guid = (drag?.guid >>> 0) || 0;
@@ -616,14 +690,39 @@ export function decideItemDrop(drag, target, ctx = {}) {
       // ItemHolder::AttemptPlaceIn3D
       if (!drag.owned) return reject(`You must first pick up the ${name}`);
       const ent = target.entity || null;
+      // inventory-session-4 (`?retailPlace3D`, ctx.retailPlace3D false = the
+      // old path): retail's trade refusal, ground-stack merge, vendor sale
+      // and mid-air refusal (acclient.c:433226-433320).
+      const retail3D = ctx.retailPlace3D !== false;
+      let notice = "";
+      if (ent && ent.guid && ent.isSelf) {
+        if (src && src.key === MAIN_PACK_KEY && (it.equipMask >>> 0) === 0) return NOOP;
+        return { op: "move", guid, container: me, placement: 0, listKey: isPack ? PACKS_KEY : MAIN_PACK_KEY, index: 0, amount };
+      }
+      // Retail refuses an item in the trade window right after the self
+      // case, whatever it was dropped on (acclient.c:433226).
+      if (retail3D && ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be dropped`);
       if (ent && ent.guid) {
-        if (ent.isSelf) {
-          if (src && src.key === MAIN_PACK_KEY && (it.equipMask >>> 0) === 0) return NOOP;
-          return { op: "move", guid, container: me, placement: 0, listKey: isPack ? PACKS_KEY : MAIN_PACK_KEY, index: 0, amount };
-        }
         if (ent.isOpenContainer) {
           if (ctx.isCorpse?.(ent.guid)) return reject(`The ${ent.name || "corpse"} cannot accept items`);
           return { op: "move", guid, container: ent.guid >>> 0, placement: 0, listKey: ent.guid >>> 0, index: 0, amount, external: true };
+        }
+        if (retail3D) {
+          // AttemptMerge(obj, target, quiet 0) first (acclient.c:433237): a
+          // stack dropped on a same-wcid ground stack with room merges; a
+          // full or different stack prints and the drop carries on.
+          const m = place3DMerge({ ...it, guid }, ent, amount);
+          if (m && m.amount > 0) {
+            return { op: "merge", guid, target: ent.guid >>> 0, amount: m.amount, targetStack: m.held };
+          }
+          if (m && m.notice) notice = m.notice;
+          // BF_VENDOR 0x200, ahead of the trade / creature give (:433247):
+          // a whole stack goes to ClientUISystem::AttemptSellToVendor, a
+          // split is refused (:433256).
+          if (ent.isVendor) {
+            if (isSplit) return reject(PLACE_IN_3D_TEXT.splitToSell);
+            return { op: "sell3d", guid, vendor: ent.guid >>> 0 };
+          }
         }
         // charopt-4 — with "Drag item onto player opens trade" on, another
         // player gets a secure-trade offer of the whole item, not a gift
@@ -639,7 +738,18 @@ export function decideItemDrop(drag, target, ctx = {}) {
           return reject(ent.openable === false ? `The ${cn} is locked` : `You must open the ${cn} first`);
         }
       }
-      return { op: "drop", guid, amount };
+      // Only the ground drop needs the player on the ground (CPhysicsObj::
+      // on_ground, acclient.c:433317); unknown = allowed.
+      if (retail3D) {
+        let onGround = ctx.playerOnGround;
+        if (typeof onGround === "function") {
+          try { onGround = onGround(); } catch (_) { onGround = null; }
+        }
+        if (onGround === false) return reject(PLACE_IN_3D_TEXT.midAir);
+      }
+      const out = { op: "drop", guid, amount };
+      if (notice) out.notice = notice;
+      return out;
     }
 
     case DROP_TARGET.DOLL_SLOT: {
@@ -647,7 +757,12 @@ export function decideItemDrop(drag, target, ctx = {}) {
       if (!mask) return NOOP;
       if ((it.equipMask >>> 0) !== 0 && ((it.equipMask >>> 0) & mask) !== 0) return NOOP;
       const verdict = ctx.canEquip ? ctx.canEquip(it, mask) : { ok: true };
-      if (verdict && verdict.ok === false) return reject(verdict.reason || "You can't put that item there");
+      if (verdict && verdict.ok === false) {
+        // inventory-session-2: a slot outside the item's ValidLocations takes
+        // nothing and says nothing (gmPaperDollUI::AcceptDragObject :219987).
+        if (verdict.silent) return QUIET_REFUSAL;
+        return reject(verdict.reason || "You can't put that item there");
+      }
       // Wield to the item's own bit inside a multi-bit slot (bow into the
       // main-hand slot → MissileWeapon), never the multi-bit mask itself —
       // ACE stores the location verbatim and a multi-bit one breaks combat
@@ -1462,6 +1577,101 @@ export function planAmmoWield(item, wielded, opts = {}) {
   if (amount > 0) return { op: "merge", guid, target, amount, targetStack: held };
   if (!ammo) return WIELD;
   return reject(`You cannot wield more ${retailPluralName(item.name || "ammunition", item.pluralName)}`);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 2026-10-13 — inventory-session-2: retail wield legality
+// (`?retailWieldLegal`, default ON; `=off` = the canEquipInSlot cascade).
+// canEquipInSlot approximated ACE's server checks and inverted the held
+// rule (it refused a CASTER in combat); retail refuses a held NON-caster,
+// checks the shield against the weapon-ready slot (which includes a wand)
+// and reads the caster bit off ITEM_TYPE, which every row carries.
+// Pinned by tests/retail_autowield_legal.test.mjs.
+// ════════════════════════════════════════════════════════════════════
+
+// Caster = ITEM_TYPE_CASTER above (retail `InqType() & 0x8000`).
+// COMBAT_USE (acclient.h enum COMBAT_USE).
+const COMBAT_USE_MISSILE = 2;
+const COMBAT_USE_TWO_HANDED = 5;
+
+/**
+ * ACCWeenieObject::GetObjectName(NAME_APPROPRIATE) (acclient.c:439093):
+ * the plural name for a stack of more than one, else the name.
+ */
+export function retailAppropriateName(row, fallback = "item") {
+  const name = row?.name || fallback;
+  return (Number(row?.stackSize) || 1) > 1 ? retailPluralName(name, row?.pluralName) : name;
+}
+
+/**
+ * ACCWeenieObject::BlocksUseOfShield (acclient.c:395589): a launcher
+ * (CombatUse Missile with an AmmoType), a two-hander (CombatUse TwoHanded)
+ * or a caster (ITEM_TYPE 0x8000). A row without CombatUse (a wasm without
+ * the getter, or no PropertyInt 51) falls back to the wield slot standing
+ * in for it: TwoHanded, or MissileWeapon with an AmmoType.
+ */
+export function blocksUseOfShield(weapon) {
+  if (!weapon) return false;
+  if ((((weapon.itemType >>> 0) || 0) & ITEM_TYPE_CASTER) !== 0) return true;
+  const ammo = (weapon.ammoType >>> 0) || 0;
+  const cu = (weapon.combatUse >>> 0) || 0;
+  if (cu !== 0) return (cu === COMBAT_USE_MISSILE && ammo !== 0) || cu === COMBAT_USE_TWO_HANDED;
+  const loc = ((weapon.equipMask >>> 0) || (weapon.validLocations >>> 0)) || 0;
+  return (loc & EQUIP.TwoHanded) !== 0 || ((loc & EQUIP.MissileWeapon) !== 0 && ammo !== 0);
+}
+
+/**
+ * CPlayerSystem::AutoWieldIsLegal (acclient.c:397227), run by AutoWield
+ * (:398897) for the double-click / shortcut wield and the paperdoll
+ * ready-slot drop. Tests the ITEM's ValidLocations against the item in the
+ * weapon-ready slot (MeleeWeapon | MissileWeapon | Held | TwoHanded):
+ *   - MissileAmmo 0x800000: the ready weapon's non-zero AmmoType must equal
+ *     the item's — "Cannot be used with %s" (NAME_APPROPRIATE);
+ *   - Shield 0x200000: BlocksUseOfShield(ready weapon) —
+ *     "A shield may not be worn with the %s";
+ *   - Held 0x1000000 outside NonCombat (combatMode != 1) for an item that is
+ *     NOT a caster — "Cannot hold %s while in combat" (NAME_APPROPRIATE).
+ *     ACE agrees (Player_Inventory.cs: a Held item without
+ *     DefaultCombatStyle, e.g. Ball of Gunk).
+ *
+ * @param {object} item  copyInventoryRow row (validLocations, itemType,
+ *   ammoType, name, stackSize, pluralName?)
+ * @param {Array<object>} rows  the player's inventory (the wielded rows count)
+ * @param {boolean} inCombat  combat mode is not NonCombat
+ * @returns {string|null} null = legal; "" = illegal without a message (no
+ *   ValidLocations); else the retail refusal line.
+ */
+export function retailAutoWieldIllegal(item, rows, inCombat) {
+  const vl = (item?.validLocations >>> 0) || 0;
+  if ((vl & 0x7fffffff) === 0) return "";
+  const weapon = readySlotOccupant(rows, WEAPON_READY_LOCATIONS);
+  if ((vl & EQUIP.MissileAmmo) !== 0 && weapon) {
+    const need = (weapon.ammoType >>> 0) || 0;
+    if (need !== 0 && need !== ((item.ammoType >>> 0) || 0)) {
+      return `Cannot be used with ${retailAppropriateName(weapon, "weapon")}`;
+    }
+  }
+  if ((vl & EQUIP.Shield) !== 0 && weapon && blocksUseOfShield(weapon)) {
+    return `A shield may not be worn with the ${weapon.name || "weapon"}`;
+  }
+  if ((vl & EQUIP.Held) !== 0 && inCombat && (((item.itemType >>> 0) || 0) & ITEM_TYPE_CASTER) === 0) {
+    return `Cannot hold ${retailAppropriateName(item)} while in combat`;
+  }
+  return null;
+}
+
+/**
+ * canEquipInSlot's retail branch: a slot outside the item's ValidLocations
+ * is a QUIET refusal (gmPaperDollUI::AcceptDragObject :219987 returns 0 and
+ * HandleDropRelease :220960 only clears the waiting state — no line), then
+ * AutoWieldIsLegal.
+ */
+function retailWieldVerdict(item, slot, state) {
+  const vl = (item.validLocations >>> 0) || 0;
+  if (slot !== 0 && (vl & slot) === 0) return { ok: false, silent: true, reason: "" };
+  const why = retailAutoWieldIllegal(item, state.rows, !!state.inCombatMode);
+  if (why === null) return { ok: true, reason: "" };
+  return why ? { ok: false, reason: why } : { ok: false, silent: true, reason: "" };
 }
 
 /**

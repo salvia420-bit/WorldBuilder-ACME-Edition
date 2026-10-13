@@ -343,32 +343,13 @@ impl ProtocolUnpack for GameMessage {
                 // raw byte-grab so existing recv-loop consumers don't
                 // crash on malformed payloads.
                 let payload_start = *offset;
-                let consumed = match opcode_raw {
-                    // Remove* — 5 bytes private (byte Sequence + uint Key),
-                    // 9 bytes public (byte Sequence + ObjectId + uint Key)
-                    // — codegen handles per-variant.
-                    0x01D1 => crate::generated::S2C_Qualities_PrivateRemoveIntEvent::read_from(data, offset).is_ok(),
-                    0x01D2 => crate::generated::S2C_Qualities_RemoveIntEvent::read_from(data, offset).is_ok(),
-                    0x01D3 => crate::generated::S2C_Qualities_PrivateRemoveBoolEvent::read_from(data, offset).is_ok(),
-                    0x01D4 => crate::generated::S2C_Qualities_RemoveBoolEvent::read_from(data, offset).is_ok(),
-                    0x01D5 => crate::generated::S2C_Qualities_PrivateRemoveFloatEvent::read_from(data, offset).is_ok(),
-                    0x01D6 => crate::generated::S2C_Qualities_RemoveFloatEvent::read_from(data, offset).is_ok(),
-                    0x01D7 => crate::generated::S2C_Qualities_PrivateRemoveStringEvent::read_from(data, offset).is_ok(),
-                    0x01D8 => crate::generated::S2C_Qualities_RemoveStringEvent::read_from(data, offset).is_ok(),
-                    0x01D9 => crate::generated::S2C_Qualities_PrivateRemoveDataIdEvent::read_from(data, offset).is_ok(),
-                    0x01DA => crate::generated::S2C_Qualities_RemoveDataIdEvent::read_from(data, offset).is_ok(),
-                    0x01DB => crate::generated::S2C_Qualities_PrivateRemoveInstanceIdEvent::read_from(data, offset).is_ok(),
-                    0x01DC => crate::generated::S2C_Qualities_RemoveInstanceIdEvent::read_from(data, offset).is_ok(),
-                    0x01DD => crate::generated::S2C_Qualities_PrivateRemovePositionEvent::read_from(data, offset).is_ok(),
-                    0x01DE => crate::generated::S2C_Qualities_RemovePositionEvent::read_from(data, offset).is_ok(),
-                    0x02B8 => crate::generated::S2C_Qualities_PrivateRemoveInt64Event::read_from(data, offset).is_ok(),
-                    0x02B9 => crate::generated::S2C_Qualities_RemoveInt64Event::read_from(data, offset).is_ok(),
-                    0x02E1 => crate::generated::S2C_Qualities_PrivateUpdateSkillAC::read_from(data, offset).is_ok(),
-                    0x02E2 => crate::generated::S2C_Qualities_UpdateSkillAC::read_from(data, offset).is_ok(),
-                    0x02E5 => crate::generated::S2C_Qualities_PrivateUpdateAttributeLevel::read_from(data, offset).is_ok(),
-                    0x02E6 => crate::generated::S2C_Qualities_UpdateAttributeLevel::read_from(data, offset).is_ok(),
-                    _ => false,
-                };
+                // test-tooling-3: the per-opcode codegen table lives in
+                // `qualities_codegen_read` (below) so the wasm wire-integrity
+                // counters can re-run it (`super::qualities_raw_wrap_decodes`)
+                // and tell a validated wrap from the raw-grab fallback —
+                // both surface as `Unknown`. `None` (not one of the 20) is
+                // unreachable from this arm; it stays `false` as before.
+                let consumed = qualities_codegen_read(opcode_raw, data, offset).unwrap_or(false);
                 if !consumed {
                     // Bad bytes — gobble rest of buffer so we don't loop
                     // (matches top-of-function Unknown fall-through).
@@ -384,4 +365,46 @@ impl ProtocolUnpack for GameMessage {
             }
         }
     }
+}
+
+/// Wave 6.A — validate one of the 20 Qualities opcodes that
+/// [`GameMessage::unpack`] decodes through the generated codegen reader and
+/// then wraps as `GameMessage::Unknown` on purpose. Reads the payload at
+/// `*offset` (just past the opcode) and advances it as the reader does.
+///
+/// `Some(true)` = the codegen reader accepted the payload; `Some(false)` = it
+/// rejected it (`*offset` may have moved part-way) — `unpack`'s `!consumed`
+/// raw-grab fallback; `None` = `opcode_raw` is not one of the 20.
+pub(super) fn qualities_codegen_read(
+    opcode_raw: u32,
+    data: &[u8],
+    offset: &mut usize,
+) -> Option<bool> {
+    let ok = match opcode_raw {
+        // Remove* — 5 bytes private (byte Sequence + uint Key),
+        // 9 bytes public (byte Sequence + ObjectId + uint Key)
+        // — codegen handles per-variant.
+        0x01D1 => crate::generated::S2C_Qualities_PrivateRemoveIntEvent::read_from(data, offset).is_ok(),
+        0x01D2 => crate::generated::S2C_Qualities_RemoveIntEvent::read_from(data, offset).is_ok(),
+        0x01D3 => crate::generated::S2C_Qualities_PrivateRemoveBoolEvent::read_from(data, offset).is_ok(),
+        0x01D4 => crate::generated::S2C_Qualities_RemoveBoolEvent::read_from(data, offset).is_ok(),
+        0x01D5 => crate::generated::S2C_Qualities_PrivateRemoveFloatEvent::read_from(data, offset).is_ok(),
+        0x01D6 => crate::generated::S2C_Qualities_RemoveFloatEvent::read_from(data, offset).is_ok(),
+        0x01D7 => crate::generated::S2C_Qualities_PrivateRemoveStringEvent::read_from(data, offset).is_ok(),
+        0x01D8 => crate::generated::S2C_Qualities_RemoveStringEvent::read_from(data, offset).is_ok(),
+        0x01D9 => crate::generated::S2C_Qualities_PrivateRemoveDataIdEvent::read_from(data, offset).is_ok(),
+        0x01DA => crate::generated::S2C_Qualities_RemoveDataIdEvent::read_from(data, offset).is_ok(),
+        0x01DB => crate::generated::S2C_Qualities_PrivateRemoveInstanceIdEvent::read_from(data, offset).is_ok(),
+        0x01DC => crate::generated::S2C_Qualities_RemoveInstanceIdEvent::read_from(data, offset).is_ok(),
+        0x01DD => crate::generated::S2C_Qualities_PrivateRemovePositionEvent::read_from(data, offset).is_ok(),
+        0x01DE => crate::generated::S2C_Qualities_RemovePositionEvent::read_from(data, offset).is_ok(),
+        0x02B8 => crate::generated::S2C_Qualities_PrivateRemoveInt64Event::read_from(data, offset).is_ok(),
+        0x02B9 => crate::generated::S2C_Qualities_RemoveInt64Event::read_from(data, offset).is_ok(),
+        0x02E1 => crate::generated::S2C_Qualities_PrivateUpdateSkillAC::read_from(data, offset).is_ok(),
+        0x02E2 => crate::generated::S2C_Qualities_UpdateSkillAC::read_from(data, offset).is_ok(),
+        0x02E5 => crate::generated::S2C_Qualities_PrivateUpdateAttributeLevel::read_from(data, offset).is_ok(),
+        0x02E6 => crate::generated::S2C_Qualities_UpdateAttributeLevel::read_from(data, offset).is_ok(),
+        _ => return None,
+    };
+    Some(ok)
 }

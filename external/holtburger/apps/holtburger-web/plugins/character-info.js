@@ -45,6 +45,17 @@
 //     skills train for credits after a confirmation
 //     (gmSkillUI::TrainSkill → TrainSkillDialogCallback); +10 is hidden.
 //
+// Info tab (examine-text-8, 2026-10-13): retail gmCharacterInfoUI — a
+// separate panel in retail, one scrolling text element 0x1000011D — shown
+// in place of the template above: born / played / deaths, resistance and
+// regeneration tiers, innate attributes, chess / fishing, masteries,
+// luminance auras, gem augmentations and the burden line. The text comes
+// from plugins/character_info_report.js (pure, loaded on first use); it
+// repaints with the stats and once a second while the tab is showing (the
+// ints it reads — deaths, burden, augmentations — raise no stats event).
+// The Info button is tagged data-pane, not data-tab: it swaps the whole
+// body rather than the StatManagement list.
+//
 // Hotkeys: F1 toggles this view (last-used tab, Attributes first time);
 // F11 opens it on the Skills tab (train-skills manifest hotkey →
 // app/plugin_bar.js). `window.__openCharacterTab(tab)` is the shared
@@ -84,7 +95,10 @@ const TABS = [
   { id: "skills", label: "Skills", title: "Skills" },
   { id: "titles", label: "Titles", title: "Character Titles" },
 ];
-const TAB_IDS = new Set(TABS.map((t) => t.id));
+// gmCharacterInfoUI — swaps the body for the report text (see header).
+const INFO_TAB = { id: "info", label: "Info", title: "Character Information" };
+const ALL_TABS = [...TABS, INFO_TAB];
+const TAB_IDS = new Set(ALL_TABS.map((t) => t.id));
 
 // Last tab the player looked at — F1 reopens it (retail remembered the
 // open sub-panel per session). First open defaults to Attributes.
@@ -93,7 +107,7 @@ function resolveTab(ctx) {
   const t = ctx?.tab;
   return TAB_IDS.has(t) ? t : lastTab;
 }
-function tabMeta(id) { return TABS.find((t) => t.id === id) ?? TABS[0]; }
+function tabMeta(id) { return ALL_TABS.find((t) => t.id === id) ?? TABS[0]; }
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -112,6 +126,22 @@ function ensureStyles() {
       background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
     }
     .hb-ci-tabs { flex: 0 0 auto; }
+    /* Four tabs in 300px: the short Info tab keeps its natural width so
+       "Attributes" still fits. */
+    .hb-ci-tabs .hbk-tab { padding-left: 4px; padding-right: 4px; letter-spacing: 0.03em; }
+    .hb-ci-tabs .hbk-tab[data-pane="info"] { flex: 0 0 auto; }
+    /* Info pane — gmCharacterInfoUI's single text element 0x1000011D. */
+    .hb-ci-info {
+      display: none; flex: 1 1 auto; min-height: 0;
+      padding: 6px 8px 8px; box-sizing: border-box;
+      white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.35;
+      color: var(--hbk-text); user-select: text;
+    }
+    .hb-ci-root[data-pane="info"] .hb-ci-info { display: block; }
+    .hb-ci-root[data-pane="info"] .hb-ci-head,
+    .hb-ci-root[data-pane="info"] .hb-ci-rule,
+    .hb-ci-root[data-pane="info"] .hb-ci-list,
+    .hb-ci-root[data-pane="info"] .hb-ci-foot { display: none; }
     /* Header — StatManagement_Header (0x10000230), compressed from 105px. */
     .hb-ci-head { flex: 0 0 auto; display: flex; align-items: stretch; padding: 3px 0 3px 6px; }
     .hb-ci-head-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding-right: 6px; }
@@ -330,6 +360,69 @@ function readPlayerInt(stype) {
     const v = handle.objectIntProperty(guid, stype);
     return Number.isFinite(v) ? v : null;
   } catch (_) { return null; }
+}
+
+/**
+ * Batch reader for the Info report: one playerGuid() lookup, then
+ * `objectIntProperty(guid, stype)` per int (null when absent / unavailable).
+ */
+function playerIntReader() {
+  try {
+    const handle = getHandle();
+    if (typeof handle?.objectIntProperty !== "function" || typeof handle?.playerGuid !== "function") return () => null;
+    const guid = handle.playerGuid() >>> 0;
+    if (!guid) return () => null;
+    return (stype) => {
+      try {
+        const v = handle.objectIntProperty(guid, stype);
+        return Number.isFinite(v) ? v : null;
+      } catch (_) { return null; }
+    };
+  } catch (_) { return () => null; }
+}
+
+/**
+ * The report's reads (plugins/character_info_report.js `src`): the player's
+ * ints off the wasm handle; raw (base) and buffed (current) attributes from
+ * the stats stride; the innate value is attributeXp `start` (retail
+ * Attribute._init_level), or base − ranks on a pkg without that stride.
+ */
+function infoSource(stats) {
+  const attrs = new Map();
+  const a = stats?.attributes ?? [];
+  for (let i = 0; i + 3 < a.length; i += 4) {
+    attrs.set(a[i] >>> 0, { cur: a[i + 1] >>> 0, base: a[i + 2] >>> 0, ranks: a[i + 3] >>> 0 });
+  }
+  const xp = parseStatXp(stats?.attributeXp);
+  return {
+    int: playerIntReader(),
+    rawAttr: (id) => attrs.get(id)?.base ?? null,
+    attr: (id) => attrs.get(id)?.cur ?? null,
+    innateAttr: (id) => {
+      const real = xp.get(id);
+      if (real) return real.start;
+      const r = attrs.get(id);
+      return r ? Math.max(0, r.base - r.ranks) : null;
+    },
+  };
+}
+
+// The report builder, loaded the first time the Info tab paints (like the
+// skill / xp tables above).
+let reportMod = null;
+let reportModPromise = null;
+function loadReportModule() {
+  if (reportMod) return Promise.resolve(reportMod);
+  if (!reportModPromise) {
+    reportModPromise = import("./character_info_report.js")
+      .then((m) => { reportMod = m; return m; })
+      .catch((e) => {
+        console.warn("[char-info] character_info_report load failed", e);
+        reportModPromise = null; // retryable
+        return null;
+      });
+  }
+  return reportModPromise;
 }
 
 function u64(lo, hi) { return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0); }
@@ -686,10 +779,11 @@ export const view = {
     const tabsEl = el("div", "hbk-tabs hb-ci-tabs");
     tabsEl.setAttribute("role", "tablist");
     const tabBtns = {};
-    for (const t of TABS) {
+    for (const t of ALL_TABS) {
       const b = el("button", "hbk-tab");
       b.type = "button";
-      b.dataset.tab = t.id;
+      if (t === INFO_TAB) b.dataset.pane = t.id;
+      else b.dataset.tab = t.id;
       b.dataset.label = t.label;
       b.setAttribute("role", "tab");
       b.textContent = t.label;
@@ -765,6 +859,12 @@ export const view = {
     btns.append(raise10, raise1, setTitleBtn);
     foot.append(footText, btns);
     root.appendChild(foot);
+
+    // Info pane (gmCharacterInfoUI text 0x1000011D) — hidden unless the
+    // Info tab is active (root data-pane="info").
+    const infoPane = el("div", "hbk-scroll hb-ci-info");
+    infoPane.dataset.el = "0x1000011D";
+    root.appendChild(infoPane);
 
     parentEl.appendChild(root);
 
@@ -949,9 +1049,36 @@ export const view = {
       return changed;
     }
 
+    // gmCharacterInfoUI::Update — the whole text, rebuilt from the reads;
+    // the DOM is only touched when it changed.
+    let infoText = null;
+    function renderInfo() {
+      let text;
+      if (!stats) {
+        text = "Waiting for character data…";
+      } else if (!reportMod) {
+        text = "Loading…";
+        loadReportModule().then((m) => {
+          if (m && root.isConnected && activeTab === INFO_TAB.id) renderInfo();
+        });
+      } else {
+        try {
+          text = reportMod.characterInfoText(infoSource(stats));
+        } catch (e) {
+          console.warn("[char-info] character info report failed:", e);
+          text = "No data.";
+        }
+      }
+      if (text !== infoText) {
+        infoText = text;
+        infoPane.textContent = text;
+      }
+    }
+
     function rerender() {
       stats = getStats();
       refreshTitles();
+      if (activeTab === INFO_TAB.id) { renderInfo(); return; }
       renderHeader();
       renderList();
       renderFooter();
@@ -975,13 +1102,15 @@ export const view = {
       activeTab = id;
       lastTab = id;
       selectedKey = null; // ids overlap across tabs (skill 6 vs attribute 6)
-      for (const t of TABS) {
+      for (const t of ALL_TABS) {
         const on = t.id === id;
         tabBtns[t.id].setAttribute("aria-selected", on ? "true" : "false");
         tabBtns[t.id].classList.toggle("is-active", on);
       }
+      root.dataset.pane = id === INFO_TAB.id ? INFO_TAB.id : "stats";
       try { window.__mainPanel?.setTitle?.(tabMeta(id).title); } catch (_) {}
       list.scrollTop = 0;
+      infoPane.scrollTop = 0;
       rerender();
     }
 
@@ -1067,6 +1196,12 @@ export const view = {
     const pkTimer = setInterval(() => {
       if (root.isConnected && livePkStatus() !== shownPk) schedule();
     }, 1000);
+    // Info tab: deaths / burden / augmentation ints raise no stats event
+    // (retail re-runs Update on PlayerDescReceived, LoadChanged and the
+    // Age quality); renderInfo only writes the DOM when the text changed.
+    const infoTimer = setInterval(() => {
+      if (root.isConnected && activeTab === INFO_TAB.id) schedule();
+    }, 1000);
     const client = window.__pluginClient;
     let off = null;
     if (client?.events?.on) {
@@ -1084,6 +1219,7 @@ export const view = {
     return () => {
       if (off) off();
       clearInterval(pkTimer);
+      clearInterval(infoTimer);
       if (raf) { try { cancelAnimationFrame(raf); } catch (_) { clearTimeout(raf); } }
       clearTimeout(awaitTimer);
       if (activeInstance === instance) activeInstance = null;
@@ -1093,4 +1229,4 @@ export const view = {
 };
 
 // Test seam (node): pure model builders.
-export const __test = { buildAttributeModel, buildSkillModel, buildTitleModel, resolveTab, titleName };
+export const __test = { buildAttributeModel, buildSkillModel, buildTitleModel, resolveTab, titleName, infoSource };

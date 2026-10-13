@@ -1758,6 +1758,7 @@ dependencies = [
  "clap",
  "env_logger",
  "futures-util",
+ "holtburger-protocol",
  "log",
  "serde",
  "serde_json",

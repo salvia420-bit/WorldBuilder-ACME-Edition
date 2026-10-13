@@ -48,7 +48,10 @@
 //                     Summary→Skills.
 //   Failed → returns to the Skills page (the most common rejection
 //   bucket — server-side name collisions, attribute budget mismatches,
-//   etc.); user clicks Back to walk all the way back if needed.
+//   etc.); user clicks Back to walk all the way back if needed. A name
+//   rejection (0xF643 NameInUse / NameBanned / AdminPrivilegeDenied, with
+//   `?retailCharErrors` on) shows the retail ID_Character_Err_* text and
+//   only a Back button to Heritage, where the name field is.
 //
 // Wire integration:
 //   - C2S `sendCharGenResult(payload)` — see `apps/holtburger-web/
@@ -401,9 +404,11 @@ export function computeAttributeBudget(attributes, attributeBudget) {
 /**
  * J4.B.2 — Bump one attribute by `delta` (typically ±1 or ±5),
  * clamped to `[CHARACTER_GEN_MIN_ATTRIBUTE, CHARACTER_GEN_MAX_ATTRIBUTE]`
- * AND to the heritage's remaining attribute budget on increment so the
- * user can't go over (mirrors gmCGProfessionPage::SetAttribValue
- * 0x00482C50 which clamps to remaining credits).
+ * AND to the heritage's unspent attribute budget on increment so the
+ * user can't go over. This is the plain sum-based clamp, NOT retail's:
+ * gmCGProfessionPage::SetAttribValue clamps to the lock-aware
+ * GetAbsRemainingCredits and then rebalances the other attributes — the
+ * Attributes page goes through `setAttribValue` below for that.
  *
  * Returns the new value (caller is responsible for assigning back).
  * Pure: no side effects on `attributes` — call sites do `attributes[k]
@@ -428,6 +433,117 @@ export function applyAttributeDelta(current, delta, remaining) {
     return safeDesired > CHARACTER_GEN_MAX_ATTRIBUTE ? CHARACTER_GEN_MAX_ATTRIBUTE : safeDesired;
   }
   return desired;
+}
+
+/**
+ * maps-chargen-barber-4 — the attribute keys in CharGenState::
+ * BalanceAttributes' drain order, which is the profession page's rows top
+ * to bottom: slots 1 Str, 2 End, 4 Coord, 3 Quick, 5 Focus, 6 Self
+ * (CharGenState::GetAttribute numbers Quickness 3 and Coordination 4).
+ */
+export const ATTRIBUTE_BALANCE_ORDER = Object.freeze([
+  "strength", "endurance", "coordination", "quickness", "focus", "self",
+]);
+
+/** No attribute locked (CharGenState::ResetAttributeLock; ApplyTemplate also clears bAttribLocked). */
+export function emptyAttributeLocks() {
+  return {
+    strength: false, endurance: false, coordination: false,
+    quickness: false, focus: false, self: false,
+  };
+}
+
+// acclient.c `unsigned int startAtrb = 1u;` — BalanceAttributes' STATIC
+// start slot. Retail never resets it (it lives as long as the client), so
+// successive raises spread their cost round-robin, across wizard runs too.
+let _attributeBalanceStart = "strength";
+
+/** The slot the next BalanceAttributes drain starts at (retail `startAtrb`). */
+export function getAttributeBalanceStart() {
+  return _attributeBalanceStart;
+}
+
+/** Test hook: put the static back to its client-start value (Strength). */
+export function resetAttributeBalanceStart(key = "strength") {
+  _attributeBalanceStart = ATTRIBUTE_BALANCE_ORDER.includes(key) ? key : "strength";
+}
+
+/**
+ * acclient.c CharGenState::GetAbsRemainingCredits — the credits `key`
+ * could still take if every UNLOCKED other attribute fell to its floor:
+ * `totalCredits − Σ (locked[j] || j == key ? value[j] : 10)`.
+ */
+export function absRemainingCredits(attributes, locks, key, totalCredits) {
+  let credits = totalCredits | 0;
+  for (const k of ATTRIBUTE_BALANCE_ORDER) {
+    credits -= (locks?.[k] || k === key)
+      ? (attributes[k] | 0)
+      : CHARACTER_GEN_MIN_ATTRIBUTE;
+  }
+  return credits;
+}
+
+/**
+ * acclient.c CharGenState::BalanceAttributes — while the sum exceeds
+ * `totalCredits`, take one point at a time from the unlocked attributes
+ * above 10 other than `fixedKey`, in ATTRIBUTE_BALANCE_ORDER starting at
+ * the static `startAtrb` and wrapping; the slot after the one that gave
+ * the last point becomes the next start (Self wraps to Strength).
+ *
+ * Returns a new attributes object; the input is not touched. The only
+ * side effect is the module-scope start slot, as in retail. Retail relies
+ * on SetAttribValue's clamp to end the loop; ours also stops after a full
+ * pass that takes nothing (the overspend then shows in the budget banner).
+ */
+export function balanceAttributes(attributes, locks, fixedKey, totalCredits) {
+  const next = { ...attributes };
+  let over = -(totalCredits | 0);
+  for (const k of ATTRIBUTE_BALANCE_ORDER) over += next[k] | 0;
+  if (over <= 0) return next;
+  const order = ATTRIBUTE_BALANCE_ORDER;
+  let i = Math.max(0, order.indexOf(_attributeBalanceStart));
+  let idle = 0;
+  while (over > 0 && idle < order.length) {
+    const k = order[i];
+    i = (i + 1) % order.length;
+    if (k !== fixedKey && !locks?.[k] && (next[k] | 0) > CHARACTER_GEN_MIN_ATTRIBUTE) {
+      next[k] = (next[k] | 0) - 1;
+      over -= 1;
+      idle = 0;
+      if (over <= 0) _attributeBalanceStart = order[i];
+    } else {
+      idle += 1;
+    }
+  }
+  return next;
+}
+
+/**
+ * acclient.c gmCGProfessionPage::SetAttribValue → CharGenState::Set<Attr>
+ * (value, balance = 1), what the page's slider, value box and +/− drive:
+ * a rise past GetAbsRemainingCredits(key) lands on current + that, the
+ * value is stored, and BalanceAttributes takes the overspend from the
+ * unlocked others. So once every credit is spent, raising Strength lowers
+ * Endurance, Coordination, … one point each in turn, and a locked row is
+ * never lowered. Lowering only frees credits. A locked row's own controls
+ * still move it (ListenToElementMessage routes the slider to
+ * SetAttribValue without a lock check). Set<Attr> also refuses any rise
+ * while GetAbsRemainingCredits is 0 — the clamp above already makes that
+ * a no-op.
+ *
+ * `value` is held to [CHARACTER_GEN_MIN_ATTRIBUTE,
+ * CHARACTER_GEN_MAX_ATTRIBUTE] first (the slider's range). Returns a new
+ * attributes object.
+ */
+export function setAttribValue(attributes, locks, key, value, totalCredits) {
+  const clamp = (v) => Math.min(CHARACTER_GEN_MAX_ATTRIBUTE,
+    Math.max(CHARACTER_GEN_MIN_ATTRIBUTE, v));
+  const current = attributes[key] | 0;
+  const asked = Math.trunc(Number(value));
+  let v = clamp(Number.isFinite(asked) ? asked : current);
+  const room = absRemainingCredits(attributes, locks, key, totalCredits);
+  if (v - current >= 0 && v - current > room) v = clamp(current + room);
+  return balanceAttributes({ ...attributes, [key]: v }, locks, key, totalCredits);
 }
 
 /**
@@ -692,6 +808,14 @@ function ensureStyles() {
       color: #806838; font-style: italic;
       background: repeating-linear-gradient(45deg, #14100c, #14100c 4px, #1a1410 4px, #1a1410 8px);
     }
+    /* maps-chargen-barber-3 — colour rows: wheel spots + shade scroll */
+    .hb-cc-spots { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+    .hb-cc-swatch.hb-cc-spot { width: 26px; height: 26px; }
+    .hb-cc-swatch.hb-cc-spot.unknown {
+      background: repeating-linear-gradient(45deg, #14100c, #14100c 3px, #2c2018 3px, #2c2018 6px);
+    }
+    .hb-cc-spots > .pending { color: #806838; font-size: 11px; }
+    .hb-cc-shade { width: 110px; flex-shrink: 0; margin-left: 6px; accent-color: #c89858; }
     /* J4.B.2 — attribute spending sliders */
     .hb-cc-attr-row {
       display: flex; align-items: center; gap: 8px;
@@ -717,6 +841,16 @@ function ensureStyles() {
     }
     .hb-cc-attr-row > .step-btn:hover:not(:disabled) { background: #3a2c20; }
     .hb-cc-attr-row > .step-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .hb-cc-attr-row > .lock-btn {
+      width: 52px; height: 24px; flex-shrink: 0;
+      background: #14100c; color: #806838;
+      border: 1px solid #4a3c28; cursor: pointer;
+      font-family: inherit; font-size: 11px;
+    }
+    .hb-cc-attr-row > .lock-btn:hover { border-color: #c89858; }
+    .hb-cc-attr-row > .lock-btn.locked {
+      background: #3a2c20; color: #f0d8a0; border-color: #c89858;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -791,6 +925,9 @@ function createWizardInstance(client, catalog, ctx) {
     // Page 1.5 — attribute spread (template-driven; UI exposed as
     // read-only in v1 — user uses pre-spread templates).
     attributes: { strength: 10, endurance: 10, coordination: 10, quickness: 10, focus: 10, self: 10 },
+    // Page 2 — per-row attribute locks (CharGenState::bAttribLocked): a
+    // locked attribute is never lowered to pay for raising another one.
+    attributeLocks: emptyAttributeLocks(),
     // Page 1 — appearance (randomized initially; user can re-roll OR
     // pick individual swatches via the J4.B.1 picker UI).
     appearance: null,
@@ -798,10 +935,20 @@ function createWizardInstance(client, catalog, ctx) {
     // `getCharacterGenAppearanceStrips`; null until first render of the
     // Heritage page, invalidated on heritage/gender change.
     appearanceStrips: null,
+    // maps-chargen-barber-3 — the colour rows' data for one heritage /
+    // gender (`colorDataFor`): the gears' colour lists
+    // (`chargenGearColors`) and each part's wheel (`chargenColorWheel`).
+    colorData: null,
     startArea: null,
     // Error state after Failed.
     errorMessage: null,
+    // The rejection is about the name (0xF643 codes 3 / 4 / 7, retail text
+    // on) — Failed offers only "Back" to page 1, where the name field is.
+    errorNameField: false,
   };
+  // maps-chargen-barber-3 — the open Heritage page's colour-row painters
+  // (`buildColorRow`); reset on each render of the appearance rows.
+  let colorRowRepaints = [];
 
   // ── DOM ──
   const overlay = document.createElement("div");
@@ -881,7 +1028,11 @@ function createWizardInstance(client, catalog, ctx) {
     const onFailed = (ev) => {
       if (state.wizard !== WizardState.Submitting) return;
       const detail = ev?.detail || {};
-      state.errorMessage = detail?.reason || detail?.code || "Server rejected character creation.";
+      // maps-chargen-barber-2: `message` is the retail ID_Character_Err_*
+      // text (app/client_events.js, only with retailCharErrors on); `reason`
+      // is the raw enum label.
+      state.errorMessage = detail?.message || detail?.reason || detail?.code || "Server rejected character creation.";
+      state.errorNameField = detail?.nameError === true;
       transition("fail");
     };
     client.events.on("characterCreated", onSuccess);
@@ -923,6 +1074,7 @@ function createWizardInstance(client, catalog, ctx) {
 
   function doSubmit() {
     state.errorMessage = null;
+    state.errorNameField = false;
     const heritage = findHeritage(catalog, state.heritageId);
     if (!heritage) {
       state.errorMessage = "Unknown heritage; cannot submit.";
@@ -1081,6 +1233,8 @@ function createWizardInstance(client, catalog, ctx) {
           coordination: t.coordination, quickness: t.quickness,
           focus: t.focus, self: t["self"],
         };
+        // CharGenState::ApplyTemplate zeroes bAttribLocked.
+        state.attributeLocks = emptyAttributeLocks();
         state.skillStates = templateSkillStates(
           catalog.skills, t, costsFor(state.heritageId), heritage.skillCredits);
       }
@@ -1092,8 +1246,11 @@ function createWizardInstance(client, catalog, ctx) {
 
     // J4.B.3 — Start area dropdown (gmCGTownPage.cs:1-185 equivalent
     // collapsed onto Heritage). Heritage exposes `primaryStartAreaIds`
-    // + `secondaryStartAreaIds` (Aluvian → Holtburg only; Sho →
-    // Shoushi + Hebian-To; etc); we merge them and let the user pick.
+    // + `secondaryStartAreaIds` (live ACE catalog, tests/spawn_preview:
+    // Aluvian [0] + [1,2,3], Sho [1] + [0,2,3] — the union is all four
+    // towns, matching retail gmCGTownPage::ListenToElementMessage, which
+    // offers Holtburg / Shoushi / Yaraq / Sanamar with no heritage test);
+    // we merge them and let the user pick, the heritage's own town first.
     const allowedAreaIds = [
       ...(heritage.primaryStartAreaIds || []),
       ...(heritage.secondaryStartAreaIds || []),
@@ -1126,6 +1283,8 @@ function createWizardInstance(client, catalog, ctx) {
     // / face-mouth / headgear) per gmCGAppearancePage::InitChoices
     // (gmCGAppearancePage.cs:346). One icon strip per feature; click
     // a swatch to assign the index into state.appearance.*Style.
+    // maps-chargen-barber-3 adds the colour + shade rows and the shirt /
+    // trousers / footwear style rows (renderAppearanceSwatchPickers).
     body.appendChild(sectionTitle("Appearance"));
     renderAppearanceSwatchPickers();
 
@@ -1148,7 +1307,12 @@ function createWizardInstance(client, catalog, ctx) {
         if (!window.confirm("Randomize appearance? Your current eye / skin / hair selections will be replaced.")) return;
       }
       const g = heritage.genders.find((x) => x.genderId === state.genderId);
-      if (g) state.appearance = randomizeAppearance(g);
+      // maps-chargen-barber-3: clothing colours roll inside each gear's
+      // own list once it is known (CharGenState::Randomize*).
+      if (g) {
+        state.appearance = randomizeAppearance(g,
+          (gear, style) => gearColorCount(colorDataFor().gear, gear, style));
+      }
       render();
     });
     apprRow.appendChild(apprLabel);
@@ -1252,13 +1416,187 @@ function createWizardInstance(client, catalog, ctx) {
       if (!Array.isArray(f.entries) || f.entries.length === 0) continue;
       body.appendChild(buildSwatchRow(f, /* allowNone */ false));
     }
+
+    // maps-chargen-barber-3 — colour + shade rows (retail gmCGAppearancePage
+    // parts 1-9) and the shirt / trousers / footwear style rows.
+    // A stale pkg/ without the two exports shows no colour rows (the
+    // spots could not show their colours); the style rows still work.
+    colorRowRepaints = [];
+    ensureGearColors();
+    const g = heritageGenderFor(state);
+    const sh = sessionHandle();
+    const wheelsAvailable = typeof sh?.chargenColorWheel === "function";
+    const gearListsAvailable = wheelsAvailable && typeof sh?.chargenGearColors === "function";
+    for (const part of wheelsAvailable ? ["hair", "eyes", "skin"] : []) {
+      const row = chargenColorRow(part);
+      // No hair-colour / eye-colour list for this sex: nothing to pick.
+      if (row.countKey && !(g?.appearance?.[row.countKey] > 0)) continue;
+      body.appendChild(buildColorRow(row, g));
+    }
     // Headgear — optional ("None" picks the 0xFFFFFFFF sentinel).
     if (Array.isArray(strips.headgearStyles) && strips.headgearStyles.length > 0) {
       body.appendChild(buildSwatchRow({
         key: "headgearStyle", label: "Hat",
         entries: strips.headgearStyles, iconField: null /* Gear has no icon_image */,
       }, /* allowNone */ true));
+      if (gearListsAvailable && state.appearance?.headgearStyle !== 0xFFFFFFFF) {
+        body.appendChild(buildColorRow(chargenColorRow("headgear"), g));
+      }
     }
+    for (const [key, label, entries, part] of [
+      ["shirtStyle", "Shirt", strips.shirts, "shirt"],
+      ["pantsStyle", "Trousers", strips.pants, "trousers"],
+      ["footwearStyle", "Footwear", strips.footwear, "footwear"],
+    ]) {
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      body.appendChild(buildSwatchRow({ key, label, entries, iconField: null }, /* allowNone */ false));
+      if (gearListsAvailable) body.appendChild(buildColorRow(chargenColorRow(part), g));
+    }
+  }
+
+  // ── maps-chargen-barber-3: colour rows ──────────────────────────────
+  // Each row repaints itself in place when its data arrives (name typing
+  // keeps its focus); a render() rebuilds the list (`colorRowRepaints`,
+  // declared with the state above).
+
+  function repaintColorRows() {
+    if (state.wizard !== WizardState.Heritage) return;
+    for (const paint of colorRowRepaints) {
+      try { paint(); } catch (e) { console.warn("[character-creation] colour row:", e); }
+    }
+  }
+
+  function sessionHandle() {
+    return (typeof window !== "undefined" ? window.__sessionHandle : null) ?? null;
+  }
+
+  // The colour data of the current heritage / gender (rebuilt on a change).
+  function colorDataFor() {
+    const key = `${state.heritageId}:${state.genderId}`;
+    if (!state.colorData || state.colorData.key !== key) {
+      state.colorData = { key, gear: null, gearPending: false, wheels: {}, pending: {} };
+    }
+    return state.colorData;
+  }
+
+  function parseJson(v) {
+    return typeof v === "string" ? JSON.parse(v) : v;
+  }
+
+  // The gears' colour lists, once per heritage / gender. When they arrive
+  // the first (random) colours are fitted to them and the rows repaint.
+  function ensureGearColors() {
+    const cd = colorDataFor();
+    if (cd.gear || cd.gearPending) return;
+    const sh = sessionHandle();
+    if (typeof sh?.chargenGearColors !== "function") return;
+    cd.gearPending = true; // stays set on failure: no retry loop
+    Promise.resolve()
+      .then(() => sh.chargenGearColors(state.heritageId, state.genderId))
+      .then((json) => {
+        cd.gear = parseJson(json);
+        cd.gearPending = false;
+        if (state.colorData !== cd) return;
+        rerollGearColors(state.appearance, cd.gear);
+        repaintColorRows();
+      })
+      .catch((e) => console.warn("[character-creation] chargenGearColors failed:", e));
+  }
+
+  // One part's wheel (spot colours); null until it has loaded.
+  function ensureWheel(part, style) {
+    const cd = colorDataFor();
+    const k = `${part}:${style}`;
+    if (cd.wheels[k] || cd.pending[k]) return cd.wheels[k] ?? null;
+    const sh = sessionHandle();
+    if (typeof sh?.chargenColorWheel !== "function") return null;
+    cd.pending[k] = true;
+    Promise.resolve()
+      .then(() => sh.chargenColorWheel(state.heritageId, state.genderId, part, style >>> 0))
+      .then((json) => {
+        cd.wheels[k] = parseJson(json);
+        if (state.colorData === cd) repaintColorRows();
+      })
+      .catch((e) => console.warn(`[character-creation] chargenColorWheel(${part}) failed:`, e));
+    return null;
+  }
+
+  // The number of spots of a row: the loaded wheel's, else the catalog's
+  // list size (hair / eyes), 1 (skin), or the gear's list size; null when
+  // a gear's list is not known yet.
+  function spotCount(row, style, g, wheel) {
+    if (wheel && Number.isInteger(wheel.count)) return wheel.count;
+    if (row.gear) return gearColorCount(colorDataFor().gear, row.gear, style);
+    if (row.countKey) return g?.appearance?.[row.countKey] | 0;
+    return 1;
+  }
+
+  function buildColorRow(row, g) {
+    const el = document.createElement("div");
+    el.className = "hb-cc-swatch-row";
+    el.dataset.colorRow = row.part;
+    const lbl = document.createElement("div");
+    lbl.className = "label";
+    setAcText(lbl, row.label + ":");
+    el.appendChild(lbl);
+    const spots = document.createElement("div");
+    spots.className = "hb-cc-spots";
+    el.appendChild(spots);
+    if (row.shadeKey) {
+      // SetShade: the scroll's 0..1 value is the shade.
+      const shade = document.createElement("input");
+      shade.type = "range";
+      shade.min = "0";
+      shade.max = "1";
+      shade.step = "0.01";
+      shade.className = "hb-cc-shade";
+      shade.title = row.label.replace(/ colour$/, "") + " shade";
+      shade.dataset.shadeKey = row.shadeKey;
+      shade.value = String(clampShade(state.appearance?.[row.shadeKey]));
+      shade.addEventListener("input", () => {
+        if (state.appearance) state.appearance[row.shadeKey] = clampShade(shade.value);
+      });
+      el.appendChild(shade);
+    }
+    const paint = () => {
+      spots.innerHTML = "";
+      const style = row.styleKey ? (state.appearance?.[row.styleKey] ?? 0) : 0;
+      const wheel = ensureWheel(row.part, style);
+      const count = spotCount(row, style, g, wheel);
+      if (!count) {
+        // "…" while the gear's list loads; "—" when the gear offers no
+        // colour (the wire carries 0) or its ClothingTable did not load.
+        const mark = document.createElement("span");
+        mark.className = "pending";
+        setAcText(mark, count == null ? "…" : "—");
+        spots.appendChild(mark);
+        return;
+      }
+      for (let i = 0; i < count; i += 1) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "hb-cc-swatch hb-cc-spot";
+        b.dataset.spot = String(i);
+        const css = spotCss(wheel?.spots?.[i]);
+        if (css) b.style.background = css;
+        else b.classList.add("unknown");
+        // The skin row's single spot is always the current one.
+        const current = row.colorKey ? state.appearance?.[row.colorKey] === i : true;
+        if (current) b.classList.add("selected");
+        b.title = `${row.label} ${i + 1}`;
+        if (row.colorKey) {
+          b.addEventListener("click", () => {
+            if (!state.appearance) return;
+            state.appearance[row.colorKey] = i; // SetColor
+            paint();
+          });
+        }
+        spots.appendChild(b);
+      }
+    };
+    paint();
+    colorRowRepaints.push(paint);
+    return el;
   }
 
   // Build a single feature row (label + horizontal swatch strip).
@@ -1316,18 +1654,25 @@ function createWizardInstance(client, catalog, ctx) {
       }
       btn.addEventListener("click", () => {
         if (!state.appearance) return;
+        const previous = state.appearance[feature.key];
         state.appearance[feature.key] = entry.index;
-        // Defensive: if headgear flipped from "none" sentinel to a real
-        // entry, give it a randomized color (caller already had one if
-        // the wizard initialised via randomizeAppearance).
-        if (feature.key === "headgearStyle" && entry.index !== 0xFFFFFFFF) {
+        // A hat put on over "none" gets a random colour and shade, inside
+        // the hat's own list when it is known (CharGenState::
+        // RandomizeHeadgear). maps-chargen-barber-3: changing hats keeps
+        // the colour the player picked — retail SetHeadgearStyle keeps it
+        // and only clamps it (below).
+        if (feature.key === "headgearStyle" && previous === 0xFFFFFFFF) {
           const g = heritageGenderFor(state);
-          const colorCount = g?.appearance?.clothingColorCount || 0;
+          const known = gearColorCount(colorDataFor().gear, "headgear", entry.index);
+          const colorCount = known ?? (g?.appearance?.clothingColorCount || 0);
           if (colorCount > 0) {
             state.appearance.headgearColor = Math.floor(Math.random() * colorCount);
             state.appearance.headgearHue = Math.random();
           }
         }
+        // maps-chargen-barber-3: CharGenState::Set*Style clamps the colour
+        // into the new gear's list.
+        clampGearColors(state.appearance, colorDataFor().gear);
         render();
       });
       row.appendChild(btn);
@@ -1340,23 +1685,55 @@ function createWizardInstance(client, catalog, ctx) {
     const heritage = findHeritage(catalog, state.heritageId);
     if (!heritage) return;
 
-    const budget = computeAttributeBudget(state.attributes, heritage.attributeCredits);
+    const credits = heritage.attributeCredits;
+    if (!state.attributeLocks) state.attributeLocks = emptyAttributeLocks();
+    const budget = computeAttributeBudget(state.attributes, credits);
 
     const banner = document.createElement("div");
-    banner.className = `hb-cc-budget${budget.valid ? "" : " exceeded"}`;
-    setAcText(banner,
-      `Attribute credits: ${budget.spent} spent / ${budget.budget} budget` +
-      (budget.remaining === 0 ? " (fully allocated)"
-                     : budget.remaining > 0 ? ` (${budget.remaining} unspent)`
-                                            : ` (over by ${-budget.remaining})`));
+    const paintBanner = (b) => {
+      banner.className = `hb-cc-budget${b.valid ? "" : " exceeded"}`;
+      setAcText(banner,
+        `Attribute credits: ${b.spent} spent / ${b.budget} budget` +
+        (b.remaining === 0 ? " (fully allocated)"
+                    : b.remaining > 0 ? ` (${b.remaining} unspent)`
+                                      : ` (over by ${-b.remaining})`));
+    };
+    paintBanner(budget);
     body.appendChild(banner);
 
     const hint = document.createElement("div");
     hint.className = "hb-cc-hint";
     setAcText(hint,
       `Each attribute is ${CHARACTER_GEN_MIN_ATTRIBUTE}-${CHARACTER_GEN_MAX_ATTRIBUTE}; ` +
-      `the total may not exceed ${heritage.attributeCredits}.`);
+      `the total may not exceed ${credits}. Raising one takes points from ` +
+      `the unlocked others; lock a row to keep its value.`);
     body.appendChild(hint);
+
+    // maps-chargen-barber-4: every control goes through setAttribValue
+    // (retail gmCGProfessionPage::SetAttribValue — lock-aware clamp, then
+    // BalanceAttributes on the unlocked others).
+    const setAttr = (key, value) => {
+      state.attributes = setAttribValue(
+        state.attributes, state.attributeLocks, key, value, credits);
+    };
+    // `+` is live while GetAbsRemainingCredits(key) > 0: the unlocked
+    // others still have points above 10 (or credits are unspent).
+    const canRaise = (key) =>
+      state.attributes[key] < CHARACTER_GEN_MAX_ATTRIBUTE
+      && absRemainingCredits(state.attributes, state.attributeLocks, key, credits) > 0;
+    // Slider drags rebalance the OTHER rows too; repaint them in place
+    // (a full render would drop the slider being dragged).
+    const rowEls = [];
+    const refreshRows = () => {
+      for (const r of rowEls) {
+        const v = state.attributes[r.key];
+        r.slider.value = String(v);
+        setAcText(r.val, String(v));
+        r.dec.disabled = v <= CHARACTER_GEN_MIN_ATTRIBUTE;
+        r.inc.disabled = !canRaise(r.key);
+      }
+      paintBanner(computeAttributeBudget(state.attributes, credits));
+    };
 
     const attrs = [
       ["strength",     "Strength"],
@@ -1370,28 +1747,37 @@ function createWizardInstance(client, catalog, ctx) {
       const row = document.createElement("div");
       row.className = "hb-cc-attr-row";
 
+      // Retail lock toggle 0x100002EC (gmCGProfessionPage::SetLock →
+      // CharGenState::LockAttribute): only changes what BalanceAttributes
+      // may take from, never the value.
+      const locked = !!state.attributeLocks[key];
+      const lockBtn = document.createElement("button");
+      lockBtn.type = "button";
+      lockBtn.className = `lock-btn${locked ? " locked" : ""}`;
+      lockBtn.dataset.attr = key;
+      lockBtn.title = locked
+        ? `${label} is locked: raising another attribute will not lower it.`
+        : `Lock ${label} so raising another attribute does not lower it.`;
+      lockBtn.setAttribute("aria-pressed", locked ? "true" : "false");
+      setAcText(lockBtn, locked ? "Locked" : "Lock");
+      lockBtn.addEventListener("click", () => {
+        state.attributeLocks = { ...state.attributeLocks, [key]: !state.attributeLocks[key] };
+        render();
+      });
+      row.appendChild(lockBtn);
+
       const nameEl = document.createElement("div");
       nameEl.className = "name";
       setAcText(nameEl, label);
       row.appendChild(nameEl);
 
-      // Compute remaining FOR THIS attribute (the budget minus all
-      // other five). The user can push this attribute up to either
-      // CHARACTER_GEN_MAX_ATTRIBUTE or `current + remainingGlobal`,
-      // whichever's smaller.
-      const others = attrs
-        .filter(([k]) => k !== key)
-        .reduce((sum, [k]) => sum + (state.attributes[k]|0), 0);
-      const remainingGlobalIncl = heritage.attributeCredits - others - (state.attributes[key]|0);
-
       const dec = document.createElement("button");
       dec.type = "button";
-      dec.className = "step-btn";
+      dec.className = "step-btn dec";
       setAcText(dec, "−");
       dec.disabled = state.attributes[key] <= CHARACTER_GEN_MIN_ATTRIBUTE;
       dec.addEventListener("click", () => {
-        state.attributes[key] = applyAttributeDelta(
-          state.attributes[key], -1, remainingGlobalIncl);
+        setAttr(key, state.attributes[key] - 1);
         render();
       });
       row.appendChild(dec);
@@ -1402,31 +1788,21 @@ function createWizardInstance(client, catalog, ctx) {
       slider.max = String(CHARACTER_GEN_MAX_ATTRIBUTE);
       slider.value = String(state.attributes[key]);
       slider.addEventListener("input", () => {
-        const desired = Number(slider.value);
-        const delta = desired - state.attributes[key];
-        state.attributes[key] = applyAttributeDelta(
-          state.attributes[key], delta, remainingGlobalIncl);
-        slider.value = String(state.attributes[key]);
-        // Only update the value cell + banner; full re-render on
+        setAttr(key, Number(slider.value));
+        // Repaint the rows + banner in place; full re-render on the
         // mouseup-equivalent (change event).
-        const val = row.querySelector(".value");
-        if (val) val.textContent = String(state.attributes[key]);
+        refreshRows();
       });
       slider.addEventListener("change", () => render());
       row.appendChild(slider);
 
       const inc = document.createElement("button");
       inc.type = "button";
-      inc.className = "step-btn";
+      inc.className = "step-btn inc";
       setAcText(inc, "+");
-      // `+` disabled when at MAX or budget fully spent
-      // (remainingGlobalIncl = budget - others - current ≤ 0 means no
-      // room to add more).
-      inc.disabled = state.attributes[key] >= CHARACTER_GEN_MAX_ATTRIBUTE
-                  || remainingGlobalIncl <= 0;
+      inc.disabled = !canRaise(key);
       inc.addEventListener("click", () => {
-        state.attributes[key] = applyAttributeDelta(
-          state.attributes[key], 1, remainingGlobalIncl);
+        setAttr(key, state.attributes[key] + 1);
         render();
       });
       row.appendChild(inc);
@@ -1436,6 +1812,7 @@ function createWizardInstance(client, catalog, ctx) {
       setAcText(val, String(state.attributes[key]));
       row.appendChild(val);
 
+      rowEls.push({ key, slider, val, dec, inc });
       body.appendChild(row);
     }
 
@@ -1459,6 +1836,8 @@ function createWizardInstance(client, catalog, ctx) {
           coordination: tmpl.coordination, quickness: tmpl.quickness,
           focus: tmpl.focus, self: tmpl["self"],
         };
+        // CharGenState::ApplyTemplate zeroes bAttribLocked.
+        state.attributeLocks = emptyAttributeLocks();
       }
       render();
     });
@@ -1665,6 +2044,19 @@ function createWizardInstance(client, catalog, ctx) {
     setAcText(err, state.errorMessage || "Character creation failed. Please check your selections and try again.");
     body.appendChild(err);
 
+    // maps-chargen-barber-2: a name rejection (in use / banned / admin
+    // denied) is fixed on page 1, which holds the name field — "retry" goes
+    // there with every choice kept, so it is the only button.
+    if (state.errorNameField) {
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "hb-cc-btn primary";
+      setAcText(back, "← Back");
+      back.addEventListener("click", () => transition("retry"));
+      footer.appendChild(back);
+      return;
+    }
+
     const back = document.createElement("button");
     back.type = "button";
     back.className = "hb-cc-btn";
@@ -1711,6 +2103,8 @@ function applyHeritageDefaults(state, heritage, catalog, costsForSkill) {
       focus: tmpl.focus, self: tmpl["self"],
     };
   }
+  // CharGenState::ApplyTemplate zeroes bAttribLocked.
+  state.attributeLocks = emptyAttributeLocks();
   state.skillStates = templateSkillStates(
     catalog?.skills, tmpl, costsForSkill, heritage.skillCredits | 0);
   state.startArea = pickDefaultStartArea(heritage) ?? 0;
@@ -1727,26 +2121,50 @@ function applyHeritageDefaults(state, heritage, catalog, costsForSkill) {
 // src/lib.rs Wave D.2 block). The wasm side translates to the
 // snake_case `CharacterCreateAppearanceData` wire fields via
 // `into_wire()` before packing.
-export function randomizeAppearance(gender) {
+//
+// maps-chargen-barber-3: `colorCountFor(gear, style)` (optional) gives the
+// colour count of a gear style ("headgear" / "shirt" / "trousers" /
+// "footwear") when its ClothingTable list is known. Retail
+// CharGenState::RandomizeShirt and the others (acclient.c:497279-497381)
+// roll the colour inside that gear's own list (`numShirtColors`). Without
+// the count the gender list's size is the range, as before.
+export function randomizeAppearance(gender, colorCountFor = null) {
   const a = gender.appearance;
   const r = (count) => count > 0 ? Math.floor(Math.random() * count) : 0;
   const optR = (count) => count > 0 ? Math.floor(Math.random() * count) : 0xFFFFFFFF;
+  const colorsFor = (gear, style) => {
+    const n = typeof colorCountFor === "function" ? colorCountFor(gear, style) : null;
+    return typeof n === "number" && n >= 0 ? n : a.clothingColorCount;
+  };
   const headgearStyle = optR(a.headgearCount);
+  const eyes = r(a.eyeStripCount);
+  const nose = r(a.noseStripCount);
+  const mouth = r(a.mouthStripCount);
+  const hairColor = r(a.hairColorCount);
+  const eyeColor = r(a.eyeColorCount);
+  const hairStyle = r(a.hairStyleCount);
+  const headgearColor = headgearStyle === 0xFFFFFFFF ? 0 : r(colorsFor("headgear", headgearStyle));
+  const shirtStyle = r(a.shirtCount);
+  const shirtColor = r(colorsFor("shirt", shirtStyle));
+  const pantsStyle = r(a.pantsCount);
+  const pantsColor = r(colorsFor("trousers", pantsStyle));
+  const footwearStyle = r(a.footwearCount);
+  const footwearColor = r(colorsFor("footwear", footwearStyle));
   return {
-    eyes:          r(a.eyeStripCount),
-    nose:          r(a.noseStripCount),
-    mouth:         r(a.mouthStripCount),
-    hairColor:     r(a.hairColorCount),
-    eyeColor:      r(a.eyeColorCount),
-    hairStyle:     r(a.hairStyleCount),
+    eyes,
+    nose,
+    mouth,
+    hairColor,
+    eyeColor,
+    hairStyle,
     headgearStyle,
-    headgearColor: headgearStyle === 0xFFFFFFFF ? 0 : r(a.clothingColorCount),
-    shirtStyle:    r(a.shirtCount),
-    shirtColor:    r(a.clothingColorCount),
-    pantsStyle:    r(a.pantsCount),
-    pantsColor:    r(a.clothingColorCount),
-    footwearStyle: r(a.footwearCount),
-    footwearColor: r(a.clothingColorCount),
+    headgearColor,
+    shirtStyle,
+    shirtColor,
+    pantsStyle,
+    pantsColor,
+    footwearStyle,
+    footwearColor,
     skinHue:       Math.random(),
     hairHue:       Math.random(),
     headgearHue:   headgearStyle === 0xFFFFFFFF ? 0 : Math.random(),
@@ -1754,4 +2172,105 @@ export function randomizeAppearance(gender) {
     pantsHue:      Math.random(),
     footwearHue:   Math.random(),
   };
+}
+
+// ── maps-chargen-barber-3 (2026-10-13): the colour rows ─────────────────
+//
+// Retail gmCGAppearancePage (acclient.c) has nine parts: hair, eyes, nose,
+// mouth, skin, headgear, shirt, trousers, footwear. Each has a colour
+// wheel of spots, and every part but the eyes has a shade scroll.
+// SetSelection (:186939) fills the spots: hair PalSets sampled at entry
+// 208, eye palettes at 259, the skin PalSet at 176 (nose / mouth / skin
+// share it) and each gear's PalSets at 1312. SetColor (:186680) stores the
+// spot index; SetShade (:185502) stores the scroll's 0..1 value as the
+// hair / skin / clothing shade. The clothing spots are the gear's own list
+// (CharGenState::StoreColorInformation :495905, from the gear's
+// ClothingTable), so a colour index means a different template per gear.
+// The wasm exports SessionHandle.chargenGearColors / chargenColorWheel
+// (src/chargen_colors.rs over holtburger_core::chargen_colors) supply
+// both; GetCharGenResult (:495612) turns the index into the gear's
+// template key on the wire (CharacterGenBuilder::wire_appearance).
+
+/** One colour row per part (nose and mouth share the skin row). */
+export const CHARGEN_COLOR_ROWS = Object.freeze([
+  Object.freeze({ part: "hair", label: "Hair colour", colorKey: "hairColor", shadeKey: "hairHue", countKey: "hairColorCount" }),
+  Object.freeze({ part: "eyes", label: "Eye colour", colorKey: "eyeColor", shadeKey: null, countKey: "eyeColorCount" }),
+  Object.freeze({ part: "skin", label: "Skin", colorKey: null, shadeKey: "skinHue", countKey: null }),
+  Object.freeze({ part: "headgear", label: "Hat colour", colorKey: "headgearColor", shadeKey: "headgearHue", styleKey: "headgearStyle", gear: "headgear" }),
+  Object.freeze({ part: "shirt", label: "Shirt colour", colorKey: "shirtColor", shadeKey: "shirtHue", styleKey: "shirtStyle", gear: "shirt" }),
+  Object.freeze({ part: "trousers", label: "Trousers colour", colorKey: "pantsColor", shadeKey: "pantsHue", styleKey: "pantsStyle", gear: "trousers" }),
+  Object.freeze({ part: "footwear", label: "Footwear colour", colorKey: "footwearColor", shadeKey: "footwearHue", styleKey: "footwearStyle", gear: "footwear" }),
+]);
+
+/** The colour row of `part`, or null. */
+export function chargenColorRow(part) {
+  return CHARGEN_COLOR_ROWS.find((row) => row.part === part) || null;
+}
+
+/**
+ * The colour count of gear `style` in a `chargenGearColors` result
+ * (`{ headgear: [{ templateIds, palSetIds } | null, …], shirt, trousers,
+ * footwear }`), or null when it is not known.
+ */
+export function gearColorCount(gearColors, gear, style) {
+  const list = gearColors?.[gear];
+  if (!Array.isArray(list)) return null;
+  const entry = list[style];
+  return entry && Array.isArray(entry.templateIds) ? entry.templateIds.length : null;
+}
+
+/**
+ * CharGenState::Set{Headgear,Shirt,Trousers,Footwear}Style (acclient.c:
+ * 496750-496960): after a style change the colour stays, but a colour past
+ * the new gear's list drops to its last entry. An empty list leaves 0
+ * (GetCharGenResult then sends 0). Gears whose list is not known, and "no
+ * hat", are left alone. Mutates and returns `appearance`.
+ */
+export function clampGearColors(appearance, gearColors) {
+  if (!appearance) return appearance;
+  for (const row of CHARGEN_COLOR_ROWS) {
+    if (!row.gear) continue;
+    const style = appearance[row.styleKey];
+    if (style === 0xFFFFFFFF) continue;
+    const n = gearColorCount(gearColors, row.gear, style);
+    if (n == null) continue;
+    if ((appearance[row.colorKey] >>> 0) >= n) appearance[row.colorKey] = Math.max(0, n - 1);
+  }
+  return appearance;
+}
+
+/**
+ * The wizard rolls its first appearance before the gears' lists have
+ * loaded, over the gender list. Retail rolls inside each gear's own list
+ * (CharGenState::Randomize*), so once the lists arrive a colour that is
+ * past its gear's list is rolled again inside it. Mutates and returns
+ * `appearance`.
+ */
+export function rerollGearColors(appearance, gearColors, random = Math.random) {
+  if (!appearance) return appearance;
+  for (const row of CHARGEN_COLOR_ROWS) {
+    if (!row.gear) continue;
+    const style = appearance[row.styleKey];
+    if (style === 0xFFFFFFFF) continue;
+    const n = gearColorCount(gearColors, row.gear, style);
+    if (n == null) continue;
+    if ((appearance[row.colorKey] >>> 0) >= n) {
+      appearance[row.colorKey] = n > 0 ? Math.floor(random() * n) : 0;
+    }
+  }
+  return appearance;
+}
+
+/** A spot's `[r, g, b]` as CSS; null for an unknown spot. */
+export function spotCss(rgb) {
+  if (!Array.isArray(rgb) || rgb.length < 3) return null;
+  const c = (v) => Math.max(0, Math.min(255, Number(v) | 0));
+  return `rgb(${c(rgb[0])}, ${c(rgb[1])}, ${c(rgb[2])})`;
+}
+
+/** The shade scroll's value, held to [0, 1] (SetShade's range). */
+export function clampShade(value) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return 0;
+  return Math.min(1, Math.max(0, v));
 }

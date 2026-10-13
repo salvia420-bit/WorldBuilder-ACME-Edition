@@ -25,6 +25,8 @@
 //   out: {t:'ready'}                wasm instantiated OK (init handshake)
 //        {t:'rx', bytes}            one inbound game-message payload (transferable)
 //        {t:'timesync', time}       server clock sample (seconds, ACE PortalYearTicks)
+//        {t:'linkstatus', rttMs, loss}  the worker's ping RTT (0xFFFFFFFF = none
+//                                   yet) + packet-loss figure (net-transport-6)
 //        {t:'disconnect', reason}   socket/session ended (or connect failed)
 //        {t:'error', reason}        worker-level failure (init/import)
 
@@ -39,6 +41,24 @@ import init, {
 const RX_KIND_MESSAGE = 0;
 const RX_KIND_DISCONNECT = 1;
 const RX_KIND_TIMESYNC = 2;
+const RX_KIND_LINK_STATUS = 3;
+
+/**
+ * net-transport-6: decode an RX_KIND_LINK_STATUS payload (8 bytes: u32 LE
+ * ping RTT ms, 0xFFFFFFFF = none measured yet; f32 LE packet-loss figure).
+ * Returns null for a short or malformed payload.
+ */
+export function decodeLinkStatus(bytes) {
+  try {
+    if (!bytes || bytes.byteLength < 8) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
+    const rttMs = dv.getUint32(0, true);
+    const loss = dv.getFloat32(4, true);
+    return Number.isFinite(loss) ? { rttMs, loss } : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 let ready = false; // wasm init done
 let started = false; // net_worker_run kicked off (once per worker lifetime)
@@ -58,6 +78,11 @@ function postToMain(kind, bytes) {
       time = new DataView(bytes.buffer, bytes.byteOffset, 8).getFloat64(0, true);
     } catch (_) {}
     if (Number.isFinite(time)) self.postMessage({ t: "timesync", time });
+  } else if (kind === RX_KIND_LINK_STATUS) {
+    // net-transport-6: the worker's own RTT + packet loss for the link
+    // indicator (decoded here so the main thread gets plain numbers).
+    const ls = decodeLinkStatus(bytes);
+    if (ls) self.postMessage({ t: "linkstatus", rttMs: ls.rttMs, loss: ls.loss });
   } else if (kind === RX_KIND_DISCONNECT) {
     let reason = "";
     try {

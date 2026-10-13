@@ -9,7 +9,10 @@
 //!   — the **default**, and the mode that lands scenery on the Z the player
 //!   actually stands on: the render meshes (`build_mesh`, `subdivide_landblock`)
 //!   and physics (`holtburger_world::state::types::terrain_height_at`) all
-//!   interpolate within the per-cell TRIANGLE.
+//!   interpolate within the per-cell TRIANGLE. Also used by
+//!   [`crate::BakeMode::Retail`] (retail `Plane::set_height` on the walkable
+//!   terrain triangle), through [`triangle_plane_from_grid`], which also
+//!   returns that triangle's normal for retail's slope gate.
 //! - **Bilinear** ([`bilinear_height_from_grid`]) — interpolates across the
 //!   whole cell quad. Used by [`crate::BakeMode::Strict`]. NOTE (2026-06-26):
 //!   this NO LONGER matches the player/render surface — physics + render moved
@@ -248,6 +251,10 @@ fn triangle_plane_z(
     (d - abc_x * px - abc_y * py) / abc_z
 }
 
+/// One cell triangle as three `(x, y, z)` corners, in ACE `BuildTriangles`
+/// order.
+type CellTriangle = ((f32, f32, f32), (f32, f32, f32), (f32, f32, f32));
+
 /// **ACE-parity triangle-plane Z at `(lx, ly)`**. Verbatim port of
 /// `LandblockMesh.GetZ`.
 ///
@@ -263,6 +270,97 @@ pub fn triangle_plane_height_from_grid(
     lx: f32,
     ly: f32,
 ) -> f32 {
+    let (p1, p2, p3) = cell_triangle_at(heights, landblock_id_top_16, lx, ly);
+    triangle_plane_z(p1, p2, p3, lx, ly)
+}
+
+/// The walkable terrain triangle under a point: its plane Z there and its
+/// upward unit normal. Returned by [`triangle_plane_from_grid`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrianglePlane {
+    /// Triangle-plane Z, bit-identical to [`triangle_plane_height_from_grid`].
+    pub z: f32,
+    /// Upward (`z >= 0`) unit normal `(x, y, z)` of the triangle.
+    pub normal: (f32, f32, f32),
+}
+
+impl TrianglePlane {
+    /// `N.z`, the cosine of the triangle's slope: what retail
+    /// `ObjectDesc::CheckSlope` tests (`acclient.c:351355`, called with
+    /// `walkable->plane.N.z` at :352699).
+    #[inline]
+    pub fn normal_z(&self) -> f32 {
+        self.normal.2
+    }
+}
+
+/// [`triangle_plane_height_from_grid`] plus the triangle's upward unit
+/// normal, for `BakeMode::Retail`'s slope gate (terrain-scenery-3).
+///
+/// Same cell clamp, same diagonal ([`get_split_dir`]) and same T0-then-T1
+/// choice, so `z` is bit-identical to [`triangle_plane_height_from_grid`]
+/// and the normal belongs to the triangle that `z` came from. Retail's
+/// gate reads `walkable->plane.N.z` of the terrain polygon
+/// `CLandCell::find_terrain_poly` returns (`acclient.c:352698-352699`):
+/// the one cell triangle under the point, not the 4-corner average
+/// [`normal_z_at`] fits (those differ on a saddle cell, where the average
+/// gradient is zero but both triangles slope).
+///
+/// The normal follows `CPolygon::make_plane` (`acclient.c:359628`): the
+/// edge cross product, scaled by `1 / sqrt(|n|^2)` narrowed to float.
+pub fn triangle_plane_from_grid(
+    heights: &[f32; 81],
+    landblock_id_top_16: u16,
+    lx: f32,
+    ly: f32,
+) -> TrianglePlane {
+    let (p1, p2, p3) = cell_triangle_at(heights, landblock_id_top_16, lx, ly);
+    TrianglePlane {
+        z: triangle_plane_z(p1, p2, p3, lx, ly),
+        normal: triangle_up_normal(p1, p2, p3),
+    }
+}
+
+/// Upward unit normal of a triangle (see [`triangle_plane_from_grid`]).
+/// Terrain triangles always have a non-zero XY area (`|n.z| = 576`), so
+/// the degenerate fallback (straight up) is unreachable for them.
+fn triangle_up_normal(
+    p1: (f32, f32, f32),
+    p2: (f32, f32, f32),
+    p3: (f32, f32, f32),
+) -> (f32, f32, f32) {
+    let v1 = (
+        p1.0 as f64 - p3.0 as f64,
+        p1.1 as f64 - p3.1 as f64,
+        p1.2 as f64 - p3.2 as f64,
+    );
+    let v2 = (
+        p2.0 as f64 - p3.0 as f64,
+        p2.1 as f64 - p3.1 as f64,
+        p2.2 as f64 - p3.2 as f64,
+    );
+    let nx = v1.1 * v2.2 - v1.2 * v2.1;
+    let ny = v1.2 * v2.0 - v1.0 * v2.2;
+    let nz = v1.0 * v2.1 - v1.1 * v2.0;
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if !(len > 0.0 && len.is_finite()) {
+        return (0.0, 0.0, 1.0);
+    }
+    // make_plane: `v19 = (float)(1.0 / sqrt(...))`, then N = v19 * n.
+    let inv = (1.0 / len) as f32 as f64;
+    let inv = if nz < 0.0 { -inv } else { inv };
+    ((nx * inv) as f32, (ny * inv) as f32, (nz * inv) as f32)
+}
+
+/// The cell triangle holding `(lx, ly)` — the selection half of ACE
+/// `LandblockMesh.GetZ`, shared by [`triangle_plane_height_from_grid`] and
+/// [`triangle_plane_from_grid`].
+fn cell_triangle_at(
+    heights: &[f32; 81],
+    landblock_id_top_16: u16,
+    lx: f32,
+    ly: f32,
+) -> CellTriangle {
     // ACE LandblockMesh.GetCell: clamp to [0, CellDim-1] = [0, 7].
     let cell_x = (lx / CELL_SIZE).floor() as i32;
     let cell_y = (ly / CELL_SIZE).floor() as i32;
@@ -307,9 +405,9 @@ pub fn triangle_plane_height_from_grid(
     // exactly, including the "always-T1 if T0 fails" behaviour for
     // points outside the cell (a clamped-OOB query, e.g.).
     if triangle_contains_xy(t0.0, t0.1, t0.2, lx, ly) {
-        triangle_plane_z(t0.0, t0.1, t0.2, lx, ly)
+        t0
     } else {
-        triangle_plane_z(t1.0, t1.1, t1.2, lx, ly)
+        t1
     }
 }
 
@@ -339,6 +437,12 @@ pub fn slope_at(heights: &[f32; 81], lx: f32, ly: f32) -> f32 {
 /// (real DAT values cluster in 0.86–0.98, unmistakably cos θ), so the
 /// slope-rejection comparison must run against this normal-Z, not the
 /// `slope_at` angle.
+///
+/// This is `BakeMode::Strict`'s gate and only approximates retail's: it
+/// fits ONE plane to the cell's four corners, whereas retail reads the
+/// normal of the cell TRIANGLE under the point. `BakeMode::Retail` uses
+/// [`triangle_plane_from_grid`] instead (the two differ most on a saddle
+/// cell, where this returns `1.0` but both triangles slope).
 ///
 /// For a plane with gradient `(g_x, g_y)` the unit normal is
 /// `(-g_x, -g_y, 1) / sqrt(g_x² + g_y² + 1)`, so
@@ -378,6 +482,9 @@ fn gradient_at(heights: &[f32; 81], lx: f32, ly: f32) -> (f32, f32) {
 /// since the bake's contract is to produce IDENTICAL output to ACE
 /// (warts and all), we mirror the exact expression including the
 /// indexing mistake.
+///
+/// This is the `AceCompat` / `Strict` road test only. It is not retail:
+/// `BakeMode::Retail` uses [`on_road_retail`] (the 4-corner road band).
 pub fn on_road(lb: &CellLandblock, lx: f32, ly: f32) -> bool {
     let cell_x = (lx / CELL_SIZE).floor() as i32;
     let cell_y = (ly / CELL_SIZE).floor() as i32;
@@ -392,6 +499,326 @@ pub fn on_road(lb: &CellLandblock, lx: f32, ly: f32) -> bool {
         return false;
     }
     (lb.terrain[idx] & 0x3) != 0
+}
+
+/// Retail's scenery road-band width in metres. `CLandBlock::on_road`
+/// (`acclient.c:352238`) hard-codes it (`rmax = 24.0 - 5.0`), and
+/// `LandDefs::get_vars` (`acclient.c:467318`) packs the same `5.0` into the
+/// Region's `LandDefs.road_width`.
+pub const RETAIL_ROAD_WIDTH: f32 = 5.0;
+
+/// The road-band width [`on_road_retail`] uses for `region`:
+/// `region.land_defs.road_width` when it is usable (`0 < w < CELL_SIZE`),
+/// else [`RETAIL_ROAD_WIDTH`]. Retail Regions carry `5.0`, so on real DATs
+/// this is exactly retail's literal; the fallback covers synthetic Regions
+/// that leave the field zeroed (or NaN).
+pub fn retail_road_width(region: &Region) -> f32 {
+    let w = region.land_defs.road_width;
+    if w > 0.0 && w < CELL_SIZE {
+        w
+    } else {
+        RETAIL_ROAD_WIDTH
+    }
+}
+
+/// Retail road test for a scenery candidate at LB-local `(lx, ly)` —
+/// `CLandBlock::on_road` (`acclient.c:352238`, called from
+/// `CLandBlock::get_land_scenes` :352679). Used by
+/// [`crate::BakeMode::Retail`] only; `AceCompat` / `Strict` keep
+/// [`on_road`].
+///
+/// Retail reads all four corners of the cell holding the point on the 9×9
+/// vertex grid — `t[9*ix + iy]`, `+1`, `+9`, `+10` (decomp
+/// `v8 = v5 + v6 + 8 * v5`) — and answers false at once when none carries
+/// road bits (`& 3`). Otherwise it tests the cell-local offset `(dx, dy)`
+/// against a band `road_width` (5 m) wide along each road edge, an L1 patch
+/// around a lone road corner, and a diagonal band when only opposite corners
+/// are road. With `w = road_width` and corners r0 `(ix, iy)`, r1
+/// `(ix, iy+1)`, r2 `(ix+1, iy)`, r3 `(ix+1, iy+1)`:
+///
+/// | road corners | on road iff |
+/// |---|---|
+/// | all four | always |
+/// | r0 r1 r2 | `dx < w \|\| dy < w` |
+/// | r0 r1 r3 | `dx < w \|\| dy > 24-w` |
+/// | r0 r2 r3 | `dx > 24-w \|\| dy < w` |
+/// | r1 r2 r3 | `dx > 24-w \|\| dy > 24-w` |
+/// | r0 r1 / r2 r3 | `dx < w` / `dx > 24-w` |
+/// | r0 r2 / r1 r3 | `dy < w` / `dy > 24-w` |
+/// | r0 r3 | `\|dx - dy\| < w` |
+/// | r1 r2 | `\|dx + dy - 24\| < w` |
+/// | r0 / r1 / r2 / r3 | `dx + dy` / `24 + dx - dy` / `24 - dx + dy` / `48 - dx - dy` `< w` |
+///
+/// Every comparison is strict. The acclient.c listing hides the diagonal
+/// and lone-corner arithmetic behind x87 flag tests; the 2013 listing of
+/// the same function (`acclient_2013.bndb_pseudo_c.txt`, `0x52fff0`) shows
+/// it, and ACE's live `Physics/Common/Landblock.OnRoad` is the same table.
+///
+/// The floor and the band arithmetic run in f64, as retail's
+/// `_floor(x / 24.0)` and x87 compares do. Retail's caller only asks for
+/// points inside `[0, 192)`, and so does the bake's `Retail` path (its
+/// bounds gate is strict, terrain-scenery-3); a point outside (e.g.
+/// `lx == 192` from another caller) clamps onto the edge cell, which keeps
+/// the corner reads inside the grid and measures the band from that cell's
+/// far edge. Missing terrain words (a short synthetic `terrain`) read as
+/// no road.
+pub fn on_road_retail(lb: &CellLandblock, lx: f32, ly: f32, road_width: f32) -> bool {
+    let tile = CELL_SIZE as f64;
+    let ix = ((lx as f64 / tile).floor() as i32).clamp(0, 7);
+    let iy = ((ly as f64 / tile).floor() as i32).clamp(0, 7);
+    // acclient.c: `v8 = v5 + v6 + 8 * v5` = 9*ix + iy.
+    let base = (ix as usize) * VERTEX_DIM + (iy as usize);
+    let road = |idx: usize| lb.terrain.get(idx).is_some_and(|&t| (t & 0x3) != 0);
+    let r0 = road(base); // (ix,   iy)
+    let r1 = road(base + 1); // (ix,   iy+1)
+    let r2 = road(base + VERTEX_DIM); // (ix+1, iy)
+    let r3 = road(base + VERTEX_DIM + 1); // (ix+1, iy+1)
+    if !(r0 || r1 || r2 || r3) {
+        return false;
+    }
+
+    let dx = lx as f64 - ix as f64 * tile;
+    let dy = ly as f64 - iy as f64 * tile;
+    let r_min = road_width as f64;
+    // acclient.c: `rmax = 24.0 - 5.0` (a float).
+    let r_max = (CELL_SIZE - road_width) as f64;
+    match (r0, r1, r2, r3) {
+        (true, true, true, true) => true,
+        (true, true, true, false) => dx < r_min || dy < r_min,
+        (true, true, false, true) => dx < r_min || dy > r_max,
+        (true, true, false, false) => dx < r_min,
+        (true, false, true, true) => dx > r_max || dy < r_min,
+        (true, false, true, false) => dy < r_min,
+        (true, false, false, true) => (dx - dy).abs() < r_min,
+        (true, false, false, false) => dx + dy < r_min,
+        (false, true, true, true) => dx > r_max || dy > r_max,
+        (false, true, true, false) => (dx + dy - tile).abs() < r_min,
+        (false, true, false, true) => dy > r_max,
+        (false, true, false, false) => tile + dx - dy < r_min,
+        (false, false, true, true) => dx > r_max,
+        (false, false, true, false) => tile - dx + dy < r_min,
+        (false, false, false, true) => tile * 2.0 - dx - dy < r_min,
+        (false, false, false, false) => false,
+    }
+}
+
+#[cfg(test)]
+mod on_road_retail_tests {
+    //! terrain-scenery-2: retail `CLandBlock::on_road` on synthetic terrain.
+
+    use super::*;
+
+    fn lb_with_terrain(terrain: Vec<u16>) -> CellLandblock {
+        CellLandblock {
+            id: 0xA9B4_FFFF,
+            has_objects: 0,
+            terrain,
+            height: vec![0u8; 81],
+            _align: (),
+        }
+    }
+
+    /// Terrain where every word has all its NON-road bits set (so only
+    /// `& 3` can decide) and the corners of cell `(ix, iy)` named by
+    /// `mask` carry road bits: bit 0 = r0 `(ix, iy)`, bit 1 = r1
+    /// `(ix, iy+1)`, bit 2 = r2 `(ix+1, iy)`, bit 3 = r3 `(ix+1, iy+1)`.
+    /// The road type varies per corner (1, 2, 3, 1): any non-zero type is
+    /// a road.
+    fn cell_with_road_corners(ix: usize, iy: usize, mask: u32) -> CellLandblock {
+        let mut terrain = vec![0xFFFCu16; 81];
+        let base = ix * VERTEX_DIM + iy;
+        let corners = [
+            (base, 0x1u16),
+            (base + 1, 0x2),
+            (base + VERTEX_DIM, 0x3),
+            (base + VERTEX_DIM + 1, 0x1),
+        ];
+        for (bit, &(idx, road_type)) in corners.iter().enumerate() {
+            if mask & (1 << bit) != 0 {
+                terrain[idx] |= road_type;
+            }
+        }
+        lb_with_terrain(terrain)
+    }
+
+    /// Cell-local `(dx, dy)` probe points. Bit `k` of an [`EXPECTED`] row is
+    /// the answer at `PROBES[k]`.
+    const PROBES: [(f32, f32); 23] = [
+        (12.0, 12.0), // 0  centre
+        (4.9, 12.0),  // 1  west band, in
+        (5.1, 12.0),  // 2  west band, out
+        (19.1, 12.0), // 3  east band, in
+        (18.9, 12.0), // 4  east band, out
+        (12.0, 4.9),  // 5  south band, in
+        (12.0, 5.1),  // 6  south band, out
+        (12.0, 19.1), // 7  north band, in
+        (12.0, 18.9), // 8  north band, out
+        (2.4, 2.4),   // 9  r0 corner, L1 4.8
+        (2.6, 2.6),   // 10 r0 corner, L1 5.2
+        (2.4, 21.6),  // 11 r1 corner, L1 4.8
+        (2.6, 21.4),  // 12 r1 corner, L1 5.2
+        (21.6, 2.4),  // 13 r2 corner, L1 4.8
+        (21.4, 2.6),  // 14 r2 corner, L1 5.2
+        (21.6, 21.6), // 15 r3 corner, L1 4.8
+        (21.4, 21.4), // 16 r3 corner, L1 5.2
+        (12.0, 7.1),  // 17 |dx - dy| = 4.9
+        (12.0, 6.9),  // 18 |dx - dy| = 5.1
+        (12.0, 16.9), // 19 |dx + dy - 24| = 4.9
+        (12.0, 17.1), // 20 |dx + dy - 24| = 5.1
+        (0.0, 0.0),   // 21 on the r0 vertex
+        (23.5, 0.5),  // 22 next to the r2 vertex
+    ];
+
+    /// Expected on-road bits per corner mask (index = `mask`, bits as in
+    /// [`cell_with_road_corners`]). Generated outside this crate by a
+    /// Python transcription of the decomp (acclient.c:352238 branch
+    /// structure, with the 2013 listing's arithmetic for the x87-hidden
+    /// branches), which was asserted equal to ACE's live
+    /// `Landblock.OnRoad` at every probe in every cell.
+    const EXPECTED: [u32; 16] = [
+        0b00000000000000000000000, // none
+        0b01000000000001000000000, // r0
+        0b00000000000100000000000, // r1
+        0b01000000001111000000010, // r0 r1
+        0b10000000010000000000000, // r2
+        0b11000000110011000100000, // r0 r2
+        0b10010100111100000000001, // r1 r2
+        0b11000000111111000100010, // r0 r1 r2
+        0b00000001000000000000000, // r3
+        0b01010111000011000000001, // r0 r3
+        0b00000011001100010000000, // r1 r3
+        0b01000011001111010000010, // r0 r1 r3
+        0b10000011110000000001000, // r2 r3
+        0b11000011110011000101000, // r0 r2 r3
+        0b10000011111100010001000, // r1 r2 r3
+        0b11111111111111111111111, // all four
+    ];
+
+    /// All 16 corner masks, at every probe, in every one of the 64 cells
+    /// (the 9-stride corner read must hold everywhere, not just in cell 0).
+    #[test]
+    fn every_corner_mask_matches_the_retail_table_in_every_cell() {
+        for ix in 0..8usize {
+            for iy in 0..8usize {
+                for mask in 0..16u32 {
+                    let lb = cell_with_road_corners(ix, iy, mask);
+                    for (k, &(dx, dy)) in PROBES.iter().enumerate() {
+                        let lx = ix as f32 * CELL_SIZE + dx;
+                        let ly = iy as f32 * CELL_SIZE + dy;
+                        let want = (EXPECTED[mask as usize] >> k) & 1 == 1;
+                        let got = on_road_retail(&lb, lx, ly, RETAIL_ROAD_WIDTH);
+                        assert_eq!(
+                            got, want,
+                            "cell ({ix},{iy}) mask {mask:04b} probe {k} ({dx}, {dy}) at ({lx}, {ly})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The four edge bands are 5 m wide (19 m on the far side), and the
+    /// comparisons are strict: exactly 5 m / 19 m is off the road.
+    #[test]
+    fn edge_bands_are_5m_and_strict() {
+        let (x0, y0) = (72.0f32, 48.0f32); // cell (3, 2)
+        let w = RETAIL_ROAD_WIDTH;
+        let west = cell_with_road_corners(3, 2, 0b0011);
+        assert!(on_road_retail(&west, x0 + 4.9, y0 + 12.0, w));
+        assert!(!on_road_retail(&west, x0 + 5.0, y0 + 12.0, w));
+        assert!(!on_road_retail(&west, x0 + 5.1, y0 + 12.0, w));
+        let east = cell_with_road_corners(3, 2, 0b1100);
+        assert!(on_road_retail(&east, x0 + 19.1, y0 + 12.0, w));
+        assert!(!on_road_retail(&east, x0 + 19.0, y0 + 12.0, w));
+        assert!(!on_road_retail(&east, x0 + 18.9, y0 + 12.0, w));
+        let south = cell_with_road_corners(3, 2, 0b0101);
+        assert!(on_road_retail(&south, x0 + 12.0, y0 + 4.9, w));
+        assert!(!on_road_retail(&south, x0 + 12.0, y0 + 5.0, w));
+        let north = cell_with_road_corners(3, 2, 0b1010);
+        assert!(on_road_retail(&north, x0 + 12.0, y0 + 19.1, w));
+        assert!(!on_road_retail(&north, x0 + 12.0, y0 + 19.0, w));
+    }
+
+    /// Opposite corners only: a diagonal band. r0 + r3 runs SW-NE
+    /// (`|dx - dy| < 5`); r1 + r2 runs NW-SE (`|dx + dy - 24| < 5`).
+    #[test]
+    fn diagonal_bands_for_opposite_corners() {
+        let (x0, y0) = (72.0f32, 48.0f32); // cell (3, 2)
+        let w = RETAIL_ROAD_WIDTH;
+        let sw_ne = cell_with_road_corners(3, 2, 0b1001);
+        assert!(on_road_retail(&sw_ne, x0 + 12.0, y0 + 7.1, w)); // 4.9
+        assert!(!on_road_retail(&sw_ne, x0 + 12.0, y0 + 6.9, w)); // 5.1
+        assert!(on_road_retail(&sw_ne, x0 + 20.0, y0 + 20.0, w)); // on the diagonal
+        assert!(!on_road_retail(&sw_ne, x0 + 2.0, y0 + 22.0, w)); // far corner
+        let nw_se = cell_with_road_corners(3, 2, 0b0110);
+        assert!(on_road_retail(&nw_se, x0 + 12.0, y0 + 16.9, w)); // 4.9
+        assert!(!on_road_retail(&nw_se, x0 + 12.0, y0 + 17.1, w)); // 5.1
+        assert!(on_road_retail(&nw_se, x0 + 2.0, y0 + 22.0, w)); // on the diagonal
+        assert!(!on_road_retail(&nw_se, x0 + 2.0, y0 + 2.0, w)); // far corner
+    }
+
+    /// Retail reads vertex `9*ix + iy`. A road bit only at idx `9*3+2 = 29`
+    /// (vertex (3, 2), LB-local (72, 48)) puts (74, 50) on the road. ACE's
+    /// dead-code [`on_road`] reads idx `3*8+2 = 26` there and misses it, and
+    /// instead flags cell (3, 5) (`3*8+5 = 29`), which retail leaves clear.
+    #[test]
+    fn reads_the_nine_stride_vertex_not_aces_eight_stride() {
+        let mut terrain = vec![0u16; 81];
+        terrain[9 * 3 + 2] = 0x0001;
+        let lb = lb_with_terrain(terrain);
+        let w = RETAIL_ROAD_WIDTH;
+        assert!(on_road_retail(&lb, 74.0, 50.0, w));
+        assert!(!on_road(&lb, 74.0, 50.0));
+        assert!(!on_road_retail(&lb, 80.0, 130.0, w));
+        assert!(on_road(&lb, 80.0, 130.0));
+        // The vertex is a corner of four cells; its L1 patch reaches into
+        // each of them.
+        assert!(on_road_retail(&lb, 70.0, 46.0, w)); // cell (2,1), r3: 48-22-22 = 4
+        assert!(on_road_retail(&lb, 70.0, 50.0, w)); // cell (2,2), r2: 24-22+2 = 4
+        assert!(on_road_retail(&lb, 74.0, 46.0, w)); // cell (3,1), r1: 24+2-22 = 4
+        // Outside the 5 m patch.
+        assert!(!on_road_retail(&lb, 80.0, 50.0, w)); // L1 = 10
+    }
+
+    /// The band width is the parameter: a 3 m road leaves 4 m off it.
+    #[test]
+    fn band_width_follows_road_width() {
+        let west = cell_with_road_corners(3, 2, 0b0011);
+        assert!(on_road_retail(&west, 76.0, 60.0, 5.0));
+        assert!(!on_road_retail(&west, 76.0, 60.0, 3.0));
+        let east = cell_with_road_corners(3, 2, 0b1100);
+        assert!(on_road_retail(&east, 92.0, 60.0, 5.0)); // dx 20 > 19
+        assert!(!on_road_retail(&east, 92.0, 60.0, 3.0)); // dx 20 < 21
+    }
+
+    /// A point on the LB's far edge (x or y == 192) clamps onto cell 7 and
+    /// stays inside the 81-word grid. The bake never sends such a point
+    /// here. `on_road_retail`'s only bake caller is `BakeMode::Retail`, and
+    /// its bounds gate is strict (`lx < LANDBLOCK_SIZE`, as retail's
+    /// `< 192` at `acclient.c:352677-352678`), so 192 is rejected before the
+    /// road test. Only `AceCompat` / `Strict` accept 192 (ACE's `> 192`
+    /// gate), and they use `on_road`, not this function. The clamp guards
+    /// other callers.
+    #[test]
+    fn landblock_far_edge_clamps_onto_cell_seven() {
+        let mut terrain = vec![0u16; 81];
+        // A road along x = 192: vertices (8, 3) and (8, 4).
+        terrain[9 * 8 + 3] = 0x0002;
+        terrain[9 * 8 + 4] = 0x0002;
+        let lb = lb_with_terrain(terrain);
+        let w = RETAIL_ROAD_WIDTH;
+        assert!(on_road_retail(&lb, 192.0, 84.0, w));
+        assert!(on_road_retail(&lb, 187.5, 84.0, w)); // dx 19.5
+        assert!(!on_road_retail(&lb, 186.5, 84.0, w)); // dx 18.5
+        assert!(!on_road_retail(&lb, 192.0, 150.0, w));
+        // Both axes at 192 read vertex (8, 8), the last word (idx 80).
+        let mut corner = vec![0u16; 81];
+        corner[80] = 0x0003;
+        assert!(on_road_retail(&lb_with_terrain(corner), 192.0, 192.0, w));
+        // A short synthetic terrain array reads as no road, never panics.
+        let short = lb_with_terrain(vec![0x0001u16; 10]);
+        assert!(!on_road_retail(&short, 180.0, 180.0, w));
+    }
 }
 
 #[cfg(test)]
@@ -711,5 +1138,152 @@ mod tests {
         assert!(on_road(&lb, 80.0, 100.0));
         // Position in a different cell — no road.
         assert!(!on_road(&lb, 0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod triangle_plane_from_grid_tests {
+    //! terrain-scenery-3: the walkable-triangle normal behind
+    //! `BakeMode::Retail`'s slope gate.
+
+    use super::*;
+
+    /// Deterministic, non-planar 9×9 grid (a 32-bit LCG, heights 0..200).
+    fn rough_grid(seed: u32) -> [f32; 81] {
+        let mut s = seed;
+        let mut g = [0.0f32; 81];
+        for h in g.iter_mut() {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *h = (s >> 24) as f32 * (200.0 / 255.0);
+        }
+        g
+    }
+
+    /// Planar ramp along X: `z = vx * 24 * gx` at every vertex.
+    fn ramp_grid(gx: f32) -> [f32; 81] {
+        let mut g = [0.0f32; 81];
+        for vx in 0..VERTEX_DIM {
+            for vy in 0..VERTEX_DIM {
+                g[vx * VERTEX_DIM + vy] = vx as f32 * CELL_SIZE * gx;
+            }
+        }
+        g
+    }
+
+    /// Every cell a saddle: vertex height `h` where `vx + vy` is odd, else 0.
+    fn saddle_grid(h: f32) -> [f32; 81] {
+        let mut g = [0.0f32; 81];
+        for vx in 0..VERTEX_DIM {
+            for vy in 0..VERTEX_DIM {
+                if (vx + vy) % 2 == 1 {
+                    g[vx * VERTEX_DIM + vy] = h;
+                }
+            }
+        }
+        g
+    }
+
+    fn sample_points() -> Vec<(f32, f32)> {
+        let mut pts = Vec::new();
+        let mut x = -5.0f32;
+        while x <= 197.0 {
+            let mut y = -5.0f32;
+            while y <= 197.0 {
+                pts.push((x, y));
+                y += 3.7;
+            }
+            x += 2.9;
+        }
+        // Vertices and cell edges, where the triangle choice is decided.
+        for v in 0..=8 {
+            let c = v as f32 * CELL_SIZE;
+            pts.push((c, c));
+            pts.push((c, 12.0));
+            pts.push((12.0, c));
+        }
+        pts
+    }
+
+    /// `z` is `triangle_plane_height_from_grid`, bit for bit, everywhere
+    /// (in, on the edges of, and clamped outside the landblock).
+    #[test]
+    fn z_is_bit_identical_to_triangle_plane_height() {
+        for (seed, top16) in [(1u32, 0xA9B4u16), (7, 0x0000), (99, 0x7F7F), (12345, 0xFEFE)] {
+            let grid = rough_grid(seed);
+            for (lx, ly) in sample_points() {
+                let want = triangle_plane_height_from_grid(&grid, top16, lx, ly);
+                let got = triangle_plane_from_grid(&grid, top16, lx, ly);
+                assert_eq!(
+                    got.z.to_bits(),
+                    want.to_bits(),
+                    "seed {seed} lb {top16:#06x} at ({lx}, {ly}): {} vs {want}",
+                    got.z
+                );
+            }
+        }
+    }
+
+    /// The normal is a unit vector pointing up, on rough terrain too.
+    #[test]
+    fn normal_is_unit_and_upward() {
+        let grid = rough_grid(42);
+        for (lx, ly) in sample_points() {
+            let n = triangle_plane_from_grid(&grid, 0xA9B4, lx, ly).normal;
+            let len = (n.0 * n.0 + n.1 * n.1 + n.2 * n.2).sqrt();
+            assert!((len - 1.0).abs() < 1e-5, "|N| = {len} at ({lx}, {ly})");
+            assert!(n.2 > 0.0, "N.z = {} must point up at ({lx}, {ly})", n.2);
+        }
+        // A descending ramp still reports an upward normal.
+        let down = ramp_grid(-0.5);
+        let n = triangle_plane_from_grid(&down, 0xA9B4, 50.0, 50.0).normal;
+        assert!(n.2 > 0.0 && n.0 > 0.0, "descending ramp normal {n:?}");
+    }
+
+    /// On a planar ramp every triangle is the plane: `N.z = 1/sqrt(1+g^2)`
+    /// and `N.x = -g/sqrt(1+g^2)`.
+    #[test]
+    fn planar_ramp_normal_matches_the_analytic_plane() {
+        for g in [0.0f32, 0.25, 0.484_322, 1.0] {
+            let grid = ramp_grid(g);
+            let inv = 1.0 / (1.0 + (g as f64) * (g as f64)).sqrt();
+            for (lx, ly) in sample_points() {
+                let p = triangle_plane_from_grid(&grid, 0xA9B4, lx, ly);
+                assert!(
+                    (p.normal_z() as f64 - inv).abs() < 1e-6,
+                    "g {g} at ({lx}, {ly}): N.z {} vs {inv}",
+                    p.normal_z()
+                );
+                assert!((p.normal.0 as f64 + g as f64 * inv).abs() < 1e-6);
+                assert!(p.normal.1.abs() < 1e-6);
+            }
+        }
+    }
+
+    /// On a saddle cell the 4-corner fit ([`normal_z_at`]) is flat but both
+    /// cell triangles slope by `sqrt(2) * h / 24`, whichever diagonal the
+    /// cell uses: retail's `walkable->plane.N.z` is the triangle's.
+    #[test]
+    fn saddle_cell_triangles_slope_where_the_four_corner_fit_is_flat() {
+        let h = 12.0f32;
+        let grid = saddle_grid(h);
+        let g = h as f64 / CELL_SIZE as f64;
+        let want = 1.0 / (1.0 + 2.0 * g * g).sqrt();
+        for cx in 0..8 {
+            for cy in 0..8 {
+                let x0 = cx as f32 * CELL_SIZE;
+                let y0 = cy as f32 * CELL_SIZE;
+                // One point on each side of either diagonal.
+                for (dx, dy) in [(6.0f32, 2.0f32), (2.0, 6.0), (18.0, 22.0), (22.0, 18.0)] {
+                    let (lx, ly) = (x0 + dx, y0 + dy);
+                    let tri = triangle_plane_from_grid(&grid, 0xA9B4, lx, ly).normal_z();
+                    let quad = normal_z_at(&grid, lx, ly);
+                    assert!(
+                        (tri as f64 - want).abs() < 1e-6,
+                        "cell ({cx},{cy}) at ({lx}, {ly}): triangle N.z {tri} vs {want}"
+                    );
+                    assert!((quad - 1.0).abs() < 1e-6, "4-corner N.z {quad} should be flat");
+                }
+            }
+        }
     }
 }

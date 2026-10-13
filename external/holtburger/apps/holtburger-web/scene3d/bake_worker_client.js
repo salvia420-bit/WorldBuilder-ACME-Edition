@@ -90,12 +90,34 @@ const WORKER_FETCH_SHARE_FRACTION = 0.25;
 //
 // MUST be called before `init_resource_source` on the main thread; that call
 // sizes this instance's cache.
+//
+// streaming-residency-2: an armed budget is a SOFT cap — a record read or
+// landed less than `?shardMinAgeS=S` seconds ago is never evicted, and an
+// over-budget pass trims to 85% of the budget in one batch (shard_cache.rs).
+// Absent / garbage → leave `__hbShardMinAgeMs` unset → Rust's 120 s default;
+// `0` / `off` → 0 (no floor). Inert while the budget is unbounded. Rides the
+// worker `init` message beside the budget (same per-instance value).
+export const DEFAULT_SHARD_MIN_AGE_S = 120; // mirrors shard_cache.rs DEFAULT_MIN_AGE_MS
+
+/** Parse one `shardMinAgeS` token → seconds (0 = no floor), or null (⇒ Rust default). */
+export function parseShardMinAgeS(raw) {
+  if (raw === null || raw === undefined) return null;
+  const t = String(raw).trim().toLowerCase();
+  if (t === "off") return 0;
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export function applyShardBudget(g = globalThis) {
   let mb = 0;
+  let minAgeS = null;
   try {
-    const raw = new URLSearchParams(g.location?.search || "").get("shardBudgetMB");
+    const params = new URLSearchParams(g.location?.search || "");
+    const raw = params.get("shardBudgetMB");
     const n = Number(raw);
     if (raw !== null && Number.isFinite(n) && n > 0) mb = n;
+    minAgeS = parseShardMinAgeS(params.get("shardMinAgeS"));
   } catch (_) {
     /* unbounded */
   }
@@ -105,7 +127,18 @@ export function applyShardBudget(g = globalThis) {
     // Leave the global unset so Rust takes the unbounded default.
     delete g.__hbShardBudgetBytes;
   }
-  return { mb, bytes: g.__hbShardBudgetBytes ?? 0 };
+  if (minAgeS !== null) {
+    g.__hbShardMinAgeMs = Math.round(minAgeS * 1000);
+  } else {
+    // Unset → Rust's DEFAULT_MIN_AGE_MS.
+    delete g.__hbShardMinAgeMs;
+  }
+  return {
+    mb,
+    bytes: g.__hbShardBudgetBytes ?? 0,
+    // The floor in force once a budget is armed (default included).
+    minAgeS: minAgeS ?? DEFAULT_SHARD_MIN_AGE_S,
+  };
 }
 
 // Surface-cache budget — S2 host plumbing (DESIGN-surface-budget-2026-07-25).
@@ -1105,6 +1138,9 @@ export class BakeWorkerClient {
       // cache would stay unbounded while the main thread's was capped. Same
       // per-instance value (see applyShardBudget); `undefined` → unbounded.
       shardBudgetBytes: globalThis.__hbShardBudgetBytes,
+      // streaming-residency-2: the shard cache's time floor (`?shardMinAgeS`),
+      // same per-instance value; `undefined` → Rust's 120 s default.
+      shardMinAgeMs: globalThis.__hbShardMinAgeMs,
       // Surface-budget S2: the WORKER's half of `?surfaceBudgetMB=N:M` (a lone
       // `N` gives both instances N). Same defect-4 reason as the shard budget —
       // the worker's `globalThis` is not the page's, so its surface store would

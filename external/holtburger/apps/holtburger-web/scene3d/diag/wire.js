@@ -27,6 +27,14 @@
 //   byKind(k)   — filter tail by numeric kind (matches both domains)
 //   summary()   — total + byKind + byCategory + windowMs
 //   reset()     — zero counters + clear tail
+//   integrity() — test-tooling-3: the recv loop's per-opcode DECODE counters
+//                 from wasm (`wire_integrity_json`, src/wire_integrity.rs) —
+//                 the messages that never become a ClientEvent: undecodable
+//                 (dropped by GameMessage::unpack), unknown opcode/event,
+//                 short read (bytes left unread), overrun. Keys are "0x" + 8
+//                 hex digits; a GameEvent keys as 0xF7B0_0000 | event type.
+//                 null when the export is absent (stale pkg/) or fails.
+//                 ci-smoke S7 gates totals.undecodable / totals.unknown == 0.
 
 const MAX_TAIL_DEFAULT = 200;
 const SNIPPET_LIMIT = 60;
@@ -97,6 +105,27 @@ function pushTail(wire, rec) {
   if (tail.length > wire.maxTail) tail.shift();
 }
 
+/** The curated wasm surface (index.html `window.__hbWasm`), or null. */
+function hbWasm() {
+  const w = (typeof window !== "undefined") ? window : null;
+  return (w && w.__hbWasm) ? w.__hbWasm : null;
+}
+
+/**
+ * Parse the wasm `wire_integrity_json()` payload. `null` on a missing export
+ * (stale pkg/, pre-boot), a throwing export, or a payload without `totals`.
+ */
+export function readWireIntegrity(hb = hbWasm()) {
+  if (!hb || typeof hb.wire_integrity_json !== "function") return null;
+  try {
+    const parsed = JSON.parse(hb.wire_integrity_json());
+    if (!parsed || typeof parsed !== "object" || !parsed.totals) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 export function attachWire(diag) {
   const counters = Object.create(null);   // null-proto: cleaner devtools display
 
@@ -157,6 +186,15 @@ export function attachWire(diag) {
     reset() {
       for (const key in counters) delete counters[key];
       wire.tail.length = 0;
+    },
+
+    /**
+     * test-tooling-3 — per-opcode decode integrity from the wasm recv loop
+     * (cumulative since load; `reset()` does not touch it). Fail-soft: null
+     * when the export is missing (stale pkg/) or fails.
+     */
+    integrity() {
+      return readWireIntegrity();
     },
   };
 

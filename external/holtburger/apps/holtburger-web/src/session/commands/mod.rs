@@ -123,7 +123,13 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::SetCharacterOption { .. }
         | SessionCommand::AddShortcut { .. }
         | SessionCommand::RemoveShortcut { .. }
-        | SessionCommand::TitleSet { .. }) => character::handle(ctx, c).await,
+        | SessionCommand::AddSpellFavorite { .. }
+        | SessionCommand::RemoveSpellFavorite { .. }
+        | SessionCommand::SpellbookFilter { .. }
+        | SessionCommand::TitleSet { .. }
+        | SessionCommand::FinishBarber { .. }
+        | SessionCommand::QueryAge { .. }
+        | SessionCommand::QueryBirth { .. }) => character::handle(ctx, c).await,
         c @ (SessionCommand::BuyHouse { .. }
         | SessionCommand::HouseQuery { .. }
         | SessionCommand::AbandonHouse { .. }

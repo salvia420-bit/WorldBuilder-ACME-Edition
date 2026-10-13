@@ -1068,7 +1068,7 @@ setSearch("?surfaceUnified=on&surfaceParityV2=on");
     decode6(F.Translucent, undefined, undefined).fog === true, "");
   check("M3b ClipMap (non-additive) → fog stays true",
     decode6(F.Base1ClipMap, undefined, true).fog === true, "");
-  setSearch("?surfaceUnified=on");
+  setSearch("?surfaceUnified=on&additiveObjFog=off");
   check("M3b parityV2 off → Additive fog stays true (legacy)",
     decode6(F.Additive, undefined, undefined).fog === true, "");
   setSearch("?surfaceUnified=on&surfaceParityV2=on");

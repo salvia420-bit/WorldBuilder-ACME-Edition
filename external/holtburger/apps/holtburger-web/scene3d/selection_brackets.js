@@ -73,11 +73,17 @@
 // Box3-over-rig heuristic only for setups that carry no sphere — see
 // `computeSelectionSphere` / `datSelectionSphereFor` and `selectionSphereStats`.
 //
+// Display option (hud-ui-6 / charopt-5, 2026-10-13): retail hides BOTH the
+// corners and the off-screen arrow unless `m_bDisplayOn` — the player's
+// VividTargetingIndicator option (CharacterOption 0x0E, default ON). See
+// `setDisplayOn` / `_pollDisplayOption`.
+//
 // Flags: `?selectionIndicator=` brackets (default) | ring | both | none ·
-// `?bracketBlipColor=off` · `?bracketCornerArt=off`.
+// `?bracketBlipColor=off` · `?bracketCornerArt=off` · `?vtiOptionGate=off`.
 // ============================================================================
 
 import * as THREE from "three";
+import { CHARACTER_OPTION, isCharacterOptionEnabled } from "../ui/ac_character_options.js";
 
 /** Retail's fixed 8 px viewport margin (OnDraw :289789-:289816). */
 const EDGE_MARGIN_PX = 8;
@@ -126,6 +132,47 @@ export const BRACKET_BLIP_COLOR_ON = (() => {
       .get("bracketBlipColor")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
+
+/**
+ * hud-ui-6 / charopt-5 (2026-10-13): honour the VividTargetingIndicator
+ * character option (0x0E). Retail `VividTargetIndicator::OnDraw` (:289780)
+ * returns with both the on-screen corners and the off-screen arrow hidden
+ * unless `m_bDisplayOn`, which `UpdateDisplayState` (:289556),
+ * `RecvNotice_PlayerDescReceived` (:289580) and
+ * `RecvNotice_PlayerOptionChanged` (`i_eOption == 14`, :289604) all set from
+ * `PlayerModule::VividTargetingIndicator()`. The option is default ON
+ * (`PlayerModule` ctor 0x50C4A54A, ACE `CharacterOptions1.Default`), so a
+ * default character draws exactly what it drew before; only a player who
+ * unticks it loses the brackets.
+ *
+ * DEFAULT-ON; `?vtiOptionGate=off` (or 0/false) never reads the option, so
+ * the brackets draw regardless of it (the pre-2026-10-13 behaviour).
+ * @param {string} [search] — a `location.search` string.
+ * @returns {boolean}
+ */
+export function vtiOptionGateEnabled(search) {
+  try {
+    const v = (new URLSearchParams(search || "").get("vtiOptionGate") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+const VTI_OPTION_GATE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return vtiOptionGateEnabled(window.location.search);
+  } catch (_) { return true; }
+})();
+
+/**
+ * How often `tick` re-reads the option while a target is selected. Retail is
+ * notice-driven (PlayerDescReceived / PlayerOptionChanged); the wasm session
+ * re-publishes the stats snapshot on both (PlayerDescription and the
+ * optimistic `SetCharacterOption` arm), so a 250 ms poll of that snapshot is
+ * the same signal at most a quarter-second late. Same cadence as camera.js's
+ * ViewCombatTarget (0x07) read.
+ */
+const VTI_OPTION_POLL_MS = 250;
 
 /**
  * 2026-08-02 — `?bracketCornerArt=off` falls back to the CSS L-brackets.
@@ -682,6 +729,13 @@ export class SelectionBracketLayer {
     /** @type {THREE.Object3D|null} */
     this._follow = null;
     this._guid = 0;
+    // hud-ui-6: retail `m_bDisplayOn` (VividTargetingIndicator, default ON).
+    // `_displayOptAt` / `_displayOptLast` = the option poll's last read time
+    // and value; the poll only calls `setDisplayOn` when the value CHANGES,
+    // the way retail only reacts to RecvNotice_PlayerOptionChanged.
+    this._displayOn = true;
+    this._displayOptAt = -Infinity;
+    this._displayOptLast = true;
 
     this._tl = this._makeCorner("tl");
     this._tr = this._makeCorner("tr");
@@ -834,6 +888,38 @@ export class SelectionBracketLayer {
   }
 
   /**
+   * Retail `VividTargetIndicator::UpdateDisplayState` (:289556): store
+   * `m_bDisplayOn` and, when it is off, hide both the on-screen corners and
+   * the off-screen arrow at once. Turning it back on needs nothing more —
+   * the next `tick` re-projects the still-tracked target (retail re-runs
+   * `SetSelected`).
+   * @param {boolean} on
+   */
+  setDisplayOn(on) {
+    this._displayOn = !!on;
+    if (!this._displayOn) this._hideAll();
+  }
+
+  /**
+   * Re-read CharacterOption 0x0E at most every `VTI_OPTION_POLL_MS` and feed a
+   * CHANGED value to `setDisplayOn`. `null` from the reader (no session handle
+   * yet, a stale pkg/, a throw) reads as ON — retail's default, and what the
+   * wasm export itself answers before PlayerDescription lands.
+   * @param {number} [now] — ms clock (tests pass it; defaults to performance.now()).
+   */
+  _pollDisplayOption(now) {
+    if (!VTI_OPTION_GATE_ON) return;
+    const t = Number.isFinite(now) ? now
+      : ((typeof performance !== "undefined") ? performance.now() : Date.now());
+    if (t - this._displayOptAt < VTI_OPTION_POLL_MS) return;
+    this._displayOptAt = t;
+    const on = isCharacterOptionEnabled(CHARACTER_OPTION.VividTargetingIndicator, null) !== false;
+    if (on === this._displayOptLast) return;
+    this._displayOptLast = on;
+    this.setDisplayOn(on);
+  }
+
+  /**
    * Per-rAF projection. Mirrors `SmartBox::GetObjectBoundingBox` (:144083)
    * then `VividTargetIndicator::OnDraw` (:289744).
    * @param {THREE.Camera} camera — the active camera.
@@ -841,6 +927,13 @@ export class SelectionBracketLayer {
   tick(camera) {
     this.tickCount += 1;
     if (!camera || !this._guid || !this._follow || !this._sphere) {
+      this._hideAll();
+      return;
+    }
+    // hud-ui-6: OnDraw's `!m_bDisplayOn` early-out (:289780) — the
+    // VividTargetingIndicator option hides corners AND arrow.
+    this._pollDisplayOption();
+    if (!this._displayOn) {
       this._hideAll();
       return;
     }
@@ -1038,6 +1131,8 @@ export function createSelectionBracketOverlay(canvas) {
       status: () => layer.lastStatus,
       radius: () => layer._sphere?.radius ?? null,
       fromDat: () => !!layer._sphere?.local,
+      // hud-ui-6: VividTargetingIndicator (0x0E) display state.
+      displayOn: () => layer._displayOn,
     };
   } catch (_) {}
   return { layer, domRoot: div };

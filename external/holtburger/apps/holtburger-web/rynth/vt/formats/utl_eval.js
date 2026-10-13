@@ -23,7 +23,8 @@
 // portal.dat ⇒ optimistic true; DamagePercentGE and CalcedBuffedTinkedTarget-
 // MeleeGE ⇒ false; Buffed* read the raw item values; CustomExpression is
 // ignored; an unknown node type or unparseable data ⇒ the rule does not match.
-// Fixed: max damage is STypeInt DAMAGE (44) — C# read 54 (WEAPON_ENCUMBRANCE).
+// Fixed: max damage is STypeInt DAMAGE (44) — C# read 54 (WEAPON_ENCUMBRANCE);
+// a ',' in a double is a decimal comma (VTClassic) — C# dropped it as grouping.
 //
 // Regexes are .NET patterns, matched case-insensitively. opts.getRegex
 // (EXPR's translator, injected by INT-2 — C2 forbids importing expr/) is used
@@ -85,10 +86,13 @@ function int(d, i) {
   if (!/^[-+]?\d+$/.test(t)) throw new BadData(`data ${i + 1} ${JSON.stringify(t)} is not an integer`);
   return parseInt(t, 10);
 }
+// A ',' is a decimal comma, not a group separator: VTank writes doubles with
+// "G" (no grouping) and VTClassic's HaxConvertDouble (Constants.cs) reads
+// ',' as '.'. C# ReadDouble's AllowThousands turned "0,95" into 95.
 function dbl(d, i) {
   const t = String((d && d[i]) ?? "")
     .trim()
-    .replace(/,/g, "");
+    .replace(",", ".");
   const n = Number(t);
   if (!t || !Number.isFinite(n)) throw new BadData(`data ${i + 1} ${JSON.stringify(t)} is not a number`);
   return n;

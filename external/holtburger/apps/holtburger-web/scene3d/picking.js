@@ -11,6 +11,9 @@ import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
 import { readBusyCount } from "../ui/ac_cast_predict.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
+// app-loop-2 (2026-10-13): the charge abort resolves the movement keys by
+// physical key, exactly like the index.html keystate they move with.
+import { movementKeyOf } from "../ui/movement_keys.js";
 import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
 import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 // FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — when the server owns the
@@ -26,6 +29,10 @@ import {
   containerOpenable, groundContainerUseNotice, isContainerObject, lockedContainerNoticeEnabled,
 } from "../plugins/ground_container_rules.js";
 import { pickNearestSphereHit } from "./pick_math.js";
+import { SEARCH_REASON, selectionFlashEnabled } from "./selection_lighting.js";
+import { getAttackCharge } from "../ui/attack_power_bar.js";
+import { createAttackRepeatState, attackRepeatStateEnabled } from "../ui/attack_repeat_state.js";
+import { escapeActionEnabled, installEscapeAction } from "../ui/escape_action.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -280,6 +287,17 @@ const RETAIL_USE_REJECT = (() => {
     return v !== "off" && v !== "0" && v !== "false";
   } catch { return true; }
 })();
+
+// lighting-materials-6 (2026-10-13) — `?selectionFlash=on` (DEFAULT OFF, a new
+// look pending the 1070 eye-test): the object a mouse find lands on flashes
+// fullbright / dim twice (selection_lighting.js; retail UIElement_SmartBoxWrapper
+// ::RecvNotice_SmartBoxObjectFound, acclient.c:275631). Only this file's mouse
+// paths feed it, never `setSelectedTarget` / `selectionChanged`: retail runs no
+// SmartBox find for keyboard target cycling, and Rynth SelectObject must not
+// blink the target either.
+// typeof guard: harnesses that strip this file's imports (test_picking_resolve)
+// must still evaluate it; the opt-in then reads as off.
+const SELECTION_FLASH = typeof selectionFlashEnabled === "function" ? selectionFlashEnabled() : false;
 
 // use-4 (2026-10-08 round 2) — retail's shared 0.2 s m_timeLastUsed, spent
 // by every world Use / pickup send (target_cycle.js consumeWorldUseThrottle;
@@ -546,6 +564,29 @@ export function setupClickPicking({
   // F6-4 — throttle for movement-driven CancelAttack so a held WASD key
   // (keydown auto-repeat) doesn't spam the wire.
   let lastCancelAttackMs = 0;
+
+  // combat-magic-2 (2026-10-13) — retail repeat-attack lifecycle
+  // (ui/attack_repeat_state.js: repeatAttacking, the pending reply, the queued
+  // press). It is created together with its bus hooks at the end of setup. It
+  // stays null under `?attackRepeatState=off` or without a plugin bus, and
+  // then the lockout-only path below runs unchanged.
+  let attackRepeat = null;
+  // CancelAttack for the repeat hooks (selection switch, jump). Uses the same
+  // 500 ms throttle as the movement and deselect arms below.
+  function sendRepeatCancelAttack() {
+    if (typeof sessionHandle.cancelAttack !== "function") return false;
+    const nowMs = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+    if (nowMs - lastCancelAttackMs < 500) return false;
+    lastCancelAttackMs = nowMs;
+    try {
+      sessionHandle.cancelAttack();
+      return true;
+    } catch (e) {
+      console.warn(`[picking] cancelAttack: ${e?.message ?? e}`);
+      return false;
+    }
+  }
 
   // Wave 2 Phase 4 (2026-05-26): track the last-fired melee motion u32
   // so the CMT picker can carry `prevMotion` forward. Module-scoped to
@@ -1047,6 +1088,15 @@ export function setupClickPicking({
     return pickNearestSphereHit(raycaster.ray.origin, raycaster.ray.direction, _pickSpheres, n);
   }
 
+  // `?selectionFlash=on` — hand a mouse find to the click flash
+  // (EntityManager.selectionFlashFound). No-op on the default path.
+  function selectionFlash(guid, reason) {
+    if (!SELECTION_FLASH) return;
+    try {
+      liveScene3d.entityManager?.selectionFlashFound?.((guid >>> 0) || 0, reason);
+    } catch (_) { /* cosmetic — never block the click */ }
+  }
+
   function onPointerDown(ev) {
     if (ev.button !== 0) {
       // Group C: right-click cancels an in-flight use-on-target selection.
@@ -1071,7 +1121,11 @@ export function setupClickPicking({
     }
     cancelClientMove();
     const guid = pickEntityAt(ev.clientX, ev.clientY);
-    if (guid == null) return;
+    if (guid == null) {
+      // ?selectionFlash: a find of nothing restores the object still blinking.
+      selectionFlash(0, SEARCH_REASON.Select);
+      return;
+    }
     ev.stopPropagation();
     ev.preventDefault();
     // Group C: if a use-on-target is pending (inventory "Use" of a
@@ -1079,6 +1133,9 @@ export function setupClickPicking({
     // canUseWith is the legality gate; we only dispatch. Retail
     // ItemHolder::TargetAcquired (acclient.c:433578).
     if (window.__useTargeting?.pending) {
+      // ?selectionFlash: sr_TargetedUse (MouseDown with a target mode armed)
+      // lights the target but does not select it.
+      selectionFlash(guid, SEARCH_REASON.TargetedUse);
       window.__useTargeting.resolve(guid >>> 0);
       return;
     }
@@ -1098,6 +1155,11 @@ export function setupClickPicking({
         prevGuid,
       });
     }
+    // ?selectionFlash: sr_Select lights the clicked object. The second press
+    // of a double-click lands here too and re-lights it, as retail's sr_Use
+    // find does (same SetLighting, flips re-armed) — so the Use branches below
+    // need no call of their own.
+    selectionFlash(newGuid, SEARCH_REASON.Select);
     try {
       const cb = window.__combatBarState;
 
@@ -1411,6 +1473,20 @@ export function setupClickPicking({
   }
   canvas.addEventListener("pointermove", onPointerMoveUseTarget);
 
+  // ?selectionFlash: retail re-finds the object under the mouse every frame
+  // (Global_Loop → FindObject with sr_MouseOver), and a find of another object,
+  // or of nothing, restores the one still blinking. Only while a flash runs
+  // (0.8 s after a click), throttled like the use-target hover above.
+  let lastFlashHoverMs = 0;
+  function onPointerMoveSelectionFlash(ev) {
+    if (!liveScene3d.entityManager?.selectionFlashActive?.()) return;
+    const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    if (now - lastFlashHoverMs < 50) return;
+    lastFlashHoverMs = now;
+    selectionFlash(pickEntityAt(ev.clientX, ev.clientY) ?? 0, SEARCH_REASON.MouseOver);
+  }
+  if (SELECTION_FLASH) canvas.addEventListener("pointermove", onPointerMoveSelectionFlash);
+
   // PR-LL 2026-05-23: drag-drop give from inventory onto an NPC.
   // The inventory plugin's <slot> elements set dataTransfer with
   // `application/x-hb-inv-guid` on dragstart. When such a drag is
@@ -1430,6 +1506,9 @@ export function setupClickPicking({
     const itemGuid = parseInt(guidStr, 10) >>> 0;
     if (!itemGuid) return;
     const targetGuid = pickEntityAt(ev.clientX, ev.clientY);
+    // ?selectionFlash: sr_Drop (HandleDropRelease) lights the object dropped
+    // on but does not select it; a drop on nothing restores a running blink.
+    selectionFlash(targetGuid ?? 0, SEARCH_REASON.Drop);
     if (!targetGuid) {
       console.log("[give] drop missed — no entity under cursor at",
         ev.clientX, ev.clientY);
@@ -1504,12 +1583,20 @@ export function setupClickPicking({
       ? Math.max(0, Math.min(1, power))
       : (cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL);
     if (opts?.followUp) {
+      // combat-magic-2 — when the release was queued behind a pending reply,
+      // its follow-up is held too. Retail EndAttackRequest makes no second
+      // request while pending, and the replay sends its own follow-up.
+      if (attackRepeat?.hasQueued()) return;
       try {
+        let sent = false;
         if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
           sessionHandle.missileAttack(targetGuid, safeHeight, slider);
+          sent = true;
         } else if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
           sessionHandle.attack(targetGuid, safeHeight, slider);
+          sent = true;
         }
+        if (sent) attackRepeat?.noteFollowUp({ height: safeHeight, power: slider });
       } catch (e) {
         console.warn(`[fire-attack] follow-up request failed: ${e?.message ?? e}`);
       }
@@ -1535,12 +1622,27 @@ export function setupClickPicking({
       // attackInProgress forward across the swap, so the live object never
       // loses an in-flight lock.
       const liveCb = (typeof window !== "undefined") ? window.__combatBarState : cb;
-      if (liveCb?.attackInProgress) {
+      // combat-magic-2 — retail EndAttackRequest (acclient.c:408952) QUEUES a
+      // release made while the server's reply is pending
+      // (attackWhenResponseReceived), and AttackDone replays it. The server's
+      // CombatCommenceAttack raises the pending flag too. So a press on a new
+      // target mid-swing waits for the cancelled loop's AttackDone, instead of
+      // being wiped by ACE's OnAttackDone.
+      if (attackRepeat) {
+        if (attackRepeat.shouldQueue(liveCb?.attackInProgress)) {
+          attackRepeat.queue(safeHeight, slider);
+          console.log("[fire-attack] attack still pending (server hasn't sent attackDone) — queued for AttackDone");
+          return false;
+        }
+      } else if (liveCb?.attackInProgress) {
         console.log("[fire-attack] attack still pending (server hasn't sent attackDone) — gated");
         return false;
       }
       cmd();
       if (liveCb) liveCb.attackInProgress = true;
+      // The USER fire path is the only caller: the bot's wasm attacks never
+      // set repeatAttacking.
+      attackRepeat?.noteSend({ selected: selGuid, target: targetGuid, height: safeHeight, power: slider });
       try {
         // F10-3 — this client-bus emit already seeds the combat-bar power
         // meter on the FIRST / single swing (the doc's "first attacks never
@@ -1885,13 +1987,34 @@ export function setupClickPicking({
   // frame, racing the keystate-driven movement and producing a
   // "tug of war" — see handoff Tier 1 #4. Now any of WASD, Q/E,
   // or Shift cancels the charge cleanly.
+  // app-loop-2: W/A/S/D/Q/E come from ui/movement_keys.js movementKeyOf
+  // (ev.code — the key that actually moves the character, whatever the
+  // layout); Shift and the arrows keep their layout-invariant ev.key.
   const ABORT_KEYS = new Set([
-    "w", "a", "s", "d", "q", "e", "shift",
+    "shift",
     "arrowup", "arrowdown", "arrowleft", "arrowright",
   ]);
   function onKeyDownAbortCharge(ev) {
-    const k = (ev.key || "").toLowerCase();
-    if (!ABORT_KEYS.has(k)) return;
+    // combat-magic-2 — retail CommenceJump (acclient.c:408033-408067): when
+    // charge_jump accepts a jump with Repeat Attacks on, the client sends
+    // CancelAttack and ends the repeat. Otherwise ACE's loop runs through the
+    // jump and after it. Every Space arm in index.html (legacy, jumpParity,
+    // cmdInterp) gets here. This is gated on the user's live repeat and on
+    // canJumpNow, because ACE's CancelAttack also cancels a server MoveTo.
+    if (ev.key === " " && attackRepeat && !ev.repeat) {
+      const tag = ev.target?.tagName;
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        let accepted = true;
+        try {
+          if (typeof sessionHandle.canJumpNow === "function") accepted = !!sessionHandle.canJumpNow();
+        } catch (_) { accepted = false; }
+        attackRepeat.jumpCommenced(accepted);
+      }
+      return;
+    }
+    const mk = movementKeyOf(ev);
+    const k = mk ?? (ev.key || "").toLowerCase();
+    if (mk === null && !ABORT_KEYS.has(k)) return;
     // Don't kill the charge / attack if the user is typing in a form
     // (chat input, login fields).
     const tag = ev.target?.tagName;
@@ -1920,12 +2043,20 @@ export function setupClickPicking({
     try {
       sessionHandle.cancelAttack();
       if (cb) cb.attackInProgress = false;
+      attackRepeat?.noteCancelSent(); // combat-magic-2: the repeat is over
     } catch (e) {
       console.warn(`[picking] cancelAttack: ${e?.message ?? e}`);
     }
   }
+  // combat-magic-4 — the in-world Escape (installed below); null under
+  // `?escapeAction=off`.
+  let escapeAction = null;
   // Group C: Esc cancels an in-flight use-on-target selection.
   function onKeyDownCancelUseTarget(ev) {
+    // combat-magic-4: the in-world Escape owns this. Retail clears the target
+    // mode only when standing with no repeat attack (OnAction 0x27 step 3a),
+    // and not when a panel used the key.
+    if (escapeAction) return;
     if (ev.key === "Escape" && window.__useTargeting?.pending) {
       window.__useTargeting.cancel();
     }
@@ -1943,12 +2074,45 @@ export function setupClickPicking({
     document.addEventListener("keydown", onKeyDownCancelUseTarget);
   }
 
+  // combat-magic-4 (2026-10-13) — retail in-world Escape
+  // (ClientUISystem::OnAction case 0x27, acclient.c:402170-402224), in decomp
+  // order:
+  //   1. a jump charge is cancelled;
+  //   2. else, standing still with no repeat attack, a pending use-on-target
+  //      is cleared, or the selection is dropped willingly (no auto-target);
+  //   3. else the client move and autorun stop, "Action interrupted" prints
+  //      when moving, and a running repeat attack is aborted (CancelAttack
+  //      through the repeat state above).
+  // It runs only when no panel / popover used the Escape (the central consumed
+  // signal in ui/escape_action.js). It is the funnel's last raw subscriber.
+  // `?escapeAction=off` keeps the use-target arm above as the only Escape.
+  // The flag read sits inside the try too: nothing about the Escape may stop
+  // the click picking from being set up (a failure leaves the use-target arm).
+  try {
+    if (escapeActionEnabled()) {
+      escapeAction = installEscapeAction({
+        funnel: inputFunnelV2On() ? getInputFunnel() : null,
+        sessionHandle,
+        getEntityManager: () => liveScene3d?.entityManager ?? null,
+        stopMovement: cancelClientMove,
+        getRepeatState: () => attackRepeat,
+        sendCancelAttack: sendRepeatCancelAttack,
+        getAttackCharge,
+      });
+    }
+  } catch (e) {
+    escapeAction = null;
+    console.warn(`[picking] escape action install failed: ${e?.message ?? e}`);
+  }
+
   // F6-4 — also stop the server attack loop when the target is cleared
   // (explicit deselect, or the target despawning mid-fight). ACE already
   // ends the loop on target death, so this is mostly belt-and-suspenders
   // for the explicit-deselect case; throttled + combat-stance-gated so it
   // doesn't send pointless cancels in peace.
   let onSelectionCleared = null;
+  let onRepeatAttackDone = null;
+  let onRepeatCommence = null;
   const bus = (typeof window !== "undefined") ? window.__pluginClient?.events : null;
   if (bus && typeof bus.on === "function") {
     onSelectionCleared = (ev) => {
@@ -1958,21 +2122,75 @@ export function setupClickPicking({
       // stance, sent CancelAttack — with the client run-up gone (86c4d11e) a
       // charge then ended in "Action cancelled!" (1070, 2026-10-11).
       const d = ev?.detail ?? ev ?? {};
+      // combat-magic-2 — retail RecvNotice_SelectionChanged
+      // (acclient.c:408741) cancels a live repeat attack on ANY selection
+      // change. ACE never lets the next TargetedMeleeAttack pre-empt its
+      // running loop, so Tab or a click on a second monster kept the swings on
+      // the first. The cancel needs the user's own repeat (the bot's wasm
+      // attacks never set it), a different non-zero guid, and a selection that
+      // is not a T9 LOD respawn (the 2026-10-11 regression).
+      if (attackRepeat && ((d.guid >>> 0) || 0) !== 0) {
+        attackRepeat.selectionChanged(d.guid >>> 0, { lodRespawn: !!d.lodRespawn });
+      }
       if (((d.guid >>> 0) || 0) !== 0) return; // only on clear
       // A same-guid T9 LOD respawn clears and re-selects the target: not a
       // deselect, so it cancels neither the move nor the attack.
       if (d.lodRespawn) return;
       // Deselect cancels the in-flight turn / sticky hold.
       cancelClientMove();
+      // combat-magic-2 — a real deselect ends the user's repeat too, even if
+      // the throttle below holds back the CancelAttack. Nothing is left to
+      // re-send to.
+      const repeatLive = attackRepeat ? attackRepeat.endRepeat() : false;
       if (!(isInMeleeStance?.() || isInRangedStance?.())) return;
       if (typeof sessionHandle.cancelAttack !== "function") return;
       const nowMs = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
       if (nowMs - lastCancelAttackMs < 500) return;
       lastCancelAttackMs = nowMs;
-      try { sessionHandle.cancelAttack(); } catch (_) {}
+      try {
+        sessionHandle.cancelAttack();
+        attackRepeat?.noteCancelSent(repeatLive);
+      } catch (_) {}
     };
     try { bus.on("selectionChanged", onSelectionCleared); } catch (_) {}
+
+    // combat-magic-2 — the repeat state's server inputs. Both arrive as
+    // kind=19 events on the bus. The local combatCommenceAttack that
+    // fireOnce emits right after a send only raises the pending flag again.
+    // A queued press is replayed in a microtask, after every AttackDone
+    // listener has run (the combat-bar lockout clear and the meter paint),
+    // so the replayed swing's own commence is the last thing the meter sees.
+    if (attackRepeatStateEnabled()) {
+      attackRepeat = createAttackRepeatState({
+        autoRepeat: () => !!window.__combatBarState?.autoRepeat,
+        getSlider: () => {
+          const v = Number(window.__combatBarState?.powerLevel);
+          return Number.isFinite(v) ? v : ATTACK_POWER_FULL;
+        },
+        isBuilding: () => !!getAttackCharge().building,
+        sendCancel: sendRepeatCancelAttack,
+        resend: (height, power) => fireAttackOnSelectedTarget(height, power, { followUp: true }),
+        fire: (height, power) => fireAttackOnSelectedTarget(height, power),
+        defer: (fn) => {
+          if (typeof queueMicrotask === "function") queueMicrotask(fn);
+          else Promise.resolve().then(fn);
+        },
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (id) => clearTimeout(id),
+      });
+      onRepeatAttackDone = (ev) => {
+        const detail = ev?.detail ?? {};
+        attackRepeat?.onAttackDone(detail.error);
+      };
+      onRepeatCommence = () => { attackRepeat?.noteCommence(); };
+      try {
+        bus.on("attackDone", onRepeatAttackDone);
+        bus.on("combatCommenceAttack", onRepeatCommence);
+      } catch (_) {
+        attackRepeat = null;
+      }
+    }
   }
 
   return {
@@ -1981,14 +2199,26 @@ export function setupClickPicking({
       cancelClientMove();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMoveUseTarget);
+      canvas.removeEventListener("pointermove", onPointerMoveSelectionFlash);
       canvas.removeEventListener("dragover", onCanvasDragOver);
       canvas.removeEventListener("drop", onCanvasDrop);
       document.removeEventListener("keydown", onKeyDownAbortCharge);
       document.removeEventListener("keydown", onKeyDownCancelUseTarget);
+      // The reference stays set: the funnel copy of onKeyDownCancelUseTarget
+      // is never unbound, and must not start cancelling on Escape again.
+      escapeAction?.uninstall();
       if (window.__useTargeting?.pending) window.__useTargeting.cancel();
       if (onSelectionCleared && bus && typeof bus.off === "function") {
         try { bus.off("selectionChanged", onSelectionCleared); } catch (_) {}
       }
+      if (onRepeatAttackDone && bus && typeof bus.off === "function") {
+        try {
+          bus.off("attackDone", onRepeatAttackDone);
+          bus.off("combatCommenceAttack", onRepeatCommence);
+        } catch (_) {}
+      }
+      attackRepeat?.reset();
+      attackRepeat = null;
     },
   };
 }

@@ -53,6 +53,7 @@ import {
   UTL_NODE_TYPES,
   newUtlProfile,
   validateUtl,
+  importUsdProfile,
 } from "./formats/index.js";
 import { MetaEngine, ViewManager, registerViewFunctions, registerMetaFunctions } from "./meta/index.js";
 import { createRsDispatcher, createVtActions, registerHostFunctions, QuestTracker } from "./cmd/index.js";
@@ -60,6 +61,7 @@ import { ActiveNav, NavProfiles } from "./nav/index.js";
 import {
   MonsterList,
   MONSTER_VARIABLES,
+  normalizeEntry,
   makeMonsterVars,
   DebuffLedger,
   AttackPlanner,
@@ -78,6 +80,7 @@ import { buildHostFnContext } from "./glue/host_fn_context.js";
 import { makeLootClassify } from "./glue/loot_ctx.js";
 import { installRsEntry, openVtPanel, loadViewRendererFactory } from "./rs_entry.js";
 import * as gotoCompose from "../goto_compose.js";
+import { createHostSkillCap, readTierThresholds } from "../skill_cap.js";
 
 export const VT_LAYER_VERSION = 1;
 /** postTick runs every Nth heartbeat (10 Hz host → 2 Hz, §3.3). */
@@ -698,6 +701,11 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
           }
           return session.stores.loot.remove(n);
         }),
+      // A VTank settings profile (.usd) → a NEW user profile (Save As, then
+      // its Settings by VTank name and its Monsters tab through the
+      // MonsterList validator); refused for Default and existing names.
+      importUsd: (name, data, opts) =>
+        wrap(() => importUsdProfile(options, name, data, { mineOnly: !!opts && opts.mineOnly === true, normalizeMonster: normalizeEntry })),
     };
     layer.library = library;
 
@@ -803,6 +811,48 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       if (ib.wrote && bot.buff && typeof bot.buff.setItemBuffs === "function") bot.buff.setItemBuffs([]);
     });
 
+    // ── (12b) buff/vital tier cap by magic skill: BuffTierSkillCap +
+    // BuffMinSkillLevelTier1..8 projected onto buff/vitals setSkillCap
+    // (rynth/skill_cap.js; RynthAi GetHighestBuffSpellTier). Off — the
+    // default — never touches a loop, so Default stays byte-identical (V-2);
+    // turned off after being on, both loops get setSkillCap(null). One host cap
+    // (one 5 s skills read) serves both loops; it is rebuilt only when the
+    // thresholds change, and re-applied to a loop bot.setBuffs replaced (1 Hz).
+    const sc = { buff: undefined, vitals: undefined, sig: "off", cap: null, wrote: false };
+    function projectSkillCap(force = false) {
+      if (disposed) return;
+      const buff = bot.buff || null;
+      const vitals = bot.vitals || null;
+      const on = safe(() => options.getValue("BuffTierSkillCap") === true, false) === true;
+      const tiers = on ? readTierThresholds((k, d) => safe(() => options.getValue(k), d), "BuffMinSkillLevelTier") : null;
+      const sig = on ? tiers.join(",") : "off";
+      if (!force && buff === sc.buff && vitals === sc.vitals && sig === sc.sig) return;
+      const capChanged = sig !== sc.sig;
+      const prev = { buff: sc.buff, vitals: sc.vitals };
+      sc.buff = buff;
+      sc.vitals = vitals;
+      sc.sig = sig;
+      if (!on && !sc.wrote) return; // never projected: leave the loops' own (absent) cap alone
+      if (!on) sc.cap = null;
+      else if (capChanged || !sc.cap) sc.cap = createHostSkillCap(host, { tiers });
+      for (const [loop, before] of [[buff, prev.buff], [vitals, prev.vitals]]) {
+        if (!loop || typeof loop.setSkillCap !== "function") continue;
+        if (!force && !capChanged && loop === before) continue;
+        safe(() => loop.setSkillCap(sc.cap));
+      }
+      sc.wrote = on;
+    }
+    function clearSkillCap() {
+      if (!sc.wrote) return;
+      for (const loop of [bot.buff, bot.vitals]) {
+        if (loop && typeof loop.setSkillCap === "function") safe(() => loop.setSkillCap(null));
+      }
+      sc.wrote = false;
+      sc.cap = null;
+    }
+    projectSkillCap(true);
+    undo.push(() => clearSkillCap());
+
     // ── option changes → the services that mirror them ───────────────────────
     const offOptions = options.onChange((evt) => {
       if (disposed || !evt) return;
@@ -818,6 +868,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
           } else if (evt.key === "buffs") projectItemBuffs(true);
         } else if (evt.kind === "setting") {
           if (evt.key === "WarSpellMode" || evt.key === "SwitchWandsToDebuff") refreshPlanner();
+          else if (evt.key === "BuffTierSkillCap" || String(evt.key).startsWith("BuffMinSkillLevelTier")) projectSkillCap();
         } else if (evt.kind === "profile") {
           // A selected profile: re-read every list, then load the refs it
           // names (never on kind:"ref" — ActiveNav.loadByName sets the ref
@@ -826,6 +877,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
           refreshPlanner();
           safe(() => combat?.invalidateScan?.());
           projectItemBuffs(true);
+          projectSkillCap();
           loadProfileRefs();
         }
       } catch (e) {
@@ -930,6 +982,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       // A new buff loop (bot.setBuffs built one) or a newly loaded spell table
       // or a changed spellbook re-projects the item buffs.
       const entries = safe(() => items.list().length, 0);
+      if ((bot.buff || null) !== sc.buff || (bot.vitals || null) !== sc.vitals) projectSkillCap();
       if (bot.buff !== ib.buff) projectItemBuffs(true);
       else if (entries && (!ib.loaded ? combatSpellsLoaded() === true : knownSig((callHost("TryGetKnownSpells") || []).map((x) => Number(x) >>> 0)) !== ib.knownSig)) {
         projectItemBuffs(true);
@@ -1068,6 +1121,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       }
       if (bot.loot && lootBinding.classify && bot.loot.classify === lootBinding.classify) bot.loot.classify = null;
       if (ib.wrote && bot.buff && typeof bot.buff.setItemBuffs === "function") safe(() => bot.buff.setItemBuffs([]));
+      clearSkillCap();
       safe(() => removeAux());
       if (bot.unwedge && bot.unwedge.allowEscalation === allowEscalation) bot.unwedge.allowEscalation = null;
     };

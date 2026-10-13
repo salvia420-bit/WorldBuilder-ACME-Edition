@@ -120,6 +120,45 @@ export function heldKeyReleaseOn() {
   return _heldKeyRelease;
 }
 
+/** `?nativeContextMenu=on` — debugging escape (input-options-8, 2026-10-13):
+ *  skip the page-wide context-menu suppression in `InputFunnel.install`, so
+ *  the browser's menu opens everywhere it did before. Opt-in: only
+ *  `on`/`1`/`true`; absent = suppression installed. */
+export function readNativeContextMenuFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "";
+    const v = new URLSearchParams(s).get("nativeContextMenu");
+    if (v == null) return false;
+    const lc = v.toLowerCase();
+    return lc === "on" || lc === "1" || lc === "true";
+  } catch (_) {
+    return false;
+  }
+}
+let _nativeContextMenu = null;
+export function nativeContextMenuOn() {
+  if (_nativeContextMenu === null) _nativeContextMenu = readNativeContextMenuFlag();
+  return _nativeContextMenu;
+}
+/** Test seam. */
+export function _resetNativeContextMenuForTest() {
+  _nativeContextMenu = null;
+}
+
+/** True when `el` itself takes typed text: INPUT / TEXTAREA / SELECT /
+ *  contentEditable. */
+export function isTextEntryElement(el) {
+  if (!el || typeof el !== "object") return false;
+  const tag = (el.tagName || "").toUpperCase();
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return el.isContentEditable === true;
+}
+
 /**
  * True when a genuine text-entry context owns this keystroke.
  *
@@ -130,23 +169,122 @@ export function heldKeyReleaseOn() {
  * input can never receive the key, so it must not eat it.
  */
 export function isTextEntryTarget(ev) {
-  const eats = (el) => {
-    if (!el || typeof el !== "object") return false;
-    const tag = (el.tagName || "").toUpperCase();
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-    return el.isContentEditable === true;
-  };
-  if (eats(ev?.target)) return true;
+  if (isTextEntryElement(ev?.target)) return true;
   try {
     if (typeof document === "undefined") return false;
     const el = document.activeElement;
     if (!el) return false;
     // Detached (panel torn down mid-focus) — cannot receive keys, ignore.
     if (el.isConnected === false) return false;
-    return eats(el);
+    return isTextEntryElement(el);
   } catch (_) {
     return false;
   }
+}
+
+/** Walk `parentNode` up from `node` (at most 256 steps); true on `ancestor`. */
+function isWithin(node, ancestor) {
+  let n = node;
+  for (let i = 0; n && i < 256; i++) {
+    if (n === ancestor) return true;
+    n = n.parentNode ?? null;
+  }
+  return false;
+}
+
+function defaultGetSelection() {
+  try {
+    return typeof window !== "undefined" && typeof window.getSelection === "function"
+      ? window.getSelection()
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function defaultUserSelectOf(el) {
+  try {
+    const view =
+      el?.ownerDocument?.defaultView ?? (typeof window !== "undefined" ? window : null);
+    if (!view || typeof view.getComputedStyle !== "function") return "";
+    const cs = view.getComputedStyle(el);
+    return String(cs.userSelect || cs.webkitUserSelect || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
+ * True when a right-click lands on the player's text selection. The selection
+ * must be non-empty (chat-panel.js's `!sel.isCollapsed` test) and either lie
+ * in the target's selectable region, its nearest `user-select: text`
+ * ancestor-or-self (the chat log; examine, book, journal and dialog prose),
+ * or overlap the target itself.
+ */
+function selectionKeepsContextMenu(target, ctx) {
+  if (!target || typeof target !== "object") return false;
+  let sel = null;
+  try {
+    sel = typeof ctx.getSelection === "function" ? ctx.getSelection() : defaultGetSelection();
+  } catch (_) {
+    sel = null;
+  }
+  if (!sel || sel.isCollapsed !== false) return false;
+  const userSelectOf =
+    typeof ctx.userSelectOf === "function" ? ctx.userSelectOf : defaultUserSelectOf;
+  let el = target;
+  for (let i = 0; el && i < 64; i++) {
+    let us = "";
+    try {
+      us = String(userSelectOf(el) || "");
+    } catch (_) {
+      us = "";
+    }
+    if (us === "text") {
+      if (isWithin(sel.anchorNode, el) || isWithin(sel.focusNode, el)) return true;
+      break;
+    }
+    el = el.parentElement ?? null;
+  }
+  try {
+    return typeof sel.containsNode === "function" && sel.containsNode(target, true) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Should the page-wide `contextmenu` listener (`InputFunnel.install`) stop
+ * the browser's menu? Retail had no OS context menu: the right button is one
+ * more input to CInputManager (acclient.c), and a right-drag is mouse-look.
+ * So the default is "suppress"; the exceptions keep browser conveniences the
+ * HUD deliberately offers.
+ *
+ *   1. A right press that began on the 3D canvas is a camera turn wherever it
+ *      ends. Windows fires `contextmenu` on the mouse-up target, so a drag
+ *      released over chat would otherwise open it there → suppress, even
+ *      over a text field or selected text.
+ *   2. A text field keeps the menu, for paste (after WebAC
+ *      packages/renderer/src/input/BrowserDefaults.ts suppressPageContextMenu,
+ *      AGPL-3.0). Only `ev.target` counts: the menu belongs to the element
+ *      under the pointer, not to whatever holds focus.
+ *   3. Selected text keeps it, for Copy (see `selectionKeepsContextMenu`).
+ *   4. Everything else is HUD chrome → suppress.
+ *
+ * @param {{target?: object}} ev
+ * @param {{rightPressOnCanvas?: boolean, getSelection?: () => any,
+ *   userSelectOf?: (el: object) => string}} [ctx] `getSelection` and
+ *   `userSelectOf` are test seams (default `window.getSelection()` and the
+ *   computed `user-select`).
+ * @returns {boolean}
+ */
+export function shouldSuppressContextMenu(ev, ctx = {}) {
+  const c = ctx || {};
+  if (c.rightPressOnCanvas === true) return true;
+  const target = ev?.target ?? null;
+  if (isTextEntryElement(target)) return false;
+  if (selectionKeepsContextMenu(target, c)) return false;
+  return true;
 }
 
 /**
@@ -186,8 +324,12 @@ export class InputFunnel {
       faults: 0,
       heldReleased: 0,
       lostKeyUps: 0,
+      contextMenusSuppressed: 0,
     };
     this.lastDispatch = null;
+    // True from a right press on the 3D canvas (camera.js calls
+    // `noteCanvasRightPress`) until the next `contextmenu` or mouse press.
+    this._rightPressOnCanvas = false;
     // Held-key ledger (2026-10-07, `?heldKeyRelease`): every key whose press
     // reached the raw subscribers and whose release has not been seen yet,
     // keyed by `ev.code` (identical on press and release whatever the layout
@@ -230,10 +372,12 @@ export class InputFunnel {
    * @param {string|object} defaultBinding KeyboardEvent.code, or a
    *   `{code, ctrl, shift, alt, meta}` shape for modifier defaults.
    * @param {(ev: KeyboardEvent) => void} handler
-   * @param {{when?: () => boolean, priority?: number, source?: string, allowRepeat?: boolean}} [opts]
+   * @param {{when?: (ev?: KeyboardEvent) => boolean, priority?: number, source?: string, allowRepeat?: boolean}} [opts]
    *   `when` is the action's own scope predicate (e.g. magic stance, panel
-   *   mounted). It narrows WHICH action wins — it is NOT a second gate: a
-   *   dead funnel still kills the action.
+   *   mounted), called with the keydown. It narrows WHICH action wins — it
+   *   is NOT a second gate: a dead funnel still kills the action. A `false`
+   *   skips this action; if nothing else matches, the key stays unclaimed
+   *   (no preventDefault) for the focused control.
    *   `allowRepeat` lets OS key autorepeat re-fire the action (selection
    *   scrolling). Default false: a held key fires once, on the press edge.
    * @returns {() => void} unbind
@@ -340,7 +484,10 @@ export class InputFunnel {
       if (a.when) {
         let ok = false;
         try {
-          ok = !!a.when();
+          // The keydown is passed so a scope can yield one KEY (e.g. Home
+          // while a focused HUD list owns it — ui/hud_focus.js); every
+          // older `when` ignores the argument.
+          ok = !!a.when(ev);
         } catch (_) {
           ok = false;
         }
@@ -438,6 +585,17 @@ export class InputFunnel {
     return released;
   }
 
+  /**
+   * camera.js: this right press began on the 3D canvas (a mouse-look turn).
+   * The `contextmenu` that ends it is suppressed wherever the pointer is
+   * released (see `shouldSuppressContextMenu`). The document capture
+   * `mousedown` listener in `install` clears the mark first, so it always
+   * belongs to the latest press.
+   */
+  noteCanvasRightPress() {
+    this._rightPressOnCanvas = true;
+  }
+
   /** Remember an event that can swallow a key-up (last 8 kept). */
   _noteRisk(type, ev) {
     let target = "";
@@ -501,13 +659,38 @@ export class InputFunnel {
         d.addEventListener(t, this._onDragOver, true);
       }
     }
+    if (!nativeContextMenuOn()) {
+      // Page-wide context-menu suppression (input-options-8, 2026-10-13).
+      // The canvas (camera.js) and the HUD cells with their own right-click
+      // already prevent theirs; this covers the rest of the page, so a camera
+      // turn released over chat, radar or vitals no longer opens the browser
+      // menu (and the release-held fallback below rarely has to run). Bubble
+      // phase on document: every element handler has already run, and the
+      // window listener below runs after this one, so its `defaultPrevented`
+      // test still means "the browser menu really opened". Rules:
+      // `shouldSuppressContextMenu`. `?nativeContextMenu=on` skips this.
+      this._onAnyPress = () => { this._rightPressOnCanvas = false; };
+      d.addEventListener("mousedown", this._onAnyPress, true);
+      this._onContextMenu = (ev) => {
+        const rightPressOnCanvas = this._rightPressOnCanvas;
+        this._rightPressOnCanvas = false;
+        if (ev.defaultPrevented) return;
+        if (!shouldSuppressContextMenu(ev, { rightPressOnCanvas })) return;
+        try {
+          ev.preventDefault();
+        } catch (_) {}
+        this.stats.contextMenusSuppressed += 1;
+      };
+      d.addEventListener("contextmenu", this._onContextMenu);
+    }
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       // A native context menu also takes the keyboard until it closes, with
       // no blur. Windows fires `contextmenu` on mouse-up over whatever is under
       // the pointer, so a right-drag camera turn released over a HUD element
-      // opens Chrome's menu. Bubble phase on window runs after every element
-      // handler, so `defaultPrevented` is final here: release only when the
-      // browser menu really opens.
+      // opens Chrome's menu (now only with `?nativeContextMenu=on`; the menu
+      // still opens on text fields and selected text). Bubble phase on window
+      // runs after every element handler, so `defaultPrevented` is final
+      // here: release only when the browser menu really opens.
       window.addEventListener("contextmenu", (ev) => {
         if (ev.defaultPrevented) return;
         this._noteRisk("contextmenu", ev);

@@ -587,14 +587,18 @@ export function mount(_ctx) {
     reanchorVertical();
     if (pinned) scrollToBottom();
   }
+  // gmFloatyMainChatUI::UpdateLockedStatus reads the global LockUI
+  // (ui/ui_lock.js): no drag and no resize while it is set.
   const edgeResizers = attachEdgeResizers(overlay, {
     edges: ["top"],
     windowId: WINDOW_ID.CHAT,
+    obeysGlobalLock: true,
     minWidth: MIN_W, minHeight: MIN_H, maxWidth: MAX_W, maxHeight: MAX_H,
     onSizeChange: onUserResize,
   });
   const cornerResizers = attachCornerResizers(overlay, {
     windowId: WINDOW_ID.CHAT,
+    obeysGlobalLock: true,
     size: 6,
     minWidth: MIN_W, minHeight: MIN_H, maxWidth: MAX_W, maxHeight: MAX_H,
     onSizeChange: onUserResize,
@@ -606,6 +610,7 @@ export function mount(_ctx) {
     dragHandle: overlay,
     ignoreSelector: DRAG_IGNORE,
     legacyKey: "hb_panel_pos_chat-panel",
+    obeysGlobalLock: true,
   });
 
   // Never larger than the HUD viewport (a box sized at HUD scale 1 can be

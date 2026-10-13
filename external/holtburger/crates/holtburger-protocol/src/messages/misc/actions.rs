@@ -121,6 +121,60 @@ impl ProtocolPack for EnterPkLiteActionData {
     fn pack(&self, _buf: &mut Vec<u8>) {}
 }
 
+/// chat-errors-8 (2026-10-13): C2S `Character_QueryAge` (0x01C2) — retail
+/// `CM_Character::Event_QueryAge(i_target)` (acclient.c:697985) packs the
+/// opcode and one `u32`. `ClientCommunicationSystem::DoAge` (:422037) passes
+/// the selected object only for a PSR, so a player always sends 0. ACE
+/// (`GameActionQueryAge.cs`) reads the field as an empty `String16L` + pad
+/// and ignores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryAgeActionData {
+    pub target: u32,
+}
+
+impl ProtocolUnpack for QueryAgeActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let target = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { target })
+    }
+}
+
+impl ProtocolPack for QueryAgeActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.target).unwrap();
+    }
+}
+
+/// chat-errors-8: C2S `Character_QueryBirth` (0x01C4) — retail
+/// `CM_Character::Event_QueryBirth(i_target)` (acclient.c:698035);
+/// `ClientCommunicationSystem::DoBirth` (:410915) always passes 0. ACE
+/// (`GameActionQueryBirth.cs`) answers with a Broadcast chat line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryBirthActionData {
+    pub target: u32,
+}
+
+impl ProtocolUnpack for QueryBirthActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let target = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { target })
+    }
+}
+
+impl ProtocolPack for QueryBirthActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.target).unwrap();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfirmationResponseActionData {
     pub confirmation_type: ConfirmationType,
@@ -272,5 +326,44 @@ mod tests {
         // Generated from ACE: SyntheticProtocolTests.GenerateChatAndRecallActionFixtures
         let fixture = hex::decode("444444448F020000").unwrap();
         assert_pack_unpack_parity(&fixture, &action);
+    }
+
+    /// chat-errors-8: `/age` → opcode 0x01C2 + `u32 target` 0 (retail
+    /// Event_QueryAge for a non-PSR player).
+    #[test]
+    fn test_query_age_packs_opcode_and_zero_target() {
+        let action = GameActionMessage {
+            sequence: 0x55555555,
+            action: GameAction::QueryAge(Box::new(QueryAgeActionData { target: 0 })),
+        };
+        let mut packed = Vec::new();
+        action.pack(&mut packed);
+        assert_eq!(
+            packed,
+            vec![0x55, 0x55, 0x55, 0x55, 0xC2, 0x01, 0, 0, 0, 0, 0, 0]
+        );
+        let fixture = hex::decode("55555555C201000000000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &action);
+    }
+
+    /// chat-errors-8: `/birth` → opcode 0x01C4 + `u32 target` 0 (retail
+    /// DoBirth always passes 0).
+    #[test]
+    fn test_query_birth_packs_opcode_and_zero_target() {
+        let action = GameActionMessage {
+            sequence: 0x66666666,
+            action: GameAction::QueryBirth(Box::new(QueryBirthActionData { target: 0 })),
+        };
+        let mut packed = Vec::new();
+        action.pack(&mut packed);
+        assert_eq!(
+            packed,
+            vec![0x66, 0x66, 0x66, 0x66, 0xC4, 0x01, 0, 0, 0, 0, 0, 0]
+        );
+        let fixture = hex::decode("66666666C401000000000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &action);
+        // A truncated body does not unpack.
+        let mut offset = 0;
+        assert!(GameActionMessage::unpack(&fixture[..10], &mut offset).is_none());
     }
 }

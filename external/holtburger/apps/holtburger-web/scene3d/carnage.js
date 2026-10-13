@@ -67,6 +67,19 @@ export function carnageEnabled() {
   }
 }
 
+/**
+ * `?combatFxBus=on` — STRICT opt-in (2026-10-13). Feeds the bus handlers in
+ * `_bind` the event's `detail` (see the note there). Absent ⇒ OFF, so the
+ * default arm keeps its shipped behaviour until the owner's eye-test.
+ */
+export function combatFxBusEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get("combatFxBus") === "on";
+  } catch (_e) {
+    return false;
+  }
+}
+
 export const CARNAGE_LIMP_HITS = 2; // leg hits before the limp shows
 export const CARNAGE_SEVER_HITS = 4; // leg hits before the lower leg comes off
 const CRIT_WINDOW_MS = 4000;
@@ -841,12 +854,24 @@ export function carnageOnDeath(inst) {
 /* ── bus wiring ──────────────────────────────────────────────────────── */
 
 let _installed = false;
+let _busDetail = false; // ?combatFxBus=on, read once in installCarnage()
 let _critByName = new Map(); // defenderName → ts (same latch idea as combatFx)
 
 function _bind() {
   const pc = window.__pluginClient;
   if (!pc?.events?.on) return false;
-  pc.events.on("playEffect", ({ targetGuid, scriptId }) => {
+  // The plugin bus delivers `new CustomEvent(name, { detail: payload })`
+  // (plugins/api.js events.emit), but both handlers below read the payload
+  // fields straight off their argument — i.e. off the Event — so on real
+  // traffic they see `undefined` and never fire (lint-event-consumers.mjs
+  // DETAIL_KNOWN_BUGS). Under `?combatFxBus=on` each handler is handed
+  // `ev.detail` instead (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake
+  // bus that passes the raw payload still works). Off by default: carnage
+  // actually firing is a large visual change pending the owner's eye-test, so
+  // the default arm subscribes the handler itself, exactly as before.
+  const onBus = (name, fn) =>
+    pc.events.on(name, _busDetail ? (ev) => fn(ev?.detail ?? ev ?? {}) : fn);
+  onBus("playEffect", ({ targetGuid, scriptId }) => {
     try {
       const decoded = decodeSplatterId(scriptId);
       if (!decoded) return;
@@ -860,7 +885,7 @@ function _bind() {
       _onSplatterHit(inst, decoded, critical);
     } catch (_e) { /* never break the shared bus */ }
   });
-  pc.events.on("damageDealt", (d) => {
+  onBus("damageDealt", (d) => {
     try {
       if (d?.criticalHit && d.defenderName) {
         _critByName.set(d.defenderName, performance.now());
@@ -878,6 +903,11 @@ function _bind() {
 export function installCarnage() {
   if (_installed || !carnageEnabled()) return;
   _installed = true;
+  _busDetail = combatFxBusEnabled();
+  if (_busDetail) {
+    // eslint-disable-next-line no-console
+    console.info("[carnage] ?combatFxBus=on — bus handlers read the event's detail payload");
+  }
   let tries = 0;
   const attempt = () => {
     if (_bind()) {

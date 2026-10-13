@@ -4,6 +4,20 @@
 //! 43, 54, 59, 101-160. Every magic constant comes from the C# source —
 //! do not rename, deduplicate, or "simplify" them.
 //!
+//! The `*_retail` functions are the exceptions. They are `BakeMode::Retail`
+//! ports of `acclient.c`, not of `Scenery.cs`:
+//! - [`object_noise_retail`] is the frequency gate from
+//!   `CLandBlock::get_land_scenes`. `Scenery.cs:59` gets it wrong by
+//!   dropping the object index.
+//! - [`scene_index_retail`] is the scene pick from the same function.
+//! - [`displace_retail`] is `ObjectDesc::Place`.
+//! - [`scale_obj_retail`] is `ObjectDesc::ScaleObj`.
+//! - [`rotate_obj_retail`] is the heading in degrees from
+//!   `ObjectDesc::GetObjFrame`.
+//!
+//! All of them scale the u32 noise by [`NOISE_SCALE_RETAIL`] (exactly
+//! 2^-32), not by ACE's [`NOISE_SCALE`] literal. See note 2.
+//!
 //! ## Determinism notes
 //!
 //! 1. **All u32 ops are `wrapping_*`.** The C# code uses uint
@@ -14,6 +28,27 @@
 //! 2. **The `2.3283064e-10` constant is a literal.** It maps to
 //!    `1.0 / 4294967296.0` *mathematically* but the f64 representations
 //!    differ in the last bit or two. Copy it byte-exact from Scenery.cs.
+//!    That is ACE's constant ([`NOISE_SCALE`]), and every `AceCompat` /
+//!    `Strict` path keeps it. Retail does NOT use it. `acclient.c` prints
+//!    `2.3283064e-10` because Hex-Rays shows the shortest decimal for a
+//!    *float*. The shipped `acclient.exe` multiplies by the float at
+//!    `0x7c6f10`, whose bytes are `00 00 80 2F` (`0x2F800000`). That float
+//!    is exactly 2^-32 ([`NOISE_SCALE_RETAIL`]). ACE copied the decimal into
+//!    a C# *double*, which comes out about 1.6e-8 relative too small.
+//!
+//!    The sites in the exe are:
+//!    - the scene pick: `fmul dword [0x7c6f10]` at `0x531363`;
+//!    - the frequency gate: at `0x531455`, followed by
+//!      `fcomp [esi+0x44]` (freq);
+//!    - `Place` at `0x5a6d38`, `0x5a6d9f` and `0x5a6de1` (quadrant);
+//!    - `GetObjFrame` at `0x5a6ee3`;
+//!    - `ScaleObj` at `0x52fe66`.
+//!
+//!    `ClientMain::ConfigureFPU` sets x87 precision to 53 bits
+//!    (`acclient.c:60888`), and the D3D device is created with
+//!    `D3DCREATE_FPU_PRESERVE` (`acclient.c:459978`, `v14 |= 0x106`). So
+//!    retail's x87 arithmetic rounds like the f64 arithmetic here, and
+//!    `u32 * 2^-32` is exact.
 //!
 //! 3. **`uint * 2.3283064e-10` is `f64`.** In C# the result of
 //!    `uint * double` is `double`. We mirror this with `as f64`.
@@ -39,7 +74,19 @@ use holtburger_dat::file_type::object_desc::ObjectDesc;
 
 /// C# `int * 2.3283064e-10` literal. Maps to approximately `1 / 2^32`
 /// but is **not** byte-equal to `1.0 / 4294967296.0`. Do not refactor.
+///
+/// This is ACE's constant, used by `AceCompat` / `Strict` only. Retail
+/// uses [`NOISE_SCALE_RETAIL`] (module note 2).
 pub const NOISE_SCALE: f64 = 2.3283064e-10;
+
+/// Retail's noise scale: the float at `acclient.exe` `0x7c6f10`, bytes
+/// `00 00 80 2F` (`0x2F800000`), which is exactly 2^-32. Hex-Rays prints
+/// this float as `2.3283064e-10`, and ACE copied that decimal into a
+/// double ([`NOISE_SCALE`]). Every `BakeMode::Retail` noise path
+/// multiplies by this value: the gate, the scene pick, the displacement,
+/// the quadrant, the scale and the heading. The product
+/// `u32 as f64 * NOISE_SCALE_RETAIL` is exact.
+pub const NOISE_SCALE_RETAIL: f64 = 1.0 / 4_294_967_296.0;
 
 /// Initial cell-PRNG for the per-vertex scene selection. Mirrors
 /// `Scenery.cs:43`. Pure u32 wrapping math.
@@ -78,12 +125,21 @@ pub fn cell_mats_per_object(global_cell_x: u32, global_cell_y: u32) -> (u32, u32
     (cell_x_mat, cell_y_mat, cell_mat)
 }
 
-/// Per-object noise sample. Mirrors `Scenery.cs:59`:
+/// Per-object noise sample, `BakeMode::AceCompat` form. Mirrors
+/// `Scenery.cs:59`:
 ///
 /// ```csharp
 /// var noise = (uint)(cellXMat + cellYMat - cellMat * 23399)
 ///             * 2.3283064e-10;
 /// ```
+///
+/// This is NOT retail. It has no object-index term, so every `ObjectDesc`
+/// in a Scene is gated by the same draw. It is also not what a live ACE
+/// server runs: `Entity/Scenery.cs` is only reached from
+/// `Entity/Landblock.LoadMeshes`, whose one call site is commented out
+/// (`Entity/Landblock.cs:197`, "This isn't used by ACE" at :334). Kept
+/// unchanged so ace-compat bakes stay byte-identical; retail is
+/// [`object_noise_retail`].
 #[inline]
 pub fn object_noise(cell_x_mat: u32, cell_y_mat: u32, cell_mat: u32) -> f64 {
     let n: u32 = cell_x_mat
@@ -92,11 +148,67 @@ pub fn object_noise(cell_x_mat: u32, cell_y_mat: u32, cell_mat: u32) -> f64 {
     n as f64 * NOISE_SCALE
 }
 
-/// 2D quadrant rotation tag. Mirrors `Scenery.cs:120`. Returns a value
-/// in `[0, 1)` (approximately) used to pick one of four quadrant
-/// rotations in `displace`.
+/// Per-object noise sample, `BakeMode::Retail` form: object `j` of the
+/// Scene draws its own value from `cellMat * (23399 + j)`.
+///
+/// Retail `CLandBlock::get_land_scenes` (`acclient.c:352662-352731`)
+/// starts an accumulator at `23399 * cellMat`, gates object `kq` on
+/// `cellXMat + cellYMat - acc`, and adds `cellMat` to the accumulator at
+/// the loop tail for every object (gated or not, weenie or not). That
+/// equals the closed form here mod 2^32. The live ACE server's physics
+/// scenery (`Physics/Common/Landblock.get_land_scenes`, `Landblock.cs:226`)
+/// uses the same closed form. All u32 wrapping, as in the decomp.
+///
+/// The u32 is scaled by [`NOISE_SCALE_RETAIL`] (exactly 2^-32, the exe's
+/// `fmul dword [0x7c6f10]` at `0x531455`), not ACE's [`NOISE_SCALE`].
+///
+/// At `j == 0` the u32 draw is the same one [`object_noise`] uses, but the
+/// f64 is not: it is about 1.6e-8 relative larger. The two gates differ
+/// only when the draw lands within that of `freq`. For example, a gate u32
+/// of `2^31` at `freq = 0.5` is exactly `0.5` here, so it is rejected,
+/// while ACE's literal accepts it. Every later object in the Scene draws a
+/// different u32.
 #[inline]
-fn quadrant(ix: u32, iy: u32) -> f64 {
+pub fn object_noise_retail(cell_x_mat: u32, cell_y_mat: u32, cell_mat: u32, j: u32) -> f64 {
+    let n: u32 = cell_x_mat
+        .wrapping_add(cell_y_mat)
+        .wrapping_sub(cell_mat.wrapping_mul(23_399u32.wrapping_add(j)));
+    n as f64 * NOISE_SCALE_RETAIL
+}
+
+/// Retail scene pick, `BakeMode::Retail` form. This is `acclient.c`
+/// `CLandBlock::get_land_scenes` (:352639-352645):
+///
+/// ```c
+/// if (count == 1
+///     || (v11 = (double)cellMat * 2.3283064e-10,     // float 0x2F800000 = 2^-32
+///         idx = (unsigned __int64)_floor(v11 * (double)count),
+///         idx >= count))
+///     idx = 0;
+/// ```
+///
+/// `cell_mat` is [`cell_mat_scene`] of the vertex. `count` is the length of
+/// the scene list and must be at least 1; the bake skips empty lists
+/// before it picks. This is the `AceCompat` pick (`Scenery.cs:43-46`) with
+/// [`NOISE_SCALE_RETAIL`] in place of [`NOISE_SCALE`]. The scale matters at
+/// the index boundaries. For example, with `count == 2` and
+/// `cell_mat == 2^31`, retail picks scene 1, while ACE's literal gives
+/// `0.99999998` and so picks scene 0.
+#[inline]
+pub fn scene_index_retail(cell_mat: u32, count: usize) -> usize {
+    if count <= 1 {
+        return 0;
+    }
+    let idx = (cell_mat as f64 * NOISE_SCALE_RETAIL * count as f64).floor() as usize;
+    if idx >= count { 0 } else { idx }
+}
+
+/// 2D quadrant rotation tag, as the raw u32 before scaling. Mirrors
+/// `Scenery.cs:120` (and `acclient.c` `ObjectDesc::Place` :462630).
+/// [`displace`] scales it to a value in `[0, 1)` and uses that to pick one
+/// of four quadrant rotations.
+#[inline]
+fn quadrant_u32(ix: u32, iy: u32) -> u32 {
     // quadrant = (1813693831 * iy
     //            - ix * (1870387557 * iy + 1109124029)
     //            - 402451965)
@@ -104,18 +216,18 @@ fn quadrant(ix: u32, iy: u32) -> f64 {
     let inner = 1_870_387_557u32
         .wrapping_mul(iy)
         .wrapping_add(1_109_124_029);
-    let v = 1_813_693_831u32
+    1_813_693_831u32
         .wrapping_mul(iy)
         .wrapping_sub(ix.wrapping_mul(inner))
-        .wrapping_sub(402_451_965);
-    v as f64 * NOISE_SCALE
+        .wrapping_sub(402_451_965)
 }
 
-/// Per-object displacement noise core. The expression is the same shape
-/// for X and Y; only the `45773` (X) / `72719` (Y) magic differs.
-/// Mirrors `Scenery.cs:111-118`.
+/// Per-object displacement noise core, as the raw u32 before scaling. The
+/// expression is the same shape for X, Y, scale and rotation; only the
+/// magic differs: `45773` (X), `72719` (Y), `32593` (scale) or `63127`
+/// (rotation). Mirrors `Scenery.cs:111-118`.
 #[inline]
-fn displace_noise(ix: u32, iy: u32, iq: u32, magic: u32) -> f64 {
+fn displace_noise_u32(ix: u32, iy: u32, iq: u32, magic: u32) -> u32 {
     // (1813693831 * iy
     //  - (iq + magic) * (1360117743 * iy * ix + 1888038839)
     //  - 1109124029 * ix)
@@ -124,11 +236,17 @@ fn displace_noise(ix: u32, iy: u32, iq: u32, magic: u32) -> f64 {
         .wrapping_mul(iy)
         .wrapping_mul(ix)
         .wrapping_add(1_888_038_839);
-    let v = 1_813_693_831u32
+    1_813_693_831u32
         .wrapping_mul(iy)
         .wrapping_sub((iq.wrapping_add(magic)).wrapping_mul(inner))
-        .wrapping_sub(1_109_124_029u32.wrapping_mul(ix));
-    v as f64 * NOISE_SCALE
+        .wrapping_sub(1_109_124_029u32.wrapping_mul(ix))
+}
+
+/// Per-object displacement noise core, scaled by ACE's [`NOISE_SCALE`].
+/// Mirrors `Scenery.cs:111-118`.
+#[inline]
+fn displace_noise(ix: u32, iy: u32, iq: u32, magic: u32) -> f64 {
+    displace_noise_u32(ix, iy, iq, magic) as f64 * NOISE_SCALE
 }
 
 /// Returns the displaced (x, y) offset for an `ObjectDesc` placement.
@@ -138,6 +256,28 @@ fn displace_noise(ix: u32, iy: u32, iq: u32, magic: u32) -> f64 {
 /// within its `Scene.objects` list. Output is in cell-local units (no
 /// vertex base added yet).
 pub fn displace(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> (f32, f32) {
+    displace_scaled(obj, ix, iy, iq, NOISE_SCALE)
+}
+
+/// Retail displacement, `BakeMode::Retail` form. This is `acclient.c`
+/// `ObjectDesc::Place` (:462605). It uses the same expressions, f32
+/// narrowing and quadrant flip as [`displace`], with every noise scaled by
+/// [`NOISE_SCALE_RETAIL`]. In the exe those multiplies are
+/// `fmul dword [0x7c6f10]` at `0x5a6d38` (X), `0x5a6d9f` (Y) and
+/// `0x5a6de1` (quadrant). With ACE's literal, a displaced X or Y often
+/// lands 1 f32 ULP away from retail. A quadrant (and so a whole mirror)
+/// flips when its u32 sits just above a threshold: within about 17 above
+/// `2^30`, 34 above `2^31` or 51 above `3 * 2^30`.
+pub fn displace_retail(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> (f32, f32) {
+    displace_scaled(obj, ix, iy, iq, NOISE_SCALE_RETAIL)
+}
+
+/// Shared body of [`displace`] (`scale = NOISE_SCALE`) and
+/// [`displace_retail`] (`scale = NOISE_SCALE_RETAIL`). For
+/// `NOISE_SCALE` it performs exactly the f64 operations the ACE port always
+/// did, so `AceCompat` output is byte-identical.
+#[inline]
+fn displace_scaled(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32, scale: f64) -> (f32, f32) {
     let loc_x = obj.base_loc.origin.x;
     let loc_y = obj.base_loc.origin.y;
 
@@ -145,7 +285,7 @@ pub fn displace(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> (f32, f32) {
     let x = if obj.displace_x <= 0.0 {
         loc_x
     } else {
-        let n = displace_noise(ix, iy, iq, 45_773);
+        let n = displace_noise_u32(ix, iy, iq, 45_773) as f64 * scale;
         (n * obj.displace_x as f64 + loc_x as f64) as f32
     };
 
@@ -153,12 +293,12 @@ pub fn displace(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> (f32, f32) {
     let y = if obj.displace_y <= 0.0 {
         loc_y
     } else {
-        let n = displace_noise(ix, iy, iq, 72_719);
+        let n = displace_noise_u32(ix, iy, iq, 72_719) as f64 * scale;
         (n * obj.displace_y as f64 + loc_y as f64) as f32
     };
 
     // Quadrant flip — Scenery.cs:122-126.
-    let q = quadrant(ix, iy);
+    let q = quadrant_u32(ix, iy) as f64 * scale;
     if q >= 0.75 {
         (y, -x)
     } else if q >= 0.5 {
@@ -193,6 +333,41 @@ pub fn scale_obj(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
     (ratio.powf(n) * obj.min_scale as f64) as f32
 }
 
+/// Retail uniform scale, `BakeMode::Retail` form. This is `acclient.c`
+/// `ObjectDesc::ScaleObj` (:351361):
+///
+/// ```c
+/// if (min_scale == max_scale) return max_scale;
+/// return pow(max_scale / min_scale,
+///            (double)(1813693831 * y - (k + 32593) * (1360117743 * y * x + 1888038839)
+///                     - 1109124029 * x) * 2.3283064e-10) * min_scale;
+/// ```
+///
+/// It differs from the ACE port [`scale_obj`] in two ways, both read from
+/// the shipped exe at `0x52fe00`:
+/// - The noise is scaled by [`NOISE_SCALE_RETAIL`] (`fmul dword
+///   [0x7c6f10]` at `0x52fe66`).
+/// - `max_scale / min_scale` is NOT rounded to f32. The exe runs
+///   `fld [esi+0x54]` and then `fdiv [esi+0x50]`. The quotient stays on
+///   the x87 stack (53-bit precision, see module note 2) until `_CIpow`, so
+///   it is the f64 quotient of the two floats. ACE's C# divides in f32
+///   first.
+///
+/// The product with `min_scale` is a double. The caller narrows it to
+/// float (`fstp dword` before `CPhysicsObj::SetScaleStatic`, `0x531679`),
+/// which the `as f32` here mirrors. Retail's `_CIpow` is the MSVC x87
+/// routine and this uses the platform's `f64::powf`. After the f32
+/// narrowing they are not expected to differ, but that is not proven bit
+/// for bit.
+pub fn scale_obj_retail(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
+    if obj.min_scale == obj.max_scale {
+        return obj.max_scale;
+    }
+    let n = displace_noise_u32(ix, iy, iq, 32_593) as f64 * NOISE_SCALE_RETAIL;
+    let ratio = obj.max_scale as f64 / obj.min_scale as f64;
+    (ratio.powf(n) * obj.min_scale as f64) as f32
+}
+
 /// Returns the yaw rotation (radians) for an `ObjectDesc` placement.
 /// Mirrors `Scenery.cs:155-161`.
 pub fn rotate_obj(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
@@ -204,6 +379,29 @@ pub fn rotate_obj(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
     const DEG_TO_RAD: f32 = 0.017_453_3;
     let n = displace_noise(ix, iy, iq, 63_127);
     (n * obj.max_rotation as f64 * DEG_TO_RAD as f64) as f32
+}
+
+/// Retail scenery heading, in DEGREES, `BakeMode::Retail` form
+/// (terrain-scenery-4). `acclient.c` `ObjectDesc::GetObjFrame` (:462660):
+///
+/// ```c
+/// if (max_rot > 0.0) {
+///     degrees = (double)(1813693831 * y - (k + 63127) * (1360117743 * y * x + 1888038839)
+///                        - 1109124029 * x) * 2.3283064e-10 * max_rot;  // float
+///     Frame::set_heading(obj_frame, degrees);
+/// }
+/// ```
+///
+/// This is the same u32 noise as [`rotate_obj`], with two differences.
+/// There is no degrees-to-radians factor, because `Frame::set_heading`
+/// takes a compass heading in degrees. And the noise is scaled by
+/// [`NOISE_SCALE_RETAIL`] (`fmul dword [0x7c6f10]` at `0x5a6ee3`) instead
+/// of ACE's literal, which often moves the heading by 1 f32 ULP. The
+/// `max_rot > 0` guard belongs to the caller
+/// ([`crate::orientation::obj_frame_orientation`]).
+pub fn rotate_obj_retail(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
+    let n = displace_noise_u32(ix, iy, iq, 63_127) as f64 * NOISE_SCALE_RETAIL;
+    (n * obj.max_rotation as f64) as f32
 }
 
 /// Mirror of `Scenery.cs:177-184` `Collision`. Returns true if any
@@ -281,6 +479,161 @@ mod tests {
         let n1 = object_noise(a, b, c);
         let n2 = object_noise(a, b, c);
         assert_eq!(n1.to_bits(), n2.to_bits());
+    }
+
+    /// At `j = 0`, `object_noise_retail` draws the same u32 as the
+    /// ace-compat sample, scaled by 2^-32 rather than ACE's literal. At
+    /// `j > 0` it is the decomp accumulator (`23399 * cellMat`, then
+    /// `+= cellMat` per object), scaled by 2^-32.
+    #[test]
+    fn object_noise_retail_j0_matches_legacy_and_steps_by_cell_mat() {
+        for &(gx, gy) in &[(42u32, 314u32), (1000, 1000), (0, 0), (u32::MAX, 7)] {
+            let (a, b, c) = cell_mats_per_object(gx, gy);
+            let legacy_u32 = a.wrapping_add(b).wrapping_sub(c.wrapping_mul(23_399));
+            assert_eq!(
+                object_noise(a, b, c).to_bits(),
+                (legacy_u32 as f64 * NOISE_SCALE).to_bits()
+            );
+            assert_eq!(
+                object_noise_retail(a, b, c, 0).to_bits(),
+                (legacy_u32 as f64 * NOISE_SCALE_RETAIL).to_bits(),
+                "j=0 must scale the legacy u32 draw by 2^-32 at ({gx},{gy})"
+            );
+            let mut acc = c.wrapping_mul(23_399);
+            for j in 0..8u32 {
+                let n = a.wrapping_add(b).wrapping_sub(acc);
+                assert_eq!(
+                    object_noise_retail(a, b, c, j).to_bits(),
+                    (n as f64 * NOISE_SCALE_RETAIL).to_bits(),
+                    "accumulator drift at ({gx},{gy}) j={j}"
+                );
+                // 2^-32 is a power of two: the scaled value is exact.
+                assert_eq!(object_noise_retail(a, b, c, j) * 4_294_967_296.0, n as f64);
+                acc = acc.wrapping_add(c);
+            }
+        }
+    }
+
+    /// `NOISE_SCALE_RETAIL` is retail's float `0x2F800000`, exactly 2^-32,
+    /// and is not ACE's double literal.
+    #[test]
+    fn noise_scale_retail_is_the_exe_float_two_pow_minus_32() {
+        assert_eq!(NOISE_SCALE_RETAIL.to_bits(), 0x3DF0_0000_0000_0000);
+        assert_eq!(f32::from_bits(0x2F80_0000) as f64, NOISE_SCALE_RETAIL);
+        assert_eq!((NOISE_SCALE_RETAIL as f32).to_bits(), 0x2F80_0000);
+        assert_ne!(NOISE_SCALE.to_bits(), NOISE_SCALE_RETAIL.to_bits());
+        // ACE's literal is the smaller one (about 1.6e-8 relative).
+        assert!(NOISE_SCALE < NOISE_SCALE_RETAIL);
+        let rel = (NOISE_SCALE_RETAIL - NOISE_SCALE) / NOISE_SCALE_RETAIL;
+        assert!(rel > 1.5e-8 && rel < 1.6e-8, "relative gap {rel}");
+    }
+
+    /// The reviewer's failure scenario: a gate u32 of exactly `2^31` at
+    /// `freq = 0.5`. Retail computes `0.5`, which is not `< 0.5`, and
+    /// rejects. ACE's literal computes just under `0.5` and accepts.
+    #[test]
+    fn retail_gate_rejects_at_half_where_ace_literal_accepts() {
+        let freq = 0.5_f32 as f64;
+        // a + b - c * 23399 == 2^31 with b = c = 0.
+        let (a, b, c) = (0x8000_0000u32, 0u32, 0u32);
+        assert_eq!(object_noise_retail(a, b, c, 0), 0.5);
+        assert!(!(object_noise_retail(a, b, c, 0) < freq), "retail rejects");
+        assert!(object_noise(a, b, c) < freq, "ACE's literal accepts");
+        // ACE stays under 0.5 for the next ~33 u32 values; retail does not.
+        for d in 0..33u32 {
+            assert!(object_noise(a + d, b, c) < freq, "ACE accepts 2^31 + {d}");
+            assert!(
+                !(object_noise_retail(a + d, b, c, 0) < freq),
+                "retail rejects 2^31 + {d}"
+            );
+        }
+    }
+
+    /// Scene-pick boundary: with two scenes and `cellMat = 2^31`, retail
+    /// picks scene 1, while ACE's literal (the `AceCompat` pick in the
+    /// bake) gives `0.99999998` and picks scene 0.
+    #[test]
+    fn scene_index_retail_uses_two_pow_minus_32_at_the_boundary() {
+        let cm = 0x8000_0000u32;
+        assert_eq!(scene_index_retail(cm, 2), 1);
+        // The AceCompat pick, as `bake_landblock_impl` computes it.
+        assert_eq!((2usize as f64 * (cm as f64 * NOISE_SCALE)) as usize, 0);
+        // count == 1 short-circuits to 0, as in retail.
+        assert_eq!(scene_index_retail(u32::MAX, 1), 0);
+        // The top u32 stays below `count` (no fall-back needed).
+        assert_eq!(scene_index_retail(u32::MAX, 7), 6);
+        assert_eq!(scene_index_retail(0, 7), 0);
+        // Matches floor(cm * count / 2^32) across counts.
+        for &cm in &[0u32, 1, 0x4000_0000, 0x5555_5556, 0xAAAA_AAAB, 0xFFFF_FFFF] {
+            for count in 2..=9usize {
+                let want = ((cm as u64 * count as u64) >> 32) as usize;
+                assert_eq!(
+                    scene_index_retail(cm, count),
+                    want,
+                    "cm 0x{cm:08X} count {count}"
+                );
+            }
+        }
+    }
+
+    /// The `*_retail` pose functions equal their ACE ports with the scale
+    /// swapped, and scale the raw u32 by exactly 2^-32. ScaleObj also keeps
+    /// the f64 ratio.
+    #[test]
+    fn retail_pose_noise_uses_two_pow_minus_32() {
+        let mut obj = dummy_obj();
+        obj.displace_x = 3.0;
+        obj.displace_y = 5.0;
+        obj.min_scale = 0.8;
+        obj.max_scale = 1.5;
+        obj.max_rotation = 360.0;
+        for &(ix, iy, iq) in &[
+            (1355u32, 1442u32, 4u32),
+            (1304, 1392, 0),
+            (11_000, 12_000, 3),
+        ] {
+            let nx = displace_noise_u32(ix, iy, iq, 45_773) as f64 * NOISE_SCALE_RETAIL;
+            let ny = displace_noise_u32(ix, iy, iq, 72_719) as f64 * NOISE_SCALE_RETAIL;
+            let x = (nx * 3.0 + 12.0) as f32;
+            let y = (ny * 5.0 + 14.0) as f32;
+            let q = quadrant_u32(ix, iy) as f64 * NOISE_SCALE_RETAIL;
+            let want = if q >= 0.75 {
+                (y, -x)
+            } else if q >= 0.5 {
+                (-x, -y)
+            } else if q >= 0.25 {
+                (-y, x)
+            } else {
+                (x, y)
+            };
+            let got = displace_retail(&obj, ix, iy, iq);
+            assert_eq!(
+                (got.0.to_bits(), got.1.to_bits()),
+                (want.0.to_bits(), want.1.to_bits())
+            );
+
+            let ns = displace_noise_u32(ix, iy, iq, 32_593) as f64 * NOISE_SCALE_RETAIL;
+            let s = ((1.5f32 as f64 / 0.8f32 as f64).powf(ns) * 0.8f32 as f64) as f32;
+            assert_eq!(scale_obj_retail(&obj, ix, iy, iq).to_bits(), s.to_bits());
+
+            let nr = displace_noise_u32(ix, iy, iq, 63_127) as f64 * NOISE_SCALE_RETAIL;
+            assert_eq!(
+                rotate_obj_retail(&obj, ix, iy, iq).to_bits(),
+                ((nr * 360.0) as f32).to_bits()
+            );
+        }
+        // The ACE ports are untouched: same u32, ACE's scale.
+        let (ix, iy, iq) = (1355u32, 1442u32, 4u32);
+        let nr = displace_noise_u32(ix, iy, iq, 63_127) as f64 * NOISE_SCALE;
+        let deg_to_rad = 0.017_453_3f32 as f64;
+        assert_eq!(
+            rotate_obj(&obj, ix, iy, iq).to_bits(),
+            ((nr * 360.0 * deg_to_rad) as f32).to_bits()
+        );
+        // min == max still short-circuits.
+        obj.min_scale = 2.5;
+        obj.max_scale = 2.5;
+        assert_eq!(scale_obj_retail(&obj, ix, iy, iq), 2.5);
     }
 
     fn dummy_obj() -> ObjectDesc {

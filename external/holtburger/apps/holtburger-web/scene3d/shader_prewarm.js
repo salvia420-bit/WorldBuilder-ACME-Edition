@@ -36,7 +36,9 @@
 // gl.linkProgram + gl.getProgramParameter to split three's cheap
 // KHR_parallel_shader_compile COMPLETION_STATUS_KHR ready-polls from forced
 // LINK_STATUS waits (the synchronous driver-link flush). Score the walk-stall
-// re-run on `window.__linkProbe.summary()`.
+// re-run on `window.__linkProbe.summary()`. The same probe keeps a program
+// create/release LEDGER (`__linkProbe.ledger()`, 2026-10-13) that names every
+// key three links a second time — see installLinkProbe.
 
 import * as THREE from "three";
 
@@ -147,6 +149,60 @@ export function withWarmTarget(renderer, fn) {
 const _LINK_STATUS_FALLBACK = 0x8b82;
 const _COMPLETION_STATUS_KHR = 0x91b1;
 
+/** Program-ledger ring size (entries); the oldest entry drops past it. */
+export const LINK_LEDGER_CAP = 2000;
+/** Program-ledger diff cadence (ms). `installLinkProbe(r, {ledgerMs: 0})`
+ *  turns the timer off — ticks then run only on read or via ledgerTick(). */
+export const LINK_LEDGER_MS = 50;
+/** cacheKey chars kept per ledger entry (a built-in key lists every program
+ *  parameter, plus defines and customProgramCacheKey — it runs long). */
+const _LEDGER_KEY_CHARS = 400;
+
+/** 64-bit string hash (cyrb53 mixing, public domain) — relink identity is the
+ *  FULL cacheKey (or, for a stage-keyed program, its GLSL; see
+ *  _stageHeadEnd), but the ledger must not retain every released key's text
+ *  to know it saw it once. */
+function _keyHash(s) {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Index just past the two WebGLShaderStage ids that head a STAGE-KEYED
+ * cacheKey, or -1 for a built-in key ("physical,…", "depth,…").
+ *
+ * three r184 getProgramCacheKey pushes a built-in material's shaderID first,
+ * but for a material with none (ShaderMaterial, RawShaderMaterial, a custom-
+ * type subclass) it pushes customVertexShaderID + customFragmentShaderID
+ * (three.module.js:7772-7779). Those are WebGLShaderStage ids (`_id ++`,
+ * :7376), and WebGLShaderCache.remove deletes a stage once its last material
+ * is disposed (:7301-7313; releaseMaterialProgramReferences calls it for every
+ * ShaderMaterial, :17104-17106). The next material with the same source gets a
+ * NEW id, so a real relink of such a program arrives under a NEW key. Same
+ * test as program_retention.js stagePairOf (both leading fields all digits).
+ */
+function _stageHeadEnd(key) {
+  const a = key.indexOf(",");
+  if (a <= 0) return -1;
+  let b = key.indexOf(",", a + 1);
+  if (b < 0) b = key.length;
+  if (b === a + 1) return -1;
+  for (let i = 0; i < b; i++) {
+    if (i === a) continue;
+    const c = key.charCodeAt(i);
+    if (c < 48 || c > 57) return -1;
+  }
+  return b;
+}
+
 /**
  * Install the link-cost probe on the renderer's GL context (`?linkProbe=on`).
  * Idempotent per context. Returns the probe state ({stats, reset, summary})
@@ -160,8 +216,52 @@ const _COMPLETION_STATUS_KHR = 0x91b1;
  * they only get to run once is a footgun, not a safety rail. Everything else
  * about the probe is unchanged — same wrap, same counters, same idempotence.
  *
+ * PROGRAM LEDGER (2026-10-13). The counters above say how many links happened,
+ * never WHICH key, and every other program count in the client
+ * (`?renderDiag`, stall_probe, landblock_lru's eviction snapshot) is
+ * `renderer.info.programs.length`. three destroys a WebGLProgram when the
+ * last material holding its cache key is released (WebGLPrograms
+ * releaseProgram, r184: `--usedTimes === 0` → swap-remove + destroy), and the
+ * next material with that key links it AGAIN at first draw — a length can't
+ * see that: a release and a create in one tick leave it unchanged. So the
+ * probe also diffs `renderer.info.programs` BY `id` (three's programIdCount —
+ * never reused) every LINK_LEDGER_MS and on every ledger read, logging
+ * `{t, op:'+'|'-', id, name, type, key}` (key = first 400 chars of cacheKey)
+ * into a LINK_LEDGER_CAP ring. A '+' whose full cacheKey was resident before
+ * is a RELINK (`relink: true`, counted per key). Programs already resident at
+ * install are the baseline: remembered, not logged.
+ *
+ * STAGE-KEYED programs (ShaderMaterial / RawShaderMaterial / custom-type
+ * subclasses — a key headed by two WebGLShaderStage ids, see _stageHeadEnd)
+ * would never match that way: three mints new stage ids once the last
+ * material with that source is disposed, so the relink arrives under a new
+ * key. Those are the only programs ProgramRetention (program_retention.js,
+ * default ON) still lets relink, so keying them by id would read ~0 relinks
+ * by construction. Their identity is the linked GLSL instead: the program's
+ * attached shaders' source (gl.getShaderSource on the program's
+ * vertexShader / fragmentShader — a client-side string, no GPU round trip;
+ * three deletes the shaders after first use but never detaches them, so they
+ * stay queryable while the program is resident) + the key minus its two ids.
+ * That read runs only for a stage-keyed create (or install seed), never per
+ * frame. When the source can't be read (mock, lost context) the full key is
+ * used and `stats.ledger.stageKeyedNoSource` counts it: such a relink can
+ * only be UNDER-counted. `stats.ledger.stageKeyed` counts stage-keyed creates.
+ * Otherwise only renderer.info is read; nothing drawn differently.
+ * After WebAC tools/hitch-probe.ts (program-churn scan), AGPL-3.0.
+ *
+ *   __linkProbe.ledger()        chronological copy of the ring
+ *   __linkProbe.ledgerStats()   {available, created, released, relinks,
+ *                                distinctKeys, resident, seeded, dropped,
+ *                                stageKeyed, stageKeyedNoSource, ...}
+ *   __linkProbe.relinkedKeys()  [{name, type, key, relinks, stage}] worst first
+ *   __linkProbe.ledgerTick()    diff once now (tests; the timer does this)
+ *   __linkProbe.stopLedger()    clear the timer (ledger reads still diff)
+ *
+ * `reset()` clears the ring and the window counters (`stats.ledger`) but keeps
+ * the session's key memory, so a relink after a reset is still a relink.
+ *
  * @param {any} renderer
- * @param {{force?: boolean}} [opts]
+ * @param {{force?: boolean, ledgerMs?: number}} [opts]
  */
 export function installLinkProbe(renderer, opts = {}) {
   if ((!LINK_PROBE_ON && opts.force !== true) || !renderer || typeof renderer.getContext !== "function") return null;
@@ -194,6 +294,11 @@ export function installLinkProbe(renderer, opts = {}) {
     // COMPLETION_STATUS_KHR reads: three's cheap async ready-poll.
     completion: { calls: 0, ms: 0 },
     other: { calls: 0, ms: 0 },
+    // Program ledger window counters (see the PROGRAM LEDGER note above).
+    // `dropped` = entries the ring overwrote. `stageKeyed` = creates of a
+    // stage-keyed program (identity = its GLSL); `stageKeyedNoSource` = those
+    // whose source was unreadable (identity fell back to the re-mintable key).
+    ledger: { created: 0, released: 0, relinks: 0, dropped: 0, stageKeyed: 0, stageKeyedNoSource: 0 },
   });
   let stats = _zero();
 
@@ -222,22 +327,208 @@ export function installLinkProbe(renderer, opts = {}) {
     return r;
   };
 
+  // ── program ledger ──────────────────────────────────────────────────────
+  let ring = [];
+  let ringHead = 0; // index of the oldest entry once the ring is full
+  let relinked = new Map(); // key hash -> { name, type, key, relinks } (window)
+  const keysSeen = new Set(); // key hash of every key ever resident (session)
+  let known = new Map(); // id -> { name, type, key, hash } resident last tick
+  let ledgerAvailable = false;
+  let ledgerTicks = 0;
+  let ledgerSeeded = 0;
+  let ledgerTimer = null;
+
+  // Relink identity of one newly seen program (see STAGE-KEYED above):
+  // {hash, stage, bySource}. Built-in key → hash of the full key.
+  const _getShaderSource = typeof gl.getShaderSource === "function" ? gl.getShaderSource : null;
+  const _identity = (p, full) => {
+    const end = _stageHeadEnd(full);
+    if (end < 0) return { hash: _keyHash(full), stage: false, bySource: false };
+    let vsSrc = null;
+    let fsSrc = null;
+    if (_getShaderSource && p.vertexShader && p.fragmentShader) {
+      try {
+        vsSrc = _getShaderSource.call(gl, p.vertexShader);
+        fsSrc = _getShaderSource.call(gl, p.fragmentShader);
+      } catch (_) {
+        vsSrc = fsSrc = null;
+      }
+    }
+    if (typeof vsSrc !== "string" || typeof fsSrc !== "string" || vsSrc.length === 0 || fsSrc.length === 0) {
+      return { hash: _keyHash(full), stage: true, bySource: false };
+    }
+    return { hash: _keyHash(`glsl\0${vsSrc}\0${fsSrc}\0${full.slice(end)}`), stage: true, bySource: true };
+  };
+
+  const _ledgerPush = (e) => {
+    if (ring.length < LINK_LEDGER_CAP) {
+      ring.push(e);
+    } else {
+      ring[ringHead] = e;
+      ringHead = (ringHead + 1) % LINK_LEDGER_CAP;
+      stats.ledger.dropped += 1;
+    }
+  };
+
+  // One diff of renderer.info.programs against the previous tick. Read fresh
+  // every time: three swaps in a new array on context restore. Releases are
+  // logged before creates (three releases on dispose and relinks at the next
+  // draw); creates in id order, which is creation order. `seed` = the install
+  // baseline. Returns the number of entries logged.
+  const ledgerTick = (seed = false) => {
+    let progs = null;
+    try {
+      progs = renderer.info && renderer.info.programs;
+    } catch (_) {
+      progs = null;
+    }
+    if (!Array.isArray(progs)) return 0; // mock / no info: fail-soft
+    ledgerAvailable = true;
+    ledgerTicks += 1;
+    const t = _now();
+    const now = new Map();
+    for (const p of progs) if (p && p.id != null) now.set(p.id, p);
+    let logged = 0;
+    for (const [id, rec] of known) {
+      if (now.has(id)) continue;
+      stats.ledger.released += 1;
+      _ledgerPush({ t, op: "-", id, name: rec.name, type: rec.type, key: rec.key });
+      logged += 1;
+    }
+    const added = [];
+    const next = new Map();
+    for (const [id, p] of now) {
+      const rec = known.get(id);
+      if (rec) next.set(id, rec);
+      else added.push(p);
+    }
+    added.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const p of added) {
+      const full = typeof p.cacheKey === "string" ? p.cacheKey : String(p.cacheKey ?? "");
+      const ident = _identity(p, full);
+      const rec = {
+        name: typeof p.name === "string" ? p.name : "",
+        type: typeof p.type === "string" ? p.type : "",
+        key: full.length > _LEDGER_KEY_CHARS ? full.slice(0, _LEDGER_KEY_CHARS) + "…" : full,
+        hash: ident.hash,
+      };
+      next.set(p.id, rec);
+      if (seed) {
+        keysSeen.add(rec.hash);
+        ledgerSeeded += 1;
+        continue;
+      }
+      const relink = keysSeen.has(rec.hash);
+      keysSeen.add(rec.hash);
+      stats.ledger.created += 1;
+      if (ident.stage) {
+        stats.ledger.stageKeyed += 1;
+        if (!ident.bySource) stats.ledger.stageKeyedNoSource += 1;
+      }
+      if (relink) {
+        stats.ledger.relinks += 1;
+        const r = relinked.get(rec.hash);
+        if (r) r.relinks += 1;
+        else relinked.set(rec.hash, { name: rec.name, type: rec.type, key: rec.key, relinks: 1, stage: ident.stage });
+      }
+      _ledgerPush({ t, op: "+", id: p.id, name: rec.name, type: rec.type, key: rec.key, relink });
+      logged += 1;
+    }
+    known = next;
+    return logged;
+  };
+  const _ledgerTickSafe = () => {
+    try {
+      return ledgerTick();
+    } catch (_) {
+      return 0;
+    }
+  };
+
+  try {
+    ledgerTick(true);
+  } catch (_) {}
+  const ledgerMs = opts.ledgerMs === undefined ? LINK_LEDGER_MS : Number(opts.ledgerMs);
+  if (Number.isFinite(ledgerMs) && ledgerMs > 0 && typeof setInterval === "function") {
+    try {
+      ledgerTimer = setInterval(_ledgerTickSafe, ledgerMs);
+      // node (tests): a diagnostic timer must never hold the process open.
+      if (ledgerTimer && typeof ledgerTimer.unref === "function") ledgerTimer.unref();
+    } catch (_) {
+      ledgerTimer = null;
+    }
+  }
+
   const state = {
     get stats() {
       return stats;
     },
     reset() {
       stats = _zero();
+      ring = [];
+      ringHead = 0;
+      relinked = new Map();
     },
     summary() {
+      _ledgerTickSafe();
       const ls = stats.linkStatus;
+      const lg = stats.ledger;
       return (
         `linkProgram=${stats.linkProgramCalls} | ` +
         `LINK_STATUS ${ls.calls} reads ${ls.ms.toFixed(1)}ms ` +
         `(worst ${ls.worstMs.toFixed(1)}ms, >5ms×${ls.stallCalls}) | ` +
         `COMPLETION_STATUS_KHR ${stats.completion.calls} reads ${stats.completion.ms.toFixed(1)}ms | ` +
-        `other ${stats.other.calls} reads ${stats.other.ms.toFixed(1)}ms`
+        `other ${stats.other.calls} reads ${stats.other.ms.toFixed(1)}ms | ` +
+        (ledgerAvailable
+          ? `programs relinks=${lg.relinks} distinctKeys=${keysSeen.size} released=${lg.released} ` +
+            `created=${lg.created} resident=${known.size} stageKeyed=${lg.stageKeyed} noSource=${lg.stageKeyedNoSource}`
+          : `programs ledger n/a (no renderer.info.programs)`)
       );
+    },
+    /** Chronological copy of the ledger ring (diffs once first). */
+    ledger() {
+      _ledgerTickSafe();
+      return ring.length < LINK_LEDGER_CAP ? ring.slice() : ring.slice(ringHead).concat(ring.slice(0, ringHead));
+    },
+    /** Diff renderer.info.programs once now; returns entries logged. */
+    ledgerTick() {
+      return _ledgerTickSafe();
+    },
+    /** Ledger counters (diffs once first). `distinctKeys`/`resident`/`seeded`
+     *  are session-wide; the rest are the `stats.ledger` window. */
+    ledgerStats() {
+      _ledgerTickSafe();
+      const lg = stats.ledger;
+      return {
+        available: ledgerAvailable,
+        created: lg.created,
+        released: lg.released,
+        relinks: lg.relinks,
+        relinkedKeys: relinked.size,
+        distinctKeys: keysSeen.size,
+        resident: known.size,
+        seeded: ledgerSeeded,
+        dropped: lg.dropped,
+        stageKeyed: lg.stageKeyed,
+        stageKeyedNoSource: lg.stageKeyedNoSource,
+        entries: ring.length,
+        ticks: ledgerTicks,
+        timerMs: ledgerTimer ? ledgerMs : 0,
+      };
+    },
+    /** Keys linked more than once, worst first (diffs once first). */
+    relinkedKeys() {
+      _ledgerTickSafe();
+      return [...relinked.values()].map((r) => ({ ...r })).sort((a, b) => b.relinks - a.relinks);
+    },
+    /** Stop the ledger timer. Reads still diff; nothing else changes. */
+    stopLedger() {
+      if (ledgerTimer) {
+        try {
+          clearInterval(ledgerTimer);
+        } catch (_) {}
+        ledgerTimer = null;
+      }
     },
   };
   gl.__linkProbeState = state;
@@ -246,7 +537,7 @@ export function installLinkProbe(renderer, opts = {}) {
   } catch (_) {}
   // eslint-disable-next-line no-console
   console.info(
-    `[shader_prewarm] link probe installed (${opts.force === true ? "forced by caller" : "?linkProbe=on"}) — window.__linkProbe.summary()`,
+    `[shader_prewarm] link probe installed (${opts.force === true ? "forced by caller" : "?linkProbe=on"}) — window.__linkProbe.summary(), .ledger(), .relinkedKeys()`,
   );
   return state;
 }

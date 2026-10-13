@@ -156,8 +156,101 @@ export function pkCommandDecision(verb, rest, odf) {
     : { send: "teleToPklArena" };
 }
 
+// chat-errors-8 (2026-10-13): retail's client-side /age and /birth
+// (InitializeCommands, acclient.c:429604 / :429630). DoAge (:422037) sends
+// CM_Character::Event_QueryAge (0x01C2) and DoBirth (:410915)
+// Event_QueryBirth (0x01C4), both with target 0 for a player (the selection
+// is used only for a PSR) and whatever arguments follow. ACE has no `@age` /
+// `@birth` text command; it answers the GameActions (QueryAgeResponse → the
+// wasm's "You have played for …." line; a Broadcast "You were born on …").
+const STATUS_VERB_SEND = Object.freeze({ age: "queryAge", birth: "queryBirth" });
+export const STATUS_CLIENT_VERBS = Object.freeze(Object.keys(STATUS_VERB_SEND));
+
+/** `?retailStatusCmds` — DEFAULT-ON; off keeps the old server forward. */
+export function retailStatusCmdsEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = new URLSearchParams(s).get("retailStatusCmds");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+/**
+ * The SessionHandle method a status verb sends (`queryAge` / `queryBirth`),
+ * or null when `verb` is not one.
+ */
+export function statusCommandSend(verb) {
+  const v = String(verb ?? "").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(STATUS_VERB_SEND, v) ? STATUS_VERB_SEND[v] : null;
+}
+
 /** 2026-10-09 — back to the character screen (client-only, never sent to ACE). */
 export const LOGOUT_VERBS = new Set(["logout", "logoff"]);
+
+// input-options-4 (2026-10-13): retail ClientCommunicationSystem::DoLockUI
+// (acclient.c:412522, registered as "lockui"): no argument toggles
+// PlayerModule::LockUI and broadcasts global message 0xD; any argument prints
+// the usage line. The state lives in ui/ui_lock.js, reached through its
+// `window.__uiLock` seam (this module may not gain a static import — I-27).
+// Without the seam, or with `?globalLockUI=off`, the verb keeps the old
+// server forward.
+export const LOCKUI_VERBS = new Set(["lockui"]);
+export const LOCKUI_USAGE_TEXT = "Please use @help lockui for proper usage.";
+
+function uiLockApi() {
+  try {
+    const api = window.__uiLock;
+    if (!api || typeof api.toggle !== "function") return null;
+    if (typeof api.enabled === "function" && !api.enabled()) return null;
+    return api;
+  } catch (_) { return null; }
+}
+
+// inventory-session-7 (2026-10-13): retail ClientCommunicationSystem::DoCorpse
+// (acclient.c:418186, registered as "corpse" and "cor", :428426 / :428457)
+// answers locally from the PlayerDesc LastOutsideDeath position (0xE) and
+// ignores its arguments. ACE has no `@corpse` command; the wasm keeps the
+// position (SessionHandle.playerLastOutsideDeath, from PlayerDescription and
+// the LastOutsideDeath PrivateUpdatePosition). A pkg without the getter
+// keeps the old server forward.
+export const CORPSE_VERBS = new Set(["corpse", "cor"]);
+export const CORPSE_NO_RECORD_TEXT =
+  "We're sorry, but we have no record of your last outside corpse location.";
+
+/**
+ * Retail LandDefs::CellidToCoordinateString (acclient.c:467472) over
+ * LandDefs::gid_to_lcoord (:209521). Cell-granular: the cell's landscape
+ * coordinate (landblock * 8 + the cell's column / row) becomes
+ * `(lcoord - 1024) * 0.1 + 0.5` map units, printed "%.1f%s, %.1f%s" N/S
+ * first, with no direction letter at exactly 0. gid_to_lcoord fails for a
+ * non-outdoor cell and retail then prints uninitialised locals; this prints
+ * the formula's result instead (ACE only records an outdoor
+ * LastOutsideDeath, Creature_Death.cs).
+ */
+export function cellIdToCoordinateString(cellId) {
+  const id = cellId >>> 0;
+  const cell = id & 0xffff;
+  const x = ((id >>> 21) & 0x7f8) + ((cell - 1) >> 3);
+  const y = (((id >>> 16) & 0xff) << 3) + ((cell - 1) & 7);
+  const ew = (x - 1024) * 0.1 + 0.5;
+  const ns = (y - 1024) * 0.1 + 0.5;
+  const nsDir = ns > 0 ? "N" : ns < 0 ? "S" : "";
+  const ewDir = ew > 0 ? "E" : ew < 0 ? "W" : "";
+  return `${Math.abs(ns).toFixed(1)}${nsDir}, ${Math.abs(ew).toFixed(1)}${ewDir}`;
+}
+
+/** DoCorpse's line for a LastOutsideDeath objcell id (null = no record). */
+export function corpseCommandText(cellId) {
+  if (cellId === null || cellId === undefined) return CORPSE_NO_RECORD_TEXT;
+  return `The last time you died outside, your corpse was located at (${cellIdToCoordinateString(cellId)}).`;
+}
+
+/** The LastOutsideDeath objcell id from the wasm snapshot, or null. */
+function lastOutsideDeathCell(handle) {
+  const snap = handle.playerLastOutsideDeath();
+  try { return snap ? (snap.cellId >>> 0) : null; }
+  finally { try { snap?.free?.(); } catch (_) { /* plain object */ } }
+}
 
 /** Verbs retail's client command table owns — the only `@` verbs rerouted. */
 export const RETAIL_CLIENT_VERBS = new Set([
@@ -166,6 +259,9 @@ export const RETAIL_CLIENT_VERBS = new Set([
   ...Object.keys(TURBINE_CMDS),
   ...SOCIAL_CLIENT_VERBS,
   ...PK_CLIENT_VERBS,
+  ...STATUS_CLIENT_VERBS,
+  ...LOCKUI_VERBS,
+  ...CORPSE_VERBS,
 ]);
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -267,8 +363,11 @@ export function normalizeChatLine(message) {
     const verb = parseCommandLine(m).cmd;
     const social = SOCIAL_CLIENT_VERBS.includes(verb);
     const pk = PK_CLIENT_VERBS.includes(verb);
+    const status = STATUS_CLIENT_VERBS.includes(verb);
+    const lock = LOCKUI_VERBS.has(verb);
     return RETAIL_CLIENT_VERBS.has(verb) && (!social || retailSocialCmdsEnabled())
-        && (!pk || retailPkCmdsEnabled())
+        && (!pk || retailPkCmdsEnabled()) && (!status || retailStatusCmdsEnabled())
+        && (!lock || uiLockApi() !== null)
       ? { kind: "command", line: `/${m.slice(1)}` }
       : { kind: "server", line: m };
   }
@@ -571,6 +670,34 @@ export function initSlashCommands() {
       return { dispatched: true, echo: null };
     }
 
+    // input-options-4: `/lockui` / `@lockui` — retail DoLockUI toggles the
+    // global LockUI locally (ACE has no such command). Success prints nothing.
+    if (LOCKUI_VERBS.has(cmd)) {
+      const api = uiLockApi();
+      if (api) {
+        if (rest.trim()) {
+          const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
+          if (append) append(LOCKUI_USAGE_TEXT, CHAT_CATEGORY.SYSTEM);
+          return { dispatched: true, echo: null, lines: [LOCKUI_USAGE_TEXT], category: CHAT_CATEGORY.SYSTEM };
+        }
+        try { api.toggle(); }
+        catch (e) { return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` }; }
+        return { dispatched: true, echo: null };
+      }
+    }
+
+    // inventory-session-7: `/corpse` / `/cor` (and `@` forms) — retail
+    // DoCorpse prints the LastOutsideDeath line locally (default text type)
+    // and sends nothing.
+    if (CORPSE_VERBS.has(cmd) && typeof handle?.playerLastOutsideDeath === "function") {
+      let text;
+      try { text = corpseCommandText(lastOutsideDeathCell(handle)); }
+      catch (e) { return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` }; }
+      const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
+      if (append) append(text, CHAT_CATEGORY.SYSTEM);
+      return { dispatched: true, echo: null, lines: [text], category: CHAT_CATEGORY.SYSTEM };
+    }
+
     // pk-4 (round 5, 2026-10-08): @pklite / @pkarena / @pklarena run
     // retail's client checks on the LIVE PK bits, then send the GameAction.
     // A pkg without the bindings keeps the old server forward below.
@@ -591,6 +718,17 @@ export function initSlashCommands() {
         catch (e) { return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` }; }
         return { dispatched: true, echo: null };
       }
+    }
+
+    // chat-errors-8 (2026-10-13): /age and /birth send the GameAction
+    // (retail DoAge / DoBirth print nothing themselves; ACE's reply is the
+    // line). A pkg without queryAge / queryBirth keeps the old server
+    // forward below.
+    const statusSend = retailStatusCmdsEnabled() ? statusCommandSend(cmd) : null;
+    if (statusSend && typeof handle?.[statusSend] === "function") {
+      try { handle[statusSend](); }
+      catch (e) { return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` }; }
+      return { dispatched: true, echo: null };
     }
 
     // Wave 9 Phase 9.3 (2026-05-26) — soul emote slash commands

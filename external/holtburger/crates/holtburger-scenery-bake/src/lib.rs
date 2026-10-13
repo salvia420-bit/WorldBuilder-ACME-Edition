@@ -1,11 +1,27 @@
-//! **Holtburger Scenery Bake** — verbatim Rust port of
-//! `ACE.Server.Entity.Scenery.Load` (198 lines).
+//! **Holtburger Scenery Bake** — turns AC's procedural-scenery channel
+//! into an explicit, deterministic placement list. This is Phase B.2 of
+//! the world-completeness method (see `docs/hypotheticalmethod.md`).
 //!
-//! Phase B.2 of the world-completeness method (see
-//! `docs/hypotheticalmethod.md`). Turns AC's procedural-scenery
-//! channel into an explicit, deterministic placement list. One bake,
-//! two consumers: the renderer reads it, the server reads it, both
-//! agree by construction.
+//! The bake runs in one of three [`BakeMode`]s, and they follow different
+//! sources:
+//! - `AceCompat` is the default, and every shipped bake uses it. It is a
+//!   verbatim port of `ACE.Server.Entity.Scenery.Load` (`Entity/Scenery.cs`,
+//!   198 lines). That code is DEAD in ACE: its only caller,
+//!   `Entity/Landblock.LoadMeshes`, is commented out
+//!   (`Entity/Landblock.cs:197`, and :334 says "This isn't used by ACE").
+//!   So it is not what a live ACE server computes.
+//! - `Retail` follows `acclient.c` `CLandBlock::get_land_scenes`. Live ACE
+//!   physics (`Physics/Common/Landblock.get_land_scenes`) follows the same
+//!   rules, except that it scales the noise by ACE's double literal instead
+//!   of retail's 2^-32 ([`NOISE_SCALE`] vs [`NOISE_SCALE_RETAIL`]).
+//! - `Strict` is a renderer-aligned variant of `AceCompat`.
+//!
+//! The bake's consumers agree with each other by construction, because
+//! they all read the same bake. They are the client renderer, the client's
+//! scenery colliders and the rynthnav nav geometry. No server reads the
+//! bake. A server agrees with it only as far as the server computes the
+//! same placements itself. For live ACE that is close to `Retail`, and
+//! `AceCompat` does not match it.
 //!
 //! # Determinism contract
 //!
@@ -27,6 +43,26 @@
 //! - `OnRoad`:     `Scenery.cs:166-172` → `height::on_road`
 //! - `Collision`:  `Scenery.cs:177-184` → `noise::intersects_any`
 //! - `GetZ`:       `Scenery.cs:189-196` → `height::bilinear_height`
+//! - Retail frequency gate (`BakeMode::Retail` only): `acclient.c`
+//!   `CLandBlock::get_land_scenes` :352662-352731 →
+//!   `noise::object_noise_retail`
+//! - Retail noise scale (`BakeMode::Retail` only): the exe's float
+//!   `0x2F800000` = 2^-32 → [`NOISE_SCALE_RETAIL`] in the gate, the scene
+//!   pick (:352639-352645, `noise::scene_index_retail`), `ObjectDesc::Place`
+//!   (:462605, `noise::displace_retail`), `ObjectDesc::ScaleObj` (:351361,
+//!   `noise::scale_obj_retail`) and `GetObjFrame` (`noise::rotate_obj_retail`)
+//! - Retail road band (`BakeMode::Retail` only): `acclient.c`
+//!   `CLandBlock::on_road` :352238 → `height::on_road_retail`
+//! - Retail acceptance (`BakeMode::Retail` only, via
+//!   [`bake_landblock_retail`]): `acclient.c` `CLandBlock::get_land_scenes`
+//!   :352673-352718 — strict `< 192` bounds, `CSortCell::has_building` →
+//!   [`retail::building_cell_mask`], `ObjectDesc::CheckSlope` on the
+//!   walkable triangle → [`retail::check_slope`] +
+//!   [`height::triangle_plane_from_grid`], `CPhysicsObj::obj_within_block`
+//!   → the caller's `within_block` closure ([`retail::WithinBlockShape`])
+//! - Retail orientation (`BakeMode::Retail` only): `acclient.c`
+//!   `ObjectDesc::GetObjFrame` :462660 / `ObjectDesc::ObjAlign` :462708 →
+//!   `Frame::set_heading` :357692 → [`orientation::obj_frame_orientation`]
 //!
 //! # Caller contract for the closures
 //!
@@ -38,7 +74,10 @@
 //!   vertices through ACE's `scale * yaw * cellTranslate * inner`
 //!   stack (see [`aabb::transform_mesh_to_aabb3`] for the canonical
 //!   helper). Returns `None` when the mesh can't be loaded; the bake
-//!   skips placements without a usable AABB (no collision basis).
+//!   skips placements without a usable AABB (no collision basis). In
+//!   `BakeMode::Retail` the frame is the full retail quaternion
+//!   ([`PlacementXform::orientation`]; build the box with
+//!   [`aabb::transform_mesh_to_aabb3_quat`]), not a yaw.
 //!
 //! # DAT-01 phase 1 (2026-07-27) — the box is shipped, not discarded
 //!
@@ -65,45 +104,70 @@
 //! collision-blocker list from Buildings alone; see
 //! `~/ace-server/Source/ACE.Server/Physics/Common/Landblock.cs:438`
 //! and `Scenery.cs:83`) using the same per-vertex transform.
+//!
+//! `BakeMode::Retail` never rejects on a box (terrain-scenery-3): it still
+//! builds and ships `bounds`, but its building test is the retail
+//! building-CELL mask ([`retail::building_cell_mask`], from the
+//! `LandblockInfo.Buildings` origins) and it has no placed-scenery test.
 
 #![forbid(unsafe_code)]
 
 pub mod aabb;
 pub mod height;
 pub mod noise;
+pub mod orientation;
+pub mod retail;
 
 pub use aabb::{
     Aabb2D, Aabb3D, LocalBounds, transform_local_aabb, transform_mesh_to_aabb,
-    transform_mesh_to_aabb3,
+    transform_mesh_to_aabb3, transform_mesh_to_aabb3_quat,
 };
 pub use height::{
-    CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid,
-    get_split_dir, normal_z_at, slope_at, triangle_plane_height_from_grid, vertex_heights,
+    CELL_SIZE, LANDBLOCK_SIZE, TrianglePlane, VERTEX_DIM, bilinear_height,
+    bilinear_height_from_grid, get_split_dir, normal_z_at, slope_at, triangle_plane_from_grid,
+    triangle_plane_height_from_grid, vertex_heights,
 };
 pub use noise::{
-    NOISE_SCALE, cell_mat_scene, cell_mats_per_object, displace, object_noise, rotate_obj,
-    scale_obj,
+    NOISE_SCALE, NOISE_SCALE_RETAIL, cell_mat_scene, cell_mats_per_object, displace,
+    displace_retail, object_noise, object_noise_retail, rotate_obj, rotate_obj_retail, scale_obj,
+    scale_obj_retail, scene_index_retail,
+};
+pub use orientation::{frame_set_heading, obj_frame_orientation, vector_heading, yaw_about_z};
+pub use retail::{
+    BlockSphere, WithinBlockQuery, WithinBlockShape, building_cell_mask, land_cell_bit,
 };
 
+use holtburger_common::Quaternion;
 use holtburger_dat::file_type::Region;
 use holtburger_dat::file_type::Scene;
 use holtburger_dat::landblock::CellLandblock;
 
-/// Bake-mode toggle for two deliberately-different placement contracts.
+/// Bake-mode toggle for the placement contracts the bake can reproduce.
 ///
-/// The B.2 / B.3 implementation diverged from ACE in two places. For
-/// each divergence the ACE behaviour is one mode and the
-/// renderer-friendly behaviour is the other:
+/// | Concern | `AceCompat` (default) | `Strict` | `Retail` |
+/// |---|---|---|---|
+/// | Noise scale | ACE's C# double literal `2.3283064e-10` ([`NOISE_SCALE`]), about 1.6e-8 relative below 2^-32. | Same as `AceCompat`. | Retail — the exe's float `0x2F800000` (`acclient.exe` `0x7c6f10`), exactly 2^-32 ([`NOISE_SCALE_RETAIL`]), in the gate, the scene pick ([`scene_index_retail`]), the displacement and quadrant ([`displace_retail`]), the scale ([`scale_obj_retail`], which also keeps `max/min` unrounded as retail's x87 does) and the heading ([`rotate_obj_retail`]). Live ACE physics keeps ACE's literal. |
+/// | Frequency gate | `Scenery.cs:59` — ONE draw per vertex (`cellMat * 23399`, [`object_noise`]) shared by every `ObjectDesc` in the Scene, so a Scene's objects appear or vanish as a nested set. | Same as `AceCompat`. | Retail — object `j` draws its own value from `cellMat * (23399 + j)` ([`object_noise_retail`]; `acclient.c` `CLandBlock::get_land_scenes` :352662-352731). |
+/// | Road test | `Scenery.cs:166-172` — ONE terrain word, read at `cellX * 8 + cellY` (an 8-stride on the 9×9 grid, so for `cellX >= 1` it is an unrelated vertex; [`height::on_road`]). | Same as `AceCompat`. | Retail — all four cell corners at `9 * ix + iy` (`+1`, `+9`, `+10`) and the 5 m road band, diagonals included ([`height::on_road_retail`]; `acclient.c` `CLandBlock::on_road` :352238). |
+/// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation, **and matches the live player surface** (render + `holtburger_world` physics both use the per-cell triangle). | Bilinear via [`bilinear_height_from_grid`] — NB: no longer matches the player/render surface (they moved to the per-cell triangle 2026-06-19/20); retained as an explicit alternative. | Triangle-plane, as `AceCompat` (retail `Plane::set_height` on the walkable terrain triangle). |
+/// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements whose terrain-normal Z (cos slope) falls outside `[min_slope, max_slope]`, using the 4-corner plane fit [`normal_z_at`]. | Retail — `ObjectDesc::CheckSlope` on the `N.z` of the walkable cell TRIANGLE under the point ([`triangle_plane_from_grid`], [`retail::check_slope`]; `acclient.c:352699`). |
+/// | Bounds | `Scenery.cs:70` — `0 <= x, y <= 192` (192 accepted). | Same as `AceCompat`. | Retail — `0 <= x, y < 192` (`flt_844AEC`, strict; `acclient.c:352677-352678`). |
+/// | Buildings | `Scenery.cs:83` — reject when the placement's render-mesh XY AABB overlaps any building's. | Same as `AceCompat`. | Retail — reject when the candidate's 24 m land cell holds a building ORIGIN (`CSortCell::has_building`, :352697); no box test ([`retail::building_cell_mask`]). |
+/// | Scenery overlap | `Scenery.cs:84` — reject when the AABB overlaps an already placed one. | Same as `AceCompat`. | None — retail has no scenery-vs-scenery test. |
+/// | Block edge | None. | None. | Retail — `CPhysicsObj::obj_within_block` (:352712) on the unscaled physics shape, via the caller's `within_block` closure ([`bake_landblock_retail`], [`retail::WithinBlockShape`]). |
+/// | Orientation | `Scenery.cs:77` — yaw only, `(cos(r/2), 0, 0, sin(r/2))` with `r = noise * max_rot` in radians ([`rotate_obj`]); `base_loc` orientation and `align` ignored. | Same as `AceCompat`. | Retail — `ObjectDesc::GetObjFrame` / `ObjAlign` (:352703-352706): `base_loc` whole when `max_rot == 0`; else `Frame::set_heading(noise * max_rot)` in compass DEGREES, clockwise, so heading `d` is `(cos(d/2), 0, 0, -sin(d/2))` (the mirror of `AceCompat`), keeping the base's forward-axis pitch; `align != 0` faces up the walkable triangle's slope ([`orientation::obj_frame_orientation`]). |
 ///
-/// | Concern | `AceCompat` (default) | `Strict` |
-/// |---|---|---|
-/// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation, **and matches the live player surface** (render + `holtburger_world` physics both use the per-cell triangle). | Bilinear via [`bilinear_height_from_grid`] — NB: no longer matches the player/render surface (they moved to the per-cell triangle 2026-06-19/20); retained as an explicit alternative. |
-/// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements whose terrain-normal Z (cos slope) falls outside `[min_slope, max_slope]`, matching retail `ObjectDesc::CheckSlope`. |
-///
-/// `AceCompat` is the **1:1 Coldeve compatibility** target — what the
-/// brief calls the load-bearing requirement. Even when ACE has a TODO or
-/// a bug, ACE-compat replays that exact behaviour so that the bake and
-/// a live ACE server agree placement-for-placement.
+/// `AceCompat` replays ACE's `Entity/Scenery.cs` port exactly, TODOs and
+/// bugs included. **That port is dead code in ACE** (corrected
+/// 2026-10-13): its only caller, `Entity/Landblock.LoadMeshes`, is
+/// commented out (`Entity/Landblock.cs:197`; ":334 This isn't used by
+/// ACE"). A live ACE server builds its scenery in
+/// `Physics/Common/Landblock.get_land_scenes` (`UseSceneFiles = true`),
+/// which follows retail: the per-object index in the frequency gate, the
+/// road-band test, `has_building` and `CheckSlope`. So `AceCompat` does
+/// NOT agree placement-for-placement with a live ACE server, and its
+/// "bugs" are not retail behaviour. It stays the default only because
+/// every shipped bake (and its `placements-hash` sidecars) is ace-compat.
 ///
 /// `Strict` is the **renderer-aligned** target — what we'd want if we
 /// were running a clean-slate server with no ACE compatibility needs.
@@ -111,19 +175,63 @@ use holtburger_dat::landblock::CellLandblock;
 /// removes placements; Z is the only other delta and it doesn't
 /// add/remove placements, just shifts them).
 ///
+/// `Retail` is the retail target. Live ACE physics follows the same rules,
+/// but it keeps ACE's double noise literal. That flips a gate or a scene
+/// pick only within about 1.6e-8 of a threshold, but it moves many
+/// displacements, scales and headings by 1 f32 ULP. It is built up under
+/// this one mode: today it differs from `AceCompat` in the noise scale,
+/// the frequency gate, the road test, the acceptance rules and the
+/// orientation. Under the gate each object keeps its
+/// marginal probability `freq`, so density is unchanged; what changes is
+/// WHICH objects of a
+/// Scene appear in a cell. The road band keeps scenery off the roads
+/// retail keeps clear (and stops ACE's 8-stride from clearing unrelated
+/// cells). The acceptance rules (terrain-scenery-3) follow
+/// `get_land_scenes` in order — bounds, road, building cell, slope,
+/// within-block — and drop both of ACE's box rejections, so forests that
+/// ACE's overlap test thinned get denser, steep hillsides and building
+/// cells get sparser, and a tree in a cell NEXT to a building may now
+/// touch its walls (retail-faithful). The full rule set needs the
+/// caller's building origins and physics shapes, so it runs through
+/// [`bake_landblock_retail`]; [`bake_landblock`] in this mode has neither
+/// (empty building-cell mask, within-block always true). The orientation
+/// (terrain-scenery-4) is retail's `Frame::set_heading` frame: every
+/// rotated object turns the other way to `AceCompat` (which copies ACE's
+/// `CreateFromYawPitchRoll(0, 0, +r)`), so a partial `max_rot` range (say
+/// 0-85 degrees) fans out clockwise from north, not counter-clockwise, and
+/// the heading replaces the base's own yaw; `max_rot == 0` objects keep
+/// their `base_loc` heading instead of identity; `align` objects face up
+/// the slope; and the few pitched bases keep their (1-2 degree) tilt, so
+/// `qx`/`qy` may be non-zero. It is opt-in: do not make it the default
+/// until a Retail bake has passed an A/B eye-test against the shipped
+/// ace-compat dist.
+///
 /// The mode appears in the bake's `bake-source.sha256` sidecar so
 /// downstream consumers can refuse to honour a mode they don't expect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BakeMode {
-    /// **Default.** Match today's ACE behaviour bit-exactly:
-    /// triangle-plane Z, no slope check. Use this for ACE-derivative
-    /// servers (Coldeve etc.) that want client/server agreement.
+    /// **Default.** ACE's `Entity/Scenery.cs` port, bit-exactly: one
+    /// shared frequency draw per vertex, triangle-plane Z, no slope
+    /// check. Every shipped bake is this mode. (Not what a live ACE
+    /// server runs — see the type docs.)
     #[default]
     AceCompat,
     /// Renderer-friendly: bilinear Z, slope-rejection ON. Use this for
     /// non-ACE consumers or when you want scenery to land on the same
     /// terrain Z the player physics integrator uses.
     Strict,
+    /// Retail `CLandBlock::get_land_scenes` (`acclient.c:352530`), which
+    /// the live ACE server's `Physics/Common/Landblock.get_land_scenes`
+    /// also follows (with ACE's noise literal). Currently: retail's 2^-32
+    /// noise scale ([`NOISE_SCALE_RETAIL`]) in every noise draw, the
+    /// per-object frequency gate
+    /// ([`object_noise_retail`]), the 4-corner road band
+    /// ([`height::on_road_retail`]) and retail acceptance (strict bounds,
+    /// building cell, walkable-triangle slope, within-block; no box
+    /// rejections — see [`bake_landblock_retail`]) and the retail frame
+    /// orientation ([`orientation::obj_frame_orientation`]);
+    /// triangle-plane Z as `AceCompat`. Opt-in only.
+    Retail,
 }
 
 impl BakeMode {
@@ -133,6 +241,7 @@ impl BakeMode {
         match self {
             BakeMode::AceCompat => "ace-compat",
             BakeMode::Strict => "strict",
+            BakeMode::Retail => "retail",
         }
     }
 }
@@ -143,8 +252,9 @@ impl std::str::FromStr for BakeMode {
         match s {
             "ace-compat" | "ace_compat" | "acecompat" => Ok(BakeMode::AceCompat),
             "strict" => Ok(BakeMode::Strict),
+            "retail" => Ok(BakeMode::Retail),
             other => Err(format!(
-                "unknown BakeMode `{other}` (expected `ace-compat` or `strict`)"
+                "unknown BakeMode `{other}` (expected `ace-compat`, `strict` or `retail`)"
             )),
         }
     }
@@ -201,12 +311,15 @@ impl GeneratedSceneryIdentity {
 /// One baked scenery placement. Emitted by `bake_landblock`.
 ///
 /// Coordinates `(x, y, z)` are LB-local, `[0, 192]` on each axis for
-/// XY. The quaternion is yaw-only-about-Z: `w = cos(rad/2)`, `z =
-/// sin(rad/2)` (XY are always 0). Matches ACE's `Quaternion.
-/// CreateFromYawPitchRoll(0, 0, RotateObj(...))` — verified against
-/// .NET reference source: yaw=pitch=0 reduces the quaternion to a
+/// XY. In `AceCompat` / `Strict` the quaternion is yaw-only-about-Z:
+/// `w = cos(rad/2)`, `z = sin(rad/2)` (XY are always 0). Matches ACE's
+/// `Quaternion.CreateFromYawPitchRoll(0, 0, RotateObj(...))` — verified
+/// against .NET reference source: yaw=pitch=0 reduces the quaternion to a
 /// pure roll-about-Z rotation, which is `(cos(r/2), 0, 0, sin(r/2))`
-/// in (w, x, y, z) order.
+/// in (w, x, y, z) order. In `Retail` it is the retail frame
+/// orientation ([`orientation::obj_frame_orientation`]): the opposite turn
+/// for the same noise, `base_loc` kept when nothing turns it, and `qx`/`qy`
+/// non-zero where the base is pitched.
 ///
 /// `source_*` fields are debug-only: they say WHY a placement exists.
 /// Useful for "the lifestone is missing — which vertex/scene/index
@@ -248,7 +361,8 @@ pub struct ScenicPlacement {
     /// and has always discarded it afterwards. `bounds.xy()` is
     /// literally the box that was tested against `building_aabbs` and
     /// the already-placed set; the Z extent is the same per-vertex walk
-    /// with the third axis kept instead of thrown away.
+    /// with the third axis kept instead of thrown away. (`BakeMode::Retail`
+    /// tests no box; there it is built only to be shipped.)
     ///
     /// It exists so procedural scenery can get a collision
     /// representation without the client re-deriving one per instance:
@@ -349,6 +463,11 @@ impl ScenicPlacement {
 /// `BoundingBox.BuildBox` does. Since DAT-01 phase 1 the closure returns
 /// an [`Aabb3D`]; the bake reads `.xy()` for ACE's rejection test and
 /// ships the whole box on the placement.
+///
+/// terrain-scenery-4: it also carries the full orientation the placement
+/// ships with (`qw..qz`). A `BakeMode::Retail` frame is not yaw-only, so a
+/// Retail closure should rotate by [`Self::orientation`]
+/// ([`aabb::transform_mesh_to_aabb3_quat`]) rather than `rotation_rad`.
 #[derive(Debug, Clone, Copy)]
 pub struct PlacementXform {
     /// GfxObj (`0x01xxxxxx`) or SetupModel (`0x02xxxxxx`) DID.
@@ -359,10 +478,33 @@ pub struct PlacementXform {
     pub ly: f32,
     /// World Z snapped to terrain.
     pub lz: f32,
-    /// Yaw about Z, in radians.
+    /// Yaw about Z, in radians. `AceCompat` / `Strict`: ACE's
+    /// `RotateObj` value, exactly as before. `Retail`: the yaw of the
+    /// retail frame ([`orientation::yaw_about_z`]), which drops the 1-2
+    /// degree pitch a few bases carry.
     pub rotation_rad: f32,
     /// Uniform scale.
     pub scale: f32,
+    /// The placement's orientation, `(w, x, y, z)` — bit-identical to the
+    /// [`ScenicPlacement`] quaternion. `AceCompat` / `Strict`:
+    /// `(cos(r/2), 0, 0, sin(r/2))` of `rotation_rad`.
+    pub qw: f32,
+    pub qx: f32,
+    pub qy: f32,
+    pub qz: f32,
+}
+
+impl PlacementXform {
+    /// The placement orientation as a [`Quaternion`].
+    #[inline]
+    pub fn orientation(&self) -> Quaternion {
+        Quaternion {
+            w: self.qw,
+            x: self.qx,
+            y: self.qy,
+            z: self.qz,
+        }
+    }
 }
 
 /// Run the scenery bake for one landblock.
@@ -393,7 +535,13 @@ pub struct PlacementXform {
 ///   computing each one via the same per-vertex transform. **Do not
 ///   include `LandblockInfo.Objects`** — ACE's Scenery.Load collides
 ///   against Buildings only (`Scenery.cs:83` /
-///   `Landblock.cs:438`).
+///   `Landblock.cs:438`). Ignored by `BakeMode::Retail`, which never
+///   rejects on a box.
+///
+/// `BakeMode::Retail` through this entry point runs the retail chain with
+/// NO building cells and an always-true within-block test, because this
+/// signature carries neither. Use [`bake_landblock_retail`] for the full
+/// retail acceptance.
 pub fn bake_landblock(
     region: &Region,
     landblock: &CellLandblock,
@@ -410,10 +558,64 @@ pub fn bake_landblock(
         fetch_scene,
         compute_world_aabb,
         building_aabbs,
+        0,
+        |_: WithinBlockQuery| true,
         mode,
     )
 }
 
+/// Run the scenery bake for one landblock in `BakeMode::Retail`, with the
+/// two inputs only the caller can supply (terrain-scenery-3).
+///
+/// Acceptance follows `acclient.c` `CLandBlock::get_land_scenes`
+/// (:352673-352718) in order: `0 <= x, y < 192`; not on a road
+/// ([`height::on_road_retail`]); the candidate's land cell not in
+/// `building_cells`; `N.z` of the walkable terrain triangle within
+/// `[min_slope, max_slope]`; and `within_block` true. There is no box
+/// test of any kind: `compute_world_aabb` is still called for every
+/// accepted placement, but only to fill [`ScenicPlacement::bounds`] (the
+/// collider broad phase). A `None` from it still drops the placement — it
+/// means the model could not be loaded, which in retail is a failed
+/// `CPhysicsObj::makeObject` and likewise places nothing.
+///
+/// # Arguments
+///
+/// As [`bake_landblock`], plus:
+///
+/// - `building_cells` — bit `ix * 8 + iy` set for each of this block's land
+///   cells holding a building origin. Build it with
+///   [`retail::building_cell_mask`] from `LandblockInfo.Buildings[].frame`
+///   origins (not `Objects`).
+/// - `within_block` — `CPhysicsObj::obj_within_block` (`acclient.c:318307`)
+///   for the placed, UNSCALED object: retail runs it before
+///   `SetScaleStatic` (:352712 vs :352716). It gets the model id and the
+///   placement frame (the same origin and quaternion the placement ships
+///   with) and returns false to drop the candidate. Load the model's
+///   [`retail::WithinBlockShape`] and call
+///   [`retail::WithinBlockShape::within_block`]. Must be deterministic.
+pub fn bake_landblock_retail(
+    region: &Region,
+    landblock: &CellLandblock,
+    landblock_id: u32,
+    fetch_scene: impl FnMut(u32) -> Option<Scene>,
+    compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb3D>,
+    building_cells: u64,
+    within_block: impl FnMut(WithinBlockQuery) -> bool,
+) -> Vec<ScenicPlacement> {
+    bake_landblock_impl(
+        region,
+        landblock,
+        landblock_id,
+        fetch_scene,
+        compute_world_aabb,
+        &[],
+        building_cells,
+        within_block,
+        BakeMode::Retail,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn bake_landblock_impl(
     region: &Region,
     landblock: &CellLandblock,
@@ -421,12 +623,14 @@ fn bake_landblock_impl(
     mut fetch_scene: impl FnMut(u32) -> Option<Scene>,
     mut compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb3D>,
     building_aabbs: &[Aabb2D],
+    building_cells: u64,
+    mut within_block: impl FnMut(WithinBlockQuery) -> bool,
     mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
     // Scenery.cs:21-22: get landblock cell offsets.
     let block_x: u32 = (landblock_id >> 24).wrapping_mul(8);
     let block_y: u32 = ((landblock_id >> 16) & 0xFF).wrapping_mul(8);
-    // For triangle-plane Z (AceCompat): pre-pack the LB-id top half
+    // For triangle-plane Z (AceCompat, Retail): pre-pack the LB-id top half
     // exactly the way `LandblockId.LandblockX/Y` reads it. `landblock_id`
     // is `(lb_x << 24) | (lb_y << 16)` so the top 16 bits packed back
     // as `(lb_x << 8) | lb_y` is `landblock_id >> 16`.
@@ -443,6 +647,9 @@ fn bake_landblock_impl(
     // Pre-resolve the height grid once — saves 81 × N(candidates)
     // table lookups in the hot loop.
     let heights = vertex_heights(region, landblock);
+    // `BakeMode::Retail` road-band width: the Region's `road_width` (5.0,
+    // retail's `CLandBlock::on_road` literal), resolved once.
+    let road_width = height::retail_road_width(region);
 
     let mut scenery: Vec<ScenicPlacement> = Vec::new();
     let mut placed_aabbs: Vec<Aabb2D> = Vec::new();
@@ -487,12 +694,21 @@ fn bake_landblock_impl(
         let global_cell_y = cell_y.wrapping_add(block_y);
 
         // Scenery.cs:43-46 — pick the Scene via deterministic noise.
+        // `Retail` scales by retail's 2^-32 (acclient.c
+        // CLandBlock::get_land_scenes :352639-352645); `AceCompat` and
+        // `Strict` keep ACE's literal, byte-identical.
         let cell_mat_initial = cell_mat_scene(global_cell_x, global_cell_y);
-        let offset: f64 = cell_mat_initial as f64 * NOISE_SCALE;
-        let mut scene_idx = (scenes.len() as f64 * offset) as usize;
-        if scene_idx >= scenes.len() {
-            scene_idx = 0;
-        }
+        let scene_idx = match mode {
+            BakeMode::Retail => scene_index_retail(cell_mat_initial, scenes.len()),
+            BakeMode::AceCompat | BakeMode::Strict => {
+                let offset: f64 = cell_mat_initial as f64 * NOISE_SCALE;
+                let mut scene_idx = (scenes.len() as f64 * offset) as usize;
+                if scene_idx >= scenes.len() {
+                    scene_idx = 0;
+                }
+                scene_idx
+            }
+        };
         let scene_id = scenes[scene_idx];
 
         // Scenery.cs:50 — load the Scene via the closure.
@@ -508,26 +724,60 @@ fn bake_landblock_impl(
         for (j, obj) in scene.objects.iter().enumerate() {
             let j_u32 = j as u32;
 
-            // Scenery.cs:59 — per-object noise sample.
-            let noise = object_noise(cell_x_mat, cell_y_mat, cell_mat);
+            // Scenery.cs:59 — per-object noise sample. `Retail` gives each
+            // object its own draw, `cellMat * (23399 + j)` (acclient.c
+            // CLandBlock::get_land_scenes :352662-352731). `AceCompat` and
+            // `Strict` keep ACE's dead-code shared draw, byte-identical.
+            let noise = match mode {
+                BakeMode::Retail => object_noise_retail(cell_x_mat, cell_y_mat, cell_mat, j_u32),
+                BakeMode::AceCompat | BakeMode::Strict => {
+                    object_noise(cell_x_mat, cell_y_mat, cell_mat)
+                }
+            };
 
             // Scenery.cs:61 — gate on freq + skip weenie-managed entities.
             if !(noise < obj.freq as f64) || obj.weenie_obj != 0 {
                 continue;
             }
 
-            // Scenery.cs:63 — apply displacement noise.
-            let (dx, dy) = displace(obj, global_cell_x, global_cell_y, j_u32);
+            // Scenery.cs:63 — apply displacement noise. `Retail` is
+            // `ObjectDesc::Place` with retail's 2^-32 scale.
+            let (dx, dy) = match mode {
+                BakeMode::Retail => displace_retail(obj, global_cell_x, global_cell_y, j_u32),
+                BakeMode::AceCompat | BakeMode::Strict => {
+                    displace(obj, global_cell_x, global_cell_y, j_u32)
+                }
+            };
 
             // Scenery.cs:66-67 — translate to LB-local frame.
             let lx = cell_x as f32 * CELL_SIZE + dx;
             let ly = cell_y as f32 * CELL_SIZE + dy;
 
             // Scenery.cs:70 — reject out-of-LB placements + road overlap.
-            if lx < 0.0 || ly < 0.0 || lx > LANDBLOCK_SIZE || ly > LANDBLOCK_SIZE {
+            // `Retail` bounds the point to [0, 192): get_land_scenes tests
+            // `obj_vector.x < flt_844AEC` (24.0 * 8.0), strict, and a NaN
+            // fails every comparison (acclient.c:352674-352678).
+            // `AceCompat` / `Strict` keep ACE's `> 192`, which accepts 192.
+            let out_of_block = match mode {
+                BakeMode::Retail => {
+                    !(lx >= 0.0 && ly >= 0.0 && lx < LANDBLOCK_SIZE && ly < LANDBLOCK_SIZE)
+                }
+                BakeMode::AceCompat | BakeMode::Strict => {
+                    lx < 0.0 || ly < 0.0 || lx > LANDBLOCK_SIZE || ly > LANDBLOCK_SIZE
+                }
+            };
+            if out_of_block {
                 continue;
             }
-            if height::on_road(landblock, lx, ly) {
+            // `AceCompat` and `Strict` keep ACE's dead-code one-word test
+            // (Scenery.cs:166-172, 8-stride), byte-identical. `Retail` runs
+            // the 4-corner road band (acclient.c CLandBlock::on_road, called
+            // from get_land_scenes :352679).
+            let on_road = match mode {
+                BakeMode::Retail => height::on_road_retail(landblock, lx, ly, road_width),
+                BakeMode::AceCompat | BakeMode::Strict => height::on_road(landblock, lx, ly),
+            };
+            if on_road {
                 continue;
             }
 
@@ -551,6 +801,9 @@ fn bake_landblock_impl(
             // REJECT when it falls OUTSIDE `[min_slope, max_slope]` —
             // i.e. accept iff CheckSlope would (`N.z >= min && N.z <=
             // max`).
+            //
+            // `BakeMode::Retail` slope-checks below, against the walkable
+            // terrain TRIANGLE's `N.z` rather than this 4-corner fit.
             if matches!(mode, BakeMode::Strict) {
                 let normal_z = height::normal_z_at(&heights, lx, ly);
                 if normal_z < obj.min_slope || normal_z > obj.max_slope {
@@ -562,30 +815,100 @@ fn bake_landblock_impl(
             // (triangle-plane per-cell, see `height::triangle_plane_height_from_grid`).
             // `BakeMode::Strict` instead uses bilinear so scenery lands
             // on the same Z the renderer's physics integrator uses.
-            let z = match mode {
-                BakeMode::AceCompat => height::triangle_plane_height_from_grid(
-                    &heights,
-                    landblock_id_top_16,
-                    lx,
-                    ly,
+            // `BakeMode::Retail` uses the triangle plane too: retail calls
+            // `Plane::set_height` on the walkable terrain triangle
+            // (acclient.c CLandBlock::get_land_scenes). Before that it runs
+            // the two cell gates, in retail order (:352697-352699):
+            // `CSortCell::has_building` on the candidate's land cell, then
+            // `ObjectDesc::CheckSlope` on the `N.z` of the triangle
+            // `CLandCell::find_terrain_poly` returns. The triangle's normal
+            // rides along for `ObjectDesc::ObjAlign` below (only `Retail`
+            // reads it; the other modes pass straight up, unused).
+            let (z, walkable_normal) = match mode {
+                BakeMode::AceCompat => (
+                    height::triangle_plane_height_from_grid(&heights, landblock_id_top_16, lx, ly),
+                    (0.0, 0.0, 1.0),
                 ),
-                BakeMode::Strict => height::bilinear_height_from_grid(&heights, lx, ly),
+                BakeMode::Strict => (
+                    height::bilinear_height_from_grid(&heights, lx, ly),
+                    (0.0, 0.0, 1.0),
+                ),
+                BakeMode::Retail => {
+                    if building_cells & retail::land_cell_bit(landblock_id, lx, ly) != 0 {
+                        continue;
+                    }
+                    let plane =
+                        height::triangle_plane_from_grid(&heights, landblock_id_top_16, lx, ly);
+                    if !retail::check_slope(obj, plane.normal_z()) {
+                        continue;
+                    }
+                    (plane.z, plane.normal)
+                }
             };
 
-            // Scenery.cs:77 — rotation about Z.
-            let rotation_rad = rotate_obj(obj, global_cell_x, global_cell_y, j_u32);
-            // Yaw-only-about-Z quaternion. .NET reference:
-            //   CreateFromYawPitchRoll(0, 0, r)
-            // = (cos(r/2), 0, 0, sin(r/2)) in (w, x, y, z) order.
-            let half = rotation_rad * 0.5;
-            // Compute sin/cos in f64 then narrow, to match .NET's f32 sin/cos
-            // (CreateFromYawPitchRoll) which does not bit-match scalar glibc
-            // `sinf`/`cosf`. `half` stays f32 first (matches ACE `roll * 0.5f`).
-            let qw = (half as f64).cos() as f32;
-            let qz = (half as f64).sin() as f32;
+            // Orientation. `AceCompat` / `Strict`: Scenery.cs:77, a yaw
+            // about Z from `RotateObj`, byte-identical to every shipped
+            // bake. `Retail` (terrain-scenery-4): the frame retail builds
+            // after `Plane::set_height` (acclient.c CLandBlock::get_land_scenes
+            // :352703-352706) — `ObjectDesc::ObjAlign` when `align != 0`,
+            // else `ObjectDesc::GetObjFrame` (`base_loc`, then
+            // `Frame::set_heading(noise * max_rot)` in compass degrees when
+            // `max_rot > 0`). Full quaternion; `rotation_rad` is its yaw.
+            let (rotation_rad, qw, qx, qy, qz) = match mode {
+                BakeMode::Retail => {
+                    let q = orientation::obj_frame_orientation(
+                        obj,
+                        global_cell_x,
+                        global_cell_y,
+                        j_u32,
+                        walkable_normal,
+                    );
+                    (orientation::yaw_about_z(q), q.w, q.x, q.y, q.z)
+                }
+                BakeMode::AceCompat | BakeMode::Strict => {
+                    // Scenery.cs:77 — rotation about Z.
+                    let rotation_rad = rotate_obj(obj, global_cell_x, global_cell_y, j_u32);
+                    // Yaw-only-about-Z quaternion. .NET reference:
+                    //   CreateFromYawPitchRoll(0, 0, r)
+                    // = (cos(r/2), 0, 0, sin(r/2)) in (w, x, y, z) order.
+                    let half = rotation_rad * 0.5;
+                    // Compute sin/cos in f64 then narrow, to match .NET's f32 sin/cos
+                    // (CreateFromYawPitchRoll) which does not bit-match scalar glibc
+                    // `sinf`/`cosf`. `half` stays f32 first (matches ACE `roll * 0.5f`).
+                    let qw = (half as f64).cos() as f32;
+                    let qz = (half as f64).sin() as f32;
+                    (rotation_rad, qw, 0.0, 0.0, qz)
+                }
+            };
 
-            // Scenery.cs:78 — uniform scale.
-            let scale = scale_obj(obj, global_cell_x, global_cell_y, j_u32);
+            // `Retail` only — `CPhysicsObj::obj_within_block` on the placed
+            // object (acclient.c:352711-352712): `set_initial_frame` with
+            // the placement frame, BEFORE `SetScaleStatic`, so the closure
+            // tests the unscaled shape. False deletes the object.
+            if matches!(mode, BakeMode::Retail)
+                && !within_block(WithinBlockQuery {
+                    obj_id: obj.obj_id,
+                    x: lx,
+                    y: ly,
+                    z,
+                    qw,
+                    qx,
+                    qy,
+                    qz,
+                })
+            {
+                continue;
+            }
+
+            // Scenery.cs:78 — uniform scale. `Retail` is
+            // `ObjectDesc::ScaleObj`: retail's 2^-32 scale and an unrounded
+            // (f64) `max / min` ratio.
+            let scale = match mode {
+                BakeMode::Retail => scale_obj_retail(obj, global_cell_x, global_cell_y, j_u32),
+                BakeMode::AceCompat | BakeMode::Strict => {
+                    scale_obj(obj, global_cell_x, global_cell_y, j_u32)
+                }
+            };
 
             // Scenery.cs:80 + 83-84 — bounding box + collision reject.
             // AABB construction matches ACE BoundingBox.BuildBox: walk
@@ -600,6 +923,10 @@ fn bake_landblock_impl(
                 lz: z,
                 rotation_rad,
                 scale,
+                qw,
+                qx,
+                qy,
+                qz,
             }) {
                 Some(a) => a,
                 None => continue,
@@ -610,25 +937,32 @@ fn bake_landblock_impl(
             // accepted placement — it never influences acceptance, which
             // is why widening the closure's return type cannot move a
             // single placement.
-            let world_aabb = world_bounds.xy();
+            //
+            // `Retail` runs neither box test: retail has no
+            // scenery-vs-scenery rejection at all, and its building test
+            // is the land-cell mask above (terrain-scenery-3). The box is
+            // still built and shipped as the collider broad phase.
+            if !matches!(mode, BakeMode::Retail) {
+                let world_aabb = world_bounds.xy();
 
-            if noise::intersects_any(&world_aabb, building_aabbs) {
-                continue;
-            }
-            if noise::intersects_any(&world_aabb, &placed_aabbs) {
-                continue;
+                if noise::intersects_any(&world_aabb, building_aabbs) {
+                    continue;
+                }
+                if noise::intersects_any(&world_aabb, &placed_aabbs) {
+                    continue;
+                }
+                placed_aabbs.push(world_aabb);
             }
 
             // Accept the placement.
-            placed_aabbs.push(world_aabb);
             scenery.push(ScenicPlacement {
                 obj_id: obj.obj_id,
                 x: lx,
                 y: ly,
                 z,
                 qw,
-                qx: 0.0,
-                qy: 0.0,
+                qx,
+                qy,
                 qz,
                 scale,
                 source_cell_x: cell_x,

@@ -487,6 +487,7 @@ pub(crate) fn assemble_envcells<S: ResourceSource + ?Sized>(
     let mut missing = 0u32;
     let mut env_payload_memo: std::collections::HashMap<u32, Option<Vec<u8>>> =
         std::collections::HashMap::new();
+    let neg_face_retail = crate::neg_face_retail_enabled();
 
     for (i, &cid) in cell_ids.iter().enumerate() {
         let Some(envcell) = &cells_parsed[i] else {
@@ -532,6 +533,12 @@ pub(crate) fn assemble_envcells<S: ResourceSource + ?Sized>(
         for s in mesh.subsets()? {
             let did = resolve(s.surface_ref);
             if s.flags & hbg1::subset_flags::ENV_BACKFACE != 0 {
+                // dat-parser-2 `?negFace=retail`: the reversed back face has
+                // no retail counterpart; `append_environment_tris` drops it
+                // under the same flag.
+                if neg_face_retail {
+                    continue;
+                }
                 let pos_did = resolve(if s.pair_slot == u16::MAX {
                     hbg1::ENV_SLOT_NONE
                 } else {
@@ -694,10 +701,20 @@ mod exports {
     /// descriptor: string(JSON)}`. Sync over resident packs; models without
     /// a resident GEOM payload come back `missing` (JS runtime-decode
     /// fallback, counted).
+    ///
+    /// dat-parser-2 `?negFace=retail`: model payloads bake the reversed back
+    /// faces with no per-subset marker (only env subsets carry
+    /// `ENV_BACKFACE`), so under that flag every model comes back `missing`
+    /// and takes the counted runtime-decode fallback, which honours it.
     #[wasm_bindgen]
     pub fn assemble_model_geometry(model_ids: &[u32]) -> Result<JsValue, JsValue> {
-        let mut geom =
-            |id: u32| -> Option<Vec<u8>> { crate::pack_source_glue::pack_geom_payload(id) };
+        let neg_face_retail = crate::neg_face_retail_enabled();
+        let mut geom = |id: u32| -> Option<Vec<u8>> {
+            if neg_face_retail {
+                return None;
+            }
+            crate::pack_source_glue::pack_geom_payload(id)
+        };
         let (buffer, descriptor) = super::assemble_models(&mut geom, model_ids)
             .map_err(|e| JsValue::from_str(&e))?;
         Ok(bundle_to_js(buffer, descriptor))
@@ -714,7 +731,12 @@ mod exports {
     /// in cannot accidentally pass a truthy variant flag.
     #[wasm_bindgen]
     pub fn assemble_model_geometry_relief(model_ids: &[u32]) -> Result<JsValue, JsValue> {
+        // `?negFace=retail`: runtime-decode fallback, as `assemble_model_geometry`.
+        let neg_face_retail = crate::neg_face_retail_enabled();
         let mut geom = |id: u32| -> Option<Vec<u8>> {
+            if neg_face_retail {
+                return None;
+            }
             crate::pack_source_glue::pack_geom_payload_relief(id)
         };
         let (buffer, descriptor) = super::assemble_models(&mut geom, model_ids)
@@ -1073,6 +1095,72 @@ mod tests {
                 "no-light fixture bakes black"
             );
         }
+    }
+
+    /// dat-parser-2 `?negFace=retail`: the per-cell assembly drops every
+    /// `ENV_BACKFACE` subset (kept by default for distinct pos/neg DIDs), and
+    /// what remains matches `append_environment_tris` under the same flag.
+    #[test]
+    fn neg_face_retail_env_assembly_drops_backface_subsets() {
+        struct FlagReset;
+        impl Drop for FlagReset {
+            fn drop(&mut self) {
+                crate::set_neg_face_for_test(false, false);
+            }
+        }
+        let _reset = FlagReset;
+        let env = hbg1_fixture_env();
+        // Distinct DIDs for the wall's pos slot 0 and neg slot 3.
+        let surfaces_u16: Vec<u16> = vec![0x0010, 0x0020, 0x0030, 0x0040, 0x0050, 0x0060];
+        let surfaces: Vec<u32> = surfaces_u16
+            .iter()
+            .map(|&s| surface_did_for_envcell_index(s))
+            .collect();
+        let payload = hbg1::encode_env_directory(&env).unwrap();
+        let envcell = fixture_envcell(0x1234_0100, env.id, 0, surfaces_u16.clone());
+        let mut cell_bytes = Vec::new();
+        envcell.pack(&mut std::io::Cursor::new(&mut cell_bytes)).unwrap();
+        let src = FixtureSource(HashMap::from([(
+            ("eor/cell".to_string(), envcell.cell_id),
+            cell_bytes,
+        )]));
+        // (subset rows, ENV_BACKFACE rows, triangles per surface DID).
+        let assemble = |retail: bool| -> (usize, usize, HashMap<u32, usize>) {
+            crate::set_neg_face_for_test(retail, false);
+            let mut geom = |id: u32| (id == env.id).then(|| payload.clone());
+            let (_buffer, descriptor) =
+                assemble_envcells(&src, &mut geom, 0x1234_0000, &[envcell.cell_id]).unwrap();
+            let subs = descriptor["cells"][0]["subsets"].as_array().unwrap().clone();
+            let back = subs
+                .iter()
+                .filter(|s| {
+                    ((s["flags"].as_u64().unwrap() as u8) & hbg1::subset_flags::ENV_BACKFACE) != 0
+                })
+                .count();
+            let mut per_did: HashMap<u32, usize> = HashMap::new();
+            for s in &subs {
+                *per_did.entry(s["surfaceDid"].as_u64().unwrap() as u32).or_insert(0) +=
+                    s["indexCount"].as_u64().unwrap() as usize / 3;
+            }
+            (subs.len(), back, per_did)
+        };
+
+        let (rows_default, back_default, _) = assemble(false);
+        assert_eq!(back_default, 1, "default keeps the distinct-DID back subset");
+        let (rows_retail, back_retail, per_did_retail) = assemble(true);
+        assert_eq!(back_retail, 0, "retail drops every ENV_BACKFACE subset");
+        assert_eq!(rows_retail, rows_default - 1);
+
+        // Runtime under the same flag: no reversed tri, same per-DID counts.
+        crate::set_neg_face_for_test(true, false);
+        let mut tris = Vec::new();
+        crate::append_environment_tris(&mut tris, &env, &surfaces, 0);
+        assert!(tris.iter().all(|t| t.side_kind == crate::SideKind::Positive));
+        let mut rt: HashMap<u32, usize> = HashMap::new();
+        for t in &tris {
+            *rt.entry(t.surface_did).or_insert(0) += 1;
+        }
+        assert_eq!(rt, per_did_retail);
     }
 
     /// REAL-DAT differ (H-04.6(d) at corpus scale; #[ignore] — needs

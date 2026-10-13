@@ -1,0 +1,14 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "barber-panel",
+  "name": "Barber",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Retail barber page (gmBarberUI): StartBarber → face editor → FinishBarber",
+  "icon": "✂",
+  "iconHidden": true,
+  "entry": "./barber-panel.js",
+  "environments": ["browser"],
+  "slots": ["overlay"],
+  "clientApi": "^1.0"
+}

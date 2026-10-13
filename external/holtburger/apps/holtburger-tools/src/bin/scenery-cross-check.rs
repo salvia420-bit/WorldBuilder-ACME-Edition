@@ -3,18 +3,46 @@
 //!
 //! ## What this is — and what it is EMPHATICALLY NOT
 //!
-//! The fork's bake (`holtburger-scenery-bake` / `Scenery.cs` verbatim port)
-//! is the **bit-parity authority**: it reproduces ACE `Scenery.cs` exactly,
-//! down to the deliberate retail "bugs" (the `23399` frequency multiplier with
-//! no object-index term, the `cellX*8+cellY` road-stride off-by-one, the
-//! slope check left as a no-op TODO). Those are not defects — they are the
-//! contract the client and server both depend on.
+//! The fork's bake (`holtburger-scenery-bake`) in its default
+//! `--mode ace-compat` is the **bit-parity authority for the shipped
+//! bake**: it reproduces ACE's `Entity/Scenery.cs` exactly, quirks included
+//! (the `23399` frequency multiplier with no object-index term, the
+//! `cellX*8+cellY` road stride, the slope check left as a no-op TODO).
+//!
+//! Correction (2026-10-13): those quirks are NOT retail behaviour, and no
+//! live server depends on them. `Entity/Scenery.cs` is dead code in ACE —
+//! its only caller is commented out (`Entity/Landblock.cs:197`
+//! `//LoadMeshes(objects);`, ":334 This isn't used by ACE"). Retail
+//! (`acclient.c` `CLandBlock::get_land_scenes`) and the live ACE server
+//! (`Physics/Common/Landblock.get_land_scenes`) both gate object `j` on
+//! `cellMat * (23399 + j)`, use a road-band test and run `CheckSlope`.
+//! ace-compat keeps the quirks only so the shipped dist and its
+//! `placements-hash` sidecars stay byte-stable; `--mode retail` is the
+//! retail target (built up incrementally — see `BakeMode::Retail`).
 //!
 //! Upstream merklejerk's `derive_generated_scenery`
-//! (`static_outdoor_scene.rs`) DELIBERATELY diverges from ACE: it adds
+//! (`static_outdoor_scene.rs`) DELIBERATELY diverges from ace-compat: it adds
 //! `template_index` to the noise multiplier, "corrects" the road stride to
 //! `x*9+y` with a `road_width=5.0` edge model, and runs always-on
-//! point-spacing / building-occupancy / slope rejection gates ACE lacks.
+//! point-spacing / building-occupancy / slope rejection gates ace-compat
+//! lacks. The index term and the slope gate are what retail does; the
+//! point-spacing gate is not. The four classes below are pre-registered
+//! against an **ace-compat baseline**. Against a `--mode retail` baseline,
+//! FrequencyGateNoise is no longer a divergence (both sides add the index),
+//! and neither is the road stride (both read `x*9+y`; `--mode retail` runs
+//! retail's 4-corner band, `CLandBlock::on_road`), nor the slope gate or
+//! building-cell occupancy (`--mode retail` runs `CheckSlope` on the
+//! walkable triangle and retail's building-ORIGIN cell test,
+//! terrain-scenery-3). Of the four, only upstream's point-spacing gate is a
+//! real divergence there (retail has no scenery-vs-scenery test, and
+//! `--mode retail` drops ace-compat's box rejections), so do not read an
+//! ADD/REMOVE against a retail baseline as explained by any other class.
+//! None of the four covers orientation: `--mode retail` ships retail's
+//! `Frame::set_heading` quaternion (terrain-scenery-4) — the opposite turn
+//! to ace-compat for the same noise, `base_loc` kept when nothing turns it,
+//! `align` rows facing up-slope — so a retail-vs-ace-compat (mode-vs-mode)
+//! diff CHANGES `qw`..`qz` on nearly every rotated matched placement by
+//! design.
 //!
 //! Therefore this oracle is a **DRIFT DETECTOR / difference characterizer**:
 //! it diffs two scenery-JSONL streams, classifies the diffs, and (when told
@@ -44,9 +72,11 @@
 //!
 //! It is **NEVER an equality gate** and **NEVER a merge source**.
 //!  - It must NEVER be promoted into a `fork == upstream` equality gate. The
-//!    expected divergences are EXPECTED, not bugs; flagging them would emit
-//!    false positives and tempt a maintainer to "fix" the fork toward
-//!    upstream, which would silently break the ACE bit-parity contract.
+//!    expected divergences are EXPECTED against ace-compat; flagging them
+//!    would emit false positives and tempt a maintainer to "fix" the
+//!    ace-compat mode toward upstream, which would silently break the
+//!    byte-stability of the shipped ace-compat bake. Retail fidelity belongs
+//!    in `--mode retail`, re-derived from the decomp.
 //!  - It must NEVER be used to pull upstream's corrected math into the fork.
 //!  - It is **READ-ONLY**: it parses `*.scenery.jsonl`, prints a report to
 //!    stdout, and mutates no bake. (See the AVOID list, items #2 and #3, in
@@ -268,21 +298,29 @@ impl DeltaKind {
 enum ExpectedClass {
     /// (a) Frequency-gate noise. Upstream `generated_template_noise` adds
     /// `template_index` to the `23399` multiplier
-    /// (`cell_mat.wrapping_mul(23399 + template_index)`); ACE/fork use the
-    /// constant `23399` with NO index term. => a DIFFERENT accepted SET, so
-    /// ADD/REMOVE deltas where the two streams simply chose different
-    /// vertices/templates.
+    /// (`cell_mat.wrapping_mul(23399 + template_index)`), as retail does
+    /// (`acclient.c` `CLandBlock::get_land_scenes`) and as the fork's
+    /// `--mode retail` does; ACE's dead `Entity/Scenery.cs` port and the
+    /// fork's ace-compat/strict modes use the constant `23399` with NO index
+    /// term. => a DIFFERENT accepted SET, so ADD/REMOVE deltas where the two
+    /// streams simply chose different vertices/templates.
     FrequencyGateNoise,
     /// (b) OnRoad stride. Upstream `get_road` uses the corrected `x*9+y` plus
-    /// a `road_width=5.0` geometric edge model; ACE/fork use the deliberate
-    /// `cellX*8+cellY` mistake. => road-band ADD/REMOVE/move deltas.
+    /// a `road_width=5.0` geometric edge model; ACE's dead port and the
+    /// fork's ace-compat mode use the `cellX*8+cellY` stride, which is not
+    /// retail (live ACE `Physics/Common/Landblock.OnRoad` runs a road-band
+    /// test). => road-band ADD/REMOVE/move deltas.
     OnRoadStride,
     /// (c) Upstream-only point-spacing (`MIN_POINT_SPACING_SQUARED = 4.0`) +
     /// building-cell occupancy gates that drop placements ACE/fork keep. =>
-    /// REMOVE deltas (candidate is missing placements baseline has).
+    /// REMOVE deltas (candidate is missing placements baseline has). The
+    /// building-cell gate is retail's (`CSortCell::has_building`), and the
+    /// fork's `--mode retail` runs it too; the point spacing is not retail.
     OccupancySpacingGates,
     /// (d) Always-on slope rejection in upstream; fork exposes it as
-    /// `BakeMode::Strict`, default OFF, and ACE leaves it a no-op TODO. =>
+    /// `BakeMode::Strict` (4-corner fit) and `--mode retail` (the walkable
+    /// triangle, as retail), both off by default, and ACE's dead port
+    /// leaves it a no-op TODO (retail and live ACE do run `CheckSlope`). =>
     /// REMOVE deltas.
     SlopeGate,
 }

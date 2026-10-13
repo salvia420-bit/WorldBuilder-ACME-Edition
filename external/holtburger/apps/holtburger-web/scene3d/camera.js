@@ -139,6 +139,10 @@ import {
   resolveRunModifier,
 } from "./input.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
+// app-loop-2 (2026-10-13): the keystate mirror and the C mode toggle resolve
+// the physical key (ev.code), like index.html's gameplay keystate.
+// `?movementKeysByCode=off` restores ev.key.
+import { movementKeyOf, isCameraModeKey } from "../ui/movement_keys.js";
 // A12-C2/C3 (2026-06-12): retail camera math (zoom continuum / in-head /
 // near-fade / stiffness / mouse filter). Pure module, headless-tested by
 // tests/camera_retail_math.test.cjs. Only consulted behind the default-off
@@ -693,6 +697,9 @@ export class CameraSwitcher {
     this._viewCombatTargetOpt = null;
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
+    // app-loop-3: ends the follow-mode right-drag from outside its closure
+    // (window blur, mode teardown). Set by switchMode("follow"), else null.
+    this._endFollowDrag = null;
     this._lastUserYawMs = null; // performance.now() of the last right-drag yaw edit
     this._lastFollowPos = null; // {x,y} last frame, for the "is moving" test
     this._autoFollowDiagCount = 0; // one-time heading-convention diag budget
@@ -900,6 +907,13 @@ export class CameraSwitcher {
     // Without this, every switchMode call leaks 4 listeners onto the
     // canvas/document so right-clicks fire the radial menu N times
     // after N toggles.
+    // app-loop-3: a right-drag still held when its listeners go away can
+    // never see its mouseup, so end it here (else _followDragging sticks
+    // and autofollow stays suspended after returning to follow mode).
+    if (typeof this._endFollowDrag === "function") {
+      try { this._endFollowDrag(); } catch (_) {}
+    }
+    this._endFollowDrag = null;
     if (Array.isArray(this._listeners) && this._listeners.length > 0) {
       for (const entry of this._listeners) {
         if (!entry) continue;
@@ -927,12 +941,34 @@ export class CameraSwitcher {
         let downX = 0;
         let downY = 0;
         let candidateGuid = null;
+        // app-loop-3: end a drag whose right-button release never arrived
+        // (focus left mid-drag: Alt-Tab, an OS prompt, an overlay hotkey).
+        // Retail drops input on focus loss (acclient.c Device::Deactivate →
+        // ICIDM Activate(0)), so a held button never outlives it. A drag
+        // ended this way opens no context menu: candidateGuid is cleared.
+        const endFollowDrag = () => {
+          if (!dragging) return;
+          dragging = false;
+          this._followDragging = false;
+          candidateGuid = null;
+          if (typeof performance !== "undefined") {
+            this._lastUserYawMs = performance.now(); // start the post-drag grace
+          }
+        };
+        this._endFollowDrag = endFollowDrag;
         const onContextMenu = (ev) => {
           ev.preventDefault();
           return false;
         };
         const onMouseDown = (ev) => {
           if (ev.button !== 2) return;
+          // input-options-8: a right press on the canvas is a camera turn
+          // wherever it ends. Windows fires `contextmenu` on the mouse-up
+          // target, so mark it for the page-wide suppression in
+          // ui/input-funnel.js (`shouldSuppressContextMenu`).
+          try {
+            getInputFunnel().noteCanvasRightPress();
+          } catch (_) {}
           dragging = true;
           this._followDragging = true; // suppress autofollow while free-looking
           lastX = ev.clientX;
@@ -948,6 +984,12 @@ export class CameraSwitcher {
         };
         const onMouseMove = (ev) => {
           if (!dragging) return;
+          // app-loop-3: self-heal — a move with the right button up means the
+          // mouseup was lost; never turn the camera on a released button.
+          if (typeof ev.buttons === "number" && (ev.buttons & 2) === 0) {
+            endFollowDrag();
+            return;
+          }
           let mx = ev.clientX - lastX;
           let my = ev.clientY - lastY;
           lastX = ev.clientX;
@@ -3063,7 +3105,7 @@ export class CameraSwitcher {
     };
     const onKeyDown = (ev) => {
       if (isTypingInForm()) return;
-      const k = (ev.key || "").toLowerCase();
+      const k = movementKeyOf(ev);
       if (movementKeys.has(k)) {
         this.keys[k] = true;
         // Don't preventDefault — let other paths (2D) still see WASD.
@@ -3090,7 +3132,7 @@ export class CameraSwitcher {
       }
     };
     const onKeyUp = (ev) => {
-      const k = (ev.key || "").toLowerCase();
+      const k = movementKeyOf(ev);
       if (movementKeys.has(k)) {
         this.keys[k] = false;
       } else if (ev.key === "Shift") {
@@ -3099,6 +3141,11 @@ export class CameraSwitcher {
     };
     const onBlur = () => {
       for (const key of Object.keys(this.keys)) this.keys[key] = false;
+      // app-loop-3: the right-button mouseup is not delivered once focus
+      // leaves mid-drag, so drop follow free-look too (WebAC does the same).
+      if (typeof this._endFollowDrag === "function") {
+        try { this._endFollowDrag(); } catch (_) {}
+      }
     };
     // P-unification (2026-07-28): the camera's movement keystate mirror is a
     // RAW subscriber of the ONE funnel — it is movement input, so it must die
@@ -3158,7 +3205,7 @@ export class CameraSwitcher {
       if (isTypingInForm()) return;
       // Press edge only — a held C used to cycle the modes at the OS
       // autorepeat rate and land on whichever one the last repeat picked.
-      if ((ev.key || "").toLowerCase() === "c" && !ev.repeat) {
+      if (isCameraModeKey(ev) && !ev.repeat) {
         const idx = CAMERA_MODES.indexOf(this.mode);
         const next = CAMERA_MODES[(idx + 1) % CAMERA_MODES.length];
         this.switchMode(next);

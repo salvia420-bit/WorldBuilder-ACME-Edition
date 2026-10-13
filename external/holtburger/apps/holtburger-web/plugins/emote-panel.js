@@ -25,6 +25,7 @@
 // is-clickable entries in a two-column grid, hbk-scroll list.
 
 import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
+import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
 
 const STYLE_ID = "hb-emote-panel-style";
 const SP = "./data/ui-sprites";
@@ -360,9 +361,14 @@ export const view = {
             row.appendChild(dot);
           }
           row.addEventListener("click", () => run(entry));
+          // input-options-1: a clicked emote must not replay on every jump
+          // (Space) or its autorepeat (ui/hud_focus.js).
           row.addEventListener("keydown", (ev) => {
-            if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); run(entry); }
+            if (!hudKeyActivates(ev)) return;
+            ev.preventDefault();
+            run(entry);
           });
+          releaseMouseFocus(row);
           grid.appendChild(row);
         }
         section.appendChild(grid);

@@ -322,7 +322,8 @@ function renderTool() {
   if (!r) return;
   if (state.toolGuid) {
     const name = objectDisplayName(state.toolGuid, "Salvaging tool");
-    fillSlotIcon(r.toolSlot, objectIconId(state.toolGuid), name);
+    // hud-ui-3: retail composite icons (commerce_window.slotIconMeta).
+    fillSlotIcon(r.toolSlot, { guid: state.toolGuid, iconId: objectIconId(state.toolGuid) }, name);
     setAcText(r.toolName, `Using: ${name}`, { color: KIT_COLOR.gold, fit: true });
     r.toolHint.textContent = "Drag items or whole packs from your inventory below.";
   } else {
@@ -349,7 +350,7 @@ function renderList() {
       const row = el("div", "hbk-row hsv-row", list);
       const slot = el("div", "hbk-slot", row);
       const name = it.label || objectDisplayName(it.guid);
-      fillSlotIcon(slot, it.iconId || objectIconId(it.guid), name);
+      fillSlotIcon(slot, { guid: it.guid, iconId: it.iconId || objectIconId(it.guid) }, name);
       const text = el("div", "hsv-row-text", row);
       const nm = el("div", "", text);
       setAcText(nm, name, { color: KIT_COLOR.text, fit: true });

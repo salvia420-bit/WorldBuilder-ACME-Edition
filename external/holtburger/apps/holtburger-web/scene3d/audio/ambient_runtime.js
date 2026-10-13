@@ -120,6 +120,7 @@ export class AmbientRuntime {
     this.skippedNoRegion = 0;
     this.skippedNoPlayer = 0;
     this.skippedIndoor = 0;
+    this.skippedDisabled = 0;
     this.terrainSampleMisses = 0;
     this.lastError = null;
   }
@@ -137,10 +138,16 @@ export class AmbientRuntime {
     const focusChanged = this._lastEpoch !== null && epoch !== this._lastEpoch;
     this._lastEpoch = epoch;
     const inactive = this._audioManager.isActive?.() === false;
-    if (inactive || focusChanged) {
+    // audio-5: Options "Ambient sounds" off (retail ambient_sounds_enabled,
+    // acclient.c 45629) plays nothing. Retail's Ambient::UseTime stops
+    // draining the queue instead (384517), so turning it back on would fire
+    // every overdue sound at once; fast-forward it as for an inactive app.
+    const disabled = this._audioManager.isAmbientSoundsEnabled?.() === false;
+    if (inactive || disabled || focusChanged) {
       this._scheduler.fastForward(now);
       this.fastForwardCount = (this.fastForwardCount | 0) + 1;
-      if (inactive) return;
+      if (disabled) this.skippedDisabled += 1;
+      if (inactive || disabled) return;
     }
 
     if (!this._getBakedAmbientTriggers && !this._region) {
@@ -231,6 +238,7 @@ export class AmbientRuntime {
       skippedNoRegion: this.skippedNoRegion,
       skippedNoPlayer: this.skippedNoPlayer,
       skippedIndoor: this.skippedIndoor,
+      skippedDisabled: this.skippedDisabled,
       terrainSampleMisses: this.terrainSampleMisses,
       lastError: this.lastError,
     };

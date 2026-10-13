@@ -141,6 +141,8 @@ import { weatherForState } from "./daygroup_weather.js";
 import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 // "Disable most weather effects" / "Disable distance fog" (CharacterOptions 0x04 / 0x30).
 import { readVisualOptions, dropWeatherSkyObjects, disableFogBand } from "./visual_options.js";
+// sky-fog-time-5: free the per-tick SkyObjectState wrappers (tickWeatherState).
+import { freeSkyObjectStates, SKY_OBJECT_FREE_ENABLED } from "./sky_object_free.js";
 
 // VFX material-oscillator registry (Visual-Behavior Suite, Phase 1 — spec §7).
 // The SINGLE per-frame VFX tick: drives VFX_GLOBALS.uTime (the master clock) plus
@@ -189,6 +191,20 @@ import {
 import { tickLuminousNight } from "./luminous_night.js";
 // ?retailFill (2026-10-07) — hemisphere fill follows the retail diurnal ambient.
 import { tickRetailFill } from "./retail_fill.js";
+// sky-fog-time-4 (2026-10-13) — the landscape's one light clock (LScape::
+// next_light_tick), shared with the pebbles and reset by LScape::SetDay.
+import { retailLightTick } from "./retail_light_tick.js";
+// sky-fog-time-2 (2026-10-13) — AdminEnvirons fade-in, ambient override and
+// fogged sky (LScape::UseTime / GameSky::Draw); `?environRetail=off` escape.
+import {
+  environOverride,
+  environRetailEnabled,
+  blendFogToward,
+  blendValue,
+  authoredWorldFog,
+  updateEnvironSkyVeil,
+  hideEnvironSkyVeil,
+} from "./environ_override.js";
 
 // Entity-update kind constants — aliases over the shared KIND table
 // (A15-Q4; pre-Q4 these were file-local literals). Listed here
@@ -1239,10 +1255,10 @@ function _nightGroundMul(state) {
 // Dereth's Region DAT (portal 0x13000000) carries skyInfo.lightTickSize = 15.0
 // as an f64; acclient's no-region fallback is 3.0 (acclient.c:307294) and the
 // SkyDesc ctor seeds 20.0 (acclient.c:301477). 15 is what the shipped client
-// actually used in Dereth.
-const AC_LIGHT_TICK_SECONDS = 15.0;
+// actually used in Dereth. The tick itself lives in `retail_light_tick.js`
+// (RETAIL_LIGHT_TICK_SEC) — one clock for the whole landscape.
 const _acTerrainGouraud = {
-  nextLightTick: -Infinity,
+  // The `retailLightTick` epoch these values were computed for.
   epoch: 0,
   sun: [0, 0, 0],
   sunColor: [1, 1, 1],
@@ -1344,18 +1360,40 @@ if (typeof window !== "undefined") {
   // on the NEXT retail light tick; bump the epoch so it is the next frame.
   window.__setTerrainLightScale = (v) => {
     _acTerrainLight.scale = Math.min(4, Math.max(0, +v));
-    _acTerrainGouraud.nextLightTick = -Infinity;
+    retailLightTick.invalidate();
     return _acTerrainLight.scale;
   };
   window.__setAmbTintSat = (v) => {
     _acTerrainLight.ambSat = Math.min(1, Math.max(0, +v));
-    _acTerrainGouraud.nextLightTick = -Infinity;
+    retailLightTick.invalidate();
     return _acTerrainLight.ambSat;
   };
   window.__terrainLightState = () => ({ ..._acTerrainLight });
+  // sky-fog-time-4 probe: epoch / next deadline / pending SetDay reset.
+  window.__retailLightTickState = () => retailLightTick.stats();
+  // sky-fog-time-2 probe: AdminEnvirons override, transition, tick counts.
+  window.__environOverrideState = () => environOverride.stats();
 }
 
-function tickTerrainSunDir(scene3d) {
+// sky-fog-time-2 — `?environRetail` (default ON), read once on first use so a
+// node test's late window stub still reaches the fail-soft default.
+let _environRetailCache;
+function _environRetailOn() {
+  if (_environRetailCache === undefined) _environRetailCache = environRetailEnabled();
+  return _environRetailCache;
+}
+/** The AdminEnvirons message client_events.js stored (null = none / Clear). */
+function _environSource() {
+  return (typeof window !== "undefined") ? (window.__environFogOverride ?? null) : null;
+}
+
+/**
+ * Exported for tests only (tests/retail_light_tick.test.mjs,
+ * tests/environ_override.test.mjs); loop.js's frame driver is the one
+ * production caller. `lightTick` defaults to the shared landscape clock, `env`
+ * to the shared AdminEnvirons override.
+ */
+export function tickTerrainSunDir(scene3d, lightTick = retailLightTick, env = environOverride) {
   if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
     return;
   }
@@ -1378,18 +1416,20 @@ function tickTerrainSunDir(scene3d) {
   // not an optimisation — the visible stepping of terrain brightness IS the
   // retail look, and a per-frame push would smooth it away.
   const g = _acTerrainGouraud;
-  // LIVE monotonic clock, NOT scene3d.frameTime.tsSec: frameTime is stamped
-  // only by the rAF tick and FREEZES under ?renderOnDemand=1 (see the RP3
-  // throttle-clock note in tickPerFrame). A frozen clock here wedges the 15 s
-  // light tick after its first firing — terrain Gouraud sun/ambient would
-  // never re-light across day/night in net-drain-driven sessions.
-  const nowSec = (typeof performance !== "undefined" && performance.now)
-    ? performance.now() * 0.001
-    : Date.now() * 0.001;
-  const lightTickDue = !(nowSec < g.nextLightTick);
+  // sky-fog-time-4: ONE landscape light clock (retail_light_tick.js), shared
+  // with the pebble field (terrain_rock.js) and reset by LScape::SetDay
+  // (always_daylight.js). It runs on the LIVE monotonic clock, NOT
+  // scene3d.frameTime.tsSec: frameTime is stamped only by the rAF tick and
+  // FREEZES under ?renderOnDemand=1 (see the RP3 throttle-clock note in
+  // tickPerFrame). A frozen clock here wedges the 15 s light tick after its
+  // first firing — terrain Gouraud sun/ambient would never re-light across
+  // day/night in net-drain-driven sessions. This runs BEFORE
+  // skyLightingController.tick, so a SetDay reset waits for `_tickCount` to
+  // advance: the re-light reads the post-pin sky, not the pre-pin one.
+  const epoch = lightTick.sync(scene3d.skyLightingController?._tickCount);
+  const lightTickDue = epoch !== g.epoch;
   if (lightTickDue) {
-    g.nextLightTick = nowSec + AC_LIGHT_TICK_SECONDS;
-    g.epoch += 1;
+    g.epoch = epoch;
     // sunlight_vec carries dirBright as its MAGNITUDE
     // (SkyDesc::GetLighting, acclient.c:301548-301560).
     const db = Number.isFinite(+state.dirBright) ? Math.max(0, +state.dirBright) : 0;
@@ -1419,7 +1459,21 @@ function tickTerrainSunDir(scene3d) {
     g.sunColor[0] = (((dc >>> 16) & 0xff) / 255) * tls;
     g.sunColor[1] = (((dc >>> 8) & 0xff) / 255) * tls;
     g.sunColor[2] = ((dc & 0xff) / 255) * tls;
-    const ac = (state.ambColorArgb >>> 0);
+    // LSCAPE_LIGHT_MINIMUM floors AMBIENT ONLY (acclient.c:40344, 307261);
+    // dirBright above is deliberately left free to reach 0 at night.
+    const ab = +state.ambBright;
+    const dayAmbLevel = Math.max(AC_LSCAPE_LIGHT_MINIMUM, Number.isFinite(ab) ? ab : 0);
+    // sky-fog-time-2: an AdminEnvirons override REPLACES the floored landscape
+    // ambient (LScape::UseTime, acclient.c:307264-307286) — colour per byte and
+    // level blended toward it by m_override_transition, which this light tick
+    // then steps; verbatim once it reaches 1. The sun is never overridden.
+    // `?environRetail=off` keeps the day ambient.
+    let envAmb = null;
+    if (_environRetailOn() && env) {
+      env.sync(_environSource());
+      envAmb = env.lightTick(state.ambColorArgb >>> 0, dayAmbLevel);
+    }
+    const ac = envAmb ? envAmb.argb : (state.ambColorArgb >>> 0);
     let ar = ((ac >>> 16) & 0xff) / 255;
     let ag = ((ac >>> 8) & 0xff) / 255;
     let ab2 = (ac & 0xff) / 255;
@@ -1435,10 +1489,7 @@ function tickTerrainSunDir(scene3d) {
     g.ambColor[0] = ar * tls;
     g.ambColor[1] = ag * tls;
     g.ambColor[2] = ab2 * tls;
-    // LSCAPE_LIGHT_MINIMUM floors AMBIENT ONLY (acclient.c:40344, 307261);
-    // dirBright above is deliberately left free to reach 0 at night.
-    const ab = +state.ambBright;
-    g.ambLevel = Math.max(AC_LSCAPE_LIGHT_MINIMUM, Number.isFinite(ab) ? ab : 0);
+    g.ambLevel = envAmb ? envAmb.level : dayAmbLevel;
   }
 
   for (const mat of scene3d.terrainMaterials) {
@@ -1503,43 +1554,54 @@ function tickWeatherState(scene3d, sessionHandle) {
       skyObjects = null;
     }
   }
-  // "Disable most weather effects" (2026-10-11): retail never creates a
-  // weather SkyObject (properties 0x04) with the option on, so nothing
-  // below sees one — and no storm, since an empty snapshot would fall back
-  // to the per-DayGroup table (scene3d/visual_options.js).
-  const weatherOff = readVisualOptions(handle, performance.now()).weatherOff;
-  if (weatherOff) skyObjects = dropWeatherSkyObjects(skyObjects);
-
-  // W4 — profile (T/Td/P heuristic) + is_storm derived from real weather
-  // SkyObjects when the snapshot array is available.
+  // sky-fog-time-5 (2026-10-13): that call returns ~7 fresh wasm
+  // SkyObjectState wrappers every sky tick. Nothing below keeps one (the scan
+  // and both sky-dome hosts read the fields synchronously), so the `finally`
+  // frees them instead of leaving them to the FinalizationRegistry after a GC
+  // (scene3d/sky_object_free.js; `?skyObjFree=off` restores that). `fetched`
+  // is the ORIGINAL array, because the weather-off filter shares its wrappers.
+  const fetched = skyObjects;
   try {
-    let profile = weatherForState(state, state.dayGroupIndex, skyObjects);
-    if (weatherOff && profile?.is_storm) profile = { ...profile, is_storm: false };
-    wxUpdateFromDayGroup(profile);
+    // "Disable most weather effects" (2026-10-11): retail never creates a
+    // weather SkyObject (properties 0x04) with the option on, so nothing
+    // below sees one — and no storm, since an empty snapshot would fall back
+    // to the per-DayGroup table (scene3d/visual_options.js).
+    const weatherOff = readVisualOptions(handle, performance.now()).weatherOff;
+    if (weatherOff) skyObjects = dropWeatherSkyObjects(skyObjects);
 
-    // W5 indoor flag — reuse the skyDome's freshly-read indoor state when
-    // present (it reads isCurrentCellIndoor() each tick); fall back to a
-    // direct read so the billboard host still gates when the dome is absent.
-    let indoor = scene3d?.skyDome?._lastIsIndoor;
-    if (typeof indoor !== "boolean" && handle &&
-        typeof handle.isCurrentCellIndoor === "function") {
-      try { indoor = !!handle.isCurrentCellIndoor(); } catch (_) { indoor = false; }
-    }
-    if (typeof indoor !== "boolean") indoor = false;
+    // W4 — profile (T/Td/P heuristic) + is_storm derived from real weather
+    // SkyObjects when the snapshot array is available.
+    try {
+      let profile = weatherForState(state, state.dayGroupIndex, skyObjects);
+      if (weatherOff && profile?.is_storm) profile = { ...profile, is_storm: false };
+      wxUpdateFromDayGroup(profile);
 
-    // W1 — drive the parametric sky-dome weather billboard host with the
-    // same snapshot array (the host gates itself on its `?skyWeather`
-    // flag + the props/window bits, and no-ops indoors).
-    if (scene3d?.skyDome?.updateWeatherSkyObjects) {
-      scene3d.skyDome.updateWeatherSkyObjects(skyObjects, indoor);
+      // W5 indoor flag — reuse the skyDome's freshly-read indoor state when
+      // present (it reads isCurrentCellIndoor() each tick); fall back to a
+      // direct read so the billboard host still gates when the dome is absent.
+      let indoor = scene3d?.skyDome?._lastIsIndoor;
+      if (typeof indoor !== "boolean" && handle &&
+          typeof handle.isCurrentCellIndoor === "function") {
+        try { indoor = !!handle.isCurrentCellIndoor(); } catch (_) { indoor = false; }
+      }
+      if (typeof indoor !== "boolean") indoor = false;
+
+      // W1 — drive the parametric sky-dome weather billboard host with the
+      // same snapshot array (the host gates itself on its `?skyWeather`
+      // flag + the props/window bits, and no-ops indoors).
+      if (scene3d?.skyDome?.updateWeatherSkyObjects) {
+        scene3d.skyDome.updateWeatherSkyObjects(skyObjects, indoor);
+      }
+      // Task #4 — realize SkyObject Swarm (bird/aurora) particle chains from the
+      // same snapshot. Self-gated on `?skyBirds=on`; idempotent per pesObjectId.
+      if (scene3d?.skyDome?.updateSkyParticleChains) {
+        scene3d.skyDome.updateSkyParticleChains(skyObjects, scene3d.wasmExports);
+      }
+    } catch (_) {
+      // Weather wiring must never kill the frame.
     }
-    // Task #4 — realize SkyObject Swarm (bird/aurora) particle chains from the
-    // same snapshot. Self-gated on `?skyBirds=on`; idempotent per pesObjectId.
-    if (scene3d?.skyDome?.updateSkyParticleChains) {
-      scene3d.skyDome.updateSkyParticleChains(skyObjects, scene3d.wasmExports);
-    }
-  } catch (_) {
-    // Weather wiring must never kill the frame.
+  } finally {
+    if (SKY_OBJECT_FREE_ENABLED) freeSkyObjectStates(fetched);
   }
 }
 
@@ -1948,7 +2010,10 @@ function applyFogRadiance(fog, sky, authoredHex, tint) {
 // not just the seed values. Linear THREE.Fog carries `.near`/`.far`
 // (plain numbers — no THREE import needed); FogExp2 (wireframe fallback)
 // carries `.density` and no near/far, so we feature-detect.
-function tickDistanceFogColor(scene3d) {
+//
+// Exported for tests only (tests/environ_override.test.mjs); `env` defaults
+// to the shared AdminEnvirons override.
+export function tickDistanceFogColor(scene3d, env = environOverride) {
   const scene = scene3d?.scene;
   if (!scene) return;
   // "Disable distance fog" (2026-10-11): retail skips the world fog AND the
@@ -1959,25 +2024,32 @@ function tickDistanceFogColor(scene3d) {
   if (readVisualOptions(null, performance.now()).fogOff) {
     if (scene.fog && scene.fog.__environCreated) scene.fog = null;
     disableFogBand(scene.fog);
+    // sky-fog-time-2: nor is the sky pass fogged (SetFFFogUserDisabled).
+    hideEnvironSkyVeil(scene3d.skyDome?.skyScene);
     return;
   }
   // AdminEnvirons (0xEA60) fog override — server-pushed RedFog/BlueFog/etc.
-  // (acclient.c:396344-416). Set by index.html's kind-60 handler; takes
-  // precedence over the region/sky fog until a Clear (0x00) nulls it. `rgb`
-  // is sRGB hex (0xRRGGBB); `fogMax` is the AC far band (a dense near fog —
-  // RedFog ~50 m). The world materials honour `scene.fog` (fog:true on terrain
-  // + statics), but on the default atmosphere path `scene.fog` is null (only
-  // wireframe creates the FogExp2; the ?fogLerp linear Fog is gated on one
-  // already existing), so when an environ fog is active we CREATE a transient
-  // linear THREE.Fog the materials then tint, and tear it down on Clear. This
-  // sums with the atmosphere aerial-perspective haze; for these dramatic
-  // overrides the dense colored fog dominates (an aerial-opacity knock, like
-  // ?fogLerp's FOGLERP_AERIAL_OPACITY, is an optional tuning follow-up).
+  // (acclient.c:396344-416). Set by app/client_events.js's kind-60 handler;
+  // takes precedence over the region/sky fog until a Clear (0x00) nulls it.
+  // `fogRgb` is sRGB hex (0xRRGGBB); `fogMax` is the AC far band (a dense near
+  // fog — RedFog 50 m). The world materials honour `scene.fog` (fog:true on
+  // terrain + statics); when no fog exists (?terrainFog=off) we CREATE a
+  // transient linear THREE.Fog the materials then tint, and tear it down on
+  // Clear. This sums with the atmosphere aerial-perspective haze.
   const environOv = (typeof window !== "undefined") ? window.__environFogOverride : null;
-  if (environOv && Number.isFinite(environOv.rgb)) {
+  // sky-fog-time-2 (default ON, `?environRetail=off` = the snap below): the
+  // retail fade — see tickEnvironFogRetail.
+  if (environOv && Number.isFinite(environOv.fogRgb) && _environRetailOn()) {
+    tickEnvironFogRetail(scene3d, environOv, env);
+    return;
+  }
+  // Not on the retail path this frame: drop its sky veil and give a region
+  // fog it blended its own band back.
+  _environFogLeave(scene3d, env);
+  if (environOv && Number.isFinite(environOv.fogRgb)) {
     const far = (Number.isFinite(environOv.fogMax) && environOv.fogMax > 0) ? environOv.fogMax : 50;
     const near = far * 0.1;
-    const rgb = environOv.rgb & 0xffffff;
+    const rgb = environOv.fogRgb & 0xffffff;
     if (!scene.fog) {
       scene.fog = new THREE.Fog(rgb, near, far);
       scene.fog.__environCreated = true;
@@ -1996,7 +2068,127 @@ function tickDistanceFogColor(scene3d) {
   if (scene.fog && scene.fog.__environCreated) {
     scene.fog = null;
   }
-  const fog = scene.fog;
+  _tickDistanceFogDay(scene3d);
+}
+
+/**
+ * sky-fog-time-2 — the retail AdminEnvirons fog. `LScape::UseTime`
+ * (acclient.c:307306-307331) does not replace the world fog: each 0.8 s fog
+ * tick blends the day colour (per byte, truncated), min and max toward the
+ * override by `m_override_transition` and steps it +0.04, so the fog rolls in
+ * over ~20 s; at 1 it is the override verbatim (min 0). `GameSky::Draw`
+ * (:308494) fogs the sky pass meanwhile — the veil below, at alpha = the
+ * transition the fog shows, in the same (working-space) colour.
+ *
+ * With a region fog (?terrainFog linear Fog, wireframe FogExp2) the day half
+ * writes this frame's day values first, starting from the band stashed last
+ * frame, so its keep-the-prior-band guards never read our override back.
+ * Without one, the day fog is the authored band retail draws
+ * (SkyDesc::GetWorldFog) and the fog is created here as before.
+ */
+function tickEnvironFogRetail(scene3d, environOv, env = environOverride) {
+  const scene = scene3d.scene;
+  const ov = env.sync(environOv);
+  if (!ov) return;
+  const t = env.fogTick();
+  let fog = scene.fog;
+  if (!fog || fog.__environCreated) {
+    const state = scene3d.skyLightingController?._lastState ?? null;
+    const b = blendFogToward(authoredWorldFog(state), ov, t);
+    if (!fog) {
+      fog = new THREE.Fog(b.rgb, b.min, b.max);
+      fog.__environCreated = true;
+      scene.fog = fog;
+    } else {
+      fog.color.setHex(b.rgb);
+      fog.near = b.min;
+      fog.far = b.max;
+    }
+  } else if (fog.color && typeof fog.color.setHex === "function") {
+    _environRestoreDayFog(fog);
+    _tickDistanceFogDay(scene3d);
+    _environStashDayFog(fog);
+    // The day colour here is the sampled sky RADIANCE (linear, may exceed a
+    // byte), not authored bytes, so it blends in the working space; the band
+    // is retail's formula. t = 0 leaves the day fog exactly as written.
+    const linear = typeof fog.near === "number" && typeof fog.far === "number";
+    _environOvColor.setHex(ov.fogRgb & 0xffffff);
+    if (t < 1) {
+      fog.color.lerp(_environOvColor, t);
+      if (linear) {
+        fog.near = blendValue(fog.near, ov.fogMin, t);
+        fog.far = blendValue(fog.far, ov.fogMax, t);
+      }
+    } else {
+      fog.color.copy(_environOvColor);
+      if (linear) {
+        fog.near = ov.fogMin;
+        fog.far = ov.fogMax;
+      }
+    }
+  } else {
+    return;
+  }
+  updateEnvironSkyVeil(THREE, scene3d.skyDome?.skyScene, fog.color, t);
+}
+
+const _environOvColor = new THREE.Color();
+/** The day colour/band the region fog had before the override blend. */
+function _environStashDayFog(fog) {
+  const d = fog.__environDay || (fog.__environDay = { r: 0, g: 0, b: 0, near: NaN, far: NaN });
+  d.r = fog.color.r;
+  d.g = fog.color.g;
+  d.b = fog.color.b;
+  d.near = typeof fog.near === "number" ? fog.near : NaN;
+  d.far = typeof fog.far === "number" ? fog.far : NaN;
+}
+function _environRestoreDayFog(fog) {
+  const d = fog.__environDay;
+  if (!d) return;
+  fog.color.r = d.r;
+  fog.color.g = d.g;
+  fog.color.b = d.b;
+  if (Number.isFinite(d.near) && typeof fog.near === "number") fog.near = d.near;
+  if (Number.isFinite(d.far) && typeof fog.far === "number") fog.far = d.far;
+}
+/** Leaving the retail path (Clear / ?environRetail=off): veil off, day band back. */
+function _environFogLeave(scene3d, env = environOverride) {
+  // A Clear reaches the override state now, not at the next light tick (the
+  // latched ambient still waits for it, as retail's does).
+  if (_environRetailOn() && env) env.sync(_environSource());
+  hideEnvironSkyVeil(scene3d.skyDome?.skyScene);
+  const fog = scene3d.scene?.fog;
+  if (fog && fog.__environDay) {
+    _environRestoreDayFog(fog);
+    fog.__environDay = null;
+  }
+}
+
+/**
+ * sky-fog-time-2 — atmosphere_lights' probe follows the ambient level the
+ * terrain took on the last light tick (retail SetWorldAmbientLight reads the
+ * overridden landscape ambient). A scratch copy, only while one is latched;
+ * otherwise the snapshot itself.
+ */
+const _environLitScratch = {};
+function _environLitState(state) {
+  if (!state || !_environRetailOn()) return state;
+  const ab = +state.ambBright;
+  const a = environOverride.ambient(
+    state.ambColorArgb >>> 0,
+    Math.max(AC_LSCAPE_LIGHT_MINIMUM, Number.isFinite(ab) ? ab : 0),
+  );
+  if (!a) return state;
+  Object.assign(_environLitScratch, state);
+  _environLitScratch.ambColorArgb = a.argb;
+  _environLitScratch.ambBright = a.level;
+  return _environLitScratch;
+}
+
+// The region/sky fog half of tickDistanceFogColor (no AdminEnvirons override,
+// or the day values tickEnvironFogRetail blends from).
+function _tickDistanceFogDay(scene3d) {
+  const fog = scene3d.scene.fog;
   if (!fog || !fog.color || typeof fog.color.setHex !== "function") return;
   const state = scene3d.skyLightingController?._lastState ?? null;
   if (!state) return;
@@ -2939,7 +3131,8 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
   // atmosphere.
   if (_rp3RunSky && scene3d?.atmosphereLights) {
     try {
-      const state = scene3d.skyLightingController?._lastState ?? null;
+      // sky-fog-time-2: the AdminEnvirons ambient override, when one is lit.
+      const state = _environLitState(scene3d.skyLightingController?._lastState ?? null);
       const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
       scene3d.atmosphereLights.tick(state, cam?.position);
     } catch (e) {

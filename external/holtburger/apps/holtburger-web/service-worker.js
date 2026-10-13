@@ -2,7 +2,8 @@
 // bake-time-immutable v2 content (`/shards/...` + per-namespace
 // `/manifest/<namespace>.bin` catalog binaries). Tries Cache
 // Storage first, falls through to network, stashes 2xx-basic
-// responses for next time.
+// responses for next time (content-addressed ones only once their
+// sha256 matches the name — see CAS VERIFY-BEFORE-PERSIST below).
 //
 // Cache Storage gives the durability guarantee the brief asks for
 // (typically ~60% of total disk on Chrome, persistent across
@@ -224,6 +225,105 @@ function isCacheable(url) {
   return isContentAddressed(url) || isBakeVersioned(url);
 }
 
+// ── CAS VERIFY-BEFORE-PERSIST (2026-10-13, WebAC comparison streaming-residency-4)
+//
+// Cache-first-forever is sound only while what went INTO the cache really is
+// the bytes the path names. Every consumer sha-verifies its bodies (the shard
+// fetch worker + wasm Step E for `shards/`, the PackFetchController for
+// `packs/` + `index/`) and fails a mismatched key, but this worker used to
+// persist every 200 unverified and answer every retry from Cache Storage — so
+// one bad body (a file served mid-write during a re-stage, disk corruption, a
+// proxy's 200 error page) failed that key in this session and every later one.
+// For content-addressed paths only:
+//   * verify before persisting — the page gets the network response at once;
+//     a clone is hashed under waitUntil and `cache.put` runs only when its
+//     sha256 prefix equals the hash in the name. A name that does not parse
+//     (or no digest engine) keeps the old unverified put;
+//   * honour a cache-bypass request — `cache: "reload"` / `"no-store"` skips
+//     `cache.match`, goes to the network (past the immutable HTTP cache too)
+//     and a verified 200 overwrites the entry. The consumers send `reload` on
+//     the retry after a verify failure (scene3d/shard_fetch_worker.js, the
+//     wasm direct path in holtburger-resource-http http.rs, and
+//     pack_fetch_controller.js D-03.5), so a bad entry heals on its next retry.
+// (WebAC does the same: packages/renderer/src/dat/streaming/DatStore.ts
+// `fetchAndVerify` puts only after `inflateChecked` passes.)
+
+/**
+ * The truncated sha256 (lowercase hex) a content-addressed path names, or
+ * null when the name does not parse. Each CAS name is the sha256 of the
+ * file's bytes, truncated to 32 hex: `shards/{sha256_prefix2}/{sha256}.bin`
+ * (manifest `shard_url_template`), `packs/{sha256_prefix2}/{sha256}.hbp`
+ * (`pack_url_template`), `index/{sha256_16}.bin` (`world_index.url`).
+ */
+function casHashFromPath(pathname) {
+  const m = /\/(?:shards|packs|index)\/(?:[0-9a-f]{2}\/)?([0-9a-f]{32,64})\.(?:bin|hbp)$/i.exec(pathname);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Lowercase hex sha256 of `buf`, or null when there is no digest engine. A
+ * service worker only runs in a secure context, so `crypto.subtle` is always
+ * there; null means a test sandbox, which then keeps the old put.
+ */
+async function sha256HexOf(buf) {
+  const subtle = typeof crypto !== "undefined" && crypto ? crypto.subtle : null;
+  if (!subtle || typeof subtle.digest !== "function") return null;
+  const u = new Uint8Array(await subtle.digest("SHA-256", buf));
+  let hex = "";
+  for (let i = 0; i < u.length; i++) hex += u[i].toString(16).padStart(2, "0");
+  return hex;
+}
+
+/** The request asked to skip the caches (`cache: "reload"` / `"no-store"`). */
+function cacheBypassRequested(request) {
+  const mode = request ? request.cache : undefined;
+  return mode === "reload" || mode === "no-store";
+}
+
+/**
+ * Persist a content-addressed 200 only when its bytes hash to its name.
+ * `network` itself goes to the page untouched: two clones are taken before
+ * it is returned — one hashed, one stored — and the work runs under
+ * waitUntil. A body that cannot be read in full is never stored.
+ */
+function putContentAddressed(event, cache, url, network) {
+  const want = casHashFromPath(url.pathname);
+  if (!want) {
+    cache.put(event.request, network.clone()).catch((e) => {
+      console.warn("[holtburger-sw] cache.put failed:", e);
+    });
+    return;
+  }
+  const forHash = network.clone();
+  const forCache = network.clone();
+  const discard = () => {
+    try {
+      if (forCache.body) forCache.body.cancel().catch(() => {});
+    } catch (_) { /* nothing left to release */ }
+  };
+  event.waitUntil(
+    (async () => {
+      let got;
+      try {
+        got = await sha256HexOf(await forHash.arrayBuffer());
+      } catch (_) {
+        discard();
+        return;
+      }
+      if (got !== null && got.slice(0, want.length) !== want) {
+        console.warn("[holtburger-sw] content hash mismatch, not cached:", url.pathname, `got ${got.slice(0, want.length)}`);
+        discard();
+        return;
+      }
+      try {
+        await cache.put(event.request, forCache);
+      } catch (e) {
+        console.warn("[holtburger-sw] cache.put failed:", e);
+      }
+    })()
+  );
+}
+
 // Synthetic cache key holding the bake identity the cached
 // non-content-addressed entries belong to. Never served to the page.
 const BAKE_ID_KEY = "/__holtburger_bake_id";
@@ -345,7 +445,10 @@ function isSwrCacheable(url) {
 
 // Test hooks (harness/test_service_worker_v3.mjs vm-loads this file and
 // asserts the v2/v3 predicate split; worker-scope only, inert in production).
-self.__swTestHooks = { SW_V3, CONTENT_CACHE, isContentAddressed, isBakeVersioned, isSwrCacheable, isCacheable };
+self.__swTestHooks = {
+  SW_V3, CONTENT_CACHE, isContentAddressed, isBakeVersioned, isSwrCacheable, isCacheable,
+  casHashFromPath, cacheBypassRequested,
+};
 
 // Coalesce concurrent fetches for the same URL. Without this, two
 // JS-side fetches that arrive while the SW's cache.match is still
@@ -358,6 +461,10 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   const swr = isSwrCacheable(url);
   if (!isCacheable(url) && !swr) return;
+  // Content-addressed: verified before persisting, and a cache-bypass request
+  // skips the cached copy (the CAS verify block above).
+  const cas = isContentAddressed(url);
+  const bypass = cas && cacheBypassRequested(event.request);
 
   event.respondWith(
     (async () => {
@@ -370,7 +477,7 @@ self.addEventListener("fetch", (event) => {
       if (cache && isBakeVersioned(url)) {
         mayServeCached = await bakeGateAllowsCache(cache, url);
       }
-      if (cache && mayServeCached) {
+      if (cache && mayServeCached && !bypass) {
         const cached = await cache.match(event.request).catch(() => null);
         if (cached) {
           if (swr) {
@@ -392,13 +499,19 @@ self.addEventListener("fetch", (event) => {
       // original — Response bodies are locked after the first clone()
       // on a given instance, so the old (inflight-dedup + double-clone)
       // pattern threw "body already used" on the second consumer when
-      // upstream chunked-encoded the response.
+      // upstream chunked-encoded the response. (A content-addressed path
+      // takes its two clones — hash + store — here too, from the unread
+      // original, before it is returned.)
       try {
         const network = await fetch(event.request);
         if (cache && network.ok && network.type === "basic") {
-          cache.put(event.request, network.clone()).catch((e) => {
-            console.warn("[holtburger-sw] cache.put failed:", e);
-          });
+          if (cas) {
+            putContentAddressed(event, cache, url, network);
+          } else {
+            cache.put(event.request, network.clone()).catch((e) => {
+              console.warn("[holtburger-sw] cache.put failed:", e);
+            });
+          }
         }
         return network;
       } catch (e) {

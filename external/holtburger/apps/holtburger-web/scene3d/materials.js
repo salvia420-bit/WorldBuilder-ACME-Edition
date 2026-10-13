@@ -616,7 +616,11 @@ function _patchSetCacheKey(material) {
     // component SET + each component's linkVariant() — NEVER per-instance
     // config/hash — so program count ≈ distinct sets, not 10k DIDs. Empty ""
     // when no VFX patch is installed → key unchanged for every existing material.
-    "|v" + (u.__vfxSetKey || "")
+    "|v" + (u.__vfxSetKey || "") +
+    // lighting-materials-7 (`?envDetailTex=on`) — one program per detail KIND
+    // (`|e1` building shell, `|e2` EnvCell structure), never per instance.
+    // Appended only when the patch is installed, so every other key is unchanged.
+    (u.__envDetailKind ? "|e" + (ENV_DETAIL_KIND_CODE[u.__envDetailKind] || 0) : "")
   );
 }
 
@@ -1013,6 +1017,227 @@ void main() {`
   });
   // Force shader re-compile if the material was already used.
   material.needsUpdate = true;
+}
+
+// === lighting-materials-7 (2026-10-13) — retail ENVIRONMENT DETAIL TEXTURES ==
+// `?envDetailTex=on` — DEFAULT OFF until a 1070 eye-test (it changes the look
+// of every building wall and dungeon corridor). Absent / anything else = off,
+// and nothing below runs: no variant is patched, no key bit, no fetch.
+//
+// Retail draws a second, high-frequency pass over building shells and EnvCell
+// structure (the `Render.BuildingDetailTextures` option, on at the quality
+// presets 4-5). The Phase-0.2 patch above keys on the Surface Detail bit,
+// which retail sets only on these generated surfaces (portal.dat ships 0), so
+// it never reproduced this pass.
+//   - LScape::SetDetailTexturing (acclient.c:308209) reads the Region's
+//     detail SurfaceTexture + tiling at terrain_desc LIST index 1 (building)
+//     and 2 (environment); every caller passes landscape = object = 0.
+//   - RenderDeviceD3D::DrawBuilding / DrawEnvCell (acclient.c:456943 /
+//     456894) set Render::curr_detail_surface + tiling around the shell / cell
+//     structure draw ONLY (objects inside cells draw without it), blend src 9
+//     (D3DBLEND_DESTCOLOR) / dst 6 (D3DBLEND_INVSRCALPHA).
+//   - D3DPolyRender::RenderMeshSubset (acclient.c:454792) redraws each subset
+//     with the detail texture on stage 0 (MODULATE by the lit vertex colour),
+//     UV set 1 = tiling x UV set 0 (D3DPolyRender::SetDetailTiling), WRAP +
+//     LINEAR, depth LESSEQUAL (ACRender::SetDetailSurfaceInternal,
+//     acclient.c:719956). D3DPolyRender::DrawMesh skips the alpha-delay list
+//     while a detail surface is set, so translucent subsets get it too.
+// With dst = texel*L already in the frame buffer, src = detail.rgb*L and
+// src.a = detail.a:
+//     out = src*dst + dst*(1 - src.a) = texel*L*(1 + detail.rgb*L - detail.a)
+// a near-neutral signed grain (retail Dereth, per WebAC's read of Region
+// 0x13000000 — not re-verified against DAT bytes here: 0x05001787 at tiling 4,
+// dark rgb, low alpha). Folded here into ONE extra sample in the lit fragment, not
+// a second draw (equation after WebAC
+// packages/renderer/src/models/DetailTexturing.ts, AGPL-3.0). The multiplier
+// is formed in the gamma space the D3D pass blended in — raw detail bytes, L
+// recovered as (outgoingLight / albedo)^(1/2.2), clamped like the D3D vertex
+// colour — and applied to the linear outgoing light as f^2.2 (exact for a
+// power-law gamma, and scale-free so HDR outgoing light is never clamped).
+//
+// Program cost: ONE variant per kind (`|e1` / `|e2` in the patch-set key,
+// never per instance), and ONE shared uniform set per kind, so the late region
+// load reaches every compiled program by flipping `uAcEnvDetailOn` — no relink.
+
+/** `?envDetailTex=on` reader — exact opt-in, everything else is off. */
+export function envDetailTexEnabled(search) {
+  try {
+    let s = search;
+    if (typeof s !== "string") {
+      if (typeof window === "undefined" || !window.location) return false;
+      s = window.location.search || "";
+    }
+    const v = new URLSearchParams(s).get("envDetailTex");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** The detail kinds and their `|e<n>` patch-set key codes. */
+export const ENV_DETAIL_KIND_CODE = Object.freeze({ building: 1, environment: 2 });
+
+// One shared uniform set per kind, bound BY REFERENCE into every patched
+// material's `shader.uniforms` at compile.
+const _envDetailUniforms = {
+  building: {
+    uAcEnvDetailMap: { value: null },
+    uAcEnvDetailTiling: { value: 0 },
+    uAcEnvDetailOn: { value: 0 },
+  },
+  environment: {
+    uAcEnvDetailMap: { value: null },
+    uAcEnvDetailTiling: { value: 0 },
+    uAcEnvDetailOn: { value: 0 },
+  },
+};
+
+/** The shared uniform set for `kind`, or null for an unknown kind. */
+export function envDetailUniformsFor(kind) {
+  return Object.prototype.hasOwnProperty.call(_envDetailUniforms, kind)
+    ? _envDetailUniforms[kind]
+    : null;
+}
+
+/**
+ * Point a kind's shared uniforms at its detail texture + tiling. The pass is
+ * ON only with both a texture and a positive tiling (retail: a null detail
+ * surface or a zero tiling factor means no detailing). Returns the new on-state.
+ */
+export function setEnvDetailSurface(kind, texture, tiling) {
+  const u = envDetailUniformsFor(kind);
+  if (!u) return false;
+  const t = Number(tiling);
+  u.uAcEnvDetailMap.value = texture || null;
+  u.uAcEnvDetailTiling.value = Number.isFinite(t) && t > 0 ? t : 0;
+  u.uAcEnvDetailOn.value =
+    u.uAcEnvDetailMap.value && u.uAcEnvDetailTiling.value > 0 ? 1 : 0;
+  return u.uAcEnvDetailOn.value === 1;
+}
+
+// A wasm-decoded detail texture (`TerrainTexture`: width/height/pixels) as a
+// raw-byte, wrapping, mipmapped DataTexture. NoColorSpace: the bytes are used
+// exactly as retail's gamma-space D3D pass used them (the shader owns the 2.2).
+function _envDetailTextureFrom(t) {
+  const w = (t && t.width) >>> 0;
+  const h = (t && t.height) >>> 0;
+  const px = t && t.pixels;
+  if (!w || !h || !px || px.length < w * h * 4) return null;
+  const tex = new THREE.DataTexture(px, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.name = "env-detail";
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = getAdapterMaxAnisotropy();
+  tex.needsUpdate = true;
+  return tex;
+}
+
+let _envDetailLoad = null;
+
+/**
+ * Fetch + install the Region's building / environment detail surfaces, once
+ * per page (wasm `fetchRegionDetailSurfaces`). Returns the shared promise, or
+ * null when the export is missing (stale `pkg/`: the uniforms stay off, so a
+ * patched material renders exactly as unpatched). Fail-soft: a fetch/decode
+ * error logs once and leaves the pass off for the session.
+ */
+export function loadEnvDetailSurfaces(wasm) {
+  if (_envDetailLoad) return _envDetailLoad;
+  if (!wasm || typeof wasm.fetchRegionDetailSurfaces !== "function") return null;
+  _envDetailLoad = (async () => {
+    let bundle = null;
+    try {
+      bundle = await wasm.fetchRegionDetailSurfaces();
+      if (!bundle) return 0;
+      const raw = typeof bundle.takeTextures === "function" ? bundle.takeTextures() : [];
+      const textures = [];
+      for (const t of raw || []) {
+        textures.push(_envDetailTextureFrom(t));
+        try { t?.free?.(); } catch (_) { /* already released */ }
+      }
+      let on = 0;
+      for (const kind of ["building", "environment"]) {
+        const slice = Number(kind === "building" ? bundle.buildingSlice : bundle.environmentSlice);
+        const tiling = kind === "building" ? bundle.buildingTiling : bundle.environmentTiling;
+        const tex =
+          Number.isInteger(slice) && slice >= 0 && slice < textures.length ? textures[slice] : null;
+        if (setEnvDetailSurface(kind, tex, tiling)) on += 1;
+      }
+      return on;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[materials] fetchRegionDetailSurfaces failed; env detail stays off:", e);
+      return 0;
+    } finally {
+      try { bundle?.free?.(); } catch (_) { /* already released */ }
+    }
+  })();
+  return _envDetailLoad;
+}
+
+/** Test seam: forget the load promise and switch both kinds off. */
+export function __resetEnvDetailForTest() {
+  _envDetailLoad = null;
+  setEnvDetailSurface("building", null, 0);
+  setEnvDetailSurface("environment", null, 0);
+}
+
+const ENV_DETAIL_FRAGMENT_PARS = [
+  "#include <common>",
+  "uniform sampler2D uAcEnvDetailMap;",
+  "uniform float uAcEnvDetailTiling;",
+  "uniform float uAcEnvDetailOn;",
+].join("\n");
+
+const ENV_DETAIL_FRAGMENT_BODY = [
+  "#ifdef USE_MAP",
+  "if (uAcEnvDetailOn > 0.5) {",
+  "  // retail DESTCOLOR/INVSRCALPHA detail pass, formed in gamma space:",
+  "  // out = texel*L*(1 + detail.rgb*L - detail.a)",
+  "  vec4 acEnvDetail = texture2D(uAcEnvDetailMap, vMapUv * uAcEnvDetailTiling);",
+  "  vec3 acEnvLin = clamp(outgoingLight / max(diffuseColor.rgb, vec3(1e-3)), 0.0, 1.0);",
+  "  vec3 acEnvL = pow(acEnvLin, vec3(1.0 / 2.2));",
+  "  vec3 acEnvF = 1.0 + clamp(acEnvDetail.rgb * acEnvL, 0.0, 1.0) - acEnvDetail.a;",
+  "  outgoingLight *= pow(max(acEnvF, vec3(0.0)), vec3(2.2));",
+  "}",
+  "#endif",
+  "#include <opaque_fragment>",
+].join("\n");
+
+// Install the env-detail term on `material` for `kind` ("building" |
+// "environment"). Idempotent (userData guard) and chained, so it composes with
+// the floor-bias / baked-light patch the variant already carries. Anchors:
+// `<common>` (shared, every patch re-emits it) and `<opaque_fragment>`, which
+// no object patch in this file touches and which runs after outgoingLight is
+// final. `#ifdef USE_MAP`: a variant minted from the fallback (no map yet)
+// compiles the term out until the re-seat brings the map and recompiles.
+function _installEnvDetailPatch(material, kind) {
+  const u = envDetailUniformsFor(kind);
+  if (!material || !u) return false;
+  if (material.userData && material.userData.__envDetailKind) return false;
+  _chainBeforeCompile(material, function envDetailHook(shader) {
+    if (!shader.fragmentShader.includes("#include <opaque_fragment>")) return;
+    shader.uniforms.uAcEnvDetailMap = u.uAcEnvDetailMap;
+    shader.uniforms.uAcEnvDetailTiling = u.uAcEnvDetailTiling;
+    shader.uniforms.uAcEnvDetailOn = u.uAcEnvDetailOn;
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", ENV_DETAIL_FRAGMENT_PARS)
+      .replace("#include <opaque_fragment>", ENV_DETAIL_FRAGMENT_BODY);
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__envDetailKind = kind;
+  material.needsUpdate = true;
+  return true;
+}
+
+/** Exported twin of `_installEnvDetailPatch` (tests / capture scripts). */
+export function installEnvDetailPatch(material, kind) {
+  return _installEnvDetailPatch(material, kind);
 }
 
 // Visual-fidelity Phase 3.3 — install the CSM cascade-sample shader
@@ -1820,8 +2045,10 @@ export function applySurfaceRenderState(mat, state, opts) {
   const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
   const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
   // === A10-M3b (2026-06-12) — `?surfaceParityV2=on` parity details =========
-  // Default OFF. The remaining two sub-behaviours (additive fog exemption,
-  // true InvAlpha blend) live ONLY inside this decoder, which is itself only
+  // Default OFF. The remaining two sub-behaviours (additive fog exemption —
+  // default-ON in all three ladders since lighting-materials-4, see
+  // `additiveObjFogExemptEnabled` — and the true InvAlpha blend) live ONLY
+  // inside this decoder, which is itself only
   // reached when `?surfaceUnified=on` — so parityV2 is inert without
   // surfaceUnified (documented in url-flags.md; deliberately no cross-flag
   // enforcement). The third (ClipMap alpha-test ref 100/200) graduated to the
@@ -1896,26 +2123,31 @@ export function applySurfaceRenderState(mat, state, opts) {
     // per-format alpha-test ref GRADUATED out of `?surfaceParityV2` — it, and
     // retail's `SetAlphaBlendEnable(1)` + ONE/INVSRCALPHA blend, now ship
     // default-ON through the shared helper (see `applyClipMapRenderState` for
-    // the acclient.c anchors and the census). parityV2 keeps only (b1) the
-    // additive fog exemption and (b3) the true INVALPHA blend.
+    // the acclient.c anchors and the census). parityV2 keeps only (b3) the
+    // true INVALPHA blend; (b1) the additive fog exemption is default-ON now
+    // (`?additiveObjFog`) and parityV2 merely forces it past that escape.
     applyClipMapRenderState(mat, state.hasPalette);
   }
-  // A10-M3b (b1) — additive surfaces are exempt from fog (retail
-  // acclient.c:454551-454553: ADDITIVE 0x10000 → SetFFFogAlphaDisabled(1),
-  // whose body at acclient.c:460295-460302 is SetRenderState(28 =
-  // D3DRS_FOGENABLE, !value) — i.e. fixed-function fog fully OFF for that
-  // draw; fog-SKIP, not fog-to-black, so per-material `fog: false` is the
-  // exact three.js analogue). Retail's check is on the BIT, evaluated after
-  // the blend ladder — NOT per-branch — so it also covers Translucent+Additive
-  // and InvAlpha+Additive combos. Known residual: `material.fog` only exempts
-  // from `scene.fog` (the wireframe FogExp2 path, index.js:585, and the
-  // `?fogLerp=on` linear-Fog path, index.js:2962); the default 3D path's
-  // Bruneton aerial-perspective post pass is screen-space and cannot honour a
+  // A10-M3b (b1), DEFAULT-ON since lighting-materials-4 (2026-10-13) —
+  // additive surfaces are exempt from fog (retail acclient.c:454551-454553:
+  // ADDITIVE 0x10000 → SetFFFogAlphaDisabled(1), whose body at
+  // acclient.c:460295-460302 is SetRenderState(28 = D3DRS_FOGENABLE, !value) —
+  // i.e. fixed-function fog fully OFF for that draw; fog-SKIP, not
+  // fog-to-black, so per-material `fog: false` is the exact three.js analogue).
+  // Retail's check is on the BIT, evaluated after the blend ladder — NOT
+  // per-branch — so it also covers Translucent+Additive and InvAlpha+Additive
+  // combos. The default path DOES have a `scene.fog`: `fogLerp` is default-ON
+  // and index.js builds a linear THREE.Fog on the atmosphere path (wireframe
+  // keeps its FogExp2), so without this an additive object surface is mixed
+  // toward fogColor (see `additiveObjFogExemptEnabled`; `?additiveObjFog=off`
+  // escape, `?surfaceParityV2=on` still forces it). Known residual:
+  // `material.fog` only exempts from `scene.fog`; the Bruneton
+  // aerial-perspective post pass is screen-space and cannot honour a
   // per-material exemption (A10-M3 spec §5/§6 OQ-2). The retail "fog globally
   // off" half (acclient.c:454551 !GetFFFogEnable) needs no analogue — with no
   // scene.fog three.js applies no fog anyway. `fog` is program-affecting; the
   // trailing `needsUpdate = true` below forces the recompile.
-  if (parityV2 && isAdditive) mat.fog = false;
+  if (isAdditive && (parityV2 || additiveObjFogExemptEnabled())) mat.fog = false;
   applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
   // Retail draws a surface ONCE (see applyRetailSinglePass). This is THE funnel
   // for the unified/entity/recolored-paletted paths — the blend ladder above is what
@@ -1943,6 +2175,11 @@ function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
     mat.emissive = new THREE.Color(0xffffff);
     mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
     if (texture) mat.emissiveMap = texture;
+    // ?surfaceLumWins (luminous_hook.js): the authored luminosity, which a
+    // Luminous hook must leave alone — retail draws a luminous surface with its
+    // own value (D3DPolyRender::RenderMeshSubset). Data only; nothing renders it.
+    mat.userData = mat.userData || {};
+    mat.userData.__surfaceLuminosity = sfLuminosity;
     registerLuminousMaterial(mat, sfLuminosity);
   }
   // Diffuse-reflectance albedo tint — retail uses `diffuse` as a reflectance
@@ -2089,6 +2326,40 @@ export function readSurfaceParityV2Flag() {
     return lv === "on" || lv === "1" || lv === "true";
   } catch (_) {
     return false;
+  }
+}
+
+// === lighting-materials-4 (2026-10-13) — `?additiveObjFog` =================
+// Additive OBJECT surfaces draw unfogged. Retail `D3DPolyRender::SetSurface`
+// ends its blend setup with
+//     if ( !GetFFFogEnable() || Render::curr_surface_type & 0x10000 )
+//       SetFFFogAlphaDisabled(1);                        // acclient.c:454551-454553
+// and `SetFFFogAlphaDisabled` (acclient.c:460295) is SetRenderState(28 =
+// D3DRS_FOGENABLE, FALSE): every surface with the Additive bit is drawn with
+// fixed-function fog OFF. A fog SKIP, not fog-to-black, so per-material
+// `fog = false` is the exact three.js analogue. The exemption used to live
+// only in the default-OFF `?surfaceParityV2` arm, written when the default path
+// had no `scene.fog`; `fogLerp` now ships default-ON (index.js builds a linear
+// THREE.Fog), so additive glows / flames / spell haloes inside the fog band had
+// `f * fogColor` mixed into their ADD term — the pale fog-coloured sheet that
+// particles/additive_fog.js already fixed for particles. Bit-based like retail
+// (covers Alpha+Additive, Translucent+Additive, InvAlpha+Additive), applied in
+// all three ladders: `_materialFromFlags`, `applySurfaceRenderState` and
+// entities.js `_applyPalettedSurfaceRenderState`. ~202 base-DAT surfaces carry
+// the bit (183 Alpha+Additive, 19 pure). `fog` is program-affecting but lands
+// on three's stock no-fog variant. DEFAULT ON; `?additiveObjFog=off|0|false|no`
+// restores the fogged pre-fix look (`?surfaceParityV2=on` still exempts on the
+// unified path, as before). NOT memoized: the ESM harness re-stubs
+// `globalThis.window` per case (same reason as `readSurfaceParityV2Flag`).
+export function additiveObjFogExemptEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("additiveObjFog");
+    if (typeof v !== "string") return true;
+    const lv = v.trim().toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false" || lv === "no");
+  } catch (_) {
+    return true;
   }
 }
 
@@ -2886,7 +3157,7 @@ export const MATERIAL_SURFACE_FIELDS = Object.freeze(_RESEAT_FIELDS.slice());
 const _CLONE_LOST_PATCH_FLAGS = [
   "detailEnabled", "csmEnabled", "pomEnabled", "pomForced", "lightClampRetail",
   "__lightClampPatched", "__aoPatched", "__depthBiased", "__floorBiased",
-  "__staticBiased", "__acBakedLight",
+  "__staticBiased", "__acBakedLight", "__envDetailKind",
 ];
 // Clone-local markers that must survive a re-seat: `_patchSetCacheKey` reads
 // them, so losing one collapses the clone onto the un-patched program.
@@ -2894,6 +3165,7 @@ const _RESEAT_KEEP_USERDATA = [
   "__cacheOwned", "__floorBiased", "__staticBiased", "__acBakedLight",
   "__aoPatched", "__depthBiased", "__vfxSetKey", "__vfxColorPassOnly",
   "detailEnabled", "csmEnabled", "pomEnabled", "lightClampRetail",
+  "__envDetailKind",
 ];
 /** Non-enumerable live handles (see `_defineLiveUserData`) — a spread skips them. */
 const _LIVE_USERDATA_KEYS = [
@@ -3242,6 +3514,12 @@ export class MaterialCache {
     // same Map so each tile is uploaded to GPU exactly once.
     this.detailTileCache = opts.detailTileCache ?? null;
     this.forceDetail = !!opts.forceDetail;
+    // lighting-materials-7 — retail building / environment detail pass
+    // (`?envDetailTex=on`, default OFF; see `applyEnvDetail`). `opts.envDetailTex`
+    // is the test seam; the wasm namespace feeds `fetchRegionDetailSurfaces`.
+    this.envDetailOn =
+      opts.envDetailTex !== undefined ? !!opts.envDetailTex : envDetailTexEnabled();
+    this._envDetailWasm = opts.wasmExports || null;
 
     // Visual-fidelity Phase 3.3 — Cascaded Shadow Maps bundle. When
     // present, every material this cache produces gets the CSM shader
@@ -3785,6 +4063,39 @@ export class MaterialCache {
       this.cellBakedMaterials.set(key, v);
     }
     return v;
+  }
+
+  /**
+   * lighting-materials-7 — `?envDetailTex=on` (default OFF): retail's building
+   * / environment detail pass (RenderDeviceD3D::DrawBuilding / DrawEnvCell, see
+   * the block above `envDetailTexEnabled`) on the material a building shell
+   * (buildings.js, kind "building") or an EnvCell structure surface (cells.js,
+   * kind "environment") is about to draw with.
+   *
+   * Patches IN PLACE, and only the per-DID variant that kind alone draws with:
+   * the floor-bias clone (`getCachedFloorBias` — buildings.js is its only
+   * caller) or the baked-light clone (`getCachedCellBaked` — cells.js only).
+   * The shared base that statics and the objects inside cells draw with is
+   * never touched, and the variant's existing lifecycle (re-seat, albedo
+   * re-point, eviction, dispose) carries the patch. Anything else comes back
+   * unchanged: flag off, wireframe, or the shared base on the
+   * `?buildingFloorBias=off` / `?vertexBake=off` arms (no detail there).
+   * @param {object} material
+   * @param {"building"|"environment"} kind
+   * @param {number} surfaceDid
+   * @returns {object} `material`
+   */
+  applyEnvDetail(material, kind, surfaceDid) {
+    if (!this.envDetailOn || this.wireframeMode || !material) return material;
+    const owner =
+      kind === "building"
+        ? this.floorBiasMaterials
+        : kind === "environment"
+          ? this.cellBakedMaterials
+          : null;
+    if (!owner || owner.get(surfaceDid >>> 0) !== material) return material;
+    if (_installEnvDetailPatch(material, kind)) loadEnvDetailSurfaces(this._envDetailWasm);
+    return material;
   }
 
   getCachedStaticBias(surfaceDid) {
@@ -4462,7 +4773,9 @@ export class MaterialCache {
    *     texture's own alpha channel. acclient.c SetSurface @454470.
    *   - Additive (0x10000): `blending = AdditiveBlending` +
    *     `transparent = true, depthWrite = false`. For flame, sparks,
-   *     and other particle-style additive surfaces.
+   *     and other particle-style additive surfaces. The bit (with or
+   *     without Alpha) also sets `fog = false` (retail fog-skip,
+   *     acclient.c:454551; `?additiveObjFog=off` escape).
    *   - Self-illumination is driven by the luminosity FLOAT (not the
    *     0x40 bit, which retail never sets): emissive = grayscale
    *     luminosity, flat (no emissiveMap), per acclient.c @454688.
@@ -4707,10 +5020,15 @@ export class MaterialCache {
       opts.depthWrite = false;
     } else if (!useUnifiedDecoder && isAdditive) {
       // Pure-additive (Additive without the Alpha bit): retail resolves to
-      // src=BLEND_ONE(2)/dst=BLEND_ONE(2) (acclient.c:454474, the non-Alpha
-      // path), which THREE.AdditiveBlending matches exactly. 19 retail
-      // surfaces (flames, sparks). depthWrite=false so additive surfaces
-      // don't occlude geometry behind them.
+      // src=BLEND_ONE(2)/dst=BLEND_ONE(2) (acclient.c:454486-454489, the
+      // non-Alpha path). THREE.AdditiveBlending matches that ONLY for opaque
+      // texels: with premultipliedAlpha off three r184 binds
+      // blendFuncSeparate(SRC_ALPHA, ONE, ONE, ONE), so a texel with alpha
+      // < 1 adds dimmer than retail's full-RGB ONE/ONE. Kept as-is pending a
+      // census of pure-Additive surfaces whose texels carry alpha < 255
+      // (lighting-materials-4 step 2). 19 retail surfaces (flames, sparks).
+      // depthWrite=false so additive surfaces don't occlude geometry behind
+      // them.
       opts.blending = THREE.AdditiveBlending;
       opts.transparent = true;
       opts.depthWrite = false;
@@ -4737,6 +5055,14 @@ export class MaterialCache {
       // the `?clipMapParity=off|ref` escapes. `opts` is the pre-construction
       // bag; the helper writes the same property names a material takes.
       applyClipMapRenderState(opts, surfaceFloats?.hasPalette);
+    }
+    // lighting-materials-4 — Additive (0x10000) draws unfogged: retail checks
+    // the BIT after the blend ladder (acclient.c:454551-454553,
+    // SetFFFogAlphaDisabled(1) = D3DRS_FOGENABLE off). `?additiveObjFog=off`
+    // escape; see `additiveObjFogExemptEnabled`. The unified decoder applies
+    // the same rule inside `applySurfaceRenderState`.
+    if (!useUnifiedDecoder && isAdditive && additiveObjFogExemptEnabled()) {
+      opts.fog = false;
     }
     if (!useUnifiedDecoder && hasLum) {
       // Self-illumination, driven by the per-surface luminosity FLOAT
@@ -4775,6 +5101,9 @@ export class MaterialCache {
     const mat = new THREE.MeshStandardMaterial(opts);
     // ?lumNight — the inline ladder set the luminosity emissive on `opts`.
     if (!useUnifiedDecoder && hasLum) registerLuminousMaterial(mat, sfLuminosity);
+    // ?surfaceLumWins — the same authored-luminosity stamp applyFloatLumDiffuse
+    // writes on the unified path (read by the Luminous hook; data only).
+    if (!useUnifiedDecoder && hasLum) mat.userData.__surfaceLuminosity = sfLuminosity;
 
     // === A10-M1 (2026-06-11) — run the single decoder on the built material ===
     // When `?surfaceUnified=on` the inline `opts` ladder above was skipped; apply

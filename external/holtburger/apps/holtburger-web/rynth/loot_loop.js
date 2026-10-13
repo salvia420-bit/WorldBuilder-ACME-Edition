@@ -57,6 +57,25 @@
 //   progress watchdog and the resume re-issue are what recover it; a cast's or
 //   attack's MaybeStopCompletely does NOT cancel it. host.StopCompletely()
 //   ends only the bot's own pursuit/MoveTo.
+//
+// 2026-10-13 — corpse refusals (WebAC comparison rynth-macro-nav-2): ACE turns
+// a corpse away with a CommunicationTransientString (kind=2 chat, category
+// Transient), not a UseFailed — TryUseItem then sends a plain UseDone — so
+// OPEN waited out OPEN_TIMEOUT_MS × MAX_OPEN_TRIES on every corpse we may not
+// loot (another player's kill, a fellow's unshared kill, a rare or PK corpse,
+// a player corpse), again every LOOTED_TTL_MS, while the kernel's Loot rung
+// held buffing off. The three refusals (ACE Corpse.Open, Container.InUseMessage
+// via SendTransientError) now end the corpse on the next tick when the line
+// names it (TryGetObjectName — names repeat, guids do not):
+//   "You do not yet have the right to loot the X."  parked (LOOTED_TTL_MS
+//       already outlasts ACE's Corpse.HalfLife, 180 s, after which a monster
+//       corpse opens to everyone)
+//   "You may not loot the X because …"  (rare / PK kill) parked while the guid
+//       stays in NearbyGuids
+//   "The X is already in use by Y!"  skipped INUSE_SKIP_MS, parked on the
+//       MAX_INUSE_REFUSALS-th refusal (constants after WebAC corpseBook.ts,
+//       AGPL-3.0; the strings are re-derived from ACE)
+// A corpse ACE opens never sees any of this, so the default path is unchanged.
 
 import { portalSpaceActive } from "./portal_gate.js";
 import { worldX, worldY, isEnvCellId } from "./nav_frame.js";
@@ -90,6 +109,33 @@ const WERR_YOURE_TOO_BUSY = 0x1d;
 // table is not part of the rynth tree that tests stage).
 const KIND_USE_FAILED = 13; // u32 = WeenieError
 const KIND_INVENTORY_ACTION_FAILED = 48; // u32 = item guid, u32b = WeenieError
+const KIND_CHAT = 2; // text = the line, u32b = chat category (src/lib.rs CHAT_CATEGORY_*)
+const CHAT_CATEGORY_SYSTEM = 0;
+const CHAT_CATEGORY_TRANSIENT = 9; // CommunicationTransientString
+// Corpse refusals (header, 2026-10-13).
+const INUSE_SKIP_MS = 10_000; // "already in use" — someone else has it open
+const MAX_INUSE_REFUSALS = 3; // then parked like any refused corpse
+
+// ACE.Server Corpse.Open (rare / PK / no rights yet) and Container.InUseMessage.
+// The capture is the corpse's Name: "Corpse of X" / "Treasure of X"
+// (Creature_Death.CreateCorpse).
+const CORPSE_REFUSALS = [
+  ["notYet", /^You do not yet have the right to loot the (.+)\.$/],
+  ["barred", /^You may not loot the (.+?) because /],
+  ["inUse", /^The (.+?) is already in use by .*!$/],
+];
+
+/** One of ACE's refusals to open a corpse — { why: "notYet" | "barred" |
+ *  "inUse", name } — or null for any other line. */
+export function parseCorpseRefusal(text) {
+  if (typeof text !== "string" || !text) return null;
+  const line = text.trimEnd();
+  for (const [why, re] of CORPSE_REFUSALS) {
+    const m = re.exec(line);
+    if (m) return { why, name: m[1] };
+  }
+  return null;
+}
 
 // Horizontal distance in the world frame (rynth/nav_frame.js — the one copy
 // of the frame math). Outdoors, cells of different landblocks are comparable;
@@ -151,6 +197,10 @@ export class RynthLootLoop {
     this._nextPickupAt = 0;
     this._lastTickAt = 0;
     this._pack = { at: -Infinity, full: false };
+    // Corpse refusals (header, 2026-10-13).
+    this._corpseRefusal = null; // { guid, why } — the last refusal naming this.corpse
+    this._barred = new Set(); // corpse guids ACE will not open for us ("may not loot … because"), while in view
+    this._inUse = new Map(); // corpse guid -> { n, until } — "already in use" refusals, while in view
     if (host && typeof host.onEvent === "function") host.onEvent((e) => this._onEvent(e));
   }
 
@@ -176,9 +226,13 @@ export class RynthLootLoop {
     if (s === "SCAN") this._assessAt.clear(); // per-corpse holds never leak across corpses
   }
 
-  // Push plane: the two server refusals the loop acts on (see header).
+  // Push plane: the server refusals the loop acts on (see header).
   _onEvent(e) {
     if (!e) return;
+    if (e.kind === KIND_CHAT) {
+      this._noteCorpseRefusal(e);
+      return;
+    }
     const now = Date.now();
     if (e.kind === KIND_USE_FAILED) {
       if ((e.u32 >>> 0) === WERR_YOURE_TOO_BUSY) this._lastBusyAt = now;
@@ -188,6 +242,63 @@ export class RynthLootLoop {
     if (e.kind === KIND_INVENTORY_ACTION_FAILED && this.pendingItem && (e.u32 >>> 0) === (this.pendingItem >>> 0)) {
       this._pendingFailed = { code: e.u32b >>> 0, at: now };
     }
+  }
+
+  // A corpse refusal (header, 2026-10-13) naming this.corpse is recorded here
+  // and acted on by APPROACH / OPEN on the next tick (_takeCorpseRefusal).
+  // Recorded in any state: a host may answer the Use before _issueOpen has
+  // switched to OPEN. A new corpse or a finished one drops the record.
+  _noteCorpseRefusal(e) {
+    if (!this.corpse) return;
+    const cat = e.u32b >>> 0;
+    if (cat !== CHAT_CATEGORY_TRANSIENT && cat !== CHAT_CATEGORY_SYSTEM) return;
+    const r = parseCorpseRefusal(e.text);
+    if (!r) return;
+    let name = null;
+    try {
+      name = typeof this.host.TryGetObjectName === "function" ? this.host.TryGetObjectName(this.corpse) : null;
+    } catch {
+      name = null;
+    }
+    // The line names the corpse, not its guid: a line naming a different
+    // corpse is not about ours. An unknown name takes the line on trust.
+    if (name && name !== r.name) return;
+    this._corpseRefusal = { guid: this.corpse, why: r.why };
+  }
+
+  // End this corpse on a recorded refusal instead of waiting out OPEN's
+  // timeouts. True = handled (back to SCAN).
+  _takeCorpseRefusal(now) {
+    const r = this._corpseRefusal;
+    if (!r) return false;
+    this._corpseRefusal = null;
+    const g = this.corpse;
+    if (r.guid !== g) return false;
+    const hex = (g >>> 0).toString(16);
+    if (r.why === "inUse") {
+      const n = (this._inUse.get(g)?.n ?? 0) + 1;
+      if (n < MAX_INUSE_REFUSALS) {
+        this._inUse.set(g, { n, until: now + INUSE_SKIP_MS });
+        this._finishCorpse(now, `corpse ${hex} in use by someone else — skipped ${INUSE_SKIP_MS / 1000}s (${n}/${MAX_INUSE_REFUSALS})`, false);
+        return true;
+      }
+      this._inUse.delete(g);
+      this._finishCorpse(now, `corpse ${hex} in use ${n}x — corpse parked`);
+      return true;
+    }
+    if (r.why === "barred") {
+      this._barred.add(g);
+      this._finishCorpse(now, `may not loot corpse ${hex} (rare / PK kill) — parked while in view`);
+      return true;
+    }
+    this._finishCorpse(now, `no right to loot corpse ${hex} yet — corpse parked`);
+    return true;
+  }
+
+  // Refusal memory lasts only while the corpse stays in view.
+  _forgetGoneRefusals(seen) {
+    for (const g of this._barred) if (!seen.has(g)) this._barred.delete(g);
+    for (const g of this._inUse.keys()) if (!seen.has(g)) this._inUse.delete(g);
   }
 
   // ── netBrain (D1 path A′) — .NET-wasm LootScoring shadow ────────────────
@@ -267,9 +378,14 @@ export class RynthLootLoop {
     const now = Date.now();
     const maxD = Number.isFinite(this.corpseRangeM) ? this.corpseRangeM : 30;
     let best = null;
+    const seen = this._barred.size || this._inUse.size ? new Set() : null;
     for (const g of h.NearbyGuids()) {
+      if (seen) seen.add(g);
       const t = this.looted.get(g);
       if (t && now - t < LOOTED_TTL_MS) continue;
+      if (this._barred.has(g)) continue; // "may not loot … because" — not while in view
+      const inUse = this._inUse.get(g);
+      if (inUse && now < inUse.until) continue; // "already in use" — skipped a while
       if (h.TryGetObjectWcid(g) !== CORPSE_WCID) continue;
       const pos = h.TryGetObjectPosition(g);
       if (!pos) continue;
@@ -277,6 +393,7 @@ export class RynthLootLoop {
       if (d == null || d > maxD) continue;
       if (!best || d < best.d) best = { guid: g, d, pos };
     }
+    if (seen) this._forgetGoneRefusals(seen);
     return best;
   }
 
@@ -355,14 +472,16 @@ export class RynthLootLoop {
   }
 
   // Leave the current corpse: close it when we had it open (see header), park
-  // it for LOOTED_TTL_MS, back to SCAN.
-  _finishCorpse(now, why) {
+  // it for LOOTED_TTL_MS (park=false: the "in use" skip keeps its own clock),
+  // back to SCAN.
+  _finishCorpse(now, why, park = true) {
     const h = this.host;
     if (this.corpse && h.GetGroundContainerId?.() === this.corpse && typeof h.CloseContainer === "function") {
       try { h.CloseContainer(this.corpse); } catch (_) {}
     }
     if (why) this.log(why);
-    this.looted.set(this.corpse, now);
+    if (park) this.looted.set(this.corpse, now);
+    this._corpseRefusal = null;
     this._pickupTries.clear();
     this.pendingItem = 0;
     this._pendingFailed = null;
@@ -405,6 +524,7 @@ export class RynthLootLoop {
         const c = this._findCorpse();
         if (!c) return;
         this.corpse = c.guid;
+        this._corpseRefusal = null;
         this._openTries = 0;
         this._openBusyRetries = 0;
         this._pickupTries.clear();
@@ -420,6 +540,7 @@ export class RynthLootLoop {
         return;
       }
       case "APPROACH": {
+        if (this._takeCorpseRefusal(now)) return;
         const me = h.TryGetPlayerPose();
         const pos = h.TryGetObjectPosition(this.corpse);
         const d = me && pos ? horizontalDistance(me, pos) : null;
@@ -463,6 +584,8 @@ export class RynthLootLoop {
           }
           return;
         }
+        // ACE refused this corpse by name (header, 2026-10-13).
+        if (this._takeCorpseRefusal(now)) return;
         // A pending retry (after a refusal) waits out its delay first.
         if (this._openRetryAt) {
           if (now >= this._openRetryAt) this._issueOpen(this._openRetryCounts);

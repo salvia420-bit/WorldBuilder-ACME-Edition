@@ -31,6 +31,10 @@ mod slow_run_tests;
 // no landing, no bounce) over crests, dips and bumps.
 #[cfg(test)]
 mod terrain_hop_tests;
+// physics-collision-2 (2026-10-13): the local player's transition body from
+// its own Setup (`?setupPlayerBody`).
+#[cfg(test)]
+mod setup_player_body_tests;
 mod stall_recovery;
 mod system;
 

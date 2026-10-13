@@ -13,10 +13,11 @@
 // Protocol (postMessage):
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl,
 //              locationSearch, verifyShards?, fetchConcurrency?,
-//              shardBudgetBytes?, decodeAdmission?:{jobs,bytes,reserve},
+//              shardBudgetBytes?, shardMinAgeMs?,
+//              decodeAdmission?:{jobs,bytes,reserve},
 //              decodePressure?:{t1MB,t2MB},
 //              gfxRelief?:{enabled,subdivLevel,scale}}
-//        (the last six are the page's host flags — see handleInit)
+//        (everything after sceneryBaseUrl is the page's host flags — see handleInit)
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
@@ -90,6 +91,11 @@ async function handleInit(msg) {
   // `init_resource_source`, which sizes the cache once at connect.
   if (typeof msg.shardBudgetBytes === "number" && msg.shardBudgetBytes >= 1) {
     self.__hbShardBudgetBytes = msg.shardBudgetBytes;
+  }
+  // streaming-residency-2: the same cache's time floor (`?shardMinAgeS`). `0`
+  // is meaningful (no floor), so the test is >= 0. Unset → Rust's 120 s.
+  if (typeof msg.shardMinAgeMs === "number" && msg.shardMinAgeMs >= 0) {
+    self.__hbShardMinAgeMs = msg.shardMinAgeMs;
   }
   // Surface-budget S2: THIS instance's surface-pixel cache byte budget
   // (`?surfaceBudgetMB=`, the worker half of an `N:M` split). Unset → Rust's

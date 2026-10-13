@@ -66,11 +66,62 @@ export const WEENIE_ERROR_MESSAGES = Object.freeze({
 /// Look up an English string for `code`. Falls back to a synthetic
 /// `"WeenieError 0x????"` if `code` is unknown so the toast still has
 /// SOMETHING to display.
+/// chat-errors-2 (2026-10-13): a code retail's HandleFailureEvent
+/// (acclient.c:413716) prints delegates to the wasm `weenieErrorText` —
+/// the generated holtburger-core table the chat line uses — so the toast
+/// and the chat line say the same thing. Its `%s` slots come back as `_`,
+/// the substitution marker callers already replace. The map above stays
+/// for codes retail prints nothing for, a stale pkg/ (no export) and
+/// `?retailFailureText=off`.
 export function weenieErrorMessage(code) {
+  if (retailFailureTextEnabled()) {
+    const retail = retailWeenieErrorText(code);
+    if (retail != null) return retail;
+  }
   const msg = WEENIE_ERROR_MESSAGES[code];
   if (typeof msg === "string") return msg;
   const hex = (code >>> 0).toString(16).toUpperCase().padStart(4, "0");
   return `WeenieError 0x${hex}`;
+}
+
+/// The retail text for `code` from the wasm table (`_` in each `%s` slot),
+/// or null when the export is missing, throws, or retail has no text.
+export function retailWeenieErrorText(code) {
+  let fn;
+  try {
+    fn = globalThis.__hbWasm?.weenieErrorText;
+  } catch (_) {
+    return null;
+  }
+  if (typeof fn !== "function") return null;
+  try {
+    const text = fn((code >>> 0) || 0, "_");
+    return typeof text === "string" ? text : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// `?retailFailureText` reader — DEFAULT ON; `off` / `0` / `false` keep the
+/// map above. Same flag and spelling as the wasm chat line's reader
+/// (`chat_format::retail_failure_text_enabled`, case-sensitive). `search`
+/// defaults to the page's query string.
+export function retailFailureTextEnabled(search) {
+  let s = search;
+  if (typeof s !== "string") {
+    try {
+      s = globalThis.location?.search ?? "";
+    } catch (_) {
+      s = "";
+    }
+  }
+  try {
+    const v = new URLSearchParams(s).get("retailFailureText");
+    if (v == null) return true;
+    return !["off", "0", "false"].includes(String(v));
+  } catch (_) {
+    return true;
+  }
 }
 
 // use-3 remainder (2026-10-08 follow-ups): retail

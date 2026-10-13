@@ -1105,6 +1105,10 @@ function installSpellStrip() {
       image-rendering: pixelated; pointer-events: none;
     }
     #${STRIP_ID} .hb-ss-slot.bound .hb-ss-icon { opacity: 1; }
+    /* hud-ui-8 — the endowment cell (retail m_endowmentIcon) ahead of slot 1:
+       a .hb-ss-slot (selected ring, cast-busy sweep, drag exemption) set a
+       little apart from the bank; its icon is two background layers. */
+    #${STRIP_ID} .hb-ss-endow { margin-right: 6px; }
     #${STRIP_ID} .hb-ss-num {
       position: absolute; top: 0; left: 2px; z-index: 1;
       font: 10px var(--hbk-font, serif); line-height: 1;
@@ -1215,6 +1219,18 @@ function installSpellStrip() {
   // selecting a self spell clears the armed state.
   let selectedIdx = -1;
 
+  // hud-ui-8 — the endowment (retail m_endowmentIcon): the held caster's
+  // built-in spell, a selectable cell ahead of slot 1. Its rules live in
+  // ui/ac_spell_endowment.js, loaded lazily below; endowLib stays null with
+  // `?spellbarEndowment=off`, and every path then runs exactly as before.
+  let endowLib = null;
+  let endowment = null; // readEndowment() + spellName / label, or null
+  let endowmentSelected = false; // retail m_endowmentSelected
+  let endowDirty = true;
+  // The endowment is the live selection unless a spell was armed after it
+  // was picked (the side panel arms without touching the strip selection).
+  const endowmentActive = () => endowmentSelected && !!endowment && !armedId();
+
   function writeArmed(spellId) {
     const st = loadState();
     if ((st.armedSpellId | 0) === (spellId | 0)) return;
@@ -1228,6 +1244,7 @@ function installSpellStrip() {
     const id = (slots[idx] | 0);
     if (!id) return false;
     selectedIdx = idx;
+    endowmentSelected = false; // SpellCastSubMenu::SetSelected of a bar spell
     if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = idx;
     const meta = metaFor(id);
     const targeted = !((meta?.untargeted ?? true) === true);
@@ -1244,8 +1261,32 @@ function installSpellStrip() {
     return out;
   }
 
+  // hud-ui-8 — a click on the endowment cell (message 7) and the walks:
+  // m_endowmentSelected = 1, SetSelected(0) — no bar spell is current and
+  // nothing stays armed.
+  function selectEndowment({ silent = false } = {}) {
+    if (!endowLib || !endowment) return false;
+    endowmentSelected = true;
+    selectedIdx = -1;
+    writeArmed(0);
+    if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = -1;
+    if (!silent) setName(endowment.label);
+    render();
+    return true;
+  }
+
+  // RecvNotice_Next/Prev/First/LastSpellSelection with the endowment
+  // present: retail's walk [endowment, 0..N-1] (ui/ac_spell_endowment.js).
+  function walkWithEndowment(op) {
+    const cur = endowmentActive() ? endowLib.ENDOWMENT : selectedIdx;
+    const pick = endowLib.endowmentWalk(boundIndexes(), cur, op, true);
+    if (pick === endowLib.ENDOWMENT) selectEndowment();
+    else if (Number.isInteger(pick)) selectSlot(pick);
+  }
+
   // CombatPrevSpell / CombatNextSpell — cycle across BOUND cells, wraps.
   function selectDelta(dir) {
+    if (endowLib && endowment) { walkWithEndowment(dir > 0 ? "next" : "prev"); return; }
     const bound = boundIndexes();
     if (!bound.length) return;
     let pos = bound.indexOf(selectedIdx);
@@ -1256,14 +1297,28 @@ function installSpellStrip() {
 
   // CombatFirstSpell / CombatLastSpell.
   function selectEdge(which) {
+    if (endowLib && endowment) { walkWithEndowment(which === "last" ? "last" : "first"); return; }
     const bound = boundIndexes();
     if (!bound.length) return;
     selectSlot(which === "last" ? bound[bound.length - 1] : bound[0]);
   }
 
+  // gmSpellcastingUI::Cast with the endowment selected —
+  // ItemHolder::UseObject(item, 1, 1): UseWithTarget on the selection (ACE
+  // casts the item's SpellDID), or the 0x1A "Select your target before
+  // using the %s" line.
+  function castEndowmentNow() {
+    const tgt =
+      (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
+    const act = endowLib.castEndowment(window.__sessionHandle ?? null, endowment, { targetGuid: tgt });
+    if (act.throttled) return;
+    setName(act.reason === "noSelection" ? `${endowment.label} — select a target first` : endowment.label);
+  }
+
   // CombatCastCurrentSpell — cast the selection: self-spells cast on
   // ourselves, targeted spells fire at the selected target.
   function castCurrent() {
+    if (endowLib && endowmentActive()) { castEndowmentNow(); return; }
     const slots = getSpellBarSlots();
     const id = (slots[selectedIdx] | 0) || armedId();
     if (!id) {
@@ -1318,9 +1373,36 @@ function installSpellStrip() {
   // Hovering a cell previews its name on the name line; leaving the bank
   // restores the current selection's name (retail Spellcast_SpellName).
   function selectionName() {
+    // hud-ui-8: UpdateCastButtonTooltip's "%s (%hs)" for the endowment.
+    if (endowLib && endowmentActive()) return endowment.label;
     const id = (getSpellBarSlots()[selectedIdx] | 0) || armedId();
     return id ? (metaFor(id)?.name ?? `Spell ${id}`) : "";
   }
+
+  // hud-ui-8 — the endowment cell (retail m_endowmentIcon 0x100000B1),
+  // appended first so it sits ahead of slot 1. Click selects it (message 7),
+  // double-click casts (10), right-click examines the item (8). Hidden until
+  // a held caster with a built-in spell turns up.
+  const endowEl = document.createElement("div");
+  endowEl.className = "hbk-slot hb-ss-slot hb-ss-endow";
+  endowEl.style.display = "none";
+  const endowIcon = document.createElement("div");
+  endowIcon.className = "hb-ss-icon";
+  endowEl.appendChild(endowIcon);
+  endowEl.addEventListener("click", () => { selectEndowment(); });
+  endowEl.addEventListener("dblclick", () => {
+    if (selectEndowment({ silent: true })) castCurrent();
+  });
+  endowEl.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    if (!endowment) return;
+    try {
+      window.__showExamineFor?.(endowment.guid, { name: endowment.name, fromInventory: true });
+    } catch (_) { /* examine is best-effort */ }
+  });
+  endowEl.addEventListener("mouseenter", () => { if (endowment) setName(endowment.label); });
+  endowEl.addEventListener("mouseleave", () => setName(selectionName()));
+  slotsWrap.appendChild(endowEl);
 
   for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
     const el = document.createElement("div");
@@ -1428,6 +1510,7 @@ function installSpellStrip() {
   try {
     posCtl = attachWindowPosition(root, {
       windowId: 0x21000031,
+      obeysGlobalLock: true, // retail combat floaties read the global LockUI (ui/ui_lock.js)
       dragHandle: root,
       ignoreSelector: "button, .hb-ss-slot, .hb-ss-current",
       defaultPos: { left: "0px", right: "0px", bottom: "124px", top: "auto" },
@@ -1467,6 +1550,68 @@ function installSpellStrip() {
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
 
+  // hud-ui-8 — the endowment rules load lazily (like sneak-hud's rollup
+  // helper): a new STATIC import here would also have to be stubbed by every
+  // suite that splices this module (harness/lib/splice_module.mjs refuses an
+  // unstubbed import). `?spellbarEndowment=off` never turns the cell on.
+  import("../ui/ac_spell_endowment.js").then((m) => {
+    if (!m.spellbarEndowmentEnabled()) return;
+    endowLib = m;
+    endowDirty = true;
+    render();
+  }).catch(() => { /* module missing: the strip runs without the endowment */ });
+
+  // gmSpellcastingUI::UpdateEndowmentIcon — re-read the Held caster; with no
+  // spell selected on the open tab the endowment becomes the selection.
+  function refreshEndowment() {
+    if (!endowLib) return;
+    const h = window.__sessionHandle ?? null;
+    let next = null;
+    try { next = endowLib.readEndowment(h); } catch (_) { next = null; }
+    if (next) {
+      const sid = next.spellId;
+      next.spellName = metaFor(sid)?.name ?? endowLib.readSpellName(h, sid) ?? `Spell ${sid}`;
+      next.label = endowLib.endowmentLabel(next.name, next.spellName);
+    }
+    endowment = next;
+    if (!endowment) endowmentSelected = false;
+    else if (selectedIdx < 0 && !armedId()) endowmentSelected = true;
+  }
+
+  // Inventory / wield events mark the endowment stale; the visible poll
+  // re-reads it (wasm event boxes are read synchronously, then freed).
+  function hookEndowmentEvents() {
+    const bus = window.__pluginClient?.events;
+    if (typeof bus?.on !== "function") return false;
+    bus.on("playerInventoryChanged", () => { endowDirty = true; });
+    const onWield = (ev) => {
+      try {
+        if (endowLib?.wieldEventMarksEndowment(ev?.detail ?? ev,
+          (window.getLocalPlayerGuid?.() ?? 0) >>> 0, endowment?.guid ?? 0)) endowDirty = true;
+      } catch (_) { endowDirty = true; }
+    };
+    bus.on("kind:47", onWield);
+    bus.on("kind:49", onWield);
+    return true;
+  }
+
+  // The endowment icon: the spell composite under the item's drag icon
+  // (UpdateEndowmentIcon's Underlay / Overlay, both Blit_3Alpha), as two
+  // background layers on one element.
+  function paintEndowment(icon, endow) {
+    const m = endow?.iconMeta;
+    const key = endow ? `endow:${endow.guid}:${endow.spellId}:${m?.iconId ?? 0}:${m?.uiEffects ?? 0}:${m?.iconOverlay ?? 0}` : "";
+    if (icon.dataset.boundKey === key) return;
+    icon.dataset.boundKey = key;
+    icon.style.backgroundImage = "";
+    if (!endow) return;
+    endowLib.endowmentIconUrls(endow).then((urls) => {
+      if (icon.dataset.boundKey !== key) return;
+      const bg = endowLib.endowmentBackground(urls);
+      if (bg) icon.style.backgroundImage = bg;
+    }).catch(() => { /* cell stays dark */ });
+  }
+
   function paintIcon(icon, id) {
     const key = id ? `spell:${id}` : "";
     if (icon.dataset.boundKey === key) return;
@@ -1501,9 +1646,20 @@ function installSpellStrip() {
         : "Empty — drag a spell here from the Spellbook";
       paintIcon(iconEls[i], id);
     }
-    const curId = (slots[selectedIdx] | 0) || armed;
-    currentEl.classList.toggle("has-spell", !!curId);
-    paintIcon(currentIcon, curId);
+    // hud-ui-8: the endowment cell, and the current-spell well shows it while
+    // it is the selection.
+    const endowCur = !!endowLib && endowmentActive();
+    if (endowLib) {
+      endowEl.style.display = endowment ? "" : "none";
+      endowEl.classList.toggle("bound", !!endowment);
+      endowEl.classList.toggle("selected", endowCur);
+      endowEl.title = endowment ? endowLib.endowmentTooltip(endowment.name, endowment.spellName) : "";
+      paintEndowment(endowIcon, endowment);
+    }
+    const curId = endowCur ? 0 : ((slots[selectedIdx] | 0) || armed);
+    currentEl.classList.toggle("has-spell", endowCur || !!curId);
+    if (endowCur) paintEndowment(currentIcon, endowment);
+    else paintIcon(currentIcon, curId);
   }
 
   window.addEventListener("hb-spellbar-changed", render);
@@ -1523,6 +1679,10 @@ function installSpellStrip() {
   let lastActive = -1;
   let lastSelected = -2;
   let dockTick = 0;
+  let endowHooked = false;
+  let endowTick = 0;
+  let lastEndowKey = "";
+  let lastEndowActive = false;
   setInterval(() => {
     let on = false;
     try { on = window.__getCurrentStanceLow?.() === STANCE_MAGIC; } catch (_) {}
@@ -1556,6 +1716,31 @@ function installSpellStrip() {
         // rather than silently pointing at a different spell.
         selectedIdx = -1;
         if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = -1;
+      }
+      if (endowLib) {
+        // hud-ui-8 — UpdateEndowmentIcon on an inventory / wield event, else
+        // every ~2 s (a late PWD spell id or a missed event still lands).
+        if (!endowHooked) endowHooked = hookEndowmentEvents();
+        if (endowDirty || (++endowTick % 4) === 0) {
+          endowDirty = false;
+          refreshEndowment();
+        }
+        // An armed spell overrides the endowment; with no spell selected
+        // (e.g. after a tab change) the endowment is selected again.
+        if (a && endowmentSelected) endowmentSelected = false;
+        else if (endowment && !endowmentSelected && selectedIdx < 0 && !a) endowmentSelected = true;
+        const key = endowment
+          ? `${endowment.guid}:${endowment.spellId}:${endowment.label}:${endowmentActive() ? 1 : 0}`
+          : "";
+        if (key !== lastEndowKey) {
+          lastEndowKey = key;
+          render();
+          // Name line: the endowment as (new) selection, or cleared when the
+          // selected endowment went away — a bar pick already named itself.
+          const active = endowmentActive();
+          if (active || (lastEndowActive && !endowment)) setName(selectionName());
+          lastEndowActive = active;
+        }
       }
       if (a !== lastArmed || act !== lastActive || selectedIdx !== lastSelected) {
         lastArmed = a;
@@ -1687,17 +1872,29 @@ function renderStanceHeader(bodyEl, client) {
         } catch (_) {}
         targetMode = suggestedCombatModeFromInventory(inv);
       }
-      if (typeof handle?.setCombatMode === "function") {
-        // C8 — mirror ACE's `LastCombatMode` (Player_Combat.cs:762, stamped at
-        // REQUEST time) so the cast gate in ui/ac_cast_spell.js does not eat a
-        // cast the server would still accept during an in-flight mode change.
-        noteCombatModeRequest(targetMode);
-        handle.setCombatMode(targetMode);
-      } else if (typeof client?.player?.toggleCombatMode === "function") {
-        // Fallback for older wasm bundles without setCombatMode —
-        // toggleCombatMode now reads the hydrated CombatMode and picks
-        // the equipment-suggested mode itself (post-Wave-6.A).
-        client.player.toggleCombatMode();
+      const send = () => {
+        if (typeof handle?.setCombatMode === "function") {
+          // C8 — mirror ACE's `LastCombatMode` (Player_Combat.cs:762, stamped at
+          // REQUEST time) so the cast gate in ui/ac_cast_spell.js does not eat a
+          // cast the server would still accept during an in-flight mode change.
+          noteCombatModeRequest(targetMode);
+          handle.setCombatMode(targetMode);
+        } else if (typeof client?.player?.toggleCombatMode === "function") {
+          // Fallback for older wasm bundles without setCombatMode —
+          // toggleCombatMode now reads the hydrated CombatMode and picks
+          // the equipment-suggested mode itself (post-Wave-6.A).
+          client.player.toggleCombatMode();
+        }
+      };
+      // combat-magic-5: retail parks the change until the player is in the
+      // ready position (ClientCombatSystem::SetCombatMode :408852 / UseTime
+      // :409086), so Peace pressed mid-windup no longer fails the cast.
+      // ui/combat_mode_pending.js installs the global (this module's import
+      // list is pinned by the spliced plugin tests); ?combatModePark=off.
+      if (typeof window.__requestCombatModeChange === "function") {
+        window.__requestCombatModeChange(targetMode, send, { handle });
+      } else {
+        send();
       }
     } catch (e) {
       console.warn(`[combat-bar] setCombatMode failed: ${e?.message ?? e}`);
@@ -2155,12 +2352,34 @@ function renderAttackControls(bodyEl, state) {
       pendingResume = false;
       rafId = requestAnimationFrame(tick);
     };
-    const onDone = () => {
+    // combat-magic-2 — ACE ends every attack chain with
+    // AttackDone(ActionCancelled) "so the power / accuracy meter is reset, and
+    // doesn't start refilling again" (Player_Melee.cs OnAttackDone). When the
+    // repeat ends, retail HandleAttackDoneEvent (acclient.c:409200) drops the
+    // bar to 0.0. Only AttackDone(None), between repeat swings, shows "ready".
+    // `?attackRepeatState=off` keeps the old paint, which always showed ready.
+    // This mirrors attackRepeatStateEnabled / attackDoneMeter in
+    // ui/attack_repeat_state.js, inlined because the spliced plugin tests
+    // pin this module's import list.
+    const repeatStateOn = (() => {
+      try {
+        const v = new URLSearchParams(window.location.search).get("attackRepeatState");
+        return !(v === "off" || v === "0" || v === "false");
+      } catch (_) { return true; }
+    })();
+    const chainEnded = (error) =>
+      error != null && error !== "" && error !== "None" && error !== 0 && error !== "0";
+    const onDone = (ev) => {
       // AttackDone — power refilled, ready for next swing. Release
       // the lockout flag so picking.js will accept the next click.
       meter.classList.remove("refilling");
-      meter.classList.add("ready");
-      meterFill.style.width = "100%";
+      if (repeatStateOn && chainEnded(ev?.detail?.error)) {
+        meter.classList.remove("ready");
+        meterFill.style.width = "0%";
+      } else {
+        meter.classList.add("ready");
+        meterFill.style.width = "100%";
+      }
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
       pendingResume = false;

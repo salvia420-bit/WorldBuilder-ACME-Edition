@@ -7,6 +7,15 @@
 //! sidecar so any consuming server (Coldeve, etc.) can verify hash-match
 //! before honouring the bake.
 //!
+//! `--mode retail` instead drives
+//! [`holtburger_scenery_bake::bake_landblock_retail`], feeding it the
+//! building-ORIGIN cell mask and each model's `obj_within_block` physics
+//! shape (terrain-scenery-3), and writes `retail-building-overlaps.jsonl`:
+//! every accepted placement whose box still overlaps a building box, the
+//! spots to eye-test before Retail becomes the default. Its placements
+//! carry retail's full `Frame::set_heading` quaternion (terrain-scenery-4),
+//! and their boxes are built by that quaternion, not a yaw.
+//!
 //! See `docs/hypotheticalmethod.md` ("Base DATs only — never custom")
 //! for the determinism contract this CLI enforces.
 //!
@@ -38,10 +47,14 @@ use holtburger_common::Vector3;
 use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel, Surface};
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
+use holtburger_dat::physics::BspNode;
 use holtburger_dat::walk::read_gfx_obj_surfaces;
+use holtburger_scenery_bake::retail::land_cell_index;
 use holtburger_scenery_bake::{
-    Aabb2D, Aabb3D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock,
+    Aabb2D, Aabb3D, BakeMode, BlockSphere, PlacementXform, ScenicPlacement, WithinBlockQuery,
+    WithinBlockShape, bake_landblock, bake_landblock_retail, building_cell_mask,
     placements_fingerprint, transform_mesh_to_aabb, transform_mesh_to_aabb3,
+    transform_mesh_to_aabb3_quat,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -111,13 +124,31 @@ struct Cli {
     #[arg(long)]
     verbose: bool,
 
-    /// Bake mode. `ace-compat` (default) replays today's ACE
-    /// `Scenery.Load` bit-for-bit — triangle-plane Z + no slope check
-    /// — for 1:1 client/server agreement with an ACE-derivative server
-    /// (Coldeve etc.). `strict` is the renderer-friendly variant:
-    /// bilinear Z (matches `holtburger-world`'s player physics) and
-    /// slope rejection ON. The mode appears in `bake-source.sha256` so
-    /// downstream consumers can refuse a mode they don't expect.
+    /// Bake mode. `ace-compat` (default) replays ACE's
+    /// `Entity/Scenery.Load` port bit-for-bit — one shared frequency draw
+    /// per vertex, triangle-plane Z, no slope check. NB that port is dead
+    /// code in ACE (`Entity/Landblock.cs:197` `//LoadMeshes(objects);`);
+    /// a live ACE server places scenery with the retail rules, so
+    /// ace-compat is NOT placement-for-placement agreement with it.
+    /// `strict` is the renderer-friendly variant: bilinear Z and slope
+    /// rejection ON. `retail` (opt-in, not yet the default) follows
+    /// `acclient.c` `CLandBlock::get_land_scenes`. It scales every noise
+    /// draw by retail's exact 2^-32 (the exe float `0x2F800000`), not by
+    /// ACE's double literal. It uses the per-object frequency gate
+    /// `cellMat * (23399 + j)`, the 4-corner 5 m road band
+    /// (`CLandBlock::on_road`), strict `< 192` bounds, the building-origin
+    /// CELL test (`CSortCell::has_building`), `CheckSlope` on the walkable
+    /// terrain triangle and `CPhysicsObj::obj_within_block`, with no box
+    /// rejections (forests ACE's overlap test thinned come back denser),
+    /// and orients each object with retail's `Frame::set_heading` frame
+    /// (`ObjectDesc::GetObjFrame` / `ObjAlign`: clockwise compass heading,
+    /// `base_loc` kept when `max_rot == 0`, `align` rows facing up-slope).
+    /// It also writes `retail-building-overlaps.jsonl` (accepted
+    /// placements whose box touches a building box). Bake `retail` into a
+    /// separate `--out` dir; the shipped dist stays ace-compat until a
+    /// Retail A/B eye-test passes.
+    /// The mode appears in `bake-source.sha256` so downstream consumers
+    /// can refuse a mode they don't expect.
     #[arg(long, value_name = "MODE", default_value = "ace-compat")]
     mode: String,
 
@@ -507,16 +538,197 @@ fn placement_aabb(
 /// near hand-placed props (signs, lampposts, fences). On Holtburg
 /// approach LBs it removed up to 60% of upper-bound placements that
 /// retail would have rendered.
-fn collect_building_aabbs(
+///
+/// Each box is labelled with its `LandblockInfo.buildings` index and model
+/// id (terrain-scenery-3, for the Retail overlap report); the boxes and
+/// their order are what the unlabelled list always was (a building whose
+/// mesh can't be loaded contributes none).
+fn collect_building_boxes(
     portal: &DatDatabase,
     mesh_cache: &mut MeshCache,
     info: &LandblockInfo,
-) -> Vec<Aabb2D> {
-    let mut out: Vec<Aabb2D> = Vec::new();
-    for b in &info.buildings {
-        if let Some(a) = placement_aabb(portal, mesh_cache, b.model_id, &b.frame) {
-            out.push(a);
+) -> Vec<BuildingBox> {
+    let mut out: Vec<BuildingBox> = Vec::new();
+    for (index, b) in info.buildings.iter().enumerate() {
+        if let Some(aabb) = placement_aabb(portal, mesh_cache, b.model_id, &b.frame) {
+            out.push(BuildingBox {
+                index,
+                model_id: b.model_id,
+                aabb,
+            });
         }
+    }
+    out
+}
+
+/// One building's world-frame XY box (see [`collect_building_boxes`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BuildingBox {
+    /// Index into `LandblockInfo.buildings`.
+    index: usize,
+    model_id: u32,
+    aabb: Aabb2D,
+}
+
+/// terrain-scenery-3: the `CPhysicsObj::obj_within_block` shape of each
+/// placed model, memoised per `obj_id` for the whole run (it is a property
+/// of the model, not the placement). `None` = the model can't be loaded.
+struct ShapeCache {
+    inner: HashMap<u32, Option<WithinBlockShape>>,
+}
+
+impl ShapeCache {
+    fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> Option<&WithinBlockShape> {
+        if !self.inner.contains_key(&obj_id) {
+            let shape = load_within_block_shape(portal, obj_id);
+            self.inner.insert(obj_id, shape);
+        }
+        self.inner.get(&obj_id)?.as_ref()
+    }
+
+    /// The `within_block` closure body for [`bake_landblock_retail`]: an
+    /// unloadable model fails, as retail's `CPhysicsObj::makeObject` would
+    /// (no object, nothing placed). The mesh closure drops it too.
+    fn within_block(&mut self, portal: &DatDatabase, q: &WithinBlockQuery) -> bool {
+        match self.lookup(portal, q.obj_id) {
+            Some(shape) => shape.within_block(q),
+            None => {
+                debug!("within_block: model {:#010X} unloadable — dropped", q.obj_id);
+                false
+            }
+        }
+    }
+}
+
+/// `GfxObjFlags.HasPhysics`: the GfxObj carries a physics BSP.
+const GFXOBJ_FLAG_HAS_PHYSICS: u32 = 0x1;
+/// `SetupFlags.HasPhysicsBSP`.
+const SETUP_FLAG_HAS_PHYSICS_BSP: u32 = 0x8;
+
+/// Build a model's [`WithinBlockShape`] from the portal DAT, following the
+/// ladder of `CPhysicsObj::obj_within_block` (`acclient.c:318307`). The
+/// shapes are UNSCALED: retail tests them before `SetScaleStatic`.
+///
+/// - `0x02` Setup: `HAS_PHYSICS_BSP_PS` is "any part GfxObj has a physics
+///   BSP" (`CPartArray::CacheHasPhysicsBSP`, `acclient.c:325428`); the
+///   Setup's `HasPhysicsBSP` flag (`0x8`) agrees on every scenery Setup, so
+///   either counts. Then the Setup's own `sorting_sphere`, `cyl_spheres`
+///   (`CylSphere.origin` is retail's `low_pt`) and sphere count.
+/// - `0x01` bare GfxObj: `CSetup::makeSimpleSetup` (`acclient.c:334456`)
+///   gives it only a sorting sphere — its `physics_sphere` (the physics BSP
+///   root's sphere), else its drawing sphere — and no cylspheres/spheres,
+///   so the sorting sphere if it has a physics BSP, else the origin.
+///
+/// The ladder itself is [`WithinBlockShape::from_setup`] /
+/// [`WithinBlockShape::from_gfx_obj`]; the client's collider classifier
+/// (`apps/holtburger-web/src/lib.rs` `scenery_model_rung`) reads the same
+/// DAT fields for a different question.
+fn load_within_block_shape(portal: &DatDatabase, obj_id: u32) -> Option<WithinBlockShape> {
+    let bytes = portal.get_file(obj_id).ok()?;
+    match (obj_id >> 24) & 0xFF {
+        0x01 => {
+            let gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).ok()?;
+            let has_bsp = gfx.flags.bits() & GFXOBJ_FLAG_HAS_PHYSICS != 0
+                || gfx.physics_bsp.is_some();
+            let sorting = gfx
+                .physics_bsp
+                .as_ref()
+                .and_then(bsp_root_sphere)
+                .or_else(|| gfx.drawing_bsp.as_ref().and_then(bsp_root_sphere))
+                .unwrap_or(BlockSphere::new(Vector3::new(0.0, 0.0, 0.0), 0.0));
+            Some(WithinBlockShape::from_gfx_obj(has_bsp, sorting))
+        }
+        0x02 => {
+            let setup = SetupModel::unpack(&mut Cursor::new(&bytes)).ok()?;
+            let has_bsp = setup.flags & SETUP_FLAG_HAS_PHYSICS_BSP != 0
+                || setup
+                    .parts
+                    .iter()
+                    .any(|&part| gfx_has_physics_bsp(portal, part));
+            let sorting = BlockSphere::new(setup.sorting_sphere.center, setup.sorting_sphere.radius);
+            let cylspheres: Vec<BlockSphere> = setup
+                .cyl_spheres
+                .iter()
+                .map(|c| BlockSphere::new(c.origin, c.radius))
+                .collect();
+            Some(WithinBlockShape::from_setup(
+                has_bsp,
+                sorting,
+                &cylspheres,
+                setup.spheres.len(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// The root node's bounding sphere — retail `BSPTREE::GetSphere`
+/// (`acclient.c:360662`), which `CGfxObj` stores as `physics_sphere`.
+fn bsp_root_sphere(node: &BspNode) -> Option<BlockSphere> {
+    let sphere = match node {
+        BspNode::Port(p) => p.sphere,
+        BspNode::Leaf(l) => l.sphere,
+        BspNode::Internal(i) => i.sphere,
+    }?;
+    Some(BlockSphere::new(sphere.center, sphere.radius))
+}
+
+/// Whether part GfxObj `gfx_id` has a physics BSP, from its flags word
+/// alone (`[u32 id][u32 flags]`; the physics BSP is present iff
+/// `HasPhysics`). Unloadable parts count as no BSP.
+fn gfx_has_physics_bsp(portal: &DatDatabase, gfx_id: u32) -> bool {
+    let Ok(bytes) = portal.get_file(gfx_id) else {
+        return false;
+    };
+    match bytes.get(4..8) {
+        Some(w) => u32::from_le_bytes([w[0], w[1], w[2], w[3]]) & GFXOBJ_FLAG_HAS_PHYSICS != 0,
+        None => false,
+    }
+}
+
+/// terrain-scenery-3 eye-test guard. One JSONL line per Retail-accepted
+/// placement whose box intersects any building's box: retail clears only
+/// the building's ORIGIN cell, so a tree in a neighbouring cell may now
+/// touch the walls (ace-compat's box test dropped it). These are the spots
+/// to review on the 1070 before Retail becomes the default.
+fn retail_building_overlap_lines(
+    lb_key: u16,
+    placements: &[ScenicPlacement],
+    buildings: &[BuildingBox],
+) -> Vec<String> {
+    let landblock_id = (lb_key as u32) << 16;
+    let mut out = Vec::new();
+    for p in placements {
+        let b = p.bounds.xy();
+        let hits: Vec<String> = buildings
+            .iter()
+            .filter(|bb| b.intersects(&bb.aabb))
+            .map(|bb| format!("{{\"index\":{},\"model_id\":\"0x{:08X}\"}}", bb.index, bb.model_id))
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        let cell = match land_cell_index(landblock_id, p.x, p.y) {
+            Some((ix, iy)) => format!("[{ix},{iy}]"),
+            None => "null".to_string(),
+        };
+        out.push(format!(
+            "{{\"lb\":\"0x{:04X}\",\"stable_id\":{:?},\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"cell\":{},\"buildings\":[{}]}}",
+            lb_key,
+            p.stable_id(),
+            p.obj_id,
+            format_f32_six_sig(p.x),
+            format_f32_six_sig(p.y),
+            format_f32_six_sig(p.z),
+            cell,
+            hits.join(","),
+        ));
     }
     out
 }
@@ -942,10 +1154,20 @@ fn format_f32_six_sig(v: f32) -> String {
     format!("{:.6}", v)
 }
 
+/// What [`bake_one`] reports back for one baked landblock.
+struct LbBakeOutcome {
+    /// Placements written (for distribution reporting).
+    placements: usize,
+    /// `--mode retail` only: the [`retail_building_overlap_lines`] JSONL
+    /// lines for this landblock. Always empty in the other modes.
+    retail_building_overlaps: Vec<String>,
+}
+
 /// Bake one landblock and serialize the placements. Returns the
 /// placement count (for distribution reporting). Returns `None` if the
 /// LB's CellLandblock record isn't present in cell.dat (skipped, with
 /// a warn log).
+#[allow(clippy::too_many_arguments)]
 fn bake_one(
     region: &Region,
     portal: &DatDatabase,
@@ -953,11 +1175,12 @@ fn bake_one(
     mesh_cache: &mut MeshCache,
     scene_cache: &mut SceneCache,
     script_cache: &mut ScriptCache,
+    shape_cache: &mut ShapeCache,
     lb_key: u16,
     out_dir: &Path,
     mode: BakeMode,
     emit_bounds: bool,
-) -> Result<Option<usize>> {
+) -> Result<Option<LbBakeOutcome>> {
     let lb_word = (lb_key as u32) << 16;
     let cell_id = lb_word | 0xFFFF;
     let info_id = lb_word | 0xFFFE;
@@ -971,23 +1194,41 @@ fn bake_one(
 
     // LandblockInfo is optional — many LBs (open countryside) have no
     // buildings. Absent record = zero building AABBs.
-    let building_aabbs: Vec<Aabb2D> = match cell_db.get_file(info_id) {
+    let info: Option<LandblockInfo> = match cell_db.get_file(info_id) {
         Ok(info_bytes) => match LandblockInfo::unpack(&info_bytes) {
-            Ok(info) => collect_building_aabbs(portal, mesh_cache, &info),
+            Ok(info) => Some(info),
             Err(e) => {
                 warn!("LB 0x{lb_key:04X}: LandblockInfo {info_id:#010X} parse failed: {e}");
-                Vec::new()
+                None
             }
         },
-        Err(_) => Vec::new(),
+        Err(_) => None,
     };
+    let building_boxes: Vec<BuildingBox> = match &info {
+        Some(info) => collect_building_boxes(portal, mesh_cache, info),
+        None => Vec::new(),
+    };
+    let building_aabbs: Vec<Aabb2D> = building_boxes.iter().map(|b| b.aabb).collect();
 
     let landblock_id = lb_word;
+    // `--mode retail` (terrain-scenery-3): a building blocks only the land
+    // cell holding its ORIGIN (`CLandBlock::init_buildings`), so Retail
+    // takes the origin-cell mask instead of the boxes. Buildings only, as
+    // for the boxes.
+    let building_cells: u64 = match &info {
+        Some(info) => building_cell_mask(
+            landblock_id,
+            info.buildings
+                .iter()
+                .map(|b| (b.frame.origin.x, b.frame.origin.y)),
+        ),
+        None => 0,
+    };
     // Bake calls back through our closures + caches. Splitting the
-    // two caches lets us hold portal + cell DBs read-only inside both.
+    // caches lets us hold portal + cell DBs read-only inside each.
     let placements = {
-        // Both closures hold their own `&DatDatabase` and a `&mut` to
-        // their respective cache. The AABB closure resolves the mesh
+        // Each closure holds its own `&DatDatabase` and a `&mut` to
+        // its respective cache. The AABB closure resolves the mesh
         // and applies ACE's per-vertex transform — see
         // `placement_aabb` for the equivalent building-side helper.
         let (scene_cache_ref, mesh_cache_ref) = (scene_cache, mesh_cache);
@@ -996,27 +1237,62 @@ fn bake_one(
         // bit-identical to the 2D builder this replaced, so the
         // rejection decisions — and therefore every baked placement —
         // are unchanged; the Z extent simply stops being discarded.
+        // terrain-scenery-4: a Retail frame is not yaw-only
+        // (`Frame::set_heading` keeps the base's forward-axis pitch), so
+        // Retail turns the mesh by the full quaternion the placement ships
+        // with. AceCompat / Strict keep the yaw builder, bit for bit.
         let compute_world_aabb = |px: PlacementXform| -> Option<Aabb3D> {
             let verts = mesh_cache_ref.lookup(portal, px.obj_id)?;
-            Some(transform_mesh_to_aabb3(
-                verts,
-                px.lx,
-                px.ly,
-                px.lz,
-                px.rotation_rad,
-                px.scale,
-            ))
+            Some(match mode {
+                BakeMode::Retail => transform_mesh_to_aabb3_quat(
+                    verts,
+                    px.lx,
+                    px.ly,
+                    px.lz,
+                    px.orientation(),
+                    px.scale,
+                ),
+                BakeMode::AceCompat | BakeMode::Strict => transform_mesh_to_aabb3(
+                    verts,
+                    px.lx,
+                    px.ly,
+                    px.lz,
+                    px.rotation_rad,
+                    px.scale,
+                ),
+            })
         };
 
-        bake_landblock(
-            region,
-            &cell_landblock,
-            landblock_id,
-            fetch_scene,
-            compute_world_aabb,
-            &building_aabbs,
-            mode,
-        )
+        match mode {
+            // Retail: the origin-cell mask and `obj_within_block` on each
+            // model's unscaled physics shape; the boxes are only shipped.
+            BakeMode::Retail => {
+                let within_block =
+                    |q: WithinBlockQuery| -> bool { shape_cache.within_block(portal, &q) };
+                bake_landblock_retail(
+                    region,
+                    &cell_landblock,
+                    landblock_id,
+                    fetch_scene,
+                    compute_world_aabb,
+                    building_cells,
+                    within_block,
+                )
+            }
+            BakeMode::AceCompat | BakeMode::Strict => bake_landblock(
+                region,
+                &cell_landblock,
+                landblock_id,
+                fetch_scene,
+                compute_world_aabb,
+                &building_aabbs,
+                mode,
+            ),
+        }
+    };
+    let retail_building_overlaps = match mode {
+        BakeMode::Retail => retail_building_overlap_lines(lb_key, &placements, &building_boxes),
+        BakeMode::AceCompat | BakeMode::Strict => Vec::new(),
     };
 
     // Emit JSONL — one line per placement. Empty file (0 placements)
@@ -1082,8 +1358,18 @@ fn bake_one(
         building_aabbs.len(),
         out_path.display()
     );
+    if !retail_building_overlaps.is_empty() {
+        debug!(
+            "LB 0x{lb_key:04X}: {} retail placements overlap a building box ({} building cells)",
+            retail_building_overlaps.len(),
+            building_cells.count_ones()
+        );
+    }
 
-    Ok(Some(placements.len()))
+    Ok(Some(LbBakeOutcome {
+        placements: placements.len(),
+        retail_building_overlaps,
+    }))
 }
 
 /// Compute distribution summary {min, p50 (median), max, total,
@@ -1161,8 +1447,25 @@ fn main() -> Result<()> {
     // V1 (2026-05-29) — `default_script` DID resolution, memoised per
     // placement obj_id across the whole bake run.
     let mut script_cache = ScriptCache::new();
+    // terrain-scenery-3 — `obj_within_block` shapes, memoised per model
+    // (only consulted by `--mode retail`).
+    let mut shape_cache = ShapeCache::new();
     let mut counts: Vec<usize> = Vec::with_capacity(landblocks.len());
     let mut skipped: usize = 0;
+
+    // terrain-scenery-3 eye-test guard: `--mode retail` lists every
+    // accepted placement whose box overlaps a building box. Not a
+    // `*.scenery.jsonl`, so no scenery consumer picks it up.
+    let overlaps_path = cli.out.join(RETAIL_BUILDING_OVERLAPS_FILE);
+    let mut overlaps_out: Option<BufWriter<File>> = match mode {
+        BakeMode::Retail => Some(BufWriter::new(
+            File::create(&overlaps_path)
+                .with_context(|| format!("create {}", overlaps_path.display()))?,
+        )),
+        BakeMode::AceCompat | BakeMode::Strict => None,
+    };
+    let mut overlap_count: usize = 0;
+    let mut overlap_lbs: usize = 0;
 
     for (i, &lb_key) in landblocks.iter().enumerate() {
         match bake_one(
@@ -1172,12 +1475,24 @@ fn main() -> Result<()> {
             &mut mesh_cache,
             &mut scene_cache,
             &mut script_cache,
+            &mut shape_cache,
             lb_key,
             &cli.out,
             mode,
             !cli.no_bounds,
         )? {
-            Some(n) => counts.push(n),
+            Some(outcome) => {
+                counts.push(outcome.placements);
+                if let Some(w) = overlaps_out.as_mut() {
+                    for line in &outcome.retail_building_overlaps {
+                        writeln!(w, "{line}")?;
+                    }
+                }
+                if !outcome.retail_building_overlaps.is_empty() {
+                    overlap_count += outcome.retail_building_overlaps.len();
+                    overlap_lbs += 1;
+                }
+            }
             None => skipped += 1,
         }
         if cli.throttle_ms > 0 {
@@ -1224,8 +1539,20 @@ fn main() -> Result<()> {
         eprintln!("scenery-bake done: 0 LBs baked, {skipped} skipped");
     }
 
+    if let Some(mut w) = overlaps_out {
+        w.flush()
+            .with_context(|| format!("flush {}", overlaps_path.display()))?;
+        eprintln!(
+            "scenery-bake retail: {overlap_count} placements in {overlap_lbs} LBs overlap a building box (retail clears only the origin cell) → {}",
+            overlaps_path.display()
+        );
+    }
+
     Ok(())
 }
+
+/// File name of the `--mode retail` building-overlap report in `--out`.
+const RETAIL_BUILDING_OVERLAPS_FILE: &str = "retail-building-overlaps.jsonl";
 
 /// Render the `bake-source.sha256` body. Fixed-field layout so any
 /// consuming server (Coldeve, retail emu, etc.) can parse it
@@ -1830,6 +2157,40 @@ mod tests {
         assert!(bad.is_err());
     }
 
+    /// terrain-scenery-1: `--mode retail` parses and labels the sidecar,
+    /// and the CLI default is still `ace-compat`.
+    #[test]
+    fn bake_mode_retail_parses_and_labels_manifest() {
+        let rt: BakeMode = "retail".parse().unwrap();
+        assert_eq!(rt, BakeMode::Retail);
+        let m = format_manifest(
+            &"0".repeat(64),
+            &"0".repeat(64),
+            &"0".repeat(64),
+            0x13000000,
+            1,
+            0,
+            BakeMode::Retail,
+            true,
+        );
+        assert!(m.contains("bake-mode\tretail"));
+        assert_eq!(m.lines().count(), 8);
+        // Default stays ace-compat (no flag → no shipped-dist change).
+        let cli = Cli::try_parse_from([
+            "scenery-bake",
+            "--dat-dir",
+            "/nonexistent",
+            "--landblocks",
+            "0xA9B4",
+            "--out",
+            "/nonexistent-out",
+        ])
+        .unwrap();
+        assert_eq!(cli.mode, "ace-compat");
+        let parsed: BakeMode = cli.mode.parse().unwrap();
+        assert_eq!(parsed, BakeMode::AceCompat);
+    }
+
     #[test]
     fn modder_allocated_filter_rejects_modder_range() {
         // Top byte in content-prefix range AND second byte == 0xFF.
@@ -2258,5 +2619,226 @@ mod tests {
             fp,
             "a single mutated coordinate must change the freeze hash"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // terrain-scenery-3 — `--mode retail` inputs: the `obj_within_block`
+    // shape ladder over real DAT records, and the building-overlap report.
+    // -----------------------------------------------------------------
+
+    /// SetupModel with the physics fields set (flags must not carry 0x1 /
+    /// 0x2, which would add per-part arrays this builder does not write).
+    fn build_shape_setup(
+        id: u32,
+        flags: u32,
+        parts: &[u32],
+        cyls: &[(Vector3, f32, f32)],
+        spheres: &[(Vector3, f32)],
+        sorting: (Vector3, f32),
+    ) -> Vec<u8> {
+        assert_eq!(flags & 0x3, 0, "builder writes no parent/default-scale arrays");
+        let v3 = |buf: &mut Vec<u8>, v: Vector3| {
+            buf.extend_from_slice(&v.x.to_le_bytes());
+            buf.extend_from_slice(&v.y.to_le_bytes());
+            buf.extend_from_slice(&v.z.to_le_bytes());
+        };
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&flags.to_le_bytes());
+        buf.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+        for &p in parts {
+            buf.extend_from_slice(&p.to_le_bytes());
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_holding
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_conn
+        buf.extend_from_slice(&0i32.to_le_bytes()); // num_placements
+        buf.extend_from_slice(&(cyls.len() as u32).to_le_bytes());
+        for &(origin, radius, height) in cyls {
+            v3(&mut buf, origin);
+            buf.extend_from_slice(&radius.to_le_bytes());
+            buf.extend_from_slice(&height.to_le_bytes());
+        }
+        buf.extend_from_slice(&(spheres.len() as u32).to_le_bytes());
+        for &(center, radius) in spheres {
+            v3(&mut buf, center);
+            buf.extend_from_slice(&radius.to_le_bytes());
+        }
+        for _ in 0..4 {
+            buf.extend_from_slice(&0f32.to_le_bytes()); // height, radius, step_up, step_down
+        }
+        v3(&mut buf, sorting.0);
+        buf.extend_from_slice(&sorting.1.to_le_bytes());
+        for _ in 0..4 {
+            buf.extend_from_slice(&0f32.to_le_bytes()); // selection sphere
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_lights
+        for _ in 0..5 {
+            buf.extend_from_slice(&0u32.to_le_bytes()); // 5 optional resource ids
+        }
+        buf
+    }
+
+    /// A complete GfxObj record (`GfxObj::pack`), with a one-leaf physics
+    /// BSP whose sphere is `physics_sphere` when given.
+    fn build_shape_gfx_obj(id: u32, physics_sphere: Option<(Vector3, f32)>) -> Vec<u8> {
+        use holtburger_common::properties::GfxObjFlags;
+        use holtburger_dat::graphics::CVertexArray;
+        use holtburger_dat::physics::BspLeaf;
+        let physics_bsp = physics_sphere.map(|(center, radius)| {
+            BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 1,
+                sphere: Some(holtburger_common::Sphere { center, radius }),
+                poly_ids: vec![],
+            })
+        });
+        let gfx = GfxObj {
+            id,
+            flags: if physics_bsp.is_some() {
+                GfxObjFlags::HAS_PHYSICS
+            } else {
+                GfxObjFlags::NONE
+            },
+            surfaces: vec![],
+            vertex_array: CVertexArray::new(),
+            physics_polygons: HashMap::new(),
+            physics_bsp,
+            sort_center: Vector3::new(0.0, 0.0, 0.0),
+            polygons: HashMap::new(),
+            drawing_bsp: None,
+            did_degrade: None,
+        };
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        gfx.pack(&mut cursor).expect("pack GfxObj");
+        cursor.into_inner()
+    }
+
+    fn block_sphere(x: f32, y: f32, z: f32, r: f32) -> BlockSphere {
+        BlockSphere::new(Vector3::new(x, y, z), r)
+    }
+
+    /// `load_within_block_shape` walks `obj_within_block`'s ladder over
+    /// real records: BSP (by flag or by a part's physics BSP) → sorting
+    /// sphere, else every cylsphere, else spheres → sorting sphere, else
+    /// the origin; a bare GfxObj is its physics BSP root sphere or the
+    /// origin; an unknown id is unloadable.
+    #[test]
+    fn within_block_shape_ladder_over_dat_records() {
+        const GFX_PHYS: u32 = 0x0100_0A01;
+        const GFX_PLAIN: u32 = 0x0100_0A02;
+        const SETUP_BSP_FLAG: u32 = 0x0200_0B01;
+        const SETUP_CYL: u32 = 0x0200_0B02;
+        const SETUP_SPHERES: u32 = 0x0200_0B03;
+        const SETUP_NONE: u32 = 0x0200_0B04;
+        const SETUP_BSP_PART: u32 = 0x0200_0B05;
+        let sorting = (Vector3::new(0.0, 0.5, 1.5), 2.25f32);
+        let cyls = [
+            (Vector3::new(1.0, 0.0, 0.0), 1.2f32, 3.0f32),
+            (Vector3::new(-0.5, 0.25, 0.0), 0.75, 2.0),
+        ];
+        let sph = [(Vector3::new(0.0, 0.0, 1.0), 0.5f32)];
+        let records = vec![
+            (GFX_PHYS, build_shape_gfx_obj(GFX_PHYS, Some((Vector3::new(0.25, 0.0, 2.0), 3.5)))),
+            (GFX_PLAIN, build_shape_gfx_obj(GFX_PLAIN, None)),
+            (
+                SETUP_BSP_FLAG,
+                build_shape_setup(SETUP_BSP_FLAG, 0x8, &[GFX_PLAIN], &cyls, &sph, sorting),
+            ),
+            (SETUP_CYL, build_shape_setup(SETUP_CYL, 0, &[GFX_PLAIN], &cyls, &sph, sorting)),
+            (SETUP_SPHERES, build_shape_setup(SETUP_SPHERES, 0, &[GFX_PLAIN], &[], &sph, sorting)),
+            (SETUP_NONE, build_shape_setup(SETUP_NONE, 0, &[GFX_PLAIN], &[], &[], sorting)),
+            (SETUP_BSP_PART, build_shape_setup(SETUP_BSP_PART, 0, &[GFX_PHYS], &cyls, &[], sorting)),
+        ];
+        let (db, _dir) = open_fixture_dat(&records);
+        let s = block_sphere(0.0, 0.5, 1.5, 2.25);
+
+        assert_eq!(
+            load_within_block_shape(&db, GFX_PHYS),
+            Some(WithinBlockShape::SortingSphere(block_sphere(0.25, 0.0, 2.0, 3.5)))
+        );
+        assert_eq!(load_within_block_shape(&db, GFX_PLAIN), Some(WithinBlockShape::Origin));
+        assert_eq!(
+            load_within_block_shape(&db, SETUP_BSP_FLAG),
+            Some(WithinBlockShape::SortingSphere(s)),
+            "HasPhysicsBSP short-circuits the cylspheres"
+        );
+        assert_eq!(
+            load_within_block_shape(&db, SETUP_CYL),
+            Some(WithinBlockShape::CylSpheres(vec![
+                block_sphere(1.0, 0.0, 0.0, 1.2),
+                block_sphere(-0.5, 0.25, 0.0, 0.75),
+            ]))
+        );
+        assert_eq!(
+            load_within_block_shape(&db, SETUP_SPHERES),
+            Some(WithinBlockShape::SortingSphere(s)),
+            "spheres are tested by the sorting sphere"
+        );
+        assert_eq!(load_within_block_shape(&db, SETUP_NONE), Some(WithinBlockShape::Origin));
+        assert_eq!(
+            load_within_block_shape(&db, SETUP_BSP_PART),
+            Some(WithinBlockShape::SortingSphere(s)),
+            "a part GfxObj with a physics BSP sets HAS_PHYSICS_BSP without the flag"
+        );
+        assert_eq!(load_within_block_shape(&db, 0x0200_0FFF), None);
+
+        // Through the cache, as the Retail closure calls it: an unloadable
+        // model fails within_block (retail's makeObject would fail).
+        let mut cache = ShapeCache::new();
+        let q = |obj_id: u32, x: f32| WithinBlockQuery {
+            obj_id,
+            x,
+            y: 50.0,
+            z: 0.0,
+            qw: 1.0,
+            qx: 0.0,
+            qy: 0.0,
+            qz: 0.0,
+        };
+        assert!(!cache.within_block(&db, &q(SETUP_CYL, 0.1))); // low pt x 1.1 < 1.2
+        assert!(cache.within_block(&db, &q(SETUP_CYL, 5.0)));
+        assert!(!cache.within_block(&db, &q(GFX_PHYS, 3.0))); // centre x 3.25 < 3.5
+        assert!(cache.within_block(&db, &q(GFX_PHYS, 3.5)));
+        assert!(cache.within_block(&db, &q(SETUP_NONE, 0.0)));
+        assert!(!cache.within_block(&db, &q(0x0200_0FFF, 50.0)));
+    }
+
+    /// The Retail overlap report lists exactly the placements whose box
+    /// touches a building box, with the building's index and model id and
+    /// the placement's land cell.
+    #[test]
+    fn retail_building_overlap_lines_list_only_overlapping_placements() {
+        let mut near = mk_placement(0x0200_0001);
+        near.x = 50.0;
+        near.y = 30.0;
+        near.bounds = Aabb3D::new(46.0, 26.0, 0.0, 54.0, 34.0, 8.0);
+        near.identity.landblock_id = 0xA9B4_0000;
+        let mut far = mk_placement(0x0200_0002);
+        far.x = 150.0;
+        far.y = 150.0;
+        far.bounds = Aabb3D::new(147.0, 147.0, 0.0, 153.0, 153.0, 8.0);
+        let buildings = [
+            BuildingBox {
+                index: 0,
+                model_id: 0x0100_1234,
+                aabb: Aabb2D::new(20.0, 20.0, 47.0, 40.0),
+            },
+            BuildingBox {
+                index: 2,
+                model_id: 0x0100_5678,
+                aabb: Aabb2D::new(100.0, 0.0, 120.0, 10.0),
+            },
+        ];
+        let lines = retail_building_overlap_lines(0xA9B4, &[near, far], &buildings);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = &lines[0];
+        assert!(line.starts_with("{\"lb\":\"0xA9B4\",\"stable_id\":\"landblock-static/a9b40000/"));
+        assert!(line.contains("\"obj_id\":\"0x02000001\""));
+        assert!(line.contains("\"cell\":[2,1]"));
+        assert!(line.contains("\"buildings\":[{\"index\":0,\"model_id\":\"0x01001234\"}]"));
+        assert!(line.ends_with('}'));
+        assert!(!line.contains('\n'));
+        assert!(retail_building_overlap_lines(0xA9B4, &[far], &buildings).is_empty());
+        assert!(retail_building_overlap_lines(0xA9B4, &[near], &[]).is_empty());
     }
 }

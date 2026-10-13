@@ -1051,61 +1051,54 @@ fn position_pack_byte_identical_cursor_advance_vs_handwritten() {
     }
 }
 
-// Reach the `$OUT_DIR` directory that build.rs writes into. The integration
-// test crate doesn't know the path directly, so we re-derive it from the
-// `OUT_DIR` env-var captured at test-binary compile time.
+// Reach the `$OUT_DIR` directory that build.rs writes into. `OUT_DIR` is only
+// set for the crate whose build.rs ran, so the protocol crate exports the
+// exact path its `include!()` resolved (`GENERATED_RS_PATH`): the file this
+// test binary was compiled against, under any target dir name, symlink or
+// profile. (test-tooling-1: the old locator walked `current_exe()` up to a
+// directory literally named `target` and hardcoded `debug/build/`, so under a
+// symlinked target dir — the exe path is canonical — 5 of these tests failed.)
 fn env_out_dir_for_holtburger_protocol() -> String {
-    // `OUT_DIR` is only set for the *crate* whose build.rs ran. For an
-    // integration test, the test binary has its OWN `OUT_DIR`; the protocol
-    // crate's OUT_DIR sits one parent directory above. Walk up from the
-    // current test executable's compile-time `OUT_DIR` (re-emitted by
-    // build.rs of the holtburger-protocol crate itself, captured via
-    // `holtburger_protocol::generated`'s `include!()` macro which already
-    // resolved to the path). The clean reachable hook: `generated`'s source
-    // is in `$OUT_DIR/messages_generated.rs`; we can list candidate paths
-    // under `target/**/build/holtburger-protocol-*/out/` and pick the
-    // newest, which is the one this test was compiled against.
-    use std::fs;
-    use std::path::PathBuf;
-    let target_dir = locate_workspace_target_dir().expect("could not locate workspace target dir");
-    let candidates: Vec<PathBuf> = std::fs::read_dir(target_dir.join("debug").join("build"))
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("holtburger-protocol-"))
-        })
-        .filter(|p| p.join("out").join("messages_generated.rs").is_file())
-        .collect();
+    let gen_path = std::path::Path::new(holtburger_protocol::GENERATED_RS_PATH);
     assert!(
-        !candidates.is_empty(),
-        "no holtburger-protocol build dir found under {}/debug/build/",
-        target_dir.display()
+        gen_path.is_file(),
+        "holtburger_protocol::GENERATED_RS_PATH is not a file: {}",
+        gen_path.display()
     );
-    let newest = candidates.iter()
-        .max_by_key(|p| {
-            fs::metadata(p.join("out").join("messages_generated.rs"))
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        })
-        .unwrap();
-    newest.join("out").to_string_lossy().to_string()
+    gen_path
+        .parent()
+        .expect("GENERATED_RS_PATH has a parent directory")
+        .to_string_lossy()
+        .to_string()
 }
 
-fn locate_workspace_target_dir() -> Option<std::path::PathBuf> {
-    // The integration-test binary lives at `target/debug/deps/generated_parity-…`;
-    // walk up to find the `target` dir.
-    let exe = std::env::current_exe().ok()?;
-    let mut p = exe.as_path();
-    while let Some(parent) = p.parent() {
-        if parent.file_name().and_then(|n| n.to_str()) == Some("target") {
-            return Some(parent.to_path_buf());
-        }
-        p = parent;
-    }
-    None
+/// test-tooling-1: the exported path is the codegen output `generated`
+/// `include!()`s — absolute, named `messages_generated.rs`, and declaring the
+/// items this suite reads back as source text — and the `$OUT_DIR` helper
+/// the source-text tests use resolves to its directory.
+#[test]
+fn generated_rs_path_is_the_included_build_output() {
+    let gen_path = std::path::Path::new(holtburger_protocol::GENERATED_RS_PATH);
+    assert!(gen_path.is_absolute(), "GENERATED_RS_PATH is not absolute: {}", gen_path.display());
+    assert_eq!(
+        gen_path.file_name().and_then(|n| n.to_str()),
+        Some("messages_generated.rs")
+    );
+    let body = std::fs::read_to_string(gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    assert!(body.contains("pub const OPCODE_INDEX"), "no OPCODE_INDEX in {}", gen_path.display());
+    assert!(
+        body.contains("pub struct C2S_Login_SendEnterWorld"),
+        "no C2S_Login_SendEnterWorld in {}",
+        gen_path.display()
+    );
+    // The compiled-in table and the file on disk are the same build output.
+    assert!(!generated::OPCODE_INDEX.is_empty());
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    assert_eq!(
+        std::path::Path::new(&out_dir).join("messages_generated.rs"),
+        gen_path
+    );
 }
 
 // ===== J3.D — `<switch>` discriminated-union + `<table>` Dictionary<K,V> =====

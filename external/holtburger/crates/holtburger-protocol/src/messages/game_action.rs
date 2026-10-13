@@ -12,6 +12,7 @@ pub use crate::messages::movement::actions::*;
 pub use crate::messages::object::actions::*;
 pub use crate::messages::player::actions::*;
 pub use crate::messages::trade::actions::*;
+pub use crate::messages::ui_events::actions::*;
 
 use crate::opcodes::GameActionOpcode;
 use crate::traits::{ProtocolPack, ProtocolUnpack};
@@ -101,6 +102,11 @@ pub enum GameAction {
     TeleToMarketPlace(Box<TeleToMarketPlaceActionData>),
     TeleToMansion(Box<TeleToMansionActionData>),
     Suicide(Box<SuicideActionData>),
+    /// chat-errors-8 (2026-10-13): C2S `Character_QueryAge` (0x01C2):
+    /// `u32 target` (0 for a player).
+    QueryAge(Box<QueryAgeActionData>),
+    /// chat-errors-8: C2S `Character_QueryBirth` (0x01C4): `u32 target` (0).
+    QueryBirth(Box<QueryBirthActionData>),
     EnterPkLite(Box<EnterPkLiteActionData>),
     RaiseAttribute(Box<RaiseAttributeActionData>),
     RaiseVital(Box<RaiseVitalActionData>),
@@ -113,6 +119,15 @@ pub enum GameAction {
     CastTargetedSpell(Box<CastTargetedSpellActionData>),
     CastUntargetedSpell(Box<CastUntargetedSpellActionData>),
     RemoveSpellFromBook(Box<RemoveSpellFromBookActionData>),
+    /// input-options-2 (2026-10-13): C2S `Character_AddSpellFavorite`
+    /// (0x01E3): `u32 spell, u32 index, u32 list`.
+    AddSpellFavorite(Box<AddSpellFavoriteActionData>),
+    /// input-options-2: C2S `Character_RemoveSpellFavorite` (0x01E4):
+    /// `u32 spell, u32 list`.
+    RemoveSpellFavorite(Box<RemoveSpellFavoriteActionData>),
+    /// input-options-2: C2S `Character_SpellbookFilterEvent` (0x0286):
+    /// `u32 filters`.
+    SpellbookFilter(Box<SpellbookFilterActionData>),
     ChangeCombatMode(Box<ChangeCombatModeActionData>),
     CancelAttack(Box<CancelAttackActionData>),
     Buy(Box<BuyActionData>),
@@ -138,6 +153,10 @@ pub enum GameAction {
     /// `SendClientContractTracker` with `DeleteContract=true`. Opcode
     /// `AbandonContract = 0x0316`.
     AbandonContract(Box<AbandonContractActionData>),
+    /// maps-chargen-barber-1 (2026-10-13): C2S `Character_FinishBarber`
+    /// (0x0311) — the barber page's Apply. Body = the 16 u32 of
+    /// `GameEventStartBarber` (`FinishBarberActionData`).
+    FinishBarber(Box<FinishBarberActionData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -362,6 +381,12 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::Suicide => {
                     GameAction::Suicide(Box::new(SuicideActionData::unpack(data, offset)?))
                 }
+                GameActionOpcode::QueryAge => {
+                    GameAction::QueryAge(Box::new(QueryAgeActionData::unpack(data, offset)?))
+                }
+                GameActionOpcode::QueryBirth => GameAction::QueryBirth(Box::new(
+                    QueryBirthActionData::unpack(data, offset)?,
+                )),
                 GameActionOpcode::EnterPkLite => {
                     GameAction::EnterPkLite(Box::new(EnterPkLiteActionData::unpack(data, offset)?))
                 }
@@ -394,6 +419,15 @@ impl ProtocolUnpack for GameActionMessage {
                 )),
                 GameActionOpcode::RemoveSpellFromBook => GameAction::RemoveSpellFromBook(Box::new(
                     RemoveSpellFromBookActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::AddSpellFavorite => GameAction::AddSpellFavorite(Box::new(
+                    AddSpellFavoriteActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RemoveSpellFavorite => GameAction::RemoveSpellFavorite(Box::new(
+                    RemoveSpellFavoriteActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::SpellbookFilter => GameAction::SpellbookFilter(Box::new(
+                    SpellbookFilterActionData::unpack(data, offset)?,
                 )),
                 GameActionOpcode::CastUntargetedSpell => GameAction::CastUntargetedSpell(Box::new(
                     CastUntargetedSpellActionData::unpack(data, offset)?,
@@ -454,6 +488,9 @@ impl ProtocolUnpack for GameActionMessage {
                 }
                 GameActionOpcode::AbandonContract => GameAction::AbandonContract(Box::new(
                     AbandonContractActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::FinishBarber => GameAction::FinishBarber(Box::new(
+                    FinishBarberActionData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -815,6 +852,16 @@ impl ProtocolPack for GameActionMessage {
                     .unwrap();
                 data.pack(buf);
             }
+            GameAction::QueryAge(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::QueryAge as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::QueryBirth(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::QueryBirth as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
             GameAction::EnterPkLite(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::EnterPkLite as u32)
                     .unwrap();
@@ -872,6 +919,21 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::RemoveSpellFromBook(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveSpellFromBook as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AddSpellFavorite(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AddSpellFavorite as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveSpellFavorite(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveSpellFavorite as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::SpellbookFilter(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::SpellbookFilter as u32)
                     .unwrap();
                 data.pack(buf);
             }
@@ -967,6 +1029,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::AbandonContract(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::AbandonContract as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::FinishBarber(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::FinishBarber as u32)
                     .unwrap();
                 data.pack(buf);
             }

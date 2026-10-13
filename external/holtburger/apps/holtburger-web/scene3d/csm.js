@@ -384,6 +384,18 @@ export function invalidateCsm(csmState) {
 }
 
 /**
+ * The vertical fov (degrees) the cascades fit: `camera.fov`, unless the
+ * camera carries `userData.csmFitFov`. portal_space.js `?portalFovFade`
+ * (cells-portals-3) parks the game fov there while its 1 s WORLD_FADEIN zoom
+ * widens `camera.fov` toward 179°, so the cascades keep the game frustum
+ * instead of stretching over the zoom. Unset (every other frame): camera.fov.
+ */
+function _fitFov(camera) {
+  const f = camera.userData ? camera.userData.csmFitFov : undefined;
+  return typeof f === "number" && f > 0 && f < 180 ? f : camera.fov;
+}
+
+/**
  * Per-frame: recompute each cascade's shadow camera frustum to tightly
  * fit the camera's view-frustum sub-slice between consecutive cascade
  * splits. Mirrors the standard CSM recipe from learnopengl.com
@@ -465,8 +477,9 @@ export function updateCsm(csmState, camera, sunDir) {
   // Projection parameters feed the sub-frustum shape directly (resize, retail
   // zoom): compare exactly — they only move on discrete events, so there is
   // no threshold to tune and no drift to accumulate.
+  const fitFov = _fitFov(camera);
   const projChanged =
-    camera.fov !== csmState._lastCamFov ||
+    fitFov !== csmState._lastCamFov ||
     camera.aspect !== csmState._lastCamAspect ||
     camera.near !== csmState._lastCamNear ||
     camera.zoom !== csmState._lastCamZoom;
@@ -525,7 +538,7 @@ export function updateCsm(csmState, camera, sunDir) {
   csmState._lastCamFX = me[8];
   csmState._lastCamFY = me[9];
   csmState._lastCamFZ = me[10];
-  csmState._lastCamFov = camera.fov;
+  csmState._lastCamFov = fitFov;
   csmState._lastCamAspect = camera.aspect;
   csmState._lastCamNear = camera.near;
   csmState._lastCamZoom = camera.zoom;
@@ -772,7 +785,7 @@ function _frustumCornersWorld(camera, near, far, out) {
   //   zoom = camera.zoom (default 1)
   // makePerspective(left, right, top, bottom, near, far) — matches
   // three.js's PerspectiveCamera.updateProjectionMatrix.
-  const top = near * Math.tan((camera.fov * 0.5 * Math.PI) / 180) / camera.zoom;
+  const top = near * Math.tan((_fitFov(camera) * 0.5 * Math.PI) / 180) / camera.zoom;
   const height = 2 * top;
   const width = camera.aspect * height;
   const left = -0.5 * width;

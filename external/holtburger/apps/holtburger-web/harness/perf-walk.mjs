@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { PLAYWRIGHT_CACHE } from "./lib/boot.mjs";
+import { acquireHeavyLock } from "./lib/heavy_lock.mjs";
 // P5.5 — no "walk" conclusion without proof the player moved. See
 // lib/movement_gate.mjs for the standing rule and its provenance.
 import { movementGate } from "./lib/movement_gate.mjs";
@@ -89,6 +90,9 @@ const pctile = (arr, p) => {
 async function main() {
   console.log(`[perf-walk] ${DURATION_S}s walk, all unified-pipeline flags ON, REAL render (software GL).`);
   console.log(`[perf-walk] scratch=${SCRATCH}`);
+  // One heavy job per machine (~/CLAUDE.md): a real-render SwiftShader
+  // Chromium is the heaviest thing this harness starts.
+  await acquireHeavyLock({ label: `perf-walk ${DURATION_S}s` });
   const chromium = loadChromium();
   const browser = await chromium.launch({
     headless: !HEADED,

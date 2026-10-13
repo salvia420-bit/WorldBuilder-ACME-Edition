@@ -30,6 +30,36 @@
 // belt-and-suspenders fallback. `sendKeepalive` is idempotent and
 // server-side-gated (a no-op unless InWorld/EnteringWorld), so both firing
 // is harmless. Default-ON; opt out with `?keepaliveWorker=0` (or off/false).
+//
+// app-loop-4 (2026-10-13): the same worker also posts a 250 ms {type:'beat'}
+// (KEEPALIVE_BEAT_MS), delivered to ONE subscriber registered with
+// `onKeepaliveBeat(cb)` — scene3d/index.js's net watchdog, which re-drives
+// the page net/movement pump through scene3d/net_pump_gate.js when rAF has
+// stopped (a hidden tab's main-thread timers drop to ~1/min after ~5 min, and
+// a ~60 s movement dt is dropped as > HUGE_QUANTUM). No worker
+// (`?keepaliveWorker=0`, no Worker support) = no beat; the watchdog's own
+// 500 ms interval remains.
+
+/** Cadence of the worker's pump beat (separate from the 2 s keepalive tick). */
+export const KEEPALIVE_BEAT_MS = 250;
+
+let _beatCb = null;
+
+/**
+ * Register the single beat subscriber (replaces any previous one). Called on
+ * the main thread for every worker 'beat'; wrapped in try/catch here. Returns
+ * an unsubscribe function that clears it only if it is still the current one.
+ *
+ * @param {(() => void) | null} cb
+ * @returns {() => void}
+ */
+export function onKeepaliveBeat(cb) {
+  const fn = typeof cb === "function" ? cb : null;
+  _beatCb = fn;
+  return () => {
+    if (_beatCb === fn) _beatCb = null;
+  };
+}
 
 function urlFlagEnabled() {
   try {
@@ -55,9 +85,10 @@ let _started = false;
  *
  * @param {() => void} onTick
  * @param {number} [intervalMs=2000]
+ * @param {number} [beatMs=KEEPALIVE_BEAT_MS]  pump-beat cadence; 0 = no beat
  * @returns {boolean}
  */
-export function startKeepaliveWorker(onTick, intervalMs = 2000) {
+export function startKeepaliveWorker(onTick, intervalMs = 2000, beatMs = KEEPALIVE_BEAT_MS) {
   if (_started) return false; // already running for this page lifetime
   if (!urlFlagEnabled()) return false;
   if (typeof Worker === "undefined") return false; // no worker support → fallback
@@ -65,11 +96,21 @@ export function startKeepaliveWorker(onTick, intervalMs = 2000) {
     // Resolve against THIS module's URL (scene3d/), matching bake_worker.
     _worker = new Worker(new URL("./keepalive_worker.js", import.meta.url));
     _worker.onmessage = (ev) => {
-      if (ev && ev.data && ev.data.type === "tick") {
+      const type = ev && ev.data && ev.data.type;
+      if (type === "tick") {
         try {
           onTick();
         } catch (_) {
           /* a dead/replaced handle must never break the heartbeat */
+        }
+      } else if (type === "beat") {
+        const cb = _beatCb;
+        if (cb) {
+          try {
+            cb();
+          } catch (_) {
+            /* a failing pump must never break the heartbeat */
+          }
         }
       }
     };
@@ -81,10 +122,10 @@ export function startKeepaliveWorker(onTick, intervalMs = 2000) {
         (e && e.message) || e,
       );
     };
-    _worker.postMessage({ type: "start", intervalMs });
+    _worker.postMessage({ type: "start", intervalMs, beatMs });
     _started = true;
     console.log(
-      `[keepalive_worker] heartbeat worker started (${intervalMs}ms) — survives hidden-tab timer throttling`,
+      `[keepalive_worker] heartbeat worker started (${intervalMs}ms, pump beat ${beatMs}ms) — survives hidden-tab timer throttling`,
     );
     return true;
   } catch (e) {

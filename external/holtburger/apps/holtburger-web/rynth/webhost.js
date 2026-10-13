@@ -555,9 +555,15 @@ function selectionClock() {
     const bus = g.__pluginClient?.events;
     if (bus && c.bus !== bus && typeof bus.on === "function") {
       bus.on("selectionChanged", (e) => {
-        const guid = Number(e && e.guid) >>> 0;
-        if (e && e.lodRespawn === true) {
-          c.lodGuid = Number(e.prevGuid) >>> 0; // the LOD release half
+        // The bus delivers a CustomEvent: the payload is `e.detail`
+        // (plugins/api.js events.emit; picking.js / target-bar.js read it the
+        // same way). Reading `e.guid` saw undefined on every event, so the
+        // LOD-respawn pair below never matched and stamped the world clock
+        // twice. A raw payload (no `.detail`) is still accepted.
+        const d = (e && e.detail) ?? e;
+        const guid = Number(d && d.guid) >>> 0;
+        if (d && d.lodRespawn === true) {
+          c.lodGuid = Number(d.prevGuid) >>> 0; // the LOD release half
           return;
         }
         if (c.lodGuid && guid === c.lodGuid) {

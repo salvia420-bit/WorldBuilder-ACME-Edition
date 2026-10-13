@@ -155,6 +155,9 @@ export function installDragPersistence(rootEl, handleEl, panelId) {
     dragHandle: handleEl,
     ignoreSelector: DRAG_BUTTON_SELECTOR,
     legacyKey: `hb_panel_pos_${panelId}`,
+    // gmFloatyPanelUI::UpdateFromPlayerModule → UpdateLockedStatus reads
+    // the global LockUI (ui/ui_lock.js).
+    obeysGlobalLock: windowId === WINDOW_ID.MAIN_PANEL,
   });
   return () => { /* attachWindowPosition has no teardown handle today */ };
 }
@@ -496,6 +499,7 @@ function applyMainPanelLayout(refs, attempt = 0) {
             cornerSize: 5,
             borderThickness: 5,
             windowId: WINDOW_ID.MAIN_PANEL,
+            obeysGlobalLock: true,
           });
           refs.overlayEl.classList.add("hb-floaty-framed");
           applied += 1;

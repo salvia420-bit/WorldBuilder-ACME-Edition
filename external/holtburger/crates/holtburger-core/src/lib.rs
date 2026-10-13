@@ -1,7 +1,10 @@
 pub mod arrival_placement_diag;
+pub mod barber;
 pub mod character_gen;
+pub mod chargen_colors;
 pub mod client;
 pub mod errors;
+pub mod retail_failure_table;
 pub mod slow_run_diag;
 pub mod soul_emote_motion;
 

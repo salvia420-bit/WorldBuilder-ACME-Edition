@@ -25,7 +25,9 @@
 //   * gmSpellbookUI::GetSortedInsertionPlace — ascending SpellBase
 //     _display_order.
 //   * gmSpellbookUI::IsFilteredOut — one filter bit per school/level
-//     button (PlayerModule spellbook filters); persisted per browser.
+//     button (PlayerModule spellbook filters); kept on the server per
+//     character, like the 8 spell-bar tabs (input-options-2,
+//     plugins/spellbar_sync.js; `?serverSpellBars=off` = per browser).
 //   * gmSpellbookUI::ListenToElementMessage — double-click adds the spell
 //     to the active spell bar (CM_Magic::SendNotice_AddSpellShortcut);
 //     single click selects; the Delete button / Delete key remove it after
@@ -51,6 +53,19 @@ import {
   formulaUntargetedEnabled,
   spellTargetClass,
 } from "../ui/ac_spell_target_type.js";
+import {
+  serverSpellBarsEnabled,
+  padTab,
+  pruneUnknownSpells,
+  planSpellBarHydration,
+  planSpellBarFlush,
+  spellbookFilterWord,
+  readCharSpellBars,
+  writeCharSpellBars,
+  fillTabsFromMirror,
+  spellBarCharKey,
+  SPELL_BARS_BY_CHAR_KEY,
+} from "./spellbar_sync.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 // Task C follow-up (2026-07-01): retail-corrected counts, verified
@@ -63,6 +78,29 @@ const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 // SPELL_BAR_SLOTS and older 8-slot arrays just gain empty cells.
 const SPELL_BAR_SLOTS = 18;
 const SPELL_BAR_TABS = 8;
+
+// input-options-2 / hud-ui-2 (2026-10-13) — server spell bars. Retail keeps
+// each character's 8 tabs in the server PlayerModule (the rules are in
+// plugins/spellbar_sync.js). Each character's tabs live under their own
+// localStorage key, `holtburger_spell_bars_by_char_v1[guidHex]` — an offline
+// cache that also keeps the 18-cell gaps. They are kept OUT of the shared
+// `holtburger_combat_bar_v1` blob: combat-bar.js writes its stale snapshot of
+// that blob back wholesale (power slider, attack height, spell picker …),
+// which reverted the tabs and made the next flush remove the server's
+// favourites. powerLevel / attackHeight / activeSpellBar and the old
+// per-browser `spellBars` stay in the blob where combat-bar.js and
+// combat-hud.js read them. `?serverSpellBars=off` = the old per-browser,
+// wire-silent bars.
+const SERVER_SPELL_BARS = serverSpellBarsEnabled();
+const barSync = {
+  handle: null, // session the fields below belong to (a new login re-reads)
+  guid: 0, // character the fields below belong to (0 = none)
+  hydrated: false, // tabs reconciled with this character's PlayerDescription
+  mirror: null, // the 8 lists the server holds; null = no wire (stale pkg/)
+  overflow: [], // server entries past the 18 cells, per tab
+  knownCount: 0, // known-spell count at the last prune
+  flushQueued: false,
+};
 
 let catalogPromise = null;
 function loadCatalog() {
@@ -292,20 +330,42 @@ function writeCombatBarState(merged) {
   try {
     localStorage.setItem(COMBAT_BAR_STORAGE_KEY, JSON.stringify(merged));
   } catch {}
-  // Mirror the ACTIVE tab's slots onto window state so picking.js
-  // (and the combat-bar's magic-mode renderer) sees the right list
-  // without knowing about tabs.
+  announceSpellBars(merged.activeSpellBar ?? 0);
+}
+
+// Mirror the ACTIVE tab's slots onto window state so picking.js
+// (and the combat-bar's magic-mode renderer) sees the right list
+// without knowing about tabs.
+function announceSpellBars(activeSpellBar = getActiveSpellBar()) {
   const activeSlots = getSpellBarSlots();
   if (window.__combatBarState) {
     window.__combatBarState.spellBarSlots = activeSlots;
-    window.__combatBarState.activeSpellBar = merged.activeSpellBar ?? 0;
+    window.__combatBarState.activeSpellBar = activeSpellBar;
   } else {
     window.__combatBarState = {
       spellBarSlots: activeSlots,
-      activeSpellBar: merged.activeSpellBar ?? 0,
+      activeSpellBar,
     };
   }
   window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
+}
+
+// input-options-2: the per-character tab cache (its own localStorage key;
+// see the note above `barSync`). Every write re-reads the store first.
+function readCharBarsStore() {
+  try {
+    const raw = localStorage.getItem(SPELL_BARS_BY_CHAR_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCharTabs(key, tabs, synced) {
+  try {
+    localStorage.setItem(SPELL_BARS_BY_CHAR_KEY, JSON.stringify(writeCharSpellBars(readCharBarsStore(), key, tabs, synced)));
+  } catch {}
 }
 
 // Phase I.2 — pull the array-of-tabs out of localStorage, migrating
@@ -362,9 +422,189 @@ function setActiveSpellBar(idx) {
   writeCombatBarState(state);
 }
 
-function getSpellBarSlots(barIdx) {
+// ─── input-options-2: per-character tabs + server round trip ─────────
+function sessionHandle() {
+  try { return window.__sessionHandle ?? null; } catch (_) { return null; }
+}
+function localPlayerGuid(handle) {
+  try {
+    if (handle && typeof handle.playerGuid === "function") return handle.playerGuid() >>> 0;
+  } catch (_) {}
+  return 0;
+}
+function knownSpellIds(handle) {
+  try {
+    if (handle && typeof handle.playerKnownSpells === "function") {
+      return Array.from(handle.playerKnownSpells() ?? [], (v) => v >>> 0);
+    }
+  } catch (_) {}
+  return [];
+}
+// The character whose tabs the helpers read and write; null = the old
+// per-browser bars (`?serverSpellBars=off`, or no character in the world).
+function activeCharBarsKey() {
+  if (!SERVER_SPELL_BARS) return null;
+  const guid = localPlayerGuid(sessionHandle());
+  return guid ? spellBarCharKey(guid) : null;
+}
+// The tabs to show / edit: the per-browser bars for a null key, else this
+// character's cached tabs ([] before its first PlayerDescription).
+function readTabs(key) {
+  if (!key) return readSpellBars(readCombatBarState());
+  let tabs = readCharSpellBars(readCharBarsStore(), key)?.tabs ?? [];
+  // Defensive: once reconciled, a tab the cache lacks (missing / emptied
+  // record) is rebuilt from what the server holds, never diffed as empty —
+  // that would send RemoveSpellFavorite for every favourite on it.
+  if (barSync.hydrated && barSync.mirror && key === spellBarCharKey(barSync.guid)) {
+    tabs = fillTabsFromMirror(tabs, barSync.mirror, SPELL_BAR_SLOTS, SPELL_BAR_TABS).tabs;
+  }
+  return tabs.length > 0 ? readSpellBars({ spellBars: tabs }) : [];
+}
+function serverBarsWired(handle) {
+  return !!handle
+    && typeof handle.playerSpellBars === "function"
+    && typeof handle.addSpellFavorite === "function"
+    && typeof handle.removeSpellFavorite === "function";
+}
+function sendSpellBarOps(handle, ops) {
+  for (const o of ops) {
+    try {
+      if (o.op === "remove") handle.removeSpellFavorite(o.spell >>> 0, o.list >>> 0);
+      else if (o.op === "add") handle.addSpellFavorite(o.spell >>> 0, o.index >>> 0, o.list >>> 0);
+    } catch (e) {
+      console.warn(`[spellbook] spell-bar ${o.op}(${o.spell}, bar ${o.list}) failed: ${e?.message ?? e}`);
+    }
+  }
+}
+function resetBarSync(guid = 0, handle = null) {
+  barSync.handle = handle;
+  barSync.guid = guid;
+  barSync.hydrated = false;
+  barSync.mirror = null;
+  barSync.overflow = [];
+  barSync.knownCount = 0;
+}
+
+/** Reconcile the tabs with the server. Runs on a 1 Hz poll and before every
+ *  edit:
+ *   - a character's first PlayerDescription → planSpellBarHydration (server
+ *     wins, unknown spells pruned with RemoveSpellFavorite; an empty server
+ *     list on a never-synced character uploads the local bars once);
+ *   - afterwards a spell that leaves the spellbook leaves every tab too
+ *     (retail RecvNotice_SpellRemoved → UpdateFromPlayerModule).
+ *  Returns true once this character's tabs are reconciled. */
+function syncSpellBarsFromServer() {
+  if (!SERVER_SPELL_BARS) return false;
+  const handle = sessionHandle();
+  const guid = localPlayerGuid(handle);
+  if (!guid) {
+    // Logged out: the next login re-reads its PlayerDescription.
+    if (barSync.guid) resetBarSync();
+    return false;
+  }
+  if (barSync.guid !== guid || barSync.handle !== handle) resetBarSync(guid, handle);
+  const known = knownSpellIds(handle);
+  if (barSync.hydrated) {
+    if (known.length > 0 && known.length !== barSync.knownCount) {
+      barSync.knownCount = known.length;
+      pruneCharSpellBars(guid, new Set(known));
+    }
+    return true;
+  }
+  // No known spell yet = the PlayerDescription has not landed (a character
+  // with an empty spellbook has nothing to file either).
+  if (known.length === 0) return false;
+  return hydrateCharSpellBars(handle, guid, new Set(known));
+}
+
+function hydrateCharSpellBars(handle, guid, known) {
+  const key = spellBarCharKey(guid);
   const state = readCombatBarState();
-  const bars = readSpellBars(state);
+  const record = readCharSpellBars(readCharBarsStore(), key);
+  const legacyTabs = (Array.isArray(state.spellBars) || Array.isArray(state.spellBarSlots))
+    ? readSpellBars(state)
+    : null;
+  let tabs;
+  let synced;
+  if (serverBarsWired(handle)) {
+    let serverLists = null;
+    try {
+      serverLists = Array.from(handle.playerSpellBars() ?? [], (l) => Array.from(l ?? [], (v) => v >>> 0));
+    } catch (_) {}
+    if (!serverLists || serverLists.length === 0) return false; // no world yet
+    const plan = planSpellBarHydration({
+      serverLists, record, legacyTabs, known, slots: SPELL_BAR_SLOTS, tabs: SPELL_BAR_TABS,
+    });
+    sendSpellBarOps(handle, plan.ops);
+    barSync.mirror = plan.mirror;
+    barSync.overflow = plan.overflow;
+    tabs = plan.tabs;
+    synced = true;
+  } else {
+    // Stale pkg/ without the spell-bar exports: a per-character copy of the
+    // local bars minus spells this character does not know, nothing on the
+    // wire. `synced` stays as stored, so the server is consulted once the
+    // exports exist.
+    const source = record?.tabs ?? legacyTabs ?? [];
+    const padded = [];
+    for (let t = 0; t < SPELL_BAR_TABS; t++) padded.push(padTab(source[t], SPELL_BAR_SLOTS));
+    tabs = pruneUnknownSpells(padded, known).tabs;
+    synced = undefined;
+  }
+  barSync.hydrated = true;
+  barSync.knownCount = known.size;
+  saveCharTabs(key, tabs, synced);
+  announceSpellBars();
+  hydrateSpellbookFilters(handle);
+  return true;
+}
+
+function pruneCharSpellBars(guid, known) {
+  const key = spellBarCharKey(guid);
+  const cur = readTabs(key);
+  if (cur.length > 0) {
+    const { tabs, removed } = pruneUnknownSpells(cur, known);
+    if (removed.length > 0) {
+      saveCharTabs(key, tabs);
+      announceSpellBars();
+    }
+  }
+  // The flush also drops unknown spells the cells cannot show (overflow).
+  queueSpellBarFlush();
+}
+
+// One diff per task: a move written as two setSpellBarSlot calls (combat-bar
+// swap / tab drop) goes out as one [Remove, Add] set.
+function queueSpellBarFlush() {
+  if (barSync.flushQueued) return;
+  barSync.flushQueued = true;
+  const run = () => {
+    barSync.flushQueued = false;
+    flushSpellBarsToServer();
+  };
+  if (typeof queueMicrotask === "function") queueMicrotask(run);
+  else Promise.resolve().then(run);
+}
+
+function flushSpellBarsToServer() {
+  if (!barSync.hydrated || !barSync.mirror) return;
+  const handle = sessionHandle();
+  if (handle !== barSync.handle || !serverBarsWired(handle) || localPlayerGuid(handle) !== barSync.guid) return;
+  const tabs = readTabs(spellBarCharKey(barSync.guid));
+  if (tabs.length === 0) return;
+  const plan = planSpellBarFlush(
+    barSync.mirror,
+    tabs,
+    barSync.overflow,
+    new Set(knownSpellIds(handle)),
+  );
+  barSync.mirror = plan.mirror;
+  barSync.overflow = plan.overflow;
+  sendSpellBarOps(handle, plan.ops);
+}
+
+function getSpellBarSlots(barIdx) {
+  const bars = readTabs(activeCharBarsKey());
   const idx = (typeof barIdx === "number")
     ? Math.max(0, Math.min(SPELL_BAR_TABS - 1, barIdx))
     : getActiveSpellBar();
@@ -373,8 +613,11 @@ function getSpellBarSlots(barIdx) {
 
 function setSpellBarSlot(slotIndex, spellId, barIdx) {
   if (slotIndex < 0 || slotIndex >= SPELL_BAR_SLOTS) return;
-  const state = readCombatBarState();
-  const bars = readSpellBars(state);
+  const key = activeCharBarsKey();
+  // input-options-2: reconcile first, so an edit never lands on tabs the
+  // PlayerDescription is about to replace.
+  if (key) syncSpellBarsFromServer();
+  const bars = readTabs(key);
   const tab = (typeof barIdx === "number")
     ? Math.max(0, Math.min(SPELL_BAR_TABS - 1, barIdx))
     : getActiveSpellBar();
@@ -393,9 +636,18 @@ function setSpellBarSlot(slotIndex, spellId, barIdx) {
     }
   }
   bars[tab][slotIndex] = id;
-  state.spellBars = bars;
-  delete state.spellBarSlots;
-  writeCombatBarState(state);
+  if (key) {
+    // The server gets the cells in order, gaps dropped (retail's ordered
+    // favourite list): the flush diffs it against what the server holds.
+    saveCharTabs(key, bars);
+    queueSpellBarFlush();
+    announceSpellBars();
+  } else {
+    const state = readCombatBarState();
+    state.spellBars = bars;
+    delete state.spellBarSlots;
+    writeCombatBarState(state);
+  }
 }
 
 function addToFirstEmptySlot(spellId, barIdx) {
@@ -415,8 +667,10 @@ function addToFirstEmptySlot(spellId, barIdx) {
 
 // Retail spellbook filter word (PlayerModule::GetSpellbookFilters, read by
 // gmSpellbookUI::IsFilteredOut, acclient.c): one bit per school button and
-// per level button. Persisted per browser here (retail kept it in the
-// character's PlayerModule).
+// per level button. Kept in the character's server PlayerModule
+// (input-options-2): read from the PlayerDescription, sent on every change
+// (gmSpellbookUI::UpdateFilter → Event_SpellbookFilterEvent); localStorage is
+// the cache the view opens with. `?serverSpellBars=off` = per browser only.
 const SCHOOL_BIT = { 4: 0x1, 3: 0x2, 2: 0x4, 1: 0x8, 5: 0x2000 }; // Creature, Item, Life, War, Void
 const LEVEL_BIT = { 1: 0x10, 2: 0x20, 3: 0x40, 4: 0x80, 5: 0x100, 6: 0x200, 7: 0x400, 8: 0x800 };
 const FILTER_ALL = 0x2FFF;
@@ -481,6 +735,38 @@ function readFilterMask() {
 }
 function writeFilterMask(mask) {
   try { localStorage.setItem(FILTER_LS_KEY, String(mask & FILTER_ALL)); } catch (_) {}
+}
+
+// input-options-2: the filter word as the server last had it. Its bits with
+// no FilterBox button (retail Default_SpellbookFilter 0x3FFF carries
+// Level_9 0x1000) go back unchanged with every toggle.
+let serverFilterWord = 0x3FFF;
+
+function hydrateSpellbookFilters(handle) {
+  if (!handle || typeof handle.playerSpellbookFilters !== "function") return;
+  let word;
+  try { word = handle.playerSpellbookFilters() >>> 0; } catch (_) { return; }
+  serverFilterWord = word;
+  const mask = word & FILTER_ALL;
+  writeFilterMask(mask);
+  try {
+    window.dispatchEvent(new CustomEvent("hb-spellbook-filters-changed", { detail: { mask } }));
+  } catch (_) {}
+}
+
+/** gmSpellbookUI::UpdateFilter → CM_Character::Event_SpellbookFilterEvent:
+ *  the whole word on every change. Nothing on `?serverSpellBars=off` or
+ *  without the wasm export. */
+function sendSpellbookFilters(mask) {
+  if (!SERVER_SPELL_BARS) return;
+  const handle = sessionHandle();
+  if (!handle || typeof handle.setSpellbookFilters !== "function" || !localPlayerGuid(handle)) return;
+  serverFilterWord = spellbookFilterWord(mask, serverFilterWord, FILTER_ALL);
+  try {
+    handle.setSpellbookFilters(serverFilterWord);
+  } catch (e) {
+    console.warn(`[spellbook] setSpellbookFilters failed: ${e?.message ?? e}`);
+  }
 }
 
 const SCHOOL_TINT = {
@@ -729,6 +1015,7 @@ function doMount(parentEl, ctx) {
   filtersEl.dataset.el = "0x10000297";
   filtersEl.dataset.mode = "spells";
   let filterMask = readFilterMask();
+  const filterChecks = []; // [checkbox, bit] — re-synced when the server word lands
 
   function filterLabel(text, elId) {
     const l = document.createElement("div");
@@ -746,9 +1033,11 @@ function doMount(parentEl, ctx) {
     cb.type = "checkbox";
     cb.className = "hbk-check";
     cb.checked = !!(filterMask & bit);
+    filterChecks.push([cb, bit]);
     cb.addEventListener("change", () => {
       filterMask = cb.checked ? (filterMask | bit) : (filterMask & ~bit);
       writeFilterMask(filterMask);
+      sendSpellbookFilters(filterMask);
       listEl.scrollTop = 0; // retail UpdateFilter → ScrollToShow(0)
       rerenderList();
     });
@@ -1119,6 +1408,14 @@ function doMount(parentEl, ctx) {
     if (mode === "spells") updateWindow();
   };
   window.addEventListener("hb-spellbar-changed", spellbarHandler);
+  // input-options-2: the character's filter word arrived (PlayerDescription).
+  const filtersHandler = (ev) => {
+    const m = ev?.detail?.mask;
+    filterMask = Number.isInteger(m) ? m : readFilterMask();
+    for (const [cb, bit] of filterChecks) cb.checked = !!(filterMask & bit);
+    if (mode === "spells") rerenderList();
+  };
+  window.addEventListener("hb-spellbook-filters-changed", filtersHandler);
 
   // Phase J.1 — Delete key OR the Delete button removes the selected
   // spell (RemoveSpellFromBook 0x01A8) after a confirmation, like retail
@@ -1190,6 +1487,7 @@ function doMount(parentEl, ctx) {
     if (client?.events?.off) client.events.off("playerStatsUpdated", statsHandler);
     if (statsRaf) cancelAnimationFrame(statsRaf);
     window.removeEventListener("hb-spellbar-changed", spellbarHandler);
+    window.removeEventListener("hb-spellbook-filters-changed", filtersHandler);
     if (unbindDeleteKey) unbindDeleteKey();
     else window.removeEventListener("keydown", onDeleteKey);
     window.removeEventListener("mousedown", onPopoverMouseDown, true);
@@ -1199,6 +1497,25 @@ function doMount(parentEl, ctx) {
     root.remove();
   };
 }
+
+// input-options-2: the reconcile poll (1 Hz, like hotbar.js's shortcut
+// reconcile). Once a character is reconciled it costs one playerGuid() and
+// one playerKnownSpells() read per tick. Not installed on
+// `?serverSpellBars=off`.
+let spellBarSyncTimer = null;
+function installSpellBarServerSync() {
+  if (!SERVER_SPELL_BARS || spellBarSyncTimer || typeof setInterval !== "function") return;
+  spellBarSyncTimer = setInterval(() => {
+    try {
+      syncSpellBarsFromServer();
+    } catch (e) {
+      console.warn(`[spellbook] spell-bar sync failed: ${e?.message ?? e}`);
+    }
+  }, 1000);
+  // A node test that imports this module must still exit.
+  spellBarSyncTimer?.unref?.();
+}
+installSpellBarServerSync();
 
 export {
   getSpellBarSlots,
@@ -1210,4 +1527,7 @@ export {
   SPELL_BAR_TABS,
   loadCatalog,
   spellRecordFromWasm,
+  // input-options-2 (tests / console)
+  syncSpellBarsFromServer,
+  sendSpellbookFilters,
 };

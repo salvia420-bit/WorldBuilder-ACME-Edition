@@ -42,6 +42,87 @@ pub(crate) const BATCH_WALK_MAX_ROUNDS: u32 = 8;
 /// `prefetch::PREFETCH_ROUND_TRIES`.
 pub(crate) const BATCH_WALK_ROUND_TRIES: u32 = 3;
 
+// ---------------------------------------------------------------------------
+// streaming-residency-3 (2026-10-13): failure-only pause between a round's
+// attempts. Both loops (`prefetch::run_walk_loop` and [`run_batch_walk_paced`])
+// used to re-issue a failed round back to back, so a transient (a wifi drop,
+// a tunnel reconnect, a saturated link) usually failed all three tries inside
+// the same few milliseconds. A short wait before each RETRY gives it time to
+// clear. A round that succeeds never waits; nor does the last failed try
+// (nothing follows it). Retail never builds against a missing file at all
+// (`DBObj::Get` blocks until it is local); WebAC backs its fetch retries off
+// 250/500/1000 ms (DatStore.ts).
+// ---------------------------------------------------------------------------
+
+/// Wait before retry N+1 after failed attempt N (1-based): 250 ms before the
+/// second try, 750 ms before the third. One entry per retry.
+pub(crate) const ROUND_RETRY_DELAYS_MS: [u32; 2] = [250, 750];
+
+// One delay per retry of a round, for both loops' 3 tries.
+const _: () = assert!(ROUND_RETRY_DELAYS_MS.len() as u32 == BATCH_WALK_ROUND_TRIES - 1);
+
+/// The pause after failed attempt `failed_attempt` (1-based) of a round; 0
+/// for an attempt with no retry after it.
+pub(crate) fn round_retry_delay_ms(failed_attempt: u32) -> u32 {
+    match failed_attempt.checked_sub(1) {
+        Some(i) => ROUND_RETRY_DELAYS_MS.get(i as usize).copied().unwrap_or(0),
+        None => 0,
+    }
+}
+
+/// Parse `?prefetchRetryDelay`. DEFAULT-ON; `off|0|false|no` disables (the
+/// same grammar as `?walkPace`): a failed round is retried back to back again.
+pub(crate) fn parse_prefetch_retry_delay_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "prefetchRetryDelay=off"
+                | "prefetchRetryDelay=0"
+                | "prefetchRetryDelay=false"
+                | "prefetchRetryDelay=no"
+        )
+    })
+}
+
+/// The `?prefetchRetryDelay` gate, parsed once per wasm instance over the
+/// seeded `flag_search()` (the bake worker runs its own walks).
+#[cfg(target_arch = "wasm32")]
+fn prefetch_retry_delay_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_prefetch_retry_delay_flag(&crate::flag_search()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Native stand-in for the timer: every pause [`round_retry_backoff`]
+    /// would take, in order (per test thread).
+    static RETRY_BACKOFF_LOG: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pause before retrying a round whose attempt `failed_attempt` just failed.
+/// Callers invoke it ONLY on a failed attempt that a retry follows. wasm: a
+/// `setTimeout` (works in the page and in the bake worker), skipped under
+/// `?prefetchRetryDelay=off`. Native tests record the pause instead of
+/// sleeping.
+pub(crate) async fn round_retry_backoff(failed_attempt: u32) {
+    let ms = round_retry_delay_ms(failed_attempt);
+    if ms == 0 {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if prefetch_retry_delay_flag() {
+            gloo_timers::future::TimeoutFuture::new(ms).await;
+        }
+    }
+    #[cfg(test)]
+    {
+        RETRY_BACKOFF_LOG.with(|l| l.borrow_mut().push(ms));
+    }
+}
+
 /// Why a batch walk stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BatchWalkEnd {
@@ -314,7 +395,8 @@ where
         let requested = keys.len() as u32;
         // Retry the round up to BATCH_WALK_ROUND_TRIES times. A retry asks
         // only for what did not land (a whole-round failure asks for all of it
-        // again); the source's own step A skips anything already cached.
+        // again); the source's own step A skips anything already cached. A
+        // retry waits `round_retry_backoff` first; a success never waits.
         let mut outstanding: Vec<OwnedKey> = keys;
         let mut last_failure: Option<Vec<OwnedKey>> = None;
         for attempt in 1..=BATCH_WALK_ROUND_TRIES {
@@ -336,6 +418,9 @@ where
                             failed_keys.len(),
                             f.detail
                         ));
+                        // streaming-residency-3: failure-only pause before
+                        // the retry (250 / 750 ms; `?prefetchRetryDelay`).
+                        round_retry_backoff(attempt).await;
                     } else {
                         warn(format!(
                             "prefetch round failed after {BATCH_WALK_ROUND_TRIES} attempts: excluding {} key(s), discovery continues: {}",
@@ -796,6 +881,100 @@ mod tests {
         for off in ["off", "0", "false", "no"] {
             assert!(!parse_walk_pace_flag(&format!("?walkPace={off}")));
             assert!(!parse_walk_pace_flag(&format!("?a=b&walkPace={off}&c=d")));
+        }
+    }
+
+    // ---- streaming-residency-3: failure-only retry backoff -------------------
+
+    /// Drain this test thread's record of the pauses `round_retry_backoff`
+    /// took (the native stand-in for the wasm timer).
+    fn take_backoffs() -> Vec<u32> {
+        RETRY_BACKOFF_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+
+    #[test]
+    fn round_retry_delay_schedule() {
+        assert_eq!(round_retry_delay_ms(0), 0, "no attempt 0");
+        assert_eq!(round_retry_delay_ms(1), 250, "before the 2nd try");
+        assert_eq!(round_retry_delay_ms(2), 750, "before the 3rd try");
+        assert_eq!(round_retry_delay_ms(BATCH_WALK_ROUND_TRIES), 0, "nothing follows the last try");
+        assert_eq!(ROUND_RETRY_DELAYS_MS.len() as u32, BATCH_WALK_ROUND_TRIES - 1);
+    }
+
+    /// A walk whose rounds all succeed never waits.
+    #[tokio::test]
+    async fn successful_rounds_never_back_off() {
+        let _ = take_backoffs();
+        let rig = Rig::new(vec![(1, vec![2]), (2, vec![3]), (3, vec![])]);
+        let (stats, warnings) = rig.run(&[1]).await;
+        assert_eq!(stats.rounds, 3);
+        assert_eq!(stats.end, BatchWalkEnd::Complete);
+        assert!(warnings.is_empty());
+        assert!(take_backoffs().is_empty(), "a successful round must not pause");
+    }
+
+    /// One transient whole-round failure: exactly one pause (250 ms), taken
+    /// BETWEEN the failed attempt and its retry — and the retry then lands.
+    #[tokio::test]
+    async fn transient_failure_backs_off_once_between_the_attempts() {
+        let _ = take_backoffs();
+        let rig = Rig::new(vec![(1, vec![2]), (2, vec![])]);
+        *rig.whole_round_failures.lock().unwrap() = 1;
+        // Pauses already taken when each prefetch attempt starts.
+        let seen: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+        let stats = run_batch_walk(
+            Vec::new(),
+            || {
+                let rs = RecordingSource::new(&rig.cache);
+                walk(&rs, &[1]);
+                rs.take_misses()
+            },
+            |keys| {
+                seen.lock().unwrap().push(RETRY_BACKOFF_LOG.with(|l| l.borrow().len()));
+                rig.prefetch(keys)
+            },
+            |_| {},
+        )
+        .await;
+        assert!(rig.cached(1) && rig.cached(2));
+        assert_eq!(stats.failed, 0);
+        assert_eq!(stats.end, BatchWalkEnd::Complete);
+        // Attempts: round 1 try 1 (fails) → pause → round 1 try 2 → round 2.
+        assert_eq!(*seen.lock().unwrap(), vec![0, 1, 1], "the pause sits between try 1 and try 2");
+        assert_eq!(take_backoffs(), vec![250]);
+    }
+
+    /// A key that fails every try: the round pauses 250 then 750 ms, and NOT
+    /// after the last try (it is excluded at once); the other rounds succeed
+    /// and do not pause.
+    #[tokio::test]
+    async fn persistent_failure_takes_the_full_schedule_and_no_trailing_pause() {
+        let _ = take_backoffs();
+        let mut rig = Rig::new(vec![
+            (1, vec![0x10]),
+            (2, vec![0x20]),
+            (0x10, vec![]),
+            (0x20, vec![0x21]),
+            (0x21, vec![]),
+        ]);
+        rig.always_fail.insert(0x10);
+        let (stats, warnings) = rig.run(&[1, 2]).await;
+        assert_eq!(stats.failed, 1);
+        assert_eq!(stats.end, BatchWalkEnd::OnlyFailedLeft);
+        assert_eq!(rig.attempts_for(0x10), BATCH_WALK_ROUND_TRIES as usize);
+        assert_eq!(warnings.len(), BATCH_WALK_ROUND_TRIES as usize);
+        assert_eq!(take_backoffs(), ROUND_RETRY_DELAYS_MS.to_vec(), "250 then 750, nothing after try 3");
+    }
+
+    #[test]
+    fn prefetch_retry_delay_flag_defaults_on_with_off_0_false_no_escape() {
+        assert!(parse_prefetch_retry_delay_flag(""));
+        assert!(parse_prefetch_retry_delay_flag("?foo=bar"));
+        assert!(parse_prefetch_retry_delay_flag("?prefetchRetryDelay=on"));
+        assert!(parse_prefetch_retry_delay_flag("?prefetchRetryDelay=1"));
+        for off in ["off", "0", "false", "no"] {
+            assert!(!parse_prefetch_retry_delay_flag(&format!("?prefetchRetryDelay={off}")));
+            assert!(!parse_prefetch_retry_delay_flag(&format!("?a=b&prefetchRetryDelay={off}&c=d")));
         }
     }
 }

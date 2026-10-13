@@ -706,3 +706,131 @@ fn spine_moveto_tracks_the_target_through_the_voyeur() {
     run(&mut scene, &kinematics, t0, 47, 1);
     assert!(scene.remote_mover(MOVER).unwrap().voyeur.is_none());
 }
+
+// === motion-remote-1 (2026-10-13): root motion × the object's scale. =====
+// Retail `CPhysicsObj::UpdatePositionInternal` multiplies the part array's
+// offset ORIGIN by `m_scale` on walkable ground (acclient.c:320014-320020;
+// ACE `PhysicsObj.UpdatePositionInternal` `offsetFrame.Origin *= Scale`);
+// the rotation is not scaled, and the leave-ground velocity
+// (`get_leave_ground_velocity` :343806 → `get_state_velocity`) has no scale.
+
+/// Steps `slices` slices of `quantum` with every mover at `scale` (what
+/// `WorldState::step_remote_objects` reads from the entity's ObjScale).
+fn run_at_scale(scene: &mut SpatialScene, kinematics: &MotionKinematics, scale: f32, slices: usize, quantum: f32) {
+    use std::collections::HashMap;
+    let t0 = Instant::now();
+    for i in 0..slices {
+        let now = t0 + Duration::from_secs_f32(i as f32 * quantum);
+        let roots = scene.remote_root_motions_scaled(Some(kinematics), |_| scale);
+        scene.step_remote_spine(quantum, &roots, &HashMap::new(), now);
+    }
+}
+
+/// A scale-2 runner travels twice as far as a scale-1 one in the same ten
+/// 0.05 s slices (no interpolation node), and turns by the same angle.
+#[test]
+fn spine_root_motion_scales_origin_by_obj_scale() {
+    let kinematics = player_kinematics();
+    let start = at(50.0, 50.0, 90.0);
+    let mut moved = Vec::new();
+    let mut turned = Vec::new();
+    for scale in [2.0f32, 1.0] {
+        let mut scene = spine_scene(start);
+        apply(&mut scene, &interpreted(Some((RUN_FORWARD_LOW16, 1.0)), Some(1.0)), false);
+        assert!(
+            !scene.body(SpatialBodyId::Entity(MOVER)).unwrap().position_manager.queue_active(),
+            "no interpolation node owns the slices"
+        );
+        run_at_scale(&mut scene, &kinematics, scale, 10, 0.05);
+        let after = pose(&scene, MOVER);
+        assert!((after.coords.z - TERRAIN_Z).abs() < 1e-3, "scale {scale}: on the terrain");
+        // Landblock-local coords (finer f32 steps than global ones).
+        assert_eq!(after.landblock_id.0 & 0xFFFF_0000, start.landblock_id.0 & 0xFFFF_0000);
+        let d = after.coords - start.coords;
+        moved.push((d.x * d.x + d.y * d.y).sqrt());
+        turned.push(heading_deg(&after) - 90.0);
+    }
+    assert!(moved[1] > 1.5, "the unscaled run travels: {moved:?}");
+    let ratio = moved[0] / moved[1];
+    assert!((ratio - 2.0).abs() < 1e-4, "displacement ratio {ratio} ({moved:?})");
+    assert!(turned[1].abs() > 10.0, "the turn ran: {turned:?}");
+    assert!((turned[0] - turned[1]).abs() < 1e-4, "omega is not scaled: {turned:?}");
+}
+
+/// Scale 1.0 through the scaled path is byte-identical to the unscaled step,
+/// and `?remoteRootScale=off` moves a scale-2 object as if unscaled.
+#[test]
+fn spine_root_scale_one_and_off_are_byte_identical() {
+    let kinematics = player_kinematics();
+    let start = at(50.0, 50.0, 90.0);
+    let motion = interpreted(Some((RUN_FORWARD_LOW16, 1.5)), Some(0.5));
+
+    let mut today = spine_scene(start);
+    apply(&mut today, &motion, false);
+    run(&mut today, &kinematics, Instant::now(), 0, 30);
+    let expected = pose(&today, MOVER);
+    assert!(planar_distance(&expected, &start) > 1.0, "the fixture moves");
+
+    let mut one = spine_scene(start);
+    apply(&mut one, &motion, false);
+    run_at_scale(&mut one, &kinematics, 1.0, 30, SLICE);
+    assert_eq!(pose(&one, MOVER), expected, "scale 1.0");
+
+    let mut off = spine_scene(start);
+    off.set_remote_root_scale_enabled(false);
+    apply(&mut off, &motion, false);
+    run_at_scale(&mut off, &kinematics, 2.0, 30, SLICE);
+    assert_eq!(pose(&off, MOVER), expected, "?remoteRootScale=off");
+}
+
+/// A scale-2 runner walking off a 3 m roof leaves the ground with the
+/// UNSCALED run velocity (4 m/s), though it crossed the roof at 8 m/s.
+#[test]
+fn spine_scaled_mover_leaves_a_ledge_at_the_unscaled_walk() {
+    use holtburger_common::Triangle;
+    let kinematics = player_kinematics();
+    let deck = TERRAIN_Z + 3.0;
+    let mut start = at(50.0, 50.0, 90.0);
+    start.coords.z = deck;
+    let mut scene = spine_scene(start);
+    // A 2 m roof at `deck` centred on the start (global 242, 434).
+    let (x0, x1, y0, y1) = (241.0, 243.0, 433.0, 435.0);
+    scene.insert_building_triangle(
+        0x0102_0000,
+        Triangle::new(Vector3::new(x0, y0, deck), Vector3::new(x1, y0, deck), Vector3::new(x1, y1, deck)),
+    );
+    scene.insert_building_triangle(
+        0x0102_0000,
+        Triangle::new(Vector3::new(x0, y0, deck), Vector3::new(x1, y1, deck), Vector3::new(x0, y1, deck)),
+    );
+    apply(&mut scene, &interpreted(Some((RUN_FORWARD_LOW16, 1.0)), None), false);
+    let mut slices = 0;
+    while scene.remote_arc(MOVER).is_none() && slices < 10 {
+        run_at_scale(&mut scene, &kinematics, 2.0, 1, 0.05);
+        slices += 1;
+    }
+    assert!(scene.remote_arc(MOVER).is_some(), "ran off the roof");
+    assert!(slices <= 3, "crossed the 1 m to the edge at 8 m/s (0.4 m a slice): {slices} slices");
+    let v = scene.body(SpatialBodyId::Entity(MOVER)).unwrap().remote_velocity;
+    let horiz = (v.x * v.x + v.y * v.y).sqrt();
+    assert!((horiz - 4.0).abs() < 1e-3, "leaves at the unscaled run (4 m/s), not 8: {horiz}");
+}
+
+/// The transition planner carries both: the scaled walk moves the plan's
+/// end, the unscaled walk is its leave-ground velocity.
+#[test]
+fn spine_plan_carries_the_unscaled_leave_velocity() {
+    use super::remote_transition::REMOTE_TRANSITION_RADIUS_M;
+    let kinematics = player_kinematics();
+    let start = at(50.0, 50.0, 90.0);
+    let mut scene = spine_scene(start);
+    seed_local_player(&mut scene, at(55.0, 50.0, 0.0));
+    apply(&mut scene, &interpreted(Some((RUN_FORWARD_LOW16, 1.0)), None), false);
+    let roots = scene.remote_root_motions_scaled(Some(&kinematics), |_| 2.0);
+    let plans = scene.plan_remote_moves(0.05, &roots, REMOTE_TRANSITION_RADIUS_M);
+    let plan = plans.iter().find(|p| p.guid == MOVER).expect("the mover plans a move");
+    let speed = |v: Vector3| (v.x * v.x + v.y * v.y).sqrt();
+    assert!((speed(plan.walk_v) - 8.0).abs() < 1e-4, "walk {:?}", plan.walk_v);
+    assert!((speed(plan.leave_walk_v) - 4.0).abs() < 1e-4, "leave {:?}", plan.leave_walk_v);
+    assert!((planar_distance(&plan.end, &plan.begin) - 0.4).abs() < 1e-4, "8 m/s × 0.05 s");
+}

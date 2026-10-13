@@ -109,6 +109,8 @@ impl WorldState {
         now: Instant,
         sweep: Option<RemoteTransitionConfig>,
     ) {
+        use holtburger_common::properties::WorldObjectExt as _;
+
         if !self.scene.remote_spine_active() {
             self.scene.step_remote_position_managers(quantum);
             return;
@@ -117,7 +119,17 @@ impl WorldState {
         self.scene
             .prune_remote_movers(|guid| entities.get(guid).is_some());
         let kinematics = Arc::clone(&self.motion_kinematics);
-        let roots = self.scene.remote_root_motions(Some(&kinematics));
+        // motion-remote-1: each object's root motion at its own scale (the
+        // wire ObjScale, `PropertyFloat::DefaultScale`), read per slice and
+        // sanitised as `entity_part_dims` does.
+        let roots = self.scene.remote_root_motions_scaled(Some(&kinematics), |guid| {
+            entities
+                .get(guid)
+                .and_then(|e| e.obj_scale())
+                .map(|s| s as f32)
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .unwrap_or(1.0)
+        });
         let resolved = match sweep.filter(|_| self.scene.remote_sweep_active()) {
             Some(config) => {
                 let plans = self
@@ -314,6 +326,45 @@ mod tests {
         let heading = body.pose.rotation.to_heading().to_degrees();
         let error = ((heading - 270.0) + 540.0).rem_euclid(360.0) - 180.0;
         assert!(error.abs() < 0.01, "faces the player due south (pose 270), got {heading}°");
+    }
+
+    /// motion-remote-1 (2026-10-13), end to end: an object whose wire ObjScale
+    /// (`PropertyFloat::DefaultScale`) is 2.0 runs twice as far per slice as
+    /// an unscaled one — `step_remote_objects` reads the scale every slice, a
+    /// scale the wire cannot mean (0) moves it unscaled, and
+    /// `?remoteRootScale=off` ignores it.
+    #[test]
+    fn step_remote_objects_moves_a_scaled_object_at_its_scale() {
+        use holtburger_common::properties::{PropertyFloat, WorldObjectPropertyAccessorsMut as _};
+        let travel = |scale: Option<f64>, scale_on: bool| {
+            let mut state = world_with_remote(true);
+            state.scene.set_remote_root_scale_enabled(scale_on);
+            state.scene.populate_terrain_heights(0x0102_0000, [0.0; 81]);
+            if let Some(scale) = scale {
+                state
+                    .entities
+                    .get_mut(REMOTE)
+                    .expect("the remote entity")
+                    .set_float_prop(PropertyFloat::DefaultScale, scale);
+            }
+            let _ = state.handle_message(&update_motion());
+            let body = |state: &WorldState| state.scene.body(SpatialBodyId::Entity(REMOTE)).expect("body").pose;
+            let start = body(&state);
+            let t0 = web_time::Instant::now();
+            for i in 0..10 {
+                let now = t0 + std::time::Duration::from_secs_f32(i as f32 * 0.05);
+                state.step_remote_objects(0.05, now, None);
+            }
+            let d = body(&state).coords - start.coords;
+            (d.x * d.x + d.y * d.y).sqrt()
+        };
+        let unscaled = travel(None, true);
+        assert!(unscaled > 1.0, "the run moves the body: {unscaled} m");
+        let scaled = travel(Some(2.0), true);
+        assert!((scaled / unscaled - 2.0).abs() < 1e-3, "scale 2: {scaled} m vs {unscaled} m");
+        assert_eq!(travel(Some(1.0), true), unscaled, "scale 1.0 is the unscaled move");
+        assert_eq!(travel(Some(0.0), true), unscaled, "a zero scale is ignored");
+        assert_eq!(travel(Some(2.0), false), unscaled, "?remoteRootScale=off");
     }
 
     /// The per-slice world step prunes movers whose object left the world.

@@ -19,6 +19,21 @@
 // cache key — and only when the scale moves, so the per-frame cost is one
 // compare. Batched-mesh variants mirror `emissiveIntensity` from their member
 // material every frame (batched_material_variant.js HOT keys), so they follow.
+//
+// CLONES (`?lumCloneAdopt`, 2026-10-13, DEFAULT ON; `off/0/false/no` escape).
+// A per-entity material (entities.js `_getOrCloneEntityMaterial`: object
+// translucency, Transparent / Luminous / Diffuse hooks, TextureVelocity, the
+// camera fade) is a `.clone()` of a tracked material. three's Material.copy
+// JSON-copies userData, so the clone carries `hbLumBase` — which makes
+// `registerLuminousMaterial` refuse it — and it was never tracked: its glow
+// froze at the scale live when it was cloned (cloned at noon = full glow all
+// night, 4x its untouched peers; cloned at night = dim all day).
+// `adoptLuminousClone` tracks it at the live scale; `releaseLuminousMaterial`
+// hands a material's emissive to a Luminous hook (its raw write must not be
+// overwritten by the next scale change). Weapon / lifestone VFX variants
+// (vfx/weapon_fx.js, vfx/lifestone_fx.js) are NOT adopted: they mirror their
+// base's `emissiveIntensity` every tick (MATERIAL_SURFACE_FIELDS), so they
+// follow through the base.
 
 import { nightFactorFromAuthoredPitch, nightRampEnabled } from "./night_ramp.js";
 
@@ -50,7 +65,35 @@ export function lumScaleAt(t, k) {
   return 1 + n * (k - 1);
 }
 
+/**
+ * `?lumCloneAdopt` — per-entity clones follow the night scale. Default ON;
+ * `off` / `0` / `false` / `no` restores the freeze-at-clone-time behaviour.
+ */
+export function lumCloneAdoptEnabled(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const v = new URLSearchParams(s).get("lumCloneAdopt");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+// The page's own answer is read once (the query does not change in a session);
+// an explicit `search` (tests) is always re-read.
+let _adoptMemo = null;
+function _adoptOn(search) {
+  if (search !== undefined) return lumCloneAdoptEnabled(search);
+  if (_adoptMemo === null) _adoptMemo = lumCloneAdoptEnabled();
+  return _adoptMemo;
+}
+
 const _refs = new Set();
+// material -> its `_refs` entry. Membership lives HERE, not in userData,
+// because userData is copied into every clone.
+const _tracked = new WeakMap();
 let _scale = 1;
 const _hasWeakRef = typeof WeakRef === "function";
 
@@ -66,8 +109,45 @@ export function registerLuminousMaterial(mat, luminosity) {
   mat.userData = mat.userData || {};
   if (mat.userData.hbLumBase !== undefined) return false;
   mat.userData.hbLumBase = mat.emissiveIntensity;
-  _refs.add(_hasWeakRef ? new WeakRef(mat) : { deref: () => mat });
+  const ref = _hasWeakRef ? new WeakRef(mat) : { deref: () => mat };
+  _refs.add(ref);
+  _tracked.set(mat, ref);
   if (_scale !== 1) mat.emissiveIntensity = mat.userData.hbLumBase * _scale;
+  return true;
+}
+
+/**
+ * Track a per-entity `.clone()` of a tracked material (see CLONES above). The
+ * clone keeps the `hbLumBase` it copied and takes the LIVE scale at once.
+ * Idempotent; a material without a finite `hbLumBase` (non-luminous, a light
+ * source, or one a Luminous hook released) is ignored. `search` is for tests.
+ */
+export function adoptLuminousClone(mat, search) {
+  if (!mat || _tracked.has(mat)) return false;
+  const base = mat.userData?.hbLumBase;
+  if (!Number.isFinite(base)) return false;
+  if (!_adoptOn(search)) return false;
+  const ref = _hasWeakRef ? new WeakRef(mat) : { deref: () => mat };
+  _refs.add(ref);
+  _tracked.set(mat, ref);
+  mat.emissiveIntensity = base * _scale;
+  return true;
+}
+
+/**
+ * Stop tracking `mat` because a Luminous(8/9) hook now owns its emissive
+ * (entities.js `_applyRampValueToMaterial` writes `emissiveIntensity = 1.0`
+ * raw, retail SetLuminositySimple) — otherwise the next scale change would
+ * overwrite the hook's value with `hbLumBase × scale`. Drops `hbLumBase` too,
+ * so the material is never re-adopted. Only per-entity materials reach the
+ * hook, never a shared cache material. No-op under `?lumCloneAdopt=off`.
+ */
+export function releaseLuminousMaterial(mat, search) {
+  const ref = mat ? _tracked.get(mat) : undefined;
+  if (!ref || !_adoptOn(search)) return false;
+  _tracked.delete(mat);
+  _refs.delete(ref);
+  if (mat.userData) delete mat.userData.hbLumBase;
   return true;
 }
 
@@ -101,7 +181,7 @@ export function tickLuminousNight(state, search) {
 export function luminousNightState() {
   let live = 0;
   for (const r of _refs) if (r.deref()) live += 1;
-  return { scale: _scale, tracked: live, fullNightScale: lumNightScale() };
+  return { scale: _scale, tracked: live, fullNightScale: lumNightScale(), cloneAdopt: lumCloneAdoptEnabled() };
 }
 
 if (typeof window !== "undefined") {

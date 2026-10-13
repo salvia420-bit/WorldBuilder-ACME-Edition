@@ -33,6 +33,7 @@ import {
   mix as retailMix,
   getAttenuation as retailAttenuation,
   linearGain,
+  retailPanGains,
   stereoPositionFromPan,
   threeToAc,
   headingFromThreeQuaternion,
@@ -41,7 +42,8 @@ import {
 // 2026-10-05 (audio parity) — two mixes. DEFAULT: the HRTF PannerNode
 // path below — owner product call 2026-10-05: keep HRTF where the web client
 // is deliberately better than retail's stereo. OPT-IN `?audioRetailPan=on`:
-// retail's mix — yaw-only integer pan (StereoPannerNode) + 25/d^2
+// retail's mix — yaw-only integer pan (DirectSound SetPan as per-channel
+// gains, none at pan 0; SoundBuf::Play acclient.c:386102) + 25/d^2
 // integer-dB gain + -50 dB cull, computed once at start
 // (scene3d/audio/retail_mixer.js; acclient.c 383079-383118, 383152-383180).
 // In BOTH modes every voice goes through retail's 16-slot pool
@@ -85,6 +87,32 @@ export function loadSavedAudioGains(storage) {
   return out;
 }
 
+// audio-5 (2026-10-13): retail's on/off sound preferences, kept as booleans in
+// the same hb.options.audio.v1 object (Options → Config → Sound). Retail
+// SoundManager::InitPrefs (acclient.c 383284) registers "Interface Sound
+// Disabled", "Ambient Sound Disabled" and "Play Sound Only When Active" over
+// interface_sounds_enabled / ambient_sounds_enabled /
+// s_bPlaySoundOnlyWhenActive, all true by default (45629-45633). Anything but
+// a stored boolean reads as the default.
+export const AUDIO_PREF_DEFAULTS = Object.freeze({
+  playOnlyWhenActive: true,
+  interfaceSounds: true,
+  ambientSounds: true,
+});
+export function loadSavedAudioPrefs(storage) {
+  const out = { ...AUDIO_PREF_DEFAULTS };
+  try {
+    const st = storage ?? (typeof localStorage !== "undefined" ? localStorage : null);
+    const raw = st?.getItem?.(AUDIO_SETTINGS_KEY);
+    if (!raw) return out;
+    const parsed = JSON.parse(raw);
+    for (const k of Object.keys(out)) {
+      if (typeof parsed?.[k] === "boolean") out[k] = parsed[k];
+    }
+  } catch (_) { /* defaults */ }
+  return out;
+}
+
 // Bug 8 (2026-10-07): `[audio-loud]` diagnostic thresholds (see `_noteLoud`).
 const LOUD_DB = -30;
 const LOUD_REPEAT_MS = 15000;
@@ -96,6 +124,14 @@ const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
 // FETCH failure stays cached before the sound may be retried.
 const BUFFER_CACHE_BUDGET_BYTES = 64 * 1024 * 1024;
 const BUFFER_FETCH_RETRY_MS = 30_000;
+
+// Drop the extra nodes AudioManager._buildRetailSetPan made (null = none).
+function disconnectRetailSetPan(setPan) {
+  if (!setPan) return;
+  for (const n of [setPan.splitter, setPan.left, setPan.right, setPan.merger]) {
+    try { n.disconnect(); } catch (_) {}
+  }
+}
 
 /**
  * @typedef {object} PlayOpts
@@ -122,6 +158,8 @@ export class AudioManager {
     this._fetchWave = opts.fetchWave;
     const saved = opts.savedGains === false
       ? null : loadSavedAudioGains(opts.storage);
+    const prefs = opts.savedGains === false
+      ? { ...AUDIO_PREF_DEFAULTS } : loadSavedAudioPrefs(opts.storage);
     this._masterGainValue = saved ? saved.master : (opts.masterGain ?? 1.0);
     // HRTF PannerNode mix (default) vs retail's stereo mix (?audioRetailPan=on).
     // `opts.hrtf` overrides the URL flag (tests).
@@ -141,10 +179,21 @@ export class AudioManager {
     // the active app (383015, 383160, PlaySoundA 383469/383494/383661/383687,
     // PlaySoundFromCenter 383575/383598). Sounds already playing finish.
     // `?audioWhenInactive=on` keeps sound playing in a background/unfocused
-    // tab (off-screen ear tests); default is retail.
+    // tab (off-screen ear tests); default is retail. audio-5: the Options
+    // "Play sounds only when the game is active" box is the same preference
+    // (setPlayOnlyWhenActive); the URL flag still wins.
     this._active = true;
     this.inactiveSkipCount = 0;
-    if (!readAudioWhenInactiveFlag()) this._installActivityTracking(opts.document, opts.window);
+    this._playOnlyWhenActive = prefs.playOnlyWhenActive;
+    this._interfaceSoundsEnabled = prefs.interfaceSounds;
+    this._ambientSoundsEnabled = prefs.ambientSounds;
+    // Kept so the tracking can be removed and re-installed at runtime.
+    this._trackDoc = opts.document;
+    this._trackWin = opts.window;
+    this._activityTracking = null;
+    if (this._playOnlyWhenActive && !readAudioWhenInactiveFlag()) {
+      this._installActivityTracking(opts.document, opts.window);
+    }
 
     /** @type {AudioContext|null} */
     this._ctx = null;
@@ -243,6 +292,11 @@ export class AudioManager {
   }
 
   _installActivityTracking(doc, win) {
+    // Idempotent: a second install only re-reads the current state.
+    if (this._activityTracking) {
+      this._activityTracking.recompute();
+      return;
+    }
     const d = doc ?? (typeof document !== "undefined" ? document : null);
     const w = win ?? (typeof window !== "undefined" ? window : null);
     const recompute = () => {
@@ -251,12 +305,83 @@ export class AudioManager {
       try { if (typeof d?.hasFocus === "function") focused = !!d.hasFocus(); } catch (_) {}
       this.setActive(!hidden && focused);
     };
+    const onFocus = () => { this.setActive(!d?.hidden); };
+    const onBlur = () => { this.setActive(false); };
+    this._activityTracking = { d, w, recompute, onFocus, onBlur };
     try {
       d?.addEventListener?.("visibilitychange", recompute);
-      w?.addEventListener?.("focus", () => { this.setActive(!d?.hidden); });
-      w?.addEventListener?.("blur", () => { this.setActive(false); });
+      w?.addEventListener?.("focus", onFocus);
+      w?.addEventListener?.("blur", onBlur);
       recompute();
     } catch (_) { /* no DOM: stay active */ }
+  }
+
+  _removeActivityTracking() {
+    const t = this._activityTracking;
+    if (!t) return;
+    this._activityTracking = null;
+    try { t.d?.removeEventListener?.("visibilitychange", t.recompute); } catch (_) {}
+    try { t.w?.removeEventListener?.("focus", t.onFocus); } catch (_) {}
+    try { t.w?.removeEventListener?.("blur", t.onBlur); } catch (_) {}
+  }
+
+  /**
+   * audio-5 — retail "Play Sound Only When Active" (SoundManager::
+   * s_bPlaySoundOnlyWhenActive, acclient.c 45633; InitPrefs 383284). true
+   * (default): track visibility/focus — refuse new sounds and mute the
+   * master bus while the tab is hidden or unfocused. false: the tracking is
+   * removed and sound keeps playing in the background. `?audioWhenInactive=on`
+   * still forces the false behaviour.
+   */
+  setPlayOnlyWhenActive(on) {
+    this._playOnlyWhenActive = !!on;
+    if (this._playOnlyWhenActive && !readAudioWhenInactiveFlag()) {
+      this._installActivityTracking(this._trackDoc, this._trackWin);
+    } else {
+      this._removeActivityTracking();
+      this.setActive(true);
+    }
+    this._applyFocusMute();
+  }
+
+  isPlayOnlyWhenActive() {
+    return this._playOnlyWhenActive;
+  }
+
+  /**
+   * audio-5 — retail "Interface Sound Disabled" (interface_sounds_enabled,
+   * acclient.c 45631): false refuses both PlaySoundFromCenter overloads
+   * (383575/383598) — UI clicks, portal whooshes, Environs. The gate lives in
+   * retail_sound_rules.js playSoundFromCenter, the PlaySoundFromCenter port.
+   */
+  setInterfaceSoundsEnabled(on) {
+    this._interfaceSoundsEnabled = !!on;
+  }
+
+  isInterfaceSoundsEnabled() {
+    return this._interfaceSoundsEnabled;
+  }
+
+  /**
+   * audio-5 — retail "Ambient Sound Disabled" (ambient_sounds_enabled,
+   * acclient.c 45629): false refuses PlayAmbientSound(FromCenter)
+   * (383525/383549) — every `category: "ambient"` play here — and
+   * AmbientRuntime.tick fast-forwards its queue without playing.
+   */
+  setAmbientSoundsEnabled(on) {
+    this._ambientSoundsEnabled = !!on;
+  }
+
+  isAmbientSoundsEnabled() {
+    return this._ambientSoundsEnabled;
+  }
+
+  // PlayAmbientSound / PlayAmbientSoundFromCenter return before anything else
+  // while ambient sounds are disabled (acclient.c 383525/383549).
+  _ambientRefused(category) {
+    if (category !== "ambient" || this._ambientSoundsEnabled) return false;
+    this.skipCount += 1;
+    return true;
   }
 
   _initContext() {
@@ -572,14 +697,18 @@ export class AudioManager {
    * every retail voice records, so a 17th concurrent sound is dropped.
    *
    * Fire-and-forget: resolves once the source has STARTED (not finished)
-   * with `{source, panner, gain}` (panner = StereoPannerNode in retail mode,
-   * PannerNode in HRTF mode, null from the centre), or null when skipped.
+   * with `{source, panner, gain, setPan}` (panner = PannerNode in HRTF mode,
+   * null in retail mode — a StereoPannerNode only on a context without
+   * ChannelSplitter/ChannelMerger — and from the centre; setPan = the retail
+   * SetPan nodes `{splitter, left, right, merger}` for a non-zero retail
+   * pan, else null), or null when skipped.
    *
    * @param {number} did Wave DID (0x0Axxxxxx).
    * @param {{x:number, y:number, z:number}} worldPos
    * @param {PlayOpts & {priority?: number}} [opts]
    */
   async play(did, worldPos, opts = {}) {
+    if (this._ambientRefused(opts.category)) return null;
     if (!(await this._ensureRunning())) return null;
     if (opts.sliderTwice) {
       // Retail pre-multiplies the slider into `volume` on some paths and
@@ -638,6 +767,7 @@ export class AudioManager {
    * @param {{category?: "effect"|"ambient", loop?: boolean, priority?: number}} [opts]
    */
   async playFromCenter(waveDid, volume, opts = {}) {
+    if (this._ambientRefused(opts.category)) return null;
     if (!(await this._ensureRunning())) return null;
     const master = this._sliderFor(opts.category);
     let vol = (typeof volume === "number") ? volume : 1.0;
@@ -704,8 +834,9 @@ export class AudioManager {
     return true;
   }
 
-  // Shared tail: decode, build source -> gain -> [stereo panner] -> bus,
-  // claim a retail voice slot, start. `pan` null = no panner node.
+  // Shared tail: decode, build source -> gain -> [HRTF panner | retail
+  // SetPan] -> bus, claim a retail voice slot, start. `pan` null or 0 = no
+  // pan nodes (only the retail mix passes a pan; the HRTF path passes null).
   async _startVoice(did, { gainValue, pan, loop, category, priority, panner: hrtfPanner, followGuid }) {
     const buf = await this._loadBuffer(did);
     if (!buf || !this._ctx) {
@@ -718,14 +849,25 @@ export class AudioManager {
     const gain = this._ctx.createGain();
     gain.gain.value = gainValue;
     let panner = hrtfPanner ?? null;
-    if (!panner && pan != null && typeof this._ctx.createStereoPanner === "function") {
-      panner = this._ctx.createStereoPanner();
-      panner.pan.value = stereoPositionFromPan(pan);
+    let setPan = null;
+    // Retail SoundBuf::Play (acclient.c:386102): pan 0 skips SetPan, so the
+    // voice plays at full level on both channels, like playFromCenter.
+    if (!panner && pan != null && pan !== 0) {
+      setPan = this._buildRetailSetPan(gain, pan);
+      if (!setPan && typeof this._ctx.createStereoPanner === "function") {
+        // Fallback for a context without ChannelSplitter/ChannelMerger:
+        // equal-power position with retail's L/R ratio (near side < 1).
+        panner = this._ctx.createStereoPanner();
+        panner.pan.value = stereoPositionFromPan(pan);
+      }
     }
     const bus = (category === "ambient") ? this._ambientMaster : this._effectMaster;
     const out = bus || this._master;
     if (panner) source.connect(gain).connect(panner).connect(out);
-    else source.connect(gain).connect(out);
+    else if (setPan) {
+      source.connect(gain);
+      setPan.merger.connect(out);
+    } else source.connect(gain).connect(out);
 
     // Retail 16-voice pool. A stolen voice is stopped (SoundBuf::Stop). Bug 8:
     // the wave id feeds OpenAC's per-wave cap (voice_pool.js MAX_VOICES_PER_WAVE).
@@ -738,6 +880,7 @@ export class AudioManager {
       try { source.disconnect(); } catch (_) {}
       try { gain.disconnect(); } catch (_) {}
       try { panner?.disconnect(); } catch (_) {}
+      disconnectRetailSetPan(setPan);
       this.skipCount += 1;
       this.voiceDropCount = (this.voiceDropCount | 0) + 1;
       return null;
@@ -750,6 +893,7 @@ export class AudioManager {
       try { source.disconnect(); } catch (_) {}
       try { gain.disconnect(); } catch (_) {}
       try { panner?.disconnect(); } catch (_) {}
+      disconnectRetailSetPan(setPan);
       this._followingHandles.delete(source);
     };
     // Wave 3 / A4 — follow-mode (HRTF path only: the retail mix is fixed at
@@ -760,7 +904,7 @@ export class AudioManager {
     try {
       source.start(0);
       this.playCount += 1;
-      return { source, panner, gain };
+      return { source, panner, gain, setPan };
     } catch (e) {
       this.voicePool.release(token);
       this._followingHandles.delete(source);
@@ -770,6 +914,42 @@ export class AudioManager {
       console.warn("[H3/audio] source.start threw:", e);
       return null;
     }
+  }
+
+  /**
+   * Retail mix, non-zero pan: IDirectSoundBuffer::SetPan(100 * pan) from
+   * SoundBuf::Play (acclient.c:386102) — the far channel is turned down by
+   * |pan| dB, the near channel stays at full level (retailPanGains). Graph:
+   * `gain` (explicit 2-channel "speakers" up-mix, so a mono wave reaches
+   * both channels at 1.0 as DirectSound plays a mono buffer) ->
+   * ChannelSplitter(2) -> per-channel GainNodes -> ChannelMerger(2); the
+   * caller connects `merger` to the bus. Exact for mono and stereo waves.
+   * An equal-power StereoPannerNode matched only the L/R ratio and played
+   * every positional voice up to 3 dB low (0.707 per channel at centre).
+   * After WebAC packages/renderer/src/audio/SoundPlayer.ts connectPanned, AGPL-3.0.
+   * Returns null when the context has no splitter/merger.
+   */
+  _buildRetailSetPan(gain, pan) {
+    const ctx = this._ctx;
+    if (typeof ctx.createChannelSplitter !== "function" || typeof ctx.createChannelMerger !== "function") {
+      return null;
+    }
+    const g = retailPanGains(pan);
+    gain.channelCount = 2;
+    gain.channelCountMode = "explicit";
+    gain.channelInterpretation = "speakers";
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    const left = ctx.createGain();
+    const right = ctx.createGain();
+    left.gain.value = g.left;
+    right.gain.value = g.right;
+    gain.connect(splitter);
+    splitter.connect(left, 0);
+    splitter.connect(right, 1);
+    left.connect(merger, 0, 0);
+    right.connect(merger, 0, 1);
+    return { splitter, left, right, merger };
   }
 
   // HRTF path (the default; `?audioRetailPan=on` selects the retail mix): PannerNode with exponential

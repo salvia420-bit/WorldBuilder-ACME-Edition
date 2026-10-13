@@ -13,6 +13,13 @@
 // ("s" right after the XML — VTank requires that, metaf ACreateView.cs) only
 // parse correctly on bytes. Decoding: TextDecoder("utf-8").
 //
+// A `ba` count is taken on the CRLF file (metaf AEmbedNav.ExportToMet sums
+// `line.Length + 2`, ACreateView "2 chars for a newline") and a git LF copy
+// keeps it, so in a bare-LF file every bare LF counts 2, read and written
+// (Reader.baEnd / crlfLength). An LF file whose counts are plain byte lengths
+// (holtburger's LF export before it counted CRLF) loads through a raw-count
+// retry. CRLF files only ever take the byte-count path.
+//
 // Fixed RynthAi bugs (U5 §9): ChatCapture is CType 28 (B1); CallState is
 // TABLE{st,ret} (B2); an EMPTY embedded nav is kept as navText "" (B3); no
 // start state is chosen here (META starts every load in Default, B4).
@@ -64,6 +71,8 @@ class Reader {
     this.end = end;
     this.crlf = 0;
     this.lf = 0;
+    // true for a bare-LF file: `ba` counts are VTank's CRLF character counts.
+    this.crlfCounts = false;
   }
   line() {
     if (this.p >= this.end) throw new MetError("unexpected end of file", this.p);
@@ -120,9 +129,9 @@ class Reader {
         break;
       case "ba": {
         const n = this.int("byte count");
-        if (n < 0 || this.p + n > this.end) throw new MetError(`byte array of ${n} bytes runs past the end of the file`, this.p);
-        v = { k: "ba", bytes: this.b.subarray(this.p, this.p + n) };
-        this.p += n;
+        const e = this.baEnd(n);
+        v = { k: "ba", bytes: this.b.subarray(this.p, e) };
+        this.p = e;
         break;
       }
       case "TABLE":
@@ -134,6 +143,28 @@ class Reader {
     v.start = start;
     v.end = this.p;
     return v;
+  }
+  // End (exclusive) of a `ba` of count `n` starting at this.p. With
+  // crlfCounts each bare LF counts as the CRLF VTank counted (inverse of
+  // crlfLength); a count that lands between the two halves of that CRLF
+  // cannot come from a CRLF file and is an error.
+  baEnd(n) {
+    if (!this.crlfCounts) {
+      if (n < 0 || this.p + n > this.end) throw new MetError(`byte array of ${n} bytes runs past the end of the file`, this.p);
+      return this.p + n;
+    }
+    if (n < 0) throw new MetError(`byte array of ${n} characters runs past the end of the file`, this.p);
+    const b = this.b;
+    const s = this.p;
+    let i = s;
+    let c = 0;
+    while (c < n) {
+      if (i >= this.end) throw new MetError(`byte array of ${n} characters runs past the end of the file`, s);
+      c += b[i] === 10 && (i === s || b[i - 1] !== 13) ? 2 : 1;
+      i++;
+    }
+    if (c !== n) throw new MetError(`byte array of ${n} characters ends inside a line break`, s);
+    return i;
   }
   table(depth) {
     const nc = this.int("column count");
@@ -437,6 +468,13 @@ function int32(v) {
 function line(chunks, text, eol) {
   chunks.push(enc.encode(text + eol));
 }
+// The `ba` count VTank expects for `b` in a bare-LF file: its length once each
+// bare LF is the CRLF VTank wrote (see Reader.baEnd).
+function crlfLength(b) {
+  let n = b.length;
+  for (let i = 0; i < b.length; i++) if (b[i] === 10 && (i === 0 || b[i - 1] !== 13)) n++;
+  return n;
+}
 function encScalar(chunks, type, value, eol) {
   switch (type) {
     case "s":
@@ -454,7 +492,7 @@ function encScalar(chunks, type, value, eol) {
     case "ba": {
       const b = enc.encode(String(value ?? ""));
       line(chunks, "ba", eol);
-      line(chunks, String(b.length), eol);
+      line(chunks, String(eol === "\n" ? crlfLength(b) : b.length), eol);
       chunks.push(b);
       return;
     }
@@ -497,8 +535,10 @@ function encodeFields(node, spec, eol, chunks) {
   }
 }
 
-// Re-emit a `_met` hint when it still decodes to this node's semantics.
-function hinted(node, isCond, navs) {
+// Re-emit a `_met` hint when it still decodes to this node's semantics. In a
+// bare-LF meta the hint is read with CRLF `ba` counts only, so a byte-count
+// hint from an older LF export is re-encoded with VTank's counts.
+function hinted(node, isCond, navs, eol) {
   const h = node && node._met;
   if (!h || typeof h.data !== "string") return null;
   const metType = Number.isInteger(h.type) ? h.type : isCond ? condByKw(node.t)?.met : actByKw(node.t)?.met;
@@ -510,6 +550,7 @@ function hinted(node, isCond, navs) {
   }
   try {
     const r = new Reader(bytes);
+    r.crlfCounts = eol === "\n";
     const v = r.value(0);
     if (r.p !== bytes.length) return null;
     const ctx = new DecodeCtx(bytes, "\r\n", { scratch: true });
@@ -569,7 +610,7 @@ function encodeCond(node, eol, chunks, depth = 0) {
         inertChild(out, eol);
         continue;
       }
-      const t = condTypeOf(ch);
+      const t = condTypeOf(ch, eol);
       line(out, "i", eol);
       line(out, String(t.type), eol);
       if (t.bytes) out.push(t.bytes);
@@ -591,7 +632,7 @@ function encodeAct(node, eol, navs, chunks, depth = 0) {
         inertChild(out, eol);
         continue;
       }
-      const t = actTypeOf(ch, navs);
+      const t = actTypeOf(ch, navs, eol);
       line(out, "i", eol);
       line(out, String(t.type), eol);
       if (t.bytes) out.push(t.bytes);
@@ -622,14 +663,14 @@ function encodeEmbedNav(node, eol, navs, out) {
   encScalar(out, "ba", `${display}${eol}${count}${eol}${navText}`, eol);
 }
 
-function condTypeOf(node) {
-  const h = hinted(node, true, null);
+function condTypeOf(node, eol) {
+  const h = hinted(node, true, null, eol);
   if (h) return h;
   const row = condByKw(node && node.t);
   return { type: row ? row.met : 0, bytes: null };
 }
-function actTypeOf(node, navs) {
-  const h = hinted(node, false, navs);
+function actTypeOf(node, navs, eol) {
+  const h = hinted(node, false, navs, eol);
   if (h) return h;
   const row = actByKw(node && node.t);
   return { type: row ? row.met : 0, bytes: null };
@@ -672,8 +713,28 @@ export function parseMet(bytes, opts = {}) {
   const bom = b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf;
   const body = bom ? b.subarray(3) : b;
   if (!body.length) return { ok: false, warnings, error: "empty .met file" };
+  // A bare-LF file is read with VTank's CRLF `ba` counts, then once more with
+  // plain byte counts (an LF file holtburger wrote before it counted CRLF).
+  const lfFile = bareLfHeader(body);
+  const res = parseBody(body, bom, fileName, lfFile, false);
+  if (res.ok || !lfFile) return res;
+  const raw = parseBody(body, bom, fileName, false, true);
+  return raw.ok ? raw : res;
+}
+
+// The "1" header line ends in a bare LF (a git LF copy or an LF export).
+function bareLfHeader(body) {
+  const i = body.indexOf(10);
+  return i > 0 && body[i - 1] !== 13;
+}
+
+// parseMet on the BOM-less body; `crlfCounts` reads `ba` counts as CRLF
+// character counts, `byteCounts` marks the raw-count retry of an LF file.
+function parseBody(body, bom, fileName, crlfCounts, byteCounts) {
+  const warnings = [];
   try {
     const r = new Reader(body);
+    r.crlfCounts = crlfCounts;
     const ver = r.line().trim();
     const name = r.line().trim();
     if (ver !== "1" || name !== "CondAct") return { ok: false, warnings, error: "not a VTank .met file (expected \"1\" / \"CondAct\" header)" };
@@ -682,6 +743,7 @@ export function parseMet(bytes, opts = {}) {
     if (t.cols.join(",") !== ROOT_COLS.join(",")) warnings.push(`unexpected CondAct column names ${t.cols.join(",")}`);
     if (r.p < body.length) warnings.push(`${body.length - r.p} trailing byte(s) after the CondAct table ignored`);
     const eol = r.lf > 0 && r.crlf === 0 ? "\n" : "\r\n";
+    if (byteCounts) warnings.push(`"ba" lengths are LF byte counts, not VTank's CRLF character counts (an older LF export)${eol === "\n" ? "; saving writes VTank's counts" : ""}`);
     const ctx = new DecodeCtx(body, eol);
     const rules = [];
     const ids = new Set();
@@ -726,8 +788,8 @@ export function writeMet(meta) {
   line(out, "CondAct", eol);
   tableBodyHead(out, ROOT_COLS, rules.length, eol);
   for (const r of rules) {
-    const c = condTypeOf(r.cond || { t: "Never" });
-    const a = actTypeOf(r.act || { t: "None" }, navs);
+    const c = condTypeOf(r.cond || { t: "Never" }, eol);
+    const a = actTypeOf(r.act || { t: "None" }, navs, eol);
     line(out, "i", eol);
     line(out, String(c.type), eol);
     line(out, "i", eol);

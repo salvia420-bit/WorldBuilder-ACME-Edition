@@ -77,6 +77,8 @@ import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
 // 2026-10-08 — ?layerHaze: painterly distance + altitude haze over all geometry.
 import { LayeredHazePass, layerHazeStrength, installLayerHazeHandle } from "./layered_haze.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
+// cells-portals-2 — `?indoorLandscapeGate` diag counter (skipped frames).
+import { INDOOR_LANDSCAPE_GATE_STATS } from "./indoor_landscape_gate.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -86,6 +88,10 @@ import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 const CAM_LAYER_MASK_BOTH = (1 << 0) | (1 << 1);
 const CAM_LAYER_MASK_WORLD_ONLY = (1 << 0);
 const CAM_LAYER_MASK_INDOOR_ONLY = (1 << 1);
+// cells-portals-2 `?indoorLandscapeGate`: no layer at all. The world pass
+// keeps running (its colour + depth clear is the frame's clear) but draws
+// nothing — retail skipping LScape::draw (acclient.c:461476).
+const CAM_LAYER_MASK_NONE = 0;
 
 /**
  * Tiny pmndrs Pass subclass that sets the camera's layer mask before the
@@ -1233,6 +1239,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // cellsMaskPass / cellsRenderPass slots that have existed (disabled) since
   // the Phase 5 PView work.
   let indoorSplitArmed = false;
+  // cells-portals-2 `?indoorLandscapeGate=on` (OPT-IN). Published once per
+  // tick by cells.js `tickPortalSeal` via `setIndoorLandscapeSkip`; honoured
+  // only on an armed indoor frame. Stays `false` forever when the flag is off.
+  let indoorLandscapeSkip = false;
 
   // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
   // cells pass. Both are `enabled=false` by default (outdoor steady state);
@@ -1855,6 +1865,20 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     },
 
     /**
+     * cells-portals-2 `?indoorLandscapeGate=on` — skip the landscape on the
+     * NEXT armed indoor frame (the walk reaches no outside portal; retail
+     * draws LScape::draw only under `outside_view.view_count`, PView::DrawCells
+     * acclient.c:461476). Called once per tick by cells.js `tickPortalSeal`,
+     * which owns every fail-open clause (scene3d/indoor_landscape_gate.js).
+     * Never called with the flag off.
+     *
+     * @param {boolean} skip
+     */
+    setIndoorLandscapeSkip(skip) {
+      indoorLandscapeSkip = !!skip;
+    },
+
+    /**
      * Pre-frame: sync sky camera, flip sky enabled/world clear flags
      * based on indoor state, AND configure the Phase 5 PView render
      * order (terrain → depth-clear → EnvCells) when indoor.
@@ -1882,12 +1906,17 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // the sky's sun (it was (0,0,0); see aerialSunEnabled). Two vec3 compares.
       if (aerialSunOn && atmosphereSky) syncAerialSun(aerialPerspective, atmosphereSky);
       const isIndoor = !!skyDome?._lastIsIndoor;
+      // cells-portals-2 `?indoorLandscapeGate=on`: this armed indoor frame
+      // draws no landscape — retail's sky (GameSky::Draw) is inside
+      // LScape::draw, so the sky, sky-capture and horizon passes go with it.
+      // Always false with the flag off.
+      const landscapeSkip = indoorLandscapeSkip && indoorSplitArmed && isIndoor;
       // SKY-SEEN-OUTSIDE (2026-08-04): the SKY gates read the composite flag
       // (indoor AND not SeenOutside — sky_dome.js tick) so a cottage interior
       // keeps its sky behind the doorway/window view; dungeon cells (never
       // SeenOutside) black out exactly as before. Everything else in this
       // method (punch split, layer masks) still keys off `isIndoor`.
-      const skyBlocked = !!(skyDome?._lastSkyBlocked ?? isIndoor);
+      const skyBlocked = landscapeSkip || !!(skyDome?._lastSkyBlocked ?? isIndoor);
 
       // Sky-K.2 sky-pass + sky-camera sync (existing behaviour).
       if (skyRenderPass) {
@@ -2026,10 +2055,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         // (1) world pass, layer 0 → TERRAIN (plus other landblocks' buildings,
         //     which stay on layer 0 on purpose and so keep terrain occlusion).
         //     Retail's `LScape::draw` at :461480.
-        worldMaskPass.mask = CAM_LAYER_MASK_WORLD_ONLY;
+        //     `?indoorLandscapeGate` skip: an EMPTY mask, NOT a disabled pass —
+        //     the world RenderPass still clears colour + depth (the sky pass is
+        //     off, so `clear` is true above) and the cells pass, which never
+        //     clears, draws the room onto that. Retail runs neither LScape::draw
+        //     nor the Z wipe when `outside_view.view_count` is 0 (:461476).
+        worldMaskPass.mask = landscapeSkip ? CAM_LAYER_MASK_NONE : CAM_LAYER_MASK_WORLD_ONLY;
         // (2) full depth wipe, colour kept — retail's `Clear(4, …, 1.0f)` at
         //     :461484. `ClearPass(false, true, false)` is exactly that.
-        depthClearPass.enabled = true;
+        depthClearPass.enabled = !landscapeSkip;
+        if (landscapeSkip) INDOOR_LANDSCAPE_GATE_STATS.skippedFrames++;
         // (3) cells pass, layer 1 → the room SHELL + its props + the portal-set
         //     EnvCells + entities, against the fresh depth, so terrain can no
         //     longer occlude the room the camera is standing in. Retail's
@@ -2051,7 +2086,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //      Retail draws no atmosphere indoors; the bar is "the doorway view
         //      looks like the same view outdoors". Fed by cells.js
         //      tickPortalSeal from the PView walk's outside view.
-        if (portalSealPass) portalSealPass.enabled = portalSealPass.hasApertures;
+        //      (No seal on a landscape-skip frame: there is no outdoor colour to
+        //      protect, and the walk that feeds it reached no outside portal.)
+        if (portalSealPass) portalSealPass.enabled = !landscapeSkip && portalSealPass.hasApertures;
         _setSealSlots(!!portalSealPass && portalSealPass.enabled);
         cellsMaskPass.enabled = true;
         cellsRenderPass.enabled = true;

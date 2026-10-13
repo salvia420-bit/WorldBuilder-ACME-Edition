@@ -137,6 +137,13 @@ holtburger-core = { workspace = true }
 # single-task by design (RefCell-backed dedup map is `!Send`).
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 futures = { workspace = true }
+# net-transport-2 (2026-10-13) — `net_worker_outbound` (cfg(any(wasm32,
+# test))) returns `anyhow::Result`, and its native tests implement
+# `holtburger_session::Transport` (an `#[async_trait]` trait) to record what a
+# real `Session` sends. Both are already in the wasm32 dep block above; this
+# is the native-test mirror.
+anyhow = { workspace = true }
+async-trait = { workspace = true }
 # COL-03 (2026-07-27) — `mod tests_entity_bsp_door_collision` drives
 # `holtburger_world::spatial::clamp_delta_against_entities` against the real
 # grocer door's DAT geometry, and `setup_entity_physics_geometry` returns

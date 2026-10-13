@@ -94,8 +94,12 @@ pub const ACE_EMU_EPOCH_UNIX: f64 = 1_485_882_000.0;
 //
 //   props=0x00 → 120 occurrences across 9 unique gfx ids:
 //     sun, moons, sky shells, stars, SetupModel moon 0x02000714.
-//     All have begin_time/end_time != 0 OR are static (sky shells).
-//     Zero tex_velocity. No PhysicsScript.
+//     Windowed (begin_time/end_time != 0) or static (sky shells).
+//     Zero tex_velocity. No PhysicsScript EXCEPT the SetupModel moon
+//     0x02000714: it carries default_pes_object_id 0x330007DB (three
+//     Swarm glow emitters, scene3d/sky_glow.js) and begin == end == 0
+//     (always visible) in all 20 DayGroups. So a non-zero PES does NOT
+//     imply bit 0x08 or weather (sky-fog-time-1, 2026-10-13).
 //
 //   props=0x02 → 20 occurrences across 7 unique gfx ids:
 //     ALL are cloud-band 0x01xxxxxx GfxObjs (0x010015B6, 0x01004C35-3A).
@@ -159,13 +163,23 @@ pub const SKY_OBJ_PROP_SCROLLING_CLOUD: u32 = 0x02;
 /// 0 and 3 → props=0x0D). The distinguishing feature is large
 /// tex_velocity_y magnitude (>1.0). Confidence: MEDIUM (small sample,
 /// 2 unique 0x01 ids).
+///
+/// Retail reads this bit as THE weather flag, on its own:
+/// `GameSky::CreateDeletePhysicsObjects` (acclient.c:308687) passes
+/// `props & 4` to `GameSky::MakeObject` (:308427), which skips the
+/// object unless `LScape::weather_enabled`; `GameSky::Draw` (:308475)
+/// gates it the same way. The PES and the Setup/GfxObj type play no part.
 pub const SKY_OBJ_PROP_WEATHER_STREAK: u32 = 0x04;
 
 /// Bit 3 (0x08): "PhysicsScript-bound." Only present on
 /// 0x02xxxxxx SetupModels that ALSO carry a non-zero
 /// `default_pes_object_id` (PhysicsScript DID). 100% correlated in
 /// retail data: every SetupModel weather effect has bit 3 set, and
-/// no GfxObj does. Confidence: HIGH.
+/// no GfxObj does. Confidence: HIGH. The converse does not hold: the
+/// moon proxy 0x02000714 has PES 0x330007DB with props 0x00. Retail
+/// reads this bit only on weather (0x04) objects, as a placement flag:
+/// `GameSky::UpdatePosition` (acclient.c:308367) drops a weather object
+/// WITHOUT 0x08 to z = -120 and leaves one with it at the viewer's z.
 pub const SKY_OBJ_PROP_PHYSICS_SCRIPT: u32 = 0x08;
 
 /// Convenience predicate: should the renderer treat this SkyObject

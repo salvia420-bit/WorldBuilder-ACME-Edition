@@ -57,10 +57,17 @@ pub struct RemoteMovePlan {
     pub guid: Guid,
     pub begin: WorldPosition,
     pub end: WorldPosition,
-    /// World-frame walk velocity (its own motion) — the leave-ground
-    /// velocity if the move walks it off a ledge
-    /// (`get_leave_ground_velocity`, acclient.c:343806-343833).
+    /// World-frame walk velocity (its own motion, × the object's scale —
+    /// motion-remote-1).
     pub walk_v: Vector3,
+    /// The planar walk offset `end` carries: `walk_v` × quantum × the leash
+    /// scale (motion-remote-3, `?remoteLeash`). The scene step accumulates
+    /// it into the body's leash (`ConstraintManager::accumulate`).
+    pub walk_offset: Vector3,
+    /// `walk_v` before the object's scale — the leave-ground velocity if
+    /// the move walks it off a ledge (`get_leave_ground_velocity`,
+    /// acclient.c:343806-343833, takes the unscaled `get_state_velocity`).
+    pub leave_walk_v: Vector3,
     /// The sliding physics velocity after this slice's friction.
     pub slide_v: Vector3,
     pub contact_plane: Option<(Plane, u32)>,
@@ -78,6 +85,10 @@ pub struct ResolvedRemoteMove {
     pub leave_ground: bool,
     pub contact_plane: Option<(Plane, u32)>,
     pub wall_normal: Option<Vector3>,
+    /// The plan's [`RemoteMovePlan::walk_offset`] — the leash accumulates
+    /// the offset BEFORE the sweep, as retail's `adjust_offset` runs before
+    /// the transition (motion-remote-3).
+    pub walk_offset: Vector3,
 }
 
 impl WorldState {
@@ -123,7 +134,7 @@ impl WorldState {
                 let velocity = if !leave_ground {
                     plan.slide_v
                 } else if plan.walk_v != Vector3::zero() {
-                    Vector3::new(plan.walk_v.x, plan.walk_v.y, 0.0)
+                    Vector3::new(plan.leave_walk_v.x, plan.leave_walk_v.y, 0.0)
                 } else {
                     plan.slide_v
                 };
@@ -135,6 +146,7 @@ impl WorldState {
                         leave_ground,
                         contact_plane: outcome.contact_plane.or(plan.contact_plane),
                         wall_normal: outcome.wall_normal.or(plan.wall_normal),
+                        walk_offset: plan.walk_offset,
                     },
                 )
             })
@@ -188,13 +200,10 @@ impl WorldState {
                 capsule = [(c.origin.z * scale + r, r), (c.origin.z * scale + h - r, r)];
                 height = c.origin.z * scale + h;
             }
-            if let Some((up, down)) = shapes.step_heights
-                && up.is_finite()
-                && down.is_finite()
-                && up >= 0.0
-                && down >= 0.0
-            {
-                step = (up * scale, down * scale);
+            // The step-height half is shared with the local player's body
+            // (`transition::mover_body_from_setup`, physics-collision-2).
+            if let Some(scaled) = transition::scaled_setup_step_heights(shapes, scale) {
+                step = scaled;
             }
         }
 

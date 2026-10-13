@@ -51,10 +51,18 @@ import {
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
 import {
-  itemTypeLabel, equipSlotsLabel, skillName, damageTypeLabel,
-  formatThousands, protectionText, weaponSpeedText, damageRangeText,
+  itemTypeLabel, equipSlotsLabel,
+  formatThousands, protectionText,
   highlightState, healthModel, examineHeaderModel, creatureAttributeRows, pkStatusText,
+  splitSpellBook, manaCostText,
+  workmanshipText, bondedText, attunedText,
+  examineSubPage, characterMiscRows, creatureRatingRows, armorCell,
+  levelLimitLine, wieldRequirementLines,
 } from "./examine_format.js";
+import {
+  equipmentSetLines, ratingLines, specialPropertyLines, itemLevelLines,
+  weaponAndArmorLines, defenseModLines, casterLines, activationRequirementLines,
+} from "./appraisal_text.js";
 
 const VIEW_ID_STYLE = "hb-examine-view-style";
 const SP = "./data/ui-sprites";
@@ -161,6 +169,11 @@ function ensureStyles() {
     .hb-exa-body .hbk-kv.is-debuffed > :last-child { color: var(--hbk-warn); }
     .hb-exa-body .hbk-kv.is-debuffed > :last-child::after { content: " \\25BC"; font-size: 9px; }
     .hb-exa-body .hbk-kv.is-incomplete > :last-child { opacity: 0.65; font-style: italic; }
+    /* examine-text-7: retail AddLineToMiscInfo colours label AND value —
+       font 1 for the viewer's own society, font 2 for a rival one. */
+    .hb-exa-body .hbk-kv.is-ok > * { color: #c6ff9a; }
+    .hb-exa-body .hbk-kv.is-warn > * { color: var(--hbk-warn); }
+    .hb-exa-gap { height: 6px; }
     .hb-exa-grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
     .hb-exa-spells { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 2px; }
     .hb-exa-spell { display: flex; align-items: center; gap: 6px; min-height: 18px; }
@@ -170,6 +183,17 @@ function ensureStyles() {
       image-rendering: pixelated;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
     }
+    /* examine-text-4: name + the SpellTable description under it. */
+    .hb-exa-spell.has-desc { align-items: flex-start; padding: 1px 0; }
+    .hb-exa-spell.has-desc > i { margin-top: 1px; }
+    .hb-exa-spell-text { display: flex; flex-direction: column; min-width: 0; }
+    .hb-exa-spell-desc {
+      color: var(--hbk-text-dim);
+      font-size: 11px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+      user-select: text;
+    }
     .hb-exa-prose {
       padding: 2px 2px 0;
       line-height: 1.4;
@@ -178,6 +202,7 @@ function ensureStyles() {
       user-select: text;
     }
     .hb-exa-prose.is-flavor { font-style: italic; color: var(--hbk-text); }
+    .hb-exa-prose.is-note { color: var(--hbk-text-dim); }
     .hb-exa-fail { padding: 8px 2px; color: var(--hbk-warn); font-style: italic; }
     .hb-exa-pending { padding: 6px 2px; color: var(--hbk-text-dim); font-style: italic; }
     /* Embedded PaperdollViewport (Wave 3.B) — the examined creature /
@@ -244,6 +269,9 @@ function kvRow(parent, label, value, { tone = null, title = null } = {}) {
   else if (tone === "debuffed") { row.classList.add("is-debuffed"); row.title = "Lowered by an enchantment"; }
   // enchstats-4: retail font 3 — the value of a failed assess.
   else if (tone === "incomplete") { row.classList.add("is-incomplete"); row.title = "Assess failed"; }
+  // examine-text-7: the misc-info list's font 1 / font 2 (Society row).
+  else if (tone === "ok") row.classList.add("is-ok");
+  else if (tone === "warn") row.classList.add("is-warn");
   if (title) row.title = title;
   const l = document.createElement("span");
   l.textContent = label;
@@ -270,6 +298,42 @@ function renderCreatureAttributeBlock(wrapEl, rows) {
   }
 }
 
+/** examine-text-7: retail's misc-info list (examine_format.js
+ *  characterMiscRows / creatureRatingRows) — kv rows, a thin gap for
+ *  retail's blank lines (none leading, never two), the legend as a note. */
+function renderMiscInfoRows(wrapEl, rows) {
+  let rendered = 0;
+  let gap = false;
+  for (const r of rows) {
+    if (r.blank) { gap = rendered > 0; continue; }
+    if (gap) {
+      const g = document.createElement("div");
+      g.className = "hb-exa-gap";
+      wrapEl.appendChild(g);
+      gap = false;
+    }
+    if (r.note) prose(wrapEl, r.label, "is-note");
+    else {
+      const title = r.tone === "ok" ? "Your society" : r.tone === "warn" ? "A rival society" : null;
+      kvRow(wrapEl, r.label, r.value, { tone: r.tone, title });
+    }
+    rendered++;
+  }
+}
+
+// examine-text-7: the VIEWER's own Faction1Bits (PropertyInt 0x119) — retail
+// CharExamineUI reads it from PlayerDesc to colour the Society row. The
+// local player's PlayerDescription properties live on its entity.
+function viewerFaction1Bits() {
+  try {
+    const h = getHandle();
+    if (typeof h?.objectIntProperty !== "function") return 0;
+    const g = (window.getLocalPlayerGuid?.() >>> 0) || (h.playerGuid?.() >>> 0) || 0;
+    if (!g) return 0;
+    return (h.objectIntProperty(g, 281) ?? 0) | 0;
+  } catch (_) { return 0; }
+}
+
 function sectionTitle(parent, text) {
   const s = document.createElement("div");
   s.className = "hbk-section-title";
@@ -286,6 +350,30 @@ function prose(parent, text, cls = "") {
   return d;
 }
 
+// examine-text-5: one plugins/appraisal_text.js line — a kit kv row when it
+// splits into label + value (tinted like the other rows), else retail's
+// sentence as prose.
+function appraisalLine(parent, line) {
+  if (line.label != null) return kvRow(parent, line.label, line.value, { tone: line.tone });
+  return prose(parent, line.text);
+}
+
+// examine-text-5: the viewer's Shield skill (SkillType 48) for retail's
+// "Effective Shield Level" — CACQualities::InqSkill (buffed) and the
+// advancement class, from playerStats' stride-6 skills
+// [type, current, base, ranks, training, next_rank_cost]. Read only for a
+// shield (appraisal_text.js calls it lazily).
+function viewerShieldSkill() {
+  try {
+    const s = window.__pluginClient?.player?.stats?.skills;
+    if (!s) return null;
+    for (let i = 0; i + 5 < s.length; i += 6) {
+      if ((s[i] >>> 0) === 48) return { current: s[i + 1] >>> 0, training: s[i + 4] >>> 0 };
+    }
+  } catch (_) { /* no stats yet → retail's zeroed InqSkill */ }
+  return null;
+}
+
 function debugEnabled() {
   try { return new URLSearchParams(window.location?.search ?? "").get("debug") === "1"; }
   catch (_) { return false; }
@@ -297,20 +385,63 @@ const hex8 = (n) => `0x${(Number(n) >>> 0).toString(16).toUpperCase().padStart(8
 // normalization (getSpellRecord crosses the wasm boundary as a JS Map —
 // `.name` on the raw object silently returns undefined, per the 2026-07-01
 // fix in that file). Small local cache avoids re-crossing the boundary
-// every render.
-const _spellNameCache = new Map();
-function getSpellName(spellId) {
+// every render. examine-text-4: also keeps the SpellTable `description`
+// (retail Appraisal_ShowMagicInfo's "~ Name: description" entries).
+const _spellInfoCache = new Map();
+function getSpellInfo(spellId) {
   const id = spellId >>> 0;
-  if (_spellNameCache.has(id)) return _spellNameCache.get(id);
-  let name = null;
+  if (_spellInfoCache.has(id)) return _spellInfoCache.get(id);
+  let info = null;
   try {
     const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
     let rec = handle?.getSpellRecord?.(id);
     if (rec instanceof Map) rec = Object.fromEntries(rec);
-    if (rec && typeof rec.name === "string") name = rec.name;
+    if (rec && typeof rec.name === "string" && rec.name) {
+      info = {
+        name: rec.name,
+        description: typeof rec.description === "string" ? rec.description.trim() : "",
+      };
+    }
   } catch (_) { /* pre-SpellTable-load — retry next render */ }
-  if (name) _spellNameCache.set(id, name);
-  return name;
+  if (info) _spellInfoCache.set(id, info);
+  return info;
+}
+
+// Spell list with names + icons — retail's ItemExamineUI spell strip.
+// `ids` are plain spell ids (enchantment bit already stripped by
+// splitSpellBook); names/descriptions resolve via handle.getSpellRecord
+// (sync) and icons via resolveSpellIcon (async), same path as the
+// spellbook/hotbar. examine-text-4: the description is a muted second line.
+function spellListEl(ids) {
+  const list = document.createElement("div");
+  list.className = "hb-exa-spells hb-exa-spelllist";
+  for (const spellId of ids) {
+    const id = spellId >>> 0;
+    const info = getSpellInfo(id);
+    const entry = document.createElement("div");
+    entry.className = "hb-exa-spell";
+    const ic = document.createElement("i");
+    entry.appendChild(ic);
+    const text = document.createElement("div");
+    text.className = "hb-exa-spell-text";
+    const label = document.createElement("span");
+    label.textContent = info?.name || "Unknown spell";
+    if (debugEnabled()) label.title = `spell ${id}`;
+    text.appendChild(label);
+    if (info?.description) {
+      entry.classList.add("has-desc");
+      const desc = document.createElement("span");
+      desc.className = "hb-exa-spell-desc";
+      desc.textContent = info.description;
+      text.appendChild(desc);
+    }
+    entry.appendChild(text);
+    list.appendChild(entry);
+    resolveSpellIcon(id).then((url) => {
+      if (url && ic.isConnected) ic.style.backgroundImage = `url("${url}")`;
+    }).catch(() => {});
+  }
+  return list;
 }
 
 function getHandle() {
@@ -700,6 +831,9 @@ function populateFromEntity(body, ctx, model) {
   let liveOdf = 0;
   try { liveOdf = (window.__sessionHandle?.objectDescFlags?.(guid >>> 0) ?? 0) >>> 0; } catch (_) { liveOdf = 0; }
   const pkOdf = liveOdf || objDescFlags;
+  // examine-text-7: kept for a templated NPC the appraisal later routes to
+  // the character page (renderHeader).
+  model.pkOdf = pkOdf;
   model.isPK = model.isPlayer && (pkOdf & 0x20) !== 0;
   model.pkStatus = model.isPlayer ? pkStatusText(pkOdf) : null;
   const itemType = (v("itemType") ?? 0) >>> 0;
@@ -734,10 +868,10 @@ function populateFromEntity(body, ctx, model) {
 
 // EX-05 (2026-06-05) — render the AppraisalProfile snapshot returned by
 // `getObjectAppraisal(guid)` into `wrapEl`, in retail
-// ItemExamineUI::SetAppraiseInfo order (acclient.c 235257): tinkering →
-// weapon & armor data → armor mods → magic → wield requirements →
-// properties / usage → spells → description. Creatures get
-// BasicCreatureExamineUI's attribute block instead.
+// ItemExamineUI::SetAppraiseInfo order (acclient.c 235257): set & ratings →
+// tinkering + weapon & armor data → armor mods → magic → special
+// properties → wield requirements + item level → usage → description.
+// Creatures get BasicCreatureExamineUI's attribute block instead.
 // Hidden (display:none) when no appraisal has landed yet for this GUID.
 function renderAppraisal(wrapEl, guid, snapshot, kind) {
   if (!wrapEl) return;
@@ -758,12 +892,9 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
   const gated = identifyFlags !== 0;
   const flagBit = (mask) => !gated || (identifyFlags & mask) !== 0;
   const IDENTIFY_FLAG_SPELL_BOOK       = 0x0010;
-  const IDENTIFY_FLAG_WEAPON_PROFILE   = 0x0020;
-  const IDENTIFY_FLAG_HOOK_PROFILE     = 0x0040;
   const IDENTIFY_FLAG_ARMOR_PROFILE    = 0x0080;
   const IDENTIFY_FLAG_CREATURE_PROFILE = 0x0100;
   const IDENTIFY_FLAG_ARMOR_ENCH       = 0x0200;
-  const IDENTIFY_FLAG_WEAPON_ENCH      = 0x0800;
   const IDENTIFY_FLAG_ARMOR_LEVELS     = 0x4000;
   if (!identifySuccess) {
     const fail = document.createElement("div");
@@ -772,6 +903,12 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
       ? "You fail to assess this creature. You will try again shortly."
       : "Your skill is not high enough to identify this item. You will try again shortly.";
     wrapEl.appendChild(fail);
+    // examine-text-4: Appraisal_ShowShortMagicInfo / Appraisal_ShowMagicInfo
+    // (acclient.c:232508 / :232717) print "Spells: unknown." when the failed
+    // profile still carried a spell book (ACE sends the flag on a failure).
+    if (kind !== "creature" && kind !== "player" && (identifyFlags & IDENTIFY_FLAG_SPELL_BOOK) !== 0) {
+      prose(wrapEl, "Spells: unknown.");
+    }
     // enchstats-4 (2026-10-08): retail still renders the creature block on
     // a failed assess (AttributeInfoRegion / Attribute2ndInfoRegion::
     // Update(AppraisalProfile*), acclient.c:285975 / :286022): attributes
@@ -790,18 +927,16 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
   const strings = props.strings || {};
   const cp = snapshot.creatureProfile || null;
   const ap = snapshot.armorProfile || null;
-  const wp = snapshot.weaponProfile || null;
-  const hp = snapshot.hookProfile || null;
   const al = snapshot.armorLevels || null;
   // Enchantment highlights (retail tints the line green / red).
   const ah = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorHighlight : 0;
   const ac = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorColor : 0;
-  const wh = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponHighlight : 0;
-  const wc = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponColor : 0;
   const armorTone = (bit) => highlightState(ah, ac, bit);
-  const weaponTone = (bit) => highlightState(wh, wc, bit);
   const sec = (text) => sectionTitle(wrapEl, text);
   const row = (label, value, opts) => kvRow(wrapEl, label, value, opts);
+  // examine-text-5: the appraisal_text.js sections are ItemExamineUI's —
+  // CharExamineUI / BasicCreatureExamineUI print none of them.
+  const isItem = kind !== "creature" && kind !== "player";
 
   // === UiEffects magic-effect badges (Track A A0, 2026-06-24) ===
   // `?uiEffectIcons` (default OFF) — render the item's UiEffects (PropertyInt
@@ -857,54 +992,102 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
   // the wire (types.rs), so there is nothing to render until a
   // SkillProfile lands.
 
+  // === Misc info (CreatureExamineUI / CharExamineUI m_extraInfoList) ===
+  // examine-text-7 (2026-10-13): under the attribute block retail lists the
+  // Dmg/CritDmg + DoT/Life rating lines (both pages) and, on the character
+  // page, Society (own / rival colour from the viewer's Faction1Bits), the
+  // allegiance rows, the "Head/Chest/Groin  AL: a/b/c" armor rows,
+  // Fellowship, Arrived / Time in Dereth, Chess Rank, Fishing Skill,
+  // Deaths, Titles Earned and the "* = Unenchantable" legend.
+  const armorLevelsShown = flagBit(IDENTIFY_FLAG_ARMOR_LEVELS) ? al : null;
+  if (kind === "player") {
+    const miscRows = characterMiscRows(ints, strings, viewerFaction1Bits(), { armorLevels: armorLevelsShown });
+    if (miscRows.length) {
+      sec("Character");
+      renderMiscInfoRows(wrapEl, miscRows);
+    }
+  } else if (kind === "creature") {
+    const ratingRows = creatureRatingRows(ints);
+    if (ratingRows.length) {
+      sec("Ratings");
+      renderMiscInfoRows(wrapEl, ratingRows);
+    }
+  }
+
   // === Tinkering (Appraisal_ShowTinkeringInfo) ===
+  // examine-text-3 (2026-10-13): retail "<adjective> (N)"; a salvage bag's
+  // ItemWorkmanship is the SUM over NumItemsInMaterial items, so it reads
+  // the average "(7.20)" + "Salvaged from N items." (workmanshipText).
   const tinkerRows = [];
-  if (ints.ItemWorkmanship != null) tinkerRows.push(["Workmanship", ints.ItemWorkmanship]);
+  const workmanship = workmanshipText(ints.ItemWorkmanship, ints.NumItemsInMaterial);
+  if (workmanship) tinkerRows.push(["Workmanship", workmanship.value]);
   if (ints.NumTimesTinkered > 0) tinkerRows.push(["Tinkered", `${ints.NumTimesTinkered} time${ints.NumTimesTinkered === 1 ? "" : "s"}`]);
   if (strings.TinkerName) tinkerRows.push(["Last tinkered by", strings.TinkerName]);
   if (strings.ImbuerName) tinkerRows.push(["Imbued by", strings.ImbuerName]);
 
+  // === Set & Ratings (Appraisal_ShowSet / Appraisal_ShowRatings) ===
+  // examine-text-6 (2026-10-13): "Set: <name>", "Ratings: Dam N, Crit N, …."
+  // and "This item adds N Vitality." from plugins/appraisal_text.js. Retail
+  // prints them right after the tinkering lines and before the weapon /
+  // armor data; the tinkering rows live in that section here, so the block
+  // sits just above it.
+  const setRatingLines = isItem ? [...equipmentSetLines(snapshot), ...ratingLines(snapshot)] : [];
+  if (setRatingLines.length) {
+    sec("Set & Ratings");
+    for (const line of setRatingLines) appraisalLine(wrapEl, line);
+  }
+
   // === Weapon & armor data (Appraisal_ShowWeaponAndArmorData /
+  //     Appraisal_ShowDefenseModData / Appraisal_ShowCasterData /
   //     Appraisal_ShowArmorMods). ArmorProfile carries per-damage-type
   //     multipliers; the overall AL is PropertyInt.ArmorLevel (28). ===
+  // examine-text-5 (2026-10-13): the weapon / shield / ammunition /
+  // "Covers …" lines, the Melee / Missile / Magic Defense bonuses and the
+  // caster's Mana Conversion + elemental spell damage are retail's, from
+  // plugins/appraisal_text.js: "Skill" carries the WeaponType suffix and no
+  // tint (weapon bit 0x1 is WeaponOffense → "Bonus to Attack Skill"), and
+  // the old any-weapon "Damage bonus" row is gone (retail prints "Damage
+  // Modifier" for ammo launchers only, acclient.c:231467).
   const showArmor = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ap;
-  const showWeapon = flagBit(IDENTIFY_FLAG_WEAPON_PROFILE) && wp;
-  const showHook = flagBit(IDENTIFY_FLAG_HOOK_PROFILE) && hp;
   const showArmorLevels = flagBit(IDENTIFY_FLAG_ARMOR_LEVELS) && al;
   const showArmorLevelInt = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ints.ArmorLevel != null;
-  if (tinkerRows.length || showWeapon || showArmorLevelInt || showArmor) {
-    sec(showWeapon ? "Weapon" : (showArmor || showArmorLevelInt) ? "Armor" : "Craftsmanship");
+  const weaponArmorLines = isItem ? weaponAndArmorLines(snapshot, { shieldSkill: viewerShieldSkill }) : [];
+  const statLines = isItem ? [...defenseModLines(snapshot), ...casterLines(snapshot)] : [];
+  const armorish = showArmor || showArmorLevelInt || weaponArmorLines.some((l) => l.group === "armor");
+  const weaponish = weaponArmorLines.some((l) => l.group === "weapon") || (statLines.length > 0 && !armorish);
+  if (tinkerRows.length || weaponish || armorish) {
+    sec(weaponish ? "Weapon" : armorish ? "Armor" : "Craftsmanship");
     for (const [l, val] of tinkerRows) row(l, val);
-    if (showWeapon) {
-      // Retail weapon block: Skill, Damage "min - max, Type", Speed.
-      const dmg = damageRangeText(wp.damage, wp.damage_variance);
-      const dtype = damageTypeLabel(wp.damage_type);
-      if (wp.weapon_skill != null) row("Skill", skillName(wp.weapon_skill), { tone: weaponTone(0x0001) });
-      if (dmg) row("Damage", dtype ? `${dmg}, ${dtype}` : dmg, { tone: weaponTone(0x0008) || weaponTone(0x0010) });
-      if (wp.weapon_time != null) row("Speed", weaponSpeedText(wp.weapon_time), { tone: weaponTone(0x0004) });
-      if (wp.damage_mod != null && Number(wp.damage_mod) !== 1) {
-        row("Damage bonus", `${Math.round((Number(wp.damage_mod) - 1) * 100)}%`, { tone: weaponTone(0x0020) });
-      }
-    }
+    if (workmanship?.salvagedLine) prose(wrapEl, workmanship.salvagedLine);
+    for (const line of weaponArmorLines) appraisalLine(wrapEl, line);
+    for (const line of statLines) appraisalLine(wrapEl, line);
     if (showArmorLevelInt) row("Armor Level", formatThousands(ints.ArmorLevel), { tone: armorTone(0x0001) });
     if (showArmor) {
       const AL = Number(ints.ArmorLevel);
-      const prot = (label, mod, bit) => {
+      // examine-text-3: `dtype` (the DAMAGE_TYPE bit) picks retail's
+      // negative-modifier sentence; the highlight bits are
+      // AppraisalProfile::InqFloatEnchantmentMod's armor bits — Nether
+      // (0xA5) is 0x100 (acclient.c:477475; vanilla ACE never sets it).
+      const prot = (label, mod, bit, dtype) => {
         if (mod == null) return;
-        row(label, protectionText(mod, Number.isFinite(AL) ? AL : null), { tone: armorTone(bit) });
+        row(label, protectionText(mod, Number.isFinite(AL) ? AL : null, dtype), { tone: armorTone(bit) });
       };
-      prot("Slashing",    ap.slashing,    0x0002);
-      prot("Piercing",    ap.piercing,    0x0004);
-      prot("Bludgeoning", ap.bludgeoning, 0x0008);
-      prot("Fire",        ap.fire,        0x0020);
-      prot("Cold",        ap.cold,        0x0010);
-      prot("Acid",        ap.acid,        0x0040);
-      prot("Electric",    ap.lightning,   0x0080);
-      prot("Nether",      ap.nether,      0);
+      prot("Slashing",    ap.slashing,    0x0002, 0x001);
+      prot("Piercing",    ap.piercing,    0x0004, 0x002);
+      prot("Bludgeoning", ap.bludgeoning, 0x0008, 0x004);
+      prot("Fire",        ap.fire,        0x0020, 0x010);
+      prot("Cold",        ap.cold,        0x0010, 0x008);
+      prot("Acid",        ap.acid,        0x0040, 0x020);
+      prot("Electric",    ap.lightning,   0x0080, 0x040);
+      prot("Nether",      ap.nether,      0x0100, 0x400);
     }
   }
   // Per-slot armor-level breakdown (ArmorLevels, 9 body locations).
-  if (showArmorLevels) {
+  // examine-text-7: the character page prints these as its
+  // "Head/Chest/Groin  AL: a/b/c" rows (the Character section above); other
+  // creatures keep the grid. ACE adds 9999 to an all-unenchantable location,
+  // which retail shows as "*N" (armorCell) with the "* = Unenchantable" note.
+  if (showArmorLevels && kind !== "player") {
     const slots = [
       ["head", "Head"], ["chest", "Chest"], ["abdomen", "Abdomen"],
       ["upper_arm", "Upper Arms"], ["lower_arm", "Lower Arms"], ["hand", "Hands"],
@@ -914,97 +1097,99 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
       sec("Armor by Location");
       const grid = document.createElement("div");
       grid.className = "hb-exa-grid2";
-      for (const [key, label] of slots) kvRow(grid, label, formatThousands(al[key]));
+      let starred = false;
+      for (const [key, label] of slots) {
+        const cell = armorCell(al[key]);
+        if (cell?.startsWith("*")) starred = true;
+        kvRow(grid, label, cell);
+      }
       wrapEl.appendChild(grid);
+      if (starred) prose(wrapEl, "* = Unenchantable", "is-note");
     }
   }
 
   // === Magic (Appraisal_ShowMagicInfo: "Spellcraft: %d." "Mana: %d / %d."
   //     + Appraisal_ShowActivationRequirements arcane-lore difficulty) ===
+  // examine-text-4 (2026-10-13): the spell book splits on bit 31 like
+  // retail (splitSpellBook). ACE's AppraiseInfo.AddEnchantments sends every
+  // enchantment on the item (and wielder auras) as `SpellId | 0x80000000`.
+  // Those list under "Enchantments", not as spells the item carries. The
+  // mana cost is ManaRate, else ItemManaCost (manaCostText).
   const sb = flagBit(IDENTIFY_FLAG_SPELL_BOOK) && Array.isArray(snapshot.spellBook)
     ? snapshot.spellBook : [];
-  const hasMagic = ints.ItemSpellcraft != null || ints.ItemMaxMana != null || ints.ItemDifficulty != null || sb.length > 0;
+  const { intrinsic, enchantments } = splitSpellBook(sb);
+  // examine-text-5: Appraisal_ShowActivationRequirements' "Activation
+  // requires Arcane Lore: N, Allegiance Rank: N, <heritage>, <skill>: N, …"
+  // and "This item can only be activated by …" replace the old
+  // "Arcane Lore to activate" row.
+  const activationLines = isItem ? activationRequirementLines(snapshot) : [];
+  const hasMagic = ints.ItemSpellcraft != null || ints.ItemMaxMana != null || ints.ItemDifficulty != null
+    || intrinsic.length > 0 || activationLines.length > 0;
   if (hasMagic) {
     sec("Magic");
     if (ints.ItemSpellcraft != null) row("Spellcraft", ints.ItemSpellcraft);
     if (ints.ItemMaxMana != null) row("Mana", `${formatThousands(ints.ItemCurMana ?? 0)} / ${formatThousands(ints.ItemMaxMana)}`);
-    if (ints.ItemDifficulty != null) row("Arcane Lore to activate", ints.ItemDifficulty);
-    if (floats.ManaRate != null && Number(floats.ManaRate) < 0) {
-      const secs = Math.round(-1 / Number(floats.ManaRate));
-      if (Number.isFinite(secs) && secs > 0) row("Mana cost", `1 every ${secs} s`);
+    for (const line of activationLines) appraisalLine(wrapEl, line);
+    const manaCost = manaCostText(ints, floats);
+    if (manaCost) {
+      row("Mana cost", manaCost.value);
+      if (manaCost.note) prose(wrapEl, manaCost.note, "is-note");
     }
-    if (sb.length > 0) {
-      // Spell list with names + icons — retail's ItemExamineUI spell
-      // strip. `spellBook` is a plain `Vec<u32>` of spell ids on the
-      // wire — names resolve via handle.getSpellRecord (sync) and icons
-      // via resolveSpellIcon (async), same path as the spellbook/hotbar.
-      const list = document.createElement("div");
-      list.className = "hb-exa-spells hb-exa-spelllist";
-      for (const spellId of sb) {
-        const id = spellId >>> 0;
-        const entry = document.createElement("div");
-        entry.className = "hb-exa-spell";
-        const ic = document.createElement("i");
-        entry.appendChild(ic);
-        const label = document.createElement("span");
-        label.textContent = getSpellName(id) || "Unknown spell";
-        if (debugEnabled()) label.title = `spell ${id}`;
-        entry.appendChild(label);
-        list.appendChild(entry);
-        resolveSpellIcon(id).then((url) => {
-          if (url && ic.isConnected) ic.style.backgroundImage = `url("${url}")`;
-        }).catch(() => {});
-      }
-      wrapEl.appendChild(list);
-    }
+    if (intrinsic.length > 0) wrapEl.appendChild(spellListEl(intrinsic));
+  }
+  // Retail's separate "Enchantments:" block (Appraisal_ShowMagicInfo).
+  if (enchantments.length > 0) {
+    sec("Enchantments");
+    wrapEl.appendChild(spellListEl(enchantments));
   }
 
-  // === Requirements (Appraisal_ShowWieldRequirements) ===
-  // WieldRequirements picks which check applies: 1=RawSkill,
-  // 2=AttribSkill (trained skill), 3=RawAttrib, 4=Level, 5=RawAttrib2,
-  // 7=Heritage, 8=Faction.
-  const WIELD_REQ_LABELS = {
-    1: "Skill", 2: "Skill", 3: "Attribute",
-    4: "Level", 5: "Attribute",
-    7: "Heritage", 8: "Faction",
-  };
-  const reqRows = [];
-  if (ints.WieldDifficulty != null || ints.WieldRequirements != null || ints.WieldSkillType != null) {
-    const reqKind = ints.WieldRequirements >>> 0;
-    const skillType = ints.WieldSkillType ?? null;
-    const diff = ints.WieldDifficulty ?? null;
-    const isSkillReq = reqKind === 1 || reqKind === 2;
-    const what = skillType != null && isSkillReq ? skillName(skillType) : null;
-    if (reqKind === 4 && diff != null) reqRows.push(["Wield", `Level ${diff}+`]);
-    else if (what && diff != null) reqRows.push(["Wield", `${what} ${diff}+`]);
-    else if (what) reqRows.push(["Wield", what]);
-    else if (diff != null) reqRows.push([`Wield (${WIELD_REQ_LABELS[reqKind] || "requirement"})`, `${diff}+`]);
-  }
-  if (ints.WieldDifficulty2 != null && ints.WieldSkillType2 != null) {
-    const reqKind2 = ints.WieldRequirements2 >>> 0;
-    const what2 = (reqKind2 === 1 || reqKind2 === 2) ? skillName(ints.WieldSkillType2) : null;
-    if (what2) reqRows.push(["Wield", `${what2} ${ints.WieldDifficulty2}+`]);
-  }
-  if (ints.ItemMinLevel != null) reqRows.push(["Minimum level", ints.ItemMinLevel]);
-  if (ints.ItemMaxLevel != null && kind === "item") reqRows.push(["Item level cap", ints.ItemMaxLevel]);
-  if (reqRows.length) {
-    sec("Requirements");
-    for (const [l, val] of reqRows) row(l, val);
-  }
-
-  // === Properties (Appraisal_ShowSpecialProperties / Bonded/Attuned
-  //     status / "This item cannot be sold.") ===
-  const special = [];
-  if (Number(ints.Bonded) === 1) special.push("Bonded");
-  else if (Number(ints.Bonded) === -1) special.push("Destroyed on death");
-  if (Number(ints.Attuned) === 1) special.push("Attuned");
-  if (props.bools?.IsSellable === false) special.push("Cannot be sold");
-  if (props.bools?.Retained === true) special.push("Retained");
-  if (special.length) {
+  // === Properties (Appraisal_ShowSpecialProperties, then
+  //     SetAppraiseInfo's "This item cannot be sold.") ===
+  // examine-text-6 (2026-10-13): retail's lines from appraisal_text.js —
+  // "You can only carry N of these items.", "Cooldown When Used: 1m 30s",
+  // "Cleave: N enemies in front arc.", the comma-joined "Properties: …"
+  // (slayer, Multi-Strike, imbues, Crushing Blow / Biting Strike, armor /
+  // resistance cleaving, Cast on Strike, Unenchantable, Attuned / Bonded,
+  // Retained, Ivoryable / Dyeable), "This item cannot be further imbued."
+  // and "This item is tethered to the left side." — ahead of the
+  // requirements, in SetAppraiseInfo order (acclient.c:235257). The old
+  // " · " list and its "Cannot be sold" word are gone.
+  // examine-text-3: the Attuned / Bonded words are AttunedStatusToString
+  // (1..2) then BondedStatusToString (−2 Destroyed / −1 Dropped on Death,
+  // 1 Bonded).
+  const specialLines = isItem
+    ? specialPropertyLines(snapshot, { attuned: attunedText(ints.Attuned), bonded: bondedText(ints.Bonded) })
+    : [];
+  const notSellable = isItem && props.bools?.IsSellable === false;
+  if (specialLines.length || notSellable) {
     sec("Properties");
-    prose(wrapEl, special.join(" · "));
+    for (const line of specialLines) appraisalLine(wrapEl, line);
+    if (notSellable) prose(wrapEl, "This item cannot be sold.");
   }
-  if (showHook && hp.hook_type != null && debugEnabled()) row("Hook type", hp.hook_type);
+
+  // examine-text-6: Appraisal_ShowItemLevelInfo's "Item Level: L / Max" and
+  // "Item XP: a / b" (+ the cloak proc sentence) close the Requirements
+  // block. The old "Item level cap" row stays only for an item that has an
+  // ItemMaxLevel but no XP curve (retail prints nothing there).
+  const itemLevel = isItem ? itemLevelLines(snapshot) : [];
+  const hasItemLevel = itemLevel.some((l) => l.key === "itemLevel");
+
+  // === Requirements (Appraisal_ShowLevelLimitInfo, then
+  //     Appraisal_ShowWieldRequirements, then the ShowItemLevelInfo cap) ===
+  // examine-text-1 (2026-10-13): retail's own sentences from
+  // examine_format.js (WieldRequirement 1..12, all four requirement slots,
+  // MinLevel/MaxLevel) instead of the old guessed enum table.
+  const reqLines = [];
+  const levelLine = levelLimitLine(ints);
+  if (levelLine) reqLines.push(levelLine);
+  reqLines.push(...wieldRequirementLines(ints, props.bools || {}, strings));
+  const itemLevelCap = kind === "item" && !hasItemLevel ? (ints.ItemMaxLevel ?? null) : null;
+  if (reqLines.length || itemLevel.length || itemLevelCap != null) {
+    sec("Requirements");
+    for (const line of reqLines) prose(wrapEl, line);
+    for (const line of itemLevel) appraisalLine(wrapEl, line);
+    if (itemLevelCap != null) row("Item level cap", itemLevelCap);
+  }
 
   // === Usage + description (Appraisal_ShowUsage / ShowDescription) ===
   const useText = strings.Use || strings.UseMessage;
@@ -1037,6 +1222,15 @@ function renderHeader(refs, model, snapshot) {
   // An appraisal with a creature profile settles an unknown item/creature.
   if (kind === "item" && !model.fromInventory
       && (snapshot?.creatureProfile || snapshot?.failedCreatureProfile)) kind = "creature";
+  // examine-text-7: gmExaminationUI::SetAppraiseInfo (acclient.c:228878)
+  // sends a creature appraisal carrying Template (string 5) or
+  // CharacterTitleId (int 0x105) to CharExamineUI, so a templated NPC gets
+  // the character page too — with CharExamineUI's PK line for every
+  // character (IsPK / IsPKLite / Non-Player Killer).
+  if (kind === "creature" && examineSubPage(snapshot) === "character") {
+    kind = "player";
+    if (model.pkStatus == null) model.pkStatus = pkStatusText(model.pkOdf ?? 0);
+  }
   model.kind = kind;
   const head = examineHeaderModel({
     kind, ints, strings, item: model.item, meta: model.meta, isPK: model.isPK,
@@ -1208,7 +1402,7 @@ export function mountExamineBody(parentEl, ctx, opts = {}) {
 
   const model = {
     kind: "item", name: resolveExamineName(ctx), titleShown: null,
-    item: null, meta: null, isPlayer: false, isPK: false, pkStatus: null,
+    item: null, meta: null, isPlayer: false, isPK: false, pkStatus: null, pkOdf: 0,
     health: null, healthFraction: null, loading: false,
     fromInventory: !!ctx?.fromInventory,
   };

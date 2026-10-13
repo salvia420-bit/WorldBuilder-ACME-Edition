@@ -98,11 +98,36 @@ const USE_STEP_UP_DOWN: bool = true;
 /// non-human movers once A6 consumes the entity-side fields).
 const USE_SETUP_STEP_HEIGHTS: bool = true;
 
+/// physics-collision-2 (2026-10-13) — the local player's transition body
+/// from its OWN Setup.
+///
+/// `true` (default): once the player entity's Setup is resident
+/// (`WorldState::setup_mover_body`), [`MovementSystem::transition_profile`]
+/// sweeps with that Setup's first two spheres × `obj_scale` and its
+/// `step_up`/`step_down` × scale — retail `CPhysicsObj::transition`
+/// (acclient.c:320061-320102 `init_sphere(GetNumSphere, GetSphere,
+/// m_scale)`) + `OBJECTINFO::init` (:314118-314129), what ACE collides the
+/// player with server-side (`PlayerFactory` gives each heritage/sex its own
+/// Setup). Setup `0x02000001` (and human female `0x0200004E`, the same
+/// bytes) resolves to exactly the hardcoded constants, so human characters
+/// are byte-identical; before the Setup is resident the constants stay.
+///
+/// `false`: every player sweeps as the human Setup `0x02000001`
+/// (`ObjectInfo::for_local_player`'s constants). Runtime escape:
+/// `?setupPlayerBody=off` ([`MovementSystem::setup_player_body_runtime`]).
+const USE_SETUP_PLAYER_BODY: bool = true;
+
 /// A7-R1 — the effective step-up cap for the local player (see
-/// [`USE_SETUP_STEP_HEIGHTS`]).
+/// [`USE_SETUP_STEP_HEIGHTS`]). Legacy-chain reader: it agrees with
+/// [`MovementSystem::transition_profile`]'s const-default body
+/// ([`USE_SETUP_PLAYER_BODY`]).
 fn player_step_up_height(world: &WorldState) -> f32 {
     if USE_SETUP_STEP_HEIGHTS && let Some(height) = world.player.step_up_height {
         height
+    } else if USE_SETUP_PLAYER_BODY
+        && let Some(body) = world.setup_mover_body(world.player.guid)
+    {
+        body.step_up_height
     } else {
         holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT
     }
@@ -112,6 +137,10 @@ fn player_step_up_height(world: &WorldState) -> f32 {
 fn player_step_down_height(world: &WorldState) -> f32 {
     if USE_SETUP_STEP_HEIGHTS && let Some(height) = world.player.step_down_height {
         height
+    } else if USE_SETUP_PLAYER_BODY
+        && let Some(body) = world.setup_mover_body(world.player.guid)
+    {
+        body.step_down_height
     } else {
         holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT
     }
@@ -2317,6 +2346,10 @@ pub(crate) struct MovementSystem {
     /// `None` = the [`USE_WALKABLE_LANDING_GROUND`] const default (ON).
     /// Combined by [`Self::walkable_landing_ground_enabled`].
     walkable_landing_ground_runtime: Option<bool>,
+    /// physics-collision-2 (2026-10-13) — runtime carrier of
+    /// `?setupPlayerBody=off`. `None` = the [`USE_SETUP_PLAYER_BODY`] const
+    /// default (ON). Combined by [`Self::setup_player_body_enabled`].
+    setup_player_body_runtime: Option<bool>,
     /// R1 motioninterp-1 (2026-10-08) — runtime carrier of `?jumpLaunchCap=off`.
     /// `None` = the [`USE_JUMP_LAUNCH_CAP`] const default (ON). Combined by
     /// [`Self::jump_launch_cap_enabled`].
@@ -2945,6 +2978,7 @@ impl MovementSystem {
             terrain_plane_frame_runtime: None,
             airborne_check_contact_runtime: None,
             walkable_landing_ground_runtime: None,
+            setup_player_body_runtime: None,
             jump_launch_cap_runtime: None,
             jump_load_gate_runtime: None,
             retail_position_event_gate_runtime: None,
@@ -3103,6 +3137,12 @@ impl MovementSystem {
     /// carrier (see [`USE_WALKABLE_LANDING_GROUND`]).
     pub(crate) fn set_walkable_landing_ground(&mut self, on: bool) {
         self.walkable_landing_ground_runtime = Some(on);
+    }
+
+    /// physics-collision-2 (2026-10-13) — install the `?setupPlayerBody=off`
+    /// runtime carrier (see [`USE_SETUP_PLAYER_BODY`]).
+    pub(crate) fn set_setup_player_body(&mut self, on: bool) {
+        self.setup_player_body_runtime = Some(on);
     }
 
     /// R1 motioninterp-1 (2026-10-08) — install the `?jumpLaunchCap=off`
@@ -3295,6 +3335,12 @@ impl MovementSystem {
     pub(crate) fn walkable_landing_ground_enabled(&self) -> bool {
         self.walkable_landing_ground_runtime
             .unwrap_or(USE_WALKABLE_LANDING_GROUND)
+    }
+
+    /// [`USE_SETUP_PLAYER_BODY`] effective predicate
+    /// (`?setupPlayerBody=off` runtime carrier over the const default).
+    pub(crate) fn setup_player_body_enabled(&self) -> bool {
+        self.setup_player_body_runtime.unwrap_or(USE_SETUP_PLAYER_BODY)
     }
 
     /// [`USE_CAST_MOVE`] effective predicate.
@@ -3715,7 +3761,9 @@ impl MovementSystem {
         let drive = seams.drive;
         if !handled {
             if let InterpOp::KeyEdge { action, .. } = op {
-                log::warn!("cmdInterp: unhandled input action {action:#x} (emote hash dark, M3)");
+                log::warn!(
+                    "cmdInterp: unhandled input action {action:#x} (not a movement or emote-hash action)"
+                );
             }
         }
         if dispatched {
@@ -8155,6 +8203,22 @@ impl MovementSystem {
         holtburger_world::spatial::transition::ObjectInfo,
         holtburger_world::spatial::transition::TransitionGates,
     ) {
+        Self::transition_profile_with_body(world, USE_SETUP_PLAYER_BODY)
+    }
+
+    /// [`Self::transition_profile`] with the `?setupPlayerBody` carrier
+    /// resolved by the caller (`self.setup_player_body_enabled()` at the live
+    /// dispatch sites). `setup_body` on + the player's Setup resident ⇒ the
+    /// body comes from that Setup (physics-collision-2, see
+    /// [`USE_SETUP_PLAYER_BODY`]); otherwise the human `0x02000001`
+    /// constants of `ObjectInfo::for_local_player`.
+    pub(crate) fn transition_profile_with_body(
+        world: &WorldState,
+        setup_body: bool,
+    ) -> (
+        holtburger_world::spatial::transition::ObjectInfo,
+        holtburger_world::spatial::transition::TransitionGates,
+    ) {
         let step_up = if USE_SETUP_STEP_HEIGHTS {
             world.player.step_up_height
         } else {
@@ -8171,6 +8235,19 @@ impl MovementSystem {
             USE_EDGE_SLIDE && world.player.allow_edge_slide,
             world.player.guid,
         );
+        // physics-collision-2: the player's OWN Setup body — spheres ×
+        // m_scale (`CPhysicsObj::transition`, acclient.c:320061-320102) and
+        // step heights × scale.z (`OBJECTINFO::init`, :314128-314129). An
+        // explicit A7-R1 PlayerState step height still wins.
+        if setup_body && let Some(body) = world.setup_mover_body(world.player.guid) {
+            object.apply_setup_body(&body);
+            if let Some(up) = step_up {
+                object.step_up_height = up;
+            }
+            if let Some(down) = step_down {
+                object.step_down_height = down;
+            }
+        }
         // `OBJECTINFO::init` (acclient.c:314118-314143): the mover's weenie
         // ORs in IS_IMPENETRABLE / IS_PLAYER / IS_PK / IS_PKLITE
         // (`ACCWeenieObject::IsImpenetrable` etc., the object-description
@@ -8258,7 +8335,9 @@ impl MovementSystem {
             return;
         }
 
-        let (object, mut gates) = Self::transition_profile(world);
+        // physics-collision-2: `?setupPlayerBody=off` runtime carrier.
+        let (object, mut gates) =
+            Self::transition_profile_with_body(world, self.setup_player_body_enabled());
         gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
         gates.retail_ground = self.retail_ground_enabled();
 
@@ -8936,7 +9015,9 @@ impl MovementSystem {
         };
         // SLOW-RUN detector: the slice's offset after interp / sticky / leash.
         self.slow_run.note_leash_offset(planar_speed(leash_delta));
-        let (object, mut gates) = Self::transition_profile(world);
+        // physics-collision-2: `?setupPlayerBody=off` runtime carrier.
+        let (object, mut gates) =
+            Self::transition_profile_with_body(world, self.setup_player_body_enabled());
         // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
         // const default baked by `transition_profile` (mirrors faithful_stepup).
         gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();

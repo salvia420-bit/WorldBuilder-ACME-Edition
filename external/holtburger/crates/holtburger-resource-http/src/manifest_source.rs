@@ -62,7 +62,7 @@ use crate::http::{
 };
 use crate::inflight::InflightMap;
 use crate::pack::PackSource;
-use crate::shard_cache::ShardCache;
+use crate::shard_cache::{DEFAULT_MIN_AGE_MS, LOW_WATER_FRACTION, ShardCache};
 use crate::shard_route;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
@@ -146,6 +146,30 @@ pub fn configured_shard_budget_bytes() -> usize {
     match v {
         Some(n) if n >= 1.0 => n as usize,
         _ => usize::MAX,
+    }
+}
+
+/// streaming-residency-2: JS global `globalThis.__hbShardMinAgeMs` — the shard
+/// cache's time floor. A record read or landed less than this long ago is
+/// never evicted, which makes an armed `__hbShardBudgetBytes` a SOFT cap and
+/// closes the hydrate → re-walk eviction window (`shard_cache` module doc).
+/// Absent / non-numeric / negative → [`DEFAULT_MIN_AGE_MS`] (120 s); `0`
+/// disables the floor. Inert while the budget is unbounded (the default).
+///
+/// Same host plumbing as the budget: JS parses `?shardMinAgeS=` (seconds) in
+/// `applyShardBudget` and forwards the value in the bake worker's `init`
+/// message, so both instances read the same floor.
+pub(crate) fn configured_shard_min_age_ms() -> f64 {
+    let g = js_sys::global();
+    let v = js_sys::Reflect::get(
+        g.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__hbShardMinAgeMs"),
+    )
+    .ok()
+    .and_then(|val| val.as_f64());
+    match v {
+        Some(n) if n.is_finite() && n >= 0.0 => n,
+        _ => DEFAULT_MIN_AGE_MS,
     }
 }
 
@@ -316,6 +340,9 @@ pub struct V2Source {
     /// path cannot fire unless the host sets `__hbShardBudgetBytes`, so this
     /// ships behaviour-neutral. See [`configured_shard_budget_bytes`] and the
     /// `shard_cache` module doc for the eviction-soundness argument.
+    /// streaming-residency-2: an armed budget is a soft cap (time floor
+    /// `configured_shard_min_age_ms` + low-water trim); recency-stamping
+    /// locks go through `lock_shards_stamped`.
     shards: Arc<Mutex<ShardCache<OwnedKey>>>,
     base_url: String,
     /// F.35: in-flight URL-fetch dedup map. When N concurrent
@@ -580,7 +607,12 @@ impl V2Source {
             manifest,
             boot,
             catalogs: Arc::new(Mutex::new(HashMap::new())),
-            shards: Arc::new(Mutex::new(ShardCache::new(configured_shard_budget_bytes()))),
+            // streaming-residency-2: the soft cap (time floor + low-water
+            // trim) only matters once a host arms a budget.
+            shards: Arc::new(Mutex::new(
+                ShardCache::new(configured_shard_budget_bytes())
+                    .with_soft_cap(configured_shard_min_age_ms(), LOW_WATER_FRACTION),
+            )),
             base_url,
             inflight: Arc::new(InflightMap::new()),
             shard_inflight: Arc::new(InflightMap::new()),
@@ -683,7 +715,7 @@ impl V2Source {
         let pack = self.pack_source();
         let mut work_keys: Vec<OwnedKey> = Vec::new();
         {
-            let mut cached = self.shards.lock().expect("shard cache mutex poisoned");
+            let mut cached = self.lock_shards_stamped();
             for key in keys {
                 if let Some(p) = &pack
                     && p.serves(*key)
@@ -1003,7 +1035,7 @@ impl V2Source {
         let mut failed: Vec<(String, u32)> = Vec::new();
         let mut first_detail: Option<String> = None;
         {
-            let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
+            let mut cache = self.lock_shards_stamped();
             // A15 §1: bracket the round so a batch larger than the whole budget
             // cannot evict its OWN earlier results before the caller reads them
             // (`prefetch` returning Ok must mean every landed key is readable).
@@ -1049,6 +1081,10 @@ impl V2Source {
                                     task.key.0, task.key.1
                                 ));
                             }
+                            // streaming-residency-4: this key's retry fetches
+                            // the URL with `cache: "reload"` (direct path), so
+                            // a bad cached copy cannot fail every retry.
+                            crate::http::mark_shard_reload(&task.url);
                             failed.push(task.key);
                             continue;
                         }
@@ -1084,6 +1120,21 @@ impl V2Source {
         self.shards.lock().expect("shard cache mutex poisoned").len()
     }
 
+    /// streaming-residency-2: lock the shard cache for an op that stamps
+    /// recency (`get` / `contains_touch` / `insert` / `end_round`). With the
+    /// time floor live (armed budget, non-zero floor) the cache clock is
+    /// advanced to `Date.now()` first; the cache clamps it monotone, so a
+    /// wall-clock step back only makes records look younger (the safe side).
+    /// Otherwise no JS call is made — the unbounded default's read path costs
+    /// exactly what it did.
+    fn lock_shards_stamped(&self) -> std::sync::MutexGuard<'_, ShardCache<OwnedKey>> {
+        let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
+        if cache.time_floor_active() {
+            cache.set_now_ms(js_sys::Date::now());
+        }
+        cache
+    }
+
     /// A15 §1 diag surface, published to `globalThis.__hbShardCache` at the end
     /// of every prefetch round. A JS global rather than a `#[wasm_bindgen]`
     /// export because the page runs TWO instances and the bake worker's exports
@@ -1092,7 +1143,7 @@ impl V2Source {
     /// worker→page message channel if a later commit wants them merged into
     /// `dat_decode_diag()`.
     fn publish_shard_cache_diag(&self) {
-        let (bytes, count, evictions, evicted_bytes, budget) = {
+        let (bytes, count, evictions, evicted_bytes, budget, min_age_ms, trims, floor_holds) = {
             let c = self.shards.lock().expect("shard cache mutex poisoned");
             (
                 c.total_bytes(),
@@ -1100,6 +1151,9 @@ impl V2Source {
                 c.evictions(),
                 c.evicted_bytes(),
                 c.budget(),
+                c.min_age_ms(),
+                c.trims(),
+                c.floor_holds(),
             )
         };
         let obj = js_sys::Object::new();
@@ -1120,6 +1174,13 @@ impl V2Source {
             "shardCacheBudget",
             if budget == usize::MAX { -1.0 } else { budget as f64 },
         );
+        // streaming-residency-2 (the owed ABAB reads these per hop): the time
+        // floor in force (0 = none), eviction passes, and passes the floor
+        // stopped with the cache still above its low-water target — i.e. how
+        // often the soft cap ran over instead of evicting a young record.
+        set("shardCacheMinAgeMs", min_age_ms);
+        set("shardCacheTrims", trims as f64);
+        set("shardCacheFloorHolds", floor_holds as f64);
         // Workstream B follow-up: Step E main-thread sha256 work. With the
         // shard-fetch worker on, `stepEHashed` should stay ~0 (only bodies the
         // worker did not verify); `stepEHashSkipped` counts worker-verified
@@ -1182,12 +1243,7 @@ impl V2Source {
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(bytes);
         }
-        if let Some(bytes) = self
-            .shards
-            .lock()
-            .expect("shard cache mutex poisoned")
-            .get(&owned(key))
-        {
+        if let Some(bytes) = self.lock_shards_stamped().get(&owned(key)) {
             return Ok((*bytes).clone());
         }
         Err(DatError::Other(format!(
@@ -1209,12 +1265,7 @@ impl V2Source {
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(Arc::new(bytes));
         }
-        if let Some(bytes) = self
-            .shards
-            .lock()
-            .expect("shard cache mutex poisoned")
-            .get(&owned(key))
-        {
+        if let Some(bytes) = self.lock_shards_stamped().get(&owned(key)) {
             return Ok(bytes);
         }
         Err(DatError::Other(format!(

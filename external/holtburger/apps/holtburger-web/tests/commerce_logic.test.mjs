@@ -226,9 +226,10 @@ check("rent due: free / ok / soon / overdue", () => {
   const now = 1_800_000_000;
   assert.equal(rentDueInfo(now, true, now).level, "free");
   assert.equal(rentDueInfo(now - 86400, false, now).level, "ok");
-  assert.match(rentDueInfo(now - 86400, false, now).text, /^Due in 6d/);
+  assert.match(rentDueInfo(now - 86400, false, now).text, /^Period ends in 29d/);
   assert.equal(rentDueInfo(now - MAINTENANCE_PERIOD_SECONDS + 3600, false, now).level, "soon");
-  assert.equal(rentDueInfo(now - MAINTENANCE_PERIOD_SECONDS - 1, false, now).level, "overdue");
+  assert.equal(rentDueInfo(now - MAINTENANCE_PERIOD_SECONDS - 1, false, now).level, "ok");
+  assert.match(rentDueInfo(now - MAINTENANCE_PERIOD_SECONDS - 1, false, now).text, /Period ended/);
 });
 check("house type names (never 'Undef' or a number)", () => {
   assert.equal(houseTypeName(1), "Cottage");

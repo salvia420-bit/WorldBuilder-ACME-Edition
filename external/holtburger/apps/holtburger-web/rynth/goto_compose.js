@@ -64,6 +64,9 @@ import {
   toLegs,
   buildStitchedGraphFromWasm,
   edgeKey,
+  hasDoorways,
+  isUprightDoor,
+  resolveIndoorDoorways,
 } from "./indoor_router.js";
 // deriveRouteFlags moved out to route_flags.js (2026-07-20) so nav_import.js
 // (VTank/.nav import) can share the SAME v2 flag semantics without pulling in
@@ -72,6 +75,9 @@ import {
 import { deriveRouteFlags } from "./route_flags.js";
 export { deriveRouteFlags }; // re-exported: named-export surface unchanged for existing importers
 import { holdIsAlive } from "./portal_gate.js";
+// Default-OFF portal avoidance for the indoor graph walks (?botPortalAvoid=on /
+// opts.portalAvoid; rynth-macro-nav-6) — see avoidPortalsOnLegs below.
+import { resolvePortalAvoid, portalHazards, avoidPortalDisks, originalLegsWalked } from "./portal_hazards.js";
 
 // World-frame metres from a full objCellId + landblock-local x/y (router.js:50).
 const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
@@ -180,6 +186,55 @@ function resolveCell(nodes, exactId, frameCell, x, y, z) {
 // A precise final leg at the requested indoor goal (exact x/y/z, not the cell centre).
 const goalLeg = (to) => ({ lb: to.lb >>> 0, x: to.x, y: to.y, z: to.z });
 
+// Real-doorway walking for the indoor graph walks (rynth-macro-nav-5,
+// DEFAULT-OFF: tune.indoorDoorways from ?indoorDoorways=on /
+// opts.indoorDoorways). On, and only when the graph carries doorway data
+// (indoor_router.js node.doors; a stale pkg has none), the cell search goes
+// through body-sized openings first (findPath / findExitPath {bodySized}: no
+// route over the tavern's bar counter) and the legs pass through the real
+// openings (toLegs {doorways}). Off, or without door data, every call below
+// is the one it was.
+const useDoorways = (tune, nodes) => !!tune && tune.indoorDoorways === true && hasDoorways(nodes);
+
+// How far past an outdoor doorway the exit walk's last (outdoor) leg sits,
+// along the doorway's normal. With the router's default 3 m arrival radius,
+// arriving there puts the body at least 1 m past the doorway plane — fully
+// outside (body radius 0.48 m).
+const EXIT_DOORSTEP_M = 4;
+
+// Portal avoidance for an indoor walk (rynth-macro-nav-6, DEFAULT-OFF:
+// tune.portalAvoid from ?botPortalAvoid=on / opts.portalAvoid). Portals are
+// ethereal, so the cell graph and the walker's collision both walk straight
+// over one and the touch teleports the player (ACE Player.OnCollideObject ->
+// Portal.OnCollideObject). Every portal within 80 m except the walk's own
+// (opts.target) becomes a disk; legs that cross one get a rim side-step
+// (portal_hazards.js avoidPortalDisks). With the flag off — or no portal near,
+// or no clear detour — the SAME `legs` array comes back, so the walk is
+// byte-identical. opts.dropLeading: the midpoint legs' own-cell-centre first
+// leg may be dropped. opts.normalize: re-bucket moved/inserted legs
+// (normalizeLegWorldFrame) for call sites that walk normalized legs.
+function avoidPortalsOnLegs(ctx, tune, legs, pose, opts = {}) {
+  if (!tune || tune.portalAvoid !== true || !Array.isArray(legs) || !legs.length) return legs;
+  const start = pose
+    ? { wx: worldX(pose.objCellId >>> 0, pose.x), wy: worldY(pose.objCellId >>> 0, pose.y), z: pose.z }
+    : null;
+  const disks = portalHazards(ctx.host, { ...(start ? { center: start } : {}), ...(opts.target ? { target: opts.target } : {}) });
+  if (!disks.length) return legs;
+  const r = avoidPortalDisks(legs, disks, { start, dropLeading: opts.dropLeading === true });
+  const label = opts.label || "indoor";
+  if (ctx.log) {
+    if (r.changed) {
+      ctx.log(`${label}: portal avoid — ${r.sideSteps} side-step(s), ${r.displaced} moved, ${r.dropped} dropped (${disks.length} portal(s) near)`);
+    } else if (r.unresolved) {
+      ctx.log(`${label}: portal avoid — no clear detour (${r.unresolved}); walking the plain legs`);
+    }
+  }
+  if (!r.changed) return legs;
+  return opts.normalize
+    ? r.legs.map((l) => (l.portalSideStep || l.portalDisplaced ? normalizeLegWorldFrame(l) : l))
+    : r.legs;
+}
+
 /**
  * Walk `legs` via `router` (RynthRouter, ticked off the host heartbeat) and
  * resolve when the walk reaches a terminal state. Mirrors global_router.js's
@@ -236,9 +291,33 @@ export async function walkLegs(router, legs, { pollMs = 500, stallMs = 45_000, l
 //                    NEXT-nearest exit around a wedged doorway edge.
 //   doorwayApproach  use toLegs' two-stage 30%/50% doorway pre-approach
 //                    (the offset-doorframe fix) instead of {midpoints}.
+//   doorways         (rynth-macro-nav-5, tune.indoorDoorways) with doorway
+//                    data: a body-sized exit search, legs through the real
+//                    openings and out through the exit doorway, and the
+//                    outdoor leg EXIT_DOORSTEP_M out along that doorway's
+//                    normal instead of the 9 m projection below. An exit with
+//                    no upright doorway on record keeps the legs below.
 function buildExitLegs(graph, nodes, fromCell, pose, opts = {}) {
-  const exit = findExitPath(graph, fromCell, opts.excludeEdges ? { excludeEdges: opts.excludeEdges } : {});
+  const doorways = opts.doorways === true && hasDoorways(nodes);
+  const exitOpts = opts.excludeEdges ? { excludeEdges: opts.excludeEdges } : {};
+  const exit = findExitPath(graph, fromCell, doorways ? { ...exitOpts, bodySized: true } : exitOpts);
   if (!exit) return null;
+  if (doorways && isUprightDoor(exit.exitDoor) && nodes.has(exit.exitCell >>> 0)) {
+    const d = exit.exitDoor; // normal points out of the exit cell: outdoors
+    const cell = exit.exitCell >>> 0;
+    const legs = toLegs(graph, exit.path, { doorways: true, exitDoor: d });
+    const h = Math.hypot(d.normal.x, d.normal.y);
+    const wx = d.at.x + (d.normal.x / h) * EXIT_DOORSTEP_M;
+    const wy = d.at.y + (d.normal.y / h) * EXIT_DOORSTEP_M;
+    const outside = normalizeLegWorldFrame({
+      lb: cell,
+      x: wx - ((cell >>> 24) & 0xff) * 192,
+      y: wy - ((cell >>> 16) & 0xff) * 192,
+      z: d.bottom,
+    });
+    legs.push(outside);
+    return { legs, path: exit.path, exitCell: cell, outdoorId: outside.lb >>> 0 };
+  }
   const legs = toLegs(graph, exit.path, opts.doorwayApproach ? { doorwayApproach: true } : { midpoints: true });
   const exitNode = nodes.get(exit.exitCell >>> 0);
   if (!exitNode) return null;
@@ -454,8 +533,11 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
   const targetCell = nearestCell(nodes, twx, twy, blockedLeg.z);
   if (!targetCell) return stage("portal cell not found");
   // Walk the interior to the portal's cell (unless already in it).
+  // Flag-on with doorway data: body-sized openings first, real-doorway legs.
+  const doorways = useDoorways(tune, nodes);
+  const pathOpts = doorways ? { bodySized: true } : {};
   if ((targetCell >>> 0) !== (fromCell >>> 0)) {
-    const path = findPath(graph, fromCell, targetCell >>> 0);
+    const path = findPath(graph, fromCell, targetCell >>> 0, pathOpts);
     if (!path) return stage("portal cell unreachable"); // drop-gated / disconnected
     // Two-stage doorway pre-approach (DungeonPathfinder.cs:377-399, ported into
     // toLegs {doorwayApproach}) so the walker lines up on the offset doorframe
@@ -463,11 +545,19 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
     // {midpoints:true} never threaded. World-frame normalize + a generous
     // per-leg deadline (the network sim can crawl ~0.3 m/s, live v9: a 5m hall
     // leg blew 90s), stall guard outliving the per-leg watchdog.
-    const buildLegs = (p) =>
-      toLegs(graph, p, { doorwayApproach: true })
-        .map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
+    // Portal avoidance (default off) keeps out of every OTHER portal: the
+    // network hall is lined with them (live v15 clipped a non-target one).
+    const buildLegs = (p, from) =>
+      avoidPortalsOnLegs(
+        ctx,
+        tune,
+        toLegs(graph, p, doorways ? { doorways: true } : { doorwayApproach: true })
+          .map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs })),
+        from,
+        { target: { wx: twx, wy: twy }, normalize: true, label: "portal-approach" },
+      );
     const walkStallMs = tune.indoorLegTimeoutMs + 15_000;
-    let w = await walk(buildLegs(path), { label: "portal-approach", stallMs: walkStallMs });
+    let w = await walk(buildLegs(path, pose), { label: "portal-approach", stallMs: walkStallMs });
     if (!w.ok) {
       // ONE re-walk retry of the REMAINING path from the wedge pose: a fresh
       // MoveToPosition sometimes threads the offset doorway that the first pass
@@ -477,9 +567,9 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
       if (alreadyHopped(pr)) return { ok: true, portal: "(walk-in hop)", exitCell: targetCell >>> 0 };
       const reFrom = resolveCell(nodes, currentCell(host), pr.objCellId >>> 0, pr.x, pr.y, pr.z);
       if (reFrom && (reFrom >>> 0) !== (targetCell >>> 0)) {
-        const rePath = findPath(graph, reFrom >>> 0, targetCell >>> 0);
+        const rePath = findPath(graph, reFrom >>> 0, targetCell >>> 0, pathOpts);
         if (rePath && rePath.length >= 2) {
-          w = await walk(buildLegs(rePath), { label: "portal-approach-retry", stallMs: walkStallMs });
+          w = await walk(buildLegs(rePath, pr), { label: "portal-approach-retry", stallMs: walkStallMs });
         }
       }
     }
@@ -1028,15 +1118,25 @@ async function exitToOutdoors(ctx, tune, phases, { label = "re-exit" } = {}) {
     if (nodes.size === 0) return { ok: false, error: "indoor graph unavailable" };
     const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
     if (!fromCell) return { ok: false, error: "indoor graph unavailable" };
-    const exit = buildExitLegs(graph, nodes, fromCell, pose, { excludeEdges, doorwayApproach: true });
+    const exit = buildExitLegs(graph, nodes, fromCell, pose, {
+      excludeEdges,
+      doorwayApproach: true,
+      doorways: tune.indoorDoorways === true,
+    });
     if (!exit) {
       // No walk ever ran -> genuinely no exit in the graph. After exclusions,
       // prefer the honest walk error (the wedge is the story, not the BFS).
       if (lastError) break;
       return { ok: false, error: "no reachable exit" };
     }
-    const legs = exit.legs.map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
     const walkLabel = attempt === 1 ? label : `${label}-retry${attempt}`;
+    const legs = avoidPortalsOnLegs(
+      ctx,
+      tune,
+      exit.legs.map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs })),
+      pose,
+      { normalize: true, label: walkLabel },
+    );
     const w = await walk(legs, { label: walkLabel, stallMs: tune.indoorLegTimeoutMs + 15_000 });
     legsWalkedTotal += w.legsWalked ?? 0;
     if (w.ok) return succeed(w.state ?? "DONE", attempt, exit);
@@ -1054,7 +1154,9 @@ async function exitToOutdoors(ctx, tune, phases, { label = "re-exit" } = {}) {
     // Remedy 2 — blame the stalled doorway edge; exclude only on the SECOND
     // wedge of the SAME edge (a first wedge may have been just the door).
     let newExclusion = false;
-    const stalled = stalledEdgeFromWalk(exit.path, w.legsWalked ?? 0);
+    // Portal side-step legs (flag on only) are not doorway legs: count them out.
+    const walkedPath = tune.portalAvoid === true ? originalLegsWalked(legs, w.legsWalked ?? 0) : (w.legsWalked ?? 0);
+    const stalled = stalledEdgeFromWalk(exit.path, walkedPath);
     if (stalled) {
       const n = (wedgeCounts.get(stalled) || 0) + 1;
       wedgeCounts.set(stalled, n);
@@ -1162,7 +1264,8 @@ const fail = (error, extra = {}) => ({
  *   walk?       async (legs, {label}) => walkLegs-shape (default: walkLegs over router)
  *   fetchEnvCells? passed to buildStitchedGraphFromWasm in headless contexts
  *   log?        (msg) => void
- * `to`: {ns,ew} | {lb,x,y[,z]} (an EnvCell lb -> indoor goal). `opts`: goto opts.
+ * `to`: {ns,ew} | {lb,x,y[,z]} (an EnvCell lb -> indoor goal). `opts`: goto opts
+ * (opts.portalAvoid / opts.indoorDoorways override the default-off URL flags).
  * Resolves the goto result; never rejects.
  */
 export async function composeGoto(deps, to, opts = {}) {
@@ -1201,6 +1304,12 @@ export async function composeGoto(deps, to, opts = {}) {
     // Bounded egress retry ladder (exitToOutdoors, 2026-07-23 tavern fix).
     egressAttempts: opts.egressAttempts ?? 4,
     doorOpenTimeoutMs: opts.doorOpenTimeoutMs ?? DOOR_OPEN_TIMEOUT_MS, // attemptDoorOpen confirm wait
+    // Keep indoor walks out of unrelated portals (avoidPortalsOnLegs). DEFAULT
+    // OFF: ?botPortalAvoid=on or opts.portalAvoid:true.
+    portalAvoid: resolvePortalAvoid(opts),
+    // Walk the real doorways (useDoorways). DEFAULT OFF: ?indoorDoorways=on
+    // or opts.indoorDoorways:true.
+    indoorDoorways: resolveIndoorDoorways(opts),
   };
 
   const startCell = currentCell(host);
@@ -1230,11 +1339,13 @@ export async function composeGoto(deps, to, opts = {}) {
     if (goalIndoor && ((to.lb >>> 0) & 0xffff0000) === startLb) {
       const goalCell = resolveCell(nodes, to.lb >>> 0, to.lb >>> 0, to.x, to.y, to.z);
       if (!goalCell) return fail("indoor graph unavailable (goal cell not in graph)", { phases, legsWalked });
-      const path = findPath(graph, fromCell, goalCell);
+      const doorways = useDoorways(tune, nodes);
+      const path = findPath(graph, fromCell, goalCell, doorways ? { bodySized: true } : {});
       if (!path) return fail("indoor route unreachable (drop-gated or disconnected)", { phases, legsWalked });
-      const legs = toLegs(graph, path, { midpoints: true });
+      // Flag-on: through the real doorways, straight on to the goal (no last centre).
+      const legs = doorways ? toLegs(graph, path, { doorways: true, lastCentre: false }) : toLegs(graph, path, { midpoints: true });
       legs.push(goalLeg(to));
-      const w = await walk(legs, { label: "indoor" });
+      const w = await walk(avoidPortalsOnLegs(ctx, tune, legs, pose, { dropLeading: !doorways, label: "indoor" }), { label: "indoor" });
       legsWalked += w.legsWalked || 0;
       phases.push({ phase: "indoor", ok: w.ok, state: w.state, legsWalked: w.legsWalked || 0 });
       return {
@@ -1321,13 +1432,16 @@ export async function composeGoto(deps, to, opts = {}) {
   const entryCell = nearestCell(nodes, worldX(pose.objCellId >>> 0, pose.x), worldY(pose.objCellId >>> 0, pose.y), pose.z);
   const goalCell = resolveCell(nodes, to.lb >>> 0, to.lb >>> 0, to.x, to.y, to.z);
   if (!entryCell || !goalCell) return fail("indoor graph unavailable", { phases, legsWalked, coverage: approach.coverage });
-  const path = findPath(graph, entryCell >>> 0, goalCell >>> 0);
+  const doorways = useDoorways(tune, nodes);
+  const path = findPath(graph, entryCell >>> 0, goalCell >>> 0, doorways ? { bodySized: true } : {});
   // Entry doorway not reachable (graph empty / cell not streamed / drop-gated):
   // honest failure per the task contract — no guessing an interior path.
   if (!path) return fail("indoor graph unavailable", { phases, legsWalked, coverage: approach.coverage });
-  const legs = toLegs(graph, path, { midpoints: true });
+  const legs = doorways ? toLegs(graph, path, { doorways: true, lastCentre: false }) : toLegs(graph, path, { midpoints: true });
   legs.push(goalLeg(to));
-  const w = await walk(legs, { label: "enter" });
+  // The dungeon arrival point can stand beside its exit portal (WebAC's
+  // Banderling Ruin walk left that way): flag-on, the entry legs keep out of it.
+  const w = await walk(avoidPortalsOnLegs(ctx, tune, legs, pose, { dropLeading: !doorways, label: "enter" }), { label: "enter" });
   legsWalked += w.legsWalked || 0;
   phases.push({ phase: "enter", ok: w.ok, state: w.state, legsWalked: w.legsWalked || 0 });
   return {
@@ -1426,6 +1540,11 @@ export function buildTune(opts = {}, router = null) {
     // Bound on jump attempts per replayRoute() call — generous vs. the
     // corpus's own max (14 attempts at one gap in vr-bridge-jump).
     maxJumpAttempts: opts.jumpAttempts ?? 20,
+    // Portal avoidance on the graph walks (egress / wedge re-path), never on
+    // the recorded legs themselves. DEFAULT OFF (avoidPortalsOnLegs).
+    portalAvoid: resolvePortalAvoid(opts),
+    // Real-doorway walking on the same graph walks (useDoorways). DEFAULT OFF.
+    indoorDoorways: resolveIndoorDoorways(opts),
   };
 }
 
@@ -1579,7 +1698,8 @@ export async function attemptDoorOpen(host, pose, opts = {}) {
 
 // doorwayApproach emits exactly 2 legs (30% pre-approach, 50% doorway
 // midpoint) per path EDGE, then one trailing "last cell centre" leg
-// (indoor_router.js toLegs {doorwayApproach} docblock). Map a walk's
+// (indoor_router.js toLegs {doorwayApproach} docblock; {doorways} keeps the
+// same 2 per edge, then its own trailing legs). Map a walk's
 // legsWalked count back to the specific edge it stalled ON, so the next
 // findPath attempt can exclude exactly that doorway rather than guessing.
 // Returns null when the stall was on the trailing centre/goal leg (not a
@@ -1634,20 +1754,25 @@ async function repathIndoor(ctx, tune, target) {
     const toCell = resolveCell(nodes, target.lb >>> 0, target.lb >>> 0, target.x, target.y, target.z);
     if (!fromCell || !toCell) return { ok: false, error: "indoor re-path: cell not in graph" };
     if ((fromCell >>> 0) === (toCell >>> 0)) return { ok: true }; // already in the target cell
-    const path = findPath(graph, fromCell, toCell >>> 0, { excludeEdges });
+    const doorways = useDoorways(tune, nodes);
+    const path = findPath(graph, fromCell, toCell >>> 0, doorways ? { excludeEdges, bodySized: true } : { excludeEdges });
     if (!path) {
       // Unreachable even after excluding every edge a prior attempt wedged
       // on: a genuine disconnect, not a fixable stall. Stop early.
       return { ok: false, error: excludeEdges.size ? "indoor re-path: unreachable (all recovery edges exhausted)" : "indoor re-path: unreachable" };
     }
-    const rlegs = toLegs(graph, path, { doorwayApproach: true }).map((l) => ({
+    // Flag-on: real-doorway legs, still 2 per edge (stalledEdgeFromWalk), and
+    // no last centre — the exact target follows.
+    const planned = toLegs(graph, path, doorways ? { doorways: true, lastCentre: false } : { doorwayApproach: true }).map((l) => ({
       ...normalizeLegWorldFrame(l),
       timeoutMs: tune.indoorLegTimeoutMs,
     }));
     // Nail the EXACT requested target instead of stopping at the last cell's
     // bbox-derived centre (see header note above).
-    rlegs.push(normalizeLegWorldFrame({ lb: toCell >>> 0, x: target.x, y: target.y, z: target.z }));
+    planned.push(normalizeLegWorldFrame({ lb: toCell >>> 0, x: target.x, y: target.y, z: target.z }));
     const label = attempt === 1 ? "wedge-repath" : `wedge-repath-retry${attempt}`;
+    // Flag-on only: keep out of unrelated portals (the target's own is exempt).
+    const rlegs = avoidPortalsOnLegs(ctx, tune, planned, pose, { normalize: true, label });
     const w = await walk(rlegs, { label, stallMs: tune.indoorLegTimeoutMs + 15_000 });
     if (w.ok) return { ok: true };
     lastError = `indoor re-path ${(w.state || "failed").toLowerCase()}`;
@@ -1664,7 +1789,8 @@ async function repathIndoor(ctx, tune, target) {
       if (log) log(`repathIndoor: opened closed door ${dr.name} — retrying attempt ${attempt}`);
       continue; // same excludeEdges (no edge blamed), consumes one attempt slot
     }
-    const stalled = stalledEdgeFromWalk(path, w.legsWalked ?? 0);
+    const walkedPath = tune.portalAvoid === true ? originalLegsWalked(rlegs, w.legsWalked ?? 0) : (w.legsWalked ?? 0);
+    const stalled = stalledEdgeFromWalk(path, walkedPath);
     if (stalled) excludeEdges.add(stalled);
   }
   return { ok: false, error: lastError };

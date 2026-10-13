@@ -11,8 +11,8 @@ pub const MAX_PACKET_SIZE: usize = 1024;
 /// acclient.c: `v8 = 448; if (v3 <= 0x1C0) v8 = v3;`). With the 16-byte
 /// fragment header that yields a 464-byte fragment, which is exactly ACE's
 /// cutoff: `ClientPacketFragment.Unpack` rejects `Header.Size > 464` and
-/// discards the whole packet before sequence tracking. Until outbound
-/// fragmentation is implemented, `send_message` refuses payloads above this.
+/// discards the whole packet before sequence tracking. `Session::send_message`
+/// splits any larger message into chunks of this size, one fragment per packet.
 pub const MAX_FRAGMENT_PAYLOAD: usize = 448;
 
 // Protocol Magic Numbers

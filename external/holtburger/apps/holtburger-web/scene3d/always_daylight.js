@@ -22,7 +22,15 @@
 // replaces on every EnteredWorld (src/lib.rs) — so the pin is re-asserted at
 // every poll while the option is on, not set once. A `?skytime` debug pin or
 // accel cycle owns the clock instead (index.html skips this driver then).
+//
+// SetDay also zeroes `LScape::next_light_tick`, so retail re-lights the ground
+// on the very next frame. Each applied pin edge (pinned, or unpinned) resets
+// the shared landscape light clock the same way (`retail_light_tick.js`);
+// without it the ground kept the old light for up to 15 s under the new sky.
+// `?lightTickReset=off` skips the reset.
 // Pure (no DOM / three imports) so node tests can import it.
+
+import { retailLightTick, lightTickResetEnabled } from "./retail_light_tick.js";
 
 /** `holtburger_common::CharacterOption::AlwaysDaylightOutdoors`. */
 export const ALWAYS_DAYLIGHT_OPTION = 0x05;
@@ -62,11 +70,31 @@ function setSkyClock(handle, timeOfDay) {
  * the pin applied, then once per poll. When the option goes off it clears the
  * pin it set, and only a pin it set: with the option off from login it never
  * touches the clock.
+ *
+ * Each applied edge — pinned false→true, and the unpin — resets the landscape
+ * light clock (`LScape::SetDay`). The per-poll re-asserts of a held pin do not.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.lightTick]  the clock to reset (tests); default the
+ *   shared `retailLightTick`.
+ * @param {string} [opts.search]     URL search for `?lightTickReset`.
  */
-export function createAlwaysDaylight() {
+export function createAlwaysDaylight(opts = {}) {
+  const lightTick = opts.lightTick || retailLightTick;
+  const resetLight = lightTickResetEnabled(opts.search);
   let on = false;
   let pinned = false;
   let nextPollMs = -Infinity;
+  let lightResets = 0;
+  function setDay() {
+    if (!resetLight) return;
+    try {
+      lightTick.reset();
+      lightResets += 1;
+    } catch (_) {
+      /* a broken clock must not stop the pin */
+    }
+  }
   return {
     tick(handle, nowMs) {
       const poll = !(nowMs < nextPollMs);
@@ -75,15 +103,20 @@ export function createAlwaysDaylight() {
         nextPollMs = nowMs + ALWAYS_DAYLIGHT_POLL_MS;
       }
       if (on) {
-        if (poll || !pinned) pinned = setSkyClock(handle, ALWAYS_DAYLIGHT_TIME_OF_DAY);
+        if (poll || !pinned) {
+          const was = pinned;
+          pinned = setSkyClock(handle, ALWAYS_DAYLIGHT_TIME_OF_DAY);
+          if (pinned && !was) setDay();
+        }
       } else if (pinned) {
         setSkyClock(handle, NaN);
         pinned = false;
+        setDay();
       }
     },
     /** Probe/diag snapshot. */
     state() {
-      return { on, pinned };
+      return { on, pinned, lightResets };
     },
   };
 }

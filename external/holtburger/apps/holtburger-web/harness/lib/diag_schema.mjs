@@ -323,13 +323,20 @@ export const REGISTRY = Object.freeze([
     name: "__linkProbe",
     status: "current",
     reads: "object",
-    evidence: "scene3d/shader_prewarm.js:245",
+    evidence: "scene3d/shader_prewarm.js:536",
     availability: "flag:?linkProbe=on",
-    note: "GL link-probe state (installed at shader_prewarm.js:175-247; also "
+    note: "GL link-probe state (installed at shader_prewarm.js:266-542; also "
       + "force-installable by callers). stats.linkStatus.ms is the "
       + "forced-wait bucket the stall probe sums as linkStatusMs — F5's "
       + "linkStatusMs=0 criterion reads it. Probe self-cost is priced by the "
-      + "wrapper (PR-12).",
+      + "wrapper (PR-12). stats.ledger.* (2026-10-13) = the program "
+      + "create/release ledger, a 50 ms diff of renderer.info.programs by id: "
+      + "relinks counts creates of a key resident earlier in the session "
+      + "(three destroyed it at usedTimes 0, then linked it again); a "
+      + "stage-keyed (ShaderMaterial) program is matched on its GLSL, since "
+      + "three re-mints its key's stage ids once the stage is freed. It "
+      + "retains a 2,000-entry ring — a run that carries it lists linkProbe "
+      + "in its taint (moving-bench --linkProbe does).",
     fields: {
       "stats.linkProgramCalls": C("count"),
       "stats.linkStatus.calls": C("count"),
@@ -340,6 +347,12 @@ export const REGISTRY = Object.freeze([
       "stats.completion.ms": C("ms", null, { attribution: false }),
       "stats.other.calls": C("count"),
       "stats.other.ms": C("ms", null, { attribution: false }),
+      "stats.ledger.created": C("count"),
+      "stats.ledger.released": C("count"),
+      "stats.ledger.relinks": C("count"),
+      "stats.ledger.dropped": C("count", null, { note: "ledger ring entries overwritten (the ring holds 2,000)" }),
+      "stats.ledger.stageKeyed": C("count", null, { note: "creates of a stage-keyed (ShaderMaterial / RawShaderMaterial) program; relink identity = its GLSL" }),
+      "stats.ledger.stageKeyedNoSource": C("count", null, { note: "stage-keyed creates whose shader source was unreadable; identity fell back to the key (relinks can only be under-counted)" }),
     },
   },
 

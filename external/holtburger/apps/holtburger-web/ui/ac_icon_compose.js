@@ -178,6 +178,117 @@ export function composeLayers(layers) {
   return { width: w, height: h, pixels: out };
 }
 
+/* ── retail blit ops (hud-ui-3, 2026-10-13) ─────────────────────────────
+ * `IconData::RenderIcons` blits every layer with its OWN op
+ * (`SurfaceWindow::Blit` → SoftwareBlitAndColor, ARGB → ARGB, alpha modifier
+ * 1.0), not one alpha-over:
+ *   SrcCopy           — the four channels copied.
+ *   ThreeChannelAlpha — `BlitLoopNoScale__BlitOp_ThreeChannelAlpha_..._ARGB_ARGB`
+ *       (acclient.c:631018): sa = src alpha; 0 → skip; 255 → dst.rgb =
+ *       src.rgb; else w = sa+1, dst.c = dst.c − ((dst.c·w)>>8) + ((src.c·w)>>8).
+ *       The destination keeps its alpha.
+ *   FourChannelAlpha  — `BlitLoopNoScale__BlitOp_FourChannelAlpha_..._ARGB_ARGB_1`
+ *       (acclient.c:642714): sa 0 → skip; sa 255 OR dst alpha 0 → dst = src;
+ *       dst alpha 255 → the ThreeChannelAlpha lerp (alpha stays 255); else the
+ *       non-premultiplied "over" in single-precision floats:
+ *       A = w − ((w·(da+1))>>8) + da + 1, dst.c = dst.c − (dst.c − src.c)·w / A
+ *       (cvtps2pi → round half to even), dst.a = A − 1.
+ * `composeLayers` did `out = src·sa + dst·(1 − sa)` for every layer, which
+ * darkened an anti-aliased overlay pixel over a transparent icon pixel (its
+ * colour scaled by sa, then by sa again over the background): a dark fringe
+ * on IconOverlay edges. Re-derived from the decomp; cross-checked against
+ * WebAC packages/renderer/src/ui/ItemIconComposite.ts:192-221 (AGPL-3.0).
+ * Each op is `(dst, di, src, si)` on RGBA byte arrays. */
+
+/** BlitOp_SrcCopy. */
+export function srcCopy(d, di, s, si) {
+  d[di] = s[si]; d[di + 1] = s[si + 1]; d[di + 2] = s[si + 2]; d[di + 3] = s[si + 3];
+}
+
+const clamp8 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+/** BlitOp_ThreeChannelAlpha: colour lerp by the source alpha, dst alpha kept. */
+export function threeChannelAlpha(d, di, s, si) {
+  const sa = s[si + 3];
+  if (sa === 0) return;
+  if (sa === 255) {
+    d[di] = s[si]; d[di + 1] = s[si + 1]; d[di + 2] = s[si + 2];
+    return;
+  }
+  const w = sa + 1;
+  for (let c = 0; c < 3; c++) {
+    const dc = d[di + c];
+    d[di + c] = clamp8(dc - ((dc * w) >> 8) + ((s[si + c] * w) >> 8));
+  }
+}
+
+/** cvtps2pi under the default MXCSR: round half to even. */
+function roundHalfEven(v) {
+  const r = Math.round(v);
+  return (r - v === 0.5 && (r & 1) !== 0) ? r - 1 : r;
+}
+
+/** BlitOp_FourChannelAlpha: the non-premultiplied "over", alpha included. */
+export function fourChannelAlpha(d, di, s, si) {
+  const sa = s[si + 3];
+  if (sa === 0) return;
+  const da = d[di + 3];
+  if (sa === 255 || da === 0) {
+    srcCopy(d, di, s, si);
+    return;
+  }
+  if (da === 255) {
+    threeChannelAlpha(d, di, s, si);
+    return;
+  }
+  const w = sa + 1;
+  const dap = da + 1;
+  const outA = w - ((w * dap) >> 8) + dap;
+  const fr = Math.fround;
+  const wf = fr(w), af = fr(outA);
+  for (let c = 0; c < 3; c++) {
+    const dc = d[di + c];
+    const q = fr(fr(fr(dc - s[si + c]) * wf) / af);
+    d[di + c] = clamp8(roundHalfEven(fr(dc - q)));
+  }
+  d[di + 3] = clamp8(outA - 1);
+}
+
+const isLayer = (l) => !!(l && l.width > 0 && l.height > 0 && l.pixels?.length);
+
+/**
+ * `SurfaceWindow::Blit` of a layer stack: `[[img, op], …]`. The first present
+ * layer sets the size and is copied as is (retail SrcCopies it onto a blank
+ * 32×32 surface); each later layer is blitted at (0,0) with its op, clipped
+ * to the base. Missing layers are skipped (composeItemIcon gives a missing
+ * background its own transparent base, see there).
+ * @returns {{width:number,height:number,pixels:Uint8ClampedArray}|null}
+ */
+export function blitLayers(stack) {
+  const list = stack.filter(([l]) => isLayer(l));
+  if (list.length === 0) return null;
+  const base = list[0][0];
+  const w = base.width, h = base.height;
+  const out = new Uint8ClampedArray(base.pixels.length);
+  out.set(base.pixels);
+  for (let li = 1; li < list.length; li++) {
+    const [src, op] = list[li];
+    const cw = Math.min(w, src.width), ch = Math.min(h, src.height);
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) op(out, (y * w + x) * 4, src.pixels, (y * src.width + x) * 4);
+    }
+  }
+  return { width: w, height: h, pixels: out };
+}
+
+/** `?iconBlitRetail=off` (or `0` / `false`) restores the single alpha-over
+ *  composite; default ON (hud-ui-3). Pure: pass the query string. */
+export function iconBlitRetailEnabled(search) {
+  let v = null;
+  try { v = new URLSearchParams(search ?? "").get("iconBlitRetail"); } catch (_) { v = null; }
+  return !(v === "off" || v === "0" || v === "false");
+}
+
 /** `SurfaceWindow::ReplaceColor(white, tile)`: exact-white pixels take the
  *  tile's pixel at the same coordinates. In place. */
 export function replaceWhiteFromTile(img, tile) {
@@ -213,12 +324,34 @@ export function replaceWhiteWithBlack(img) {
 
 /**
  * Retail item icon from decoded layers (any may be null).
+ * `IconData::RenderIcons` (acclient.c:437901): drag = icon (SrcCopy), overlay
+ * (Blit_4Alpha), white → effect tile; icon = background (SrcCopy), underlay
+ * (Blit_3Alpha), drag (Blit_3Alpha). `opts.retailBlit === false`
+ * (`?iconBlitRetail=off`) = the pre-hud-ui-3 single alpha-over.
  * @returns {{icon:object|null, drag:object|null}}
  */
-export function composeItemIcon({ background, underlay, icon, overlay, effectTile }) {
-  const drag = composeLayers([icon, overlay]);
+export function composeItemIcon({ background, underlay, icon, overlay, effectTile }, opts = {}) {
+  if (opts.retailBlit === false) {
+    const drag = composeLayers([icon, overlay]);
+    if (drag && effectTile) replaceWhiteFromTile(drag, effectTile);
+    const full = composeLayers([background, underlay, drag]);
+    return { icon: full, drag };
+  }
+  const drag = blitLayers([[icon, srcCopy], [overlay, fourChannelAlpha]]);
   if (drag && effectTile) replaceWhiteFromTile(drag, effectTile);
-  const full = composeLayers([background, underlay, drag]);
+  let full;
+  if (isLayer(background)) {
+    full = blitLayers([[background, srcCopy], [underlay, threeChannelAlpha], [drag, threeChannelAlpha]]);
+  } else {
+    // Retail always has the type background (an opaque base). Without it
+    // (failed fetch), ThreeChannelAlpha onto the underlay would keep the
+    // UNDERLAY's alpha and hide the icon wherever the underlay is
+    // transparent; FourChannelAlpha onto a transparent base degrades to the
+    // plain "over" instead (a lone drag icon comes back byte-identical).
+    const size = isLayer(drag) ? drag : isLayer(underlay) ? underlay : null;
+    const blank = size ? { width: size.width, height: size.height, pixels: new Uint8ClampedArray(size.width * size.height * 4) } : null;
+    full = blitLayers([[blank, srcCopy], [underlay, fourChannelAlpha], [drag, fourChannelAlpha]]);
+  }
   return { icon: full, drag };
 }
 

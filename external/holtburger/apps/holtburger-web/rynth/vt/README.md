@@ -19,9 +19,13 @@ checklist on the 1070 is still pending.
 - **At the Default profile it changes nothing.** Every new option defaults to today's
   behaviour (D3); the parity oracle `tests/rynth_vt_parity.test.mjs` (T-P1) runs one
   scripted world with and without the layer and compares every kernel action and every host
-  action call. VTank's own defaults are one click away: **Profiles → Apply VTank defaults**
-  (or `/rs settings preset vtank`) writes Autostack, Autocram, Peace Mode When Idle,
-  Follow/Nav Min 1.5 m, VTank war spells and pet refill into the active (user) profile.
+  action call. The VTank/RynthAi defaults are one click away: **Profiles → Apply
+  VTank/RynthAi defaults** (or `/rs settings preset vtank`) writes Autostack, Autocram, Peace
+  Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells and pet refill into the active (user)
+  profile. These are RynthAi's values (`LegacyUiSettings.cs`, PLAN D3), not read from a
+  VTank-written `defaultsettings.usd`; WebAC (`vtankOptions.ts`) reports that file ships
+  Autocram and Peace Mode When Idle off and Nav close-stop ≈ 2 m — unverified here, so the
+  preset keeps the RynthAi values until a real VTank file is checked.
 
 ## How you reach it
 
@@ -80,7 +84,7 @@ reading (a single integer is the hold time). Motion verbs (jump, `nav start`,
 |---|---|---|
 | `expr/` | The one expression language (monster expressions + metas): lexer, parser, values, evaluator, .NET→JS regex, vars (session / persistent / global), pure function library | W1-1 EXPR |
 | `settings/` | `VtOptions` — the single settings authority (schema rows, live cells over the loop fields, profiles, named stores, the page-level `VtSession`) | W1-2 SET |
-| `formats/` | `.met` / metaf `.af` / view XML / VT `.utl` loot profiles (parse + write, round-trip stable) | W1-3 FMT |
+| `formats/` | `.met` / metaf `.af` / view XML / VT `.utl` loot profiles (parse + write, round-trip stable); VTank `.usd` settings profiles (import only) | W1-3 FMT |
 | `meta/` | The meta engine (states, rules, conditions, actions, watchdog, views) | W1-4 META |
 | `cmd/` | `/rs` dispatcher, compat verbs, world/inventory action helpers, meta host functions, quest tracker | W1-5 CMD |
 | `nav/` | Routes (Circular / Linear / Follow / Once), `.nav` profiles, `ActiveNav` + one tick-driven executor per waypoint type | W1-6 NAV |
@@ -211,6 +215,13 @@ selector is now labelled "Persona" instead of "Profile".
   fresh buffs in a loop. At the defaults a buff of 30 min or more is recast when < 15 min
   remain. When it fires, the buff loop's existing batch rule (B11) recasts every desired buff
   to align timers.
+- **Buff tier by skill** (`BuffTierSkillCap`, default off; thresholds
+  `BuffMinSkillLevelTier1`..`8`, RynthAi defaults 35..435): self buffs and vital spells use
+  the highest known tier the buffed skill of their school reaches, instead of the highest
+  known tier (RynthAi GetHighestBuffSpellTier). `index.js` projects the option onto the
+  buff and vitals loops' `setSkillCap` (one `rynth/skill_cap.js` `createHostSkillCap` over
+  the host, rebuilt when a threshold changes, re-applied to a loop `bot.setBuffs` replaced);
+  off — the default — never touches a loop, and turning it off hands both loops `null`.
 
 Storage (all `localStorage`, try/catch everywhere):
 
@@ -253,6 +264,8 @@ One dialect for both (PLAN §3.4). Things that differ from what you might expect
   edits rules live without leaving the current state. Views (`CreateView`) are rendered by
   `plugins/rynth-vt/meta_views.js`; they are destroyed when the bot stops or is rebound, and an
   already-fired `CreateView` rule re-creates its window only when its state is re-entered.
+  An `.af` `EmbedNav tag {name} {a b c d e f g}` point transform (metaf, for duplicated
+  dungeons) is baked into a derived route under a new tag, as metaf does in the `.met`.
 - Routes import uTank2 `.nav` text (incl. Follow files) and metaf NAV sections; the web-only
   jump strafe direction is dropped on export with a warning. Insert above / below, the active
   row and the ten waypoint types (Point, Portal, Recall, Pause, Chat, Open Vendor, Portal/NPC,
@@ -272,6 +285,16 @@ One dialect for both (PLAN §3.4). Things that differ from what you might expect
 - Loot profiles: VT Classic Looter `.utl` (31 node types) plus a minimal rule editor. Rules
   needing appraisal data hold the item until it arrives. Decal "synthetic" property keys are
   only partly mapped (`glue/loot_ctx.js`); unknown ones read as unknown (logged once).
+- VTank settings profiles (`.usd`, `formats/usd.js`; format after WebAC `vtankUsd.ts` /
+  `docs/vtank-formats.md` §6, AGPL-3.0) import with `bot.vt.library.importUsd(name, data,
+  { mineOnly })` into a NEW user profile only: Save As (refused for Default, `[By char]` and a
+  name that already exists), then the Settings rows by VTank name (landblock fractions ×240,
+  clamps and unknown names reported, as `/rs opt`) and the Monsters tab through the
+  MonsterList validator (`<DEFAULT>` → DEFAULT; WeaponToUse / SecondaryEquip object ids are
+  server-specific and kept with a warning). Items, Consumables and Buffs tables (object /
+  spell ids) are parsed and reported, not applied; there is no export and no panel control
+  yet. Checked against WebAC's own `hunter.usd` and a synthetic fixture only — no
+  VTank-written `.usd` is in this tree.
 
 ## Not the same as VTank (by design or not yet verified live)
 

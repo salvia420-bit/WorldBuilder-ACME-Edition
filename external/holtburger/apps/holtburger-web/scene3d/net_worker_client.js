@@ -9,7 +9,8 @@
 //     we `worker.postMessage({t:'tx', …})` (transferable).
 //   • inbound:  the worker posts `{t:'rx'|'disconnect'|'error', …}` →
 //     we route into the wasm exports `net_proxy_push_inbound` /
-//     `net_proxy_push_disconnect`.
+//     `net_proxy_push_disconnect`; `{t:'linkstatus'}` (net-transport-6)
+//     goes to the handle's `netWorkerLinkStatus`.
 //
 // The wasm side is "armed" for worker mode via `net_worker_arm(sink)`
 // immediately before `start_session`, so `start_session` builds a proxy
@@ -208,6 +209,10 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
 
   // Worker is live. Wire the real inbound router + a disconnect-surfacing
   // error handler, then arm + connect + start.
+  // net-transport-6: the SessionHandle once start_session resolves; the
+  // worker's link numbers go to it (posts before then are dropped — the
+  // worker re-posts on every 2.5 s keepalive tick).
+  let liveHandle = null;
   worker.onmessage = (ev) => {
     const m = ev.data || {};
     if (m.t === "rx") {
@@ -215,6 +220,14 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     } else if (m.t === "timesync") {
       // Server clock sample → SessionEvent::TimeSync in the main recv loop.
       net_proxy_push_timesync(Number(m.time));
+    } else if (m.t === "linkstatus") {
+      // net-transport-6: the worker measures the ping RTT + packet loss (the
+      // main thread stamps no ping in this mode). Guarded for a stale pkg/.
+      if (typeof liveHandle?.netWorkerLinkStatus === "function") {
+        try {
+          liveHandle.netWorkerLinkStatus(Number(m.rttMs) >>> 0, Number(m.loss));
+        } catch (_) {}
+      }
     } else if (m.t === "memCensus") {
       // T20 census relay reply (see netWorkerMemCensus below).
       const p = _censusPending.get(m.seq);
@@ -269,6 +282,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     console.log(`[net_worker_client] session transport running in a dedicated worker (${why})`);
   }
   const handle = await start_session(bridgeUrl, serverHost, serverPort, account, password);
+  liveHandle = handle;
   // Keep the worker referenced off the handle so it isn't GC'd; the module
   // singleton (`_activeWorker`) is what actually gets terminated on the next
   // session start.

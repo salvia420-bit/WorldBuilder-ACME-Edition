@@ -28,6 +28,9 @@ import { prewarmSubtree } from "./bake_prewarm.js";
 // far-patch shader (scene3d/far_terrain.js), so the near/far seam cannot drift
 // apart. See scene3d/terrain_shared_glsl.js for the full rationale.
 import { TERRAIN_SHARED_TAIL_GLSL } from "./terrain_shared_glsl.js";
+// ?radialFog=on (OPT-IN, 2026-10-13): retail range fog for the terrain fog call
+// (scene3d/radial_fog.js). Applied to the assembled pair below TERRAIN_FRAGMENT_GLSL.
+import { radialFogTerrainGlsl } from "./radial_fog.js";
 // Tier-1 particle upgrade (2026-10-10): the terrain takes the light pool's point
 // lights (`?terrainLights`, scene3d/vfx/fx_lights.js). The loop is compiled in
 // unless the URL says `terrainLights=off`; the preset / live switch drives the
@@ -3955,6 +3958,17 @@ ${TERRAIN_FX_LIGHTS_CALL_GLSL}  fragColor = vec4(terrainApplyFog(terrainLit, vVi
 }
 `;
 
+// ?radialFog=on (scene3d/radial_fog.js, OPT-IN 2026-10-13) — retail range fog
+// (RenderDeviceD3D::SetDefaultD3DStates, D3DRS_RANGEFOGENABLE = TRUE). The fog
+// call reads a new vFogDist = length(mvPos.xyz) varying instead of the plane
+// depth vViewDepth, which keeps driving every non-fog ramp (POM, detail, macro,
+// sparkle fades, CSM cascade pick, paint light). three's fog_vertex chunk is
+// switched by the same flag (index.js), so terrain and statics stay in step.
+// Session-constant. Without the flag these are the very same two strings, so
+// the compiled program is byte-identical. Every material / batch / test site
+// below compiles THIS pair.
+const TERRAIN_LIVE_GLSL = radialFogTerrainGlsl(TERRAIN_VERTEX_GLSL, TERRAIN_FRAGMENT_GLSL);
+
 /**
  * 2026-10-07 — test seam: the ASSEMBLED terrain GLSL (every interpolated
  * module string resolved for this session's flags), so node tests can check
@@ -3962,7 +3976,7 @@ ${TERRAIN_FX_LIGHTS_CALL_GLSL}  fragColor = vec4(terrainApplyFog(terrainLit, vVi
  * program the GPU actually compiles rather than against the source text.
  */
 export function _terrainGlslForTest() {
-  return { vertex: TERRAIN_VERTEX_GLSL, fragment: TERRAIN_FRAGMENT_GLSL };
+  return { vertex: TERRAIN_LIVE_GLSL.vertex, fragment: TERRAIN_LIVE_GLSL.fragment };
 }
 
 /**
@@ -6600,6 +6614,8 @@ export async function bakeTerrainForLandblock(
       fogFar: { value: 2400 },
       fogDensity: { value: 0.00025 },
     },
+    // The constructor names the TEMPLATE constants so test_shader_logdepth.mjs's
+    // L4 scan resolves them; the ?radialFog live pair is swapped in right after.
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,
     glslVersion: THREE.GLSL3,
@@ -6625,6 +6641,11 @@ export async function bakeTerrainForLandblock(
     // also reverting the adapter's index reversal.
     side: THREE.FrontSide,
     });
+    // ?radialFog=on — compile the range-fog pair (TERRAIN_LIVE_GLSL; the patch
+    // only rewrites fog lines, the log-depth chunk survives). Flag off: the
+    // very same string objects, so nothing changes. Before the first compile.
+    if (TERRAIN_LIVE_GLSL.vertex !== TERRAIN_VERTEX_GLSL) material.vertexShader = TERRAIN_LIVE_GLSL.vertex;
+    if (TERRAIN_LIVE_GLSL.fragment !== TERRAIN_FRAGMENT_GLSL) material.fragmentShader = TERRAIN_LIVE_GLSL.fragment;
   }
 
   // Phase 2.2 — register the material so the per-rAF tick can push
@@ -6752,8 +6773,8 @@ export async function bakeTerrainForLandblock(
   let terrainBatchAbsorbed = false;
   if (!scene3d.wireframeMode && terrainBatchEnabled()) {
     terrainBatchAbsorbed = tryAbsorbTerrainLbIntoBatch(scene3d, lbMesh, opts, {
-      vertexGlsl: TERRAIN_VERTEX_GLSL,
-      fragmentGlsl: TERRAIN_FRAGMENT_GLSL,
+      vertexGlsl: TERRAIN_LIVE_GLSL.vertex,
+      fragmentGlsl: TERRAIN_LIVE_GLSL.fragment,
       texMergeAlphaRound: TEXMERGE_ALPHA_ROUND,
     });
   }

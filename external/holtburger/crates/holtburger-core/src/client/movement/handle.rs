@@ -363,6 +363,15 @@ impl MovementSystemHandle {
         self.inner.set_walkable_landing_ground(on);
     }
 
+    /// physics-collision-2 (2026-10-13): install the `?setupPlayerBody=off`
+    /// runtime carrier (default-ON — the local player's transition spheres
+    /// and step heights come from its own resident Setup × scale, as retail
+    /// and ACE build them; `=off` sweeps every player as the human Setup
+    /// `0x02000001`). Forwards to `MovementSystem::set_setup_player_body`.
+    pub fn set_setup_player_body(&mut self, on: bool) {
+        self.inner.set_setup_player_body(on);
+    }
+
     /// R1 motioninterp-1 (2026-10-08): install the `?jumpLaunchCap=off`
     /// runtime carrier (default-ON — a jump under held keys launches with
     /// retail `get_leave_ground_velocity`, the state velocity capped at

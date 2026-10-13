@@ -105,5 +105,69 @@ pub enum GameMessage {
 mod pack;
 mod unpack;
 
+/// test-tooling-3 (wire integrity): `GameMessage::unpack` wraps 20 Qualities
+/// opcodes (Wave 6.A: the `Remove*` family, `Update*SkillAC`,
+/// `Update*AttributeLevel`) as `GameMessage::Unknown` ON PURPOSE, both when
+/// the generated codegen reader validates the payload and when it rejects it
+/// (the `!consumed` raw-grab fallback). Given a whole inbound message (opcode
+/// first), this re-runs that reader: `Some(true)` = a validated wrap,
+/// `Some(false)` = a decode failure disguised as `Unknown`, `None` = not one
+/// of the 20 (or no opcode). Diagnostics only; pure.
+pub fn qualities_raw_wrap_decodes(message: &[u8]) -> Option<bool> {
+    let b = message.get(0..4)?;
+    let op = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let mut offset = 4;
+    unpack::qualities_codegen_read(op, message, &mut offset)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod raw_wrap_tests {
+    use super::*;
+    use crate::traits::ProtocolUnpack;
+
+    /// 0x02E1 Qualities_PrivateUpdateSkillAC (protocol.xml): byte Sequence,
+    /// SkillId Key (i32), SkillAdvancementClass Value (u32).
+    fn update_skill_ac(skill: i32, sac: u32) -> Vec<u8> {
+        let mut b = 0x02E1u32.to_le_bytes().to_vec();
+        b.push(5);
+        b.extend_from_slice(&skill.to_le_bytes());
+        b.extend_from_slice(&sac.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn qualities_raw_wrap_valid_payload_is_some_true() {
+        // MeleeDefense (6), Specialized (3).
+        let msg = update_skill_ac(6, 3);
+        assert_eq!(qualities_raw_wrap_decodes(&msg), Some(true));
+        // ...and unpack still wraps it as Unknown, consuming every byte.
+        let mut off = 0;
+        let parsed = GameMessage::unpack(&msg, &mut off);
+        assert!(matches!(parsed, Some(GameMessage::Unknown(0x02E1, _))));
+        assert_eq!(off, msg.len());
+    }
+
+    #[test]
+    fn qualities_raw_wrap_truncated_payload_is_some_false() {
+        let mut msg = update_skill_ac(6, 3);
+        msg.truncate(msg.len() - 4); // drop the SkillAdvancementClass
+        assert_eq!(qualities_raw_wrap_decodes(&msg), Some(false));
+        // unpack's raw-grab fallback: still Some(Unknown), indistinguishable
+        // by variant from the validated wrap above.
+        let mut off = 0;
+        let parsed = GameMessage::unpack(&msg, &mut off);
+        assert!(matches!(parsed, Some(GameMessage::Unknown(0x02E1, _))));
+        assert_eq!(off, msg.len());
+    }
+
+    #[test]
+    fn qualities_raw_wrap_other_opcodes_are_none() {
+        // 0xF7B0 GameEvent, an unknown opcode, and a runt with no opcode.
+        assert_eq!(qualities_raw_wrap_decodes(&0xF7B0u32.to_le_bytes()), None);
+        assert_eq!(qualities_raw_wrap_decodes(&0xDEAD_BEEFu32.to_le_bytes()), None);
+        assert_eq!(qualities_raw_wrap_decodes(&[0xE1, 0x02]), None);
+    }
+}

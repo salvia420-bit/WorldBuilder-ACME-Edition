@@ -58,7 +58,10 @@ const mod = await import("./plugins/audio_optimistic.js");
 const { playOptimistic, shouldSuppressEcho, SOUND } = mod;
 const LPG = 0x5000_0001;
 // The prediction arms below run with the escape flag (see the header).
-window.location = { search: "?retailItemSounds=off" };
+// audio-2 (2026-10-13): the UI cue arms (UI_ERROR, slider) pin the
+// `?retailUiSounds=off` path; the retail default (silent) is pinned in
+// tests/audio_retail_ui_sounds.test.mjs.
+window.location = { search: "?retailItemSounds=off&retailUiSounds=off" };
 
 const fire = (type, target) => {
   for (const fn of listeners.get(type) || []) fn({ target });
@@ -207,8 +210,9 @@ console.log("\n=== audio-1: item cues are the server's (retail default) ===");
   await tick();
   check("no window.location at all → retail default too", played.length === 0);
 
-  // UI cues are never echoed by the server: they still play here.
-  window.location = { search: "" };
+  // UI cues are never echoed by the server: under `?retailUiSounds=off`
+  // (audio-2) they still play here, whatever the item-sound flag says.
+  window.location = { search: "?retailUiSounds=off" };
   resolveSoundImpl = async () => ({ waveDid: 0x0A00_0011, volume: 0.5, probability: 1 });
   played.length = 0;
   await playOptimistic(SOUND.UI_ERROR, 0x1);
@@ -249,6 +253,7 @@ console.log("\n=== slider held-set does not latch ===");
 {
   const slider = { tagName: "INPUT", type: "range" };
   const other = { tagName: "DIV" };
+  window.location = { search: "?retailUiSounds=off" };   // audio-2 escape
   entityMap = new Map();
   entityMap.set(LPG, makeInst(LPG, 1, 2, 3));
   resolveSoundImpl = async () => ({ waveDid: 0x0B00_0001, volume: 1.0 });

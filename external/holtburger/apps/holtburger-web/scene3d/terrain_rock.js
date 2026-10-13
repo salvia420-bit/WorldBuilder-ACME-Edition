@@ -86,6 +86,12 @@ import {
 } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL } from "./terrain_scatter.js";
 import {
+  RETAIL_LIGHT_TICK_SEC,
+  createRetailLightTick,
+  retailLightTick,
+  lightTickResetEnabled,
+} from "./retail_light_tick.js";
+import {
   registerTerrainVfx,
   unregisterTerrainVfx,
   lbKeyFromXY,
@@ -115,10 +121,11 @@ export const GRIT_PROVIDER_ID = "terrain.rockGrit";
 // Retail light-tick constants. Same values and same reasons as
 // `loop.js::tickTerrainSunDir` (Dereth's Region DAT carries
 // skyInfo.lightTickSize = 15 s; `LSCAPE_LIGHT_MINIMUM` floors AMBIENT only,
-// acclient.c:40344). Duplicated rather than imported because `loop.js` keeps
-// them module-private and this module must stay THREE-free and import-light.
+// acclient.c:40344). The tick comes from `retail_light_tick.js` (pure, no
+// THREE), the clock the ground runs on; the ambient floor stays duplicated
+// because `loop.js` keeps its copy module-private.
 // ---------------------------------------------------------------------------
-export const ROCK_LIGHT_TICK_SEC = 15.0;
+export const ROCK_LIGHT_TICK_SEC = RETAIL_LIGHT_TICK_SEC;
 export const ROCK_AMBIENT_MINIMUM = 0.2;
 
 // ---------------------------------------------------------------------------
@@ -834,6 +841,14 @@ function _gritGeometry(THREE) {
  * @param {number} [opts.seed]
  * @param {boolean} [opts.offRoad] keep pebbles off painted roads; default
  *   `?grassOffRoad` (ON).
+ * @param {object} [opts.lightTick] a `retail_light_tick.js` clock to step the
+ *   light with — the provider passes the shared `retailLightTick`, so the
+ *   pebbles re-light on the SAME epoch as the ground. Omitted (a bare field,
+ *   node tests, `?lightTickReset=off`): a private 15 s clock on the `tSec`
+ *   each `update` is handed.
+ * @param {Function} [opts.readStateTick] the sky snapshot's freshness stamp
+ *   (`skyLightingController._tickCount`) the shared clock gates a SetDay
+ *   reset on.
  */
 export function createPebbleField(opts = {}) {
   const THREE = opts.THREE || null;
@@ -983,22 +998,39 @@ export function createPebbleField(opts = {}) {
     lastRescattered: 0,
     built: !!mesh,
     lightTicks: 0,
-    nextLightTick: -Infinity,
+    // The light-clock epoch the uniforms were last pushed for; null = never
+    // (or `invalidateLight()`), so the next update pushes whatever the epoch.
+    lightEpoch: null,
     sunOk: false,
   };
+
+  // The light clock. Shared (the ground's) when the provider hands one in;
+  // otherwise private, driven by the `tSec` the update is given.
+  let _lightT = 0;
+  const lightTick = opts.lightTick && typeof opts.lightTick.sync === "function"
+    ? opts.lightTick
+    : createRetailLightTick({ periodSec: ROCK_LIGHT_TICK_SEC, now: () => _lightT });
+  const readStateTick = typeof opts.readStateTick === "function" ? opts.readStateTick : null;
 
   /**
    * Refresh the light uniforms from a sky snapshot, on the RETAIL CADENCE.
    * `LScape::UseTime` (acclient.c:307257) only re-lights the landscape when the
    * light tick expires, and `loop.js::tickTerrainSunDir` quantises the ground
-   * to the same 15 s. Pebbles step with the ground they sit on; a smooth push
-   * here would make them disagree with it every dusk.
+   * on the same clock (`retail_light_tick.js`). Pebbles step with the ground
+   * they sit on — same epoch, same SkyState snapshot (both run before the sky
+   * tick in a frame); a smooth push here would make them disagree with it
+   * every dusk.
    */
   function _pushLight(skyState, tSec) {
-    const t = Number.isFinite(tSec) ? tSec : 0;
-    if (t < state.nextLightTick) return false;
+    _lightT = Number.isFinite(tSec) ? tSec : 0;
+    let stateTick;
+    if (readStateTick) {
+      try { stateTick = readStateTick(); } catch (_) { stateTick = undefined; }
+    }
+    const epoch = lightTick.sync(stateTick);
+    if (epoch === state.lightEpoch) return false;
     if (!rockSunFromSkyState(skyState, sun).ok) return false;
-    state.nextLightTick = t + ROCK_LIGHT_TICK_SEC;
+    state.lightEpoch = epoch;
     state.lightTicks += 1;
     state.sunOk = true;
     const d = uniforms.uSunDir.value;
@@ -1029,8 +1061,9 @@ export function createPebbleField(opts = {}) {
       state.lastRescattered = pool.update(dt, px, py, pz);
       return state.lastRescattered;
     },
-    /** Test/diag seam: force the next `update` to re-read the sky. */
-    invalidateLight() { state.nextLightTick = -Infinity; },
+    /** Test/diag seam: force the next `update` to re-read the sky (the clock
+     *  itself is not touched — a shared one belongs to the ground too). */
+    invalidateLight() { state.lightEpoch = null; },
     dispose() {
       // The pool owns the mesh (it built it) and deliberately never disposes
       // the geometry/material it was handed — those are ours.
@@ -1045,6 +1078,8 @@ export function createPebbleField(opts = {}) {
         frames: state.frames,
         lastRescattered: state.lastRescattered,
         lightTicks: state.lightTicks,
+        lightEpoch: state.lightEpoch,
+        sharedLightClock: lightTick === opts.lightTick,
         sunResolved: state.sunOk,
         sunDir: { x: sun.x, y: sun.y, z: sun.z },
         ambLevel: sun.ambLevel,
@@ -1249,6 +1284,21 @@ function _skyState() {
   return null;
 }
 
+/** The `_tickCount` of the controller `_skyState()` reads — the freshness
+ *  stamp the shared light clock gates a SetDay reset on. Undefined under a
+ *  `readSkyState` override (no stamp: the reset then waits for the ground). */
+function _skyStateTick() {
+  if (!_rock || typeof _rock.readSkyState === "function") return undefined;
+  try {
+    const c = _rock.scene3d?.skyLightingController;
+    if (c && c._lastState) return c._tickCount;
+    if (typeof window !== "undefined") {
+      return window.liveScene3d?.skyLightingController?._tickCount;
+    }
+  } catch (_) { /* fail-soft */ }
+  return undefined;
+}
+
 function _pebbleProvider() {
   return {
     id: PEBBLE_PROVIDER_ID,
@@ -1281,6 +1331,10 @@ function _pebbleProvider() {
           count,
           radiusM: q.radiusM || terrainRockRadiusM(),
           seed: _rock.seed,
+          // sky-fog-time-4: re-light on the ground's clock (one epoch for the
+          // landscape); `?lightTickReset=off` keeps the private timer.
+          lightTick: _rock.sharedLightTick ? retailLightTick : null,
+          readStateTick: _skyStateTick,
         });
         _stats.pebbleBuilds += 1;
       }
@@ -1373,6 +1427,7 @@ export function initTerrainRock(opts = {}) {
     parent: opts.parent || scene3d?.terrainGroup?.parent || null,
     globals: opts.globals || null,
     readSkyState: typeof opts.readSkyState === "function" ? opts.readSkyState : null,
+    sharedLightTick: lightTickResetEnabled(opts.search),
     seed: Number.isFinite(opts.seed) ? opts.seed | 0 : 0x520c4bed,
     density: Number.isFinite(density) ? density : 1,
     pebbles: null,

@@ -20,6 +20,11 @@ export const CHARACTER_OPTION = Object.freeze({
   // and-watch auto-attack). Mirrors `holtburger_common::CharacterOption
   // ::AutoRepeatAttacks = 0x00` (character.rs:118). ACE defaults it OFF.
   AutoRepeatAttacks: 0x00,
+  // `VividTargetingIndicator` (character.rs, mask 0x8000) — retail
+  // PlayerModule::VividTargetingIndicator gates the target brackets + the
+  // off-screen arrow (VividTargetIndicator::UpdateDisplayState, acclient.c:
+  // 289556). Default ON (0x50C4A54A).
+  VividTargetingIndicator: 0x0E,
   // `DragItemToPlayerOpensTrade` (character.rs) — retail PlayerModule::
   // DragItemOnPlayerOpensSecureTrade: an item dropped on another player
   // opens / extends a secure trade instead of giving it

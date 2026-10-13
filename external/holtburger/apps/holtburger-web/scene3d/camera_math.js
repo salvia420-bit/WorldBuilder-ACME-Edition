@@ -482,3 +482,78 @@ export function trackedTargetYaw(pivot, target) {
   if (!(Math.hypot(dx, dy) >= 1e-4)) return null;
   return Math.atan2(dx, dy);
 }
+
+// ---- models-camera-2: retail game FOV (`?retailFov=on`) --------------------
+//
+// Retail never stores a vertical FOV: the SmartBox draw derives it every frame
+// from the Render.FieldOfView preference, `m_fGameFOV / (m_ViewportAspectRatio
+// - 0.1)` → `Render::SetFOVRad` (acclient.c:144897, same at :143950) →
+// `D3DXMatrixPerspectiveFovLH` fovY (PrimD3DRender::SetFOVInternal
+// :453039-453048), so the HORIZONTAL FOV stays near 81-89° across window
+// shapes. Our world camera keeps a fixed 60° vertical FOV unless the default-
+// OFF `?retailFov=on` opt-in is set (pending the batched 1070 eye-test).
+
+/** `SmartBox::m_fGameFOV` ctor default π/2 (acclient.c:145517, raw 1070141403). */
+export const RETAIL_GAME_FOV_DEFAULT_DEG = 90;
+
+/**
+ * Render.FieldOfView preference range — `UIPreferences::SetPreferenceRange(
+ * &Render_FieldOfView, 10.0, 160.0)` (acclient.c:63316). SmartBox::
+ * SetDefaultFov stores the degrees as radians (:143244).
+ */
+export const RETAIL_GAME_FOV_MIN_DEG = 10;
+export const RETAIL_GAME_FOV_MAX_DEG = 160;
+
+/** Ours: the fixed vertical FOV the flag-off world camera keeps (index.js). */
+export const LEGACY_VERTICAL_FOV_DEG = 60;
+
+/**
+ * Default-OFF opt-in reader: true only for exactly `?retailFov=on`.
+ * @param {string} [search] a `location.search` string
+ */
+export function retailFovEnabled(search) {
+  try {
+    return new URLSearchParams(search || "").get("retailFov") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Sanitise a stored Field of View preference (degrees): non-numeric →
+ * the retail default 90; otherwise clamped to the retail 10..160 range.
+ */
+export function clampGameFovDeg(v) {
+  const f = typeof v === "number" ? v : parseFloat(v);
+  if (!Number.isFinite(f)) return RETAIL_GAME_FOV_DEFAULT_DEG;
+  if (f < RETAIL_GAME_FOV_MIN_DEG) return RETAIL_GAME_FOV_MIN_DEG;
+  if (f > RETAIL_GAME_FOV_MAX_DEG) return RETAIL_GAME_FOV_MAX_DEG;
+  return f;
+}
+
+/**
+ * Retail vertical FOV (degrees) for a game FOV (degrees) and viewport
+ * aspect (width / height, RenderDevice::ComputeAspectForViewport
+ * acclient.c:382376). Returns null where
+ * `Render::SetFOVRad` refuses the value (≤ 0 or ≥ π, acclient.c:378905) —
+ * retail then keeps the previous projection, so callers must too.
+ * 90° gives 53.6° at 16:9, 73.0° at 4:3 and 40.3° at 21:9.
+ */
+export function retailVerticalFovDeg(gameFovDeg, aspect) {
+  const rad = ((gameFovDeg * Math.PI) / 180) / (aspect - 0.1);
+  if (!(rad > 0 && rad < Math.PI)) return null;
+  return (rad * 180) / Math.PI;
+}
+
+/**
+ * Set `camera.fov` to the retail vertical FOV for its current aspect.
+ * Returns true when it wrote a value (the caller then calls
+ * `updateProjectionMatrix`); false leaves the previous fov untouched.
+ */
+export function applyRetailFov(camera, gameFovDeg) {
+  if (!camera) return false;
+  const fov = retailVerticalFovDeg(gameFovDeg, camera.aspect);
+  if (fov == null) return false;
+  camera.fov = fov;
+  return true;
+}

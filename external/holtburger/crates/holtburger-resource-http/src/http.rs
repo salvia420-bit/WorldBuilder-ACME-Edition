@@ -71,12 +71,32 @@ pub async fn fetch_bytes_with_priority(
     url: &str,
     priority: FetchPriority,
 ) -> Result<Vec<u8>, HttpError> {
+    fetch_bytes_with_init(url, priority, false).await
+}
+
+/// [`fetch_bytes_with_priority`], plus `cache: "reload"` on the `RequestInit`
+/// when `cache_reload` (streaming-residency-4: the retry of a shard whose last
+/// body failed Step E's sha256 check — past the service worker's Cache Storage
+/// and the immutable HTTP cache). Set via `Reflect::set` like `priority`; the
+/// Node fallback below passes no init either way.
+async fn fetch_bytes_with_init(
+    url: &str,
+    priority: FetchPriority,
+    cache_reload: bool,
+) -> Result<Vec<u8>, HttpError> {
     let init = web_sys::RequestInit::new();
     if priority == FetchPriority::Low {
         let _ = Reflect::set(
             init.as_ref(),
             &JsValue::from_str("priority"),
             &JsValue::from_str("low"),
+        );
+    }
+    if cache_reload {
+        let _ = Reflect::set(
+            init.as_ref(),
+            &JsValue::from_str("cache"),
+            &JsValue::from_str("reload"),
         );
     }
     let global = js_sys::global();
@@ -151,6 +171,18 @@ thread_local! {
     /// so an unregister mid-flight sends every LATER fetch direct while the
     /// ones already handed to the fetcher settle through it.
     static SHARD_FETCHER: RefCell<Option<Function>> = const { RefCell::new(None) };
+
+    /// Shard URLs whose last body failed Step E's sha256 check
+    /// (streaming-residency-4; see [`shard_route::ReloadSet`]). Marked by
+    /// [`mark_shard_reload`], taken by the URL's next [`fetch_shard_bytes`].
+    static SHARD_RELOAD: RefCell<shard_route::ReloadSet> =
+        RefCell::new(shard_route::ReloadSet::new());
+}
+
+/// Step E: `url`'s body failed its sha256 check, so its next fetch on the
+/// direct path bypasses the caches (`cache: "reload"`).
+pub fn mark_shard_reload(url: &str) {
+    SHARD_RELOAD.with(|s| s.borrow_mut().mark(url));
 }
 
 /// Install (`Some`) or remove (`None`) the JS shard fetcher for this wasm
@@ -183,18 +215,26 @@ pub struct ShardBody {
 /// (→ [`HttpError::Network`]). A synchronous throw is a `Network` error too.
 /// `expected_sha_hex` is the catalog's truncated sha256 (32 lowercase hex);
 /// `None` asks for no verification.
+///
+/// Reload retry (streaming-residency-4): a URL [`mark_shard_reload`]ed by
+/// Step E has its mark taken here, whichever route this fetch takes. The
+/// direct path fetches it with `cache: "reload"`; the registered fetcher keeps
+/// its own record of the bodies IT found mismatched and reloads those
+/// (scene3d/shard_fetch_worker.js RELOAD RETRY), so the fetcher contract above
+/// is unchanged.
 pub async fn fetch_shard_bytes(
     url: &str,
     priority: FetchPriority,
     expected_sha_hex: Option<&str>,
 ) -> Result<ShardBody, HttpError> {
+    let reload = SHARD_RELOAD.with(|s| s.borrow_mut().take(url));
     // Clone the handle out of the slot BEFORE calling into JS, so a fetcher
     // that (un)registers re-entrantly can never hit a RefCell borrow panic.
     let fetcher: Option<Function> = SHARD_FETCHER.with(|slot| slot.borrow().clone());
     let fetcher = match fetcher {
         Some(f) => f,
         None => {
-            let bytes = fetch_bytes_with_priority(url, priority).await?;
+            let bytes = fetch_bytes_with_init(url, priority, reload).await?;
             return Ok(ShardBody {
                 bytes,
                 verified: false,

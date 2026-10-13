@@ -61,6 +61,16 @@
 // semantics are unchanged). HTTP errors carry `status`; network/body errors
 // carry `status:0` + `msg`.
 //
+// RELOAD RETRY (2026-10-13, WebAC comparison streaming-residency-4): the worker
+// remembers each URL whose body failed its sha check here, and the NEXT request
+// for that URL (the wasm walk's retry of the failed key) goes out with
+// `cache: "reload"`, past the service worker's Cache Storage and the immutable
+// HTTP cache (`?nosw=1`), so a bad cached copy can heal instead of coming back
+// on every retry. Once per failure: the entry is taken by that request and set
+// again only if it mismatches again. Bounded (RELOAD_URLS_MAX); with
+// verification off (`__hbVerifyShards=false`, no `sha` sent) nothing is ever
+// marked. Stats: `reloads`.
+//
 // NO imports, NO wasm: nothing here can go stale with a wasm rebuild (no stamp
 // site), and the bundled shell's worker guard (scripts/build-shell.mjs) wants
 // worker graphs free of non-pkg externals. `createShardFetchHandler` is exported
@@ -74,6 +84,9 @@ export const LAG_PROBE_MS = 10;
 /** `?shardHashSlice`: bodies above this are hashed one slice of this size per
  *  event-loop turn ('js' engine only); at or below it, in one pass as before. */
 export const HASH_SLICE_BYTES = 64 * 1024;
+/** RELOAD RETRY: at most this many mismatched URLs are remembered at once; a
+ *  mismatch beyond it is not remembered (its retry is a plain fetch). */
+export const RELOAD_URLS_MAX = 4096;
 
 /**
  * `?shardHashSlice` — default ON; `off` / `0` / `false` / `no` restore the
@@ -378,7 +391,11 @@ export function createShardFetchHandler(deps = {}) {
     slicedBodies: 0,
     slices: 0,
     maxSliceMs: 0,
+    // RELOAD RETRY: requests sent with cache:"reload" after a mismatch.
+    reloads: 0,
   };
+  // RELOAD RETRY: URLs whose last body here failed its sha check.
+  const reloadUrls = new Set();
   const hashSnap = () => ({
     slice: stats.hashSlice,
     yield: stats.hashYield,
@@ -525,8 +542,13 @@ export function createShardFetchHandler(deps = {}) {
     // "low" = the normal lane; "high" = the urgent lane, explicit (the page's
     // `?shardFetchHigh`, default on); anything else = no init (the urgent lane
     // with `?shardFetchHigh=off`: the browser's default for a worker fetch).
-    const init = req.prio === "low" ? { priority: "low" } : req.prio === "high" ? { priority: "high" } : undefined;
-    stats.prio[init ? init.priority : "auto"] += 1;
+    const prioInit = req.prio === "low" ? { priority: "low" } : req.prio === "high" ? { priority: "high" } : undefined;
+    stats.prio[prioInit ? prioInit.priority : "auto"] += 1;
+    // RELOAD RETRY: this URL's last body failed its sha check here — fetch it
+    // past every cache (taken once; a fresh mismatch sets it again).
+    const reload = reloadUrls.delete(req.url);
+    const init = reload ? { ...prioInit, cache: "reload" } : prioInit;
+    if (reload) stats.reloads += 1;
     let res;
     try {
       res = init ? await fetchImpl(req.url, init) : await fetchImpl(req.url);
@@ -578,7 +600,10 @@ export function createShardFetchHandler(deps = {}) {
           got = await digest.digestHex(buf);
         }
         if (got.slice(0, want.length) === want) verified = true;
-        else mismatch = true;
+        else {
+          mismatch = true;
+          if (reloadUrls.size < RELOAD_URLS_MAX) reloadUrls.add(req.url);
+        }
       } catch (_) {
         /* hash engine failed: deliver unverified, the wasm Step E verifies */
       }
@@ -619,7 +644,14 @@ export function createShardFetchHandler(deps = {}) {
   }
 
   function snapshot() {
-    return { ...stats, flushBy: { ...stats.flushBy }, prio: { ...stats.prio }, lag: { ...lag }, slicesQueued: jobs.length };
+    return {
+      ...stats,
+      flushBy: { ...stats.flushBy },
+      prio: { ...stats.prio },
+      lag: { ...lag },
+      slicesQueued: jobs.length,
+      reloadPending: reloadUrls.size,
+    };
   }
 
   return { onMessage, flush: () => flush("time"), stats, snapshot, engine: digest.engine };

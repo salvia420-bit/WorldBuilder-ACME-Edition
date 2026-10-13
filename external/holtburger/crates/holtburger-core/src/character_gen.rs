@@ -1,3 +1,4 @@
+use crate::chargen_colors::{ChargenClothingTables, ChargenGearSlot};
 use holtburger_content::CharacterGenCatalog;
 use holtburger_content::character_gen::{
     CharacterGenHeritageGroup, CharacterGenSkillCosts, CharacterGenSkillDefinition,
@@ -331,6 +332,9 @@ impl Default for CharacterGenPolicy {
 pub struct CharacterGenBuilder {
     catalog: Arc<CharacterGenCatalog>,
     policy: CharacterGenPolicy,
+    /// The gears' ClothingTables, when the caller has them: each gear's
+    /// colour list (`StoreColorInformation`) comes from its own table.
+    clothing: Option<Arc<ChargenClothingTables>>,
 }
 
 impl CharacterGenBuilder {
@@ -339,7 +343,21 @@ impl CharacterGenBuilder {
     }
 
     pub fn with_policy(catalog: Arc<CharacterGenCatalog>, policy: CharacterGenPolicy) -> Self {
-        Self { catalog, policy }
+        Self {
+            catalog,
+            policy,
+            clothing: None,
+        }
+    }
+
+    /// maps-chargen-barber-3: attach the gears' ClothingTables so the
+    /// clothing colours use each gear's own list
+    /// (`CharGenState::StoreColorInformation`, acclient.c:495905) for the
+    /// wire key and the random roll. A gear whose table is missing keeps
+    /// the old gender-list behaviour.
+    pub fn with_clothing_tables(mut self, tables: Arc<ChargenClothingTables>) -> Self {
+        self.clothing = Some(tables);
+        self
     }
 
     pub fn catalog(&self) -> &CharacterGenCatalog {
@@ -402,28 +420,57 @@ impl CharacterGenBuilder {
     /// `ClothingTable::GetCloPaletteTemplate`; ACE stamps it as the item's
     /// PaletteTemplate and icon), so an index there is the wrong colour.
     ///
-    /// The keys come from the gender's ClothingColorsList, which holds
-    /// every key retail's per-gear lists (StoreColorInformation) can
-    /// offer. Retail orders each gear's list by ClothingTable hash order
-    /// instead; the wizard picks clothing colours at random, so only the
-    /// key's validity matters here.
-    fn wire_appearance(&self, build: &CharacterGenBuild) -> CharacterCreateAppearanceData {
+    /// maps-chargen-barber-3: the key is the chosen GEAR's list entry —
+    /// `StoreColorInformation` (acclient.c:495905) keeps the gear's
+    /// ClothingTable templates that are also in the gender's
+    /// ClothingColorsList, in PackableHashTable walk order — so it is
+    /// always a template of that gear's table. Out of range sends 0, as
+    /// retail does. When the gear's table is not attached
+    /// ([`Self::with_clothing_tables`]) the key falls back to the gender's
+    /// ClothingColorsList entry, which may not be in the gear's table (ACE
+    /// then dresses the item in the table's first template).
+    pub fn wire_appearance(&self, build: &CharacterGenBuild) -> CharacterCreateAppearanceData {
         let mut appearance = build.appearance.clone();
-        let keys = self
+        let options = self
             .catalog
             .heritage_group(build.heritage)
             .and_then(|heritage| heritage.genders.get(&build.gender))
-            .map(|gender| gender.appearance.clothing_color_ids.as_slice())
+            .map(|gender| &gender.appearance);
+        let gender_keys = options
+            .map(|options| options.clothing_color_ids.as_slice())
             .unwrap_or_default();
-        let key = |index: u32| keys.get(index as usize).copied().unwrap_or(0);
+        let key = |slot: ChargenGearSlot, style: u32, color: u32| -> u32 {
+            if let (Some(options), Some(tables)) = (options, self.clothing.as_deref()) {
+                if let Some(choices) = tables.gear_choices(options, slot, style) {
+                    return choices.template_for(color);
+                }
+            }
+            gender_keys.get(color as usize).copied().unwrap_or(0)
+        };
         appearance.headgear_color = if appearance.headgear_style == u32::MAX {
             0
         } else {
-            key(appearance.headgear_color)
+            key(
+                ChargenGearSlot::Headgear,
+                appearance.headgear_style,
+                appearance.headgear_color,
+            )
         };
-        appearance.shirt_color = key(appearance.shirt_color);
-        appearance.pants_color = key(appearance.pants_color);
-        appearance.footwear_color = key(appearance.footwear_color);
+        appearance.shirt_color = key(
+            ChargenGearSlot::Shirt,
+            appearance.shirt_style,
+            appearance.shirt_color,
+        );
+        appearance.pants_color = key(
+            ChargenGearSlot::Trousers,
+            appearance.pants_style,
+            appearance.pants_color,
+        );
+        appearance.footwear_color = key(
+            ChargenGearSlot::Footwear,
+            appearance.footwear_style,
+            appearance.footwear_color,
+        );
         appearance
     }
 
@@ -441,28 +488,62 @@ impl CharacterGenBuilder {
             return empty_appearance();
         };
 
+        // maps-chargen-barber-3: retail `CharGenState::RandomizeShirt` (and
+        // the headgear / trousers / footwear ones, acclient.c:497279-497381)
+        // rolls the colour inside the chosen gear's list (`numShirtColors`).
+        // Without that gear's ClothingTable the gender list's size is the
+        // range, as before.
+        let color_count = |slot: ChargenGearSlot, style: u32| -> usize {
+            self.clothing
+                .as_deref()
+                .and_then(|tables| tables.gear_choices(appearance, slot, style))
+                .map_or(appearance.clothing_color_ids.len(), |choices| choices.len())
+        };
+
         let mut rng = rand::rng();
         let headgear_style = random_optional_index(&mut rng, appearance.headgear.len());
 
+        let eyes = random_required_index(&mut rng, appearance.eye_strips.len());
+        let nose = random_required_index(&mut rng, appearance.nose_strips.len());
+        let mouth = random_required_index(&mut rng, appearance.mouth_strips.len());
+        let hair_color = random_required_index(&mut rng, appearance.hair_color_ids.len());
+        let eye_color = random_required_index(&mut rng, appearance.eye_color_ids.len());
+        let hair_style = random_required_index(&mut rng, appearance.hair_styles.len());
+        let headgear_color = if headgear_style == u32::MAX {
+            0
+        } else {
+            random_required_index(
+                &mut rng,
+                color_count(ChargenGearSlot::Headgear, headgear_style),
+            )
+        };
+        let shirt_style = random_required_index(&mut rng, appearance.shirts.len());
+        let shirt_color =
+            random_required_index(&mut rng, color_count(ChargenGearSlot::Shirt, shirt_style));
+        let pants_style = random_required_index(&mut rng, appearance.pants.len());
+        let pants_color =
+            random_required_index(&mut rng, color_count(ChargenGearSlot::Trousers, pants_style));
+        let footwear_style = random_required_index(&mut rng, appearance.footwear.len());
+        let footwear_color = random_required_index(
+            &mut rng,
+            color_count(ChargenGearSlot::Footwear, footwear_style),
+        );
+
         CharacterCreateAppearanceData {
-            eyes: random_required_index(&mut rng, appearance.eye_strips.len()),
-            nose: random_required_index(&mut rng, appearance.nose_strips.len()),
-            mouth: random_required_index(&mut rng, appearance.mouth_strips.len()),
-            hair_color: random_required_index(&mut rng, appearance.hair_color_ids.len()),
-            eye_color: random_required_index(&mut rng, appearance.eye_color_ids.len()),
-            hair_style: random_required_index(&mut rng, appearance.hair_styles.len()),
+            eyes,
+            nose,
+            mouth,
+            hair_color,
+            eye_color,
+            hair_style,
             headgear_style,
-            headgear_color: if headgear_style == u32::MAX {
-                0
-            } else {
-                random_required_index(&mut rng, appearance.clothing_color_ids.len())
-            },
-            shirt_style: random_required_index(&mut rng, appearance.shirts.len()),
-            shirt_color: random_required_index(&mut rng, appearance.clothing_color_ids.len()),
-            pants_style: random_required_index(&mut rng, appearance.pants.len()),
-            pants_color: random_required_index(&mut rng, appearance.clothing_color_ids.len()),
-            footwear_style: random_required_index(&mut rng, appearance.footwear.len()),
-            footwear_color: random_required_index(&mut rng, appearance.clothing_color_ids.len()),
+            headgear_color,
+            shirt_style,
+            shirt_color,
+            pants_style,
+            pants_color,
+            footwear_style,
+            footwear_color,
             skin_hue: rng.random::<f64>(),
             hair_hue: rng.random::<f64>(),
             headgear_hue: if headgear_style == u32::MAX {

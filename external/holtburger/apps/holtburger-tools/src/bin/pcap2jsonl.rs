@@ -7,6 +7,9 @@
 //! sudo tcpdump -i lo -n -s 0 -w retail.pcap 'udp port 9000 or udp port 9001'
 //! ```
 //!
+//! Or, with no sudo, for any session relayed by the WS bridge (browser or
+//! shim): `holtburger-wsbridge --capture session.pcap` (test-tooling-4).
+//!
 //! Decode side:
 //!
 //! ```sh
@@ -91,6 +94,18 @@ fn main() -> anyhow::Result<()> {
     eprintln!(
         "pcap2jsonl: {} frames, {} AC datagrams, {} messages, {} telemetry records",
         summary.frames, summary.udp_datagrams, summary.messages, summary.records_emitted
+    );
+    // test-tooling-4: server->client wire integrity (per-key maps: --summary).
+    let total = |m: &std::collections::BTreeMap<String, u64>| m.values().sum::<u64>();
+    eprintln!(
+        "pcap2jsonl: s2c decode: {} ok, {} short-read ({} B unread), {} overrun, \
+         {} undecodable, {} unknown",
+        total(&summary.decoded_ok),
+        total(&summary.short_read),
+        summary.short_read_bytes,
+        total(&summary.overrun),
+        total(&summary.undecodable),
+        total(&summary.unknown)
     );
     if args.require_records && summary.records_emitted == 0 {
         anyhow::bail!(

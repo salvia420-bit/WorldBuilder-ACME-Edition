@@ -39,6 +39,13 @@
 //     Tab / ←→ cycle the two buttons, focus returns where it was.
 //   - no ui/ac_font.js import, so node tests can import the siblings
 //     that share the chrome.
+//
+// chat-errors-7 (2026-10-13) — `hideCancel: true` is retail's type-3 OK
+// message dialog (Handle_Communication__PopUpString, acclient.c:425219):
+// one OK button (`confirmLabel`, default "OK"), no title row unless a
+// `title` is given, and Enter / Esc / a backdrop click all close it as OK
+// (onConfirm, Promise → true). Same chrome and queue; callers that do not
+// pass it are unchanged.
 
 const OVERLAY_ID = "hb-modal-dialog";
 const STYLE_ID = "hb-modal-dialog-style";
@@ -210,14 +217,21 @@ function ensureDom() {
   document.body.appendChild(backdrop);
   document.body.appendChild(dialog);
 
-  _domRefs = { backdrop, dialog, titleEl, msgEl, okBtn, cancelBtn };
+  _domRefs = { backdrop, dialog, titleEl, divider, msgEl, okBtn, cancelBtn };
   return _domRefs;
 }
 
 function openCurrent(entry) {
   const refs = ensureDom();
   _currentEntry = entry;
-  refs.titleEl.textContent = entry.title || "Confirm";
+  // chat-errors-7: an OK-only entry (`hideCancel`) has one answer, so every
+  // close path resolves it as OK; its title row shows only when given.
+  const okOnly = entry.hideCancel === true;
+  const title = okOnly ? (entry.title || "") : (entry.title || "Confirm");
+  refs.titleEl.textContent = title;
+  refs.titleEl.style.display = title ? "" : "none";
+  refs.divider.style.display = title ? "" : "none";
+  refs.cancelBtn.style.display = okOnly ? "none" : "";
   refs.msgEl.textContent = entry.message || "";
   refs.msgEl.scrollTop = 0;
   refs.okBtn.textContent = entry.confirmLabel || "OK";
@@ -226,24 +240,25 @@ function openCurrent(entry) {
   refs.dialog.setAttribute("data-open", "1");
   refs.okBtn.onclick = () => resolve(entry, true);
   refs.cancelBtn.onclick = () => resolve(entry, false);
-  refs.backdrop.onclick = () => resolve(entry, false);
+  refs.backdrop.onclick = () => resolve(entry, okOnly);
   if (!_keyHandler) {
     _keyHandler = (ev) => {
       if (refs.dialog.dataset.open !== "1") return;
       if (ev.key === "Escape") {
         ev.preventDefault();
         ev.stopPropagation();
-        resolve(entry, false);
+        resolve(entry, okOnly);
       } else if (ev.key === "Enter") {
         ev.preventDefault();
         ev.stopPropagation();
         // Enter confirms — unless the player tabbed onto Cancel.
-        resolve(entry, document.activeElement !== refs.cancelBtn);
+        resolve(entry, okOnly || document.activeElement !== refs.cancelBtn);
       } else if (ev.key === "Tab" || ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
-        // Keep focus inside the dialog: cycle the two buttons.
+        // Keep focus inside the dialog: cycle the two buttons (OK-only:
+        // stay on OK).
         ev.preventDefault();
         ev.stopPropagation();
-        const next = document.activeElement === refs.okBtn ? refs.cancelBtn : refs.okBtn;
+        const next = okOnly || document.activeElement !== refs.okBtn ? refs.okBtn : refs.cancelBtn;
         try { next.focus({ preventScroll: true }); } catch (_) {}
       }
     };
@@ -369,6 +384,7 @@ export function modalConfirm(opts) {
       message: opts?.message,
       confirmLabel: opts?.confirmLabel,
       cancelLabel: opts?.cancelLabel,
+      hideCancel: opts?.hideCancel === true,
       dialogId: opts?.dialogId,
       action: opts?.action,
       resolvePromise,
@@ -452,6 +468,7 @@ export function modalConfirmCallback(opts) {
     message: opts?.message,
     confirmLabel: opts?.confirmLabel,
     cancelLabel: opts?.cancelLabel,
+    hideCancel: opts?.hideCancel === true,
     dialogId: opts?.dialogId,
     action: opts?.action,
     onConfirm: opts?.onConfirm,
@@ -490,6 +507,7 @@ export function mount() {
       message: d.message,
       confirmLabel: d.confirmLabel,
       cancelLabel: d.cancelLabel,
+      hideCancel: d.hideCancel === true,
       onConfirm: d.onConfirm,
       onCancel: d.onCancel,
     });

@@ -20,10 +20,14 @@
 //                      (= destination position applied AND cells loaded,
 //                      SmartBox::UseTime :146262-146283). Holds >= 2 s, leaves
 //                      when (120 - frame)/40 is in (1.1, 1.3) or at 5 s.
-//     5 TUNNEL_FADEOUT 1 s — the tunnel's far plane (smartbox view distance)
-//                      shrinks to 0.001 along GetAnimLevel.
+//     5 TUNNEL_FADEOUT 1 s — the smartbox view-plane distance
+//                      (SetOverrideFovDistance) lerps to 0.001 along
+//                      GetAnimLevel. It only ever becomes an FOV (Render::
+//                      set_vdst -> SetFOVInternal, zfar untouched): the tunnel
+//                      zooms out to a point; nothing darkens.
 //     6 WORLD_FADEIN   SmartBox::Show + Sound_UI_ExitPortal; 1 s view-distance
-//                      grow-in, then LoginComplete + teleport_in_progress=0.
+//                      grow-in (the world zooms in from a point), then
+//                      LoginComplete + teleport_in_progress=0.
 // OpenAC (src/AcDream.App/Rendering/PortalTunnelPresentation.cs +
 // AcDream.Core/World/TeleportAnimSequencer.cs) ports the same machine; the
 // constants below match both.
@@ -43,6 +47,14 @@
 //          world renders and renderPortalSpaceOverlay fades a black quad out
 //          (approximation of retail's view-distance grow-in — changing the main
 //          camera's far plane would ripple through CSM/log-depth/culling).
+//   FOV    `?portalFovFade=on` (2026-10-13, cells-portals-3, OPT-IN until a 1070
+//          teleport eye test; absent = the far-plane shrink + black quad above):
+//          the retail fades. TUNNEL_FADEOUT widens the tunnel camera's fov
+//          toward 179° (far plane kept), WORLD_FADEIN narrows the world
+//          camera's from 179° back to its own (no black quad) — viewDistFov.
+//          The world camera's fov is held between frames and put back at OFF /
+//          teardown / a new tunnel; the CSM keeps fitting the game fov
+//          (userData.csmFitFov, csm.js). See _tickWorldFov.
 //   LOGIN  (2026-10-09, `?loginPortalSpace`, default `quick`) retail enters the
 //          same TAS_TUNNEL at login (SmartBox::teleport_in_progress = player &&
 //          !position_update_complete, acclient.c:143092; position_update_complete
@@ -66,11 +78,16 @@
 //          target) — the reveal frame no longer links them. The release waits
 //          ≤ 1.5 s for a still-linking program the async-link guard would not
 //          defer (`nohold`: never). See warmWorldPrograms.
+//   DRONE  `?portalDrone` (2026-10-13, cells-portals-5, default on, `=off`
+//          escape): the tunnel animation's Sound / SoundTweaked hooks, read
+//          from the DAT (wasm fetchAnimation soundHook*) — retail frame 2's
+//          SoundTweaked Wave 0x0A000316 at vol 0.3, every 2.975 s loop. See
+//          hooksCrossed / tickDrone. `?portalSoundLoop` replaces it.
 //   NOT PORTED: LoginComplete timing (the wasm still sends it on PlayerTeleport —
 //          see holtburger_core DEFER_LOGIN_COMPLETE_AFTER_TELEPORT; at login it
 //          is sent before the tunnel ends, so ACE materialises the player while
 //          the client still shows the tunnel), the logout tunnel entry, the
-//          tunnel animation's hooks.
+//          tunnel animation's non-sound hooks.
 //
 // `?portalSpace=off` disables the whole presentation (the world just stays up),
 // the login entry included.
@@ -78,7 +95,8 @@
 import * as THREE from "three";
 import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
 import { withLogDepth } from "./shader_logdepth.js";
-import { playUiSound } from "./audio/retail_sound_rules.js";
+import { playUiSound, rollProbability, retailVolume } from "./audio/retail_sound_rules.js";
+import { hookFiresInDirection } from "./hook_windows.js";
 import { wireframeFlagOn } from "./wireframe_flag.js";
 import { getWarmTarget, compileWithTarget, programsOf, programPending, prunePending, warmSceneMaterials } from "./shader_prewarm.js";
 
@@ -264,6 +282,115 @@ const PORTAL_ENTER_WAVE = SOUND_UI_ENTER_PORTAL; // sentinel: "via the SoundTabl
 const PORTAL_EXIT_WAVE = SOUND_UI_EXIT_PORTAL;
 const SOUND_FADE_S = 0.35;
 
+// ── portal-space drone (cells-portals-5, 2026-10-13) ───────────────────
+// Retail plays the tunnel object's animation as a normal CSequence:
+// UseTime set_sequence_animation(teleportObj, GetDIDByEnum(0x10000002, 7),
+// interrupt 1, low frame 1, 40.0) (acclient.c:262444, 316619), and
+// CSequence::update_internal (340659) runs execute_hooks (339683) for every
+// frame the playhead LEAVES. The retail clip 0x030005AC carries one hook:
+// frame 2, SoundTweaked (Both), Wave 0x0A000316 (3.01 s), prob 1, vol 0.3 —
+// re-fired every 119/40 = 2.975 s loop, a continuous drone between the
+// whooshes. SoundTweakedHook::Execute -> PlaySoundA(gid, obj, prio, prob, vol)
+// (342207, 383490): PlayProbability(prob), then PlaySoundInternal at the
+// object's position while CreatureMode's draw holds the listener at the portal
+// camera (143926-143934) — ~2.85 m away, inside VOL_MIN_DIST (5 m): no
+// falloff, pan 0, i.e. from the centre at `vol`. SoundHook (type 1) plays at
+// effect_sound_volume, which GetAttenuation applies again (342188, 383481).
+// The hooks come from the DAT (wasm fetchAnimation soundHook*): no hook, no
+// sound; a stale pkg without those getters stays silent.
+
+/**
+ * `?portalDrone` — `off|0|false|no` → false (the tunnel's sound hooks stay
+ * silent); absent / anything else → true. Read per tunnel start, so tests can
+ * pass `search`.
+ */
+export function portalDroneEnabled(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("portalDrone") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * The wasm AnimationJs sound-hook arrays → `[{frame, hookType, direction,
+ * volume, probability, wave}]`. `frames` / `waves` are Uint32Arrays (wave ids
+ * exceed 2^24 — a Float32Array would round them), `meta` 4 floats per hook
+ * `[hookType, direction, volume, probability]`. Missing (stale pkg) or ragged
+ * arrays → [] (no hooks, no sound); a zero wave is dropped.
+ */
+export function parseTunnelSoundHooks(frames, waves, meta) {
+  const out = [];
+  if (!frames || !waves || !meta) return out;
+  const n = frames.length | 0;
+  if (!(n > 0) || waves.length !== n || meta.length < n * 4) return out;
+  for (let i = 0; i < n; i++) {
+    const wave = waves[i] >>> 0;
+    if (!wave) continue;
+    out.push({
+      frame: frames[i] >>> 0,
+      hookType: Math.round(meta[i * 4]),
+      direction: Math.round(meta[i * 4 + 1]),
+      volume: +meta[i * 4 + 2],
+      probability: +meta[i * 4 + 3],
+      wave,
+    });
+  }
+  return out;
+}
+
+/**
+ * Hooks to fire when the tunnel playhead moves from absolute frame count
+ * `prevAbs` to `curAbs` (frames played since the sequence start; frame number
+ * = 1 + abs % (n-1), the retail low frame 1 / high frame n-1 loop). Retail
+ * CSequence::update_internal (acclient.c:340659): advancing, it runs the hooks
+ * of each frame it LEAVES — execute_hooks(frame, 1), which skips Backward
+ * hooks (339683; the shared gate hook_windows.js hookFiresInDirection) — and
+ * passing the high frame clamps to it and wraps (advance_to_next_animation)
+ * without running the high frame's own hooks. A stall (hidden tab) fires at
+ * most one loop's worth. Pure; exported for the node test. `hooks`:
+ * `[{frame, direction, …}]`, returned in firing order.
+ */
+export function hooksCrossed(prevAbs, curAbs, n, hooks) {
+  const out = [];
+  const span = (n | 0) - 1;
+  if (!(span >= 1) || !hooks || !hooks.length) return out;
+  let from = Math.floor(+prevAbs || 0);
+  const to = Math.floor(+curAbs || 0);
+  if (!(to > from)) return out;
+  if (to - from > span) from = to - span;
+  for (let a = from; a < to; a++) {
+    const left = 1 + (((a % span) + span) % span);
+    if (left === span) continue; // the high frame: retail clamps + wraps, no hooks
+    for (const h of hooks) {
+      if (h.frame === left && hookFiresInDirection(h, 1)) out.push(h);
+    }
+  }
+  return out;
+}
+
+/**
+ * How one tunnel sound hook plays (retail SoundHook / SoundTweakedHook
+ * ::Execute, acclient.c:342188-342209 -> PlaySoundA 383465-383510):
+ * SoundTweaked rolls its probability (PlayProbability) and plays at its own
+ * volume (0 = silent); Sound always plays at the effect slider, applied twice.
+ * Returns `{ play, volume, sliderTwice, reason }`.
+ */
+export function soundHookPlan(hook, rng = Math.random) {
+  const ht = hook ? hook.hookType | 0 : 0;
+  if (!hook || !(hook.wave >>> 0)) return { play: false, volume: 0, sliderTwice: false, reason: "no_wave" };
+  if (ht === 21) {
+    if (!rollProbability(hook.probability, rng)) return { play: false, volume: 0, sliderTwice: false, reason: "probability" };
+    const volume = retailVolume(hook.volume);
+    if (!(volume > 0)) return { play: false, volume, sliderTwice: false, reason: "silent" };
+    return { play: true, volume, sliderTwice: false, reason: "ok" };
+  }
+  if (ht === 1) return { play: true, volume: 1.0, sliderTwice: true, reason: "ok" };
+  return { play: false, volume: 0, sliderTwice: false, reason: "type" };
+}
+
 // UIGlobals::GetAnimLevel — the retail ease table (OpenAC
 // TeleportAnimSequencer.BuildRetailAnimationLevels, bit-exact port).
 const _ANIM_LEVELS = (() => {
@@ -288,6 +415,55 @@ const _ANIM_LEVELS = (() => {
 export function retailAnimLevel(t) {
   const c = t < 0 ? 0 : t > 1 ? 1 : t;
   return _ANIM_LEVELS[-Math.trunc(-99.0 * c)];
+}
+
+// ── portal-space FOV fades (cells-portals-3, 2026-10-13) ───────────────
+// Retail's fades never dim anything. UseTime states 5/6 (acclient.c:262497-
+// 262527) lerp the SmartBox view-plane distance between gameVDist (captured by
+// BeginTeleportAnimation from GetOverrideFovDistance, whose default is
+// 1/tan(fovV/2), 143080) and 0.001 along GetAnimLevel, and push it with
+// SetOverrideFovDistance (143073). RenderNormalMode (the world, 144891) and
+// CreatureMode with UseSmartboxFOV (the tunnel viewport, 143942) consume it
+// only through Render::set_vdst (378875) -> SetFOVInternal (453039) ->
+// D3DXMatrixPerspectiveFovLH(fov, aspect, znear, Render::zfar): an FOV, zfar
+// untouched. 0.001 is ~180°: the tunnel recedes to a point, then the world
+// zooms in from one.
+
+/** The widest fov the zoom draws (degrees): set_vdst clamps at π, where
+ *  three's perspective projection degenerates. */
+export const PORTAL_FOV_MAX_DEG = 179;
+
+/**
+ * `?portalFovFade` — OPT-IN: only `on` → true (the retail FOV zoom fades);
+ * absent / anything else → false (today's tunnel far-plane shrink + black
+ * world quad). Read per tunnel start, so tests can pass `search`.
+ */
+export function portalFovFadeEnabled(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    return (new URLSearchParams(s).get("portalFovFade") || "").trim().toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** SmartBox::GetOverrideFovDistance's default for a vertical fov (degrees):
+ *  1 / tan(fov/2) (acclient.c:143080). */
+export function viewDistForFov(fovDeg) {
+  return 1 / Math.tan((fovDeg * Math.PI) / 360);
+}
+
+/**
+ * Render::set_vdst (acclient.c:378875): the vertical fov (degrees) a
+ * view-plane distance gives, 2·atan(1/vdist), capped at PORTAL_FOV_MAX_DEG.
+ * The printed `atan2(_vdst, 1.0)` is the decompiler's FPATAN operand order;
+ * 2·atan(1/vdist) is the reading that is the identity at the default
+ * distance and keeps set_vdst's znear = vdist·0.25 at a constant half-width.
+ */
+export function fovForViewDist(vdist) {
+  if (!(vdist > 0)) return PORTAL_FOV_MAX_DEG;
+  const f = (2 * Math.atan(1 / vdist) * 180) / Math.PI;
+  return f > PORTAL_FOV_MAX_DEG ? PORTAL_FOV_MAX_DEG : f;
 }
 
 /**
@@ -346,6 +522,27 @@ export function createPortalSequencer(rng = Math.random) {
     worldOverlayAlpha() {
       if (s.state !== TAS.WORLD_FADEIN) return 0;
       return 1 - retailAnimLevel(s.t / FADE_TIME) / 1024;
+    },
+    /**
+     * ?portalFovFade: the vertical fov (degrees) retail's view-distance
+     * override gives a camera whose own fov is `fovDeg` — null outside
+     * TUNNEL_FADEOUT / WORLD_FADEIN (or for a fov outside (0,180)).
+     * gmSmartBoxUI::UseTime (acclient.c:262497-262527), g = 1/tan(fov/2),
+     * L = GetAnimLevel/1024: state 5 vdist = g + (0.001 - g)·L over this
+     * run's fade-out (the quick login fade included), state 6 vdist =
+     * 0.001 + (g - 0.001)·L over FADE_TIME; fov = 2·atan(1/vdist).
+     */
+    viewDistFov(fovDeg) {
+      const out = s.state === TAS.TUNNEL_FADEOUT;
+      if (!out && s.state !== TAS.WORLD_FADEIN) return null;
+      if (!(fovDeg > 0 && fovDeg < 180)) return null;
+      const g = viewDistForFov(fovDeg);
+      if (out) {
+        const lvl = retailAnimLevel(s.fadeOut > 0 ? s.t / s.fadeOut : 1) / 1024;
+        return fovForViewDist(g + (NEAR_VDIST - g) * lvl);
+      }
+      const lvl = retailAnimLevel(s.t / FADE_TIME) / 1024;
+      return fovForViewDist(NEAR_VDIST + (g - NEAR_VDIST) * lvl);
     },
     /**
      * Advance. `worldReady` = retail !teleport_in_progress; `frame` = the
@@ -475,6 +672,24 @@ const _warmSeen = new WeakMap(); // material -> keys compiled (whole session)
 const _warmZero = () => ({ passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0, lastMs: 0, maxMs: 0, totalMs: 0, holdMs: 0, holdCapped: false, errors: 0 });
 let _warmStats = _warmZero();
 let _warmRuns = 0;
+// ?portalDrone (cells-portals-5). The hook clock is the retail sequence's own:
+// it restarts at frame 1 when the tunnel (audibly) starts, apart from the
+// drawn frame's `_animTime`, which is left as it was.
+let _droneOn = false; // this run plays the tunnel's sound hooks
+let _droneHooks = null; // { numFrames, hooks } from the tunnel Animation (null = none)
+let _droneTime = 0; // seconds of hook-clock time this run
+let _droneAbs = 0; // whole frames played on the hook clock
+let _droneGen = 0; // bumped by stopDrone: a voice that starts after it is stopped
+const _droneVoices = new Set(); // playing voice handles ({ source, gain })
+const _droneZero = () => ({ fires: 0, skipped: 0 });
+let _droneStats = _droneZero();
+// ?portalFovFade (cells-portals-3).
+let _fovFadeOn = false; // this run fades by FOV zoom (read at each tunnel start)
+let _fovCam = null; // the world camera whose fov the WORLD_FADEIN zoom holds (null = none)
+let _fovBase = 0; // that camera's own (game) fov, put back on release
+let _fovSet = 0; // the fov the zoom last wrote (anything else = a resize / FOV slider since)
+let _fovRevealPending = false; // this tick's hold began wider than its culls ran: draw the frame black
+let _tunnelFov = 0; // diag: the tunnel camera's fov at the last tunnel draw
 
 function now() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -668,10 +883,16 @@ async function ensureTunnel(scene3d) {
     }
     // Tunnel animation (frame-major, 7 floats per part: xyz + wxyz).
     _anim = null;
+    _droneHooks = null;
     if (parts.length > 0 && typeof wasm.fetchAnimation === "function") {
       try {
         const a = await wasm.fetchAnimation(_animDid);
         const anim = { frames: a.frames, numParts: a.numParts | 0, numFrames: a.numFrames | 0 };
+        // ?portalDrone: the clip's Sound / SoundTweaked hooks (a stale pkg
+        // has no getters -> undefined -> no hooks).
+        let hooks = [];
+        try { hooks = parseTunnelSoundHooks(a.soundHookFrames, a.soundHookWaves, a.soundHookMeta); } catch (_) { hooks = []; }
+        if (hooks.length && anim.numFrames > 2) _droneHooks = { numFrames: anim.numFrames, hooks };
         try { a.free?.(); } catch (_) {}
         if (anim.numParts === parts.length && anim.numFrames > 1 &&
             anim.frames.length >= anim.numParts * anim.numFrames * 7) {
@@ -831,9 +1052,8 @@ function playOneShot(scene3d, did) {
   }
 }
 
-function stopLoop() {
-  const h = _loop;
-  _loop = null;
+// Fade a playing voice ({ source, gain }) out over SOUND_FADE_S and stop it.
+function fadeStopVoice(h) {
   if (!h?.source) return;
   try {
     const ctx = h.gain?.context;
@@ -845,6 +1065,106 @@ function stopLoop() {
       h.source.stop();
     }
   } catch (_) {}
+}
+
+function stopLoop() {
+  const h = _loop;
+  _loop = null;
+  fadeStopVoice(h);
+}
+
+// ?portalDrone: one tunnel sound hook, from the centre (see the drone note at
+// the top: the object sits inside VOL_MIN_DIST of the portal listener).
+function playDroneHook(hook) {
+  const plan = soundHookPlan(hook);
+  if (!plan.play || !_audio || typeof _audio.playFromCenter !== "function") {
+    _droneStats.skipped += 1;
+    return;
+  }
+  _droneStats.fires += 1;
+  const gen = _droneGen;
+  _audio
+    .playFromCenter(hook.wave >>> 0, plan.volume, plan.sliderTwice ? { sliderTwice: true } : {})
+    .then((v) => {
+      if (!v?.source) return;
+      if (gen !== _droneGen) { fadeStopVoice(v); return; } // stopped while it decoded
+      _droneVoices.add(v);
+      try { v.source.addEventListener?.("ended", () => { _droneVoices.delete(v); }); } catch (_) {}
+    })
+    .catch(() => {});
+}
+
+// ?portalDrone: advance the hook clock and fire the hooks of every frame it
+// left. Waits for the tunnel Animation (the clock starts when the hooks are
+// known, i.e. with the tunnel build).
+function tickDrone(dt) {
+  if (!_droneHooks) return;
+  const prev = _droneAbs;
+  _droneTime += dt;
+  _droneAbs = Math.floor(_droneTime * TUNNEL_FPS);
+  for (const h of hooksCrossed(prev, _droneAbs, _droneHooks.numFrames, _droneHooks.hooks)) playDroneHook(h);
+}
+
+// Fade out every drone voice (exit edge / teardown); a voice still decoding
+// is stopped when it starts (generation check).
+function stopDrone() {
+  _droneGen += 1;
+  for (const v of _droneVoices) fadeStopVoice(v);
+  _droneVoices.clear();
+}
+
+// ?portalFovFade: WORLD_FADEIN draws the world through retail's view-distance
+// zoom (RenderNormalMode -> set_vdst, acclient.c:144891). The active world
+// camera's fov follows viewDistFov, written once per tick — after the camera
+// tick, before the render — and HELD between frames, so the cell PVS and
+// frustum-cull passes early in the next tick see the zoomed view (the fov only
+// narrows during the fade-in: last frame's is a superset). The CSM is the
+// exception: userData.csmFitFov parks the game fov for csm.js, so the cascades
+// keep fitting the game frustum instead of stretching over ~179°.
+// The tick a hold BEGINS is the other exception (V-cells-stream-R2): that
+// tick's culls already ran at the camera's game fov, so its frame would draw a
+// ~179° view with everything outside the game cone culled. `_fovRevealPending`
+// keeps that one frame black (renderPortalSpaceOverlay); the next tick's culls
+// see the wide frustum.
+function _tickWorldFov(sc) {
+  _fovRevealPending = false;
+  const cam = _fovFadeOn && _seq.state === TAS.WORLD_FADEIN
+    ? (sc?.cameraSwitcher?.activeCamera ?? sc?.camera ?? null)
+    : null;
+  if (!cam || !cam.isPerspectiveCamera || typeof cam.updateProjectionMatrix !== "function") {
+    _releaseWorldFov(); // none / top-down ortho: the black quad stands in
+    return;
+  }
+  const starting = cam !== _fovCam;
+  if (starting) _releaseWorldFov(); // switched mid-fade: the old camera gets its fov back
+  // The game fov: the camera's own at the first write, else whatever a resize
+  // (?retailFov) or the Field of View slider wrote over our last value.
+  const base = cam === _fovCam && cam.fov === _fovSet ? _fovBase : cam.fov;
+  const f = _seq.viewDistFov(base);
+  if (f == null) {
+    _releaseWorldFov();
+    return;
+  }
+  const culledAt = cam.fov; // the fov this tick's culls built their frustum from
+  _fovCam = cam;
+  _fovBase = base;
+  _fovSet = f;
+  _fovRevealPending = starting && f > culledAt;
+  cam.fov = f;
+  if (cam.userData) cam.userData.csmFitFov = base;
+  cam.updateProjectionMatrix();
+}
+
+// Put the held world camera's game fov back (OFF, teardown, a new tunnel).
+// A fov someone else wrote during the hold (resize, FOV slider) is kept.
+function _releaseWorldFov() {
+  _fovRevealPending = false;
+  const cam = _fovCam;
+  if (!cam) return;
+  _fovCam = null;
+  if (cam.fov === _fovSet) cam.fov = _fovBase;
+  try { if (cam.userData) delete cam.userData.csmFitFov; } catch (_) {}
+  try { cam.updateProjectionMatrix(); } catch (_) {}
 }
 
 function publishDiag() {
@@ -878,6 +1198,12 @@ function publishDiag() {
       // by the per-pass cap), unguarded programs still linking, sky programs
       // still linking (IBL), last/max/total pass ms, release hold ms / capped.
       warm: { mode: _warmMode, runs: _warmRuns, ..._warmStats },
+      // ?portalDrone, this run: on, tunnel sound hooks known, hooks played /
+      // skipped (probability, volume 0, no audio), voices still playing.
+      drone: { on: _droneOn, hooks: _droneHooks ? _droneHooks.hooks.length : 0, ..._droneStats, voices: _droneVoices.size },
+      // ?portalFovFade, this run: on, the world camera's held zoom fov / its
+      // game fov (0 = not holding), the tunnel camera's fov at its last draw.
+      fovFade: { on: _fovFadeOn, world: _fovCam ? _fovSet : 0, base: _fovCam ? _fovBase : 0, tunnel: _tunnelFov },
     };
   } catch (_) {}
 }
@@ -1149,6 +1475,21 @@ function _startTunnel(scene3d, opts, silent) {
       .then((h) => { if (h && _seq.isActive()) _loop = h; else if (h) { _loop = h; stopLoop(); } })
       .catch(() => {});
   }
+  // ?portalDrone: the ?portalSoundLoop bed replaces it. A tunnel that was not
+  // up restarts the hook clock at frame 1 (retail set_sequence_animation with
+  // interrupt); a re-teleport inside the tunnel keeps the running sequence.
+  _droneOn = portalDroneEnabled() && !loopDid;
+  if (!_droneOn) stopDrone();
+  if (!wasOwning) {
+    _droneTime = 0;
+    _droneAbs = 0;
+    _droneStats = _droneZero();
+  }
+  // ?portalFovFade: a teleport during WORLD_FADEIN gives the world camera its
+  // fov back before the tunnel takes the frame again.
+  _fovFadeOn = portalFovFadeEnabled();
+  _releaseWorldFov();
+  _tunnelFov = 0;
   if (!silent) setNotice(true);
   ensureTunnel(scene3d).catch((e) => console.warn("[portalSpace] tunnel build failed:", e));
   publishDiag();
@@ -1364,12 +1705,23 @@ export function tickPortalSpace(scene3d, dt) {
       _t.reveal = now();
       if (!_loginMode || _loginAnnounced) playOneShot(scene3d ?? _scene3d, _exitDid);
       setNotice(false);
+      // ?portalDrone: retail clears the tunnel sequence here (UseTime state
+      // 5 -> 6, clear_sequence_anims, acclient.c:262559): no more hooks. Its
+      // last voice would play out (<= 3 s into the world); ours fades out
+      // under the exit whoosh, as the ?portalSoundLoop bed does at the end.
+      stopDrone();
     } else if (e === "done") {
       _t.done = now();
       endPortalSpace();
       return;
     }
   }
+  // ?portalDrone: the tunnel's sound hooks run while its viewport is up
+  // (retail CreatureMode draw -> update_position), and a login tunnel only
+  // once it is announced (a warm-path login stays silent).
+  if (_droneOn && _seq.ownsFrame() && (!_loginMode || _loginAnnounced)) tickDrone(d);
+  // ?portalFovFade: the world camera's WORLD_FADEIN zoom for this frame's draw.
+  if (_fovFadeOn || _fovCam) _tickWorldFov(scene3d ?? _scene3d);
   if (!_seq.ownsFrame()) setNotice(false);
   publishDiag();
 }
@@ -1397,7 +1749,16 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
       cam.fov = mainCam?.fov > 0 ? mainCam.fov : 45;
       cam.aspect = mainCam?.aspect > 0 ? mainCam.aspect : 1;
       cam.near = 0.05;
-      cam.far = Math.max(cam.near + 1e-3, gameFar * _seq.tunnelFarFrac());
+      // ?portalFovFade: TUNNEL_FADEOUT zooms the tunnel out to a point
+      // (CreatureMode UseSmartboxFOV -> Render::set_vdst, acclient.c:143942)
+      // and leaves its far plane alone (SetFOVInternal keeps Render::zfar);
+      // off: today's far-plane shrink.
+      if (_fovFadeOn) {
+        const zf = _seq.viewDistFov(cam.fov);
+        if (zf != null) cam.fov = zf;
+        _tunnelFov = cam.fov;
+      }
+      cam.far = Math.max(cam.near + 1e-3, gameFar * (_fovFadeOn ? 1 : _seq.tunnelFarFrac()));
       cam.updateProjectionMatrix();
       // AC eye (0.24,-2.7,0.88) looking +Y, rolled about the view axis.
       const a = (_seq.angle * Math.PI) / 180;
@@ -1420,7 +1781,20 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
 
 /** WORLD_FADEIN: black quad fading out over the freshly drawn world. */
 export function renderPortalSpaceOverlay(renderer) {
-  const alpha = _seq.worldOverlayAlpha();
+  // ?portalFovFade: the zoom IS the fade-in (retail draws no black) — no quad
+  // while it holds the world camera (a top-down ortho camera keeps the quad),
+  // except one fully black frame when the hold began this tick: this tick's
+  // culls ran at the game fov, so the ~179° world would draw with its
+  // periphery culled (see _tickWorldFov). On the reveal frame alpha is 1
+  // anyway (WORLD_FADEIN s.t = 0); the tunnel's last frame is a point on black.
+  let alpha;
+  if (_fovCam) {
+    if (!_fovRevealPending) return;
+    _fovRevealPending = false;
+    alpha = 1;
+  } else {
+    alpha = _seq.worldOverlayAlpha();
+  }
   if (!(alpha > 0.002) || !renderer) return;
   _ensureOverlay();
   _overlay.mat.uniforms.alpha.value = alpha;
@@ -1472,6 +1846,8 @@ export function endPortalSpace() {
   _warmHoldFrom = -1;
   setNotice(false);
   stopLoop();
+  stopDrone();
+  _releaseWorldFov(); // ?portalFovFade: the world camera's game fov back (OFF / teardown)
   _reason = "off";
   publishDiag();
   const cb = _onExit;

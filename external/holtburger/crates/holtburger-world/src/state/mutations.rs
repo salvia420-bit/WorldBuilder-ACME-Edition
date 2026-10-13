@@ -1858,6 +1858,45 @@ impl WorldState {
         Some(rank as u32)
     }
 
+    /// messages-objects-2 (2026-10-13) — an UpdateObject (0xF7DB) on an
+    /// item the player owns. Retail runs UpdateObject as destroy + re-create
+    /// (acclient.c SmartBox::HandleUpdateObject → HandleCreateObject with
+    /// force_recreate), so the re-created weenie is no longer in its
+    /// container's list: ACCObjectMaint::SetWeenieDesc's
+    /// GetPlaceInItemsList / GetPlaceInContainersList comes back -1 → place
+    /// 0, and ServerSaysMoveItem files it at the FRONT of the container. ACE
+    /// mirrors that server-side for persistence (RecipeManager.UpdateObj →
+    /// Player.MoveItemToFirstContainerSlot, skipped for wielded items, no
+    /// network message), so without this the local order drifts from
+    /// PlacementPosition until relog.
+    ///
+    /// Call after `Entity::apply_description` (the container read here is
+    /// the post-update one). Only player-owned subjects are touched; world
+    /// and other-owner subjects keep their order. Returns whether the
+    /// subject is player-owned — wielded items included, since their name /
+    /// icon / ui-effects may have changed — so the caller refreshes the
+    /// inventory snapshot.
+    pub fn note_update_object(&mut self, guid: Guid) -> bool {
+        if !self.is_owned_by_player(guid) {
+            return false;
+        }
+        let Some((container, wielded, uses_pack_slot)) = self.entities.get(guid).map(|entity| {
+            (
+                entity.container_id(),
+                entity.wielder_id().is_some() || !entity.wield_location().is_empty(),
+                entity.uses_player_container_slot(),
+            )
+        }) else {
+            return true;
+        };
+        if let Some(container) = container
+            && !wielded
+        {
+            self.record_inventory_placement(guid, container, 0, uses_pack_slot);
+        }
+        true
+    }
+
     pub(crate) fn move_entity_into_world(
         &mut self,
         guid: Guid,

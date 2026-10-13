@@ -235,8 +235,14 @@ impl Drop for DiscoveryWalkGuard {
 }
 
 /// Total attempts per prefetch round (1 initial + retries). See the retry
-/// block in [`run_walk_loop`].
+/// block in [`run_walk_loop`]. Retries wait
+/// `batch_walk::ROUND_RETRY_DELAYS_MS` (one entry per retry) first.
 const PREFETCH_ROUND_TRIES: u32 = 3;
+
+// The shared retry schedule has exactly one pause per retry of this loop too.
+const _: () = assert!(
+    crate::batch_walk::ROUND_RETRY_DELAYS_MS.len() as u32 == PREFETCH_ROUND_TRIES - 1
+);
 
 /// §2.1b — ONE discovery round, extracted as a **relocatable unit**.
 ///
@@ -525,7 +531,10 @@ where
         // that DID resolve aren't re-fetched. Only after the retries
         // exhaust do we stop discovering (the pre-hardening behavior —
         // still correct for the permanent UnknownKey / not-in-manifest
-        // class, which fails every attempt identically).
+        // class, which fails every attempt identically). Since
+        // streaming-residency-3 a retry first waits
+        // (`batch_walk::round_retry_backoff`) so a transient has time to
+        // clear; a round that succeeds never waits.
         let mut round_ok = false;
         let mut round_suspended = false;
         for attempt in 1..=PREFETCH_ROUND_TRIES {
@@ -544,6 +553,10 @@ where
                     log::warn!(
                         "prefetch round failed (attempt {attempt}/{PREFETCH_ROUND_TRIES}, retrying): {e}"
                     );
+                    // streaming-residency-3: failure-only pause before the
+                    // retry (250 / 750 ms; `?prefetchRetryDelay`), shared
+                    // with the batch loop.
+                    crate::batch_walk::round_retry_backoff(attempt).await;
                 }
                 Err(e) => {
                     log::warn!(

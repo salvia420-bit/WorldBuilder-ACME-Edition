@@ -32,6 +32,10 @@ pub mod remote_transition;
 /// `CObjCell::check_entry_restrictions`), behind `?houseBarriers` (default
 /// ON, `=off` escape).
 pub mod house_barrier;
+/// physics-collision-1 (2026-10-13) — a ballistic missile swept against the
+/// solid objects in its path (`WorldState::sweep_missile_against_objects`,
+/// wasm `sweepSphereAgainstObjects`; `?missileObjSweep=off` escape in JS).
+mod missile_sweep;
 mod types;
 
 pub use entity_collision::{
@@ -67,6 +71,10 @@ pub use scene::{
     CellMembership, CellPhysicsBsp, LocalStickyStep, RemoteCorrectionCtx, SpatialScene,
     pview_clip_polygon_against_polygon, pview_project_polygon,
 };
+// `?remoteRestHeading` (motion-remote-2, default ON, `=off` escape).
+pub use scene::{remote_rest_heading_enabled, set_remote_rest_heading};
+// `?remoteLeash` (motion-remote-3, default ON, `=off` escape).
+pub use scene::{remote_leash_enabled, set_remote_leash};
 pub use scenery::{
     CYLSPHERE_EPSILON, CylSphereHit, SceneryColliderBatch, SceneryPrimKind, SetupCylSphere,
     SetupSphere, WorldCylSphere, cylsphere_collides_with_sphere, cylsphere_normal_of_collision,
@@ -87,6 +95,21 @@ mod tests;
 /// MoveTo refactor phase B (2026-10-10) — the per-object movement spine.
 #[cfg(test)]
 mod remote_spine_tests;
+
+/// motion-remote-2 (2026-10-13) — `?remoteRestHeading`: the wire heading an
+/// at-rest remote takes in `InterpolateTo`'s ≤0.05 m arm.
+#[cfg(test)]
+mod remote_rest_heading_tests;
+
+/// motion-remote-3 (2026-10-13) — `?remoteLeash`: the remote leash on root
+/// motion, re-armed after every accepted `MoveOrTeleport` arm.
+#[cfg(test)]
+mod remote_leash_tests;
+
+/// physics-collision-2 (2026-10-13) — `?setupPlayerBody`: the local
+/// player's transition body from its own Setup (human Setup byte-identical).
+#[cfg(test)]
+mod setup_mover_body_tests;
 
 /// Offline repro + diagnosis of the Holtburg grocer EnvCell-seam
 /// movement-refusal bug (Environment 840, cells 0xA9B4016A..0xA9B4016E),

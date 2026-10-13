@@ -36,6 +36,19 @@ export function bloodEnabled() {
   }
 }
 
+/**
+ * `?combatFxBus=on` — STRICT opt-in (2026-10-13). Feeds the bus handlers in
+ * `_bind` the event's `detail` (see the note there). Absent ⇒ OFF, so the
+ * default arm keeps its shipped behaviour until the owner's eye-test.
+ */
+export function combatFxBusEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get("combatFxBus") === "on";
+  } catch (_e) {
+    return false;
+  }
+}
+
 /* ── tunables ────────────────────────────────────────────────────────── */
 export const BLOOD_MAX_DECALS = 1024; // one InstancedMesh, circular overwrite
 export const BLOOD_TTL_S = 240; // full life; last 45s fade out
@@ -752,6 +765,7 @@ export function addPool(acX, acY, acZ, radius = 0.6) {
 
 let _installed = false;
 let _bound = false;
+let _busDetail = false; // ?combatFxBus=on, read once in installBloodDecals()
 let _budget = { windowStart: 0, used: 0 };
 const _critByName = new Map();
 
@@ -785,7 +799,18 @@ function _bodyMetrics(inst) {
 function _bind(decodeSplatterId) {
   const pc = window.__pluginClient;
   if (!pc?.events?.on) return false;
-  pc.events.on("playEffect", ({ targetGuid, scriptId }) => {
+  // The plugin bus delivers `new CustomEvent(name, { detail: payload })`
+  // (plugins/api.js events.emit), but both handlers below read the payload
+  // fields straight off their argument — i.e. off the Event — so on real
+  // traffic they see `undefined` and never stamp (lint-event-consumers.mjs
+  // DETAIL_KNOWN_BUGS). Under `?combatFxBus=on` each handler is handed
+  // `ev.detail` instead (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake
+  // bus that passes the raw payload still works). Off by default: splatter
+  // decals actually appearing is a visual change pending the owner's
+  // eye-test, so the default arm subscribes the handler itself, as before.
+  const onBus = (name, fn) =>
+    pc.events.on(name, _busDetail ? (ev) => fn(ev?.detail ?? ev ?? {}) : fn);
+  onBus("playEffect", ({ targetGuid, scriptId }) => {
     try {
       const d = decodeSplatterId(scriptId);
       if (!d || !_underBudget()) return;
@@ -813,7 +838,7 @@ function _bind(decodeSplatterId) {
       _splatterFromHit(inst, wound, quadDir, crit);
     } catch (_e) { /* never break the shared bus */ }
   });
-  pc.events.on("damageDealt", (dd) => {
+  onBus("damageDealt", (dd) => {
     try {
       if (dd?.criticalHit && dd.defenderName) {
         _critByName.set(dd.defenderName, performance.now());
@@ -838,6 +863,11 @@ function _bind(decodeSplatterId) {
 export async function installBloodDecals() {
   if (_installed || !bloodEnabled()) return;
   _installed = true;
+  _busDetail = combatFxBusEnabled();
+  if (_busDetail) {
+    // eslint-disable-next-line no-console
+    console.info("[blood] ?combatFxBus=on — bus handlers read the event's detail payload");
+  }
   const { decodeSplatterId } = await import("./splatter_decode.js");
   let tries = 0;
   const attempt = () => {

@@ -27,6 +27,17 @@
 // When ACE exposes these as generic per-window props, swap the
 // localStorage path here for the wire round-trip without changing
 // callers; the keys above are the canonical mapping.
+//
+// input-options-4 (2026-10-13) — retail ALSO has one global LockUI
+// (PlayerModule::LockUI, CharacterOption 0x33) that every gmFloaty*UI
+// re-reads in UpdateLockedStatus; ui/ui_lock.js owns it. A window that
+// passes `obeysGlobalLock: true` is locked when the global lock OR its
+// own per-window lock is set. The default (false) keeps the per-window
+// lock only — the RynthSuite windows rely on that.
+
+import {
+  globalLockUIEnabled, isGlobalLocked, onGlobalLockChange, ensureGlobalLockSync,
+} from "./ui_lock.js";
 
 const STORAGE_PREFIX = "hb.window.";
 
@@ -72,6 +83,13 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   window.addEventListener("resize", schedule);
   document.addEventListener("hb-hud-scale-changed", schedule);
 }
+// Global LockUI changed (retail BroadcastGlobalMessage 0xD): each live
+// window that obeys it re-evaluates its effective lock.
+onGlobalLockChange(() => {
+  for (const w of _liveWindows) {
+    try { w.onGlobalLock?.(); } catch (_) {}
+  }
+});
 const LOCK_EVENT = "hb-ui-lock-changed";
 // Rec #79 — pixel band within which an absolute-position drag-release
 // snaps to the matching viewport edge. Matches the retail floaty
@@ -106,6 +124,10 @@ const EDGE_SNAP_PX = 20;
  * @param {boolean} [options.clampToViewport=true]  — clamp restored
  *   coords to the current viewport so a window-shrink doesn't strand
  *   a panel off-screen.
+ * @param {boolean} [options.obeysGlobalLock=false]  — retail floaties
+ *   only: the window is also locked while the global LockUI
+ *   (ui/ui_lock.js) is set. `onLockChange` and `isLocked()` then report
+ *   the effective lock; `getState().locked` stays the per-window flag.
  * @returns {object} A control surface — `getState`, `isLocked`,
  *   `setLocked`, `resetPosition`.
  */
@@ -117,6 +139,7 @@ export function attachWindowPosition(element, options) {
     windowId, dragHandle, lockButton, defaultPos, onLockChange,
     ignoreSelector, legacyKey,
     clampToViewport = true,
+    obeysGlobalLock = false,
   } = options;
   if (typeof windowId !== "number") {
     throw new Error("attachWindowPosition requires options.windowId (uint)");
@@ -136,6 +159,12 @@ export function attachWindowPosition(element, options) {
 
   if (clampToViewport) clampStateToViewport(state, element);
   applyPosition(element, state, defaultPos);
+
+  // input-options-4 — effective lock = per-window || (obeys && global).
+  const obeysGlobal = !!obeysGlobalLock && globalLockUIEnabled();
+  if (obeysGlobal) ensureGlobalLockSync();
+  const isEffectivelyLocked = () => state.locked || (obeysGlobal && isGlobalLocked());
+  let lastEffective = isEffectivelyLocked();
 
   // R11: position writes must NOT clobber width/height written under the same
   // key by persistWindowSize (the CHAT window 0x10000600 has dual writers).
@@ -168,6 +197,16 @@ export function attachWindowPosition(element, options) {
       persistPosition();
       applyPosition(element, state, defaultPos);
     },
+    // Global LockUI changed — gmFloaty*UI::UpdateLockedStatus.
+    onGlobalLock() {
+      if (!obeysGlobal) return;
+      const eff = isEffectivelyLocked();
+      if (eff === lastEffective) return;
+      lastEffective = eff;
+      if (typeof onLockChange === "function") {
+        try { onLockChange(eff); } catch (_) {}
+      }
+    },
   };
   _liveWindows.add(live);
 
@@ -180,7 +219,7 @@ export function attachWindowPosition(element, options) {
   if (dragHandle) {
     dragHandle.style.cursor = dragHandle.style.cursor || "move";
     dragHandle.addEventListener("pointerdown", (ev) => {
-      if (state.locked) return;
+      if (isEffectivelyLocked()) return;
       // Skip drag when the pointerdown lands on an interactive child
       // (button / input / specified selector). Lets the same element
       // serve as both a tabstrip and a drag-handle.
@@ -252,13 +291,16 @@ export function attachWindowPosition(element, options) {
   }
 
   function fireLockChanged() {
+    // The per-window bus carries the per-window flag; obeying frames and
+    // resizers combine it with the global lock themselves.
     try {
       document.dispatchEvent(new CustomEvent(LOCK_EVENT, {
         detail: { windowId, locked: state.locked },
       }));
     } catch (_) {}
+    lastEffective = isEffectivelyLocked();
     if (typeof onLockChange === "function") {
-      try { onLockChange(state.locked); } catch (_) {}
+      try { onLockChange(lastEffective); } catch (_) {}
     }
   }
 
@@ -272,13 +314,13 @@ export function attachWindowPosition(element, options) {
 
   // Initial lock state notification so subscribers (and the caller via
   // onLockChange) can render the right lock sprite/state on mount.
-  if (state.locked && typeof onLockChange === "function") {
+  if (isEffectivelyLocked() && typeof onLockChange === "function") {
     try { onLockChange(true); } catch (_) {}
   }
 
   return {
     getState: () => ({ x: state.x, y: state.y, locked: state.locked }),
-    isLocked: () => state.locked,
+    isLocked: () => isEffectivelyLocked(),
     setLocked(locked) {
       const next = !!locked;
       if (next === state.locked) return;
@@ -550,11 +592,14 @@ const EDGE_SPECS = {
  * locking the floaty hides every edge handle in one motion. onSizeChange
  * debounces 120 ms after the last pointermove (same cadence as
  * attachCornerResizers + persistWindowSize so handlers compose).
+ * `opts.obeysGlobalLock` (retail floaties only) also hides them while the
+ * global LockUI (ui/ui_lock.js) is set.
  *
  * @param {HTMLElement} element
  * @param {object} opts
  * @param {Array<"top"|"bottom"|"left"|"right">} opts.edges
  * @param {number} [opts.windowId]
+ * @param {boolean} [opts.obeysGlobalLock=false]
  * @param {number} [opts.minWidth=120]
  * @param {number} [opts.minHeight=80]
  * @param {number} [opts.maxWidth]
@@ -583,7 +628,11 @@ export function attachEdgeResizers(element, opts) {
   }
 
   const handles = {};
-  let locked = !!opts?.initialLocked;
+  // input-options-4 — `ownLocked` is the per-window / setLocked flag;
+  // `locked` is the effective state the handles show.
+  const obeysGlobal = !!opts?.obeysGlobalLock && globalLockUIEnabled();
+  let ownLocked = !!opts?.initialLocked;
+  let locked = ownLocked || (obeysGlobal && isGlobalLocked());
   let drag = null;
   let sizeChangeTimer = 0;
 
@@ -677,8 +726,8 @@ export function attachEdgeResizers(element, opts) {
     div.addEventListener("pointercancel", endDrag);
   }
 
-  function setLocked(next) {
-    const want = !!next;
+  function applyLocked() {
+    const want = ownLocked || (obeysGlobal && isGlobalLocked());
     if (want === locked) return;
     locked = want;
     for (const edge of Object.keys(handles)) {
@@ -686,6 +735,10 @@ export function attachEdgeResizers(element, opts) {
       div.style.pointerEvents = locked ? "none" : "auto";
       div.style.visibility = locked ? "hidden" : "";
     }
+  }
+  function setLocked(next) {
+    ownLocked = !!next;
+    applyLocked();
   }
 
   let unsubLock = null;
@@ -700,6 +753,7 @@ export function attachEdgeResizers(element, opts) {
       console.warn("[ac-window-position] edge lock-change subscribe failed:", e);
     }
   }
+  const unsubGlobal = obeysGlobal ? onGlobalLockChange(applyLocked) : null;
 
   function dispose() {
     try { clearTimeout(sizeChangeTimer); } catch (_) {}
@@ -707,6 +761,7 @@ export function attachEdgeResizers(element, opts) {
       try { unsubLock(); } catch (_) {}
       unsubLock = null;
     }
+    if (unsubGlobal) unsubGlobal();
     for (const edge of Object.keys(handles)) {
       const div = handles[edge];
       try {

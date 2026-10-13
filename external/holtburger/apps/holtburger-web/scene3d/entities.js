@@ -1134,7 +1134,8 @@ import { gatePaletteId, gateSubPalettes } from "./recolor_flag.js";
 // A12 (S14): spawns.js pre-warms LOD degrade bands per wave; _spawnImpl
 // consults this memo before paying a per-entity wasm await.
 import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
-import { PartDegrade, partDegradeEnabled, PART_DEGRADE_INTERVAL_S } from "./part_degrade.js";
+import { lodChainGet, lodChainResolve } from "./lod_chain_memo.js";
+import { PartDegrade, partDegradeEnabled, PART_DEGRADE_INTERVAL_S, RETAIL_DEG_MUL } from "./part_degrade.js";
 import { linkMissIsDefect } from "./motion_link_diag.js";
 // Animation consolidation (docs/animation-audit §5) — COMPLETE (2026-10-05):
 // every entity rig is driven by ONE authority, the RUST MotionSequence
@@ -1283,6 +1284,12 @@ import {
   PROP_IID_CURRENT_ATTACKER,
   consumeWorldUseThrottle,
   readAttackMeta,
+  // input-options-7: the rest of the OnAction selection keys.
+  radarBehaviorFor,
+  objectWithinRadarRange,
+  lastAttackerChoice,
+  previousSelectionChoice,
+  fellowCycleChoice,
 } from "./target_cycle.js";
 // A2-death (2026-10-08 round 2): the selection / corpse-claim rules around the
 // death hold (pure; scene3d/death_hold.js). Round 3 (2026-10-11): the pending
@@ -1308,6 +1315,7 @@ import {
   applyRetailSinglePass,
   readSurfaceUnifiedFlag,
   readLuminousEmissiveMapFlag,
+  additiveObjFogExemptEnabled,
   VFX_GLOBALS,
   installVfxComponentPatch,
   surfaceResultDecodeMisses,
@@ -1470,6 +1478,15 @@ const RIG_MODULE_ON = readRigModuleFlag();
 // via `tickEntityRenderVisibility`.
 import { CULL_DIST_SQ } from "./culling.js";
 import { getOcclusionCuller, ENTITY_PAD_M } from "./occlusion_cull.js";
+// cells-portals-1 (2026-10-13) — `?rigCellGate=on` (OPT-IN): indoors, a rig in
+// a cell that is not drawn this frame is not drawn (nor pickable). Leaf module;
+// consulted only inside tickEntityRenderVisibility.
+import {
+  rigCellGateEnabled,
+  rigCellHidden,
+  collectDrawnCellBoxes,
+  RIG_CELL_GATE_STATS,
+} from "./rig_cell_gate.js";
 // A8-M4 (2026-06-12) — generic pre-create event buffer (retail null-object
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
@@ -1495,6 +1512,10 @@ import {
   sweepProjectileSegment,
   projectileSweepCells,
   projectileStopPoint,
+  projectileExemptsLocalPlayer,
+  projectileIsEthereal,
+  projectileTerrainCrossing,
+  projectileCollisionScriptPlays,
 } from "./projectile_sweep.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
@@ -1929,7 +1950,10 @@ const PROJECTILE_GROUND_CLAMP_SKIP_ON = (() => {
 //                                 (the bolt's trail, acclient.c:320867) for the
 //                                 single `_particleChainsAttached` slot, so a bolt
 //                                 either lost its trail or burst a collision splash
-//                                 at the caster's hands.
+//                                 at the caster's hands. Since particles-scripts-1
+//                                 (2026-10-13) the spawn arm is opt-in for EVERY
+//                                 object (`?defaultScriptAtSpawn=on`), so this
+//                                 escape only matters together with that opt-in.
 function _projFlagOn(name) {
   try {
     if (typeof window === "undefined" || !window.location) return true;
@@ -1965,6 +1989,50 @@ const PROJECTILE_EXACT_ARC_ON = _projFlagOn("projectileExactArc");
 // quantum, acclient.c:322812). See scene3d/projectile_sweep.js. Off = legacy
 // (only the outdoor terrain stop; walls stop nothing until ACE's impact).
 const PROJECTILE_ENV_SWEEP_ON = _projFlagOn("projectileEnvSweep");
+// physics-collision-1 (2026-10-13, `?missileObjSweep=off` escape, default ON):
+// add the OBJECT layer to that sweep — creatures, players, chests, props by
+// their Setup cylspheres / spheres (wasm `sweepSphereAgainstObjects`). Retail
+// `missile_ignore` exempts a creature only when targetID != 0, and the client
+// only ever zeroes targetID (acclient.c:314070, :311603, :312155), so every
+// solid body in the path stops a missile locally. Also the ETHEREAL-missile
+// rule (an ETHEREAL missile passes non-STATIC objects, acclient.c:316201):
+// the door layer stands down for it. Off = legacy (doors only).
+const PROJECTILE_OBJ_SWEEP_ON = _projFlagOn("missileObjSweep");
+// physics-collision-3 (2026-10-13, `?projectileScenerySweep=off` escape,
+// default ON): an OUTDOOR missile also sweeps the procedural scenery — trunk
+// cylspheres, boulder spheres (wasm `sweepSphereAgainstScenery`, the camera's
+// step 4b). ACE loads scenery into its server physics
+// (Landblock.get_land_scenes), so its bolt stops on a trunk ours flew
+// through. Off = legacy (no scenery layer).
+const PROJECTILE_SCENERY_SWEEP_ON = _projFlagOn("projectileScenerySweep");
+// physics-collision-3 (2026-10-13, `?projectileTerrainCrossing=off` escape,
+// default ON): the client terrain stop tests every integration substep and
+// parks the bolt at its first crossing, not once per frame at the overshot
+// end point; and a bolt launched indoors arms it once it leaves through an
+// outside portal (retail `CEnvCell::find_transit_cells` →
+// `add_all_outside_cells`, acclient.c:348250). Off = legacy (per-frame end
+// point, outdoor launches only).
+const PROJECTILE_TERRAIN_CROSSING_ON = _projFlagOn("projectileTerrainCrossing");
+// physics-collision-4 (2026-10-13, `?missileImpactScript=on`, DEFAULT-OFF
+// opt-in — it adds a visible impact effect): a CLIENT-side missile contact
+// (env sweep, object sweep, terrain) plays the missile's PhysicsDesc
+// default_script — retail ACCWeenieObject::DoCollision → play_default_script
+// when SCRIPTED_COLLISION (acclient.c:436857-436867), reached from both
+// report_environment_collision and report_object_collision. ACE authors it
+// as PlayScript.ProjectileCollision on bolt-type spells and never sends it
+// (SpellProjectile.cs:86-91). Off (default) = no collision script, as before.
+// See `_playMissileCollisionScript`.
+const MISSILE_IMPACT_SCRIPT_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("missileImpactScript")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 /** PhysicsState::LIGHTING_ON (acclient.c:322181 `BYTE1(new_state) & 8`). */
 const PHYSICS_STATE_LIGHTING_ON = 0x800;
 /** PhysicsState::HAS_PHYSICS_BSP (acclient.c:316229 `state & 0x10000`). */
@@ -2183,7 +2251,20 @@ import { entityParticleRenderLayer } from "./particles/render_layer.js";
 // `_fireHook`). Off-path = the unchanged legacy walker below.
 import { ScriptManager } from "./script_manager.js";
 // ?lumNight (2026-10-07): ambient-like luminosity dims at night.
-import { registerLuminousMaterial } from "./luminous_night.js";
+// ?lumCloneAdopt (2026-10-13): per-entity clones stay in its registry.
+import { registerLuminousMaterial, adoptLuminousClone, releaseLuminousMaterial } from "./luminous_night.js";
+// ?surfaceLumWins / ?lumHookTexel (2026-10-13): a Luminous hook skips surfaces
+// with their own luminosity and lights the texel of the rest.
+import { surfaceLumWinsEnabled, syncLuminousHookTexel } from "./luminous_hook.js";
+// ?fadeAlphaParity (2026-10-13): a faded part drops its ClipMap alpha test, and
+// a fade's end restores the surface's authored blend / depth flags.
+import { snapshotAuthoredAlpha, syncFadeAlpha } from "./fade_alpha_state.js";
+// ?selectionFlash=on (2026-10-13, default OFF): a clicked object flashes
+// fullbright / dim twice (retail SmartBox find → CPhysicsObj::SetLighting).
+import {
+  SelectionLighting, LIGHTING_MODE, selectionFlashEnabled, selectionFlashNow,
+  selectionLightable, applySelectionLighting, restoreSelectionLighting,
+} from "./selection_lighting.js";
 const SCRIPT_QUEUE_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -2263,41 +2344,87 @@ const HOOK_DRAIN_ON = (() => {
 })();
 
 // A11-S5 / G14 (2026-06-12, W3+ remainder) — `?defaultScriptSpawn`
-// (DEFAULT-ON since the flip waves; `=off` opts out — the "(default OFF)"
-// note below predates the flip, P14 fleet packet 2026-07-04) closes the
-// spawn-time DefaultScript auto-resolve gap
-// (survey A11 §3 row 9): the wire PhysicsDesc `default_script` is usually a
-// PScriptType ENUM (+ `default_script_intensity` mod weight), NOT a 0x33
-// DID — the wasm spawn payload filters it out (`physicsScriptDid` = raw
-// 0x33 only), so entities with PScriptType defaults showed no ambient
-// effect at spawn AND their DefaultScript(17)/DefaultScriptPart(18)
-// animation hooks fired into a 0. Retail resolves it through the object's
-// PhysicsScriptTable: `play_default_script` →
+// (DEFAULT-ON; `=off` opts out) is the master switch for resolving the wire
+// PhysicsDesc `default_script`. That field is usually a PScriptType ENUM
+// (+ `default_script_intensity` mod weight), NOT a 0x33 DID — the wasm spawn
+// payload filters it out (`physicsScriptDid` = raw 0x33 only), so without
+// this the DefaultScript(17)/DefaultScriptPart(18) animation hooks fired
+// into a 0. Retail resolves it through the object's PhysicsScriptTable:
+// `play_default_script` →
 // `PhysicsScriptTable::GetScript(default_script, default_script_intensity)`
 // → `play_script_internal` (acclient.c:320351-320376; GetScript picker
-// :336552 — first entry whose mod >= intensity). When ON,
-// `_resolveDefaultScriptDid` runs that chain (new `entityDefaultScript` /
+// :336552 — first entry whose mod >= intensity). `_resolveDefaultScriptDid`
+// runs that chain (the `entityDefaultScript` /
 // `entityDefaultScriptIntensity` session-handle getters — typeof-guarded, a
 // pre-rebuild pkg/ soft-degrades to 0 — + the Phase 49 table facade + the
 // Phase 51/53 `pickScriptEntry` picker) and the resolved 0x33 plays through
 // `_attachParticleChainForEntity`, which routes onto the A11-S1
-// `ScriptManager.addScript` queue under `?scriptQueue=on` (the stage's
-// intended pairing) or the legacy walker otherwise. Wired at THREE retail
-// trigger points: the spawn arm (the survey's "spawn-time auto-play" —
-// note retail's own literal triggers are DefaultScriptHook 17/18,
-// acclient.c:342324-342334, and missile env-collision DoCollision,
-// :436861-436870; ACE-era content authors DefaultScript as the ambient
-// spawn effect, hence the survey framing) plus the hook 17/18 PScriptType
-// fallback. DEFAULT-ON — the reader below is `!== "off"`, so an ABSENT param
-// resolves ON. `?defaultScriptSpawn=off` is the escape, and THAT arm is the
-// byte-identical (0x33-only) behavior. (The old note here read "Default OFF",
-// which described the escape arm and not the default; audit 2026-08-02.)
+// `ScriptManager.addScript` queue under `?scriptQueue` or the legacy walker
+// otherwise.
+//
+// WHEN it plays (particles-scripts-1, 2026-10-13): retail
+// `CPhysicsObj::set_description` only STORES default_script + intensity on
+// the object (acclient.c:322389-322391), and `play_default_script` has
+// exactly three callers — DefaultScriptPartHook::Execute (:342326),
+// DefaultScriptHook::Execute (:342332) and ACCWeenieObject::DoCollision
+// (:436867, SCRIPTED_COLLISION missiles). At creation retail plays only the
+// Setup's `default_script_id` (CPhysicsObj::InitDefaults :320867-320868 —
+// the SETUP_DEFAULT_SCRIPT_ON arm). So this flag drives the hook 17/18
+// PScriptType fallbacks, and the spawn-time play is the separate opt-in
+// DEFAULT_SCRIPT_PLAY_AT_SPAWN_ON below. The old A11-S5 premise ("ACE-era
+// content authors DefaultScript as the ambient spawn effect") does not hold:
+// ACE sends PropertyDataId.PhysicsScript here, and the LSD census of that
+// property is Breathe* on 618 creatures, BreatheLightning / Create on ~70
+// weapons, Destroy / ProjectileCollision on 80 spell projectiles, plus
+// RestrictionEffectBlue on every House (ACE House.cs:77) — never an ambient
+// effect. The reader below is `!== "off"`, so an ABSENT param resolves ON;
+// `?defaultScriptSpawn=off` is the escape for the whole PScriptType path
+// (0x33-only behavior).
 const DEFAULT_SCRIPT_SPAWN_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
         .get("defaultScriptSpawn")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// particles-scripts-1 (2026-10-13) — `?defaultScriptAtSpawn=on` (DEFAULT-OFF
+// opt-in): also play the wire PhysicsDesc default_script when the object
+// spawns — the pre-2026-10-13 A11-S5 behavior. Off (default) = retail: the
+// script is only stored at creation (set_description, acclient.c:322389-322391)
+// and plays from the DefaultScript(17)/DefaultScriptPart(18) hooks, so a
+// breath creature no longer puffs as it streams in, and the one-shot no longer
+// races the Setup default_script arm for the `_particleChainsAttached` slot.
+const DEFAULT_SCRIPT_PLAY_AT_SPAWN_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("defaultScriptAtSpawn")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// particles-scripts-2 (2026-10-13) — `?defaultScriptPartChild=on` (DEFAULT-OFF
+// opt-in): DefaultScriptPart(18) plays the default script of the HELD CHILD
+// mounted on the hook's part, on that child — retail
+// `CPhysicsObj::play_default_script(part_index)` walks the CHILDLIST
+// (acclient.c:320378-320412), it never plays the animating object's own
+// script (that is the no-arg overload, hook 17). Nothing held there → nothing
+// plays. Off (default) = the W4.7 owner-anchored arm, byte-identical. See
+// `_playHeldChildDefaultScript`.
+const DEFAULT_SCRIPT_PART_CHILD_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("defaultScriptPartChild")?.toLowerCase() === "on"
     );
   } catch (_) {
     return false;
@@ -2892,6 +3019,9 @@ const ENTITY_CULL_RADIUS = 6;
 // Reused scratch sphere for the per-entity frustum test — radius is fixed,
 // only the center is rewritten per entity. Zero per-frame allocation.
 const _entityCullSphere = new THREE.Sphere(new THREE.Vector3(), ENTITY_CULL_RADIUS);
+// ?rigCellGate scratch: this frame's drawn-EnvCell AABBs (cached arrays owned
+// by the containers; the list itself is reused).
+const _rigGateDrawnBoxes = [];
 
 // GUARDRAIL: never cull a rig that owns an active SetupModel SetLight — hiding
 // `inst.root` makes THREE skip the whole subtree, extinguishing any light
@@ -2955,6 +3085,10 @@ function _entityOwnsLight(inst) {
  *
  * `culler` is the shared AC-space FrustumCuller, already `.update()`d this
  * frame by loop.js. Fail-soft on every missing input.
+ *
+ * `?rigCellGate=on` (opt-in, rig_cell_gate.js) adds an indoor cell term after
+ * the frustum/distance test: a rig whose cell is not drawn this frame is
+ * hidden. The exemptions above apply to it unchanged.
  */
 export function tickEntityRenderVisibility(scene3d, culler) {
   const em = scene3d?.entityManager;
@@ -2996,6 +3130,23 @@ export function tickEntityRenderVisibility(scene3d, culler) {
   let occluded = 0;
   const occ = getOcclusionCuller(scene3d, THREE);
   const frameNo = occ ? occ.frame : 0;
+  // ?rigCellGate=on (cells-portals-1, OPT-IN) — retail draws an object only
+  // through the cells the portal walk reached (PView::DrawCells →
+  // DrawObjCellForDummies, acclient.c:461450), and the indoor ?occlusionCull
+  // is disarmed. Only while the viewer is indoors AND the ?indoorDepthSplit is
+  // armed: its narrowed cell set is our cell_draw_list. See rig_cell_gate.js.
+  let cellGated = 0;
+  let rigGateArmed = false;
+  let rigGateBoxes = null;
+  let rigGateOutside = null;
+  if (rigCellGateEnabled()) {
+    rigGateArmed = scene3d._currentCellIndoor === true && scene3d._indoorSplitArmed === true;
+    if (rigGateArmed) {
+      rigGateBoxes = collectDrawnCellBoxes(scene3d, _rigGateDrawnBoxes);
+      const oc = scene3d._rigGateOutsideViewCount;
+      rigGateOutside = typeof oc === "number" ? oc : null;
+    }
+  }
   for (const inst of map.values()) {
     if (!inst || !inst.root) continue;
     // Local player — never cull (and clear any stale cull flag so a prior
@@ -3043,6 +3194,23 @@ export function tickEntityRenderVisibility(scene3d, culler) {
       const distSq = culler.getDistanceSq(p.x, p.y, p.z);
       if (distSq > distHorizonSq) want = false;
     }
+    // ?rigCellGate — the rig's cell is not drawn this frame (and its cull
+    // sphere reaches no drawn cell). Fails open on any unknown.
+    if (
+      want &&
+      rigGateArmed &&
+      rigCellHidden(
+        inst._wireCellId ?? inst._spawnCellId,
+        scene3d.cellContainers3d,
+        rigGateBoxes,
+        p,
+        ENTITY_CULL_RADIUS,
+        rigGateOutside,
+      )
+    ) {
+      cellGated += 1;
+      want = false;
+    }
     // ?occlusionCull (occlusion_cull.js) — a frustum-visible rig whose padded
     // bounds put no sample on screen (behind a building, inside a shop seen
     // from the street) is not submitted: ~40 part draws per humanoid.
@@ -3061,7 +3229,15 @@ export function tickEntityRenderVisibility(scene3d, culler) {
     }
     if (cullHidden) culled += 1;
   }
-  return { tested, culled, occluded };
+  if (rigGateArmed || RIG_CELL_GATE_STATS.armed) {
+    RIG_CELL_GATE_STATS.armed = rigGateArmed;
+    RIG_CELL_GATE_STATS.gated = cellGated;
+    RIG_CELL_GATE_STATS.drawnCellBoxes = rigGateBoxes ? rigGateBoxes.length : 0;
+    RIG_CELL_GATE_STATS.boxesUnknown = rigGateArmed && rigGateBoxes === null;
+    RIG_CELL_GATE_STATS.outsideViewCount = rigGateOutside;
+    if (rigGateArmed) RIG_CELL_GATE_STATS.frames += 1;
+  }
+  return { tested, culled, occluded, cellGated };
 }
 
 // ?occlusionCull proxy bounds for an entity rig, in the MAIN scene's frame:
@@ -3519,6 +3695,24 @@ function classifyMotionCommandTyped(motionTableId, stance, motionCmd) {
 if (typeof window !== "undefined") {
   window.__classifyMotionCommandTyped = classifyMotionCommandTyped;
 }
+
+// models-camera-1 (2026-10-13) — `?camFadeHier`: the camera fade on the local
+// player is HIERARCHICAL and STICKY, as retail. `CPhysicsObj::
+// SetTranslucencyHierarchical` (acclient.c:318733-318755) recurses the
+// CHILDLIST (held sword / shield / torch fade with the body), and
+// `CPhysicsObj::DoObjDescChanges` (:316853-316876) re-applies the current
+// translucency to re-dressed parts. See `EntityManager.setLocalPlayerCameraOpacity`.
+// Default ON; `=off`/`0`/`false` restores the body-only, value-deduped fade.
+export function camFadeHierEnabled(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = (new URLSearchParams(s ?? "").get("camFadeHier") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+const CAM_FADE_HIER_ON = camFadeHierEnabled();
 
 /**
  * Per-entity instance: one Object3D rig driven by the Rust motion playhead.
@@ -4000,6 +4194,8 @@ export class EntityManager {
               ?? (typeof window !== "undefined" ? window.__hbWasm?.fetch_gfx_obj_degrade_info : undefined);
             return typeof fn === "function" ? fn(did) : null;
           },
+          // Retail's steady-state Render::deg_mul (CalcDegLevel holds 1.0 at >= 20 fps).
+          degMul: RETAIL_DEG_MUL,
         })
       : null;
     this._partDegradeAccum = 0;
@@ -4100,6 +4296,12 @@ export class EntityManager {
     this._leftWorldChildren = new Map();
     // held-6 (2026-10-08) — index.js's flushWieldedDirty reads this.
     this._heldMountStrict = HELD_MOUNT_STRICT_ON;
+    // models-camera-1 (2026-10-13, `?camFadeHier`) — the last camera fade
+    // pushed onto the local player, `{ guid, o }` while it is below 1 (else
+    // null), re-applied by `_syncCamFade` when a faded rig is rebuilt or a
+    // held item is mounted / unmounted. See `setLocalPlayerCameraOpacity`.
+    this._camFadeHier = CAM_FADE_HIER_ON;
+    this._localCamFade = null;
     // A8-M4 (2026-06-12) — `?preCreateBuffer` (default ON): the generic
     // guid-keyed pre-create FIFO that REPLACES `_pendingAttach` when on. It
     // also carries the F16-5 spawn-time draw gate: the wasm spawn-hidden emit
@@ -4583,6 +4785,9 @@ export class EntityManager {
     // substitution so the recheck always asks the band table from full detail.
     inst._lodOriginalSetup = lodOriginalSetup;
     inst._lodSub = lodSubstitute;
+    // render-perf-2: drop a setup that can never substitute (no chain, or a
+    // multi-part rig) from the T9 tick — see `_gateLodChain`.
+    this._gateLodChain(inst);
     // Phase 2 limbs (2026-08-02) — the setup this rig was actually built from
     // (post-LOD-substitution, so it matches `parts`/`restOrigins`) plus refs to
     // the rest-pose arrays. `limbs.js` needs BOTH: the setup id keys its
@@ -5201,6 +5406,10 @@ export class EntityManager {
     // cell index so position updates can re-clamp (covers terrain that streams
     // in after spawn).
     inst._outdoorCellIdx = lbId & 0xffff;
+    // ?rigCellGate (cells-portals-1): the FULL spawn cell — the cell-container
+    // registry is keyed by it. A static NPC may never get a KIND_POSITION
+    // (`_wireCellId`, cells.js noteEntityLandcell), so this is its only cell.
+    inst._spawnCellId = lbId;
     // WS10 (2026-07-12): never ground-clamp a MISSILE projectile — it is airborne by
     // definition and its launch Z is server-authored to ~2/3 caster height
     // (WorldObject_Magic.CalculatePreOffset). Clamping a bolt spawned below the terrain at
@@ -5765,7 +5974,11 @@ export class EntityManager {
     // `play_default_script` chain (GetScript(default_script, intensity),
     // acclient.c:320351-320376) and play it. Same idempotency guard as the
     // raw-0x33 arm above; fire-and-forget (resolve is async DAT work).
+    // particles-scripts-1 (2026-10-13): opt-in only (`?defaultScriptAtSpawn=on`)
+    // — retail never plays this script at creation (set_description only stores
+    // it, acclient.c:322389-322391); the hook 17/18 fallbacks are its trigger.
     if (
+      DEFAULT_SCRIPT_PLAY_AT_SPAWN_ON &&
       DEFAULT_SCRIPT_SPAWN_ON &&
       pesId === 0 &&
       // PROJ-VIS: a MISSILE's wire default_script is its COLLISION script
@@ -5957,6 +6170,10 @@ export class EntityManager {
         }
       }
     }
+    // models-camera-1 — a respawned local player (the appearance fallback's
+    // remove + spawn, a relog) re-takes the remembered camera fade; camera.js
+    // will not push the unchanged value again. No-op for every other rig.
+    this._syncCamFade(inst);
     if (SPAWN_TRACE) {
       const rigMs = performance.now() - _spawnTraceRigStart;
       const totalMs = performance.now() - _spawnTraceT0;
@@ -6051,12 +6268,17 @@ export class EntityManager {
         await cache.preload(dids, this.wasmExports.fetch_surfaces_pixels);
       } catch (_) { /* transient — covered by the retry below */ }
       if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+      let swapped = false;
       for (const m of pending) {
         // Preserve the mesh's sidedness (FrontSide for per-poly-culled faces).
         const doubleSided = !m.material || m.material.side !== THREE.FrontSide;
         const real = cache.getCached(m.userData.surfaceDid >>> 0, doubleSided);
-        if (real && real.map) m.material = real; // only swap to a textured material
+        if (real && real.map) { m.material = real; swapped = true; } // only swap to a textured material
       }
+      // models-camera-1 (review R1) — the healed (shared, unfaded) material
+      // must take the camera fade when this rig is, or hangs off, the faded
+      // local player.
+      if (swapped) this._syncCamFadePartial(inst);
       // Anything still untextured? the resource hasn't arrived — back off + retry.
       if (pending.some((m) => needsTex(m.material))) {
         this._scheduleEntitySurfaceRefresh(inst, attempt + 1);
@@ -6233,6 +6455,9 @@ export class EntityManager {
         });
         if (!inst._entityMaterials) inst._entityMaterials = new Map();
         for (const [d, m] of healed) inst._entityMaterials.set(d, m);
+        // models-camera-1 (review R1) — the healed materials are unfaded
+        // (cache-owned); re-take the camera fade on the local player.
+        this._syncCamFadePartial(inst);
       }
       // Anything still mapless (or the sweep still incomplete)? back off +
       // retry; otherwise the ladder is done — release the supersession key.
@@ -6379,6 +6604,13 @@ export class EntityManager {
       // Virindi) decodes identically to its un-recoloured twin.
       applyClipMapRenderState(mat, state.hasPalette);
     }
+    // lighting-materials-4 — Additive (0x10000) draws unfogged, bit-based
+    // after the blend ladder like retail (acclient.c:454551-454553,
+    // SetFFFogAlphaDisabled(1) = D3DRS_FOGENABLE off); same rule as both
+    // materials.js ladders so a recoloured glow fogs like its un-recoloured
+    // twin. `?additiveObjFog=off` escape. `isAdditive` is tested FIRST so a
+    // non-additive surface never evaluates the flag reader.
+    if (isAdditive && additiveObjFogExemptEnabled()) mat.fog = false;
     if (sfLuminosity > 0) {
       // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit).
       // LEGACY (?surfaceUnified off): flat grayscale emissive with NO
@@ -6400,6 +6632,9 @@ export class EntityManager {
       // emissiveMap program variant already exists (no net new program expected).
       // Default OFF = byte-identical (flat white).
       if (readLuminousEmissiveMapFlag() && mat.map) mat.emissiveMap = mat.map;
+      // ?surfaceLumWins (luminous_hook.js): the authored luminosity, which a
+      // Luminous hook must leave alone (`_applyRampValueToMaterial`). Data only.
+      mat.userData.__surfaceLuminosity = sfLuminosity;
       registerLuminousMaterial(mat, sfLuminosity);
     }
     // Diffuse-reflectance albedo tint — parity with _materialFromFlags
@@ -7098,9 +7333,14 @@ export class EntityManager {
       c.root.position.set(0, 0, 0);
       c.root.quaternion.identity();
     }
-    // The wielder root may carry obj_scale; the child inherits it through
-    // the part node (a juvenile creature holds a proportionally-placed
-    // weapon — matches retail). Keep the child's own scale untouched.
+    // The wielder root may carry obj_scale; the child inherits it (and the
+    // ScaleHook tween / jump-squash) through the part node. NOT retail:
+    // `CPhysicsObj::UpdateChild` (acclient.c:320039) places the child at
+    // `Frame::combine(part frame, holding frame)` and a Frame has no scale,
+    // so retail draws the child at its own scale with an unscaled holding
+    // offset. Known gap held-1 (openac-comparison FINDINGS-round2), deferred
+    // for render impact pending the 1070 eye-test. Keep the child's own
+    // scale untouched.
     // FCULL (2026-06-08) — set the STATE-visible baseline (true on attach);
     // while attached the child is excluded from the cull walk (it follows
     // the wielder's hierarchy visibility) so `_renderCullHidden` stays clear.
@@ -7149,6 +7389,9 @@ export class EntityManager {
     }
     if (!p._attachedChildren) p._attachedChildren = new Set();
     p._attachedChildren.add(cGuid);
+    // models-camera-1 — an item mounted on the faded local player fades with
+    // it (retail re-applies SetTranslucencyHierarchical every frame in-head).
+    this._syncCamFade(c);
     this._pendingAttach.delete(cGuid);
     // A8-M4 (2026-06-12): same stale-park cleanup for the generic buffer —
     // a direct mount (both rigs present) supersedes any earlier parked
@@ -7207,6 +7450,9 @@ export class EntityManager {
     // drops render the item at its new position. ObjectDelete reaches the
     // normal despawn path that fully removes the entity.
     this._unlinkChildRig(c, cGuid);
+    // models-camera-1 — off the faded local player: back to opaque, so an
+    // item unwielded / dropped in first person is not left invisible.
+    this._syncCamFade(c);
   }
 
   /**
@@ -8193,6 +8439,56 @@ export class EntityManager {
   }
 
   /**
+   * particles-scripts-2 (`?defaultScriptPartChild=on`) — the DefaultScriptPart
+   * (18) target, retail `CPhysicsObj::play_default_script(part_index)`
+   * (acclient.c:320378-320412, via DefaultScriptPartHook::Execute :342324):
+   * the FIRST CHILDLIST entry whose part_number == part_index — the wielded
+   * weapon / shield / orb, whose part_number is its holding location's part
+   * (CPhysicsObj::add_child :316729-316760) — plays the CHILD's
+   * default_script, resolved through the CHILD's PhysicsScriptTable and
+   * intensity, on the child. No child on that part → nothing (retail returns
+   * 0); a child without a cell plays nothing either. The root sentinel
+   * (0xFFFFFFFF) matches only a child mounted on the rig root.
+   *
+   * Children come from `inst._attachedChildren`, mounted under
+   * `inst.parts[loc.partId]` (or `inst.root`) by `attachChildToParent`. A raw
+   * 0x33 child default plays as-is; a PScriptType default goes through
+   * `_playDefaultScriptResolved` under the `?defaultScriptSpawn` master
+   * switch, like the hook 17/18 owner arms. Played on `c.root` and owned by
+   * the child guid, so the child's despawn reaps it. Returns the child guid
+   * it matched (0 = none).
+   */
+  _playHeldChildDefaultScript(inst, partHint) {
+    const wGuid = (inst?.guid ?? 0) >>> 0;
+    const kids = inst?._attachedChildren;
+    if (wGuid === 0 || !inst.root || !kids || kids.size === 0) return 0;
+    const part = partHint >>> 0;
+    const mount = part === 0xFFFFFFFF ? inst.root : inst.parts?.[part];
+    if (!mount) return 0;
+    for (const cg of kids) {
+      const cGuid = cg >>> 0;
+      const c = this.entityMap.get(cGuid);
+      if (!c || !c.root || c.root.parent !== mount) continue;
+      if (c._attachedParentGuid == null || (c._attachedParentGuid >>> 0) !== wGuid) continue;
+      // First match wins (retail returns from inside the loop); an
+      // out-of-world child (`if (v5->cell)` fails) plays nothing.
+      if (c._leftWorld) return cGuid;
+      const pesId = (c.physicsScriptDid >>> 0) ||
+        ((c.meta?.physicsScriptDid >>> 0) | 0) ||
+        0;
+      if (pesId !== 0) {
+        this._attachParticleChainForEntity(cGuid, c.root, pesId)
+          .catch(() => {});
+      } else if (DEFAULT_SCRIPT_SPAWN_ON) {
+        this._playDefaultScriptResolved(cGuid, c.root);
+      }
+      this._defaultScriptPartChildHits = (this._defaultScriptPartChildHits | 0) + 1;
+      return cGuid;
+    }
+    return 0;
+  }
+
+  /**
    * Track B7 (2026-06-08): best-effort spawn-time prewarm for an entity
    * that carries a PhysicsScriptTable (DAT 0x34). Called fire-and-forget
    * from `_spawnImpl` so the first object-triggered PlayEffect cue on
@@ -8966,13 +9262,15 @@ export class EntityManager {
    */
   _gatherCycleCandidates(type, pose) {
     const out = [];
+    // input-options-7: the compass-item cycle narrows in melee/missile mode.
+    const meleeOrMissile = type === SELECTION_TYPE.COMPASS_ITEM && this._inMeleeOrMissile();
     if (this._cycleRadarFilterOn === false) {
       for (const [guid, inst] of this.entityMap) {
         if (!inst || !inst.root || !inst.root.position) continue;
         if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
         if (inst._removePending || inst._corpseHandoffGuid) continue; // deleted
         const corpseOpened = this._openedCorpses.has((guid >>> 0) || 0);
-        if (!matchesSelectionType(inst.meta, type, { corpseOpened })) continue;
+        if (!matchesSelectionType(inst.meta, type, { corpseOpened, meleeOrMissile })) continue;
         const p = inst.root.position;
         out.push({
           guid: (guid >>> 0) || 0,
@@ -8986,7 +9284,7 @@ export class EntityManager {
     const range = this._radarRange(pose);
     // One wasm read per gather (a key press / auto-target), not per entity.
     const fellows = (type === SELECTION_TYPE.PLAYER || type === SELECTION_TYPE.ANY ||
-        type === SELECTION_TYPE.UNOPENED_CORPSE)
+        type === SELECTION_TYPE.UNOPENED_CORPSE || type === SELECTION_TYPE.ITEM)
       ? null
       : readFellowshipRoster()?.members ?? null;
     for (const [guid, inst] of this.entityMap) {
@@ -9009,6 +9307,13 @@ export class EntityManager {
         dist2d: Math.hypot(p.x - pose.x, p.y - pose.y),
         range,
         corpseOpened: this._openedCorpses.has(g),
+        meleeOrMissile,
+        // input-options-7: the ITEM cycle's Wielder (IID 3) and raw
+        // RadarBehavior (int 133), read only for ITEM candidates.
+        wielder: () => {
+          try { return sh?.objectInstanceIdProperty?.(g, 3); } catch (_) { return 0; }
+        },
+        radarBehavior: () => radarBehaviorFor(sh, g, inst.meta?.objDescFlags, inst.meta?.itemType),
       }, type);
       if (!ok) continue;
       out.push({ guid: g, dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }) });
@@ -9040,6 +9345,16 @@ export class EntityManager {
    */
   _radarShowable(sh, guid, meta) {
     return radarShowableFor(sh, guid, (meta?.objDescFlags >>> 0) || 0, (meta?.itemType >>> 0) || 0);
+  }
+
+  /** ClientCombatSystem::combatMode is Melee (2) or Missile (4). */
+  _inMeleeOrMissile() {
+    let mode = 1;
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      mode = (sh?.combatMode?.() ?? 1) >>> 0;
+    } catch (_) { mode = 1; }
+    return mode === 2 || mode === 4;
   }
 
   /**
@@ -9149,10 +9464,13 @@ export class EntityManager {
    *   Closest  0x10000035 = (1, 1) — the nearest.
    *   Previous 0x10000036 = (1, 0) one step inward, else (0, 1) = farthest.
    *   Next     0x10000037 = (0, 0) one step outward, else (1, 1) = nearest.
-   * `?retailSelectNext=off` restores the pre-2026-10-08 swapped pair.
+   * `?retailSelectNext=off` restores the pre-2026-10-08 swapped pair. The
+   * player (0x10000039-3B), item (0x10000032-34) and compass-item
+   * (0x1000002F-31) keys use the same dispatch (input-options-7).
    *
    * @param {"next"|"previous"|"closest"} mode
-   * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ANY.
+   * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ITEM
+   *        / COMPASS_ITEM / ANY.
    * @returns {number} the guid now selected (0 if nothing selectable).
    */
   cycleTarget(mode, type = SELECTION_TYPE.MONSTER) {
@@ -9418,14 +9736,108 @@ export class EntityManager {
   }
 
   /**
-   * Retail SelectSelf — select the local player. Returns the guid (0 if the
-   * local player isn't resolved yet).
+   * Retail SelectSelf (CPlayerSystem::OnAction 0x1000002A, acclient.c:
+   * 399598-399621) — select the local player. While a use-on-target is
+   * pending (retail target mode 3; here `window.__useTargeting`, app/
+   * hud_panels.js) the key completes it on yourself instead
+   * (ItemHolder::TargetAcquired) and the selection is left alone. Retail's
+   * examine target mode (2) has no counterpart in this client. Returns the
+   * selected guid (0 if the local player isn't resolved yet).
    */
   selectSelf() {
     if (this._targetCycleEnabled === false) return (this._selectedGuid >>> 0) || 0;
     const self = this._localPlayerGuid();
     if (!self) return 0;
+    const useTargeting = (typeof window !== "undefined") ? window.__useTargeting : null;
+    if (useTargeting?.pending && typeof useTargeting.resolve === "function") {
+      try { useTargeting.resolve(self); } catch (e) {
+        console.warn("[targetCycle] use on self failed:", e);
+      }
+      return (this._selectedGuid >>> 0) || 0;
+    }
     return this._commitSelection(self);
+  }
+
+  /**
+   * input-options-7 — a guid that can hold this client's selection: a
+   * spawned rig that has not been deleted server-side (a delete-deferred
+   * `_removePending` rig or a corpse-claimed one is gone).
+   */
+  _isLiveSelectable(guid) {
+    const g = (guid >>> 0) || 0;
+    if (!g) return false;
+    const inst = this.entityMap.get(g);
+    return !!inst?.root && !inst._removePending && !inst._corpseHandoffGuid;
+  }
+
+  /**
+   * input-options-7 — Select Previous Selection (CPlayerSystem::OnAction
+   * 0x1000002E, acclient.c:399687-399691): re-select prevSelectedID; with
+   * none, nothing happens. Pressing it again swaps back, since the commit
+   * makes the old selection the new previous one (SetSelectedObject).
+   * @returns {number} the guid now selected
+   */
+  selectPrevious() {
+    const cur = (this._selectedGuid >>> 0) || 0;
+    if (this._targetCycleEnabled === false) return cur;
+    const prev = (this._prevSelectedGuid >>> 0) || 0;
+    const pick = previousSelectionChoice({
+      prevGuid: prev,
+      selectedGuid: cur,
+      prevLive: this._isLiveSelectable(prev),
+    });
+    return pick ? this._commitSelection(pick) : cur;
+  }
+
+  /**
+   * input-options-7 — Select Last Attacker (CPlayerSystem::OnAction
+   * 0x10000038, acclient.c:399749-399788): the player's CurrentAttacker
+   * (PlayerDesc IID 0xB, ACE PrivateUpdateInstanceID) when it is a known
+   * object within radar range (ObjectIsWithinRadarRange, :398216).
+   * @returns {number} the guid now selected
+   */
+  selectLastAttacker() {
+    const cur = (this._selectedGuid >>> 0) || 0;
+    if (this._targetCycleEnabled === false) return cur;
+    const me = this._localPlayerGuid();
+    if (!me) return cur;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    let attacker = 0;
+    try {
+      attacker = (sh?.objectInstanceIdProperty?.(me, PROP_IID_CURRENT_ATTACKER) ?? 0) >>> 0;
+    } catch (_) { attacker = 0; }
+    let inRadarRange = false;
+    const pose = this._localPlayerWorldPose();
+    const inst = attacker ? this.entityMap.get(attacker) : null;
+    if (pose && this._isLiveSelectable(attacker) && inst._attachedParentGuid == null) {
+      const p = inst.root.position;
+      inRadarRange = objectWithinRadarRange({
+        xyDist: Math.hypot(p.x - pose.x, p.y - pose.y),
+        range: this._radarRange(pose),
+      });
+    }
+    const pick = lastAttackerChoice({ attackerGuid: attacker, inRadarRange });
+    return pick ? this._commitSelection(pick) : cur;
+  }
+
+  /**
+   * input-options-7 — Select Next / Previous Fellow (0x1000003D /
+   * 0x1000003C → ClientFellowshipSystem::SelectNextFellow /
+   * SelectPreviousFellow, acclient.c:406174 / :406239): step through the
+   * fellowship roster in its order (target_cycle.js `fellowCycleChoice`).
+   * Members this client has not spawned are skipped, since the selection
+   * can only hold a spawned rig. No fellowship: nothing happens.
+   * @param {boolean} next
+   * @returns {number} the guid now selected
+   */
+  selectFellow(next) {
+    const cur = (this._selectedGuid >>> 0) || 0;
+    if (this._targetCycleEnabled === false) return cur;
+    const roster = readFellowshipRoster();
+    if (!roster) return cur;
+    const members = [...roster.members].filter((g) => this._isLiveSelectable(g));
+    const pick = fellowCycleChoice(members, cur, !!next);
+    return pick && pick !== cur ? this._commitSelection(pick) : cur;
   }
 
   /**
@@ -12749,6 +13161,9 @@ export class EntityManager {
       delete inst._pendingOwnedTextures;
     }
     inst._entityMaterials = entityMaterials;
+    // models-camera-1 — the swapped-in parts carry fresh, unfaded materials:
+    // keep the camera fade (retail CPhysicsObj::DoObjDescChanges re-applies it).
+    this._syncCamFade(inst, true);
     for (const m of oldOwnedMaterials) {
       entityOwnedTally.disposeMaterial(m);
       try { m.dispose(); } catch (_) {}
@@ -14257,6 +14672,9 @@ export class EntityManager {
       const owned = existing.clone();
       owned.userData = { ...(owned.userData || {}), __disposable: true };
       delete owned.userData.__cacheOwned;
+      // ?lumCloneAdopt: the clone copied `hbLumBase`, so ?lumNight would refuse
+      // to register it and its glow would freeze at the scale live right now.
+      adoptLuminousClone(owned);
       inst._entityMaterials.set(did, owned);
       this._repointEntityMeshes(inst, did, owned);
       existing = owned;
@@ -14288,6 +14706,8 @@ export class EntityManager {
     // Strip `__cacheOwned` if it carried over via spread — the clone
     // is per-entity, not cache-owned.
     if (cloned.userData.__cacheOwned) delete cloned.userData.__cacheOwned;
+    // ?lumCloneAdopt — as above: keep the clone on the ?lumNight scale.
+    adoptLuminousClone(cloned);
     if (opts.cloneTexture && cloned.map) {
       const tex = cloned.map.clone();
       tex.userData = { ...(tex.userData || {}), __disposable: true };
@@ -14316,6 +14736,70 @@ export class EntityManager {
           child.material = mat;
         }
       }
+    }
+  }
+
+  /**
+   * lighting-materials-6 (`?selectionFlash=on`, DEFAULT OFF) — a SmartBox find
+   * landed on `guid` (0 = nothing) for `reason` (selection_lighting.js
+   * SEARCH_REASON). Retail UIElement_SmartBoxWrapper::
+   * RecvNotice_SmartBoxObjectFound (acclient.c:275631): the object still
+   * blinking is restored when the find moved off it, and a find for sr_Select
+   * or above lights the found object HIGH and starts the 0.2 s flips, which
+   * `tick` advances. Called ONLY from picking.js's mouse paths — never from
+   * `setSelectedTarget` / `selectionChanged`, so keyboard cycling and Rynth
+   * SelectObject do not blink (they run no find in retail either). Returns
+   * true when retail would also SetSelectedObject; selection itself stays with
+   * the caller.
+   */
+  selectionFlashFound(guid, reason) {
+    if (!selectionFlashEnabled()) return false;
+    if (!this._selFlash) {
+      this._selFlash = new SelectionLighting((g, mode) => this._applySelectionLighting(g, mode));
+    }
+    return this._selFlash.objectFound(guid, reason, selectionFlashNow());
+  }
+
+  /** A click flash is running (picking.js re-finds under the mouse only then). */
+  selectionFlashActive() {
+    return !!(this._selFlash && this._selFlash.active);
+  }
+
+  /**
+   * `ApplyLighting` → CPhysicsObj::SetLighting / RestoreLighting
+   * (acclient.c:318929 / :318953) over the entity's OWN parts: every surface
+   * that `_collectEntitySurfaceDids` would walk, through the per-entity clone
+   * (`_getOrCloneEntityMaterial`) so the level never bleeds onto other
+   * entities sharing the surface. Skipped: surfaces with a luminosity of their
+   * own (retail swaps `surface->luminosity` into Emissive at draw), unlit
+   * materials, and wielded children — a held item is its own entity, its root
+   * parented under our part, never one of the part's surface meshes. RESTORE
+   * puts back exactly the materials this flash wrote.
+   */
+  _applySelectionLighting(guid, mode) {
+    const lit = this._selFlashMats || (this._selFlashMats = new Set());
+    if (mode === LIGHTING_MODE.RESTORE) {
+      for (const mat of lit) restoreSelectionLighting(mat);
+      lit.clear();
+      return;
+    }
+    const inst = this.entityMap.get((guid >>> 0) || 0);
+    if (!inst || !Array.isArray(inst.parts)) return;
+    const dids = [];
+    const seen = new Set();
+    for (const part of inst.parts) {
+      if (!part) continue;
+      for (const child of part.children) {
+        if (!child || !child.isMesh || child.userData?.__attachedChildOf != null) continue;
+        const did = child.userData?.surfaceDid >>> 0;
+        if (!did || seen.has(did)) continue;
+        seen.add(did);
+        if (selectionLightable(child.material)) dids.push(did);
+      }
+    }
+    for (const did of dids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did);
+      if (mat && applySelectionLighting(mat, mode)) lit.add(mat);
     }
   }
 
@@ -15615,6 +16099,40 @@ export class EntityManager {
   }
 
   /**
+   * render-perf-2 (2026-10-13) — zero `inst._lodOriginalSetup` when its setup
+   * has no GfxObjDegradeInfo chain, so the T9 tick's "no degrade chain" skip
+   * fires. `_lodOriginalSetup` was the spawn setupId for EVERY entity, so the
+   * skip never fired and each tick sent one async wasm band query per entity —
+   * including every multi-part creature, for which the answer is always 0
+   * (resolve_did_degrade's `parts.len() != 1` bail). The chain id is asked
+   * once per setupId (`lod_chain_memo.js`, wasm `entity_degrade_chain_id`).
+   * Unknown / stale pkg/ / rejected query → untouched (the old per-tick
+   * path). Only the tick reads `_lodOriginalSetup`, so nothing renders
+   * differently.
+   * @private
+   */
+  _gateLodChain(inst) {
+    if (!DYN_LOD_ON) return; // the tick never runs — nothing to save
+    const sid = (inst?._lodOriginalSetup ?? 0) >>> 0;
+    if (!sid) return;
+    const known = lodChainGet(sid);
+    if (known === 0) {
+      inst._lodOriginalSetup = 0;
+      return;
+    }
+    if (known !== undefined) return; // has a chain — the tick keeps checking it
+    const chainFn = this.wasmExports?.entity_degrade_chain_id;
+    if (typeof chainFn !== "function") return;
+    lodChainResolve(sid, chainFn)
+      .then((chain) => {
+        if (chain === 0 && ((inst._lodOriginalSetup ?? 0) >>> 0) === sid) {
+          inst._lodOriginalSetup = 0;
+        }
+      })
+      .catch(() => {});
+  }
+
+  /**
    * T9 — dynamic-LOD recheck. For each non-local, settled entity with a
    * degrade chain, re-query the band at the live camera distance and respawn
    * at the new band when it crosses. The spawn path rebuilds rig + mixer +
@@ -15639,6 +16157,12 @@ export class EntityManager {
       const g = inst.guid >>> 0;
       if (g === localGuid) continue; // local player is always full detail
       if (!inst._lodOriginalSetup) continue; // no degrade chain captured
+      // render-perf-2: a chainless setup another spawn resolved since this
+      // entity's own `_gateLodChain` query (or after that query rejected).
+      if (lodChainGet(inst._lodOriginalSetup) === 0) {
+        inst._lodOriginalSetup = 0;
+        continue;
+      }
       // Bug 6 (2026-10-07): never LOD-respawn (remove()+spawn()) a dying
       // creature or a corpse mid-handoff — it wiped the ragdoll and the
       // `_deathAt` stamp the corpse claim needs, so the corpse came up in the
@@ -15803,6 +16327,7 @@ export class EntityManager {
       let remaining = rdt;
       let chordVz = lv.vz;
       let hitWall = false;
+      let terrainPerStep = false;
       while (remaining > 1e-4) {
         const step = remaining > 0.1 ? 0.1 : remaining;
         const x0 = pos.x, y0 = pos.y, z0 = pos.z;
@@ -15825,9 +16350,20 @@ export class EntityManager {
           pos.z += lv.vz * step;
         }
         remaining -= step;
-        // physupd-1: stop at the first wall / cell static / door on this step.
+        // physics-collision-3: the terrain stop on this substep — parks the
+        // bolt at its first crossing (undefined = off: the per-frame test
+        // below) — then carry an indoor bolt's cell through its portals.
+        const ground = this._projectileTerrainStep?.(inst, x0, y0, z0);
+        if (ground !== undefined) terrainPerStep = true;
+        if (ground !== true) this._projectileTrackCell?.(inst, x0, y0, z0);
+        // physupd-1: stop at the first wall / cell static / door on this step
+        // (swept only up to a terrain crossing, so the earlier contact wins).
         if (PROJECTILE_ENV_SWEEP_ON && this._sweepBallisticStep(inst, x0, y0, z0)) {
           hitWall = true;
+          break;
+        }
+        if (ground === true) {
+          hitWall = true; // the terrain ends the flight like a wall
           break;
         }
       }
@@ -15848,7 +16384,9 @@ export class EntityManager {
       // PROJ-VIS: client-side terrain collision (retail collides missiles
       // locally; ACE's zero-velocity impact arrives a round-trip later). Only
       // when the launch point was above our terrain sample, and only outdoors.
-      if (PROJECTILE_TERRAIN_STOP_ON && inst._ballisticTerrainOk) {
+      // Legacy per-frame end-point test: physics-collision-3 tests each
+      // substep in the loop above unless `?projectileTerrainCrossing=off`.
+      if (PROJECTILE_TERRAIN_STOP_ON && inst._ballisticTerrainOk && !terrainPerStep) {
         const gz = _terrainZAt(pos.x, pos.y);
         if (gz != null && pos.z < gz - PROJECTILE_TERRAIN_STOP_EPS) {
           pos.z = gz;
@@ -15866,7 +16404,10 @@ export class EntityManager {
 
   /**
    * physupd-1 (2026-10-08): sweep the substep `(x0,y0,z0) → root.position`
-   * against building / EnvCell / door geometry (scene3d/projectile_sweep.js).
+   * against building / EnvCell / door geometry (scene3d/projectile_sweep.js)
+   * and, physics-collision-1, the solid objects in the path (creatures,
+   * players, props — `?missileObjSweep=off` escape) and, physics-collision-3,
+   * an outdoor bolt's procedural scenery (`?projectileScenerySweep=off`).
    * On a hit, parks the bolt just short of the contact and returns true (the
    * caller stops it). The launch window — the first substep, or until the
    * bolt is 2·radius from its spawn point — ignores an embedded start, so a
@@ -15883,9 +16424,17 @@ export class EntityManager {
     const p0 = { x: x0, y: y0, z: z0 };
     const pos = inst.root.position;
     const out = {};
+    const obj = this._projectileObjectSweepOpts(inst, ctx);
+    const cellId = (inst._ballisticCellId ?? 0) >>> 0;
     const t = sweepProjectileSegment(ctx.sh, p0, pos, {
-      cells: projectileSweepCells(ctx.renderSet, inst._ballisticCellId ?? 0),
+      cells: projectileSweepCells(ctx.renderSet, cellId),
+      // physics-collision-3: an outdoor bolt also sweeps the scenery.
+      scenery: PROJECTILE_SCENERY_SWEEP_ON && (cellId & 0xffff) < 0x0100,
       entities: ctx.entities,
+      objects: ctx.objects,
+      missileGuid: inst.guid >>> 0,
+      ethereal: obj.ethereal,
+      exemptLocalPlayer: obj.exemptLocalPlayer,
       launchWindow,
       out,
     });
@@ -15898,11 +16447,73 @@ export class EntityManager {
     return true;
   }
 
+  /**
+   * physics-collision-3 (2026-10-13, `?projectileTerrainCrossing=off`
+   * escape): the client terrain stop for one substep
+   * `(x0,y0,z0) → root.position`. Retail tests a missile against the terrain
+   * inside every quantum's transition (`CLandCell::find_env_collisions`,
+   * acclient.c:354992); the per-frame end-point test let a fast bolt tunnel
+   * a thin ridge and snapped the stop to the ground at the overshot xy. On a
+   * crossing (scene3d/projectile_sweep.js `projectileTerrainCrossing`, same
+   * 0.25 m tolerance) parks the bolt there with z on the surface and returns
+   * true. Returns undefined when the per-substep test is off, so the caller
+   * runs the legacy per-frame test.
+   */
+  _projectileTerrainStep(inst, x0, y0, z0) {
+    if (!PROJECTILE_TERRAIN_STOP_ON || !PROJECTILE_TERRAIN_CROSSING_ON) return undefined;
+    if (!inst._ballisticTerrainOk) return false;
+    const pos = inst.root.position;
+    const hit = projectileTerrainCrossing(
+      { x: x0, y: y0, z: z0 }, pos, _terrainZAt, PROJECTILE_TERRAIN_STOP_EPS,
+    );
+    if (!hit) return false;
+    pos.x = hit.x;
+    pos.y = hit.y;
+    pos.z = hit.z;
+    inst._ballisticStopCause = "client-terrain";
+    return true;
+  }
+
+  /**
+   * physics-collision-3: carry an indoor bolt's cell through the EnvCell
+   * portals it crossed this substep (wasm `resolveViewerCell`, the camera's
+   * portal walk). Retail's mover gains the outdoor land cells, and with them
+   * the terrain and the outdoor objects, once its sphere crosses an outside
+   * portal (`CEnvCell::find_transit_cells` → `add_all_outside_cells`,
+   * acclient.c:348250). On that exit the scenery layer joins the sweep and,
+   * by the spawn rule (at or above our terrain sample), the terrain stop
+   * arms. An outdoor bolt, a stale pkg or a start the walk cannot place
+   * leaves the cell, and the legacy behaviour, unchanged.
+   */
+  _projectileTrackCell(inst, x0, y0, z0) {
+    if (!PROJECTILE_SCENERY_SWEEP_ON && !PROJECTILE_TERRAIN_CROSSING_ON) return;
+    const cell = (inst._ballisticCellId ?? 0) >>> 0;
+    if ((cell & 0xffff) < 0x0100) return;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.resolveViewerCell !== "function") return;
+    const pos = inst.root.position;
+    let next = cell;
+    try {
+      next = sh.resolveViewerCell(x0, y0, z0, pos.x, pos.y, pos.z, PROJECTILE_SWEEP_RADIUS, cell) >>> 0;
+    } catch (_) {
+      return; // stale pkg / borrow conflict: the cell stays put
+    }
+    if (next === 0 || next === cell) return;
+    inst._ballisticCellId = next;
+    if ((next & 0xffff) >= 0x0100) return; // into another room
+    if (PROJECTILE_TERRAIN_STOP_ON && PROJECTILE_TERRAIN_CROSSING_ON && !inst._ballisticTerrainOk) {
+      const gz = _terrainZAt(pos.x, pos.y);
+      inst._ballisticTerrainOk = gz != null && pos.z >= gz - PROJECTILE_TERRAIN_STOP_EPS;
+    }
+  }
+
   /** physupd-1: per-pass sweep inputs — the session handle, the player's
-   *  depth-1 render set, and whether the door (entity) layer is safe. */
+   *  depth-1 render set, and whether the door (entity) layer is safe.
+   *  physics-collision-1: whether the object layer runs (`objects`) and the
+   *  ETHEREAL-missile rule can read missile state (`etherealRule`). */
   _buildProjectileSweepCtx() {
     const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
-    const ctx = { sh: sh || null, renderSet: null, entities: false };
+    const ctx = { sh: sh || null, renderSet: null, entities: false, objects: false, etherealRule: false };
     if (!sh) return ctx;
     try {
       if (typeof sh.getRenderSet === "function") {
@@ -15910,6 +16521,8 @@ export class EntityManager {
         if (rs && rs.length > 0) ctx.renderSet = rs instanceof Uint32Array ? rs : new Uint32Array(rs);
       }
     } catch (_) { /* no cell layers this pass */ }
+    ctx.objects = PROJECTILE_OBJ_SWEEP_ON && typeof sh.sweepSphereAgainstObjects === "function";
+    ctx.etherealRule = PROJECTILE_OBJ_SWEEP_ON && typeof sh.objectPhysicsState === "function";
     // Retail `OBJECTINFO::missile_ignore` (acclient.c:314070): a missile never
     // collides with another MISSILE. The wasm entity sweep can only exclude the
     // player, and a missile's wasm entity sits at its stale wire position, so a
@@ -15935,6 +16548,28 @@ export class EntityManager {
   }
 
   /**
+   * physics-collision-1: one missile's object-layer inputs for this step.
+   * `ethereal` is read live (ACE's impact SetState makes a spent bolt
+   * ETHEREAL; Rolling Death flies ETHEREAL) — off with `?missileObjSweep=off`
+   * or an unknown state. `exemptLocalPlayer` is decided once, at the first
+   * sweep: a missile born within PROJECTILE_OWN_LAUNCH_M of the local player
+   * (our own launch, or point-blank) never stops on our body.
+   */
+  _projectileObjectSweepOpts(inst, ctx) {
+    let ethereal = false;
+    if (ctx.etherealRule) {
+      try {
+        ethereal = projectileIsEthereal(ctx.sh.objectPhysicsState(inst.guid >>> 0));
+      } catch (_) { /* unknown → solid */ }
+    }
+    if (inst._ballisticExemptPlayer == null) {
+      inst._ballisticExemptPlayer =
+        projectileExemptsLocalPlayer(inst._ballisticLaunch, this._localPlayerWorldPose());
+    }
+    return { ethereal, exemptLocalPlayer: inst._ballisticExemptPlayer };
+  }
+
+  /**
    * PROJ-VIS (2026-10-05): end a ballistic projectile's self-integration —
    * the single stop path shared by the in-flight impact VectorUpdate
    * (setVelocity), an impact that raced the rig build (`_ballisticStopMs`), the
@@ -15945,7 +16580,8 @@ export class EntityManager {
    */
   _stopBallisticProjectile(inst) {
     if (!inst) return;
-    if (inst._ballistic) this._noteProjectileStop(inst, inst._ballisticStopCause || "unknown");
+    const cause = inst._ballistic ? inst._ballisticStopCause : null;
+    if (inst._ballistic) this._noteProjectileStop(inst, cause || "unknown");
     inst._ballisticStopCause = null;
     inst._ballistic = false;
     inst._ballisticGravity = false;
@@ -15958,6 +16594,56 @@ export class EntityManager {
       inst.lastVel.vz = 0;
     }
     this._setProjectileLightsOn(inst, false);
+    // physics-collision-4 (`?missileImpactScript=on`): a client contact
+    // plays the missile's collision script (retail DoCollision).
+    this._playMissileCollisionScript?.(inst, cause);
+  }
+
+  /**
+   * physics-collision-4 (2026-10-13, `?missileImpactScript=on` opt-in): a
+   * CLIENT-side missile contact plays the missile's PhysicsDesc
+   * default_script at the contact point. Retail
+   * `report_environment_collision` and `report_object_collision`
+   * (acclient.c:320194-320290) call `ACCWeenieObject::DoCollision` — the Env
+   * and Atk overloads share one body (:436857) — which runs
+   * `play_default_script` when SCRIPTED_COLLISION is set. ACE gives bolt /
+   * streak / arc / volley / blast spells DefaultScriptId =
+   * PlayScript.ProjectileCollision (SpellProjectile.cs:86-91) and never
+   * broadcasts it, so this splash only ever exists client-side.
+   *
+   * Once per missile (`_collisionScriptPlayed`, retail's
+   * `colliding_with_environment` latch); only for `client-sweep:*` /
+   * `client-terrain` stops while the wire state still has REPORT_COLLISIONS
+   * and MISSILE (`projectileCollisionScriptPlays`) — ACE's ProjectileImpact
+   * SetState clears REPORT_COLLISIONS, and a server-impact stop never plays
+   * it. Plays the raw DAT script through `_playDefaultScriptResolved` (the
+   * PhysicsScriptTable + intensity resolve, not the `_particleChainsAttached`
+   * slot the trail holds) — not the playEffect cue bus, whose
+   * projectileCollision shock + decal would stack on ACE's Explode cue.
+   * `?defaultScriptSpawn=off` (the PScriptType master escape) silences it
+   * too. Marks the stop's `__projectileStops()` row `impactScript: true`.
+   * Returns true when it queued the play.
+   */
+  _playMissileCollisionScript(inst, cause) {
+    if (!MISSILE_IMPACT_SCRIPT_ON || !DEFAULT_SCRIPT_SPAWN_ON) return false;
+    if (!inst || !inst.root || inst._collisionScriptPlayed) return false;
+    const guid = (inst.guid ?? 0) >>> 0;
+    if (guid === 0 || typeof cause !== "string" || cause.startsWith("server")) return false;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.objectPhysicsState !== "function") return false;
+    let state = 0;
+    try {
+      state = sh.objectPhysicsState(guid) >>> 0;
+    } catch (_) {
+      return false; // stale pkg / borrow conflict: no splash
+    }
+    if (!projectileCollisionScriptPlays(cause, state)) return false;
+    inst._collisionScriptPlayed = true;
+    this._playDefaultScriptResolved(guid, inst.root);
+    const log = this._projectileStops;
+    const row = log && log.length > 0 ? log[log.length - 1] : null;
+    if (row && row.guid === guid) row.impactScript = true;
+    return true;
   }
 
   /**
@@ -16112,6 +16798,10 @@ export class EntityManager {
     // UpdatePosition), so a real-time integration here is correct and immune to
     // the freeze. Runs unconditionally; no-op when no entity is ballistic.
     this._tickBallisticProjectiles();
+    // ?selectionFlash=on — the click flash's flip clock (retail
+    // UIElement_SmartBoxWrapper::Global_Loop runs on cur_time, ungated). Built
+    // by the first `selectionFlashFound`; never built on the default path.
+    if (this._selFlash) this._selFlash.tick(selectionFlashNow());
     if (!(dt > 0)) {
       // PROJ-VIS (2026-10-05): the particle/script managers run on the WALL
       // clock (time_rng.js currentTime) and retail never gates them
@@ -17713,6 +18403,9 @@ export class EntityManager {
     // `inst.parts[partIndex]` (via the partFrames path) instead of the body
     // root — retail `play_default_script(object, _part_index)`
     // (acclient.c:342324-342327). Was previously advisory/telemetry-only.
+    // particles-scripts-2 (2026-10-13, `?defaultScriptPartChild=on`): that
+    // overload plays the HELD CHILD's default script on the child, never the
+    // owner's (acclient.c:320378-320412) — `_playHeldChildDefaultScript`.
     if (hookType === 18) {
       const pesId = (inst.physicsScriptDid >>> 0) ||
         ((inst.meta?.physicsScriptDid >>> 0) | 0) ||
@@ -17720,7 +18413,9 @@ export class EntityManager {
       const partHint = hook.partIndex >>> 0;
       // Normalize the root sentinel (0xFFFFFFFF) to the walker's -1 default.
       const defaultPartIndex = (partHint === 0xFFFFFFFF) ? -1 : (partHint | 0);
-      if (pesId !== 0) {
+      if (DEFAULT_SCRIPT_PART_CHILD_ON) {
+        this._playHeldChildDefaultScript(inst, partHint);
+      } else if (pesId !== 0) {
         this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId, 0, defaultPartIndex)
           .catch(() => {});
       } else if (DEFAULT_SCRIPT_SPAWN_ON) {
@@ -17943,7 +18638,7 @@ export class EntityManager {
       // Snap to rampStart immediately so a 0-duration ramp lands the
       // end value on the next tick (durationMs<=0 → tick sees elapsed
       // >= durationMs and applies rampEnd).
-      this._applyRampValueToMaterial(hookType, mat, rampStart);
+      this._applyMaterialRamp(hookType, mat, rampStart);
       inst._materialHookTweens.push({
         hookType,
         surfaceDid: did,
@@ -17998,9 +18693,25 @@ export class EntityManager {
   }
 
   /**
+   * The tween clock's entry to `_applyRampValueToMaterial`. A Transparent
+   * (20/7) ramp is a fade owner, so it is bracketed like the other three
+   * (object translucency, camera fade, ethereal): authored-state snapshot
+   * before the write, `syncFadeAlpha` after it (fade_alpha_state.js,
+   * `?fadeAlphaParity`). Kept out of `_applyRampValueToMaterial` itself, whose
+   * body the luminous tests splice and run on its own.
+   */
+  _applyMaterialRamp(hookType, mat, value) {
+    const fade = hookType === 20 || hookType === 7;
+    if (fade) snapshotAuthoredAlpha(mat);
+    this._applyRampValueToMaterial(hookType, mat, value);
+    if (fade) syncFadeAlpha(mat);
+  }
+
+  /**
    * Apply a ramp value to a material based on the source hookType.
    * Transparent (20/7) → `opacity` + `transparent`. Luminous (8/9) →
-   * `emissive` (set as a uniform white at the given intensity).
+   * `emissive` (set as a uniform white at the given intensity) on surfaces
+   * with no luminosity of their own.
    * Diffuse (10/11) → `color` scaled to the value (multiplies the
    * albedo texture by `v` — matches retail's "Diffuse" parameter
    * semantic in `acclient.c:0x00523000`).
@@ -18016,6 +18727,10 @@ export class EntityManager {
       // the static-surface path (materials.js:1836 `opacity = 1 - translucency`).
       // `transparent: true` is required for three.js to actually blend;
       // value <= 0 (fully opaque) restores the fast opaque path.
+      // ?fadeAlphaParity: the caller (`_applyMaterialRamp`) then replaces the
+      // `transparent` / `depthWrite` guesses below with the authored flags, so
+      // an Alpha surface stays blended at 0 and a ClipMap one drops its alpha
+      // test while faded (fade_alpha_state.js).
       //
       // DIM7-5 / W4.2 (2026-06-05): floor the ramp VALUE (translucency) to the
       // surface's authored base translucency so a Transparent hook can never
@@ -18040,6 +18755,16 @@ export class EntityManager {
         delete material.userData.__preTransDepthWrite;
       }
     } else if (hookType === 8 || hookType === 9) {
+      // ?surfaceLumWins (default ON; `off/0/false/no` escape): a surface with
+      // a luminosity of its OWN ignores the hook. Retail D3DPolyRender::
+      // RenderMeshSubset (acclient.c:454688-454719) draws such a surface with
+      // `surface->luminosity` swapped into the part material's Emissive and
+      // restores it after (:454828-454845), so the hook's value never reaches
+      // it: a ramp to 0 no longer kills a crystal's glow, a ramp to 1 no
+      // longer over-brightens a 0.3 surface. The material keeps its emissive,
+      // emissiveIntensity, emissiveMap and its ?lumNight tracking. The stamp
+      // comes from the Surface ladders and survives clone() (luminous_hook.js).
+      if (material.userData?.__surfaceLuminosity > 0 && surfaceLumWinsEnabled()) return;
       // Luminous — emissive intensity. Set the emissive color to a
       // uniform white at `value` brightness; `emissiveIntensity` stays
       // at the material's default (usually 1.0) so the on-screen
@@ -18054,8 +18779,20 @@ export class EntityManager {
         // emissiveIntensity = min(2.0, sfLuminosity) (entities.js ~:2615 /
         // materials.js); three.js renders emissive × emissiveIntensity, so
         // leaving it would DOUBLE-brighten a base-luminous surface that also
-        // gets a runtime Luminous hook. (anim-deep FIX-PLAN W4.1.)
+        // gets a runtime Luminous hook. (anim-deep FIX-PLAN W4.1.) Such a
+        // surface only gets here under ?surfaceLumWins=off (see above).
+        // ?lumCloneAdopt: the hook now owns this emissive — drop the material
+        // from the ?lumNight registry so the next night-scale change does not
+        // overwrite the raw 1.0 with `hbLumBase × scale` (luminous_night.js).
+        releaseLuminousMaterial(material);
         material.emissiveIntensity = 1.0;
+        // ?lumHookTexel (default ON; `off/0/false/no` escape): retail's FF
+        // stage draws texture × saturate(emissive + lighting), so the value
+        // lights the texel. three ADDS emissive, texture-modulated only via
+        // emissiveMap, which a non-luminous surface lacks — a ramp to 1 washed
+        // it flat white. Attach `map` as emissiveMap while value > 0, restore
+        // the authored one at 0 (luminous_hook.js).
+        if (material.map || material.emissiveMap) syncLuminousHookTexel(material, value);
       }
     } else if (hookType === 10 || hookType === 11) {
       // Diffuse — albedo scalar. Multiplies the texture by `value`;
@@ -18091,6 +18828,7 @@ export class EntityManager {
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
       if (!mat) continue;
+      snapshotAuthoredAlpha(mat); // ?fadeAlphaParity: before any write (fade_alpha_state.js)
       if (ethereal) {
         if (mat.userData.__preEtherealOpacity === undefined) {
           mat.userData.__preEtherealOpacity = mat.opacity;
@@ -18112,6 +18850,8 @@ export class EntityManager {
           delete mat.userData.__preEtherealDepthWrite;
         }
       }
+      // ?fadeAlphaParity: the flags follow (authored, faded?), not `opacity < 1`.
+      syncFadeAlpha(mat);
     }
   }
 
@@ -18169,6 +18909,7 @@ export class EntityManager {
       const mat = this._getOrCloneEntityMaterial(inst, did);
       if (!mat) continue;
       if (t > 0) {
+        snapshotAuthoredAlpha(mat); // ?fadeAlphaParity: before any write (fade_alpha_state.js)
         // Snapshot the base opacity (owned by surface-translucency / hooks /
         // ethereal) on FIRST object-translucency touch; re-derive from it on
         // every subsequent apply so runtime updates don't compound.
@@ -18188,7 +18929,9 @@ export class EntityManager {
         // Restore: object is fully opaque again. Return the base opacity the
         // other systems set, then let `transparent` reflect THAT value (a
         // surface that's authored-translucent or mid-ethereal stays blended;
-        // a plain opaque surface drops back to opaque).
+        // a plain opaque surface drops back to opaque). ?fadeAlphaParity
+        // replaces that guess with the authored flags (syncFadeAlpha below).
+        snapshotAuthoredAlpha(mat);
         mat.opacity = mat.userData.__preObjTransOpacity;
         delete mat.userData.__preObjTransOpacity;
         mat.transparent = mat.opacity < 1.0;
@@ -18200,6 +18943,9 @@ export class EntityManager {
       // t === 0 AND no snapshot → material was never touched by object
       // translucency; leave it exactly as the other systems set it (do NOT
       // force `transparent = true` on an already-opaque material).
+      // ?fadeAlphaParity: flags from (authored, faded?); a no-op on a material
+      // no owner is fading.
+      syncFadeAlpha(mat);
     }
   }
 
@@ -18227,14 +18973,129 @@ export class EntityManager {
    *
    * Idempotent per `inst._camFadeOpacity`; camera.js additionally
    * quantizes to 1/128 so material writes only happen on visible change.
+   *
+   * models-camera-1 (2026-10-13, `?camFadeHier=off` escape) — retail fades
+   * with `CPhysicsObj::SetTranslucencyHierarchical` (acclient.c:318733-
+   * 318755), which recurses the CHILDLIST, and `CameraSet::UpdateCamera`
+   * (:149181-149216) re-applies it EVERY frame in-head and in the near band.
+   * Fading only the body left the wielded weapon / shield / lit torch fully
+   * opaque in front of the in-head camera, and any re-dress (fresh, unfaded
+   * materials) or respawn brought the body back while camera.js's value
+   * dedupe never re-pushed. So the fade now walks `_attachedChildren`, and
+   * the last push is remembered (`_localCamFade`) and re-applied through
+   * `_syncCamFade` at the re-dress hot-swap, the spawn commit, a held-item
+   * mount, and an unmount (back to opaque, so a dropped item is not left
+   * invisible on the ground), and through `_syncCamFadePartial` at the
+   * partial rebuilds: the ReplaceObject hook and the R-8 heal ladders.
    */
   setLocalPlayerCameraOpacity(guid, opacity) {
-    const inst = this.entityMap.get(guid >>> 0);
-    if (!inst || !inst.root) return;
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
     let o = +opacity;
     if (!Number.isFinite(o)) o = 1.0;
     if (o < 0) o = 0;
     else if (o > 1) o = 1;
+    if (!this._camFadeHier) {
+      // `?camFadeHier=off` — the body-only fade.
+      if (!inst || !inst.root) return;
+      this._applyCamFadeToInst(inst, o);
+      return;
+    }
+    // Remembered even while the rig is mid-rebuild (the respawn fallback's
+    // remove + spawn): camera.js will not push the same value again.
+    this._localCamFade = o < 1 ? { guid: g, o } : null;
+    if (!inst || !inst.root) return;
+    this._applyCamFadeHier(inst, o);
+  }
+
+  /**
+   * models-camera-1 — the camera fade `inst` should carry: the remembered
+   * push when it IS the local player or hangs (at any depth — a dart on an
+   * atlatl) off it, else 1.
+   */
+  _camFadeTarget(inst) {
+    const f = this._localCamFade;
+    if (!f) return 1;
+    let cur = inst;
+    for (let depth = 0; cur && depth < 8; depth += 1) {
+      if ((cur.guid >>> 0) === f.guid) return f.o;
+      if (cur._attachedParentGuid == null) return 1;
+      cur = this.entityMap.get(cur._attachedParentGuid >>> 0);
+    }
+    return 1;
+  }
+
+  /**
+   * models-camera-1 — `SetTranslucencyHierarchical`: fade `inst`, then every
+   * held child (retail passes the raw value down; each object applies it to
+   * its own parts). A rig that was never faded needs no restore, so `o === 1`
+   * skips it (and does not clone its shared materials for nothing).
+   */
+  _applyCamFadeHier(inst, o, seen = new Set()) {
+    if (!inst || !inst.root || seen.has(inst)) return;
+    seen.add(inst);
+    if (o < 1 || inst._camFadeOpacity !== undefined) this._applyCamFadeToInst(inst, o);
+    const kids = inst._attachedChildren;
+    if (kids && kids.size) {
+      for (const cg of kids) this._applyCamFadeHier(this.entityMap.get(cg >>> 0), o, seen);
+    }
+  }
+
+  /**
+   * models-camera-1 — re-sync `inst` (and its held children) with the
+   * remembered camera fade after its materials or its mount changed.
+   * `rebuilt` = its part materials were just replaced with fresh, unfaded
+   * ones (retail `CPhysicsObj::DoObjDescChanges` re-applies the translucency
+   * after `CPartArray::DoObjDescChanges`), so the per-inst dedupe value is
+   * stale and is dropped first. No-op with `?camFadeHier=off`, and for a rig
+   * that is neither faded nor under the faded local player.
+   */
+  _syncCamFade(inst, rebuilt = false) {
+    if (!this._camFadeHier || !inst || !inst.root) return;
+    if (rebuilt) inst._camFadeOpacity = undefined;
+    // Hot path (every spawn commit): no fade live and this rig never faded.
+    if (!this._localCamFade && inst._camFadeOpacity === undefined) return;
+    try {
+      this._applyCamFadeHier(inst, this._camFadeTarget(inst));
+    } catch (_) { /* cosmetic: never break a spawn / mount / re-dress */ }
+  }
+
+  /**
+   * models-camera-1 (review R1) — re-sync after a PARTIAL material rebuild:
+   * the ReplaceObject hook's new part meshes, or an R-8 heal ladder's swap
+   * (whose `inst.root.traverse` also reaches mounted held children). Some
+   * meshes now carry a fresh, unfaded (often shared-cache) material while the
+   * rest keep their faded clones, and the per-inst dedupe would skip the
+   * re-walk. Retail has no such gap: `CameraSet::UpdateCamera` re-applies
+   * `SetTranslucencyHierarchical` every frame. Unlike a full re-dress
+   * (`_syncCamFade(inst, true)`), the rig still owns faded clones, so a faded
+   * dedupe value is invalidated with NaN (equal to no push, and not
+   * `undefined`, so a later push of 1 still restores them) instead of being
+   * dropped. No-op with `?camFadeHier=off`, and for a rig never faded while
+   * no fade is live (every NPC).
+   */
+  _syncCamFadePartial(inst) {
+    if (!this._camFadeHier || !inst || !inst.root) return;
+    const seen = new Set();
+    const invalidate = (r) => {
+      if (!r || seen.has(r)) return;
+      seen.add(r);
+      const prev = r._camFadeOpacity;
+      if (prev !== undefined && prev < 1) r._camFadeOpacity = NaN;
+      const kids = r._attachedChildren;
+      if (kids && kids.size) {
+        for (const cg of kids) invalidate(this.entityMap.get(cg >>> 0));
+      }
+    };
+    invalidate(inst);
+    this._syncCamFade(inst);
+  }
+
+  /**
+   * One rig's own part materials (not its children) — the A12-C2 snapshot /
+   * restore loop. Idempotent per `inst._camFadeOpacity`.
+   */
+  _applyCamFadeToInst(inst, o) {
     if (inst._camFadeOpacity === o) return;
     inst._camFadeOpacity = o;
     const dids = this._collectEntitySurfaceDids(inst, -1);
@@ -18242,6 +19103,7 @@ export class EntityManager {
       const mat = this._getOrCloneEntityMaterial(inst, did);
       if (!mat) continue;
       if (o < 1) {
+        snapshotAuthoredAlpha(mat); // ?fadeAlphaParity: before any write (fade_alpha_state.js)
         if (mat.userData.__preCamFadeOpacity === undefined) {
           mat.userData.__preCamFadeOpacity = mat.opacity;
         }
@@ -18252,6 +19114,7 @@ export class EntityManager {
           mat.depthWrite = false;
         }
       } else if (mat.userData.__preCamFadeOpacity !== undefined) {
+        snapshotAuthoredAlpha(mat);
         mat.opacity = mat.userData.__preCamFadeOpacity;
         delete mat.userData.__preCamFadeOpacity;
         mat.transparent = mat.opacity < 1.0;
@@ -18260,6 +19123,10 @@ export class EntityManager {
           delete mat.userData.__preCamFadeDepthWrite;
         }
       }
+      // ?fadeAlphaParity: a ClipMap part fades instead of vanishing under its
+      // alpha-test ref, and backing off restores an Alpha surface's blend
+      // (the `opacity < 1.0` guess above turned it opaque).
+      syncFadeAlpha(mat);
     }
   }
 
@@ -18348,12 +19215,12 @@ export class EntityManager {
         if (!mat) continue; // material disposed / dereferenced
         const elapsed = nowMs - tw.startMs;
         if (tw.durationMs <= 0 || elapsed >= tw.durationMs) {
-          this._applyRampValueToMaterial(tw.hookType, mat, tw.rampEnd);
+          this._applyMaterialRamp(tw.hookType, mat, tw.rampEnd);
           continue; // tween done
         }
         const t = elapsed / tw.durationMs;
         const v = tw.rampStart + (tw.rampEnd - tw.rampStart) * t;
-        this._applyRampValueToMaterial(tw.hookType, mat, v);
+        this._applyMaterialRamp(tw.hookType, mat, v);
         survivors.push(tw);
       }
       inst._materialHookTweens = survivors.length > 0 ? survivors : null;
@@ -18660,6 +19527,10 @@ export class EntityManager {
     }
     // Indoor-layer invariant — the replacement meshes default to layer 0.
     _stampEntityIndoorLayer(this.scene3d, partGroup);
+    // models-camera-1 (review R1) — a new surface DID got the shared, unfaded
+    // cache material above; re-take the camera fade (first person / near band)
+    // so the swapped part does not pop opaque in front of the camera.
+    this._syncCamFadePartial(inst);
     // ?partDegrade: retail SetPart loads the NEW GfxObj's degrade chain
     // (CPhysicsPart::LoadGfxObjArray). fetchBuildingPlacement does not fill
     // didDegrade, so look it up; the fresh meshes start visible meanwhile.

@@ -24,7 +24,11 @@
 // ClientCombatSystem::AutoTarget issues it in melee/missile mode
 // (acclient.c:408728, filter :398090-398106), and UNOPENED_CORPSE (5, death-5
 // 2026-10-08 round 2): a corpse this client has not opened (:398069-398072),
-// the loot-cycle keys. The ITEM cycle is out of scope.
+// the loot-cycle keys. input-options-7 (2026-10-13) adds the keyboard ITEM
+// (1, :398108-398117) and COMPASS_ITEM (2, :398090-398106, by combat mode)
+// cycles, plus the Previous Selection / Last Attacker / fellow-cycle choices
+// (CPlayerSystem::OnAction acclient.c:399687-399840); ui/selection_keys.js
+// binds them.
 
 export const SELECTION_TYPE = Object.freeze({
   MONSTER: "monster",
@@ -32,6 +36,8 @@ export const SELECTION_TYPE = Object.freeze({
   ANY: "any",
   COMPASS_COMBAT: "compassCombat",
   UNOPENED_CORPSE: "unopenedCorpse",
+  ITEM: "item",
+  COMPASS_ITEM: "compassItem",
 });
 
 // ACE ItemType.Creature (ItemType.cs:13) — the "this object is a creature"
@@ -80,13 +86,19 @@ export function weightedDistance(pose, tpos) {
  *   - ANY:     any attackable non-corpse.
  *   - UNOPENED_CORPSE: a corpse not yet opened (`opts.corpseOpened`, the
  *     caller's HasCorpseBeenOpened answer — passed in so this stays pure).
+ *   - ITEM: no radar presence (the meta has no RadarBehavior, so the radar
+ *     heuristic stands in for it) or a lifestone / portal / bindstone; like
+ *     retail case 1 it does not test the corpse bit.
+ *   - COMPASS_ITEM: shown on radar (heuristic) or a lifestone / portal /
+ *     bindstone; in melee/missile mode (`opts.meleeOrMissile`) it reads as
+ *     MONSTER.
  * Every other type excludes corpses (they leave the live cycle). This is the
  * type-only rule `?cycleRadarFilter=off` keeps (COMPASS_COMBAT reads as
  * MONSTER here); the retail gate is `cycleCandidateOk` below.
  *
  * @param {{itemType?:number, objDescFlags?:number}} meta
  * @param {string} type — a SELECTION_TYPE value
- * @param {{corpseOpened?:boolean}} [opts]
+ * @param {{corpseOpened?:boolean, meleeOrMissile?:boolean}} [opts]
  */
 export function matchesSelectionType(meta, type, opts) {
   const it = (meta?.itemType >>> 0) || 0;
@@ -94,12 +106,21 @@ export function matchesSelectionType(meta, type, opts) {
   if (type === SELECTION_TYPE.UNOPENED_CORPSE) {
     return (odf & ODF_CORPSE) !== 0 && !opts?.corpseOpened;
   }
+  if (type === SELECTION_TYPE.ITEM) {
+    return meta != null && (odf & ODF_UI_HIDDEN) === 0 &&
+      (!fallbackRadarShowable(odf, it) || (odf & ODF_COMPASS_ALWAYS) !== 0);
+  }
   if ((odf & ODF_CORPSE) !== 0) return false;
   switch (type) {
     case SELECTION_TYPE.PLAYER:
       return (odf & ODF_PLAYER) !== 0;
     case SELECTION_TYPE.ANY:
       return (odf & ODF_ATTACKABLE) !== 0;
+    case SELECTION_TYPE.COMPASS_ITEM:
+      if (!opts?.meleeOrMissile) {
+        return fallbackRadarShowable(odf, it) || (odf & ODF_COMPASS_ALWAYS) !== 0;
+      }
+      // falls through — melee/missile: the MONSTER rule
     case SELECTION_TYPE.MONSTER:
     default:
       // Creature bit + attackable + NOT a player (players cycle separately).
@@ -119,6 +140,9 @@ export const ODF_PORTAL = 0x00040000;
 export const ODF_FREE_PK_STATUS = 0x00200000;
 export const ODF_PKLITE_STATUS = 0x02000000;
 export const ODF_BINDSTONE = 0x08000000;
+// SelectNext's `_bitfield & 0x8044000` (acclient.c:398091 / :398113): a
+// lifestone, portal or bindstone is always a compass item / item.
+export const ODF_COMPASS_ALWAYS = (ODF_LIFESTONE | ODF_PORTAL | ODF_BINDSTONE) >>> 0;
 
 /** CPlayerSystem::GetRadarRadius (acclient.c:395871): 75 m out, 25 m in. */
 export const RADAR_RANGE_OUTDOOR = 75;
@@ -174,6 +198,21 @@ export function radarShowableFor(sh, guid, odf, itemType) {
   let v;
   try { v = sh.objectIntProperty(guid >>> 0, 133); } catch (_) { v = undefined; }
   return isShowableOnRadar(v) && !(bits & ODF_UI_HIDDEN);
+}
+
+/**
+ * input-options-7 — the raw RadarBehavior (PropertyInt 133, retail
+ * `pwd._radar_enum`; absent = 0) that the ITEM cycle tests. A stale pkg/ with
+ * no `objectIntProperty` reads the radar heuristic as ShowAlways (4) or 0.
+ */
+export function radarBehaviorFor(sh, guid, odf, itemType) {
+  if (!sh || typeof sh.objectIntProperty !== "function") {
+    return fallbackRadarShowable(odf >>> 0, itemType >>> 0) ? 4 : 0;
+  }
+  let v;
+  try { v = sh.objectIntProperty(guid >>> 0, 133); } catch (_) { v = undefined; }
+  const n = Number(v);
+  return Number.isFinite(n) ? n >>> 0 : 0;
 }
 
 /**
@@ -441,22 +480,35 @@ export function computeSelectNext(candidates, anchor, selfGuid, closer, extreme)
  *            ObjectIsAttackable, not a fellow, not a vendor (:398090-398106;
  *            the REPORT_COLLISIONS_AS_ENVIRONMENT physics state is not in the
  *            spawn meta and is not tested).
+ *   COMPASS_ITEM (2, the keyboard compass-item cycle, input-options-7) —
+ *            in melee/missile mode (`ctx.meleeOrMissile`) the COMPASS_COMBAT
+ *            rule; otherwise shown on radar or a lifestone/portal/bindstone.
+ *   ITEM (1, input-options-7) — not wielded (`pwd._wielderID`, ctx.wielder)
+ *            and no RadarBehavior (`pwd._radar_enum`, ctx.radarBehavior)
+ *            unless a lifestone/portal/bindstone (:398108-398117). Like the
+ *            non-combat compass case it never tests the corpse bit.
  *   ANY — the synthetic "any attackable object" cycle.
  *
  * @param {{itemType?:number, objDescFlags?:number, petOwner?:number}|null} meta
  * @param {{playerMeta?:object|null, isFellow?:boolean,
  *          showable?:boolean|(() => boolean), stateVisible?:boolean,
  *          attached?:boolean, dist2d:number, range:number,
- *          corpseOpened?:boolean, attackMeta?:() => object|null}} ctx
+ *          corpseOpened?:boolean, attackMeta?:() => object|null,
+ *          meleeOrMissile?:boolean, wielder?:number|(() => number),
+ *          radarBehavior?:number|(() => number)}} ctx
  *        `attackMeta` (pk-1) returns the candidate's live attack meta.
- *        `showable` may be a thunk so the caller's wasm lookup runs only for
- *        candidates that pass every cheaper rule.
+ *        `showable`, `wielder` and `radarBehavior` may be thunks so the
+ *        caller's wasm lookups run only for candidates that need them.
  * @param {string} type — a SELECTION_TYPE value
  */
 // pk-1: `ctx.attackMeta` (a thunk) supplies the live attack meta; it runs
 // only for candidates that reach the attackable test.
 function attackMetaOf(meta, ctx) {
   return (typeof ctx.attackMeta === "function" ? ctx.attackMeta() : null) ?? meta;
+}
+// A ctx value given directly or as a thunk.
+function ctxValue(v) {
+  return typeof v === "function" ? v() : v;
 }
 
 export function cycleCandidateOk(meta, ctx, type) {
@@ -467,16 +519,27 @@ export function cycleCandidateOk(meta, ctx, type) {
     if ((odf & ODF_UI_HIDDEN) !== 0 || !(ctx.dist2d <= ctx.range)) return false;
     return (odf & ODF_CORPSE) !== 0 && !ctx.corpseOpened;
   }
-  if ((odf & (ODF_UI_HIDDEN | ODF_CORPSE)) !== 0) return false;
-  if (!(ctx.dist2d <= ctx.range)) return false;
   const showable = () =>
     (typeof ctx.showable === "function" ? ctx.showable() : ctx.showable) === true;
+  if (type === SELECTION_TYPE.ITEM ||
+      (type === SELECTION_TYPE.COMPASS_ITEM && !ctx.meleeOrMissile)) {
+    if ((odf & ODF_UI_HIDDEN) !== 0 || !(ctx.dist2d <= ctx.range)) return false;
+    if (type === SELECTION_TYPE.COMPASS_ITEM) {
+      return (odf & ODF_COMPASS_ALWAYS) !== 0 || showable();
+    }
+    if ((Number(ctxValue(ctx.wielder)) >>> 0) !== 0) return false;
+    const radar = Number(ctxValue(ctx.radarBehavior)) >>> 0;
+    return radar === 0 || (odf & ODF_COMPASS_ALWAYS) !== 0;
+  }
+  if ((odf & (ODF_UI_HIDDEN | ODF_CORPSE)) !== 0) return false;
+  if (!(ctx.dist2d <= ctx.range)) return false;
   switch (type) {
     case SELECTION_TYPE.PLAYER:
       return (odf & ODF_PLAYER) !== 0 && showable();
     case SELECTION_TYPE.ANY:
       return (odf & ODF_ATTACKABLE) !== 0;
     case SELECTION_TYPE.COMPASS_COMBAT:
+    case SELECTION_TYPE.COMPASS_ITEM: // melee/missile mode (above otherwise)
       return (
         objectIsAttackable(attackMetaOf(meta, ctx), ctx.playerMeta ?? null) &&
         !ctx.isFellow &&
@@ -527,6 +590,75 @@ export function autoTargetChoice({
     return "attacker";
   }
   return "closest";
+}
+
+// ── input-options-7 (2026-10-13) — the other CPlayerSystem::OnAction
+// selection keys (acclient.c:399598-399840). ui/selection_keys.js binds them;
+// EntityManager.selectPrevious / selectLastAttacker / selectFellow run these
+// choices over live state.
+
+/**
+ * CPlayerSystem::ObjectIsWithinRadarRange (acclient.c:398216): the radar
+ * radius for the player's cell (75 m out, 25 m in) is strictly greater than
+ * the object's XY distance.
+ * @param {{xyDist:number, range:number}} r
+ */
+export function objectWithinRadarRange({ xyDist, range }) {
+  return Number.isFinite(xyDist) && range > xyDist;
+}
+
+/**
+ * Select Last Attacker (0x10000038, acclient.c:399749-399788): the player's
+ * CurrentAttacker (PlayerDesc IID 0xB) when it is a known object within radar
+ * range; otherwise the selection is left alone.
+ * @param {{attackerGuid:number, inRadarRange:boolean}} a
+ * @returns {number} the guid to select, or 0 (no change)
+ */
+export function lastAttackerChoice({ attackerGuid, inRadarRange }) {
+  const g = (attackerGuid >>> 0) || 0;
+  return g !== 0 && inRadarRange === true ? g : 0;
+}
+
+/**
+ * Select Previous Selection (0x1000002E, acclient.c:399687-399691):
+ * SetSelectedObject(prevSelectedID) unless it is 0. Not retail: `prevLive`
+ * must hold too. This client's selection can only hold a spawned rig
+ * (setSelectedTarget refuses anything else), so selecting a gone object
+ * would just clear the current target (plugins/social-panel.js
+ * selectWorldObject keeps the same rule).
+ * @param {{prevGuid:number, selectedGuid:number, prevLive:boolean}} s
+ * @returns {number} the guid to select, or 0 (no change)
+ */
+export function previousSelectionChoice({ prevGuid, selectedGuid, prevLive }) {
+  const p = (prevGuid >>> 0) || 0;
+  if (p === 0 || p === ((selectedGuid >>> 0) || 0) || prevLive !== true) return 0;
+  return p;
+}
+
+/**
+ * Select Next / Previous Fellow (0x1000003D / 0x1000003C →
+ * ClientFellowshipSystem::SelectNextFellow / SelectPreviousFellow,
+ * acclient.c:406174 / :406239): a walk of the fellowship member table, not a
+ * distance cycle. Next: the member after the selected one, wrapping to the
+ * first; with no fellow selected, the first. Previous: the member before it,
+ * wrapping to the last; with no fellow selected, the last. The local player
+ * is a member like any other.
+ * @param {Iterable<number>} members — fellowship order
+ * @param {number} selectedGuid
+ * @param {boolean} next
+ * @returns {number} the guid to select, or 0 (no fellowship members)
+ */
+export function fellowCycleChoice(members, selectedGuid, next) {
+  const list = [];
+  for (const m of members ?? []) {
+    const g = (m >>> 0) || 0;
+    if (g !== 0) list.push(g);
+  }
+  if (list.length === 0) return 0;
+  const sel = (selectedGuid >>> 0) || 0;
+  const i = sel !== 0 ? list.indexOf(sel) : -1;
+  if (next) return i >= 0 ? list[(i + 1) % list.length] : list[0];
+  return i > 0 ? list[i - 1] : list[list.length - 1];
 }
 
 /**

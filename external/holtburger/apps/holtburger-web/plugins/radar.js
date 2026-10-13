@@ -45,6 +45,10 @@
 //   * gmRadarUI::UpdateLockedStatus — lock sprite LockedUI 0x060074B7 /
 //     UnlockedUI 0x060074B8; the drag button (0x060074C9, cursor 0x06006119)
 //     is hidden while locked.
+//   * gmRadarUI::ListenToElementMessage — the lock button 0x10000619 is the
+//     GLOBAL LockUI: PlayerModule::SetLockUI(!LockUI) +
+//     BroadcastGlobalMessage(0xD) locks every retail floaty (ui/ui_lock.js;
+//     `?globalLockUI=off` keeps the old radar-only lock).
 //
 // Data sources: the local pose comes from the wasm session
 // (`getLocalPlayerPose`, via scene3d/frame_pose.js which frees the box) so
@@ -61,6 +65,8 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
+import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
+import { globalLockUIEnabled, toggleGlobalLock } from "../ui/ui_lock.js";
 import { getHudScale, hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
 import { readLocalPlayerPose } from "../scene3d/frame_pose.js";
 import { blipColorForEntity, readFellowshipRoster, resolveRadarLook } from "../scene3d/selection_brackets.js";
@@ -710,10 +716,15 @@ export function mount(_ctx) {
   _overlayEl = overlay;
   _hostileEl = hostile;
 
+  // input-options-4: with the global LockUI the lock button flips
+  // PlayerModule::LockUI (gmRadarUI::ListenToElementMessage) instead of a
+  // radar-only lock, and the radar obeys it like every retail floaty.
+  const globalLock = globalLockUIEnabled();
   const winPos = attachWindowPosition(overlay, {
     windowId: WINDOW_ID.RADAR,
     dragHandle: moveBtn,
-    lockButton: lockBtn,
+    lockButton: globalLock ? undefined : lockBtn,
+    obeysGlobalLock: true,
     defaultPos: { top: "8px", right: "8px" },
     onLockChange: (locked) => {
       // gmRadarUI::UpdateLockedStatus — LockedUI/UnlockedUI sprite, and the
@@ -726,10 +737,23 @@ export function mount(_ctx) {
       document.documentElement.classList.toggle("hb-ui-locked", locked);
     },
   });
+  const onGlobalLockClick = () => { toggleGlobalLock(); };
+  if (globalLock) {
+    // Retail has no radar-only lock: drop one an older build saved, or the
+    // radar would stay locked whatever the global state says.
+    if (winPos.getState().locked) winPos.setLocked(false);
+    lockBtn.addEventListener("click", onGlobalLockClick);
+  }
+  // input-options-1: a jump (Space) must not also toggle the lock after the
+  // button was clicked. `lockBtn.click()` is synthetic (detail 0), so a
+  // keyboard toggle keeps focus (ui/hud_focus.js).
   const onLockKey = (ev) => {
-    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); lockBtn.click(); }
+    if (!hudKeyActivates(ev)) return;
+    ev.preventDefault();
+    lockBtn.click();
   };
   lockBtn.addEventListener("keydown", onLockKey);
+  const releaseLockFocus = releaseMouseFocus(lockBtn);
 
   // ── Hover / click (retail m_iidObjectUnderMouse) ──
   let mouse = null; // retail-pixel coords inside the disk, or null
@@ -974,6 +998,8 @@ export function mount(_ctx) {
       disk.removeEventListener("pointerleave", onLeave);
       disk.removeEventListener("click", onClick);
       lockBtn.removeEventListener("keydown", onLockKey);
+      lockBtn.removeEventListener("click", onGlobalLockClick);
+      releaseLockFocus();
     } catch (_) {}
     overlay.remove();
     tooltip.remove();

@@ -5,9 +5,12 @@
 # master. This is the gate that actually runs on every holtburger change.
 #
 # Scope is deliberately cheap and deterministic:
-#   - js:   the headless Node test gate (no browser, no wasm build) + the URL-flag lints
-#   - rust: unit tests of the crates that need no DAT files. DAT-backed tests
-#           SKIP without client_portal.dat etc., so they are not run here.
+#   - js:   the headless Node test gate (no browser, no wasm build) + the URL-flag
+#           and plugin-bus event-consumer lints
+#   - rust: unit + integration tests of the crates that need no DAT files
+#           (holtburger-protocol's tests/opcode_parity.rs and
+#           tests/generated_parity.rs included). DAT-backed tests SKIP without
+#           client_portal.dat etc., so they are not run here.
 name: holtburger-ci
 
 on:
@@ -48,6 +51,8 @@ jobs:
         run: node ../../scripts/gen-client-event-kinds.mjs --check
       - name: URL-flag lint
         run: node ../../scripts/lint-url-flags.mjs
+      - name: Plugin-bus event-consumer lint
+        run: node ../../scripts/lint-event-consumers.mjs
       - name: URL-flag default audit
         run: node ../../scripts/audit-flag-defaults.mjs
 
@@ -71,5 +76,10 @@ jobs:
         run: |
           git clone --filter=blob:none https://github.com/Chorizite/Chorizite.ACProtocol.git external/chorizite/Chorizite.ACProtocol
           git -C external/chorizite/Chorizite.ACProtocol checkout --quiet ff7dffd6afa53c4e2b2ba14bd89962258ebd4371
-      - name: Unit tests (no DAT fixtures needed)
-        run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib
+      # `--tests` adds the integration targets (crates/*/tests/*.rs) to the lib
+      # unit tests; `--lib` alone never built them, so opcode_parity's
+      # categorization gate and the 71 generated_parity checks ran in no gate.
+      # Doctests stay out. A rotted integration test gets #[ignore = "reason"],
+      # not a dropped `--tests`.
+      - name: Unit + integration tests (no DAT fixtures needed)
+        run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib --tests

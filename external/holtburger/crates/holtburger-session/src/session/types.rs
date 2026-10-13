@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 pub use async_trait::async_trait;
 use holtburger_protocol::crypto::Isaac;
 use holtburger_protocol::messages::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::time::Duration;
 // `web_time::Instant` is `std::time::Instant` on native and a
@@ -65,6 +65,13 @@ pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_millis(6
 // net-4 (R2-net 2026-10-08): rescaled 180 -> 300 with the 1 s -> 0.6 s
 // cadence so the give-up stays at ~3 min (300 x 0.6 s = 180 s).
 pub(crate) const RETRANSMIT_GIVE_UP_REQUESTS: u32 = 300;
+/// net-transport-3 (2026-10-13): retail re-sends its ConnectResponse
+/// ("ConnectAck") while the connection sits in `cs_ConnectionRequestAcked`,
+/// every 1/3 s and with no cap, until the server's first packet arrives
+/// (`ClientNet::ProcessConnection` case 4, acclient.c:372867 `if
+/// (Timer::local_time - pReceiver->lastSentHandshake_ > 0.333333333)
+/// ClientNet::SendConnectAck`). WebAC `CONNECT_RESPONSE_RETRY_INTERVAL = 333`.
+pub(crate) const CONNECT_RESPONSE_RESEND_INTERVAL: Duration = Duration::from_millis(333);
 pub(crate) const DEFAULT_LOGIN_PROTOCOL_VERSION: &str = "1802";
 
 // `Transport` is cfg-split between native (Send + Sync, async-trait Send
@@ -209,6 +216,18 @@ pub(crate) struct PendingControlPacket {
     pub(crate) data: PendingControlPacketData,
 }
 
+/// net-transport-3 (2026-10-13): the handshake's ConnectResponse, kept so the
+/// receive loop can re-send it every [`CONNECT_RESPONSE_RESEND_INTERVAL`]
+/// until the server shows it was accepted (`Session::connect_response_resend`).
+#[derive(Clone, Debug)]
+pub(crate) struct ConnectResponseResend {
+    pub(crate) header: PacketHeader,
+    pub(crate) cookie: u64,
+    pub(crate) addr: SocketAddr,
+    /// Last actual send + the interval (retail `lastSentHandshake_`).
+    pub(crate) next_resend_at: Instant,
+}
+
 #[derive(Debug)]
 pub enum SessionEvent {
     Message(Vec<u8>),
@@ -232,6 +251,12 @@ pub struct Session {
     pub fragment_reassembler: HashMap<u32, PendingMessage>,
     pub(crate) pending_server_packets: BTreeMap<u32, ReceivedPacket>,
     pub(crate) pending_control_packets: Vec<PendingControlPacket>,
+    // net-transport-3 (2026-10-13): `Some` from the ConnectRequest until the
+    // first server packet that proves the ConnectResponse was accepted
+    // (retail `cs_ConnectionRequestAcked` -> `cs_Connected`). While `Some`,
+    // the receive loop re-sends the ConnectResponse on a timer, because ACE
+    // drops one that arrives before its DoLogin finishes.
+    pub(crate) connect_response_resend: Option<ConnectResponseResend>,
     pub(crate) last_request_retransmit_time: Option<Instant>,
     // net-4 (R2-net 2026-10-08): retail `highestIDReceived_` while it is
     // AHEAD of `last_server_seq` — the newest S2C sequence known to exist,
@@ -240,6 +265,17 @@ pub struct Session {
     // receive loop re-sends the RequestRetransmit on the
     // `REQUEST_RETRANSMIT_INTERVAL` timer; cleared once ordering catches up.
     pub(crate) highest_server_seq_seen: Option<u32>,
+    // net-transport-4 (2026-10-13): S2C sequences the server answered with a
+    // RejectRetransmit because it no longer holds them (ACE drops a packet
+    // from its retransmit cache after 120 s, NetworkSession.cs
+    // `cachedPacketRetentionTime`). Retail drops such ids from its NAK set
+    // and carries on (`SharedNet::HandleEmptyAck`, acclient.c:372177), so
+    // ordering steps over them (`skip_lost_server_sequences`) instead of
+    // stalling every later packet until the retransmit give-up ends the
+    // session. Every entry is newer than `last_server_seq` and within
+    // `MAX_RETRANSMIT_SEQUENCE_WINDOW` of it (checked on insert, removed as
+    // ordering passes it), so the window bounds the set.
+    pub(crate) lost_server_seqs: BTreeSet<u32>,
     // conn-fix (2026-07-18): consecutive retransmit requests issued
     // without any ordering progress. Reset whenever an ordered packet
     // finalizes; when it exceeds RETRANSMIT_GIVE_UP_REQUESTS the
@@ -253,4 +289,11 @@ pub struct Session {
     pub bytes_out: u64,
     pub last_recv_time: Instant,
     pub last_send_time: Instant,
+    // net-transport-6 (2026-10-13): retail `CLinkStatusAverages` packet
+    // counters, fed by `send_raw_packet` (sent, retransmissions included),
+    // `retransmit_sequences` (re-sent for the server's NAK) and
+    // `process_inbound_packet` (received, checksum valid). The 2 s heartbeat
+    // runs from those same paths. `link_status.packet_loss()` is the figure
+    // retail's Link Status panel prints.
+    pub link_status: crate::link_status::LinkStatusAverages,
 }

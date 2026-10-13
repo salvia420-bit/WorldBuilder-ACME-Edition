@@ -117,6 +117,42 @@ pub(crate) fn accept_verified_claim(sha_requested: bool, claimed: Option<bool>) 
     sha_requested && claimed == Some(true)
 }
 
+/// At most this many shard URLs are remembered by a [`ReloadSet`]; a mismatch
+/// beyond it is not remembered (that key's retry is a plain fetch, as before).
+/// Same bound as `RELOAD_URLS_MAX` in scene3d/shard_fetch_worker.js.
+pub(crate) const RELOAD_SET_MAX: usize = 4096;
+
+/// The shard URLs whose last body failed Step E's sha256 check (WebAC
+/// comparison streaming-residency-4, 2026-10-13). The next fetch of one takes
+/// its entry ([`ReloadSet::take`]) and, on the direct path, goes out with
+/// `cache: "reload"` (`http::fetch_shard_bytes`): past the service worker's
+/// Cache Storage and the immutable HTTP cache, so a bad cached copy heals
+/// instead of coming back on every retry. Once per failure: a fresh mismatch
+/// marks the URL again. Bounded by [`RELOAD_SET_MAX`].
+#[derive(Debug, Default)]
+pub(crate) struct ReloadSet {
+    urls: std::collections::HashSet<String>,
+}
+
+impl ReloadSet {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remember `url` (a no-op when it is already remembered or the set is
+    /// full).
+    pub(crate) fn mark(&mut self, url: &str) {
+        if self.urls.len() < RELOAD_SET_MAX && !self.urls.contains(url) {
+            self.urls.insert(url.to_owned());
+        }
+    }
+
+    /// Take `url`'s entry: `true` exactly once per [`ReloadSet::mark`].
+    pub(crate) fn take(&mut self, url: &str) -> bool {
+        self.urls.remove(url)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +242,36 @@ mod tests {
         assert!(!needs_main_thread_verify(true, true, verified_for_task(Some(&h), Some(&h))));
         assert!(needs_main_thread_verify(true, true, verified_for_task(Some(&h), None)));
         assert!(needs_main_thread_verify(true, true, verified_for_task(Some(&h), Some(&other))));
+    }
+
+    #[test]
+    fn reload_set_takes_once_per_mark() {
+        let mut s = ReloadSet::new();
+        let u = "https://x/dist/shards/ab/abcd.bin";
+        assert!(!s.take(u), "nothing marked: a plain fetch");
+        s.mark(u);
+        s.mark(u);
+        assert!(s.take(u), "the retry after a mismatch reloads");
+        assert!(!s.take(u), "once per failure");
+        s.mark(u);
+        assert!(s.take(u), "a fresh mismatch re-arms it");
+        assert!(!s.take("https://x/dist/shards/ab/other.bin"));
+    }
+
+    #[test]
+    fn reload_set_is_bounded() {
+        let mut s = ReloadSet::new();
+        for i in 0..RELOAD_SET_MAX + 10 {
+            s.mark(&format!("u{i}"));
+        }
+        assert_eq!(s.urls.len(), RELOAD_SET_MAX);
+        assert!(s.take("u0"));
+        assert!(
+            !s.take(&format!("u{}", RELOAD_SET_MAX + 5)),
+            "beyond the cap: not remembered"
+        );
+        s.mark("late");
+        assert!(s.take("late"), "room again after a take");
     }
 }
 

@@ -1848,12 +1848,14 @@ pub struct PlayerState {
     /// A7-R1 (2026-06-12, survey A7 §3 row 1): the local player's
     /// per-setup step heights — `Setup.step_up/step_down × Scale.Z`,
     /// fallback `DefaultStepHeight = 0.01`
-    /// (`acclient.c:325400-325424`; ACE `PartArray.cs:236-248`). `None`
-    /// until the wasm-side Setup hydration runs; the movement system
-    /// consumes them via `set_setup_step_heights` ONLY under the
-    /// default-off `USE_SETUP_STEP_HEIGHTS` flag — flag off, the
-    /// hardcoded human-body 0.6/1.5 stay in effect (byte-identical: the
-    /// player Setup `0x02000001` resolves to exactly those values).
+    /// (`acclient.c:325400-325424`; ACE `PartArray.cs:236-248`). An
+    /// explicit OVERRIDE only: nothing writes it live (there is no
+    /// `set_setup_step_heights`). The live per-Setup heights come from
+    /// `WorldState::setup_mover_body` — the player entity's resident Setup
+    /// × scale (physics-collision-2, `USE_SETUP_PLAYER_BODY` /
+    /// `?setupPlayerBody`); `Some` here still wins over it under
+    /// `USE_SETUP_STEP_HEIGHTS`. Neither ⇒ the human-body 0.6/1.5 (Setup
+    /// `0x02000001` resolves to exactly those values).
     pub step_up_height: Option<f32>,
     pub step_down_height: Option<f32>,
 

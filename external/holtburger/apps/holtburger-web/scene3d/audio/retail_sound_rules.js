@@ -53,6 +53,29 @@ export function environSoundType(option) {
   return 0;
 }
 
+/**
+ * audio-2 (2026-10-13) — `?retailUiSounds` (default ON; `off` / `0` /
+ * `false` restore the old cues). Retail's client plays a UI sound by itself
+ * only from four places — the PlaySoundFromCenter callers in acclient.c:
+ * MediaMachine::Update_Sound (162259 / 162267, LayoutDesc Sound media, i.e.
+ * the UI_ButtonPress a UIElement_Button plays when MouseDown (174702) puts it
+ * in its Pressed state), the portal tunnel's Sound_UI_EnterPortal /
+ * ExitPortal (261845 / 262562) and Handle_Admin__Environs (396439-396539).
+ * Sound_UI_GeneralError / GrabSlider / ReleaseSlider (acclient.h:4680 /
+ * 4686 / 4687) have no reference in acclient.c at all. So by default the
+ * client's own error buzz and slider cues are silent and the button chime
+ * lands on press, not on click. Read per call: cheap, and tests toggle it.
+ */
+export function retailUiSoundsEnabled(search) {
+  try {
+    const s = (search !== undefined && search !== null)
+      ? search
+      : ((typeof window !== "undefined" && window.location) ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("retailUiSounds")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
 // ClientUISystem::GetUISoundTable (acclient.c:401286-401293):
 // DBObj::GetByEnum(0x10000003, 7, 0x22) — the UI SoundTable through the
 // EnumIDMap (OpenAC UiSoundTableResolver: master map slot 7, key 0x10000003).
@@ -98,6 +121,9 @@ export async function playSoundFromCenter(live, soundTableDid, soundType, { rng 
   const audioMgr = live?.audioManager;
   const cache = live?.soundTableCache;
   if (!audioMgr || !cache || !soundTableDid) return null;
+  // Both PlaySoundFromCenter overloads open with interface_sounds_enabled
+  // (acclient.c 383575/383598) — Options → Config → "Interface sounds".
+  if (audioMgr.isInterfaceSoundsEnabled?.() === false) return null;
   const entry = await cache.resolveSound(soundTableDid >>> 0, soundType >>> 0);
   if (!entry) return null;
   if (!rollProbability(entry.probability, rng)) return null;

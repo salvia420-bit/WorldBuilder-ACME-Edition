@@ -37,6 +37,7 @@
 import * as spellTables from "./spell_tables.js";
 import { DebuffLedger } from "./debuff_ledger.js";
 import { DEFAULT_ENTRY } from "./monster_list.js";
+import { readTierThresholds, skillCapFn } from "../../skill_cap.js";
 
 /** The DEFAULT row's attack columns (S, arc, Damage Type) are unedited. */
 function defaultAttackShape(entry) {
@@ -59,10 +60,8 @@ const EM_HELD = 0x01000000;
 const EM_TWO_HANDED = 0x02000000;
 const EM_WEAPON_SLOTS = EM_MELEE | EM_MISSILE | EM_HELD | EM_TWO_HANDED;
 
-// Magic school (catalog) → skill id (buff_loop.js SKILL table).
-const SCHOOL_SKILL = Object.freeze({ 1: 34, 2: 33, 3: 32, 4: 31, 5: 43 });
-const TIER_DEFAULTS = Object.freeze([35, 85, 135, 185, 235, 285, 335, 435]);
-const SKILL_TRAINED = 2;
+// Magic school → skill id, the tier defaults and the tier rule live in
+// rynth/skill_cap.js (shared with the buff/vitals loops' opt-in skill cap).
 
 // WeenieError codes on kind-13 (combat_loop.js CAST_REFUSALS).
 const WE_FIZZLE = 0x0402;
@@ -291,18 +290,8 @@ export class AttackPlanner {
     if (c.cap) return c.cap;
     const stats = this._call("TryGetPlayerStats");
     const skills = stats && stats.skills ? stats.skills : null;
-    const tiers = TIER_DEFAULTS.map((d, i) => Number(this._opt(`MinSkillLevelTier${i + 1}`, d)) || d);
-    c.cap = (school) => {
-      if (!skills) return Infinity;
-      const row = skills[SCHOOL_SKILL[school]] ?? skills[String(SCHOOL_SKILL[school])];
-      if (!row) return Infinity;
-      if (typeof row.training === "number" && row.training < SKILL_TRAINED) return 0;
-      const v = Number(row.current ?? row.base);
-      if (!Number.isFinite(v)) return Infinity;
-      let lvl = 0;
-      for (let t = 0; t < tiers.length; t++) if (v >= tiers[t]) lvl = t + 1;
-      return Math.max(1, lvl);
-    };
+    // RynthAi GetHighestSpellTier (the combat thresholds) — skill_cap.js.
+    c.cap = skillCapFn(skills, readTierThresholds((k, d) => this._opt(k, d), "MinSkillLevelTier"));
     return c.cap;
   }
 

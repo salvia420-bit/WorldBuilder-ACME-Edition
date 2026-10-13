@@ -117,6 +117,23 @@ URL this file builds boots to `__bootState === "ready"` in 8.4 s on SwiftShader
 Pass a bot account for unattended runs — `--account` defaults to `tailnet1`,
 which on the 1070 is the human's Developer account.
 
+**`--linkProbe` (2026-10-13).** Adds `?linkProbe=on` to the page outside the
+arm label, so both arms carry it. The probe's program ledger
+(`scene3d/shader_prewarm.js`) diffs `renderer.info.programs` by id. The run
+then reports `programsRelinked@moving`: the programs linked during the measure
+lap whose cache key was already resident earlier in the session (three
+destroyed the program at `usedTimes` 0, then linked it again). It also reports
+`programs@resident`, and the header taint lists `linkProbe`. In the page,
+`__linkProbe.relinkedKeys()` names the keys. A ShaderMaterial /
+RawShaderMaterial key starts with two shader-stage ids that three mints again
+once the stage is freed, so for those programs the ledger matches relinks on
+the linked GLSL (`gl.getShaderSource`) plus the rest of the key, not on the
+key itself; `ledgerStats().stageKeyed` / `stageKeyedNoSource` count them.
+ProgramRetention (`scene3d/program_retention.js`) is default ON and keeps
+every built-in-keyed program alive, so a default run measures only what is
+left over. To measure the churn it removes, run the A/B with one arm on
+`--arm='programRetain=off'` (three's stock program lifetime).
+
 Tests: `node test_cam_moving_bench.mjs` (38 checks — including two runs of the
 real in-page rig against a stub client with a 6.7× frame-cost spread, asserted
 pose-for-pose identical) and `node harness/test_moving_bench_boot.mjs`

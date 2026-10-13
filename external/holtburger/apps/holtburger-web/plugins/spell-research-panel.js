@@ -22,7 +22,7 @@
 
 import { escapeHtml } from "../ui/ac_html.js";
 import {
-  fetchIconDataUrl as fetchIconDataUrlShared,
+  fetchSpellIconWithFallback,
   getIconImmediate as getIconImmediateShared,
 } from "../ui/ac_icon_cache.js";
 import { castSpellViaHandleResult } from "../ui/ac_cast_spell.js";
@@ -161,8 +161,13 @@ function resolveComponentName(comp) {
 // shared `getIconImmediate` so the ghost still uses the cached URL when
 // the panel had previously fetched it OR the boot-time bulk preload
 // (?preloadIcons=1) had populated it).
-async function fetchIconDataUrl(iconId) {
-  return fetchIconDataUrlShared(iconId, "spell-research");
+//
+// hud-ui-3: rows draw the retail spell composite
+// (ClientMagicSystem::GetSpellIcon → CompositeSpellIcon, as every retail
+// spell UIItem does — UIElement_UIItem::UIItem_SetIcon acclient.c:272213);
+// the raw icon is the fallback when there is no wasm spell record yet.
+function fetchSpellIcon(spellId, iconId) {
+  return fetchSpellIconWithFallback(spellId, iconId, "spell-research");
 }
 function iconCacheGetSync(iconId) {
   return getIconImmediateShared(iconId);
@@ -434,6 +439,8 @@ function makeRow(id, meta) {
   row.dataset.expanded = "0";
   row.draggable = true;
   row.title = "Double-click to cast · drag to bar slot";
+  // The row icon's resolved URL (composite or raw) — the drag ghost reuses it.
+  let iconUrl = null;
 
   row.addEventListener("dragstart", (ev) => {
     ev.dataTransfer.effectAllowed = "copy";
@@ -446,7 +453,7 @@ function makeRow(id, meta) {
     // Wave 15 — sync cache peek via shared module. Falls back to the
     // school color when the URL isn't resolved yet (matches the
     // pre-Wave 15 `iconCache.get(meta.icon)` short-circuit).
-    const cached = meta.icon ? iconCacheGetSync(meta.icon) : null;
+    const cached = iconUrl || (meta.icon ? iconCacheGetSync(meta.icon) : null);
     if (typeof cached === "string" && cached) {
       ghost.style.backgroundImage = `url(${cached})`;
     } else {
@@ -470,8 +477,9 @@ function makeRow(id, meta) {
   iconEl.className = "hb-sr-icon";
   iconEl.textContent = "✦";
   if (meta.icon) {
-    fetchIconDataUrl(meta.icon).then((url) => {
+    fetchSpellIcon(id, meta.icon).then((url) => {
       if (!url || !iconEl.isConnected) return;
+      iconUrl = url;
       iconEl.textContent = "";
       const img = document.createElement("img");
       img.src = url;

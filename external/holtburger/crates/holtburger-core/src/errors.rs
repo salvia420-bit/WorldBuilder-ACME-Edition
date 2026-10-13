@@ -1,5 +1,54 @@
 use holtburger_protocol::errors::WeenieError;
 
+use crate::retail_failure_table::{RETAIL_FAILURE, RETAIL_FAILURE_ITEM_FALLBACK};
+
+/// chat-errors-2 (2026-10-13): the retail `HandleFailureEvent`
+/// (acclient.c:413716) entry for a WeenieError `code` — its text (`{}` for
+/// each `%s`, trailing `\n` stripped) and the `AddTextToScroll` text type it
+/// prints at (0 = System, 7 = Magic, 0x1A = the transient spew box). From
+/// the checked-in `retail_failure_table` (scripts/gen_retail_failure_table.py
+/// walks the decomp). `None` = retail has no printing case for the code.
+pub fn retail_failure_entry(code: u32) -> Option<(&'static str, u8)> {
+    RETAIL_FAILURE
+        .binary_search_by_key(&code, |&(c, _, _)| c)
+        .ok()
+        .map(|i| (RETAIL_FAILURE[i].1, RETAIL_FAILURE[i].2))
+}
+
+/// chat-errors-2: the table code a wire code reads as. Vanilla ACE reports
+/// spell-target loss as TargetNotAcquired (0x42C, Player_Magic.cs), which
+/// retail has no case for; it keeps the deliberate retail
+/// YourSpellTargetIsMissing (0x403) text `spellcast_error_text` already
+/// gives it (WS05).
+fn retail_table_code(code: u32) -> u32 {
+    if code == WeenieError::TargetNotAcquired as u32 {
+        WeenieError::YourSpellTargetIsMissing as u32
+    } else {
+        code
+    }
+}
+
+/// chat-errors-2: the retail text type for `error` (`retail_failure_entry`).
+pub fn retail_failure_text_type(error: WeenieError) -> Option<u8> {
+    retail_failure_entry(retail_table_code(error as u32)).map(|(_, text_type)| text_type)
+}
+
+/// chat-errors-2: the retail line for a WeenieError `code` with `parameter`
+/// in every `%s` slot (retail passes the same user_data to each). A missing
+/// parameter prints as empty, as retail's bare `Handle_Communication__WeenieError`
+/// (acclient.c:420742) passes the null string — except 0x4BF / 0x4C0, which
+/// print "item" for an empty user_data (:415382-415399). `None` for a code
+/// retail prints nothing for.
+pub fn retail_failure_line(code: u32, parameter: Option<&str>) -> Option<String> {
+    let code = retail_table_code(code);
+    let (template, _) = retail_failure_entry(code)?;
+    let mut p = parameter.unwrap_or("");
+    if p.is_empty() && RETAIL_FAILURE_ITEM_FALLBACK.contains(&code) {
+        p = "item";
+    }
+    Some(template.replace("{}", p))
+}
+
 /// use-3 (2026-10-08): the retail client's own text for the use / move /
 /// pickup failure codes, verbatim from
 /// `ClientCommunicationSystem::HandleFailureEvent` (acclient.c:413716,
@@ -42,15 +91,39 @@ pub fn retail_text_type(error: WeenieError) -> Option<u32> {
 /// use-3 (2026-10-08): failure codes retail never prints
 /// (`HandleFailureEvent` has no case for 0x3B / 0x3C, so they fall to its
 /// silent default branch).
+/// chat-errors-1 (2026-10-13): plus TurbineChatIsEnabled (0x51D) — no case
+/// either (0x51B / 0x51C do have theirs, :414458-414461), and vanilla ACE
+/// sends it at every login (Player_Networking.cs, `use_turbine_chat`), as it
+/// sends ITeleported after every portal (Portal.cs).
 pub fn is_silent_failure(error: WeenieError) -> bool {
-    matches!(error, WeenieError::ILeftTheWorld | WeenieError::ITeleported)
+    matches!(
+        error,
+        WeenieError::ILeftTheWorld | WeenieError::ITeleported | WeenieError::TurbineChatIsEnabled
+    )
 }
 
 pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> String {
+    format_weenie_error_with(error, parameter, true)
+}
+
+/// `format_weenie_error` with chat-errors-2's retail table switchable:
+/// `retail_table = false` is the `?retailFailureText=off` escape (the
+/// pre-table templates and sentence-case fallback below).
+pub fn format_weenie_error_with(
+    error: WeenieError,
+    parameter: Option<&str>,
+    retail_table: bool,
+) -> String {
     // use-3: the retail HandleFailureEvent strings win (none of them take
     // a parameter).
     if let Some(text) = retail_failure_text(error) {
         return text.to_string();
+    }
+    // chat-errors-2 (2026-10-13): then every other HandleFailureEvent case,
+    // verbatim. Codes retail has no case for keep the templates / fallback
+    // below (round-2 use-3: the non-retail ACE codes stay readable).
+    if retail_table && let Some(text) = retail_failure_line(error as u32, parameter) {
+        return text;
     }
     // Some errors have custom formatting templates.
     let template = match error {
@@ -400,6 +473,9 @@ pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> Strin
 pub fn format_weenie_error_id(error_id: u32, parameter: Option<&str>) -> String {
     if let Some(error) = WeenieError::from_repr(error_id) {
         format_weenie_error(error, parameter)
+    } else if let Some(text) = retail_failure_line(error_id, parameter) {
+        // chat-errors-2: a retail case with no enum variant (0x4CE).
+        text
     } else {
         format!(
             "Unknown error {:#06X}{}",
@@ -541,5 +617,191 @@ mod tests {
         assert!(is_silent_failure(WeenieError::ILeftTheWorld));
         assert!(!is_silent_failure(WeenieError::Stuck));
         assert!(!is_silent_failure(WeenieError::YoureTooBusy));
+    }
+
+    #[test]
+    fn turbine_chat_enabled_is_silent_but_channel_lines_are_not() {
+        // chat-errors-1: no HandleFailureEvent case for 0x51D …
+        assert!(is_silent_failure(WeenieError::TurbineChatIsEnabled));
+        assert!(is_silent_failure(WeenieError::ITeleported));
+        // … while 0x51B / 0x51C print "You have entered/left the %s channel."
+        assert!(!is_silent_failure(WeenieError::YouHaveEnteredTheChannel));
+        assert!(!is_silent_failure(WeenieError::YouHaveLeftTheChannel));
+        assert_eq!(
+            format_weenie_error(WeenieError::YouHaveEnteredTheChannel, Some("General")),
+            "You have entered the General channel."
+        );
+    }
+
+    #[test]
+    fn retail_failure_table_is_whole_and_sorted() {
+        use crate::retail_failure_table::{
+            RETAIL_FAILURE, RETAIL_FAILURE_ITEM_FALLBACK, RETAIL_FAILURE_NOTICE_ONLY,
+        };
+        // chat-errors-2: 341 printing cases + 3 notice-only arms = the 344
+        // HandleFailureEvent cases (339 `case` labels + 5 `if (etype == N)`).
+        assert!(
+            (300..=345).contains(&RETAIL_FAILURE.len()),
+            "{} entries",
+            RETAIL_FAILURE.len()
+        );
+        assert!(
+            RETAIL_FAILURE.windows(2).all(|w| w[0].0 < w[1].0),
+            "sorted, no duplicate codes (binary search)"
+        );
+        for &(code, text, text_type) in RETAIL_FAILURE {
+            assert!(matches!(text_type, 0 | 7 | 0x1A), "{code:#x} type {text_type:#x}");
+            assert!(!text.ends_with('\n'), "{code:#x} keeps its newline");
+            assert_eq!(
+                text.matches('{').count(),
+                text.matches("{}").count(),
+                "{code:#x}: only `{{}}` slots"
+            );
+        }
+        assert_eq!(RETAIL_FAILURE_NOTICE_ONLY, &[0x4B8, 0x4B9, 0x4BA]);
+        for code in RETAIL_FAILURE_NOTICE_ONLY {
+            assert_eq!(retail_failure_entry(*code), None);
+        }
+        assert_eq!(RETAIL_FAILURE_ITEM_FALLBACK, &[0x4BF, 0x4C0]);
+        assert_eq!(retail_failure_entry(0x3B), None, "no case: default branch");
+    }
+
+    #[test]
+    fn retail_failure_table_spot_texts() {
+        use WeenieError as E;
+        for (error, parameter, text) in [
+            (E::YouAreNotInAllegiance, None, "You are not in an allegiance!"),
+            (
+                E::YouDoNotHaveAuthorityInAllegiance,
+                None,
+                "You do not have the authority within your allegiance to do that.",
+            ),
+            (E::YouMustOwnHouseToUseCommand, None, "You must own a house to use this command."),
+            (E::ConfirmationInProgress, None, "You are already involved in something!"),
+            (
+                E::YouMustLinkToPortalToRecall,
+                None,
+                "You must have linked with a portal in order to recall to it!",
+            ),
+            (
+                E::ExitTrainingAcademyToUseCommand,
+                None,
+                "You must exit the Training Academy before that command will be available to you.",
+            ),
+            (E::CantJumpLoadedDown, None, "You're too loaded down to jump"),
+            (E::YouCantJumpFromThisPosition, None, "You can't jump from this position"),
+            (E::YourSpellFizzled, None, "Your spell fizzled."),
+            (E::Dead, None, "You can't do that... you're dead!"),
+            (E::ListOfBannedCharacters, Some("Bob"), "Banned Characters: Bob"),
+            (
+                E::IsTooBusyToAcceptGifts,
+                Some("Bob"),
+                "Bob is too busy to accept gifts right now.",
+            ),
+            // Retail's literal `$s` (an owner call already on record).
+            (
+                E::FailsToAffectYouTheyCannotAffectAnyone,
+                Some("Bob"),
+                "Bob fails to affect you because $s cannot affect anyone!",
+            ),
+        ] {
+            assert_eq!(format_weenie_error(error, parameter), text, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn retail_failure_table_fixes_the_old_templates() {
+        use WeenieError as E;
+        // Retail's sprintf passes user_data twice (acclient.c :414769).
+        let hooked = format_weenie_error(E::MaxNumberOfHooked, Some("trophies"));
+        assert!(hooked.contains("maximum number of trophies hooked"), "{hooked}");
+        assert!(
+            format_weenie_error(E::MaxNumberOfHookedUntilOneIsRemoved, Some("trophies"))
+                .contains("cannot hook any additional trophies until")
+        );
+        assert!(
+            format_weenie_error(E::NoLongerMaxNumberOfHooked, Some("trophies"))
+                .ends_with("You may hook additional trophies.")
+        );
+        // 0x4D5 names the skill twice, with retail's double spaces.
+        let lower = format_weenie_error(E::CannotLowerSkillWhileWieldingItem, Some("Sword"));
+        assert!(lower.contains("certain level of Sword.  Your Sword skill"), "{lower}");
+        // The cant_jump_in_air global has no '!' (acclient.c:796618).
+        let air = format_weenie_error(E::YouCantJumpWhileInTheAir, None);
+        assert_eq!(air, "You can't jump while in the air");
+        assert!(!air.ends_with('!'));
+        // A bare WeenieError prints the null string in the slot …
+        assert_eq!(
+            format_weenie_error(E::IsTooBusyToAcceptGifts, None),
+            " is too busy to accept gifts right now."
+        );
+        // … except the salvage lines, which say "item".
+        assert_eq!(
+            format_weenie_error(E::TheWasNotSuitableForSalvaging, None),
+            "The item was not suitable for salvaging."
+        );
+        assert_eq!(
+            format_weenie_error(E::TheWasNotSuitableForSalvaging, Some("Pyreal Salvage")),
+            "The Pyreal Salvage was not suitable for salvaging."
+        );
+        // 0x4CE has a retail case but no enum variant.
+        assert_eq!(
+            format_weenie_error_id(0x4CE, Some("Bob")),
+            "Bob is too busy to accept gifts right now."
+        );
+    }
+
+    #[test]
+    fn retail_failure_text_types() {
+        use WeenieError as E;
+        assert_eq!(retail_failure_text_type(E::YourSpellFizzled), Some(7));
+        assert_eq!(retail_failure_text_type(E::YouMustOwnHouseToUseCommand), Some(0x1A));
+        assert_eq!(retail_failure_text_type(E::YouAreNotInAllegiance), Some(0x1A));
+        assert_eq!(retail_failure_text_type(E::YouDoNotHaveAuthorityInAllegiance), Some(0));
+        assert_eq!(retail_failure_text_type(E::YouMustLinkToPortalToRecall), Some(7));
+        assert_eq!(retail_failure_text_type(E::TradeNonCombatMode), None);
+        // pk-3's PK set agrees with the table wherever it answers.
+        for &(code, _, text_type) in crate::retail_failure_table::RETAIL_FAILURE {
+            if let Some(error) = WeenieError::from_repr(code)
+                && let Some(pk) = retail_text_type(error)
+            {
+                assert_eq!(pk, u32::from(text_type), "{error:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn target_not_acquired_keeps_the_deliberate_text() {
+        // WS05: ACE's spell-target loss reads as retail 0x403.
+        assert_eq!(
+            format_weenie_error(WeenieError::TargetNotAcquired, None),
+            "Your spell's target is missing!"
+        );
+        assert_eq!(
+            retail_failure_line(WeenieError::TargetNotAcquired as u32, None).as_deref(),
+            Some("Your spell's target is missing!")
+        );
+        assert_eq!(retail_failure_text_type(WeenieError::TargetNotAcquired), Some(0x1A));
+    }
+
+    #[test]
+    fn retail_failure_text_off_restores_the_old_lines() {
+        use WeenieError as E;
+        // `?retailFailureText=off`: the pre-table templates / fallback.
+        assert_eq!(
+            format_weenie_error_with(E::YouCantJumpWhileInTheAir, None, false),
+            "You can't jump while in the air!"
+        );
+        assert_eq!(
+            format_weenie_error_with(E::YouAreNotInAllegiance, None, false),
+            "You are not in allegiance."
+        );
+        // The use-3 strings stay either way.
+        assert_eq!(format_weenie_error_with(E::YoureTooBusy, None, false), "You're too busy!");
+        // Codes retail has no case for are the same either way.
+        assert_eq!(
+            format_weenie_error_with(E::TradeNonCombatMode, None, true),
+            format_weenie_error_with(E::TradeNonCombatMode, None, false)
+        );
     }
 }

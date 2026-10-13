@@ -3,10 +3,20 @@
 Prereq: `python3 scripts/serve.py` on :8765; local ACE on 127.0.0.1:9000.
 All checks JSON-emitting; a land FAILS the smoke if any check fails.
 
-## S0 — wasm size assertion (no boot needed, catches dev-profile ship)
-    SZ=$(stat -c%s external/holtburger/apps/holtburger-web/pkg/holtburger_web_bg.wasm)
-    [ "$SZ" -lt 6000000 ] && echo "PASS wasm=${SZ}B" || echo "FAIL wasm=${SZ}B (release ~4.25MB; dev ~18MB — check [profile] in Cargo.toml, cross-ref A15)"
-    # measured ground truth 2026-07-09: 4,246,409 bytes
+## S0 — wasm build-profile assertion (no boot needed, catches dev-profile ship)
+    node external/holtburger/apps/holtburger-web/harness/lib/wasm_profile.mjs \
+         external/holtburger/apps/holtburger-web/pkg/holtburger_web_bg.wasm
+    # -> {"profile":"release","reason":"no name/.debug_* custom section",...}
+  PASS: profile `release`. FAIL (`FAIL-dev-wasm`): the module carries a `name`
+  or `.debug_*` custom section — wasm-pack `--dev` (or `--profiling`) keeps
+  them, `--release` strips them (check [profile] in Cargo.toml, cross-ref A15).
+  Read from the module's own custom sections since 2026-10-13
+  (test-tooling-8): the old size band (`< 6,000,000 B`, from the 2026-07-09
+  ground truth 4,246,409 B) failed every RELEASE build once the crate grew past
+  it (7,182,909 B on 2026-10-12, no `name`/`.debug_*` sections), so a real dev
+  ship had become indistinguishable. Size is only the fallback when node
+  cannot answer: `> 12 MB` = dev (release ~7.2 MB, dev ~16.6 MB today).
+  Also WARNs when the wasm predates the last Rust commit (stale pkg/).
 
 ## S1 — boot-to-in-world under nullRender (< 90s)
     node -e '
@@ -62,8 +72,32 @@ All checks JSON-emitting; a land FAILS the smoke if any check fails.
   Parks the Town Network backlog, keeps marks, unparks + re-attaches on
   return, 0 non-benign errors (W4 §3.1 default-ON gate).
 
+## S7 — wire integrity, zero undecodable / unknown (same second boot as S4/S5)
+    window.__diag.wire.integrity()   // sync; wasm wire_integrity_json(), null on a stale pkg/
+    # -> {"messages":N,"totals":{"undecodable":0,"unknown":0,"shortRead":k,"overrun":0},
+    #     "undecodable":{},"unknown":{},"shortRead":{"0x0000F745":{"n":..,"bytes":..,"lastLen":..}},"overrun":{}}
+  The recv loop classifies every inbound message after `GameMessage::unpack`
+  (src/wire_integrity.rs, test-tooling-3 2026-10-13), log-only — dispatch is
+  unchanged. Cumulative since load (login + spawn + 60s idle). Keys are the
+  top-level opcode, or `0xF7B0_0000 | event type` for a GameEvent.
+  PASS: `totals.undecodable == 0` (no message dropped by unpack, no Qualities
+  raw wrap whose codegen read failed) AND `totals.unknown == 0` (no opcode /
+  GameEvent type missing from `GameOpcode` / `GameEventOpcode`; ACE's senders
+  are fully enumerated per s2c-coverage-2026-07-10.md). The deliberate
+  `GameMessage::Unknown` wraps (AccountBanned, the 20 Wave-6.A Qualities
+  opcodes) are NOT unknown — the classifier keys off the opcode tables, not
+  the variant.
+  REPORTED, not gated (yet): `shortRead` (bytes a parser left unread — often
+  a trailing alignment pad) and `overrun` (cursor past the end), per opcode.
+  `unlistedShort` counts short-read keys missing from the script's
+  `SHORT_READ_ALLOW` map; add a key there deliberately, with the reason it is
+  benign, before turning short reads into a gate.
+  SKIP: stale pkg/ (no `wire_integrity_json` export) or a boot stall.
+  Zero-GPU protocol bots (`?nullRender=1`) get the same check for free:
+  `__diag.wire.integrity().totals`.
+
 ## Cadence & ownership
-Run S0 on every commit (1s). Run S1–S6 (`--full`, chained boots, ~8 min) on
+Run S0 on every commit (1s). Run S1–S7 (`--full`, chained boots, ~8 min) on
 every land that touches apps/holtburger-web or crates/holtburger-*. Emit one
 line:
-    CI-SMOKE: wasm=PASS boot=PASS(42s) errors=0 white=0 keepalive=PASS datDecode=PASS canaries=PASS warmpark=PASS
+    CI-SMOKE: wasm=PASS boot=PASS(42s) errors=0 white=0 keepalive=PASS datDecode=PASS canaries=PASS wire=PASS warmpark=PASS

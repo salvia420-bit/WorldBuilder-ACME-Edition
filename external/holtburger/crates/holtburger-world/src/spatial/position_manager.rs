@@ -259,7 +259,8 @@ impl InterpolationManager {
                 true
             } else {
                 // ≤ deadband: stop; heading snap is the caller's
-                // (`:389131-389137`).
+                // (`:389131-389137`; the remote lattice does it under
+                // `?remoteRestHeading`, scene.rs).
                 self.stop_interpolating();
                 false
             }
@@ -869,6 +870,46 @@ impl ConstraintManager {
         self.constraint_pos_offset += offset.length();
         offset
     }
+
+    /// motion-remote-3 (2026-10-13): the factor [`Self::adjust_offset`]
+    /// would apply to this frame's offset, WITHOUT accumulating it — `1.0`
+    /// disarmed / off contact / at or under `start` (or a degenerate band),
+    /// `(max - off)/(max - start)` inside the band, `0.0` at or past `max`
+    /// (`acclient.c:389478-389505`). The remote root-motion planners hold
+    /// `&self` on the scene; they scale the walk with this and the per-body
+    /// step then [`Self::accumulate`]s what was applied.
+    pub fn preview_scale(&self, on_contact: bool) -> f32 {
+        if !self.constrained || !on_contact {
+            return 1.0;
+        }
+        if self.constraint_pos_offset < self.constraint_max {
+            if self.constraint_pos_offset > self.constraint_start {
+                let span = self.constraint_max - self.constraint_start;
+                if span > EPSILON {
+                    return (self.constraint_max - self.constraint_pos_offset) / span;
+                }
+            }
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// motion-remote-3: the accumulate half of [`Self::adjust_offset`]
+    /// (`constraint_pos_offset += |offset|`, `acclient.c:389506-389510`) for
+    /// an offset the caller already scaled with [`Self::preview_scale`].
+    /// No-op while disarmed (retail's `is_constrained` gate, `:389485`).
+    pub fn accumulate(&mut self, applied: Vector3) {
+        if self.constrained {
+            self.constraint_pos_offset += applied.length();
+        }
+    }
+
+    /// `(start, max)` the last `ConstrainTo` armed (`(0.0, 0.0)` disarmed)
+    /// — motion-remote-3 diag/test surface (the indoor/outdoor choice).
+    pub fn distances(&self) -> (f32, f32) {
+        (self.constraint_start, self.constraint_max)
+    }
 }
 
 /// The retail per-body `PositionManager` (`acclient.h:30952-30956`,
@@ -897,6 +938,13 @@ pub struct PositionManager {
     /// heading-slerp behavior, byte-identical. Runtime flag
     /// `?retailLeash` (scene install sites set this).
     retail_leash: bool,
+    /// motion-remote-3 (2026-10-13, `?remoteLeash`): the REMOTE leash
+    /// outlives interp completion as retail's does (`ConstrainTo` stays
+    /// armed until the next `ConstrainTo` / `UnConstrain`, `:389417`), so
+    /// the root motion after a correction is still leashed — WITHOUT
+    /// `retail_leash`'s one-frame heading snap. Set by the remote lattice's
+    /// re-arm; `false` (default) = the shipped auto-release.
+    hold_leash: bool,
 }
 
 impl Default for PositionManager {
@@ -907,6 +955,7 @@ impl Default for PositionManager {
             constraint: ConstraintManager::default(),
             sticky: StickyManager::default(),
             retail_leash: false,
+            hold_leash: false,
         }
     }
 }
@@ -920,6 +969,16 @@ impl PositionManager {
 
     pub fn retail_leash(&self) -> bool {
         self.retail_leash
+    }
+
+    /// motion-remote-3: keep the leash armed across interp completion
+    /// (see the `hold_leash` field doc).
+    pub fn set_hold_leash(&mut self, on: bool) {
+        self.hold_leash = on;
+    }
+
+    pub fn hold_leash(&self) -> bool {
+        self.hold_leash
     }
 
     pub fn is_interpolating(&self) -> bool {
@@ -1050,12 +1109,14 @@ impl PositionManager {
             return (InterpStep::Completed { pose: pos }, commands);
         }
         if !self.retail_leash
+            && !self.hold_leash
             && matches!(step, InterpStep::Completed { .. })
             && !self.interpolation.is_interpolating()
         {
             // Retail keeps the leash armed until `UnConstrain` /
             // re-`ConstrainTo` (`:389417`); the auto-release stays the
-            // flag-off behavior pending the retail_leash rollout.
+            // flag-off behavior pending the retail_leash rollout
+            // (`hold_leash`: the remote lattice's motion-remote-3 hold).
             self.constraint.unconstrain();
         }
         (step, commands)

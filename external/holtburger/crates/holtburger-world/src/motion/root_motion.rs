@@ -55,13 +55,34 @@ pub const FALLBACK_TURN_RIGHT_OMEGA_Z: f32 = -1.5;
 /// y = forward, z = up) and the angular velocity about +z.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RootMotion {
+    /// The travel velocity — × the object's scale once [`Self::scaled`].
     pub velocity: Vector3,
     pub omega_z: f32,
+    /// `velocity` before the object's scale: the motion's own speed. Retail's
+    /// leave-ground velocity comes from `get_state_velocity`, which has no
+    /// scale (`CMotionInterp::get_leave_ground_velocity`, acclient.c:343806).
+    pub unscaled_velocity: Vector3,
 }
 
 impl RootMotion {
     pub fn is_still(&self) -> bool {
         self.velocity.x == 0.0 && self.velocity.y == 0.0 && self.velocity.z == 0.0 && self.omega_z == 0.0
+    }
+
+    /// motion-remote-1 (2026-10-13): this motion for an object of `scale`.
+    /// `CPhysicsObj::UpdatePositionInternal` multiplies the part array's
+    /// offset ORIGIN by `m_scale` on walkable ground (acclient.c:320014-320020;
+    /// ACE `PhysicsObj.UpdatePositionInternal` `offsetFrame.Origin *= Scale`),
+    /// so a scale-2 creature runs twice as far per cycle; the omega is not
+    /// scaled. 1.0 and a non-finite or non-positive scale leave it as is.
+    pub fn scaled(self, scale: f32) -> RootMotion {
+        if scale == 1.0 || !scale.is_finite() || scale <= 0.0 {
+            return self;
+        }
+        RootMotion {
+            velocity: self.unscaled_velocity * scale,
+            ..self
+        }
     }
 }
 
@@ -157,7 +178,11 @@ pub fn root_motion(state: &InterpretedState, table: Option<MotionTableRef<'_>>) 
         0.0
     };
 
-    RootMotion { velocity, omega_z }
+    RootMotion {
+        velocity,
+        omega_z,
+        unscaled_velocity: velocity,
+    }
 }
 
 /// Test fixture shared with the scene spine tests: the player table as the
@@ -271,6 +296,28 @@ mod tests {
         let side = root_motion(&state(None, 1.0, Some(-1.248), None), table);
         assert!((side.velocity.x + 1.25 * 1.248).abs() < 1e-4, "{side:?}");
         assert_eq!(side.velocity.y, 0.0);
+    }
+
+    /// motion-remote-1: the object's scale multiplies the travel velocity
+    /// only (acclient.c:320014-320020); the turn rate and the unscaled
+    /// velocity are untouched, and 1.0 or a bad scale is the identity.
+    #[test]
+    fn scaled_multiplies_the_origin_only() {
+        let kinematics = player_kinematics();
+        let table = Some(MotionTableRef { kinematics: &kinematics, motion_table_id: TABLE });
+        let m = root_motion(
+            &state(Some(InterpretedForwardCommand::RunForward), 1.0, Some(0.5), Some(1.0)),
+            table,
+        );
+        assert_eq!(m.unscaled_velocity, m.velocity);
+        let big = m.scaled(2.0);
+        assert!((big.velocity.y - 8.0).abs() < 1e-5, "{big:?}");
+        assert!((big.velocity.x - 2.0 * m.velocity.x).abs() < 1e-6, "{big:?}");
+        assert_eq!(big.omega_z, m.omega_z, "omega is not scaled");
+        assert_eq!(big.unscaled_velocity, m.velocity);
+        for identity in [1.0f32, 0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(m.scaled(identity), m, "scale {identity}");
+        }
     }
 
     #[test]

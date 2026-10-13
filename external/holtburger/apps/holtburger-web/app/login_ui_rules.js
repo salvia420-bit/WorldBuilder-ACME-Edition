@@ -19,7 +19,8 @@
 //   which asks for DELETE to be typed.
 //
 // `?retailCharErrors=off` / `?retailCharList=off` restore the old texts /
-// list rendering.
+// list rendering. `?retailCharErrors=off` also keeps the raw enum label for
+// a 0xF643 character-creation rejection (chargenErrorInfo below).
 
 function params(search) {
   try { return new URLSearchParams(search ?? globalThis.location?.search ?? ""); }
@@ -74,6 +75,76 @@ export function characterErrorInfo(code) {
   const row = CHARACTER_ERRORS[code >>> 0];
   if (!row) return { mode: IGNORE, text: "" };
   return { mode: row[0], text: row[1] };
+}
+
+// maps-chargen-barber-2 (2026-10-13): gmCharGenMainUI::
+//   RecvNotice_CharGenVerificationResponse (acclient.c:278557) shows each
+//   non-Ok 0xF643 CharGenVerificationResponse as one of four
+//   ID_Character_Err_* strings: 3 NameInUse → NameReserved, 4 NameBanned →
+//   NameBanned, 7 AdminPrivilegeDenied → NameAdminDenied, anything else
+//   (Pending, Corrupt, DatabaseDown, unknown) → NameDBDown. The string is
+//   looked up by compute_str_hash in table enum 0x10000002 (StringTable
+//   0x23000002) and shown in MakeErrorMessageDialog; the player stays in
+//   character creation. The English texts are that table's
+//   client_local_English.dat values. Same `?retailCharErrors=off` escape.
+
+/** StringTable holding the ID_Character_Err_* texts (table enum 0x10000002). */
+export const CHARGEN_ERROR_STRING_TABLE = 0x23000002;
+
+/**
+ * Retail compute_str_hash (acclient.c:78974): h = c + 16·h over the signed
+ * chars, folding the top nibble back in; a result of −1 becomes −2. Equals
+ * holtburger-dat utils::spellbase_string_hash (NOT utils::string_hash,
+ * which is a rotate-xor). Characters are taken as their low byte (the
+ * tokens are ASCII).
+ */
+export function computeStrHash(str) {
+  const s = String(str ?? "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    let c = s.charCodeAt(i) & 0xFF;
+    if (c >= 0x80) c -= 0x100; // signed char
+    h = (c + h * 16) >>> 0;
+    if (h & 0xF0000000) h = ((h ^ ((h & 0xF0000000) >>> 24)) & 0x0FFFFFFF) >>> 0;
+  }
+  return h === 0xFFFFFFFF ? 0xFFFFFFFE : h;
+}
+
+const CHARGEN_ERROR_TEXTS = Object.freeze({
+  ID_Character_Err_NameReserved: "The name you have selected is already in use.",
+  ID_Character_Err_NameBanned: "Sorry, but that name is not permitted. Please choose another.",
+  ID_Character_Err_NameAdminDenied: "Sorry, but you do not have the privileges to make an administrator character.",
+  ID_Character_Err_NameDBDown: "The server cannot create your new character at this time. Please try again later.",
+});
+
+/** The retail string token for a 0xF643 code; null for Ok (1). */
+export function chargenErrorToken(code) {
+  switch (code >>> 0) {
+    case 1: return null;
+    case 3: return "ID_Character_Err_NameReserved";
+    case 4: return "ID_Character_Err_NameBanned";
+    case 7: return "ID_Character_Err_NameAdminDenied";
+    default: return "ID_Character_Err_NameDBDown";
+  }
+}
+
+/**
+ * Retail rejection for a 0xF643 code: `{ token, stringId, text, nameError }`,
+ * or null for Ok. `lookup(tableId, stringId)` (ui/ac_strings.js acString)
+ * gives the DAT text once StringTable 0x23000002 is loaded; until then the
+ * English value is used. `nameError` marks the three name codes, whose fix
+ * is on the name page.
+ */
+export function chargenErrorInfo(code, lookup) {
+  const token = chargenErrorToken(code);
+  if (!token) return null;
+  const stringId = computeStrHash(token);
+  let text = null;
+  if (typeof lookup === "function") {
+    try { text = lookup(CHARGEN_ERROR_STRING_TABLE, stringId); } catch (_) { text = null; }
+  }
+  if (typeof text !== "string" || !text) text = CHARGEN_ERROR_TEXTS[token];
+  return { token, stringId, text, nameError: token !== "ID_Character_Err_NameDBDown" };
 }
 
 /** `deleteTime` / secondsGreyedOut ≠ 0 → the row is greyed (pending deletion). */

@@ -126,6 +126,11 @@ function snapshotFromWasm(state) {
       ...(typeof i.supply === "number" ? { supply: i.supply } : {}),
       ...(typeof i.maxStackSize === "number" ? { maxStackSize: i.maxStackSize } : {}),
       ...(typeof i.packSlot === "boolean" ? { packSlot: i.packSlot } : {}),
+      // hud-ui-3: the rest of the retail icon composite (PublicWeenieDesc
+      // _effects / _iconOverlayID / _iconUnderlayID). Absent on a stale pkg/.
+      ...(typeof i.uiEffects === "number" ? { uiEffects: i.uiEffects } : {}),
+      ...(typeof i.iconOverlay === "number" ? { iconOverlay: i.iconOverlay } : {}),
+      ...(typeof i.iconUnderlay === "number" ? { iconUnderlay: i.iconUnderlay } : {}),
     })),
     // Wave F.4 (2026-05-27) typed-profile fields, filled by
     // enrichWithProfile(). Defaults = retail "no restriction" sentinels.
@@ -244,6 +249,10 @@ let state = {
   sellQueue: [],             // same shape, inventory items
   sellSplits: [],            // split-before-sell in flight (commerce_logic.planSellSplit().pending + at)
   rangeCheckTimer: null,     // HUD rec #18 — 2Hz approach-distance watchdog
+  // inventory-session-4: retail ClientUISystem attemptOpenVendorID /
+  // attemptSaleObjectID — a 3D sell drop that had to Use the vendor first.
+  attemptOpenVendorID: 0,
+  attemptSaleObjectID: 0,
 };
 
 function toast(text, kind = "ok") {
@@ -537,6 +546,39 @@ function failSellSplit(guid) {
   return true;
 }
 
+/** The vendor whose window is open, 0 when none (retail ClientUISystem::vendorID). */
+function currentVendor() {
+  return state.win?.isOpen?.() ? ((state.vendorState?.vendorGuid >>> 0) || 0) : 0;
+}
+
+/**
+ * inventory-session-4 — retail ClientUISystem::AttemptSellToVendor
+ * (acclient.c:401304), reached from a whole stack dropped on a vendor in the
+ * 3D view (plugins/item_drag.js "sell3d"). An item the player owns is added
+ * to the sell list when that vendor's window is open; otherwise the vendor
+ * is Used and the item remembered, and openWith (Handle_VendorInfo) opens
+ * that vendor on the Selling tab with it added. Returns {sent, staged}.
+ */
+function attemptSellToVendor(vendorGuid, itemGuid) {
+  const v = vendorGuid >>> 0;
+  const g = itemGuid >>> 0;
+  if (!v || !g) return { sent: false, staged: false };
+  if (!inventoryRows().some((r) => (r.guid >>> 0) === g)) return { sent: false, staged: false };
+  if (currentVendor() === v) {
+    stageSell(g);
+    return { sent: true, staged: true };
+  }
+  const h = window.__sessionHandle;
+  if (typeof h?.useObject !== "function") return { sent: false, staged: false };
+  try { h.useObject(v); } catch (e) {
+    console.warn("[vendor-ui] useObject failed", e);
+    return { sent: false, staged: false };
+  }
+  state.attemptOpenVendorID = v;
+  state.attemptSaleObjectID = g;
+  return { sent: true, staged: false };
+}
+
 function stageSellRows(stage) {
   state.currentTab = "selling";
   for (const item of stage) {
@@ -772,6 +814,22 @@ function renderItemsPane(cur) {
   r.btn.add.disabled = !sel;
 }
 
+// hud-ui-3: the inputs of the retail icon composite for a stock line
+// (UIElement_UIItem::UIItem_SetIcon → IconData::RenderIcons). Vendor stock is
+// not in the entity store (ACE sends its PublicWeenieDesc inside
+// ApproachVendor, not as CreateObject), so everything comes from the stock
+// entry. A stale pkg/ has no uiEffects / overlay / underlay → 0: the item-type
+// background and the black outline.
+function stockIconMeta(it) {
+  return {
+    iconId: (it?.iconId >>> 0) || 0,
+    itemType: (it?.itemType >>> 0) || 0,
+    uiEffects: (it?.uiEffects >>> 0) || 0,
+    iconOverlay: (it?.iconOverlay >>> 0) || 0,
+    iconUnderlay: (it?.iconUnderlay >>> 0) || 0,
+  };
+}
+
 function buildStockCell(it, cur) {
   const vs = state.vendorState;
   const price = vendorLineCost(it, vs, 1);
@@ -779,7 +837,7 @@ function buildStockCell(it, cur) {
   cell.dataset.itemGuid = String(it.itemGuid);
   if (price > cur.balance) cell.classList.add("is-unaffordable");
   const slot = el("div", "hbk-slot", cell);
-  fillSlotIcon(slot, it.iconId, it.name);
+  fillSlotIcon(slot, stockIconMeta(it), it.name);
   const badge = stockBadge(it);
   if (badge > 1) {
     const st = el("span", "hbk-stack", slot);
@@ -870,7 +928,11 @@ function renderQueuePane(which, cur) {
     for (const q of queue) {
       const row = el("div", "hbk-row hvb-row", listEl);
       const slot = el("div", "hbk-slot", row);
-      fillSlotIcon(slot, q.iconId, q.name);
+      // Buying: the stock line's composite; selling: our own item, which
+      // the entity store resolves by guid (commerce_window.slotIconMeta).
+      fillSlotIcon(slot, buying
+        ? stockIconMeta(stockItemFor(q) || q)
+        : { guid: q.itemGuid, iconId: q.iconId, itemType: q.itemType }, q.name);
       const nm = el("div", "hbk-grow", row);
       setAcText(nm, q.name || "Unnamed item", { color: KIT_COLOR.text, fit: true });
       nm.title = q.name || "";
@@ -1221,6 +1283,14 @@ export function mount(ctx) {
     const prevVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
     state.vendorState = enrichWithProfile(snapshotFromWasm(rawState), profilePayload);
     const nextVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
+    // inventory-session-4 — retail ClientUISystem::Handle_VendorInfo
+    // (acclient.c:402990): the vendor a 3D sell drop Used opens in sell mode
+    // (SHOP_MODE_SELL) and gets the dropped item; any vendor info clears
+    // the attempt.
+    const sellAttempt = nextVendorGuid !== 0 && state.attemptOpenVendorID === nextVendorGuid;
+    const saleGuid = sellAttempt ? (state.attemptSaleObjectID >>> 0) : 0;
+    state.attemptOpenVendorID = 0;
+    state.attemptSaleObjectID = 0;
     // ACE re-sends kind=12 after every buy: preserve the queues for the
     // SAME vendor, drop them when switching vendors — otherwise vendor A's
     // item guids would be sent against vendor B's guid and ACE rejects
@@ -1263,9 +1333,12 @@ export function mount(ctx) {
       state.gridKey = "";
       if (state.refs?.qtyInput) state.refs.qtyInput.value = "1";
     }
+    if (sellAttempt) state.currentTab = "selling";
     showOverlay();
     if (!wasOpen || nextVendorGuid !== prevVendorGuid) startVendorRangeWatchdog();
     render();
+    // CM_Vendor::SendNotice_AddItemToSell — only while it is still carried.
+    if (saleGuid && inventoryRows().some((r) => (r.guid >>> 0) === saleGuid)) stageSell(saleGuid);
   }
 
   // The REAL kind=12 entry point for the e2e verifier and
@@ -1343,5 +1416,11 @@ if (typeof window !== "undefined") {
     switchTab: (id) => { state.currentTab = id; render(); },
     refs: () => state.refs,
     stageSell: (guid, opts) => stageSell(guid, opts),
+  };
+  // inventory-session-4: the 3D sell drop (plugins/item_drag.js "sell3d").
+  window.__vendorUi = {
+    currentVendor,
+    stageSell: (guid, opts) => stageSell(guid, opts),
+    attemptSellToVendor,
   };
 }

@@ -69,6 +69,7 @@ import {
   TERRAIN_SHARED_TAIL_GLSL,
   glslFingerprint,
 } from "./terrain_shared_glsl.js";
+import { radialFogTerrainGlsl } from "./radial_fog.js";
 import {
   farTerrainEnabled,
   farRingEnabled,
@@ -533,6 +534,17 @@ void main() {
 #endif
 }
 `;
+
+// ?radialFog=on (scene3d/radial_fog.js, OPT-IN 2026-10-13) — the same range-fog
+// varying the near monolith gets (terrain.js TERRAIN_LIVE_GLSL), so the near/far
+// seam fogs by one metric. vViewDepth stays plane depth for paint light.
+// Session-constant. Without the flag these are the exported strings unchanged.
+const FAR_LIVE_GLSL = radialFogTerrainGlsl(FAR_VERTEX_GLSL, FAR_FRAGMENT_GLSL);
+
+/** Test seam: the far-patch GLSL pair the material compiles this session. */
+export function _farGlslForTest() {
+  return { vertex: FAR_LIVE_GLSL.vertex, fragment: FAR_LIVE_GLSL.fragment };
+}
 
 // ===========================================================================
 // Geometry
@@ -1012,6 +1024,8 @@ function ensureFarMaterial(scene3d) {
       fogFar: { value: 2400 },
       fogDensity: { value: 0.00025 },
     },
+    // TEMPLATE constants here so test_shader_logdepth.mjs's L4 scan resolves
+    // them; the ?radialFog live pair is swapped in right after.
     vertexShader: FAR_VERTEX_GLSL,
     fragmentShader: FAR_FRAGMENT_GLSL,
     glslVersion: THREE.GLSL3,
@@ -1025,6 +1039,10 @@ function ensureFarMaterial(scene3d) {
     // The handoff overlap is biased in the shader instead (uFarDepthBias).
     fog: terrainFogEnabled(),
   });
+  // ?radialFog=on — compile the range-fog pair (FAR_LIVE_GLSL; fog lines only,
+  // the log-depth write survives). Flag off: the same string objects.
+  if (FAR_LIVE_GLSL.vertex !== FAR_VERTEX_GLSL) mat.vertexShader = FAR_LIVE_GLSL.vertex;
+  if (FAR_LIVE_GLSL.fragment !== FAR_FRAGMENT_GLSL) mat.fragmentShader = FAR_LIVE_GLSL.fragment;
   mat.name = "far-terrain";
   st.material = mat;
   return mat;

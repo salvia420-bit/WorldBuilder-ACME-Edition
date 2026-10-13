@@ -5,10 +5,27 @@
 //! split); see `session::commands::handle_command` for the routing.
 
 use crate::*;
+use crate::inventory_request::{InventoryRequest, drop_request, put_in_container_request};
 use crate::session::{LoopCtx, LoopFlow};
 
+/// messages-objects-1 (2026-10-13): whether `guid` sits in the 3-D world —
+/// retail `PositionState` IN_3D_VIEW (acclient.h:6802; no container, no
+/// wielder), which picks the request `UIAttemptPutInContainer` /
+/// `UIAttemptPutIn3D` record. `None` for an object the world does not know
+/// (nothing is recorded for it).
+fn subject_in_3d(
+    world: &std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>>,
+    guid: u32,
+) -> Option<bool> {
+    use holtburger_common::properties::WorldObjectExt as _;
+    let world = world.borrow();
+    let entity = world.as_ref()?.entities.get(holtburger_common::Guid(guid))?;
+    let held = |g: Option<holtburger_common::Guid>| g.is_some_and(|g| g.0 != 0);
+    Some(!held(entity.container_id()) && !held(entity.wielder_id()))
+}
+
 pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
-    let LoopCtx { session, queued_events, world, movement, .. } = &mut *ctx;
+    let LoopCtx { session, queued_events, world, movement, inventory_requests, .. } = &mut *ctx;
     match cmd {
         SessionCommand::UseObject { guid } => {
             // Phase 4 step 5 (interactive entities): wrap
@@ -163,6 +180,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "give_object: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptGive` → IR_GIVE.
+            inventory_requests.record(item_guid, InventoryRequest::Give);
             console_log_str(&format!(
                 "[give] target=0x{target_guid:08X} item=0x{item_guid:08X} amount={amount}",
             ));
@@ -203,6 +222,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "buy_from_vendor: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `gmVendorUI::BuySingleItem`
+            // records IR_SHOP_EVENT on the VENDOR (acclient.c:244839).
+            inventory_requests.record(vendor_guid, InventoryRequest::ShopEvent);
             console_log_str(&format!(
                 "[buy] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
             ));
@@ -238,6 +260,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "sell_to_vendor: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: a sale records IR_SHOP_EVENT on the vendor
+            // too (gmVendorUI::SellSingleItem, acclient.c:244914).
+            inventory_requests.record(vendor_guid, InventoryRequest::ShopEvent);
             console_log_str(&format!(
                 "[sell] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
             ));
@@ -605,6 +630,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "wield_from_pack: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptWield` → IR_WIELD (the
+            // auto-unequips above record nothing).
+            inventory_requests.record(item_guid, InventoryRequest::Wield);
             console_log_str(&format!(
                 "[paperdoll/wield] item=0x{item_guid:08X} slot=0x{equip_mask:08X}",
             ));
@@ -631,6 +659,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "drop_item: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptPutIn3D` → IR_MOVE for an
+            // object already in the 3-D world, else IR_DROP.
+            if let Some(in_3d) = subject_in_3d(world, item_guid) {
+                inventory_requests.record(item_guid, drop_request(in_3d));
+            }
             console_log_str(&format!(
                 "[paperdoll/drop] item=0x{item_guid:08X}",
             ));
@@ -659,6 +692,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "move_item: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptPutInContainer` →
+            // IR_PICK_UP out of the 3-D world, else IR_PUT_IN_CONTAINER.
+            if let Some(in_3d) = subject_in_3d(world, item_guid) {
+                inventory_requests.record(item_guid, put_in_container_request(in_3d));
+            }
             console_log_str(&format!(
                 "[inventory/move] item=0x{item_guid:08X} container=0x{container_guid:08X} slot={placement}",
             ));
@@ -704,6 +742,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "unwield_to_pack: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: the paperdoll → pack drag is retail
+            // `UIAttemptPutInContainer` on a WIELDED object (IR_PUT_IN_CONTAINER).
+            if let Some(in_3d) = subject_in_3d(world, item_guid) {
+                inventory_requests.record(item_guid, put_in_container_request(in_3d));
+            }
             console_log_str(&format!(
                 "[inventory/unwield] item=0x{item_guid:08X} player=0x{player_guid_raw:08X}",
             ));
@@ -733,6 +776,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "split_stack_to_wield: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptWield`'s split branch
+            // records no request (acclient.c:438132).
             console_log_str(&format!(
                 "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{equip_mask:08X} amount={amount}",
             ));
@@ -763,6 +808,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "split_stack_to_container: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptSplitToContainer` → IR_SPLIT.
+            inventory_requests.record(stack_guid, InventoryRequest::Split);
             console_log_str(&format!(
                 "[inventory/split-container] stack=0x{stack_guid:08X} container=0x{container_guid:08X} slot={placement} amount={amount}",
             ));
@@ -789,6 +836,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "split_stack_to_3d: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptSplitTo3D` → IR_SPLIT.
+            inventory_requests.record(stack_guid, InventoryRequest::Split);
             console_log_str(&format!(
                 "[inventory/split-3d] stack=0x{stack_guid:08X} amount={amount}",
             ));
@@ -817,6 +866,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "merge_stacks: {e}",
                 LoopFlow::Exit
             );
+            // messages-objects-1: retail `UIAttemptMerge` → IR_MERGE on the
+            // source stack.
+            inventory_requests.record(src_guid, InventoryRequest::Merge);
             console_log_str(&format!(
                 "[inventory/merge] src=0x{src_guid:08X} dst=0x{dst_guid:08X} amount={amount}",
             ));

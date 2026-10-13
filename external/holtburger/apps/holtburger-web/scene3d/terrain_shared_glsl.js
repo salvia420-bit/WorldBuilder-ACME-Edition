@@ -109,10 +109,16 @@ vec3 terrainApplyLight(vec3 albedo, float ndotl, float cloudShadow, float csmSha
 // `scene.fog` has never affected the ground. This closes it.
 //
 // three's chunk is PLANE-based (`-mvPosition.z`); retail set
-// D3DRS_RANGEFOGENABLE (radial). We deliberately match THREE, not retail, so
-// terrain and statics cannot disagree with each other at a shared silhouette
-// edge. Radial can be offered later behind its own flag if the corner-of-screen
-// difference is ever visible.
+// D3DRS_RANGEFOGENABLE (radial). By default the callers pass the matching plane
+// depth (vViewDepth), so terrain and statics cannot disagree with each other at
+// a shared silhouette edge. The difference IS visible under the horizon band:
+// facing a diagonal of the square streaming ring, the drawn edge at the frame
+// side is only ~14 % fogged by plane depth. `?radialFog=on` (OPT-IN,
+// scene3d/radial_fog.js) switches BOTH sides together: three's fog_vertex chunk
+// becomes `length( mvPosition.xyz )`, and the two callers pass a new
+// `vFogDist = length(mvPos.xyz)` varying. The `viewDepth` parameter below is
+// then the range. Its name and this tail's bytes are unchanged on purpose
+// (fingerprint, byte-identical default).
 //
 // The arithmetic below is character-for-character three's <fog_fragment>, hand-
 // written because the terrain shader is GLSL3 with a custom `out` (fragColor)

@@ -35,8 +35,9 @@
 //
 // USAGE
 //   node harness/run-js-headless.mjs [--only=substr,substr] [--tier=1|4|all]
-//                                    [--quiet] [--list] [--strict-missing]
-//                                    [--timeout=MS] [--bail] [--allow-skips]
+//                                    [--quiet] [--list] [--coverage]
+//                                    [--strict-missing] [--timeout=MS]
+//                                    [--bail] [--allow-skips]
 //
 //   --only=...        Run only files whose path OR flag contains any listed
 //                     substring (comma-separated, case-insensitive).
@@ -45,6 +46,10 @@
 //                     and MISSING always print their captured output).
 //   --list            Print the resolved test plan (tier/flag/file/exists) and
 //                     exit 0 without running anything.
+//   --coverage        Print only the coverage guard (QUARANTINED /
+//                     NEEDS-TOOLCHAIN / NEEDS-BROWSER / UNREGISTERED) and exit
+//                     1 iff a suite is UNREGISTERED. Runs nothing, takes no
+//                     heavy lock.
 //   --strict-missing  Treat a MISSING file as a FAIL (default: MISSING is
 //                     tolerated and does not affect the exit code).
 //   --timeout=MS      Per-test wall-clock timeout (default 120000). On timeout
@@ -63,17 +68,29 @@
 //
 // EXIT CODE: 0 unless at least one test FAILED, or a test SKIPPED (unless
 // --allow-skips), or -- under --strict-missing -- a file was MISSING.
-// MISSING alone (default) and an empty plan exit 0.
+// MISSING alone (default) and an empty plan exit 0. 2 = the heavy-job lock /
+// free-memory gate refused to start (see below).
+//
+// ONE HEAVY JOB PER MACHINE (2026-10-13): a run that executes anything first
+// takes harness/lib/heavy_lock.mjs — a machine-wide lock (waits for the
+// holder, naming it every 15 s) plus MemAvailable >= HB_MIN_FREE_MB (2560).
+// The 2026-10-05 freeze was four of these runs at once. Children inherit
+// HB_HEAVY_LOCK_HELD, so nothing they start waits on this run. Each child
+// also gets --max-old-space-size=HB_TEST_HEAP_MB (1536; 0 = uncapped).
+// Bypass: CI=true or HB_HEAVY_LOCK=0. `node <one test file>` takes no lock.
 // ============================================================================
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireHeavyLockSync, childHeapArgs } from "./lib/heavy_lock.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // harness/ → apps/holtburger-web/ (the app root; child cwd + path base).
 const APP_ROOT = path.resolve(HERE, "..");
+// Per-child V8 heap cap (HB_TEST_HEAP_MB): a runaway suite dies alone.
+const CHILD_HEAP_ARGS = childHeapArgs();
 
 // ---------------------------------------------------------------------------
 // EMBEDDED TEST PLAN (authoritative). Paths are relative to APP_ROOT.
@@ -884,6 +901,139 @@ const TIER5 = [
   // INT-3 page entry: the /rs /vt /ra /mt /ub chat branch (never reaches ACE) and the HUD VT button / provider.
   { tier: 5, flag: "rynthVtSlash", file: "tests/rynth_vt_slash.test.mjs" },
   { tier: 5, flag: "rynthVtHudIntegration", file: "tests/rynth_vt_hud_integration.test.mjs" },
+  // 2026-10-13 — WebAC comparison suites (docs/webac-comparison-2026-10-13/FINDINGS.md).
+  { tier: 5, flag: "movementKeysByCode", file: "tests/movement_key_of.test.mjs" },
+  { tier: 5, flag: "cameraFollowDragRelease", file: "tests/camera_follow_drag_release.test.mjs" },
+  { tier: 5, flag: "netPumpBeat", file: "tests/net_pump_beat.test.mjs" },
+  { tier: 5, flag: "audioUrgentFetch", file: "tests/audio_urgent_fetch.test.mjs" },
+  { tier: 5, flag: "wavePrefetch", file: "tests/audio_wave_prefetch.test.mjs" },
+  { tier: 5, flag: "audio_retail_ui_sounds", file: "tests/audio_retail_ui_sounds.test.mjs" },
+  { tier: 5, flag: "audioRetailPan_setpan", file: "tests/audio_retail_setpan.test.mjs" },
+  { tier: 5, flag: "audio_mp3_wave_bytes", file: "tests/audio_mp3_wave_bytes.test.mjs" },
+  { tier: 5, flag: "audio_sound_prefs", file: "tests/audio_sound_prefs.test.mjs" },
+  { tier: 5, flag: "options_sound_prefs", file: "tests/options_sound_prefs.test.mjs" },
+  { tier: 4, flag: "combatFxBus", file: "tests/combat_fx_bus_detail.test.mjs" },
+  { tier: 5, flag: "rigCellGate", file: "tests/entity_cell_cull.test.mjs" },
+  { tier: 5, flag: "indoorLandscapeGate", file: "tests/indoor_landscape_gate.test.mjs" },
+  { tier: 5, flag: "portalFovFade", file: "tests/portal_fov_fade.test.mjs" },
+  { tier: 5, flag: "portalDrone", file: "tests/portal_drone.test.mjs" },
+  { tier: 5, flag: "retailSilentFailures", file: "tests/retail_silent_failures.test.mjs" },
+  { tier: 5, flag: "retailFailureText", file: "tests/weenie_error_messages_delegate.test.mjs" },
+  { tier: 5, flag: "rangedSpeechGate", file: "tests/ranged_speech_gate.test.mjs" },
+  { tier: 5, flag: "buffExpiryLine", file: "tests/buff_expiry_line.test.mjs" },
+  { tier: 5, flag: "inventoryActionFailed(pairedLine)", file: "tests/rejection_feedback_paired_line.test.mjs" },
+  { tier: 5, flag: "spewBox", file: "tests/chat_log_errors_filter.test.mjs" },
+  { tier: 5, flag: "spewBox", file: "tests/rejection_toast_stack.test.mjs" },
+  { tier: 5, flag: "popupDialog", file: "tests/popup_string_dialog.test.mjs" },
+  { tier: 5, flag: "modalDialogOkOnly", file: "tests/modal_dialog_ok_only.test.mjs" },
+  { tier: 5, flag: "retailStatusCmds", file: "tests/slash_age_birth.test.mjs" },
+  { tier: 5, flag: "attack_repeat_state", file: "tests/attack_repeat_state.test.mjs" },
+  { tier: 5, flag: "combatHitChatLines", file: "tests/combat_hit_chat_lines.test.mjs" },
+  { tier: 5, flag: "escapeAction", file: "tests/escape_action.test.mjs" },
+  { tier: 5, flag: "combatModePark", file: "tests/combat_mode_pending.test.mjs" },
+  { tier: 5, flag: "surfaceAnim", file: "tests/surface_anim_flag.test.mjs" },
+  { tier: 5, flag: "examineWieldRequirements", file: "tests/examine_wield_requirements.test.mjs" },
+  { tier: 5, flag: "buffs_hud_stat_labels", file: "tests/buffs_hud_stat_labels.test.cjs" },
+  { tier: 5, flag: "examine_text_rows", file: "tests/examine_text_rows.test.mjs" },
+  { tier: 5, flag: "examineSpellBook", file: "tests/examine_spell_book.test.mjs" },
+  { tier: 5, flag: "appraisal_text", file: "tests/appraisal_text.test.mjs" },
+  { tier: 5, flag: "appraisal_special_properties", file: "tests/appraisal_special_properties.test.mjs" },
+  { tier: 5, flag: "examineCharacterMisc", file: "tests/examine_character_misc.test.mjs" },
+  { tier: 5, flag: "characterInfoReport", file: "tests/character_info_report.test.mjs" },
+  { tier: 5, flag: "characterInfoInfoTab", file: "tests/character_info_info_tab.test.mjs" },
+  { tier: 5, flag: "house_panel_text", file: "tests/house_panel_text.test.mjs" },
+  { tier: 5, flag: "house_panel_dom", file: "tests/house_panel_dom.test.mjs" },
+  { tier: 5, flag: "icon_blit_ops", file: "tests/icon_blit_ops.test.mjs" },
+  { tier: 5, flag: "commerce_slot_icon", file: "tests/commerce_slot_icon.test.mjs" },
+  { tier: 5, flag: "houseQueryAtLogin", file: "tests/house_query_login.test.mjs" },
+  { tier: 5, flag: "trade_add_plan", file: "tests/trade_add_plan.test.mjs" },
+  { tier: 5, flag: "selectionBracketsDisplayOption", file: "tests/selection_brackets_display_option.test.mjs" },
+  { tier: 5, flag: "portal_storm_notices", file: "tests/portal_storm_notices.test.mjs" },
+  { tier: 5, flag: "spellbarEndowment", file: "tests/spellbar_endowment.test.mjs" },
+  { tier: 5, flag: "spellbarEndowmentStrip", file: "tests/spellbar_endowment_strip.test.mjs" },
+  { tier: 5, flag: "hudKeyActivation", file: "tests/hud_key_activation.test.mjs" },
+  { tier: 5, flag: "hudFocusHotbar", file: "tests/hud_focus_hotbar.test.mjs" },
+  { tier: 5, flag: "spellbarServerSync", file: "tests/spellbar_server_sync.test.mjs" },
+  { tier: 5, flag: "retailQuickslotMods", file: "tests/hotbar_ctrl_alias.test.mjs" },
+  { tier: 5, flag: "uiLockGlobal", file: "tests/ui_lock_global.test.mjs" },
+  { tier: 5, flag: "uiLockOptions", file: "tests/ui_lock_options.test.mjs" },
+  { tier: 5, flag: "emote_keys", file: "tests/emote_keys.test.mjs" },
+  { tier: 5, flag: "keysPageLiveRows", file: "tests/keys_page_live_rows.test.mjs" },
+  { tier: 5, flag: "selectionKeys", file: "tests/selection_keys.test.mjs" },
+  { tier: 5, flag: "nativeContextMenu", file: "tests/context_menu_suppress.test.mjs" },
+  { tier: 5, flag: "retailWieldLegal", file: "tests/retail_autowield_legal.test.mjs" },
+  { tier: 5, flag: "hotbarPerChar", file: "tests/hotbar_per_character.test.mjs" },
+  { tier: 5, flag: "place_in_3d_retail", file: "tests/place_in_3d_retail.test.mjs" },
+  { tier: 5, flag: "vendorSell3dDrop", file: "tests/vendor_sell_3d_drop.test.mjs" },
+  { tier: 5, flag: "hudLogoffButton", file: "tests/status_indicators_logoff.test.mjs" },
+  { tier: 5, flag: "accountBoot", file: "tests/account_boot.test.mjs" },
+  { tier: 5, flag: "corpseCommand", file: "tests/corpse_command.test.mjs" },
+  { tier: 5, flag: "fadeAlphaParity", file: "tests/fade_alpha_state.test.mjs" },
+  { tier: 5, flag: "lumCloneAdopt", file: "tests/luminous_night_clone.test.mjs" },
+  { tier: 5, flag: "additiveObjFog", file: "tests/additive_obj_fog.test.mjs" },
+  { tier: 5, flag: "luminousHook", file: "tests/luminous_hook.test.mjs" },
+  { tier: 5, flag: "selectionFlash", file: "tests/selection_lighting.test.mjs" },
+  { tier: 5, flag: "envDetailTex", file: "tests/env_detail_patch.test.mjs" },
+  { tier: 5, flag: "barber_panel", file: "tests/barber_panel.test.mjs" },
+  { tier: 5, flag: "retailCharErrorsWebAC", file: "tests/chargen_errors.test.mjs" },
+  { tier: 5, flag: "character_creation_colors", file: "tests/character_creation_colors.test.mjs" },
+  { tier: 5, flag: "character_creation_attr_balance", file: "tests/character_creation_attr_balance.test.mjs" },
+  { tier: 5, flag: "map_house_marker", file: "tests/map_house_marker.test.mjs" },
+  { tier: 5, flag: "inventoryActionFailed(attemptFailedLine)", file: "tests/rejection_feedback_attempt_failed.test.mjs" },
+  { tier: 5, flag: "house_slumlord_range", file: "tests/house_slumlord_range.test.mjs" },
+  { tier: 5, flag: "camFadeHier", file: "tests/cam_fade_hierarchical.test.mjs" },
+  { tier: 5, flag: "retailFov", file: "tests/retail_fov.test.mjs" },
+  { tier: 5, flag: "paperdoll_held_flag", file: "tests/paperdoll_held_flag.test.mjs" },
+  { tier: 5, flag: "remoteRootScale", file: "tests/remote_root_scale.test.mjs" },
+  { tier: 5, flag: "remoteLeash", file: "tests/remote_leash.test.mjs" },
+  { tier: 5, flag: "netWorkerDisconnect", file: "tests/net_worker_disconnect_kind.test.mjs" },
+  { tier: 5, flag: "linkStatusPacketLoss", file: "tests/link_status_packet_loss.test.mjs" },
+  { tier: 4, flag: "defaultScriptAtSpawn", file: "tests/default_script_no_spawn_play.test.mjs" },
+  { tier: 5, flag: "defaultScriptPartChild", file: "tests/default_script_part_child.test.mjs" },
+  { tier: 5, flag: "particleCellGate", file: "tests/particle_cell_gate.test.mjs" },
+  { tier: 5, flag: "particleSlotCarrier", file: "tests/particle_slot_carrier.test.mjs" },
+  { tier: 5, flag: "particleInitFrameAce", file: "tests/particle_init_frame.test.mjs" },
+  { flag: "missileObjSweep", file: "tests/projectile_object_sweep.test.mjs" },
+  { tier: 5, flag: "projectileScenerySweep", file: "tests/projectile_scenery_sweep.test.mjs" },
+  { tier: 5, flag: "projectileTerrainCrossing", file: "tests/projectile_terrain_crossing.test.mjs" },
+  { tier: 5, flag: "missileImpactScript", file: "tests/projectile_collision_script.test.mjs" },
+  { tier: 5, flag: "programRetain", file: "tests/program_retention.test.mjs" },
+  { tier: 5, flag: "dynLodChainGate", file: "tests/dyn_lod_tick.test.mjs" },
+  { tier: 5, flag: "statics_retail_degrade", file: "tests/statics_retail_degrade.test.mjs" },
+  { tier: 5, flag: "deg_mul_retail", file: "tests/deg_mul_retail.test.mjs" },
+  { tier: 5, flag: "lodCollapseDup", file: "tests/lod_collapse_dup.test.mjs" },
+  { tier: 5, flag: "rynthVtFormatsMetLf", file: "tests/rynth_vt_formats_met_lf.test.mjs" },
+  { tier: 5, flag: "rynthVtFormatsComma", file: "tests/rynth_vt_formats_comma.test.mjs" },
+  { tier: 5, flag: "rynthVtFormatsAfXf", file: "tests/rynth_vt_formats_af_xf.test.mjs" },
+  { tier: 5, flag: "rynthVtFormatsUsd", file: "tests/rynth_vt_formats_usd.test.mjs" },
+  { tier: 5, flag: "rynthVtPresetLabel", file: "tests/rynth_vt_preset_label.test.mjs" },
+  { tier: 5, flag: "rynthBuffTierLock", file: "tests/rynth_buff_tier_lock.test.mjs" },
+  { tier: 5, flag: "rynthLootCorpseDenial", file: "tests/rynth_loot_corpse_denial.test.mjs" },
+  { tier: 5, flag: "rynthVitalsProgress", file: "tests/rynth_vitals_progress.test.mjs" },
+  { tier: 5, flag: "rynthSkillCap", file: "tests/rynth_skill_cap.test.mjs" },
+  { tier: 5, flag: "rynthPortalHazards", file: "tests/rynth_portal_hazards.test.mjs" },
+  { tier: 5, flag: "rynthSelclockDetail", file: "tests/rynth_selclock_detail.test.mjs" },
+  { tier: 5, flag: "stormScan", file: "tests/daygroup_weather_scan.test.mjs" },
+  { tier: 5, flag: "environOverride", file: "tests/environ_override.test.mjs" },
+  { tier: 5, flag: "radialFog", file: "tests/radial_fog.test.mjs" },
+  { tier: 5, flag: "lightTickReset", file: "tests/retail_light_tick.test.mjs" },
+  { tier: 5, flag: "skyObjectFree", file: "tests/sky_object_free.test.mjs" },
+  { tier: 5, flag: "aceObjMaint", file: "tests/ace_obj_maint.test.mjs" },
+  { tier: 5, flag: "shardBudgetSoftCap", file: "tests/shard_budget_soft_cap.test.mjs" },
+  { tier: 5, flag: "provenAbsentExempt", file: "tests/proven_absent_miss.test.mjs" },
+  { tier: 5, flag: "service_worker_cas_verify", file: "tests/service_worker_cas_verify.test.mjs" },
+  { tier: 5, flag: "shardFetchWorker_reload", file: "tests/shard_fetch_worker_reload.test.mjs" },
+  { tier: 5, flag: "gateBrowserSmokes", file: "harness/test_gate_browser_smokes.mjs" },
+  { tier: 5, flag: "heavy_lock", file: "harness/test_heavy_lock.mjs" },
+  { tier: 5, flag: "wireIntegrity", file: "tests/diag_wire_integrity.test.mjs" },
+  { tier: 5, flag: "linkProbeLedger", file: "tests/link_probe_ledger.test.mjs" },
+  { tier: 5, flag: "lintEventConsumers", file: "tests/lint_event_consumers.test.mjs" },
+  { tier: 5, flag: "harness_suite_hygiene", file: "harness/test_suite_hygiene.mjs" },
+  { tier: 5, flag: "harness_perf_ratchet", file: "harness/test_perf_ratchet.mjs" },
+  { tier: 5, flag: "sceneryBakeFlag", file: "tests/scenery_bake_flag.test.mjs" },
+  { tier: 5, flag: "combatModePendingProxy", file: "tests/combat_mode_pending_proxy.test.mjs" },
+  { tier: 5, flag: "rynthVtSkillCapWiring", file: "tests/rynth_vt_skill_cap_wiring.test.mjs" },
+  { tier: 5, flag: "rynthIndoorDoorways", file: "tests/rynth_indoor_doorways.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
@@ -910,9 +1060,33 @@ const NEEDS_TOOLCHAIN = [
 ];
 const QUARANTINED = new Set([...QUARANTINE, ...NEEDS_TOOLCHAIN].map((q) => q.file));
 
+// Not JS-headless suites either (test-tooling-1, 2026-10-13): GPU/shader
+// smokes that serve the app on a loopback port and drive ONE headless
+// Chromium tab (playwright-core + /usr/bin/chromium, SwiftShader WebGL2). A
+// shader or GL regression in these paths is caught by nothing else, but a
+// browser is out of scope here (and in CI's js job). Each is a HEAVY job under
+// ~/CLAUDE.md: orchestrator only, `capped-build node <file>`, one at a time.
+// Listed so the COVERAGE GUARD sees them — a new `test_*.cjs` smoke at the app
+// root, or a new harness/glsl_smoke/*_smoke.mjs, that is not listed here is
+// UNREGISTERED. Deliberately NOT in QUARANTINE: `--run-quarantined` must never
+// launch a browser.
+const BROWSER_WHY = "headless Chromium (SwiftShader); capped-build, one tab";
+const NEEDS_BROWSER = [
+  { file: "test_far_bake_shared_textures_gpu.cjs", why: `far-bake shared textures — ${BROWSER_WHY}` },
+  { file: "test_fx_decal_gpu.cjs", why: `fxDecals / fxDecalSmooth — ${BROWSER_WHY}` },
+  { file: "test_lifestone_fx_gpu.cjs", why: `lifestoneFx — ${BROWSER_WHY}` },
+  { file: "test_moon_fx_gpu.cjs", why: `moonFx — ${BROWSER_WHY}` },
+  { file: "test_particle_fx_gpu.cjs", why: `particleFx — ${BROWSER_WHY}` },
+  { file: "test_particle_fx_tier1_gpu.cjs", why: `particle FX tier 1 — ${BROWSER_WHY}` },
+  { file: "test_particle_fx_tier2_gpu.cjs", why: `particle FX tier 2 — ${BROWSER_WHY}` },
+  { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
+];
+const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
+
 // COVERAGE GUARD — every `test_*.mjs` in the tree must be in a tier or in
-// QUARANTINE. Unlisted files are reported so the registration list can never
-// silently rot again.
+// QUARANTINE (or listed in NEEDS_TOOLCHAIN / NEEDS_BROWSER). Unlisted files are
+// reported so the registration list can never silently rot again.
 function unregisteredSuites() {
   const seen = new Set([...TIER1, ...TIER4, ...TIER5].map((p) => p.file));
   const out = [];
@@ -928,6 +1102,11 @@ function unregisteredSuites() {
     // was registered and the guard never looked, so 25 ran nowhere.
     { dir: "harness", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
     { dir: "tests", match: (n) => /\.(test\.)?(mjs|cjs)$/.test(n) && (n.startsWith("test_") || n.includes(".test.")) },
+    // 2026-10-13 (test-tooling-1): the browser smokes — root `test_*.cjs` and
+    // harness/glsl_smoke/ — were outside every pattern, so 9 shader smokes ran
+    // nowhere and nothing said so. They belong in NEEDS_BROWSER, never a tier.
+    { dir: "", match: (n) => n.startsWith("test_") && n.endsWith(".cjs") },
+    { dir: "harness/glsl_smoke", match: (n) => n.endsWith("_smoke.mjs") },
   ];
   for (const { dir, match } of SCAN) {
     let names = [];
@@ -935,13 +1114,30 @@ function unregisteredSuites() {
     for (const n of names) {
       if (!match(n)) continue;
       const rel = dir ? `${dir}/${n}` : n;
-      if (!seen.has(rel) && !QUARANTINED.has(rel)) out.push(rel);
+      if (!seen.has(rel) && !QUARANTINED.has(rel) && !BROWSER_ONLY.has(rel)) out.push(rel);
     }
   }
   return out.sort();
 }
 
 const PLAN = [...TIER1, ...TIER4, ...TIER5];
+
+// Listed suites this runner never executes, and why (printed every full run
+// and by --coverage).
+function printNotRunHere() {
+  for (const q of NEEDS_TOOLCHAIN) {
+    console.log(`  NEEDS-TOOLCHAIN (not run here): ${q.file} — ${q.why}`);
+  }
+  for (const q of NEEDS_BROWSER) {
+    console.log(`  NEEDS-BROWSER (not run here): ${q.file} — ${q.why}`);
+  }
+}
+
+function printUnregistered(unregistered) {
+  for (const f of unregistered) {
+    console.log(`  UNREGISTERED: ${f} — in no tier and not quarantined; nothing runs it`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // args
@@ -959,11 +1155,13 @@ function parseArgs(argv) {
     bail: false,
     runQuarantined: false,
     strictFixtures: false,
+    coverage: false,
     help: false,
   };
   for (const a of argv) {
     if (a === "--quiet") opts.quiet = true;
     else if (a === "--list") opts.list = true;
+    else if (a === "--coverage") opts.coverage = true;
     else if (a === "--strict-missing") opts.strictMissing = true;
     else if (a === "--allow-skips") opts.allowSkips = true;
     else if (a === "--bail") opts.bail = true;
@@ -1082,7 +1280,7 @@ function runOne(entry, opts) {
   if (need && !existsSync(path.resolve(APP_ROOT, need))) {
     return { ...entry, status: STATUS.NOFIXTURE, code: null, detail: `fixture absent: ${need}`, output: "" };
   }
-  const run = spawnSync(process.execPath, [entry.file], {
+  const run = spawnSync(process.execPath, [...CHILD_HEAP_ARGS, entry.file], {
     cwd: APP_ROOT,
     encoding: "utf8",
     timeout: opts.timeoutMs,
@@ -1119,9 +1317,24 @@ function main() {
   if (opts.help) {
     console.log(
       "usage: node harness/run-js-headless.mjs [--only=substr,...] [--tier=1|4|all] " +
-        "[--quiet] [--list] [--strict-missing] [--timeout=MS] [--bail]"
+        "[--quiet] [--list] [--coverage] [--strict-missing] [--timeout=MS] [--bail]"
     );
     process.exit(0);
+  }
+
+  // --coverage: the COVERAGE GUARD alone. A readdir of the tree — runs no
+  // suite, takes no heavy lock — so it is safe beside anything. Exits 1 iff
+  // a suite is UNREGISTERED, as a full run would; ignores --only / --tier.
+  if (opts.coverage) {
+    console.log(`[run-js-headless] --coverage: ${PLAN.length} registered, ` +
+      `${QUARANTINE.length} quarantined, ${NEEDS_TOOLCHAIN.length} needs-toolchain, ` +
+      `${NEEDS_BROWSER.length} needs-browser`);
+    for (const q of QUARANTINE) console.log(`  QUARANTINED: ${q.file} — ${q.why}`);
+    printNotRunHere();
+    const unregistered = unregisteredSuites();
+    printUnregistered(unregistered);
+    console.log(`[run-js-headless] --coverage: ${unregistered.length} unregistered`);
+    process.exit(unregistered.length > 0 ? 1 : 0);
   }
 
   const plan = selectPlan(opts);
@@ -1155,6 +1368,18 @@ function main() {
   if (plan.length === 0) {
     console.log("\n[run-js-headless] no tests selected — nothing to do (exit 0).");
     process.exit(0);
+  }
+
+  // One heavy job per machine (~/CLAUDE.md, 2026-10-05). Released on exit; a
+  // run killed by a signal leaves a dead-pid lock the next run reclaims.
+  try {
+    const lock = acquireHeavyLockSync({ label: `run-js-headless ${process.argv.slice(2).join(" ")}`.trim() });
+    console.log(`  heavy-lock: ${lock.bypassed ? `bypassed (${lock.bypassed})` : lock.dir}` +
+      `  child heap: ${CHILD_HEAP_ARGS.join(" ") || "uncapped (HB_TEST_HEAP_MB=0)"}`);
+  } catch (e) {
+    if (!String(e && e.code).startsWith("HB_HEAVY_LOCK")) throw e;
+    console.error(`\n${e.message}`);
+    process.exit(2);
   }
 
   const results = [];
@@ -1245,17 +1470,13 @@ function main() {
     }
     console.log(`  QUARANTINED: ${q.file}${tag} — ${q.why}`);
   }
-  for (const q of NEEDS_TOOLCHAIN) {
-    console.log(`  NEEDS-TOOLCHAIN (not run here): ${q.file} — ${q.why}`);
-  }
+  printNotRunHere();
 
   // Coverage guard. A suite in neither a tier nor QUARANTINE is invisible —
   // the failure mode that left 169 of 212 suites unrun until 2026-08-03.
   // Only meaningful on a full run; a filtered plan says nothing about coverage.
   const unregistered = (opts.only || opts.tier !== "all") ? [] : unregisteredSuites();
-  for (const f of unregistered) {
-    console.log(`  UNREGISTERED: ${f} — in no tier and not quarantined; nothing runs it`);
-  }
+  printUnregistered(unregistered);
 
   const missingCountsAsFail = opts.strictMissing ? missing.length : 0;
   const skipCountsAsFail = opts.allowSkips ? 0 : skipped.length;

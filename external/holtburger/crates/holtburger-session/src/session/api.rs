@@ -1,6 +1,6 @@
 use super::types::{MockTransport, Session, Transport};
 use anyhow::Result;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[cfg(not(target_arch = "wasm32"))]
 use socket2::SockRef;
@@ -59,8 +59,10 @@ impl Session {
             fragment_reassembler: HashMap::new(),
             pending_server_packets: BTreeMap::new(),
             pending_control_packets: Vec::new(),
+            connect_response_resend: None,
             last_request_retransmit_time: None,
             highest_server_seq_seen: None,
+            lost_server_seqs: BTreeSet::new(),
             retransmit_requests_since_progress: 0,
             cached_packets: BTreeMap::new(),
             capture: None,
@@ -69,6 +71,7 @@ impl Session {
             bytes_out: 0,
             last_recv_time: web_time::Instant::now(),
             last_send_time: web_time::Instant::now(),
+            link_status: crate::link_status::LinkStatusAverages::new(),
         }
     }
 

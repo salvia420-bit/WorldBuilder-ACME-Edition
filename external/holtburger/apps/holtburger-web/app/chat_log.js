@@ -8,10 +8,17 @@
 // model the HUD chat window (plugins/chat-panel.js) renders from: the retail
 // per-text-type colour table, the filter groups behind the four left-edge
 // buttons, the talk-focus (outgoing channel) table, sender-name parsing for
-// click-to-tell, and the pin-to-bottom test. No DOM, no imports — covered by
-// test_chat_panel_layout.mjs.
+// click-to-tell, and the pin-to-bottom test. No DOM, and its one import
+// (ui/spew_box.js) is pure too — covered by test_chat_panel_layout.mjs.
+//
+// chat-errors-6 (2026-10-13): appendChatLine sends retail text type 0x1A
+// (TRANSIENT) lines to the spew box instead of the log — see ui/spew_box.js.
 
-// ── CHAT_CATEGORY_* (src/lib.rs `const CHAT_CATEGORY_*`) ─────────────────
+import {
+  isSpewLine, spewBoxEnabled, chatErrorsEnabled, applyChatErrorsParam,
+} from "../ui/spew_box.js";
+
+// ── CHAT_CATEGORY_*(src/lib.rs `const CHAT_CATEGORY_*`) ─────────────────
 // The wasm tags every kind=2 line with one of these in ClientEvent
 // u32Payload2; appendChatLine stamps it on the <li> as `data-cat`.
 export const CHAT_CATEGORY = Object.freeze({
@@ -292,6 +299,8 @@ export function computeMaximizedRect({ top, height }, viewportHeight) {
 export function initChatLog(D) {
   const { chatLog, chatTabs } = D;
   const CHAT_LOG_LIMIT = 400;
+  // chat-errors-6: `?chatErrors=1` / `=0` sets the per-viewer "Errors" option.
+  applyChatErrorsParam();
   // Phase 4 step 4: append a chat line keyed by the wasm-bundle's
   // CHAT_CATEGORY_* id (`category` is `evt.u32Payload2`). The id
   // becomes a `cat-N` CSS class which paints the line in its
@@ -301,6 +310,19 @@ export function initChatLog(D) {
   // (or any non-number) which routes to the `.echo` neutral
   // class and is always visible regardless of active tab.
   function appendChatLine(text, category) {
+    // chat-errors-6 (2026-10-13): a text type 0x1A line goes to the spew box
+    // (gmSpewBoxUI::RecvNotice_DisplayFinalStringInfo, acclient.c:261680), and
+    // the log shows it only with the "Errors" chat option on (ChatInterface's
+    // constructor clears that filter bit, :288232). The box is drawn by
+    // plugins/rejection_feedback.js (`window.__hbSpewBox`); without it the
+    // line stays in the log. `?spewBox=off` restores the log copy.
+    if (typeof category === "number" && isSpewLine(text, category) && spewBoxEnabled()) {
+      const spew = window.__hbSpewBox;
+      if (spew && typeof spew.push === "function") {
+        try { spew.push(String(text)); } catch (_) { /* the log copy still follows the option */ }
+        if (!chatErrorsEnabled()) return;
+      }
+    }
     // Drop the empty-state placeholder on first real message.
     const empty = chatLog.querySelector("li.empty");
     if (empty) empty.remove();

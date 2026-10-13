@@ -31,8 +31,16 @@
 //!   -> fragment walk        (FragmentHeader)
 //!   -> Reassembler          (reimplemented here — see note)
 //!   -> GameMessage::unpack  (holtburger_protocol)
+//!   -> decode outcome       (Summary wire-integrity tallies, s2c only)
 //!   -> JSONL record
 //! ```
+//!
+//! The decode-outcome step (test-tooling-4) is what makes a capture usable
+//! as a protocol replay corpus, not just a movement oracle: every
+//! server->client message is classified the way the wasm recv loop's
+//! wire-integrity counters classify it live (decoded OK, short read,
+//! overrun, undecodable, unknown), so a decode regression in any message a
+//! capture contains shows up in [`Summary`] instead of being skipped.
 //!
 //! NOTE on the reassembler: `holtburger-session` has one, but it is
 //! `pub(crate)` and bound to a live `Session` that owns a `Transport`, so it
@@ -42,7 +50,7 @@
 //! fragments idempotent — a capture sees every retransmission, so that guard
 //! is load-bearing here in a way it rarely is live.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::net::Ipv4Addr;
@@ -51,10 +59,12 @@ use std::path::Path;
 use holtburger_common::math::Quaternion;
 use holtburger_protocol::messages::game_action::GameAction;
 use holtburger_protocol::messages::game_message::GameMessage;
+use holtburger_protocol::messages::game_message::qualities_raw_wrap_decodes;
 use holtburger_protocol::messages::movement::messages::motion::MovementTypeData;
 use holtburger_protocol::messages::transport::{
     self, FragmentHeader, PacketHeader, packet_flags,
 };
+use holtburger_protocol::opcodes::{GameEventOpcode, GameOpcode};
 use holtburger_protocol::traits::ProtocolUnpack;
 use holtburger_session::optional_header::OptionalHeaderCursor;
 use serde_json::{Value, json};
@@ -440,17 +450,139 @@ fn decode_play_script_id(bytes: &[u8]) -> Option<Value> {
     }))
 }
 
+// ---------------------------------------------------------------------------
+// message -> decode outcome (wire integrity)
+// ---------------------------------------------------------------------------
+
+/// Top-level opcode of the ordered-GameEvent envelope.
+const GAME_EVENT_OPCODE: u32 = 0xF7B0;
+
+/// Integrity key of a message too short to carry an opcode (< 4 bytes).
+pub const RUNT_KEY: u32 = 0xFFFF_FFFF;
+
+/// How `GameMessage::unpack` fared on one reassembled message.
+///
+/// test-tooling-4: the offline twin of the wasm recv loop's classifier
+/// (`apps/holtburger-web/src/wire_integrity.rs`, test-tooling-3) — same
+/// outcomes, same [`integrity_key`] — so a capture replayed here and a live
+/// session's `__diag.wire.integrity()` count the same things. Keep the two in
+/// step (the wasm crate's copy is `pub(crate)` and unreachable from here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageOutcome {
+    /// Decoded, and the cursor ended exactly at the message end.
+    Ok,
+    /// Decoded, but this many trailing bytes were never read (the parser
+    /// stopped early, or an alignment pad it does not consume).
+    ShortRead(usize),
+    /// Decoded, but the cursor ended this many bytes PAST the message end.
+    Overrun(usize),
+    /// `unpack` returned `None` (the live recv loop drops the message), or a
+    /// Qualities raw wrap whose codegen read failed.
+    Undecodable,
+    /// Top-level opcode not in `GameOpcode`.
+    UnknownOpcode,
+    /// 0xF7B0 GameEvent whose event type is not in `GameEventOpcode`.
+    UnknownEvent,
+}
+
+fn read_u32_at(bytes: &[u8], at: usize) -> Option<u32> {
+    let b = bytes.get(at..at.checked_add(4)?)?;
+    Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// The integrity tally key: the top-level opcode, or for a 0xF7B0 GameEvent
+/// `0xF7B0_0000 | event_type` (the event type sits at bytes 12..16, after the
+/// target guid and the sequence; masked to 16 bits — every `GameEventOpcode`
+/// is < 0x10000). A GameEvent too short to carry its event type keys as plain
+/// 0xF7B0; a message shorter than an opcode keys as [`RUNT_KEY`].
+pub fn integrity_key(bytes: &[u8]) -> u32 {
+    let Some(op) = read_u32_at(bytes, 0) else {
+        return RUNT_KEY;
+    };
+    if op != GAME_EVENT_OPCODE {
+        return op;
+    }
+    match read_u32_at(bytes, 12) {
+        Some(event_type) => 0xF7B0_0000 | (event_type & 0xFFFF),
+        None => op,
+    }
+}
+
+/// [`integrity_key`] spelled as the [`Summary`] maps (and the live
+/// `wire_integrity_json`) key it: `0x` + 8 upper-case hex digits.
+pub fn integrity_key_label(key: u32) -> String {
+    format!("0x{key:08X}")
+}
+
+/// Classify one message. `parsed` / `offset` are exactly what
+/// `GameMessage::unpack(bytes, &mut offset)` (starting at 0) produced.
+///
+/// "Unknown" is decided from the raw opcode (`from_repr` = `None`), NOT from
+/// the `Unknown` variant: `unpack` also builds `GameMessage::Unknown` on
+/// purpose for AccountBanned and the 20 Wave-6.A Qualities opcodes. A
+/// validated Qualities wrap is a decode; its `!consumed` raw-grab fallback is
+/// a decode failure disguised as `Unknown` (`qualities_raw_wrap_decodes`).
+/// 0xF754 PlayScriptId (retail-only, absent from `GameOpcode`) is therefore
+/// unknown here even though [`message_json`] decodes it by hand for
+/// telemetry — the client's own decoder does not.
+pub fn classify_message(
+    bytes: &[u8],
+    parsed: Option<&GameMessage>,
+    offset: usize,
+) -> MessageOutcome {
+    let Some(message) = parsed else {
+        return MessageOutcome::Undecodable;
+    };
+    // `unpack` needs 4 bytes for the opcode before it can return `Some`.
+    let Some(op) = read_u32_at(bytes, 0) else {
+        return MessageOutcome::Undecodable;
+    };
+    if GameOpcode::from_repr(op).is_none() {
+        return MessageOutcome::UnknownOpcode;
+    }
+    if op == GAME_EVENT_OPCODE
+        && let Some(event_type) = read_u32_at(bytes, 12)
+        && GameEventOpcode::from_repr(event_type).is_none()
+    {
+        return MessageOutcome::UnknownEvent;
+    }
+    // A KNOWN opcode wrapped as `Unknown` on purpose: AccountBanned (tail
+    // grabbed raw by design) is a decode; a Qualities wrap is one only when
+    // its codegen reader accepts the payload.
+    if matches!(message, GameMessage::Unknown(..)) && qualities_raw_wrap_decodes(bytes) == Some(false)
+    {
+        return MessageOutcome::Undecodable;
+    }
+    match offset.cmp(&bytes.len()) {
+        std::cmp::Ordering::Equal => MessageOutcome::Ok,
+        std::cmp::Ordering::Less => MessageOutcome::ShortRead(bytes.len() - offset),
+        std::cmp::Ordering::Greater => MessageOutcome::Overrun(offset - bytes.len()),
+    }
+}
+
+/// Decode one reassembled message once: the telemetry record body (exactly
+/// what [`message_json`] returns) plus its [`MessageOutcome`].
+pub fn decode_message(payload: &[u8], keep_all: bool) -> (Option<Value>, MessageOutcome) {
+    let mut off = 0usize;
+    let msg = GameMessage::unpack(payload, &mut off);
+    let outcome = classify_message(payload, msg.as_ref(), off);
+    (message_body(payload, &msg, keep_all), outcome)
+}
+
 /// Turn a reassembled message into a telemetry record body, or `None` if the
 /// opcode is not movement/cast relevant.
 pub fn message_json(payload: &[u8], keep_all: bool) -> Option<Value> {
+    decode_message(payload, keep_all).0
+}
+
+/// [`message_json`] over an already-unpacked message.
+fn message_body(payload: &[u8], msg: &Option<GameMessage>, keep_all: bool) -> Option<Value> {
     if payload.len() < 4 {
         return None;
     }
     let opcode = u32::from_le_bytes(payload[0..4].try_into().ok()?);
-    let mut off = 0usize;
-    let msg = GameMessage::unpack(payload, &mut off);
 
-    let mut body = match &msg {
+    let mut body = match msg {
         Some(GameMessage::UpdatePosition(d)) => json!({
             "kind": "UpdatePosition",
             "guid": format!("{:#010X}", d.guid.0),
@@ -622,6 +754,41 @@ pub struct Summary {
     pub duplicate_fragments: u64,
     pub dropped_groups: u64,
     pub opcode_histogram: std::collections::BTreeMap<String, u64>,
+    // test-tooling-4 wire integrity: per-[`integrity_key`] message counts
+    // (keys from [`integrity_key_label`], the live `wire_integrity_json`
+    // spelling, so one short-read allowlist serves a replay and ci-smoke S7).
+    // SERVER->CLIENT messages only — the decoder under test; the live
+    // counters likewise see only inbound traffic. A capture that decodes
+    // cleanly has `undecodable`, `unknown` and `overrun` empty.
+    /// Decoded, cursor exactly at the message end.
+    pub decoded_ok: BTreeMap<String, u64>,
+    /// Decoded, trailing bytes left unread (see `short_read_bytes`).
+    pub short_read: BTreeMap<String, u64>,
+    /// Total unread trailing bytes across `short_read`.
+    pub short_read_bytes: u64,
+    /// Decoded, cursor past the message end.
+    pub overrun: BTreeMap<String, u64>,
+    /// `unpack` failed — the live recv loop drops these messages.
+    pub undecodable: BTreeMap<String, u64>,
+    /// Opcode / GameEvent type the protocol crate does not enumerate.
+    pub unknown: BTreeMap<String, u64>,
+}
+
+impl Summary {
+    /// Tally one server->client message's decode outcome.
+    fn record_integrity(&mut self, key: u32, outcome: MessageOutcome) {
+        let bucket = match outcome {
+            MessageOutcome::Ok => &mut self.decoded_ok,
+            MessageOutcome::ShortRead(n) => {
+                self.short_read_bytes += n as u64;
+                &mut self.short_read
+            }
+            MessageOutcome::Overrun(_) => &mut self.overrun,
+            MessageOutcome::Undecodable => &mut self.undecodable,
+            MessageOutcome::UnknownOpcode | MessageOutcome::UnknownEvent => &mut self.unknown,
+        };
+        *bucket.entry(integrity_key_label(key)).or_default() += 1;
+    }
 }
 
 /// Decode a pcap into JSONL lines.  Returns the lines plus a summary; the
@@ -680,7 +847,11 @@ pub fn decode_pcap(path: &Path, opts: &Options) -> anyhow::Result<(Vec<String>, 
                     .entry(format!("{op:#06X}"))
                     .or_default() += 1;
             }
-            let Some(mut body) = message_json(payload, opts.keep_all) else {
+            let (body, outcome) = decode_message(payload, opts.keep_all);
+            if is_s2c {
+                summary.record_integrity(integrity_key(payload), outcome);
+            }
+            let Some(mut body) = body else {
                 continue;
             };
             body["t"] = json!(t);
@@ -927,5 +1098,163 @@ mod tests {
         std::fs::write(&path, &buf).unwrap();
         let err = PcapReader::open(&path).unwrap_err().to_string();
         assert!(err.contains("classic pcap"), "helpful error, got: {err}");
+    }
+
+    // --- test-tooling-4: wire-integrity tallies -----------------------------
+
+    /// 0xF7B0 GameEvent / 0x01C0 UpdateHealth: opcode, target guid, sequence,
+    /// event type, then the event (object guid + f32 health) — 24 bytes.
+    fn update_health_msg() -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&0xF7B0u32.to_le_bytes());
+        b.extend_from_slice(&0x5000_0001u32.to_le_bytes());
+        b.extend_from_slice(&7u32.to_le_bytes());
+        b.extend_from_slice(&0x01C0u32.to_le_bytes());
+        b.extend_from_slice(&0x8000_0123u32.to_le_bytes());
+        b.extend_from_slice(&0.5f32.to_le_bytes());
+        b
+    }
+
+    /// 0x02E1 Qualities_PrivateUpdateSkillAC (protocol.xml): byte Sequence,
+    /// SkillId (i32), SkillAdvancementClass (u32).
+    fn update_skill_ac_msg(skill: i32, sac: u32) -> Vec<u8> {
+        let mut b = 0x02E1u32.to_le_bytes().to_vec();
+        b.push(5);
+        b.extend_from_slice(&skill.to_le_bytes());
+        b.extend_from_slice(&sac.to_le_bytes());
+        b
+    }
+
+    fn decode_synthetic(link_type: u32, dgrams: &[(u16, u16, Vec<u8>)]) -> (Vec<String>, Summary) {
+        let bytes = synth_pcap(link_type, dgrams);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.pcap");
+        std::fs::write(&path, &bytes).unwrap();
+        decode_pcap(&path, &Options::default()).unwrap()
+    }
+
+    fn tally(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
+        pairs.iter().map(|(k, n)| (k.to_string(), *n)).collect()
+    }
+
+    #[test]
+    fn integrity_counts_ok_undecodable_and_unknown() {
+        // One valid UpdatePosition, the same truncated by 2 bytes (the final
+        // sequence block no longer fits -> unpack None), and an opcode the
+        // protocol crate does not enumerate.
+        let valid = update_position_msg();
+        let mut truncated = update_position_msg();
+        truncated.truncate(truncated.len() - 2);
+        let mut unknown = 0xDEAD_BEEFu32.to_le_bytes().to_vec();
+        unknown.extend_from_slice(&[1, 2, 3, 4]);
+        let pkt = wrap_packet(1, &[valid, truncated, unknown]);
+        let (lines, summary) = decode_synthetic(DLT_EN10MB, &[(9000, 40000, pkt)]);
+
+        assert_eq!(summary.messages, 3);
+        assert_eq!(summary.decoded_ok, tally(&[("0x0000F748", 1)]));
+        assert_eq!(summary.undecodable, tally(&[("0x0000F748", 1)]));
+        assert_eq!(summary.unknown, tally(&[("0xDEADBEEF", 1)]));
+        assert!(summary.short_read.is_empty());
+        assert!(summary.overrun.is_empty());
+        // The opcode histogram still counts every message, decodable or not,
+        // and only the valid UpdatePosition becomes a telemetry record.
+        assert_eq!(summary.opcode_histogram["0xF748"], 2);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn integrity_keys_game_events_by_type_and_tallies_short_reads() {
+        let mut truncated_event = update_health_msg();
+        truncated_event.truncate(truncated_event.len() - 2);
+        let mut unknown_event = update_health_msg();
+        unknown_event[12..16].copy_from_slice(&0xFFF0u32.to_le_bytes());
+        let mut padded = update_position_msg();
+        padded.extend_from_slice(&[0, 0, 0, 0]);
+        let pkt = wrap_packet(
+            2,
+            &[update_health_msg(), truncated_event, unknown_event, padded],
+        );
+        let (_, summary) = decode_synthetic(DLT_EN10MB, &[(9001, 40000, pkt)]);
+
+        assert_eq!(summary.messages, 4);
+        assert_eq!(summary.decoded_ok, tally(&[("0xF7B001C0", 1)]));
+        assert_eq!(summary.undecodable, tally(&[("0xF7B001C0", 1)]));
+        assert_eq!(summary.unknown, tally(&[("0xF7B0FFF0", 1)]));
+        assert_eq!(summary.short_read, tally(&[("0x0000F748", 1)]));
+        assert_eq!(summary.short_read_bytes, 4);
+    }
+
+    #[test]
+    fn integrity_counts_server_to_client_only() {
+        // The same undecodable message client->server is not the decoder
+        // under test: counted as a message, absent from every integrity map.
+        let mut truncated = update_position_msg();
+        truncated.truncate(truncated.len() - 2);
+        let pkt = wrap_packet(3, &[truncated]);
+        let (_, summary) = decode_synthetic(DLT_EN10MB, &[(40000, 9000, pkt)]);
+        assert_eq!(summary.messages, 1);
+        assert!(summary.undecodable.is_empty());
+        assert!(summary.decoded_ok.is_empty());
+        assert!(summary.unknown.is_empty());
+    }
+
+    #[test]
+    fn dlt_raw_capture_decodes() {
+        // LINKTYPE_RAW (bare IPv4) is what the wsbridge `--capture` writer
+        // emits; it must reach the same decode as a tcpdump Ethernet capture.
+        let pkt = wrap_packet(4, &[update_position_msg()]);
+        let (lines, summary) = decode_synthetic(DLT_RAW, &[(9000, 40000, pkt)]);
+        assert_eq!(summary.udp_datagrams, 1);
+        assert_eq!(summary.decoded_ok, tally(&[("0x0000F748", 1)]));
+        assert_eq!(lines.len(), 1);
+        let v: Value = serde_json::from_str(&lines[0]).unwrap();
+        assert_eq!(v["kind"], "UpdatePosition");
+        assert_eq!(v["dir"], "s2c");
+    }
+
+    /// `unpack` from 0 exactly as the recv loop does, then classify.
+    fn classify_bytes(bytes: &[u8]) -> (MessageOutcome, u32) {
+        let mut offset = 0;
+        let parsed = GameMessage::unpack(bytes, &mut offset);
+        (classify_message(bytes, parsed.as_ref(), offset), integrity_key(bytes))
+    }
+
+    #[test]
+    fn integrity_deliberate_unknown_wraps_are_not_unknown() {
+        // A validated Qualities wrap (MeleeDefense, Specialized) is a decode
+        // even though unpack wraps it as GameMessage::Unknown on purpose...
+        assert_eq!(classify_bytes(&update_skill_ac_msg(6, 3)), (MessageOutcome::Ok, 0x02E1));
+        // ...its raw-grab fallback is a decode failure, not an unknown...
+        let mut bad = update_skill_ac_msg(6, 3);
+        bad.truncate(bad.len() - 4);
+        assert_eq!(classify_bytes(&bad), (MessageOutcome::Undecodable, 0x02E1));
+        // ...and AccountBanned's raw tail grab is a decode.
+        let mut banned = 0xF7C1u32.to_le_bytes().to_vec();
+        banned.extend_from_slice(&3600u32.to_le_bytes());
+        assert_eq!(classify_bytes(&banned), (MessageOutcome::Ok, 0xF7C1));
+    }
+
+    #[test]
+    fn integrity_runts_overruns_and_play_script_id() {
+        assert_eq!(classify_bytes(&[0xB0, 0xF7]), (MessageOutcome::Undecodable, RUNT_KEY));
+        // A GameEvent too short for its event type keys as plain 0xF7B0.
+        let event = update_health_msg();
+        assert_eq!(classify_bytes(&event[..10]), (MessageOutcome::Undecodable, 0xF7B0));
+        let parsed = {
+            let mut o = 0;
+            GameMessage::unpack(&event, &mut o)
+        };
+        assert_eq!(
+            classify_message(&event, parsed.as_ref(), event.len() + 3),
+            MessageOutcome::Overrun(3)
+        );
+        // 0xF754 is decoded by hand for telemetry but is not in GameOpcode, so
+        // the client's decoder (and therefore the tally) calls it unknown.
+        let mut psi = 0xF754u32.to_le_bytes().to_vec();
+        psi.extend_from_slice(&0x5000_00ABu32.to_le_bytes());
+        psi.extend_from_slice(&0x0000_0021u32.to_le_bytes());
+        assert_eq!(classify_bytes(&psi), (MessageOutcome::UnknownOpcode, 0xF754));
+        assert_eq!(decode_message(&psi, false).0.unwrap()["kind"], "PlayScriptId");
+        assert_eq!(integrity_key_label(0xF748), "0x0000F748");
     }
 }

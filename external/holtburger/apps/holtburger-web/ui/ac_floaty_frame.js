@@ -43,8 +43,13 @@
 // locked/unlocked swap via the `hb-ui-lock-changed` event. Callers
 // that don't (yet) wire window persistence can call
 // `frame.setLocked(bool)` directly.
+//
+// input-options-4 (2026-10-13): `obeysGlobalLock: true` also draws the
+// `_Locked` set while retail's global LockUI (ui/ui_lock.js) is set —
+// gmFloaty*UI::UpdateLockedStatus reads PlayerModule::LockUI.
 
 import { fetchIconDataUrl } from "./ac_icon_cache.js";
+import { globalLockUIEnabled, isGlobalLocked, onGlobalLockChange } from "./ui_lock.js";
 
 const PIECE_NAMES = Object.freeze([
   "tl", "t", "tr", "l", "bl", "b", "br", "r",
@@ -77,6 +82,8 @@ async function resolveSpriteCss(did) {
  * @param {number} [options.windowId]  — if provided, the frame subscribes
  *   to `hb-ui-lock-changed` events for this windowId and swaps sprites
  *   automatically on lock toggle.
+ * @param {boolean} [options.obeysGlobalLock=false]  — retail floaties
+ *   only: also locked while the global LockUI is set.
  * @returns {object} `{ setLocked(locked: boolean), dispose() }`
  */
 export function attachFloatyFrame(element, options) {
@@ -88,6 +95,7 @@ export function attachFloatyFrame(element, options) {
     cornerSize = 8,
     borderThickness = 6,
     windowId,
+    obeysGlobalLock = false,
   } = options;
   if (!Array.isArray(unlocked) || unlocked.length !== 8) {
     throw new Error("attachFloatyFrame: options.unlocked must be 8 sprite DIDs");
@@ -132,7 +140,11 @@ export function attachFloatyFrame(element, options) {
     element.insertBefore(pieces[name], element.firstChild);
   }
 
-  let isLocked = false;
+  // `ownLocked` = the per-window / setLocked flag; `isLocked` = what is
+  // drawn (also set by the global LockUI when the frame obeys it).
+  const obeysGlobal = !!obeysGlobalLock && globalLockUIEnabled();
+  let ownLocked = false;
+  let isLocked = obeysGlobal && isGlobalLocked();
   async function applySprites(lockedSet) {
     const set = lockedSet ? locked : unlocked;
     const urls = await Promise.all(set.map((did) => resolveSpriteCss(did)));
@@ -147,22 +159,32 @@ export function attachFloatyFrame(element, options) {
   }
   // Fire-and-forget: the frame DOM is in place immediately; the sprite
   // data URLs land asynchronously and paint over.
-  void applySprites(false);
+  void applySprites(isLocked);
 
   let lockHandler = null;
   if (typeof windowId === "number") {
     lockHandler = (ev) => {
       if (!ev?.detail) return;
       if ((ev.detail.windowId >>> 0) !== (windowId >>> 0)) return;
-      isLocked = !!ev.detail.locked;
+      ownLocked = !!ev.detail.locked;
+      isLocked = ownLocked || (obeysGlobal && isGlobalLocked());
       void applySprites(isLocked);
     };
     document.addEventListener("hb-ui-lock-changed", lockHandler);
   }
+  let unsubGlobal = obeysGlobal
+    ? onGlobalLockChange(() => {
+      const next = ownLocked || isGlobalLocked();
+      if (next === isLocked) return;
+      isLocked = next;
+      void applySprites(next);
+    })
+    : null;
 
   return {
     setLocked(locked) {
-      const next = !!locked;
+      ownLocked = !!locked;
+      const next = ownLocked || (obeysGlobal && isGlobalLocked());
       if (next === isLocked) return;
       isLocked = next;
       void applySprites(next);
@@ -172,6 +194,10 @@ export function attachFloatyFrame(element, options) {
       if (lockHandler) {
         document.removeEventListener("hb-ui-lock-changed", lockHandler);
         lockHandler = null;
+      }
+      if (unsubGlobal) {
+        unsubGlobal();
+        unsubGlobal = null;
       }
       for (const name of PIECE_NAMES) {
         if (pieces[name].parentNode === element) {

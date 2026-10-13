@@ -27,9 +27,10 @@
 //   * effectAllowed "all" — the inventory used "move", which silently
 //     vetoed hotbar.js ("copy") and tinker-panel.js ("link") drops;
 //   * the 3D view: retail ItemHolder::AttemptPlaceIn3D (self → pack,
+//     same-wcid ground stack → merge, vendor → sell list,
 //     creature → give the whole stack — or, with the "Drag item onto player
 //     opens trade" option, a player → secure trade — open chest → put in,
-//     else drop). It
+//     else drop unless airborne). It
 //     used to be BOTH inventory.js's dropItem AND picking.js's giveObject
 //     on the same drop (an item dropped on an NPC was given AND dropped);
 //     for drags we started, the capture-phase handler now owns it;
@@ -47,7 +48,9 @@ import {
   MAIN_PACK_KEY,
   PACKS_KEY,
   pendingExpect,
+  PLACE_IN_3D_TEXT,
   planPlaceInBackpack,
+  retailPlace3DEnabled,
   rowUsesPackSlot,
   takeInventoryRows,
 } from "./inventory_helpers.js";
@@ -359,7 +362,7 @@ function endSession() {
 
 /**
  * Register a drop zone. `spec.resolve(ev, session)` → hit | null where
- *   hit = { el, ok?: boolean, reason?: string, target, scope? }
+ *   hit = { el, ok?: boolean, reason?: string, silent?: boolean, target, scope? }
  * (`target` is the decideItemDrop target description; `scope` "items" |
  * "paperdoll" also publishes `hb:inventory-drag-over` for dye-preview.js).
  * `spec.drop(ev, session, hit)` performs the drop. Innermost zone wins.
@@ -478,7 +481,9 @@ function onDrop(ev) {
     try { hit = zone.resolve(ev, s); } catch (_) { hit = null; }
     if (hit && hit.ok === false) {
       if (hit.reason) showItemToast(hit.reason);
-      uiError();
+      // inventory-session-2: a quiet refusal (retail gmPaperDollUI::
+      // HandleDropRelease on a slot the item cannot go in) makes no sound.
+      if (!hit.silent) uiError();
     } else if (hit) {
       Promise.resolve()
         .then(() => zone.drop(ev, s, hit))
@@ -514,6 +519,17 @@ export function describeWorldEntity(guid) {
   const intProp = (stype) => {
     try { return (h?.objectIntProperty?.(g, stype) | 0) || 0; } catch (_) { return 0; }
   };
+  // inventory-session-4: what AttemptPlaceIn3D's merge reads of the target —
+  // wcid, PropertyInt StackSize 12 / MaxStackSize 11; undefined = unknown.
+  const optInt = (stype) => {
+    try {
+      const v = h?.objectIntProperty?.(g, stype);
+      return Number.isFinite(v) ? v : undefined;
+    } catch (_) { return undefined; }
+  };
+  let wcid = 0;
+  try { wcid = (h?.objectWcid?.(g) >>> 0) || 0; } catch (_) { wcid = 0; }
+  if (!wcid) wcid = (meta.wcid >>> 0) || 0;
   let locked;
   try { locked = h?.objectBoolProperty?.(g, 3); } catch (_) { locked = undefined; }
   // The open ground container is the one the external-container window
@@ -530,6 +546,12 @@ export function describeWorldEntity(guid) {
     isCreature: (itemType & 0x10) !== 0 || meta.category === "creature",
     // ODF Player 0x8 — retail ACCWeenieObject::IsPlayer (acclient.c:437199).
     isPlayer: (odf & 0x8) !== 0,
+    // inventory-session-4: ODF Vendor 0x200 (BF_VENDOR) — AttemptPlaceIn3D
+    // sells to it ahead of the creature give (acclient.c:433247).
+    isVendor: (odf & 0x200) !== 0,
+    wcid: wcid || undefined,
+    stackSize: optInt(12),
+    maxStackSize: optInt(11),
     isOpenContainer,
     // extcontainer-3: retail ACCWeenieObject::IsContainer (acclient.c:220515)
     // and BF_OPENABLE with a live Locked update winning.
@@ -549,9 +571,51 @@ function handleWorldDrop(ev, s) {
 }
 
 // ── decision + execution ────────────────────────────────────────────
+// inventory-session-4: `?retailPlace3D=off` restores the old 3D drop (no
+// trade refusal, ground-stack merge, vendor sale or mid-air refusal).
+const RETAIL_PLACE_3D = hasDom ? retailPlace3DEnabled() : true;
+
+/** The local player's on-ground flag (wasm pose `isOnGround`), null when
+ *  unknown. Retail AttemptPlaceIn3D reads CPhysicsObj::on_ground. */
+function playerOnGroundNow() {
+  const h = sessionHandle();
+  if (typeof h?.getLocalPlayerPose !== "function") return null;
+  let p = null;
+  try { p = h.getLocalPlayerPose(); } catch (_) { return null; }
+  if (!p) return null;
+  try { return typeof p.isOnGround === "boolean" ? p.isOnGround : null; }
+  catch (_) { return null; }
+  finally { try { p.free?.(); } catch (_) {} }
+}
+
+/** Is `guid` one of the player's own offers in the open trade? (retail
+ *  AttemptPlaceIn3D: "You are trading the %s, it cannot be dropped"). */
+function itemInOpenTrade(guid) {
+  const g = guid >>> 0;
+  const h = sessionHandle();
+  if (!g || typeof h?.playerTrade !== "function") return false;
+  let snap = null;
+  try { snap = h.playerTrade(); } catch (_) { return false; }
+  if (!snap) return false;
+  let hit = false;
+  try {
+    if (snap.isOpen !== false) {
+      for (const i of Array.from(snap.myItems || [])) {
+        if (((i?.guid >>> 0) || 0) === g) hit = true;
+        try { i?.free?.(); } catch (_) {}
+      }
+    }
+  } catch (_) { hit = false; }
+  try { snap.free?.(); } catch (_) {}
+  return hit;
+}
+
 function defaultCtx() {
   return {
     playerGuid: localPlayerGuid(),
+    retailPlace3D: RETAIL_PLACE_3D,
+    isBeingTraded: (g) => itemInOpenTrade(g),
+    playerOnGround: () => playerOnGroundNow(),
     canUseWith: (a, b) => {
       const h = sessionHandle();
       if (typeof h?.canUseWith !== "function") return null;
@@ -597,6 +661,10 @@ export async function resolveDropAction(s, target, { ctx = null, anchor = null }
     // has no split size), so it never asks how many.
     const whole = decideItemDrop({ ...s, split: 0 }, target, merged);
     if (whole.op === "trade") return whole;
+    // inventory-session-4: a vendor in the 3D view takes only a whole stack
+    // (AttemptPlaceIn3D, acclient.c:433256); a shift-drop is the split size,
+    // so it is refused without asking how many.
+    if (whole.op === "sell3d") return { op: "reject", message: PLACE_IN_3D_TEXT.splitToSell };
     const n = await promptStackAmount({
       max: stack,
       initial: Math.max(1, Math.floor(stack / 2)),
@@ -726,7 +794,24 @@ export function executeItemAction(action, s, opts = {}) {
       if (sent) pendingOps.add(guid, { op: "give", amount, expect: pendingExpect.reduced(stack), undo });
       break;
     }
+    case "sell3d": {
+      // inventory-session-4 — ClientUISystem::AttemptSellToVendor (acclient.c:
+      // 401304), owned by plugins/vendor-ui.js: add the item to the sell list
+      // when that vendor's window is open, else Use the vendor and add it
+      // when its shop opens. The item does not move, so there is no
+      // pending-ledger entry. Without vendor-ui the vendor is just Used.
+      const vendor = (action.vendor >>> 0) || 0;
+      if (!vendor) return false;
+      const attempt = window.__vendorUi?.attemptSellToVendor;
+      if (typeof attempt !== "function") return call("useObject", vendor);
+      let r = null;
+      try { r = attempt(vendor, guid); } catch (e) { console.warn("[item-drag] sell failed:", e); }
+      return !!r?.sent;
+    }
     case "drop": {
+      // inventory-session-4: retail's merge line (a full or different ground
+      // stack) is printed before the item drops.
+      if (action.notice) showItemToast(action.notice);
       if (split) sent = call("splitStackTo3D", guid, amount);
       else sent = call("dropItem", guid);
       if (sent) {

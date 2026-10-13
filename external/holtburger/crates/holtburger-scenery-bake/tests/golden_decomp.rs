@@ -100,7 +100,13 @@ fn decomp_cell_mats(gx: u32, gy: u32) -> (u32, u32, u32) {
     (cell_x_mat, cell_y_mat, cell_mat)
 }
 
-/// `acclient.c` per-object noise sample (mirrors Scenery.cs:59).
+/// Per-object noise sample WITHOUT the object index — ACE-dead-code
+/// parity (mirrors `Scenery.cs:59`, which ACE never calls:
+/// `Entity/Landblock.cs:197` `//LoadMeshes(objects);`). NOT the decomp:
+/// retail adds the index, `c * (23399 + j)`, see section 7
+/// (`decomp_object_gate_accumulator`). It draws the same u32 as retail only
+/// at `j == 0`, and even there it scales by ACE's literal, not retail's
+/// 2^-32 (section 7).
 fn decomp_object_noise(a: u32, b: u32, c: u32) -> f64 {
     let n = a.wrapping_add(b).wrapping_sub(c.wrapping_mul(OBJECT_SELECT_E));
     n as f64 * NOISE_SCALE
@@ -447,4 +453,425 @@ fn noise_scale_is_the_decomp_literal_not_one_over_two_pow_32() {
         one_over_2_32.to_bits(),
         "decomp literal must differ from 1/2^32 in the low bits"
     );
+}
+
+// ======================================================================
+// 7. Retail frequency gate — object index in the multiplier
+//    (`BakeMode::Retail`, terrain-scenery-1).
+//
+//    The retail noise scale is NOT section 6's `NOISE_SCALE`. Hex-Rays
+//    prints `2.3283064e-10`, but that is the shortest decimal for the
+//    FLOAT the exe multiplies by. The float is at `acclient.exe`
+//    `0x7c6f10`, its bytes are `00 00 80 2F` (`0x2F800000`), and its value
+//    is exactly 2^-32. One use is the gate's `fmul dword [0x7c6f10]` at
+//    `0x531455`, followed by `fcomp [esi+0x44]`. Section 6 pins ACE's C#
+//    double literal, and only `AceCompat` uses that. The `BakeMode::Retail`
+//    goldens below are computed with 2^-32 (reviewer K-R1, 2026-10-13).
+// ======================================================================
+
+use holtburger_scenery_bake::{
+    NOISE_SCALE_RETAIL, displace_retail, object_noise_retail, rotate_obj_retail, scale_obj_retail,
+    scene_index_retail,
+};
+
+/// Retail's noise scale, from the exe's float bits (`0x2F800000` at
+/// `0x7c6f10`). Independent of `noise.rs`.
+const RETAIL_SCALE_F32_BITS: u32 = 0x2F80_0000;
+
+fn retail_scale() -> f64 {
+    f32::from_bits(RETAIL_SCALE_F32_BITS) as f64
+}
+
+/// `acclient.c` `CLandBlock::get_land_scenes` frequency gate, transcribed
+/// in the decomp's own ACCUMULATOR form (:352659-352731), not the closed
+/// form, for objects `0..n`:
+///
+/// ```text
+/// v44 = 1813693831 * y;            v16 = -1109124029 * x;
+/// v38 = 1360117743 * x * y + 1888038839;
+/// v17 = 23399 * v38;               scene_id = 23399 * v38;
+/// loop kq:  obj_id.id = v16 + v44 - v17;          // the gate (:352668)
+///           ... (double)obj_id.id * 2.3283064e-10 < freq ...  // float 0x2F800000
+///           v17 = v38 + scene_id;  scene_id += v38; // loop tail (:352729-31)
+/// ```
+///
+/// The tail runs for every object, gated or not, so object `j` sees
+/// `v38 * (23399 + j)`. Shares no code with `noise.rs`.
+fn decomp_object_gate_accumulator(gx: u32, gy: u32, n: u32) -> Vec<u32> {
+    let v44 = SCENE_SELECT_B.wrapping_mul(gy);
+    let v16 = SCENE_SELECT_C_NEG.wrapping_mul(gx).wrapping_neg();
+    let v38 = OBJECT_SELECT_C
+        .wrapping_mul(gx)
+        .wrapping_mul(gy)
+        .wrapping_add(OBJECT_SELECT_D);
+    let mut v17 = OBJECT_SELECT_E.wrapping_mul(v38);
+    let mut scene_id = OBJECT_SELECT_E.wrapping_mul(v38);
+    let mut out = Vec::with_capacity(n as usize);
+    for _kq in 0..n {
+        out.push(v16.wrapping_add(v44).wrapping_sub(v17));
+        v17 = v38.wrapping_add(scene_id);
+        scene_id = scene_id.wrapping_add(v38);
+    }
+    out
+}
+
+/// Decomp noise for object `j`: `(double)gate * 2^-32` (retail's float
+/// `0x2F800000`).
+fn decomp_object_noise_j(gx: u32, gy: u32, j: u32) -> f64 {
+    decomp_object_gate_accumulator(gx, gy, j + 1)[j as usize] as f64 * retail_scale()
+}
+
+/// Retail gate pinned to hand-computed values for `j = 0..3` at two
+/// cells. These were computed in Python from the accumulator form above
+/// (u32 wrap, then `float(n) * 2**-32`), independently of the Rust code.
+/// The 2^-32 product is exact, so each f64 is just the u32 with its
+/// exponent shifted:
+///
+/// ```text
+/// (42,314)    j=0 0x8D58B2CF 0.5521346812602133  0x3FE1AB1659E00000
+///             j=1 0xC66BEEDC 0.7750844275578856  0x3FE8CD7DDB800000
+///             j=2 0xFF7F2AE9 0.998034173855558   0x3FEFEFE55D200000
+///             j=3 0x389266F6 0.22098392015323043 0x3FCC49337B000000
+/// (1000,1000) j=0 0xACA0A12F 0.6743260135408491  0x3FE5941425E00000
+///             j=1 0x252AD7B8 0.14518497698009014 0x3FC2956BDC000000
+///             j=2 0x9DB50E41 0.6160439404193312  0x3FE3B6A1C8200000
+///             j=3 0x163F44CA 0.08690290385857224 0x3FB63F44CA000000
+/// ```
+///
+/// At `j = 0` the u32 equals the section 2 draw, because the index term is
+/// zero there. The f64 does not equal it, because section 2 pins ACE's
+/// literal.
+#[test]
+fn retail_object_gate_pinned_to_decomp_hex() {
+    let cases: &[(u32, u32, [(u32, u64); 4])] = &[
+        (
+            42,
+            314,
+            [
+                (0x8D58_B2CF, 0x3FE1_AB16_59E0_0000),
+                (0xC66B_EEDC, 0x3FE8_CD7D_DB80_0000),
+                (0xFF7F_2AE9, 0x3FEF_EFE5_5D20_0000),
+                (0x3892_66F6, 0x3FCC_4933_7B00_0000),
+            ],
+        ),
+        (
+            1000,
+            1000,
+            [
+                (0xACA0_A12F, 0x3FE5_9414_25E0_0000),
+                (0x252A_D7B8, 0x3FC2_956B_DC00_0000),
+                (0x9DB5_0E41, 0x3FE3_B6A1_C820_0000),
+                (0x163F_44CA, 0x3FB6_3F44_CA00_0000),
+            ],
+        ),
+    ];
+    for &(gx, gy, per_j) in cases {
+        let gates = decomp_object_gate_accumulator(gx, gy, 4);
+        let (a, b, c) = cell_mats_per_object(gx, gy);
+        for (j, &(exp_gate, exp_bits)) in per_j.iter().enumerate() {
+            let j = j as u32;
+            assert_eq!(
+                gates[j as usize], exp_gate,
+                "decomp accumulator gate ({gx},{gy}) j={j}"
+            );
+            assert_eq!(
+                decomp_object_noise_j(gx, gy, j).to_bits(),
+                exp_bits,
+                "decomp noise ({gx},{gy}) j={j}"
+            );
+            let n = object_noise_retail(a, b, c, j);
+            assert_eq!(
+                n.to_bits(),
+                exp_bits,
+                "object_noise_retail({gx},{gy}) j={j} = {n} (bits 0x{:016X}) != decomp golden 0x{exp_bits:016X}",
+                n.to_bits()
+            );
+            // 2^-32 is exact: the f64 is the u32 with its exponent shifted.
+            assert_eq!(n * 4_294_967_296.0, exp_gate as f64);
+        }
+    }
+}
+
+/// The decomp's running accumulator equals the closed form
+/// `cellXMat + cellYMat - cellMat * (23399 + j)` for `j` in `0..8`, and
+/// the production `object_noise_retail` matches the decomp transcription
+/// bit-for-bit across a sweep that includes u32 wrap stress.
+#[test]
+fn retail_accumulator_equals_closed_form_and_production() {
+    for &(gx, gy) in &[
+        (42u32, 314u32),
+        (1000, 1000),
+        (0, 0),
+        (1, 1),
+        (1304, 1392), // 0xA3AE cell (0,0)
+        (1355, 1444), // 0xA9B4 cell (3,4)
+        (1384, 1472), // 0xACB7 cell (8,8)
+        (u32::MAX, 7),
+        (7, u32::MAX),
+    ] {
+        let gates = decomp_object_gate_accumulator(gx, gy, 8);
+        let (a, b, c) = decomp_cell_mats(gx, gy);
+        assert_eq!((a, b, c), cell_mats_per_object(gx, gy));
+        for j in 0..8u32 {
+            let closed = a
+                .wrapping_add(b)
+                .wrapping_sub(c.wrapping_mul(OBJECT_SELECT_E.wrapping_add(j)));
+            assert_eq!(
+                gates[j as usize], closed,
+                "accumulator != closed form at ({gx},{gy}) j={j}"
+            );
+            assert_eq!(
+                object_noise_retail(a, b, c, j).to_bits(),
+                decomp_object_noise_j(gx, gy, j).to_bits(),
+                "object_noise_retail drift from decomp at ({gx},{gy}) j={j}"
+            );
+        }
+    }
+}
+
+/// At `j = 0` the retail gate draws the same u32 as the legacy
+/// (ACE-dead-code) gate, scaled by 2^-32 instead of ACE's literal. From
+/// `j = 1` on, the draws themselves differ.
+///
+/// Worked example at (42,314) with `freq = 0.5`. The legacy shared draw
+/// (0.552) rejects every object in the Scene. Retail accepts object 3
+/// (0.221), which is a non-nested subset the legacy gate can never produce.
+#[test]
+fn retail_j0_is_the_legacy_gate_and_later_objects_differ() {
+    for &(gx, gy) in &[(42u32, 314u32), (1000, 1000), (0, 0), (1, 1)] {
+        let (a, b, c) = cell_mats_per_object(gx, gy);
+        let legacy = object_noise(a, b, c);
+        let legacy_u32 = a.wrapping_add(b).wrapping_sub(c.wrapping_mul(OBJECT_SELECT_E));
+        assert_eq!(decomp_object_noise(a, b, c).to_bits(), legacy.to_bits());
+        assert_eq!(decomp_object_gate_accumulator(gx, gy, 1)[0], legacy_u32);
+        assert_eq!(
+            object_noise_retail(a, b, c, 0).to_bits(),
+            (legacy_u32 as f64 * retail_scale()).to_bits()
+        );
+        assert_eq!(
+            decomp_object_noise_j(gx, gy, 0).to_bits(),
+            object_noise_retail(a, b, c, 0).to_bits()
+        );
+        // Same draw, different scale: retail's f64 is never below ACE's.
+        assert!(object_noise_retail(a, b, c, 0) >= legacy);
+        assert_ne!(
+            decomp_object_gate_accumulator(gx, gy, 2)[1],
+            legacy_u32,
+            "j=1 must not reuse the j=0 draw at ({gx},{gy})"
+        );
+    }
+    let (a, b, c) = cell_mats_per_object(42, 314);
+    let freq = 0.5_f32 as f64;
+    assert!(!(object_noise(a, b, c) < freq), "legacy rejects every object here");
+    assert!(!(object_noise_retail(a, b, c, 0) < freq), "retail rejects object 0 too");
+    assert!(object_noise_retail(a, b, c, 3) < freq, "retail accepts object 3 here");
+}
+
+// ======================================================================
+// 8. Retail noise scale — 2^-32 in every Retail noise draw
+//    (`BakeMode::Retail`, reviewer K-R1).
+// ======================================================================
+
+/// `NOISE_SCALE_RETAIL` is the exe's float `0x2F800000`, exactly 2^-32. It
+/// is not section 6's ACE literal, which is about 1.6e-8 relative smaller.
+#[test]
+fn noise_scale_retail_is_the_exe_float_0x2f800000() {
+    assert_eq!(NOISE_SCALE_RETAIL.to_bits(), 0x3DF0_0000_0000_0000);
+    assert_eq!(NOISE_SCALE_RETAIL, retail_scale());
+    assert_eq!(NOISE_SCALE_RETAIL, 1.0 / 4_294_967_296.0);
+    assert_ne!(NOISE_SCALE_RETAIL.to_bits(), NOISE_SCALE.to_bits());
+    assert!(NOISE_SCALE < NOISE_SCALE_RETAIL);
+}
+
+/// Raw u32 of the decomp's displace/scale/rotate noise core. Shares no
+/// code with `noise.rs`.
+fn decomp_core_u32(ix: u32, iy: u32, iq: u32, magic: u32) -> u32 {
+    let inner = OBJECT_SELECT_C
+        .wrapping_mul(iy)
+        .wrapping_mul(ix)
+        .wrapping_add(OBJECT_SELECT_D);
+    SCENE_SELECT_B
+        .wrapping_mul(iy)
+        .wrapping_sub(iq.wrapping_add(magic).wrapping_mul(inner))
+        .wrapping_sub(SCENE_SELECT_C_NEG.wrapping_mul(ix))
+}
+
+/// Raw u32 of the decomp's quadrant tag (`ObjectDesc::Place` :462630).
+fn decomp_quadrant_u32(ix: u32, iy: u32) -> u32 {
+    let inner = QUADRANT_B.wrapping_mul(iy).wrapping_add(QUADRANT_C);
+    SCENE_SELECT_B
+        .wrapping_mul(iy)
+        .wrapping_sub(ix.wrapping_mul(inner))
+        .wrapping_sub(QUADRANT_D_NEG)
+}
+
+const SCALE_MAGIC: u32 = 32_593;
+const ROTATION_MAGIC: u32 = 63_127;
+
+/// `ObjectDesc::Place` (:462605) with retail's scale, for an object at
+/// origin `(0, 0)` with displacement amplitude `amt`.
+fn decomp_place_retail(ix: u32, iy: u32, iq: u32, amt: f32) -> (f32, f32) {
+    let s = retail_scale();
+    let nx = (decomp_core_u32(ix, iy, iq, DISPLACE_X_MAGIC) as f64 * s * amt as f64 + 0.0) as f32;
+    let ny = (decomp_core_u32(ix, iy, iq, DISPLACE_Y_MAGIC) as f64 * s * amt as f64 + 0.0) as f32;
+    let q = decomp_quadrant_u32(ix, iy) as f64 * s;
+    if q >= 0.75 {
+        (ny, -nx)
+    } else if q >= 0.5 {
+        (-nx, -ny)
+    } else if q >= 0.25 {
+        (-ny, nx)
+    } else {
+        (nx, ny)
+    }
+}
+
+/// `ObjectDesc::ScaleObj` (:351361) with retail's scale and its x87 f64
+/// `max / min` (the exe's `fld [esi+0x54]; fdiv [esi+0x50]`, which is never
+/// stored as a float).
+fn decomp_scale_retail(ix: u32, iy: u32, iq: u32, min: f32, max: f32) -> f32 {
+    if min == max {
+        return max;
+    }
+    let n = decomp_core_u32(ix, iy, iq, SCALE_MAGIC) as f64 * retail_scale();
+    ((max as f64 / min as f64).powf(n) * min as f64) as f32
+}
+
+/// `ObjectDesc::GetObjFrame` (:462660) heading in degrees, retail's scale.
+fn decomp_heading_retail(ix: u32, iy: u32, iq: u32, max_rot: f32) -> f32 {
+    (decomp_core_u32(ix, iy, iq, ROTATION_MAGIC) as f64 * retail_scale() * max_rot as f64) as f32
+}
+
+/// The `*_retail` pose functions pinned to f32 bits that were computed in
+/// Python from the decomp with 2^-32 and the f64 ScaleObj ratio. The
+/// computation is independent of the Rust code. The probe object has
+/// origin `(0,0)`, displacement 1.0, scale 0.8..1.5 and max_rot 360.
+///
+/// The first five rows are the section 3-5 vectors. There, retail rounds
+/// to the same f32 as ACE's literal: displace equals section 3, scale
+/// equals section 4, and the degrees match `retail_orientation.rs`. The
+/// last three rows were chosen because ACE's literal lands 1 ULP off on
+/// several channels. A Python sweep of 3,240 `(cell, j)` samples on the
+/// five golden LBs (this probe object) compared the two scales. 633 X and
+/// 583 Y displacement values and 585 headings were 1 ULP apart, and so
+/// were 102 scales. No quadrant flipped.
+///
+/// ```text
+/// 0xA6B1 c(7,8) j=4 ret disp (0x3F321444,0xBEF44F64) scale 0x3FBCC96E deg 0x4278DC7C [flip y,-x]
+///                   ace disp (0x3F321443,0xBEF44F63) scale 0x3FBCC96F deg 0x4278DC7B
+/// 0xA9B4 c(5,2) j=4 ret disp (0x3F38A477,0xBF63CEE4) scale 0x3FAE36C9 deg 0x4391A09F [flip y,-x]
+///                   ace disp (0x3F38A476,0xBF63CEE3) scale 0x3FAE36CA deg 0x4391A09E
+/// 0xA3AE c(4,1) j=5 ret disp (0x3EB3083A,0x3EC5A494) scale 0x3FB26078 deg 0x42F2EA10
+///                   ace disp (0x3EB30839,0x3EC5A493) scale 0x3FB26078 deg 0x42F2EA0F
+/// ```
+#[test]
+fn retail_pose_noise_pinned_to_decomp_hex() {
+    // (lb, cx, cy, j, disp x, disp y, scale, degrees)
+    let cases: &[(u16, u32, u32, u32, u32, u32, u32, u32)] = &[
+        (0xA3AE, 0, 0, 0, 0x3F42_9388, 0x3EB5_CC02, 0x3FA0_44BD, 0x41C8_579A),
+        (0xA3AE, 0, 0, 5, 0x3F77_37DE, 0x3F0F_8A57, 0x3FB6_623E, 0x42C6_2418),
+        (0xA6B1, 3, 4, 2, 0x3F38_03B6, 0x3F75_76F1, 0x3F9E_23BD, 0x4131_8D48),
+        (0xACB7, 8, 8, 7, 0x3EC8_1B12, 0x3F37_C199, 0x3F95_4990, 0x4332_DBA4),
+        (0xAFBA, 1, 2, 3, 0x3F41_8492, 0xBF71_8B27, 0x3FA3_443C, 0x4391_BC81),
+        (0xA6B1, 7, 8, 4, 0x3F32_1444, 0xBEF4_4F64, 0x3FBC_C96E, 0x4278_DC7C),
+        (0xA9B4, 5, 2, 4, 0x3F38_A477, 0xBF63_CEE4, 0x3FAE_36C9, 0x4391_A09F),
+        (0xA3AE, 4, 1, 5, 0x3EB3_083A, 0x3EC5_A494, 0x3FB2_6078, 0x42F2_EA10),
+    ];
+    let obj = probe_obj(1.0, 0.8, 1.5, 360.0);
+    for &(lb, cx, cy, j, ex, ey, es, ed) in cases {
+        let (ix, iy) = global_cell(lb, cx, cy);
+        let (x, y) = displace_retail(&obj, ix, iy, j);
+        assert_eq!(
+            (x.to_bits(), y.to_bits()),
+            (ex, ey),
+            "displace_retail 0x{lb:04X} c({cx},{cy}) j={j}: got ({x}, {y})"
+        );
+        let s = scale_obj_retail(&obj, ix, iy, j);
+        assert_eq!(s.to_bits(), es, "scale_obj_retail 0x{lb:04X} c({cx},{cy}) j={j}: got {s}");
+        let d = rotate_obj_retail(&obj, ix, iy, j);
+        assert_eq!(d.to_bits(), ed, "rotate_obj_retail 0x{lb:04X} c({cx},{cy}) j={j}: got {d}");
+        // The independent transcription agrees.
+        assert_eq!(decomp_place_retail(ix, iy, j, 1.0), (x, y));
+        assert_eq!(decomp_scale_retail(ix, iy, j, 0.8, 1.5).to_bits(), es);
+        assert_eq!(decomp_heading_retail(ix, iy, j, 360.0).to_bits(), ed);
+    }
+    // On the last three rows the ACE ports (AceCompat) are 1 ULP off retail.
+    for &(lb, cx, cy, j) in &[(0xA6B1u16, 7u32, 8u32, 4u32), (0xA9B4, 5, 2, 4), (0xA3AE, 4, 1, 5)] {
+        let (ix, iy) = global_cell(lb, cx, cy);
+        let (rx, ry) = displace_retail(&obj, ix, iy, j);
+        let (ax, ay) = displace(&obj, ix, iy, j);
+        assert_ne!((rx.to_bits(), ry.to_bits()), (ax.to_bits(), ay.to_bits()));
+        assert_eq!(rx.to_bits().abs_diff(ax.to_bits()), 1);
+        assert_eq!(ry.to_bits().abs_diff(ay.to_bits()), 1);
+    }
+}
+
+/// Production `*_retail` pose functions match the independent decomp
+/// transcription bit for bit across all 81 vertices of two golden LBs.
+#[test]
+fn retail_pose_noise_recomputed_from_raw_decomp() {
+    let obj = probe_obj(4.0, 0.7, 1.9, 270.0);
+    for lb in [0xA9B4u16, 0xACB7] {
+        for cx in 0..9u32 {
+            for cy in 0..9u32 {
+                let (ix, iy) = global_cell(lb, cx, cy);
+                for j in 0..4u32 {
+                    let got = displace_retail(&obj, ix, iy, j);
+                    let want = decomp_place_retail(ix, iy, j, 4.0);
+                    assert_eq!(
+                        (got.0.to_bits(), got.1.to_bits()),
+                        (want.0.to_bits(), want.1.to_bits()),
+                        "displace_retail 0x{lb:04X} c({cx},{cy}) j={j}"
+                    );
+                    assert_eq!(
+                        scale_obj_retail(&obj, ix, iy, j).to_bits(),
+                        decomp_scale_retail(ix, iy, j, 0.7, 1.9).to_bits(),
+                        "scale_obj_retail 0x{lb:04X} c({cx},{cy}) j={j}"
+                    );
+                    assert_eq!(
+                        rotate_obj_retail(&obj, ix, iy, j).to_bits(),
+                        decomp_heading_retail(ix, iy, j, 270.0).to_bits(),
+                        "rotate_obj_retail 0x{lb:04X} c({cx},{cy}) j={j}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Retail scene pick, transcribed from `get_land_scenes`
+/// (:352639-352645). `count == 1` short-circuits, and
+/// `floor((double)cellMat * 2^-32 * count) >= count` falls back to 0.
+fn decomp_scene_index_retail(gx: u32, gy: u32, count: u32) -> u32 {
+    if count == 1 {
+        return 0;
+    }
+    let v11 = decomp_cell_mat_scene(gx, gy) as f64 * retail_scale();
+    let v12 = (v11 * count as f64).floor() as u64 as u32;
+    if v12 >= count { 0 } else { v12 }
+}
+
+/// `scene_index_retail` matches the decomp pick for every vertex of the
+/// golden ring and every bucket size from 1 to 8. At the boundary it
+/// differs from ACE's literal: `cellMat = 2^31` with two scenes picks
+/// scene 1 (exactly 0.5 * 2) where ACE's literal picks scene 0.
+#[test]
+fn retail_scene_pick_matches_decomp() {
+    for lb in [0xA3AEu16, 0xA6B1, 0xA9B4, 0xACB7, 0xAFBA] {
+        for cx in 0..9u32 {
+            for cy in 0..9u32 {
+                let (gx, gy) = global_cell(lb, cx, cy);
+                let cm = cell_mat_scene(gx, gy);
+                for count in 1..=8u32 {
+                    assert_eq!(
+                        scene_index_retail(cm, count as usize),
+                        decomp_scene_index_retail(gx, gy, count) as usize,
+                        "scene pick 0x{lb:04X} c({cx},{cy}) count={count}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(scene_index_retail(0x8000_0000, 2), 1);
+    assert_eq!((2.0 * (0x8000_0000u32 as f64 * NOISE_SCALE)) as usize, 0);
 }

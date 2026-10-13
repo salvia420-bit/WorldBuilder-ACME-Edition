@@ -53,6 +53,18 @@
 // hop mode (the arm that deliberately DOES stream):
 //   --mode=hop --hops=0x9722003a:80:80:42,0x9622003a:80:80:42 --dwell=120
 //
+// perf HISTORY / ratchet (test-tooling-8, 2026-10-13):
+//   --history            ratchet this run against its own recent past, then
+//   --history=DIR        append it (harness/perf-ratchet.mjs; DIR defaults to
+//                        $HB_PERF_HISTORY, else /mnt/wbterminal2/hb-perf-history).
+//                        Exit 3 = USABLE run that the ratchet calls a
+//                        regression (1 stays "REJECT"). Absent = no history I/O.
+//   --historyAccept      with --history: an INTENDED cost change — stamp this
+//                        run "accepted" so it becomes the new bar.
+//   Every run now records platform.renderer, wasmProfile (from the loaded
+//   wasm's custom sections — lib/wasm_profile.mjs), distGeneratedAt and the
+//   harness checkout's commit, read AFTER the measure lap.
+//
 // FLAGS THE RUN NEEDS ON THE PAGE (added automatically unless --url is given):
 //   ?camDebug=on        installs window.__cam            (required)
 //   ?vfxGauge=on        per-frame CPU time               (required for cpuMs)
@@ -60,6 +72,10 @@
 //   ?renderDiag=on      draws/triangles/nodes
 //   ?nosw=1             or the service worker serves a stale build
 //   ?agent=1 &autoLogin ...  headless login
+//   ?linkProbe=on       OPTIONAL, `--linkProbe` adds it outside the arm label:
+//                       the program ledger (scene3d/shader_prewarm.js) ->
+//                       programsRelinked@moving + programs@resident, and the
+//                       run's taint list names it (pass-10 D-10.4.4)
 //
 // THE BOOT GATE (2026-08-10 — why it is not a one-line poll any more)
 // -------------------------------------------------------------------
@@ -96,10 +112,16 @@
 // HUMAN's Developer account — two things logging into it fight. Pass a bot
 // account (`--account=agentp07`) for unattended runs.
 
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { acquireHeavyLock } from "./lib/heavy_lock.mjs";
 import { poseTable } from "./lib/moving_path.mjs";
 import { movingRigSource } from "./lib/moving_rig.mjs";
 import { createReport } from "./lib/report.mjs";
+import { classifyWasmProfile, wasmCustomSectionNames } from "./lib/wasm_profile.mjs";
+import { appendHistory, formatRatchet, ratchetResults, readHistory, resolveHistoryDir } from "./perf-ratchet.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (k, d) => {
@@ -117,6 +139,9 @@ const ACCOUNT = String(arg("account", "tailnet1"));
 const POI = String(arg("poi", "Nanto"));
 const ARM = String(arg("arm", "") || "").replace(/^default$/, "");
 const DRIVE = String(arg("drive", "ondemand"));
+// `--linkProbe` (or `=on`/`=1`): arm the program create/release ledger in BOTH
+// arms without it becoming part of the arm label.
+const LINK_PROBE = ((v) => v === true || v === "on" || v === "1")(arg("linkProbe", false));
 const SETTLE_MS = num("settle", 45000);
 const BOOT_MS = num("bootTimeout", 160000);
 // Boot-gate retry budget (see "THE BOOT GATE" above). `--loginRetries=0`
@@ -133,6 +158,11 @@ const BASE = String(arg("base", "http://127.0.0.1:8765/apps/holtburger-web/index
 // Repeatability budgets. A run outside them is REJECTED, not averaged in.
 const CHURN_MAX = num("churnMax", MODE === "hop" ? 1e9 : 0);
 const DRAW_SPREAD_MAX = num("drawSpreadMax", 0.05);
+// `--history` (default dir) or `--history=DIR`: ratchet + append (see header).
+const HISTORY = arg("history", null);
+// `--historyAccept`: this run is an operator rebase after an INTENDED cost
+// change (perf-ratchet rule 5). Only meaningful with --history.
+const HISTORY_ACCEPT = ((v) => v === true || v === "on" || v === "1")(arg("historyAccept", false));
 
 function parseAnchor(s) {
   if (!s || s === true) return null;
@@ -174,6 +204,7 @@ export function buildUrl(arm) {
     `autoLogin=1&account=${ACCOUNT}&password=${ACCOUNT}&autoSpawn=first&agent=1`,
   ];
   if (DRIVE === "ondemand") flags.push("renderOnDemand=1", "netDrainHz=30");
+  if (LINK_PROBE) flags.push("linkProbe=on");
   if (arm) flags.push(arm);
   return `${BASE}?${flags.join("&")}`;
 }
@@ -275,6 +306,96 @@ const mean = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFix
 const stat = (a) => (a.length ? { n: a.length, p50: pct(a, 50), p95: pct(a, 95), p99: pct(a, 99), mean: mean(a), min: +Math.min(...a).toFixed(2), max: +Math.max(...a).toFixed(2) } : null);
 
 /**
+ * Run provenance, as a page-evaluable expression (test-tooling-8). Evaluated
+ * AFTER the measure lap — it fetches the wasm and touches GL state, so it must
+ * never overlap a measured frame:
+ *   renderer        UNMASKED_RENDERER_WEBGL of the context that rendered
+ *                   (liveScene3d.renderer), else a throwaway context that is
+ *                   lost again at once. The ratchet's software-renderer rule
+ *                   (counts only on SwiftShader) keys on it.
+ *   wasm            custom-section names of the module THIS page loaded: the
+ *                   Resource Timing entry's exact URL (cache-busting ?v=
+ *                   included; force-cache reuses the boot's download), walked
+ *                   in-page with lib/wasm_profile.mjs's self-contained walker
+ *                   so 7-17 MB never crosses CDP. A `name`/.debug_* section =
+ *                   DEV-WASM; size is NOT the test (release is ~7.2 MB now).
+ *   distGeneratedAt ../../dist/manifest.json `generated_at`, the bake stamp the
+ *                   service worker keys on (recorded as ratchet taint).
+ */
+export function provenanceProbeSource() {
+  return `(async () => {
+  const walk = ${wasmCustomSectionNames.toString()};
+  const out = { renderer: null, wasm: null, distGeneratedAt: null, errors: [] };
+  try {
+    let gl = null;
+    let scratch = false;
+    try { gl = window.liveScene3d && window.liveScene3d.renderer ? window.liveScene3d.renderer.getContext() : null; } catch (_) { gl = null; }
+    if (!gl) { scratch = true; const c = document.createElement("canvas"); gl = c.getContext("webgl2") || c.getContext("webgl"); }
+    if (gl) {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      out.renderer = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "") || null;
+      if (scratch) { const lose = gl.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext(); }
+    }
+  } catch (e) { out.errors.push("renderer: " + ((e && e.message) || e)); }
+  try {
+    const entry = (performance.getEntriesByType("resource") || []).find((e) => /holtburger_web_bg\\.wasm/.test(e.name));
+    const url = entry ? entry.name : new URL("pkg/holtburger_web_bg.wasm", location.href).href;
+    const res = await fetch(url, { cache: "force-cache" });
+    if (!res.ok) throw new Error("HTTP " + res.status + " for " + url);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let sections = null;
+    let error = null;
+    try { sections = walk(bytes); } catch (e) { error = String((e && e.message) || e); }
+    out.wasm = { url, size: bytes.length, sections, error };
+  } catch (e) { out.errors.push("wasm: " + ((e && e.message) || e)); }
+  try {
+    const res = await fetch(new URL("../../dist/manifest.json", location.href).href, { cache: "no-store" });
+    if (res.ok) { const m = await res.json(); out.distGeneratedAt = (m && m.generated_at) || null; }
+  } catch (e) { out.errors.push("manifest: " + ((e && e.message) || e)); }
+  return out;
+})()`;
+}
+
+/**
+ * Fold the page probe into report fields. Pure, so the mapping is testable.
+ * A probe that failed outright (`null`) records "unknown", never a guess.
+ */
+export function provenanceFields(prov) {
+  const w = prov && prov.wasm ? prov.wasm : null;
+  const cls = classifyWasmProfile({
+    sections: w && Array.isArray(w.sections) ? w.sections : null,
+    size: w && Number.isFinite(w.size) ? w.size : null,
+    error: w ? (w.error || null) : "wasm not fetched",
+  });
+  return {
+    renderer: (prov && typeof prov.renderer === "string" && prov.renderer) || null,
+    wasmProfile: cls.profile,
+    wasmProbe: { url: (w && w.url) || null, size: cls.size, reason: cls.reason, customSections: cls.customSections },
+    distGeneratedAt: (prov && prov.distGeneratedAt) || null,
+    provenanceErrors: (prov && Array.isArray(prov.errors)) ? prov.errors : ["provenance probe returned nothing"],
+  };
+}
+
+/**
+ * HEAD of the checkout this harness runs from (in the laptop flow, the tree
+ * serve.py serves). Provenance only — recorded, never part of the ratchet key;
+ * null when git is unavailable.
+ */
+function gitCommit() {
+  try {
+    const sha = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      cwd: path.dirname(fileURLToPath(import.meta.url)),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The verdict. A harness that cannot prove its own repeatability is worse than
  * none, so this is deliberately quick to say NO.
  */
@@ -320,6 +441,10 @@ async function main() {
   console.log(`[moving-bench] path checksum ${table.checksum}  (identical across arms by construction)`);
   console.log(`[moving-bench] arm=${ARM || "(default)"}`);
   console.log(`[moving-bench] url=${url}`);
+
+  // One heavy job per machine (~/CLAUDE.md). Taken HERE, never at module
+  // scope: harness/test_moving_bench_boot.mjs (a gate suite) imports this file.
+  await acquireHeavyLock({ label: `moving-bench arm=${ARM || "(default)"}` });
 
   const { chromium } = await import("playwright-core");
   const browser = await chromium.connectOverCDP(CDP);
@@ -393,6 +518,10 @@ async function main() {
   console.log(`[moving-bench] rig installed: ${JSON.stringify(install)} — warm lap, then measure lap`);
 
   const r = await page.evaluate(() => window.__mbench.run());
+  // Provenance strictly AFTER the measure lap (see provenanceProbeSource).
+  const prov = provenanceFields(await page.evaluate(provenanceProbeSource()).catch((e) => ({
+    errors: [`probe: ${e && e.message ? e.message : e}`],
+  })));
   await page.close().catch(() => {});
 
   const rep = {
@@ -414,13 +543,24 @@ async function main() {
       residentInstances: r.census.instances,
       batchedMeshes: r.census.batched,
       staticBatchC: r.census.staticBatchC,
+      // renderer.info.programs.length at the lap's end (null = stale rig).
+      programs: Number.isFinite(r.programs) ? r.programs : null,
     },
     lb: { churnFrames: r.lb.churnFrames, countFirst: r.lb.counts[0], countLast: r.lb.counts[r.lb.counts.length - 1], hashFirst: r.lb.hashFirst, hashLast: r.lb.hashLast },
     walkDelta: deltaWalk(r.walk0, r.walk1),
+    // Program ledger across the measure lap (`?linkProbe=on`); null = absent.
+    link: r.link || null,
     // Login-phase errors are reported, never judged (see splitBootErrors).
     bootErrors: splitBootErrors(errors, bootErrorCut).bootErrors.slice(0, 8),
     reloginAttempts: attempt,
     errors: splitBootErrors(errors, bootErrorCut).runErrors.concat(r.errors || []).slice(0, 16),
+    // Run provenance (test-tooling-8): header fields of the v2 report.
+    renderer: prov.renderer,
+    wasmProfile: prov.wasmProfile,
+    wasmProbe: prov.wasmProbe,
+    distGeneratedAt: prov.distGeneratedAt,
+    commit: gitCommit(),
+    provenanceErrors: prov.provenanceErrors,
   };
   const j = judge(rep, { churnMax: CHURN_MAX, drawSpreadMax: DRAW_SPREAD_MAX });
   rep.verdict = j.verdict;
@@ -428,7 +568,8 @@ async function main() {
 
   // RESULTS v2 (T01): same measurements, emitted through the shared report
   // writer — every figure now carries its mechanical @scale tag.
-  writeFileSync(OUT, JSON.stringify(toResultsV2(rep, { series: { cpuMs: r.cpuMs, rafMs: r.rafMs, draws: r.draws } }), null, 2));
+  const v2 = toResultsV2(rep, { series: { cpuMs: r.cpuMs, rafMs: r.rafMs, draws: r.draws } });
+  writeFileSync(OUT, JSON.stringify(v2, null, 2));
   console.log("\n" + "=".repeat(72));
   console.log(`  MOVING BENCH — ${rep.arm}`);
   console.log("=".repeat(72));
@@ -443,12 +584,38 @@ async function main() {
   console.log(`  resident slots : ${rep.workload.residentInstances}  buckets ${rep.workload.staticBatchC}/${rep.workload.batchedMeshes}   (RESIDENT)`);
   console.log(`  lb churn       : ${rep.lb.churnFrames} frames  count ${rep.lb.countFirst} -> ${rep.lb.countLast}  hash ${rep.lb.hashFirst} -> ${rep.lb.hashLast}`);
   console.log(`  walk delta     : ${JSON.stringify(rep.walkDelta)}`);
+  console.log(`  programs       : ${rep.link
+    ? `${rep.link.relinks} relinked, +${rep.link.created} -${rep.link.released} this lap, ${rep.link.programs} resident`
+    : `${rep.workload.programs ?? "?"} resident (no relink ledger — pass --linkProbe)`}`);
   console.log(`  errors         : ${rep.errors.length}`);
   console.log(`  boot           : ${rep.reloginAttempts} relogin(s), ${rep.bootErrors.length} login-phase error(s) (reported, not judged)`);
   for (const be of rep.bootErrors) console.log(`      ~ ${be}`);
+  console.log(`  provenance     : renderer=${rep.renderer ?? "?"}  wasm=${rep.wasmProfile} (${rep.wasmProbe.reason})  `
+    + `dist=${rep.distGeneratedAt ?? "?"}  commit=${rep.commit ?? "?"}`);
+  for (const pe of rep.provenanceErrors) console.log(`      ~ ${pe}`);
   console.log(`\n  full JSON -> ${OUT}`);
   console.log("=".repeat(72));
-  process.exit(j.ok ? 0 : 1);
+
+  // --history: hold this run to its own recent past, then keep it
+  // (harness/perf-ratchet.mjs). A failure here never costs the run's JSON.
+  let ratchetRegression = false;
+  if (HISTORY) {
+    const dir = resolveHistoryDir(HISTORY === true ? null : String(HISTORY));
+    try {
+      const { records: history } = readHistory(dir);
+      const { records, toAppend } = ratchetResults(v2, history, { source: path.resolve(OUT), accept: HISTORY_ACCEPT });
+      const file = appendHistory(dir, toAppend);
+      for (const rec of records) {
+        console.log(formatRatchet(rec));
+        if (rec.ratchet?.verdict === "regression") ratchetRegression = true;
+      }
+      console.log(`  history -> ${file}`);
+    } catch (e) {
+      console.error(`[moving-bench] --history failed: ${e && e.message ? e.message : e} `
+        + "(set HB_PERF_HISTORY or --history=DIR)");
+    }
+  }
+  process.exit(j.ok ? (ratchetRegression ? 3 : 0) : 1);
 }
 
 /**
@@ -489,10 +656,25 @@ export function deltaWalk(a, b) {
  *   ktris  -> ktris@submitted
  *   residentInstances/batchedMeshes/staticBatchC -> *@resident (RESIDENT,
  *                               never priced as if drawn — the founding wall)
+ *   link.relinks  -> programsRelinked@moving  (`--linkProbe` only: programs
+ *                               whose key was resident earlier, linked again
+ *                               during the measure lap)
+ *   link.programs -> programs@resident  (renderer.info.programs.length at the
+ *                               lap's end). With the ledger present the header
+ *                               taint lists "linkProbe" (pass-10 D-10.4.4); absent
+ *                               ledger = neither ledger key, never a 0.
+ *   workload.programs -> programs@resident  when there is no ledger (the rig's
+ *                               bare count, every run since test-tooling-8);
+ *                               absent or -1 = no key.
  *
  * Everything else the old file carried (checksums, frames, lb churn,
  * walkDelta, errors, spec, series) rides along as aux fields on the arm, so
  * nothing an operator read from the legacy shape is lost.
+ *
+ * Header provenance (test-tooling-8): rep.renderer -> platform.renderer,
+ * rep.wasmProfile / commit / distGeneratedAt -> the D-10.6 run-validity
+ * fields. A rep without them keeps the old "unknown"/null header exactly —
+ * harness/perf-ratchet.mjs keys comparability on renderer + wasmProfile.
  *
  * A judge() USABLE run lands verdict EXPLORATORY (a single arm is never a
  * scored budget by itself); a REJECT run lands INVALID and is kept on disk as
@@ -507,12 +689,31 @@ export function toResultsV2(rep, { series } = {}) {
   if (Number.isFinite(rep.workload?.residentInstances)) metrics["instances@resident"] = rep.workload.residentInstances;
   if (Number.isFinite(rep.workload?.batchedMeshes)) metrics["batchedMeshes@resident"] = rep.workload.batchedMeshes;
   if (Number.isFinite(rep.workload?.staticBatchC)) metrics["staticBatchBuckets@resident"] = rep.workload.staticBatchC;
+  const link = rep.link && Number.isFinite(rep.link.relinks) ? rep.link : null;
+  if (link) {
+    metrics["programsRelinked@moving"] = link.relinks;
+    if (Number.isFinite(link.programs) && link.programs >= 0) metrics["programs@resident"] = link.programs;
+  }
+  // Without the ledger, the rig's bare count (test-tooling-8): the ratchet
+  // needs programs@resident in DEFAULT runs to catch a default-on change that
+  // adds programs. Absent / -1 (unreadable) = no key, never a 0.
+  if (!("programs@resident" in metrics) && Number.isFinite(rep.workload?.programs) && rep.workload.programs >= 0) {
+    metrics["programs@resident"] = rep.workload.programs;
+  }
   return createReport({
     bench: "MOVE-FIX",
     protocol: "PC-3",
     url: rep.url,
     ts: rep.ts,
-    wasmProfile: "unknown", // PR-13 gate not wired here yet (T01 handoff)
+    // PR-13 (test-tooling-8): read from the loaded wasm's custom sections by
+    // provenanceProbeSource; a rep without the probe stays "unknown".
+    wasmProfile: rep.wasmProfile ?? "unknown",
+    commit: rep.commit ?? null,
+    distGeneratedAt: rep.distGeneratedAt ?? null,
+    platform: { box: null, renderer: rep.renderer ?? null },
+    // The ledger retains a ring of program records: a diagnostic that rides
+    // a measurement is declared, not hidden (pass-10 D-10.4.4).
+    ...(link ? { taint: ["linkProbe"] } : {}),
   })
     .addArm({
       arm: rep.arm,
@@ -527,11 +728,15 @@ export function toResultsV2(rep, { series } = {}) {
       missedGauge: rep.missedGauge,
       lb: rep.lb,
       walkDelta: rep.walkDelta,
+      ...(link ? { link } : {}),
       errors: rep.errors,
       // Boot provenance (2026-08-10): how many relogins the gate had to spend
       // and what the login phase logged. Reported, never judged.
       reloginAttempts: rep.reloginAttempts ?? 0,
       bootErrors: rep.bootErrors ?? [],
+      // How wasmProfile was decided (url, size, reason) + probe failures.
+      ...(rep.wasmProbe ? { wasmProbe: rep.wasmProbe } : {}),
+      ...(rep.provenanceErrors && rep.provenanceErrors.length ? { provenanceErrors: rep.provenanceErrors } : {}),
       ...(series !== undefined ? { series } : {}),
     })
     .setVerdict(rep.verdict === "USABLE" ? "EXPLORATORY" : "INVALID")

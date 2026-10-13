@@ -18,12 +18,17 @@
 //! port the packet is destined for (browser→bridge) or originated from
 //! (bridge→browser).
 
+pub mod admission;
 pub mod bridge;
+pub mod capture;
 pub mod config;
+pub mod disconnect;
 pub mod frame;
 pub mod handshake;
 pub mod shim;
 
+#[cfg(test)]
+mod admission_smoke_test;
 #[cfg(test)]
 mod shim_smoke_test;
 #[cfg(test)]

@@ -261,12 +261,30 @@ export function clipPolygonAgainstPlane(pts, plane) {
 }
 
 /**
- * Retail's degenerate-boundary reject (acclient.c:453918-453931): a polygon
- * whose vertices ALL share x == +12, or all x == -12, or all y == +12, or all
- * y == -12 lies flat on an outdoor LandCell wall plane and is skipped. Our
- * aperture vertices are LANDBLOCK-frame (the wasm adds the LB corner offset),
- * so the retail literal ±12 becomes "the coordinate is an exact multiple of
- * 24 offset by 12" — i.e. the local coordinate within the 24 m cell is ±12.
+ * Stand-in for retail's degenerate-boundary reject
+ * (D3DPolyRender::DrawPortalPolyInternal, acclient.c:453918-453931): a
+ * polygon whose vertices ALL have x == +12, or all x == -12, or all y == +12,
+ * or all y == -12 is skipped. Retail runs those EXACT compares on the
+ * polygon's OWN vertices: CellStruct-local for the indoor seal (DrawCells
+ * pushes cell->pos), building-GfxObj-local for the outdoor punch
+ * (PView::DrawPortal). Our apertures arrive LANDBLOCK-frame (the wasm has
+ * already applied the cell frame and LB corner), so this tests "the
+ * coordinate lies on a 24 m LandCell line, ±1e-3" instead. That is the same
+ * plane only for a cell centred on its landcell with a 90°-multiple yaw, and
+ * the tolerance is looser than retail's exact compare.
+ *
+ * Census over the retail baseline (holtburger-dat
+ * tests/portal_boundary_reject_census.rs, 16,997 outdoor-facing portals):
+ * retail skips 2,163, this test 2,545, and they disagree on 412. In 374
+ * cases retail draws a wall portal whose local coords are ±12.0001, which
+ * the tolerance skips. In 23, retail draws a portal this skips: 19 sit in
+ * off-centre cells and happen to lie on a world 24 m line, and 4 span both
+ * ±12 walls (this test only asks each vertex to be on SOME line, retail
+ * asks for one shared ±12). In 15, retail skips an off-centre cell's ±12
+ * wall that is off the world grid. The exact CellStruct-local test agrees
+ * with retail's building-GfxObj test on all 16,937 building-linked portals,
+ * so it could replace this for both the punch and the seal (it needs the
+ * local vertices from wasm).
  *
  * @param {number[]} pts flat [x,y,z, …]
  * @returns {boolean} true when the polygon should be skipped.
@@ -294,8 +312,9 @@ export function isLandCellBoundaryPoly(pts) {
   return allXWall || allYWall;
 
   // Distance from the nearest 24 m LandCell wall plane, or null when the
-  // coordinate is not on one. Walls sit at multiples of 24 (cell corners) —
-  // retail's ±12 literals are the CELL-LOCAL form of the same planes.
+  // coordinate is not on one. Walls sit at multiples of 24 (cell corners).
+  // Retail's ±12 literals name the same planes only in a landcell-centred,
+  // right-angle cell frame (see the census note above).
   function wallOffset(v) {
     if (!Number.isFinite(v)) return null;
     const m = v - Math.floor(v / 24) * 24;

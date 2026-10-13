@@ -590,6 +590,26 @@ function openPack(guid) {
 // more X") instead of swapping. The drag-to-paperdoll path gets the same
 // rules through dropCtx (wearPlan / readySlotOccupant).
 const RETAIL_AUTO_WEAR = typeof window !== "undefined" ? defaultOnUrlFlag("retailAutoWear") : true;
+// inventory-session-2 (2026-10-13, `?retailWieldLegal=off` = the old
+// canEquipInSlot cascade): the wield check is retail CPlayerSystem::
+// AutoWieldIsLegal (acclient.c:397227) — a caster may be held in combat, a
+// held NON-caster may not; a shield is refused next to a wielded wand / bow
+// / two-hander; a paperdoll slot the item cannot go in ignores the drop
+// quietly. "In combat" is ClientCombatSystem::combatMode != 1, read from the
+// wasm combatMode() (__combatBarState has no inCombatMode field).
+const RETAIL_WIELD_LEGAL = typeof window !== "undefined" ? defaultOnUrlFlag("retailWieldLegal") : true;
+function wieldEquipState(rows) {
+  let inCombatMode = !!window.__combatBarState?.inCombatMode;
+  const h = RETAIL_WIELD_LEGAL ? sessionHandleNow() : null;
+  if (typeof h?.combatMode === "function") {
+    try { inCombatMode = ((h.combatMode() >>> 0) || 1) !== 1; } catch (_) { /* keep the fallback */ }
+  }
+  return buildPlayerEquipState(rows, {
+    stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+    inCombatMode,
+    retailWieldLegal: RETAIL_WIELD_LEGAL,
+  });
+}
 function activateItem(guid, { cell = null } = {}) {
   const g = (guid >>> 0) || 0;
   if (!g) return false;
@@ -628,13 +648,9 @@ function activateItem(guid, { cell = null } = {}) {
           if (plan.op === "merge" || plan.op === "reject") { executeItemAction(plan, src); return true; }
         }
       }
-      const state = buildPlayerEquipState(rows, {
-        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
-        inCombatMode: !!window.__combatBarState?.inCombatMode,
-      });
-      const verdict = canEquipInSlot(row, slotMask, state);
+      const verdict = canEquipInSlot(row, slotMask, wieldEquipState(rows));
       if (verdict && verdict.ok === false) {
-        executeItemAction({ op: "reject", message: verdict.reason || "Cannot equip there." }, src);
+        if (!verdict.silent) executeItemAction({ op: "reject", message: verdict.reason || "Cannot equip there." }, src);
         return true;
       }
       executeItemAction({ op: act.kind, guid: g, slotMask, amount: row.stackSize }, src);
@@ -1402,10 +1418,7 @@ function doMount(parentEl, _ctx) {
   }
 
   function equipState() {
-    return buildPlayerEquipState(rows, {
-      stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
-      inCombatMode: !!window.__combatBarState?.inCombatMode,
-    });
+    return wieldEquipState(rows);
   }
 
   // Wave 14 — load / refresh the 3D doll from the local player's meta
@@ -1603,11 +1616,13 @@ function doMount(parentEl, _ctx) {
   function hitFor(el, s, target, scope) {
     if (!s) return { el, ok: true, target, scope };
     const action = decideItemDrop({ ...dragFor(s), split: 0 }, target, { ...dropCtx(), canUseWith: () => null });
-    const ok = action.op !== "reject";
+    // A quiet refusal (`refused` no-op: a ready slot the item cannot go in)
+    // still shows the reject highlight, but its release is silent.
+    const ok = action.op !== "reject" && !action.refused;
     // Passing a weapon over the figure on its way to a ready slot should
     // not flash the whole paperdoll red; the release still explains.
     const hl = (!ok && target.kind === DROP_TARGET.DOLL) ? null : el;
-    return { el: hl, ok, reason: action.message, target, scope };
+    return { el: hl, ok, reason: action.message, silent: !!action.refused, target, scope };
   }
   async function performDrop(ev, s, target) {
     const drag = dragFor(s);

@@ -15,7 +15,7 @@
 //   * the retail floaty frame (corner 0x06006129 + edges 0x0600612A-D, the
 //     *_Locked set 0x060074BF-C6 when the window is locked) hugs the icons;
 //   * one kit-styled hover tooltip says what each icon means in words, with
-//     live detail (ping, burden %, vitae %, effect counts);
+//     live detail (ping, packet loss, burden %, vitae %, effect counts);
 //   * Positive/Negative Effects open the effects window (buffs-hud), Vitae
 //     opens the vitae panel (vitae-detail) — anchored under this strip.
 //
@@ -30,10 +30,13 @@
 //                                               (flashes uncertain↔bad every 0.75 s),
 //                                               else disconnected
 //   gmFloatyIndicatorsUI::ListenToElementMessage — LogoffButton (0x100000FA) →
-//     CM_UI::SendNotice_EndCharacterSession. NOT ported: the wasm session has no
-//     logout/LogOffCharacter surface yet, and a dead button is worse than none,
-//     so the frame is sized to the six indicators instead of retail's seven
-//     buttons.
+//     CM_UI::SendNotice_EndCharacterSession(1) → the Yes / No
+//     ID_Client_EndCharacterSessionConfirm dialog, then the log-off
+//     (ui/end_character_session.js → index.html __logOutToCharacterSelect).
+//     inventory-session-5 (2026-10-13): ported as the seventh button (layout
+//     x=125, 20×20, Normal 0x060074B1 / Normal_pressed 0x060074B2), so the
+//     frame spans retail's seven buttons again. The button is hidden — and
+//     the frame back to six slots — on a page without the log-off path.
 //
 // rec #197 (kept): read_order 23 is the LogoffButton, not a
 // PortalStormIndicator — acclient.h declares gmUIElement_PortalStormIndicator
@@ -42,6 +45,8 @@
 
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { ETF } from "../ui/enchantment_constants.js";
+import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
+import { logOffAvailable, requestEndCharacterSession } from "../ui/end_character_session.js";
 
 const OVERLAY_ID = "hb-status-indicators";
 const SP = "./data/ui-sprites";
@@ -97,6 +102,32 @@ const INDICATORS = Object.freeze([
   Object.freeze({ id: "minigame", name: "Mini-Game",        active: "0x060074A5", inactive: "0x060074A6" }),
 ]);
 
+// LogoffButton (read_order 23) — a plain button, not an indicator: Normal
+// 0x060074B1, Normal_pressed 0x060074B2 and no PressedOverlay child (the
+// layout gives it none). Retail geometry from data/retail-layouts/0x21000071.json.
+const LOGOFF_BUTTON = Object.freeze({
+  id: "logoff",
+  elementId: 0x100000FA,
+  name: "Log Off",
+  normal: "0x060074B1",
+  pressed: "0x060074B2",
+  x: 125, y: 5, width: 20, height: 20,
+});
+
+/** Retail slot origin: read_order 17-23 packed edge to edge from x = 5. */
+function retailSlotX(index) {
+  return FRAME + index * ICON_SIZE;
+}
+
+/** Retail RootFloatyIndicators_Field width — 150 for the seven buttons. */
+const RETAIL_FRAME_WIDTH = FRAME * 2 + (INDICATORS.length + 1) * ICON_SIZE;
+
+/** Our strip width for `slots` buttons: retail's frame plus the 2-px gutters. */
+function stripWidth(slots) {
+  const n = Math.max(0, slots | 0);
+  return FRAME * 2 + n * ICON_SIZE + Math.max(0, n - 1) * ICON_GAP;
+}
+
 // ─── Pure state machines (exported via __test) ──────────────────────────
 
 /** gmUIElement_BurdenIndicator::Update — load = burden / capacity. */
@@ -151,6 +182,44 @@ function linkTierFor(ageMs, rttMs, th = {}) {
     else if (rtt > rttWarn) tier = "uncertain";
   }
   return tier;
+}
+
+/**
+ * net-transport-6 (2026-10-13): the packet-loss fact the link tooltip shows,
+ * or null for no line — no getter (stale pkg/), a junk value, or a link that
+ * has not spoken yet (`ageMs` unknown), where a "0.00%" would read as a
+ * measurement.
+ *
+ * @param {number|null} lossPct  SessionHandle.sessionPacketLossPct()
+ * @param {number} ageMs         ms since the last inbound packet (u32::MAX = none)
+ * @returns {number|null}
+ */
+function linkLossFact(lossPct, ageMs) {
+  if (lossPct == null) return null;
+  const loss = Number(lossPct);
+  const age = Number(ageMs);
+  if (!Number.isFinite(loss) || loss < 0) return null;
+  if (!Number.isFinite(age) || age < 0 || age >= LINK_NO_DATA) return null;
+  return loss;
+}
+
+/**
+ * The link tooltip's detail line: ping, packet loss, last-packet age.
+ * net-transport-6: the packet loss is retail's Link Status figure
+ * (LinkStatusHolder::GetPacketLossPercentage — 2 × (NAKed + retransmitted)
+ * / (received + sent) over the last 40 two-second snapshots), printed as
+ * gmLinkStatusUI::Update prints it: 2 decimals and "%", the doubled ratio
+ * unscaled.
+ *
+ * @param {{rttMs?: number|null, ageMs?: number|null, lossPct?: number|null}} f
+ * @returns {string}
+ */
+function linkTooltipDetail(f = {}) {
+  const parts = [];
+  if (Number.isFinite(f.rttMs)) parts.push(`Ping ${Math.round(f.rttMs)} ms`);
+  if (Number.isFinite(f.lossPct)) parts.push(`Packet loss ${f.lossPct.toFixed(2)}%`);
+  if (Number.isFinite(f.ageMs)) parts.push(`last packet ${(f.ageMs / 1000).toFixed(1)} s ago`);
+  return parts.length ? parts.join(" · ") : "No data from the server yet.";
 }
 
 const LINK_TIER_LABEL = Object.freeze({
@@ -225,7 +294,8 @@ function ensureStyles() {
   stylesInjected = true;
   const style = document.createElement("style");
   style.id = "hb-status-indicators-style";
-  const width = FRAME * 2 + INDICATORS.length * ICON_SIZE + (INDICATORS.length - 1) * ICON_GAP;
+  // Six indicators + the LogoffButton; `.no-logoff` drops the seventh slot.
+  const width = stripWidth(INDICATORS.length + 1);
   style.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
@@ -267,6 +337,16 @@ function ensureStyles() {
       position: absolute; inset: 0;
       background: url("${SP}/0x0600749B.png") center / 100% 100% no-repeat;
     }
+    /* LogoffButton 0x100000FA — Normal / Normal_pressed sprites. */
+    #${OVERLAY_ID} .hb-indicator.hb-logoff-button {
+      background-image: url("${SP}/${LOGOFF_BUTTON.normal}.png");
+      cursor: pointer;
+    }
+    #${OVERLAY_ID} .hb-indicator.hb-logoff-button:active {
+      background-image: url("${SP}/${LOGOFF_BUTTON.pressed}.png");
+    }
+    #${OVERLAY_ID} .hb-indicator.hb-logoff-button[hidden] { display: none; }
+    #${OVERLAY_ID}.no-logoff { width: ${stripWidth(INDICATORS.length)}px; }
     /* gmUIElement_LinkStatusIndicator::UseTime — the "bad" state flashes
        between the uncertain and bad sprites every 0.75 s. */
     #${OVERLAY_ID} .hb-indicator[data-indicator="linkstatus"][data-state="bad"] {
@@ -388,7 +468,7 @@ export function mount(_ctx) {
   // Live per-indicator facts the tooltip renders from. Updated by the
   // state setters below; the tooltip re-reads on hover + on every change.
   const facts = {
-    linkstatus: { tier: "disconnected", rttMs: null, ageMs: null },
+    linkstatus: { tier: "disconnected", rttMs: null, ageMs: null, lossPct: null },
     buffs: { count: null },
     debuffs: { count: null },
     vitae: { vitae: 1.0 },
@@ -409,20 +489,17 @@ export function mount(_ctx) {
   tip.appendChild(tipDetail);
   tip.appendChild(tipHint);
   let hoveredId = null;
+  let logoffEl = null;
 
   function tooltipFor(id) {
     const f = facts[id] || {};
     switch (id) {
-      case "linkstatus": {
-        const parts = [];
-        if (Number.isFinite(f.rttMs)) parts.push(`Ping ${Math.round(f.rttMs)} ms`);
-        if (Number.isFinite(f.ageMs)) parts.push(`last packet ${(f.ageMs / 1000).toFixed(1)} s ago`);
+      case "linkstatus":
         return {
           title: `Connection: ${LINK_TIER_LABEL[f.tier] ?? "Unknown"}`,
-          detail: parts.length ? parts.join(" · ") : "No data from the server yet.",
+          detail: linkTooltipDetail(f),
           hint: "",
         };
-      }
       case "buffs":
       case "debuffs": {
         const n = f.count;
@@ -460,6 +537,12 @@ export function mount(_ctx) {
           detail: f.active ? "A game is in progress." : "No game in progress.",
           hint: "",
         };
+      case LOGOFF_BUTTON.id:
+        return {
+          title: LOGOFF_BUTTON.name,
+          detail: "Exit to Character Selection.",
+          hint: "Click to log off (asks first).",
+        };
       default:
         return { title: id, detail: "", hint: "" };
     }
@@ -470,7 +553,7 @@ export function mount(_ctx) {
       tip.classList.remove("is-open");
       return;
     }
-    const el = indicatorEls[hoveredId];
+    const el = hoveredId === LOGOFF_BUTTON.id ? logoffEl : indicatorEls[hoveredId];
     const t = tooltipFor(hoveredId);
     tipTitle.textContent = t.title;
     tipDetail.textContent = t.detail;
@@ -517,16 +600,64 @@ export function mount(_ctx) {
         }
       };
       el.addEventListener("click", activate);
+      // input-options-1: a jump (Space) or chat (Enter) must not also toggle
+      // the effects/vitae window after the icon was clicked (ui/hud_focus.js).
       el.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" || ev.key === " ") {
-          ev.preventDefault();
-          activate();
-        }
+        if (!hudKeyActivates(ev)) return;
+        ev.preventDefault();
+        activate();
       });
+      releaseMouseFocus(el);
     }
     overlay.appendChild(el);
     indicatorEls[ind.id] = el;
   }
+
+  // LogoffButton (0x100000FA) — gmFloatyIndicatorsUI::ListenToElementMessage
+  // sends CM_UI::SendNotice_EndCharacterSession(1): the Yes / No
+  // confirmation, then the log-off (ui/end_character_session.js).
+  logoffEl = document.createElement("div");
+  logoffEl.className = "hb-indicator hb-logoff-button";
+  logoffEl.dataset.button = LOGOFF_BUTTON.id;
+  logoffEl.dataset.elementId = `0x${LOGOFF_BUTTON.elementId.toString(16).toUpperCase()}`;
+  logoffEl.setAttribute("role", "button");
+  logoffEl.setAttribute("aria-label", LOGOFF_BUTTON.name);
+  const activateLogoff = () => {
+    hoveredId = null;
+    renderTip();
+    if (!logOffAvailable(window)) return;
+    requestEndCharacterSession({ win: window }).catch(() => {});
+  };
+  logoffEl.addEventListener("mouseenter", () => { hoveredId = LOGOFF_BUTTON.id; renderTip(); });
+  logoffEl.addEventListener("mouseleave", () => {
+    if (hoveredId === LOGOFF_BUTTON.id) { hoveredId = null; renderTip(); }
+  });
+  logoffEl.addEventListener("focus", () => { hoveredId = LOGOFF_BUTTON.id; renderTip(); });
+  logoffEl.addEventListener("blur", () => {
+    if (hoveredId === LOGOFF_BUTTON.id) { hoveredId = null; renderTip(); }
+  });
+  logoffEl.addEventListener("click", activateLogoff);
+  logoffEl.addEventListener("keydown", (ev) => {
+    if (!hudKeyActivates(ev)) return;
+    ev.preventDefault();
+    activateLogoff();
+  });
+  releaseMouseFocus(logoffEl);
+  overlay.appendChild(logoffEl);
+  // Hidden (and the frame back to six slots) while the page has no log-off
+  // path; re-checked with the 1 Hz link poll.
+  let logoffShown = null;
+  function refreshLogoff() {
+    const on = logOffAvailable(window);
+    if (on === logoffShown) return;
+    logoffShown = on;
+    logoffEl.hidden = !on;
+    logoffEl.tabIndex = on ? 0 : -1;
+    logoffEl.setAttribute("aria-disabled", on ? "false" : "true");
+    overlay.classList.toggle("no-logoff", !on);
+    if (!on && hoveredId === LOGOFF_BUTTON.id) { hoveredId = null; renderTip(); }
+  }
+  refreshLogoff();
   overlay.appendChild(tip);
 
   // Lock toggle. attachWindowPosition wires the click to the persisted lock
@@ -550,6 +681,9 @@ export function mount(_ctx) {
     dragHandle: overlay,
     ignoreSelector: ".hb-indicator, .hb-status-lock-button",
     lockButton,
+    // gmFloatyIndicatorsUI::UpdateLockedStatus reads PlayerModule::LockUI;
+    // the lock stud stays an extra per-window lock.
+    obeysGlobalLock: true,
     onLockChange: applyLocked,
   });
   applyLocked(positionCtl?.isLocked?.() === true);
@@ -583,14 +717,18 @@ export function mount(_ctx) {
     const handle = window.__sessionHandle;
     let ageMs = 0xFFFFFFFF;
     let rttMs = 0xFFFFFFFF;
+    let lossPct = null;
     try {
       if (typeof handle?.sessionLastRecvAgeMs === "function") ageMs = handle.sessionLastRecvAgeMs() >>> 0;
       if (typeof handle?.sessionLastPingRttMs === "function") rttMs = handle.sessionLastPingRttMs() >>> 0;
+      // net-transport-6: retail's packet-loss figure (absent on a stale pkg/).
+      if (typeof handle?.sessionPacketLossPct === "function") lossPct = handle.sessionPacketLossPct();
     } catch (_) {}
     const tier = linkTierFor(ageMs, rttMs, window.__linkStatusThresholds || {});
     const f = facts.linkstatus;
     f.ageMs = ageMs < LINK_NO_DATA ? ageMs : null;
     f.rttMs = rttMs < LINK_NO_DATA ? rttMs : null;
+    f.lossPct = linkLossFact(lossPct, ageMs);
     if (tier !== f.tier) {
       f.tier = tier;
       if (linkEl) linkEl.dataset.state = tier;
@@ -598,7 +736,7 @@ export function mount(_ctx) {
     refreshTipIf("linkstatus");
   }
   if (linkEl) linkEl.dataset.state = facts.linkstatus.tier;
-  const linkPollTimer = setInterval(pollLink, 1000);
+  const linkPollTimer = setInterval(() => { pollLink(); refreshLogoff(); }, 1000);
 
   // ── Burden / vitae / effects / mini-game ─────────────────────────────
   function applyBurden(ratio) {
@@ -765,6 +903,8 @@ export const __test = Object.freeze({
   classifyEnchKind,
   burdenStateFor,
   linkTierFor,
+  linkLossFact,
+  linkTooltipDetail,
   /** Burden indicator lit (Encumbered or worse) — retail load ≥ 1.0. */
   isBurdenActive(ratio) { return burdenStateFor(ratio) !== "unencumbered"; },
   /** Past 100% capacity — the same threshold (retail state 15+). */
@@ -773,4 +913,8 @@ export const __test = Object.freeze({
   isVitaeActive(vitae) { return vitaeActive(vitae); },
   INDICATORS,
   STATUS_ELEMS,
+  LOGOFF_BUTTON,
+  RETAIL_FRAME_WIDTH,
+  retailSlotX,
+  stripWidth,
 });

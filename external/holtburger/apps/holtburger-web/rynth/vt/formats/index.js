@@ -6,6 +6,7 @@
 //   view_xml     Virindi meta-view XML → safe ViewModel (own tokenizer)
 //   utl          VT Classic Looter .utl ↔ UtlProfile
 //   utl_eval     .utl rule evaluation + loot verdict
+//   usd          VirindiTank settings profile .usd → a new user profile (import only)
 export {
   COND_KW,
   ACT_KW,
@@ -37,3 +38,4 @@ export { parseAf, writeAf } from "./af.js";
 export { parseViewXml } from "./view_xml.js";
 export { parseUtl, writeUtl, UTL_NODE_TYPES, UTL_ACTIONS, DISABLED_RULE, utlNodeType, utlActionCode, utlLengthCode, newUtlProfile, validateUtl } from "./utl.js";
 export { evaluateUtl, lootVerdict } from "./utl_eval.js";
+export { parseUsd, importUsdProfile, USD_TABLES, USD_MONSTER_SWITCHES, VT_DAMAGE_NAMES, USD_ASSIST_TYPES } from "./usd.js";

@@ -22,6 +22,8 @@
 //                                    1=invisible; three.js uses opacity
 //                                    1=opaque, 0=invisible. Material is
 //                                    set transparent=true at construction.)
+//                                    Also mesh.userData.__op (the instanced
+//                                    path's copy — see setTranslucency).
 //
 // All 12 ParticleType cases from Particle.cs:47-108 (init) and
 // Particle.cs:138-171 (update) are ported faithfully. Even though
@@ -81,6 +83,21 @@ const PARTICLE_ROT_EULER_LEGACY = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return new URLSearchParams(window.location.search)
       .get("particleRotAce")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Particle::Init first-update frame escape (2026-10-13). Default = retail
+// `Particle::Update(..., &start_frame)` (acclient.c:330830). `?particleInitFrameAce=on`
+// restores ACE Particle.cs:118's `pFrame` (parentOffset) arg, which drew every
+// new particle for one frame at parentOffset + offset (near the world origin).
+// Strict `=== "on"`. Read once at module load.
+const PARTICLE_INIT_FRAME_ACE_LEGACY = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("particleInitFrameAce")?.toLowerCase() === "on";
   } catch (_) {
     return false;
   }
@@ -152,18 +169,29 @@ export function localToGlobalVec(frame, v) {
 
 /** Set per-particle alpha given ACE translucency. ACE convention:
  * translucency 0 = fully opaque, translucency 1 = fully invisible.
- * Mirrors PhysicsPart.SetTranslucency (PhysicsPart.cs:137-156). */
+ * Mirrors PhysicsPart.SetTranslucency (PhysicsPart.cs:137-156).
+ *
+ * Slot carriers (2026-10-13): the opacity also rides `mesh.userData.__op`,
+ * which is what the instanced path reads back (particle_manager.js
+ * `_appendInstances`). An instanced emitter's slot meshes share ONE never-
+ * rendered carrier material (`userData.__slotCarrier`), so it is left alone;
+ * every other material takes the opacity exactly as before. */
 export function setTranslucency(mesh, translucency) {
   if (!mesh || !mesh.material) return;
   // ACE: if translucency == 1.0 → NoDraw=true. We mirror by setting
   // mesh.visible = false. Otherwise visible + opacity = 1 - translucency.
+  let op;
   if (translucency >= 1.0) {
     mesh.visible = false;
-    mesh.material.opacity = 0.0;
-    return;
+    op = 0.0;
+  } else {
+    mesh.visible = true;
+    op = Math.max(0.0, Math.min(1.0, 1.0 - translucency));
   }
-  mesh.visible = true;
-  mesh.material.opacity = Math.max(0.0, Math.min(1.0, 1.0 - translucency));
+  const ud = mesh.userData;
+  if (ud) ud.__op = op;
+  const mud = mesh.material.userData;
+  if (!(mud && mud.__slotCarrier === true)) mesh.material.opacity = op;
 }
 
 /**
@@ -415,12 +443,20 @@ export class Particle {
     setTranslucency(mesh, this.startTrans);
 
     // Immediately invoke first update so the mesh has its t=0 position +
-    // scale/opacity values before this frame's render. Mirrors
-    // Particle.cs:118 — `Update(info.ParticleType, persistent, part, pFrame);`
-    // — note ACE passes `pFrame` (parentOffset) as the `parent` arg here,
-    // NOT the parent.Position.Frame. This subtle distinction matters for
-    // Still/Velocity types whose math is `parent.Origin + Offset`.
-    this.update(info.particleType, persistent, mesh, parentOffset);
+    // scale/opacity values before this frame's render. Retail Particle::Init
+    // ends with `Particle::Update(..., part, &this->start_frame)`
+    // (acclient.c:330830). ACE Particle.cs:118 passes `pFrame` (parentOffset)
+    // instead, and this file used to follow it: `emitParticle` runs AFTER the
+    // per-slot update loop in `updateParticles`, so the new particle was drawn
+    // for one frame at parentOffset + Offset in `_scene` space (absolute AC
+    // world coords → near the SW map corner, off screen), every particle
+    // appeared a frame late and a per-metre trail (cast hand 0x32000109) lost
+    // its head segment. startFrame is exact for both emitter kinds at t=0:
+    // non-parent-local updates read startFrame, and parent-local ones read the
+    // live anchor frame startFrame was just copied from.
+    // `?particleInitFrameAce=on` restores the ACE arg.
+    this.update(info.particleType, persistent, mesh,
+      PARTICLE_INIT_FRAME_ACE_LEGACY ? parentOffset : this.startFrame);
 
     return false;
   }

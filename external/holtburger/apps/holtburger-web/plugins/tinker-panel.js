@@ -127,7 +127,8 @@ function setFromDrop(role, guid) {
 function renderTarget(t, guid, role) {
   if (guid) {
     const name = objectDisplayName(guid);
-    fillSlotIcon(t.slot, objectIconId(guid), name);
+    // hud-ui-3: retail composite icon (commerce_window.slotIconMeta).
+    fillSlotIcon(t.slot, { guid, iconId: objectIconId(guid) }, name);
     t.name.textContent = name;
     t.name.classList.remove("is-empty");
     t.box.title = `${name} — click to clear`;

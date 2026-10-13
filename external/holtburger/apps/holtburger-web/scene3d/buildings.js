@@ -140,8 +140,15 @@ const BUILDING_BATCH = (() => {
 // reads (`n.updateMatrix()` → setMatrixAt). Stamps `landblockId` so the per-LB eviction hook
 // (evictStaticAtlasForLb, keyed by node.userData.landblockId) excises them on LB evict.
 // Returns the count of passthrough meshes added to buildingsGroup (fail-soft, unbatched).
+// lighting-materials-7 — true for a mesh drawing with an env-detail-patched
+// material (`MaterialCache.applyEnvDetail` stamps `userData.__envDetailKind`).
+function _carriesEnvDetail(n) {
+  const m = n && n.material;
+  return !!(m && !Array.isArray(m) && m.userData && m.userData.__envDetailKind);
+}
+
 function _feedBuildingGroupsToAtlas(groups, scene3d) {
-  const singletons = [];
+  let singletons = [];
   for (const g of groups) {
     g.updateMatrixWorld(true); // detached → subtree matrixWorld == staticsGroup-relative
     const lbId = (g.userData?.landblockId ?? 0) >>> 0;
@@ -154,6 +161,19 @@ function _feedBuildingGroupsToAtlas(groups, scene3d) {
       singletons.push(o);
     });
   }
+  // lighting-materials-7 (`?envDetailTex=on`, default OFF) — a shell surface
+  // carrying the retail detail patch keeps its OWN material: a pool or atlas
+  // bucket would draw it with the bucket's material and silently drop the
+  // detail. Those surfaces go straight to buildingsGroup, unbatched (the
+  // flag's draw-call cost). Flag off: no material carries the marker, so the
+  // list is untouched and the routing below is unchanged.
+  const keepOwnMaterial = [];
+  if (singletons.some(_carriesEnvDetail)) {
+    const rest = [];
+    for (const n of singletons) (_carriesEnvDetail(n) ? keepOwnMaterial : rest).push(n);
+    singletons = rest;
+  }
+  for (const n of keepOwnMaterial) scene3d.buildingsGroup.add(n);
   // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5) — THE PRODUCER SWAP,
   // consumer 2 of 3. Buildings already flatten to staticsGroup-relative
   // singletons here, which is exactly the pooled producer's input contract, so
@@ -190,7 +210,7 @@ function _feedBuildingGroupsToAtlas(groups, scene3d) {
     ? addSingletonsToCrossLbAtlas(toAtlas, scene3d)
     : { passthrough: toAtlas };
   for (const n of passthrough) scene3d.buildingsGroup.add(n); // world-baked TRS → correct under buildingsGroup
-  return passthrough.length;
+  return passthrough.length + keepOwnMaterial.length;
 }
 
 // A3 (busted-world load fix 2026-06-20) — concurrent-call dedup for the
@@ -591,9 +611,15 @@ function buildOneBuilding(
     };
 
     for (const g of part.groups) {
-      const mat = BUILDING_FLOOR_BIAS
+      let mat = BUILDING_FLOOR_BIAS
         ? materialCache.getCachedFloorBias(g.surfaceDid)
         : materialCache.getCached(g.surfaceDid);
+      // lighting-materials-7 — `?envDetailTex=on` (default OFF): retail's
+      // building detail pass on the shell (RenderDeviceD3D::DrawBuilding,
+      // acclient.c:456943). Same object back when the flag is off.
+      if (typeof materialCache.applyEnvDetail === "function") {
+        mat = materialCache.applyEnvDetail(mat, "building", g.surfaceDid);
+      }
       const mesh = new THREE.Mesh(g.geometry, mat);
       mesh.name = `surface-${g.surfaceDid.toString(16).padStart(8, "0")}`;
       mesh.userData = {

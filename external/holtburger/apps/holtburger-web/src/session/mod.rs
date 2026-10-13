@@ -47,6 +47,9 @@ pub(crate) struct LoopFlags {
     pub(crate) world_lifecycle_on: bool,
     pub(crate) unified_tick_on: bool,
     pub(crate) maint_prune_on: bool,
+    /// streaming-residency-1 (2026-10-13): `?aceObjMaint=on` (OPT-IN) —
+    /// ACE-parity visibility prune (`WorldState::set_ace_object_maint_enabled`).
+    pub(crate) ace_obj_maint_on: bool,
     pub(crate) pose_publish_post_tick_on: bool,
     pub(crate) wire_state_packs_stage1_on: bool,
     pub(crate) routine_pos_guard_on: bool,
@@ -58,6 +61,8 @@ pub(crate) struct LoopFlags {
     pub(crate) remote_turn_on: bool,
     /// MoveTo refactor phase B: `?remoteSpine` (per-object movement managers).
     pub(crate) remote_spine_on: bool,
+    /// motion-remote-1: `?remoteRootScale` (remote root motion × ObjScale).
+    pub(crate) remote_root_scale_on: bool,
     /// MoveTo refactor phase C: `?remoteSweep` (remote moves through the transition).
     pub(crate) remote_sweep_on: bool,
     /// MoveTo refactor phase G: `?targetVoyeur` (TargetManager voyeur).
@@ -126,6 +131,9 @@ pub(crate) struct LoopCtx {
         std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>>,
     pub(crate) latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>>,
     pub(crate) latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
+    pub(crate) latest_last_outside_death: std::rc::Rc<
+        std::cell::RefCell<Option<crate::last_outside_death::LastOutsideDeathJs>>,
+    >,
     pub(crate) latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>>,
     pub(crate) cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     pub(crate) door_part_snapshot:
@@ -166,5 +174,9 @@ pub(crate) struct LoopCtx {
     pub(crate) js_spawned_guids: std::collections::HashSet<u32>,
     pub(crate) seq_tracker:
         std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>>,
+    /// messages-objects-1 (2026-10-13): retail's pending inventory request —
+    /// recorded by the item `SessionCommand` arms, answered in
+    /// `messages::handle_message`, read by the 0x00A0 arm.
+    pub(crate) inventory_requests: crate::inventory_request::InventoryRequestTracker,
     pub(crate) flags: LoopFlags,
 }

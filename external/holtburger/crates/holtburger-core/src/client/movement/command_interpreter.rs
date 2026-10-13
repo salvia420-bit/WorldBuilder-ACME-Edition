@@ -63,6 +63,7 @@ use super::motion_interp::{
     MOTION_WALK_FORWARD,
 };
 use super::params::MovementParameters;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -506,6 +507,11 @@ pub(crate) struct CommandInterpreter {
     /// the cast window closes. Cleared by any unlocked forward re-apply and by
     /// a forward-axis key edge.
     pub(crate) forward_killed_by_cast_lock: bool,
+    /// `ACCmdInterp::m_hashEmoteInputActionsToCommands` — InputAction id →
+    /// MotionCommand, filled by the ctor from [`EMOTE_INPUT_ACTION_IDS`]
+    /// (`InitializeEmoteInputActionHash`, acclient.c:436034, called from
+    /// the `ACCmdInterp` ctor :436191). Read by `on_action`'s default arm.
+    pub(crate) emote_input_actions_to_commands: HashMap<u32, u32>,
 }
 
 /// Step-5 renderer/effect stream entries (PLAN rows 12-13).
@@ -577,6 +583,7 @@ impl CommandInterpreter {
             effects: Vec::new(),
             forward_reclaim_locked: false,
             forward_killed_by_cast_lock: false,
+            emote_input_actions_to_commands: EMOTE_INPUT_ACTION_IDS.iter().copied().collect(),
         }
     }
 
@@ -1743,9 +1750,9 @@ impl CommandInterpreter {
     /// `ACCmdInterp::OnAction(action, fStart)` — acclient.c:435951. Returns
     /// handled/consumed. Inactive interpreter SWALLOWS the event (true
     /// without acting). Dense switch over `InputAction - 0x29`; default →
-    /// the emote hash (M3: ships dark/empty — movement ids 0x29-0x32 are the
-    /// live surface; the ~90-pair emote list is `EMOTE_INPUT_ACTION_PAIRS`
-    /// awaiting numeric ids). ADJ-4: this IS the retail entry the step-4 JS
+    /// the emote hash (`emote_input_actions_to_commands`, the 91 pairs of
+    /// [`EMOTE_INPUT_ACTION_IDS`]: Ready/Crouch/Sit/Lay Down and the
+    /// gesture emotes). ADJ-4: this IS the retail entry the step-4 JS
     /// forwarder feeds (`w` → case 0 → WalkForward 0x45000005; autorun →
     /// case 7 → 0x090000C7 const-on — the two P14 constants corrected by
     /// construction).
@@ -1777,9 +1784,14 @@ impl CommandInterpreter {
             }
             0x32 => self.set_hold_run(seams, f_start as i32),
             _ => {
-                // Emote path (M3: dark — the hash ships empty until the
-                // numeric InputAction ids land; unknown → not handled).
-                return false;
+                // Emote path (:436010-436018): a hashed InputAction →
+                // `SetMotion(command, 1)` — const-on, `fStart` unread (JS
+                // forwards only the press). Unknown → not handled.
+                let Some(motion) = self.emote_input_actions_to_commands.get(&action).copied()
+                else {
+                    return false;
+                };
+                self.set_motion(seams, motion, true);
             }
         }
         true
@@ -1805,11 +1817,10 @@ impl CommandInterpreter {
 
 /// The complete emote (InputAction, MotionCommand) pair list from
 /// `InitializeEmoteInputActionHash` (acclient.c:436034), in retail insertion
-/// order — 91 pairs, fidelity-verified programmatically. M3: the numeric
-/// InputAction ids are not on this box; the hash ships DARK (empty) and
-/// `on_action`'s default arm returns unhandled. When an id source lands,
-/// build the map from this list.
-#[allow(dead_code)] // staged: emote input lane (M3)
+/// order — 91 pairs, fidelity-verified programmatically. The symbol names
+/// of [`EMOTE_INPUT_ACTION_IDS`], row for row (the tests pin the two
+/// tables together).
+#[allow(dead_code)] // names only — the live table is EMOTE_INPUT_ACTION_IDS
 pub(crate) const EMOTE_INPUT_ACTION_PAIRS: &[(&str, &str)] = &[
     ("Ready", "Motion_Ready"),
     ("Crouch", "Motion_Crouch"),
@@ -1902,6 +1913,114 @@ pub(crate) const EMOTE_INPUT_ACTION_PAIRS: &[(&str, &str)] = &[
     ("DrudgeDance", "Motion_DrudgeDance"),
     ("HaveASeat", "Motion_HaveASeat"),
     ("Helper", "Motion_Helper"),
+];
+
+/// The emote hash's numeric pairs — `(InputAction, MotionCommand)` in the
+/// `InitializeEmoteInputActionHash` insertion order (acclient.c:436034),
+/// row for row with [`EMOTE_INPUT_ACTION_PAIRS`]. Re-derived 2026-10-13
+/// (input-options-5):
+/// - InputAction ids: the acclient.c `const unsigned int Ready = 268435604u;`
+///   … declarations (0x10000094 `Ready` … 0x100000EE `YMCA`) — the same
+///   values as `holtburger_common::properties::ClientAction`.
+/// - MotionCommand ids: the END-OF-RETAIL numbering — ACE
+///   `MotionCommand.cs`, the keys of the portal.dat player MotionTable
+///   0x09000001, and what `soul_emote_motion.rs` / the renderer use. The
+///   acclient.c `Motion_*` values match it below low-16 0x115; from there on
+///   the PDB build sits 3 lower (`Motion_SitState` 0x4300013A vs the DAT's
+///   0x4300013D — that build predates three inserted commands), so those 28
+///   rows carry the DAT value, with the acclient.c one in the comment.
+pub(crate) const EMOTE_INPUT_ACTION_IDS: &[(u32, u32)] = &[
+    (0x1000_0094, 0x4100_0003), // Ready
+    (0x1000_0095, 0x4100_0012), // Crouch
+    (0x1000_0096, 0x4100_0013), // Sitting
+    (0x1000_0097, 0x4100_0014), // Sleeping
+    (0x1000_00CF, 0x4300_00EA), // ShakeFistState
+    (0x1000_00C7, 0x4300_00EB), // PrayState
+    (0x1000_00A1, 0x4300_00EC), // BowDeepState
+    (0x1000_00A4, 0x4300_00ED), // ClapHandsState
+    (0x1000_00A6, 0x4300_00EE), // CrossArmsState
+    (0x1000_00D2, 0x4300_00EF), // ShiverState
+    (0x1000_00BE, 0x4300_00F0), // PointState
+    (0x1000_00E6, 0x4300_00F1), // WaveState
+    (0x1000_009B, 0x4300_00F2), // AkimboState
+    (0x1000_00CA, 0x4300_00F3), // SaluteState
+    (0x1000_00CD, 0x4300_00F4), // ScratchHeadState
+    (0x1000_00E1, 0x4300_00F5), // TapFootState
+    (0x1000_00B3, 0x4300_00F6), // LeanState
+    (0x1000_00B0, 0x4300_00F7), // KneelState
+    (0x1000_00BC, 0x4300_00F8), // PleadState
+    (0x1000_009A, 0x4200_00F9), // ATOYOT
+    (0x1000_00D9, 0x4300_00FA), // SlouchState
+    (0x1000_00DE, 0x4300_00FB), // SurrenderState
+    (0x1000_00EC, 0x4300_00FC), // WoahState
+    (0x1000_00EA, 0x4300_00FD), // WindedState
+    (0x1000_00DB, 0x4300_0118), // SnowAngelState (acclient.c 0x43000115)
+    (0x1000_00A8, 0x4300_011A), // CurtseyState (acclient.c 0x43000117)
+    (0x1000_0098, 0x4300_011B), // AFKState (acclient.c 0x43000118)
+    (0x1000_00B4, 0x4300_011C), // MeditateState (acclient.c 0x43000119)
+    (0x1000_00D5, 0x4300_013D), // SitState (acclient.c 0x4300013A)
+    (0x1000_00D7, 0x4300_013E), // SitCrossleggedState (acclient.c 0x4300013B)
+    (0x1000_00D6, 0x4300_013F), // SitBackState (acclient.c 0x4300013C)
+    (0x1000_00C2, 0x4300_0140), // PointLeftState (acclient.c 0x4300013D)
+    (0x1000_00C4, 0x4300_0141), // PointRightState (acclient.c 0x4300013E)
+    (0x1000_00DF, 0x4300_0142), // TalktotheHandState (acclient.c 0x4300013F)
+    (0x1000_00C0, 0x4300_0143), // PointDownState (acclient.c 0x43000140)
+    (0x1000_00AA, 0x4300_0144), // DrudgeDanceState (acclient.c 0x43000141)
+    (0x1000_00C5, 0x4300_0145), // PossumState (acclient.c 0x43000142)
+    (0x1000_00C8, 0x4300_0146), // ReadState (acclient.c 0x43000143)
+    (0x1000_00E3, 0x4300_0147), // ThinkerState (acclient.c 0x43000144)
+    (0x1000_00AC, 0x4300_0148), // HaveASeatState (acclient.c 0x43000145)
+    (0x1000_009C, 0x4300_0149), // AtEaseState (acclient.c 0x43000146)
+    (0x1000_00A2, 0x1300_004C), // Cheer
+    (0x1000_00A7, 0x1300_007F), // Cry
+    (0x1000_00CE, 0x1300_0079), // ShakeFist
+    (0x1000_009D, 0x1300_007A), // Beckon
+    (0x1000_009E, 0x1300_007B), // BeSeeingYou
+    (0x1000_009F, 0x1300_007C), // BlowKiss
+    (0x1000_00A0, 0x1300_007D), // BowDeep
+    (0x1000_00A3, 0x1300_007E), // ClapHands
+    (0x1000_00B2, 0x1300_0080), // Laugh
+    (0x1000_00B6, 0x1300_0081), // MimeEat
+    (0x1000_00B5, 0x1300_0082), // MimeDrink
+    (0x1000_00B8, 0x1300_0083), // Nod
+    (0x1000_00BD, 0x1300_0084), // Point
+    (0x1000_00D0, 0x1300_0085), // ShakeHead
+    (0x1000_00D4, 0x1300_0086), // Shrug
+    (0x1000_00E5, 0x1300_0087), // Wave
+    (0x1000_0099, 0x1300_0088), // Akimbo
+    (0x1000_00AD, 0x1300_0089), // HeartyLaugh
+    (0x1000_00C9, 0x1300_008A), // Salute
+    (0x1000_00CC, 0x1300_008B), // ScratchHead
+    (0x1000_00DA, 0x1300_008C), // SmackHead
+    (0x1000_00E0, 0x1300_008D), // TapFoot
+    (0x1000_00E8, 0x1300_008E), // WaveHigh
+    (0x1000_00E7, 0x1300_008F), // WaveLow
+    (0x1000_00ED, 0x1300_0090), // YawnStretch
+    (0x1000_00A5, 0x1300_0091), // Cringe
+    (0x1000_00AF, 0x1300_0092), // Kneel
+    (0x1000_00BB, 0x1300_0093), // Plead
+    (0x1000_00D1, 0x1300_0094), // Shiver
+    (0x1000_00D3, 0x1300_0095), // Shoo
+    (0x1000_00D8, 0x1300_0096), // Slouch
+    (0x1000_00DC, 0x1300_0097), // Spit
+    (0x1000_00DD, 0x1300_0098), // Surrender
+    (0x1000_00EB, 0x1300_0099), // Woah
+    (0x1000_00E9, 0x1300_009A), // Winded
+    (0x1000_00EE, 0x1200_009B), // YMCA
+    (0x1000_00C6, 0x1300_00CA), // Pray
+    (0x1000_00B7, 0x1300_00CB), // Mock
+    (0x1000_00E2, 0x1300_00CC), // Teapot
+    (0x1000_00E4, 0x1300_0119), // WarmHands (acclient.c 0x13000116)
+    (0x1000_00B9, 0x1300_014A), // NudgeLeft (acclient.c 0x13000147)
+    (0x1000_00BA, 0x1300_014B), // NudgeRight (acclient.c 0x13000148)
+    (0x1000_00C1, 0x1300_014C), // PointLeft (acclient.c 0x13000149)
+    (0x1000_00C3, 0x1300_014D), // PointRight (acclient.c 0x1300014A)
+    (0x1000_00BF, 0x1300_014E), // PointDown (acclient.c 0x1300014B)
+    (0x1000_00B1, 0x1300_014F), // Knock (acclient.c 0x1300014C)
+    (0x1000_00CB, 0x1300_0150), // ScanHorizon (acclient.c 0x1300014D)
+    (0x1000_00A9, 0x1300_0151), // DrudgeDance (acclient.c 0x1300014E)
+    (0x1000_00AB, 0x1300_0152), // HaveASeat (acclient.c 0x1300014F)
+    (0x1000_00AE, 0x1300_0135), // Helper (acclient.c 0x13000132)
 ];
 
 // ===========================================================================
@@ -2902,6 +3021,158 @@ mod tests {
     #[test]
     fn emote_pair_list_is_the_verified_91() {
         assert_eq!(EMOTE_INPUT_ACTION_PAIRS.len(), 91);
+    }
+
+    // ---- emote hash (input-options-5) ---------------------------------------
+
+    #[test]
+    fn emote_id_table_pairs_row_for_row_with_the_names() {
+        use holtburger_common::properties::ClientAction;
+        assert_eq!(EMOTE_INPUT_ACTION_IDS.len(), 91);
+        assert_eq!(EMOTE_INPUT_ACTION_IDS.len(), EMOTE_INPUT_ACTION_PAIRS.len());
+        let it = CommandInterpreter::new(0.0);
+        assert_eq!(
+            it.emote_input_actions_to_commands.len(),
+            91,
+            "the ctor hash holds every pair (no duplicate input ids)"
+        );
+        for (&(input, motion), &(name, motion_name)) in
+            EMOTE_INPUT_ACTION_IDS.iter().zip(EMOTE_INPUT_ACTION_PAIRS)
+        {
+            assert_eq!(
+                ClientAction::from_repr(input)
+                    .map(|a| a.to_string())
+                    .as_deref(),
+                Some(name),
+                "{input:#x} is ClientAction::{name}"
+            );
+            assert_eq!(format!("Motion_{name}"), motion_name, "pair names line up");
+            assert!(
+                motion & 0x5000_0000 != 0,
+                "{name}: {motion:#x} is a forward-class or action-class command"
+            );
+        }
+    }
+
+    #[test]
+    fn emote_input_ids_match_the_acclient_consts() {
+        // acclient.c declares them in decimal: `const unsigned int Ready =
+        // 268435604u;` … `Wave = 268435685u;`.
+        let id = |name: &str| {
+            EMOTE_INPUT_ACTION_PAIRS
+                .iter()
+                .position(|&(n, _)| n == name)
+                .map(|i| EMOTE_INPUT_ACTION_IDS[i].0)
+        };
+        assert_eq!(id("Ready"), Some(268_435_604));
+        assert_eq!(id("Crouch"), Some(268_435_605));
+        assert_eq!(id("Sitting"), Some(268_435_606));
+        assert_eq!(id("Sleeping"), Some(268_435_607));
+        assert_eq!(id("Cheer"), Some(268_435_618));
+        assert_eq!(id("Wave"), Some(268_435_685));
+        assert_eq!(id("WaveState"), Some(268_435_686));
+    }
+
+    #[test]
+    fn emote_motion_ids_are_the_end_of_retail_numbering() {
+        use crate::soul_emote_motion::motion_command_for_soul_emote_pose;
+        let it = CommandInterpreter::new(0.0);
+        let get = |action: u32| it.emote_input_actions_to_commands.get(&action).copied();
+        assert_eq!(get(0x1000_0094), Some(MOTION_READY), "Ready");
+        assert_eq!(get(0x1000_0095), Some(0x4100_0012), "Crouch");
+        assert_eq!(get(0x1000_0096), Some(0x4100_0013), "Sitting");
+        assert_eq!(get(0x1000_0097), Some(0x4100_0014), "Sleeping");
+        assert_eq!(get(0x1000_00A2), Some(0x1300_004C), "Cheer");
+        assert_eq!(get(0x1000_00E5), Some(0x1300_0087), "Wave");
+        // Past low-16 0x115 the DAT numbering wins over the PDB build's
+        // (acclient.c `Motion_SitState` = 0x4300013A).
+        assert_eq!(get(0x1000_00D5), Some(0x4300_013D), "SitState");
+        assert_eq!(get(0x1000_00AE), Some(0x1300_0135), "Helper");
+        // Every pose the chat soul-emote path resolves agrees on the low 16.
+        let mut checked = 0;
+        for (&(_, motion), &(name, _)) in
+            EMOTE_INPUT_ACTION_IDS.iter().zip(EMOTE_INPUT_ACTION_PAIRS)
+        {
+            if let Some(cmd) = motion_command_for_soul_emote_pose(name) {
+                assert_eq!(u32::from(cmd.0), motion & 0xFFFF, "{name}");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 70, "soul-emote overlap {checked}");
+    }
+
+    #[test]
+    fn on_action_emote_hash_sets_the_motion() {
+        let mut m = Mock::default();
+        let mut it = in_world();
+        it.controlled_by_server = false;
+
+        // Sit (0x10000096) → SetMotion(Motion_Sitting 0x41000013, 1)
+        // (:436010-436018) → DoMotion.
+        assert!(it.on_action(&mut m, 0x1000_0096, true));
+        assert!(
+            m.log
+                .iter()
+                .any(|op| matches!(op, Op::DoMotion { cmd: 0x4100_0013, .. })),
+            "Sit → DoMotion(Sitting): {:?}",
+            m.log
+        );
+
+        // Ready (0x10000094) → Motion_Ready.
+        m.log.clear();
+        assert!(it.on_action(&mut m, 0x1000_0094, true));
+        assert!(
+            m.log
+                .iter()
+                .any(|op| matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_READY)),
+            "Ready → DoMotion(Ready): {:?}",
+            m.log
+        );
+
+        // Wave (0x100000E5) → Motion_Wave 0x13000087, an action command:
+        // StopCompletely first, then DoMotion, then action_stamp++
+        // (:717997-718003).
+        m.log.clear();
+        let stamp = it.action_stamp;
+        assert!(it.on_action(&mut m, 0x1000_00E5, true));
+        let stop = m.log.iter().position(|op| *op == Op::PhysStopCompletely);
+        let wave = m
+            .log
+            .iter()
+            .position(|op| matches!(op, Op::DoMotion { cmd: 0x1300_0087, .. }));
+        assert!(
+            matches!((stop, wave), (Some(s), Some(w)) if s < w),
+            "StopCompletely before the wave: {:?}",
+            m.log
+        );
+        assert_eq!(it.action_stamp, stamp.wrapping_add(1));
+
+        // fStart is unread: retail plays the hashed motion on a release edge
+        // too (`SetMotion(*v4, 1)`), which is why JS forwards presses only.
+        m.log.clear();
+        assert!(it.on_action(&mut m, 0x1000_00E5, false));
+        assert!(
+            m.log
+                .iter()
+                .any(|op| matches!(op, Op::DoMotion { cmd: 0x1300_0087, .. })),
+            "release still dispatches: {:?}",
+            m.log
+        );
+    }
+
+    #[test]
+    fn on_action_non_emote_ids_stay_unhandled() {
+        let mut m = Mock::default();
+        let mut it = in_world();
+        it.controlled_by_server = false;
+        assert!(!it.on_action(&mut m, 0xDEAD_BEEF, true));
+        // A ClientAction outside the hash (ToggleCasPanel) is not an emote.
+        assert!(!it.on_action(&mut m, 0x1000_0001, true));
+        assert!(m.log.is_empty(), "nothing dispatched: {:?}", m.log);
+        // Inactive interpreter: an emote id is swallowed without acting.
+        let mut idle = CommandInterpreter::new(0.0);
+        assert!(idle.on_action(&mut m, 0x1000_0096, true));
+        assert!(m.log.is_empty());
     }
 
     // ---- WS04 (?castHoldReclaim) ------------------------------------------

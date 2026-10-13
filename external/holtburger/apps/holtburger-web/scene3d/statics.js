@@ -87,6 +87,12 @@ import { poolWorldActive, addSingletonsToPools } from "./pool_producer.js";
 // specifier list would leave a dangling `} from "./materials.js";`.
 import { MaterialCache, materialCanCastShadow, materialRendersNothing, skipDeadBatchEnabled, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
+// ?surfaceAnim=on (default OFF) — read only inside getOrCreateMaterialCache.
+import { surfaceAnimFramesFetch } from "./surface_anim_flag.js";
+// ?retailDegrade=on (default OFF) — Render::s_rDegradeDistance + RETAIL_DEG_MUL.
+// Namespace, read only inside functions: the strip-import tests eval this file
+// without its imports, and an older part_degrade.js may lack RETAIL_DEG_MUL.
+import * as partDegradeNs from "./part_degrade.js";
 // ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter. Flag OFF
 // it returns EXACTLY the `new Promise(r => setTimeout(r, 0))` macrotask
 // yield the F3/B3 time-slices use today (byte-identical scheduling); flag
@@ -276,6 +282,9 @@ function staticsReceiveShadowForPlacement(
 // foliage). The exact retail threshold isn't preserved in the DAT, so
 // we pick a conservative 100m; anything closer than that gets the full
 // mesh, anything farther gets the lower-detail variant.
+// (2026-10-13: it is — GfxObjDegradeInfo::get_degrade + the 50 m
+// Render::s_rDegradeDistance define it exactly; `?retailDegrade=on` runs that
+// rule, see `retailBandSwapDistances`. This fallback is the flag-off path.)
 const LOD_DISTANCE_M = 100.0;
 
 // ── G1 (waves-2 2026-05-29) — degrade-band billboard orientation ──────
@@ -382,12 +391,329 @@ function bandSwapDistances(levels) {
   return out;
 }
 
+// ── ?lodCollapseDup (2026-10-13, DEFAULT-ON; `=off` escape) ─────────────
+//
+// Retail degrade chains name the base GfxObj itself as their first band(s):
+// all 4,131 GfxObjDegradeInfo-carrying GfxObjs in the base portal.dat open
+// with band 0 = the base, and 0x11000001 repeats 0x0100376A in bands 0 AND 1.
+// Retail pays nothing for that — `CPhysicsPart::LoadGfxObjArray` resolves
+// every band through `DBObj::Get`, so a repeated id is the same cached
+// CGfxObj. We cloned one BufferGeometry per band, so such a THREE.LOD held the
+// full mesh up to three times (level 0 + two clones, each its own GPU upload
+// on first activation) and swapped between identical meshes.
+//
+// Collapse, per (model, surface) level list, every level whose geometry is
+// the SAME as the level it follows: band 0 vs the base surface group (same
+// gfxId AND identical attribute bytes — a canopy-softened base is not
+// identical to a fresh decode, so it keeps its band), and band i vs band i-1
+// (same fetched source). No clone, no extra LOD level. Zero visual change:
+//   - every surviving level keeps the swap distance `bandSwapDistances` gave
+//     it over the FULL list (an unauthored band's fallback is index-based and
+//     a band can be bumped past its predecessor, so the resolved value is
+//     written onto the survivor);
+//   - a list carrying a billboard band (degradeMode >= 2) is left as-is,
+//     because `tagBillboardLod` orients `levels[1]` by index;
+//   - a list whose levels are ALL duplicates keeps its first one, so the node
+//     stays a THREE.LOD (a plain Mesh would become eligible for the static
+//     batchers / atlas — a different draw path).
+export function lodCollapseDupEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("lodCollapseDup") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _lodCollapseDupFlag;
+function _lodCollapseDupOn() {
+  if (_lodCollapseDupFlag === undefined) _lodCollapseDupFlag = lodCollapseDupEnabled();
+  return _lodCollapseDupFlag;
+}
+// Test seam.
+export function __setLodCollapseDupForTest(v) { _lodCollapseDupFlag = v; }
+const _lodCollapseStats = { listsCollapsed: 0, levelsDropped: 0 };
+/** Cumulative ?lodCollapseDup counters (diag / eye-test). */
+export function lodCollapseDupStats() {
+  return { enabled: _lodCollapseDupOn(), ..._lodCollapseStats };
+}
+if (typeof window !== "undefined") {
+  try { window.__lodCollapseDup = { stats: lodCollapseDupStats }; } catch (_) {}
+}
+
+// Bitwise equality of two typed arrays (same element type and length).
+function _typedBytesEqual(x, y) {
+  if (x === y) return true;
+  if (!ArrayBuffer.isView(x) || !ArrayBuffer.isView(y)) return false;
+  if (x.constructor !== y.constructor || x.byteLength !== y.byteLength) return false;
+  const n = x.byteLength;
+  if ((x.byteOffset & 3) === 0 && (y.byteOffset & 3) === 0 && (n & 3) === 0) {
+    const u = new Uint32Array(x.buffer, x.byteOffset, n >>> 2);
+    const v = new Uint32Array(y.buffer, y.byteOffset, n >>> 2);
+    for (let i = 0; i < u.length; i += 1) if (u[i] !== v[i]) return false;
+    return true;
+  }
+  const u = new Uint8Array(x.buffer, x.byteOffset, n);
+  const v = new Uint8Array(y.buffer, y.byteOffset, n);
+  for (let i = 0; i < n; i += 1) if (u[i] !== v[i]) return false;
+  return true;
+}
+
+// True only when `a` and `b` would upload and draw the same vertices: same
+// attribute set, item sizes, normalization and bytes; same index; no
+// groups / morphs; same draw range. Anything unexpected answers false (keep
+// the level). Never throws.
+function _geometriesIdentical(a, b) {
+  try {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (!!a.index !== !!b.index) return false;
+    if (a.index && !_typedBytesEqual(a.index.array, b.index.array)) return false;
+    const aa = a.attributes, ba = b.attributes;
+    if (!aa || !ba) return false;
+    const keys = Object.keys(aa);
+    if (keys.length !== Object.keys(ba).length) return false;
+    for (const k of keys) {
+      const x = aa[k], y = ba[k];
+      if (!x || !y || x.isInterleavedBufferAttribute || y.isInterleavedBufferAttribute) return false;
+      if (x.itemSize !== y.itemSize || !!x.normalized !== !!y.normalized) return false;
+      if (!_typedBytesEqual(x.array, y.array)) return false;
+    }
+    if ((a.groups?.length || 0) !== 0 || (b.groups?.length || 0) !== 0) return false;
+    if (Object.keys(a.morphAttributes || {}).length || Object.keys(b.morphAttributes || {}).length) return false;
+    const ra = a.drawRange, rb = b.drawRange;
+    if (ra && rb && (ra.start !== rb.start || ra.count !== rb.count)) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Plan the ?lodCollapseDup collapse of ONE (model, surface) level list.
+// `pending` = [{ src, band: { gfxId, dist, degradeMode } }] in chain order,
+// `baseGeom` = the model's full surface group geometry for the same surface
+// key (level 0 of the LOD). Returns null when nothing collapses (the caller
+// then emits the list exactly as before), else `{ keep, dists, dropped }`:
+// `keep[i]` false drops level i, `dists[i]` is the swap distance level i had
+// in the uncollapsed list. Pure / never throws.
+function planLodDupCollapse(pending, modelId, baseGeom) {
+  const n = Array.isArray(pending) ? pending.length : 0;
+  if (n === 0) return null;
+  for (const p of pending) {
+    if (((p?.band?.degradeMode ?? 0) >>> 0) >= 2) return null; // billboard list
+  }
+  const keep = new Array(n).fill(true);
+  let dropped = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dup =
+      i === 0
+        ? ((pending[0].band.gfxId >>> 0) === (modelId >>> 0) &&
+            _geometriesIdentical(baseGeom, pending[0].src))
+        : pending[i].src === pending[i - 1].src;
+    if (dup) {
+      keep[i] = false;
+      dropped += 1;
+    }
+  }
+  if (dropped === n) {
+    keep[0] = true; // keep the node a THREE.LOD
+    dropped -= 1;
+  }
+  if (dropped === 0) return null;
+  const dists = bandSwapDistances(pending.map((p) => ({ dist: p.band.dist })));
+  return { keep, dists, dropped };
+}
+
+// ── ?retailDegrade (2026-10-13, OPT-IN `=on`, default OFF) ──────────────
+//
+// Retail's degrade pick for statics, as fixed THREE.LOD switch-in distances.
+// RETAIL (acclient.c, read 2026-10-13):
+//  - CPhysicsPart::UpdateViewerDistance (:315098 / :315173): distance =
+//    viewer distance / gfxobj_scale.z, then GfxObjDegradeInfo::get_degrade
+//    (:332356).
+//  - get_degrade: d' = max(|d| - Render::s_rDegradeDistance, 0) (50.0, :45516);
+//    deg_mul >= 0 walks the levels while d' >= ideal - (ideal - max) * deg_mul
+//    (deg_mul < 0: while d' >= (ideal - min) * deg_mul + ideal); walking off
+//    the end picks the LAST level. deg_mul sits at 1.0 under the default
+//    "Automatic degrades" (part_degrade.js RETAIL_DEG_MUL).
+// So level i draws for d' in [M_i, T_i), T_i its threshold and M_i =
+// max(0, T_0..T_{i-1}); a level with T_i <= M_i is never picked, except the
+// last, which draws from M_{n-1} on. The walk is monotone in d', so each
+// level that draws is ONE switch-in distance: 0 when M_i = 0, else
+// (50 + M_i) * scale.
+//
+// The flag-off path (`bandSwapDistances`) swaps each band in at its min_dist
+// with no 50 m offset: a 0x11000001-shaped chain (self 10/25/50, self
+// 25/50/100, L2 50/100/200, NULL) shows L2 from 50 m where retail holds the
+// full mesh to 50 + 100 = 150 m at deg_mul 1.
+//
+// OURS:
+//  - LOD level 0 (the model's own mesh) stands for the levels that name the
+//    model's GfxObj; a level naming the same GfxObj (and billboard mode) as
+//    the level drawn before it folds into it — no clone, no extra LOD level.
+//  - a NULL level (gfx 0) never hides: the level before it keeps drawing
+//    (retail draws nothing there; hiding stays an opt-in like ?partDegrade).
+//  - THREE.LOD measures unscaled world distance, so the singleton path scales
+//    the switch-ins by the placement scale (retail's / gfxobj_scale.z). The
+//    instanced path keeps scale 1: one LOD spans many differently-scaled
+//    placements.
+//  - no hysteresis: retail re-picks from the raw distance every frame.
+//  - a surface list left with no level keeps one PARKED level (never drawn)
+//    so the node stays a THREE.LOD — a plain Mesh would move to the static
+//    batchers / atlas (a different draw path than the flag-off build).
+export function retailDegradeEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    return new URLSearchParams(s).get("retailDegrade") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+let _retailDegradeFlag;
+function _retailDegradeOn() {
+  if (_retailDegradeFlag === undefined) _retailDegradeFlag = retailDegradeEnabled();
+  return _retailDegradeFlag;
+}
+// Test seam.
+export function __setRetailDegradeForTest(v) { _retailDegradeFlag = v; }
+
+/** Switch-in distance of a ?retailDegrade level that is never drawn. */
+export const RETAIL_DEGRADE_PARKED = Number.MAX_VALUE;
+
+// Render::s_rDegradeDistance / RETAIL_DEG_MUL, read lazily (see the import).
+function _retailDegradeDistance() {
+  const v = partDegradeNs.DEGRADE_DISTANCE;
+  return typeof v === "number" ? v : 50.0;
+}
+function _retailDegMul() {
+  const v = partDegradeNs.RETAIL_DEG_MUL;
+  return typeof v === "number" ? v : 1.0;
+}
+
+const _retailDegradeStats = { chains: 0, levels: 0, folded: 0, nullKept: 0, unreachable: 0, parked: 0 };
+/** Cumulative ?retailDegrade counters (diag / eye-test). */
+export function retailDegradeStats() {
+  return { enabled: _retailDegradeOn(), degMul: _retailDegMul(), ..._retailDegradeStats };
+}
+if (typeof window !== "undefined") {
+  try { window.__retailDegrade = { stats: retailDegradeStats }; } catch (_) {}
+}
+
+/**
+ * Retail `GfxObjDegradeInfo::get_degrade` (acclient.c:332356) as THREE.LOD
+ * switch-in distances for one chain.
+ * @param {Array<{gfx:number, mode?:number, min:number, ideal:number, max:number}>} levels
+ *   the WHOLE chain in DAT order, NULL (gfx 0) levels included
+ * @param {number} baseGfx the model's own GfxObj (LOD level 0)
+ * @param {number} [degMul] Render::deg_mul (default RETAIL_DEG_MUL)
+ * @param {number} [scale=1] placement scale
+ * @returns {{levels: Array<{band:number, gfx:number, mode:number, dist:number}>, levelOfBand: number[]}}
+ *   `levels` = the LOD levels after level 0, switch-ins ascending;
+ *   `levelOfBand[i]` = the LOD level (0 = the model's mesh) drawn where retail
+ *   picks band i, -1 for a band retail never picks. Pure / never throws.
+ */
+export function retailBandSwapDistances(levels, baseGfx, degMul = _retailDegMul(), scale = 1) {
+  const n = Array.isArray(levels) ? levels.length : 0;
+  const out = [];
+  const levelOfBand = new Array(n).fill(-1);
+  const s = typeof scale === "number" && scale > 0 ? scale : 1;
+  const offset = _retailDegradeDistance();
+  const bbClass = (m) => (m >= 2 ? m : 0); // modes 0/1 draw unrotated
+  let lo = 0; // M_i
+  let cur = 0; // LOD level drawn from `lo` on
+  let curGfx = baseGfx >>> 0;
+  let curMode = 0;
+  for (let i = 0; i < n; i += 1) {
+    const L = levels[i] || {};
+    // Same expressions as part_degrade.js selectDegradeLevel.
+    let t = degMul >= 0 ? L.ideal - (L.ideal - L.max) * degMul : (L.ideal - L.min) * degMul + L.ideal;
+    if (Number.isNaN(t)) t = Infinity; // retail never walks past a NaN threshold
+    if ((i === n - 1 || t > lo) && Number.isFinite(lo)) {
+      const gfx = (L.gfx ?? 0) >>> 0;
+      const mode = (L.mode ?? 0) >>> 0;
+      const dist = lo > 0 ? (offset + lo) * s : 0;
+      if (gfx === 0 || (gfx === curGfx && bbClass(mode) === curMode) || !Number.isFinite(dist)) {
+        levelOfBand[i] = gfx === 0 || Number.isFinite(dist) ? cur : -1;
+      } else {
+        out.push({ band: i, gfx, mode, dist });
+        cur = out.length;
+        curGfx = gfx;
+        curMode = bbClass(mode);
+        levelOfBand[i] = cur;
+      }
+    }
+    if (t > lo) lo = t;
+  }
+  return { levels: out, levelOfBand };
+}
+
+// ?retailDegrade — the fetchDegradedGeometries chain for one model: every
+// band with a GfxObj, in DAT order, tagged with its DAT index. A band that is
+// an LOD level of its own carries its scale-1 switch-in (`retailEmit`); the
+// rest (folded / never picked) are kept only as a parking source. Null when
+// no band names a GfxObj.
+function retailDegradeChain(bands, modelId) {
+  const levels = bands.map((b) => ({
+    gfx: (b?.gfx_obj_id ?? 0) >>> 0,
+    mode: typeof b?.degrade_mode === "number" ? b.degrade_mode >>> 0 : 0,
+    min: +b?.min_dist,
+    ideal: +b?.ideal_dist,
+    max: +b?.max_dist,
+  }));
+  const plan = retailBandSwapDistances(levels, modelId, _retailDegMul(), 1);
+  const emitByBand = new Map(plan.levels.map((l) => [l.band, l]));
+  const st = _retailDegradeStats;
+  st.chains += 1;
+  st.levels += plan.levels.length;
+  const chain = [];
+  for (let i = 0; i < levels.length; i += 1) {
+    const gfxId = levels[i].gfx;
+    if (plan.levelOfBand[i] < 0) st.unreachable += 1;
+    else if (!gfxId) st.nullKept += 1;
+    else if (!emitByBand.has(i)) st.folded += 1;
+    if (!gfxId) continue;
+    const e = emitByBand.get(i);
+    chain.push({
+      gfxId,
+      dist: e ? e.dist : null,
+      degradeMode: levels[i].mode,
+      retailBand: i,
+      retailEmit: !!e,
+    });
+  }
+  return chain.length > 0 ? chain : null;
+}
+
+// ?retailDegrade — the node builders' swap distances for a level list built
+// by the retail path (`retailBand` on every entry), else null.
+function retailLevelSwapDistances(levels, scale) {
+  if (!levels.length || levels.some((l) => !l || l.retailBand == null)) return null;
+  const s = typeof scale === "number" && scale > 0 ? scale : 1;
+  return levels.map((l) => (l.parked ? RETAIL_DEGRADE_PARKED : l.dist * s));
+}
+
 // Phase C.3 — base URL for the baked scenery JSONL files. Mirrors
 // index.html's `MANIFEST_URL = "../../dist/manifest.json"`; scenery
 // files live at `../../dist/scenery/0xXXXX.scenery.jsonl`. Init is
 // idempotent + module-local so the second baker call (per-LB lazy +
 // ring driver overlap) doesn't re-call `init_scenery_base_url`.
 const SCENERY_BASE_URL = "../../dist/scenery/";
+// `?sceneryBake=retail` (exact, default OFF) — A/B the retail placement
+// rules (holtburger-scenery-bake `BakeMode::Retail`: acclient.c
+// CLandBlock::get_land_scenes) against the shipped ace-compat bake. The
+// retail dir is a parallel bake; LBs it lacks fall back to the shipped
+// files through symlinks, so only the baked ring differs.
+const RETAIL_SCENERY_BASE_URL = "../../dist/scenery-retail/";
+export function sceneryBaseUrlFor(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    return new URLSearchParams(s).get("sceneryBake") === "retail"
+      ? RETAIL_SCENERY_BASE_URL
+      : SCENERY_BASE_URL;
+  } catch (_) {
+    return SCENERY_BASE_URL;
+  }
+}
 let _sceneryBaseUrlInitialized = false;
 
 /**
@@ -413,11 +739,12 @@ function ensureSceneryInit(wasmExports) {
     return;
   }
   try {
-    wasmExports.init_scenery_base_url(SCENERY_BASE_URL);
+    const baseUrl = sceneryBaseUrlFor();
+    wasmExports.init_scenery_base_url(baseUrl);
     // eslint-disable-next-line no-console
     console.log(
       "[scene3d.statics] scenery base URL initialized:",
-      SCENERY_BASE_URL
+      baseUrl
     );
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -551,7 +878,9 @@ export function getOrCreateMaterialCache(scene3d) {
     pomEnabled: !!scene3d.pomEnabled,
     forcePom: !!scene3d.forcePom,
     // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
-    animFramesFetch: scene3d.wasmExports?.fetchSurfaceAnimFrames ?? null,
+    // 2026-10-13: default OFF (`?surfaceAnim=on`) — a 2-level SurfaceTexture
+    // is a retail detail pair, not frames (surface_anim_flag.js).
+    animFramesFetch: surfaceAnimFramesFetch(scene3d.wasmExports),
     // Phase-5 — wasm namespace for the baked-roughness by-key suite fetch.
     wasmExports: scene3d.wasmExports ?? null,
     // === Wave 2.B — procedural normals (2026-05-28) ===
@@ -1123,11 +1452,24 @@ function degradedSurfaceKey(surfaceDid, doubleSided) {
  * whose `0x01` geometry can't be fetched/built are SKIPPED (logged), never
  * silently capping the chain — the remaining buildable bands still emit
  * their levels at their correct distances.
+ *
+ * ?lodCollapseDup (2026-10-13, default ON) — a level identical to the one it
+ * follows (band 0 = the base itself, band i = band i-1) is dropped, the
+ * survivors keeping their uncollapsed swap distances (`planLodDupCollapse`).
+ * `baseGroupsByModel` (the primary `groupsByModel`, optional) supplies each
+ * model's full surface groups for the band-0 comparison; without it only
+ * band-to-band repeats collapse.
+ *
+ * ?retailDegrade=on (2026-10-13, default OFF) — the levels are retail's
+ * (`retailBandSwapDistances`): only bands that draw as a level of their own
+ * are cloned, each entry's `dist` is its scale-1 retail switch-in and it
+ * carries `retailBand` (its DAT index); ?lodCollapseDup is not consulted.
  */
 async function fetchDegradedGeometries(
   didDegradeByModel,
   fetchModelMeshes,
-  fetchDegradeInfo
+  fetchDegradeInfo,
+  baseGroupsByModel = null
 ) {
   const degradedGeomByModel = new Map();
   if (!didDegradeByModel || didDegradeByModel.size === 0) {
@@ -1160,6 +1502,9 @@ async function fetchDegradedGeometries(
 
   // Resolve each model's chain → ordered list of
   // { gfxId (0x01), dist, degradeMode } bands, in parallel.
+  // ?retailDegrade=on (default OFF) — the chain carries retail switch-ins
+  // instead (`retailDegradeChain`); the flag-off path below is unchanged.
+  const retail = _retailDegradeOn();
   const entries = [...didDegradeByModel.entries()];
   const resolved = await Promise.all(
     entries.map(async ([modelId, chainId]) => {
@@ -1169,6 +1514,10 @@ async function fetchDegradedGeometries(
         const info = JSON.parse(json);
         const bands = Array.isArray(info?.degrades) ? info.degrades : [];
         if (bands.length === 0) return null;
+        if (retail) {
+          const rchain = retailDegradeChain(bands, modelId);
+          return rchain ? { modelId, chain: rchain } : null;
+        }
         // R-JS-T4a — walk the WHOLE band list (not just bands[0]). Each
         // band with a usable `0x01` gfx_obj_id becomes one degraded LOD
         // level; bands without one are dropped from the chain (they have
@@ -1298,7 +1647,54 @@ async function fetchDegradedGeometries(
   // whose geometry couldn't be built is visible, not silently dropped.
   let bandsWithGeom = 0;
   let bandsSkipped = 0;
+  // ?retailDegrade folds same-GfxObj levels itself (`retailBandSwapDistances`).
+  const collapseDup = !retail && _lodCollapseDupOn();
   for (const [modelId, chain] of perModel) {
+    // ?lodCollapseDup — plan every surface's level list BEFORE cloning, so a
+    // dropped duplicate is never cloned. surfaceKey → planLodDupCollapse
+    // result; a surface without a plan emits exactly as before.
+    let plans = null;
+    if (collapseDup) {
+      const pendingBySurface = new Map();
+      for (const band of chain) {
+        const srcBySurface = groupsByGfxId.get(band.gfxId);
+        if (!srcBySurface || srcBySurface.size === 0) continue;
+        for (const [surfaceKey, srcGeom] of srcBySurface) {
+          let pending = pendingBySurface.get(surfaceKey);
+          if (!pending) {
+            pending = [];
+            pendingBySurface.set(surfaceKey, pending);
+          }
+          pending.push({ src: srcGeom, band });
+        }
+      }
+      // The model's full surface groups (LOD level 0), keyed like the bands.
+      const baseBySurface = new Map();
+      const baseGroups =
+        baseGroupsByModel && typeof baseGroupsByModel.get === "function"
+          ? baseGroupsByModel.get(modelId)
+          : null;
+      if (Array.isArray(baseGroups)) {
+        for (const g of baseGroups) {
+          if (g && g.geometry) {
+            baseBySurface.set(degradedSurfaceKey(g.surfaceDid, g.doubleSided), g.geometry);
+          }
+        }
+      }
+      for (const [surfaceKey, pending] of pendingBySurface) {
+        const plan = planLodDupCollapse(pending, modelId, baseBySurface.get(surfaceKey));
+        if (!plan) continue;
+        if (!plans) plans = new Map();
+        plans.set(surfaceKey, plan);
+        _lodCollapseStats.listsCollapsed += 1;
+        _lodCollapseStats.levelsDropped += plan.dropped;
+      }
+    }
+    // ?lodCollapseDup — running level index per planned surface list.
+    const levelIndex = plans ? new Map() : null;
+    // ?retailDegrade — surfaceKey → the first band that is no level of its
+    // own (folded / never picked), parked if that surface gets no level.
+    const parkBySurface = retail ? new Map() : null;
     // surfaceKey → ordered array of { geometry, dist, degradeMode }.
     const bySurfaceLevels = new Map();
     for (const band of chain) {
@@ -1312,6 +1708,21 @@ async function fetchDegradedGeometries(
       }
       bandsWithGeom += 1;
       for (const [surfaceKey, srcGeom] of srcBySurface) {
+        // ?retailDegrade — no clone for a band that is no level of its own.
+        if (parkBySurface && !band.retailEmit) {
+          if (!parkBySurface.has(surfaceKey)) parkBySurface.set(surfaceKey, { srcGeom, band });
+          continue;
+        }
+        // ?lodCollapseDup — a duplicate level is dropped here, uncloned; a
+        // survivor carries the swap distance it had in the full list.
+        const plan = plans ? plans.get(surfaceKey) : undefined;
+        let li = -1;
+        if (plan) {
+          li = levelIndex.get(surfaceKey) ?? 0;
+          levelIndex.set(surfaceKey, li + 1);
+          if (!plan.keep[li]) continue;
+        }
+        const dist = plan ? plan.dists[li] : band.dist;
         // Clone so each consumer owns its geometry (see ownership note).
         let geom;
         try {
@@ -1326,18 +1737,46 @@ async function fetchDegradedGeometries(
         // level exactly as the single-band path did, plus on the list entry
         // for direct access.
         geom.userData = geom.userData || {};
-        if (band.dist != null) geom.userData.lodDist = band.dist;
+        if (dist != null) geom.userData.lodDist = dist;
         if (band.degradeMode) geom.userData.degradeMode = band.degradeMode;
         let arr = bySurfaceLevels.get(surfaceKey);
         if (!arr) {
           arr = [];
           bySurfaceLevels.set(surfaceKey, arr);
         }
-        arr.push({
+        const level = {
           geometry: geom,
-          dist: band.dist,
+          dist,
           degradeMode: band.degradeMode,
-        });
+        };
+        // ?retailDegrade — `dist` is the scale-1 retail switch-in; the node
+        // builders scale it per placement (`retailLevelSwapDistances`).
+        if (band.retailBand != null) level.retailBand = band.retailBand;
+        arr.push(level);
+      }
+    }
+    // ?retailDegrade — a surface with no level of its own keeps one parked
+    // (never-drawn) level so its node stays a THREE.LOD. Billboard mode 0:
+    // the billboard tick has nothing to orient.
+    if (parkBySurface) {
+      for (const [surfaceKey, { srcGeom, band }] of parkBySurface) {
+        if (bySurfaceLevels.has(surfaceKey)) continue;
+        let geom;
+        try {
+          geom = srcGeom.clone();
+        } catch (_) {
+          continue;
+        }
+        geom.userData = geom.userData || {};
+        geom.userData.lodDist = RETAIL_DEGRADE_PARKED;
+        bySurfaceLevels.set(surfaceKey, [{
+          geometry: geom,
+          dist: RETAIL_DEGRADE_PARKED,
+          degradeMode: 0,
+          retailBand: band.retailBand,
+          parked: true,
+        }]);
+        _retailDegradeStats.parked += 1;
       }
     }
     if (bySurfaceLevels.size > 0) {
@@ -1532,7 +1971,10 @@ function buildSingletonNode({
   // into a multi-level chain instead of capping at bands[0]. A missing/
   // throwing band is skipped (never throws); a single-band chain produces
   // the exact prior 2-level LOD.
-  const swapDists = bandSwapDistances(levels);
+  // ?retailDegrade — retail switch-ins times the placement scale (retail
+  // divides the viewer distance by gfxobj_scale.z; THREE.LOD does not).
+  const swapDists =
+    retailLevelSwapDistances(levels, placementScale) || bandSwapDistances(levels);
   let firstBillboardGeom = null;
   for (let li = 0; li < levels.length; li += 1) {
     const lvl = levels[li];
@@ -1731,7 +2173,9 @@ function buildInstancedNode({
   // A band whose geometry is missing/throws is skipped, never throwing; a
   // single-band chain reproduces the prior 2-level instanced LOD (now at
   // the band's real distance rather than the fixed guess).
-  const swapDists = bandSwapDistances(levels);
+  // ?retailDegrade — retail switch-ins at scale 1: one LOD spans placements
+  // of different scales.
+  const swapDists = retailLevelSwapDistances(levels, 1) || bandSwapDistances(levels);
   let firstBillboardMode = 0;
   for (let li = 0; li < levels.length; li += 1) {
     const dGeom = levels[li] && levels[li].geometry;
@@ -1794,6 +2238,21 @@ function buildInstancedNode({
   }
   return { node: lod, isLod: true };
 }
+
+// Test seam (tests/lod_collapse_dup.test.mjs) — the degrade fetch and both
+// LOD node builders, so the collapsed chain can be checked as built levels.
+export const __lodTestSeams = {
+  fetchDegradedGeometries,
+  buildSingletonNode,
+  buildInstancedNode,
+};
+// Test seam (tests/statics_retail_degrade.test.mjs) — the flag-off swap
+// distances (pinned there) and the ?retailDegrade chain / builder helpers.
+export const __retailDegradeTestSeams = {
+  bandSwapDistances,
+  retailDegradeChain,
+  retailLevelSwapDistances,
+};
 
 /**
  * Empty per-call summary used by both the early-return paths and as
@@ -2417,7 +2876,8 @@ export async function bakeStaticsForLandblock(
     fetchDegradedGeometries(
       primary.didDegradeByModel,
       mmFetch,
-      wasmExports.fetch_gfx_obj_degrade_info
+      wasmExports.fetch_gfx_obj_degrade_info,
+      primary.groupsByModel // ?lodCollapseDup band-0 comparison
     ),
     // Per-LB surface preload. The ring driver preloads ALL ring DIDs in a
     // single batch (Phase 7.2 buildings.js pattern); the lazy-add path only
@@ -3248,7 +3708,8 @@ export async function bakeStaticsRing(
     : await fetchDegradedGeometries(
         primary.didDegradeByModel,
         mmFetch,
-        wasmExports.fetch_gfx_obj_degrade_info
+        wasmExports.fetch_gfx_obj_degrade_info,
+        primary.groupsByModel // ?lodCollapseDup band-0 comparison
       );
   mark(`stage2: fetchDegradedGeometries (${primary.didDegradeByModel?.size ?? 0} degraded${scene3d.wireframeMode ? " — SKIPPED in wire" : ""})`);
 
@@ -4546,6 +5007,15 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       const r = await wasmExports.fetchModelDidDegrades(new Uint32Array([hwGfxObjId >>> 0]));
       return (r && r[0]) >>> 0;
     },
+    // `?particleCellGate=on` (render-only, default OFF) — an interior anchor's
+    // `userData.cellId` resolves to its EnvCell container here; the manager
+    // withholds the draw while cells.js has that container hidden. Read
+    // through the registry on every call (never cached): LRU re-bake and
+    // warm-park swap the containers. Inert unless the flag is on.
+    cellLookup: (cellId) => {
+      const reg = scene3d.cellContainers3d;
+      return reg instanceof Map ? reg.get(cellId >>> 0) : undefined;
+    },
     materialFactory: async (hwGfxObjId) => {
       if (!materialCache) return null;
       const r = await resolveGfxObjShared(hwGfxObjId);
@@ -5023,7 +5493,8 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
  * their `default_script` particle chains exactly like their outdoor twins.
  *
  * Each item: `{ defaultScriptId:number, x, y, z:number, qw, qx, qy,
- * qz?:number, scale?:number }` (x/y/z + q already in world frame).
+ * qz?:number, scale?:number, landblockId?:number, cellId?:number }`
+ * (x/y/z + q already in world frame).
  * Items with `defaultScriptId === 0` are skipped — the overwhelming
  * majority, so the filter is the whole default-path cost (one numeric
  * check per item; no manager/runtime imported when nothing is scripted).
@@ -5033,6 +5504,10 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
  * container. A follow-up could parent to the EnvCell container so the
  * effect inherits the cell's enter-to-show visibility gate; for now the
  * emitter sits at the brazier's world position regardless of cell BFS.
+ * `?particleCellGate=on` (2026-10-13, opt-in) is that gate, render-only:
+ * the anchor carries `userData.cellId` (from the item's `cellId`) and the
+ * particle manager skips the DRAW while the cell's container is hidden,
+ * while the emitters keep simulating (see particle_manager.js).
  *
  * @returns {Promise<{anchorCount:number, emitterCount:number}>}
  */
@@ -5108,6 +5583,12 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     // the detached-anchor CallPES bail never fired for interiors).
     if (it.landblockId != null) {
       anchor.userData.landblockId = it.landblockId >>> 0;
+    }
+    // particles-scripts-3: the owning EnvCell, so `?particleCellGate=on` can
+    // withhold the draw while cells.js has this cell hidden (render-only; the
+    // emitters keep simulating — retail CObjCell::IsInView is `return 1`).
+    if (it.cellId != null) {
+      anchor.userData.cellId = it.cellId >>> 0;
     }
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;

@@ -19,8 +19,10 @@
 //   - ui/ac_window_position.js#persistWindowSize (companion that takes
 //     the {width, height} commit from onSizeChange)
 //   - ui/ac_window_position.js#onAnyLockChange (lock-state event source)
+//   - ui/ui_lock.js (retail global LockUI; `opts.obeysGlobalLock`)
 
 import { onAnyLockChange } from "./ac_window_position.js";
+import { globalLockUIEnabled, isGlobalLocked, onGlobalLockChange } from "./ui_lock.js";
 
 const CORNER_KEYS = ["tl", "tr", "bl", "br"];
 
@@ -76,6 +78,8 @@ const CORNER_STYLES = {
  * @param {(detail: {width:number, height:number}) => void} [opts.onSizeChange]
  *   — debounced 120 ms after the last pointermove.
  * @param {boolean} [opts.initialLocked=false]
+ * @param {boolean} [opts.obeysGlobalLock=false] — retail floaties only:
+ *   the corners also hide while the global LockUI (ui/ui_lock.js) is set.
  * @returns {{dispose():void, getCorners():Record<string,HTMLDivElement>,
  *            setLocked(locked:boolean):void, isLocked():boolean}}
  */
@@ -98,7 +102,11 @@ export function attachCornerResizers(element, opts) {
   }
 
   const corners = {};
-  let locked = !!opts?.initialLocked;
+  // input-options-4 — `ownLocked` is the per-window / setLocked flag;
+  // `locked` is the effective state the corners show.
+  const obeysGlobal = !!opts?.obeysGlobalLock && globalLockUIEnabled();
+  let ownLocked = !!opts?.initialLocked;
+  let locked = ownLocked || (obeysGlobal && isGlobalLocked());
   let drag = null;
   let sizeChangeTimer = 0;
 
@@ -203,8 +211,8 @@ export function attachCornerResizers(element, opts) {
     div.addEventListener("pointercancel", endDrag);
   }
 
-  function setLocked(next) {
-    const want = !!next;
+  function applyLocked() {
+    const want = ownLocked || (obeysGlobal && isGlobalLocked());
     if (want === locked) return;
     locked = want;
     for (const key of CORNER_KEYS) {
@@ -213,6 +221,10 @@ export function attachCornerResizers(element, opts) {
       div.style.pointerEvents = locked ? "none" : "auto";
       div.style.visibility = locked ? "hidden" : "";
     }
+  }
+  function setLocked(next) {
+    ownLocked = !!next;
+    applyLocked();
   }
 
   // Auto-sync with attachWindowPosition's lock state when a windowId
@@ -231,6 +243,7 @@ export function attachCornerResizers(element, opts) {
       console.warn("[ac-resize-corners] lock-change subscribe failed:", e);
     }
   }
+  const unsubGlobal = obeysGlobal ? onGlobalLockChange(applyLocked) : null;
 
   function dispose() {
     try { clearTimeout(sizeChangeTimer); } catch (_) {}
@@ -238,6 +251,7 @@ export function attachCornerResizers(element, opts) {
       try { unsubLockChange(); } catch (_) {}
       unsubLockChange = null;
     }
+    if (unsubGlobal) unsubGlobal();
     for (const key of CORNER_KEYS) {
       const div = corners[key];
       if (!div) continue;

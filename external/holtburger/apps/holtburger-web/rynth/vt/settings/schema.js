@@ -104,6 +104,13 @@ const ROWS = [
     "Rebuff when seconds remaining below", "buff", { cell: true }),
   int("IdleRebuffWindowSec", [], "s", 600, 0, 3600, "advanced", "Buffing", "Idle rebuff window", "idle",
     { help: "Rebuff When Idle recasts buffs with less than RebuffSecondsRemaining + this window left." }),
+  // RynthAi GetHighestBuffSpellTier (rynth/skill_cap.js; the loops' opts.skillCap).
+  bool("BuffTierSkillCap", [], false, "advanced", "Buffing", "Cap buff/vital tiers by magic skill", "buff",
+    { help: "Self buffs and vital spells use the highest known tier the buffed skill of their school reaches "
+      + "(BuffMinSkillLevelTier1-8) instead of the highest known tier." }),
+  ...MIN_SKILL_DEFAULTS.map((d, i) =>
+    int(`BuffMinSkillLevelTier${i + 1}`, [], undefined, d, 1, 500, "advanced", "Buffing",
+      `Min skill for buff tier ${i + 1}`, "buff")),
   int("LootMinValue", [], undefined, 0, 0, 1e9, "advanced", "Looting", "Loot minimum value", "loot", { cell: true }),
   float("CorpseApproachRangeMax", ["CorpseApproachRange-Max"], "m", 30, 1, 60, "advanced", "Looting",
     "Corpse approach range (max)", "loot", { vtUnit: "lbf", cell: true }),

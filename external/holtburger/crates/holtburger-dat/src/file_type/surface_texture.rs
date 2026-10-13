@@ -1,6 +1,13 @@
-//! AC SurfaceTexture (DatFileType 0x05) — a list of mip-level [`Texture`]
-//! IDs for one logical "skin". The terrain-atlas pipeline takes the
-//! highest-res mip (last entry in `textures`).
+//! AC SurfaceTexture (DatFileType 0x05; retail `ImgTex`, DB_TYPE_SURFACETEXTURE
+//! = 11) — the [`Texture`] (RenderSurface 0x06) IDs of one logical "skin",
+//! as 1 or 2 DETAIL LEVELS of the same image (`textures[1]` half the size of
+//! `textures[0]`), never animation frames. Retail draws exactly one (acclient.c
+//! `ImgTex::GetSurfaceDID`): 1 level → `textures[0]`; 2 levels →
+//! `textures[0]` (the HiFi level, which lives in the optional
+//! `client_highres.dat`) unless `Render::ShouldDropHighDetail()` (HiFi not on
+//! disk, or texture detail lowered), then `textures[1]`; any other count is
+//! a data error. We bake base DATs only, so every consumer takes the last
+//! entry ([`SurfaceTexture::highest_res`]).
 //!
 //! Format: `[u32 id][i32 unknown][u8 unknown_byte][i32 count][u32 texture_id]*count`.
 
@@ -24,8 +31,13 @@ impl SurfaceTexture {
         Self::read(&mut cursor)
     }
 
-    /// Highest-resolution mip-level (last entry). Returns `None` for an
-    /// empty texture list.
+    /// The last entry: the level retail draws WITHOUT `client_highres.dat`
+    /// (acclient.c `ImgTex::GetSurfaceDID` with `ShouldDropHighDetail()`
+    /// true). Despite the name this is NOT the highest-resolution level — on
+    /// a 2-level list `textures[0]` is the HiFi level, 2× this one and absent
+    /// from `client_portal.dat` (degrade-chain audit 2026-08-17: 2,284 of
+    /// retail's 3,024 two-level lists). Name and value kept so every caller
+    /// stays byte-identical. Returns `None` for an empty texture list.
     pub fn highest_res(&self) -> Option<u32> {
         self.textures.last().copied()
     }

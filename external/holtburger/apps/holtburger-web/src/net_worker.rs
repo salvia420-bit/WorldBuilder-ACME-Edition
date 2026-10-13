@@ -29,12 +29,14 @@
 //! `session.send_action()`, `session.send_message()` verbatim — but
 //! `session` is now a [`LoopSession`] enum that is either the real
 //! `Session` (direct mode, unchanged default) or a [`RemoteSessionProxy`]
-//! that shuttles those three operations across `postMessage`:
+//! that shuttles those three operations across `postMessage` (plus
+//! `send_disconnect`, net-transport-2, which ends the worker's session):
 //!
 //! ```text
 //! main thread (recv loop, dispatch, TickMovement)     net_worker (own wasm)
 //!   RemoteSessionProxy                                   WsTransport + Session
 //!    ├─ send_action/send_message ─ postMessage(tx) ──▶  session.send_action/…
+//!    ├─ send_disconnect ────────── postMessage(tx) ──▶  session.send_disconnect, loop ends
 //!    │                                                  keepalive IntervalStream
 //!    └─ recv_message() ◀── postMessage(rx bytes) ─────  session.recv_message()
 //! ```
@@ -61,7 +63,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 
 use anyhow::{anyhow, Result};
@@ -72,16 +74,18 @@ use wasm_bindgen::prelude::*;
 
 use holtburger_protocol::messages::game_action::GameActionMessage;
 use holtburger_protocol::messages::{GameAction, GameMessage};
-use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
+use holtburger_protocol::traits::ProtocolPack;
 use holtburger_session::{Session, SessionEvent};
 
 // ── boundary "kind" tags ────────────────────────────────────────────────
-// Outbound (main → worker), second arg of the outbound sink:
-/// bytes = `ProtocolPack` of `GameMessage::GameAction(GameActionMessage{0, action})`.
-/// Worker unpacks, extracts `.action`, calls `session.send_action` (re-sequences).
-pub const TX_KIND_ACTION: u8 = 0;
-/// bytes = `ProtocolPack` of a plain `GameMessage`. Worker calls `session.send_message`.
-pub const TX_KIND_MESSAGE: u8 = 1;
+// Outbound (main → worker), second arg of the outbound sink: TX_KIND_ACTION,
+// TX_KIND_MESSAGE and (net-transport-2) TX_KIND_DISCONNECT live with the
+// worker's outbound dispatch in net_worker_outbound.rs, which is unit-tested
+// natively.
+use crate::net_worker_outbound::{
+    OutboundOutcome, TX_KIND_ACTION, TX_KIND_DISCONNECT, TX_KIND_MESSAGE,
+};
+use crate::ping_round_trip::{self, PingRoundTrip};
 
 // Inbound (worker → main), first arg of the worker's post sink:
 /// bytes = one decrypted/reassembled game-message payload (a `SessionEvent::Message`).
@@ -95,6 +99,33 @@ pub const RX_KIND_DISCONNECT: u8 = 1;
 /// main recv loop can stamp `WorldState::set_server_time_sync` — native
 /// parity: holtburger-core runtime.rs:118-120.
 pub const RX_KIND_TIMESYNC: u8 = 2;
+/// net-transport-6 (2026-10-13): bytes = 8: `u32` LE last ping RTT in ms
+/// (`u32::MAX` = none measured yet), then `f32` LE packet-loss figure
+/// (retail `LinkStatusHolder::GetPacketLossPercentage`). The worker owns the
+/// session, so it measures both; `net_worker.js` posts `{t:'linkstatus'}` and
+/// `net_worker_client.js` hands it to `SessionHandle::net_worker_link_status`.
+/// Posted on every keepalive tick and on every measured round trip.
+pub const RX_KIND_LINK_STATUS: u8 = 3;
+
+thread_local! {
+    /// net-transport-6: the packet-loss figure `sessionPacketLossPct` reads.
+    /// Direct mode refreshes it from the main-thread `Session` after every
+    /// `recv_message`; `?netWorker` mode from the worker's posts. One session
+    /// per page, so one slot.
+    static LINK_PACKET_LOSS: Cell<f32> = const { Cell::new(0.0) };
+}
+
+/// net-transport-6: the latest packet-loss figure (see [`RX_KIND_LINK_STATUS`]).
+pub fn link_packet_loss() -> f32 {
+    LINK_PACKET_LOSS.with(Cell::get)
+}
+
+/// net-transport-6: store the packet-loss figure; anything non-finite or
+/// negative reads as 0.
+pub fn set_link_packet_loss(value: f32) {
+    let value = if value.is_finite() && value >= 0.0 { value } else { 0.0 };
+    LINK_PACKET_LOSS.with(|c| c.set(value));
+}
 
 // ════════════════════════════════════════════════════════════════════════
 // MAIN THREAD — RemoteSessionProxy + LoopSession + inbound push exports
@@ -135,6 +166,9 @@ impl RemoteSessionProxy {
     pub fn new(outbound_sink: Function) -> Self {
         let (tx, rx) = mpsc::unbounded();
         PROXY_INBOUND_TX.with(|c| *c.borrow_mut() = Some(tx));
+        // net-transport-6: a new session starts with no packet loss until
+        // its worker posts a figure.
+        set_link_packet_loss(0.0);
         Self {
             outbound_sink,
             inbound_rx: rx,
@@ -181,6 +215,14 @@ impl RemoteSessionProxy {
         ProtocolPack::pack(message, &mut buf);
         self.post(TX_KIND_MESSAGE, &buf)
     }
+
+    /// net-transport-2 (2026-10-13): mirror of `Session::send_disconnect`.
+    /// The worker owns the transport, so the DISCONNECT (0x8000) is sent
+    /// there (`TX_KIND_DISCONNECT`, no bytes); the worker then ends its wire
+    /// loop and drops the socket.
+    pub async fn send_disconnect(&mut self) -> Result<()> {
+        self.post(TX_KIND_DISCONNECT, &[])
+    }
 }
 
 /// The recv loop's `session`: either the real `Session` (direct mode,
@@ -194,9 +236,23 @@ pub enum LoopSession {
 impl LoopSession {
     pub async fn recv_message(&mut self) -> Result<Vec<SessionEvent>> {
         match self {
-            LoopSession::Direct(s) => s.recv_message().await,
+            LoopSession::Direct(s) => {
+                let result = s.recv_message().await;
+                // net-transport-6: publish the session's packet-loss figure
+                // (refreshed by its own 2 s heartbeat) for
+                // `sessionPacketLossPct`.
+                set_link_packet_loss(s.link_status.packet_loss());
+                result
+            }
             LoopSession::Proxy(p) => p.recv_message().await,
         }
+    }
+
+    /// net-transport-6: `true` when this loop owns the real `Session` (and
+    /// with it the ping RTT clock); `false` under `?netWorker`, where the
+    /// worker measures and posts the link numbers itself.
+    pub fn is_direct(&self) -> bool {
+        matches!(self, LoopSession::Direct(_))
     }
 
     pub async fn send_action(&mut self, action: GameAction) -> Result<()> {
@@ -215,12 +271,14 @@ impl LoopSession {
 
     /// 2026-10-09 — the retail DISCONNECT (0x8000) teardown
     /// (`Session::send_disconnect`). Direct mode sends it on this session's
-    /// socket; in proxy mode (`?netWorker=1`) the worker owns the transport,
-    /// so nothing is sent from here and ACE falls back to its timeout.
+    /// socket. net-transport-2 (2026-10-13): proxy mode (`?netWorker`, also
+    /// automatic for `?bot=1` / `?agent=1`) used to send nothing here, so ACE
+    /// held the session for its 60 s timeout; it now asks the worker, which
+    /// owns the transport, to send it.
     pub async fn send_disconnect(&mut self) -> Result<()> {
         match self {
             LoopSession::Direct(s) => s.send_disconnect().await,
-            LoopSession::Proxy(_) => Ok(()),
+            LoopSession::Proxy(p) => p.send_disconnect().await,
         }
     }
 
@@ -338,6 +396,15 @@ fn worker_post(kind: u8, bytes: &[u8]) {
     });
 }
 
+/// net-transport-6: post the worker's link numbers to the main thread
+/// ([`RX_KIND_LINK_STATUS`]).
+fn worker_post_link_status(ping: &PingRoundTrip, session: &Session) {
+    let mut bytes = [0u8; 8];
+    bytes[..4].copy_from_slice(&ping.last_rtt_ms().unwrap_or(u32::MAX).to_le_bytes());
+    bytes[4..].copy_from_slice(&session.link_status.packet_loss().to_le_bytes());
+    worker_post(RX_KIND_LINK_STATUS, &bytes);
+}
+
 /// Worker entry: connect the socket, log in, then run the wire loop forever
 /// (recv → post inbound; autonomous keepalive ping; drain outbound → send).
 /// Returns only on disconnect/error (after posting a disconnect to main).
@@ -381,6 +448,15 @@ pub async fn net_worker_run(
     // window, so even a lossy freeze keeps the session alive.
     let mut keepalive = gloo_timers::future::IntervalStream::new(2_500);
 
+    // net-transport-6 (2026-10-13): in this mode the worker owns the ping RTT
+    // clock (the main thread stamps nothing) and posts what it measures.
+    // `in_world` flips on the first PlayerCreate, the main loop's
+    // `LoopState::InWorld` edge: ACE answers no ping before the player
+    // exists, so earlier pings are not counted, and each PlayerCreate
+    // forgets what is still outstanding.
+    let mut ping = PingRoundTrip::new();
+    let mut in_world = false;
+
     loop {
         tokio::select! {
             recv = session.recv_message() => {
@@ -389,7 +465,25 @@ pub async fn net_worker_run(
                         for ev in events {
                             match ev {
                                 SessionEvent::Message(bytes) => {
+                                    // net-transport-6: peek the opcode for the
+                                    // in-world edge and for PingResponses; the
+                                    // main thread still decodes every message.
+                                    if ping_round_trip::is_player_create_message(&bytes) {
+                                        in_world = true;
+                                        // `in_world` never clears, so after a
+                                        // logoff the character-select pings
+                                        // were counted; ACE answered none.
+                                        ping.note_entered_world();
+                                    }
+                                    let rtt_measured =
+                                        ping_round_trip::is_ping_response_message(&bytes)
+                                            && ping
+                                                .note_response_ms(web_time::Instant::now())
+                                                .is_some();
                                     worker_post(RX_KIND_MESSAGE, &bytes);
+                                    if rtt_measured {
+                                        worker_post_link_status(&ping, &session);
+                                    }
                                 }
                                 // P4.2 TIMESYNC (2026-07-27): forward the
                                 // server clock instead of dropping it — the
@@ -420,33 +514,62 @@ pub async fn net_worker_run(
                 // state gate but the packet still resets the 60s server timeout.
                 if session.isaac_c2s.is_some() {
                     use holtburger_protocol::messages::misc::actions::PingRequestActionData;
-                    if let Err(e) = session
+                    match session
                         .send_action(GameAction::PingRequest(Box::new(PingRequestActionData)))
                         .await
                     {
-                        log::warn!("net_worker: keepalive PingRequest send failed: {e}");
+                        // net-transport-6: count the ping (in-world only);
+                        // it is stamped when no other is out.
+                        Ok(()) => {
+                            ping.note_sent(web_time::Instant::now(), in_world);
+                        }
+                        Err(e) => {
+                            log::warn!("net_worker: keepalive PingRequest send failed: {e}");
+                        }
                     }
+                    // net-transport-6: refresh the main thread's link numbers
+                    // (the packet-loss figure moves on the session's 2 s
+                    // heartbeat).
+                    worker_post_link_status(&ping, &session);
                 }
             }
             out = out_rx.next() => {
                 let Some((kind, bytes)) = out else { return };
-                let mut offset = 0;
-                let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
-                    log::warn!("net_worker: dropped un-unpackable outbound (kind={kind})");
-                    continue;
-                };
-                let res = if kind == TX_KIND_ACTION {
-                    match message {
-                        GameMessage::GameAction(gam) => session.send_action(gam.action).await,
-                        // Shouldn't happen (action kind always packs a GameAction),
-                        // but send it verbatim rather than silently dropping.
-                        other => session.send_message(&other).await,
+                // net-transport-6: a ping the main thread sent
+                // (`SessionCommand::ForceKeepalive`) is counted like the
+                // worker's own, so its answer is not credited to a later one.
+                let is_ping = kind == TX_KIND_ACTION
+                    && ping_round_trip::is_ping_request_message(&bytes);
+                match crate::net_worker_outbound::apply_outbound(&mut session, kind, &bytes).await {
+                    Ok(OutboundOutcome::Sent) => {
+                        if is_ping {
+                            ping.note_sent(web_time::Instant::now(), in_world);
+                        }
                     }
-                } else {
-                    session.send_message(&message).await
-                };
-                if let Err(e) = res {
-                    log::warn!("net_worker: outbound send failed: {e}");
+                    Ok(OutboundOutcome::Dropped) => {
+                        log::warn!("net_worker: dropped un-unpackable outbound (kind={kind})");
+                    }
+                    // net-transport-2: the session is over once the DISCONNECT
+                    // is sent (or failed to send), as in direct mode, where the
+                    // recv loop exits after `SessionCommand::Disconnect`.
+                    // Returning drops `session` and its `WsTransport`, which
+                    // closes the WebSocket; the bridge then sends its own
+                    // Disconnect too (a duplicate ACE only logs).
+                    Ok(OutboundOutcome::Disconnected) => {
+                        worker_post(RX_KIND_DISCONNECT, b"net worker: client sent Disconnect");
+                        return;
+                    }
+                    Err(e) if kind == TX_KIND_DISCONNECT => {
+                        log::warn!("net_worker: Disconnect send failed: {e}");
+                        worker_post(
+                            RX_KIND_DISCONNECT,
+                            format!("net worker: Disconnect send failed: {e}").as_bytes(),
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!("net_worker: outbound send failed: {e}");
+                    }
                 }
             }
         }

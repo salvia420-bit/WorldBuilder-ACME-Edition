@@ -25,7 +25,10 @@
 //   • Any change to the offer clears both acceptances server-side
 //     (RecvNotice_ClearTradeAcceptance → Reset) — the snapshot carries it.
 //   • Drops: only items you carry (DragItemAcceptable: "You can only trade
-//     items you are carrying"), never the same item twice.
+//     items you are carrying"), wielded ones included; the same item twice
+//     is ignored silently. hud-ui-5: a pack holding items offers its
+//     contents ("Trading contents of <pack>", gmSecureTradeUI::AddItem),
+//     never the bag itself; only an empty pack goes in whole.
 //   • Range: the partner is registered at range 5.0 with use-cylinders
 //     (RecvNotice_RegisterTrade); OnObjectRangeExit closes the
 //     negotiation (CloseTradeNegotiations). The old 24-m decline was not
@@ -53,7 +56,8 @@ import {
   inventoryRows, entityWorldPos, localPlayerWorldPos, selectedTargetGuid,
   objectDisplayName, objectIconId, chatNotice,
 } from "./commerce_window.js";
-import { tradeStatus, tradeRangeVerdict, tradeItemAttempt, fmtNumber } from "./commerce_logic.js";
+import { tradeStatus, tradeRangeVerdict, tradeItemAttempt, planTradeAdd, fmtNumber } from "./commerce_logic.js";
+import { showTransientLine } from "../ui/ac_spell_target_compat.js";
 
 const OVERLAY_ID = "hb-trade-panel";
 const STYLE_ID = "hb-trade-panel-style";
@@ -230,27 +234,33 @@ function onTradeButton() {
   }
 }
 
-/** Offer an item; true when addToTrade went out. */
+/**
+ * Offer an item; true when at least one addToTrade went out.
+ * hud-ui-5 — retail gmSecureTradeUI::AcceptDragObject → AddItem(_addContents
+ * = 1) (planTradeAdd): a pack holding items offers its contents with the 0x1A
+ * "Trading contents of …" line, never the bag itself; an item already listed
+ * is skipped silently; a wielded item is offered (DragItemAcceptable only
+ * tests IsOwnedByPlayer).
+ */
 function offerItem(guid) {
   const g = guid >>> 0;
-  const mineGuids = new Set((lastSnap?.myItems || []).map((i) => i.guid >>> 0));
-  if (mineGuids.has(g)) {
-    win?.toast("That item is already in the trade.", "err");
-    return false;
-  }
-  const item = inventoryRows().find((r) => r.guid === g);
+  const rows = inventoryRows();
+  const item = rows.find((r) => r.guid === g);
   if (!item) {
     win?.toast("You can only trade items you are carrying", "err");
     return false;
   }
-  if ((item.equipMask >>> 0) !== 0) {
-    win?.toast(`Unequip ${item.name} before trading it`, "err");
-    return false;
-  }
+  const plan = planTradeAdd(item, rows, (lastSnap?.myItems || []).map((i) => i.guid));
+  if (plan.notice) showTransientLine(plan.notice);
+  if (plan.guids.length === 0) return false;
   const h = window.__sessionHandle;
   if (typeof h?.addToTrade !== "function") return false;
-  try { h.addToTrade(g, 0); return true; }
-  catch (e) { console.warn("[trade-panel] addToTrade failed:", e); return false; }
+  let sent = false;
+  for (const ig of plan.guids) {
+    try { h.addToTrade(ig, 0); sent = true; }
+    catch (e) { console.warn("[trade-panel] addToTrade failed:", e); }
+  }
+  return sent;
 }
 
 /**
@@ -312,7 +322,9 @@ function renderWell(well, items, emptyText) {
   for (const it of items) {
     const name = it.name || objectDisplayName(it.guid);
     const slot = el("div", "hbk-slot", grid);
-    fillSlotIcon(slot, it.iconId || objectIconId(it.guid), name);
+    // hud-ui-3: the retail composite (both sides' items are in the entity
+    // store — ACE TrackObjects the partner's to us).
+    fillSlotIcon(slot, { guid: it.guid, iconId: it.iconId || objectIconId(it.guid) }, name);
     if ((it.stackSize || 1) > 1) {
       const st = el("span", "hbk-stack", slot);
       st.textContent = fmtNumber(it.stackSize);

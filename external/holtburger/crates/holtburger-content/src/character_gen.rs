@@ -1,7 +1,7 @@
 use holtburger_common::stats::{AttributeType, SkillType};
 use holtburger_dat::file_type::char_gen::{
-    CharacterGenGender, CharacterTemplate, EyeStrip, FaceStrip, Gear, HairStyle, HeritageGroup,
-    StarterArea, StarterLocation,
+    AnimationPartChange, CharacterGenGender, CharacterTemplate, EyeStrip, FaceStrip, Gear,
+    HairStyle, HeritageGroup, StarterArea, StarterLocation, TextureMapChange,
 };
 use holtburger_dat::file_type::{CharGen, SkillTable};
 use holtburger_dat::graphics::Frame;
@@ -449,5 +449,180 @@ impl CharacterGenGear {
             clothing_table: gear.clothing_table,
             weenie_default: gear.weenie_default,
         }
+    }
+}
+
+// ── maps-chargen-barber-1 (2026-10-13): the barber's view of CharGen ────────
+//
+// Retail's barber (gmBarberUI, acclient.c:270582 InitializePage / :269886
+// ListenToElementMessage) maps the server's StartBarber DIDs back to Sex_CG
+// list indices (`ACCharGenData::Get*IndexFromID` / `Get*FromID`,
+// acclient.c:494562-494900) and rebuilds the DIDs from the indices
+// (`ACCharGenData::GenerateBaseAppearanceData`, acclient.c:494345). Both
+// read the strips' ObjDescs, which `CharacterGenCatalog` does not keep. This
+// table keeps exactly those parts. It is a separate type so the catalog's
+// structs (and the JSON `getCharacterGenCatalog` /
+// `getCharacterGenAppearanceStrips` build from them, which RynthSuite
+// re-exports) stay unchanged.
+
+/// One `TextureMapChange` of a char-gen ObjDesc, in DAT order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharacterGenTextureChange {
+    pub part_index: u8,
+    pub old_texture: u32,
+    pub new_texture: u32,
+}
+
+impl CharacterGenTextureChange {
+    fn list(changes: &[TextureMapChange]) -> Vec<Self> {
+        changes
+            .iter()
+            .map(|c| Self {
+                part_index: c.part_index,
+                old_texture: c.old_texture,
+                new_texture: c.new_texture,
+            })
+            .collect()
+    }
+}
+
+/// One `AnimPartChange` of a char-gen ObjDesc, in DAT order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharacterGenAnimPartChange {
+    pub part_index: u8,
+    pub part_id: u32,
+}
+
+impl CharacterGenAnimPartChange {
+    fn list(changes: &[AnimationPartChange]) -> Vec<Self> {
+        changes
+            .iter()
+            .map(|c| Self {
+                part_index: c.part_index,
+                part_id: c.part_id,
+            })
+            .collect()
+    }
+}
+
+/// `HairStyle_CG` as the barber reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CharacterGenHairStyleDesc {
+    pub bald: bool,
+    pub alternate_setup: u32,
+    /// `[0]` is the head object (`GetAnimPartChange(0)->part_id`).
+    pub anim_part_changes: Vec<CharacterGenAnimPartChange>,
+    /// `[0]` is the hair texture (new) over its default (old).
+    pub texture_changes: Vec<CharacterGenTextureChange>,
+}
+
+/// `EyesStrip_CG` as the barber reads it (`objDesc` / `objDesc_Bald`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CharacterGenEyeStripDesc {
+    pub texture_changes: Vec<CharacterGenTextureChange>,
+    pub texture_changes_bald: Vec<CharacterGenTextureChange>,
+}
+
+/// `FaceStrip_CG` (nose / mouth) as the barber reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CharacterGenFaceStripDesc {
+    pub texture_changes: Vec<CharacterGenTextureChange>,
+}
+
+/// One `Sex_CG` (heritage × gender) with the face ObjDescs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CharacterGenFaceSex {
+    pub heritage_id: u32,
+    pub gender_id: u32,
+    /// `Sex_CG.setup`.
+    pub setup_id: u32,
+    pub base_palette: u32,
+    pub skin_palette_set: u32,
+    /// `mHairColorList` — PalSet (0x0F) ids.
+    pub hair_color_ids: Vec<u32>,
+    /// `mEyeColorList` — Palette (0x04) ids.
+    pub eye_color_ids: Vec<u32>,
+    pub hair_styles: Vec<CharacterGenHairStyleDesc>,
+    pub eye_strips: Vec<CharacterGenEyeStripDesc>,
+    pub nose_strips: Vec<CharacterGenFaceStripDesc>,
+    pub mouth_strips: Vec<CharacterGenFaceStripDesc>,
+}
+
+impl CharacterGenFaceSex {
+    fn from_asset(heritage_id: u32, gender_id: u32, gender: &CharacterGenGender) -> Self {
+        Self {
+            heritage_id,
+            gender_id,
+            setup_id: gender.setup_id,
+            base_palette: gender.base_palette,
+            skin_palette_set: gender.skin_palette_set,
+            hair_color_ids: gender.hair_color_list.clone(),
+            eye_color_ids: gender.eye_color_list.clone(),
+            hair_styles: gender
+                .hair_style_list
+                .iter()
+                .map(|s| CharacterGenHairStyleDesc {
+                    bald: s.bald,
+                    alternate_setup: s.alternate_setup,
+                    anim_part_changes: CharacterGenAnimPartChange::list(
+                        &s.obj_desc.anim_part_changes,
+                    ),
+                    texture_changes: CharacterGenTextureChange::list(&s.obj_desc.texture_changes),
+                })
+                .collect(),
+            eye_strips: gender
+                .eye_strip_list
+                .iter()
+                .map(|s| CharacterGenEyeStripDesc {
+                    texture_changes: CharacterGenTextureChange::list(&s.obj_desc.texture_changes),
+                    texture_changes_bald: CharacterGenTextureChange::list(
+                        &s.obj_desc_bald.texture_changes,
+                    ),
+                })
+                .collect(),
+            nose_strips: gender
+                .nose_strip_list
+                .iter()
+                .map(|s| CharacterGenFaceStripDesc {
+                    texture_changes: CharacterGenTextureChange::list(&s.obj_desc.texture_changes),
+                })
+                .collect(),
+            mouth_strips: gender
+                .mouth_strip_list
+                .iter()
+                .map(|s| CharacterGenFaceStripDesc {
+                    texture_changes: CharacterGenTextureChange::list(&s.obj_desc.texture_changes),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Every `Sex_CG` of the CharGen table, keyed by (heritage, gender).
+#[derive(Debug, Clone, Default)]
+pub struct CharacterGenFaceTable {
+    pub sexes: BTreeMap<(u32, u32), CharacterGenFaceSex>,
+}
+
+impl CharacterGenFaceTable {
+    pub fn from_char_gen(char_gen: &CharGen) -> Self {
+        let mut sexes = BTreeMap::new();
+        for (heritage_id, group) in &char_gen.heritage_groups {
+            for (gender_id, gender) in &group.genders {
+                let Ok(gender_id) = u32::try_from(*gender_id) else {
+                    continue;
+                };
+                sexes.insert(
+                    (*heritage_id, gender_id),
+                    CharacterGenFaceSex::from_asset(*heritage_id, gender_id, gender),
+                );
+            }
+        }
+        Self { sexes }
+    }
+
+    /// `ACCharGenData::GetHG(heritage)` → `HeritageGroup_CG::GetSX(gender)`.
+    pub fn sex(&self, heritage_id: u32, gender_id: u32) -> Option<&CharacterGenFaceSex> {
+        self.sexes.get(&(heritage_id, gender_id))
     }
 }

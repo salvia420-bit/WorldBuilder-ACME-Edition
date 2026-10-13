@@ -314,6 +314,72 @@ const REMOTE_BLIP_OUTDOOR_M: f32 = 100.0;
 /// gate, acclient.c:323483-323489).
 const REMOTE_INTERP_PLAYER_RADIUS_M: f32 = 96.0;
 
+thread_local! {
+    static REMOTE_REST_HEADING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// motion-remote-2 (2026-10-13): `?remoteRestHeading` — a near, on-contact
+/// remote wire position within 0.05 m of the body adopts the wire heading
+/// unless the body is moving-to (retail `InterpolationManager::InterpolateTo`
+/// :389129-389136). Default ON; `=off` is the escape.
+pub fn remote_rest_heading_enabled() -> bool {
+    REMOTE_REST_HEADING.with(|c| c.get())
+}
+
+/// Set the switch for this thread (wasm is single-threaded; each `cargo
+/// test` runs on its own thread).
+pub fn set_remote_rest_heading(on: bool) {
+    REMOTE_REST_HEADING.with(|c| c.set(on));
+}
+
+thread_local! {
+    static REMOTE_LEASH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// motion-remote-3 (2026-10-13): `?remoteLeash` — the remote
+/// `ConstraintManager` leash applies to the object's OWN motion, not only to
+/// interpolation, and re-arms after every accepted `MoveOrTeleport` arm
+/// (acclient.c:145223-145227, 388287-388304). A remote whose positions stop
+/// runs 10 m (5 m indoors) at full speed, then slows to a halt by 50 m
+/// (20 m). Default ON; `=off` is the escape.
+pub fn remote_leash_enabled() -> bool {
+    REMOTE_LEASH.with(|c| c.get())
+}
+
+/// Set the switch for this thread (wasm is single-threaded; each `cargo
+/// test` runs on its own thread).
+pub fn set_remote_leash(on: bool) {
+    REMOTE_LEASH.with(|c| c.set(on));
+}
+
+/// motion-remote-3 — `ConstrainTo(object, &object->m_position, start, max)`
+/// after an accepted remote `MoveOrTeleport` (acclient.c:145223-145227): the
+/// running offset starts at zero, and start/max come from the object's OWN
+/// cell after the arm (`GetStart/MaxConstraintDistance` read
+/// `m_position.objcell_id`, :315885-315929 — 10/50 outdoor, 5/20 indoor).
+/// The leash is held across interp completion as retail's is.
+fn rearm_remote_leash(body: &mut SpatialBody) {
+    let (start, max) = if body.pose.is_indoors() {
+        (CONSTRAINT_LEASH_INDOOR_M, CONSTRAINT_MAX_INDOOR_M)
+    } else {
+        (CONSTRAINT_LEASH_OUTDOOR_M, CONSTRAINT_MAX_OUTDOOR_M)
+    };
+    body.position_manager.set_hold_leash(true);
+    body.position_manager.remote_constrain_to(0.0, start, max);
+}
+
+/// motion-remote-3 — the leash's factor on a remote's root motion this
+/// slice. Retail runs `ConstraintManager::adjust_offset` on the whole offset
+/// frame, the part array's root motion included (`PositionManager::
+/// adjust_offset` acclient.c:388287-388304, called from
+/// `UpdatePositionInternal` :320027-320030); the physics velocity (a landing
+/// slide) is integrated afterwards and is never leashed. Contact as the
+/// interp gate reads it.
+fn remote_leash_scale(body: &SpatialBody) -> f32 {
+    let on_contact = body.remote_arc.is_none() && body.last_wire_contact != Some(false);
+    body.position_manager.constraint.preview_scale(on_contact)
+}
+
 /// OpenAC comparison 2026-10-04 (remote motion D7) — `PhysicsGlobals::gravity`
 /// (acclient.c:45824), applied by `calc_acceleration` (:317787) to a GRAVITY
 /// object that is not in contact on walkable ground.
@@ -1580,6 +1646,12 @@ pub struct SpatialScene {
     /// remote bodies by their interpreted-state velocity every slice (see
     /// [`Self::step_remote_position_managers`]). `?remoteRootMotion=off`.
     remote_root_motion_enabled: bool,
+    /// motion-remote-1 (2026-10-13): the spine's root motion travels at the
+    /// object's scale × its motion's speed, as retail's
+    /// `UpdatePositionInternal` scales the offset origin by `m_scale`
+    /// (acclient.c:320014-320020; [`RootMotion::scaled`]). Default ON;
+    /// `?remoteRootScale=off` moves every remote at its unscaled speed.
+    remote_root_scale_enabled: bool,
     /// OpenAC comparison 2026-10-04 (remote motion D7): a remote body that
     /// leaves the ground flies its own gravity arc in
     /// [`Self::step_remote_position_managers`] (retail runs
@@ -1889,6 +1961,7 @@ impl SpatialScene {
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
             remote_root_motion_enabled: true,
+            remote_root_scale_enabled: true,
             remote_jump_arc_enabled: true,
             remote_moveto_enabled: true,
             remote_moveto_facing_enabled: USE_REMOTE_MOVETO_FACING,
@@ -2172,6 +2245,16 @@ impl SpatialScene {
     /// `?remoteRootMotion=off` escape for the D1 per-slice remote root motion.
     pub fn set_remote_root_motion_enabled(&mut self, enabled: bool) {
         self.remote_root_motion_enabled = enabled;
+    }
+
+    /// motion-remote-1 — install `?remoteRootScale` (see the field doc).
+    pub fn set_remote_root_scale_enabled(&mut self, enabled: bool) {
+        self.remote_root_scale_enabled = enabled;
+    }
+
+    /// True when the spine scales remote root motion by the object's scale.
+    pub fn remote_root_scale_enabled(&self) -> bool {
+        self.remote_root_scale_enabled
     }
 
     /// `?remoteJumpArc=off` escape for the D7 remote gravity arc.
@@ -3169,6 +3252,16 @@ impl SpatialScene {
     /// `cell_aabb` (read access to the parallel `cell_seen_outside` map).
     pub fn cell_seen_outside(&self, cell_id: u32) -> bool {
         self.cell_seen_outside.get(&cell_id).copied().unwrap_or(false)
+    }
+
+    /// streaming-residency-1 (2026-10-13): the SeenOutside bit WITHOUT the
+    /// `unwrap_or(false)` fold — `None` when the cell's EnvCell record has
+    /// not been loaded (key absent; outdoor cells are never keyed). The
+    /// ACE-parity visibility prune (`state::liveness`, `?aceObjMaint=on`)
+    /// needs the distinction: an unloaded bit read as "sealed" would prune
+    /// objects ACE is still sending.
+    pub fn cell_seen_outside_opt(&self, cell_id: u32) -> Option<bool> {
+        self.cell_seen_outside.get(&cell_id).copied()
     }
 
     /// Iterate every (cell_id, world-space AABB) pair currently loaded.
@@ -6052,6 +6145,12 @@ impl SpatialScene {
                 if let Some(contact) = ctx.contact {
                     body.last_wire_contact = Some(contact);
                 }
+                // motion-remote-3 (`?remoteLeash`): every arm that returns
+                // 1 from `MoveOrTeleport` re-arms the leash on the object's
+                // own post-move position (acclient.c:145223-145227) — hard
+                // set, far snap and InterpolateTo, its ≤0.05 m stop
+                // included; `!contact` returns 0 and does not.
+                let leash = remote_leash_enabled();
                 let teleport_advanced = matches!(sync, AuthoritativeBodySync::Reset);
                 if teleport_advanced || !body_existed {
                     // Teleport-stamp advance / no resolved prior pose →
@@ -6059,6 +6158,9 @@ impl SpatialScene {
                     body.position_manager.stop();
                     body.pose = pose;
                     body.sampling.mode = mode;
+                    if leash {
+                        rearm_remote_leash(&mut body);
+                    }
                     // A hard set places the object; any arc it was flying
                     // is over (D7).
                     if let SpatialBodyId::Entity(guid) = body_id {
@@ -6093,6 +6195,9 @@ impl SpatialScene {
                         body.position_manager.stop();
                         body.pose = pose;
                         body.sampling.mode = mode;
+                        if leash {
+                            rearm_remote_leash(&mut body);
+                        }
                         if let SpatialBodyId::Entity(guid) = body_id {
                             end_remote_arc(&mut body, guid, &mut self.remote_airborne_changes);
                             body.remote_velocity = Vector3::zero();
@@ -6109,7 +6214,16 @@ impl SpatialScene {
                         // remote MoveTo pump (D5) sets
                         // `remote_moving_to` while a directive is active,
                         // so wire headings do not fight its steer.
-                        let indoor = pose.is_indoors();
+                        // motion-remote-3: `GetAutonomyBlipDistance` reads
+                        // the object's OWN cell (`InterpolateTo` :389053 →
+                        // :315861-315880), not the target's — they differ
+                        // only across a door threshold. `=off` keeps the
+                        // target's.
+                        let indoor = if leash {
+                            body.pose.is_indoors()
+                        } else {
+                            pose.is_indoors()
+                        };
                         let blip = if indoor {
                             REMOTE_BLIP_INDOOR_M
                         } else {
@@ -6118,7 +6232,26 @@ impl SpatialScene {
                         let queued = body
                             .position_manager
                             .remote_interpolate_to(body.pose, pose, body.remote_moving_to, blip);
-                        if queued {
+                        if !queued && !body.remote_moving_to && remote_rest_heading_enabled() {
+                            // motion-remote-2 (2026-10-13, `?remoteRestHeading`):
+                            // the ≤0.05 m arm takes the wire heading unless
+                            // keep_heading — `set_heading(get_heading(p))`, then
+                            // StopInterpolating (acclient.c:389129-389136). Yaw
+                            // only; the position stays. Before, an at-rest body
+                            // kept the heading its own turn integration left, and
+                            // that stale heading seeded the next root-motion walk,
+                            // MoveTo turn and heading-owned row (turn / arrival /
+                            // D5 rows reach applyManagedPose on the DEFAULT path,
+                            // so it was already drawn at the start of a turn).
+                            body.pose.rotation = holtburger_common::Quaternion::from_heading(
+                                pose.rotation.to_heading(),
+                            );
+                        }
+                        if leash {
+                            // motion-remote-3: queued or stopped, the arm
+                            // returned 1 — re-arm on the body's own cell.
+                            rearm_remote_leash(&mut body);
+                        } else if queued {
                             let start = if indoor {
                                 CONSTRAINT_LEASH_INDOOR_M
                             } else {
@@ -6329,6 +6462,7 @@ impl SpatialScene {
             return Vec::new();
         };
         let up = Vector3::new(0.0, 0.0, 1.0);
+        let leash_on = remote_leash_enabled();
         self.body_store
             .bodies
             .values()
@@ -6344,18 +6478,30 @@ impl SpatialScene {
                 if dx * dx + dy * dy > radius * radius {
                     return None;
                 }
-                let walk_v = if self.remote_walk_gate(body, guid) {
-                    let v = roots.get(&guid).map_or_else(Vector3::zero, |m| m.velocity);
+                let to_world = |v: Vector3| {
                     if v.x != 0.0 || v.y != 0.0 {
                         body.pose.rotation.rotate_vector(v)
                     } else {
                         Vector3::zero()
                     }
+                };
+                // motion-remote-1: the walk travels at the object's scale;
+                // walking off a ledge leaves at the unscaled speed
+                // (`get_leave_ground_velocity`, acclient.c:343806).
+                let (walk_v, leave_walk_v) = if self.remote_walk_gate(body, guid) {
+                    roots.get(&guid).map_or_else(
+                        || (Vector3::zero(), Vector3::zero()),
+                        |m| (to_world(m.velocity), to_world(m.unscaled_velocity)),
+                    )
                 } else {
-                    Vector3::zero()
+                    (Vector3::zero(), Vector3::zero())
                 };
                 let sliding = self.remote_jump_arc_enabled && body.remote_velocity != Vector3::zero();
-                if walk_v == Vector3::zero() && !sliding {
+                // motion-remote-3 (`?remoteLeash`): the leash scales the
+                // walk only (`remote_leash_scale`); a halted walker with no
+                // slide plans nothing.
+                let leash = if leash_on { remote_leash_scale(body) } else { 1.0 };
+                if (walk_v == Vector3::zero() || leash == 0.0) && !sliding {
                     return None;
                 }
                 let (slide_offset, slide_v) = if sliding {
@@ -6368,11 +6514,13 @@ impl SpatialScene {
                 } else {
                     (Vector3::zero(), Vector3::zero())
                 };
+                let walk_offset =
+                    Vector3::new(walk_v.x * quantum * leash, walk_v.y * quantum * leash, 0.0);
                 let mut end = body.pose;
                 end.coords = end.coords
                     + Vector3::new(
-                        walk_v.x * quantum + slide_offset.x,
-                        walk_v.y * quantum + slide_offset.y,
+                        walk_offset.x + slide_offset.x,
+                        walk_offset.y + slide_offset.y,
                         0.0,
                     );
                 Some(RemoteMovePlan {
@@ -6380,6 +6528,8 @@ impl SpatialScene {
                     begin: body.pose,
                     end,
                     walk_v,
+                    walk_offset,
+                    leave_walk_v,
                     slide_v: Vector3::new(slide_v.x, slide_v.y, 0.0),
                     contact_plane: body.remote_contact_plane,
                     wall_normal: body.remote_wall_normal,
@@ -6390,10 +6540,25 @@ impl SpatialScene {
 
     /// MoveTo refactor phase B — each remote mover's body motion this
     /// instant: its interpreted state through its motion table
-    /// ([`root_motion`]). Movers at rest are left out.
+    /// ([`root_motion`]). Movers at rest are left out. Every object at scale
+    /// 1.0 (see [`Self::remote_root_motions_scaled`]).
     pub(crate) fn remote_root_motions(
         &self,
         kinematics: Option<&MotionKinematics>,
+    ) -> HashMap<Guid, RootMotion> {
+        self.remote_root_motions_scaled(kinematics, |_| 1.0)
+    }
+
+    /// [`Self::remote_root_motions`] with each object's travel at
+    /// `scale_of(guid)` × its motion's speed (motion-remote-1:
+    /// `UpdatePositionInternal` scales the offset origin by `m_scale`,
+    /// acclient.c:320014-320020; [`RootMotion::scaled`]). The scale is read
+    /// every slice, so a runtime ObjScale change applies at once.
+    /// `?remoteRootScale=off` ignores it.
+    pub(crate) fn remote_root_motions_scaled(
+        &self,
+        kinematics: Option<&MotionKinematics>,
+        scale_of: impl Fn(Guid) -> f32,
     ) -> HashMap<Guid, RootMotion> {
         self.remote_movers
             .iter()
@@ -6406,7 +6571,10 @@ impl SpatialScene {
                     }),
                     _ => None,
                 };
-                let motion = root_motion(&interp.interpreted_state, table);
+                let mut motion = root_motion(&interp.interpreted_state, table);
+                if self.remote_root_scale_enabled {
+                    motion = motion.scaled(scale_of(*guid));
+                }
                 (!motion.is_still()).then_some((*guid, motion))
             })
             .collect()
@@ -6598,7 +6766,11 @@ impl SpatialScene {
         let up = Vector3::new(0.0, 0.0, 1.0);
         let step_up = super::physics::PLAYER_STEP_UP_HEIGHT;
         let step_down = super::physics::PLAYER_STEP_DOWN_HEIGHT;
-        let ground_moves: HashMap<Guid, (WorldPosition, Vector3, bool)> = self
+        // motion-remote-3 (`?remoteLeash`): the leash scales each move's
+        // walk (`remote_leash_scale`); the 4th field is the walk offset the
+        // move applied, accumulated into the leash below.
+        let leash_on = remote_leash_enabled();
+        let ground_moves: HashMap<Guid, (WorldPosition, Vector3, bool, Vector3)> = self
             .body_store
             .bodies
             .values()
@@ -6610,7 +6782,7 @@ impl SpatialScene {
                 // (`WorldState::step_remote_objects`) — walls, objects,
                 // step-up/down, indoors — replaces the floor sample.
                 if let Some(r) = spine.and_then(|s| s.resolved.get(&guid)) {
-                    return Some((guid, (r.pose, r.velocity, r.leave_ground)));
+                    return Some((guid, (r.pose, r.velocity, r.leave_ground, r.walk_offset)));
                 }
                 // D7: retail zeroes root motion off walkable ground
                 // (UpdatePositionInternal acclient.c:320014-320025); the arc
@@ -6631,19 +6803,27 @@ impl SpatialScene {
                 // motion table (a MoveTo's RunForward included), along its
                 // facing, as `CSequence::apply_physics` moves it
                 // (acclient.c:339860).
+                // motion-remote-1: `velocity` travels at the object's scale,
+                // `unscaled_velocity` is the leave-ground velocity below.
                 let spine_v = spine.map(|spine| {
-                    let v_local = if walk {
-                        spine.roots.get(&guid).map_or_else(Vector3::zero, |motion| motion.velocity)
+                    let (v_local, unscaled_local) = if walk {
+                        spine.roots.get(&guid).map_or_else(
+                            || (Vector3::zero(), Vector3::zero()),
+                            |motion| (motion.velocity, motion.unscaled_velocity),
+                        )
                     } else {
-                        Vector3::zero()
+                        (Vector3::zero(), Vector3::zero())
                     };
-                    if v_local.x != 0.0 || v_local.y != 0.0 {
-                        body.pose.rotation.rotate_vector(v_local)
-                    } else {
-                        Vector3::zero()
-                    }
+                    let to_world = |v: Vector3| {
+                        if v.x != 0.0 || v.y != 0.0 {
+                            body.pose.rotation.rotate_vector(v)
+                        } else {
+                            Vector3::zero()
+                        }
+                    };
+                    (to_world(v_local), to_world(unscaled_local))
                 });
-                let walk_v = if let Some(v) = spine_v { v } else { match drive {
+                let walk_v = if let Some((v, _)) = spine_v { v } else { match drive {
                     Some(d) if walk && d.forward.is_some() => {
                         let y = remote_moveto_forward_speed(&d, d.forward == Some(true), body.my_run_rate);
                         if self.remote_moveto_facing_enabled {
@@ -6664,7 +6844,8 @@ impl SpatialScene {
                     }
                 } };
                 let sliding = self.remote_jump_arc_enabled && body.remote_velocity != Vector3::zero();
-                if walk_v == Vector3::zero() && !sliding {
+                let leash = if leash_on { remote_leash_scale(body) } else { 1.0 };
+                if (walk_v == Vector3::zero() || leash == 0.0) && !sliding {
                     return None;
                 }
                 let here = remote_ground_at(self, &body.pose, body.pose.coords.z + step_up);
@@ -6679,11 +6860,13 @@ impl SpatialScene {
                 // (|v·n| >= 0.25) would lift it in retail's sweep; we have
                 // none, so it is dropped (documented deviation).
                 let slide_v = Vector3::new(slide_v.x, slide_v.y, 0.0);
+                let walk_offset =
+                    Vector3::new(walk_v.x * quantum * leash, walk_v.y * quantum * leash, 0.0);
                 let mut next = body.pose;
                 next.coords = next.coords
                     + Vector3::new(
-                        walk_v.x * quantum + slide_offset.x,
-                        walk_v.y * quantum + slide_offset.y,
+                        walk_offset.x + slide_offset.x,
+                        walk_offset.y + slide_offset.y,
                         0.0,
                     );
                 let mut next = next.rebucket_outdoor_landblock().normalize_outdoor_cell();
@@ -6692,7 +6875,7 @@ impl SpatialScene {
                 // dock) — keep the height rather than drop through it.
                 if here.is_some_and(|(z, _)| body.pose.coords.z - z > REMOTE_UNKNOWN_FLOOR_M) {
                     next.coords.z = body.pose.coords.z;
-                    return Some((guid, (next, slide_v, false)));
+                    return Some((guid, (next, slide_v, false, walk_offset)));
                 }
                 let (z, _) = remote_ground_at(self, &next, body.pose.coords.z + step_up)?;
                 if self.remote_jump_arc_enabled && body.pose.coords.z - z > step_down {
@@ -6700,15 +6883,18 @@ impl SpatialScene {
                     // `get_leave_ground_velocity` (acclient.c:343806-343833)
                     // REPLACES the velocity with the walk (state) velocity;
                     // only a zero walk velocity keeps the physics velocity.
+                    // The state velocity has no object scale
+                    // (motion-remote-1): the spine leaves at the unscaled walk.
+                    let leave_walk_v = spine_v.map_or(walk_v, |(_, unscaled)| unscaled);
                     let leave_v = if walk_v != Vector3::zero() {
-                        Vector3::new(walk_v.x, walk_v.y, 0.0)
+                        Vector3::new(leave_walk_v.x, leave_walk_v.y, 0.0)
                     } else {
                         slide_v
                     };
-                    return Some((guid, (next, leave_v, true)));
+                    return Some((guid, (next, leave_v, true, walk_offset)));
                 }
                 next.coords.z = z;
-                Some((guid, (next, slide_v, false)))
+                Some((guid, (next, slide_v, false, walk_offset)))
             })
             .collect();
         // OpenAC comparison 2026-10-04 (remote motion D7). Retail simulates
@@ -6750,7 +6936,13 @@ impl SpatialScene {
                 continue;
             };
             let mut stepped = false;
-            if let Some(&(next, v, leave_ground)) = ground_moves.get(&guid) {
+            if let Some(&(next, v, leave_ground, walk_offset)) = ground_moves.get(&guid) {
+                // motion-remote-3: the leash accumulates the walk the move
+                // applied — pre-sweep, as `ConstraintManager::adjust_offset`
+                // runs before the transition (acclient.c:389506-389510).
+                if leash_on {
+                    body.position_manager.constraint.accumulate(walk_offset);
+                }
                 body.pose = next;
                 body.remote_velocity = v;
                 // Phase C: the transition's contact plane / wall normal carry

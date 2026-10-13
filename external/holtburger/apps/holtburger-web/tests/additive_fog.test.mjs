@@ -330,8 +330,15 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   check("alpha bucket: stock fog toward fogColor kept", imAlpha?.material.fog === true);
   check("alpha bucket: its own program key untouched", imAlpha?.material.customProgramCacheKey() === "hbParticleInstAlpha");
   const slots = (id) => mgr.particleTable.get(id).partStorage.filter(Boolean).map((m) => m.material);
-  check("additive per-slot clones unfogged", slots(idAdd).length === 4 && slots(idAdd).every((m) => m.fog === false));
-  check("Alpha+Additive per-slot clones unfogged", slots(idAA).every((m) => m.fog === false));
+  // Slot carriers (2026-10-13, `?particleSlotCarrier`, DEFAULT ON): an instanced
+  // emitter's slots hold the shared NEVER-RENDERED carrier and the bucket draws
+  // them, so the fog contract is on the bucket. A slot is that carrier or
+  // (`=off`) an unfogged per-slot clone — never a fogged additive material.
+  const drawnUnfogged = (m) => (PM._isSlotCarrier(m) ? m.visible === false : m.fog === false);
+  check("additive slots: carrier (drawn by the unfogged bucket) or unfogged clone",
+    slots(idAdd).length === 4 && slots(idAdd).every(drawnUnfogged) && imAdd.material.fog === false);
+  check("Alpha+Additive slots: carrier (drawn by the unfogged bucket) or unfogged clone",
+    slots(idAA).every(drawnUnfogged) && imAA.material.fog === false);
   check("alpha per-slot clones keep fog", slots(idAlpha).every((m) => m.fog === true));
   check("base cache materials never touched", baseAdd.fog === true && baseAlpha.fog === true && baseAA.fog === true &&
     F.additiveFogStateOf(baseAdd) === null);
@@ -376,8 +383,12 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   const id4 = await mgr.addEmitter({ emitterInfo: { ...info(GFX_ADD), id: 0x32000002 }, parent: anchor });
   check("new emitter under =off keeps stock fog", mgr.particleTable.get(id4).partStorage.filter(Boolean).every((m) => m.material.fog === true));
   const d3 = window.__additiveFogBlack("retail");
-  check("live -> retail: everything unfogged again (incl. the =off-born emitter)", d3.unfogged === d3.materials && d3.materials === d0.materials + 4,
-    JSON.stringify(d3));
+  // The =off-born emitter draws through imAdd; it adds per-slot clones only
+  // under `?particleSlotCarrier=off` (carrier slots are not materials it renders).
+  const id4Clones = mgr.particleTable.get(id4).partStorage.filter(Boolean).filter((m) => !PM._isSlotCarrier(m.material)).length;
+  check("live -> retail: everything unfogged again (incl. the =off-born emitter)",
+    d3.unfogged === d3.materials && d3.materials === d0.materials + id4Clones && imAdd.material.fog === false,
+    JSON.stringify({ ...d3, id4Clones }));
   check("alpha slots never touched by any switch", slots(idAlpha).every((m) => m.fog === true));
 
   // ---- `?particleFx` on: the fog modes compose with the FX hook -------------

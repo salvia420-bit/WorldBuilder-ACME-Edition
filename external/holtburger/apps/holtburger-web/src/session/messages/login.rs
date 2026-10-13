@@ -1,6 +1,6 @@
 //! `GameMessage` arms: Login and server identity: character list, create/enter-
 //! world responses, the local PlayerCreate, server name, localization
-//! interrogation, character errors.
+//! interrogation, character errors, the server's AccountBoot (session end).
 //!
 //! Moved verbatim from the inbound `match message` (2026-10-05 recv_loop
 //! split); see `session::messages::dispatch_game_message` for the routing.
@@ -18,6 +18,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         remote_motion_keep_on,
         remote_turn_on,
         remote_spine_on,
+        remote_root_scale_on,
         remote_sweep_on,
         target_voyeur_on,
         remote_moveto_begin_on,
@@ -31,6 +32,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         object_blob_queue_on,
         open_sea_wall_on,
         fallback_water_retail_on,
+        ace_obj_maint_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -213,6 +215,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             *state = LoopState::InWorld {
                 player_guid: data.guid,
             };
+            // net-transport-6: a fresh in-world edge. After a logoff the
+            // state stayed `InWorld` at character select, so those pings were
+            // counted as answerable; ACE answered none. Forget them.
+            PING_ROUND_TRIP.with(|c| c.borrow_mut().note_entered_world());
             queued_events.borrow_mut().push(ClientEvent {
                 kind: CLIENT_EVENT_KIND_ENTERED_WORLD,
                 string_payload: None,
@@ -277,6 +283,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 // MoveTo refactor phase B: remote objects on their own
                 // movement managers (?remoteSpine, default ON).
                 new_world.scene.set_remote_spine_enabled(remote_spine_on);
+                // motion-remote-1: their root motion travels at their
+                // ObjScale (?remoteRootScale, default ON).
+                new_world.scene.set_remote_root_scale_enabled(remote_root_scale_on);
                 // MoveTo refactor phase C: their moves through the
                 // transition (?remoteSweep, default ON).
                 new_world.scene.set_remote_sweep_enabled(remote_sweep_on);
@@ -309,6 +318,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 // (?openSeaWall / ?fallbackWaterRetail, both ON).
                 new_world.scene.set_open_sea_wall_enabled(open_sea_wall_on);
                 new_world.set_fallback_water_retail(fallback_water_retail_on);
+                // streaming-residency-1 (2026-10-13): ACE-parity
+                // visibility prune (?aceObjMaint=on, OPT-IN).
+                new_world.set_ace_object_maint_enabled(ace_obj_maint_on);
                 // Physics-parity 2026-07-03: retail
                 // LOCAL lattice (?retailLeash=on).
                 new_world.set_local_retail_leash(retail_leash_on);
@@ -450,6 +462,28 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 u32_payload_2: None,
                 f32_payload: None,
             });
+        }
+        GameMessage::AccountBoot(data) => {
+            // inventory-session-6 (2026-10-13): retail
+            // CPlayerSystem::Handle_AccountBooted (acclient.c:400213)
+            // shows "You have been booted from Asheron's Call%s." on the
+            // disconnected screen. ACE sends the boot only from
+            // Session.Terminate and then drops the session, so this is the
+            // session's end: one kind=4 Disconnected carrying retail's line
+            // and the 0xF7DC boot marker, then exit (no 140 s silence wait,
+            // no keepalives into a dropped session). Before CharacterList
+            // the exit drops `charlist_tx` and `start_session` rejects with
+            // the same line.
+            let text = crate::account_boot::account_boot_text(data.reason.as_deref());
+            log::warn!("[account-boot] {text}");
+            queued_events.borrow_mut().push(ClientEvent {
+                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                string_payload: Some(text),
+                u32_payload: Some(crate::account_boot::ACCOUNT_BOOT_DISCONNECT_MARKER),
+                u32_payload_2: None,
+                f32_payload: None,
+            });
+            return LoopFlow::Exit;
         }
         _ => unreachable!("GameMessage routed to the wrong handler module"),
     }

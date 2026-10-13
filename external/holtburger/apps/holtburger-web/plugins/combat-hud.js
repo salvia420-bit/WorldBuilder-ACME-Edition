@@ -685,6 +685,8 @@ function build() {
   try {
     state.posCtl = attachWindowPosition(ov, {
       windowId: WINDOW_ID.COMBAT_HUD,
+      // gmFloatyCombatPanelUI::UpdateLockedStatus reads the global LockUI.
+      obeysGlobalLock: true,
       dragHandle: ov,
       ignoreSelector: "button, input, label, .hch-bar, kbd",
       defaultPos: { left: "0px", right: "0px", bottom: `${DOCK_FALLBACK_BOTTOM}px`, top: "auto" },

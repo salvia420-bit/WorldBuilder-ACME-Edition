@@ -28,8 +28,16 @@ import { readBusyCount } from "../ui/ac_cast_predict.js";
 import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
 import { emitterPosThree, threeToAc } from "../scene3d/audio/emitter_position.js";
 import { radarBlankAfterEnviron } from "../scene3d/target_cycle.js";
+import { environFogFor } from "../scene3d/environ_override.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
-import { characterErrorInfo, retailCharErrorsEnabled } from "./login_ui_rules.js";
+import { isAccountBootDisconnect } from "./account_boot.js";
+import { characterErrorInfo, retailCharErrorsEnabled, chargenErrorInfo, CHARGEN_ERROR_STRING_TABLE } from "./login_ui_rules.js";
+import { retailStatusCmdsEnabled } from "./slash_commands.js";
+import { routePopupString } from "./popup_string.js";
+import { jumpRefusalLine } from "./jump_refusal_text.js";
+import { maybeQueryHouseAtLogin } from "./house_query_login.js";
+import { showPortalStormNotice } from "./portal_storm_notice.js";
+import { acString, loadStringTable } from "../ui/ac_strings.js";
 import { maybeAutoBootBot } from "../rynth/boot.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
@@ -161,7 +169,11 @@ export function dispatchClientEvent(evt, D) {
         category: typeof category === "number" ? category : 0,
       },
     );
-    if (!chatHookEv?.eaten) {
+    // chat-errors-7 (2026-10-13): a PopupString line opens retail's OK
+    // message dialog instead (Handle_Communication__PopUpString, acclient.c:
+    // 425219 — no AddTextToScroll); app/popup_string.js keeps the chat line
+    // for agent sessions and `?popupDialog=off`. The hook above still fires.
+    if (!chatHookEv?.eaten && !routePopupString(text, category)) {
       appendChatLine(
         text,
         typeof category === "number" ? category : 0,
@@ -241,6 +253,17 @@ export function dispatchClientEvent(evt, D) {
         console.warn('[portalSpace] login request failed:', e);
       }
     }
+    // hud-ui-4 (2026-10-13): retail CPlayerSystem::InitializePlayer
+    // (acclient.c:400740) ends with CM_House::Event_QueryHouse, after
+    // LoginComplete (the wasm sent it before queuing this event). The answer
+    // (HouseData / HouseStatus) fills the map's "Your house" marker and the
+    // House page without pressing Query House. Once per SessionHandle (this
+    // event refires on a death respawn); `?houseQueryAtLogin=off` skips it.
+    try {
+      maybeQueryHouseAtLogin(
+        (typeof window !== "undefined" ? window.__sessionHandle : null) ?? handle,
+      );
+    } catch (_) { /* never block entering the world on the house query */ }
     // rynth auto-boot (2026-07-17): ?bot=1 starts the grind bot
     // on the live session at first in-world — the client-side
     // wire the whole rynth stack was missing (previously only
@@ -435,40 +458,65 @@ export function dispatchClientEvent(evt, D) {
     // form so the user can retry with a different name.
     const code = evt.u32Payload >>> 0;
     const label = evt.stringPayload || "<unknown>";
-    createStatus.innerHTML =
-      `<span class="fail">[FAIL]</span> CharacterCreate rejected: ` +
-      // escapeHtml: server-supplied label into innerHTML. The
-      // plugin-bus fan-out below keeps the RAW label.
-      `<code>${escapeHtml(label)}</code> (code ${code}).`;
+    // maps-chargen-barber-2 (2026-10-13): retail gmCharGenMainUI::
+    // RecvNotice_CharGenVerificationResponse (acclient.c:278557) shows an
+    // ID_Character_Err_* sentence from StringTable 0x23000002, not the enum
+    // name. The first rejection warms the table; until it is loaded the
+    // identical English value is used. `?retailCharErrors=off` keeps the label.
+    const retail = retailCharErrorsEnabled() ? chargenErrorInfo(code, acString) : null;
+    if (retail) {
+      loadStringTable(CHARGEN_ERROR_STRING_TABLE).catch(() => {});
+      createStatus.innerHTML = `<span class="fail">[FAIL]</span> ${escapeHtml(retail.text)}`;
+    } else {
+      createStatus.innerHTML =
+        `<span class="fail">[FAIL]</span> CharacterCreate rejected: ` +
+        // escapeHtml: server-supplied label into innerHTML. The
+        // plugin-bus fan-out below keeps the RAW label.
+        `<code>${escapeHtml(label)}</code> (code ${code}).`;
+    }
     createBtn.disabled = false;
-    // Wave D.2 — bus fan-out (see kind=5 comment above).
+    // Wave D.2 — bus fan-out (see kind=5 comment above). `reason` stays the
+    // RAW label; `message` / `nameError` (retail text, name codes 3/4/7) are
+    // added only when retailCharErrors is on.
     if (window.__pluginClient?.events?.emit) {
       window.__pluginClient.events.emit("characterCreateFailed",
-        { code, reason: label });
+        retail
+          ? { code, reason: label, message: retail.text, nameError: retail.nameError }
+          : { code, reason: label });
     }
   } else if (evt.kind === ClientEventKind.DISCONNECTED) {
     // Disconnected — recv loop terminated. The UI stays
     // up but commands won't go anywhere.
-    loginStatus.innerHTML =
-      // escapeHtml: server-supplied reason into innerHTML. The
-      // __lastDisconnect stash below keeps the RAW reason (the
-      // autoLogin orchestrator matches on it).
-      `<span class="fail">[FAIL]</span> Disconnected: <code>${escapeHtml(evt.stringPayload || "")}</code>` +
-      ` <span class="hint">Reload the page to retry.</span>`;
+    // inventory-session-6: a server AccountBoot ends the session with
+    // u32Payload 0xF7DC and retail's "You have been booted from
+    // Asheron's Call…" line (CPlayerSystem::Handle_AccountBooted,
+    // acclient.c:400213), shown as-is, like retail's disconnected screen.
+    const booted = isAccountBootDisconnect(evt);
+    // escapeHtml: server-supplied reason into innerHTML. The
+    // __lastDisconnect stash below keeps the RAW reason (the
+    // autoLogin orchestrator matches on it).
+    loginStatus.innerHTML = booted
+      ? `<span class="fail">[FAIL]</span> ${escapeHtml(evt.stringPayload || "")}` +
+        ` <span class="hint">Reload the page to log in again.</span>`
+      : `<span class="fail">[FAIL]</span> Disconnected: <code>${escapeHtml(evt.stringPayload || "")}</code>` +
+        ` <span class="hint">Reload the page to retry.</span>`;
     // Stash the disconnect reason so the autoLogin
     // orchestrator can see it (it watches for kind=20
     // CharacterError + kind=4 disconnect as the two
-    // signals that the kick path is required).
+    // signals that the kick path is required; `booted` = terminal).
     window.__lastDisconnect = {
       ts: Date.now(),
       reason: evt.stringPayload || "",
+      booted,
     };
     // radar-4: the session's radar blackout ends with it (retail
     // ClientUISystem::OnEndCharacterSession, acclient.c:402065).
     window.__radarBlank = false;
     showDisconnectBanner(
-      "DISCONNECTED — session dead, reload to reconnect" +
-        (evt.stringPayload ? ` (${evt.stringPayload})` : ""),
+      booted
+        ? `DISCONNECTED — ${evt.stringPayload || ""}`
+        : "DISCONNECTED — session dead, reload to reconnect" +
+          (evt.stringPayload ? ` (${evt.stringPayload})` : ""),
     );
     // Entity reaping (2026-06-15): the dead session's entity
     // guids are all invalid now. Clear them so an in-page
@@ -502,9 +550,15 @@ export function dispatchClientEvent(evt, D) {
     // wedged account or a bad URL can't reload-loop forever:
     // max 5 reloads per rolling 10-minute window, then stop and
     // leave the banner up for a human (never an infinite loop).
+    // inventory-session-6: never after a server boot — a reload cannot fix
+    // a bad password, wrong client or closed world, and would undo an
+    // admin's boot (retail stays on the disconnected screen).
     try {
       const rp = new URLSearchParams(location.search);
-      if (rp.get("bot") === "1" || rp.get("agent") === "1") {
+      const unattended = rp.get("bot") === "1" || rp.get("agent") === "1";
+      if (unattended && booted) {
+        console.warn(`[auto-reload] kind=4 disconnect is an account boot — not reloading (${evt.stringPayload || ""})`);
+      } else if (unattended) {
         const AUTO_RELOAD_KEY = "hbAutoReloadBudget";
         const AUTO_RELOAD_MAX = 5;
         const AUTO_RELOAD_WINDOW_MS = 10 * 60 * 1000; // 10 min
@@ -1051,6 +1105,13 @@ export function dispatchClientEvent(evt, D) {
         extent,
       });
     }
+    // hud-ui-7 (2026-10-13): retail also shows each state as text —
+    // Brewing / Imminent / Subsided in the spew box (text type 0x1A),
+    // the storm itself as a chat line (ClientUISystem::
+    // Handle_Misc__PortalStorm*, acclient.c:402264-402367). See
+    // app/portal_storm_notice.js. The raw state: a missing one prints
+    // nothing (the emit above still falls back to "subsided").
+    showPortalStormNotice(evt.stringPayload);
   } else if (evt.kind === ClientEventKind.ENTITY_ENCHANTMENTS_UPDATED /* Wave 4.B EntityEnchantmentsUpdated */) {
     // === Wave 4.B — remote-entity enchantments dispatch (2026-05-28) ===
     //
@@ -1194,8 +1255,8 @@ export function dispatchClientEvent(evt, D) {
   } else if (evt.kind === ClientEventKind.UI_EVENT /* SG-C3 UiEvent */) {
     // SG-C3 (2026-06-09): UI-surface self-events
     // (barber/age/chat-channels/housing/house-access). stringPayload
-    // = "<tag>|<data...>". Route /age to the chat log; emit the rest
-    // on the plugin bus as `uiEvent` (per-feature UIs are follow-ons).
+    // = "<tag>|<data...>". Emit every tag on the plugin bus as `uiEvent`
+    // (per-feature UIs are follow-ons); the /age chat line is the wasm's.
     try {
       const rec = String(evt.stringPayload || "");
       const sep = rec.indexOf("|");
@@ -1204,14 +1265,27 @@ export function dispatchClientEvent(evt, D) {
       const u32 = (evt.u32Payload ?? 0) >>> 0;
       const u32b = (evt.u32Payload2 ?? 0) >>> 0;
       if (tag === "age") {
-        // "age|<name>|<age>"
+        // "age|<name>|<age>". chat-errors-8 (2026-10-13): the wasm prints
+        // retail's "You have played for …." line itself (kind=2, System;
+        // Handle_Character__QueryAgeResponse) — this old line comes back
+        // only with ?retailStatusCmds=off.
         const bar = rest.indexOf("|");
         const name = bar === -1 ? rest : rest.slice(0, bar);
         const age = bar === -1 ? "" : rest.slice(bar + 1);
         const line = `${name || "?"} ${age || ""}`.trim();
-        if (typeof appendChatLine === "function") appendChatLine(line, 0);
+        if (!retailStatusCmdsEnabled() && typeof appendChatLine === "function") appendChatLine(line, 0);
         // eslint-disable-next-line no-console
         console.log(`[uiEvent age] ${line}`);
+      } else if (tag === "barber") {
+        // maps-chargen-barber-1 (2026-10-13): "barber|f0,…,f15" (the 16
+        // StartBarber fields, wire order) — retail gmBarberUI::
+        // RecvNotice_StartBarberNotice (acclient.c:271178) opens the barber
+        // page. plugins/barber-panel.js listens on `startBarber`, parses
+        // `rest` (ui/ac_barber.js parseStartBarberFields) and honours
+        // `?barber=off`.
+        // eslint-disable-next-line no-console
+        console.log(`[uiEvent barber]`, { rest, u32, u32b });
+        window.__pluginClient?.events?.emit?.("startBarber", { rest, u32, u32b });
       } else {
         // eslint-disable-next-line no-console
         console.log(`[uiEvent ${tag}]`, { rest, u32, u32b });
@@ -1326,10 +1400,13 @@ export function dispatchClientEvent(evt, D) {
     // kind=48 InventoryActionFailed — the server's own rejection
     // of an inventory mutation (GameEvent InventoryServerSaveFailed
     // 0x00A0): u32Payload = item GUID, u32Payload2 = WeenieError,
-    // stringPayload = Debug label. Forward the authoritative event
-    // to the plugin bus (raw + semantic name); rejection_feedback.js
-    // renders the slot flash + toast. The paired transient chat line
-    // is pushed separately by the same recv arm.
+    // stringPayload = retail's ServerSaysAttemptFailed line ("" when
+    // retail prints none; messages-objects-1); the WeenieError Debug
+    // label only under ?retailAttemptFailed=off or a stale pkg, so key
+    // on u32Payload2, never on the string. Forward the authoritative
+    // event to the plugin bus (raw + semantic name);
+    // rejection_feedback.js renders the slot flash + toast. The chat
+    // line(s) are pushed separately by the same recv arm.
     const payload = {
       kind: ClientEventKind.INVENTORY_ACTION_FAILED,
       u32Payload: (evt.u32Payload ?? 0) >>> 0,
@@ -1598,19 +1675,15 @@ export function dispatchClientEvent(evt, D) {
     // jump_charge_is_allowed, acclient.c:343922-343974); retail
     // prints via ClientSystem::AddTextToScroll(…, 0x1A, …)
     // (acclient.c:408050-408059 press, :408193-408203 release).
-    // Wording = ACE WeenieError style; the retail string
-    // CONTENTS aren't in the decompile (only the globals
-    // cant_jump_load/position/in_air, acclient.c:56814-56818 —
-    // spec §6 Q3, confirm when the ACE Network tree is
-    // greppable). Replaces the legacy arm's silent drop.
-    const code = evt.u32Payload >>> 0;
-    const text =
-      code === 73 ? "You are too encumbered to jump!"
-      : code === 72 ? "You can't jump from this position!"
-      : code === 36 ? "You're in the air!"
-      : "You can't jump right now.";
-    if (typeof appendChatLine === "function") {
-      appendChatLine(text, 10);
+    // Replaces the legacy arm's silent drop.
+    // chat-errors-7 / MISSED-1 (2026-10-13): the retail strings
+    // (the cant_jump_* globals, acclient.c:796298-796320) at the
+    // Transient category; any other code prints nothing (DoJump's
+    // `default: return`). See app/jump_refusal_text.js;
+    // `?retailFailureText=off` restores the old ACE-style lines.
+    const line = jumpRefusalLine(evt.u32Payload >>> 0);
+    if (line && typeof appendChatLine === "function") {
+      appendChatLine(line.text, line.category);
     }
   } else if (evt.kind === ClientEventKind.CMD_INTERP) {
     // ?cmdInterp=on (step 5, PLAN rows 12-13): interpreter
@@ -2020,23 +2093,17 @@ export function dispatchClientEvent(evt, D) {
     window.__radarBlank = radarBlankAfterEnviron(window.__radarBlank === true, ec);
     if (ec <= 0x06) {
       // FOG: set a global override the distance-fog tick
-      // (scene3d/loop.js::tickDistanceFogColor) respects until a
-      // Clear (0x00) resets it. Colors + fogMax from retail
-      // (acclient.c:396344-416; ARGB 0x64RRGGBB -> RGB). Clear
-      // restores the region/sky fog.
-      const ENVIRON_FOG = {
-        0x01: { rgb: 0x960000, fogMax: 50 }, // RedFog
-        0x02: { rgb: 0x320096, fogMax: 50 }, // BlueFog
-        0x03: { rgb: 0x646464, fogMax: 30 }, // WhiteFog
-        0x04: { rgb: 0x1e6400, fogMax: 50 }, // GreenFog
-        0x05: { rgb: 0x969696, fogMax: 40 }, // BlackFog
-        0x06: { rgb: 0x969696, fogMax: 40 }, // BlackFog2 (== BlackFog)
-      };
-      window.__environFogOverride = ec === 0x00 ? null : (ENVIRON_FOG[ec] || null);
+      // (scene3d/loop.js::tickDistanceFogColor) and the terrain light tick
+      // respect until a Clear (0x00) resets it. sky-fog-time-2: the table is
+      // retail's whole set (acclient.c:396344-416) — fog colour, fog min 0,
+      // fog max, ambient colour + level; BlackFog/BlackFog2 fog BLACK under a
+      // 0x969696 ambient — in scene3d/environ_override.js ENVIRON_FOG. A fresh
+      // object per message: loop.js restarts the ~20 s fade on a new one.
+      window.__environFogOverride = ec === 0x00 ? null : environFogFor(ec);
       // eslint-disable-next-line no-console
       console.log(
         `[environ] fog change 0x${ec.toString(16)} -> `
-        + `${window.__environFogOverride ? `override rgb=0x${window.__environFogOverride.rgb.toString(16)}` : "clear (region fog)"}`,
+        + `${window.__environFogOverride ? `override fog=0x${window.__environFogOverride.fogRgb.toString(16)}` : "clear (region fog)"}`,
       );
     } else if (ec >= 0x65) {
       // SOUND: retail CPlayerSystem::Handle_Admin__Environs

@@ -8,7 +8,7 @@
 
 import {
   retailPluralName, packCapacity, MAIN_PACK_KEY, PACKS_KEY,
-  DEFAULT_PLAYER_ITEMS_CAPACITY, DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+  DEFAULT_PLAYER_ITEMS_CAPACITY, DEFAULT_PLAYER_CONTAINERS_CAPACITY, rowUsesPackSlot,
 } from "./inventory_helpers.js";
 
 // ─── Vendor prices ─────────────────────────────────────────────────────
@@ -499,6 +499,57 @@ export function tradeStatus(snap) {
   };
 }
 
+/**
+ * hud-ui-5 — what one drop onto your side of the trade adds: retail
+ * gmSecureTradeUI::AcceptDragObject / TradeAnItemForDummies →
+ * AddItem(id, 0, 1, _addContents = 1, 0) (acclient.c 004CA780).
+ *   • An object goes into the list only when it holds no items AND no
+ *     containers; one already listed is skipped silently (ItemList_IsInList
+ *     in DragItemAcceptable and AddItem — no message).
+ *   • A pack holding items is never offered itself: retail shows the 0x1A
+ *     notice "Trading contents of <name>" and runs AddItem on each contained
+ *     ITEM (the containers list is not walked) with _addContents = 0, so a
+ *     child that holds anything is skipped rather than opened.
+ *   • An empty pack is offered as itself.
+ *   • Wielded items are fine: DragItemAcceptable only tests IsOwnedByPlayer
+ *     (true for `_wielderID == player`), and ACE HandleActionAddToTrade falls
+ *     back to GetEquippedItem. The caller keeps the not-carried refusal.
+ * ACE adds whatever guid it is sent with no container check, so offering a
+ * non-empty pack would give the bag away with everything in it.
+ * @param {object} item  the dropped inventory row (guid, name, itemType,
+ *   requiresBackpackSlot?)
+ * @param {Array<object>} rows  inventory rows (containerId = holder)
+ * @param {Iterable<number>} listedGuids  guids already on your side
+ * @returns {{guids:number[], notice:string|null}}  addToTrade order
+ */
+export function planTradeAdd(item, rows, listedGuids) {
+  const plan = { guids: [], notice: null };
+  const g = (item?.guid >>> 0) || 0;
+  if (!g) return plan;
+  const listed = new Set();
+  for (const x of listedGuids || []) listed.add(x >>> 0);
+  // DragItemAcceptable: the dropped object itself already listed → silent.
+  if (listed.has(g)) return plan;
+  const all = Array.isArray(rows) ? rows : [];
+  const contents = (holder) => all.filter((r) => r && (r.containerId >>> 0) === holder && (r.guid >>> 0) !== holder);
+  const held = contents(g);
+  if (held.length === 0) {
+    plan.guids.push(g);
+    return plan;
+  }
+  // GetContainedItemsList = the ITEMS list; packs sit in the containers list.
+  const items = held.filter((r) => !rowUsesPackSlot(r));
+  if (items.length === 0) return plan;
+  plan.notice = `Trading contents of ${String(item?.name || "").trim() || "the pack"}`;
+  for (const c of items) {
+    const cg = c.guid >>> 0;
+    if (!cg || listed.has(cg) || plan.guids.includes(cg)) continue;
+    if (contents(cg).length > 0) continue;
+    plan.guids.push(cg);
+  }
+  return plan;
+}
+
 // ─── Housing ─────────────────────────────────────────────────────────
 
 /** ACE HouseType (Source/ACE.Entity/Enum/HouseType.cs). */
@@ -526,24 +577,201 @@ export function mapCoordsText(cellId, posX, posY) {
   return `${f(ns)}${ns >= 0 ? "N" : "S"}, ${f(ew)}${ew >= 0 ? "E" : "W"}`;
 }
 
-export const MAINTENANCE_PERIOD_SECONDS = 7 * 24 * 60 * 60;
+// hud-ui-1 (2026-10-13): retail's maintenance rules. The panel used to
+// assume a 7-day period and print "Overdue — pay maintenance now" from day 7
+// of every period, paid or not. ACE sends HouseData.RentTime as the START of
+// the current period (House.GetRentTimestamp: RentInterval 30 days, ×3 for an
+// apartment), and retail's gmHouseUI never counts down: DisplayHouseData
+// (acclient.c:219515) prints the purchase price, "Rent: paid/num …", Bought,
+// the period end, the next due date, the location, a paid / unpaid line keyed
+// on HousePaymentList::IsPaidInFull(rent) and the 30-day re-buy wait.
+
+/** ACE HouseType.Apartment — retail tests `m_type == 4`. */
+export const HOUSE_TYPE_APARTMENT = 4;
+/** HouseSystem::GetRentPeriod (acclient.c:486149): 2,592,000 s (30 days);
+ *  7,776,000 s (90 days) for an apartment. */
+export const HOUSE_RENT_PERIOD_SECONDS = 2_592_000;
+export const APARTMENT_RENT_PERIOD_SECONDS = 7_776_000;
+/** The landscape-house period under its pre-hud-ui-1 name (it was 7 days). */
+export const MAINTENANCE_PERIOD_SECONDS = HOUSE_RENT_PERIOD_SECONDS;
+/** HouseSystem::HasPurchaseWaitPeriodExpired (acclient.c:486143): `now −
+ *  purchase_time > 2592000` (30 days after PropertyInt 199 HousePurchaseTimestamp). */
+export const HOUSE_PURCHASE_WAIT_SECONDS = 2_592_000;
+
+export function houseRentPeriodSeconds(houseType) {
+  return (houseType >>> 0) === HOUSE_TYPE_APARTMENT ? APARTMENT_RENT_PERIOD_SECONDS : HOUSE_RENT_PERIOD_SECONDS;
+}
 
 /**
- * Rent-due summary for a HouseData snapshot. `rentTime` marks the start
- * of the current maintenance period; the next payment is one week later.
- * Returns { text, level } — level "ok" | "soon" (< 2 days) | "overdue" |
- * "free" so the panel can colour it.
+ * HousePayment::GetName (acclient.c:485769): `num` 1 → the name; otherwise
+ * the plural name the server sent, or — when it is empty — the name + "es"
+ * after a trailing 's' / 'x' (the decomp's 0x73 / 0x78 test), else + "s".
+ * `p` = `{num, name, pluralName}` (a wasm HousePay row).
  */
-export function rentDueInfo(rentTime, maintenanceFree, nowSec = Math.floor(Date.now() / 1000)) {
+export function housePaymentName(p) {
+  const name = String(p?.name ?? "");
+  if ((p?.num | 0) === 1) return name;
+  const plural = String(p?.pluralName ?? "");
+  if (plural) return plural;
+  const last = name.slice(-1);
+  return name + (last === "s" || last === "x" ? "es" : "s");
+}
+
+/** HousePaymentList::ComposeText (acclient.c:486081): "num name, …" — the
+ *  slumlord Buy page and gmHouseUI's purchase price. */
+export function composeHousePaymentText(list) {
+  return (Array.isArray(list) ? list : []).map((p) => `${p.num | 0} ${housePaymentName(p)}`).join(", ");
+}
+
+/** HousePaymentList::ComposeText2 (acclient.c:486112): "paid/num name, …" —
+ *  the slumlord Maintenance page and gmHouseUI's "Rent:" line. */
+export function composeHousePaymentText2(list) {
+  return (Array.isArray(list) ? list : []).map((p) => `${p.paid | 0}/${p.num | 0} ${housePaymentName(p)}`).join(", ");
+}
+
+/** HousePaymentList::IsPaidInFull (acclient.c:485423): every row has
+ *  paid ≥ num (an empty list is paid). */
+export function isHousePaidInFull(list) {
+  return (Array.isArray(list) ? list : []).every((p) => (p.paid | 0) >= (p.num | 0));
+}
+
+/** gmHouseUI::DisplayWarningText (acclient.c:219354), RentPaid colour. */
+export const HOUSE_RENT_PAID_TEXT =
+  "The maintenance has already been paid for this period. You may not prepay next period's maintenance.";
+
+/** HouseSystem::ConstructRentWarningMessage (acclient.c:486209) — the
+ *  RentNotPaid line; `days` = GetRentPeriod / 86400. */
+export function houseRentWarningText(houseType) {
+  const days = Math.floor(houseRentPeriodSeconds(houseType) / 86400);
+  return `Warning!  You have not paid your maintenance costs for the last ${days} day maintenance period.  `
+    + "Please pay these costs by this deadline or you will lose your house, and all your items within it.";
+}
+
+/**
+ * Maintenance dates for a HouseData snapshot — gmHouseUI::DisplayRentTimes
+ * (acclient.c:219228). `periodEnds` = rentTime + period ("This maintenance
+ * period ends"); `nextDue` = rentTime + 2 periods when the rent is paid in
+ * full or the house is maintenance-free, + 1 period when it is not
+ * ("Maintenance is next due"). `paid` is null when the snapshot has no rent
+ * list (a pre-hud-ui-1 wasm) — then `nextDue` is null too: no verdict
+ * without the list. Times are unix seconds (0 = unknown).
+ */
+export function houseRentSchedule(data) {
+  const rentTime = (data?.rentTime >>> 0) || 0;
+  const period = houseRentPeriodSeconds(data?.houseType);
+  const free = !!data?.maintenanceFree;
+  const rent = Array.isArray(data?.rent) ? data.rent : null;
+  const paid = free ? true : (rent ? isHousePaidInFull(rent) : null);
+  const periodEnds = rentTime ? rentTime + period : 0;
+  const nextDue = !rentTime || paid === null ? null : rentTime + (paid ? 2 : 1) * period;
+  return { period, periodEnds, nextDue, paid, free };
+}
+
+/**
+ * The paid / unpaid line — gmHouseUI::DisplayWarningText (acclient.c:219354):
+ * maintenance-free or IsPaidInFull(rent) → the RentPaid text (level "paid"),
+ * otherwise ConstructRentWarningMessage (level "unpaid"). null when the
+ * rent list is unknown.
+ */
+export function houseRentWarning(data) {
+  const { paid } = houseRentSchedule(data);
+  if (paid === null) return null;
+  return paid
+    ? { text: HOUSE_RENT_PAID_TEXT, level: "paid" }
+    : { text: houseRentWarningText(data?.houseType), level: "unpaid" };
+}
+
+/**
+ * gmHouseUI::DisplayPurchaseTimeText (acclient.c:219403) — the last line,
+ * from PlayerDesc PropertyInt 199 (`purchaseTime`, 0 when unset).
+ * `fmtTime(sec)` renders the date (retail strftime "%c").
+ */
+export function housePurchaseWaitText(purchaseTime, ownsHouse, nowSec = Math.floor(Date.now() / 1000),
+  fmtTime = houseTimeText) {
+  const t = Number(purchaseTime) || 0;
+  if (nowSec - t > HOUSE_PURCHASE_WAIT_SECONDS) {
+    return ownsHouse
+      ? "You may buy another house immediately after you abandon this one."
+      : "You may buy another house immediately.";
+  }
+  return `You may buy another landscape house at ${fmtTime(t + HOUSE_PURCHASE_WAIT_SECONDS)}`
+    + ". This restriction does not apply to apartments.";
+}
+
+/** HouseSystem::ConvertTime (acclient.c:486178, strftime "%c"): the local
+ *  date + time, "N/A" for 0. */
+export function houseTimeText(sec) {
+  const t = Number(sec) || 0;
+  if (!t) return "N/A";
+  try { return new Date(t * 1000).toLocaleString(); } catch (_) { return "N/A"; }
+}
+
+/**
+ * Countdown summary for a HouseData snapshot (not a retail line — kept for
+ * callers that want one). Uses the retail period (30 / 90 days from
+ * `rentTime`, the start of the current period) and never claims "Overdue":
+ * without the rent list there is no paid / unpaid verdict, and a period
+ * that has already ended means the snapshot is stale (ACE rolls the period
+ * or evicts), so it says to query again. `opts` = `{houseType, rent}`.
+ * Returns { text, level } — level "ok" | "soon" (< 2 days) | "paid" |
+ * "unpaid" | "free".
+ */
+export function rentDueInfo(rentTime, maintenanceFree, nowSec = Math.floor(Date.now() / 1000), opts = {}) {
   if (maintenanceFree) return { text: "Maintenance free this period", level: "free" };
   const start = rentTime >>> 0;
   if (!start) return { text: "Unknown", level: "ok" };
-  const left = start + MAINTENANCE_PERIOD_SECONDS - nowSec;
-  if (left <= 0) return { text: "Overdue — pay maintenance now", level: "overdue" };
+  const { periodEnds, paid } = houseRentSchedule({ rentTime: start, houseType: opts?.houseType, rent: opts?.rent });
+  const left = periodEnds - nowSec;
+  if (left <= 0) return { text: "Period ended — press Query House", level: "ok" };
   const days = Math.floor(left / 86400);
   const hours = Math.floor((left % 86400) / 3600);
-  const text = days > 0 ? `Due in ${days}d ${hours}h` : (hours > 0 ? `Due in ${hours}h` : "Due within the hour");
-  return { text, level: left < 2 * 86400 ? "soon" : "ok" };
+  const span = days > 0 ? `${days}d ${hours}h` : (hours > 0 ? `${hours}h` : "under an hour");
+  if (paid === true) return { text: `Paid — period ends in ${span}`, level: "paid" };
+  if (paid === false) return { text: `Unpaid — due in ${span}`, level: "unpaid" };
+  return { text: `Period ends in ${span}`, level: left < 2 * 86400 ? "soon" : "ok" };
+}
+
+// ─── Slumlord payment staging ────────────────────────────────────────
+//
+// gmSlumlordUI (acclient.c) stages payment items against the profile's
+// list: AddItem (:249666) builds HousePayment{wcid, ACCWeenieObject::
+// GetHousePayment = stack size, 0 → 1} and HouseProfile::Pay →
+// HousePaymentList::AttemptToPay (:485562) adds it to the FIRST row with that
+// wcid (capped at num) — or, for a trade note against the coinstack row,
+// HousePayment::PayWithTradeNote (the note's pyreal value). RefreshHouse /
+// CleanItemLists clear every row's `paid` first, so only staged items count.
+// UpdateButtons (:249621) enables Buy only for an unowned house whose buy
+// list IsPaidInFull. ACE (Player_House.GetTotalPyreals / GetTotalTradeNotes)
+// sums the coin stacks' and the trade notes' Value.
+
+/** What one staged inventory row pays: `{wcid, amount}`. A trade note
+ *  (ITEM_TYPE TYPE_PROMISSORY_NOTE) pays pyreals worth its stack Value. */
+export function housePaymentContribution(item) {
+  const stack = Math.floor(Number(item?.stackSize) || 0);
+  if (((item?.itemType >>> 0) & PROMISSORY_NOTE_TYPE) !== 0) {
+    return { wcid: PYREAL_WCID, amount: Math.max(0, Math.floor(Number(item?.value) || 0)), tradeNote: true };
+  }
+  return { wcid: item?.wcid >>> 0, amount: stack > 0 ? stack : 1, tradeNote: false };
+}
+
+/** Per-row amount still owed after the staged items (`staged` = inventory
+ *  rows; the server's `paid` is ignored, as CleanItemLists cleared it). */
+export function houseStagedRemaining(required, staged) {
+  const rows = Array.isArray(required) ? required : [];
+  const paid = rows.map(() => 0);
+  for (const item of Array.isArray(staged) ? staged : []) {
+    const c = housePaymentContribution(item);
+    if (c.amount <= 0) continue;
+    const i = rows.findIndex((r) => (r.weenieId >>> 0) === c.wcid);
+    if (i < 0) continue;
+    paid[i] = Math.min(rows[i].num | 0, paid[i] + c.amount);
+  }
+  return rows.map((r, i) => Math.max(0, (r.num | 0) - paid[i]));
+}
+
+/** HouseProfile::IsPaidInFull(Buy_House) over the staged items. */
+export function houseStagedPaidInFull(required, staged) {
+  return houseStagedRemaining(required, staged).every((n) => n <= 0);
 }
 
 // ─── Books ───────────────────────────────────────────────────────────

@@ -66,6 +66,7 @@ import {
   composeSpellIcon,
   replaceWhiteWithBlack,
   rgbaToPngDataUrl,
+  iconBlitRetailEnabled,
 } from "./ac_icon_compose.js";
 
 /** Resolved data URLs. Insertion-ordered → the first key is the LRU victim. */
@@ -246,6 +247,11 @@ export async function fetchIconDataUrl(iconId, label = "ac-icon-cache") {
  * finished composites live in the same LRU as raw icons, under string keys.
  */
 const RGBA_CACHE_MAX = 512;
+// hud-ui-3: retail's per-layer blit ops (ac_icon_compose.js); read once, so
+// the composite cache keys need no flag component.
+const ICON_BLIT_RETAIL = iconBlitRetailEnabled(
+  (typeof window !== "undefined" && window.location) ? window.location.search : "",
+);
 const rgbaCache = new Map();
 const rgbaInflight = new Map();
 const _composeLogged = new Set();
@@ -353,7 +359,7 @@ export function fetchItemIconDataUrl(meta, label = "item-icon", opts = {}) {
     if (!icI) return false;
     const { icon, drag: dragImg } = composeItemIcon({
       background: bgI, underlay: undI, icon: icI, overlay: ovI, effectTile: fxI,
-    });
+    }, { retailBlit: ICON_BLIT_RETAIL });
     const img = drag ? dragImg : icon;
     if (!img) return false;
     if (!_composeLogged.has(key) && _composeLogged.size < 64) {
@@ -413,6 +419,22 @@ export function fetchSpellIconDataUrl(spellId, label = "spell-icon") {
     if (!img) return false;
     return rgbaToPngDataUrl(img.width, img.height, img.pixels);
   });
+}
+
+/**
+ * hud-ui-3: the retail spell composite, else the raw spell icon (no spell
+ * record yet — a pre-login catalog row — or a failed compose). Retail's
+ * effects list and every spell UIItem draw `ClientMagicSystem::GetSpellIcon`
+ * (EffectInfoRegion::EffectInfoRegion acclient.c:286409,
+ * UIElement_UIItem::UIItem_SetIcon :272213), never the bare icon.
+ */
+export async function fetchSpellIconWithFallback(spellId, rawIconId, label = "spell-icon") {
+  let url = null;
+  try { url = await fetchSpellIconDataUrl(spellId, label); } catch (_) { url = null; }
+  if (typeof url === "string") return url;
+  const raw = (rawIconId >>> 0) || 0;
+  if (!raw) return url;
+  return getIconImmediate(raw) || fetchIconDataUrl(raw, label);
 }
 
 /** Retail spell-component icon (`CompositeSpellComponentIcon`): white → black. */

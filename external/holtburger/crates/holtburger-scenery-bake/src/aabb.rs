@@ -29,7 +29,7 @@
 //! survive as compatibility shims for diag tooling; production callers
 //! should use [`transform_mesh_to_aabb`].
 
-use holtburger_common::Vector3;
+use holtburger_common::{Quaternion, Vector3};
 
 /// 2D axis-aligned bounding box on the XY plane (Z is dropped).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -302,6 +302,48 @@ pub fn transform_mesh_to_aabb3(
     Aabb3D::new(min_x, min_y, min_z, max_x, max_y, max_z)
 }
 
+/// Full-orientation twin of [`transform_mesh_to_aabb3`] for
+/// `BakeMode::Retail` (terrain-scenery-4): `scale → rotate by the placement
+/// quaternion → translate`, with the rotation the `Frame::cache` matrix of
+/// `orientation`.
+///
+/// A retail scenery frame is not yaw-only: `Frame::set_heading` keeps the
+/// base frame's forward-axis pitch, so a handful of Scene objects carry a
+/// small tilt in `qx`/`qy`. Retail never tests a box, so this only builds
+/// the shipped collider broad phase. `AceCompat` / `Strict` keep
+/// [`transform_mesh_to_aabb3`], bit for bit.
+pub fn transform_mesh_to_aabb3_quat(
+    verts: &[Vector3],
+    tx: f32,
+    ty: f32,
+    tz: f32,
+    orientation: Quaternion,
+    scale: f32,
+) -> Aabb3D {
+    let m = crate::orientation::frame_cache(orientation);
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut min_z = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for v in verts {
+        let sx = v.x * scale;
+        let sy = v.y * scale;
+        let sz = v.z * scale;
+        let wx = m[0] * sx + m[3] * sy + m[6] * sz + tx;
+        let wy = m[1] * sx + m[4] * sy + m[7] * sz + ty;
+        let wz = m[2] * sx + m[5] * sy + m[8] * sz + tz;
+        if wx < min_x { min_x = wx; }
+        if wy < min_y { min_y = wy; }
+        if wz < min_z { min_z = wz; }
+        if wx > max_x { max_x = wx; }
+        if wy > max_y { max_y = wy; }
+        if wz > max_z { max_z = wz; }
+    }
+    Aabb3D::new(min_x, min_y, min_z, max_x, max_y, max_z)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +492,66 @@ mod tests {
         );
         assert!((a.min_z - 8.0).abs() < 1e-5, "min_z {}", a.min_z);
         assert!((a.max_z - 16.0).abs() < 1e-5, "max_z {}", a.max_z);
+    }
+
+    // ---- terrain-scenery-4: the full-quaternion builder ----
+
+    /// A yaw-only quaternion gives the yaw builder's box (to float noise:
+    /// the two rotate through different but equal matrices).
+    #[test]
+    fn transform_mesh_to_aabb3_quat_matches_yaw_builder_for_yaw_only() {
+        let verts: Vec<Vector3> = (0..23)
+            .map(|i| {
+                let a = (i as f32) * 0.41;
+                Vector3::new(a.cos() * 1.5, a.sin() * 0.75, a * 0.2 - 2.0)
+            })
+            .collect();
+        for &(rot, scale, tx, ty, tz) in &[
+            (0.0f32, 1.0f32, 0.0f32, 0.0f32, 0.0f32),
+            (0.7, 1.3, 10.0, 20.0, 5.0),
+            (-2.4, 0.5, 191.0, 0.5, 60.0),
+        ] {
+            let half = rot as f64 * 0.5;
+            let q = Quaternion {
+                w: half.cos() as f32,
+                x: 0.0,
+                y: 0.0,
+                z: half.sin() as f32,
+            };
+            let a = transform_mesh_to_aabb3(&verts, tx, ty, tz, rot, scale);
+            let b = transform_mesh_to_aabb3_quat(&verts, tx, ty, tz, q, scale);
+            for (x, y) in [
+                (a.min_x, b.min_x),
+                (a.min_y, b.min_y),
+                (a.min_z, b.min_z),
+                (a.max_x, b.max_x),
+                (a.max_y, b.max_y),
+                (a.max_z, b.max_z),
+            ] {
+                assert!((x - y).abs() < 1e-4, "rot={rot}: yaw {a:?} vs quat {b:?}");
+            }
+        }
+    }
+
+    /// A pitch about X lifts a forward-pointing vertex: (0, 10, 0) tilted
+    /// up 30 degrees reaches z = 5 above the origin, which the yaw-only
+    /// builder cannot see.
+    #[test]
+    fn transform_mesh_to_aabb3_quat_applies_pitch() {
+        let verts = vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 10.0, 0.0)];
+        let half = 30.0f64.to_radians() * 0.5;
+        let pitch_up = Quaternion {
+            w: half.cos() as f32,
+            x: half.sin() as f32,
+            y: 0.0,
+            z: 0.0,
+        };
+        let b = transform_mesh_to_aabb3_quat(&verts, 1.0, 2.0, 3.0, pitch_up, 1.0);
+        assert!((b.max_z - 8.0).abs() < 1e-4, "max_z {}", b.max_z);
+        assert!((b.max_y - (2.0 + 10.0 * 0.866_025_4)).abs() < 1e-4, "max_y {}", b.max_y);
+        let flat = transform_mesh_to_aabb3(&verts, 1.0, 2.0, 3.0, 0.0, 1.0);
+        assert_eq!(flat.max_z, 3.0);
+        assert!(transform_mesh_to_aabb3_quat(&[], 0.0, 0.0, 0.0, pitch_up, 1.0).is_empty());
     }
 
     #[test]

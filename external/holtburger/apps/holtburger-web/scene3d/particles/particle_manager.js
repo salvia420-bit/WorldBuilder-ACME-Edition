@@ -197,6 +197,11 @@ const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
 export const PARTICLE_RP6_STATS = {
   // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
   culledForceStopped: 0,
+  // `?particleCellGate=on` (render-only): cumulative emitter·ticks / live
+  // particle·ticks whose draw was withheld because the anchor's EnvCell was
+  // not drawn. The simulation still ran for every one of them.
+  cellHiddenEmitterTicks: 0,
+  cellHiddenParticleTicks: 0,
 };
 
 // PLIFECYCLE-2 (2026-10-08) — `?particleCullFreeze` (DEFAULT ON;
@@ -292,6 +297,89 @@ export function _rp6VirtualEmit(emitter, now) {
   return true;
 }
 
+// particles-scripts-3 (2026-10-13) — `?particleCellGate=on` (OPT-IN, default
+// OFF; RENDER-ONLY). Interior (EnvCell) static default_script emitters are
+// anchored in `staticsGroup`, not in their cell container, so they kept
+// writing instances / showing slot meshes while cells.js had HIDDEN their cell
+// (outside the PVS/BFS render set, or rejected by ?occlusionCull) — through a
+// portal-punch gap they could even draw. Retail only draws the objects of the
+// cells it draws, but it never stops SIMULATING an indoor emitter for that:
+// ShouldDrawParticles (acclient.c:317184-317199) tests `cell->IsInView()`, and
+// CObjCell::IsInView is a 6-byte `return 1` (PDB acclient.txt, S_GPROC32
+// Cb 6, folded at VA 0x005269F0) that only CLandCell overrides
+// (acclient.c:354835 `return this->in_view`); CEnvCell does not. So unlike
+// the RP6 cull path (freeze + virtual emission) this gate keeps
+// updateParticles() running and withholds only the draw: the instanced path
+// skips `_appendInstances`, the per-mesh path hides the occupied slots
+// (re-asserted every tick; the next live update's setTranslucency re-shows
+// them once the cell is drawn again). The anchor carries `userData.cellId`
+// (statics.js attachStaticDefaultScriptsWorld) and the container is looked up
+// by cellId on EVERY check through the manager's injected `cellLookup` — a
+// Map get, never a cached ref, because an LRU re-bake / warm-park swaps
+// containers. An unresolved cellId draws (bail open). WebAC gates its static
+// emitters the same visibility-only way (StaticScriptDriver.ts).
+let _CELL_GATE_ON = null;
+/** `?particleCellGate=on` — exact opt-in; any other value (or none) is OFF. */
+export function readParticleCellGateFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : typeof location !== "undefined" && location
+        ? location.search
+        : "";
+    return new URLSearchParams(s || "").get("particleCellGate") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+/** Cached flag accessor (parse once per page load). */
+export function particleCellGateEnabled() {
+  if (_CELL_GATE_ON === null) _CELL_GATE_ON = readParticleCellGateFlag();
+  return _CELL_GATE_ON;
+}
+/** Test/A-B seam: force the flag (`null` re-reads the URL on next use). */
+export function setParticleCellGateFlag(on) { _CELL_GATE_ON = on == null ? null : !!on; }
+
+/**
+ * Is this emitter's anchor in an EnvCell that is NOT drawn this frame? True
+ * only when the anchor carries `userData.cellId` AND `lookup(cellId)` resolves
+ * a container that is hidden (`visible === false`) or detached (no parent).
+ * Anything unresolvable answers false (draw).
+ */
+export function _emitterCellHidden(emitter, lookup) {
+  const ud = emitter.parent ? emitter.parent.userData : null;
+  const cid = ud ? ud.cellId : undefined;
+  if (cid === undefined || cid === null) return false;
+  let c;
+  try { c = lookup(cid >>> 0); } catch (_) { return false; }
+  if (!c) return false;
+  return c.visible === false || !c.parent;
+}
+
+// Every manager given a `cellLookup`; `window.__particleCellGateDiag()` sums them.
+const _cellGateManagers = new Set();
+function _installCellGateDiag() {
+  if (typeof window === "undefined") return;
+  const diag = () => {
+    let hiddenLastTick = 0;
+    for (const m of _cellGateManagers) hiddenLastTick += m.cellHiddenLastTick | 0;
+    return {
+      on: particleCellGateEnabled(),
+      managers: _cellGateManagers.size,
+      hiddenLastTick,
+      emitterTicks: PARTICLE_RP6_STATS.cellHiddenEmitterTicks,
+      particleTicks: PARTICLE_RP6_STATS.cellHiddenParticleTicks,
+    };
+  };
+  window.__particleCellGateDiag = diag;
+  // Runtime A/B on one page load: `__setParticleCellGate(true|false)`. Turning
+  // it off needs no restore — the next live update re-shows per-mesh slots.
+  window.__setParticleCellGate = (on) => { setParticleCellGateFlag(on); return diag(); };
+}
+
 // ── Particle instancing (2026-07-14, `?particleInstancing=on`, default OFF) ──
 //
 // Measured at Cragstone on the 1070: static default_script particle billboards
@@ -315,8 +403,9 @@ export function _rp6VirtualEmit(emitter, now) {
 //
 // The per-slot meshes are still built and still driven by particle.js — they
 // are kept OUT of the scene graph (onMeshActive/onMeshFree noops) and used
-// purely as transform+opacity carriers we read back each tick. That keeps
-// particle.js/particle_emitter.js byte-identical on this path.
+// purely as transform+opacity carriers we read back each tick. Since
+// 2026-10-13 they no longer carry a cloned material either (see the slot
+// carrier note below): the opacity rides `mesh.userData.__op`.
 // DEFAULT ON since 2026-10-06 (1070, Holtburg orbit, one page load, 4x6 s
 // interleaved: 28.1 -> 29.7 fps, 1,294 -> 1,154 draws, with the alpha half
 // below; chimney smoke / fountain puffs eye-checked side by side). Explicit
@@ -377,6 +466,57 @@ const _fxVelOut = [0, 0, 0];
 // Shared seam noops — identity-comparable, so a runtime toggle can tell "we
 // installed these" from "the caller supplied their own onMeshActive".
 const _NOOP = () => {};
+
+// ── Slot carriers (2026-10-13, `?particleSlotCarrier`) ──────────────────────
+//
+// An instanced emitter's slot meshes never render: they stay off the scene
+// graph and `_appendInstances` reads back only their transform and opacity, and
+// the bucket draws with its own material (from `_instBaseMat`). Each slot still
+// got its own `baseMaterial.clone()` (or a pooled one) just to hold that one
+// opacity float — a Material constructor + copy() + userData JSON round-trip per
+// slot, on every emitter build, for tens of thousands of slots at a town (the
+// particle_emitter.js census: 3,873 static emitters at Holtburg). Now the slots
+// share ONE dummy carrier material and particle.js setTranslucency writes the
+// opacity to `mesh.userData.__op`, which `_appendInstances` reads. The real
+// clone is made only when an instanced emitter goes (back) to the per-mesh path:
+// the bucket-attach failure in addEmitter and the runtime toggle OFF
+// (`_materializeSlotMaterials`). The instance buffers are unchanged (same matrix,
+// same opacity), so the drawn frame is too. `?particleInstancing=off` never
+// uses carriers. `?particleSlotCarrier=off|0|false|no` restores a clone per slot
+// on the instanced path. (WebAC keeps per-particle state in typed arrays with no
+// per-particle Material — packages/renderer/src/effects/ParticleSystem.ts; only
+// that idea is taken, not its one-InstancedMesh-per-system layout.)
+let _SLOT_CARRIER_ON = null;
+export function particleSlotCarrierEnabled() {
+  if (_SLOT_CARRIER_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleSlotCarrier") || "").toLowerCase();
+      _SLOT_CARRIER_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _SLOT_CARRIER_ON = true;
+    }
+  }
+  return _SLOT_CARRIER_ON;
+}
+/** Test seam / runtime A/B: `null` re-reads the URL on next use. Affects new slots only. */
+export function setParticleSlotCarrierFlag(on) { _SLOT_CARRIER_ON = on == null ? null : !!on; }
+
+// The one carrier material. Never rendered and never disposed: `visible: false`
+// makes three skip a carrier mesh that ever reaches the scene graph (draws
+// nothing, never a white box), and the teardown / pool / fog walks skip it.
+let _slotCarrierMat = null;
+function _slotCarrierMaterial() {
+  if (!_slotCarrierMat) {
+    _slotCarrierMat = new THREE.MeshBasicMaterial({ visible: false });
+    _slotCarrierMat.name = "particle-slot-carrier";
+    _slotCarrierMat.userData = { __slotCarrier: true, __cacheOwned: true };
+  }
+  return _slotCarrierMat;
+}
+/** True for the shared slot carrier material (see the note above). */
+export function _isSlotCarrier(mat) {
+  return !!mat && !!mat.userData && mat.userData.__slotCarrier === true;
+}
 
 /**
  * Runtime flip of the module gate (diagnostic; see `window.__setParticleInstancing`).
@@ -1189,16 +1329,17 @@ function _rp6ShouldCull(emitter, camera) {
 // ── ?additiveFogBlack live switch (2026-10-07) ────────────────────────────────
 // Every manager (the instancing seam's `_instManagers` holds only opted-in ones).
 // The walk covers each material an additive particle can render with: the
-// per-slot clones (`partStorage`, drawn on the per-mesh path and kept as the
-// instancing carriers), this manager's instanced buckets, and the parked pool
-// (re-applied anyway when a slot reuses it). Shared alpha buckets are never
-// additive. Diagnostic only: new materials take the current mode in addEmitter.
+// per-slot clones (`partStorage`, drawn on the per-mesh path), this manager's
+// instanced buckets, and the parked pool (re-applied anyway when a slot reuses
+// it). The shared slot carrier (instanced slots) never renders and is skipped.
+// Shared alpha buckets are never additive. Diagnostic only: new materials take
+// the current mode in addEmitter.
 const _allManagers = new Set();
 
 function _forEachParticleMaterial(fn) {
   const seen = new Set();
   const visit = (mat, isBucket) => {
-    if (!mat || seen.has(mat)) return;
+    if (!mat || seen.has(mat) || _isSlotCarrier(mat)) return;
     seen.add(mat);
     fn(mat, isBucket);
   };
@@ -1294,6 +1435,12 @@ export class ParticleManager {
     // a stale pkg without the getter yields undefined → 0 → facing soft-off.
     this._degradeInfoFactory =
       typeof opts.degradeInfoFactory === "function" ? opts.degradeInfoFactory : null;
+    // `?particleCellGate=on` (render-only) — optional `(cellId) => container`
+    // into the EnvCell registry (statics.js passes `scene3d.cellContainers3d`).
+    // Inert without the flag; a manager without a lookup is never gated.
+    this._cellLookup = null;
+    this.cellHiddenLastTick = 0;
+    if (typeof opts.cellLookup === "function") this.setCellLookup(opts.cellLookup);
     // Opt-in per manager (see `particleInstancingEnabled`); still gated by the
     // URL flag, so a manager that opts in stays byte-identical until asked.
     this._instancing = opts.instancing === true;
@@ -1350,6 +1497,23 @@ export class ParticleManager {
     /** @type {ParticleFxKids|null} */
     this._kids = null;
     this._kidsOn = false;
+  }
+
+  /**
+   * `?particleCellGate=on`: install (or with a non-function, remove) the
+   * `(cellId) => container` lookup the render-only cell gate resolves an
+   * anchor's `userData.cellId` through. See `_emitterCellHidden`.
+   */
+  setCellLookup(fn) {
+    if (typeof fn === "function") {
+      this._cellLookup = fn;
+      _cellGateManagers.add(this);
+      _installCellGateDiag();
+    } else {
+      this._cellLookup = null;
+      this.cellHiddenLastTick = 0;
+      _cellGateManagers.delete(this);
+    }
   }
 
   /**
@@ -1418,6 +1582,8 @@ export class ParticleManager {
    */
   _reclaimSlotMaterial(mat) {
     const ud = mat && mat.userData;
+    // The shared slot carrier belongs to no emitter: never pooled, never disposed.
+    if (ud && ud.__slotCarrier === true) return;
     if (ud && ud.__disposable === true && ud.__cacheOwned !== true && ud.__poolKey != null) {
       let pool = this._materialPool.get(ud.__poolKey);
       if (!pool) { pool = []; this._materialPool.set(ud.__poolKey, pool); }
@@ -1427,6 +1593,144 @@ export class ParticleManager {
       }
     }
     _disposeMaterialIfOwned(mat);
+  }
+
+  /**
+   * One per-slot material for the PER-MESH path (addEmitter's meshFactory, and
+   * `_materializeSlotMaterials` when an instanced emitter's carrier slots go
+   * back to the per-mesh path). Instanced slots take the shared carrier instead.
+   * @private
+   */
+  _makeSlotMaterial(baseMaterial, baseIsAdditive, hwGfxObjId, skyGlow) {
+    // Per-slot mesh: shared geometry, cloned material so per-particle
+    // opacity lerps don't stomp neighbors. Perf (2026-06-27): reuse a
+    // recycled clone from the per-slot material pool when available
+    // (keyed by gfxobj + blend branch — both constant for this emitter),
+    // falling back to a fresh clone. Cuts the allocate/free churn that
+    // drove the sustained-combat cast stutter.
+    // `|sky` keeps patched sky-glow clones out of a world emitter's pool.
+    const poolKey = `${(hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}|${baseMaterial.uuid}${skyGlow ? "|sky" : ""}`;
+    const mat = this._takePooledMaterial(poolKey) || baseMaterial.clone();
+    // Perf FU4 (2026-05-18) — per-emitter Additive vs Alpha branch.
+    // E5 (e1339af) shipped a single conservative middle ground for
+    // ALL particles because the wasm `ParticleEmitterJs` getter
+    // (src/lib.rs:18315) and `holtburger_dat::ParticleEmitter` (the
+    // DAT struct) don't expose a blend-mode field. FU4 lifts that
+    // limit by reading the signal off the GfxObj's surface
+    // material, which IS available here via `baseMaterial`. See
+    // the `baseIsAdditive` probe in addEmitter for the decision path.
+    if (baseIsAdditive) {
+      // Additive blend (flames, sparks, the moon's crimson-star
+      // particle). depthWrite=false so additive sprites don't
+      // occlude later-drawn additive sprites — that's the visual
+      // bug E5's "alpha for everything" path produced. No
+      // alphaTest: additive sprites legitimately have low-alpha
+      // halo pixels that contribute energy and must not be culled.
+      mat.transparent = true;
+      mat.blending = THREE.AdditiveBlending;
+      mat.depthWrite = false;
+    } else {
+      // Alpha path — keep E5's conservative middle ground. The
+      // alphaTest catches near-zero alpha and enables depth-write
+      // for those pixels, which is most of the depth-write win
+      // even on soft-edged sprites. Default `mat.blending` stays
+      // at `THREE.NormalBlending` from the clone.
+      mat.transparent = true;
+      mat.alphaTest = 0.1;
+      mat.depthWrite = true;
+    }
+    // Perf (2026-07-15) — THE second draw call per particle. three r184
+    // submits a material TWICE, BackSide then FrontSide with a
+    // `needsUpdate` program re-resolve between them, when
+    // `transparent && side === DoubleSide && !forceSinglePass`
+    // (three.module.js:18065, renderObject). BOTH branches above set
+    // `transparent = true` and the base surface material is DoubleSide
+    // (materials.js), so every particle cost two draws: measured 2.01
+    // draws per visible particle at a settled Holtburg on the 1070
+    // (A/B/A within ONE page load, 0.1% drift — particle-k-probe.mjs).
+    //
+    // Safe here because a particle is a FLAT QUAD (census: 222/222 live
+    // meshes, 6 vertices): back and front never overlap, so one of the two
+    // passes is entirely face-culled and emits no fragments — it is a draw
+    // call that draws nothing. Verified, not assumed: two renders in one
+    // synchronous moment with identical scene state differ by EXACTLY 0
+    // pixels (forcesinglepass-parity.mjs). Retail agrees — it draws a
+    // two-sided surface ONCE with CULLMODE_NONE (acclient.h:5296 via
+    // RenderDeviceD3D::SetCullMode); the back-then-front two-pass is a
+    // three-ism with no retail counterpart.
+    //
+    // Do NOT lift this to non-particle transparent DoubleSide materials
+    // (there are 451 live at Holtburg): the same probe measured 5,245 px
+    // (1.0%, max delta 113) of change scene-wide, because world/entity
+    // surfaces are closed geometry where back-then-front ordering is real.
+    mat.forceSinglePass = true;
+    // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
+    // can dispose it. The base material from materialFactory may be
+    // cache-owned — only the per-slot CLONE is owned by this emitter.
+    // THREE.Material.clone() deep-copies userData, so the clone inherits
+    // a `__cacheOwned: true` tag when the base was a cache material;
+    // clear it here so the clone is unambiguously disposable. Without
+    // this, _disposeMaterialIfOwned() sees BOTH flags, trips the E3
+    // guard, and refuses to free the clone → per-slot material leak on
+    // landblock eviction while moving.
+    mat.userData.__cacheOwned = false;
+    mat.userData.__disposable = true;
+    // Perf (2026-06-27): tag the pool key so _reclaimSlotMaterial() can
+    // park this clone back in the right pool at teardown.
+    mat.userData.__poolKey = poolKey;
+    // 2026-10-07 `?skyGlow` (per-mesh path, e.g. ?particleInstancing=off).
+    if (skyGlow) applySkyGlowMaterial(mat);
+    // 2026-10-07 `?additiveFogBlack`: retail draws Additive surfaces with
+    // D3D fog OFF (acclient.c:454551); three's mix toward fogColor turned
+    // every distant glow into a pale quad. After the sky glow (which it
+    // skips) and on EVERY slot build, so a pooled clone re-takes the
+    // current mode (a no-op when it already has it).
+    if (baseIsAdditive) applyAdditiveParticleFog(mat);
+    return mat;
+  }
+
+  /**
+   * Slot carriers → real per-slot clones, for an instanced emitter that goes
+   * (back) to the per-mesh path: the bucket-attach failure in addEmitter and the
+   * runtime toggle OFF. Must run BEFORE the slot meshes can rejoin the scene.
+   * Each clone takes its slot's current opacity (`userData.__op`, written by
+   * particle.js setTranslucency — the carrier never held it), so a live
+   * particle keeps drawing at the alpha the bucket gave it. Clears
+   * `_slotCarrier`, so later lazy grows clone too.
+   * @private
+   */
+  _materializeSlotMaterials(emitter) {
+    emitter._slotCarrier = false;
+    const base = emitter._baseMat;
+    if (!base) return;
+    const additive = emitter._baseIsAdditive === true;
+    const gfx = emitter.info ? emitter.info.hwGfxObjId : 0;
+    const sky = emitter.skyGlow === true;
+    for (const m of (emitter.partStorage || [])) {
+      if (!m || !_isSlotCarrier(m.material)) continue;
+      const mat = this._makeSlotMaterial(base, additive, gfx, sky);
+      const op = m.userData ? m.userData.__op : undefined;
+      if (typeof op === "number") mat.opacity = op;
+      m.material = mat;
+    }
+  }
+
+  /**
+   * The reverse, for the runtime toggle ON: park this emitter's per-slot clones
+   * back in the pool and give its slots the shared carrier (the bucket draws
+   * them now). Only our own disposable clones are swapped. Sets `_slotCarrier`
+   * so later lazy grows take the carrier as well.
+   * @private
+   */
+  _carrySlotMaterials(emitter) {
+    emitter._slotCarrier = true;
+    for (const m of (emitter.partStorage || [])) {
+      if (!m) continue;
+      const old = m.material;
+      if (!old || _isSlotCarrier(old) || old.userData?.__disposable !== true) continue;
+      m.material = _slotCarrierMaterial();
+      this._reclaimSlotMaterial(old);
+    }
   }
 
   /** ACE `GetNumEmitters()` (ParticleManager.cs:47-50). */
@@ -1663,100 +1967,20 @@ export class ParticleManager {
       scene: this._scene,
       // Instanced: keep slot meshes OUT of the scene graph (they stay pure
       // transform/opacity carriers that _appendInstances reads back).
-      // These seams are why particle.js / particle_emitter.js need no edits.
       onMeshActive: useInst ? _NOOP : undefined,
       onMeshFree: useInst ? _NOOP : undefined,
       meshFactory: async (_slotIdx) => {
-        // Per-slot mesh: shared geometry, cloned material so per-particle
-        // opacity lerps don't stomp neighbors. Perf (2026-06-27): reuse a
-        // recycled clone from the per-slot material pool when available
-        // (keyed by gfxobj + blend branch — both constant for this emitter),
-        // falling back to a fresh clone. Cuts the allocate/free churn that
-        // drove the sustained-combat cast stutter.
-        // `|sky` keeps patched sky-glow clones out of a world emitter's pool.
-        const poolKey = baseMaterial
-          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}|${baseMaterial.uuid}${skyGlow ? "|sky" : ""}`
-          : null;
-        const mat = baseMaterial
-          ? (this._takePooledMaterial(poolKey) || baseMaterial.clone())
-          : null;
-        if (mat) {
-          // Perf FU4 (2026-05-18) — per-emitter Additive vs Alpha branch.
-          // E5 (e1339af) shipped a single conservative middle ground for
-          // ALL particles because the wasm `ParticleEmitterJs` getter
-          // (src/lib.rs:18315) and `holtburger_dat::ParticleEmitter` (the
-          // DAT struct) don't expose a blend-mode field. FU4 lifts that
-          // limit by reading the signal off the GfxObj's surface
-          // material, which IS available here via `baseMaterial`. See
-          // the `baseIsAdditive` probe above for the decision path.
-          if (baseIsAdditive) {
-            // Additive blend (flames, sparks, the moon's crimson-star
-            // particle). depthWrite=false so additive sprites don't
-            // occlude later-drawn additive sprites — that's the visual
-            // bug E5's "alpha for everything" path produced. No
-            // alphaTest: additive sprites legitimately have low-alpha
-            // halo pixels that contribute energy and must not be culled.
-            mat.transparent = true;
-            mat.blending = THREE.AdditiveBlending;
-            mat.depthWrite = false;
-          } else {
-            // Alpha path — keep E5's conservative middle ground. The
-            // alphaTest catches near-zero alpha and enables depth-write
-            // for those pixels, which is most of the depth-write win
-            // even on soft-edged sprites. Default `mat.blending` stays
-            // at `THREE.NormalBlending` from the clone.
-            mat.transparent = true;
-            mat.alphaTest = 0.1;
-            mat.depthWrite = true;
-          }
-          // Perf (2026-07-15) — THE second draw call per particle. three r184
-          // submits a material TWICE, BackSide then FrontSide with a
-          // `needsUpdate` program re-resolve between them, when
-          // `transparent && side === DoubleSide && !forceSinglePass`
-          // (three.module.js:18065, renderObject). BOTH branches above set
-          // `transparent = true` and the base surface material is DoubleSide
-          // (materials.js), so every particle cost two draws: measured 2.01
-          // draws per visible particle at a settled Holtburg on the 1070
-          // (A/B/A within ONE page load, 0.1% drift — particle-k-probe.mjs).
-          //
-          // Safe here because a particle is a FLAT QUAD (census: 222/222 live
-          // meshes, 6 vertices): back and front never overlap, so one of the two
-          // passes is entirely face-culled and emits no fragments — it is a draw
-          // call that draws nothing. Verified, not assumed: two renders in one
-          // synchronous moment with identical scene state differ by EXACTLY 0
-          // pixels (forcesinglepass-parity.mjs). Retail agrees — it draws a
-          // two-sided surface ONCE with CULLMODE_NONE (acclient.h:5296 via
-          // RenderDeviceD3D::SetCullMode); the back-then-front two-pass is a
-          // three-ism with no retail counterpart.
-          //
-          // Do NOT lift this to non-particle transparent DoubleSide materials
-          // (there are 451 live at Holtburg): the same probe measured 5,245 px
-          // (1.0%, max delta 113) of change scene-wide, because world/entity
-          // surfaces are closed geometry where back-then-front ordering is real.
-          mat.forceSinglePass = true;
-          // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
-          // can dispose it. The base material from materialFactory may be
-          // cache-owned — only the per-slot CLONE is owned by this emitter.
-          // THREE.Material.clone() deep-copies userData, so the clone inherits
-          // a `__cacheOwned: true` tag when the base was a cache material;
-          // clear it here so the clone is unambiguously disposable. Without
-          // this, _disposeMaterialIfOwned() sees BOTH flags, trips the E3
-          // guard, and refuses to free the clone → per-slot material leak on
-          // landblock eviction while moving.
-          mat.userData.__cacheOwned = false;
-          mat.userData.__disposable = true;
-          // Perf (2026-06-27): tag the pool key so _reclaimSlotMaterial() can
-          // park this clone back in the right pool at teardown.
-          mat.userData.__poolKey = poolKey;
-          // 2026-10-07 `?skyGlow` (per-mesh path, e.g. ?particleInstancing=off).
-          if (skyGlow) applySkyGlowMaterial(mat);
-          // 2026-10-07 `?additiveFogBlack`: retail draws Additive surfaces with
-          // D3D fog OFF (acclient.c:454551); three's mix toward fogColor turned
-          // every distant glow into a pale quad. After the sky glow (which it
-          // skips) and on EVERY slot build, so a pooled clone re-takes the
-          // current mode (a no-op when it already has it).
-          if (baseIsAdditive) applyAdditiveParticleFog(mat);
-        }
+        // Slot carriers (2026-10-13): an instanced slot never renders, so it
+        // takes the ONE shared carrier instead of a clone (see the note at
+        // `_slotCarrierMaterial`). Read off the emitter, not `useInst`: once a
+        // bucket-attach failure or the runtime toggle has put the emitter on
+        // the per-mesh path (`_materializeSlotMaterials`), a lazy grow clones.
+        // Per-mesh path: a pooled or fresh per-slot clone (`_makeSlotMaterial`).
+        const mat = emitter._slotCarrier === true
+          ? _slotCarrierMaterial()
+          : (baseMaterial
+            ? this._makeSlotMaterial(baseMaterial, baseIsAdditive, info.hwGfxObjId, skyGlow)
+            : null);
         // NOTE: `geometry` is shared across all slots and originates from
         // the caller-supplied `geometryFactory` (typically a DAT-backed
         // cache, e.g. the sky-cell hwGfxObjId lookup). Per the B3
@@ -1795,8 +2019,9 @@ export class ParticleManager {
         // phantom "statics atlas-starvation" lead (refuted in 9baa72b2).
         // Must be an EXPLICIT stamp: the tempting inferred test
         // (frustumCulled===false && material.depthWrite===false) matches only
-        // ADDITIVE particles — the alpha branch above sets depthWrite=true, so
-        // it silently misses them (measured: 12 of 700 at Cragstone).
+        // ADDITIVE particles — the alpha branch of `_makeSlotMaterial` sets
+        // depthWrite=true, so it silently misses them (measured: 12 of 700 at
+        // Cragstone).
         mesh.userData.__particle = true;
         // Interior particle layering (2026-08-04). THE singleton choke point:
         // every slot mesh is built here exactly once and then reused across
@@ -1819,6 +2044,13 @@ export class ParticleManager {
     emitter._fxRow = particleFxRowFor(info);
     // 2026-10-07 `?skyGlow`: keys its own instanced bucket (see _appendInstances).
     emitter.skyGlow = skyGlow === true;
+    // Slot carriers (2026-10-13): set BEFORE setInfo builds the first slots
+    // (meshFactory reads it). The base material + blend class ride along for
+    // the per-mesh clones made later (`_materializeSlotMaterials`) and for the
+    // runtime toggle (`_applyInstancing`) — a carrier slot holds neither.
+    emitter._slotCarrier = useInst && particleSlotCarrierEnabled();
+    emitter._baseMat = baseMaterial || null;
+    emitter._baseIsAdditive = baseIsAdditive;
 
     const ok = await emitter.setInfo(info);
     if (!ok) {
@@ -1845,6 +2077,9 @@ export class ParticleManager {
         emitter._instKey = null;
         emitter._onMeshActive = null;
         emitter._onMeshFree = null;
+        // Slot carriers: the per-mesh path DRAWS the slot meshes, so they need
+        // their real per-slot clones now (carrying each slot's opacity).
+        this._materializeSlotMaterials(emitter);
         // eslint-disable-next-line no-console
         console.warn("[particles/instancing] bucket attach failed; per-mesh fallback:", String(e?.message ?? e));
       }
@@ -1938,6 +2173,12 @@ export class ParticleManager {
     // quads toward the viewer after their per-particle walk. null when disabled
     // (?particleBillboard=off) or no camera is resolvable → leave orientations.
     const bbCamera = BILLBOARD_DISABLED ? null : _rp6ResolveCamera();
+
+    // `?particleCellGate=on` — resolved once per tick; false (the default, and
+    // every manager without a lookup) leaves the loop below exactly as before.
+    const cellLookup = this._cellLookup;
+    const cellGate = cellLookup !== null && particleCellGateEnabled();
+    let cellHidden = 0;
 
     // Instanced buckets are rebuilt from scratch every tick: reset the write
     // cursors here, append below, finalize after the loop. An emitter that is
@@ -2095,6 +2336,19 @@ export class ParticleManager {
 
       if (!emitter.updateParticles()) {
         removeIds.push(id);
+      } else if (cellGate && _emitterCellHidden(emitter, cellLookup)) {
+        // `?particleCellGate=on`: the anchor's EnvCell is not drawn this frame.
+        // The simulation above already ran (retail CObjCell::IsInView == 1 —
+        // see the flag note); withhold only the draw. Instanced: no append, so
+        // its instances vanish with this tick's bucket reset. Per-mesh: hide
+        // the occupied slots, re-asserted every tick like the RP6 cull. The
+        // billboard pass only orients the draw frame, so it is skipped too.
+        if (emitter._instKey === null || emitter._instKey === undefined) {
+          _setPartsVisible(emitter, false);
+        }
+        cellHidden += 1;
+        PARTICLE_RP6_STATS.cellHiddenEmitterTicks += 1;
+        PARTICLE_RP6_STATS.cellHiddenParticleTicks += emitter.numParticles | 0;
       } else {
         if (bbCamera && emitter.info) {
           if (emitter.info.billboard) {
@@ -2115,6 +2369,7 @@ export class ParticleManager {
       }
     }
     this._finalizeInstBuckets();
+    this.cellHiddenLastTick = cellHidden;
     for (const id of removeIds) {
       const e = this.particleTable.get(id);
       // Free remaining meshes from the scene (the slot loop in
@@ -2220,7 +2475,9 @@ export class ParticleManager {
       im.setMatrixAt(n, m.matrix);
       // Per-particle opacity rides the instance color: folded into rgb for
       // additive (exact), read back as ALPHA by the alpha bucket's shader.
-      const op = m.material?.opacity ?? 1;
+      // Slot carriers: setTranslucency's `userData.__op` (the shared carrier
+      // material holds none); the material read is the pre-carrier fallback.
+      const op = m.userData?.__op ?? m.material?.opacity ?? 1;
       if (fx) {
         const p = particles ? particles[i] : null;
         const o = n * 3;
@@ -2325,13 +2582,14 @@ export class ParticleManager {
    * Re-point ONE existing emitter at the instanced or the per-mesh path.
    * Diagnostic only (runtime A/B) — addEmitter already routes new emitters.
    *
-   * Toggling ON needs the geometry + a blend-configured material, which
-   * addEmitter captured from locals long out of scope. Both are recoverable
-   * from any partStorage slot mesh: geometry is SHARED across slots, and the
-   * per-slot clone already carries this emitter's additive/alpha branch — which
-   * also gives us the additive test without re-reading the surface flags.
-   * (The clone's `opacity` is per-particle mutated, but the bucket material
-   * pins opacity=1 and folds opacity into the instance colour anyway.)
+   * Toggling ON needs the geometry + the base material and its blend class,
+   * which addEmitter captured from locals long out of scope. Geometry is SHARED
+   * across slots, so any partStorage slot mesh gives it. The base material and
+   * blend class are stored on the emitter at creation (`_baseMat` /
+   * `_baseIsAdditive`, slot carriers 2026-10-13): an instanced slot holds the
+   * shared carrier, not a blend-configured clone, so it can no longer be probed
+   * for them. An emitter built without them (not through addEmitter) still
+   * falls back to probing its per-slot clone's blending.
    */
   _applyInstancing(emitter, on) {
     try {
@@ -2340,25 +2598,34 @@ export class ParticleManager {
       if (on) {
         const probe = (emitter.partStorage || []).find(Boolean);
         if (!probe || !probe.geometry || !probe.material) return false;
-        const alpha = probe.material.blending !== THREE.AdditiveBlending;
+        const hasBase = emitter._baseMat !== undefined;
+        const base = hasBase ? emitter._baseMat : probe.material;
+        if (!base) return false;
+        const alpha = hasBase
+          ? emitter._baseIsAdditive !== true
+          : probe.material.blending !== THREE.AdditiveBlending;
         if (alpha && !particleInstancingAlphaEnabled()) return false;
         emitter._instAlpha = alpha;
         const g = _instGeometryFor(probe.geometry);
         if (!g) return false;
         emitter._instKey = (emitter.info?.hwGfxObjId ?? 0) >>> 0;
         emitter._instGeom = g;
-        emitter._instBaseMat = probe.material;
+        emitter._instBaseMat = base;
         emitter._onMeshActive = _NOOP;
         emitter._onMeshFree = _NOOP;
         // The bucket represents these particles now — pull the meshes out of the
         // scene or they would draw TWICE (once per mesh, once per instance).
         for (const m of (emitter.parts || [])) { if (m && m.parent) m.parent.remove(m); }
+        // Slot carriers: the off-graph slots give their clones back to the pool.
+        if (hasBase && particleSlotCarrierEnabled()) this._carrySlotMaterials(emitter);
         return true;
       }
       // OFF: restore the per-mesh path. Only clear seams WE installed.
       emitter._instKey = null; emitter._instGeom = null; emitter._instBaseMat = null;
       if (emitter._onMeshActive === _NOOP) emitter._onMeshActive = null;
       if (emitter._onMeshFree === _NOOP) emitter._onMeshFree = null;
+      // Slot carriers → real per-slot clones BEFORE the meshes rejoin the scene.
+      this._materializeSlotMaterials(emitter);
       // Re-attach live particles; RP6 owns their visibility, so mirror its
       // current decision rather than forcing them visible.
       const vis = emitter._rp6Culled !== true;
@@ -2400,14 +2667,22 @@ export class ParticleManager {
   /** Diagnostic counters for the runtime A/B. */
   instancingDiag() {
     let instEmitters = 0, liveParticles = 0, meshesInScene = 0;
+    // Slot carriers (2026-10-13): built slots holding the shared carrier vs a
+    // per-slot material of their own (per-mesh emitters, `?particleSlotCarrier=off`).
+    let slotCarriers = 0, slotMaterials = 0;
     for (const [, e] of this.particleTable) {
       if (e._instKey !== null && e._instKey !== undefined) instEmitters++;
       liveParticles += e.numParticles | 0;
       for (const m of (e.parts || [])) if (m && m.parent) meshesInScene++;
+      for (const m of (e.partStorage || [])) {
+        if (!m) continue;
+        if (_isSlotCarrier(m.material)) slotCarriers++; else slotMaterials++;
+      }
     }
     let buckets = 0, instances = 0;
     for (const b of this._instBuckets.values()) { buckets++; instances += b.im.count | 0; }
     return { emitters: this.particleTable.size, instEmitters, liveParticles, meshesInScene, buckets, instances,
+      slotCarriers, slotMaterials,
       sharedAlphaBuckets: sharedAlphaBuckets.buckets.size, sharedAlpha: { ...sharedAlphaBuckets.stats } };
   }
 

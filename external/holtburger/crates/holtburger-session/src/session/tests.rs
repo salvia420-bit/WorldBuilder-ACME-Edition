@@ -1086,107 +1086,307 @@ async fn test_retransmit_uses_cached_packet_with_piggybacked_ack() {
     );
 }
 
+// ── net-transport-1 (2026-10-13): outbound fragmentation ────────────────
+// These replace the R-14 stopgap tests, which pinned the old behaviour of
+// dropping every C2S message over 448 B.
+
+/// One C2S packet as ACE's `ClientPacket.Unpack` reads it: the packet header,
+/// then (after the optional piggybacked ACK word) one fragment header and its
+/// data. Asserts the packet holds exactly one fragment.
+fn parse_c2s_fragment_packet(packet: &[u8]) -> (PacketHeader, FragmentHeader, Vec<u8>) {
+    let header = unpack_header(packet);
+    assert_ne!(header.flags & packet_flags::BLOB_FRAGMENTS, 0, "not a fragment packet");
+    assert_eq!(header.size as usize, packet.len() - transport::HEADER_SIZE);
+    let mut offset = transport::HEADER_SIZE;
+    if header.flags & packet_flags::ACK_SEQUENCE != 0 {
+        offset += transport::ACK_SEQUENCE_SIZE;
+    }
+    let frag = FragmentHeader::unpack(packet, &mut offset).expect("fragment header should unpack");
+    let data_len = (frag.size as usize)
+        .checked_sub(transport::FRAGMENT_HEADER_SIZE)
+        .expect("fragment size covers its header");
+    assert_eq!(offset + data_len, packet.len(), "exactly one fragment per packet");
+    let data = packet[offset..offset + data_len].to_vec();
+    (header, frag, data)
+}
+
+/// ACE `MessageBuffer.TryGetMessage`: sort a split message's fragments by
+/// index and concatenate their data.
+fn reassemble_like_ace(mut fragments: Vec<(FragmentHeader, Vec<u8>)>) -> Vec<u8> {
+    fragments.sort_by_key(|(frag, _)| frag.index);
+    fragments.into_iter().flat_map(|(_, data)| data).collect()
+}
+
+fn packed_message(message: &GameMessage) -> Vec<u8> {
+    let mut buf = Vec::new();
+    ProtocolPack::pack(message, &mut buf);
+    buf
+}
+
+/// The 448/449 boundary (retail `NetBlob::Fragmentize`: `bufSize / 0x1C0`,
+/// +1 for a remainder). `GameMessage::Unknown` packs as opcode + raw bytes,
+/// so the payload size is exact (a string16 body only grows in 4-byte steps).
 #[tokio::test]
-async fn test_oversize_message_refused_without_parking_session() {
-    // R-14 stopgap: a C2S game message whose packed payload exceeds the
-    // single-fragment limit (ACE rejects fragment header size > 464 B, i.e.
-    // payload > 448 B, discarding the packet and permanently deafening the
-    // server via a fragment-sequence gap). `send_message` must refuse it:
-    // drop the message, keep the session live (return Ok, not Err), and
-    // consume NO packet/fragment sequence so every later message still flows.
-    use holtburger_protocol::messages::chat::actions::TalkActionData;
-    use holtburger_protocol::messages::game_action::{GameAction, GameActionMessage};
+async fn test_fragment_boundary_448_is_one_packet_449_is_two() {
+    use holtburger_protocol::messages::transport::MAX_FRAGMENT_PAYLOAD;
+
+    fn raw_message(total_len: usize) -> GameMessage {
+        // Opaque test opcode; the transport never looks inside the payload.
+        GameMessage::Unknown(0x1234_5678, (0..total_len - 4).map(|i| i as u8).collect())
+    }
 
     let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
     let sent_handle = transport.clone();
-
     let mut session = Session::new_test();
     session.transport = Box::new(transport);
 
     let frag_seq_before = session.fragment_sequence;
-    let pkt_seq_before = session.packet_sequence;
     let frag_id_before = session.fragment_id;
+    let pkt_seq_before = session.packet_sequence;
 
-    // ~500 WINDOWS-1252 chars → ~514 B packed Talk payload, well over 448.
-    let oversize = GameMessage::GameAction(Box::new(GameActionMessage {
-        sequence: 1,
-        action: GameAction::Talk(Box::new(TalkActionData {
-            message: "x".repeat(500),
-        })),
-    }));
-    // Refused gracefully (Ok, not Err — an Err trips the recv loop's
-    // disconnect arm).
-    session.send_message(&oversize).await.unwrap();
+    // Exactly 448 B: one packet, one unsplit fragment of 464 B.
+    let at_limit = raw_message(MAX_FRAGMENT_PAYLOAD);
+    let at_limit_bytes = packed_message(&at_limit);
+    assert_eq!(at_limit_bytes.len(), MAX_FRAGMENT_PAYLOAD);
+    session.send_message(&at_limit).await.unwrap();
 
-    // No wire packet emitted, and the wire-critical counters are untouched
-    // (no fragment-sequence gap → the server never goes deaf).
-    assert!(
-        sent_handle.sent_packets().await.is_empty(),
-        "oversize message must not be transmitted"
-    );
-    assert_eq!(session.fragment_sequence, frag_seq_before);
-    assert_eq!(session.packet_sequence, pkt_seq_before);
-    assert_eq!(session.fragment_id, frag_id_before);
+    let sent = sent_handle.sent_packets().await;
+    assert_eq!(sent.len(), 1);
+    let (header, frag, data) = parse_c2s_fragment_packet(&sent[0]);
+    assert_eq!(header.sequence, pkt_seq_before);
+    assert_eq!(frag.sequence, frag_seq_before);
+    assert_eq!(frag.id, frag_id_before);
+    assert_eq!(frag.count, 1);
+    assert_eq!(frag.index, 0);
+    assert_eq!(frag.size as usize, transport::FRAGMENT_HEADER_SIZE + MAX_FRAGMENT_PAYLOAD);
+    assert_eq!(data, at_limit_bytes);
 
-    // Control: an in-bounds message still sends and advances the counters,
-    // proving the session was left fully usable.
-    let ok_msg = GameMessage::GameAction(Box::new(GameActionMessage {
-        sequence: 2,
-        action: GameAction::Talk(Box::new(TalkActionData {
-            message: "hello".to_string(),
-        })),
-    }));
-    session.send_message(&ok_msg).await.unwrap();
-    assert_eq!(sent_handle.sent_packets().await.len(), 1);
-    assert_eq!(session.fragment_sequence, frag_seq_before + 1);
-    assert_eq!(session.packet_sequence, pkt_seq_before + 1);
-    assert_eq!(session.fragment_id, frag_id_before + 1);
+    // 449 B: two packets (448 + 1), one shared fragment sequence.
+    let over_limit = raw_message(MAX_FRAGMENT_PAYLOAD + 1);
+    let over_limit_bytes = packed_message(&over_limit);
+    assert_eq!(over_limit_bytes.len(), MAX_FRAGMENT_PAYLOAD + 1);
+    session.send_message(&over_limit).await.unwrap();
+
+    let sent = sent_handle.sent_packets().await;
+    assert_eq!(sent.len(), 3);
+    let mut fragments = Vec::new();
+    for (i, packet) in sent[1..].iter().enumerate() {
+        let (header, frag, data) = parse_c2s_fragment_packet(packet);
+        assert_eq!(header.sequence, pkt_seq_before + 1 + i as u32);
+        assert_eq!(frag.sequence, frag_seq_before + 1, "next message, next fragment sequence");
+        assert_eq!(frag.id, frag_id_before + 1);
+        assert_eq!(frag.count, 2);
+        assert_eq!(frag.index, i as u16);
+        assert_eq!(data.len(), if i == 0 { MAX_FRAGMENT_PAYLOAD } else { 1 });
+        fragments.push((frag, data));
+    }
+    assert_eq!(reassemble_like_ace(fragments), over_limit_bytes);
+
+    // Fragment sequence/id advance once per MESSAGE; packet sequence once
+    // per fragment.
+    assert_eq!(session.fragment_sequence, frag_seq_before + 2);
+    assert_eq!(session.fragment_id, frag_id_before + 2);
+    assert_eq!(session.packet_sequence, pkt_seq_before + 3);
 }
 
+/// A 1000-character book page (the textarea cap for 343 of 348 LSD books)
+/// packs to ~1 KB. It must go out as 3 retail fragments, each in its own
+/// encrypted packet with the ACK piggyback, consecutive packet sequences,
+/// successive C2S ISAAC keys and a retransmit-cache entry, and ACE-style
+/// reassembly must give back the exact packed message.
 #[tokio::test]
-async fn test_max_size_message_at_boundary_still_sends() {
-    // Bisect guard for the 448/449 boundary. A payload of exactly 448 B must
-    // send; 449 B must be refused. We size the Talk string so the *packed*
-    // GameMessage payload lands on each side of the limit and assert the
-    // transmit / drop decision flips.
-    use holtburger_protocol::messages::chat::actions::TalkActionData;
+async fn test_long_book_page_is_sent_as_three_fragments() {
+    use holtburger_protocol::crypto::Isaac;
+    use holtburger_protocol::messages::book::BookModifyPageActionData;
     use holtburger_protocol::messages::game_action::{GameAction, GameActionMessage};
     use holtburger_protocol::messages::transport::MAX_FRAGMENT_PAYLOAD;
 
-    fn packed_len(message: &GameMessage) -> usize {
-        let mut buf = Vec::new();
-        ProtocolPack::pack(message, &mut buf);
-        buf.len()
-    }
-    fn talk(msg: String) -> GameMessage {
-        GameMessage::GameAction(Box::new(GameActionMessage {
-            sequence: 1,
-            action: GameAction::Talk(Box::new(TalkActionData { message: msg })),
-        }))
-    }
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
 
-    // Grow the ASCII body until the packed payload is exactly MAX_FRAGMENT_PAYLOAD.
-    let mut n = 0usize;
-    while packed_len(&talk("a".repeat(n))) < MAX_FRAGMENT_PAYLOAD {
-        n += 1;
+    let seed = 0x99E7_7855;
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    // >= 2 so the retransmit cache keeps the packets (`maybe_cache_packet`).
+    session.packet_sequence = 5;
+    session.client_id = 0x0B;
+    session.has_server_seq = true;
+    session.last_server_seq = 42;
+    session.isaac_c2s = Some(Isaac::new(seed));
+    let mut expected_keys = Isaac::new(seed);
+
+    let book_page = GameMessage::GameAction(Box::new(GameActionMessage {
+        sequence: 7,
+        action: GameAction::BookModifyPage(Box::new(BookModifyPageActionData {
+            object_guid: holtburger_common::Guid(0x8000_1234),
+            page_num: 0,
+            text: "x".repeat(1000),
+        })),
+    }));
+    let packed = packed_message(&book_page);
+    assert_eq!(packed.len().div_ceil(MAX_FRAGMENT_PAYLOAD), 3);
+
+    let frag_seq_before = session.fragment_sequence;
+    let frag_id_before = session.fragment_id;
+    session.send_message(&book_page).await.unwrap();
+
+    let sent = sent_handle.sent_packets().await;
+    assert_eq!(sent.len(), 3, "one packet per fragment");
+
+    let mut fragments = Vec::new();
+    for (i, packet) in sent.iter().enumerate() {
+        assert!(
+            packet.len()
+                <= transport::HEADER_SIZE
+                    + transport::ACK_SEQUENCE_SIZE
+                    + transport::FRAGMENT_HEADER_SIZE
+                    + MAX_FRAGMENT_PAYLOAD,
+            "datagram over 488 B"
+        );
+        let (header, frag, data) = parse_c2s_fragment_packet(packet);
+
+        assert_eq!(header.sequence, 5 + i as u32, "consecutive packet sequences");
+        assert_eq!(
+            header.flags,
+            packet_flags::BLOB_FRAGMENTS
+                | packet_flags::ACK_SEQUENCE
+                | packet_flags::ENCRYPTED_CHECKSUM
+        );
+        assert_eq!(header.id, 0x0B);
+        assert_eq!(
+            LittleEndian::read_u32(&packet[transport::HEADER_SIZE..transport::HEADER_SIZE + 4]),
+            42,
+            "every fragment packet carries the ACK piggyback"
+        );
+
+        assert_eq!(frag.sequence, frag_seq_before, "one fragment sequence per message");
+        assert_eq!(frag.id, frag_id_before);
+        assert_eq!(frag.count, 3);
+        assert_eq!(frag.index, i as u16);
+        assert_eq!(frag.queue, transport::queues::GENERAL);
+        assert!(frag.size as usize <= transport::FRAGMENT_HEADER_SIZE + MAX_FRAGMENT_PAYLOAD);
+        if i < 2 {
+            assert_eq!(data.len(), MAX_FRAGMENT_PAYLOAD, "retail fills every chunk but the last");
+        }
+
+        // The encrypted checksum validates against the NEXT C2S ISAAC key,
+        // taken in packet order.
+        let header_hash = header.calculate_checksum();
+        let payload_hash = session
+            .calculate_payload_hash(header.flags, &packet[transport::HEADER_SIZE..])
+            .unwrap();
+        assert_eq!(
+            header.checksum,
+            header_hash.wrapping_add(payload_hash ^ expected_keys.current_key),
+            "packet {i} checksum"
+        );
+        expected_keys.consume_key();
+
+        assert!(
+            session.cached_packets.contains_key(&header.sequence),
+            "packet {} must be in the retransmit cache",
+            header.sequence
+        );
+        fragments.push((frag, data));
     }
-    let at_limit = talk("a".repeat(n));
-    assert_eq!(packed_len(&at_limit), MAX_FRAGMENT_PAYLOAD);
-    let over_limit = talk("a".repeat(n + 4)); // +4: string16 grows in 4-byte pad steps
+    assert_eq!(
+        session.isaac_c2s.as_ref().unwrap().current_key,
+        expected_keys.current_key,
+        "exactly one ISAAC key per packet"
+    );
+
+    // Arrival order does not matter: ACE sorts by index before joining.
+    fragments.reverse();
+    assert_eq!(reassemble_like_ace(fragments), packed);
+
+    assert_eq!(session.fragment_sequence, frag_seq_before + 1);
+    assert_eq!(session.fragment_id, frag_id_before + 1);
+    assert_eq!(session.packet_sequence, 8);
+}
+
+/// CharacterCreate packs ~396 B before its two string16s (104 B appearance,
+/// a 55-slot end-of-retail skill array), so a long account name (ACE accepts
+/// up to 50 characters) plus a character name crosses 448 B. Under R-14 that
+/// chargen was silently dropped; it must now go out as two fragments.
+#[tokio::test]
+async fn test_character_create_with_long_names_is_sent_as_two_fragments() {
+    use holtburger_protocol::messages::character::{
+        CharacterCreateAppearanceData, CharacterCreateRequestData, SkillAdvancementClass,
+    };
+    use holtburger_protocol::messages::transport::MAX_FRAGMENT_PAYLOAD;
+
+    let create = GameMessage::CharacterCreate(Box::new(CharacterCreateRequestData {
+        account_name: "a".repeat(50),
+        unknown_constant: 1,
+        heritage: 1,
+        gender: 1,
+        appearance: CharacterCreateAppearanceData {
+            eyes: 1,
+            nose: 1,
+            mouth: 1,
+            hair_color: 1,
+            eye_color: 1,
+            hair_style: 1,
+            headgear_style: 0xFFFF_FFFF,
+            headgear_color: 0,
+            shirt_style: 1,
+            shirt_color: 1,
+            pants_style: 1,
+            pants_color: 1,
+            footwear_style: 1,
+            footwear_color: 1,
+            skin_hue: 0.5,
+            hair_hue: 0.5,
+            headgear_hue: 0.0,
+            shirt_hue: 0.5,
+            pants_hue: 0.5,
+            footwear_hue: 0.5,
+        },
+        template_option: 0,
+        strength_ability: 100,
+        endurance_ability: 10,
+        coordination_ability: 100,
+        quickness_ability: 100,
+        focus_ability: 10,
+        self_ability: 10,
+        character_slot: 0,
+        class_id: 0,
+        skill_advancement_classes: vec![SkillAdvancementClass::Untrained; 55],
+        name: "Sir Reginald Longname".to_string(),
+        start_area: 0,
+        is_admin: false,
+        is_sentinel: false,
+    }));
+    let packed = packed_message(&create);
+    assert!(
+        packed.len() > MAX_FRAGMENT_PAYLOAD,
+        "fixture must exceed one fragment, got {} B",
+        packed.len()
+    );
+    assert_eq!(packed.len().div_ceil(MAX_FRAGMENT_PAYLOAD), 2);
 
     let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
     let sent_handle = transport.clone();
     let mut session = Session::new_test();
     session.transport = Box::new(transport);
+    let frag_seq_before = session.fragment_sequence;
 
-    // Exactly at the limit → sent.
-    session.send_message(&at_limit).await.unwrap();
-    assert_eq!(sent_handle.sent_packets().await.len(), 1);
+    session.send_message(&create).await.unwrap();
 
-    // Just over the limit → refused, no second packet.
-    assert!(packed_len(&over_limit) > MAX_FRAGMENT_PAYLOAD);
-    session.send_message(&over_limit).await.unwrap();
-    assert_eq!(sent_handle.sent_packets().await.len(), 1);
+    let sent = sent_handle.sent_packets().await;
+    assert_eq!(sent.len(), 2, "chargen must not be dropped");
+    let fragments: Vec<_> = sent
+        .iter()
+        .enumerate()
+        .map(|(i, packet)| {
+            let (_, frag, data) = parse_c2s_fragment_packet(packet);
+            assert_eq!(frag.sequence, frag_seq_before);
+            assert_eq!(frag.count, 2);
+            assert_eq!(frag.index, i as u16);
+            (frag, data)
+        })
+        .collect();
+    assert_eq!(reassemble_like_ace(fragments), packed);
 }
 
 // ── R2-net (2026-10-08): net-2 / net-3 / net-4 / net-5 ──────────────────

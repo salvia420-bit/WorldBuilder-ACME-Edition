@@ -49,10 +49,11 @@
 //   - Mount: subscribes to events, exposes `__buffsHudToggle` / `__buffsHudClose`
 // =============================================================================
 
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { fetchSpellIconWithFallback } from "../ui/ac_icon_cache.js";
 import { clearPlaceholderGlyph } from "../ui/ac_html.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { ETF } from "../ui/enchantment_constants.js";
+import { skillName } from "./examine_format.js";
 
 const OVERLAY_ID = "hb-buffs-hud";
 const STYLE_ID = "hb-buffs-hud-style";
@@ -62,30 +63,74 @@ const STYLE_ID = "hb-buffs-hud-style";
 
 // ─── StatKey label tables ───
 // Per `Enchantment.StatKey` doc (`Enchantment.cs:85-87`): the key is
-// AttributeId | VitalId | SkillId | PropertyInt depending on which
-// EnchantmentTypeFlags bit is set. Short ALL-CAPS abbreviations match
-// retail-AC's vitals HUD convention (`STR`, `END`, etc.).
+// AttributeId | VitalId | SkillId | PropertyInt | PropertyFloat depending
+// on which EnchantmentTypeFlags bit is set. Short ALL-CAPS abbreviations
+// match retail-AC's vitals HUD convention (`STR`, `END`, etc.).
+// Retail STypeAttribute (acclient.txt S_CONSTANT QUICKNESS_ATTRIBUTE = 3,
+// COORDINATION_ATTRIBUTE = 4; ACE PropertyAttribute.cs agrees).
 const ATTRIBUTE_NAME = Object.freeze({
-  1: "STR", 2: "END", 3: "COO", 4: "QCK", 5: "FOC", 6: "SEL",
+  1: "STR", 2: "END", 3: "QCK", 4: "COO", 5: "FOC", 6: "SEL",
 });
 const VITAL_NAME = Object.freeze({
   1: "HP", 2: "HP", 3: "STAM", 4: "STAM", 5: "MANA", 6: "MANA",
 });
-// Top retail skills used most often in buffs — long-tail fallback prints
-// the raw id. Source: `holtburger_common::stats::SkillType` /
-// `Chorizite.Common/Enums/SkillId.cs`.
+// Short forms for the skills buffs/debuffs touch most, keyed by retail
+// STypeSkill (acclient.txt S_CONSTANT ARCANE_LORE_SKILL = 14,
+// MAGIC_DEFENSE_SKILL = 15, JUMP_SKILL = 22, RUN_SKILL = 24, …;
+// `holtburger_common::stats::SkillType` uses the same ids). Any other
+// skill id falls back to its full name from examine_format.js SKILL_NAMES
+// (e.g. the retired Axe/Sword skills old "Cascade" spells still key).
 const SKILL_NAME = Object.freeze({
-  6: "Melee D",  7: "Missile D", 14: "Run",   15: "Jump",
-  20: "Magic D", 24: "Mana C",   31: "Loyalty",
-  41: "War M",   42: "Life M",   43: "Item E", 44: "Creat E",
-  45: "Void M",  46: "Heavy W",  47: "Light W", 48: "Finesse",
-  49: "Missile", 50: "Two-Hand",
-  51: "Healing", 52: "Lock",    53: "Sneak", 54: "Salvg",
-  55: "App I",   56: "Arcane",  57: "App M",
-  // Resistance skills (43-49 range in some encodings):
-  60: "Slash P", 61: "Pierce P", 62: "Bludg P", 63: "Acid P",
-  64: "Fire P",  65: "Cold P",   66: "Elec P",
+  6: "Melee D",     7: "Missile D",  14: "Arcane",     15: "Magic D",
+  16: "Mana C",     18: "Item T",    19: "Assess P",   20: "Deception",
+  21: "Healing",    22: "Jump",      23: "Lockpick",   24: "Run",
+  27: "Assess C",   28: "Weapon T",  29: "Armor T",    30: "Magic T",
+  31: "Creature E", 32: "Item E",    33: "Life M",     34: "War M",
+  35: "Leadership", 36: "Loyalty",   37: "Fletching",  38: "Alchemy",
+  39: "Cooking",    40: "Salvaging", 41: "Two-Hand",   43: "Void M",
+  44: "Heavy W",    45: "Light W",   46: "Finesse W",  47: "Missile W",
+  48: "Shield",     49: "Dual W",    50: "Reckless",   51: "Sneak",
+  52: "Dirty F",    54: "Summoning",
 });
+// ETF.FLOAT keys are PropertyFloat ids (ACE PropertyFloat.cs): the
+// protection / vulnerability family (ResistSlash 64 … ResistElectric 70,
+// ResistHealthDrain 125, ResistNether 166) and the vital regen rates
+// Regeneration / Rejuvenation / Mana Renewal scale (HealthRate 3,
+// StaminaRate 4, ManaRate 5).
+const FLOAT_NAME = Object.freeze({
+  3: "HP Regen", 4: "Stam Regen", 5: "Mana Regen",
+  64: "Slash P", 65: "Pierce P", 66: "Bludg P", 67: "Fire P",
+  68: "Cold P",  69: "Acid P",   70: "Elec P",
+  125: "Drain R", 166: "Nether P",
+});
+// EnchantmentTypeFlags bits ui/enchantment_constants.js does not carry
+// (crates/holtburger-common/src/properties/combat.rs EnchantmentTypeFlags).
+const ETF_BODY_ARMOR_VALUE = 0x0000080;
+const ETF_ATTACK_SKILLS = 0x0010000;
+const ETF_DEFENSE_SKILLS = 0x0020000;
+
+// Key-0 "stat family" enchantments carry no single stat id: MULTIPLE_STAT
+// spells (Armor Self, Cloaked in Skill, Society blessings, Vitae, the
+// "Blight" debuffs) and ACE's AttackSkills / DefenseSkills skill mods
+// (EnchantmentManager.cs). Label the family by its type bits instead of
+// printing "id 0".
+function statFamilyName(type) {
+  if ((type & ETF.SKILL) !== 0 && (type & ETF_ATTACK_SKILLS) !== 0) return "attack skills";
+  if ((type & ETF.SKILL) !== 0 && (type & ETF_DEFENSE_SKILLS) !== 0) return "defense skills";
+  if ((type & ETF.MULTIPLE_STAT) === 0) return null;
+  const parts = [];
+  if ((type & ETF.ATTRIBUTE) !== 0) parts.push("attributes");
+  if ((type & ETF.SECOND_ATT) !== 0) parts.push("vitals");
+  if ((type & ETF.SKILL) !== 0) parts.push("skills");
+  if (parts.length) return `all ${parts.join(" & ")}`;
+  if ((type & ETF_BODY_ARMOR_VALUE) !== 0) return "Armor";
+  return null;
+}
+
+function skillLabel(key) {
+  if (SKILL_NAME[key]) return SKILL_NAME[key];
+  return key > 0 ? skillName(key) : null;
+}
 
 // ─── Constants ───
 // Wire's start_time is RELATIVE and ≤ 0 — NOT an epoch timestamp (the
@@ -285,10 +330,13 @@ export function formatStatMod(ench) {
   }
 
   // Stat-name lookup keyed by the type flags.
-  let name = null;
-  if ((type & ETF.ATTRIBUTE) !== 0) name = ATTRIBUTE_NAME[key];
-  else if ((type & ETF.SECOND_ATT) !== 0) name = VITAL_NAME[key];
-  else if ((type & ETF.SKILL) !== 0) name = SKILL_NAME[key];
+  let name = key === 0 ? statFamilyName(type) : null;
+  if (!name) {
+    if ((type & ETF.ATTRIBUTE) !== 0) name = ATTRIBUTE_NAME[key];
+    else if ((type & ETF.SECOND_ATT) !== 0) name = VITAL_NAME[key];
+    else if ((type & ETF.SKILL) !== 0) name = skillLabel(key);
+    else if ((type & ETF.FLOAT) !== 0) name = FLOAT_NAME[key];
+  }
   if (!name) name = `id ${key}`;
 
   // Sign / format by additive vs multiplicative.
@@ -404,10 +452,14 @@ function spellRecord(spellId) {
   return null;
 }
 
-// Thin wrapper around the shared icon cache — preserves the
+// hud-ui-3: retail's effects list (EffectInfoRegion::EffectInfoRegion,
+// acclient.c:286409) draws ClientMagicSystem::GetSpellIcon — the
+// CompositeSpellIcon composite (power backing, white key → Reversed /
+// NonReversed tile, self / fellowship overlay) — not the bare icon. The raw
+// icon stays the fallback (no wasm spell record yet). Keeps the
 // `[buffs-hud]` warn label on failure.
-async function fetchIconDataUrl(iconId) {
-  return fetchIconDataUrlShared(iconId, "buffs-hud");
+function fetchSpellIcon(spellId, iconId) {
+  return fetchSpellIconWithFallback(spellId, iconId, "buffs-hud");
 }
 
 // ─── Styles ───
@@ -557,6 +609,7 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-bh-tip.is-open { display: block; }
     #${OVERLAY_ID} .hb-bh-tip-name { color: var(--hbk-gold-bright, #f3d27a); font-size: 12px; }
     #${OVERLAY_ID} .hb-bh-tip-kind { color: var(--hbk-text-faint, #77705f); font-style: italic; }
+    #${OVERLAY_ID} .hb-bh-tip-desc { color: var(--hbk-text, #e8dfc8); margin: 3px 0; overflow-wrap: anywhere; }
     #${OVERLAY_ID} .hb-bh-tip-mod { color: var(--hbk-value, #8aef6d); }
     #${OVERLAY_ID} .hb-bh-tip.kind-debuff .hb-bh-tip-mod { color: var(--hbk-warn, #ff6a50); }
     #${OVERLAY_ID} .hb-bh-tip-line { color: var(--hbk-text-dim, #a8a090); }
@@ -870,7 +923,7 @@ function buildCell(key, ench, kind) {
   cell.appendChild(time);
   const meta = spellRecord(ench.spellId) || {};
   if (meta.icon) {
-    fetchIconDataUrl(meta.icon).then((url) => {
+    fetchSpellIcon(ench.spellId, meta.icon).then((url) => {
       if (!url || !cell.isConnected) return;
       clearPlaceholderGlyph(iconBox);
       const img = document.createElement("img");
@@ -903,6 +956,11 @@ function tooltipLines(ench, kind) {
   const meta = spellRecord(ench.spellId) || {};
   const remaining = remainingSeconds(ench);
   const lines = [];
+  // Retail's info box is the spell name, a blank line, then the spell
+  // description (acclient.c gmEffectsUI::UpdateSelection: GetSpellName +
+  // "\n\n" + GetSpellDescription) — the description leads the lines.
+  const desc = typeof meta.desc === "string" ? meta.desc.trim() : "";
+  if (desc) lines.push({ cls: "hb-bh-tip-desc", text: desc });
   const mod = formatStatMod(ench);
   if (mod) lines.push({ cls: "hb-bh-tip-mod", text: mod });
   if (meta.school) lines.push({ cls: "hb-bh-tip-line", text: meta.school });

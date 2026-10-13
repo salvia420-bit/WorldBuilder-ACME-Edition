@@ -214,6 +214,7 @@ function applyExamineFloatyLayout(overlay, refs) {
           cornerSize: 5,
           borderThickness: 5,
           windowId: WINDOW_ID.EXAMINE,
+          obeysGlobalLock: true,
         });
         overlay.classList.add("hb-floaty-framed");
       }
@@ -275,6 +276,8 @@ function buildOverlay() {
 
   attachWindowPosition(overlay, {
     windowId: WINDOW_ID.EXAMINE,
+    // gmFloatyExaminationUI::UpdateLockedStatus reads the global LockUI.
+    obeysGlobalLock: true,
     dragHandle: titleEl,
     ignoreSelector: ".hb-exa-floaty-close,button,input,select,textarea,[data-drag-ignore]",
     defaultPos: {

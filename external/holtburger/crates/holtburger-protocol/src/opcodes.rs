@@ -493,10 +493,15 @@ pub enum GameActionOpcode {
     /// `GameActionRemoveAllFriends` → `HandleActionRemoveAllFriends` clears
     /// the DB and sends nothing back (social-lists-1, 2026-10-08).
     RemoveAllFriends = 0x0025,
-    // /// C2S: Query a character's creation age.
-    // QueryAge = 0x01C2,
-    // /// C2S: Query a character's birth date.
-    // QueryBirth = 0x01C4,
+    /// C2S: `/age` — retail `ClientCommunicationSystem::DoAge` →
+    /// `CM_Character::Event_QueryAge` (opcode 450, acclient.c:697985).
+    /// Payload `u32 target` (`QueryAgeActionData`). ACE replies with
+    /// `GameEventQueryAgeResponse` (0x01C3) (chat-errors-8, 2026-10-13).
+    QueryAge = 0x01C2,
+    /// C2S: `/birth` — `DoBirth` → `CM_Character::Event_QueryBirth`
+    /// (opcode 452, :698035). Payload `u32 target` (`QueryBirthActionData`).
+    /// ACE answers with a Broadcast line ("You were born on …").
+    QueryBirth = 0x01C4,
     /// C2S: Add an item or spell shortcut to the UI hotbar (gmFloaty-
     /// ToolbarUI). Payload is a packed `Shortcut`
     /// (`messages/player/shortcuts.rs`). ACE dispatcher:
@@ -518,8 +523,12 @@ pub enum GameActionOpcode {
     QueryPluginListResponse = 0x02AF,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
-    // /// C2S: Finalize character changes in a barber session.
-    // FinishBarber = 0x0311,
+    /// C2S: Finalize character changes in a barber session (retail
+    /// `CM_Character::Event_FinishBarber`, sent by gmBarberUI's Apply,
+    /// acclient.c:270300). Body = the 16 u32 of `GameEventStartBarber`
+    /// (`FinishBarberActionData`); ACE `HandleActionFinishBarber`
+    /// (maps-chargen-barber-1, 2026-10-13).
+    FinishBarber = 0x0311,
     /// C2S: Change state (e.g. sit, stand).
     MoveToState = 0xF61C,
     /// C2S: Perform a jump.
@@ -542,12 +551,16 @@ pub enum GameActionOpcode {
     CancelAttack = 0x01B7,
     /// C2S: Remove a spell from the character's spellbook.
     RemoveSpellFromBook = 0x01A8,
-    // /// C2S: Mark a spell as a favorite in the spellbook.
-    // AddSpellFavorite = 0x01E3,
-    // /// C2S: Remove a spell from the favorites list.
-    // RemoveSpellFavorite = 0x01E4,
-    // /// C2S: Apply active filters to the spellbook view.
-    // SpellbookFilter = 0x0286,
+    /// C2S: Put a spell on one of the 8 spell bars at a list position
+    /// (retail `CM_Character::Event_AddSpellFavorite`, acclient.c:697556;
+    /// ACE `HandleActionAddSpellFavorite`). input-options-2 (2026-10-13).
+    AddSpellFavorite = 0x01E3,
+    /// C2S: Take a spell off one of the 8 spell bars (retail
+    /// `CM_Character::Event_RemoveSpellFavorite`, acclient.c:698135).
+    RemoveSpellFavorite = 0x01E4,
+    /// C2S: Store the spellbook filter word (retail
+    /// `CM_Character::Event_SpellbookFilterEvent`, acclient.c:698239).
+    SpellbookFilter = 0x0286,
     /// C2S: Forcibly kill the character.
     Suicide = 0x0279,
     /// C2S: Increase a vital (Health, Stamina, Mana) using experience.

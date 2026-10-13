@@ -232,6 +232,11 @@ impl Session {
 
             let header = Self::unpack_packet_header(&packet)?;
             self.maybe_cache_packet(&header, &packet, pending.addr);
+            // net-transport-3: time the next ConnectResponse re-send from
+            // this real send (retail `lastSentHandshake_`).
+            if header.flags & packet_flags::CONNECT_RESPONSE != 0 {
+                self.note_connect_response_sent();
+            }
             self.pending_control_packets.remove(index);
             flushed_any = true;
         }
@@ -291,8 +296,14 @@ impl Session {
         }
 
         self.bytes_out = self.bytes_out.wrapping_add(packet.len() as u64);
-        self.last_send_time = Instant::now();
+        let now = Instant::now();
+        self.last_send_time = now;
         self.transport.send_to(packet, addr).await?;
+        // net-transport-6 (2026-10-13): retail counter 9 — `SharedNet::
+        // SendPacket` counts every packet sent, retransmissions included. The
+        // heartbeat runs first so the packet lands in the open snapshot.
+        self.link_status.heartbeat(now);
+        self.link_status.count_sent();
         Ok(())
     }
 
@@ -301,57 +312,84 @@ impl Session {
         let mut payload = Vec::new();
         ProtocolPack::pack(message, &mut payload);
 
-        // R-14 stopgap (net-fixwave-20260709): outbound fragmentation is not
-        // implemented — every message ships as a single fragment (`count: 1`
-        // below). ACE's `ClientPacketFragment.Unpack` rejects any fragment
-        // whose header size exceeds 464 B (payload > 448 B) and discards the
-        // whole packet *before* sequence tracking; the resulting
-        // fragment-sequence gap then parks every subsequent C2S game message
-        // forever (`ProcessFragment` only advances on
-        // `lastReceivedFragmentSequence + 1`) while raw packets keep resetting
-        // the timeout — the server goes silently deaf. Until retail-faithful
-        // 448 B chunking lands, refuse the oversize message loudly rather than
-        // emit the poison packet: drop it, return `Ok` (an `Err` would trip the
-        // recv loop's disconnect arm), and consume no packet/fragment sequence
-        // (the counters below are untouched by this early return), so the
-        // session stays live and in-order for the next in-bounds message.
-        if payload.len() > transport::MAX_FRAGMENT_PAYLOAD {
+        // net-transport-1 (2026-10-13): retail outbound fragmentation,
+        // replacing the R-14 stopgap that dropped (with only a log line) any
+        // message over 448 B — book pages over ~426 characters, long
+        // inscriptions, chargen with long account + character names.
+        // `NetBlob::Fragmentize` (acclient.c) cuts every blob into 448-byte
+        // BlobFrags (`cTotalBlobs = bufSize / 0x1C0`, +1 for a remainder), all
+        // stamped with the blob's one sequence/id plus their own index and the
+        // total count. ACE rejects only a fragment over 464 B
+        // (`ClientPacketFragment.Unpack`), buckets split fragments by fragment
+        // sequence (`NetworkSession.ProcessFragment`) and joins them in index
+        // order (`MessageBuffer.TryGetMessage`), so 448 data + 16 header is
+        // exactly its cap.
+        let chunk_size = transport::MAX_FRAGMENT_PAYLOAD;
+        let count = payload.len().div_ceil(chunk_size).max(1);
+        if count > u16::MAX as usize {
+            // ~29 MB: no real C2S message comes near this. `Ok` keeps the recv
+            // loop's disconnect arm out of it, and no sequence is consumed.
             log::error!(
-                ">>> REFUSED oversize C2S message: {} B payload exceeds the {} B \
-                 single-fragment limit; sending it would permanently deafen the \
-                 server (outbound fragmentation not implemented — see R-14). \
-                 Message dropped, session left intact. Message: {:?}",
+                ">>> REFUSED oversize C2S message: {} B payload needs {} fragments, \
+                 over the u16 fragment count. Message dropped, session left intact. \
+                 Message: {:?}",
                 payload.len(),
-                transport::MAX_FRAGMENT_PAYLOAD,
+                count,
                 message,
             );
             return Ok(());
         }
+        let count = count as u16;
+        if count > 1 {
+            log::debug!(
+                ">>> Fragmenting {} B C2S message into {} fragments",
+                payload.len(),
+                count
+            );
+        }
 
-        let frag_header = FragmentHeader {
-            sequence: self.fragment_sequence,
-            id: self.fragment_id,
-            count: 1,
-            index: 0,
-            size: (payload.len() + transport::FRAGMENT_HEADER_SIZE) as u16,
-            queue: queues::GENERAL,
-        };
+        // One fragment sequence and id per MESSAGE, not per fragment: ACE keys
+        // the partial buffer on the sequence, then gates the whole message on
+        // `lastReceivedFragmentSequence + 1`.
+        let fragment_sequence = self.fragment_sequence;
+        let fragment_id = self.fragment_id;
         self.fragment_sequence += 1;
         self.fragment_id += 1;
 
-        let mut body = Vec::with_capacity(transport::FRAGMENT_HEADER_SIZE + payload.len());
-        frag_header.pack(&mut body);
-        body.extend_from_slice(&payload);
+        for index in 0..count {
+            let start = usize::from(index) * chunk_size;
+            let end = (start + chunk_size).min(payload.len());
+            let chunk = &payload[start..end];
 
-        let header = PacketHeader {
-            flags: packet_flags::BLOB_FRAGMENTS,
-            sequence: self.packet_sequence,
-            id: self.client_id,
-            ..Default::default()
-        };
-        self.packet_sequence += 1;
+            let frag_header = FragmentHeader {
+                sequence: fragment_sequence,
+                id: fragment_id,
+                count,
+                index,
+                size: (chunk.len() + transport::FRAGMENT_HEADER_SIZE) as u16,
+                queue: queues::GENERAL,
+            };
 
-        self.send_packet(header, &body).await
+            let mut body = Vec::with_capacity(transport::FRAGMENT_HEADER_SIZE + chunk.len());
+            frag_header.pack(&mut body);
+            body.extend_from_slice(chunk);
+
+            // Each fragment rides its own packet (a full chunk is already
+            // ACE's 464 B fragment cap). `send_packet` gives every one the ACK
+            // piggyback, the next C2S ISAAC key in packet order and its own
+            // retransmit-cache entry.
+            let header = PacketHeader {
+                flags: packet_flags::BLOB_FRAGMENTS,
+                sequence: self.packet_sequence,
+                id: self.client_id,
+                ..Default::default()
+            };
+            self.packet_sequence += 1;
+
+            self.send_packet(header, &body).await?;
+        }
+
+        Ok(())
     }
 
     pub async fn send_action(&mut self, action: GameAction) -> Result<()> {

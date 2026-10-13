@@ -101,17 +101,55 @@ function classifyHeuristic(state) {
 // in the current time-window?". `crates/holtburger-world/src/sky.rs` already
 // decodes each SkyObject's `properties` bitmask + `visible` flag (begin/end
 // time-window applied Rust-side) and surfaces them via
-// `sessionHandle.getSkyObjectStates()`. Weather is keyed off:
-//   - properties & 0x04  → heavy UV-scroll "weather streak" GfxObj
-//                          (retail 0x01004C42 props 0x04, 0x01004C44 props 0x05)
-//   - 0x02xxxxxx gfxObjectId + properties & 0x08 (PhysicsScript-bound)
-//                          → SetupModel rain droplet model
-//                          (retail 0x02000588/589/0xBA6 props 0x0D)
-// Validated bit semantics: 0x01 additive, 0x02 cloud band, 0x04 weather
-// streak, 0x08 PhysicsScript-bound (see sky.rs probe + MEMORY).
+// `sessionHandle.getSkyObjectStates()`.
+//
+// RETAIL RULE (sky-fog-time-1, 2026-10-13): a weather SkyObject is one whose
+// properties carry 0x04 — nothing else. `GameSky::CreateDeletePhysicsObjects`
+// (acclient.c:308687) passes `props & 4` as MakeObject's `weather` argument,
+// `GameSky::MakeObject` (:308427) skips it unless `LScape::weather_enabled`,
+// and `GameSky::Draw` (:308475) gates it the same way. Neither looks at the
+// PhysicsScript or the Setup/GfxObj type. The other bits GameSky reads are
+// 0x01 (after-sky cell), 0x02 (hidden under the AdminEnvirons fog override)
+// and, on weather objects only, 0x08 (keep the viewer's z instead of
+// z = -120, `GameSky::UpdatePosition` :308367). The retail Dereth weather
+// objects all carry 0x04: the streaks
+// 0x01004C42 (props 0x04) / 0x01004C44 (0x05) and the rain/lightning Setups
+// 0x02000588/589/BA6 (0x0D).
+//
+// The LEGACY scan below (still the default) also counts a SetupModel with a
+// non-zero `pesObjectId` (or props 0x08) as rain droplets. That catches the
+// moon proxy — Setup 0x02000714, PES 0x330007DB, props 0x00, begin == end == 0
+// (always visible) — which sits in ALL 20 retail DayGroups (sky_glow.js), so
+// every DayGroup scans as a storm. `?stormScan=retail` (opt-in, exact value)
+// switches to the retail rule; it stays opt-in until the owner eye-tests it,
+// because the cloud storm look (cloud_storm_look.js) was tuned under the
+// legacy scan.
 const SKY_PROP_WEATHER_STREAK = 0x04;
 const SKY_PROP_PHYSICS_SCRIPT = 0x08;
 const SKY_PROP_CLOUD_BAND = 0x02;
+
+/** Storm-scan modes: today's heuristic (default) and the retail 0x04 rule. */
+export const STORM_SCAN_LEGACY = 'legacy';
+export const STORM_SCAN_RETAIL = 'retail';
+
+/**
+ * `?stormScan` — `retail` (exactly) selects the retail weather bit; anything
+ * else, or no flag, keeps the legacy scan. `search` defaults to the page URL.
+ */
+export function stormScanMode(search) {
+  let v = null;
+  try {
+    const s = search ??
+      (typeof window !== 'undefined' && window.location ? window.location.search : '');
+    v = new URLSearchParams(s ?? '').get('stormScan');
+  } catch (_) {
+    v = null; // no URL: default
+  }
+  return v === STORM_SCAN_RETAIL ? STORM_SCAN_RETAIL : STORM_SCAN_LEGACY;
+}
+
+/** Read once at module load (the page URL does not change mid-session). */
+export const STORM_SCAN_MODE = stormScanMode();
 
 /**
  * Scan the active DayGroup's SkyObject snapshots for a VISIBLE weather
@@ -122,12 +160,16 @@ const SKY_PROP_CLOUD_BAND = 0x02;
  *   entry per SkyObject in the active DayGroup. Each must expose the
  *   `visible` (bool), `properties` (u32), `gfxObjectId` (u32),
  *   `pesObjectId` (u32) getters from `SkyObjectState`.
+ * @param {string} [mode]  `STORM_SCAN_RETAIL` or `STORM_SCAN_LEGACY`;
+ *   defaults to the page's `?stormScan` (`STORM_SCAN_MODE`).
  * @returns {{ is_storm:boolean, has_droplets:boolean,
  *             streak_gfx_id:number }} `streak_gfx_id` is the GfxObj DID of
  *   the first visible weather-streak object (0 if none) — W2 keys precip
- *   type off it as a future refinement.
+ *   type off it as a future refinement. In retail mode it is only ever a
+ *   non-Setup weather object, and `has_droplets` means a weather Setup.
  */
-export function scanWeatherSkyObjects(skyObjects) {
+export function scanWeatherSkyObjects(skyObjects, mode = STORM_SCAN_MODE) {
+  const retail = mode === STORM_SCAN_RETAIL;
   const out = { is_storm: false, has_droplets: false, streak_gfx_id: 0 };
   if (!Array.isArray(skyObjects) || skyObjects.length === 0) return out;
   for (const o of skyObjects) {
@@ -144,6 +186,15 @@ export function scanWeatherSkyObjects(skyObjects) {
     if (!visible) continue;
     const isWeatherStreak = (props & SKY_PROP_WEATHER_STREAK) !== 0;
     const isSetupModel = (gfxId & 0xff000000) === 0x02000000;
+    if (retail) {
+      // Retail: the 0x04 bit alone (GameSky::MakeObject's `weather`).
+      if (!isWeatherStreak) continue;
+      out.is_storm = true;
+      if (isSetupModel) out.has_droplets = true;
+      else if (out.streak_gfx_id === 0) out.streak_gfx_id = gfxId;
+      continue;
+    }
+    // Legacy (default): the PES / 0x08 SetupModel heuristic — see above.
     const isPhysicsBound =
       pesId !== 0 || (props & SKY_PROP_PHYSICS_SCRIPT) !== 0;
     // A SetupModel weather object carrying a PhysicsScript = rain droplets.
@@ -163,7 +214,8 @@ export function scanWeatherSkyObjects(skyObjects) {
  *
  * W4 (2026-05-29): when a SkyObject snapshot array is supplied, the
  * fabricated table `is_storm` is REPLACED by a runtime scan of the
- * active DayGroup's weather SkyObjects (real DAT signal). The T/Td/P
+ * active DayGroup's weather SkyObjects (real DAT signal; the scan's
+ * classification follows `?stormScan`, see above). The T/Td/P
  * triplet stays a heuristic profile (there is no DAT analogue). The
  * scan result is also returned on `_weather` so W2 precip-type
  * selection can read `has_droplets` / `streak_gfx_id` without a second

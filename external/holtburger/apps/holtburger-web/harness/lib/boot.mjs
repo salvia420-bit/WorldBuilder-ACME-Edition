@@ -35,6 +35,7 @@
 
 import { createRequire } from "node:module";
 import http from "node:http";
+import { acquireHeavyLock } from "./heavy_lock.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -194,6 +195,11 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
   const chromium = loadChromium();
   const url = buildUrl(query);
 
+  // One heavy job per machine (~/CLAUDE.md, 2026-10-05). Held until
+  // helpers.close() (or process exit), NOT until this returns: the browser
+  // outlives the call. Re-entrant within this process.
+  const heavy = await acquireHeavyLock({ label: "lib/boot.mjs launchAndEnter" });
+
   const browser = await chromium.launch({
     args: [
       "--use-gl=swiftshader",
@@ -211,6 +217,9 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
       // byte-sum tallies (matMB/palMB/entMB) for those.
       "--enable-precise-memory-info",
     ],
+  }).catch((e) => {
+    heavy.release(); // no browser started — nothing to hold the lock for
+    throw e;
   });
 
   const context = await browser.newContext({
@@ -279,7 +288,7 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
     inWorld = false; // boot stalled — driver decides (SKIP), never FAIL.
   }
 
-  const helpers = makeHelpers(page, { consoleLog, pageErrors, browser, url });
+  const helpers = makeHelpers(page, { consoleLog, pageErrors, browser, url, heavy });
   return { browser, page, helpers, url, inWorld, inWorldMs };
 }
 
@@ -468,7 +477,8 @@ function makeHelpers(page, ctx) {
   const waitMs = (ms) => page.waitForTimeout(ms);
 
   /** Tear down the browser. Idempotent; swallows close errors. Stamps the
-   *  process-wide session-end clock that gates the next launch's grace-gap. */
+   *  process-wide session-end clock that gates the next launch's grace-gap,
+   *  and drops this launch's share of the heavy-job lock. */
   const close = async () => {
     try {
       await ctx.browser.close();
@@ -476,6 +486,7 @@ function makeHelpers(page, ctx) {
       /* already closed */
     }
     lastSessionEndAt = Date.now();
+    if (ctx.heavy) ctx.heavy.release();
   };
 
   return {

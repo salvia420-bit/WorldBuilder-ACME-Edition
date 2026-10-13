@@ -42,9 +42,11 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { listManifestBindings } from "../ui/keymap.js";
+import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
 import { suggestedCombatModeFromInventory, activateOrUse, worldUseLeaf } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { refuseCombatModeInPortalSpace } from "../ui/portal_busy.js";
+import { requestCombatModeChange, COMBAT_MODE_TOGGLE } from "../ui/combat_mode_pending.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { shouldQueryHealth, consumeWorldUseThrottle, readAttackMeta } from "../scene3d/target_cycle.js";
 import {
@@ -436,9 +438,14 @@ export function mountToolbarControls(field, opts = {}) {
     };
   };
   target.addEventListener("click", examineSelected);
+  // input-options-1: a jump (Space) or chat (Enter) must not also examine
+  // after the field was clicked (ui/hud_focus.js).
   target.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); examineSelected(); }
+    if (!hudKeyActivates(ev)) return;
+    ev.preventDefault();
+    examineSelected();
   });
+  releaseMouseFocus(target);
   target.addEventListener("animationend", () => target.classList.remove("is-blinking"));
   refs.targetEl = add(target);
 
@@ -519,21 +526,31 @@ export function mountToolbarControls(field, opts = {}) {
       } catch {}
     }
     const next = inCombatNow ? COMBAT_MODE.NONCOMBAT : suggested;
-    try {
-      if (typeof handle.setCombatMode === "function") {
+    const canSet = typeof handle.setCombatMode === "function";
+    if (!canSet && typeof handle.toggleCombatMode !== "function") return;
+    // The optimistic button state starts when the request is actually sent: a
+    // parked request leaves the live mode showing, so a second click asks for
+    // the same mode again, as retail's ToggleCombatMode does (acclient.c:409413).
+    const send = () => {
+      if (canSet) {
         // C8 — see ui/ac_combat_mode_intent.js (ACE LastCombatMode mirror).
         noteCombatModeRequest(next);
         handle.setCombatMode(next);
-      } else if (typeof handle.toggleCombatMode === "function") {
+      } else {
         // Untyped toggle: the server picks the mode — record "unknown".
         noteCombatModeRequest(null);
         handle.toggleCombatMode();
-      } else {
-        return;
       }
       state.pendingFromLow = live.low;
-      state.optimisticUntil = now + 2000;
+      state.optimisticUntil = Date.now() + 2000;
       setMode(next);
+    };
+    try {
+      // combat-magic-5: parked until the player is in the ready position
+      // (ClientCombatSystem::SetCombatMode :408852 / UseTime :409086), so a
+      // click mid-windup no longer makes ACE fail the cast.
+      // ui/combat_mode_pending.js; ?combatModePark=off sends at once.
+      requestCombatModeChange(canSet ? next : COMBAT_MODE_TOGGLE, send, { handle });
     } catch (e) {
       console.warn("[toolbar] combat-mode toggle failed", e);
     }

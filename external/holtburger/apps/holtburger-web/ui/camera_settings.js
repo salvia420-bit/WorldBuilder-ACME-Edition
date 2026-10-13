@@ -15,11 +15,22 @@
 // = hard-lock, smoothing off, sensitivity 1.0, no auto-follow) so an untouched
 // install is unchanged; retail's own default stiffness is ~0.44 (noted in the
 // UI as a hint). Ranges follow the decomp: Camera.Stiffness ∈ [0.2857, 1.0].
+//
+// models-camera-2 (2026-10-13): the retail Field of View preference
+// (Render.FieldOfView, 10..160, default 90) is listed and applied ONLY under
+// the default-OFF `?retailFov=on` opt-in (scene3d/index.js registers
+// `__setGameFov` under the same flag); flag off the tab is unchanged.
 
 // HUD overhaul 2026-10-05 — the row widgets are the shared kit-styled
 // ones from graphics_settings.js (retail orb checkbox, kit slider, <label
 // for>), not a private copy.
 import { boolRow, rangeRow, makeSectionHeader } from "./graphics_settings.js";
+import {
+  retailFovEnabled,
+  RETAIL_GAME_FOV_DEFAULT_DEG,
+  RETAIL_GAME_FOV_MIN_DEG,
+  RETAIL_GAME_FOV_MAX_DEG,
+} from "../scene3d/camera_math.js";
 
 const LS_KEY = "holtburger_camera_v1";
 
@@ -34,7 +45,17 @@ const DEFAULTS = Object.freeze({
   invertY: false,
   autoFollow: true,    // trailing camera behind the character (retail-default)
   autoFollowRate: 4.0, // ease speed (1/s)
+  fieldOfView: RETAIL_GAME_FOV_DEFAULT_DEG, // degrees; `?retailFov=on` only
 });
+
+// The Field of View row + setter are opt-in (see the header).
+function retailFovOn() {
+  try {
+    return typeof window !== "undefined" && retailFovEnabled(window.location?.search);
+  } catch (_e) {
+    return false;
+  }
+}
 
 export function loadCameraState() {
   if (typeof localStorage === "undefined") return { ...DEFAULTS };
@@ -86,6 +107,7 @@ export function applyCameraState(s) {
   applyCam("__setMouseSens", st.mouseSens);
   applyCam("__setMouseSmooth", st.mouseSmooth);
   applyCam("__setMouseInvertY", st.invertY);
+  if (retailFovOn()) applyCam("__setGameFov", st.fieldOfView);
 }
 
 // `extraMouseRows` (optional) returns extra row elements to place at the
@@ -151,6 +173,21 @@ export function renderCameraTab(containerEl, { onAnyChange, extraMouseRows } = {
       },
     }),
   );
+  if (retailFovOn()) {
+    containerEl.appendChild(
+      rangeRow({
+        label: "Field of View",
+        min: RETAIL_GAME_FOV_MIN_DEG, max: RETAIL_GAME_FOV_MAX_DEG, step: 1,
+        value: state.fieldOfView,
+        format: (v) => `${Math.round(v)}°`,
+        hint: "Retail Render.FieldOfView (default 90°); the vertical angle follows the window shape.",
+        onInput: (v) => {
+          set("fieldOfView", v);
+          applyCam("__setGameFov", v);
+        },
+      }),
+    );
+  }
 
   // --- Mouse look ----------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Mouse look"));

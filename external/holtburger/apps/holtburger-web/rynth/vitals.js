@@ -43,9 +43,37 @@
 //   * playerStats() returns a wasm box: copied and freed per read; the known
 //     book is re-read every 30 s instead of cached once at construction (a bot
 //     built before the spellbook hydrated never cast anything).
+//
+// 2026-10-13 give-up valve fix (rynth-macro-nav-3): the valve measured the
+// NET change of the vital between two casts, so under sustained incoming
+// damage a heal that landed in full still read as "no progress" and HP was
+// parked for 60 s mid-fight. ACE tells the caster what each self vital spell
+// restored (kind=2 Magic chat, WorldObject_Magic.cs: boost "You cast X and
+// restore N points of your health." / transfer "You cast X on yourself and
+// lose N points of stamina and also gain M points of mana"); when that line
+// arrived for the axis's previous cast, the spell is judged by its own gain.
+// Without a line (no event plane, globally squelched Magic chat, a fizzle)
+// the old fraction compare stays. A vital back at/above its threshold also
+// resets that axis's count, so the next fight starts fresh.
+//
+// 2026-10-13 skill cap + demotion expiry (rynth-macro-nav-4):
+//   * A fizzle demotion (three in a row) expires after FIZZLE_DEMOTE_RETRY_MS,
+//     the combat planner's EXCLUDE_MS and the buff loop's fizzle-walk retry.
+//     It used to last for the bot's life, so a tier lost to bad luck before
+//     the Focus / Willpower / Life mastery buffs landed never came back.
+//     "Not in the spellbook" demotions stay permanent.
+//   * Opt-in (opts.skillCap / setSkillCap, off by default): every axis — the
+//     B15 Stamina-to-Health rung included — resolves to the highest known tier
+//     the buffed Life Magic skill reaches (skill_cap.js; RynthAi
+//     AttemptVitalCast → GetDynamicSelfBuffId over GetHighestBuffSpellTier).
+//     ACE fails a cast outright below Power − 50 and rolls a 0.07 sigmoid
+//     above it, so the highest KNOWN tier is often one the character can't
+//     cast yet. When no known tier is within the cap, today's pick stands. A
+//     rise of the Life tier also lifts the fizzle demotions it now covers.
 
 import { portalSpaceActive } from "./portal_gate.js";
 import { castRefusalClass, casterWielded } from "./buff_loop.js";
+import { SCHOOL } from "./skill_cap.js";
 
 const VITAL_HEALTH = 1;
 const VITAL_STAMINA = 3;
@@ -77,6 +105,9 @@ export const VITAL_LADDERS = Object.freeze({
   stamToMana: Object.freeze([1676, 1677, 1678, 1679, 1680, 1681, 2345, 4981]), // … Meditative Trance, Incantation of Stamina to Mana Self
   revitalize: Object.freeze([1177, 1178, 1179, 1180, 1181, 1182, 2083, 4321]), // … Robustification, Incantation of Revitalize Self
 });
+// Spell level of every ladder id (slot + 1 — V7 checks the scarab levels).
+const VITAL_TIER = new Map();
+for (const ids of Object.values(VITAL_LADDERS)) ids.forEach((id, i) => VITAL_TIER.set(id, i + 1));
 
 // Magic-mode entry give-up valve (02 C1 / synthesis #11): toggleCombatMode()
 // is a NonCombat<->suggested BINARY flip that never yields Magic(8) for a
@@ -102,6 +133,8 @@ const CAST_INTERVAL_MS = 400;
 // spell is too weak vs this character's pool (the Heal-Self-I-vs-99999-HP
 // livelock) — park that vital for the cooldown so the bot stops looping and
 // resumes other work. Parked vitals still yield to a true B15 emergency.
+// Since 2026-10-13 "improving" is the spell's own reported gain (pts / max)
+// when ACE's gain line came, the fraction change otherwise (header).
 const NO_PROGRESS_LIMIT = 6;
 const MIN_PROGRESS_PCT = 0.5;
 const VITAL_PARK_MS = 60_000;
@@ -113,12 +146,37 @@ const KNOWN_REFRESH_MS = 30_000;
 // (2026-10-12 review #11).
 const KNOWN_EMPTY_REFRESH_MS = 2_000;
 const FIZZLE_DEMOTE_LIMIT = 3;
+// A fizzle demotion is lifted after this long (rynth-macro-nav-4): three in a
+// row are bad luck at skill ≈ power (ACE SkillCheck sigmoid), not a ceiling —
+// the combat planner's EXCLUDE_MS, the buff loop's FIZZLE_WALK_RETRY_MS.
+const FIZZLE_DEMOTE_RETRY_MS = 10 * 60_000;
 // A fizzle (or other refusal) belongs to our last cast when it lands inside
 // this window — longer than the slowest recovery cast (~3.1 s for a tier-6
 // spell at CastSpeed 2; level 7/8 fast casts are quicker).
 const REFUSAL_WINDOW_MS = 10_000;
 const COMPONENTS_PARK_MS = 60_000;
 const MANA_AXIS_PARK_MS = 10_000;
+
+// ACE's caster lines for a self vital spell (ChatMessageType.Magic, sent as a
+// kind=2 chat event with the text as-is). The amount is the clamped delta the
+// spell really applied (Creature.UpdateVitalDelta), so it measures the spell,
+// not the net change under incoming damage.
+//   boost    (WorldObject_Magic.cs HandleCastSpell vital arm):
+//            "You cast Heal Self VI and restore 200 points of your health."
+//   transfer (WorldObject_Magic.cs transfer arm, source == destination):
+//            "You cast Stamina to Mana Self I on yourself and lose 50 points
+//             of stamina and also gain 45 points of mana"
+const BOOST_GAIN_LINE = /^You cast (.+) and restore (\d+) points? of your (health|stamina|mana)\b/;
+const TRANSFER_GAIN_LINE = /^You cast (.+) on yourself and lose \d+ points? of \w+ and also gain (\d+) points? of (health|stamina|mana)\b/;
+const GAIN_AXIS = Object.freeze({ health: "hp", stamina: "stam", mana: "mana" });
+
+/** Parse ACE's self-cast vital gain line → { spellName, axis, pts }, or null. */
+export function parseVitalGainLine(text) {
+  if (typeof text !== "string") return null;
+  const m = BOOST_GAIN_LINE.exec(text) || TRANSFER_GAIN_LINE.exec(text);
+  if (!m) return null;
+  return { spellName: m[1], axis: GAIN_AXIS[m[3]], pts: Number(m[2]) };
+}
 
 export class RynthVitals {
   constructor(host, opts = {}) {
@@ -134,19 +192,83 @@ export class RynthVitals {
     this._noProgress = { hp: 0, stam: 0, mana: 0 };
     this._lastPct = { hp: -1, stam: -1, mana: -1 };
     this._parkedUntil = { hp: 0, stam: 0, mana: 0 };
+    // 2026-10-13: the last cast per axis (the _lastCast record; its `gain` is
+    // filled from ACE's gain line) and the buffed max per axis from the last
+    // _fractions() read — the valve's own-gain measure.
+    this._axisCast = { hp: null, stam: null, mana: null };
+    this._max = { hp: 0, stam: 0, mana: 0 };
     // 2026-10-12 state.
     this._knownSet = null;
     this._knownAt = 0;
     this._demoted = new Set(); // spell ids skipped by the ladder resolution
+    // spell id -> ts: the fizzle members of _demoted, lifted at ts
+    // (FIZZLE_DEMOTE_RETRY_MS). Ids absent here (not in the book) stay.
+    this._demotedUntil = new Map();
     this._fizzles = new Map(); // spell id -> consecutive fizzles
-    this._lastCast = null; // { spell, axis, at, fizzled }
+    this._lastCast = null; // { spell, axis, at, refused, gain, emergency }
     this._blocked = null; // { reason, until }
     this._lastLoggedBlock = null;
     this.lastRefusal = null;
+    // Opt-in skill cap (rynth-macro-nav-4): fn(school) -> highest castable
+    // level (skill_cap.js createHostSkillCap), or null = the highest known tier.
+    this.skillCap = null;
+    this._lifeCapSeen = null; // the Life cap at the last step (rise detection)
+    this.setSkillCap(opts.skillCap);
     if (typeof host?.onEvent === "function") host.onEvent((e) => this._onEvent(e));
   }
 
-  /** Resolved spell per role — the pinned id, else the highest known tier.
+  /** Opt-in skill cap: `fn(school) → highest castable level`
+   *  (skill_cap.js createHostSkillCap), or null/absent for today's highest
+   *  known tier. Takes effect at the next resolution. */
+  setSkillCap(fn) {
+    this.skillCap = typeof fn === "function" ? fn : null;
+    this._lifeCapSeen = null;
+  }
+
+  // The Life Magic cap (every vital spell is Life school); Infinity = no cap.
+  _lifeCap() {
+    const cap = this.skillCap;
+    if (!cap) return Infinity;
+    try {
+      const v = Number(cap(SCHOOL.Life));
+      return Number.isNaN(v) ? Infinity : v;
+    } catch (_) {
+      return Infinity;
+    }
+  }
+
+  // A demoted id, unless its fizzle demotion ran out (lifted here, lazily).
+  _isDemoted(id) {
+    if (!this._demoted.has(id)) return false;
+    const until = this._demotedUntil.get(id);
+    if (until == null || Date.now() < until) return true;
+    this._demotedUntil.delete(id);
+    this._demoted.delete(id);
+    this.log(`${id} back on the ladder (fizzle demotion expired)`);
+    return false;
+  }
+
+  // Skill cap on: a RISE of the Life tier (Focus / Willpower / Life mastery
+  // landing) lifts the fizzle demotions of the tiers it now covers — the odds
+  // they were demoted under are gone. A tier above the new cap stays demoted:
+  // lifting it could only make it today's fallback pick again.
+  _checkSkillRise() {
+    if (!this.skillCap) return;
+    const life = this._lifeCap();
+    const prev = this._lifeCapSeen;
+    this._lifeCapSeen = life;
+    // Only a finite -> higher finite move: skills turning readable is no rise.
+    if (!(Number.isFinite(prev) && Number.isFinite(life) && life > prev) || !this._demotedUntil.size) return;
+    for (const id of [...this._demotedUntil.keys()]) {
+      if (!(VITAL_TIER.get(id) <= life)) continue;
+      this._demotedUntil.delete(id);
+      this._demoted.delete(id);
+      this.log(`${id} back on the ladder (Life Magic tier ${prev} -> ${life})`);
+    }
+  }
+
+  /** Resolved spell per role — the pinned id, else the highest known tier
+   *  (within the Life skill cap when one is set).
    *  Back-compat view of the old `spells` field (observe/netbrain read it). */
   get spells() {
     return {
@@ -161,11 +283,21 @@ export class RynthVitals {
     const pinned = this.spellOverrides[role];
     if (pinned != null) return pinned;
     const ladder = VITAL_LADDERS[role];
+    const cap = this._lifeCap(); // Infinity unless the opt-in skill cap is set
+    // Nothing known within the cap: today's pick, but only from below the
+    // lowest demoted tier — a demotion never resolves UP to a tier above it.
+    let fallback = null;
     for (let i = ladder.length - 1; i >= 0; i--) {
       const id = ladder[i];
-      if (!this._demoted.has(id) && this._known(id)) return id;
+      if (this._isDemoted(id)) {
+        fallback = null;
+        continue;
+      }
+      if (!this._known(id)) continue;
+      if (i + 1 <= cap) return id;
+      if (fallback == null) fallback = id;
     }
-    return ladder[0]; // nothing known — _decide's _known() check skips it
+    return fallback ?? ladder[0]; // nothing known — _decide's _known() check skips it
   }
 
   _vitalAxis(reason) {
@@ -203,9 +335,10 @@ export class RynthVitals {
       const max = v[i + 3];
       if (!(max > 0)) continue;
       const pct = (cur / max) * 100;
-      if (type === VITAL_HEALTH) out.hp = pct;
-      else if (type === VITAL_STAMINA) out.stam = pct;
-      else if (type === VITAL_MANA) out.mana = pct;
+      const axis = type === VITAL_HEALTH ? "hp" : type === VITAL_STAMINA ? "stam" : type === VITAL_MANA ? "mana" : null;
+      if (!axis) continue;
+      out[axis] = pct;
+      this._max[axis] = max; // the valve's own-gain measure (pts / max)
     }
     return out;
   }
@@ -270,8 +403,13 @@ export class RynthVitals {
     return null;
   }
 
-  // kind=13 refusal codes for our most recent cast (see REFUSAL_WINDOW_MS).
+  // kind=13 refusal codes for our most recent cast (see REFUSAL_WINDOW_MS);
+  // kind=2 gain lines for the axis's last cast (_onGainLine).
   _onEvent(e) {
+    if (e && e.kind === 2) {
+      this._onGainLine(e);
+      return;
+    }
     if (!e || e.kind !== 13) return;
     const cls = castRefusalClass(e.u32);
     const lc = this._lastCast;
@@ -285,7 +423,7 @@ export class RynthVitals {
     if (cls === "fizzle") {
       const n = (this._fizzles.get(lc.spell) || 0) + 1;
       this._fizzles.set(lc.spell, n);
-      if (n >= FIZZLE_DEMOTE_LIMIT) this._demote(lc.spell, `fizzled ${n}x in a row`);
+      if (n >= FIZZLE_DEMOTE_LIMIT) this._demote(lc.spell, `fizzled ${n}x in a row`, FIZZLE_DEMOTE_RETRY_MS);
     } else if (cls === "unknown-spell") {
       this._demote(lc.spell, "not in the spellbook");
     } else if (cls === "components") {
@@ -297,8 +435,45 @@ export class RynthVitals {
     }
   }
 
-  _demote(spell, why) {
+  // ACE's "You cast X and restore N points of your <vital>" (or the transfer
+  // form) for the last cast on that vital's axis, inside the same attribution
+  // window as refusals. First line wins; a refused cast has no gain.
+  _onGainLine(e) {
+    const g = parseVitalGainLine(e.text);
+    if (!g) return;
+    const rec = this._axisCast[g.axis];
+    if (!rec || rec.refused || rec.gain != null || Date.now() - rec.at > REFUSAL_WINDOW_MS) return;
+    // Another module's cast in flight? The shared token names its owner.
+    const tok = this.host.castToken;
+    if (tok && tok.owner && tok.owner !== "vitals") return;
+    rec.gain = g.pts;
+  }
+
+  // A vital back at/above its threshold ends that axis's recovery episode:
+  // the give-up count starts over, so the first cast of the next fight at a
+  // lower fraction than the last cast of this one is not "no progress".
+  _resetRecoveredAxes(f, inCombat) {
+    const c = this.cfg;
+    const at = {
+      hp: inCombat ? c.healAtCombat : c.topOffHp,
+      mana: inCombat ? c.getManaAtCombat : c.topOffMana,
+      stam: inCombat ? c.restamAtCombat : c.topOffStam,
+    };
+    for (const axis of ["hp", "mana", "stam"]) {
+      if (at[axis] > 0 && f[axis] < at[axis]) continue; // still recovering
+      this._lastPct[axis] = -1;
+      this._noProgress[axis] = 0;
+      this._axisCast[axis] = null;
+    }
+  }
+
+  // `retryMs` > 0 (a fizzle run) lifts the demotion after that long; without
+  // it (not in the book) the demotion is for good, and stays so.
+  _demote(spell, why, retryMs = 0) {
     this._fizzles.delete(spell);
+    const permanent = this._demoted.has(spell) && !this._demotedUntil.has(spell);
+    if (retryMs > 0 && !permanent) this._demotedUntil.set(spell, Date.now() + retryMs);
+    else this._demotedUntil.delete(spell);
     if (this._demoted.has(spell)) return;
     this._demoted.add(spell);
     this.log(`demote ${spell} (${why}) — next lower known tier`);
@@ -324,6 +499,8 @@ export class RynthVitals {
     if (!h.IsPlayerReady()) return false;
     const f = this._fractions();
     if (!f || f.hp === undefined) return false;
+    this._resetRecoveredAxes(f, inCombat);
+    this._checkSkillRise(); // no-op unless the opt-in skill cap is set
     const action = this._decide(f, inCombat);
     if (!action) return false;
 
@@ -389,14 +566,25 @@ export class RynthVitals {
     this.actions += 1;
     this.lastReason = action.reason;
     const axis = this._vitalAxis(action.reason);
-    this._lastCast = { spell: action.spell, axis, at: now, refused: null };
+    const emergency = action.reason.startsWith("EMERGENCY");
+    const prev = axis ? this._axisCast[axis] : null;
+    this._lastCast = { spell: action.spell, axis, at: now, refused: null, gain: null, emergency };
+    if (axis) this._axisCast[axis] = this._lastCast;
     this._lastLoggedBlock = null;
 
-    // Give-up valve: track whether this axis's fraction is actually
-    // improving. The EMERGENCY axis is exempt (never give up on survival).
-    if (axis && !action.reason.startsWith("EMERGENCY")) {
+    // Give-up valve: track whether this axis's recovery is actually
+    // working. The EMERGENCY axis is exempt (never give up on survival).
+    // When ACE reported what the axis's previous cast restored, judge the
+    // spell by that (incoming damage can hold the fraction flat while every
+    // heal lands); otherwise compare the fraction with the previous cast's.
+    if (axis && !emergency) {
       const pct = f[axis];
-      if (this._lastPct[axis] >= 0 && pct <= this._lastPct[axis] + MIN_PROGRESS_PCT) {
+      const max = this._max[axis];
+      const stalled =
+        prev && !prev.emergency && prev.gain != null && max > 0
+          ? (prev.gain / max) * 100 < MIN_PROGRESS_PCT
+          : this._lastPct[axis] >= 0 && pct <= this._lastPct[axis] + MIN_PROGRESS_PCT;
+      if (stalled) {
         this._noProgress[axis] += 1;
         if (this._noProgress[axis] >= NO_PROGRESS_LIMIT) {
           this._parkedUntil[axis] = now + VITAL_PARK_MS;

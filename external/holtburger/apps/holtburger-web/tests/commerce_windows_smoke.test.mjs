@@ -738,7 +738,7 @@ await check("House tab shows status, dwelling, map location and maintenance — 
   assert.match(t, /You own a house/);
   assert.match(t, /Cottage/);
   assert.match(t, /42\.2N, 33\.6E/);
-  assert.match(t, /Due in 6d/);
+  assert.match(t, /Period ends/);
   assert.doesNotMatch(t, HEX);
   findButton(byId("hb-house-panel"), "Query House").click();
   assert.deepEqual(calls.at(-1), ["houseQuery"]);

@@ -56,7 +56,10 @@ let browser;
     if (st.kills >= 1) killed = true;
     // Melee AttackerNotification: "You <verb> Drudge Skulker for N points"
     // in melee is distinct from the "with <spell>" magic line.
-    if (st.chat.some(l => /You \w+ Drudge Skulker for \d+ points of damage/.test(l))) meleeDamage = true;
+    // combat-magic-3 (2026-10-13): retail's line names the damage type
+    // ("for 12 points of bludgeoning damage!", "1 point of …", none for a
+    // Health/Stamina/Mana mask) — src/chat_format.rs.
+    if (st.chat.some(l => /You \w+ Drudge Skulker for \d+ points? of (?:[a-z\/]+ )?damage/.test(l))) meleeDamage = true;
     if (killed || meleeDamage) break;
   }
   console.log(`mode=${mode} (2=Melee) meleeDamage=${meleeDamage} killed=${killed}`);

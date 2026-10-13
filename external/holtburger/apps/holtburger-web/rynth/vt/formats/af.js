@@ -33,6 +33,10 @@
 //     escapes. navText is produced by nav_file.writeNav from raw lines built
 //     from the source tokens (number text kept as written); an empty NAV body
 //     ⇒ navText "".
+//   * `EmbedNav tag {name} {a b c d e f g}` (metaf point transform, for
+//     duplicated dungeons): the cited NAV is copied with every position moved
+//     (applyXf) under a derived tag that the EmbedNav then cites — the baked
+//     form metaf writes into the .met; any other `{…}` there is a warning.
 // Writer: proper metaf — every string argument braced (and escaped), rule and
 // state order preserved (rules grouped per state in order of first
 // appearance), NAV: sections in node syntax; a route metaf cannot express (an
@@ -51,6 +55,7 @@ import {
   followNavText,
   isNavTag,
   sanitizeNavTag,
+  navTagFor,
   findNav,
   orderFields,
 } from "./meta_schema.js";
@@ -187,6 +192,15 @@ function parseHex(s) {
   return /^[0-9A-Fa-f]{1,8}$/.test(t) ? parseInt(t, 16) >>> 0 : NaN;
 }
 
+// An EmbedNav point transform: a {string} of exactly seven finite numbers.
+function parseXf(tok) {
+  if (!tok || !tok.str) return null;
+  const parts = String(tok.value).trim().split(/\s+/);
+  if (parts.length !== 7) return null;
+  const nums = parts.map(Number);
+  return nums.every(Number.isFinite) ? nums : null;
+}
+
 function convertArg(tok, type) {
   const v = tok.value;
   switch (type) {
@@ -286,7 +300,11 @@ function parseOp(text, kind, where, warn, depth = 0) {
     const r = convertArg(tok, type);
     if (!r.ok) warn(`${where}: ${row.kw} ${field} ${JSON.stringify(tok.value)} is not a valid ${type === "word" ? "tag" : type}`);
     if (field === "_xf") {
-      warn(`${where}: EmbedNav point transform {${tok.value}} is not supported (ignored)`);
+      // metaf AEmbedNav: `{a b c d e f g}`, applied when the meta is built
+      // (parseAfText bakes it into a derived NAV).
+      const xf = parseXf(tok);
+      if (xf) node._xf = xf;
+      else warn(`${where}: EmbedNav point transform {${tok.value}} is not seven numbers {a b c d e f g} (ignored)`);
       continue;
     }
     node[field] = r.value;
@@ -536,6 +554,29 @@ function parseNavData(lines, i, out, warn, rawLines) {
   return i;
 }
 
+// EmbedNav point transform {a b c d e f g} (metaf Navigation/Nav.cs ApplyXF):
+// x' = a·x + b·y + e, y' = c·x + d·y + f, z' = z + g on every node's position
+// and on a ptl/tlk object position (NPortal_NPC / NNPCTalk); a jmp heading is
+// not rotated. → { navText } | { error }
+function applyXf(nav, xf) {
+  const [a, b, c, d, e, f, g] = xf;
+  const move = (x, y, z) => [a * x + b * y + e, c * x + d * y + f, z + g];
+  const fin = (...v) => v.every(Number.isFinite);
+  const parsed = parseNav(String(nav.navText ?? ""));
+  if (parsed.warning) return { error: parsed.warning };
+  if (parsed.points.length !== parsed.pointCount) return { error: `${parsed.points.length} of ${parsed.pointCount} points read` };
+  for (const [i, p] of parsed.points.entries()) {
+    const target = p.type === 6 || p.type === 7;
+    if (!fin(p.ew, p.ns, p.z) || (target && !fin(p.exitEW, p.exitNS, p.exitZ))) return { error: `point ${i + 1} has a non-numeric position` };
+    [p.ew, p.ns, p.z] = move(p.ew, p.ns, p.z);
+    if (target) [p.exitEW, p.exitNS, p.exitZ] = move(p.exitEW, p.exitNS, p.exitZ);
+    // writeNav echoes `raw` source lines verbatim: drop them so the moved
+    // coordinates are written.
+    delete p.raw;
+  }
+  return { navText: writeNav(parsed) };
+}
+
 // ── reader ─────────────────────────────────────────────────────────────────
 function baseName(fileName) {
   const f = String(fileName ?? "")
@@ -616,9 +657,17 @@ function parseAfText(text, opts) {
   if (!rules.length && !Object.keys(navs).length) return { ok: false, warnings, error: "no STATE:/IF:/DO: rules or NAV: sections found — not a metaf file" };
   // Link EmbedNav citations ↔ NAV sections (display names come from the citation).
   const cited = new Set();
+  // A point-transformed citation cites a derived NAV holding the moved route
+  // (metaf bakes the transform into the .met): one per (NAV, transform), under
+  // a new unique tag, so plain citations of the same NAV keep the original.
+  const usedTags = new Set(Object.keys(navs).map((k) => k.toLowerCase()));
+  const derived = new Map(); // source nav → Map(transform text → derived tag | null)
+  const derivedNavs = {};
   for (const r of rules) {
     walkActs(r.act, (a) => {
       if (a.t !== "EmbedNav") return;
+      const xf = a._xf;
+      delete a._xf;
       const nav = findNav(navs, a.tag);
       if (!nav) {
         warn(`rule ${r.id}: EmbedNav cites nav "${a.tag}" which is never defined`);
@@ -626,8 +675,30 @@ function parseAfText(text, opts) {
       }
       cited.add(nav);
       if (!nav.displayName) nav.displayName = a.displayName || "";
+      if (!xf) return;
+      // Empty and Follow routes have no positions to move (metaf NFollow).
+      const info = navTextInfo(String(nav.navText ?? ""));
+      if (info.empty || info.follow || nav.followTarget) return;
+      const key = xf.join(" ");
+      let byXf = derived.get(nav);
+      if (!byXf) derived.set(nav, (byXf = new Map()));
+      if (!byXf.has(key)) {
+        const moved = applyXf(nav, xf);
+        if (moved.error) {
+          warn(`rule ${r.id}: EmbedNav ${a.tag} point transform {${key}} not applied (${moved.error}); the untransformed route is used`);
+          byXf.set(key, null);
+        } else {
+          const xfTag = navTagFor(`${a.tag}~xf`, usedTags, { n: 0 });
+          const dn = { displayName: a.displayName || "", routeType: nav.routeType, navText: moved.navText };
+          derivedNavs[xfTag] = dn;
+          cited.add(dn);
+          byXf.set(key, xfTag);
+        }
+      }
+      if (byXf.get(key)) a.tag = byXf.get(key);
     });
   }
+  Object.assign(navs, derivedNavs);
   for (const tag of Object.keys(navs)) {
     if (!cited.has(navs[tag])) {
       warn(`NAV ${tag} is never used by an EmbedNav`);

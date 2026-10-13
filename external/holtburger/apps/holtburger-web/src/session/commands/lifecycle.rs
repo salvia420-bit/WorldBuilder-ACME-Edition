@@ -17,6 +17,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_motion_keep_on,
         remote_turn_on,
         remote_spine_on,
+        remote_root_scale_on,
         remote_sweep_on,
         target_voyeur_on,
         remote_moveto_begin_on,
@@ -30,6 +31,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         object_blob_queue_on,
         open_sea_wall_on,
         fallback_water_retail_on,
+        ace_obj_maint_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -67,22 +69,23 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             ) {
                 use holtburger_protocol::messages::misc::actions::PingRequestActionData;
                 use holtburger_protocol::messages::GameAction;
-                // Stamp send time so the PingResponse arm can
-                // compute RTT (same bookkeeping as the 5s
-                // gate above); cleared on send failure.
-                PING_SEND_INSTANT.with(|c| {
-                    *c.borrow_mut() = Some(web_time::Instant::now());
-                });
-                if let Err(e) = session
+                match session
                     .send_action(GameAction::PingRequest(Box::new(
                         PingRequestActionData,
                     )))
                     .await
                 {
-                    PING_SEND_INSTANT.with(|c| { *c.borrow_mut() = None; });
-                    log::warn!(
-                        "recv_loop: forced keepalive PingRequest send failed: {e}"
-                    );
+                    // net-transport-6 (2026-10-13): start the RTT clock the
+                    // PingResponse arm reads (same bookkeeping as the 5s
+                    // arm). It stamps only when no ping is out, so this
+                    // driver no longer moves the stamp of a ping the 5s arm
+                    // or the other JS driver already has out.
+                    Ok(()) => note_keepalive_ping_sent(session, state),
+                    Err(e) => {
+                        log::warn!(
+                            "recv_loop: forced keepalive PingRequest send failed: {e}"
+                        );
+                    }
                 }
             }
         }
@@ -156,6 +159,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // MoveTo refactor phase B: remote objects on their own
                 // movement managers (?remoteSpine, default ON).
                 new_world.scene.set_remote_spine_enabled(remote_spine_on);
+                // motion-remote-1: their root motion travels at their
+                // ObjScale (?remoteRootScale, default ON).
+                new_world.scene.set_remote_root_scale_enabled(remote_root_scale_on);
                 // MoveTo refactor phase C: their moves through the
                 // transition (?remoteSweep, default ON).
                 new_world.scene.set_remote_sweep_enabled(remote_sweep_on);
@@ -188,6 +194,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // (?openSeaWall / ?fallbackWaterRetail, both ON).
                 new_world.scene.set_open_sea_wall_enabled(open_sea_wall_on);
                 new_world.set_fallback_water_retail(fallback_water_retail_on);
+                // streaming-residency-1 (2026-10-13): ACE-parity
+                // visibility prune (?aceObjMaint=on, OPT-IN).
+                new_world.set_ace_object_maint_enabled(ace_obj_maint_on);
                 // Physics-parity 2026-07-03: retail LOCAL
                 // lattice (?retailLeash=on).
                 new_world.set_local_retail_leash(retail_leash_on);

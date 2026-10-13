@@ -28,8 +28,9 @@ import { makeTitlebar } from "../ui/hud_kit.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { setAcText } from "../ui/ac_font.js";
-import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
+import { fetchIconDataUrl, fetchItemIconDataUrl, getItemIconImmediate } from "../ui/ac_icon_cache.js";
 import { isDropAccepted } from "./drop_item_flags.js";
+import { resolveContainedItemMeta } from "./contained_item_meta.js";
 
 // Retail-ish window ids for the persisted positions. Retail keys floaty
 // placement by m_eWindowID; like ui/ac_window_position.js WINDOW_ID we use
@@ -416,27 +417,80 @@ export function devHex(guid) {
   return `0x${((guid >>> 0) || 0).toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
+const SLOT_ICON_FIELDS = ["iconId", "itemType", "uiEffects", "iconOverlay", "iconUnderlay"];
+
+/**
+ * hud-ui-3: the inputs of a retail item composite for one slot. `src` carries
+ * what the caller knows — {guid?, iconId?, itemType?, uiEffects?,
+ * iconOverlay?, iconUnderlay?}; a guid fills the rest from the wasm entity
+ * store (contained_item_meta.js — pack items, and a trade partner's items,
+ * which ACE TrackObjects to us), then from the player's inventory rows. A
+ * non-zero field the caller gives wins. Null when a guid resolves nowhere
+ * and the caller gave no item type (the slot then shows the raw icon).
+ * Vendor stock is not in the entity store, so vendor-ui passes its stock
+ * fields and no guid.
+ */
+export function slotIconMeta(src) {
+  if (!src || typeof src !== "object") return null;
+  const g = (src.guid >>> 0) || 0;
+  let found = null;
+  if (g) {
+    try { found = resolveContainedItemMeta(getHandle(), g); } catch (_) { found = null; }
+    if (!found) found = findInventoryItem(g);
+    if (!found && src.itemType === undefined) return null;
+  }
+  const out = {};
+  for (const k of SLOT_ICON_FIELDS) out[k] = (src[k] >>> 0) || (found?.[k] >>> 0) || 0;
+  return out;
+}
+
 /**
  * Paint an item icon into a `.hbk-slot`. A faint initial shows until (or
  * instead of, when the DAT has no icon) the icon resolves; no emoji.
+ *
+ * `iconOrMeta`: a bare icon DID paints the raw RenderSurface; an object
+ * (see `slotIconMeta`) paints the retail composite — retail draws every
+ * UIItem list (vendor, trade, salvage …) through `IconData::RenderIcons`
+ * (UIElement_UIItem::UIItem_SetIcon, acclient.c:272213): item-type
+ * background, underlay, icon + overlay with the white key → UI-effect tile.
+ * The raw icon is the fallback when the composite cannot be built.
  */
-export function fillSlotIcon(slot, iconId, name) {
+export function fillSlotIcon(slot, iconOrMeta, name) {
   if (!slot) return;
   slot.replaceChildren();
+  // A refill (re-render) supersedes any fetch still in flight for this slot.
+  const token = {};
+  slot.__hbSlotIconToken = token;
   const glyph = document.createElement("span");
   glyph.className = "hb-cw-glyph";
   glyph.textContent = String(name || "?").trim().charAt(0).toUpperCase() || "?";
   slot.appendChild(glyph);
-  const id = iconId >>> 0;
-  if (!id) return;
-  fetchIconDataUrl(id, "commerce-window").then((url) => {
-    if (!url || !slot.isConnected) return;
+  const paint = (url) => {
     const img = document.createElement("img");
     img.src = url;
     img.alt = "";
     img.draggable = false;
     glyph.remove();
     slot.prepend(img);
+  };
+  const live = () => slot.isConnected && slot.__hbSlotIconToken === token;
+  const isObj = !!iconOrMeta && typeof iconOrMeta === "object";
+  const meta = isObj ? slotIconMeta(iconOrMeta) : null;
+  const id = ((isObj ? (meta?.iconId ?? iconOrMeta.iconId) : iconOrMeta) >>> 0) || 0;
+  if (!id) return;
+  const raw = () => fetchIconDataUrl(id, "commerce-window");
+  let pending;
+  if (meta) {
+    const hit = getItemIconImmediate(meta);
+    if (hit) { paint(hit); return; }
+    pending = fetchItemIconDataUrl(meta, "commerce-window")
+      .then((url) => (typeof url === "string" ? url : raw()));
+  } else {
+    pending = raw();
+  }
+  pending.then((url) => {
+    if (!url || !live()) return;
+    paint(url);
   }).catch(() => {});
 }
 

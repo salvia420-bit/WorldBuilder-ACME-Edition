@@ -24,6 +24,8 @@
 //   (wx = lbX*192 + localX — the same frame router.js's worldXY uses), because
 //   EnvCellPlacement.cellOriginX/Y are already world-frame (lib.rs:17593-17597).
 //   Neighbors may reference missing cells; they are skipped during search.
+//   Optional per node: exits (outdoor portal ids), floorZMin/floorZMax, and
+//   doors (real doorway polygons — see the doorways section below).
 //
 // OUTPUT CONTRACT (consumed by rynth/router.js):
 //   findPath(graph, from, to)  -> [cellId, ...] or null (unreachable)
@@ -48,6 +50,8 @@
 //     doorway-midpoint pre-approach (:377-399) and SimplifyRoute (:404) are
 //     dropped — MoveToManager owns local steering (report 09 §(b) tier 1).
 //     If live tests snag on offset doorways, pass {midpoints:true} to toLegs.
+//     With doorway data, {doorways:true} walks the real openings instead
+//     (rynth-macro-nav-5, opt-in).
 //   - No graph cache (:75-92) — buildGraphFromWasm is explicit; callers cache.
 //   - No NearestSafeCell hazard evacuation (:230) — that's RynthAi combat
 //     behavior, not routing. findPath still honors a hazards set (:308
@@ -82,6 +86,145 @@ const FLOOR_SPAN_TOL_M = 1.0;
 // collapses a small/linear dungeon, fall back to the full reachable set.
 const PATROL_MIN_KEEP_NODES = 8;
 const PATROL_MIN_KEEP_FRACTION = 0.2;
+
+// ── doorways (rynth-macro-nav-5) ──────────────────────────────────────────
+// The cell anchors are mesh-bbox centres, not where a doorway is: a
+// centre-to-centre leg cuts the wall corner at an offset door, and the exit
+// walk's "just outside" point is a projection guess (goto_compose.js
+// buildExitLegs). The wasm EnvCellPlacement.takePortalDoorways()
+// (src/lib.rs envcell_portal_doorways) carries each CellPortal's real
+// polygon: centroid, normal pointing OUT of the cell (retail portal_side),
+// vertical extent and lowest point. collectLandblockIntoGraph stores them as
+// node.doors whenever the getter exists — a stale pkg has none, and every
+// consumer below then behaves exactly as before. They change a route only on
+// request: {bodySized} on findPath / findExitPath and {doorways} on toLegs,
+// which goto_compose.js asks for behind the DEFAULT-OFF ?indoorDoorways=on.
+// After WebAC packages/renderer/src/agent/cellPath.ts (doorway-centroid legs,
+// OPENING_MIN_HEIGHT_M, body-sized openings first), AGPL-3.0.
+
+/** f64 values per takePortalDoorways row: [otherCellId, cx, cy, cz, nx, ny, nz, height, bottomZ]. */
+export const DOORWAY_ROW_STRIDE = 9;
+/** The lowest UPRIGHT opening a body walks through (the human Setup is 1.835 m
+ *  tall). Holtburg's tavern counter openings are 1.8 m over a 1 m sill, its
+ *  doors 2.5-3.1 m (measured from the base DATs; WebAC uses the same 1.83). */
+export const OPENING_MIN_HEIGHT_M = 1.83;
+/** |normal.z| above this is a floor/ceiling (stairwell) opening, not upright. */
+const UPRIGHT_MAX_NZ = 0.7;
+/** How far before / past a doorway its two legs sit, along its normal. */
+export const DOORWAY_STEP_M = 0.4;
+/** Arrival radius stamped on doorway legs (router.js honours leg.arriveM; its
+ *  3 m default counts a doorway reached from 3 m off the opening). Above the
+ *  0.6 m MoveTo stop distance (holtburger-core simulation.rs
+ *  distance_to_object) so an arrival still registers. */
+export const DOORWAY_ARRIVE_M = 0.75;
+
+/**
+ * `?indoorDoorways=on` (also `1` / `true`). DEFAULT OFF: absent, `off` or any
+ * other value reads false. No page URL (node) reads false. Never throws.
+ */
+export function indoorDoorwaysEnabled(search) {
+  try {
+    const src = search ?? (typeof location !== "undefined" ? location.search : "");
+    const v = (new URLSearchParams(src || "").get("indoorDoorways") || "").toLowerCase();
+    return v === "on" || v === "1" || v === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** opts.indoorDoorways (boolean) wins; otherwise the URL flag. Always a boolean. */
+export function resolveIndoorDoorways(opts) {
+  if (opts && opts.indoorDoorways != null) return opts.indoorDoorways === true;
+  return indoorDoorwaysEnabled();
+}
+
+/**
+ * Decode takePortalDoorways() rows (Float64Array, or any array-like) into
+ *   { other, at: {x, y, z}, normal: {x, y, z}, height, bottom }
+ * records: world frame, `normal` pointing OUT of the owning cell, `other` the
+ * full u32 cell id beyond (lb|0xFFFF = outdoors). Rows with a non-finite value,
+ * or leading back into `selfId`, are dropped. Never throws.
+ */
+export function doorsFromRows(rows, selfId) {
+  const out = [];
+  if (!rows || typeof rows.length !== "number") return out;
+  const self = selfId == null ? null : selfId >>> 0;
+  for (let o = 0; o + DOORWAY_ROW_STRIDE <= rows.length; o += DOORWAY_ROW_STRIDE) {
+    let finite = true;
+    for (let k = 0; k < DOORWAY_ROW_STRIDE; k++) {
+      if (!Number.isFinite(rows[o + k])) {
+        finite = false;
+        break;
+      }
+    }
+    if (!finite) continue;
+    const other = rows[o] >>> 0;
+    if (self !== null && other === self) continue;
+    out.push({
+      other,
+      at: { x: rows[o + 1], y: rows[o + 2], z: rows[o + 3] },
+      normal: { x: rows[o + 4], y: rows[o + 5], z: rows[o + 6] },
+      height: rows[o + 7],
+      bottom: rows[o + 8],
+    });
+  }
+  return out;
+}
+
+/** An upright doorway (a wall opening), not a floor/ceiling one. */
+export function isUprightDoor(d) {
+  return !!d && !!d.normal && Math.abs(d.normal.z) <= UPRIGHT_MAX_NZ;
+}
+
+/** An upright opening too low for a body: a window, a service counter, a vent (WebAC tooLow). */
+export function doorTooLow(d) {
+  return isUprightDoor(d) && typeof d.height === "number" && d.height < OPENING_MIN_HEIGHT_M;
+}
+
+/** An outdoor doorway a body walks out through: upright and not too low (WebAC walkableExit). */
+export function walkableExitDoor(d) {
+  return isUprightDoor(d) && !doorTooLow(d);
+}
+
+// Every doorway joining cells a and b, oriented OUT of a (b's own copy of a
+// portal comes back with its normal reversed). Usually one; two rooms can
+// share a door and a serving window. [] without door data.
+function doorsBetween(aNode, aId, bNode, bId) {
+  const fromA = aNode && Array.isArray(aNode.doors) ? aNode.doors.filter((d) => d.other === bId) : [];
+  if (fromA.length) return fromA;
+  const fromB = bNode && Array.isArray(bNode.doors) ? bNode.doors.filter((d) => d.other === aId) : [];
+  return fromB.map((d) => ({ ...d, other: bId, normal: { x: -d.normal.x, y: -d.normal.y, z: -d.normal.z } }));
+}
+
+// The doorway a walk from a to b goes through: a body-sized one when there is
+// one, else whatever joins them; null without door data.
+function doorwayFor(nodes, aId, bId) {
+  const list = doorsBetween(nodes.get(aId), aId, nodes.get(bId), bId);
+  if (!list.length) return null;
+  return list.find((d) => !doorTooLow(d)) || list[0];
+}
+
+// Body-sized search: an edge is skipped only when door data EXISTS for it and
+// every opening joining the two cells is too low. No data reads passable.
+function edgeTooLow(nodes, aId, bId) {
+  const list = doorsBetween(nodes.get(aId), aId, nodes.get(bId), bId);
+  return list.length > 0 && list.every(doorTooLow);
+}
+
+// A node's outdoor doorways: its doors leading to one of node.exits.
+function exitDoorsOf(node) {
+  if (!node || !Array.isArray(node.doors) || !Array.isArray(node.exits) || !node.exits.length) return [];
+  const ex = new Set(node.exits.map((e) => e >>> 0));
+  return node.doors.filter((d) => ex.has(d.other));
+}
+
+/** True when any cell of `graph` (Map or plain object) carries doorway data. */
+export function hasDoorways(graph) {
+  for (const node of asMap(graph).values()) {
+    if (Array.isArray(node.doors) && node.doors.length) return true;
+  }
+  return false;
+}
 
 /** True if id's low word is a real EnvCell index (DungeonPathfinder.cs:163). */
 export function isEnvCellId(id) {
@@ -362,12 +505,27 @@ function edgeIsDrop(overrides, aId, bId, aNode, bNode) {
  * per-attempt exclusion (not a corpus-derived permanent classification like
  * walkableOverrides), so it lives in opts rather than the graph itself.
  *
+ * opts.bodySized (default false; rynth-macro-nav-5): search through
+ * body-sized openings first — an edge whose every doorway (node.doors) is an
+ * upright opening under OPENING_MIN_HEIGHT_M (a window, the tavern's bar
+ * counter) is skipped — and fall back to any opening only when that finds no
+ * route (WebAC findRoute). Edges without door data always pass, so a graph
+ * without node.doors gets the same path either way.
+ *
  * DIVERGENCE from the C#: returns null when unreachable / endpoints missing
  * (task contract) instead of the empty list (:281,:323). Same-cell trivially
  * returns [from] (:282-283).
  */
 export function findPath(graph, fromCell, toCell, opts = {}) {
   const nodes = asMap(graph);
+  if (opts.bodySized === true) {
+    return aStarCells(nodes, fromCell, toCell, opts, true) || aStarCells(nodes, fromCell, toCell, opts, false);
+  }
+  return aStarCells(nodes, fromCell, toCell, opts, false);
+}
+
+// One A* pass of findPath; `bodySized` skips the too-low-only edges.
+function aStarCells(nodes, fromCell, toCell, opts, bodySized) {
   const from = Number(fromCell) >>> 0;
   const to = Number(toCell) >>> 0;
   const hazards = opts.hazards || null;
@@ -405,6 +563,7 @@ export function findPath(graph, fromCell, toCell, opts = {}) {
       const nbNode = nodes.get(nbId);
       if (!nbNode) continue;
       if (excluded && excluded.has(edgeKey(current, nbId))) continue;
+      if (bodySized && edgeTooLow(nodes, current, nbId)) continue;
       if (edgeIsDrop(overrides, current, nbId, curNode, nbNode)) continue;
       if (nbId !== to && hazards && hazards.has(nbId)) continue;
       const tentG = gCur + dist2d(curNode, nbNode);
@@ -442,6 +601,21 @@ export function findPath(graph, fromCell, toCell, opts = {}) {
  * normalizeLegWorldFrame). SimplifyRoute (C#:404) is intentionally NOT ported:
  * the router's arrival/reissue tolerates redundant collinear legs, and dropping
  * it guarantees the alignment waypoints survive at every real doorway.
+ *
+ * opts.doorways (default false; rynth-macro-nav-5): walk through the REAL
+ * openings (node.doors). Each A->B transition is still exactly 2 legs (the
+ * stalled-edge mapping in goto_compose.js counts on it): DOORWAY_STEP_M before
+ * the doorway centroid on A's side and DOORWAY_STEP_M past it on B's, along
+ * its normal, at the opening's lowest point (feet height), stamped with A's
+ * and B's id and with arriveM = DOORWAY_ARRIVE_M. A step is clamped to half
+ * the gap to the neighbouring doorway, so a thin door-frame cell (Holtburg's
+ * are 0.5 m deep, two portals back to back) never makes the walk double back.
+ * A transition with no upright doorway (no door data, or a stairwell floor
+ * opening) falls back to the doorwayApproach 30% / 50% pair. Ends at the last
+ * cell centre unless opts.lastCentre === false (callers that append their own
+ * goal). opts.exitDoor (a findExitPath result's exitDoor, upright): two more
+ * legs through that outdoor doorway instead of the last centre — the caller
+ * appends the outdoor point.
  */
 export function toLegs(graph, path, opts = {}) {
   const nodes = asMap(graph);
@@ -453,6 +627,46 @@ export function toLegs(graph, path, opts = {}) {
     y: wy - ((id >>> 16) & 0xff) * 192,
     z: wz,
   });
+  if (opts.doorways) {
+    const ids = path.map((p) => Number(p) >>> 0);
+    // One entry per transition: its upright doorway (oriented out of ids[i]) or null.
+    const steps = [];
+    for (let i = 0; i + 1 < ids.length; i++) {
+      const d = doorwayFor(nodes, ids[i], ids[i + 1]);
+      steps.push(isUprightDoor(d) ? d : null);
+    }
+    const exitDoor = isUprightDoor(opts.exitDoor) ? opts.exitDoor : null;
+    if (exitDoor) steps.push(exitDoor);
+    const gap = (i, j) =>
+      steps[i] && steps[j] ? Math.hypot(steps[i].at.x - steps[j].at.x, steps[i].at.y - steps[j].at.y) : Infinity;
+    for (let i = 0; i < steps.length; i++) {
+      const aId = ids[i];
+      const bId = i + 1 < ids.length ? ids[i + 1] : aId; // the exit doorway leads out of the last cell
+      const d = steps[i];
+      if (!d) {
+        // No doorway to aim at: the doorwayApproach 30% pre-approach + 50% midpoint.
+        const a = nodes.get(aId);
+        const b = nodes.get(bId);
+        if (!a || !b) continue;
+        const dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y, dz = b.pos.z - a.pos.z;
+        legs.push(local(bId, a.pos.x + dx * 0.3, a.pos.y + dy * 0.3, a.pos.z + dz * 0.3));
+        legs.push(local(bId, a.pos.x + dx * 0.5, a.pos.y + dy * 0.5, a.pos.z + dz * 0.5));
+        continue;
+      }
+      const h = Math.hypot(d.normal.x, d.normal.y); // >= 0.71 for an upright doorway
+      const nx = d.normal.x / h, ny = d.normal.y / h;
+      const before = Math.min(DOORWAY_STEP_M, gap(i - 1, i) / 2);
+      const after = Math.min(DOORWAY_STEP_M, gap(i, i + 1) / 2);
+      legs.push({ ...local(aId, d.at.x - nx * before, d.at.y - ny * before, d.bottom), arriveM: DOORWAY_ARRIVE_M, doorway: true });
+      legs.push({ ...local(bId, d.at.x + nx * after, d.at.y + ny * after, d.bottom), arriveM: DOORWAY_ARRIVE_M, doorway: true });
+    }
+    if (!exitDoor && opts.lastCentre !== false) {
+      const lastId = ids[ids.length - 1];
+      const lastNode = nodes.get(lastId);
+      if (lastNode) legs.push(local(lastId, lastNode.pos.x, lastNode.pos.y, lastNode.pos.z));
+    }
+    return legs;
+  }
   if (opts.doorwayApproach) {
     for (let i = 0; i + 1 < path.length; i++) {
       const a = nodes.get(Number(path[i]) >>> 0);
@@ -525,9 +739,28 @@ export function toLegs(graph, path, opts = {}) {
  * level — the next attempt excludes that edge so the BFS re-routes to the
  * NEXT-nearest exit (the tavern's south doors) instead of re-offering the
  * same jammed transition forever.
+ *
+ * opts.bodySized (default false; rynth-macro-nav-5) — the PROACTIVE form of
+ * that remedy, from the doorway data (node.doors): a first BFS skips edges
+ * whose every opening is too low for a body (findPath's rule) and counts a
+ * cell as an exit only through a walkable outdoor doorway (upright, at least
+ * OPENING_MIN_HEIGHT_M); when that reaches no exit, the plain BFS runs.
+ * Without door data both passes are the same BFS.
+ *
+ * When the exit cell carries door data, the result also has `exitDoor`: its
+ * outdoor doorway (a walkable one first), normal pointing outdoors.
  */
 export function findExitPath(graph, fromCell, opts = {}) {
   const nodes = asMap(graph);
+  if (opts.bodySized === true) {
+    return exitBfs(nodes, fromCell, opts, true) || exitBfs(nodes, fromCell, opts, false);
+  }
+  return exitBfs(nodes, fromCell, opts, false);
+}
+
+// One BFS pass of findExitPath; `bodySized` skips too-low-only edges and
+// exits with no walkable doorway (exits without door data still count).
+function exitBfs(nodes, fromCell, opts, bodySized) {
   const from = Number(fromCell) >>> 0;
   const overrides = opts.walkableOverrides || null;
   const excluded = opts.excludeEdges || null;
@@ -539,18 +772,26 @@ export function findExitPath(graph, fromCell, opts = {}) {
     for (const id of frontier) {
       const node = nodes.get(id);
       if (!node) continue;
-      if (Array.isArray(node.exits) && node.exits.length) {
+      const exitDoors = exitDoorsOf(node);
+      if (
+        Array.isArray(node.exits) &&
+        node.exits.length &&
+        (!bodySized || exitDoors.length === 0 || exitDoors.some(walkableExitDoor))
+      ) {
         const path = [id];
         for (let p = prev.get(id); p; p = prev.get(p)) path.push(p);
         path.reverse();
         // outdoorId is null for the retail outside-sentinel (0xFFFF low
         // word) — the caller derives the outdoor target from geometry.
         const direct = node.exits.find((e) => ((e & 0xffff) > 0 && (e & 0xffff) < 0x100));
-        return { path, exitCell: id, outdoorId: direct != null ? direct >>> 0 : null };
+        const exit = { path, exitCell: id, outdoorId: direct != null ? direct >>> 0 : null };
+        if (exitDoors.length) exit.exitDoor = exitDoors.find(walkableExitDoor) || exitDoors[0];
+        return exit;
       }
       for (const nb of node.neighbors) {
         if (prev.has(nb) || !nodes.has(nb)) continue;
         if (excluded && excluded.has(edgeKey(id, nb))) continue; // exclusion wins over overrides
+        if (bodySized && edgeTooLow(nodes, id, nb)) continue;
         if (edgeIsDrop(overrides, id, nb, node, nodes.get(nb))) continue;
         prev.set(nb, id);
         next.push(nb);
@@ -942,6 +1183,14 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
         }
       }
       const node = { pos, neighbors, exits };
+      // rynth-macro-nav-5: the real doorway polygons, when the pkg exports
+      // them (a stale pkg has no getter -> no node.doors -> legacy legs).
+      if (typeof p.takePortalDoorways === "function") {
+        try {
+          const doors = doorsFromRows(p.takePortalDoorways(), id);
+          if (doors.length) node.doors = doors;
+        } catch (_) { /* no doorway data — the centre legs stand */ }
+      }
       if (typeof floorZMin === "number") {
         node.floorZMin = floorZMin;
         node.floorZMax = floorZMax;
@@ -1070,4 +1319,11 @@ export default {
   buildPatrolRoute,
   buildGraphFromWasm,
   buildStitchedGraphFromWasm,
+  indoorDoorwaysEnabled,
+  resolveIndoorDoorways,
+  doorsFromRows,
+  isUprightDoor,
+  doorTooLow,
+  walkableExitDoor,
+  hasDoorways,
 };

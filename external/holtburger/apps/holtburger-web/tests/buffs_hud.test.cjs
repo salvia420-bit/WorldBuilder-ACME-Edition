@@ -186,7 +186,7 @@ function installDomShim() {
   check('skill additive: "+50 Run"', () => {
     assert.equal(formatStatMod({
       type: ETF.SKILL | ETF.ADDITIVE,
-      statKey: 14, statValue: 50,
+      statKey: 24, statValue: 50,
     }), '+50 Run');
   });
 

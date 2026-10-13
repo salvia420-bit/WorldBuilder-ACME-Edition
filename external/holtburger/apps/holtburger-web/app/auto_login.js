@@ -8,6 +8,7 @@
 
 import { netWorkerEnabled } from "../scene3d/net_worker_client.js";
 import { lowBandwidth } from "../scene3d/bandwidth_tier.js";
+import { accountBootSince } from "./account_boot.js";
 
 export function initAutoLogin(D) {
   const { __resetEntDrainPending, loginForm, characterUl, setBootState, bootParams } = D;
@@ -188,6 +189,8 @@ export function initAutoLogin(D) {
     //   "kick"            — ACE sent CharacterError::Logon (0x01)
     //                       or disconnected us mid-handshake
     //   "error"           — submit handler set boot-state to error
+    //   "booted"          — the session ended on a server AccountBoot
+    //                       (terminal; see app/account_boot.js)
     //   "timeout"         — neither signal arrived
     // 50ms polling cadence — tight enough that a successful Connect
     // (~500ms) registers in 1 poll, slow enough not to spin the CPU.
@@ -210,6 +213,8 @@ export function initAutoLogin(D) {
         }
         const dc = window.__lastDisconnect;
         if (dc && dc.ts >= since) {
+          // inventory-session-6: a server boot is no race — no grace wait.
+          if (dc.booted) return "booted";
           // Kick-dance race fix (2026-06-11): a disconnect arriving
           // just after THIS attempt fired is usually the PREVIOUS
           // attempt's socket being booted by ACE in OUR favor
@@ -383,6 +388,18 @@ export function initAutoLogin(D) {
           connectOutcome = await waitForConnectOutcome(connectTimeoutMs, attemptStartTs);
         }
 
+        // inventory-session-6 (2026-10-13): an AccountBoot (wrong password,
+        // client version, world closed, admin boot) is terminal — retail
+        // never reconnects, and a retry cannot fix it (app/account_boot.js).
+        // Whatever the wait classified it as, stop instead of retrying.
+        {
+          const bootText = accountBootSince(window.__lastDisconnect, window.__bootStateHistory, attemptStartTs);
+          if (bootText) {
+            setBootState("error", `account booted (not retried): ${bootText}`);
+            return;
+          }
+        }
+
         if (connectOutcome === "kick") {
           // Wire-level signal: ACE kicked the account. Retry.
           continue;
@@ -444,6 +461,14 @@ export function initAutoLogin(D) {
         const spawnAttemptTs = Date.now();
 
         const spawnOutcome = await waitForSpawnOutcome(spawnTimeoutMs, spawnAttemptTs);
+        if (spawnOutcome !== "in-world") {
+          // inventory-session-6: a boot during the spawn is terminal too.
+          const bootText = accountBootSince(window.__lastDisconnect, window.__bootStateHistory, attemptStartTs);
+          if (bootText) {
+            setBootState("error", `account booted (not retried): ${bootText}`);
+            return;
+          }
+        }
         if (spawnOutcome === "in-world") {
           // Protocol-level success — ACE confirmed PlayerCreate.
           // But phase7 streaming + atmosphere LUT load are still

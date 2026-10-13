@@ -168,11 +168,14 @@ import { RECOLOR_ON } from "./recolor_flag.js";
 // grammars (unchanged) it preserves.
 import { PVS_RING_RADIUS, LRU_SIZING_RADIUS } from "./residency.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
+import { retailFovEnabled, clampGameFovDeg, applyRetailFov, RETAIL_GAME_FOV_DEFAULT_DEG } from "./camera_math.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
+import { retainNewPrograms } from "./program_retention.js";
 import { installLightLoops } from "./light_loops.js";
+import { installRadialFog } from "./radial_fog.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
 import { installShadowCasterList } from "./shadow_caster_list.js";
@@ -211,7 +214,8 @@ import {
 } from "./selection_brackets.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { emitterPosThree } from "./audio/emitter_position.js";
-import { SoundTableCache } from "./audio/sound_table_cache.js";
+import { SoundTableCache, audioUrgentFetchEnabled } from "./audio/sound_table_cache.js";
+import { createWavePrefetch } from "./audio/wave_prefetch.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
 import { LandblockLRU, lbKeyFromXY, isNearPlayerLb } from "./landblock_lru.js";
@@ -220,6 +224,9 @@ import { ACMoons } from "./ac_moons.js";
 import { holdForGround } from "./bandwidth_tier.js";
 import { installDiag } from "./diag.js";
 import { installWebglContextRecovery } from "./webgl_context_recovery.js";
+// app-loop-4 — the net watchdog also pumps on the keepalive worker's beat.
+import { onKeepaliveBeat } from "./keepalive_worker_client.js";
+import { pumpIfStale, PUMP_STALE_HIDDEN_MS, PUMP_STALE_VISIBLE_MS } from "./net_pump_gate.js";
 // Wave 15 — opt-in bulk icon preload (?preloadIcons=1). Default OFF.
 // Populates the shared `ui/ac_icon_cache.js` cache so subsequent icon
 // fetches in inventory/vendor/container/trade/buffs/spell-research
@@ -568,6 +575,12 @@ function recordRenderDiag(renderer, scene) {
   // ?renderDiag flag below; itself a no-op when ?vfxGauge is off (so this line
   // adds zero cost on the normal render path).
   vfxGaugeEndFrame(renderer);
+  // render-perf-1 (program_retention.js, default ON, ?programRetain=off): hold
+  // one extra reference on each WebGLProgram linked since the last frame so a
+  // material dispose never makes three destroy (and later relink) it. Rides
+  // this shared render tail; one array/length/tail compare when nothing new.
+  // Also publishes __diag.programs (relinks counted with the flag off too).
+  retainNewPrograms(renderer);
   if (_renderDiagArmed === undefined) {
     try {
       _renderDiagArmed =
@@ -813,6 +826,29 @@ function msaaSampleCount() {
     return Math.min(8, n | 0);
   } catch (_) {
     return 2;
+  }
+}
+
+// models-camera-2 (2026-10-13) — `?retailFov=on` opt-in (default OFF pending
+// the batched 1070 eye-test; flag off keeps the fixed 60° vertical FOV
+// byte-identical). Retail derives fovY from the Render.FieldOfView preference
+// (`m_fGameFOV / (aspect - 0.1)`, SmartBox draw acclient.c:144897 — see
+// camera_math.retailVerticalFovDeg). Module scope for the same reason as
+// msaaSampleCount: the camera is built in preInit3D, the resize handler that
+// re-derives it lives in init3D.
+const RETAIL_FOV_ON = retailFovEnabled(
+  typeof window !== "undefined" ? window.location?.search : "",
+);
+let _retailGameFovDeg = RETAIL_GAME_FOV_DEFAULT_DEG;
+
+/** Saved Camera-tab Field of View (`holtburger_camera_v1`), sanitised. */
+function storedGameFovDeg() {
+  try {
+    if (typeof localStorage === "undefined") return RETAIL_GAME_FOV_DEFAULT_DEG;
+    const raw = localStorage.getItem("holtburger_camera_v1");
+    return clampGameFovDeg(raw ? JSON.parse(raw)?.fieldOfView : undefined);
+  } catch (_) {
+    return RETAIL_GAME_FOV_DEFAULT_DEG;
   }
 }
 
@@ -1114,6 +1150,12 @@ export async function preInit3D(canvas) {
   // ?lightLoops (2026-10-06): point / spot light loops stay real loops, so a lit program is
   // ~4x less fragment code (D3DCompile ~3 s per program on the 1070). Must precede every compile.
   installLightLoops(THREE);
+  // ?radialFog=on (OPT-IN, 2026-10-13): retail range fog (acclient.c
+  // RenderDeviceD3D::SetDefaultD3DStates, D3DRS_RANGEFOGENABLE = TRUE). three's
+  // fog_vertex chunk fogs by eye-to-vertex distance, matching the terrain
+  // shaders' vFogDist (scene3d/radial_fog.js). Must precede every compile.
+  // Without the flag nothing is touched.
+  installRadialFog(THREE);
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: !!quality.flags.antialias && (wireframeMode || _canvasMsaa),
@@ -1581,6 +1623,20 @@ export async function preInit3D(canvas) {
   const csmState = lighting.csmState ?? null;
 
   const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
+  // models-camera-2: `?retailFov=on` swaps the fixed 60° for the retail
+  // vertical FOV of the saved Field of View (default 90°). A value
+  // Render::SetFOVRad would refuse (≥ π at a very tall viewport) keeps 60°.
+  if (RETAIL_FOV_ON) {
+    _retailGameFovDeg = storedGameFovDeg();
+    if (applyRetailFov(camera, _retailGameFovDeg)) camera.updateProjectionMatrix();
+    // Live setter for the Camera tab's Field of View slider
+    // (ui/camera_settings.js); only registered under the flag.
+    window.__setGameFov = (deg) => {
+      _retailGameFovDeg = clampGameFovDeg(deg);
+      if (applyRetailFov(camera, _retailGameFovDeg)) camera.updateProjectionMatrix();
+      return camera.fov;
+    };
+  }
   camera.position.set(15, 15, 15);
   camera.lookAt(0, 0, 5);
   // Phase 5 PView render-order fix (2026-05-25): camera defaults to layer 0
@@ -1821,6 +1877,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
+      // models-camera-2: retail re-derives fovY from the new aspect
+      // (`?retailFov=on` only; a refused value keeps the previous fov).
+      if (RETAIL_FOV_ON) applyRetailFov(camera, _retailGameFovDeg);
       camera.updateProjectionMatrix();
       // Re-derive the ortho frustum width from the new aspect ratio.
       // Frustum height is fixed at construction (TOPDOWN_FRUSTUM_HEIGHT_M
@@ -3046,6 +3105,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // again the instant the rAF loop recovers. Escape hatch:
   // `?netWatchdog=off`. Single-instance guarded (safe across
   // reconnect/re-init); cleared on `beforeunload`.
+  //
+  // app-loop-4 (2026-10-13): a hidden tab's main-thread timers drop to ~1
+  // wake-up per MINUTE after ~5 min, so this interval alone left the
+  // movement tick with a ~60 s dt that the Rust spine drops (> HUGE_QUANTUM
+  // 2.0, retail CPhysicsObj::update_object) — autorun/MoveTo froze. The same
+  // gate now also runs on the keepalive worker's 250 ms beat (not
+  // throttled), with `document.hidden ? 200 : 1000` ms — rynth/webhost.js's
+  // PUMP_STALE_MS / PUMP_STALE_VISIBLE_MS. Both heartbeats gate on
+  // `__lastPumpMs`, which the pump re-stamps (scene3d/net_pump_gate.js), so
+  // neither they nor a bot's own worker heartbeat ever double-pump.
+  // `?netWatchdog=off` disables both; `?keepaliveWorker=0` leaves only the
+  // interval.
   const netWatchdogOn = (() => {
     try {
       if (typeof window === "undefined") return false;
@@ -3058,25 +3129,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     typeof window !== "undefined" &&
     !window.__netWatchdogInterval
   ) {
-    const STALE_MS = 1000;
-    const netWatchdogInterval = setInterval(() => {
+    // One body for both heartbeats. `fromBeat` = the worker beat, which
+    // honours the hidden threshold; the 500 ms interval keeps its 1 s gate.
+    const netPumpIfStale = (fromBeat) => {
       try {
-        // No-op before the pump (and thus the session handle) exists —
-        // pumpNetFrame is exposed as window.__netFramePump only once the
-        // boot flow reaches index.html ~9123.
-        if (typeof window.__netFramePump !== "function") return;
         const now = (typeof performance !== "undefined" && performance.now)
           ? performance.now() : Date.now();
-        const last = window.__lastPumpMs ?? 0;
+        const hidden = fromBeat && typeof document !== "undefined" && document.hidden === true;
         // Staleness gate — the SINGLE condition that arms every line
-        // below. While rAF pumps at cadence __lastPumpMs is <1 s old and
-        // the watchdog does nothing.
-        if (now - last <= STALE_MS) return;
-        window.__netFramePump();
+        // below. A no-op before the pump (and thus the session handle)
+        // exists — pumpNetFrame is exposed as window.__netFramePump only
+        // once the boot flow reaches it in index.html. While rAF pumps at
+        // cadence __lastPumpMs is fresh and the watchdog does nothing.
+        if (!pumpIfStale(window, { now, hidden })) return;
         if (!window.__netWatchdogFiredWarned) {
           window.__netWatchdogFiredWarned = true;
           // eslint-disable-next-line no-console
-          console.log("[net-watchdog] rAF pump stalled >1 s — draining net directly (backgrounded/throttled tab)");
+          console.log(`[net-watchdog] rAF pump stalled >${hidden ? PUMP_STALE_HIDDEN_MS : PUMP_STALE_VISIBLE_MS} ms — draining net directly (${fromBeat ? "worker beat" : "interval"}; backgrounded/throttled tab)`);
         }
       } catch (e) {
         if (!window.__netWatchdogWarned) {
@@ -3085,10 +3154,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           console.warn("[net-watchdog] drain threw:", e);
         }
       }
-    }, 500);
+    };
+    const netWatchdogInterval = setInterval(() => netPumpIfStale(false), 500);
     window.__netWatchdogInterval = netWatchdogInterval;
+    // Single subscriber; delivered only while the keepalive worker runs.
+    const offNetWatchdogBeat = onKeepaliveBeat(() => netPumpIfStale(true));
     if (typeof window.addEventListener === "function") {
       window.addEventListener("beforeunload", () => {
+        offNetWatchdogBeat();
         if (window.__netWatchdogInterval) {
           clearInterval(window.__netWatchdogInterval);
           window.__netWatchdogInterval = null;
@@ -3097,6 +3170,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     }
     // Expose for capture-script teardown + test inspection.
     window.__stopNetWatchdog = () => {
+      offNetWatchdogBeat();
       if (window.__netWatchdogInterval) {
         clearInterval(window.__netWatchdogInterval);
         window.__netWatchdogInterval = null;
@@ -6313,10 +6387,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // play() is a no-op until then. Per-tick listener sync happens in
   // the rAF tick below.
   let audioManager = null;
+  // audio-1 (2026-10-13): the AudioManager fetches a wave only to play it,
+  // so it rides the wasm urgent lane (`fetchWave(did, true)`) instead of
+  // queueing behind the ring bakers. A pkg built before audio-1 ignores the
+  // extra argument. `?audioUrgentFetch=off` restores the normal lane.
+  const audioUrgentFetch = audioUrgentFetchEnabled();
   if (audioConstructable && wasmExports && typeof wasmExports.fetchWave === "function") {
     try {
       audioManager = new AudioManager({
-        fetchWave: (did) => wasmExports.fetchWave(did),
+        fetchWave: audioUrgentFetch
+          ? (did) => wasmExports.fetchWave(did, true)
+          : (did) => wasmExports.fetchWave(did),
         masterGain: 1.0,
       });
       liveScene3d.audioManager = audioManager;
@@ -7183,9 +7264,26 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   let soundTableCache = null;
   if (audioConstructable && wasmExports && typeof wasmExports.fetchSoundTable === "function") {
     try {
+      // audio-1 part 2: retail CreateSound analogue. OPT-IN `?wavePrefetch=on`
+      // (null otherwise). Each newly cached table's waves are fetched as
+      // bytes on the normal lane once the scene is ready, at most 2 at a
+      // time and 8 MiB per session (scene3d/audio/wave_prefetch.js).
+      const wavePrefetch = audioManager && typeof wasmExports.fetchWave === "function"
+        ? createWavePrefetch({
+          search: typeof window !== "undefined" ? window.location?.search : "",
+          fetchWave: (did) => wasmExports.fetchWave(did),
+        })
+        : null;
       soundTableCache = new SoundTableCache({
-        fetchSoundTable: (did) => wasmExports.fetchSoundTable(did),
+        // audio-1: `urgent` is true only for a resolveSound (play-path) miss.
+        // The spawn prewarm keeps the single-argument normal-lane call.
+        fetchSoundTable: (did, urgent) => (urgent === true
+          ? wasmExports.fetchSoundTable(did, true)
+          : wasmExports.fetchSoundTable(did)),
+        urgentPlayFetch: audioUrgentFetch,
+        onInstall: wavePrefetch ? (_did, stb) => wavePrefetch.enqueueTable(stb) : null,
       });
+      if (wavePrefetch && typeof window !== "undefined") window.__wavePrefetch = wavePrefetch;
       liveScene3d.soundTableCache = soundTableCache;
       scene3dForBuilders.soundTableCache = soundTableCache;
       // eslint-disable-next-line no-undef

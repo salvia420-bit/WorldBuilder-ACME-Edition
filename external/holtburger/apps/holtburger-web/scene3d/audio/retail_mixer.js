@@ -33,6 +33,8 @@ export const VOL_MIN_DISTANCE = 5.0;
 export const VOL_MIN_DISTANCE_SQ = 25.0;
 export const VOL_MIN_DECIBELS = -50;
 export const PAN_SCALE = -15.0;
+// SoundBuf::Play clamps the integer pan to [-15, 15] (acclient.c:386102).
+export const PAN_MAX = 15;
 export const PAN_DEADZONE_METRES = 5;
 // Retail multiplies by a 0.017453292 constant (acclient.c:383173). Using it
 // verbatim in doubles makes sin(90 deg) land a hair under 1, so a source
@@ -110,9 +112,29 @@ export function linearGain(decibels) {
 }
 
 /**
+ * Retail SoundBuf::Play (acclient.c:386102) as two channel gains. The pan is
+ * clamped to +-15; pan 0 never calls SetPan (both channels at full level);
+ * otherwise IDirectSoundBuffer::SetPan(100 * pan) (hundredths of a dB)
+ * turns ONLY the far channel down by |pan| dB and leaves the near one at 1.
+ * Positive pans right (left channel attenuated).
+ * After WebAC packages/renderer/src/audio/RetailSound.ts retailPanGains, AGPL-3.0.
+ * @returns {{left:number, right:number}}
+ */
+export function retailPanGains(pan) {
+  const p = Math.max(-PAN_MAX, Math.min(PAN_MAX, Math.trunc(Number(pan) || 0)));
+  const down = Math.pow(10, -Math.abs(p) / 20);
+  if (p > 0) return { left: down, right: 1 };
+  if (p < 0) return { left: 1, right: down };
+  return { left: 1, right: 1 };
+}
+
+/**
  * StereoPannerNode position for a retail pan. DirectSound SetPan is a dB
  * difference between channels; an equal-power panner at position p gives
  * right/left = tan((p+1)*pi/4), so p = (4/pi)*atan(10^(pan/20)) - 1.
+ * Matches the RATIO only (the near channel lands under 1, -3 dB at p = 0):
+ * AudioManager uses retailPanGains and keeps this as the fallback for a
+ * context without ChannelSplitter/ChannelMerger.
  */
 export function stereoPositionFromPan(pan) {
   const diff = Math.pow(10, pan / 20);

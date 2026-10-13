@@ -3,6 +3,8 @@
 # S0 always (~1s, no boot). --full adds the boot chain (needs serve.py :8765 + ACE :9000):
 #   S1 boot-to-in-world + S2 console.error==0 + S3 whiteNow==0  (one detector boot, 90s Holtburg)
 #   S4 keepalive survival                                        (one short second boot, 60s idle)
+#   S5/S5b dat-decode diag + S7 wire integrity                   (same second boot)
+#   S6 warm-park round-trip                                      (third boot)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOLT="$(cd "$HERE/../.." && pwd)"
@@ -10,14 +12,26 @@ WASM="$HOLT/apps/holtburger-web/pkg/holtburger_web_bg.wasm"
 FULL="${1:-}"
 FAIL=0
 
-# ── S0: wasm size + staleness (A15-F1/F2) ──
+# ── S0: wasm build profile + staleness (A15-F1/F2) ──
+# The profile is read from the wasm's own custom sections (test-tooling-8,
+# 2026-10-13; harness/lib/wasm_profile.mjs): wasm-pack --dev keeps a `name`
+# (and `.debug_*`) section, --release strips them. Size is NOT the test: the
+# release build outgrew the old 6,000,000 B band (7,182,909 B on 2026-10-12;
+# pkg-release/ 6,423,996 B on 2026-08-10), so that band FAILed every release
+# since ~August. Size is only the fallback when node cannot answer, with the
+# band raised to 12 MB (release ~7.2 MB, dev ~16.6 MB).
 if [ -f "$WASM" ]; then
   SZ=$(stat -c%s "$WASM"); MT=$(stat -c%Y "$WASM")
   LAST_RUST=$(git -C "$HOLT" log -1 --format=%ct -- apps/holtburger-web/src crates ":(exclude)crates/*/examples/*" 2>/dev/null || echo 0)
+  PROFILE="$(node "$HOLT/apps/holtburger-web/harness/lib/wasm_profile.mjs" --profile-only "$WASM" 2>/dev/null)"
+  case "$PROFILE" in
+    release|DEV-WASM) PSRC="custom-sections" ;;
+    *) if [ "$SZ" -gt 12000000 ]; then PROFILE="DEV-WASM"; else PROFILE="release"; fi; PSRC="size-fallback" ;;
+  esac
   S0="PASS"
-  [ "$SZ" -ge 6000000 ] && { S0="FAIL-dev-sized"; FAIL=1; }
+  [ "$PROFILE" = "DEV-WASM" ] && { S0="FAIL-dev-wasm"; FAIL=1; }
   if [ "$LAST_RUST" -gt 0 ] && [ "$MT" -lt "$LAST_RUST" ]; then S0="WARN-stale-predates-rust-commit"; fi
-  echo "S0 wasm=${SZ}B mtime=$(date -u -d "@$MT" +%FT%TZ) lastRustCommit=$(date -u -d "@$LAST_RUST" +%FT%TZ) => $S0"
+  echo "S0 wasm=${SZ}B profile=${PROFILE}(${PSRC}) mtime=$(date -u -d "@$MT" +%FT%TZ) lastRustCommit=$(date -u -d "@$LAST_RUST" +%FT%TZ) => $S0"
 else
   echo "S0 => FAIL no pkg wasm at $WASM (pkg/ is gitignored — rebuild: wasm-pack build --target web --out-dir pkg --release)"
   S0="FAIL-missing"; FAIL=1
@@ -37,7 +51,7 @@ echo "L2 wire-codec lint => $L2"
 echo "L3 harness-param lint => $L3"
 
 if [ "$FULL" != "--full" ]; then
-  echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 (static only; pass --full for S1–S5 boot chain)"
+  echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 (static only; pass --full for S1–S7 boot chain)"
   exit "$FAIL"
 fi
 
@@ -72,7 +86,7 @@ const boot = await import("file://" + BOOT);
 const { page, helpers, inWorld, inWorldMs } = await boot.launchAndEnter({ query: { nosw: "1" }, timeoutMs: 90000 });
 // G4 (A10, 2026-07-11 s13): boot wall-clock to in-world (null on stall).
 console.log("BOOT=" + (inWorldMs == null ? -1 : inWorldMs));
-if (!inWorld) { console.log("S4=FAIL-boot"); console.log("S5=SKIP"); await helpers.close(); process.exit(0); }
+if (!inWorld) { console.log("S4=FAIL-boot"); console.log("S5=SKIP"); console.log("S7=SKIP(boot)"); await helpers.close(); process.exit(0); }
 await page.waitForTimeout(60000);
 const pumpAge = await helpers.evalInPage(() => window.__lastPumpMs != null ? performance.now() - window.__lastPumpMs : null);
 const pose = await helpers.evalInPage(() => { try { return !!window.__sessionHandle.getLocalPlayerPose(); } catch { return false; } });
@@ -145,6 +159,36 @@ if (dd?.main || dd?.worker) {
     console.log((bad.length ? `S5b=FAIL(${bad.join(" ")}) ` : "S5b=PASS ") + fmt("main", m) + " " + fmt("worker", w));
   }
 }
+// S7 (test-tooling-3, 2026-10-13): wire integrity on the SAME session — the
+// recv loop per-opcode decode counters (__diag.wire.integrity() over the wasm
+// wire_integrity_json; cumulative since load, so login + spawn + 60s idle).
+// GATED: undecodable (dropped by GameMessage::unpack, or a Qualities raw-wrap
+// whose codegen read failed) and unknown (opcode / GameEvent type not
+// enumerated) must both be 0. REPORTED only: shortRead (bytes left unread)
+// and overrun, with unlistedShort = short-read keys not in SHORT_READ_ALLOW.
+// SKIP on a stale pkg (no export).
+try {
+  // Keys as the JSON prints them ("0x0000F745"; GameEvent "0xF7B0" + type),
+  // each with the reason it is benign (e.g. a trailing alignment pad).
+  const SHORT_READ_ALLOW = {};
+  const wi = await helpers.evalInPage(() => {
+    try {
+      const viaDiag = window.__diag?.wire?.integrity?.();
+      if (viaDiag) return viaDiag;
+      const fn = window.__hbWasm?.wire_integrity_json;
+      return typeof fn === "function" ? JSON.parse(fn()) : null;
+    } catch { return null; }
+  });
+  if (wi == null || !wi.totals) console.log("S7=SKIP(no wire_integrity_json — stale pkg?)");
+  else {
+    const fmt = (m) => Object.entries(m ?? {}).map(([k, t]) => `${k}:${t.n}`).join(",");
+    const unlisted = Object.keys(wi.shortRead ?? {}).filter((k) => !(k in SHORT_READ_ALLOW));
+    const info = `msgs=${wi.messages} shortRead=${wi.totals.shortRead}[${fmt(wi.shortRead)}] unlistedShort=${unlisted.length} overrun=${wi.totals.overrun}[${fmt(wi.overrun)}]`;
+    if (wi.totals.undecodable > 0 || wi.totals.unknown > 0)
+      console.log(`S7=FAIL(undecodable=${wi.totals.undecodable}[${fmt(wi.undecodable)}] unknown=${wi.totals.unknown}[${fmt(wi.unknown)}] ${info})`);
+    else console.log(`S7=PASS(${info})`);
+  }
+} catch (e) { console.log(`S7=FAIL(${String(e)})`); }
 await helpers.close();
 ' "$HOLT/apps/holtburger-web/harness/lib/boot.mjs" 2>/dev/null)"
 S4="$(printf '%s\n' "$S45" | sed -n 's/^S4=//p' | tail -1)"; S4="${S4:-FAIL-no-output}"
@@ -156,6 +200,11 @@ case "$S4" in PASS) ;; *) FAIL=1 ;; esac
 case "$S5" in PASS*) ;; SKIP) ;; *) FAIL=1 ;; esac
 case "$S5B" in PASS*|SKIP*) ;; *) FAIL=1 ;; esac
 echo "S5b => $S5B"
+# S7 (test-tooling-3): wire integrity; SKIP-tolerant like S5b (stale pkg / boot
+# stall / no output), FAIL only on undecodable or unknown > 0.
+S7="$(printf '%s\n' "$S45" | sed -n 's/^S7=//p' | tail -1)"; S7="${S7:-SKIP(no-output)}"
+case "$S7" in PASS*|SKIP*) ;; *) FAIL=1 ;; esac
+echo "S7 => $S7"
 
 # G4 (A10, 2026-07-11 s13): boot-time budget. WARN-only (never FAIL) when the
 # in-world wall-clock exceeds CI_BOOT_BUDGET_MS, if that env is set.
@@ -184,5 +233,5 @@ else
 fi
 
 echo "$SUMMARY_LINE"
-echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 canaries=$S5B warmpark=$S6 ${BOOT_STATUS}  (details: $TMP)"
+echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 canaries=$S5B wire=${S7%%(*} warmpark=$S6 ${BOOT_STATUS}  (details: $TMP)"
 exit "$FAIL"

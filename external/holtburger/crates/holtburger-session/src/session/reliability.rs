@@ -85,6 +85,10 @@ impl Session {
         // it stays armed for the timer-driven re-NAK.
         self.note_server_seq_seen(sequence);
 
+        // net-transport-4: a rejected id that turns up after all (an earlier
+        // copy still in flight) is held like any other, not skipped over.
+        self.lost_server_seqs.remove(&sequence);
+
         self.pending_server_packets
             .entry(sequence)
             .or_insert(packet);
@@ -134,6 +138,7 @@ impl Session {
     }
 
     pub(crate) fn retransmit_sequences(&mut self, sequences: &[u32]) -> Result<()> {
+        let mut retransmitted: u16 = 0;
         for sequence in sequences {
             let Some(cached_packet) = self.cached_packets.get(sequence).cloned() else {
                 log::warn!(
@@ -150,6 +155,15 @@ impl Session {
                 cached_packet.addr,
                 Instant::now(),
             );
+            retransmitted = retransmitted.wrapping_add(1);
+        }
+
+        // net-transport-6 (2026-10-13): retail counter 10 —
+        // `FlowQueue::TransmitAcks` adds the number of packets it re-sends
+        // for the peer's NAK (the packet-loss numerator). Each one is counted
+        // as sent again when it is flushed through `send_raw_packet`.
+        if retransmitted > 0 {
+            self.link_status.count_retransmitted(retransmitted);
         }
 
         Ok(())
@@ -206,6 +220,71 @@ impl Session {
         }
     }
 
+    /// net-transport-4 (2026-10-13): the server answered a RequestRetransmit
+    /// with a RejectRetransmit (retail's EmptyAck) for `sequences`. It no
+    /// longer holds those packets and will never resend them. Retail removes
+    /// each id from its NAK set (`SharedNet::HandleEmptyAck`,
+    /// acclient.c:372177); here they are recorded so ordering steps over them
+    /// ([`Self::skip_lost_server_sequences`]) and later re-NAKs leave them
+    /// out (WebAC `OrderedPacketBuffer.markLost` does the same).
+    ///
+    /// Ids already ordered or already buffered are ignored (we have them), as
+    /// are ids outside the reorder window, which ordering could never reach.
+    ///
+    /// Known cost: when a later packet's key search walked past a lost
+    /// ENCRYPTED packet's ISAAC key, that key was parked in `Isaac::xors`, and
+    /// nothing will ever consume it, so each such loss shortens the S2C search
+    /// reach (`Isaac::MAXIMUM_EFFORT_LEVEL`) by one word. Retail parks one key
+    /// per NAKed id and frees it here; the flat key set cannot tell which key
+    /// was the lost id's. Bounded, and the trigger (a hole that outlives ACE's
+    /// 120 s retransmit cache) is rare.
+    pub(crate) fn note_rejected_server_sequences(&mut self, sequences: &[u32]) {
+        let expected = self.last_server_seq.wrapping_add(1);
+        for &sequence in sequences {
+            if !is_newer_u32(sequence, self.last_server_seq)
+                || sequence.wrapping_sub(expected) > MAX_RETRANSMIT_SEQUENCE_WINDOW
+                || self.pending_server_packets.contains_key(&sequence)
+            {
+                log::debug!(
+                    "Ignoring retransmit reject for S2C {}: already received or outside the window above {}",
+                    sequence,
+                    self.last_server_seq
+                );
+                continue;
+            }
+            self.lost_server_seqs.insert(sequence);
+        }
+    }
+
+    /// net-transport-4: step ordering over rejected ids at the head of the
+    /// queue, delivering nothing for them, so the packets buffered behind
+    /// them flow again. Same bookkeeping as an ordered packet in
+    /// `finalize_ordered_server_packet` (progress resets the give-up counter;
+    /// the re-NAK timer disarms once ordering reaches the newest known id),
+    /// minus the ACK: the reject itself carries a newer sequence, and its
+    /// cumulative ACK covers the skipped ids. Fragment groups the lost packet
+    /// left incomplete age out through the reassembler's group cap.
+    pub(crate) fn skip_lost_server_sequences(&mut self) {
+        loop {
+            let expected = self.last_server_seq.wrapping_add(1);
+            if !self.lost_server_seqs.remove(&expected) {
+                return;
+            }
+            log::warn!(
+                "Skipping S2C packet {}: the server rejected its retransmit, so its messages are lost",
+                expected
+            );
+            self.last_server_seq = expected;
+            self.has_server_seq = true;
+            self.retransmit_requests_since_progress = 0;
+            if let Some(highest) = self.highest_server_seq_seen
+                && !is_newer_u32(highest, self.last_server_seq)
+            {
+                self.highest_server_seq_seen = None;
+            }
+        }
+    }
+
     /// net-4: when the next timer-driven RequestRetransmit is due, or `None`
     /// when no gap is open (so an idle, in-order session never arms a timer).
     pub(crate) fn next_retransmit_deadline(&self) -> Option<Instant> {
@@ -247,13 +326,22 @@ impl Session {
             self.highest_server_seq_seen = None;
             return Ok(false);
         }
-        self.send_request_retransmit(target)?;
+        if !self.send_request_retransmit(target)? {
+            // net-transport-4: every id in the gap is buffered or rejected,
+            // so there was nothing to ask for. Re-arm the timer one interval
+            // out rather than leave a due deadline that would spin the loop.
+            self.last_request_retransmit_time = Some(Instant::now());
+            return Ok(false);
+        }
         Ok(true)
     }
 
-    pub(crate) fn send_request_retransmit(&mut self, received_sequence: u32) -> Result<()> {
+    /// Queue a RequestRetransmit for the missing ids in `[last_server_seq +
+    /// 1, received_sequence)`. `Ok(true)` when one was queued; `Ok(false)`
+    /// when the span is out of window or (net-transport-4) every id in it is
+    /// already buffered or was rejected by the server.
+    pub(crate) fn send_request_retransmit(&mut self, received_sequence: u32) -> Result<bool> {
         let desired_sequence = self.last_server_seq.wrapping_add(1);
-        let bottom = desired_sequence.wrapping_add(1);
 
         // net-3 (R2-net 2026-10-08): was an `Err` ("Abnormal server packet
         // sequence"), which `recv_message` propagates and the client treats
@@ -269,20 +357,30 @@ impl Session {
                 MAX_RETRANSMIT_SEQUENCE_WINDOW,
                 desired_sequence
             );
-            return Ok(());
+            return Ok(false);
         }
 
+        // net-transport-4: an id the server rejected is never asked for again
+        // (retail `SharedNet::HandleEmptyAck` drops it from the NAK set).
         let mut needed_sequences = Vec::with_capacity(MAX_RETRANSMIT_SEQUENCE_IDS);
-        needed_sequences.push(desired_sequence);
-        let mut sequence = bottom;
+        let mut sequence = desired_sequence;
         while sequence != received_sequence {
-            if !self.pending_server_packets.contains_key(&sequence) {
+            if !self.pending_server_packets.contains_key(&sequence)
+                && !self.lost_server_seqs.contains(&sequence)
+            {
                 needed_sequences.push(sequence);
                 if needed_sequences.len() >= MAX_RETRANSMIT_SEQUENCE_IDS {
                     break;
                 }
             }
             sequence = sequence.wrapping_add(1);
+        }
+        if needed_sequences.is_empty() {
+            log::debug!(
+                "Not requesting retransmit: every S2C id below {} is buffered or rejected",
+                received_sequence
+            );
+            return Ok(false);
         }
 
         let mut payload = Vec::with_capacity(4 + (needed_sequences.len() * 4));
@@ -318,7 +416,7 @@ impl Session {
                 self.retransmit_requests_since_progress
             ));
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn should_request_retransmit(&self, expected: u32, received_sequence: u32) -> bool {

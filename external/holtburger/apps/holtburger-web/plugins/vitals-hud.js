@@ -424,7 +424,8 @@ export function mount(ctx) {
   overlay.id = OVERLAY_ID;
   overlay.hidden = true;
   document.body.appendChild(overlay);
-  attachDefaultTopDragHandle(overlay, WINDOW_ID.VITALS);
+  // gmFloatyVitalsUI::UpdateLockedStatus reads the global LockUI (ui/ui_lock.js).
+  attachDefaultTopDragHandle(overlay, WINDOW_ID.VITALS, { obeysGlobalLock: true });
 
   // Size the overlay to retail dimensions on first mount. Bar rows
   // are positioned by `renderVitals` as they're added; layout sticks

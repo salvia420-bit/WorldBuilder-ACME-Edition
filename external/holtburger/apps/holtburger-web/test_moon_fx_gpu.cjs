@@ -32,6 +32,8 @@ const server = http.createServer((req, res) => {
 });
 
 (async () => {
+  // One heavy job per machine (~/CLAUDE.md): wait for the lock + free memory.
+  await (await import("./harness/lib/heavy_lock.mjs")).acquireHeavyLock();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
   const { chromium } = require("playwright-core");

@@ -212,6 +212,80 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             );
             console_log_str(&format!("[shortcut] remove: idx={index}"));
         }
+        SessionCommand::AddSpellFavorite { spell_id, index, list } => {
+            // input-options-2 (2026-10-13): retail
+            // SpellCastSubMenu::AddSpellToPlayerModule — update the local
+            // PlayerModule lists (spell_favorites, ACE's rules), then
+            // CM_Character::Event_AddSpellFavorite. The RefCell borrow is
+            // dropped before the send.
+            use holtburger_protocol::messages::{AddSpellFavoriteActionData, GameAction};
+            if let Some(w) = world.borrow_mut().as_mut() {
+                let known = w.player.spells.contains_key(&spell_id);
+                crate::spell_favorites::add_spell_favorite(
+                    &mut w.player.hotbar_spells,
+                    spell_id,
+                    index,
+                    list,
+                    known,
+                );
+            }
+            let action = GameAction::AddSpellFavorite(Box::new(AddSpellFavoriteActionData {
+                spell_id,
+                index,
+                list,
+            }));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(AddSpellFavorite spell={spell_id} idx={index} list={list}): {e}",
+                "add_spell_favorite: {e}",
+                LoopFlow::Exit
+            );
+        }
+        SessionCommand::RemoveSpellFavorite { spell_id, list } => {
+            // input-options-2: retail
+            // SpellCastSubMenu::RemoveSpellFromPlayerModule →
+            // CM_Character::Event_RemoveSpellFavorite.
+            use holtburger_protocol::messages::{GameAction, RemoveSpellFavoriteActionData};
+            if let Some(w) = world.borrow_mut().as_mut() {
+                crate::spell_favorites::remove_spell_favorite(
+                    &mut w.player.hotbar_spells,
+                    spell_id,
+                    list,
+                );
+            }
+            let action = GameAction::RemoveSpellFavorite(Box::new(
+                RemoveSpellFavoriteActionData { spell_id, list },
+            ));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(RemoveSpellFavorite spell={spell_id} list={list}): {e}",
+                "remove_spell_favorite: {e}",
+                LoopFlow::Exit
+            );
+        }
+        SessionCommand::SpellbookFilter { filters } => {
+            // input-options-2: retail gmSpellbookUI::UpdateFilter
+            // (acclient.c:198845) stores the word in the PlayerModule, then
+            // sends CM_Character::Event_SpellbookFilterEvent.
+            use holtburger_protocol::messages::{GameAction, SpellbookFilterActionData};
+            if let Some(w) = world.borrow_mut().as_mut() {
+                w.player.spellbook_filters = filters;
+            }
+            let action =
+                GameAction::SpellbookFilter(Box::new(SpellbookFilterActionData { filters }));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(SpellbookFilter 0x{filters:08X}): {e}",
+                "spellbook_filter: {e}",
+                LoopFlow::Exit
+            );
+        }
         SessionCommand::TitleSet { title_id } => {
             use holtburger_protocol::messages::{GameAction, TitleSetActionData};
             let action =
@@ -225,6 +299,61 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 LoopFlow::Exit
             );
             console_log_str(&format!("[title/set] id={title_id}"));
+        }
+        SessionCommand::FinishBarber { fields } => {
+            // maps-chargen-barber-1 (2026-10-13): gmBarberUI Apply →
+            // CM_Character::Event_FinishBarber (acclient.c:270300). ACE
+            // HandleActionFinishBarber answers a valid request with an
+            // ObjDescEvent (applied by the existing appearance path) and
+            // drops an invalid one silently; plugins/barber-panel.js runs
+            // the ported ACE checks before calling finishBarber.
+            use holtburger_protocol::messages::{FinishBarberActionData, GameAction};
+            let action = GameAction::FinishBarber(Box::new(
+                FinishBarberActionData::from_fields(&fields),
+            ));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(FinishBarber): {e}",
+                "finish_barber: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str(&format!(
+                "[barber] FinishBarber setup=0x{:08X} option1={}",
+                fields[13], fields[14],
+            ));
+        }
+        SessionCommand::QueryAge => {
+            // chat-errors-8 (2026-10-13): `/age` → CM_Character::
+            // Event_QueryAge (acclient.c:697985), target 0 (DoAge sends the
+            // selection only for a PSR). ACE answers QueryAgeResponse
+            // (0x01C3); messages/game_event.rs prints the retail line.
+            use holtburger_protocol::messages::{GameAction, QueryAgeActionData};
+            let action = GameAction::QueryAge(Box::new(QueryAgeActionData { target: 0 }));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(QueryAge): {e}",
+                "query_age: {e}",
+                LoopFlow::Exit
+            );
+        }
+        SessionCommand::QueryBirth => {
+            // chat-errors-8: `/birth` → CM_Character::Event_QueryBirth
+            // (acclient.c:698035), target 0 (retail DoBirth). ACE answers
+            // with its own Broadcast line.
+            use holtburger_protocol::messages::{GameAction, QueryBirthActionData};
+            let action = GameAction::QueryBirth(Box::new(QueryBirthActionData { target: 0 }));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(QueryBirth): {e}",
+                "query_birth: {e}",
+                LoopFlow::Exit
+            );
         }
         _ => unreachable!("SessionCommand routed to the wrong handler module"),
     }

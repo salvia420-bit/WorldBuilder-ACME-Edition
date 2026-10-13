@@ -76,6 +76,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireHeavyLock } from "./lib/heavy_lock.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // harness/ → apps/holtburger-web/ → apps/ → external/holtburger/ (workspace root).
@@ -417,6 +418,12 @@ async function main() {
     }
     process.exit(0);
   }
+
+  // One heavy job per machine (~/CLAUDE.md, 2026-10-05): capped-build caps
+  // memory but has no lock, so two capped jobs share one 3.5G oom.group and
+  // die together. Only a real run takes it (print-only exited above).
+  const lock = await acquireHeavyLock({ label: `cargo-tests ${crates.join(",")}` });
+  if (lock.bypassed) console.log(`[cargo-tests] heavy-lock bypassed (${lock.bypassed})`);
 
   // Run each crate's tests from the workspace root. Aggregate pass/fail.
   console.log(`\n[cargo-tests] running ${plan.length} crate test step(s) from ${WORKSPACE_ROOT} ...`);

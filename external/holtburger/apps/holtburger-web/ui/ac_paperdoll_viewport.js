@@ -49,6 +49,21 @@ export function paperdollEyeForHeritage(heritage) {
   }
 }
 
+// `?paperdollHeld=off|0|false` — retail parity: no held items on the doll.
+// Retail's doll is a fresh object: `gmPaperDollUI::RedressCreature`
+// (acclient.c:220031) → `CPhysicsObj::makeObject(player)` = makeObject(setup)
+// + `MorphToExistingObject` (:316880 — copies the part array + translucency,
+// never the CHILDLIST), then `DoObjDescChangesFromDefault`. A wielded weapon,
+// shield or torch therefore never shows on it (the examine 3D view, :226945,
+// is built the same way). DEFAULT ON keeps holtburger's Wave C / PR8
+// wielded-children pass; flipping the default is an owner call.
+export function paperdollHeldEnabled(search) {
+  let v = null;
+  try { v = new URLSearchParams(search ?? globalThis.location?.search ?? "").get("paperdollHeld"); }
+  catch (_) { v = null; }
+  return !(v === "off" || v === "0" || v === "false");
+}
+
 export class PaperdollViewport {
   /**
    * @param {{width?: number, height?: number}} [opts]
@@ -217,6 +232,9 @@ export class PaperdollViewport {
   async loadPlayer(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance = null) {
     if (this._disposed) return false;
     if (!setupId) return false;
+    // `?paperdollHeld=off`: retail's doll has no children (see
+    // paperdollHeldEnabled) — the held items leave both the key and the build.
+    if (!paperdollHeldEnabled()) wieldedItems = null;
     const key = this._loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance);
     if (key === this._lastLoadKey) return true;
     // Wave C / PR8 — race-cancel token captured at entry.
@@ -342,8 +360,9 @@ export class PaperdollViewport {
     // Wave C / PR8 (2026-06-06): bounds are captured BEFORE attaching
     // wielded children so camera framing stays anchored on the body
     // silhouette. A held two-hander pushes the unbiased bounds out by
-    // ~1m and would shrink the doll's apparent size; retail's
-    // gmPaperDollUI frames on the body and lets the weapon overflow.
+    // ~1m and would shrink the doll's apparent size. (Retail's doll never
+    // has a held item at all: RedressCreature builds it without children —
+    // see paperdollHeldEnabled / `?paperdollHeld=off`.)
     // Bug 13: retail framing is FIXED (no bounds fit) — doll at the origin,
     // feet on the floor, the heritage eye from UpdateForRace.
     this.rigRoot.position.set(0, 0, 0);
@@ -355,6 +374,7 @@ export class PaperdollViewport {
     // wielder part identified by the SetupModel's holding-location
     // table at the ParentLocation enum value. Race-cancel on token
     // mismatch so a late await can't land into a newer reload.
+    // (`?paperdollHeld=off` nulled wieldedItems above → pass skipped.)
     if (Array.isArray(wieldedItems) && wieldedItems.length > 0) {
       try {
         await this._attachWieldedChildren(

@@ -30,6 +30,11 @@
 //   that ruined the old moving rig, so it is not summarised, it is CHECKED: any
 //   frame whose set differs from the previous frame's is counted as churn, and
 //   the driver rejects a run whose churn exceeds the mode's budget.
+// * program relinks — only with `?linkProbe=on` (`moving-bench --linkProbe`):
+//   the `__linkProbe` ledger's relink counter differenced across the measure
+//   lap, plus `renderer.info.programs.length` at its end. Reported, never
+//   judged; absent probe = `link: null`, not zero. The bare resident program
+//   count (`programs`) is reported on EVERY run (test-tooling-8).
 //
 // SCALE DISCIPLINE. `instances` is a RESIDENT count (every slot in every
 // bucket). `drawsPerFrame` is SUBMITTED. They differ by ~an order of magnitude
@@ -103,6 +108,21 @@ export function movingRigSource() {
 
     function walkStats() {
       try { return JSON.parse(JSON.stringify(W.__statBatchXStats().walk)); } catch (_) { return null; }
+    }
+
+    // Program ledger (`?linkProbe=on`, scene3d/shader_prewarm.js): its
+    // counters are cumulative, so the measure lap is the DELTA across it.
+    // Absent probe (or a stale build without the ledger) -> null, never 0.
+    function linkSnap() {
+      const lp = W.__linkProbe;
+      if (!lp || typeof lp.ledgerStats !== "function") return null;
+      try {
+        const s = lp.ledgerStats();
+        return s && s.available ? { created: s.created | 0, released: s.released | 0, relinks: s.relinks | 0 } : null;
+      } catch (_) { return null; }
+    }
+    function programCount(renderer) {
+      try { const p = renderer.info.programs; return Array.isArray(p) ? p.length : -1; } catch (_) { return -1; }
     }
 
     W.__mbench = {
@@ -206,6 +226,7 @@ export function movingRigSource() {
 
         // ---- measure pass — the identical lap ----------------------------
         const walk0 = walkStats();
+        const link0 = linkSnap();
         let prevLb = residentLbHash();
         out.lbHashFirst = prevLb.hash;
         let lastRaf = now();
@@ -240,6 +261,16 @@ export function movingRigSource() {
         }
         out.lbHashLast = prevLb.hash;
         const walk1 = walkStats();
+        const link1 = linkSnap();
+        // A program linked during the measure lap that was resident before
+        // (released by an eviction/despawn, then drawn again) is a relink —
+        // a synchronous link the warm lap was supposed to have paid for.
+        const link = link0 && link1 ? {
+          relinks: link1.relinks - link0.relinks,
+          created: link1.created - link0.created,
+          released: link1.released - link0.released,
+          programs: programCount(renderer),
+        } : null;
 
         return {
           frames: n,
@@ -253,6 +284,11 @@ export function movingRigSource() {
           lb: { churnFrames: out.lbChurnFrames, counts: out.lbCounts, hashFirst: out.lbHashFirst, hashLast: out.lbHashLast },
           census: batchCensus(),
           walk0, walk1,
+          link,
+          // RESIDENT program count at the lap's end, ledger or not
+          // (test-tooling-8): renderer.info.programs.length retains nothing,
+          // and the perf ratchet needs it in DEFAULT runs. -1 = unreadable.
+          programs: programCount(renderer),
           errors: this._errors.slice(0, 12),
         };
       },

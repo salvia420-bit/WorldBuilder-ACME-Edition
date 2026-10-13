@@ -58,12 +58,58 @@
 // table that copies four fields to the stack. Now each (did, enum) is read
 // once into frozen plain rows (`_rows`, empty for an enum the table lacks)
 // and the pick runs on those. The pick itself is unchanged.
+//
+// audio-1 (2026-10-13) — play-path misses ride the urgent fetch lane.
+// Retail loads a table's waves when the table loads (SoundTableData::UnPack
+// acclient.c:385399 → SoundManager::CreateSound :383707), and GetSound
+// (:383433) only looks a wave up, so a retail sound never waits on a load.
+// Here, a `resolveSound` that misses this cache was a play stuck behind the
+// speculative ring bakers on the wasm normal lane (fetch_sem FIFO,
+// FetchPriority::Low). Now that miss calls `fetchSoundTable(did, true)`, the
+// urgent lane. A play that finds the table still queued on the normal lane
+// (the entity-spawn prewarm, `get(did)`) races one urgent fetch against it,
+// and the first table to land is kept. `get(did)` with no options, i.e. the
+// spawn prewarm, is unchanged. The wiring passes `urgentPlayFetch:
+// audioUrgentFetchEnabled()`, so `?audioUrgentFetch=off` restores the old
+// single lane. `opts.onInstall(did, stb)` fires once per newly cached table.
+// It is the hook for the opt-in wave prefetch (scene3d/audio/wave_prefetch.js).
 
 const SOUND_TABLE_PREFIX = 0x20;
 
 function isSoundTableDid(did) {
   return ((did >>> 24) & 0xff) === SOUND_TABLE_PREFIX;
 }
+
+/**
+ * audio-1 — `?audioUrgentFetch` (default ON; `off`/`0`/`false` disables).
+ * When on, the scene3d wiring hands the AudioManager a `fetchWave(did, true)`
+ * wrapper. A wave is only fetched when it is about to play. It also builds
+ * SoundTableCache with `urgentPlayFetch: true`.
+ * @param {string} [search]
+ * @returns {boolean}
+ */
+export function audioUrgentFetchEnabled(search) {
+  try {
+    const v = new URLSearchParams(search ?? globalThis.location?.search ?? "").get("audioUrgentFetch");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** Resolve with the first truthy result of `promises`, else null. Never rejects. */
+function firstTable(promises) {
+  return new Promise((resolve) => {
+    let left = promises.length;
+    const settle = (v) => {
+      if (v) resolve(v);
+      else if (--left === 0) resolve(null);
+    };
+    for (const p of promises) Promise.resolve(p).then(settle, () => settle(null));
+  });
+}
+
+const URGENT = Object.freeze({ urgent: true });
 
 /**
  * @typedef {object} ResolvedSoundEntry
@@ -95,6 +141,15 @@ export class SoundTableCache {
    * @param {boolean} [opts.warnOnBadDid=true]
    *        If true, log a one-shot `console.warn` the first time a
    *        non-0x20-prefixed DID is passed in. Defaults to true.
+   * @param {boolean} [opts.urgentPlayFetch=false]
+   *        audio-1: when true, a `resolveSound` miss calls
+   *        `fetchSoundTable(did, true)` (the wasm urgent lane) and races an
+   *        in-flight normal-lane fetch. Off by default here, so a cache built
+   *        without it keeps the single-lane behaviour. The scene3d wiring
+   *        passes `audioUrgentFetchEnabled()`.
+   * @param {(did: number, stb: any) => void} [opts.onInstall]
+   *        audio-1: called once each time a table is newly cached (the
+   *        opt-in wave prefetch hook). Throws are swallowed.
    */
   constructor(opts) {
     if (!opts || typeof opts.fetchSoundTable !== "function") {
@@ -104,11 +159,16 @@ export class SoundTableCache {
     this._rng = typeof opts.rng === "function" ? opts.rng : Math.random;
     this._warnOnBadDid = opts.warnOnBadDid !== false;
     this._badDidWarned = false;
+    this._urgentPlayFetch = opts.urgentPlayFetch === true;
+    this._onInstall = typeof opts.onInstall === "function" ? opts.onInstall : null;
 
     /** @type {Map<number, any>} did → SoundTableJs */
     this.cached = new Map();
     /** @type {Map<number, Promise<any|null>>} did → in-flight fetch */
     this.pending = new Map();
+    /** @type {Set<number>} dids whose in-flight fetch already rides the
+     *  urgent lane (audio-1) */
+    this._urgentPending = new Set();
     /** @type {Map<number, Map<number, ReadonlyArray<ResolvedSoundEntry>>>}
      *  did → soundEnum → frozen plain rows (audio-5) */
     this._rows = new Map();
@@ -118,6 +178,10 @@ export class SoundTableCache {
     this.missCount = 0;
     this.errorCount = 0;
     this.lastError = null;
+    // audio-1: urgent-lane fetches issued, and how many of them were a play
+    // overtaking a normal-lane fetch already in flight.
+    this.urgentFetchCount = 0;
+    this.escalationCount = 0;
   }
 
   /**
@@ -132,10 +196,16 @@ export class SoundTableCache {
    * Wasm failures clear the `pending` entry so a retry can re-fetch
    * (no poison-caching). Returns `null` on failure.
    *
+   * `opts.urgent` (audio-1, play paths only — `resolveSound` passes it)
+   * fetches a miss on the wasm urgent lane when the cache was built with
+   * `urgentPlayFetch`, and races an urgent fetch against a normal-lane fetch
+   * already in flight. Without it (the spawn prewarm) nothing changes.
+   *
    * @param {number} did
+   * @param {{urgent?: boolean}} [opts]
    * @returns {Promise<any|null>} SoundTableJs handle or null
    */
-  async get(did) {
+  async get(did, opts) {
     const key = (did >>> 0);
     if (!isSoundTableDid(key)) {
       if (this._warnOnBadDid && !this._badDidWarned) {
@@ -154,44 +224,108 @@ export class SoundTableCache {
       this.hitCount += 1;
       return hit;
     }
+    const urgent = this._urgentPlayFetch && opts?.urgent === true;
     const inflight = this.pending.get(key);
     if (inflight) {
+      // audio-1: a play that finds the table still queued on the normal lane
+      // (typically the spawn prewarm) races one urgent fetch against it.
+      if (urgent && !this._urgentPending.has(key)) {
+        return this._escalate(key, inflight);
+      }
       // Another caller is already fetching — share the Promise.
       // (Doesn't bump hit/miss; the in-flight resolution will.)
       return inflight;
     }
     this.missCount += 1;
-    const promise = (async () => {
-      let stb;
-      try {
-        stb = await this._fetchSoundTable(key);
-      } catch (e) {
-        this.errorCount += 1;
-        this.lastError = String(e?.message ?? e);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[H3/sound-cache] fetchSoundTable(0x${key
-            .toString(16)
-            .padStart(8, "0")}) failed:`,
-          e
-        );
-        return null;
-      }
-      if (!stb) {
-        // Unexpected — wasm returned a falsy SoundTableJs. Treat as
-        // a soft error so callers see null.
-        this.errorCount += 1;
-        return null;
-      }
-      this.cached.set(key, stb);
-      return stb;
-    })();
+    if (urgent) {
+      this.urgentFetchCount += 1;
+      this._urgentPending.add(key);
+    }
+    const promise = this._fetchAndInstall(key, urgent);
     this.pending.set(key, promise);
     try {
       return await promise;
     } finally {
-      this.pending.delete(key);
+      // Only clear our own entry: an escalation may have replaced it.
+      if (this.pending.get(key) === promise) {
+        this.pending.delete(key);
+        this._urgentPending.delete(key);
+      }
     }
+  }
+
+  /**
+   * One wasm fetch + install. Never rejects: failures count, warn, and
+   * resolve null. When an escalated race has already installed this table,
+   * the loser's handle is freed and the installed one is returned.
+   * @param {number} key
+   * @param {boolean} urgent
+   * @returns {Promise<any|null>}
+   */
+  async _fetchAndInstall(key, urgent) {
+    let stb;
+    try {
+      // The normal lane keeps the single-argument call (pre-audio-1 shape).
+      stb = urgent
+        ? await this._fetchSoundTable(key, true)
+        : await this._fetchSoundTable(key);
+    } catch (e) {
+      this.errorCount += 1;
+      this.lastError = String(e?.message ?? e);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[H3/sound-cache] fetchSoundTable(0x${key
+          .toString(16)
+          .padStart(8, "0")}) failed:`,
+        e
+      );
+      return null;
+    }
+    if (!stb) {
+      // Unexpected — wasm returned a falsy SoundTableJs. Treat as
+      // a soft error so callers see null.
+      this.errorCount += 1;
+      return null;
+    }
+    const installed = this.cached.get(key);
+    if (installed) {
+      if (installed !== stb && typeof stb.free === "function") {
+        try { stb.free(); } catch (_) {}
+      }
+      return installed;
+    }
+    this.cached.set(key, stb);
+    if (this._onInstall) {
+      try {
+        this._onInstall(key, stb);
+      } catch (e) {
+        this.lastError = String(e?.message ?? e);
+      }
+    }
+    return stb;
+  }
+
+  /**
+   * audio-1: race an urgent fetch against the normal-lane fetch `inflight`
+   * for `key`. The first table to land is installed and returned. Later
+   * callers share the race through `pending`.
+   * @param {number} key
+   * @param {Promise<any|null>} inflight
+   * @returns {Promise<any|null>}
+   */
+  _escalate(key, inflight) {
+    this.urgentFetchCount += 1;
+    this.escalationCount += 1;
+    this._urgentPending.add(key);
+    const raced = firstTable([inflight, this._fetchAndInstall(key, true)]);
+    this.pending.set(key, raced);
+    raced.then(() => {
+      if (this.pending.get(key) === raced) {
+        this.pending.delete(key);
+        this._urgentPending.delete(key);
+      }
+    });
+    return raced;
   }
 
   /**
@@ -223,7 +357,8 @@ export class SoundTableCache {
    * @returns {Promise<ResolvedSoundEntry|null>}
    */
   async resolveSound(did, soundEnum) {
-    const stb = await this.get(did);
+    // Every resolveSound caller is about to play the sound (audio-1).
+    const stb = await this.get(did, URGENT);
     if (!stb) return null;
     const rows = this._rowsFor(did >>> 0, soundEnum >>> 0, stb);
     if (!rows || rows.length === 0) {
@@ -334,7 +469,8 @@ export class SoundTableCache {
    *
    * @returns {{cached: number, pending: number, total: number,
    *           hits: number, misses: number, errors: number,
-   *           lastError: string|null}}
+   *           lastError: string|null, urgentFetches: number,
+   *           escalations: number}}
    */
   stats() {
     return {
@@ -345,6 +481,8 @@ export class SoundTableCache {
       misses: this.missCount,
       errors: this.errorCount,
       lastError: this.lastError,
+      urgentFetches: this.urgentFetchCount,
+      escalations: this.escalationCount,
     };
   }
 

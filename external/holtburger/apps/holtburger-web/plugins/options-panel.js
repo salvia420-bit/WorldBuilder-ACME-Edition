@@ -33,7 +33,8 @@
 //              camera, key bindings and character options.
 //
 // Pages:
-//   Gameplay  — Interface (HUD scale, reset window positions), Mouse &
+//   Gameplay  — "Exit to Character Selection" (retail 0x10000203),
+//               Interface (HUD scale, reset window positions), Mouse &
 //               Camera (UseMouseTurning 0x31 + ui/camera_settings.js),
 //               Keyboard ("Configure keyboard…" → bindings page, like
 //               retail's GameplayOptions_Keyboard_Button), About.
@@ -53,6 +54,9 @@ import {
   getRetailKeyMap,
   lookupRetailDefault,
   getManifestHotkeyConflicts,
+  retailActionStatus,
+  sameBinding,
+  findConflictingBindings,
 } from "../ui/keymap.js";
 import {
   getHudScale,
@@ -64,7 +68,9 @@ import {
   HUD_SCALE_MULT_MAX,
 } from "../ui/hud_scale.js";
 import * as windowPosition from "../ui/ac_window_position.js";
+import { CHARACTER_OPTION_LOCK_UI, setGlobalLock, onGlobalLockChange } from "../ui/ui_lock.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
+import { logOffAvailable, requestEndCharacterSession } from "../ui/end_character_session.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
 const SP = "./data/ui-sprites";
@@ -347,6 +353,15 @@ function ensureStyles() {
     .hb-opt-keyrow .hbk-btn-small { min-width: 40px; }
     .hb-opt-keyrow .hbk-icon-btn { width: 16px; height: 16px; font-size: 11px; line-height: 1; }
     .hb-opt-keyrow .hbk-icon-btn:disabled { opacity: 0.3; cursor: default; }
+    /* input-options-6: retail rows this client does not dispatch / keys it hard-codes. */
+    .hb-opt-keyrow.is-unavailable { opacity: 0.55; }
+    .hb-opt-keyrow.is-unavailable > .hb-opt-keylabel { color: var(--hbk-text-dim); }
+    .hb-opt-key.is-unavailable { color: var(--hbk-text-dim); font-style: italic; }
+    .hb-opt-key > .hb-opt-keyretail { display: block; font-size: 10px; color: var(--hbk-text-dim); }
+    .hb-opt-keytag {
+      flex: 0 0 60px; text-align: center;
+      font-size: 10px; color: var(--hbk-text-dim);
+    }
     .hb-opt-subhead {
       padding: 6px 6px 1px;
       color: var(--hbk-gold);
@@ -469,8 +484,16 @@ function revertSession(session) {
   for (const [idx, orig] of session.charOptions) {
     saveCharacterOption(idx, orig);
     try { handle?.setCharacterOption?.(idx >>> 0, orig); } catch (_) {}
+    noteCharacterOptionSent(idx, orig);
   }
   session.charOptions.clear();
+}
+
+// input-options-4 — "Lock UI" (0x33) is retail's global LockUI
+// (PlayerModule::SetLockUI): apply it to every retail floaty right away
+// (ui/ui_lock.js). The setCharacterOption call already made is the only send.
+function noteCharacterOptionSent(idx, value) {
+  if ((idx >>> 0) === CHARACTER_OPTION_LOCK_UI) setGlobalLock(value, { send: false });
 }
 
 // ---------------------------------------------------------------------
@@ -482,6 +505,10 @@ function revertSession(session) {
 
 let captureFor = null; // labelHash (hex string) currently in capture mode
 let captureHandler = null;
+// input-options-6 — what the last capture's key collides with (live
+// defaults included, ui/keymap.js findConflictingBindings); shown at the
+// top of the page until the next capture or Back.
+let captureClash = null;
 
 function endCapture() {
   if (captureHandler) {
@@ -493,6 +520,7 @@ function endCapture() {
 
 function startCapture(labelHashHex, refresh) {
   endCapture();
+  captureClash = null;
   captureFor = labelHashHex;
   captureHandler = (ev) => {
     // Esc cancels without binding.
@@ -515,23 +543,107 @@ function startCapture(labelHashHex, refresh) {
     ev.preventDefault();
     ev.stopPropagation();
 
-    setBinding(labelHashHex, {
+    const captured = {
       code: ev.code,
       shift: ev.shiftKey,
       ctrl: ev.ctrlKey,
       alt: ev.altKey,
       meta: ev.metaKey,
-    });
+    };
+    setBinding(labelHashHex, captured);
+    try {
+      const clash = findConflictingBindings(
+        captured.code, captured.shift, captured.ctrl, captured.alt, captured.meta, labelHashHex);
+      captureClash = clash.length > 0
+        ? { key: formatBinding(captured), labels: [...new Set(clash.map((c) => c.label))] }
+        : null;
+    } catch (_) { captureClash = null; }
     endCapture();
     refresh();
   };
   window.addEventListener("keydown", captureHandler, true);
 }
 
+/**
+ * input-options-6 — how one "Game actions" row reads, from the action's
+ * status in this client (ui/keymap.js retailActionStatus) and retail's
+ * KeyMap default. Pure (exported for tests/keys_page_live_rows.test.mjs).
+ *
+ *   rebindable  — Bind/× rebind `bindingId`, the handler's own key.
+ *   fixed       — this client's hard-coded key, no Bind.
+ *   unavailable — greyed, "not available", no Bind.
+ * `retailHint` ("retail A") is set when retail's default differs from the
+ * key that works here (Turn Left: Q, retail A).
+ */
+export function retailActionRowView(status, retailDefault) {
+  const retail = retailDefault && retailDefault.code ? retailDefault : null;
+  const retailKey = retail ? formatBinding(retail) : null;
+  const state = status?.status === "rebindable" || status?.status === "fixed"
+    ? status.status : "unavailable";
+  if (state === "unavailable") {
+    return {
+      state,
+      bindingId: null,
+      defaultBinding: null,
+      keyText: "not available",
+      retailHint: null,
+      title: `Not available in this client${retailKey ? ` (retail default: ${retailKey})` : ""}`,
+    };
+  }
+  const eff = status.binding && status.binding.code ? status.binding : null;
+  const retailHint = retailKey && !(eff && sameBinding(eff, retail)) ? `retail ${retailKey}` : null;
+  const how = state === "fixed" ? "Fixed key in this client" : "Default key in this client";
+  return {
+    state,
+    bindingId: state === "rebindable" ? status.bindingId : null,
+    defaultBinding: status.defaultBinding ?? null,
+    keyText: eff ? formatBinding(eff) : "—",
+    retailHint,
+    title: retailHint ? `${how} (${retailHint})` : how,
+  };
+}
+
+function appendRetailHint(keyEl, hint) {
+  const r = document.createElement("span");
+  r.className = "hb-opt-keyretail";
+  r.textContent = hint;
+  keyEl.appendChild(r);
+}
+
+// input-options-6 — a retail row with no Bind button (fixed key or not
+// available in this client).
+function buildStaticKeyRow(label, view) {
+  const unavailable = view.state === "unavailable";
+  const row = document.createElement("div");
+  row.className = "hb-opt-row hb-opt-keyrow" + (unavailable ? " is-unavailable" : "");
+
+  const l = document.createElement("span");
+  l.className = "hb-opt-keylabel";
+  l.textContent = label;
+  l.title = unavailable ? `${label} — not available in this client` : label;
+  row.appendChild(l);
+
+  const k = document.createElement("span");
+  k.className = "hb-opt-key" + (unavailable ? " is-unavailable" : " is-default");
+  k.textContent = view.keyText;
+  if (view.retailHint) appendRetailHint(k, view.retailHint);
+  k.title = view.title;
+  row.appendChild(k);
+
+  const tag = document.createElement("span");
+  tag.className = "hb-opt-keytag";
+  tag.textContent = unavailable ? "" : "fixed";
+  tag.title = unavailable ? view.title : "This key cannot be changed here";
+  row.appendChild(tag);
+  return row;
+}
+
 // One row in the keybinding table. `defaultBinding` accepts a
 // KeyboardEvent.code string (local actions), a {code,shift,ctrl,alt,meta}
-// object (retail KeyMap defaults) or null (no default).
-function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh) {
+// object (retail KeyMap defaults) or null (no default). `opts` (retail
+// "Game actions" rows, input-options-6): `defaultTitle` replaces the
+// "Retail default" tooltip, `retailHint` adds retail's key under this one.
+function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh, opts = {}) {
   const defaultBindingObj = (typeof defaultBinding === "string")
     ? { code: defaultBinding, shift: false, ctrl: false, alt: false, meta: false }
     : defaultBinding;
@@ -556,7 +668,11 @@ function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh)
     : (effectiveBinding ? formatBinding(effectiveBinding) : "—");
   k.title = inCapture
     ? "Press the new key (Esc cancels)"
-    : (isDefault ? "Retail default" : (userBinding ? "Your binding" : "Unbound"));
+    : (isDefault ? (opts.defaultTitle ?? "Retail default") : (userBinding ? "Your binding" : "Unbound"));
+  if (!inCapture && opts.retailHint) {
+    appendRetailHint(k, opts.retailHint);
+    k.title += ` (${opts.retailHint})`;
+  }
   row.appendChild(k);
 
   const bindBtn = document.createElement("button");
@@ -617,7 +733,7 @@ function renderKeysPage(bodyEl, env) {
   back.type = "button";
   back.className = "hbk-btn-small hbk-brown";
   back.textContent = "‹ Back";
-  back.addEventListener("click", () => { endCapture(); env.showPage(null); });
+  back.addEventListener("click", () => { endCapture(); captureClash = null; env.showPage(null); });
   head.appendChild(back);
   const t = document.createElement("span");
   t.textContent = "Key Bindings";
@@ -625,6 +741,21 @@ function renderKeysPage(bodyEl, env) {
   bodyEl.appendChild(head);
 
   bodyEl.appendChild(note("Click Bind, then press the new key. Esc cancels. × restores the default."));
+
+  // input-options-6 — the key just bound also fires these (user bindings
+  // and live defaults alike).
+  if (captureClash) {
+    const box = document.createElement("div");
+    box.className = "hb-opt-conflicts";
+    const title = document.createElement("div");
+    title.className = "hb-opt-conflicts-title";
+    title.textContent = `${captureClash.key} is also used by:`;
+    box.appendChild(title);
+    const r = document.createElement("div");
+    r.textContent = captureClash.labels.join(", ");
+    box.appendChild(r);
+    bodyEl.appendChild(box);
+  }
 
   // HUD rec #113 — plugin-manifest hotkey conflicts (two manifests
   // declaring the same default key; the host's last-wins resolution
@@ -653,14 +784,17 @@ function renderKeysPage(bodyEl, env) {
   }
 
   // Retail ActionMap actions grouped by their inputMap category. Defaults
-  // come from the retail KeyMap (gmDefaultMap, DAT 0x14000000) joined by
-  // (inputMap, actionHash).
+  // come from the retail KeyMap (gmDefaultMap 0x14000000 + DefaultMap
+  // 0x14000002) joined by (inputMap, actionHash). input-options-6: a row
+  // is bindable only when a handler in this client dispatches the action
+  // (ui/keymap.js retailActionStatus); it then rebinds that handler's key.
   bodyEl.appendChild(sectionTitle("Game actions"));
   const actions = window.__acKeybindings;
   if (!Array.isArray(actions) || actions.length === 0) {
     bodyEl.appendChild(note("The game's key map is still loading — reopen this page in a moment."));
     return;
   }
+  bodyEl.appendChild(note("Greyed actions are not available in this client. Where this client uses another key than retail, retail's key is shown under it."));
   if (!getRetailKeyMap()) {
     loadRetailKeyMap().then((km) => { if (km && bodyEl.isConnected) refresh(); }).catch(() => {});
   }
@@ -680,10 +814,17 @@ function renderKeysPage(bodyEl, env) {
     sub.textContent = ACTION_CATEGORY_NAMES[inputMap] ?? "Other";
     bodyEl.appendChild(sub);
     const sorted = [...group.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label));
-    for (const [labelHash, info] of sorted) {
-      const hashHex = `0x${labelHash.toString(16).toUpperCase().padStart(8, "0")}`;
+    for (const [, info] of sorted) {
       const retailDefault = lookupRetailDefault(inputMap, info.actionHash);
-      bodyEl.appendChild(buildBindingRow(hashHex, info.label, retailDefault, bindings, refresh));
+      const view = retailActionRowView(retailActionStatus(info.actionHash), retailDefault);
+      if (view.state === "rebindable") {
+        bodyEl.appendChild(buildBindingRow(view.bindingId, info.label, view.defaultBinding, bindings, refresh, {
+          defaultTitle: "Default key in this client",
+          retailHint: view.retailHint,
+        }));
+      } else {
+        bodyEl.appendChild(buildStaticKeyRow(info.label, view));
+      }
     }
   }
 }
@@ -704,8 +845,9 @@ function renderKeysPage(bodyEl, env) {
 
 // Rec #89 — full ACE CharacterOption catalog (0x00-0x34 inclusive) per
 // ace-server Source/ACE.Entity/Enum/CharacterOption.cs. 0x0E
-// VividTargetingIndicator routes through scene3d/target_ring.js; 0x35 /
-// 0x36 are *Default sentinels.
+// VividTargetingIndicator gates the target brackets + off-screen arrow in
+// scene3d/selection_brackets.js (retail VividTargetIndicator m_bDisplayOn;
+// hud-ui-6); 0x35 / 0x36 are *Default sentinels.
 const CHARACTER_OPTION_GROUPS = [
   {
     section: "Combat",
@@ -734,6 +876,7 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x14, label: "Show coordinates by the radar" },
       { idx: 0x15, label: "Display spell durations" },
       { idx: 0x08, label: "Display 3D tooltips" },
+      { idx: 0x0E, label: "Vivid targeting indicator" },
       { idx: 0x33, label: "Lock UI" },
       { idx: 0x1A, label: "Show crafting success dialog" },
       { idx: 0x2D, label: "Confirm use of rare gems" },
@@ -903,6 +1046,7 @@ function buildCharacterOptionRow(opt, ctx, env) {
         // Wire failure is best-effort — keep local state, log only.
         console.warn(`[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`, e);
       }
+      noteCharacterOptionSent(opt.idx, value);
     },
     { disabled: offline },
   );
@@ -928,9 +1072,22 @@ const AUDIO_BUSES = [
   { key: "effect",  label: "Sound effects", setter: "setEffectGain" },
   { key: "ambient", label: "Ambient sound", setter: "setAmbientGain" },
 ];
+// audio-5: retail's sound on/off preferences (SoundManager::InitPrefs,
+// acclient.c 383284; all default on), as booleans in the same object —
+// AudioManager reads them at construction (loadSavedAudioPrefs). Retail's
+// "Interface Sound Volume" slider has no reader in the client (UI sounds use
+// the effect slider), so there is no interface-volume slider here.
+const AUDIO_PREFS = [
+  { key: "playOnlyWhenActive", label: "Play sounds only when the game is active", setter: "setPlayOnlyWhenActive" },
+  { key: "interfaceSounds",    label: "Interface sounds",                         setter: "setInterfaceSoundsEnabled" },
+  { key: "ambientSounds",      label: "Ambient sounds",                           setter: "setAmbientSoundsEnabled" },
+];
 
 function loadAudioGains() {
-  const defaults = { master: 1.0, effect: 1.0, ambient: 1.0 };
+  const defaults = {
+    master: 1.0, effect: 1.0, ambient: 1.0,
+    playOnlyWhenActive: true, interfaceSounds: true, ambientSounds: true,
+  };
   try {
     const raw = localStorage.getItem(LS_AUDIO_KEY);
     if (!raw) return defaults;
@@ -957,6 +1114,9 @@ function applyAudioGains(gains) {
   for (const bus of AUDIO_BUSES) {
     try { manager[bus.setter]?.(gains[bus.key]); } catch (_) {}
   }
+  for (const pref of AUDIO_PREFS) {
+    try { manager[pref.setter]?.(gains[pref.key] !== false); } catch (_) {}
+  }
 }
 
 function renderSoundSection(bodyEl) {
@@ -975,6 +1135,13 @@ function renderSoundSection(bodyEl) {
         try { getAudioManager()?.[bus.setter]?.(g); } catch (_) {}
       },
     }));
+  }
+  for (const pref of AUDIO_PREFS) {
+    const { row } = boolOptionRow(pref.label, gains[pref.key] !== false, (value) => {
+      saveAudioGain(pref.key, value);
+      try { getAudioManager()?.[pref.setter]?.(value); } catch (_) {}
+    });
+    bodyEl.appendChild(row);
   }
   if (!getAudioManager()) {
     bodyEl.appendChild(note("Sound starts with your first click in the world; your levels are saved until then."));
@@ -1099,6 +1266,22 @@ function resetWindowPositions(env) {
 
 function renderGameplayTab(bodyEl, env) {
   bodyEl.innerHTML = "";
+  // inventory-session-5: GameplayOptions_LeaveWorld_Button (0x10000203, the
+  // page's first control) — gmGameplayOptionsUI::ListenToElementMessage
+  // sends CM_UI::SendNotice_EndCharacterSession(1), the same Yes / No
+  // confirmation as the indicator strip's LogoffButton. Only on a page with
+  // the log-off path (index.html __logOutToCharacterSelect).
+  if (logOffAvailable(window)) {
+    const leaveRow = document.createElement("div");
+    leaveRow.className = "hb-opt-btnrow";
+    const leaveBtn = document.createElement("button");
+    leaveBtn.type = "button";
+    leaveBtn.className = "hbk-btn";
+    leaveBtn.textContent = "Exit to Character Selection";
+    leaveBtn.addEventListener("click", () => { requestEndCharacterSession({ win: window }).catch(() => {}); });
+    leaveRow.appendChild(leaveBtn);
+    bodyEl.appendChild(leaveRow);
+  }
   renderInterfaceSection(bodyEl, env);
 
   // Mouse & Camera — UseMouseTurning (CharacterOption 0x31, the one wire
@@ -1279,6 +1462,7 @@ export const view = {
 
     function renderActive(page) {
       endCapture();
+      captureClash = null;
       runPageCleanups();
       env.charBoxes.clear();
       bodyEl.scrollTop = 0;
@@ -1327,12 +1511,20 @@ export const view = {
     } catch (e) {
       console.warn("[options-panel] playerStatsUpdated subscribe failed:", e);
     }
+    // input-options-4 — the radar lock button and /lockui flip the same
+    // LockUI bit; keep the "Lock UI" box on it.
+    const unsubLockUi = onGlobalLockChange((locked) => {
+      const cb = env.charBoxes.get(CHARACTER_OPTION_LOCK_UI);
+      if (cb) cb.checked = !!locked;
+    });
 
     return () => {
       endCapture();
+      captureClash = null;
       runPageCleanups();
       clearTimeout(statusTimer);
       try { unsubStats?.(); } catch (_) {}
+      unsubLockUi();
       root.remove();
     };
   },

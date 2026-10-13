@@ -13,8 +13,8 @@
 
 use crate::*;
 use crate::chat_format::{
-    can_hear, format_emote_line, format_hear_speech, strip_name_markers, textbox_visible,
-    TEXT_TYPE_EMOTE,
+    can_hear, format_emote_line, format_hear_speech, ranged_speech_gate_enabled,
+    ranged_speech_in_range, strip_name_markers, textbox_visible, TEXT_TYPE_EMOTE,
 };
 use crate::death_chat::player_killed_line_visible;
 use crate::session::{LoopCtx, LoopFlow};
@@ -54,6 +54,39 @@ fn squelch_inputs(
     };
     let globals_mask = snap.globals_mask;
     (entry, globals_mask)
+}
+
+/// chat-errors-3 (2026-10-13): retail `HandleRangedTalkEvent`'s
+/// `ObjectsInRange(player_id, sender_id, range, 0, 0)` against this client's
+/// object table (`chat_format::ranged_speech_in_range`). The player side is
+/// the client-predicted runtime pose (`entity.position` can keep a stale
+/// landblock after a walked crossing — see `publish_cell_scene_snapshot`),
+/// falling back to the entity pose. No WorldState yet means no player object,
+/// so the line drops as in retail.
+fn ranged_speech_audible(
+    world: &std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>>,
+    sender: u32,
+    range: f32,
+) -> bool {
+    let Ok(cell) = world.try_borrow() else {
+        // Not a retail state (nothing holds the world across this arm);
+        // keep the line rather than lose it.
+        return true;
+    };
+    let Some(w) = cell.as_ref() else {
+        return false;
+    };
+    let local = w.player.guid.0;
+    let is_self = local != 0 && sender == local;
+    let player = w
+        .local_player_runtime_pose()
+        .or_else(|| w.player_position());
+    ranged_speech_in_range(
+        player.as_ref(),
+        w.entities.get(sender).map(|e| &e.position),
+        is_self,
+        range,
+    )
 }
 
 pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow {
@@ -148,9 +181,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // HearSpeech.
             // R-chat (2026-10-08): retail HandleRangedTalkEvent
             // (acclient.c:434662) has no own-speaker sentence and drops a
-            // squelched sender (IsSquelched; its range gate is not ported).
+            // squelched sender (IsSquelched).
+            // chat-errors-3 (2026-10-13): … and a sender farther than the
+            // wire `range` (ObjectsInRange, :436730) or not in the object
+            // table. ACE sends a ranged Say emote out to 96 m with the
+            // emote's Extent as `range`. Gates the line AND the bubble;
+            // `?rangedSpeechGate=off` restores the squelch-only check.
             let (entry, globals_mask) = squelch_inputs(latest_squelch, data.sender);
-            if can_hear(data.sender, data.chat_type, entry, globals_mask) {
+            if can_hear(data.sender, data.chat_type, entry, globals_mask)
+                && (!ranged_speech_gate_enabled(&flag_search())
+                    || ranged_speech_audible(world, data.sender, data.range))
+            {
                 let category = chat_category_for_message_type(data.chat_type);
                 queued_events.borrow_mut().push(ClientEvent {
                     kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,

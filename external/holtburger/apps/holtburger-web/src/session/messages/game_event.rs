@@ -40,6 +40,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         entity_seeded,
         heartbeat_armed,
         seq_tracker,
+        inventory_requests,
         ..
     } = &mut *ctx;
     match message {
@@ -240,6 +241,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     });
                 }
                 holtburger_protocol::messages::GameEvent::PopupString(data) => {
+                    // chat-errors-7 (2026-10-13): retail opens an OK message
+                    // dialog (Handle_Communication__PopUpString, acclient.c:
+                    // 425219), not a chat line. This event stays for plugins
+                    // and rynth; app/popup_string.js turns it into the dialog,
+                    // keyed on this exact "[Popup] " prefix and on
+                    // CHAT_CATEGORY_POPUP, which no other arm may use.
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                         string_payload: Some(format!("[Popup] {}", data.message)),
@@ -251,29 +258,23 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::AttackerNotification(
                     data,
                 ) => {
-                    // F10-2 — retail attacker line, e.g.
-                    // "Critical hit!  You mangle Drudge
-                    // Ravener for 37 points of damage!".
-                    // The verb encodes type + severity
-                    // (acclient.c GetDamageAdjective);
+                    // F10-2 / combat-magic-3 — retail attacker
+                    // line, e.g. "Critical hit!  You mangle
+                    // Drudge Ravener for 37 points of slashing
+                    // damage!" (acclient.c
+                    // HandleAttackerNotificationEvent, built in
+                    // `chat_format::format_attacker_hit_line`).
                     // `health_percent` is the severity =
                     // damage / MaxHealth (NOT the target's
-                    // remaining health), so it drives the
-                    // verb but is no longer printed as a
-                    // misleading percent.
-                    let prefix = attack_conditions_prefix(
-                        data.critical_hit,
-                        data.attack_conditions,
-                    );
-                    let verb = damage_severity_verb(
-                        data.damage_type,
+                    // remaining health): it picks the verb and
+                    // is never printed.
+                    let line = crate::chat_format::format_attacker_hit_line(
+                        &data.defender_name,
+                        data.damage_type.bits(),
                         data.health_percent,
-                        false,
-                    );
-                    let pts = if data.damage == 1 { "point" } else { "points" };
-                    let line = format!(
-                        "{}You {} {} for {} {} of damage!",
-                        prefix, verb, data.defender_name, data.damage, pts,
+                        data.damage,
+                        data.critical_hit,
+                        data.attack_conditions.bits(),
                     );
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
@@ -307,30 +308,23 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::DefenderNotification(
                     data,
                 ) => {
-                    // F10-2 — retail defender line, e.g.
-                    // "Banderling bashes you for 18 points
-                    // of damage to your chest!". Plural
-                    // verb form; `health_percent` is the
-                    // severity (damage / MaxHealth), used
-                    // for the verb only.
-                    let prefix = attack_conditions_prefix(
-                        data.critical_hit,
-                        data.attack_conditions,
-                    );
-                    let verb = damage_severity_verb(
-                        data.damage_type,
+                    // F10-2 / combat-magic-3 — retail defender
+                    // line, e.g. "Banderling bashes your chest
+                    // for 18 points of bludgeoning damage!"
+                    // (acclient.c HandleDefenderNotificationEvent,
+                    // built in
+                    // `chat_format::format_defender_hit_line`).
+                    // Plural verb form; `health_percent` is the
+                    // severity (damage / MaxHealth), used for
+                    // the verb only.
+                    let line = crate::chat_format::format_defender_hit_line(
+                        &data.attacker_name,
+                        data.damage_type.bits(),
                         data.health_percent,
-                        true,
-                    );
-                    let pts = if data.damage == 1 { "point" } else { "points" };
-                    let line = format!(
-                        "{}{} {} you for {} {} of damage to your {}!",
-                        prefix,
-                        data.attacker_name,
-                        verb,
                         data.damage,
-                        pts,
                         damage_location_label(data.damage_location),
+                        data.critical_hit,
+                        data.attack_conditions.bits(),
                     );
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
@@ -367,10 +361,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 ) => {
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(format!(
-                            "{} evaded your attack.",
-                            data.defender_name
-                        )),
+                        string_payload: Some(
+                            crate::chat_format::format_evasion_attacker_line(
+                                &data.defender_name,
+                            ),
+                        ),
                         u32_payload: Some(0),
                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                         f32_payload: None,
@@ -392,12 +387,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::EvasionDefenderNotification(
                     data,
                 ) => {
+                    // combat-magic-3: retail "You evaded <attacker>!"
+                    // (acclient.c HandleEvasionDefenderNotificationEvent).
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(format!(
-                            "You evaded {}'s attack.",
-                            data.attacker_name
-                        )),
+                        string_payload: Some(
+                            crate::chat_format::format_evasion_defender_line(
+                                &data.attacker_name,
+                            ),
+                        ),
                         u32_payload: Some(0),
                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                         f32_payload: None,
@@ -658,6 +656,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                         holtburger_common::properties::ObjectDescriptionFlag::REQUIRES_PACK_SLOT,
                                     ) || desc.items_capacity.unwrap_or(0) > 0
                                         || desc.containers_capacity.unwrap_or(0) > 0,
+                                    // hud-ui-3: retail icon composite inputs
+                                    // (IconData::RenderIcons).
+                                    ui_effects: desc.ui_effects.unwrap_or(0),
+                                    icon_overlay: desc.icon_overlay.map(u32::from).unwrap_or(0),
+                                    icon_underlay: desc.icon_underlay.map(u32::from).unwrap_or(0),
                                 }
                             })
                             .collect();
@@ -910,34 +913,34 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         // `Unable to move to object!`, …) at the same
                         // transient type (0x1A), instead of the
                         // `[Use failed] <Debug>` label. Codes retail keeps
-                        // silent (ILeftTheWorld / ITeleported) print
-                        // nothing; an unknown code keeps the readable
-                        // sentence-case fallback as a system line.
+                        // silent (ILeftTheWorld / ITeleported /
+                        // TurbineChatIsEnabled) print nothing; an unknown
+                        // code keeps the readable sentence-case fallback
+                        // as a system line. chat-errors-1: that last step
+                        // is the WeenieError arms' shared
+                        // `chat_format::weenie_error_chat_line`; UseDone's
+                        // use-3 silence stays unconditional (`true`).
+                        // chat-errors-2: that shared line carries the
+                        // generated retail table's text + category
+                        // (`?retailFailureText=off` restores the old one).
+                        let retail_text =
+                            crate::chat_format::retail_failure_text_enabled(
+                                &flag_search(),
+                            );
                         let line = match spellcast_error_text(code) {
                             Some(text) => {
                                 Some((text.to_string(), CHAT_CATEGORY_TRANSIENT))
                             }
-                            None if holtburger_core::errors::is_silent_failure(
+                            None => match holtburger_core::errors::retail_failure_text(
                                 data.error,
-                            ) =>
-                            {
-                                None
-                            }
-                            None => Some(
-                                match holtburger_core::errors::retail_failure_text(
-                                    data.error,
-                                ) {
-                                    Some(text) => {
-                                        (text.to_string(), CHAT_CATEGORY_TRANSIENT)
-                                    }
-                                    None => (
-                                        holtburger_core::errors::format_weenie_error(
-                                            data.error, None,
-                                        ),
-                                        failure_chat_category(data.error),
-                                    ),
-                                },
-                            ),
+                            ) {
+                                Some(text) => {
+                                    Some((text.to_string(), CHAT_CATEGORY_TRANSIENT))
+                                }
+                                None => crate::chat_format::weenie_error_chat_line_with(
+                                    data.error, None, true, retail_text,
+                                ),
+                            },
                         };
                         if let Some((message, category)) = line {
                             queued_events.borrow_mut().push(ClientEvent {
@@ -969,36 +972,104 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // hooks. The transient chat line still
                     // renders the toast/chat-log copy.
                     let code = data.error as u32;
-                    let label = format!("{:?}", data.error);
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED,
-                        string_payload: Some(label.clone()),
-                        u32_payload: Some(data.item_guid.0),
-                        u32_payload_2: Some(code),
-                        f32_payload: None,
-                    });
-                    // vendor-buy-2 (round 5): ACE reports every refused
-                    // buy / sale as this event naming the PLAYER with
-                    // code 0; retail adds no text for a refused shop
-                    // event (see chat_format::inventory_save_failed_chat_line).
-                    let player_guid = world
-                        .borrow()
-                        .as_ref()
-                        .map(|w| u32::from(w.player.guid))
-                        .unwrap_or(0);
-                    if let Some(message) = crate::chat_format::inventory_save_failed_chat_line(
-                        data.item_guid.0,
-                        player_guid,
-                        code,
-                        &label,
-                    ) {
+                    // messages-objects-1 (2026-10-13): retail's dispatch
+                    // (acclient.c:394949) blames the pending inventory
+                    // request — `inventory_request`: the wire guid's own
+                    // request first, else retail's substitution — and
+                    // `ServerSaysAttemptFailed` (:439317) prints "The <name>
+                    // can't be <verb><suffix>" at 0x1A, then the code's own
+                    // HandleFailureEvent text unless the dispatch skips the
+                    // code. Code 0 with nothing pending prints nothing, and
+                    // ACE's refused shop event (naming the player) blames
+                    // the pending vendor: no line (vendor-buy-2 falls out).
+                    // kind=48 keeps u32 = the WIRE guid and u32b = the code
+                    // (rynth loot_loop / VT host_signals key on them); its
+                    // string is now that line ("" = none). The request is
+                    // answered either way; `?retailAttemptFailed=off`
+                    // restores the Debug-label payload and the old line.
+                    let (object_guid, request) =
+                        inventory_requests.attempt_failed(data.item_guid.0);
+                    if crate::inventory_request::retail_attempt_failed_enabled(&flag_search()) {
+                        let names = world.borrow().as_ref().and_then(|w| {
+                            use holtburger_common::properties::{
+                                PropertyString, WorldObjectExt as _,
+                            };
+                            w.entities.get(holtburger_common::Guid(object_guid)).map(|e| {
+                                crate::inventory_request::ObjectNames {
+                                    name: e
+                                        .properties
+                                        .strings
+                                        .get(&PropertyString::Name)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    plural_name: e.plural_name().unwrap_or_default().to_string(),
+                                    stack_size: e.stack_size(),
+                                }
+                            })
+                        });
+                        let (line, lines) = crate::inventory_request::attempt_failed_lines(
+                            request,
+                            data.error,
+                            names.as_ref(),
+                        );
+                        // The module's copies of the JS chat categories.
+                        const _: () = assert!(
+                            crate::inventory_request::LINE_CATEGORY_SYSTEM == CHAT_CATEGORY_SYSTEM
+                                && crate::inventory_request::LINE_CATEGORY_MAGIC
+                                    == CHAT_CATEGORY_MAGIC
+                                && crate::inventory_request::LINE_CATEGORY_TRANSIENT
+                                    == CHAT_CATEGORY_TRANSIENT
+                        );
                         queued_events.borrow_mut().push(ClientEvent {
-                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                            string_payload: Some(message),
-                            u32_payload: Some(0),
-                            u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                            kind: CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED,
+                            string_payload: Some(line),
+                            u32_payload: Some(data.item_guid.0),
+                            u32_payload_2: Some(code),
                             f32_payload: None,
                         });
+                        for (message, category) in lines {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(message),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
+                        }
+                    } else {
+                        let label = format!("{:?}", data.error);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED,
+                            string_payload: Some(label.clone()),
+                            u32_payload: Some(data.item_guid.0),
+                            u32_payload_2: Some(code),
+                            f32_payload: None,
+                        });
+                        // vendor-buy-2 (round 5): ACE reports every refused
+                        // buy / sale as this event naming the PLAYER with
+                        // code 0; retail adds no text for a refused shop
+                        // event (see chat_format::inventory_save_failed_chat_line).
+                        let player_guid = world
+                            .borrow()
+                            .as_ref()
+                            .map(|w| u32::from(w.player.guid))
+                            .unwrap_or(0);
+                        if let Some(message) =
+                            crate::chat_format::inventory_save_failed_chat_line(
+                                data.item_guid.0,
+                                player_guid,
+                                code,
+                                &label,
+                            )
+                        {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(message),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                f32_payload: None,
+                            });
+                        }
                     }
                 }
                 holtburger_protocol::messages::GameEvent::WeenieError(
@@ -1054,18 +1125,41 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         // show `YouHaveEnteredTheChannel(General)`.
                         // Consumers key on the u32 code, never this
                         // string.
-                        let text = holtburger_core::errors::format_weenie_error(
-                            data.error, None,
-                        );
-                        queued_events.borrow_mut().push(ClientEvent {
-                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                            string_payload: Some(text),
-                            u32_payload: Some(code),
-                            // pk-3: retail prints the PK / portal
-                            // refusals at text type 7 (Magic).
-                            u32_payload_2: Some(failure_chat_category(data.error)),
-                            f32_payload: None,
-                        });
+                        // chat-errors-1 (2026-10-13): codes retail's
+                        // HandleFailureEvent has no case for (ITeleported
+                        // after every portal, TurbineChatIsEnabled at every
+                        // login) add no line; `?retailSilentFailures=off`
+                        // restores them.
+                        let retail_silent =
+                            crate::chat_format::retail_silent_failures_enabled(
+                                &flag_search(),
+                            );
+                        // pk-3: retail prints the PK / portal refusals at
+                        // text type 7 (Magic) — the line's category.
+                        // chat-errors-2 (2026-10-13): every code
+                        // HandleFailureEvent has a case for prints retail's
+                        // text, spew-box (0x1A) codes as Transient lines;
+                        // `?retailFailureText=off` restores the old lines.
+                        let retail_text =
+                            crate::chat_format::retail_failure_text_enabled(
+                                &flag_search(),
+                            );
+                        if let Some((text, category)) =
+                            crate::chat_format::weenie_error_chat_line_with(
+                                data.error,
+                                None,
+                                retail_silent,
+                                retail_text,
+                            )
+                        {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(text),
+                                u32_payload: Some(code),
+                                u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
+                        }
                     }
                 }
                 holtburger_protocol::messages::GameEvent::WeenieErrorWithString(
@@ -1077,18 +1171,35 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // WeenieError arm; no kind=13.
                     // HUD overhaul 2026-10-05: retail English with
                     // the parameter substituted (see the arm above).
-                    let label = holtburger_core::errors::format_weenie_error(
-                        data.error,
-                        Some(data.parameter.as_str()),
-                    );
+                    // chat-errors-1: same retail silence as that arm
+                    // (`…WithString` also calls HandleFailureEvent,
+                    // acclient.c:422430).
+                    let retail_silent =
+                        crate::chat_format::retail_silent_failures_enabled(
+                            &flag_search(),
+                        );
+                    // chat-errors-2: same retail table as that arm.
+                    let retail_text =
+                        crate::chat_format::retail_failure_text_enabled(
+                            &flag_search(),
+                        );
                     let code = data.error as u32;
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(label),
-                        u32_payload: Some(code),
-                        u32_payload_2: Some(failure_chat_category(data.error)),
-                        f32_payload: None,
-                    });
+                    if let Some((label, category)) =
+                        crate::chat_format::weenie_error_chat_line_with(
+                            data.error,
+                            Some(data.parameter.as_str()),
+                            retail_silent,
+                            retail_text,
+                        )
+                    {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(label),
+                            u32_payload: Some(code),
+                            u32_payload_2: Some(category),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::MagicUpdateSpell(
                     data,
@@ -1143,26 +1254,66 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         f32_payload: None,
                     });
                 }
+                // chat-errors-4 (2026-10-13): retail
+                // `ClientMagicSystem::Handle_Magic__RemoveEnchantment` /
+                // `…RemoveMultipleEnchantments` call
+                // `NotifyOfEnchantmentRemoval` (acclient.c:405087) with the
+                // UI dispatch's fNotify = 1: "<Spell> has expired." at text
+                // type 7 ("Vitae penalty has expired."). ACE adds no text
+                // for a spell expiring on the player
+                // (EnchantmentManager.Remove), so expiry was silent. The
+                // Dispel pair passes fNotify = 0 and Purge never notifies —
+                // they stay on the catch-all. The registry / buff HUD were
+                // already updated by the world route. `?buffExpiryLine=off`.
+                holtburger_protocol::messages::GameEvent::MagicRemoveEnchantment(data) => {
+                    let eid = u32::from(data.spell_id) | (u32::from(data.layer) << 16);
+                    push_enchantment_expired_lines(
+                        world,
+                        latest_squelch,
+                        queued_events,
+                        data.target.0,
+                        &[eid],
+                    );
+                }
+                holtburger_protocol::messages::GameEvent::MagicRemoveMultipleEnchantments(
+                    data,
+                ) => {
+                    let eids: Vec<u32> = data
+                        .spells
+                        .iter()
+                        .map(|&(spell_id, layer)| u32::from(spell_id) | (u32::from(layer) << 16))
+                        .collect();
+                    push_enchantment_expired_lines(
+                        world,
+                        latest_squelch,
+                        queued_events,
+                        data.target.0,
+                        &eids,
+                    );
+                }
                 holtburger_protocol::messages::GameEvent::PingResponse(_) => {
                     // PR-SS.1 2026-05-23: real RTT for
                     // the link-status indicator. Empty
                     // payload on both Request + Response
                     // (see protocol/messages/network/
-                    // events.rs) so we can't multiplex —
-                    // we always treat the response as
-                    // matching the most recent send. The
-                    // keepalive runs every 5s gated by
-                    // last_send_time, so at most one
-                    // outstanding ping at any time.
-                    let rtt_ms = PING_SEND_INSTANT.with(|c| {
-                        let mut slot = c.borrow_mut();
-                        slot.take().map(|sent| {
-                            web_time::Instant::now()
-                                .saturating_duration_since(sent)
-                                .as_millis()
-                                .min(u32::MAX as u128)
-                                as u32
-                        })
+                    // events.rs) so we can't multiplex.
+                    // net-transport-6 (2026-10-13): ACE
+                    // answers in order, so the response
+                    // belongs to the oldest ping out.
+                    // `PING_ROUND_TRIP` stamps a send only
+                    // when no other is out, so it measures
+                    // only that ping's own answer (three
+                    // drivers ping, and the old slot let a
+                    // later send overwrite the stamp; on a
+                    // slow link it read the ping gap).
+                    // Nothing is stamped under
+                    // `?netWorker` (the worker measures and
+                    // posts its own RTT) or before the
+                    // player is in the world, so this is a
+                    // no-op there.
+                    let rtt_ms = PING_ROUND_TRIP.with(|c| {
+                        c.borrow_mut()
+                            .note_response_ms(web_time::Instant::now())
                     });
                     if let Some(rtt) = rtt_ms {
                         *last_ping_rtt_ms.borrow_mut() = Some(rtt);
@@ -1408,8 +1559,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // u32 RentTime, u32 HouseType, u32
                     // MaintenanceFree, List<Buy>, List<Rent>,
                     // Position. We pick up the scalar +
-                    // position fields; payment-list display
-                    // is not modeled in this snapshot.
+                    // position fields and (hud-ui-1) the
+                    // Buy / Rent payment lists the panel
+                    // prints (gmHouseUI::DisplayHouseData).
                     // housing-2: gmHouseUI::Update(HouseData*)
                     // (acclient.c:219536) — owned; any earlier
                     // failure status is superseded.
@@ -1424,6 +1576,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                             pos_x: data.position.coords.x,
                             pos_y: data.position.coords.y,
                             pos_z: data.position.coords.z,
+                            buy: crate::house_payments::house_payments(&data.buy),
+                            rent: crate::house_payments::house_payments(&data.rent),
                         });
                 }
                 holtburger_protocol::messages::GameEvent::HouseProfile(
@@ -1433,7 +1587,16 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // `u32 crystal_guid` + `HouseProfile.Write()`
                     // (dwelling header + owner-name string +
                     // buy/rent payment lists). We retain the
-                    // header scalars + OwnerName.
+                    // header scalars + OwnerName and (hud-ui-1)
+                    // the lists gmSlumlordUI::RefreshHouse
+                    // composes into the requirements text.
+                    // messages-objects-3: count receipts — retail
+                    // re-shows the slumlord window (and its 9 m
+                    // range check) on every HouseProfile.
+                    let seq = latest_house_profile
+                        .borrow()
+                        .as_ref()
+                        .map_or(1, |p| p.seq.wrapping_add(1));
                     *latest_house_profile.borrow_mut() =
                         Some(HouseProfile {
                             crystal_guid: u32::from(data.crystal_guid),
@@ -1443,6 +1606,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                             house_type: data.house_type,
                             maintenance_free: data.maintenance_free,
                             owner_name: data.owner_name.clone(),
+                            buy: crate::house_payments::house_payments(&data.buy),
+                            rent: crate::house_payments::house_payments(&data.rent),
+                            seq,
                         });
                 }
                 holtburger_protocol::messages::GameEvent::HouseUpdateRestrictions(
@@ -1693,6 +1859,25 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 }
                 // SG-C3 (2026-06-09): UI-surface self-events → kind=53.
                 holtburger_protocol::messages::GameEvent::QueryAgeResponse(data) => {
+                    // chat-errors-8 (2026-10-13): retail
+                    // Handle_Character__QueryAgeResponse (acclient.c:413309)
+                    // prints "You have played for %s." (empty name, ACE's
+                    // reply to /age) or "%s has played for %s." at text
+                    // type 0. `?retailStatusCmds=off` leaves the line to
+                    // app/client_events.js's old formatter. The "age|" UI
+                    // event below still goes to plugins.
+                    if crate::chat_format::retail_status_cmds_enabled(&flag_search()) {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(crate::chat_format::query_age_line(
+                                &data.target_name,
+                                &data.age,
+                            )),
+                            u32_payload: Some(crate::chat_format::QUERY_AGE_TEXT_TYPE),
+                            u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                            f32_payload: None,
+                        });
+                    }
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_UI_EVENT,
                         string_payload: Some(format!(
@@ -1705,9 +1890,19 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     });
                 }
                 holtburger_protocol::messages::GameEvent::StartBarber(data) => {
+                    // maps-chargen-barber-1 (2026-10-13): carry all 16 fields
+                    // ("barber|f0,…,f15", wire order) — the barber page
+                    // (plugins/barber-panel.js) maps them back to the face
+                    // like gmBarberUI::InitializePage (acclient.c:270582).
+                    let fields = data
+                        .to_fields()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_UI_EVENT,
-                        string_payload: Some("barber".to_string()),
+                        string_payload: Some(format!("barber|{fields}")),
                         u32_payload: Some(data.setup_table_id),
                         u32_payload_2: Some(data.palette_base_did),
                         f32_payload: None,
@@ -1770,13 +1965,62 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
     LoopFlow::Continue
 }
 
-/// pk-3 (2026-10-08 round 5): the chat category for a WeenieError line —
-/// Magic for the codes retail's HandleFailureEvent prints at text type 7
-/// (`holtburger_core::errors::retail_text_type`), System otherwise.
-fn failure_chat_category(error: holtburger_protocol::errors::WeenieError) -> u32 {
-    if holtburger_core::errors::retail_text_type(error) == Some(7) {
-        CHAT_CATEGORY_MAGIC
-    } else {
-        CHAT_CATEGORY_SYSTEM
+/// chat-errors-4 (2026-10-13): push the "<Spell> has expired." Magic lines
+/// (`chat_format::enchantment_expired_lines`) for one
+/// Remove(Multiple)Enchantment(s) on the LOCAL player; another target (the
+/// remote-enchantment index in `messages/mod.rs`) gets no line. The names
+/// come from the cached WorldBootstrap SpellTable — not loaded yet → no line,
+/// like retail's failed `CSpellTable::InqSpellBase`.
+fn push_enchantment_expired_lines(
+    world: &std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>>,
+    latest_squelch: &std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    queued_events: &std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
+    target: u32,
+    eids: &[u32],
+) {
+    let local_guid = world
+        .try_borrow()
+        .ok()
+        .and_then(|w| w.as_ref().map(|w| w.player.guid.0))
+        .unwrap_or(0);
+    if local_guid == 0 || target != local_guid {
+        return;
+    }
+    if !crate::chat_format::buff_expiry_line_enabled(&flag_search()) {
+        return;
+    }
+    let globals_mask = latest_squelch
+        .try_borrow()
+        .ok()
+        .and_then(|s| s.as_ref().map(|s| s.globals_mask))
+        .unwrap_or(0);
+    let bootstrap = crate::world_bootstrap_cache::try_get_cached();
+    let lines = crate::chat_format::enchantment_expired_lines(eids, globals_mask, |spell_id| {
+        bootstrap
+            .as_ref()?
+            .spell_table
+            .spells
+            .get(&spell_id)
+            .map(|spell| spell.name.as_str())
+    });
+    let mut events = queued_events.borrow_mut();
+    for line in lines {
+        events.push(ClientEvent {
+            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+            string_payload: Some(line),
+            u32_payload: Some(crate::chat_format::TEXT_TYPE_MAGIC),
+            u32_payload_2: Some(CHAT_CATEGORY_MAGIC),
+            f32_payload: None,
+        });
     }
 }
+
+// chat-errors-1 (2026-10-13): pk-3's `failure_chat_category` moved to
+// `chat_format` (natively unit-tested, where these wasm-only consts are not
+// visible); its copies of the category numbers must match (chat-errors-2
+// adds Transient, the retail spew-box category).
+const _: () = assert!(
+    crate::chat_format::FAILURE_CATEGORY_SYSTEM == CHAT_CATEGORY_SYSTEM
+        && crate::chat_format::FAILURE_CATEGORY_MAGIC == CHAT_CATEGORY_MAGIC
+        && crate::chat_format::FAILURE_CATEGORY_TRANSIENT == CHAT_CATEGORY_TRANSIENT
+);

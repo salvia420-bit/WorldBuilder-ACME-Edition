@@ -337,7 +337,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-12 (RynthSuite update): + rynth/boot.js (the ?bot=1 / HUD boot,
   // statically imported by app/client_events.js; generator --check: up to
   // date, 392 modules) → 376.
-  const NON_APP_PRELOADS = 376;
+  // 2026-10-13 (WebAC comparison, docs/webac-comparison-2026-10-13/): + 26
+  // new statically imported scene3d/, ui/ and plugins/ modules (program
+  // retention, fade/selection lighting, radial fog, environ override, light
+  // tick, HUD focus/lock/keys, appraisal text, spell-bar sync, barber, …)
+  // (generator --check: up to date, 423 modules) → 402.
+  const NON_APP_PRELOADS = 402;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

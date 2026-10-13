@@ -31,3 +31,8 @@ socket2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+# net-transport-2: `disconnect.rs` restates Hash32 and the packet header
+# layout; its tests cross-check them against the client's own protocol code
+# (`PacketHeader::calculate_checksum`, `Hash32::compute`). Test-only, so the
+# bridge binary still never links the protocol crate.
+holtburger-protocol = { workspace = true }
