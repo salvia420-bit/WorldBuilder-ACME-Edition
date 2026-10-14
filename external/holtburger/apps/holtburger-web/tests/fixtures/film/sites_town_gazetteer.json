@@ -1,0 +1,56 @@
+{
+ "Holtburg": {
+  "lb_key": 43444,
+  "lb_hex": "0xA9B4",
+  "lb_x": 169,
+  "lb_y": 180,
+  "culture": "Aluvian",
+  "source": "ac-lore",
+  "notes": "starter town"
+ },
+ "Kryst": {
+  "lb_key": 59682,
+  "lb_hex": "0xE922",
+  "lb_x": 233,
+  "lb_y": 34,
+  "culture": null,
+  "source": "uncertain",
+  "notes": "small mage outpost?"
+ },
+ "Cragstone": {
+  "lb_key": 48287,
+  "lb_hex": "0xBC9F",
+  "lb_x": 188,
+  "lb_y": 159,
+  "culture": "Aluvian",
+  "source": "user",
+  "notes": ""
+ },
+ "Yanshi": {
+  "lb_key": 45936,
+  "lb_hex": "0xB370",
+  "lb_x": 179,
+  "lb_y": 112,
+  "culture": "Sho",
+  "source": "user",
+  "notes": "main town; pagoda/tapered roofs"
+ },
+ "Glenden Wood": {
+  "lb_key": 41380,
+  "lb_hex": "0xA1A4",
+  "lb_x": 161,
+  "lb_y": 164,
+  "culture": "Aluvian",
+  "source": "ac-lore",
+  "notes": ""
+ },
+ "Old Yanshi (dungeon)": {
+  "lb_key": 47471,
+  "lb_hex": "0xB96F",
+  "lb_x": 185,
+  "lb_y": 111,
+  "culture": "Sho",
+  "source": "user-noted",
+  "notes": "partially destroyed; dungeon LB"
+ }
+}

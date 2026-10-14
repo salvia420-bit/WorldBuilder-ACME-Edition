@@ -2358,6 +2358,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // microtask drain, so p4 is stamped after a one-microtask hop to include
   // them in the measured slot.
   function _postRenderStreamSlot() {
+    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): every render-path exit
+    // reaches this slot right after the frame's final draw, in the same task —
+    // where the film recorder grabs the canvas (a WebCodecs VideoFrame; the
+    // drawing buffer is not preserved) and the stepped film clock resolves its
+    // post-render promise. Flag off: `film` is never set — one property read,
+    // no call. A throwing hook never skips the scheduleNext() that follows.
+    try {
+      liveScene3dRef?.film?.postRender?.();
+    } catch (e) {
+      if (liveScene3dRef && !liveScene3dRef._filmPostRenderWarned) {
+        liveScene3dRef._filmPostRenderWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[film] postRender threw (loop unaffected):", e);
+      }
+    }
     framePhaseCut(3);
     if (!_frameWorkOn) {
       framePhaseCut(4);
@@ -2404,7 +2419,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Every tick exit runs through here after its GL submission, which is
     // where the adaptive-res fence belongs (null unless the controller runs).
     adaptiveGpuProbe?.frameEnd();
-    if (renderOnDemand) return;
+    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): `film.holdLoop` (set by film_clock.js for a
+    // stepped take) parks the loop exactly as renderOnDemand does — frames then come only from
+    // __renderOnce(tsMs). A re-arm already pending when it is set is cancelled by the first
+    // `__renderOnce(tsMs)` (else it runs once and parks here). Clearing it does not re-arm by itself:
+    // film_clock.js end() re-arms with one bare `__renderOnce()` (whose exit lands back here) ONLY a
+    // dead chain (a step rendered, or a realtime tick parked here during the hold); a pre-hold re-arm
+    // still pending resumes the loop on its own. Flag off: `film` is never set.
+    if (renderOnDemand || liveScene3dRef?.film?.holdLoop) return;
     // ?portalSpaceFps (2026-10-09, default 30): while the portal tunnel owns
     // the frame (login or teleport) the loop paces to max(?targetFps interval,
     // 1000/N); tickPerFrame (net pump, cell visibility/PVS, interior builds)
@@ -2534,6 +2556,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         tsSec: ts * 0.001,
         dt,
       };
+      // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): the film camera
+      // owner (scene3d/film/runtime/camera_owner.js) poses the camera for THIS
+      // frame here, before tickPerFrame's cell visibility / viewer cell /
+      // frustum cull / CSM / sky read it (they run ahead of the camera tick).
+      // `film` is only ever set by installFilmMode, so with the flag off this
+      // is one property read and no call. A throwing hook never kills the loop.
+      try {
+        liveScene3dRef?.film?.preFrame?.(ts, dt);
+      } catch (e) {
+        if (!liveScene3dRef._filmPreFrameWarned) {
+          liveScene3dRef._filmPreFrameWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[film] preFrame threw (frame continues):", e);
+        }
+      }
       try {
         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
       } catch (e) {
@@ -3003,11 +3040,28 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // returns `true` BEFORE the frame completes (the post-hop continuation
   // runs in a trailing microtask). Callers must allow a microtask before
   // sampling; existing capture scripts already sleep between calls.
+  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): an optional explicit
+  // frame timestamp `tsMs` (ms, the performance.now()/rAF time base) for the
+  // stepped film clock; omitted or non-finite → performance.now(), exactly as
+  // before. tick() derives dt from consecutive timestamps as min(raw, 0.1) s,
+  // so a strictly increasing `base + k·1000/fps` at fps ≥ 10 gives dt = 1/fps
+  // exactly (fps < 10 clamps to 0.1). The >0.5 s recovery freeze (dt = 0 for
+  // 10 frames) is off under renderOnDemand; otherwise it trips only on a gap
+  // from the LAST frame's timestamp (liveScene3d.frameTime.tsMs), so start a
+  // take's base from that timestamp rather than from a wall clock that ran on
+  // while the loop was held. A timestamp below the last one yields a negative
+  // dt (not clamped — unchanged behaviour), so timestamps must keep
+  // increasing, and the realtime loop may resume only once performance.now()
+  // is past the last one. While `film.holdLoop` is set, an explicit-timestamp
+  // call also cancels a loop re-arm still pending from before the hold (one
+  // rAF / pacer timeout), so no wall-clock tick lands between film steps.
   if (typeof window !== "undefined") {
-    window.__renderOnce = () => {
+    window.__renderOnce = (tsMs) => {
       try {
-        tick(typeof performance !== "undefined" && performance.now
-          ? performance.now() : Date.now());
+        const explicitTs = Number.isFinite(tsMs);
+        if (explicitTs && liveScene3dRef?.film?.holdLoop) _cancelSchedule();
+        tick(explicitTs ? tsMs : (typeof performance !== "undefined" && performance.now
+          ? performance.now() : Date.now()));
         return true;
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -4463,6 +4517,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     import("./blood_decals.js")
       .then((m) => m.installBloodDecals())
       .catch((err) => console.warn("[blood] failed to load:", err));
+  }
+  // ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────
+  // Agentic cinematography (scene3d/film/SPEC.md). An exact-match opt-in:
+  // only `?filmMode=on` loads the film runtime; absent, `=1`, `=true` and
+  // `=ON` load nothing. The module is reached ONLY through this dynamic
+  // import (never statically), so the boot graph and the modulepreload block
+  // are unchanged. Its dependencies are injected (film page modules never
+  // import stateful scene3d modules); it installs `window.__film`. The
+  // particle cull seams come from the SAME particle_manager.js instance that
+  // entities.js / statics.js load (also only here, under the flag): takes run
+  // the RP6 cull every tick and the particle query sees every manager.
+  if (new URLSearchParams(window.location.search).get("filmMode") === "on") {
+    Promise.all([import("./film/index.js"), import("./particles/particle_manager.js")])
+      .then(([m, pm]) => m.installFilmMode({
+        liveScene3d,
+        THREE,
+        sessionHandle: liveScene3d.sessionHandle,
+        wasmExports: liveScene3d.wasmExports,
+        particleCull: {
+          setParticleCullConfig: pm.setParticleCullConfig,
+          allParticleManagers: pm.allParticleManagers,
+        },
+      }))
+      .catch((err) => console.warn("[film] failed to load:", err));
   }
   // ── Terrain-VFX spine (Wave 0B, plan §2.2) ────────────────────────────
   // Constructed HERE, immediately after `window.liveScene3d` is set, because

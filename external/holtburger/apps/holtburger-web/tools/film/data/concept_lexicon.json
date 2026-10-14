@@ -1,0 +1,3189 @@
+{
+  "version": 1,
+  "about": "Film mode (?filmMode=on, default off) lyric/script imagery -> Asheron's Call site features. Read by tools/film/sites/search.mjs (query expansion: words = synonyms that trigger the concept; terrain/biome/tags = gazetteer vocabulary the concept expands to; kinds = site kinds it prefers). look = suggested look preset (timeOfDay: dawn|morning|noon|golden|dusk|night; fog: none|white|red|blue|green|black; grade: neutral|warm|cool|bleach|night). techniques = SPEC 2.12 technique ids.",
+  "concepts": {
+    "ocean": {
+      "words": [
+        "ocean",
+        "oceans",
+        "sea",
+        "seas",
+        "waves",
+        "wave",
+        "tide",
+        "tides",
+        "surf",
+        "salt",
+        "saltwater",
+        "deep blue",
+        "high seas"
+      ],
+      "terrain": [
+        "sea",
+        "ocean",
+        "water"
+      ],
+      "biome": [
+        "coastal"
+      ],
+      "tags": [
+        "sea",
+        "coast",
+        "island",
+        "ship"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.flyover",
+        "drone.terrain-skim",
+        "drone.pass-over",
+        "classic.establishing"
+      ]
+    },
+    "shore": {
+      "words": [
+        "shore",
+        "shores",
+        "beach",
+        "beaches",
+        "coast",
+        "coastline",
+        "bay",
+        "cove",
+        "harbor",
+        "harbour",
+        "dock",
+        "docks",
+        "pier",
+        "seaside",
+        "sand and sea"
+      ],
+      "terrain": [
+        "coast",
+        "sand",
+        "beach",
+        "sea"
+      ],
+      "biome": [
+        "coastal"
+      ],
+      "tags": [
+        "coast",
+        "beach",
+        "shore",
+        "harbor",
+        "sea"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.side-track",
+        "drone.parallax-slide",
+        "classic.tracking-side",
+        "drone.dronie"
+      ]
+    },
+    "river": {
+      "words": [
+        "river",
+        "rivers",
+        "stream",
+        "streams",
+        "creek",
+        "brook",
+        "current",
+        "flowing",
+        "flow",
+        "rapids",
+        "riverbank",
+        "upstream",
+        "downstream"
+      ],
+      "terrain": [
+        "river",
+        "stream",
+        "water"
+      ],
+      "biome": [
+        "riverside"
+      ],
+      "tags": [
+        "river",
+        "bridge",
+        "waterfall",
+        "water"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.canyon-run",
+        "classic.tracking-side",
+        "drone.side-track"
+      ]
+    },
+    "lake": {
+      "words": [
+        "lake",
+        "lakes",
+        "pond",
+        "pool",
+        "lagoon",
+        "loch",
+        "still water",
+        "lakeside"
+      ],
+      "terrain": [
+        "lake",
+        "pond",
+        "water"
+      ],
+      "biome": [
+        "lakeside"
+      ],
+      "tags": [
+        "lake",
+        "water",
+        "pond"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.flyover",
+        "classic.static",
+        "drone.pano-360",
+        "drone.top-down"
+      ]
+    },
+    "waterfall": {
+      "words": [
+        "waterfall",
+        "waterfalls",
+        "falls",
+        "cascade",
+        "cascading",
+        "torrent"
+      ],
+      "terrain": [
+        "river",
+        "water",
+        "cliffs"
+      ],
+      "biome": [],
+      "tags": [
+        "waterfall",
+        "cliff",
+        "river",
+        "water"
+      ],
+      "kinds": [
+        "poi",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.boom-rise",
+        "classic.tilt",
+        "drone.tilt-reveal",
+        "classic.low-angle"
+      ]
+    },
+    "rain": {
+      "words": [
+        "rain",
+        "raining",
+        "rainy",
+        "rainfall",
+        "drizzle",
+        "downpour",
+        "wet",
+        "puddles",
+        "drenched"
+      ],
+      "terrain": [
+        "moss",
+        "mud",
+        "marsh"
+      ],
+      "biome": [
+        "swamp",
+        "forest"
+      ],
+      "tags": [
+        "swamp",
+        "forest",
+        "river",
+        "moss"
+      ],
+      "kinds": [
+        "wilderness",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.static",
+        "classic.rack-focus",
+        "classic.handheld",
+        "classic.dolly-in"
+      ]
+    },
+    "storm": {
+      "words": [
+        "storm",
+        "storms",
+        "stormy",
+        "thunder",
+        "thunderstorm",
+        "tempest",
+        "hurricane",
+        "gale",
+        "squall",
+        "raging sea"
+      ],
+      "terrain": [
+        "sea",
+        "rock",
+        "cliffs"
+      ],
+      "biome": [
+        "coastal",
+        "rocky"
+      ],
+      "tags": [
+        "storm",
+        "coast",
+        "cliff",
+        "mountain",
+        "sea"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "black",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.handheld",
+        "drone.chase",
+        "classic.whip-pan",
+        "drone.fly-by"
+      ]
+    },
+    "lightning": {
+      "words": [
+        "lightning",
+        "thunderbolt",
+        "bolt",
+        "electric",
+        "electricity",
+        "spark",
+        "sparks",
+        "strike"
+      ],
+      "terrain": [
+        "rock"
+      ],
+      "biome": [
+        "rocky"
+      ],
+      "tags": [
+        "storm",
+        "tower",
+        "spire",
+        "magic",
+        "peak"
+      ],
+      "kinds": [
+        "poi",
+        "wilderness",
+        "landmark"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.whip-pan",
+        "classic.low-angle",
+        "classic.dolly-zoom",
+        "drone.boom-rise"
+      ]
+    },
+    "snow": {
+      "words": [
+        "snow",
+        "snowy",
+        "snowfall",
+        "snowflake",
+        "snowflakes",
+        "blizzard",
+        "frost",
+        "frosty",
+        "white world",
+        "snowbound"
+      ],
+      "terrain": [
+        "snow",
+        "ice",
+        "frozen"
+      ],
+      "biome": [
+        "snowy",
+        "frozen"
+      ],
+      "tags": [
+        "snow",
+        "ice",
+        "frozen",
+        "glacier",
+        "winter"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.flyover",
+        "drone.rising-reveal",
+        "drone.terrain-skim",
+        "classic.establishing"
+      ]
+    },
+    "winter": {
+      "words": [
+        "winter",
+        "cold",
+        "freezing",
+        "frozen",
+        "chill",
+        "chilly",
+        "icy",
+        "numb",
+        "bitter cold",
+        "frostbite",
+        "shiver"
+      ],
+      "terrain": [
+        "snow",
+        "ice",
+        "frozen"
+      ],
+      "biome": [
+        "snowy",
+        "frozen"
+      ],
+      "tags": [
+        "snow",
+        "ice",
+        "winter",
+        "frozen"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.static",
+        "drone.dronie",
+        "classic.pull-out-reveal",
+        "drone.flyover"
+      ]
+    },
+    "ice": {
+      "words": [
+        "ice",
+        "glacier",
+        "glaciers",
+        "icicle",
+        "icicles",
+        "frozen lake",
+        "ice field",
+        "permafrost"
+      ],
+      "terrain": [
+        "ice",
+        "glacier",
+        "frozen"
+      ],
+      "biome": [
+        "frozen",
+        "snowy"
+      ],
+      "tags": [
+        "ice",
+        "glacier",
+        "frozen",
+        "crystal"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi",
+        "dungeon"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.flyover",
+        "classic.rack-focus"
+      ]
+    },
+    "desert": {
+      "words": [
+        "desert",
+        "deserts",
+        "sand",
+        "sands",
+        "dune",
+        "dunes",
+        "dust",
+        "dusty",
+        "dry",
+        "arid",
+        "drought",
+        "thirst",
+        "wasteland",
+        "mirage"
+      ],
+      "terrain": [
+        "sand",
+        "desert",
+        "dunes"
+      ],
+      "biome": [
+        "desert"
+      ],
+      "tags": [
+        "desert",
+        "dunes",
+        "sand",
+        "oasis",
+        "pyramid"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.flyover",
+        "drone.terrain-skim",
+        "classic.time-lapse",
+        "drone.pano-360"
+      ]
+    },
+    "sun": {
+      "words": [
+        "sun",
+        "sunny",
+        "sunshine",
+        "sunlight",
+        "heat",
+        "hot",
+        "summer",
+        "blazing",
+        "scorching",
+        "sunlit",
+        "midday"
+      ],
+      "terrain": [
+        "sand",
+        "grass"
+      ],
+      "biome": [
+        "desert",
+        "grassland"
+      ],
+      "tags": [
+        "desert",
+        "plains",
+        "meadow",
+        "sun"
+      ],
+      "kinds": [
+        "wilderness",
+        "town",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.low-angle",
+        "drone.boom-rise",
+        "classic.time-lapse",
+        "drone.flyover"
+      ]
+    },
+    "forest": {
+      "words": [
+        "forest",
+        "forests",
+        "tree",
+        "trees",
+        "woods",
+        "wood",
+        "woodland",
+        "grove",
+        "leaves",
+        "leaf",
+        "branches",
+        "pine",
+        "oak",
+        "jungle",
+        "timber",
+        "canopy"
+      ],
+      "terrain": [
+        "forest",
+        "woods",
+        "trees"
+      ],
+      "biome": [
+        "forest"
+      ],
+      "tags": [
+        "forest",
+        "grove",
+        "trees",
+        "woods"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "green",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "fpv.fpv-gap",
+        "drone.terrain-skim",
+        "classic.steadicam",
+        "classic.reveal-from-occluder"
+      ]
+    },
+    "mountain": {
+      "words": [
+        "mountain",
+        "mountains",
+        "peak",
+        "peaks",
+        "summit",
+        "climb",
+        "climbing",
+        "height",
+        "heights",
+        "high",
+        "top of the world",
+        "alps",
+        "rise",
+        "rising",
+        "ascend"
+      ],
+      "terrain": [
+        "rock",
+        "rocky",
+        "stone"
+      ],
+      "biome": [
+        "rocky",
+        "snowy"
+      ],
+      "tags": [
+        "mountain",
+        "peak",
+        "cliff",
+        "highlands",
+        "ridge",
+        "hills"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.boom-rise",
+        "drone.rising-reveal",
+        "drone.orbit-poi",
+        "drone.dronie"
+      ]
+    },
+    "hills": {
+      "words": [
+        "hill",
+        "hills",
+        "hillside",
+        "slope",
+        "slopes",
+        "rolling",
+        "highland",
+        "highlands",
+        "downs",
+        "knoll"
+      ],
+      "terrain": [
+        "grass",
+        "meadow",
+        "rock"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "hills",
+        "highlands",
+        "meadow",
+        "plains"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.parallax-slide",
+        "drone.flyover",
+        "classic.establishing"
+      ]
+    },
+    "valley": {
+      "words": [
+        "valley",
+        "valleys",
+        "canyon",
+        "canyons",
+        "gorge",
+        "ravine",
+        "pass",
+        "chasm",
+        "gulch",
+        "vale",
+        "glen",
+        "lowlands"
+      ],
+      "terrain": [
+        "rock",
+        "river",
+        "cliffs"
+      ],
+      "biome": [
+        "rocky"
+      ],
+      "tags": [
+        "valley",
+        "canyon",
+        "cliff",
+        "river",
+        "pass"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.canyon-run",
+        "drone.terrain-skim",
+        "fpv.fpv-corridor",
+        "drone.flythrough"
+      ]
+    },
+    "cave": {
+      "words": [
+        "cave",
+        "caves",
+        "cavern",
+        "caverns",
+        "underground",
+        "beneath",
+        "below ground",
+        "tunnel",
+        "tunnels",
+        "burrow",
+        "grotto",
+        "mine",
+        "mines",
+        "under the earth"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "cave",
+        "mine",
+        "tunnel",
+        "underground",
+        "dungeon"
+      ],
+      "kinds": [
+        "dungeon"
+      ],
+      "look": {
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "fpv.fpv-corridor",
+        "classic.steadicam",
+        "classic.tracking-follow",
+        "classic.reveal-from-occluder"
+      ]
+    },
+    "darkness": {
+      "words": [
+        "dark",
+        "darkness",
+        "black",
+        "blackness",
+        "gloom",
+        "gloomy",
+        "void",
+        "pitch black",
+        "lightless",
+        "blind"
+      ],
+      "terrain": [
+        "dark"
+      ],
+      "biome": [],
+      "tags": [
+        "dark",
+        "shadow",
+        "underground",
+        "cave",
+        "crypt"
+      ],
+      "kinds": [
+        "dungeon"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "classic.push-in",
+        "classic.reveal-from-occluder",
+        "classic.static",
+        "classic.dolly-in"
+      ]
+    },
+    "abyss": {
+      "words": [
+        "abyss",
+        "deep",
+        "depths",
+        "deeper",
+        "bottomless",
+        "pit",
+        "chasm",
+        "the deep",
+        "underworld"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "pit",
+        "chasm",
+        "underground",
+        "cave",
+        "underworld"
+      ],
+      "kinds": [
+        "dungeon"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "fpv.fpv-dive",
+        "drone.spiral-descent",
+        "drone.top-down",
+        "drone.vertigo-drone"
+      ]
+    },
+    "fire": {
+      "words": [
+        "fire",
+        "fires",
+        "flame",
+        "flames",
+        "burn",
+        "burning",
+        "burned",
+        "burnt",
+        "blaze",
+        "ablaze",
+        "ember",
+        "embers",
+        "inferno",
+        "ash",
+        "ashes",
+        "smoke",
+        "smoldering",
+        "torch",
+        "torches",
+        "on fire"
+      ],
+      "terrain": [
+        "volcanic",
+        "lava",
+        "obsidian",
+        "ash"
+      ],
+      "biome": [
+        "volcanic"
+      ],
+      "tags": [
+        "fire",
+        "volcano",
+        "lava",
+        "forge",
+        "brazier",
+        "flame"
+      ],
+      "kinds": [
+        "poi",
+        "landmark",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "red",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.push-in",
+        "drone.orbit-poi",
+        "classic.low-angle",
+        "classic.handheld"
+      ]
+    },
+    "volcano": {
+      "words": [
+        "volcano",
+        "volcanoes",
+        "volcanic",
+        "lava",
+        "magma",
+        "eruption",
+        "erupt",
+        "erupting",
+        "crater",
+        "molten",
+        "obsidian",
+        "caldera"
+      ],
+      "terrain": [
+        "volcano",
+        "lava",
+        "obsidian",
+        "volcanic"
+      ],
+      "biome": [
+        "volcanic"
+      ],
+      "tags": [
+        "volcano",
+        "crater",
+        "lava",
+        "fire",
+        "obsidian"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "red",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.orbit-poi",
+        "drone.boom-rise",
+        "drone.flyover",
+        "drone.top-down-rise"
+      ]
+    },
+    "hell": {
+      "words": [
+        "hell",
+        "hellfire",
+        "damnation",
+        "damned",
+        "inferno",
+        "brimstone",
+        "demon",
+        "demons",
+        "devil"
+      ],
+      "terrain": [
+        "lava",
+        "volcanic",
+        "obsidian"
+      ],
+      "biome": [
+        "volcanic"
+      ],
+      "tags": [
+        "fire",
+        "volcano",
+        "underground",
+        "lava",
+        "corrupt"
+      ],
+      "kinds": [
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "red",
+        "grade": "warm"
+      },
+      "techniques": [
+        "fpv.fpv-dive",
+        "classic.dolly-zoom",
+        "classic.low-angle",
+        "drone.spiral-descent"
+      ]
+    },
+    "light": {
+      "words": [
+        "light",
+        "hope",
+        "hopeful",
+        "shine",
+        "shining",
+        "glow",
+        "glowing",
+        "bright",
+        "brightness",
+        "radiant",
+        "heaven",
+        "heavenly",
+        "halo",
+        "rays"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "temple",
+        "holy",
+        "tower",
+        "lifestone",
+        "sky",
+        "crystal"
+      ],
+      "kinds": [
+        "landmark",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.rising-reveal",
+        "classic.crane",
+        "classic.pull-out-reveal",
+        "drone.boom-rise"
+      ]
+    },
+    "dawn": {
+      "words": [
+        "dawn",
+        "sunrise",
+        "daybreak",
+        "morning",
+        "first light",
+        "new day",
+        "awake",
+        "waking",
+        "rise up",
+        "break of day",
+        "beginning"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [],
+      "kinds": [],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "white",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.rising-reveal",
+        "classic.time-lapse",
+        "classic.establishing",
+        "drone.dronie"
+      ]
+    },
+    "night": {
+      "words": [
+        "night",
+        "nights",
+        "midnight",
+        "stars",
+        "star",
+        "starry",
+        "starlight",
+        "moon",
+        "moonlight",
+        "moonlit",
+        "nocturnal",
+        "after dark",
+        "constellations"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [],
+      "kinds": [],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "blue",
+        "grade": "night"
+      },
+      "techniques": [
+        "classic.tilt",
+        "drone.pano-360",
+        "classic.time-lapse",
+        "classic.static"
+      ]
+    },
+    "sunset": {
+      "words": [
+        "sunset",
+        "sundown",
+        "dusk",
+        "twilight",
+        "evening",
+        "golden",
+        "golden hour",
+        "fading light",
+        "horizon",
+        "setting sun",
+        "afterglow"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [],
+      "kinds": [],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.dronie",
+        "drone.parallax-slide",
+        "classic.pull-out-reveal",
+        "drone.orbit-poi"
+      ]
+    },
+    "city": {
+      "words": [
+        "city",
+        "cities",
+        "town",
+        "towns",
+        "street",
+        "streets",
+        "crowd",
+        "crowds",
+        "people",
+        "square",
+        "urban",
+        "village",
+        "villages",
+        "neighbours",
+        "neighbors",
+        "downtown"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "town",
+        "settlement",
+        "market",
+        "city"
+      ],
+      "kinds": [
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.flyover",
+        "classic.establishing",
+        "drone.orbit-poi",
+        "classic.tracking-side"
+      ]
+    },
+    "home": {
+      "words": [
+        "home",
+        "homes",
+        "house",
+        "hearth",
+        "homecoming",
+        "family",
+        "cottage",
+        "belong",
+        "going home",
+        "back home",
+        "roof"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "town",
+        "settlement",
+        "cottage",
+        "housing"
+      ],
+      "kinds": [
+        "town",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.dolly-in",
+        "classic.establishing",
+        "classic.push-in",
+        "drone.rising-reveal"
+      ]
+    },
+    "alone": {
+      "words": [
+        "alone",
+        "lonely",
+        "loneliness",
+        "lonesome",
+        "solitude",
+        "solitary",
+        "isolated",
+        "isolation",
+        "by myself",
+        "nobody",
+        "empty",
+        "emptiness",
+        "wander",
+        "wandering",
+        "wanderer",
+        "nowhere",
+        "stranded",
+        "abandoned"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "remote",
+        "wilderness",
+        "isolated",
+        "wild",
+        "empty"
+      ],
+      "kinds": [
+        "wilderness",
+        "landmark",
+        "poi"
+      ],
+      "look": {
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.dronie",
+        "classic.pull-out-reveal",
+        "drone.pano-360",
+        "classic.high-angle"
+      ]
+    },
+    "ruins": {
+      "words": [
+        "ruins",
+        "ruin",
+        "ruined",
+        "ancient",
+        "forgotten",
+        "lost",
+        "memory",
+        "memories",
+        "remember",
+        "remnants",
+        "crumbling",
+        "old",
+        "ages",
+        "past",
+        "relic",
+        "relics",
+        "history"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "ruins",
+        "empyrean",
+        "ancient",
+        "abandoned",
+        "tomb",
+        "statue"
+      ],
+      "kinds": [
+        "poi",
+        "dungeon",
+        "landmark"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "white",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.reveal-from-occluder",
+        "drone.orbit-poi",
+        "classic.steadicam",
+        "drone.rising-reveal"
+      ]
+    },
+    "tower": {
+      "words": [
+        "tower",
+        "towers",
+        "spire",
+        "spires",
+        "steeple",
+        "minaret",
+        "pinnacle",
+        "lighthouse",
+        "tall",
+        "skyward"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "tower",
+        "spire"
+      ],
+      "kinds": [
+        "poi",
+        "landmark",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.boom-rise",
+        "drone.helix",
+        "classic.low-angle",
+        "classic.worms-eye"
+      ]
+    },
+    "castle": {
+      "words": [
+        "castle",
+        "castles",
+        "fortress",
+        "fort",
+        "keep",
+        "citadel",
+        "stronghold",
+        "battlements",
+        "ramparts",
+        "bastion",
+        "walls",
+        "kingdom"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "castle",
+        "fortress",
+        "wall",
+        "keep"
+      ],
+      "kinds": [
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.orbit-poi",
+        "drone.rising-reveal",
+        "classic.establishing",
+        "drone.flyover"
+      ]
+    },
+    "king": {
+      "words": [
+        "king",
+        "kings",
+        "queen",
+        "queens",
+        "throne",
+        "crown",
+        "crowned",
+        "royal",
+        "reign",
+        "ruler",
+        "emperor",
+        "empire",
+        "palace",
+        "majesty",
+        "prince",
+        "princess",
+        "lord"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "palace",
+        "castle",
+        "throne",
+        "fortress",
+        "royal"
+      ],
+      "kinds": [
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.low-angle",
+        "classic.dolly-in",
+        "classic.crane",
+        "classic.worms-eye"
+      ]
+    },
+    "temple": {
+      "words": [
+        "temple",
+        "temples",
+        "shrine",
+        "shrines",
+        "prayer",
+        "pray",
+        "praying",
+        "worship",
+        "altar",
+        "sacred",
+        "holy",
+        "god",
+        "gods",
+        "goddess",
+        "divine",
+        "faith",
+        "church",
+        "chapel",
+        "monk",
+        "blessing",
+        "blessed"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "temple",
+        "shrine",
+        "altar",
+        "holy",
+        "chapel"
+      ],
+      "kinds": [
+        "poi",
+        "landmark",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "white",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.dolly-in",
+        "classic.crane",
+        "classic.low-angle",
+        "classic.static"
+      ]
+    },
+    "grave": {
+      "words": [
+        "grave",
+        "graves",
+        "death",
+        "dead",
+        "die",
+        "dying",
+        "funeral",
+        "tomb",
+        "tombs",
+        "crypt",
+        "buried",
+        "burial",
+        "coffin",
+        "mourning",
+        "cemetery",
+        "graveyard",
+        "bones",
+        "rest in peace"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "tomb",
+        "grave",
+        "crypt",
+        "undead",
+        "graveyard"
+      ],
+      "kinds": [
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "white",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.dolly-in",
+        "classic.high-angle",
+        "classic.static",
+        "classic.push-in"
+      ]
+    },
+    "ghost": {
+      "words": [
+        "ghost",
+        "ghosts",
+        "spirit",
+        "spirits",
+        "haunted",
+        "haunt",
+        "haunting",
+        "undead",
+        "skeleton",
+        "skeletons",
+        "zombie",
+        "lich",
+        "phantom",
+        "wraith",
+        "specter",
+        "spectre",
+        "souls"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "undead",
+        "haunted",
+        "ghost",
+        "crypt",
+        "tomb"
+      ],
+      "kinds": [
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "green",
+        "grade": "night"
+      },
+      "techniques": [
+        "classic.handheld",
+        "classic.dolly-zoom",
+        "fpv.fpv-corridor",
+        "classic.reveal-from-occluder"
+      ]
+    },
+    "war": {
+      "words": [
+        "war",
+        "wars",
+        "battle",
+        "battles",
+        "battlefield",
+        "fight",
+        "fighting",
+        "soldier",
+        "soldiers",
+        "army",
+        "armies",
+        "blood",
+        "bloody",
+        "sword",
+        "swords",
+        "conflict",
+        "siege",
+        "enemy",
+        "enemies",
+        "arena",
+        "warrior"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "battle",
+        "fortress",
+        "camp",
+        "barracks",
+        "arena"
+      ],
+      "kinds": [
+        "poi",
+        "landmark"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "red",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.handheld",
+        "drone.chase",
+        "fpv.fpv-proximity",
+        "classic.whip-pan"
+      ]
+    },
+    "magic": {
+      "words": [
+        "magic",
+        "magical",
+        "spell",
+        "spells",
+        "arcane",
+        "sorcery",
+        "sorcerer",
+        "wizard",
+        "mage",
+        "enchanted",
+        "enchantment",
+        "mystic",
+        "mystical",
+        "witch",
+        "rune",
+        "runes",
+        "miracle"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "magic",
+        "arcane",
+        "crystal",
+        "tower",
+        "portal",
+        "library"
+      ],
+      "kinds": [
+        "poi",
+        "landmark",
+        "dungeon"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.helix",
+        "classic.orbit",
+        "classic.dolly-zoom",
+        "classic.rack-focus"
+      ]
+    },
+    "portal": {
+      "words": [
+        "portal",
+        "portals",
+        "gateway",
+        "travel",
+        "traveling",
+        "travelling",
+        "teleport",
+        "other world",
+        "otherworld",
+        "transport",
+        "passage",
+        "beyond",
+        "another world",
+        "between worlds"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "portal",
+        "gateway",
+        "magic",
+        "nexus"
+      ],
+      "kinds": [
+        "landmark",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.push-in",
+        "fpv.fpv-gap",
+        "drone.flythrough",
+        "classic.dolly-zoom"
+      ]
+    },
+    "bridge": {
+      "words": [
+        "bridge",
+        "bridges",
+        "crossing",
+        "cross",
+        "across",
+        "span",
+        "over the river",
+        "the other side"
+      ],
+      "terrain": [
+        "river",
+        "water"
+      ],
+      "biome": [],
+      "tags": [
+        "bridge",
+        "river",
+        "aqueduct"
+      ],
+      "kinds": [
+        "poi",
+        "town",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.pass-over",
+        "drone.fly-by",
+        "fpv.fpv-gap",
+        "classic.tracking-side"
+      ]
+    },
+    "road": {
+      "words": [
+        "road",
+        "roads",
+        "journey",
+        "path",
+        "paths",
+        "miles",
+        "mile",
+        "trail",
+        "highway",
+        "way home",
+        "walking",
+        "walk",
+        "footsteps",
+        "distance",
+        "keep going",
+        "long way",
+        "on the road"
+      ],
+      "terrain": [
+        "road"
+      ],
+      "biome": [],
+      "tags": [
+        "road",
+        "path",
+        "crossroads"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.tracking-lead",
+        "drone.lead",
+        "drone.side-track",
+        "classic.tracking-follow"
+      ]
+    },
+    "island": {
+      "words": [
+        "island",
+        "islands",
+        "isle",
+        "isles",
+        "castaway",
+        "archipelago",
+        "atoll",
+        "marooned"
+      ],
+      "terrain": [
+        "sea",
+        "sand",
+        "beach"
+      ],
+      "biome": [
+        "coastal"
+      ],
+      "tags": [
+        "island",
+        "sea",
+        "coast",
+        "beach"
+      ],
+      "kinds": [
+        "poi",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.orbit-poi",
+        "drone.flyover",
+        "drone.pano-360",
+        "drone.dronie"
+      ]
+    },
+    "swamp": {
+      "words": [
+        "swamp",
+        "swamps",
+        "marsh",
+        "marshes",
+        "bog",
+        "mire",
+        "fen",
+        "muddy",
+        "mud",
+        "murky",
+        "quagmire",
+        "bayou",
+        "wetland"
+      ],
+      "terrain": [
+        "swamp",
+        "marsh",
+        "mud",
+        "moss",
+        "bog"
+      ],
+      "biome": [
+        "swamp"
+      ],
+      "tags": [
+        "swamp",
+        "marsh",
+        "bog"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "green",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "classic.steadicam",
+        "classic.tracking-follow",
+        "classic.reveal-from-occluder"
+      ]
+    },
+    "garden": {
+      "words": [
+        "flower",
+        "flowers",
+        "bloom",
+        "blooming",
+        "blossom",
+        "blossoms",
+        "garden",
+        "gardens",
+        "spring",
+        "springtime",
+        "petals",
+        "rose",
+        "roses",
+        "green",
+        "grow",
+        "growing",
+        "meadow",
+        "meadows"
+      ],
+      "terrain": [
+        "grass",
+        "meadow",
+        "lush",
+        "green"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "garden",
+        "meadow",
+        "farm",
+        "grassland"
+      ],
+      "kinds": [
+        "wilderness",
+        "town",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.rack-focus",
+        "classic.dolly-in",
+        "drone.terrain-skim",
+        "classic.time-lapse"
+      ]
+    },
+    "falling": {
+      "words": [
+        "falling",
+        "fall",
+        "fell",
+        "drown",
+        "drowning",
+        "drowned",
+        "sinking",
+        "sink",
+        "sank",
+        "plunge",
+        "plunging",
+        "descend",
+        "descending",
+        "going down",
+        "free fall"
+      ],
+      "terrain": [
+        "sea",
+        "water",
+        "cliffs"
+      ],
+      "biome": [],
+      "tags": [
+        "cliff",
+        "waterfall",
+        "sea",
+        "lake",
+        "chasm",
+        "pit"
+      ],
+      "kinds": [
+        "poi",
+        "wilderness",
+        "dungeon"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "fpv.fpv-dive",
+        "drone.spiral-descent",
+        "classic.dolly-zoom",
+        "drone.vertigo-drone"
+      ]
+    },
+    "flying": {
+      "words": [
+        "fly",
+        "flying",
+        "flight",
+        "sky",
+        "skies",
+        "wings",
+        "wing",
+        "soar",
+        "soaring",
+        "free",
+        "freedom",
+        "bird",
+        "birds",
+        "above",
+        "clouds",
+        "cloud",
+        "float",
+        "floating",
+        "airborne",
+        "eagle"
+      ],
+      "terrain": [
+        "rock"
+      ],
+      "biome": [],
+      "tags": [
+        "sky",
+        "mountain",
+        "peak",
+        "cliff",
+        "tower",
+        "highlands"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.flyover",
+        "drone.boom-rise",
+        "fpv.fpv-dive",
+        "drone.helix"
+      ]
+    },
+    "prison": {
+      "words": [
+        "chains",
+        "chained",
+        "prison",
+        "prisoner",
+        "cage",
+        "caged",
+        "trapped",
+        "trap",
+        "captive",
+        "locked",
+        "locked up",
+        "jail",
+        "bars",
+        "shackles",
+        "bound",
+        "cell"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "prison",
+        "jail",
+        "dungeon",
+        "fortress",
+        "cage"
+      ],
+      "kinds": [
+        "dungeon"
+      ],
+      "look": {
+        "fog": "black",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.static",
+        "classic.push-in",
+        "classic.handheld",
+        "classic.high-angle"
+      ]
+    },
+    "treasure": {
+      "words": [
+        "gold",
+        "treasure",
+        "treasures",
+        "riches",
+        "rich",
+        "wealth",
+        "money",
+        "fortune",
+        "jewel",
+        "jewels",
+        "gems",
+        "diamond",
+        "diamonds",
+        "pyreal",
+        "pyreals",
+        "hoard",
+        "coins",
+        "vault"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "treasure",
+        "vault",
+        "gem",
+        "crystal",
+        "market",
+        "treasury"
+      ],
+      "kinds": [
+        "dungeon",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.dolly-in",
+        "classic.orbit",
+        "classic.rack-focus",
+        "classic.push-in"
+      ]
+    },
+    "love": {
+      "words": [
+        "love",
+        "lover",
+        "lovers",
+        "heart",
+        "hearts",
+        "kiss",
+        "embrace",
+        "darling",
+        "beloved",
+        "romance",
+        "romantic",
+        "together",
+        "tender",
+        "devotion",
+        "sweetheart"
+      ],
+      "terrain": [
+        "grass",
+        "meadow"
+      ],
+      "biome": [],
+      "tags": [
+        "garden",
+        "lake",
+        "fountain",
+        "meadow"
+      ],
+      "kinds": [
+        "town",
+        "poi",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.arc",
+        "classic.dolly-in",
+        "classic.two-shot",
+        "classic.rack-focus"
+      ]
+    },
+    "rage": {
+      "words": [
+        "rage",
+        "anger",
+        "angry",
+        "fury",
+        "furious",
+        "hate",
+        "hatred",
+        "scream",
+        "screaming",
+        "wrath",
+        "violent",
+        "violence",
+        "vengeance",
+        "revenge"
+      ],
+      "terrain": [
+        "volcanic",
+        "lava"
+      ],
+      "biome": [
+        "volcanic"
+      ],
+      "tags": [
+        "fire",
+        "volcano",
+        "battle",
+        "storm"
+      ],
+      "kinds": [
+        "poi",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "red",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.whip-pan",
+        "classic.handheld",
+        "fpv.fpv-proximity",
+        "classic.snorricam"
+      ]
+    },
+    "peace": {
+      "words": [
+        "peace",
+        "peaceful",
+        "calm",
+        "quiet",
+        "serene",
+        "serenity",
+        "still",
+        "stillness",
+        "gentle",
+        "rest",
+        "tranquil",
+        "silence",
+        "silent",
+        "sleep",
+        "harmony"
+      ],
+      "terrain": [
+        "grass",
+        "meadow",
+        "lake"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "lake",
+        "meadow",
+        "garden",
+        "shrine",
+        "plains"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "classic.static",
+        "drone.parallax-slide",
+        "classic.time-lapse",
+        "drone.flyover"
+      ]
+    },
+    "mist": {
+      "words": [
+        "mist",
+        "misty",
+        "fog",
+        "foggy",
+        "haze",
+        "hazy",
+        "veil",
+        "cloudy",
+        "steam",
+        "vapour",
+        "vapor"
+      ],
+      "terrain": [
+        "swamp",
+        "lake"
+      ],
+      "biome": [
+        "swamp"
+      ],
+      "tags": [
+        "swamp",
+        "lake",
+        "forest",
+        "mountain"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "white",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.flythrough",
+        "classic.reveal-from-occluder",
+        "drone.terrain-skim",
+        "classic.static"
+      ]
+    },
+    "crystal": {
+      "words": [
+        "crystal",
+        "crystals",
+        "crystalline",
+        "ice palace",
+        "palace of ice",
+        "glass",
+        "shimmering",
+        "shimmer",
+        "prism",
+        "gem",
+        "glittering"
+      ],
+      "terrain": [
+        "ice"
+      ],
+      "biome": [
+        "frozen"
+      ],
+      "tags": [
+        "crystal",
+        "ice",
+        "palace",
+        "gem"
+      ],
+      "kinds": [
+        "poi",
+        "dungeon",
+        "landmark"
+      ],
+      "look": {
+        "timeOfDay": "night",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.orbit",
+        "drone.helix",
+        "classic.rack-focus",
+        "classic.dolly-in"
+      ]
+    },
+    "statue": {
+      "words": [
+        "statue",
+        "statues",
+        "monument",
+        "monuments",
+        "memorial",
+        "idol",
+        "colossus",
+        "obelisk",
+        "totem",
+        "stone figure",
+        "carved",
+        "effigy"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "statue",
+        "monument",
+        "obelisk",
+        "totem",
+        "sculpture"
+      ],
+      "kinds": [
+        "landmark",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.orbit-poi",
+        "classic.low-angle",
+        "classic.arc",
+        "classic.worms-eye"
+      ]
+    },
+    "ship": {
+      "words": [
+        "ship",
+        "ships",
+        "boat",
+        "boats",
+        "sail",
+        "sailing",
+        "sailor",
+        "sails",
+        "anchor",
+        "voyage",
+        "captain",
+        "shipwreck",
+        "wreck",
+        "galleon"
+      ],
+      "terrain": [
+        "sea",
+        "water"
+      ],
+      "biome": [
+        "coastal"
+      ],
+      "tags": [
+        "ship",
+        "boat",
+        "harbor",
+        "docks",
+        "coast",
+        "sea"
+      ],
+      "kinds": [
+        "poi",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "white",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.side-track",
+        "drone.orbit-poi",
+        "drone.flyover",
+        "drone.fly-by"
+      ]
+    },
+    "wind": {
+      "words": [
+        "wind",
+        "winds",
+        "windy",
+        "breeze",
+        "gust",
+        "gusts",
+        "blowing",
+        "blow",
+        "howling",
+        "whirlwind",
+        "gale"
+      ],
+      "terrain": [
+        "grass",
+        "meadow",
+        "rock"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "plains",
+        "hills",
+        "cliff",
+        "coast",
+        "mountain",
+        "wind"
+      ],
+      "kinds": [
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "morning",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.parallax-slide",
+        "classic.handheld",
+        "drone.fly-by"
+      ]
+    },
+    "shadow": {
+      "words": [
+        "shadow",
+        "shadows",
+        "shade",
+        "silhouette",
+        "darkened",
+        "obscure",
+        "hidden",
+        "hide",
+        "hiding",
+        "lurking",
+        "unseen",
+        "sneak"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "shadow",
+        "dark",
+        "forest",
+        "cave"
+      ],
+      "kinds": [
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "classic.reveal-from-occluder",
+        "classic.over-the-shoulder",
+        "classic.dolly-in",
+        "classic.steadicam"
+      ]
+    },
+    "maze": {
+      "words": [
+        "maze",
+        "labyrinth",
+        "astray",
+        "confused",
+        "confusion",
+        "corridor",
+        "corridors",
+        "halls",
+        "endless halls",
+        "no way out",
+        "lost inside",
+        "twisting"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "maze",
+        "labyrinth",
+        "dungeon",
+        "tunnel"
+      ],
+      "kinds": [
+        "dungeon"
+      ],
+      "look": {
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "fpv.fpv-corridor",
+        "classic.steadicam",
+        "classic.tracking-follow",
+        "classic.handheld"
+      ]
+    },
+    "door": {
+      "words": [
+        "door",
+        "doors",
+        "gate",
+        "gates",
+        "doorway",
+        "threshold",
+        "entrance",
+        "open",
+        "opening",
+        "enter",
+        "key",
+        "knock"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "gate",
+        "door",
+        "wall",
+        "fortress",
+        "portal"
+      ],
+      "kinds": [
+        "poi",
+        "dungeon",
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "classic.push-in",
+        "drone.flythrough",
+        "fpv.fpv-gap",
+        "classic.dolly-in"
+      ]
+    },
+    "mirror": {
+      "words": [
+        "mirror",
+        "mirrors",
+        "reflection",
+        "reflections",
+        "reflect",
+        "reflecting",
+        "water surface",
+        "still water",
+        "looking glass"
+      ],
+      "terrain": [
+        "lake",
+        "water"
+      ],
+      "biome": [
+        "lakeside"
+      ],
+      "tags": [
+        "lake",
+        "water",
+        "pond",
+        "crystal"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dawn",
+        "fog": "none",
+        "grade": "cool"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.top-down",
+        "classic.tilt",
+        "classic.static"
+      ]
+    },
+    "sadness": {
+      "words": [
+        "sad",
+        "sadness",
+        "tears",
+        "tear",
+        "cry",
+        "crying",
+        "weep",
+        "weeping",
+        "sorrow",
+        "grief",
+        "broken",
+        "heartbreak",
+        "heartbroken",
+        "pain",
+        "lament",
+        "goodbye"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "ruins",
+        "graveyard",
+        "lake",
+        "remote"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "white",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "classic.static",
+        "classic.pull-out-reveal",
+        "classic.high-angle",
+        "drone.dronie"
+      ]
+    },
+    "joy": {
+      "words": [
+        "joy",
+        "happy",
+        "happiness",
+        "dance",
+        "dancing",
+        "celebrate",
+        "celebration",
+        "party",
+        "festival",
+        "smile",
+        "laugh",
+        "laughter",
+        "singing",
+        "cheer"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "town",
+        "market",
+        "festival",
+        "tavern",
+        "settlement"
+      ],
+      "kinds": [
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.handheld",
+        "classic.orbit",
+        "drone.orbit-poi",
+        "classic.snorricam"
+      ]
+    },
+    "time": {
+      "words": [
+        "time",
+        "clock",
+        "hours",
+        "days",
+        "years",
+        "forever",
+        "eternity",
+        "eternal",
+        "seasons",
+        "endless",
+        "timeless",
+        "centuries"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "ruins",
+        "ancient",
+        "statue",
+        "monument"
+      ],
+      "kinds": [
+        "landmark",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "classic.time-lapse",
+        "drone.hyperlapse-orbit",
+        "classic.hyperlapse",
+        "classic.static"
+      ]
+    },
+    "speed": {
+      "words": [
+        "run",
+        "running",
+        "runaway",
+        "escape",
+        "chase",
+        "chasing",
+        "race",
+        "racing",
+        "fast",
+        "speed",
+        "flee",
+        "fleeing",
+        "rush",
+        "faster"
+      ],
+      "terrain": [
+        "road"
+      ],
+      "biome": [],
+      "tags": [
+        "road",
+        "plains",
+        "canyon",
+        "valley"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.chase",
+        "fpv.fpv-proximity",
+        "classic.tracking-follow",
+        "drone.fly-by"
+      ]
+    },
+    "dream": {
+      "words": [
+        "dream",
+        "dreams",
+        "dreaming",
+        "fantasy",
+        "illusion",
+        "surreal",
+        "otherworldly",
+        "wonder",
+        "wonderland",
+        "imagine",
+        "vision",
+        "visions"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "crystal",
+        "magic",
+        "sky",
+        "island",
+        "floating",
+        "portal"
+      ],
+      "kinds": [
+        "poi",
+        "landmark"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "blue",
+        "grade": "cool"
+      },
+      "techniques": [
+        "classic.dolly-zoom",
+        "drone.helix",
+        "classic.time-lapse",
+        "drone.flythrough"
+      ]
+    },
+    "cliff": {
+      "words": [
+        "edge",
+        "cliff",
+        "cliffs",
+        "brink",
+        "ledge",
+        "precipice",
+        "overlook",
+        "verge",
+        "drop",
+        "sheer"
+      ],
+      "terrain": [
+        "rock",
+        "cliffs",
+        "stone"
+      ],
+      "biome": [
+        "rocky"
+      ],
+      "tags": [
+        "cliff",
+        "mountain",
+        "coast",
+        "overlook",
+        "highlands"
+      ],
+      "kinds": [
+        "wilderness",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "white",
+        "grade": "neutral"
+      },
+      "techniques": [
+        "drone.boom-rise",
+        "drone.pass-over",
+        "fpv.fpv-dive",
+        "drone.tilt-reveal"
+      ]
+    },
+    "horizon": {
+      "words": [
+        "horizon",
+        "world",
+        "land",
+        "lands",
+        "far",
+        "faraway",
+        "far away",
+        "distant",
+        "vast",
+        "wide",
+        "everywhere",
+        "open sky",
+        "endless plains",
+        "frontier"
+      ],
+      "terrain": [
+        "grass",
+        "plains"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "plains",
+        "hills",
+        "sea",
+        "coast",
+        "region"
+      ],
+      "kinds": [
+        "wilderness",
+        "region"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.pano-360",
+        "classic.establishing",
+        "drone.dronie",
+        "drone.flyover"
+      ]
+    },
+    "swarm": {
+      "words": [
+        "swarm",
+        "swarms",
+        "insects",
+        "insect",
+        "bugs",
+        "hive",
+        "hives",
+        "nest",
+        "nests",
+        "infested",
+        "infestation",
+        "plague",
+        "olthoi",
+        "locusts"
+      ],
+      "terrain": [
+        "olthoi",
+        "hive",
+        "infested"
+      ],
+      "biome": [
+        "olthoi-infested"
+      ],
+      "tags": [
+        "olthoi",
+        "hive",
+        "infested",
+        "nest"
+      ],
+      "kinds": [
+        "wilderness",
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "green",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "fpv.fpv-corridor",
+        "classic.handheld",
+        "fpv.fpv-proximity",
+        "drone.top-down"
+      ]
+    },
+    "farm": {
+      "words": [
+        "farm",
+        "farms",
+        "harvest",
+        "field",
+        "fields",
+        "wheat",
+        "grain",
+        "crops",
+        "farmer",
+        "countryside",
+        "pasture",
+        "barn",
+        "plough",
+        "plow",
+        "orchard"
+      ],
+      "terrain": [
+        "grass",
+        "meadow",
+        "dirt",
+        "plains"
+      ],
+      "biome": [
+        "grassland"
+      ],
+      "tags": [
+        "farm",
+        "plains",
+        "meadow",
+        "mill"
+      ],
+      "kinds": [
+        "poi",
+        "town",
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "golden",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "drone.terrain-skim",
+        "drone.parallax-slide",
+        "classic.establishing",
+        "drone.top-down-track"
+      ]
+    },
+    "monster": {
+      "words": [
+        "monster",
+        "monsters",
+        "beast",
+        "beasts",
+        "creature",
+        "creatures",
+        "dragon",
+        "dragons",
+        "giant",
+        "giants",
+        "predator"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "lair",
+        "cave",
+        "dungeon",
+        "camp",
+        "hive"
+      ],
+      "kinds": [
+        "dungeon",
+        "poi"
+      ],
+      "look": {
+        "timeOfDay": "dusk",
+        "fog": "black",
+        "grade": "night"
+      },
+      "techniques": [
+        "classic.low-angle",
+        "classic.dolly-zoom",
+        "classic.handheld",
+        "classic.worms-eye"
+      ]
+    },
+    "market": {
+      "words": [
+        "market",
+        "markets",
+        "bazaar",
+        "trade",
+        "trader",
+        "merchant",
+        "merchants",
+        "shop",
+        "shops",
+        "buy",
+        "sell",
+        "coin"
+      ],
+      "terrain": [],
+      "biome": [],
+      "tags": [
+        "market",
+        "town",
+        "settlement",
+        "tavern"
+      ],
+      "kinds": [
+        "town"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "none",
+        "grade": "warm"
+      },
+      "techniques": [
+        "classic.steadicam",
+        "classic.tracking-side",
+        "drone.orbit-poi",
+        "classic.handheld"
+      ]
+    },
+    "desolation": {
+      "words": [
+        "barren",
+        "desolate",
+        "desolation",
+        "wasteland",
+        "bleak",
+        "lifeless",
+        "scorched",
+        "ashen",
+        "nothing left",
+        "dust and bones"
+      ],
+      "terrain": [
+        "rock",
+        "barren",
+        "dirt",
+        "obsidian"
+      ],
+      "biome": [
+        "rocky",
+        "barren",
+        "volcanic"
+      ],
+      "tags": [
+        "barren",
+        "rocky",
+        "remote",
+        "ruins"
+      ],
+      "kinds": [
+        "wilderness"
+      ],
+      "look": {
+        "timeOfDay": "noon",
+        "fog": "white",
+        "grade": "bleach"
+      },
+      "techniques": [
+        "drone.dronie",
+        "drone.pano-360",
+        "classic.static",
+        "drone.flyover"
+      ]
+    }
+  }
+}

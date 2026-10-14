@@ -1,0 +1,58 @@
+{
+ "regions": {
+  "Aluvian Heartlands": {
+   "culture": "Aluvian",
+   "biome": "temperate",
+   "description": "The settled northern Aluvian lands — rolling forests, river valleys, and the original starter towns."
+  },
+  "Sho Heartlands": {
+   "culture": "Sho",
+   "biome": "temperate",
+   "description": "The Sho cultural core — pagoda villages and watchtowers in temperate hill country."
+  },
+  "Direlands": {
+   "culture": "Mixed",
+   "biome": "barren",
+   "description": "Eastern wilderness — Drudge holds, abandoned lairs, mage outposts."
+  }
+ },
+ "town_to_region": {
+  "Holtburg": "Aluvian Heartlands",
+  "Cragstone": "Aluvian Heartlands",
+  "Glenden Wood": "Aluvian Heartlands",
+  "Yanshi": "Sho Heartlands",
+  "Kryst": "Direlands"
+ },
+ "town_anchors": [
+  {
+   "name": "Yanshi",
+   "lb_x": 179,
+   "lb_y": 112,
+   "region": "Sho Heartlands"
+  },
+  {
+   "name": "Cragstone",
+   "lb_x": 188,
+   "lb_y": 159,
+   "region": "Aluvian Heartlands"
+  },
+  {
+   "name": "Holtburg",
+   "lb_x": 169,
+   "lb_y": 180,
+   "region": "Aluvian Heartlands"
+  },
+  {
+   "name": "Glenden Wood",
+   "lb_x": 161,
+   "lb_y": 164,
+   "region": "Aluvian Heartlands"
+  },
+  {
+   "name": "Kryst",
+   "lb_x": 233,
+   "lb_y": 34,
+   "region": "Direlands"
+  }
+ ]
+}

@@ -1,0 +1,931 @@
+{
+ "docsToUpdate": [
+  {
+   "from": "fix:clock",
+   "text": "scene3d/film/runtime/SEAMS.md, 'How to use them', film_clock stepping bullet (line 22): add that step() publishes the frame time, then yields one animation frame (rAF, 50 ms setTimeout fallback; one MessageChannel task on a hidden page or with no rAF) BEFORE `__renderOnce(ts)`. The first step's yield lets the pre-hold re-arm run; it parks on holdLoop and the clock re-bases past it. Replace 'end(): wait until performance.now() > lastTs, clear holdLoop, then call bare `__renderOnce()`' with: end() waits past lastTs (and, under ?particleClock=sim, past the film particle time), clears holdLoop, and calls bare `__renderOnce()` only when the realtime chain is dead (a step issued an explicit-ts render, or frameTime.tsMs changed since begin). Otherwise the still-pending pre-hold re-arm resumes the loop; a second re-arm would run two rAF chains."
+  },
+  {
+   "from": "fix:clock",
+   "text": "scene3d/film/runtime/SEAMS.md, 'Time sources' bullet (line 23): the caveat 'film time advancing more than 100 ms between two rAF callbacks loses the excess' no longer applies to stepped takes. The clock yields one rAF per film frame, so the scenery driver advances exactly 1/fps per film frame, except on the 50 ms fallback path, where it catches up on the next callback."
+  },
+  {
+   "from": "fix:clock",
+   "text": "scene3d/film/SPEC.md \u00a73 `runtime/film_clock.js` bullet (~line 318-322): `time_rng.setCurrentTime(() => filmMs/1000)` is now `frame ts/1000` (wall-based particle modes) or `_particleSimNowS@begin + film elapsed` (?particleClock=sim). Add the per-step animation-frame yield. 'resumes the loop only once performance.now() > lastTs' becomes '> lastTs and > the film particle time (sim); re-arms only a dead rAF chain'."
+  },
+  {
+   "from": "fix:clock",
+   "text": "scene3d/film/README.md per-stepped-frame pipeline paragraph (~line 26-29): insert '\u2192 one animation-frame yield in film_clock.step() (rAF-paced scenery wind / billboards / drains advance on the film clock) \u2192' before '`window.__renderOnce(tsMs)`'."
+  },
+  {
+   "from": "fix:clock",
+   "text": "scene3d/index.js comments (code comments, not behaviour): the scheduleNext film comment (~line 2422-2428) says 'the film clock re-arms with one bare `__renderOnce()`'. It should say it re-arms only when the chain is dead (no explicit-ts step and no realtime tick during the hold \u2192 the pending pre-hold re-arm resumes the loop). The __renderOnce film comment (~line 3045-3058) is still accurate."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md:94-95 \u2014 the password line offers `FILM_PASSWORD=\u2026` env or `--password=\u2026` as equals. It should recommend FILM_PASSWORD, because a --password= argument is visible in ps and /proc/<pid>/cmdline while the command runs. The CLI never writes it, and the heavy-lock record gets --password=[redacted]."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/agents/film-director.md:74 \u2014 same password wording as SKILL.md: prefer `FILM_PASSWORD`, because `--password=` is visible in ps while the command runs."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md:464-465 (\u00a75.2 'CLI walk') \u2014 should add: before each teleport `__film.status()` is checked and any running take aborted; world.prewarm is best-effort (warning, a shoot-log row and a report note); after a failed take the CLI calls __film.abort() and waits for an idle page; a page that will not go idle is not teleported (remaining shots fail at 'busy'); a rehearsal always uses the stepped broker limits."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md:97 (lib/shoot.mjs row) \u2014 should mention the status check and abort before each teleport, the best-effort prewarm, abort plus idle wait on a failed take, and that a failed retake keeps the earlier attempt (failedAttempts)."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md:121 \u2014 the `reports/<shot>.jev.jsonl` row should say it holds only that shot's broker requests (its rehearsal plus attempts), using telemetryMark/{since}; one broker serves the whole shoot."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md:138-140 \u2014 optionally add that a retake which fails keeps the earlier take (reports/<shot>.json failedAttempts) and that an incomplete prewarm only warns."
+  },
+  {
+   "from": "fix:drone",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/techniques.md, `drone.hyperlapse-orbit` block (description ~line 1314, `timeRate` row ~line 1325): the row still says default `60`, 'game-sky seconds per film second'. Re-render from `node tools/film/film.mjs techniques --json`. New row: default `150`, unit sky-s/s, range 1 \u2026 3600, 'Sky speed-up: seconds of the live sky clock (one Dereth day = 7620 s) per film second. 1 = real time; 150 \u2248 0.02 game-days (\u2248 28 game-minutes) per film second \u2026'. The description now says the runtime speeds the sky up timeRate\u00d7 (meta.timeLapse in game-days per film second, like classic.time-lapse)."
+  },
+  {
+   "from": "fix:drone",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md line 213: '`time-lapse`/`hyperlapse*` set `meta.timeLapse = {rate}`' should read '`meta.timeLapse = {rate, unit:\"game-days/s\"}` (rate = game-days per film second, what film_clock reads; drone.hyperlapse-orbit converts its timeRate sky-clock seconds \u00f7 AC_DAY_LENGTH_S = 7620)'."
+  },
+  {
+   "from": "fix:pilot-words",
+   "text": "scene3d/film/SPEC.md \u00a72.14 (line ~237, scene_state.js state shape): `limits:{can_rise, can_sink, room_left, room_right, ceiling}` should become `limits:{can_rise, can_sink, can_drift_left, can_drift_right, room_left, room_right, ceiling}`. Add: room_left/right = sensed free space beside the camera (never capped by the shot bounds); can_drift_left/right = \"yes\" while more than 0.05 m (BOUND_SLACK_M) of maxLateral is left on that side, the same yes/no gate as can_rise/can_sink against maxRise/maxSink. Also, in the buildPilotState signature on line ~232, add `bounds` and `hasSubject` to the opts and `lateral, vertical` to `current`."
+  },
+  {
+   "from": "fix:pilot-words",
+   "text": "scene3d/film/SPEC.md \u00a72.14 questions.js bullet (line ~240-245): add that drift_left/drift_right need `limits.can_drift_left/right` \"yes\" plus sensed room \u2265 \"some\" and that side \u2265 \"near\", next to the existing rise/can_rise example."
+  },
+  {
+   "from": "fix:pilot-words",
+   "text": "scene3d/film/SPEC.md \u00a72.15 (line ~267): describeCandidate(metrics) \u2192 string should note that clearance is stated with the WORD_BOUNDS distance word (\"nearest tree very close (1.5 m)\", metres truncated into that band) and visibility with the visibility word, the words jev_tasks PICK_INSTRUCTIONS quotes (PICK_HIDDEN_WORDS / PICK_TOO_CLOSE_WORDS, generated from sense_words)."
+  },
+  {
+   "from": "fix:plan",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/music-video.md \u00a72 'Tempo' bullet (line ~58, 'cuts land on `beats` (and bars on `downbeats`)'): append \"A `{bars}` shot that starts before the first downbeat (the pickup at edit 0 when the song's `bars[0]` is later than 0) counts its bars from that downbeat, so the pickup joins it and every following `{bars}` cut stays on a bar line; the same holds when `song.offsetSec` puts edit 0 inside a bar. A shot that starts mid-bar after a `{beats}`/`{sec}` shot keeps its length and cuts on the nearest beat.\" (The brief asked for this file, but it is not in this cluster's file list.)"
+  },
+  {
+   "from": "fix:plan",
+   "text": "Note (no change required): the probe directory /tmp/claude-1000/probe-plan/ (compile_old.mjs, run.mjs) was left in place because the permission system denied rm; it is outside the repo and can be deleted."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/SPEC.md \u00a75.2 Take, subject resolution: 'entity \u2192 worldQuery.subject(ref) + subjectAt(t) when moving; player \u2192 local player + subjectAt(t) when moving (i.e. when its actor walks)' should now say this. A moving entity, or a live player (moving:true, or, unless moving:false, when an actor cue walks or capture.mode is 'realtime'), gets a PURE reference ctx.subject/ctx.subjectAt: the prepare-time pose, extrapolated horizontally by its velocity when that is at least 0.3 m/s. Its live, t-ignoring function is passed separately as take.liveSubject. The take player re-anchors the nominal every frame: carry rigs (tags moving-subject, follow, body-rig, subject-is-camera) by translation plus travel-heading rotation; all other techniques by re-aiming. ctx.sun is set outdoors from the sky (none indoors or at night)."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/SPEC.md \u00a72.11 ShotContext: state that subjectAt(t) must be PURE in t. The live subject is a separate take-player input (take.liveSubject), never a ShotContext field."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/SPEC.md \u00a73 (prepare/scout/shoot results): the prepare summary gains liveSubject {mode:'carry'|'aim'|'off', rotate, refHeadingDeg}, flight {preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec} (drone and fpv) and sun {available, reason, headingDeg, pitchDeg}. Validation gains issue code 'overspeed' {message, preset, vmax, peakSpeed, minDurationSec}. The take report (rehearse/shoot) gains liveSubject {mode, rotate, frames, missingFrames, maxOffsetM, maxLagM, maxTurnDeg, refHeadingDeg}. The scout result gains sun and warnings[] (light intent ignored without a usable sun)."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/runtime/SEAMS.md: add the sun seam. film/index.js reads liveScene3d.skyLightingController._lastState (fallback: one sessionHandle.getSkyState(), copied then freed) and imports scene3d/night_ramp.js nightFactorFromAuthoredPitch. Document that SkyState dirHeading/dirPitch are DEGREES, compass heading clockwise from +Y north toward the sun. Also note that worldQuery.subject().velocity now feeds the live subject's reference track."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/README.md and the film-mode-2026-10-13 known-gaps list: gap (4) 'ShotContext.sun is never provided' is closed, and so is the frozen tracking-rig gap (live subjects are now re-anchored per frame). Describe the take report's liveSubject block for rehearsal reading."
+  },
+  {
+   "from": "fix:subject",
+   "text": "WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md and reference/*.md (director docs): prepare can return validation issue 'overspeed' with minDurationSec; lengthen the shot to at least that, shorten or straighten the path, or use pilot.flightPreset 'fpv'. scout returns warnings when intent.light cannot be honoured (night, indoors, sky not ready). Player-as-actor shots (actor.moveTo/moves, or realtime capture) now follow the walking avatar."
+  },
+  {
+   "from": "fix:subject",
+   "text": "scene3d/film/shots/drone.js (\u2248 line 890, drone.flythrough meta): add peakSpeed: F.profile.peakSpeed beside lengthM and overspeed. Without it the overspeed check can only use meta.overspeed and length/duration for flythroughs, so a slower preset override (pilot.flightPreset 'heavy') with a peak above its vmax but a mean below it goes unreported."
+  },
+  {
+   "from": "fix:subject",
+   "text": "pkg/holtburger_web.d.ts SkyState.dirHeading/dirPitch doc comments say 'radians'. Every consumer treats them as degrees. The source is the Rust doc comment on the SkyState snapshot (crates/holtburger-world sky.rs), which is outside this lane."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/runtime/SEAMS.md, 'How to use them' \u2192 'Hides' bullet (Statics). Add how take_player's pilot fades now use the statics seam for tree/prop occluders. Per-placement nodes (Mesh/LOD/animated anchor, or an InstancedMesh holding only that placement) get userData.__filmHidden=true + visible=false. One instance of a shared InstancedMesh gets a zero 3\u00d73 at its own origin + needsUpdate, restored only if still unchanged. A BatchedMesh instance gets setVisibleAt(id,false), restored only if still false. animated_scenery's instanced anchors honour anchor.visible=false (_anchorVisible collapses their slots). Also note that safety.release() now runs BEFORE take_player restores its fades (reverse order of application), and that fade() never adopts an emitter already filmHidden."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/SPEC.md \u00a73 (runtime/safety.js and scene/sensors.js bullets, ~lines 323-327). The indoor cellIds default is now scene/world_query.js renderSetCells(sh): a copy of getViewerRenderSet() (camera-rooted), else getRenderSet(1). It is shared by safety and sensors, and sensors apply it when ctx.indoor and no ctx.cellIds (scout, pre-roll and take)."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/SPEC.md \u00a73.1 SensorFrame. subject now carries occluderIds: rig guids, particle keys, and static placement fade keys `placement:<lbKey hex8>:<object|scenery>:<row>` for tree/prop. The sensor ctx accepts fadedIds: a subject ray stopped by an id the take has faded counts as clear."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/SPEC.md \u00a72.14 mapper. occluder_action fade with no fadeable id now sets reroute=true (counter fadeFallbacks). Take report: `faded` is now {entities, particles, statics, fallbackFrames}, where fallbackFrames = frames whose fade hid nothing and took the reroute bias instead."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/README.md seam table, row `scene3d/statics.js:4579`: optionally add that the film take player sets the marker when the pilot fades a tree/prop occluder. The 'Flag off: marker never set' column is still accurate."
+  },
+  {
+   "from": "fix:perception",
+   "text": ".claude/skills/film-mode/reference/workflow.md:168 and reference/pilot.md:73 (the 'may be faded' guidance). Tree/prop fades need a placement the runtime can resolve to a live draw. Rocks and buildings, plus any occluder with no resolvable draw, make the camera take the reroute bias instead. A classic.reveal-from-occluder shot's own occluder is never faded."
+  },
+  {
+   "from": "fix:perception",
+   "text": "scene3d/film/pilot/questions.js:283 (prompt text, not in my files): 'the film runtime can fade them out' is now true for tree/prop placements and smoke. Optionally append 'or reroutes around them when it cannot'."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/README.md:29 ('Realtime takes (server-driven moving subjects) run on requestAnimationFrame with the pipelined pilot instead.'): add that realtime takes are RECORDED on the film grid. Grid point n is the first drawn display frame at wall t \u2265 n/fps, stamped n/fps. A display frame covering several points is encoded once per point (held, recorder.grab([t\u2026])); display frames between points are skipped; undrawn or backpressured points carry over to the next drawn frame; points after the last frame come from one final frame at the end pose. Every take is therefore a constant-rate stream of \u2308wall\u00b7fps\u2309 frames (the planned count at speed 1) that the CLI muxes with -r fps, and report.realtime holds the counters."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/README.md:208 (index.js seam row): the install is now `Promise.all([import(\"./film/index.js\"), import(\"./particles/particle_manager.js\")]).then(([m, pm]) => m.installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, particleCull: {setParticleCullConfig: pm.setParticleCullConfig, allParticleManagers: pm.allParticleManagers}}))`. It is still only under ?filmMode=on and the module is the same instance entities.js/statics.js load."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/README.md:216 (particle_manager.js row, last column 'unused'): now used. Rendered takes (take_player) and scout stills set recheckInterval 1 and restore only the previous interval; film/index.js builds the particle query with managers: allParticleManagers."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/README.md:126 (world.teleport row): after the send it parks the film viewer cell (camera_owner.parkCell: liveScene3d.filmViewer deleted until the next camera write; skipped while a take/rehearse/scout runs) and returns `viewerParked`."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/README.md:142 (`scene3d.filmViewer = {cell}` published by the camera owner): add that world.teleport unpublishes it until the next write."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/runtime/SEAMS.md:10 (scene3d/index.js line, lazy `./film/index.js` installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports})): it also lazily imports ./particles/particle_manager.js and passes particleCull {setParticleCullConfig, allParticleManagers}."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/runtime/SEAMS.md:14 (particle_manager.js seam): add the consumers. take_player cullBegin/cullEnd use recheckInterval 1 per rendered take and restore only the interval; scout stills do the same; particles_query enumerates via managers: allParticleManagers."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/runtime/SEAMS.md:24 (Viewer cell bullet): add that camera_owner.parkCell(), called by world.teleport, deletes filmViewer while the camera stays owned; the next write re-seeds the cell (plan cell after setCutCell, else the player-head walk)."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:284 (`installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, log})`): add the optional deps.particleCull {setParticleCullConfig, allParticleManagers}."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:294 (world.teleport row): parks the film viewer cell after sendChat; result {ok, cmd, viewerParked}."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:314-316 (camera_owner API): add parkCell() \u2192 {ok, parked, cell}."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:328-334 (take_player / recorder bullets): realtime takes are sampled onto the k/fps grid (constant rate, held/skipped display frames, final end-pose frame, durationSec = frames/fps, table rows at n/fps); recorder.grab(filmTimeSec | filmTimesSec[]) encodes held copies of one canvas wrap (stats.heldFrames); rendered takes run particle recheckInterval 1."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:382 (\u00a74 item 1 install text): replace with the Promise.all form that passes particleCull."
+  },
+  {
+   "from": "fix:capture",
+   "text": "scene3d/film/SPEC.md:392 (\u00a74 item 5 particle_manager.js): note the seam is now wired (take_player/scout set recheckInterval 1 and restore; particles_query managers = allParticleManagers)."
+  },
+  {
+   "from": "fix:capture",
+   "text": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md:21 (format.capture: 'stepped = film clock, smooth at any quality'): optionally add 'realtime = wall clock, recorded on the fps grid (a frame is held when the page renders slower than fps), muxed at true speed'."
+  },
+  {
+   "from": "fix:look",
+   "text": "scene3d/film/runtime/SEAMS.md: add the AdminEnvirons seams the take player now reads (no environ_override.js/loop.js change was needed). (1) `window.__environOverrideState()` (loop.js:1375) is read-only and returns environOverride.stats(): {active, option, name, transition, fogT, lightT, sets, fogTicks, lightTicks, nextFogTick, fogTickSec, ...}. (2) loop.js adopts a NEW `__environFogOverride` object identity only on its next frame: sync sets transition to 0. (3) The fog tick runs every 0.8 s and the light tick every 15 s, both on performance.now() wall time, and each steps the transition by +0.04, so the roll-in takes about 18-21 s. (4) With the 'Disable distance fog' option on, only the light tick syncs and steps. (5) `__setTerrainLightScale(__terrainLightState().scale)` invalidates the light tick, so the next frame re-lights. (6) `?environRetail=off` snaps the fog on."
+  },
+  {
+   "from": "fix:look",
+   "text": "scene3d/film/README.md: for runtime/take_player.js (line 83) and shoot() (line 137), say that a rendered take first waits, for at most 30 s and only on the live loop, until an AdminEnvirons fog change has settled, and that the take report now has an `environ` field {checked, settled, waitedMs, polls, relit, timedOut, stalled, aborted, reason, state}. For runtime/look.js (line 80), say that re-applying the fog already showing keeps its object (`applied.fog.changed:false`)."
+  },
+  {
+   "from": "fix:look",
+   "text": "scene3d/film/SPEC.md \u00a75.2 (line ~465, 'look (merged defaults \u2190 site \u2190 shot; applied by look.js before the take)'): add that a fog change is waited out before recording (\u2264 30 s, reported as take report `environ`), that re-applying the same fog is a no-op, and that retail fog stays on (no environRetail=off). SPEC \u00a73 take player / shoot report fields: add `environ`."
+  },
+  {
+   "from": "fix:look",
+   "text": ".claude/skills/film-mode/reference/music-video.md (fog row, line ~109) and reference/plan-format.md (fog row, line ~176): tell the director that the first take after a fog change waits about 20 s for the retail fog to roll in, and that a fog that changes between shots at one site pays that wait on every change. Keep fog per site where possible. Check `environ.settled` in the take report."
+  },
+  {
+   "from": "fix:look",
+   "text": ".claude/skills/film-mode/reference/workflow.md (take report facts, line ~84): mention `environ` (settled/timedOut/stalled) as a fact worth checking when a fog look was used."
+  }
+ ],
+ "skipped": [
+  {
+   "from": "fix:clock",
+   "id": "seams-0/seams-6 optional index.js hardening",
+   "why": "Not needed for correctness; it is outside my files (scene3d/index.js). An optional extra: expose a no-render cancel so the first step's yield does not let the pre-hold realtime tick render one wall-clock frame. Change `window.__renderOnce = (tsMs) => {` to `window.__renderOnce = (tsMs, opts) => {`, and add next to the explicit-ts cancel: `if (opts && opts.cancelOnly === true) { if (liveScene3dRef?.film?.holdLoop) _cancelSchedule(); return true; }`. film_clock.begin() could then call `win.__renderOnce(undefined, {cancelOnly:true})`, but only together with that seam. Without it, the current re-base path is correct and is tested (K4)."
+  },
+  {
+   "from": "fix:clock",
+   "id": "film_api rehearse macrotask regression (suggested in seams-0 fixes)",
+   "why": "tests/film_api.test.mjs is not in my file list. The clock-level regression is in tests/film_runtime_camera.test.mjs K4, against a fake display running a copy of the index.js scheduler. Optional: in film_api A4, count setImmediate turns during rehearse({fps:10}) and assert at least as many turns as frames."
+  },
+  {
+   "from": "fix:clock",
+   "id": "tooling-2..tooling-8",
+   "why": "These are all in tools/film/* (shoot.mjs, compile.mjs, film.mjs, ffmpeg.mjs, session.mjs), outside this clock cluster's files. They belong to the tooling lane. tooling-9 is refuted, so I did not touch it."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "id": "tooling-4 (source-level part)",
+   "why": "harness/lib/heavy_lock.mjs and harness/test_heavy_lock.mjs are outside my files. The film CLI leak is fully fixed in film.mjs. Exact change for the owner of those files: in resolveOptions add `cmd: opts.cmd ?? null` and thread it through tryTake(dir, label, cmd) into ownerRecord(label, cmd). In ownerRecord use `cmd: String(cmd ?? [path.basename(process.argv[1] || \"node\"), ...process.argv.slice(2)].map(a => String(a).replace(/^(--(?:password|pass|pw|token|key|api-key|apikey|secret)=)[\\s\\S]*$/i, \"$1[redacted]\").replace(/([?&;]password=)[^&\\s]*/gi, \"$1[redacted]\")).join(\" \")).slice(0, 300)`, so a passed cmd wins and every caller gets default redaction. Add a test_heavy_lock.mjs case with process.argv containing --password=SECRET, asserting owner.json holds --password=[redacted]. film.mjs already passes `cmd`, so it picks this up with no further change."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "id": "tooling-2 (optional page-side defence)",
+   "why": "scene3d/film/index.js is outside my files. Exact change: in the api object, wrap world.teleport and world.command with the same guard that pose and release use, i.e. `if (takePlayer.running || busy === \"shoot\" || busy === \"rehearse\" || busy === \"scout\") throw new FilmError(\"world.teleport: a take is running\", \"FILM_BUSY\")`. Keep it inside safeSync so the result is {ok:false, code:'FILM_BUSY'}. The CLI no longer depends on this, because it checks status and aborts before every teleport."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "id": "contracts-6/tooling-0 (optional retry)",
+   "why": "The optional single prewarm retry was not added: the prewarm is already best-effort and the warning tells the director to look for pop-in. Retrying would add up to 300 s per site on a slow landblock."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "id": "tooling-3",
+   "why": "Confirmed but not one of this cluster's ids, and the fix belongs in tools/film/plan/compile.mjs (resolveEnd for {bars}), which is outside my files. Suggested change for that lane: when barPos(inT) < 0 or the shot starts within a beat of a bar line, count bars from the next downbeat, t = grid.barTime(Math.ceil(grid.barPos(inT) - 1e-6) + n), so contiguous {bars} cuts land on downbeats."
+  },
+  {
+   "from": "fix:cli-shoot",
+   "id": "tooling-9",
+   "why": "Refuted by the Verify phase; not fixed, as instructed."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-2",
+   "why": "Outside this lane's file list (tools/film/lib/shoot.mjs): abort the page take and wait for status().active===false on any attempt error, and refuse to teleport while a take is active. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-3",
+   "why": "Outside this lane's file list (tools/film/plan/compile.mjs resolveEnd {bars}): count bars from the next downbeat when barPos(inT) < 0. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-4",
+   "why": "Outside this lane's file list (tools/film/film.mjs / heavy_lock.mjs): scrub --password= from process.argv before acquireHeavyLock, or pass an explicit scrubbed cmd. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-5",
+   "why": "Outside this lane's file list (tools/film/lib/shoot.mjs): call broker.setDecideOptions(DECIDE_OPTIONS.stepped) before rehearse, then DECIDE_OPTIONS[mode] before shoot. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-6",
+   "why": "Outside this lane's file list (tools/film/lib/shoot.mjs): add a per-attempt try/catch and choose among the attempts already recorded. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-7",
+   "why": "Outside this lane's file list (tools/film/lib/ffmpeg.mjs): add -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 to the frames and vp9\u2192mp4 argv. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:drone",
+   "id": "tooling-8",
+   "why": "Outside this lane's file list (tools/film/lib/session.mjs readyTargetsForSite): derive interiorLb from the actual @teleloc destination cell, or set it whenever (cell & 0xFFFF) >= 0x100. Belongs to the tooling lane."
+  },
+  {
+   "from": "fix:pilot-words",
+   "id": "tooling-2..tooling-8",
+   "why": "Listed as CONFIRMED_TOOLING context, not as my cluster's ids. They all live in files outside my edit list (shoot.mjs, compile.mjs, film.mjs, ffmpeg.mjs, session.mjs). tooling-9 is refuted and was not touched."
+  },
+  {
+   "from": "fix:pilot-words",
+   "id": "jev-2 (optional parts)",
+   "why": "Two optional verifier suggestions were not done. (1) Marking ok===false candidates as '(breaks the shot limits)' in pickInputOf would mean editing film.mjs or index.js, which are outside my files; the change would be appending that marker to c.words when c.ok === false, where film.mjs builds the pick candidates (around lines 968-976). (2) Aligning the solver's DEFAULT_INTENT.minClearance (1 m) with the 'very close' edge (2 m) is outside describeCandidate. As things stand, a 1-2 m candidate is ok for the solver but JEV avoids it unless every option is that close. That looks like the intended conservative behaviour, so I left it as is."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-2",
+   "why": "The fix belongs in tools/film/lib/shoot.mjs (abort the page take and wait for idle before the next teleport), which is outside this lane's files. The current shoot.mjs comments suggest another lane already handles it."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-3",
+   "why": "The fix belongs in tools/film/plan/compile.mjs ({bars} resolveEnd counting from the next downbeat), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-4",
+   "why": "The fix belongs in tools/film/film.mjs or heavy_lock.mjs (scrub --password=\u2026 from process.argv before acquireHeavyLock writes owner.json), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-5",
+   "why": "The fix belongs in tools/film/lib/shoot.mjs (call broker.setDecideOptions(DECIDE_OPTIONS.stepped) before the rehearse), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-6",
+   "why": "The fix belongs in tools/film/lib/shoot.mjs (wrap each attempt in try/catch and keep earlier recorded attempts), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-7",
+   "why": "The fix belongs in tools/film/lib/ffmpeg.mjs (add -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 to the frames and vp9\u2192mp4 argv), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-8",
+   "why": "The fix belongs in tools/film/lib/session.mjs (derive interiorLb from the teleport destination cell, or whenever site.cell is an EnvCell), which is outside this lane's files."
+  },
+  {
+   "from": "fix:subject",
+   "id": "tooling-9",
+   "why": "Refuted by the Verify phase; not fixed, as instructed."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-2",
+   "why": "In tools/film/lib/shoot.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-3",
+   "why": "In tools/film/plan/compile.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-4",
+   "why": "In tools/film/film.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-5",
+   "why": "In tools/film/lib/shoot.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-6",
+   "why": "In tools/film/lib/shoot.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-7",
+   "why": "In tools/film/lib/ffmpeg.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-8",
+   "why": "In tools/film/lib/session.mjs, which is outside this cluster's file list (tools lane)."
+  },
+  {
+   "from": "fix:perception",
+   "id": "tooling-9",
+   "why": "Refuted by the Verify phase. Not fixed, as instructed."
+  },
+  {
+   "from": "fix:perception",
+   "id": "seams-7 (optional extra hardening)",
+   "why": "Not needed: the release order plus the fade-side guard and invalidate already fix the defect (tested). My permission on safety.js covers only the shared-helper edit, so this optional belt-and-braces change is left to its owner. In scene3d/film/runtime/safety.js updateLens, change `if (!em || typeof em !== \"object\" || hidden.has(em)) continue;` to `if (!em || typeof em !== \"object\" || hidden.has(em) || em.filmHidden === true) continue;` so the reflex never adopts an emitter someone else hid."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-2",
+   "why": "Outside this cluster's files (tools/film/lib/shoot.mjs) \u2014 another lane owns it."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-3",
+   "why": "Outside this cluster's files (tools/film/plan/compile.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-4",
+   "why": "Outside this cluster's files (tools/film/film.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-5",
+   "why": "Outside this cluster's files (tools/film/lib/shoot.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-6",
+   "why": "Outside this cluster's files (tools/film/lib/shoot.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-7",
+   "why": "Outside this cluster's files (tools/film/lib/ffmpeg.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-8",
+   "why": "Outside this cluster's files (tools/film/lib/session.mjs)."
+  },
+  {
+   "from": "fix:look",
+   "id": "tooling-9",
+   "why": "REFUTED by Verify; not to be fixed."
+  }
+ ],
+ "checks": {
+  "check:clock": {
+   "ok": true,
+   "problems": [
+    "Non-blocking, docs only: the docs still describe the old behaviour. SEAMS.md 'How to use them' lines 22-23 say end() always re-arms with a bare __renderOnce(), and keep the '>100 ms between rAF callbacks loses the excess' scenery caveat. The SPEC.md \u00a73 runtime/film_clock.js bullet (lines 318-322) still says setCurrentTime(() => filmMs/1000) and makes no mention of the per-step rAF yield or the conditional re-arm. The README stepped-frame pipeline paragraph has no yield step. The index.js scheduleNext film comment (~2426-2428) says 'the film clock re-arms with one bare __renderOnce()'. All of these are already in the fix agent's docsToUpdate and none changes behaviour. The film_clock.js header and JSDoc are accurate.",
+    "Non-blocking residual: the fix re-bases past the pre-hold realtime tick instead of cancelling it. That tick runs during the first step's yield and renders one wall-clock frame on the film camera pose, with the film time sources and the seeded RNG installed, so particle RNG draws can differ slightly depending on whether the page is visible. No footage is affected: the first step is always a pre-roll frame (TAKE_PREROLL_MIN_FRAMES = 6) or an unarmed scout frame (stillFrames = 2; only the last one is armed). I checked that nothing can cause a re-base on a later step. The only other places that re-arm the loop are __renderOnce (no other callers) and onResume (it goes through scheduleNext and stays parked), and a pacer timeout or the 50 ms fallback is cancelled by the first explicit-ts render. take_player's grab-ts match is therefore safe. The optional index.js cancelOnly seam was correctly deferred."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_world.test.mjs",
+     "passed": 12,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 113,
+     "failed": 0
+    }
+   ]
+  },
+  "check:drone": {
+   "ok": false,
+   "problems": [
+    "BLOCKING (regression from the math-1/contracts-8 fix, scene3d/film/drone/flight_model.js applyGimbalLimits): the new roll band is lim = max(rollLim, |rT| + 2\u00b0), symmetric about level, and it breaks across the \u00b1180\u00b0 roll seam. The failure needs a target horizon roll that crosses \u00b1180\u00b0 while the gimbal lags by more than the 2\u00b0 slack. The camera is then left on the far side of the seam, and the band, which shrinks as |rT| falls, pushes it the opposite way to the target: a mirror image of the target's roll. The clamp increases follow error, which contradicts the fix's own contract ('the limit only bounds follow error', stated in the module header, the createDrone docblock and the F5 test name), and it rotates faster than the preset's maxRateDeg. Repro 1: fpv.fpv-flip (default axis 'roll') flown with createDrone('cinema'), reached in the plan through the documented pilot.flightPreset override. Pre-fix, the camera held at 45\u00b0 and never exceeded 4.00\u00b0/frame, the 120\u00b0/s maxRate. Now it rolls to about +154\u00b0, then at t\u22484.2 s unwinds 154\u00b0 backwards, mirroring the target (camR = \u2212nomR + 2\u00b0), at 6.17\u00b0/frame (185\u00b0/s). Follow error reaches 171\u00b0. On heavy it is 5.78\u00b0/frame against a 2.67\u00b0/frame limit; indoor also changes. Repro 2: drone.canyon-run with roll: 3.0 (legal, spec.roll \u2208 [\u2212\u03c0, \u03c0]) and maxBankDeg 60 on a winding ctx.path, flown 'heavy'. At t\u22481.1\u20132.8 s the camera holds +143\u00b0 while the target is at \u2212141\u00b0: 75\u00b0 of error, with the image banking against the turn. The same inputs on the auto-chosen cinema preset are fine (max error 2.5\u00b0). In my sweeps the problem appears only through the pilot.flightPreset override. This also contradicts the fix report's claim of 'zero change over every technique \u00d7 gimbal preset': fpv.fpv-flip \u00d7 cinema/heavy/indoor changed, outdoors and indoors. Probes: /tmp/claude-1000/verify-drone/{cmp_all,seam,seam2,flip_series}.mjs; pre-fix comparison copy: /tmp/claude-1000/verify-drone/pre. The remedy is not trivial; I tried two on scratch copies. (a) Skipping the clamp when it would increase |wrap(rT \u2212 r)| fixes canyon-run, but fpv-flip then snaps 67\u00b0/frame when the band re-engages. (b) Also capping the correction at maxRate\u00b7h still gives 8\u00b0/frame, because the cap stacks with the follow loop's own maxRate rotation. A correct fix must never move the camera away from the target across the seam, and must keep clamp plus follow within maxRate\u00b7h, for example by folding the correction into wF's budget along F. Suggested test: fpv.fpv-flip (roll) on cinema/heavy, and canyon-run roll 3.0 + maxBankDeg 60 on heavy, at 24/30/60 fps. Assert per-frame rotation \u2264 max(maxRateDeg/fps, 1.5 \u00d7 the nominal's per-frame rotation) and that follow error never grows while the target's roll crosses \u00b1180\u00b0.",
+    "Verified as fixed (not a problem; for the record). math-1/contracts-8: pass-over 'pitch-through' now peaks at 0.48\u00b0/frame at 30 fps (was 135\u00b0) with 0.2\u00b0 error. A sweep of 7 parameter sets \u00d7 cinema/heavy/indoor \u00d7 24/30/60 fps, using take_player's per-frame loop with vel/acc feed-forward, shows no snap. The 3 'uninverted' frames on heavy with maxPitchRateDeg 720 are ordinary lag at \u2264 maxRate. flyTrajectory validates for all 3 nadir modes \u00d7 4 presets \u00d7 3 fps; yaw-slew and hold are unchanged (3.41\u00b0 and 3.42\u00b0/frame); the inverted reset holds. The new F5/F6 checks fail on a pre-fix-semantics copy (2 FAIL) and pass now. contracts-2: hyperlapse-orbit emits {rate: timeRate/7620, unit:'game-days/s'}. The default 150 gives 0.000656 day/frame at 30 fps, and 3600 at 24 fps gives 0.0197 day/frame. take_player hands traj.meta.timeLapse straight to clock.begin, and film_clock.lapseRate reads .rate. The new tests run the real createFilmClock and fail on the old {rate:60} meta (2 FAIL). The only touched non-film import, scene3d/sky_game_date.js, is pure, unmodified and already loaded by the client. The cluster changed no existing scene3d file, so zero-cost-when-off is not affected. SPEC \u00a72.12 `meta.timeLapse = {rate}` still holds as a superset, and \u00a72.13 states no roll limit, so there is no SPEC or owner-decision regression.",
+    "Doc drift (non-blocking; the fix agent listed it in docsToUpdate but did not apply it): .claude/skills/film-mode/reference/techniques.md line 1325 still gives drone.hyperlapse-orbit timeRate a default of `60` and the wording 'game-sky seconds per film second'. The code now uses default 150 and unit 'sky-s/s' (one Dereth day = 7620 s), and the line 1314 description is also stale. The director reads this catalog, so re-render it from `film.mjs techniques --json`. SPEC.md line 213 could add `unit:'game-days/s'` (optional).",
+    "Minor doc inaccuracy: the flight_model.js module header (lines 20\u201323) says the horizon roll is limited to '\u00b145\u00b0 beyond the target's own intended roll'. The code band is max(rollLimitDeg, |target roll| + 2\u00b0), not target \u00b1 45\u00b0. The createDrone docblock and the preset doc state it correctly."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 36,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 113,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_registry.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 36,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_scene_dungeon.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    }
+   ]
+  },
+  "check:perception": {
+   "ok": false,
+   "problems": [
+    "REGRESSION introduced by the static-fade fix (contracts-3 / seams-2 / gate-2): world_query.describeHit picks the static whose capsule surface is nearest to the hit point. With the default radii (tree 2.5 m, prop 1.0 m; film/index.js passes no staticDimsOf), that distance is 0 for every capsule containing the point, and ties go to the lower row index. As a result the fade key can name a neighbouring placement instead of the one the ray hit. Combined with the new ctx.fadedIds 'seenThrough' rule in sensors.subjectJob, the take then fades the wrong draw, and the sensors count the real, still-visible occluder as seen through. Reproduced with throwaway probes using the real world_query + sensors (/tmp/claude-1000/perc-probe/clump.mjs, clump_e2e.mjs, props_prod.mjs). (a) Two trees 1.9 m apart: before the fade, visibleFrac 0 / occluderKind tree / occluderIds ['placement:05050000:scenery:0'] (the WRONG tree; the blocker is :scenery:1). After fading the named id: visibleFrac 1, occluderKind null, occluderIds []. Every subject ray is still blocked by the other trunk. (b) Production wiring (no catalogs): a hit on a large static's rim 2 m from its origin, with a barrel 0.7 m away, returns the barrel's key. Effect in a take: a random nearby prop or tree vanishes, the real occluder stays, the pilot and the take report believe the subject is fully visible, and neither a fade nor a reroute happens. This is the original failure scenario (subject stays hidden, nothing done) plus a false perception reading. Suggested fix: in describeHit, give a fadeKey only when identification is unambiguous. Rank candidates by horizontal distance from the hit point to the placement origin/axis, require that distance \u2264 the placement radius, and return fadeKey null (so the existing reroute fallback applies) when a second candidate is within a margin. Optionally, in sensors.subjectJob, treat a faded id as seenThrough only when the hit point lies within that placement's radius of its origin.",
+    "Wiring gap (pre-existing, not caused by this cluster) that makes the new tree fade dead in production and the fix report/docsToUpdate overstate it. scene3d/film/index.js createWorldQuery passes no `catalogs` (vfxArchetypeOf/staticDimsOf), so archetypeOf() is always null and staticKindOf classifies EVERY procedural scenery placement as 'rock'. Verified: a scenery oak trunk hit returns {kind:'rock', fadeKey:null}. Trees are therefore never faded in production; they are named 'rock' to the pilot/JEV and rerouted (the mapper safety net does cover this). Conversely, every non-building LandblockInfo static (statues, fountains, wells, fences, bridges) is a fadeable 'prop' with default 1 m dims, contrary to the 'small props' intent in questions.js, and before this fix static fades were no-ops. The fix agent's proposed docs ('Tree/prop fades need a placement the runtime can resolve') should not ship until index.js injects a catalog, e.g. from scene3d/vfx_catalog.js vfxDescriptorFor. Consider also refusing to fade a static whose live draw's bounding radius exceeds a few metres.",
+    "Low: the BatchedMesh restore (take_player.restoreStatic 'batch': setVisibleAt(id,true) whenever getVisibleAt(id)===false) cannot tell its own hide from a later park/hide. pool_registry park/unpark, static_atlas hide/show and static_batch_x all write setVisibleAt on the same buckets. A bucket parked during a take would get that one instance un-parked when the take ends. The player (and so the LRU centre) is static during a take, so this is unlikely; noted, not blocking.",
+    "Verified fixed: contracts-1. world_query.renderSetCells (getViewerRenderSet, else getRenderSet(1), copied, null when empty) is shared by safety.js and sensors.js. sense() defaults cellIds once per call when ctx.indoor, which covers take_player.senseFrame, preRollStep and index.js measureCandidate. Covered by tests perception S11, runtime_capture T2 contracts-1 and api A9.",
+    "Verified fixed: the mapper safety net. fade with no ids gives reroute=true and counts fadeFallbacks. take_player also reroutes a frame when fade() hides nothing, and retries an unresolved static key after 15 frames. Reveal occluders are never faded, and locked replays never fade.",
+    "Verified fixed: seams-7. execute()'s finally runs safety.release() before restoreFades(R). fade() calls the shared particles_query invalidate(), so the same frame's lens skips the cloud, and fade() never adopts an already filmHidden emitter. The T2 seams-7 test drives the real createSafety through the real take_player.shoot path in both orders.",
+    "Zero-cost-when-off: this cluster changed no tracked scene3d file. Every touched file is under scene3d/film/ (reached only through the ?filmMode=on dynamic import) or tests/. The statics.js __filmHidden seam and animated_scenery _anchorVisible predate this cluster. No SPEC/owner-decision regression found (DoF, account and scenery bake are untouched; report.faded has no consumers and SPEC does not define its shape)."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_perception.test.mjs",
+     "passed": 25,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_pilot_loop.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    }
+   ]
+  },
+  "check:subject": {
+   "ok": false,
+   "problems": [
+    "math-0 / contracts-0 are only partly fixed. The camera now follows a moving subject, but a flown carry rig surges at the start of the take in the case index.js usually produces. That case is a subject already walking at prepare time (velocity \u2265 0.3 m/s, so referenceTrack extrapolates it) that keeps walking through the pre-roll. Cause: during the pre-roll the reference is held at p=0. liveUpdate(settle) therefore stores S.v = S.F = d(live \u2212 ref(0))/dt, which is the subject's full speed. Once progress runs, the reference moves at that same speed, so the correct offset velocity is about 0. startPose/liveDerivs still reset the drone with nominal velocity plus S.v (double speed), and the follower overshoots. Measured by /tmp/claude-1000/subject-verify/live_probe.mjs (subject 3 m/s north, reference extrapolated at 3 m/s): drone.chase comes 1.65 m (20%) closer to the subject (ratio 0.80); drone.lead goes 1.69 m (21%) farther (ratio 1.21); both take about 3 s to settle. classic.tracking-follow dips 0.21 m. This breaks the fix's own claim of 'no lag at constant speed' and its L1 \u00b115% bound. The L1 tests miss it because they only use a static reference. When the subject stands still during the pre-roll, the error is 0.00. Fix: in liveUpdate's settle branch, subtract the reference's own velocity, i.e. S.v = S.F = dT/dt \u2212 (refSubjectFn(p+h) \u2212 refSubjectFn(p))/h. Then add an L1 case with an extrapolated ctx.subjectAt and a subject that walks during the pre-roll.",
+    "math-2 is incomplete. drone.flythrough's meta (scene3d/film/shots/drone.js:890 `{ lengthM: F.length, overspeed: F.profile.overspeed }`) still has no peakSpeed, so flightCheckOf can only compare the mean speed. The verifiers' correctedFix asked for this field explicitly, and no other review id covers it. Repro (/tmp/claude-1000/subject-verify/endgap.mjs, overspeed.mjs): flythrough, 200 m path, 30 s, gapSpeed 0.2, pilot.flightPreset 'heavy' (vmax 7). Peak speed is about 8.9\u201311 m/s and the mean 6.67. prepare reports flight.overspeed:false and no validation issue, yet the flown camera ends 24.6 m short (max tracking error 26.4 m). Also, without a peak, the flythrough's minDurationSec falls back to lengthM/vmax and can still be flagged at the duration it suggests: 120 m in 8 s suggests 10.1 s, and at 10.1 s it is overspeed again (mindur.mjs). Fix: add `peakSpeed: F.profile.peakSpeed` to that meta.",
+    "math-2: in the director's real workflow the overspeed report is still never seen. tools/film/lib/shoot.mjs throws away every prepare result (lines 465, 472\u2013473, and rehearseShot at 660). The take report from buildReport has a liveSubject block but no flight or validation block, and nothing reads validation.ok. In the CLI flow, 'nothing reports it' is therefore still true. Suggest copying plan.flightCheck and the overspeed issue into the rehearse/shoot report, or logging prepare's validation issues in shoot.mjs.",
+    "Not a code regression, but the docs are pending. SPEC.md \u00a75.2 (lines 462\u2013463) still says 'entity \u2192 \u2026 + subjectAt(t) when moving; player \u2192 \u2026 when its actor walks'. \u00a72.11 does not yet say that subjectAt must be pure in t, or that take.liveSubject is a separate input. The SEAMS.md sun seam, the README known-gaps entry and the film-mode skill docs listed in the fix report's docsToUpdate are not updated yet.",
+    "Confirmed fixed and not regressed. contracts-7: every A7 case, and the rule matches schema.mjs's player `moving` normalization (line 449). math-3 / contracts-9: SkyState dirHeading/dirPitch are DEGREES with compass heading clockwise from +Y north, confirmed against sun_direction.js sunDirFromHeadingPitch and particle_fx.js:598. liveScene3d.skyLightingController is set on the same object at scene3d/index.js:5595. getSkyState() is freed. Night is judged by night_ramp. The scout warnings work. The core frozen-rig defect is fixed: every carry and aim technique keeps the subject framed in 180/180 frames in my probes. Zero cost when off holds: only scene3d/film/* changed, film loads only through the exact-match ?filmMode=on dynamic import (scene3d/index.js:4531), and night_ramp.js is already resident through atmosphere_sky.js."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 36,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 113,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    }
+   ]
+  },
+  "check:capture": {
+   "ok": true,
+   "problems": [
+    "Fixed \u2014 gate-0, seams-4, contracts-4, tooling-1 (one defect: realtime takes were variable-rate but muxed at a constant fps). Realtime takes are now recorded on the film grid in scene3d/film/runtime/take_player.js (armGrid / commitGrid / gridDue / gridOwed, plus a final end-pose frame for points still owed after the last display frame). recorder.js grab([t\u2026]) wraps the canvas once and encodes one re-stamped copy per extra grid point. Frames are stamped n/fps; durationSec and meta.takeDuration are frames/fps; table rows sit at n/fps. The CLI passes timeline.fps as the page take fps (tools/film/lib/shoot.mjs:477), so its unchanged '-r fps -c copy' mux, the frames mux, durationSec = raw.frames/fps and the IVF pts (now consecutive integers) are all correct.",
+    "Independent probe (/tmp/claude-1000/probe-capture/probe.mjs and probe_g.mjs, real take_player + recorder + drain.mjs createTakeSink): 9 passed, 0 failed. It covers what the suite does not: the engine drawing BEFORE the film's rAF callback in a frame (22/30/60/144 Hz); 8 seeds of random 4\u2013120 ms jitter with a 600 ms hitch, random undrawn frames and random backpressure at fps 24 and D 1.7 (always \u2308endT\u00b7fps\u2309 = 41 frames); a 144 Hz display; sustained backpressure; abort; the wall cap; a locked realtime replay at a different display rate; and a final frame that is never drawn (its points are counted in droppedFrames, frames + dropped = gridFrames). In every case, encoded timestamps equal round(k/fps\u00b71e6), each table row's pose equals the pose on the canvas when that frame was encoded, every VideoFrame is closed, and the CLI sink frame count and span match.",
+    "Fixed \u2014 seams-9: the scene3d/index.js install block now uses Promise.all([import('./film/index.js'), import('./particles/particle_manager.js')]) inside the exact `filmMode === \"on\"` branch only. That is the same module instance particles/index.js already loads statically, so nothing changes when the flag is off; the only edit to an existing scene3d file is inside the flag branch. take_player cullBegin/cullEnd sets recheckInterval 1 on every rendered take and restores only the interval in finally (maxDistance untouched); a dry rehearsal leaves the cull alone. Scout stills set and restore it the same way. The particle query is built with managers: allParticleManagers; it still uses particles_query's default owner registry, and catalog/familyOf were already absent on this path, so nothing regressed. H3g (real particle_manager, including a failing take) and H7l (the lifted install block) are genuine tests.",
+    "Fixed \u2014 seams-11: camera_owner.parkCell() clears cell, cellEye and pendingCut, sets pendingReseed and deletes liveScene3d.filmViewer. Nothing else re-publishes it: only write \u2192 carryCell, release and parkCell call publishCell. world.teleport parks after a successful send only, never fails on a throwing parker, and film/index.js skips parking while a take, shoot, rehearse or scout is running. The next take's setCutCell, the scout's setCutCell, or an api pose() re-seeds the cell correctly.",
+    "Non-blocking \u2014 docs still stale. These are the fix agent's docsToUpdate items, not yet applied: README.md lines 29/126/142/208/216 (the particle_manager row still says 'unused'), runtime/SEAMS.md lines 10/14/24, and SPEC.md \u00a73 installFilmMode signature, the world.teleport row, the camera_owner/take_player/recorder bullets and the \u00a74.1 install snippet. They contradict no SPEC requirement: SPEC \u00a74.5 intended this particle seam to be used, and no owner decision (phase4demo account, DoF in v1, scenery bake) is affected.",
+    "Non-blocking observation \u2014 under sustained encoder backpressure, a realtime take now holds frames instead of dropping them (the probe with hasCapacity always false gives 30 correctly stamped frames, all copies of the final frame). This is by design: timing stays exact, and it shows up in report.realtime.backpressureFrames/heldFrames.",
+    "Non-blocking edge case \u2014 gridDue uses a 1e-3 frame tolerance but takeFrameCount uses 1e-6. If the last display frame before the end lands within about 33 \u00b5s (at 30 fps) before a grid boundary that lies past the end time, the take gets one extra grid frame. It is negligible and still constant-rate."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_world.test.mjs",
+     "passed": 12,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 36,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 113,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/portal_fov_fade.test.mjs",
+     "passed": 86,
+     "failed": 0
+    },
+    {
+     "file": "tests/audio_attached_emitter.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "tests/held_missing_location.test.mjs",
+     "passed": 15,
+     "failed": 0
+    },
+    {
+     "file": "tests/net_pump_beat.test.mjs",
+     "passed": 10,
+     "failed": 0
+    },
+    {
+     "file": "tests/radial_fog.test.mjs",
+     "passed": 83,
+     "failed": 0
+    },
+    {
+     "file": "tests/portal_punch_occlusion_flag.test.mjs",
+     "passed": 6,
+     "failed": 0
+    },
+    {
+     "file": "tests/look_pass.test.mjs",
+     "passed": 158,
+     "failed": 0
+    },
+    {
+     "file": "tests/login_portal_space.test.mjs",
+     "passed": 85,
+     "failed": 0
+    },
+    {
+     "file": "tests/audio_retail_ui_sounds.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/probe-capture/probe.mjs",
+     "passed": 8,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/probe-capture/probe_g.mjs",
+     "passed": 1,
+     "failed": 0
+    }
+   ]
+  },
+  "check:look": {
+   "ok": true,
+   "problems": [
+    "Non-blocking residual race (probe /tmp/claude-1000/look-verify/probe.mjs, case B): waitEnvironSettled's 'known' shortcut is keyed on the override `sets` count, not on object identity. It can wrongly report settled when all of these happen: world.restoreLook(), then a re-apply of the SAME fog (a fresh object), then the take's first poll, with no loop frame anywhere in that sequence. The take then reports settled with waitedMs 0, and the next frame restarts the roll-in (first rendered frame fogT 0, sets 2). The normal CLI flow never calls restoreLook between takes, and every step is a separate CDP evaluate, so this is very unlikely in practice. To harden it, store the identity of `window.__environFogOverride` when the fog settles and allow the shortcut only while that identity is unchanged.",
+    "Non-blocking efficiency note (probe case C): with no landscape light tick (terrainMaterials empty or no sky snapshot), the fog ticks keep changing the stall signature. Every fog take, including a same-fog retake, then waits the full 30 s and reports timedOut:true instead of stopping at the 5 s stall bound. It is bounded and reported, and outdoor sites always have terrain, so this is only a cost.",
+    "Docs not yet updated (listed in the fix report's docsToUpdate, owned by the orchestrator/docs lane): SEAMS.md does not yet list the new read of window.__environOverrideState(). README, SPEC \u00a75.2 and the film-mode skill references (music-video.md fog row, plan-format.md fog row, workflow.md take-report facts) do not yet mention the pre-roll fog wait of up to 30 s or the new take-report `environ` field. This is a docs gap, not a code regression."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_world.test.mjs",
+     "passed": 12,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    }
+   ]
+  },
+  "check:pilot-words": {
+   "ok": true,
+   "problems": [
+    "NON-BLOCKING (SPEC sync, orchestrator): the pilot state now has limits.can_drift_left and limits.can_drift_right, but SPEC.md \u00a72.14 (line 237) still lists limits:{can_rise, can_sink, room_left, room_right, ceiling}. The fix agent listed this in docsToUpdate, along with the questions.js bullet (\u00a72.14) and the describeCandidate wording (\u00a72.15, line 267). The change only adds fields. It is the review's own suggestedFix and verifier fix 2, and README 'Add a pilot question' step 2 allows adding state words. No consumer whitelists state keys: the broker/jev.mjs only size-check. It conflicts only with verifier fix 1's 'keep the frozen shape' alternative. Apply the docsToUpdate text so SPEC matches the code.",
+    "NON-BLOCKING (test coverage, not a regression): a mutation that removes `limits.can_drift_left` from the LEFT-OK definition, or from the drift_left 'Not when' exclusion in questions.js, still passes film_pilot_words and film_pilot_policy. The oracle is hand-written and the text checks only look for paths and words. Removing can_rise from RISE-OK slips through the same way, so this gap predates the cluster. The code/state side is pinned: reverting the room capping or the policy_code gate fails 7 and 6 checks.",
+    "NON-BLOCKING (cosmetic): the solver.js clearanceM comment says metres are 'never rounded up', but its 1e-9 float-noise epsilon rounds values within 1e-9 m below a 0.01/0.1/1 m step up (0.99999999999 m prints '1 m'). The value always stays inside the same distance band. In a 272,833-value sweep, no band word disagreed with its metres and no 'touching'/'very close' appeared outside its band.",
+    "NOTED (optional, out of cluster scope): the jev-2 verifier extras were not done, as the fix agent said: an '(breaks the shot limits)' marker for ok===false pick candidates in film.mjs pickInputOf, and aligning DEFAULT_INTENT.minClearance (1 m) with the 'very close' edge (2 m). As a result, an ok===false candidate that breaks only maxOcclusion while 'partly hidden' carries no word the pick rule quotes."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_pilot_words.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_pilot_policy.test.mjs",
+     "passed": 59,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_scene_solver.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_jev_broker.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_pilot_loop.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_perception.test.mjs",
+     "passed": 25,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    }
+   ]
+  },
+  "check:cli-shoot": {
+   "ok": true,
+   "problems": [
+    "non-blocking (tooling-2 hardening): settlePage calls __film.abort() only once per settle. take_player.abort() sets the flag only while `run` exists, and execute() resets abortRequested=false when a take starts. An abort that lands in the sub-millisecond window where index.js has busy='shoot' but take_player has not yet set `run` (await ready() + cleanFrame.apply) is therefore lost. The CLI then waits out PAGE_IDLE_WAIT_MS and fails the remaining shots at 'busy'. That is safe (it never teleports under a take) but loses the schedule. Suggested fix: re-issue the abort on every poll that still reports busy, in tools/film/lib/shoot.mjs settlePage (`if (!aborted) await abort()`).",
+    "non-blocking (behaviour change): shootSchedule now reads __film.status() before every teleport. A page whose status() returns ok:false for any reason other than NO_FILM/NO_METHOD (a page-side status bug) now stops the shoot after 90 s with every shot at 'busy'. Before this change it would have shot. This is conservative by design and documented ('an unreadable status counts as not idle').",
+    "non-blocking (comment accuracy): session.mjs readyTargetsForSite's JSDoc says plan/schema.mjs derives interiorLb from the cell 'the same way'. schema.mjs normSite actually uses `s.indoor === true && cell !== null`, so the two differ only for a plan site with an explicit indoor:true on an outdoor cell. I ran a probe over the real 5,419-site gazetteer: the new readyTargetsForSite agrees with readyTargetsForCommand for every @teleloc site, no site lost an interior gate, and 375 sites (towns/POIs/landmarks on EnvCells, e.g. crater-lake-village, the-underground-city, archive) gained one.",
+    "follow-ups not done by this cluster (listed in the fix report): the heavy_lock.mjs `cmd` option plus default argv redaction (film.mjs covers the film CLI via the explicit cmd and the in-place argv scrub during acquire, verified against the real lock); the optional page-side world.teleport FILM_BUSY guard; the doc wording in SKILL.md:94-95, film-director.md:74, SPEC \u00a75.2 'CLI walk', README lib/shoot.mjs row, pilot.md:121."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_jev_broker.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/cli-shoot-verify/schedprobe.mjs (independent probe: shoot EVAL_TIMEOUT -> abort+idle before next prepare/teleport; prewarm evaluate throws -> warn+continue; status unreadable -> no teleport, 'busy'; retake prepare FILM_BUSY -> attempt 0 kept; telemetryMark/since with ring overflow)",
+     "passed": 5,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/cli-shoot-verify/ffprobe.mjs (real /home/wbterminal/bin/ffmpeg: muxArgv frames 65x37 -> 64x36, frames 1280x633 -> 1280x632, vp9 ivf 65x37 -> 64x36; control without crop fails)",
+     "passed": 3,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/cli-shoot-verify/lockprobe.mjs (real acquireHeavyLock via main(): owner.json cmd redacted for --password=, --pass=, URL password=; argv restored; lock released)",
+     "passed": 3,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/cli-shoot-verify/sites_old_new.mjs (real gazetteer 5419 sites: 0 @teleloc site/cmd mismatches, 0 lost interior gates)",
+     "passed": 1,
+     "failed": 0
+    }
+   ]
+  },
+  "check:plan": {
+   "ok": false,
+   "problems": [
+    "tooling-3 regression in tools/film/plan/compile.mjs resolveEnd, {bars} branch. The new edit-0 rule is `pickup = bp < -1e-6 || inT <= 1e-9; base = pickup ? Math.ceil(bp - 1e-6) : bp`. When song.offsetSec lands even slightly AFTER a downbeat, Math.ceil jumps to the next bar, so the first {bars:n} shot becomes about n+1 bars and every contiguous {bars} cut after it is one bar late. The old rule cut on the intended downbeat. This is easy to hit: `song analyze` prints section starts with one decimal (analyze.mjs mmss(), e.g. '0:15.0'), and a director copies offsetSec from that. Probe /tmp/claude-1000/-home-wbterminal/6e329a46-30dc-40e7-9675-ce2d76948f37/scratchpad/bars/probe2.mjs: verse downbeat at 14.98 s, offsetSec 15.0, shots {bars:2},{bars:3},{bars:4}+start:{section:2}. OLD: v1 0\u21923.97 (bar 9), v2 \u21929.97 (bar 12), no warnings. NEW: v1 0\u21925.97 (bar 10, 3 bars instead of 2), and a new warning 'c1 starts 2 s before v2 ends; v2 is trimmed to 4 s'. Without the explicit section start, the whole chain is a bar late. Also, offsetSec 8.001 on a t0=0 grid makes {bars:4} = 10 s instead of 8 s (probe.mjs in the same dir). offsetSec at or before the downbeat (14.98, 14.95) is unaffected. Suggested fix: treat an edit-0 start that is only slightly past a downbeat as on it. For example, `const fl = Math.floor(bp + 1e-6); base = pickup && (bp - fl) * grid.barLen > grid.period / 2 ? Math.ceil(bp - 1e-6) : (pickup ? fl : bp)`, or the reviewer's alternative: snap to the nearest downbeat when the shot started within a beat of a bar line. Add a check to tests/film_plan_compile.test.mjs: offsetSec 8.01 / 15.0 just past a downbeat still cuts {bars:4} on bar k+4. Update the edit-0 mid-bar sentence in the compile.mjs header, plan-format.md \u00a75 and SPEC \u00a75.2 to match.",
+    "Minor doc nit, not blocking: SPEC.md \u00a75.2 Take says 'player \u2192 local player + subjectAt(t) when moving (i.e. when its actor walks)'. The current page code (scene3d/film/index.js resolveTake, changed by another cluster) also makes a standing player live when capture.mode is 'realtime' and moving is not false, so the '(i.e. \u2026)' wording is narrower than what the page does."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 36,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    }
+   ]
+  }
+ }
+}

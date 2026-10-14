@@ -75,7 +75,7 @@ with an explicit timestamp and encoded in-page with WebCodecs right after the fi
 |---|---|---|
 | `scene3d/film/` | ALL in-page code + pure modules shared with Node (bundled by build-shell, swept by every lint) | page (lazy, `?filmMode=on`) and Node tools |
 | `scene3d/film/{core,shots,drone,pilot}/` | pure math / shot grammar / flight model / JEV pilot logic | both |
-| `scene3d/film/scene/` | perception & planning: `solver.js`, `dungeon_route.js`, `los.js` (pure, injected handle); `world_query.js`, `sensors.js`, `particles_query.js`, `terrain_corridor.js` (page adapters, injected deps) | page (+tests with fakes) |
+| `scene3d/film/scene/` | perception & planning: `solver.js`, `dungeon_route.js`, `los.js` (pure, injected handle); `world_query.js`, `sensors.js`, `particles_query.js`, `terrain_corridor.js` (page adapters, injected deps; `world_query.js` also takes injected static-placement `catalogs`, built by `film/index.js` with world_query `createStaticCatalogs`, see below) | page (+tests with fakes) |
 | `scene3d/film/runtime/` | camera owner, clean frame, film clock, take player, safety, recorder, look, world, JEV page bridge | page |
 | `scene3d/film/index.js` | `installFilmMode(deps)` → `window.__film` | page |
 | `scene3d/film/flags.js` | `filmModeEnabled(search)`, `filmDofEnabled(search)` (exact `=== "on"`, memoised, injectable, `_set…ForTest`) | page |
@@ -85,10 +85,36 @@ with an explicit timestamp and encoded in-page with WebCodecs right after the fi
 
 Page modules MUST NOT import stateful scene3d modules (`terrain.js`, `statics.js`, `buildings.js`, `entities.js`,
 `cells.js`, `index.js`, `camera.js`, `landblock_lru.js`, `particle_manager.js`) — dependencies arrive through
-`installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, ...})` or `window.liveScene3d`. Importing
-dependency-free modules is fine: `../projectile_sweep.js`, `../pick_math.js`, `../camera_math.js`,
-`../particles/time_rng.js`, `../particles/owner_registry.js`, `../../rynth/indoor_router.js`,
-`../../rynth/nav_frame.js`. No new file-backed `Worker`s (build-shell WORKER_ENTRIES).
+`installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, particleCull, ...})` or `window.liveScene3d`.
+Importing dependency-free modules is fine: `../projectile_sweep.js`, `../pick_math.js`, `../camera_math.js`,
+`../particles/time_rng.js`, `../particles/owner_registry.js`, `../sky_game_date.js` (`AC_DAY_LENGTH_S`, shots/drone.js),
+`../night_ramp.js` (`nightFactorFromAuthoredPitch`, film/index.js), `../../rynth/indoor_router.js`,
+`../../rynth/nav_frame.js`. `film/index.js` also dynamically imports the time-source seams (`../particles/time_rng.js`,
+`../particles/particle_fx.js`, `../animated_scenery.js`; §4 items 6–7) and `../vfx_catalog.js`, which it only READS:
+`vfxDescriptorFor(did)`, never `ensureVfxCatalog` (the import returns the same module instance the client's own VFX
+paths fill: the statics bake and the entity spawns — tipFlex, weaponFx, gemSparkle; vfx_catalog.js is not modified).
+No new file-backed `Worker`s (build-shell WORKER_ENTRIES).
+
+**Static placement catalogs** (`scene/world_query.js` `catalogs`, built by `film/index.js` with
+`createStaticCatalogs`): the client's VFX descriptor catalog (`vfxDescriptorFor` only) gives each placement its
+archetype (tree vs rock) and, for catalogued models, its DAT-bounds size; `wasmExports.fetchSetupSelectionSphere`
+sizes the other Setup DIDs (fetched once per DID, prefetched per landblock, boxes freed; each prefetch waits at most
+3 s, and a DID still unsettled when a wait times out is remembered as stalled and never waited for again — its fetch
+stays in flight and its size applies if it ever settles). A `staticsNear` query loads its landblocks (≤ 25)
+concurrently, so it waits about one 3 s bound in total, not one per landblock. Per-kind defaults are the fallback.
+`StaticFacts` (and `query.near` `statics`) carry `dimsSource: 'catalog'|'selectionSphere'|'default'`. An optional
+collider source exists — `createStaticCatalogs({colliderOf})` → `catalogs.staticColliderOf(did)`, the physics-collider
+reach in model metres, read by the scenery hit LABEL rule (§3.1; it never makes a fade) — but none is wired: the VFX
+descriptors carry no collider data, so the reach comes from the size radius.
+Degrade: only the client's own VFX paths load the catalog. The statics bake loads it for the GPU tree sway (default
+on; off with `?treeWindGpu=off`, `?treeWind=on`, `?windGeo=on` or `?visual=off`) and for the `?windGeo=on` wind peel,
+which has NO `?visual` gate; entity spawns load it for `?tipFlex`, `?weaponFx` and `?gemSparkle` (each default on under
+`?visualAll`, all off under `?visual=off`). So the catalog stays empty exactly when `?windGeo=on` is absent and either
+`?visual=off` is set or every other path is off (GPU tree sway off and `?tipFlex`, `?weaponFx`, `?gemSparkle` all off,
+e.g. `?treeWindGpu=off&visualAll=off`). Then scenery reads as rock (a label only — v1 never fades procedural scenery,
+§3.1) and a placed tree reads as a prop sized by its selection sphere, if any, so it fades only when that known size
+passes the small-prop rule; otherwise the pilot reroutes. Flag off: neither the catalog read nor the sphere fetch
+happens.
 
 ---
 
@@ -195,6 +221,11 @@ horizonTiltDeg, inFrame}`.
 - **ShotContext** `{subject:{pos,radius,height,heading?,velocity?}|null, subjectAt?(t), anchor:[x,y,z],
   groundZ(x,y) → z|null, path?:[[x,y,z]...], aspect, fps, rng, sun?:{h,p},
   indoor?:{route?:[[x,y,z]], ceiling?(x,y) → z|null, floor?(x,y) → z|null}}`.
+  `subjectAt(t)` MUST be **pure in t** (it feeds the pure `sample(t)`): for a live subject the page passes a
+  reference track (§5.2 Take). The live, t-ignoring "where is it now" function is a separate take-player input
+  (`take.liveSubject`), never a ShotContext field. `sun` = `{h, p}` radians (compass bearing TOWARD the sun, clockwise
+  from north, and elevation), set by the page outdoors from the live sky; absent indoors, at night and before the sky
+  state is readable.
 
 ### 2.12 Technique catalog (ids are API — the director writes them in plans)
 `shots/classic.js` → `classic.*`: `static`, `pan`, `tilt`, `roll`, `zoom`, `dolly-in`, `dolly-out`, `truck`,
@@ -210,14 +241,25 @@ horizonTiltDeg, inFrame}`.
 Every technique: honours `duration`; keeps the subject in frame when `needs.subject` (inFront & |ndc| ≤ 1 for ≥95% of
 samples unless it is a reveal); continuous, NaN-free; respects `ctx.groundZ` (+0.7 m) outdoors and
 `ctx.indoor.ceiling/floor` when given; declares sensible `defaultBounds`; documents params in its schema.
-`time-lapse`/`hyperlapse*` set `meta.timeLapse = {rate}` (sky time advanced by the runtime);
-`rack-focus` writes the `focus` channel.
+`time-lapse`/`hyperlapse*` set `meta.timeLapse = {rate, unit:"game-days/s"}` (rate = game-days per film second, what
+film_clock reads; sky time advanced by the runtime; `drone.hyperlapse-orbit` converts its `timeRate` param, in seconds
+of the live sky clock per film second, ÷ `AC_DAY_LENGTH_S` = 7620); `rack-focus` writes the `focus` channel.
+Path-flying drone / fpv builders report `meta.lengthM` and, when a speed profile flies the path, `meta.peakSpeed` (the
+profile's peak) and `meta.overspeed` (the profile had to be time-compressed past its caps); the prepare-time flight
+check (§3) reads them, also measures the peak on the baked nominal (orbits, helix, dronie… have no profile), and
+dry-flies the nominal through the flight model (`FLIGHT_CHECK`), which catches moves limited by acceleration.
 
 ### 2.13 `drone/flight_model.js`
 `DRONE_PRESETS = {cinema, heavy, fpv, indoor}`; `createDrone(presetOrConfig) → {reset(pose), step(targetPose, dt)
 → Pose, state()}` — jerk/accel/velocity-limited critically damped tracking; body attitude from acceleration (bank ∝
 lateral accel, pitch ∝ forward accel, ≤ maxTiltDeg); camera = stabilised gimbal (lagged target orientation, pitch
-limits [−90°, +30°]) or FPV hard mount (body attitude + uptilt). `wind:{gustMps, seed}`.
+limits [−90°, +30°]; horizon-roll FOLLOW ERROR (camera roll − the target's own roll, wrap-aware across ±180°) pulled
+back inside ±rollLimitDeg (45°) while camera and target are within 72° of level, by a correction that turns the short
+way and shares the gimbal's maxRateDeg budget: a deliberate roll (Dutch angle, barrel roll, inverted pitch-through
+image) is carried, never clamped; the gimbal never rotates faster than maxRateDeg — cinema 120, heavy 80, indoor 90 °/s,
+so a target that rolls faster is followed with lag, never a snap) or FPV hard mount (body attitude + uptilt).
+`wind:{gustMps, seed}`. `presetForTrajectory(traj, {indoor})` picks the automatic preset (`traj.meta.flightPreset`
+when it names one, fpv family → `fpv`, indoor → `indoor`, else `cinema`); `take.pilot.flightPreset` overrides it.
 `flyTrajectory(traj, preset, fps) → Trajectory` (baked "real drone feel", same duration ± overrun allowed ≤ 10%).
 
 ### 2.14 `pilot/*` — JEV System-One pilot (pure; the bridge is injected)
@@ -229,20 +271,26 @@ limits [−90°, +30°]) or FPV hard mount (body attitude + uptilt). `wind:{gust
   else `clear`; `unseenWord(s)`: `not hidden`, `brief` <1, `a while` <3, else `long`; `sizeWord(ratio)`:
   `much too small` <0.5, `too small` <0.8, `right` ≤1.25, `too large` ≤2, else `much too large`;
   `offsetWord(ndcX, ndcY)`; `speedWord(mps)`; `sinceWord(s)`; `rankOf(word, scale)` helpers.
-- `scene_state.js` — `buildPilotState(sensorFrame, {standingOrder, technique, goal, current}) → state` (words only
-  + the standing-order sentence): `{standing_order, shot:{technique, goal}, camera:{speed},
+- `scene_state.js` — `buildPilotState(sensorFrame, {standingOrder, technique, goal, bounds, hasSubject,
+  current:{maneuver, since, lateral, vertical}}) → state` (words only + the standing-order sentence):
+  `{standing_order, shot:{technique, goal}, camera:{speed},
   obstacles:{far_left, left, ahead, right, far_right, above, below, left_side, right_side, behind} ("<range> <kind>"
   or "clear"), free_space:{level_ahead, above_ahead, below_ahead}, nearest:{kind, range, side},
   path_ahead:{contact_in, blocker}, subject:{visibility, unseen_for, in_frame, size, occluded_by},
-  particles:{on_lens, in_view}, limits:{can_rise, can_sink, room_left, room_right, ceiling},
-  current:{maneuver, since}}`.
+  particles:{on_lens, in_view}, limits:{can_rise, can_sink, can_drift_left, can_drift_right, room_left, room_right,
+  ceiling}, current:{maneuver, since}}`. `room_left`/`room_right` = the sensed free space beside the camera (never
+  capped by the shot bounds); `can_drift_left`/`can_drift_right` = "yes" while more than 0.05 m (`BOUND_SLACK_M`) of
+  `bounds.maxLateral` is left on that side (`current.lateral`, + = right) — the same yes/no gate as
+  `can_rise`/`can_sink` against `maxRise`/`maxSink` (`current.vertical`), which also need the sensed room.
 - `questions.js` — `PILOT_QUESTIONS` (Decisions-API `questions` object) and `questionsFor({hasSubject})`:
   `maneuver` (choice, conservative default first): `hold_path`, `drift_left`, `drift_right`, `rise`, `sink`,
   `slow_down`, `back_off`; `risk` (score, 3 levels: open / tight but manageable / about to hit); `subject_lost`
   (noul with explicit true/false criteria); `occluder_action` (choice): `ignore`, `fade`, `reroute`, `wait`;
   `framing` (choice): `keep`, `recenter`, `widen`, `tighten`. Criteria quote the state's exact words and
   WORD_BOUNDS (e.g. `rise` only when `free_space.above_ahead` is ≥ 2 buckets farther than `free_space.level_ahead`
-  AND `limits.can_rise` is "yes" — the jev-drone lesson: vertical info + ceiling must be in state).
+  AND `limits.can_rise` is "yes" — the jev-drone lesson: vertical info + ceiling must be in state; `drift_left` /
+  `drift_right` only when `limits.can_drift_left` / `can_drift_right` is "yes", the sensed room on that side
+  (`room_left` / `room_right`) is ≥ "some" and that side (`obstacles.left` / `obstacles.right`) is ≥ "near").
 - `policy_code.js` — `codePolicy(sensorFrame, state) → answers` in the **exact Decisions-API answer shape**
   (`{maneuver:{type:'choice', choice, confidence, probabilities}, risk:{type:'score', score, confidence,
   probabilities}, subject_lost:{type:'noul', noul}, ...}`): no-key fallback, test mock, shadow-agreement metric.
@@ -251,7 +299,10 @@ limits [−90°, +30°]) or FPV hard mount (body attitude + uptilt). `wind:{gust
   minConfidence=0.45}) → {apply(answers, {sceneTime, now, sensorFrame}) → Setpoint, current(), reset()}`;
   **Setpoint** `{lateral (m, +right), vertical (m, +up), speedScale, distanceScale, framing:{dh,dp,dfovDeg},
   fadeIds:[], reroute:boolean, maneuver, source}`. Commit window; low-confidence answers decay toward neutral;
-  stale answers ignored and can never increase descent; offsets clamp to bounds.
+  stale answers ignored and can never increase descent; offsets clamp to bounds. `occluder_action` `fade` with no
+  fadeable id in `sensorFrame.subject.occluderIds` (any procedural scenery tree or rock, a building, a big or unsized
+  prop, an unresolvable static) sets `reroute = true` instead (counter `fadeFallbacks`), so a fade answer is never a
+  no-op.
 - `pilot.js` — `createPilot({bridge, mode:'jev'|'code'|'shadow', decisionHz=5, maxInFlight=2, minDispatchSec=0.12,
   consult:{withinM=6, unseenSec=1.0, framing:true}, reuseSec=2.0, mapper, log}) →
   {tick(sensorFrame, ctx, now) → {setpoint, telemetry}, tickStepped(sensorFrame, ctx, now) →
@@ -265,8 +316,11 @@ limits [−90°, +30°]) or FPV hard mount (body attitude + uptilt). `wind:{gust
 ### 2.15 `scene/solver.js`, `scene/dungeon_route.js`, `scene/los.js` (pure)
 - `generateCandidates(intent, subject, ctx, {count=12, rng}) → [Pose]`; `scoreCandidate(metrics, intent) →
   {cost, reasons[]}`; `rankCandidates(cands, metricsArr, intent)`; `describeCandidate(metrics) → string` (words, for
-  JEV choice criteria). `intent = {framing, angle:'eye'|'high'|'low'|'top', side?, light?:'front'|'back'|'rim',
-  minClearance, maxOcclusion}`.
+  JEV choice criteria: the view with the sense_words visibility word, the clearance with the `WORD_BOUNDS` distance
+  word leading and the metres, truncated into that band, as a detail — "nearest tree very close (1.5 m)" — so the
+  words jev_tasks `PICK_INSTRUCTIONS` quotes (`PICK_HIDDEN_WORDS` / `PICK_TOO_CLOSE_WORDS`, generated from
+  sense_words) appear verbatim). `intent = {framing, angle:'eye'|'high'|'low'|'top', side?, light?:'front'|'back'|'rim',
+  minClearance, maxOcclusion}` (`light` needs `ctx.sun`).
 - `doorwayControlPoints(graph, cellPath, {heightFrac=0.55, approach=1.2}) → [[x,y,z]]`;
   `planIndoorPath(graph, fromCell, toCell, {findPath, fillet=1.5}) → {points, cells}` (camera variant: drop edges
   allowed); `indoorCameraPath(points, {fillet}) → Path`. Graph = `rynth/indoor_router.js` graph
@@ -281,29 +335,92 @@ limits [−90°, +30°]) or FPV hard mount (body attitude + uptilt). `wind:{gust
 
 ## 3. Page runtime (`scene3d/film/runtime/`, loaded ONLY with `?filmMode=on`)
 
-`scene3d/film/index.js` exports `installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, log}) → api` and
-installs `window.__film`. Every method is JSON-in / JSON-out (async where noted) and returns `{ok:false, error}`
-instead of throwing.
+`scene3d/film/index.js` exports `installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports, particleCull, log})
+→ api` and installs `window.__film`; `particleCull` (optional, each key optional) = particle_manager.js
+`{setParticleCullConfig, allParticleManagers}`, passed by the §4 item 1 seam (rendered takes and scout stills run the
+RP6 particle cull with `recheckInterval: 1` and restore the previous interval; the particle query enumerates
+`allParticleManagers()`). Every method is JSON-in / JSON-out (async where noted) and returns
+`{ok:false, error:{name, code, message}, code}` instead of throwing. `prepare`, `rehearse`, `shoot` and `scout` are
+mutually exclusive (`FILM_BUSY`). `pose`, `release`, `world.teleport` and `world.command` answer
+`{ok:false, code:'FILM_BUSY'}` and do nothing while a take, prepare, shoot, rehearse or scout runs (the same guard for
+all four, also through prepare's own awaits: never a teleport or an admin command recorded mid-take, or sent while
+prepare reads the subject, sun and route); `abort()` and wait for `status().active === false` first.
 
 | Method | Purpose |
 |---|---|
-| `status()` | `{ok, version, active, cameraOwned, clean, take, recorder, pilot, clock, flags}` |
+| `status()` | `{ok, version, active, busy, runtimeReady, timeSources, cameraOwned, viewerCell, clean, cleanState, take, recorder, pilot, lastTake, clock, look, flags, bridge}` |
 | `clean(on=true)` | strip HUD/DOM/overlays/brackets/bubbles/cursor; lock input; `false` restores |
-| `own()` / `release()` | take/return the camera |
-| `pose(poseJson)` | set an absolute AC-frame pose now |
-| `world.teleport(cmd)` | `sessionHandle.sendChat(cmd)` (commands must start with `@`) |
+| `own()` / `release()` | take/return the camera (`release` → FILM_BUSY while a take, prepare, shoot, rehearse or scout runs) |
+| `pose(poseJson)` | set an absolute AC-frame pose now (FILM_BUSY while a take, prepare, shoot, rehearse or scout runs) |
+| `world.teleport(cmd)` / `world.command(cmd)` | `sessionHandle.sendChat(cmd)` (commands must start with `@`; one line ≤ 200 chars; logout / DB-writing verbs refused). While a take, prepare, shoot, rehearse or scout runs both answer FILM_BUSY and send nothing. When idle, `teleport` then parks the film viewer cell (`camera_owner.parkCell`) → `{ok, cmd, viewerParked}`; `command` only sends |
 | `world.ready(opts)` | async readiness gate report (§3.4) |
 | `world.prewarm({points, radius})` | async: collision populate + heightmap corridor + statics/buildings/envcells for those LBs |
 | `world.avatar(visible)` | hide/show the local player (film-hide term, shadows included) |
-| `world.look(lookJson)` / `world.restoreLook()` | time of day, DayGroup, fog, exposure, grade, DoF |
+| `world.look(lookJson)` / `world.restoreLook()` | time of day, DayGroup, fog, exposure, grade, DoF (re-applying the fog already showing keeps its object: `applied.fog.changed:false`) |
 | `world.actor(cueJson)` | emote / motion / face heading / move-to for the player-as-actor (realtime shots) |
-| `query.subject(ref)`, `query.near({center, radius, kinds})`, `query.groundZ(x,y)` | live scene queries |
+| `query.subject(ref)`, `query.near({center, radius, kinds})`, `query.groundZ(x,y)` | live scene queries (`near` statics carry `dimsSource`) |
 | `techniques()` | technique catalog |
-| `scout(shotJson, {count, stills, width})` | async: candidates + metrics (+ JPEG data URLs when `stills`) |
-| `prepare(takeJson)` | build trajectory (technique spec or baked table), reset pilot/drone/safety |
-| `rehearse({fps})` | async: run the take stepped without capture → realised table + pilot telemetry |
-| `shoot({fps, width, height, codec, bitrate, mode, locked})` | async: record the take → take report |
+| `scout(shotJson, {count, stills, width, intent})` | async: candidates + metrics (+ JPEG data URLs when `stills`), `sun:{available, reason, headingDeg, pitchDeg}`, `warnings[]` (an `intent.light` ignored without a usable sun) |
+| `prepare(takeJson)` | build trajectory (technique spec or baked table), reset pilot/drone/safety, apply the look → the prepare summary (below) |
+| `rehearse({fps, render, locked, maxOverrun})` | async: run the take stepped without capture → the take report fields + `realisedTable`, `checksum`, `pilotTelemetry`, `safetyEvents` |
+| `shoot({fps, width, height, codec, bitrate, mode, locked})` | async: record the take → take report (below) |
 | `recorder.drain({maxBytes})` | `{chunks:[{seq, b64, timestampUs, key}], done, stats}` |
+| `abort()`, `logs({limit})`, `dispose()`, `recorder.stats()` | stop a running take at its next frame; last log entries; uninstall; encoder stats |
+
+**Prepare summary** `{ok, shotId, technique, family, duration, fps, plannedFrames, preRollFrames, hasSubject, hasFocus,
+fromTable, captureMode, pilotMode, bounds, reveal, timeLapse, nominalChecksum, validation, liveSubject, flight, subject,
+route, sun, look}`:
+- `validation` = `validateTrajectory` of the nominal `{ok, counts, issues:[{code, t, message}]}`; a drone / fpv path
+  the flying preset cannot follow adds the issue `overspeed` `{code, t:null, message, preset, vmax, peakSpeed,
+  limitedBy, minDurationSec, minDurationVerified, durationHelps, maxGapM?}` (`ok:false`; `maxGapM` = the DRY-flown
+  gap when one was flown, sampled at `FLIGHT_CHECK.fps` — not the realised gap of a run, which the CLI's
+  `tracking-gap` reports; the message names the fix — "an estimate" when the duration is not verified — and, when a
+  non-linear ease speeds up the middle of the move, an ease hint).
+- `flight` (drone / fpv, not a replayed table; else null) = `{preset, vmax, amax, peakSpeed, metaPeakSpeed,
+  sampledPeakSpeed, lengthM, overspeed, limitedBy, profileOverspeed, minDurationSec, minDurationVerified,
+  minDurationCheck, durationHelps, ease, gapToleranceM, dryFlight}`. `preset` is the one flown (`pilot.flightPreset`,
+  else `presetForTrajectory`). `peakSpeed` = max(builder `meta.peakSpeed`, the peak measured on the baked nominal).
+  `dryFlight` = the nominal flown through the preset's flight model the way a take flies it (reset with the path's
+  feed-forward, re-set at declared cuts) at `FLIGHT_CHECK.fps` (10) — `{fps, frames, maxGapM, maxGapT, endGapM,
+  peakAccel}` (craft-to-nominal gaps in metres; `peakAccel` = the nominal's peak acceleration) or null when no craft
+  could be flown. `overspeed` = the speed check (peak or mean `lengthM` / duration > preset vmax × 1.02) OR a dry-flown
+  gap above `FLIGHT_CHECK.gapToleranceM` (1 m; `gapToleranceM`); `limitedBy` = `'speed'` (the speed check failed),
+  `'acceleration'` (only the gap failed: a move within vmax that turns or brakes harder than the preset's `amax`
+  allows, e.g. a shortened boomerang or boom-rise) or null. The builder's `meta.overspeed` is reported only as
+  `profileOverspeed` and fails the check only when no speed is measurable and nothing could be flown.
+  `minDurationSec` (null when not overspeed) is searched by rebuilding the shot and dry-flying it on the 0.1 s grid,
+  starting from an estimate (speed: the duration at which the move peaks at vmax, ≥ lengthM / vmax; acceleration:
+  D·√(peakAccel / amax), ≤ 4·D; else 1.25·D) and bounded by `FLIGHT_CHECK.maxRebuilds` (6) rebuilds and
+  `maxFlownSec` (360) s of dry-flown film time (deterministic work, never the wall clock). `minDurationCheck` =
+  `'verified'` (`minDurationVerified:true`) only when the shot rebuilt at that duration passes both checks — within
+  vmax and dry-flown within 1 m; `'unverified'` (`minDurationVerified:null`; `minDurationSec` is an estimate) when the
+  budget runs out first or a rebuild throws; `'failed'` (`minDurationSec:null`, `minDurationVerified:false`,
+  `durationHelps:false`) when lengthening lowers neither the peak nor the dry-flown gap (a speed param without a path,
+  a non-linear ease, a followed subject). Only a take built from a ShotSpec is searched. A take with none to rebuild
+  (a prebuilt `trajectory`) is `'unverified'` when the check made an estimate (`minDurationSec` set) and otherwise
+  keeps `minDurationCheck`, `minDurationSec` and `minDurationVerified` null — e.g. only the dry-flown gap failed and
+  the dry flight's `peakAccel` is within `amax`, so there is no acceleration estimate.
+- `liveSubject` `{mode:'carry'|'aim'|'off', rotate, refHeadingDeg}` (null without a live subject, §5.2 Take);
+  `sun` `{available, reason, headingDeg, pitchDeg}` (indoors: unavailable).
+
+**Take report** (`shoot`; `rehearse` returns the same fields; a failed take answers `{ok:false, error}` with the partial
+report in `error.details.partial`): `{ok, shotId, technique, family, mode, locked, fps, frames, durationSec (= frames /
+fps), plannedFrames, overrunFrames, preRollFrames, progressReached, capped, aborted, realisedChecksum, nominalChecksum,
+pilot, safety:{adjustedFrames, layerHits, events}, obstruction:{minVisibleFrac, framesHidden, framesOccluded,
+maxUnseenSec, measuredFrames}, subjectMinVisibleFrac, subjectMaxUnseenSec, droppedFrames, grabbedFrames, realtime,
+particleCull, environ, popInEvents, reveal, dof, faded, validation, flight, liveSubject, actor, recorder}`:
+- `validation` = prepare's, verbatim; `flight` = prepare's check + `tracking: {frames, maxGapM, maxGapT, endGapM}`
+  (how far the flown craft trailed its re-anchored nominal; `tracking` null on a locked replay); `flight` null for
+  classic shots;
+- `liveSubject` `{mode, rotate, frames, missingFrames, maxOffsetM, maxLagM, maxTurnDeg, refHeadingDeg}` (null without a
+  live subject);
+- `faded` `{entities, particles, statics, fallbackFrames}` (`fallbackFrames` = frames whose fade hid nothing and took
+  the reroute bias instead);
+- `environ` = the pre-roll AdminEnvirons fog wait `{checked, settled, waitedMs, polls, relit, timedOut, stalled,
+  aborted, reason, state}` (rendered takes; ≤ 30 s);
+- `realtime` (realtime takes, else null) `{wallSec, gridFrames, displayFrames, heldFrames, skippedDisplayFrames,
+  undrawnDisplayFrames, backpressureFrames, tailFrames}`; `particleCull` `{recheckInterval, previous, restored}`
+  (rendered takes with the seam).
 
 Runtime modules (they receive deps; they never import stateful scene3d modules):
 - `runtime/camera_owner.js` — owns `cameraSwitcher.persp` (never a new camera); per-instance wrap of
@@ -313,39 +430,113 @@ Runtime modules (they receive deps; they never import stateful scene3d modules):
   `sessionHandle.resolveViewerCell(prevEye, eye, 0.3, prevCell)` (sub-stepped for moves > 8 m) and publishes
   `scene3d.filmViewer = {cell}` (seed on cuts from the plan's cell); registers `liveScene3d.film = {preFrame(ts, dt),
   postRender(), holdLoop}`; on release restores `_prevEyeAc=null`, avatar opacity, followYaw/followPitch, deletes
-  `filmViewer`.
+  `filmViewer`. `parkCell()` → `{ok, parked, cell}` (called by `world.teleport` when idle): forgets the carried cell
+  and any pending cut and deletes `filmViewer` while the camera stays owned, so cells.js follows the player-head walk
+  while the next site loads; the next camera write re-seeds the cell (the plan cell after `setCutCell`, else the walk).
 - `runtime/clean_frame.js` — §3.3.
 - `runtime/film_clock.js` — film time; stepped frames via `liveScene3d.film.holdLoop = true` +
   `window.__renderOnce(tsMs)` with strictly increasing `tsMs = base + k·1000/fps` and an awaited post-render
-  promise; during takes installs `time_rng.setCurrentTime(() => filmMs/1000)` + seeded `setRng`,
-  `setFxTimeSource(() => filmMs)`, `setSceneryTimeSource(() => filmMs)`; restores everything after; resumes the loop
-  only once `performance.now() > lastTs`.
+  promise. Each `step()` publishes the frame time, then yields ONE animation frame (rAF; 50 ms setTimeout fallback;
+  one MessageChannel task on a hidden page or with no rAF) BEFORE `__renderOnce(tsMs)`, so the client's rAF drivers
+  (scenery wind, billboards, drains) advance once per film frame on the film clock; the first step's yield lets the
+  pre-hold re-arm run, which parks on `holdLoop`, and the clock re-bases past it. During takes it installs
+  `time_rng.setCurrentTime` (frame ts / 1000 for the wall-based particle modes; `_particleSimNowS` at begin + film
+  elapsed under `?particleClock=sim`) + seeded `setRng`, `setFxTimeSource` / `setSceneryTimeSource` (the frame
+  timestamp, ms), and the optional sky time (`timeOfDay`, `timeLapse` in game-days per film second); restores
+  everything after. `end()` waits until `performance.now() > lastTs` (and past the film particle time under
+  `?particleClock=sim`), clears `holdLoop`, and re-arms the loop with one bare `__renderOnce()` only when the realtime
+  chain is dead (a step issued an explicit-ts render, or a realtime tick ran during the hold); otherwise the
+  still-pending pre-hold re-arm resumes it (a second re-arm would run two rAF chains).
 - `scene/world_query.js`, `scene/sensors.js`, `scene/particles_query.js`, `scene/terrain_corridor.js` — perception
-  (SensorFrame §3.1). Budget ≤16 sweeps/frame round-robin; every value carries an age.
+  (SensorFrame §3.1). Budget ≤16 sweeps/frame round-robin; every value carries an age. world_query takes the
+  injected static `catalogs` (§1.1: archetype + size, `dimsSource`) and resolves pilot fade keys of PLACED statics to
+  live draws (`staticFadeTargets`; a scenery key resolves to nothing, §3.1). Indoors, the EnvCell list both the
+  sensors and the safety reflex sweep defaults to world_query `renderSetCells(sh)`: a copy of `getViewerRenderSet()`
+  (camera-rooted), else `getRenderSet(1)`; the sensors apply it when `ctx.indoor` and no `ctx.cellIds` (scout,
+  pre-roll and take).
 - `runtime/safety.js` — per frame after the pilot: sphere sweep prevEye→eye through all layers (radius ≥ near-plane
   corner distance at the shot fov + 0.05 skin), slide along hit normals, terrain floor (+0.7 m; never indoors),
-  indoor `clipCameraToCellSpace`, near-lens particle hide via `emitter.filmHidden`. Reports `{adjusted, hits}`.
-- `runtime/take_player.js` — per frame: `nominal = traj.sample(progress)` → drone dynamics (drone/fpv families) →
-  pilot residual (path-frame offsets; progress-rate scale) → safety → `camera_owner.write` → render → recorder grab.
-  Records the realised table; `locked` replays a realised table without the pilot.
+  indoor `clipCameraToCellSpace` (cells: `ctx.cellIds`, else `renderSetCells(sh)`), near-lens particle hide via
+  `emitter.filmHidden`. Reports `{adjusted, hits}`. `release()` runs BEFORE the take player restores its fades
+  (reverse order of application).
+- `runtime/take_player.js` — per frame: `nominal = traj.sample(progress)` → (live subject: re-anchor) → drone
+  dynamics (drone/fpv families) → pilot residual (path-frame offsets; progress-rate scale) → safety →
+  `camera_owner.write` → render → recorder grab. Records the realised table; `locked` replays a realised table without
+  the pilot. Live subjects (§5.2 Take): the nominal is built against the pure reference track and re-anchored every
+  frame to `take.liveSubject` — carry rigs (tags moving-subject, follow, body-rig, subject-is-camera) by translation
+  plus travel-heading rotation, every other technique by re-aiming; a critically damped follower with velocity
+  feed-forward eases server snaps in. A flown carry rig's craft is fed the full time derivative of the re-anchored
+  pose (`liveDerivs`: reference travel + R_θ(nominal − reference travel) + the swing-rate θ̇ / θ̈ terms + the
+  follower's ẋ / ẍ), and its swing round a turning subject speeds up only within amax − |subject acceleration| −
+  1 m/s² per metre of the craft's radial error (`swingStep`, `LIVE_SUBJECT.swingRadialYield`): a turn sharper than the
+  craft's amax freezes the swing until it is done. Pilot fades (`setpoint.fadeIds`): rig guids → `setFilmHidden`,
+  particle keys → `emitter.filmHidden`, static placement keys → the statics seam (§4 items 4/7, SEAMS.md "Hides"),
+  each restored exactly after the take; a reveal shot's own occluder is never faded; a fade that hides nothing takes
+  the reroute bias that frame; the sensors see past what the take faded (`fadedIds`). Rendered takes run the particle
+  cull with `recheckInterval: 1` (restored after) and first wait, for at most 30 s and only on the live loop (before the
+  clock holds it), until an AdminEnvirons fog change has settled (report `environ`). **Realtime** takes run on
+  requestAnimationFrame with the pipelined pilot but are RECORDED on the film grid: grid point n (film time n/fps) is
+  grabbed from the first drawn display frame at wall time ≥ n/fps and stamped n/fps; a display frame covering several
+  points is encoded once per point (held, `recorder.grab([t…])`), display frames between points are skipped, undrawn or
+  backpressured points carry over to the next drawn frame, and points after the last display frame come from one final
+  frame at the end pose — a constant-rate stream of ⌈wall·fps⌉ frames (the planned count at speed 1), `durationSec` =
+  frames / fps, table rows at n/fps, counters in `report.realtime`.
 - `runtime/recorder.js` — WebCodecs `VideoEncoder` (`avc1.640033`, `avc:{format:'annexb'}`; VP9 fallback raw
   frames for IVF in the CLI); `new VideoFrame(canvas, {timestamp, duration})` created **synchronously inside
-  `postRender()`** (preserveDrawingBuffer is false); backpressure on `encodeQueueSize`; `frames` fallback = JPEG
-  `canvas.toDataURL` in the same task.
+  `postRender()`** (preserveDrawingBuffer is false); `grab(filmTimeSec | filmTimesSec[])` wraps the canvas once and
+  encodes one re-stamped copy per extra time (`stats.heldFrames`); backpressure on `encodeQueueSize`; `frames`
+  fallback = JPEG `canvas.toDataURL` in the same task.
 - `runtime/look.js`, `runtime/world.js`, `runtime/jev_bridge_page.js` (§3.2).
 
 ### 3.1 SensorFrame
 `{t, pose, speedMps, sectors:{far_left,left,center,right,far_right: {range, kind}}, freeAhead:{level, above, below},
 sides:{left, right, up, down, back}, nearest:{range, kind, bearingDeg, elevDeg}, pathAhead:{ttc, kind},
-subject:{visibleFrac, unseenSec, ndc:[x,y]|null, sizeRatio, occluderKind}|null, particles:{onLens:{family,
+subject:{visibleFrac, unseenSec, ndc:[x,y]|null, sizeRatio, occluderKind, occluderIds}|null, particles:{onLens:{family,
 density}|null, inView:[{family, occludes, range}]}, limits:{canRise, canSink, roomLeft, roomRight, ceiling},
 ages:{…}}` — ranges metres, `Infinity` = nothing within 25 m.
+`subject.occluderIds` = what the pilot may fade: rig guids, particle keys, and the fade keys of PLACED statics
+(LandBlockInfo stabs) `placement:<lbKey hex8>:object:<row>`. A static key appears only when world_query `describeHit`
+names a placed tree or small prop unambiguously (candidates: the placements within 4 m of the hit):
+- **Statics / building hits** (rays stop on the render bounds): the candidate whose axis is nearest relative to its
+  radius (`staticHitScore` = axis distance ÷ radius), the hit inside its radius (score ≤ 1), no neighbour scoring
+  within 0.25 of it (`STATIC_HIT_RULES`), and the placement a tree or a prop of KNOWN size (`dimsSource` not
+  `'default'`) with max(radius, height/2) ≤ 2 m. Buildings never get a key.
+- **Scenery hits** (procedural trees, bushes and rocks; rays stop on the physics colliders — trunk cylspheres and
+  boulder spheres): NEVER a key in v1 (`FADEABLE_STATIC_SOURCES` = `['object']`). Limitation: the wasm CollisionHit
+  carries only t / point / normal, no placement, and on real data geometry alone names the wrong placement — the main
+  scenery boulder 0x02001065 (87 % of the collidable scenery rocks; two r 2.3 m spheres up to 1 m off its axis) handed
+  its hits to a tree behind it, and multi-trunk trees (0x0200035F, 0x02000251, 0x020002DC) handed theirs to a
+  neighbour, so fading that key read as a clear view while the real collider still blocked. `describeHit` only
+  LABELS a scenery hit (kind + did, never a fade target): the placement whose axis is ABSOLUTELY nearest
+  (`staticAxisDistance`) among those that could own the hit — within its plausible collider reach
+  (`sceneryColliderReach`: the catalog collider when one is carried, else min(5.2 m tree / 2.1 m rock, max(1.35·r,
+  r + 0.6 m)) × scale for model radius r, plus 0.3 m slack) and, with a usable hit normal, behind the hit along it
+  (within 0.7 m × max(1, scale) of the inward normal line, `colliderSideFit`) — else the absolute-nearest axis
+  (`SCENERY_HIT_RULES`). The sensors drop any id on a scenery-layer hit, so it is never in `occluderIds` and never
+  seen through by `fadedIds`; `staticFadeTargets` resolves a scenery key to nothing. A procedural tree answered
+  `fade` therefore reroutes (the mapper fallback below), exactly like a rock answered `reroute`.
+  **v2:** exact scenery fades need a placement index on CollisionHit from the wasm scenery sweep (which scenery
+  row's collider stopped the ray); the key would then name that row instead of a geometric guess.
+
+Any other static occluder carries no id, so the mapper's reroute fallback applies (§2.14).
+The sensor ctx accepts `fadedIds`: a subject ray stopped by an id the take has faded counts as clear.
 
 ### 3.2 JEV bridge (page ⇄ Node, key stays in Node)
 The CLI exposes `window.__filmJev(json) → Promise<json>` with Playwright `page.exposeFunction` (connectOverCDP).
 `jev_bridge_page.js`: `createPageBridge({timeoutMs}) → {available, request(payload) → Promise<{answers, usage, ms}>}`;
 `available = typeof window.__filmJev === 'function'`; timeout 1.5 s realtime / 15 s stepped. No bridge → the pilot
 runs `codePolicy`. The OpenRouter key NEVER enters the page.
+**Wire envelope (frozen 2026-10-13 from `tools/film/lib/jev_broker.mjs`; the broker is the contract):** the page
+calls `window.__filmJev(JSON.stringify({state, questions, seq}))` and the promise resolves to a JSON **string**
+(the handler also accepts an already-structured object). Success: `{answers, usage:{inputTokens, outputTokens,
+costUsd}, ms, seq, id, model}` — answers already normalised to the `codePolicy` shape (choice probabilities keyed by
+option name, score probabilities keyed `"0".."n-1"`, `confidence` filled from probabilities when the API omits it; a
+noul answer has only `{type:'noul', noul}`). Failure: `{error:{kind, message, retryable}, seq}` with `kind` ∈
+`busy` (drop, retry next tick) | `disabled` | `budget` | `timeout` | `rate` | `server` | `network` | `too-large`
+(payload > 48 KB; `seq` null) | `bad-request` | `bad-response` | `auth` | `credits` | `config` | `internal`. Any
+failure ⇒ the pilot uses `codePolicy` for that tick (telemetry `source:'code'`). Never use integer-like choice
+option keys (`"0"`, `"12"`): JS reorders them ascending and the conservative-first default is lost. The CLI sets the
+broker's per-call limits: realtime `{timeoutMs:1200, maxRetries:0}`, stepped `{timeoutMs:4000, maxRetries:2}`.
 
 ### 3.3 Clean frame
 Boot URL already carries `agent=1&hud=none&plugins=none` (canvas sizing latches at boot). At runtime: film CSS
@@ -357,29 +548,40 @@ dblclick/auxclick/contextmenu/wheel/touch*/dragstart/drop, `cameraSwitcher._endF
 `cameraSwitcher.keys`. `clean(false)` restores everything (unpoison, remove blockers, restore wrappers).
 
 ### 3.4 Readiness gate (`world.ready({lbKeys, interiorLb, settleSec=3, timeoutSec=90})`)
-Passes when: portal space inactive (`__isPortalSpaceActive() === false`); target LBs terrain baked + attached + not
-parked; no `terrain:|statics:|buildings:` keys in `_streamGuardState.inFlight`; `_pvsSweepIncomplete === false`;
-interiors: `envCellLoadedLbs.has(lb)` and `__interiorBuildPending === false`; scene-settle (terrainBakedLbs.size,
-staticsGroup.children.length, cellContainers3d.size unchanged across 3×500 ms); then `settleSec`. Returns
-`{ok, checks:{…each sub-check…}, waitedMs}`; never blocks past `timeoutSec`.
+Passes when: the last `world.teleport` actually happened (portal entered, or `teleportGraceSec` = 8 s passed without
+one); portal space inactive (`__isPortalSpaceActive() === false`); target LBs terrain baked + attached (a terrainGroup
+mesh) + not parked (the interior landblock skips terrain unless `requireTerrainIndoors`); no
+`terrain:|statics:|buildings:` keys in `_streamGuardState.inFlight`; `_pvsSweepIncomplete === false`; interiors:
+`envCellLoadedLbs.has(lb)` and `__interiorBuildPending === false`; the player pose cell resolved (when the handle
+exposes `getLocalPlayerPoseCellResolved`); scene-settle (terrainBakedLbs.size, staticsGroup.children.length,
+cellContainers3d.size unchanged across 3×500 ms); then `settleSec`. Returns `{ok, checks:{teleport, portalSpace,
+terrain, streamInFlight, pvsSweep, interior, player, settle, settleSec}, waitedMs, timedOut}`; never blocks past
+`timeoutSec`.
 
 ---
 
 ## 4. Integration seams in existing files (orchestrator lane; each zero-cost when film is off)
 
-1. `scene3d/index.js`: after `window.liveScene3d = liveScene3d` (~4420): `if (filmModeEnabled()) import("./film/
-   index.js").then(m => m.installFilmMode({liveScene3d, THREE, sessionHandle, wasmExports})).catch(e =>
-   console.warn("[film] failed to load:", e))`; `tick()`: `liveScene3dRef?.film?.preFrame?.(nowTs, dt)` right
-   before `tickPerFrame`; `_postRenderStreamSlot()`: `liveScene3dRef?.film?.postRender?.()` first;
+1. `scene3d/index.js`: after `window.liveScene3d = liveScene3d` (~4531): `if (new URLSearchParams(window.location
+   .search).get("filmMode") === "on") Promise.all([import("./film/index.js"), import("./particles/particle_manager.js")
+   ]).then(([m, pm]) => m.installFilmMode({liveScene3d, THREE, sessionHandle: liveScene3d.sessionHandle, wasmExports:
+   liveScene3d.wasmExports, particleCull: {setParticleCullConfig: pm.setParticleCullConfig, allParticleManagers:
+   pm.allParticleManagers}})).catch(e => console.warn("[film] failed to load:", e))` (particle_manager.js is the SAME
+   module instance entities.js / statics.js already load); `tick()`: `liveScene3dRef?.film?.preFrame?.(nowTs, dt)`
+   right before `tickPerFrame`; `_postRenderStreamSlot()`: `liveScene3dRef?.film?.postRender?.()` first;
    `scheduleNext()`: `if (renderOnDemand || liveScene3dRef?.film?.holdLoop) return;`;
-   `window.__renderOnce = (tsMs) => tick(Number.isFinite(tsMs) ? tsMs : performance.now())`.
+   `window.__renderOnce = (tsMs) => tick(Number.isFinite(tsMs) ? tsMs : performance.now())` (an explicit `tsMs`
+   while `holdLoop` first cancels a pending re-arm).
 2. `scene3d/cells.js` `updateViewerCell`: if `scene3d.filmViewer?.cell` is set, use it as the viewer cell (still
    `setViewerCell` + `publishViewerCell`).
 3. `scene3d/entities.js`: `_filmHidden` term in `_applyEntityVisible`; `EntityManager.setFilmHidden(guid, on)`,
    `clearAllFilmHidden()`.
-4. `scene3d/statics.js` `cullStaticsGroup`: honour `userData.__filmHidden`.
+4. `scene3d/statics.js` `cullStaticsGroup`: honour `userData.__filmHidden` (set by the take player when the pilot
+   fades a placed tree / prop placement node; SEAMS.md "Hides").
 5. `scene3d/particles/particle_manager.js`: `allParticleManagers()`, `setParticleCullConfig({maxDistance,
-   recheckInterval})` (returns previous), render-only `emitter.filmHidden` beside the cell-gate branch.
+   recheckInterval})` (returns previous), render-only `emitter.filmHidden` beside the cell-gate branch. Wired through
+   item 1's `particleCull`: rendered takes (take_player) and scout stills set `recheckInterval: 1` and restore only the
+   previous interval (maxDistance untouched); `particles_query` enumerates `managers: allParticleManagers`.
 6. `scene3d/particles/particle_fx.js`: `setFxTimeSource(fn|null)` used by `particleFxFrame()` when `nowMs` is not
    finite; uniform `uFxNearFadeMin` floor (`nearFade = max(row, uFxNearFadeMin)`, uniform-only).
 7. `scene3d/animated_scenery.js`: `setSceneryTimeSource(fn|null)` consulted by `_nowMs()`.
@@ -393,8 +595,9 @@ staticsGroup.children.length, cellContainers3d.size unchanged across 3×500 ms);
 ## 5. Node tooling (`tools/film/`, ESM `.mjs`, Node 20)
 CLI `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-rolled `--key=value` args, exported
 `main()` behind the pathToFileURL main-guard, exit 0 ok / 1 finding / 2 usage-or-env):
-`doctor`, `techniques`, `song analyze`, `sites build|search|show`, `plan validate|compile`, `jev ping|decide`,
-`browser check`, `go`, `scout`, `rehearse`, `shoot`, `assemble`, `contact-sheet`, `run`.
+`doctor`, `project init`, `techniques`, `song analyze`, `sites build|search|show`, `plan validate|compile`,
+`jev ping|decide|task`, `browser check`, `boot`, `status`, `go`, `scout`, `rehearse`, `shoot`, `assemble`,
+`contact-sheet`, `run` (authoritative usage: `node tools/film/film.mjs <cmd> --help`).
 - JEV key: env `OPENROUTER_API_KEY` (fallback `OPENROUTER_KEY`, then `~/.config/holtburger-film/openrouter.key`,
   must be mode 600). Never logged, never sent to the page. Budget caps (`--jev-max-usd-per-hour`, default 2.00;
   `--jev-max-calls-per-min`, default 600).
@@ -405,7 +608,9 @@ CLI `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-ro
 
 ## 5.1 Owner decisions (2026-10-13 — binding)
 - Film account: `phase4demo` (ACE accessLevel 5 = Admin; verified). The CLI defaults `--account=phase4demo`; the
-  password is a run-time argument only — never in docs, plans, logs or commits.
+  password is a run-time input only — never in docs, plans, logs or commits. Prefer env `FILM_PASSWORD`: a
+  `--password=` argument is visible in `ps` / `/proc/<pid>/cmdline` while the command runs (the CLI never writes it;
+  the heavy-lock record gets `--password=[redacted]`).
 - **Depth of field ships in v1**: seam §4.8 (`?filmDof=on`) is required, the CLI `boot` URL always adds
   `filmDof=on`, `classic.rack-focus` must visibly pull focus (runtime drives `window.__dof` from the Pose `focus`
   channel; `look.dof` sets range/bokeh). The flag stays default-OFF for normal play.
@@ -413,6 +618,93 @@ CLI `tools/film/film.mjs` (`#!/usr/bin/env node`, WHY/WHAT/USAGE header, hand-ro
 - Scenery bake: the shipped default (ace-compat) for now; the owner handles any retail promotion separately. Film
   reads obstruction data from whatever
   bake the client loaded, so code must not assume either.
+
+## 5.2 Plan JSON v1, Timeline v1 and the Take object (frozen 2026-10-13 from `tools/film/plan/`)
+The plan lane's code is the contract; full field reference = `PLAN_FIELDS` + `examplePlan()` in
+`tools/film/plan/schema.mjs`, Timeline/Take = the header of `tools/film/plan/compile.mjs`.
+- **Plan** (`validatePlan(plan, {registry, dryBuild})`, `normalizePlan(plan, {registry})`): `{version:1, title,
+  kind?, format:{width=1920, height=1080, fps=30, capture='stepped'}, song?:{file?, analysis?, offsetSec=0},
+  defaults?:{transition='cut', pilot:{mode='jev'}, look, framing?, ease?}, edit?:{fadeInSec, fadeOutSec},
+  sites:[{id, name?, gazetteerId?, teleport:'@…', anchor:[x,y,z] | {cell, local}, cell?, indoor?, lbKeys?,
+  interiorLb?, settleSec=0, ready:{settleSec=3, timeoutSec=90}, look?}], shots:[{id, site, technique,
+  duration:{sec}|{beats}|{bars}, start?, params?, framing?, subject?, path?, route?, fov?, roll?, ease?, seed?,
+  bounds?, transition? (INTO this shot), standingOrder (≤300 chars), pilot?, capture?, actor?, look?, cell?, lyric?,
+  notes?}]}`. Subject kinds: `{kind:'point', pos, radius?, height?, heading?}` | `{kind:'entity', ref, moving=false,
+  radius?, height?}` | `{kind:'player', moving?}` (normalized `moving: true` when the shot's actor walks —
+  `actor.moveTo` / `actor.moves`; explicit wins) | `{kind:'path', points}`.
+  `bounds` = §2.11 `ShotSpec.bounds` (partial `{maxLateral, maxRise, maxSink ≥ 0 m; minSpeedScale ∈ [0,1];
+  maxSpeedScale ≥ 1; maxDistanceScale ≥ 1}`, keys/ranges of §2.9 `normalizeBounds`; missing keys = the technique's
+  defaultBounds), default null. `capture.mode` default: explicit wins; else 'realtime' (`auto:true`) for a moving
+  actor / `moving` entity or player, or — with the registry — a technique whose capture hint (`def.capture`,
+  = `meta.capture`) is 'realtime' following an entity/player subject (the same hint on a point subject stays stepped
+  and WARNS); else `format.capture`. `look.dof` follows the `window.__dof` setters (§4 item 8): focusDistance /
+  bokehScale ≥ 0, focusRange > 0, `enabled` boolean, `target` THREE-world xyz | null. `dryBuild` builds each `{sec}`
+  shot offline with a page-shaped ctx: a shot with a `route` gets `ctx.indoor.route` = a synthetic 2-leg L through
+  the anchor (`DRY_ROUTE_LEG_M`), an indoor site `ctx.indoor = {}`; failures are warnings.
+- **Timeline** (`compilePlan(plan, {song, registry})`): `{version:1, fps, width, height, duration, frames, song,
+  fadeIn, fadeOut, items:[{shotId, siteId, editIn, editOut, editDuration, takeDuration, takeFrames, handleIn,
+  handleOut, transitionIn, preRollSec, technique, family, captureMode, section, lyric, take, …}], schedule:[{siteId,
+  teleport, anchor, cell, indoor, ready:{lbKeys (uint32), interiorLb, settleSec, timeoutSec}, prewarm:{points,
+  radius}, shots:[ids], takeSec}], warnings:[{path, message}]}`. Cuts land on the song grid. A `{bars}` shot that
+  starts on a downbeat, or within half a beat of one (`COMPILE_DEFAULTS.barLineTolBeats`), counts its bars from that
+  downbeat, so a `song.offsetSec` copied to one decimal from `song analyze` still cuts on bar k + n. A shot that
+  starts more than half a beat before the first downbeat (the pickup), or that opens the edit further than that
+  inside a bar, counts its bars from the next downbeat, so the pickup joins it and the cut is a downbeat.
+- **Take** = `item.take`, the exact argument of `window.__film.prepare(take)` (the page MUST accept this shape; a
+  baked table `{table}` replay is the other accepted form): `{shotId, siteId, technique, family, spec (§2.11
+  ShotSpec, spec.duration = takeDuration INCLUDING handles; spec.bounds = the shot's non-null `bounds` keys, absent
+  when none), subject (plan subject above — the page resolves it:
+  point → static ctx.subject; entity → worldQuery.subject(ref) + subjectAt(t) when moving; player → local player
+  + subjectAt(t) when moving (its actor walks, or the take captures realtime; an explicit `moving: false` keeps it
+  static); path → ctx.path), path, route:{fromCell, toCell}|null
+  (indoor: planIndoorPath → ctx.indoor.route), standingOrder, goal, pilot:{mode,…}, capture:{mode, fps, width,
+  height}, look (merged defaults ← site ← shot; applied by look.js before the take), actor (cue for world.actor),
+  cell (seed of the film viewer cell on indoor sites), indoor, anchor (ShotContext.anchor), editOffsetSec
+  (= handleIn), preRollSec (rendered, never recorded), showAvatar}`.
+  **Live subjects.** A moving entity (`moving: true`) or a live player (`moving: true`, or — unless `moving: false` —
+  an actor cue that walks or `capture.mode` 'realtime') gets a PURE reference `ctx.subject` / `ctx.subjectAt`: the
+  prepare-time pose, extrapolated horizontally by its velocity when that is ≥ 0.3 m/s (else standing). Its live,
+  t-ignoring function goes separately to the take player as `take.liveSubject`, which re-anchors the nominal every
+  frame: carry rigs (tags moving-subject, follow, body-rig, subject-is-camera) by translation plus travel-heading
+  rotation, all other techniques by re-aiming (prepare summary / take report `liveSubject`). **Pre-roll rule:** the
+  pre-roll (reference held at p = 0) and frame 0 (still p = 0) settle the live-offset follower with offset velocity =
+  the subject's velocity measured over the pre-roll MINUS the reference track's own velocity, so a subject that keeps
+  walking through the pre-roll — at the reference heading or off it — gives no surge or drop-back at the take start,
+  and one that stopped keeps the camera at rest; a flown live take re-sets the craft on the re-anchored start pose at
+  frame 0; a subject that starts walking exactly at frame 0 is followed with the rig's normal (amax-limited) step
+  response. **Flown carry rigs** feed the craft the full time derivative of the re-anchored pose as feed-forward:
+  reference travel + R_θ(nominal − reference travel) + the swing-rate terms + the follower's ẋ / ẍ (so the frame-0
+  reset and every step are exact for a subject walking off the reference heading). A flown swing round a turning
+  subject only speeds up within amax − |subject acceleration| − 1 m/s² per metre of the craft's radial error; a turn
+  sharper than the craft's amax freezes the swing until it is done. That is the craft's physical floor, measured with
+  a 3 m/s subject turning at 90°/s (24 / 30 / 60 fps alike): on the cinema preset (amax 4 m/s²) a quarter turn keeps
+  the camera–subject distance of drone.chase / lead / side-track within about ±15 % (0.86–1.14×; side-track turning
+  one way reaches 1.155×, 0.5 % past the band) with the craft < 2 m off its re-anchored nominal, but a 180° U-turn
+  takes chase down to 0.74× and lead up to 1.28× (26–28 % off; side-track 0.87–1.04×) with the craft 2.2–2.3 m
+  behind; the heavy preset (amax 2.5 m/s²) leaves the band on a quarter turn (0.76–1.31×, 3.0–3.3 m behind). A
+  realised gap above 2 m raises the CLI's `tracking-gap` warning (it names the live subject's turn for a carry rig):
+  that is the signal to shoot again with a gentler move — a slower or wider subject turn, no U-turn under a chase /
+  lead / side-track, the cinema preset rather than heavy — since a retake of the same plan repeats it. `ctx.sun` is
+  set outdoors from the live sky (none indoors or at night).
+  **Look:** a fog change is waited out before recording (≤ 30 s on the live loop, before the clock holds it; take
+  report `environ`); re-applying the fog already showing is a no-op (`changed:false`); the retail fog roll-in stays on
+  (the film never uses `?environRetail=off`, which snaps the fog on).
+- CLI walk: per schedule entry teleport → `world.ready(entry.ready)` → `world.prewarm(entry.prewarm)` → per shot
+  `prepare(item.take)` → [`rehearse`] → `shoot({fps, width, height, codec, bitrate, mode: item.captureMode})`.
+  Before each teleport the CLI checks `__film.status()` and aborts any running take; after a failed take it calls
+  `__film.abort()` and waits for an idle page. While it waits it polls `__film.status()` and RE-SENDS `__film.abort()`
+  on every poll that still finds the page busy (at most `PAGE_ABORT_MAX` = 30, never after the ≈ 90 s idle wait):
+  an abort that lands while index.js has `busy='shoot'` but the take player has no run yet is a no-op. A page that
+  will not go idle is never teleported (the remaining shots fail at stage 'busy'). `world.prewarm` is best-effort (a
+  warning, a `stage:'prewarm'` shoot-log row and a report note). A rehearsal always uses the stepped broker limits;
+  a failed retake keeps the earlier attempt (`failedAttempts`). The page's validation / flight-check issues (prepare
+  summary `validation.issues` incl. `overspeed` with `minDurationSec`, `flight`, `warnings`, and the same blocks on the
+  rehearse result and take report) are surfaced by the CLI: one warning per issue per shot, and `issues` in
+  reports/<shot>.json, every shoot-log.jsonl row, <shot>.rehearsal.json and the keepOrRetake input (`judgeInput`),
+  keeping `limitedBy`, `minDurationSec`, `minDurationVerified` (null = not verified) and the dry-flown `maxGapM`.
+  The CLI adds its own `tracking-gap` issue (t = `maxGapT`; `maxGapM` = the REALISED gap) when a flown rehearsal or
+  take's `flight.tracking` trailed the plan by more than `FLIGHT_GAP_WARN_M` = 2 m, with or without an `overspeed`
+  — one warning per run whose gap differs (rehearsal, take, each retake). They never fail or retake a take.
 
 ## 6. Rules for every implementer
 - Parallel agents may read, edit and run TARGETED single tests only (`node test_x.mjs`). They must NOT run the full

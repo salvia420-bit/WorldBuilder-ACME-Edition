@@ -1,0 +1,873 @@
+{
+ "fixes": {
+  "fix:r2-plan": {
+   "fixed": [
+    {
+     "id": "tooling-3",
+     "what": "Fixed the round-1 regression in resolveEnd's {bars} branch (tools/film/plan/compile.mjs). The old edit-0 rule `pickup = bp < -1e-6 || inT <= 1e-9; base = pickup ? ceil(bp) : bp` is replaced by four ordered cases. tol = COMPILE_DEFAULTS.barLineTolBeats (new constant, 0.5) \u00d7 grid.period, i.e. half a beat. (1) Pickup: the shot starts more than tol before the first downbeat (bp < 0 and inT \u2212 barTime(0) < \u2212tol). It counts from the next downbeat, ceil(bp). (2) On a bar line: |inT \u2212 barTime(round(bp))| \u2264 tol. It counts from that bar, round(bp). (3) Edit 0 more than tol inside a bar counts from the next downbeat, ceil(bp). (4) Any other mid-bar start keeps its length. Deliberate deviation from the brief: tol is half a beat, not 'a few ms'. A few ms would leave the exact scenario the checker reported still broken. In that scenario the downbeat is at 14.98 s and offsetSec is 15.0 (copied from analyze's one-decimal mmss), which is 20 ms past. Rounding can be off by up to 50 ms. For starts that are not at edit 0, half a beat gives the same cuts as the old keep-length plus nearest-beat rule. So the only change is for edit-0 starts up to half a beat past a downbeat: the first shot is now n bars minus \u03b4, not n+1 bars minus \u03b4. Results: offset 8, 8.001, 8.002, 7.998 and 8.01 on a grid at 0 now cut at 8/16/20, where 8.001/8.002/8.01 used to give 10/18/22. In the checker's probe2 (offset 15.0), v1 now ends on bar 9, not bar 10, and the trim warning is gone. 0.3 s into a bar at 120 BPM still counts from the next downbeat. A pickup with the first downbeat at 0.51 s gives 8.5/16.5/20.5. I also rewrote the header Rules bullet and the inline comment to match. Tests: added 3 checks to tests/film_plan_compile.test.mjs that execute every branch. (a) The brief's four cases: offsetSec 8 (on), 8.002 (2 ms after), 7.998 (2 ms before), and a real pickup (t0 0.51, offset 0). For each, every cut is within half a frame of song bar k+4, k+8, k+10, snap is 'bar', there are no warnings, and the first {bars:4} is 8 s. (b) The checker's offsets 8.001 and 8.01, plus a verse downbeat at 8.98 with offsetSec 9.0. There, 2+6 bars run into start:{section:2} with no trim and no gap, and v1 ends on bar 6. (c) Tolerance edges: 0.2 s past a downbeat counts as on it; 0.3 s past counts from the next downbeat; explicit {sec} starts 0.1 s after and 0.1 s before a bar line count from that bar; a {bars} shot after a {beats} shot still keeps its length. I also corrected the existing mid-bar test comment from '\u00be' to '\u215e into a bar'. Mutation check (in a /tmp/claude-1000 scratch copy only): with the round-1 rule restored, the 3 new checks fail (36 passed, 3 failed); with the fix all 39 pass. One process note: I started the three dependent suites in a single tool batch, so they may have run at the same time rather than strictly one after another. They are light node suites against fakes, and all passed."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "check:plan minor doc nit (SPEC \u00a75.2 Take player wording)",
+     "why": "Doc-only, and SPEC.md is outside this cluster's files. I verified it against scene3d/film/index.js resolveTake: a player is also live when capture.mode is 'realtime' and moving is not false. The exact wording is listed under docsToUpdate."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tools/film/plan/compile.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_plan_compile.test.mjs"
+   ],
+   "tests": [
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md \u00a75.2, **Timeline** bullet (~lines 455-457). Replace \"Cuts land on the song grid; a `{bars}` shot that starts before the first downbeat (the pickup), or opens the edit mid-bar, counts its bars from the next downbeat, so the pickup joins it and the cut is a downbeat.\" with \"Cuts land on the song grid. A `{bars}` shot that starts on a downbeat, or within half a beat of one (`COMPILE_DEFAULTS.barLineTolBeats`), counts its bars from that downbeat, so a `song.offsetSec` copied to one decimal from `song analyze` still cuts on bar k + n. A shot that starts more than half a beat before the first downbeat (the pickup), or that opens the edit further than that inside a bar, counts its bars from the next downbeat, so the pickup joins it and the cut is a downbeat.\"",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md \u00a75, the 'With a song, every cut lands on the grid' bullet (~lines 120-126). Replace the text from \"`{bars}` on a downbeat when the shot starts on one.\" through \"(counted from the next downbeat).\" with \"`{bars}` on a downbeat when the shot starts on one, or within half a beat of one: it then counts from that downbeat, so an edit 0 a few ms past a downbeat (e.g. `song.offsetSec` 15.0 copied from `song analyze` for a downbeat at 14.98 s) still makes `{bars: 4}` exactly 4 bars, not 5. A shot that starts more than half a beat before the first downbeat (the pickup: the first shot at edit 0 whenever the song's `bars[0]` is later than that, e.g. 0.51 s) counts its bars from that downbeat, so the pickup joins it and `{bars: 4}` ends exactly on bar 4. An intro longer than a bar counts from the next downbeat of the bar grid extended backwards. The same holds when edit 0 falls more than half a beat inside a bar because of `song.offsetSec`: it is counted from the next downbeat.\" Keep the rest of the bullet, starting at \"Any other mid-bar start \u2026\".",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/music-video.md \u00a72 'Tempo' bullet (~line 58). This supersedes the round-1 pending fix:plan text for this bullet, which said offsetSec inside a bar always counts from the next downbeat. Append: \"A `{bars}` shot that starts on a downbeat, or within half a beat of one, counts from that downbeat. So `song.offsetSec` copied from the one-decimal section times `song analyze` prints still cuts on the intended bar lines. A shot that starts more than half a beat before the first downbeat (the pickup at edit 0 when the song's `bars[0]` is later than 0) counts its bars from that downbeat, so the pickup joins it and every following `{bars}` cut stays on a bar line. The same holds when `song.offsetSec` puts edit 0 more than half a beat inside a bar. A shot that starts mid-bar after a `{beats}`/`{sec}` shot keeps its length and cuts on the nearest beat.\"",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md, `song.offsetSec` table row (line 24). Optional: append to the description \"; for `{bars}`, a value within half a beat of a downbeat counts as on it\".",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md \u00a75.2, **Take** bullet (~lines 462-463). This is carried from the round-1 check:plan minor nit and verified against scene3d/film/index.js resolveTake (~line 657). Replace \"player \u2192 local player + subjectAt(t) when moving (i.e. when its actor walks)\" with \"player \u2192 local player + subjectAt(t) when moving (its actor walks, or the take captures realtime; an explicit `moving: false` keeps it static)\"."
+   ]
+  },
+  "fix:r2-drone": {
+   "fixed": [
+    {
+     "id": "check:drone (BLOCKING roll-seam regression from math-1/contracts-8)",
+     "what": "scene3d/film/drone/flight_model.js applyGimbalLimits(qTarget, h): the absolute/symmetric band max(rollLim, |rT|+2\u00b0) is gone, along with the ROLL_LIMIT_TARGET_SLACK constant. The roll limit now acts on the follow ERROR e = shortestAngleDiff(cameraHorizonRoll, targetHorizonRoll), wrap-aware across \u00b1180\u00b0. Past \u00b1rollLimitDeg the camera turns about forward toward the target, the short way, by c = min(|e|\u2212lim, room). room is the largest c with |wF\u00b7h + s\u00b7c\u00b7F| \u2264 maxRate\u00b7h, so follow plus correction never exceed maxRateDeg (folded into the follow's budget, as the checker suggested). wF is left untouched. Nothing is corrected when h = 0 (reset) or when the camera or target is within 18\u00b0 of nadir/zenith. Both callers now pass h: reset passes (q, 0), the sub-step loop passes (qTj, h). Measured: fpv.fpv-flip on cinema/heavy/indoor now peaks at exactly maxRate per frame (4.00/2.67/3.00\u00b0/frame, was 6.17/5.78/5.94) and rolls the full 360\u00b0 with the target, with no unwinding or mirroring. canyon-run with roll \u00b13.0 and maxBankDeg 60 on heavy has a 5.4\u00b0 max roll error (was 75\u00b0). pass-over is unchanged in all three nadir modes: pitch-through 0.48\u00b0/frame and 0.2\u00b0 error, yaw-slew 3.41, hold 3.42. A sweep of 564 flights (every drone/fpv technique \u00d7 outdoor/indoor-with-path \u00d7 roll {none, 1.0, 3.0} \u00d7 4 presets) has 0 gimbal frames above maxRate. Every flight that changed against round 1 has a lower peak angular speed (e.g. fpv-proximity roll 1 on cinema: 362 \u2192 120\u00b0/s)."
+    },
+    {
+     "id": "check:drone (minor: module header lines ~18-27 misstated the rule)",
+     "what": "Rewrote three comments to state the real rule: the module header camera paragraph, the DRONE_PRESETS rollLimitDeg doc and the createDrone Guarantees block. The rule: the horizon-roll follow error, measured the short way across \u00b1180\u00b0 against the target's own roll, is pulled back inside \u00b1rollLimitDeg while both camera and target are within 72\u00b0 of level. The correction shares the follow's maxRateDeg budget, so the bound is soft (a target rolling faster than maxRate out-runs it). The target's deliberate roll is never clamped, and the limit never snaps or turns the long way; 180 turns it off."
+    },
+    {
+     "id": "regression tests (tests/film_flight_model.test.mjs F5)",
+     "what": "Rewrote the old F5 roll check. It asserted a snap ('back inside \u00b145\u00b0 at once'), which conflicts with the rate budget. It now asserts four things: the deliberate 80\u00b0 roll is carried with error \u2264 lim; every frame turns \u2264 maxRate/30; after the 80\u00b0 snap to level the error never grows; and the error is inside \u00b145\u00b0 within \u230835\u00b0/maxRate\u2309+2 frames. Added three new checks. (1) A synthetic target roll 60\u00b0\u2192300\u00b0 at 1.2\u00d7 and 1.45\u00d7 maxRate, in both directions, at 24/30/60 fps on cinema/heavy/indoor, with the target's r fed wrapped so it crosses \u00b1180\u00b0. Asserts: never faster than maxRate, the camera never rolls back against the target (no long way), it crosses the seam itself, error stays within the rate-deficit bound, and it settles below 0.5\u00b0. (2) Camera settled at \u00b1170\u00b0 while the target jumps to \u2213110\u00b0 (80\u00b0 through the seam), on default presets and with rotSmoothSec 3. Asserts: \u2264 maxRate, forward through the seam only, error never grows, the limit pulls the sluggish follow inside \u00b145\u00b0 within \u230835\u00b0/maxRate\u2309+2 frames, and with rollLimitDeg 180 that takes more than twice as long, which proves the limit engages. (3) fpv.fpv-flip (\u00b1) and drone.canyon-run with roll \u00b13.0 and maxBankDeg 60 on a winding path, on cinema/heavy/indoor at 24/30/60 fps. Asserts: \u2264 maxRate, the flip's roll travel is \u00b1360\u00b0 \u00b12\u00b0 with no unwinding, canyon roll error < 10\u00b0, and the limited flight's error never exceeds rollLimitDeg 180 + 0.5\u00b0. Against the round-1 code (scratch copy /tmp/claude-1000/r2-drone/cur), all 4 roll checks FAIL: a 35.4\u00b0 snap in one frame, \u22121.2\u00b0 rolled back the long way, a 58\u00b0 jump away from the target with a permanent 138\u00b0 mirror error, and 7.7\u00b0/frame on fpv-flip. Against the pre-math-1 code they also fail, and so does the pitch-through pass-over check. All pass now."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "observation: fpv hard-mount flights with ctx.path exceed the 240\u00b0/s validation limit (pre-existing, outside lane)",
+     "why": "Seen in my sweep only, not caused by this cluster; the hard mount never calls applyGimbalLimits and these rows are byte-identical to the round-1 code. On the 'fpv' preset with an outdoor ctx.path, flyTrajectory output fails validateTrajectory's default 240\u00b0/s angular limit for six techniques: drone.flythrough 252\u00b0/s, drone.terrain-skim 255, drone.canyon-run 303, fpv.fpv-proximity 486, fpv.fpv-gap 252 and fpv.fpv-corridor 628 (outdoor). The existing F6 tests build these without a path, so they do not see it. If it matters, it belongs to whoever owns the shot geometry or validation limits for fpv takes (shots/drone.js, shots/fpv.js, trajectory.js), not to the drone lane. Probe: /tmp/claude-1000/r2-drone/sweep.mjs."
+    },
+    {
+     "id": "tests/film_shots_drone.test.mjs",
+     "why": "No change needed: it never flies anything through createDrone or flyTrajectory and only reads meta.flightPreset. I ran it unchanged (113/0)."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/drone/flight_model.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_flight_model.test.mjs"
+   ],
+   "tests": [
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 113,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_registry.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 52,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_scene_dungeon.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 33,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 35,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md \u00a72.13 (line ~219, 'camera = stabilised gimbal (lagged target orientation, pitch limits [\u221290\u00b0, +30\u00b0])'). Optional, but it makes the contract explicit, since the roll rule appears nowhere in the docs today. Append: 'horizon-roll FOLLOW ERROR (camera roll \u2212 the target's own roll, wrap-aware across \u00b1180\u00b0) pulled back inside \u00b1rollLimitDeg (45\u00b0) while camera and target are within 72\u00b0 of level, by a correction that turns the short way and shares the gimbal's maxRateDeg budget: a deliberate roll (Dutch angle, barrel roll, inverted pitch-through image) is carried, never clamped; the gimbal never rotates faster than maxRateDeg'.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md, `flightPreset` row (~line 161), and .claude/skills/film-mode/reference/techniques.md, line ~19 ('`pilot.flightPreset` \u2026 overrides the automatic choice') plus the `fpv.fpv-flip` block (~line 1441). Add a director note covering the override path the round-1 checker used. A stabilised-gimbal preset (cinema / heavy / indoor) turns at most 120 / 80 / 90 \u00b0/s. The default 3 s fpv-flip peaks near 190\u00b0/s, so on a gimbal preset the image lags the flip by up to \u224880\u00b0 / \u2248165\u00b0 / \u2248140\u00b0 (measured at 30 fps). It never snaps and catches up afterwards. For a crisp flip on a gimbal preset, set flipDuration \u2265 \u2248570\u00b7turns/maxRateDeg s (\u22484.8 s cinema, 6.3 s indoor, 7.1 s heavy), or keep the automatic 'fpv' preset."
+   ]
+  },
+  "fix:r2-cli": {
+   "fixed": [
+    {
+     "id": "r2-cli (1) page issues surfaced in the CLI",
+     "what": "tools/film/lib/shoot.mjs: new exported pageIssuesOf(result, stage), mergeIssues, flightOf, issueLine. pageIssuesOf reads a page result defensively: validation.issues[] (keeping code, t, message, preset, vmax, peakSpeed, lengthM, minDurationSec), validation.error \u2192 'validation-error', and validation.ok:false with no listed issue \u2192 'invalid' (with counts). It also reads flight/flightCheck with overspeed:true (synthesises an 'overspeed' issue naming 'use duration \u2265 <minDurationSec> s' when no validation issue exists), issues[] and warnings[]. These are read on the result itself and nested under prepared/prepare/preflight/plan/summary/checks. Absent or malformed blocks yield [] and it never throws. All 'overspeed' issues of one preset are one issue, and stages are merged. shootOne now keeps every prepare/rehearse/shoot result and warns ONCE per issue per shot ('shot <id>: <stages> issue <code>[ at t=\u2026]: <message>[ (minimum feasible duration N s)]'). Rehearsal issues are carried into every attempt. reports/<shot>.json gains issues[], validation {ok, counts, error?} (from the shot's first, non-table prepare) and flight. Every shoot-log attempt row, including failed-retake and failed-first-attempt rows, gains issues; shootSchedule failures[] carry issues. <shot>.rehearsal.json gains issues (+ flight when the page result has none). judgeInput adds issues (the report's and its page block's) and flight when present, so keepOrRetake receives them. The keep/retake words are unchanged, because a retake replays the same plan. Issues never throw, fail or retake a take. A failed attempt carries details.pageIssues through withDetails (which generalises withPageIdle). rehearseShot (film rehearse) warns per issue and returns issues/flight. film.mjs: the rehearse --json data has issues/flight and its text adds '\u00b7 N page issue(s): codes'. The shoot summary line adds '\u00b7 page issue(s): overspeed (min 11.9 s)'. scout prints the page's warnings[] and saves them in metrics.json and the --json data. Help texts for rehearse/shoot/scout are updated."
+    },
+    {
+     "id": "r2-cli (2) check:cli-shoot settlePage abort re-issue",
+     "what": "tools/film/lib/shoot.mjs settlePage now re-sends __film.abort() on every poll where status() still shows the page active, busy or take.running. The first abort is always sent. Later ones are bounded by maxAborts (new export PAGE_ABORT_MAX = 30) and are never sent after timeoutMs. The result gains an `aborts` count, and `aborted` = aborts > 0. This covers an abort that lands in index.js's window (busy='shoot' while take_player has no run, so abort() is a no-op with wasRunning:false). Mutation probe /tmp/claude-1000/r2cli-mut/probe.mjs: the old abort-once logic times out at 90 s with ok:false in both window cases; the new code goes idle after 2 aborts in 1\u20132 s."
+    },
+    {
+     "id": "tests",
+     "what": "tests/film_cli_session.test.mjs: makeTakePage gained beforeRun (models the busy-without-run window), onAbort, and prepareExtra/rehearseExtra/shootExtra hooks; createWorld/makeFilm gained prepareExtra/rehearseExtra/shootExtra. New checks: S10h exercises settlePage with a windowPage fake that loses the first abort (abortFirst and pre-teleport variants: ok, 2 aborts, exact call order), the count bound (4 aborts and 30 = PAGE_ABORT_MAX by default) and the time bound (no abort after timeoutMs). Its end-to-end part runs shootSchedule with a leftover take in the start window: the re-abort stops it before the teleport, and the teleport sees takeRunning:false. S10i: overspeed/validation-error/warnings/absent/malformed blocks across prepare, rehearse and the take report, a retake and a failed first attempt. It checks one warning per issue per shot, reports/<shot>.json issues/validation/flight, shoot-log rows, rehearsal.json, failure issues, and the keepOrRetake inputs. Issues never cause a failure. S6b: film rehearse / shoot --all / scout through main(), checking warnings, the JSON data, the text summary and the saved files. The S10b/S10c/S10g assertions that expected exactly 1 abort now check the new contract: 1 \u2264 aborts \u2264 PAGE_ABORT_MAX, and every abort comes before the next step. tests/film_cli.test.mjs H5: pageIssuesOf/mergeIssues/flightOf/issueLine unit cases (absence, malformed input, nesting, t, counts), judgeInput carrying issues + flight, and `jev task keep` on a saved report with issues. The verdict is unchanged, and the JEV request holds only the six take words, never the issue text."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "page-side field names (r2-subject lane, scene3d/film/runtime/take_player.js + index.js)",
+     "why": "Nothing to change here: the parallel lane had not yet changed the page when this finished (take_player.js mtime 08:28; buildReport/rehearse do not yet carry validation/flight). The CLI reads `validation`, `flight`/`flightCheck`, `issues` and `warnings` on the rehearse result / take report and under prepared/prepare/preflight/plan/summary/checks. If r2-subject nests them under a different key, add that key to ISSUE_HOLDERS in tools/film/lib/shoot.mjs; nothing else changes."
+    },
+    {
+     "id": "optional: issues in the keep/retake words (tools/film/lib/jev_tasks.mjs, outside this lane)",
+     "why": "judgeInput now hands `issues` and `flight` to keepOrRetake, but takeReportWords deliberately ignores them. They are plan problems that a retake (same plan) cannot fix, so they must not trigger retakes or reach the JEV state. If a word is ever wanted, the owner of jev_tasks.mjs could add an informational `plan_issues: 'none'|'overspeed'|\u2026` fact that is excluded from KEEP_CRITERIA. Not recommended."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tools/film/lib/shoot.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tools/film/film.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_cli.test.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_cli_session.test.mjs"
+   ],
+   "tests": [
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/r2cli-mut/probe.mjs (throwaway mutation probe: the real settlePage recovers from a lost abort in 2 aborts; the old abort-once mutant times out at 90 s with ok:false in both window cases)",
+     "passed": 2,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md:468-469 (\u00a75.2 'CLI walk'): add that before each teleport and after a failed take the CLI polls __film.status() and RE-SENDS __film.abort() on every poll that still finds the page busy (at most PAGE_ABORT_MAX = 30, never after the \u224890 s idle wait), because an abort that lands while index.js has busy='shoot' but take_player has no run yet is a no-op. Also add that the page's validation / flight-check issues (prepare summary validation.issues incl. 'overspeed' with minDurationSec, flight, warnings, and the same blocks on the rehearse result / take report) are surfaced by the CLI. They appear as one warning per issue per shot and as `issues` in reports/<shot>.json, every shoot-log.jsonl row, <shot>.rehearsal.json and the keepOrRetake input (judgeInput). They never fail or retake a take.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md:97 (lib/shoot.mjs row): add 're-sends __film.abort() while the page stays busy (\u2264 30)' and 'surfaces the page's validation / overspeed / warning issues (pageIssuesOf) as warnings and as `issues` in the take report, shoot-log and rehearsal file'.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md:36 (`reports/` row): <shot>.json also holds `issues` (page findings: {code, message, t, stages, preset?, vmax?, peakSpeed?, lengthM?, minDurationSec?}), `validation` {ok, counts, error?} and `flight` {preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec}|null. Every shoot-log.jsonl attempt row (failed ones too) has `issues`. <shot>.rehearsal.json has `issues` (+ `flight`).",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md:34 (`stills/<shot>/` row): metrics.json also holds `warnings` (the page's scout warnings, e.g. an intent.light ignored without a usable sun), which `scout` also prints as 'warning: scout <shot>: \u2026'.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md:134-136 (the `shoot` paragraph): the CLI re-sends `__film.abort()` on every status poll while the page stays busy (\u2264 30), not once. Add that page issues print 'warning: shot <id>: <stages> issue <code>: \u2026' once per shot and are recorded, and never fail or retake a take.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md:158 (\u00a74 'Then read reports/<shot>.json'): add `issues` / `flight` / `validation`. An `overspeed` issue means the flown drone camera ended short of the planned path.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md \u00a75 table (~line 165): add the row \"`shot <id>: \u2026 issue overspeed` warning | The path is faster than the drone preset flies: set the shot duration \u2265 the printed minimum (minDurationSec), shorten or straighten the path, or use pilot.flightPreset 'fpv'; a retake will NOT fix it (same plan).\"",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md:84 (`keep` task row): a saved reports/<shot>.json also passes its `issues` / `flight` to keepOrRetake (via judgeInput), but the verdict words and criteria ignore them.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md:135-138 (steps 10 Rehearse / 11 Shoot): `rehearse` and `shoot` print the page's validation / flight-check issues as warnings (e.g. overspeed with 'use duration \u2265 N s') and save them as `issues` in reports/<shot>.rehearsal.json / reports/<shot>.json. Fix the plan (duration / path / preset) and recompile rather than retake.",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md:123 (`reports/<shot>.json` row): besides pilot/safety/obstruction it now holds `issues`, `validation` and `flight` (the prepare-time flight check: preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec).",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/agents/film-director.md:90 (optional): after `rehearse` / `shoot`, heed any 'issue overspeed' warning (raise the duration to the printed minimum, or change path/preset) before retaking."
+   ]
+  },
+  "fix:r2-perception": {
+   "fixed": [
+    {
+     "id": "check:perception#1 (REGRESSION describeHit picks wrong placement)",
+     "what": "world_query.describeHit now ranks the static candidates by the new exported staticHitScore(point, row). The score is the distance from the hit to the placement's vertical axis segment divided by its radius, so lower means closer to the middle; it no longer uses surface distance, which was 0 for every capsule containing the point. A fadeKey is issued only when all of the following hold (STATIC_HIT_RULES {maxScore 1, ambiguity 0.25, propMaxSize 2}): (a) the winner is a tree, or a prop of KNOWN size (dimsSource not 'default') with max(radius, height/2) <= 2 m; (b) the hit is inside the winner's radius (score <= 1); (c) no runner-up scores within 0.25 of it. Otherwise the kind is still refined but fadeKey is null, so the existing reroute fallback applies. Because a faded key now implies the hit lies inside that placement's radius, sensors' seenThrough inherits the guarantee and sensors.js needed no change. Tests: perception W11 covers the clump (two oaks 1.9 m apart where the ray hits the higher row: correct key, and the reverse case), the midway hit (no key), a hit outside the radius (no key), the round-1 rim/barrel example (names the statue, which is too big, so no fade), a lone barrel of known size (fades) and default-size props (never fade). S13 runs the clump end to end through the real sensors: occluderIds names the real blocker; fading it clears the rays; fading the neighbour leaves the subject hidden. The round-1 probes in /tmp/claude-1000/perc-probe now print 'correct: A' and visibleFrac 0 -> 1 after the right fade."
+    },
+    {
+     "id": "check:perception#2 (WIRING GAP: no catalogs, every scenery = rock)",
+     "what": "New world_query.createStaticCatalogs({descriptorFor, ready, selectionSphere, timeoutMs}) provides: vfxArchetypeOf(did) = descriptor.archetype; staticDimsOf(did) = DAT-bounds size from the descriptor's classifier signals (dimsFromDescriptor: maxDimension/aspectRatio -> radius = footprint/2, height = box height, source 'catalog'), else the Setup's cached wasm selection sphere (dimsFromSelectionSphere: radius = R + |cxy|, height = cz + R, retail's 0.1 m placeholder rejected, source 'selectionSphere'), else null so the kind defaults apply. Its prefetchStaticDims(dids) fetches a sphere only for 0x02 Setup DIDs whose size is not in the catalog, once per DID, frees the boxes, caches failures, and is bounded by timeoutMs (3 s). world_query.loadStatics awaits prefetchStaticDims before a landblock becomes ready, then re-resolves its rows. Rows whose archetype or size was unknown are re-resolved (refreshRow) when touched by collectStatics/placementOfKey, so a catalog the client fills later still applies. StaticFacts gains dimsSource, which also appears in query.near output. film/index.js createWorldQuery wiring now passes catalogs: a dynamic import('../vfx_catalog.js'), the same instance the client's statics bake fills (deps.modules.vfxCatalog overrides it, even with null), read through vfxDescriptorFor only. Film never calls ensureVfxCatalog, so it cannot change the client's VFX under ?visual=off. Sizes also use wasmExports.fetchSetupSelectionSphere when present. Tests: perception W12 (pure size helpers + factory: ready awaited, 0x02 only, once, freed, failure, stalled fetch bounded) and W13 (late catalog: rock -> tree with fadeKey and catalog size). api A11 x2: the real vfx_catalog.js via setVfxCatalog -> installFilmMode -> a scenery oak hit is kind 'tree' with its fadeKey, size from the catalog; a barrel is a fadeable prop sized by its selection sphere; only the barrel's sphere is fetched; query.near shows dimsSource. The modules.vfxCatalog fake also yields tree. With null, or with an empty real catalog, the oak stays rock with no key."
+    },
+    {
+     "id": "check:perception#3 (LOW BatchedMesh restore re-shows instances others hid)",
+     "what": "take_player now keeps more on a batch hide record: the instance's geometry id + matrix at hide time (batchState), plus a watch token (watchBatch). While the take holds any hide on a BatchedMesh, the mesh's setVisibleAt is shadowed by a pass-through that marks a write to a held instance as foreign. Three's setVisibleAt leaves no trace of a redundant false->false park. The shadow is removed (own property restored or deleted) when the last hold is released. restoreStatic batch re-shows the instance only if all of these hold: no foreign write happened; it is still hidden; geometry id and matrix are unchanged (not a re-placed or reused id). This needed a small edit to hideStatic's batch branch (record at hide time) beside restoreStatic, plus three helper closures next to them; nothing else in take_player changed. Header comment updated. Residual, documented in code: writes that bypass setVisibleAt (three internals; none found in the client: rg for _instanceInfo writes is empty) and frozen/sealed meshes fall back to the hidden/geometry/matrix checks; a third party wrapping setVisibleAt over ours leaves ours as an inert pass-through. Test: runtime_capture 'T2 r2 BatchedMesh restore' uses a real THREE r184 BatchedMesh. The untouched instance is restored. The instance parked mid-take stays parked (round 1 un-parked it). The re-placed instance stays as left. Writes to an unheld instance are not tracked. The shadow is gone after the take and the prototype method is back. A second take watches afresh and restores normally. The existing T2 exact-restore test still passes (setCalls [[3,false],[3,true]])."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "check:perception optional: sensors.subjectJob seenThrough only within the faded placement's radius",
+     "why": "Not needed: describeHit now issues a fadeKey only for a hit inside that placement's radius (score <= 1) with no near-tied neighbour. Any id the sensors match against ctx.fadedIds already carries that guarantee, so sensors.js is unchanged."
+    },
+    {
+     "id": "check:perception#2 suggestion: refuse to fade a static whose LIVE draw bounding radius exceeds a few metres",
+     "why": "Done a different way: a prop fades only at a KNOWN size of at most 2 m (catalog DAT bounds or the Setup selection sphere); defaults never fade. Measuring the live draw would mean scanning staticsGroup in staticFadeTargets on every hit, which is too costly. Trees have no size cap because they are the intended fade target. Not verifiable here (browsers forbidden): whether retail selection spheres are authored for non-selectable LandBlockInfo statics (fountains, wells, fences). If a sphere is invalid, that prop simply never fades and the pilot reroutes, which is safe. Worth one off-screen 1070 probe by the orchestrator: query.near statics dimsSource around Holtburg."
+    },
+    {
+     "id": "scope note: take_player.js edit outside restoreStatic",
+     "why": "Not skipped, flagged for the orchestrator. Recording 'our own hide', as the brief requires, needs data captured at hide time. The batch branch of hideStatic, the function right next to restoreStatic, now returns {state, watch} as well, and watchBatch/unwatchBatch/batchState closures sit beside them. No other part of take_player.js was touched."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/world_query.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/index.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/take_player.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_perception.test.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_api.test.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_runtime_capture.test.mjs"
+   ],
+   "tests": [
+    {
+     "file": "tests/film_perception.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 19,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 53,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "scene3d/film/SPEC.md \u00a73.1 SensorFrame (amends the round-1 pending 'occluderIds' entry): static placement fade keys `placement:<lb>:<object|scenery>:<row>` appear in subject.occluderIds only when world_query.describeHit names the placement unambiguously. The placement is the candidate within 4 m whose axis is nearest relative to its radius (staticHitScore = axis distance / radius). The hit must lie inside its radius (score <= 1), with no neighbour scoring within 0.25 (STATIC_HIT_RULES), and the placement must be a tree or a prop of KNOWN size with max(radius, height/2) <= 2 m. Any other static occluder carries no id, so the mapper's reroute fallback applies.",
+    "scene3d/film/SPEC.md \u00a73 perception bullet (`scene/world_query.js \u2026`, ~line 323) and \u00a71.1 page adapters: world_query takes injected `catalogs`. film/index.js builds them with world_query `createStaticCatalogs`: the client's VFX descriptor catalog (scene3d/vfx_catalog.js, dynamic import, read via vfxDescriptorFor only, never ensureVfxCatalog) gives archetype (tree vs rock) and DAT-bounds size. wasmExports.fetchSetupSelectionSphere sizes other Setup DIDs (prefetched per landblock, bounded 3 s). Per-kind defaults are the fallback. StaticFacts (and query.near `statics`) gain `dimsSource: 'catalog'|'selectionSphere'|'default'`. Note the degrade: when the client never loaded the catalog (?visual=off, or ?treeWindGpu=off without ?windGeo), scenery reads as rock and is rerouted, never faded.",
+    "scene3d/film/runtime/SEAMS.md 'How to use them' -> 'Hides' bullet (amends the round-1 pending text 'A BatchedMesh instance gets setVisibleAt(id,false), restored only if still false'): the take now re-shows a BatchedMesh instance only if three things hold. No other owner called setVisibleAt on it during the take: while it holds a hide, the take shadows that mesh's setVisibleAt with a pass-through watcher, removed after the last release. The instance is still hidden. Its geometry id and matrix are unchanged. Residual: writes that bypass setVisibleAt, or a frozen mesh, fall back to the state checks only.",
+    "scene3d/film/runtime/SEAMS.md (new short note under 'How to use them') or scene3d/film/README.md module map row for `scene/world_query.js`: film mode reads (never writes or loads) scene3d/vfx_catalog.js `vfxDescriptorFor`, and calls wasm `fetchSetupSelectionSphere` per uncatalogued Setup DID. Flag off: neither happens; vfx_catalog.js is not modified.",
+    ".claude/skills/film-mode/reference/workflow.md:168 and reference/pilot.md:73 (supersedes the round-1 pending 'Tree/prop fades need a placement the runtime can resolve'; the checker's hold is now lifted because index.js injects the catalog): trees fade when the client's VFX catalog marks them (trunk-canopy / foliage-pollen / tip-flex). Small props fade only at a known size of 2 m or less (barrels, crates; never fountains, statues, bridges, or props with no DAT size). Overlapping trees, and hits where two placements are about equally likely, make the camera take the reroute bias instead. Under ?visual=off scenery reads as rock and is always rerouted.",
+    "scene3d/film/pilot/questions.js:283 prompt text (not in my files; amends the round-1 pending note): 'the film runtime can fade them out' -> 'the film runtime can fade trees, small props of known size and smoke, and reroutes around the rest'."
+   ]
+  },
+  "fix:r2-subject": {
+   "fixed": [
+    {
+     "id": "math-0 / contracts-0 (round-2 surge at take start)",
+     "what": "take_player.js liveUpdate now runs in three phases: 'settle' (pre-roll), 'anchor' (frame 0) and 'track'. In settle, the follower is set to x = T, and v = F = (the subject's own velocity, fitted over the pre-roll history in a headingWindowSec window and restarted at a snap) MINUS the reference's own velocity at p (new refVelocity). A subject that keeps walking at the speed it had at prepare therefore holds a constant offset, and a flown craft is reset at the walk's speed, not double. Frame 0 is still p = 0, so it is anchored the same way (x = T, settled velocities kept) instead of being eased. A live drone take re-sets the craft on the re-anchored start pose at frame 0 instead of holding the last pre-roll pose. Measured with the checker's probes. Subject walking through the pre-roll: before, the camera surged to 5.7\u20136.0 m/s for a 3 m/s walk, drone.chase came 0.80\u00d7 as close and drone.lead went 1.21\u00d7 as far; now 3.00 m/s and 1.000. Subject stopped during the pre-roll: before, the camera drifted at 2.7\u20133 m/s; now 0 m/s, ratio 1.000. New tests in tests/film_runtime_capture.test.mjs, three 'L2' checks: (a) realtime, every realtime rig: speed \u2264 1.25\u00d7 the walk on every frame, distance within \u00b115 %, camera covers the subject's walk within \u00b115 %, maxLag < 5 cm; (b) a stepped rehearsal of drone.chase, drone.lead, drone.side-track and tracking-follow, including the flown craft's tracking gap < 0.1 m; (c) a subject that stops stays put. Also: tests 'F1 round 2' and 'F2' assert the flight check's report fields, and film_api 'A13' asserts the same through the page API. I re-ran the suite with the old settle logic restored and these tests failed with the original numbers (6.00 m/s, 5.69 m/s, 2.69 m/s drift), then restored the fix byte for byte."
+    },
+    {
+     "id": "math-2 (flythrough peakSpeed + profile audit)",
+     "what": "shots/drone.js drone.flythrough meta now includes peakSpeed: F.profile.peakSpeed. I checked every technique that uses fitProfile/speedLimitedProfile: they all go through makeFollower (flythrough, terrain-skim, canyon-run, fpv-dive, fpv-proximity, fpv-gap, fpv-corridor), and only flythrough lacked peakSpeed. New test D10 in tests/film_shots_drone.test.mjs builds all 29 techniques at the default duration and at 7.3 s. It checks that every technique reporting meta.overspeed also reports a boolean overspeed, a finite lengthM and a peakSpeed within 5 % of the peak measured at 60 fps, that the set of profiled techniques is exactly those 7, and that the flythrough gap pass peaks above its mean. D10 fails without the drone.js line (verified, then restored)."
+    },
+    {
+     "id": "math-2 (flight check measures the nominal; verified minimum duration)",
+     "what": "In take_player.js prepare(), the nominal is now baked once and reused for the checksum and the flight check. The flight check's peak is max(meta.peakSpeed, the peak measured on the baked nominal, with cut intervals excluded). A survey showed meta.peakSpeed underestimates up to 3\u00d7 under a non-linear ease, and that unprofiled moves (helix, dronie, boomerang, spiral-descent, hyperlapse-orbit, top-down-rise) run at 15\u201332 m/s when shortened below their natural duration. The flown camera then trails by 10\u201355 m, and none of this was flagged. overspeed is now decided by the measured speed: peak or mean above vmax \u00d7 1.02. The builder's meta.overspeed is reported as flight.profileOverspeed and only fails the check when no speed can be measured. The checker's mindur probe showed a flythrough flagged again at its own suggested 10.2 s: its peak was 11.9 m/s with a 0.79 m flown error, and the flag came only from the style and acceleration caps. New verifyMinDuration rebuilds the shot at minDurationSec, up to 3 tries, and sets minDurationVerified. When a longer duration does not lower the peak (a speed param without a path, an ease, or a followed subject), it clears minDurationSec, sets durationHelps:false and gives a message about speed, ease or preset, plus a hint naming the ease. The flight block is now {preset, vmax, peakSpeed, metaPeakSpeed, sampledPeakSpeed, lengthM, overspeed, profileOverspeed, minDurationSec, minDurationVerified, durationHelps, ease}. Checker probes now: heavy flythrough with a gap at 180 m/30 s is flagged (peak 8.9 > 7), and at the suggested 38.3 s it passes; canyon 200/12, flythrough 120/8 and heavy canyon 110/12 all pass at their suggested durations. No technique at its default duration is newly flagged (survey plus all 12 suites green)."
+    },
+    {
+     "id": "math-2 (take report / rehearse result carry the checks)",
+     "what": "take_player.js buildReport adds `validation` (prepare's, plain copy, including the 'overspeed' issue with minDurationSec and durationHelps) and `flight` to the report. `flight` is prepare's check plus `tracking: {frames, maxGapM, maxGapT, endGapM}`, the craft's distance from its re-anchored nominal, measured each frame in poseStep for flown runs. It is null on a locked replay, and `flight` is null for classic shots. The rehearse result, the shoot report and a failed take's partial report all carry them; index.js passes them through, so the CLI's pageIssuesOf/flightOf (already in tools/film/lib/shoot.mjs) picks them up. Tests: F2 at the take-player level checks rehearse, shoot, the flyable case (gap < 1 m), the locked replay (tracking null) and a classic shot (flight null). A13 in film_api runs prepare, rehearse and shoot of a too-fast canyon-run through window.__film and checks JSON round-trip."
+    },
+    {
+     "id": "tooling-2 (page-side defence in depth)",
+     "what": "scene3d/film/index.js has a new cameraBusy() helper (busy is shoot, rehearse or scout, or takePlayer.running) and a new refuseWhileBusy(what) helper. world.teleport and world.command now refuse inside safeSync with {ok:false, code:'FILM_BUSY', error:{code:'FILM_BUSY', message:'world.teleport: <op> is running \u2014 abort() it \u2026'}} and send nothing. pose, release and parkViewerCell use the same helper, with unchanged messages. Header and installFilmMode docs are updated. Tests: A10 in film_api now expects a teleport during a take to be refused, with nothing sent and the cell carry intact. The new A12 probes world.teleport, world.command, pose and release during a rehearse (busy from the call), a shoot (before and while takePlayer.running) and a scout, then checks that both go through again when idle and that only the idle commands reached sendChat."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "tooling-2 / math-2 (CLI side, tools/film/lib/shoot.mjs)",
+     "why": "This file is outside my list. Another lane has already made shoot.mjs read validation and flight from the prepare summary, the rehearse result and the take report (pageIssuesOf / flightOf / issueLine), so no change is needed for the overspeed issue to reach the CLI. Three optional follow-ups for that lane. (1) Add \"durationHelps\" to ISSUE_FIELDS (shoot.mjs ~line 140). (2) overspeedFromFlight (~line 162) should print \"a longer duration does not slow this move \u2026\" when flight.durationHelps === false; it currently always says \"use a longer duration\". This only matters for a report with a flight block and no validation issue, which take_player no longer produces. (3) Surface report.flight.tracking.maxGapM/endGapM, which says how far the craft trailed, in the rehearsal warning line or judgeInput."
+    },
+    {
+     "id": "math-0 (a subject that stands through the pre-roll and starts walking exactly at frame 0)",
+     "why": "Intentional, not a regression. With the fix, the pre-roll assumes the subject keeps its observed pre-roll velocity. The checker's 'afterPre' probe case (reference extrapolated from an earlier walk, subject standing during the pre-roll, starting at the take start) now shows the flown rigs' step response: drone.chase 1.21, drone.lead 0.78, tracking-follow 1.06. The old 1.00 there was a coincidence of the old assumption. I measured the same response, to the same digits, with a STATIC reference and a subject that starts walking mid-take on the old and the new code (probe_surge2: chase [1.000, 1.214], lead [0.782, 1.000]). It is the craft's amax-limited start, unrelated to the reference extrapolation. The turnEast probe case (a 90\u00b0 turn in 1 s) is likewise unchanged from before the fix (flown swing limits)."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/take_player.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/index.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/shots/drone.js",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_runtime_capture.test.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_api.test.mjs",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_shots_drone.test.mjs"
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 58,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 114,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_registry.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_scene_dungeon.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "scene3d/film/SPEC.md \u00a73 API table, line ~294 (`world.teleport(cmd)` row): add that world.teleport AND world.command answer {ok:false, code:'FILM_BUSY'} and send nothing while a take, shoot, rehearse or scout runs (the same guard as pose/release). This supersedes the round-1 pending note that the viewer-cell park is 'skipped while a take runs': a busy teleport is now refused outright, and the park happens only when idle. Result when idle: {ok, cmd, viewerParked}.",
+    "scene3d/film/README.md lines 115-117 (Page API intro: 'prepare, rehearse, shoot and scout are mutually exclusive (FILM_BUSY)'), 124 (`own()/release()` row) and 126 (`world.teleport(cmd)/world.command(cmd)` row): add that pose, release, world.teleport and world.command refuse with FILM_BUSY while a take/shoot/rehearse/scout runs (never a teleport or an admin command mid-take). Rewrite the round-1 pending README:126 note ('skipped while a take/rehearse/scout runs') to match.",
+    ".claude/skills/film-mode/reference/workflow.md:206 (troubleshooting row 'page FILM_BUSY'): add that world.teleport / world.command (and pose / status --release) are refused while a take runs; abort() and wait for status().active === false.",
+    "scene3d/film/SPEC.md \u00a73 prepare summary and validation (round-1 pending entry from fix:subject that lists flight {preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec}). The flight block is now {preset, vmax, peakSpeed, metaPeakSpeed, sampledPeakSpeed, lengthM, overspeed, profileOverspeed, minDurationSec, minDurationVerified, durationHelps, ease}. peakSpeed = max(builder meta.peakSpeed, the peak measured on the baked nominal). overspeed = peak or mean > preset vmax \u00d7 1.02 (the measured speed). The builder's meta.overspeed is reported only as profileOverspeed and fails the check only when no speed is measurable. minDurationSec is verified by rebuilding the shot at that duration (minDurationVerified). When lengthening does not lower the peak (a speed param without a path, a non-linear ease, a followed subject), minDurationSec is null and durationHelps:false. The 'overspeed' issue gains durationHelps and an ease hint.",
+    "scene3d/film/SPEC.md \u00a73 rehearse/shoot rows (lines ~304-305) and the take-report description; README.md:136-137 (rehearse / shoot rows) and README.md:83 (runtime/take_player.js row): the rehearse result, the shoot report and a failed take's partial report now carry `validation` (prepare's, verbatim) and `flight` (prepare's check + `tracking: {frames, maxGapM, maxGapT, endGapM}`, how far the flown craft trailed its re-anchored nominal; tracking null on a locked replay; flight null for classic shots).",
+    "scene3d/film/SPEC.md \u00a75.2 / \u00a72.11 live subjects (round-1 pending fix:subject entries): add the pre-roll rule. The pre-roll (reference held at p = 0) and frame 0 (still p = 0) settle the live-offset follower with offset velocity = the subject's velocity measured over the pre-roll minus the reference track's own velocity. A subject that keeps walking through the pre-roll gives no surge or drop-back at the take start. One that stopped keeps the camera at rest. A flown live take re-sets the craft on the re-anchored start pose at frame 0. A subject that starts walking exactly at frame 0 is followed with the rig's normal (amax-limited) step response.",
+    ".claude/skills/film-mode/SKILL.md and reference/workflow.md (take-report facts, ~line 84) / reference/plan-format.md (`flightPreset` row, ~line 161) / reference/techniques.md (~line 19, drone dynamics): the 'overspeed' issue now also fires for unprofiled moves (orbit-poi, helix, dronie, boomerang, spiral-descent, hyperlapse-orbit, top-down-rise\u2026) shortened below their natural duration, and for non-linear eases on path moves. Its minDurationSec has been verified to fly. When it says 'a longer duration does not slow this move', lower params.speed, use ease 'linear', give a shorter path or use pilot.flightPreset 'fpv'. In a rehearsal report, read flight.tracking.maxGapM / endGapM to see how far the craft trailed.",
+    "Round-1 pending docsToUpdate entry from fix:subject ('scene3d/film/shots/drone.js (\u2248 line 890, drone.flythrough meta): add peakSpeed \u2026') is now DONE in code; drop it from the docs agent's list."
+   ]
+  },
+  "docs:sync": {
+   "fixed": [
+    {
+     "id": "SPEC.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md: \u00a71.1 adds the world_query injected `catalogs` (createStaticCatalogs: vfx_catalog read only through vfxDescriptorFor and never ensureVfxCatalog; fetchSetupSelectionSphere prefetched per landblock with a 3 s bound; defaults as fallback; dimsSource; the ?visual=off / ?treeWindGpu=off degrade) and extends the allowed-import list (sky_game_date.js, night_ramp.js, the dynamic time-source and vfx_catalog imports). \u00a72.11 says subjectAt is PURE, take.liveSubject is a separate input, and gives the ctx.sun meaning. \u00a72.12 changes meta.timeLapse to {rate, unit:'game-days/s'} (timeRate \u00f7 7620) and lists the drone meta.lengthM/peakSpeed/overspeed fields. \u00a72.13 adds the horizon-roll follow-error rule (\u00b145\u00b0, 72\u00b0 band, shared maxRateDeg budget, preset rates) and presetForTrajectory plus the flightPreset override. \u00a72.14: buildPilotState opts gain bounds/hasSubject/current.lateral/vertical; limits gain can_drift_left/right (BOUND_SLACK_M) with room semantics; the drift criteria are added; the mapper fade-with-no-id sets reroute (fadeFallbacks). \u00a72.15: describeCandidate word/metre wording (PICK_* words). \u00a73: installFilmMode takes the particleCull dep; the FILM_BUSY guard covers pose/release/world.teleport/world.command; the full status() fields; a world.teleport/world.command row ({ok, cmd, viewerParked}; park only when idle); scout gains sun/warnings; new 'Prepare summary' block (validation + overspeed issue; the flight block {preset \u2026 minDurationVerified, durationHelps, ease} with the peak/overspeed/profileOverspeed/minDurationSec rules; liveSubject; sun) and new 'Take report' block (validation, flight + tracking, liveSubject, faded+fallbackFrames, environ, realtime, particleCull, partial report). Runtime bullets updated: camera_owner.parkCell; film_clock (per-step rAF yield, particle clock bases, conditional re-arm); perception (catalogs, renderSetCells default); safety (renderSetCells, release order); take_player (live re-anchoring, fades, cull, the 30 s environ wait, realtime grid recording); recorder grab(t|[t\u2026]). \u00a73.1 adds occluderIds with the static fade-key rules (staticHitScore, 4 m, score \u2264 1, ambiguity 0.25, tree / known-size prop \u2264 2 m) and fadedIds. \u00a73.4 readiness is rewritten to match world.js (teleport check, attached terrain, player resolved, the checks list, timedOut). \u00a74 item 1 is the actual Promise.all + particleCull install (exact `=== \"on\"` reader, ~4531); item 4 says the marker is set by fades; item 5 says the seam is now wired. \u00a75.1 prefers FILM_PASSWORD. \u00a75.2: the Timeline {bars} half-beat rule (replacement text); Take player \u2192 realtime/moving:false wording; a new live-subject block with the pre-roll rule; the Look fog-wait rule; the CLI walk adds the status/abort before teleport, abort re-send \u2264 PAGE_ABORT_MAX = 30, best-effort prewarm, stepped rehearsal limits, failedAttempts, and page issues surfaced and never failing a take."
+    },
+    {
+     "id": "runtime/SEAMS.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/SEAMS.md: the index.js seam line shows the Promise.all install with particleCull. The particle_manager line lists its consumers (take_player cull with recheckInterval 1, scout stills, particles_query managers). The film_clock stepping bullet covers the per-step rAF yield, the re-base past the pre-hold re-arm, and the conditional end() re-arm. The Time sources bullet drops the '>100 ms loses the excess' caveat for stepped takes (one rAF per film frame; the 50 ms fallback catches up). The Viewer cell bullet adds parkCell, called only when idle, with re-seed on the next write. Hides adds how pilot fades use the statics seam: node marker + visible; a shared InstancedMesh zero 3\u00d73; the BatchedMesh re-show rules (setVisibleAt watcher, still hidden, geometry/matrix unchanged, plus the residual); animated_scenery _anchorVisible; safety.release before the fade restore; fade never adopts a filmHidden emitter. New bullets: Static catalogs (read-only vfxDescriptorFor and fetchSetupSelectionSphere; flag off neither happens; vfx_catalog.js unmodified; degrade); Sun (skyLightingController._lastState / getSkyState with free, night_ramp, SkyState degrees, d.ts 'radians' wrong, subject velocity feeds the reference track); AdminEnvirons (the read-only __environOverrideState fields, new-identity adoption, the 0.8 s/15 s ticks and the 18\u201321 s roll-in, the distance-fog option, __setTerrainLightScale relight, environRetail=off, the take wait of \u2264 30 s)."
+    },
+    {
+     "id": "README.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md: the stepped-frame pipeline gains the film_clock animation-frame yield and live-subject re-anchoring. Realtime takes are described as recorded on the film grid (held/skipped/carried/final frames, \u2308wall\u00b7fps\u2309, -r fps, report.realtime). A new paragraph says live subjects are re-anchored and ctx.sun is provided (the closed gaps). Module map: world_query (describeHit/STATIC_HIT_RULES/staticFadeTargets; createStaticCatalogs reads vfx_catalog vfxDescriptorFor and fetchSetupSelectionSphere, neither when the flag is off); camera_owner parkCell; film_clock yield; look.js fog changed:false; take_player (the environ wait and its fields, validation/flight + tracking on rehearse/shoot/partial reports); recorder grab([t\u2026]). lib/shoot.mjs row: status check/abort before teleport, best-effort prewarm, abort re-sent while busy (\u2264 30), no teleport of a busy page, failedAttempts, pageIssuesOf surfaced as warnings and `issues`, per-shot jev.jsonl. Page API intro and own/release, pose and world.teleport/world.command rows: FILM_BUSY while a take/shoot/rehearse/scout runs; teleport parks the viewer cell \u2192 {ok, cmd, viewerParked}. scout (sun, warnings), prepare (validation/overspeed, flight, liveSubject, sun), rehearse/shoot (validation, flight + tracking, environ wait, partial report). New 'Reading a take report' paragraph (liveSubject block, flight.tracking, faded, environ, realtime). filmViewer is unpublished by world.teleport. Flags/seam table: index.js:4531, the Promise.all + particleCull install, statics marker set by fades, particle_manager now used, diff stat 449/8. How-to-extend: keep the hand-written Director notes when regenerating techniques.md."
+    },
+    {
+     "id": "SKILL.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md: the password rule recommends FILM_PASSWORD (--password= is visible in ps and /proc/<pid>/cmdline; the CLI never writes it; the lock record is redacted). Step 9: scout warnings (intent.light without a usable sun) and metrics.json warnings. Step 10: rehearsal flight.tracking.maxGapM/endGapM. Step 11: a failed retake keeps the earlier take (failedAttempts); an incomplete prewarm only warns; rehearse/shoot print page validation/flight issues ('warning: shot s040: prepare issue overspeed: \u2026 use duration \u2265 N s') and save them as `issues`; fix the plan and recompile rather than retake. A new 'Drone speed' rule of thumb: preset vmax values; overspeed also fires for unprofiled shortened moves and non-linear eases; the minDurationSec fix; the 'a longer duration does not slow this move' remedies. The moving-subject bullet says the camera follows the walking avatar."
+    },
+    {
+     "id": "reference/workflow.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md: stills/ row (metrics.json `warnings`, the 'warning: scout <shot>: \u2026' line). reports/ row: <shot>.json `issues` {code, message, t, stages, preset?, vmax?, peakSpeed?, lengthM?, minDurationSec?}, `validation` {ok, counts, error?}, `flight`|null; every shoot-log row has `issues`; rehearsal.json has issues + flight. keep task row: issues/flight go to keepOrRetake via judgeInput, but the verdict ignores them. shoot paragraph: abort re-sent on every busy poll (\u2264 30); page issues print 'warning: shot <id>: <stages> issue <code>: \u2026' once per shot, are recorded, and never fail or retake. \u00a74 review: issues/flight/validation (overspeed = the flown camera ended short), page flight.tracking, liveSubject, faded, environ (settled/timedOut/stalled). \u00a75 table: foliage row rewritten with the tree/prop/particle fade rules and the reroute cases; new rows for overspeed and for the fog wait. page FILM_BUSY row: world.teleport/world.command/pose/status --release are refused during a take; abort() and wait for status().active === false."
+    },
+    {
+     "id": "reference/pilot.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md: the occluder_action row says a fade with nothing fadeable becomes the reroute bias (faded.fallbackFrames). Standing-order recipe item 3 states what really fades: catalog-marked trees (trunk-canopy/foliage-pollen/tip-flex), known-size props \u2264 2 m (never fountains, statues, bridges or unsized props), smoke/fire. Overlapping or ambiguous hits reroute; ?visual=off reads as rock; a reveal occluder is never faded. Telemetry table: reports/<shot>.json also holds issues, validation and flight (preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec); <shot>.jev.jsonl holds only that shot's broker requests (rehearsal + attempts, telemetryMark/{since}; one broker per shoot)."
+    },
+    {
+     "id": "reference/plan-format.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md: format.capture row (realtime recorded on the fps grid with held frames, muxed at true speed). song.offsetSec row (for {bars}, within half a beat of a downbeat counts as on it). \u00a75 'With a song' bullet replaced with the half-beat rule text; the 'Any other mid-bar start \u2026' remainder is kept. Player subject row: a realtime take also follows the player live unless moving:false. pilot.flightPreset row: preset vmax values, the overspeed issue (minDurationSec, unprofiled moves, non-linear eases, the 'longer duration does not slow' remedies, flight.tracking), and the gimbal-override note for fpv.fpv-flip (120/80/90 \u00b0/s, lag \u224880\u00b0/165\u00b0/140\u00b0 at 30 fps, never snaps, flipDuration \u2265 \u2248570\u00b7turns/maxRateDeg \u2248 4.8/6.3/7.1 s, or keep fpv). look.fog row: the \u224820 s wait after a fog change, one fog per site, check environ.settled (page.environ). The \u00a712 example still validates (exit 0) and compiles to the documented 8 shots / 44 s / 1320 frames / schedule."
+    },
+    {
+     "id": "reference/music-video.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/music-video.md: the \u00a72 Tempo bullet appends the round-2 half-beat {bars} rule (superseding the round-1 text). The fog row adds the \u224820 s roll-in wait (\u2264 30 s), the per-change cost, one fog per site, and environ.settled. The time-lapse sentence gives the units (classic rate in game-days/s, default 0.02; hyperlapse-orbit timeRate in sky-clock s/s, 7620 s/day, default 150)."
+    },
+    {
+     "id": "reference/techniques.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/techniques.md: the generated \u00a73\u2013\u00a74 catalog was re-rendered from `film.mjs techniques --json` with the throwaway generator /tmp/claude-1000/docs-sync/gen_tech.mjs. It reproduces the old section byte for byte except for real code changes: the drone.hyperlapse-orbit description, and the timeRate row (default 150, unit sky-s/s, the 7620 s/day wording). The index note was fixed: 'outdoor only' is an ERROR on an indoor site; the capture hint IS read by the compiler with the registry; it warns on point/path subjects. A hand-written 'Director note' in fpv.fpv-flip covers the gimbal-preset override (lag figures and the flipDuration rule), and the GENERATED header now says to keep Director notes. Hand-written \u00a71 changes: the flightPreset bullet adds preset vmax values, the overspeed issue (unprofiled moves, eases, minDurationSec, remedies, flight.tracking) and the gimbal turn-rate/roll-limit behaviour. The time-lapse bullet gives the units (timeRate default 150 sky-s/s vs classic rate in game-days/s). A new Occluders bullet covers the fade/reroute rules and the reveal occluder. The capture-hint bullet notes grid recording and live following."
+    },
+    {
+     "id": "reference/1070.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/1070.md: the readiness paragraph adds that shoot re-sends the abort while the page stays busy (\u2264 30) and that the page itself refuses world.teleport/world.command with FILM_BUSY during a take/shoot/rehearse/scout. Its eye-test plan example still validates (exit 0)."
+    },
+    {
+     "id": "film-director.md",
+     "what": "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/agents/film-director.md: the password rule prefers FILM_PASSWORD (--password= is visible in ps). 'How you work' step 3 adds: heed any 'issue overspeed' warning after rehearse/shoot (raise the duration to the printed minimum, or change the path or flightPreset, then recompile) before retaking."
+    }
+   ],
+   "skipped": [
+    {
+     "id": "fix:clock docsToUpdate #4 (index.js scheduleNext comment)",
+     "why": "Code comment, not a doc I may edit: /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/index.js:2422-2428 still says 'the film clock re-arms with one bare `__renderOnce()`'. It should say it re-arms only when the realtime chain is dead (no explicit-ts step and no realtime tick during the hold); otherwise the pending pre-hold re-arm resumes the loop. SPEC/SEAMS/README now describe the real behaviour."
+    },
+    {
+     "id": "fix:subject docsToUpdate #25 (SkyState radians)",
+     "why": "Generated code: /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/pkg/holtburger_web.d.ts:7171 and :7175 (dirHeading/dirPitch 'radians') come from the Rust doc comment on the SkyState snapshot in crates/holtburger-world (sky.rs). Fixing it needs a Rust doc edit and a wasm rebuild. SEAMS.md now states the values are DEGREES and that the d.ts note is wrong."
+    },
+    {
+     "id": "round-2 questions.js:283 prompt text",
+     "why": "Code, not in my files: /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/questions.js:283 still reads 'the film runtime can fade them out'. It should read 'the film runtime can fade trees, small props of known size and smoke, and reroutes around the rest'. pilot.md, workflow.md and techniques.md now carry the accurate rule."
+    },
+    {
+     "id": "fix:subject docsToUpdate #22 (known-gaps list)",
+     "why": "The 'KNOWN GAPS' list lives in a workflow script, /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/docs/film-mode-2026-10-13/workflows/4-review-fix.js:25 (gap 4 'ShotContext.sun is never provided'). That is code outside my file list. README.md now says that gap and the frozen tracking-rig gap are closed, and describes the take report's liveSubject block."
+    },
+    {
+     "id": "check:cli-shoot comment-accuracy note (session.mjs)",
+     "why": "Code comment outside my files: the readyTargetsForSite JSDoc in /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tools/film/lib/session.mjs says schema.mjs derives interiorLb 'the same way'. schema.mjs normSite actually uses `s.indoor === true && cell !== null`, so the two differ only for an explicit indoor:true on an outdoor cell."
+    },
+    {
+     "id": "fix:subject docsToUpdate #24 (drone.flythrough peakSpeed)",
+     "why": "Dropped as instructed: already done in code (scene3d/film/shots/drone.js:890 meta now has peakSpeed: F.profile.peakSpeed)."
+    },
+    {
+     "id": "fix:plan docsToUpdate #17 (probe dir note)",
+     "why": "No doc change: it only notes that /tmp/claude-1000/probe-plan/ was left behind (outside the repo)."
+    },
+    {
+     "id": "fix:plan #16, fix:perception #31/#32 round-1 texts",
+     "why": "The round-2 texts supersede them, and those were applied instead: the music-video Tempo half-beat rule, the tree/prop fade rule in workflow/pilot, and the questions.js wording (code, see above)."
+    }
+   ],
+   "filesTouched": [
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/SEAMS.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/plan-format.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/music-video.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/techniques.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/1070.md",
+    "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/agents/film-director.md"
+   ],
+   "tests": [
+    {
+     "file": "/tmp/claude-1000/docs-sync/check_flags.py (each of the 22 commands named in the skill/agent docs has a working `film.mjs <cmd> --help` (exit 0); each of the 65 film flags the docs mention appears in that help; the other 11 hits are Chrome/serve.py/system flags)",
+     "passed": 87,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan validate /tmp/claude-1000/docs-sync/plan_example.json (plan-format.md \u00a712 example)",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan validate /tmp/claude-1000/docs-sync/plan_1070.json (1070.md eye-test example)",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan compile plan_example.json --song=/tmp/claude-1000/docs-sync/song120.json (documented 8 shots, 44 s, 1320 frames, schedule holtburg \u2192 glenden \u2192 holtburg-dungeon)",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docs-sync/gen_tech.mjs (catalog regeneration reproduces the old generated section except the real hyperlapse-orbit code change)",
+     "passed": 1,
+     "failed": 0
+    }
+   ],
+   "docsToUpdate": [
+    "scene3d/index.js:2422-2428 (code comment): the scheduleNext film comment says 'the film clock re-arms with one bare `__renderOnce()`'. It should say the clock re-arms only when the realtime chain is dead (a step issued an explicit-ts render, or a realtime tick ran during the hold); otherwise the still-pending pre-hold re-arm resumes the loop.",
+    "scene3d/film/pilot/questions.js:283 (prompt text): 'the film runtime can fade them out' -> 'the film runtime can fade trees, small props of known size and smoke, and reroutes around the rest'.",
+    "pkg/holtburger_web.d.ts:7171/7175 via the Rust SkyState doc comment (crates/holtburger-world sky.rs): dirHeading/dirPitch are DEGREES (heading clockwise from +Y north toward the sun), not radians.",
+    "docs/film-mode-2026-10-13/workflows/4-review-fix.js:25 KNOWN GAPS list: gap (4) 'ShotContext.sun is never provided' and the frozen tracking-rig gap are closed. Gap (3), the unused particle cull seams, is wired now; gap (7), realtime mux drift, is fixed by grid recording.",
+    "tools/film/lib/session.mjs readyTargetsForSite JSDoc: it claims schema.mjs derives interiorLb 'the same way'. schema.mjs normSite uses `s.indoor === true && cell !== null`, so they differ for an explicit indoor:true on an outdoor cell."
+   ]
+  }
+ },
+ "checks": {
+  "check:r2-perception": {
+   "ok": false,
+   "problems": [
+    "DEFECT (regression from combining fixes #1 and #2): describeHit normalises the hit's axis distance by the catalog radius. For trunk-canopy trees that radius is the canopy footprint (real dist catalog: median 5.05 m, p90 13 m). But los.js scenery hits land on the physics colliders (trunk cylspheres and boulder spheres, subject ray radius 0.05 m), and uncatalogued rocks (0x01 GfxObj) keep the default 1.5 m x scale radius. So a hit on a boulder near a catalogued tree is attributed to the TREE. Probe /tmp/claude-1000/r2perc-check/p2_rock_tree.mjs uses the real vfx_catalog.js, the real dist/vfx/visual_descriptors.jsonl and the same createStaticCatalogs wiring as film/index.js. A hit 1.2 m from a rock's origin with tree 0x02000222 standing 2-4 m from the hit point returns kind 'tree' plus the tree's fade key; it is correct (rock, no key) only once the tree is about 4.5 m away. End to end with the real sensors (/tmp/claude-1000/r2perc-check/p3_rock_tree_e2e.mjs): with every subject ray stopped by the boulder, before any fade the result is {visibleFrac 0, occluderKind 'tree', occluderIds ['placement:05050000:scenery:1' = the TREE]}. After the take fades that id: {visibleFrac 1, occluderKind null, occluderIds []}, yet the rock still blocks every ray. A solid occluder becomes 'soft', the wrong tree vanishes, and seenThrough reports a false clear view. That is the round-1 failure scenario again. Before round 2, the same scene read 'rock' with no key, and the pilot rerouted. Rocks next to trees are common in Dereth. W11 only tests trees of equal size and A11 only tests a lone oak, so no test covers the mix. Suggested fix: rank collider hits by ABSOLUTE horizontal distance to the placement axis, since colliders sit on the axis, and use the radius only as the inside/size gate. Or require the normalised winner to also be the absolute-nearest axis; otherwise give no fadeKey and take the kind from the absolute-nearest. Add a test: a boulder hit with a catalogued tree 2-3 m away gives kind 'rock' and no key, and the e2e rock-blocked subject stays hidden (no seenThrough).",
+    "NON-BLOCKING (same class, weaker): a thin catalogued tree, e.g. foliage-pollen 0x020001EC (radius 0.32 m, height 3 m; 76 of 254 foliage-pollen entries have radius < 0.5), whose trunk is hit 0.3-0.45 m off its axis loses to a big trunk-canopy tree 1.5-4.5 m away. Probe p1_real_catalog.mjs section (b) prints 'BIG (WRONG)' in 7 of 12 configurations. The absolute-nearest-axis check above fixes both cases.",
+    "NON-BLOCKING: scene3d/film/pilot/questions.js:283 prompt text still says soft occluders (foliage, small props, smoke) 'the film runtime can fade them out'. docsToUpdate asked for 'can fade trees, small props of known size and smoke, and reroutes around the rest'; this is the only listed doc passage not yet applied. SPEC \u00a71.1/\u00a73.1, SEAMS Hides + static catalogs, the README module map and the skill workflow.md/pilot.md passages are updated and match the code.",
+    "NON-BLOCKING (pre-existing semantics, now visible with the real catalog): staticKindOf maps scenery 'tip-flex' to 'tree' (its comment says bushes/grass clumps). In the real catalog, the 63 scenery tip-flex entries are thin weapon-like poles (signal weaponItemType, aspect up to 23, radius about 0.05-0.15 m). They almost never get a fade key, so this is harmless, but the docs listing tip-flex among the trees that fade overstate it.",
+    "NON-BLOCKING: loadStatics now awaits prefetchStaticDims (bounded at 3 s) before a landblock is ready. staticsNear awaits up to 25 landblocks one after another, and a DID whose sphere fetch hangs stays in flight, so each later landblock that contains it waits another 3 s (worst case about 75 s for one query). Only a hung fetchSetupSelectionSphere promise triggers this. Consider remembering DIDs that timed out and skipping them on later prefetches.",
+    "VERIFIED #1 (as briefed): staticHitScore = axis-segment distance / radius plus STATIC_HIT_RULES {maxScore 1, ambiguity 0.25, propMaxSize 2}. The round-1 probes (/tmp/claude-1000/perc-probe) now print 'correct: A' at every separation, the clump e2e goes from visibleFrac 0 to 1 only after the right fade, and the rim hit names the big static with no key. Equal-size clumps are fixed; the mixed-size residual is the defect above.",
+    "VERIFIED #2: film/index.js wires createStaticCatalogs. It dynamic-imports '../vfx_catalog.js', which resolves to the same URL that statics.js/entities.js import with no ?v query, and esbuild's shell bundle folds the import into the same instance. Film reads only vfxDescriptorFor and never calls ensureVfxCatalog/setVfxCatalog. fetchSetupSelectionSphere is a real export (Promise<SetupSelectionSphere>, raw unscaled; rows multiply by the placement scale) and its boxes are freed. dimsFromDescriptor matches WorldBuilder OntologyService (MaxDimension = max(X,Y,Z), AspectRatio = Z / max(X,Y)). Spheres are fetched only for uncatalogued 0x02 Setups, once each, and the retail 0.1 placeholder is rejected. Probe p1 confirms on real catalog data: tree/catalog, rock/default, barrel and statue/selectionSphere, barrel fades, statue does not, stalled fetch bounded.",
+    "VERIFIED #3: take_player's BatchedMesh watch. The wrapper is installed after our own hide, marks only writes to held ids, is removed when the last hold is released (own property restored or deleted), and is left as an inert pass-through when someone else wraps over it. Restore re-shows only when there was no foreign write, the instance is still hidden, and its geometry id and matrix are unchanged. The client writers (pool_registry, static_atlas, static_batch_x, terrain_batch) all call bm.setVisibleAt and so go through the watch. Three r184 setVisibleAt/getGeometryIdAt/getMatrixAt semantics were checked. restoreFades runs in execute()'s finally block.",
+    "VERIFIED zero-cost-when-off: this cluster touched only scene3d/film/** and tests/** (no tracked scene3d file changed after the round-1 results; vfx_catalog.js unchanged since 2026-08-03). Film still loads only through the exact ?filmMode=on dynamic import in scene3d/index.js. No SPEC or owner-decision conflict found; SPEC \u00a71.1 now lists the read-only vfx_catalog.js import."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_perception.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 58,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_pilot_loop.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    }
+   ]
+  },
+  "check:r2-drone": {
+   "ok": true,
+   "problems": [
+    "Verified as fixed (for the record). In scene3d/film/drone/flight_model.js, applyGimbalLimits(qTarget, h) no longer uses the symmetric max(rollLim, |rT|+2\u00b0) band, and ROLL_LIMIT_TARGET_SLACK is gone. The error is now e = shortestAngleDiff(cameraHorizonRoll, targetHorizonRoll), turned toward the target the short way. The correction is c = min(|e|\u2212lim, room), and room keeps |wStep\u00b7h + s\u00b7c\u00b7F| \u2264 maxRate\u00b7h. I checked the sign (a rotation \u03b8 about forward adds +\u03b8 of horizon roll) and the room algebra by hand. Callers pass (q, 0) at reset and (qTj, h) per sub-step. The diff against the round-1 copy is confined to this function, its comments and one film-internal import (shortestAngleDiff). No non-film scene3d file is touched, so zero-cost-when-off is unaffected. The header (lines 18-29), the DRONE_PRESETS rollLimitDeg doc and the createDrone Guarantees now state the real rule. SPEC \u00a72.13 and the skill docs (techniques.md line 28, the fpv-flip director note, the plan-format.md flightPreset row) were updated by others and agree with the code.",
+    "Verified the round-1 repros on the current code at 30 fps. fpv.fpv-flip \u00b1 on cinema/heavy/indoor peaks at exactly maxRate (4.00 / 2.67 / 3.00 \u00b0/frame; round 1 was 6.17 / 5.78 / 5.94). Roll travel is \u00b1360\u00b0 on cinema and indoor and \u00b1359.4\u00b0 on heavy, the same as the unlimited follow (rollLimitDeg 180). canyon-run with roll \u00b13.0 and maxBankDeg 60 on heavy has a 5.4\u00b0 roll error (round 1: 75.3\u00b0). pass-over in all 3 nadir modes \u00d7 cinema/heavy/indoor \u00d7 24/30/60 fps matches round 1 to 1e-14\u00b0 (pitch-through 0.48 \u00b0/frame, 0.19\u00b0 error on cinema) and all flown takes validate. A random sweep of 864 flights (random h/p/r jumps and ramps, rollLimitDeg 0/10/45/90, rotSmoothSec 0.05-3, 24/30/60 fps) has 0 frames above maxRate (worst ratio 1.00001) and no NaN. I mutation-tested the new F5 checks. All 4 fail on the round-1 code; removing the shared budget fails 4; removing the angle wrap fails 4, including pass-over pitch-through; disabling the limit fails the 'limit itself' check.",
+    "NON-BLOCKING (new behaviour, only for a degenerate input). When the camera and its target are on opposite sides of the zenith or nadir and both are within 72\u00b0 of level, the two forward vectors differ by ~150\u00b0. Their horizon rolls then differ by ~180\u00b0 even though the real follow error is a pitch rotation, and the limit rolls the image. Repro: fpv.fpv-flip with params.axis 'pitch' and direction 'positive', 3 s flip, flown on a gimbal preset through the documented pilot.flightPreset override. On cinema the camera is held at the +30\u00b0 pitch stop and level while the target loops over the top. The correction then rolls the stabilised image to about \u2212114\u00b0 (\u2212122\u00b0 with tiltDeg \u221230) and unrolls it. Round 1, the pre-math-1 code and the unlimited follow all stay level. The per-frame error is up to 142-171\u00b0 worse than the unlimited follow (heavy/indoor: 49-56\u00b0 of extra roll, 31-40\u00b0 of extra error), and the camera settles about 0.8 s later. The rate stays \u2264 maxRate, there is no snap, and every case settles. The same correction also helps: with direction 'negative', or with 7 s / 12 s flips, it is what un-sticks a camera that the unlimited follow leaves inverted at the +30\u00b0 stop (a permanent 150\u00b0 error on heavy). The root cause is older: the follow takes the shortest arc, which runs into the pitch stop. A plain guard on the angle between the two forwards would bring that deadlock back. Better options are to document or warn that a pitch-axis fpv-flip cannot be flown on a gimbal preset, or to route the follow around the pitch stop. Separately, the new F5 check 'the limit never leaves a larger error than no limit' compares only the maximum over the whole shot (178.3\u00b0 vs 178.2\u00b0), so it cannot catch a per-frame excess like this. Probes: /tmp/claude-1000/r2-drone-check/{pitchflip,pitchflip2,sweep_cmp}.mjs.",
+    "NON-BLOCKING doc accuracy. The fpv-flip director note in .claude/skills/film-mode/reference/techniques.md (~line 1480) and the flightPreset row in plan-format.md (~line 164) say that flipDuration \u2265 \u2248570\u00b7turns/maxRateDeg gives 'a crisp flip on a gimbal preset'. That holds only for axis 'roll'. With axis 'pitch' the gimbal cannot loop past its +30\u00b0 stop: a 7 s pitch flip on cinema still lags by up to 107\u00b0. Add 'axis roll only; a pitch loop needs the fpv preset'.",
+    "NON-BLOCKING (inherent, not a defect). With a non-default sluggish gimbal (rotSmoothSec 1) and a target rolling 2-3\u00d7 faster than maxRate, the lag reaches ~180\u00b0. The short way relative to the target then flips, and the camera reverses, as the unlimited follow also does. With the limit on, the reverse runs at full maxRate (5 \u00b0/frame at 24 fps) instead of about 3 \u00b0/frame. At the default rotSmoothSec (0.25) and at 0.05, with factors of 0.8-3\u00d7, there were no differences from the unlimited follow (seam_extreme.mjs).",
+    "NON-BLOCKING (older issue, outside this lane; confirms the fixer's skipped item). Flying path techniques on the 'fpv' hard-mount preset with an outdoor ctx.path fails validateTrajectory's 240 \u00b0/s limit. The flights are byte-identical to the round-1 code, because the hard mount never calls applyGimbalLimits. Flown peaks: drone.flythrough 355 \u00b0/s, terrain-skim 271, canyon-run 331 (the nominals validate at 202 / 109 / 71); fpv-proximity 579, fpv-gap 622, fpv-corridor 720 (those nominals already fail). The owner is shots/drone.js, the hard-mount deviation, or the validation limits (/tmp/claude-1000/r2-drone-check/fpvpath.mjs)."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 114,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_registry.test.mjs",
+     "passed": 14,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 58,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_scene_dungeon.test.mjs",
+     "passed": 17,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_hooks.test.mjs",
+     "passed": 68,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_runtime_camera.test.mjs",
+     "passed": 30,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_gimbal.test.mjs",
+     "passed": 23,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_core_math.test.mjs",
+     "passed": 29,
+     "failed": 0
+    }
+   ]
+  },
+  "check:r2-plan": {
+   "ok": true,
+   "problems": [
+    "NON-BLOCKING: The fixer deliberately deviated from the brief. The tolerance is half a beat (COMPILE_DEFAULTS.barLineTolBeats 0.5 \u00d7 the median beat spacing), not 'a few ms'. I accept it. The checker's own probe2 is 20 ms past the downbeat (offsetSec 15.0 against a downbeat at 14.98 s), so a few-ms tolerance would leave it broken, and the round-1 checker itself suggested a half-beat threshold. I reran probe2 against round 0, round 1 and the current code. Current code: v1 0\u21923.966667 ends on bar 9, v2 on bar 12, no warnings. That matches round 0; round 1 gave bar 10 plus the trim warning. The brief's four cases all cut on their downbeats: offset on (8), 2 ms after (8.002), 2 ms before (7.998), and a real pickup (t0 0.51, offset 0, cuts at 8.5/16.5/20.5).",
+    "NON-BLOCKING: An invariant sweep (/tmp/claude-1000/.../scratchpad/r2plan/sweep3.mjs) ran 23,688 cases with 0 failures. It covered 60/90/120/174 BPM, 3/4 and 4/4, 24/30/60 fps, \u00b13 % tempo drift, t0 in {0, 0.51, 0.97, 1.3}, and offsets swept over 3 bars, with chains of {bars:2,3,4,1}. In every case each cut sat on a real or extrapolated downbeat, every later shot was exactly n bars, and there were no warnings. The first shot spanned n \u2212 \u00bd beat \u2026 n + 1 bars. Its upper end comes from pickups: a pickup counts as one when edit 0 starts more than half a beat before bars[0], the brief's 'first bar line'. Such a pickup joins the first shot, which can then run up to about n + 0.95 bars, because the analyzer's buildBars leaves bars[0] up to 0.95 bar after 0. This is the documented rule, not a defect.",
+    "NON-BLOCKING doc nit: music-video.md \u00a72 Tempo (~line 63) has the parenthetical '(the pickup at edit 0 when the song's `bars[0]` is later than 0)'. The code's condition is that bars[0] is later than half a beat; a bars[0] within half a beat of 0 counts as on bar 0. The sentence's leading clause, 'more than half a beat before the first downbeat', already states the rule correctly. Nothing else needs changing: SPEC.md \u00a75.2 Timeline (lines 590-594), the Take bullet (lines 599-601, which matches scene3d/film/index.js:709-710 resolveTake), plan-format.md \u00a75 (lines 120-129) and the offsetSec row (line 24) are already updated and match the code.",
+    "NON-BLOCKING process: tools/film/plan/compile.mjs and tests/film_plan_compile.test.mjs are untracked, so `git diff HEAD` shows nothing; I read the current files directly. The fixer's mutation check reproduces in a scratch copy (scratchpad/r2plan/mut): with the round-1 rule restored, the 3 new checks fail (36 passed, 3 failed), and with the fix all 39 pass. No scene3d page code imports compile.mjs; only tools/film and tests do. So zero-cost-when-off is untouched. I ran the suites one at a time. The film_api, film_cli_session and film_cli counts are higher than the fix report's (21/38/34 against 17/35/33) because other clusters have added checks since; all pass."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    }
+   ]
+  },
+  "check:r2-subject": {
+   "ok": false,
+   "problems": [
+    "BLOCKING (math-0 / contracts-0, still partly open): flown carry rigs still surge at the start of the take when the subject was walking at prepare and keeps walking through the pre-roll, but in a direction other than the extrapolated reference heading (\u03b8 \u2260 0). Cause: liveDerivs (scene3d/film/runtime/take_player.js ~1484) returns R_\u03b8(vNom) + S.v. liveShiftPos turns the nominal about the MOVING reference ref(p), so the true derivative is vR + R_\u03b8(vNom \u2212 vR) + \u1e8b. The feed-forward is wrong by (R_\u03b8 \u2212 I)\u00b7vR, and startPose and the new frame-0 reset both re-set the craft at that velocity. Probe /tmp/claude-1000/r2-subject-chk/probe_live.mjs (stepped rehearse, 30 fps; reference extrapolated north at 3 m/s; subject walking NE at 3 m/s through pre-roll and take): drone.chase's first recorded step is 4.42 m/s (1.47\u00d7 the walk, = |2vL \u2212 vR|), distance ratio min 0.928, craft gap 3.06 m; drone.lead ratio max 1.194; drone.side-track ratio max 1.355. classic.tracking-follow, which is not flown, stays at 1.000, so only the flown feed-forward is wrong. This breaks the brief's 'no surge' requirement, the k = 1.25 bound in the fix's own L2 test, the fix's claim 'a flown craft is reset at the walk's speed, not double', and SPEC \u00a75.2 'a subject that keeps walking through the pre-roll gives no surge'. Verified fix, in a patched mirror copy at /tmp/claude-1000/r2-subject-chk/mirror (PATCH_FF=1): pass p to liveDerivs and add vR \u2212 turnCompass(vR, \u03b8) with vR = refVelocity(R, p) when \u03b8 \u2260 0. With it, diagNE gives ratio [0.999, 1.002], first step 3.00 m/s and gap 0.01 m on every flown rig; the straight-walk, fps 24/60, 1 s pre-roll and 4.5 m/s cases are unchanged. Add an L2 case with the subject's heading off the reference heading.",
+    "BLOCKING (math-2, the new 'verified minimum duration' contract): flightCheckOf and verifyMinDuration check speed only. The comment 'within vmax the craft keeps up (sub-metre lag), so the suggested minDurationSec always passes' and minDurationVerified:true are false for moves limited by acceleration. In /tmp/claude-1000/r2-subject-chk/sweep_flight.mjs (prepare + stepped rehearse, cinema preset vmax 12, amax 4), drone.boomerang at 5 s is flagged 'use duration \u2265 6.5 s' with minDurationVerified:true. At 6.5 s, rehearse reports flight.tracking.maxGapM 32.4 m and endGapM 32.1 m: peak acceleration on the nominal is 11.5 m/s\u00b2 (boomerang.mjs). boomerang at 7, 7.5, 8 and 9 s is not flagged, yet the craft trails by 30.9, 29.4, 23.5 and 5.4 m. drone.boom-rise at 4 s is not flagged, yet trails by 4.5 m (peak acceleration 14.7). The gap itself existed before round 2 (boomerang was never flagged), but the new 'verified' flag and the pending docsToUpdate text 'Its minDurationSec has been verified to fly' would mislead the director, and the CLI does not surface flight.tracking. Suggested fix, either: (a) dry-fly the baked nominal through the flight model in prepare and verify on the tracking gap; or (b) also compare the peak acceleration measured on the baked nominal with the preset's amax (with a tolerance; under uniform time scaling the needed duration is D\u00b7sqrt(apk / (k\u00b7amax))). At minimum, document minDurationVerified as checked against vmax only and drop the 'always passes' claim.",
+    "Confirmed done, part (1), main case: a subject that keeps walking at the extrapolated reference's heading. The settle/anchor/track phases and refVelocity are correct. My probe shows ratio [0.999, 1.002], first step 3.00 m/s and craft gap 0.01 m for drone.chase, drone.lead, drone.side-track and classic.tracking-follow, at 24, 30 and 60 fps, with a 1 s pre-roll and with a subject faster than the reference (4.5 vs 3 m/s). The stopped-subject case holds still. The L2 tests run real code and assert speed \u2264 1.25\u00d7 the walk, distance within \u00b115 %, the camera covering the walk and lag < 5 cm. The checker's live_probe now gives keepWalk 1.00 and stop 1.00. The afterPre step response (chase 1.21, lead 0.78, tracking-follow 1.06) is the same as the fixer's explanation.",
+    "Confirmed done, part (2): drone.js:890 flythrough meta now has peakSpeed. All 7 makeFollower sites (lines 890, 1442, 1481, 1862, 1914, 1977, 2100) carry lengthM, overspeed and peakSpeed, and D10 checks the profiled set and the measured peak. buildReport adds validation (plainCopy) and flight (prepare's check + tracking {frames, maxGapM, maxGapT, endGapM}; tracking is null on a locked replay, and flight is null for classic shots). The rehearse result, the shoot report and a failed take's partial report all carry both (the partial was seen in a FILM_NO_RECORDER error probe). F1 round 2, F2 and A13 pass. In a 116-case sweep (29 techniques \u00d7 4 durations) no technique is flagged at its default duration except canyon-run on the 320 m test path, which was already flagged by meta.overspeed before. There are no false positives.",
+    "Confirmed done, part (3): in index.js, cameraBusy() (shoot, rehearse or scout, or takePlayer.running) and refuseWhileBusy() run first in world.teleport and world.command, inside safeSync. They return {ok:false, code:'FILM_BUSY', error:{code:'FILM_BUSY', \u2026}} and send nothing. pose, release and parkViewerCell use the same guard. A12 probes rehearse, shoot (both from the call on and while the take runs) and scout, and checks that only the idle commands reached sendChat. A10 was updated to match.",
+    "Zero cost when off holds. This cluster touched only scene3d/film/* and tests. film is reached only through the exact-match ?filmMode=on dynamic import (scene3d/index.js:4531). SPEC \u00a73 and \u00a75.2 have already been updated to the new flight block, the FILM_BUSY guard and the pre-roll rule. The \u00a75.2 'no surge' sentence is contradicted by the first BLOCKING item above.",
+    "NON-BLOCKING: the fix report puts the turnEast probe numbers down to 'flown swing limits (unchanged from before)'. That is only partly right: much of it is the same feed-forward error as the first BLOCKING item. With the patched liveDerivs, turnEast goes from chase 0.783 \u2192 0.893, lead 1.364 \u2192 1.160 and side-track max 1.458 \u2192 1.000. The rest comes from the swing rate \u03b8\u0307 \u00d7 R'_\u03b8(nom \u2212 ref), which liveDerivs also leaves out of the feed-forward.",
+    "NON-BLOCKING: if a live subject's position arrives in bursts (my probe: 5 Hz steps of 0.6 m) instead of moving every frame, flown rigs swing to distance ratios of 0.72\u20131.27 (unflown tracking-follow: 0.945\u20131.137). This matters only if worldQuery.subject() returns un-interpolated server positions. Informational.",
+    "NON-BLOCKING: cameraBusy() leaves out an in-flight async prepare (busy === 'prepare'), so a world.teleport issued during prepare's awaits goes through. This is outside the brief (take, shoot, rehearse, scout).",
+    "NON-BLOCKING (CLI lane, tools/film/lib/shoot.mjs, already noted by the fixer): durationHelps is not in ISSUE_FIELDS. overspeedFromFlight always says 'use a longer duration'. flight.tracking.maxGapM / endGapM is not surfaced. Given the second BLOCKING item, surfacing tracking in the rehearsal warning is the only safety net for moves limited by acceleration.",
+    "Probes and throwaway files are under /tmp/claude-1000/r2-subject-chk/: probe_live.mjs, sweep_flight.mjs, boomerang.mjs, probe_rt.mjs (an incomplete realtime harness, not used for results) and mirror/ (a symlinked tree with a patched take_player.js copy). No repository file was changed."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_runtime_capture.test.mjs",
+     "passed": 58,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_api.test.mjs",
+     "passed": 21,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_drone.test.mjs",
+     "passed": 114,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_flight_model.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_shots_classic.test.mjs",
+     "passed": 74,
+     "failed": 0
+    }
+   ]
+  },
+  "check:r2-cli": {
+   "ok": true,
+   "problems": [
+    "NON-BLOCKING (resolved skip): the fix report's skipped item 'page-side field names' no longer applies. The r2-subject lane has since landed top-level `validation` {ok, counts, issues[] incl. 'overspeed' with minDurationSec} and `flight` on the prepare summary (take_player.js summary()), the rehearse result and the take report (buildReport \u2192 validation/flight via flightReport). The CLI reads exactly these at top level. A real-page probe that ran shootSchedule over the actual scene3d/film/index.js API with A13's 25 m/s canyon-run take confirmed it: ISSUE_HOLDERS needs no change.",
+    "NON-BLOCKING: shoot.mjs ISSUE_FIELDS drops the page's `durationHelps` field from the overspeed issue (the page issue keys are code,t,message,preset,vmax,peakSpeed,minDurationSec,durationHelps). Nothing reaches the director wrong: when durationHelps is false the page sets minDurationSec null and its message already says a longer duration will not help, and the CLI keeps the page's message verbatim (it merges ahead of the flight-synthesised one). Adding 'durationHelps' to ISSUE_FIELDS would keep the flag machine-readable in issues[].",
+    "NON-BLOCKING: reports/<shot>.json `flight` is the shot's FIRST prepare-time flight check (shotFlight ??=), so it has no realised `tracking`. The realised tracking (maxGapM/endGapM) is only in report.page.flight. This is documented as 'the page's flight check' and is consistent, but a reader looking for how far the craft actually trailed must read page.flight.",
+    "NON-BLOCKING: pageIssuesOf does not cap how many issues it takes from a page result. The page caps validation at maxIssues 5, but warnings[]/issues[] from a buggy page would all be printed and recorded. This is cosmetic.",
+    "NON-BLOCKING: the windowPage fake in S10h models the take-start window, and I confirmed it holds on the REAL page. With settlePage({abortFirst}) issued right after api.shoot() (index.js still in await ready()), the first abort returned wasRunning:false and the re-sent abort stopped the take (aborts 2, report.aborted true). The abort-once mutant (a /tmp copy of shoot.mjs) let the same take record all 300 frames (aborted:false). The fix is real, and the probe tells the old and new code apart.",
+    "Docs: every docsToUpdate passage in the fix report is already applied in the current tree: SPEC.md \u00a75.2 'CLI walk' (lines 621-633), README.md lib/shoot.mjs row (line 107), workflow.md rows 34/36/84 and \u00a7\u00a7 at 134-141/166-167/180, SKILL.md 145-146, pilot.md 128 and film-director.md 92-93.",
+    "Zero-cost-when-off: this cluster touched only tools/film/lib/shoot.mjs, tools/film/film.mjs, tests/film_cli.test.mjs and tests/film_cli_session.test.mjs. It changed no scene3d file, so it has no effect on the default-off page path. Only those two suites import shoot.mjs."
+   ],
+   "tests": [
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli_session.test.mjs",
+     "passed": 38,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/r2cli-check/probe.mjs (independent probe over the REAL scene3d/film/index.js API. P1: pageIssuesOf on real prepare/rehearse/classic results gives exactly one overspeed with the page's message + minDurationSec, and none for classic. P2: shootSchedule with an auto-rehearsed overspeed drone + classic and the real code keepOrRetake gives one warning, and issues/validation/flight in reports, shoot-log, rehearsal.json and judgeInput, with only the six take words in JEV and no failure. P3: --locked + forced retake carries the overspeed into the table-replay retake with still one warning. P4: settlePage in the real take-start window loses the first abort (wasRunning:false), and the re-sent abort stops the take)",
+     "passed": 4,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/r2cli-check/probe_mut.mjs (mutation check: same probe against a /tmp copy of shoot.mjs reverted to abort-once; P4 correctly FAILS: 1 abort, take recorded 300 frames unaborted \u2014 mutant caught; P1-P3 unaffected)",
+     "passed": 1,
+     "failed": 0
+    }
+   ]
+  },
+  "check:docs": {
+   "ok": true,
+   "problems": [
+    "NON-BLOCKING (stale doc claim, 1070.md missed by docs-sync): /home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/1070.md:140-141 says the eye-test plan validates with '0 errors and one expected warning: route shots with a {sec} duration cannot be dry-built offline because the route is planned in the page'. The current validator gives 'valid: 0 error(s), 0 warning(s)' (exit 0) for that exact plan. The dry build now synthesizes a route (schema.mjs DRY_ROUTE_LEG_M; film_plan_schema 'its all-seconds variant dry-builds fpv.fpv-corridor via the route'), and plan-format.md \u00a710 says the same. Fix: drop the 'one expected warning \u2026' clause.",
+    "NON-BLOCKING (imprecise degrade example): SPEC.md \u00a71.1 (line ~102) and runtime/SEAMS.md 'Static catalogs' (line 27) give '?treeWindGpu=off without ?windGeo' as a case where the client never loads the VFX catalog, so scenery reads as rock. Under the default ?visual, entities.js also calls ensureVfxCatalog: entities.js:5185 (visualEnabled && tipFlexEnabled, default-on via visualAllEffects), the weaponFx path at :5208, and the gem-sparkle particle attach at :14888. So with ?treeWindGpu=off the catalog is normally still loaded and trees still fade. Only ?visual=off reliably leaves it empty. pilot.md, workflow.md and techniques.md mention only ?visual=off, which is accurate. Suggested wording: '(?visual=off, or a session where no VFX path loaded it)'.",
+    "NON-BLOCKING (deferred code-side text, correctly skipped by docs-sync and still stale): (a) scene3d/index.js:2426-2427, an existing scene3d file. The scheduleNext comment still says 'the film clock re-arms with one bare __renderOnce()', but film_clock.js:642 re-arms only a dead chain. (b) scene3d/film/pilot/questions.js:283 is JEV prompt text: 'the film runtime can fade them out' overstates the fades, since big or unsized props, overlapping trees and ambiguous hits are rerouted. (c) pkg/holtburger_web.d.ts SkyState dirHeading/dirPitch say 'radians' but the values are degrees; this needs a Rust doc edit and a wasm rebuild. (d) The tools/film/lib/session.mjs readyTargetsForSite JSDoc. (e) The take_player.js prepare docblock (lines ~567-570) lists flight fields without minDurationVerified/durationHelps. SPEC.md has the full list.",
+    "NON-BLOCKING (Director note edge case): techniques.md, fpv.fpv-flip Director note. The recommended heavy flipDuration of \u22487.1 s is cut to 80% of the shot by the technique (drone.js:2022 fd = min(flipDuration, 0.8\u00b7D)), so the default 8 s shot caps it at 6.4 s. The note should add 'with a shot of \u2265 \u2248 9 s'. Probe at the default 8 s duration: heavy with flipDuration 7.2 still peaks at 88 \u00b0/s with a 10.6\u00b0 lag. cinema at 4.8 s gives 1.2\u00b0 and indoor at 6.4 s gives 1.0\u00b0. The lag figures 80/165/140\u00b0 and the 190 \u00b0/s peak reproduce (79.7/164.4/140.3\u00b0, 188.5 \u00b0/s). The param row does state the 80% clamp.",
+    "NON-BLOCKING (wording nit): music-video.md \u00a72 Tempo calls the pickup 'the pickup at edit 0 when the song's bars[0] is later than 0'. The rule, as written in plan-format.md \u00a75, SPEC \u00a75.2 and compile.mjs barLineTolBeats = 0.5, applies only when bars[0] is more than half a beat after edit 0. Compile behaviour itself matches every documented case (probe: on / 2 ms after / 2 ms before a downbeat / a 0.51 s pickup / offset mid-bar, all cutting on downbeats).",
+    "NON-BLOCKING (omission): the README.md Page API row for world.ready lists the result as {ok, checks, waitedMs}. world.js also returns timedOut, and SPEC \u00a73.4 has the full shape.",
+    "VERIFIED (no defect): I spot-checked 43 concrete doc claims against the current code. Seam and signatures: the index.js:4531 Promise.all + particleCull install, the installFilmMode deps, the 20 README seam line citations, and diff stat 449/8. API behaviour: the FILM_BUSY guard on pose/release/world.teleport/world.command; status() fields; teleport \u2192 {ok, cmd, viewerParked}, parking only when idle; parkCell \u2192 {ok, parked, cell}; scout sun/warnings; prepare summary fields; the overspeed issue fields (tolerance \u00d71.02, minDurationSec rounded up to 0.1 s, verify/durationHelps); take report fields incl. flight.tracking, liveSubject, faded.fallbackFrames, environ \u2264 30 s, realtime counters and particleCull. Runtime internals: the film_clock rAF / 50 ms / MessageChannel yield and dead-chain re-arm; recorder grab(t|[t\u2026]) heldFrames; renderSetCells shared by safety and sensors; STATIC_HIT_RULES 1 / 0.25 / 2 m, the 4 m candidates and the placement key format; createStaticCatalogs (3 s timeout, dimsSource values). Pilot: buildPilotState opts and BOUND_SLACK_M 0.05; the drift criteria (some/near); mapper fadeFallbacks; the describeCandidate words. Flight and shots: preset vmax 12/7/25/4 and maxRateDeg 120/80/90; roll limit 45\u00b0 and the 72\u00b0 band; presetForTrajectory; meta.timeLapse unit and AC_DAY_LENGTH_S 7620; timeRate default 150; flythrough peakSpeed. World: readiness checks / teleportGraceSec 8 / timedOut; the live-subject rules (0.3 m/s; player live on realtime unless moving:false); the sun seam (_lastState, getSkyState free, night \u2265 0.5); AdminEnvirons (loop.js:1375, 0.8 s / 15 s ticks, +0.04 step); look fog changed:false. CLI: PAGE_ABORT_MAX 30 and the 90 s idle wait; the warning line formats; issues/validation summary fields; the needsRehearsal list; retakes default 1 / max 5; telemetryMark/{since}; password redaction; JEV budget defaults 2 / 600; bridge timeouts 1.5 / 15 s; FILM_API_VERSION film-1. Imports: sky_game_date.js, night_ramp.js and vfx_catalog.js are import-free (allowed). Also checked: the capture-hint warning; 73 lexicon concepts; the reveal occluder is never faded; the keep verdict ignores issues. No identifier or file path cited in SPEC, SEAMS, README, SKILL, the agent or the reference docs is missing from the code (the remaining hits are PowerShell names, *Json placeholders, the removed _sceneryNowMsForTest named as removed, and doc filenames that exist). Every docs-sync 'fixed' item is present. Zero-cost-when-off is unaffected: round 2 changed no existing scene3d file (newest: index.js 08:10, before round 2), and docs-sync edited docs only. SPEC owner decisions (phase4demo, DoF in v1, gazetteer, scenery bake) and the \u00a76 rules are intact; the password line now prefers FILM_PASSWORD, consistent with the owner decision."
+   ],
+   "tests": [
+    {
+     "file": "/tmp/claude-1000/docsync-check/flags.mjs (22 `film.mjs <cmd> --help` exit 0 + each CLI flag named in the director docs/README appears in a help text; the 14 non-CLI tokens such as Chrome, serve.py, install-claude.sh and `--key=value` were checked by hand)",
+     "passed": 85,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan validate /tmp/claude-1000/docsync-check/proj/plan.json (plan-format.md \u00a712 example, extracted verbatim): valid, 0 errors, 0 warnings, exit 0",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan compile of the \u00a712 example with an independent 120 BPM song (/tmp/claude-1000/docsync-check/proj/song/song.json): 8 shots, 44 s, 1320 frames, schedule holtburg \u2192 glenden \u2192 holtburg-dungeon, s050 section snap at 24 s, dungeon pre-roll 2.25 s, fades 1/2 s, 4 min 22 s estimate \u2014 all as documented",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "film.mjs plan validate + compile /tmp/claude-1000/docsync-check/p1070/plan.json (1070.md eye-test plan): exit 0, 6 takes, documented schedule, \u22484.5 min (doc's 'one expected warning' does not occur \u2014 NON-BLOCKING note)",
+     "passed": 1,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docsync-check/bars.mjs (documented {bars} half-beat rule via compilePlan)",
+     "passed": 9,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docsync-check/techcmp.py (techniques.md catalog: names, descriptions, whenToUse, every param row type/default/desc vs `film.mjs techniques --json`)",
+     "passed": 63,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docsync-check/techcmp2.py (techniques.md per-entry default duration / framing / ease / capture / outdoor-only / subject / lateral bound vs registry)",
+     "passed": 63,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docsync-check/flip.mjs (fpv.fpv-flip Director note: 190 \u00b0/s peak, gimbal lag 80/165/140\u00b0, flipDuration rule; real buildShot + flyTrajectory)",
+     "passed": 7,
+     "failed": 0
+    },
+    {
+     "file": "/tmp/claude-1000/docsync-check/paths.py (repo paths cited by the docs exist; 3 regex artefacts verified by hand)",
+     "passed": 73,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_install_claude.test.mjs",
+     "passed": 18,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_compile.test.mjs",
+     "passed": 39,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_plan_schema.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_cli.test.mjs",
+     "passed": 34,
+     "failed": 0
+    },
+    {
+     "file": "tests/film_registry.test.mjs",
+     "passed": 14,
+     "failed": 0
+    }
+   ]
+  }
+ }
+}

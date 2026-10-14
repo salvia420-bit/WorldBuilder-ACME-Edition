@@ -2846,13 +2846,39 @@ const VIEWER_CELL_TRACE_ALL = (() => {
     return new URLSearchParams(globalThis.location?.search || "").get("diag") === "1";
   } catch (_) { return false; }
 })();
+/**
+ * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — the film camera's OWN
+ * viewer cell, or 0. film/runtime/camera_owner.js carries it from the previous
+ * eye (`resolveViewerCell(prevEye, eye, 0.3, prevCell)`, seeded from the plan's
+ * cell on cuts) and publishes `filmViewer = {cell}` on the scene facade the
+ * loop passes here or on `window.liveScene3d` (both are honoured). Never set
+ * with the flag off, so this costs a few property reads.
+ */
+function _filmViewerCell(scene3d) {
+  const fv = scene3d.filmViewer ?? globalThis.window?.liveScene3d?.filmViewer;
+  const c = fv?.cell;
+  return typeof c === "number" && c !== 0 ? c >>> 0 : 0;
+}
 function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
   let viewer = playerCell;
   const canResolve =
     VIEWER_CELL_ON &&
     typeof sessionHandle.resolveViewerCell === "function" &&
     typeof sessionHandle.setViewerCell === "function";
-  if (canResolve) {
+  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a free film camera
+  // brings its own cell — the player-head walk below cannot reach a camera in
+  // a room it has no straight line to (the room's cells then vanish). It is
+  // rooted (`setViewerCell`) and published below exactly like a walked cell,
+  // also under `?viewerCell=off`. Flag off: `filmCell` is always 0.
+  const filmCell = _filmViewerCell(scene3d);
+  if (filmCell !== 0) {
+    viewer = filmCell;
+    if (typeof sessionHandle.setViewerCell === "function") {
+      try {
+        sessionHandle.setViewerCell(viewer !== playerCell ? viewer : 0);
+      } catch (_) {}
+    }
+  } else if (canResolve) {
     const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
     const pp = playerAcPosition(sessionHandle);
     if (pp && acCameraFrame(cam, scene3d.worldRoot ?? null)) {

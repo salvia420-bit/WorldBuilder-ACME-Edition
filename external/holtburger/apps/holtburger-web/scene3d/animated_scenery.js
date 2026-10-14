@@ -1192,7 +1192,34 @@ let _lastDt = -1;
 let _rafId = 0;
 let _rafLastMs = 0;
 let _rafDisposed = false;
+// Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): film/runtime/film_clock.js
+// routes this clock through the film clock for a stepped take
+// (`setSceneryTimeSource(() => filmMs)`), so sway advances by film time — 0
+// while the film clock is paused between steps — and restores it with null.
+// Never called with the flag off: `_nowMs()` is performance.now() as before.
+// The rAF still paces the reads, so film time that advances by more than the
+// 0.1 s dt clamp between two rAF callbacks is clamped like a wall-clock stall.
+let _sceneryTimeSource = null;
+/**
+ * @param {(() => number)|null} fn  ms clock for the private rAF driver, or null
+ *   for performance.now(). A throwing / non-finite source falls back to it.
+ *   Each swap re-bases the driver's last-frame stamp on the new clock, so the
+ *   first dt after a swap measures the new clock only (no clamped 0.1 s jump
+ *   and no frozen frame from comparing two unrelated time bases).
+ */
+export function setSceneryTimeSource(fn) {
+  if (fn !== null && fn !== undefined && typeof fn !== "function") {
+    throw new TypeError("setSceneryTimeSource: expected a function or null");
+  }
+  _sceneryTimeSource = fn || null;
+  _rafLastMs = _nowMs();
+}
 function _nowMs() {
+  if (_sceneryTimeSource !== null) {
+    let t = NaN;
+    try { t = _sceneryTimeSource(); } catch (_) { t = NaN; }
+    if (Number.isFinite(t)) return t;
+  }
   return (typeof performance !== "undefined" && performance.now)
     ? performance.now() : _rafLastMs + 16;
 }

@@ -95,7 +95,7 @@ export function stripBom(s) {
   return typeof s === "string" && s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
 }
 export function foldText(s) {
-  return String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  return String(s ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
 }
 /** Identity key of a place name: case/diacritic/punctuation/space-free, leading "the" dropped. */
 export function compactKey(name) {
@@ -152,6 +152,7 @@ export function stripWikitext(src) {
   t = t.replace(/<!--[\s\S]*?-->/g, " ");
   for (let i = 0; i < 4 && /\{\{[^{}]*\}\}/.test(t); i++) t = t.replace(/\{\{[^{}]*\}\}/g, " ");
   t = t.replace(/\{\|[\s\S]*?(?:\|\}|$)/g, " ");
+  t = t.replace(/\[\[\s*(?:File|Image|Category|Media):[^\]]*\]\]/gi, " ");
   t = t.replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, "$1");
   t = t.replace(/\[(?:https?:)?\/\/\S+\s*([^\]]*)\]/g, "$1");
   t = t.replace(/={2,}[^=\n]*={2,}/g, " ");
@@ -240,6 +241,21 @@ export function parseLocationsText(text, { log } = {}) {
   }
   if (bad) say(log, `[sites] locations: ${bad} unparseable line(s) skipped`);
   return rows;
+}
+/** Outdoor cell index (1..64) of LB-local x/y (SPEC §1: 1 + floor(lx/24)·8 + floor(ly/24)). */
+export function outdoorCellIndex(x, y) {
+  return 1 + Math.min(7, Math.max(0, Math.floor(x / CELL_SIZE))) * 8 + Math.min(7, Math.max(0, Math.floor(y / CELL_SIZE)));
+}
+/**
+ * A Locations.txt / spawn position that cannot be a real destination: an outdoor cell whose local point is
+ * exactly (0,0,0) while the cell index is not 1 (e.g. the 0xE53F0026 [0 0 0] "JumpShaft" placeholders).
+ * Rows whose cell index merely disagrees with x/y are kept verbatim — ACE accepts them (Khayyaban's own
+ * town destination is one).
+ */
+export function isBogusPosition(cell, local) {
+  if (!local) return true;
+  if (isIndoorCell(cell)) return false;
+  return local.x === 0 && local.y === 0 && local.z === 0 && (cell & 0xffff) !== 1;
 }
 export function loadLocations(file, { log } = {}) {
   const text = readTextSafe(file, "locations", log);
@@ -429,21 +445,19 @@ export function loadPoiGazetteer(file, { log } = {}) {
     const tc = parseTitleCoords(g.title);
     const name = cleanPoiName(tc ? tc.rest : g.title);
     if (!name || META_TITLES.has(name.toLowerCase())) continue;
-    let coords = tc ? { ns: tc.ns, ew: tc.ew } : null;
-    let coordSource = tc ? "title" : "fields";
-    if (!coords) {
-      const tally = new Map();
-      for (const r of g.rows) {
-        if (!r.coords) continue;
-        const k = `${r.coords.ns.toFixed(1)},${r.coords.ew.toFixed(1)}`;
-        const e = tally.get(k);
-        if (e) e.n++;
-        else tally.set(k, { n: 1, coords: r.coords });
-      }
-      let best = null;
-      for (const e of tally.values()) if (!best || e.n > best.n) best = e;
-      coords = best ? best.coords : null;
+    const tally = new Map();
+    for (const r of g.rows) {
+      if (!r.coords) continue;
+      const k = `${r.coords.ns.toFixed(1)},${r.coords.ew.toFixed(1)}`;
+      const e = tally.get(k);
+      if (e) e.n++;
+      else tally.set(k, { n: 1, ns: r.coords.ns, ew: r.coords.ew });
     }
+    // Stable: count desc, then first-seen order (Map iteration order).
+    const candidates = [...tally.values()].sort((a, b) => b.n - a.n);
+    let coords = tc ? { ns: tc.ns, ew: tc.ew } : null;
+    const coordSource = tc ? "title" : "fields";
+    if (!coords && candidates.length) coords = { ns: candidates[0].ns, ew: candidates[0].ew };
     if (!coords) continue;
     const categories = [...new Set(g.rows.flatMap((r) => r.categories))].sort();
     const description = g.rows.map((r) => r.description).reduce((a, b) => (b.length > a.length ? b : a), "");
@@ -458,6 +472,9 @@ export function loadPoiGazetteer(file, { log } = {}) {
       categories,
       description,
       coordSource,
+      // Every distinct field coordinate with its row count (count desc). build.mjs re-picks among TIED
+      // candidates with acpedia coordinate hints (e.g. Mount Esper 27.9N 29.5E vs 60.6N 15.7E).
+      candidates: tc ? [] : candidates,
       variants: g.rows.length,
     });
   }
@@ -526,14 +543,28 @@ export function loadAtlas(file, { log } = {}) {
 
 // ── knowledge.acpedia.json — [{title, text≤300, aliases?}] ────────────────
 const LB_ALIAS_RE = /^[0-9A-F]{4}$/;
-/** acpedia prose: drop the "Location: Landscape." lead, trailing categories and image boilerplate. */
+/**
+ * acpedia prose: drop the infobox lead ("Coordinates: … |", "Location: Landscape." / "Location: Dungeon |"),
+ * the "Wiki Map: … Click image for full size version" boilerplate, trailing categories and leftover pipes.
+ * The "Route: …" sentence is kept (it tells the director how players reach the place).
+ */
 export function cleanLoreText(text) {
   let t = String(text ?? "");
-  t = t.replace(/^\s*Location:\s*(?:Landscape|Point of Interest)\.\s*/i, "");
+  t = t.replace(/^\s*Coordinates:\s*[^|]*?(?:\||\.\s|$)\s*/i, "");
+  t = t.replace(/^\s*Location:\s*(?:Landscape|Point of Interest|Dungeon)\s*(?:[.|]\s*|$)/i, "");
+  t = t.replace(/Wiki Map:[\s\S]*?Click image for full size version\.?/gi, " ");
+  t = t.replace(/Wiki Map:[\s\S]*$/i, " ");
+  t = t.replace(/Click image for full size version\.?/gi, " ");
   t = t.replace(/\bCategory:[\s\S]*$/i, "");
-  t = t.replace(/(?:Wiki Map:[^.]*?)?Click image for full size version\.?/gi, " ");
+  t = t.replace(/\s*\|\s*/g, ". ").replace(/\.\s*\./g, ".");
   t = t.replace(/\s+/g, " ").trim();
+  t = t.replace(/^[\s:;,.\-–—]+/, "").trim();
   return t;
+}
+/** acpedia rows that describe an NPC, item or spell rather than a place ("Level: 58 | …", "Loot Tier: 0 | …"). */
+const ENTITY_LEAD_RE = /^\s*(?:Level|Loot Tier|Value|Damage|Armor Level|Burden|Workmanship|Spell Level|Icon|Health)\s*:/i;
+export function isEntityText(text) {
+  return ENTITY_LEAD_RE.test(String(text ?? ""));
 }
 export function loadAcpedia(file, { log } = {}) {
   const data = readJsonSafe(file, "acpedia", log);
@@ -550,21 +581,31 @@ export function loadAcpedia(file, { log } = {}) {
     const tc = parseTitleCoords(title);
     const aliases = [];
     const lbAliases = [];
+    const coordHints = [];
     for (const a of Array.isArray(r?.aliases) ? r.aliases : []) {
       const s = String(a ?? "").trim();
       if (!s) continue;
-      if (LB_ALIAS_RE.test(s)) lbAliases.push(parseInt(s, 16));
-      else if (!parseTitleCoords(s)) aliases.push(s);
+      if (LB_ALIAS_RE.test(s)) {
+        lbAliases.push(parseInt(s, 16));
+        continue;
+      }
+      const ac = parseTitleCoords(s);
+      if (ac) coordHints.push({ ns: ac.ns, ew: ac.ew });
+      else aliases.push(s);
     }
     const loc = /Location:\s*([A-Za-z][A-Za-z ]*?)\s*(?:[|.]|$)/.exec(raw);
+    const coords = tc ? { ns: tc.ns, ew: tc.ew } : parseInfoboxCoords(raw);
+    if (coords) coordHints.unshift(coords);
     rows.push({
       title,
-      name: tc ? tc.rest : title,
+      name: cleanPoiName(tc ? tc.rest : title),
       text: cleanLoreText(raw),
       aliases,
       lbAliases,
-      coords: tc ? { ns: tc.ns, ew: tc.ew } : parseInfoboxCoords(raw),
+      coords,
+      coordHints,
       location: loc ? loc[1].trim() : null,
+      entity: isEntityText(raw),
     });
   }
   return rows;
@@ -631,11 +672,21 @@ const GENERIC_PORTAL_NAMES = new Set([
   "exit to the surface", "surface exit", "gateway portal", "magical portal", "cavern exit",
 ]);
 const SPAWN_POS_RE = /"landblockId"\s*:\s*(\d+)\s*,\s*"cell"\s*:\s*(\d+)\s*,\s*"x"\s*:\s*([-\d.eE+]+)\s*,\s*"y"\s*:\s*([-\d.eE+]+)\s*,\s*"z"\s*:\s*([-\d.eE+]+)/;
-/** Landmark type of a spawn row, or null. */
+/**
+ * Landmark type of a spawn row, or null. Name-based landmarks (Statue/Fountain/…) skip category
+ * "Creature" rows: those are monsters that merely carry the word ("Wailing Statue").
+ */
+const SPAWN_JUNK_RE = /\b(?:gen|generator|linkable|place\s*holder|placeholder|spawner)\b/i;
 export function landmarkTypeOf(r) {
   const name = String(r?.name ?? "");
+  if (SPAWN_JUNK_RE.test(name)) return null; // spawn generators ("Saving Asheron's Statue Gen")
   if (r?.weenieType === 25) return "lifestone";
-  if (r?.weenieType === 7) return GENERIC_PORTAL_NAMES.has(name.trim().toLowerCase()) || !name.trim() ? null : "portal";
+  if (r?.weenieType === 7) {
+    const n = name.trim().toLowerCase();
+    if (!n || GENERIC_PORTAL_NAMES.has(n) || /\b(?:test|jumpshaft|jumpentry|jumpexit)\b/.test(n)) return null;
+    return "portal";
+  }
+  if (r?.category === "Creature") return null;
   const m = LANDMARK_NAME_RE.exec(name);
   return m ? m[1].toLowerCase() : null;
 }
@@ -695,7 +746,8 @@ export async function streamSpawns(file, { log } = {}) {
     let local = { x, y, z };
     if (!(Number(r.cell) > 0)) {
       const oc = outdoorCellOfWorld(((lb16 >>> 8) & 0xff) * LB_SIZE + x, (lb16 & 0xff) * LB_SIZE + y, z);
-      local = { x: oc.x, y: oc.y, z };
+      // world→local round trip adds float noise (81.3304 → 81.33039999999892): keep the source precision
+      local = { x: Math.round(oc.x * 1e6) / 1e6, y: Math.round(oc.y * 1e6) / 1e6, z };
     }
     const q = [Number(r.qw), Number(r.qx), Number(r.qy), Number(r.qz)];
     landmarks.push({

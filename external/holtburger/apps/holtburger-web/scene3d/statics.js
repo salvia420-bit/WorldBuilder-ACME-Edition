@@ -4567,6 +4567,21 @@ export function cullStaticsGroup(scene3d, culler) {
       if (node.visible === false) node.visible = true;
       continue;
     }
+    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): an honoured hide
+    // marker for singleton Mesh / InstancedMesh / LOD nodes — a static occluder
+    // hidden for a shot. A bare `.visible = false` would be undone by this pass
+    // next frame, so (like `__deadBatch` above) the hide is a marker this pass
+    // honours, ahead of the light guardrail and the frustum test, counted as
+    // tested + culled. BatchedMesh nodes never get here (film hides their
+    // instances with setVisibleAt). Only the film runtime sets the marker
+    // (with `?frustumCull=off` this pass never runs: there the runtime's own
+    // `visible = false` holds, as nothing else rewrites it).
+    if (ud && ud.__filmHidden === true) {
+      tested += 1;
+      culled += 1;
+      if (node.visible !== false) node.visible = false;
+      continue;
+    }
     const sphere = _resolveStaticCullSphere(node);
     if (!sphere) {
       // No derivable bounds — never hide (fail-open).

@@ -1,0 +1,340 @@
+{
+ "0xCA5D": [
+  {
+   "title": "Blackmire Swamp",
+   "lat": 27.2,
+   "lat_dir": "S",
+   "lng": 60.0,
+   "lng_dir": "E",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "}} === Description === Located northwest of Shoushi and south of Yanshi, surrounding Sawato, the Blackmire Swamp is where the River Prosper turns into many smaller water canals and small lakes. <br>Th",
+   "src": "inline"
+  }
+ ],
+ "0xA4A2": [
+  {
+   "title": "Mount Esper",
+   "lat": 27.9,
+   "lat_dir": "N",
+   "lng": 29.5,
+   "lng_dir": "E",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "}} === Description === The largest volcano in Dereth. It is home to many Fire Elementals and other heat-loving creatures including a large fire elemental, which when killed drops a fire infusion used ",
+   "src": "inline"
+  }
+ ],
+ "0xB872": [
+  {
+   "title": "Blackmire Swamp",
+   "lat": 10.3,
+   "lat_dir": "S",
+   "lng": 45.6,
+   "lng_dir": "E",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "}} === Description === Located northwest of Shoushi and south of Yanshi, surrounding Sawato, the Blackmire Swamp is where the River Prosper turns into many smaller water canals and small lakes. <br>Th",
+   "src": "inline"
+  }
+ ],
+ "0xDA55": [
+  {
+   "title": "Acid Emerald",
+   "lat": 33.5,
+   "lat_dir": "S",
+   "lng": 72.8,
+   "lng_dir": "E",
+   "categories": [
+    "Spell Gem"
+   ],
+   "description": "== Notes == == Sold By == :{|class=\"wikitable sortable\"",
+   "src": "inline"
+  }
+ ],
+ "0xA9B4": [
+  {
+   "title": "50-100 Contracts Quest",
+   "lat": 42.1,
+   "lat_dir": "N",
+   "lng": 33.7,
+   "lng_dir": "E",
+   "categories": [],
+   "description": "== Quest Overview == Get some extra XP for finishing various contract quests. == Walk Through ==",
+   "src": "inline"
+  },
+  {
+   "title": "Acid Emerald",
+   "lat": 42.2,
+   "lat_dir": "N",
+   "lng": 33.8,
+   "lng_dir": "E",
+   "categories": [
+    "Spell Gem"
+   ],
+   "description": "== Notes == == Sold By == :{|class=\"wikitable sortable\"",
+   "src": "inline"
+  },
+  {
+   "title": "Holtburg",
+   "lat": 42.3,
+   "lat_dir": "N",
+   "lng": 33.7,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Standing on a hill overlooking the River Prosper as it runs from the heights of Mount Esper into the lowlands, the town of Holtburg was one of the first Aluvian Villages. Settlers erected it in 2 PY ",
+   "src": "map_point"
+  }
+ ],
+ "0xC75F": [
+  {
+   "title": "Blackmire Swamp",
+   "lat": 25.6,
+   "lat_dir": "S",
+   "lng": 57.6,
+   "lng_dir": "E",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "}} === Description === Located northwest of Shoushi and south of Yanshi, surrounding Sawato, the Blackmire Swamp is where the River Prosper turns into many smaller water canals and small lakes. <br>Th",
+   "src": "inline"
+  }
+ ],
+ "0xACB0": [
+  {
+   "title": "40.4N, 34.5E - Eternal Flame",
+   "lat": 39.0,
+   "lat_dir": "N",
+   "lng": 35.8,
+   "lng_dir": "E",
+   "categories": [
+    "Minor POI",
+    "Historical Site",
+    "Lore Database Entry",
+    "Northeast POI"
+   ],
+   "description": "=== Description === A Memorial at 40.4N, 34.5E near Holtburg. New location of Holtburg Redoubt and the Historical Marker, which were relocated during the The Calm event from 39.0N, 35.8E. Holtburg Red",
+   "src": "inline"
+  }
+ ],
+ "0xAAB2": [
+  {
+   "title": "40.4N, 34.5E - Eternal Flame",
+   "lat": 40.4,
+   "lat_dir": "N",
+   "lng": 34.5,
+   "lng_dir": "E",
+   "categories": [
+    "Minor POI",
+    "Historical Site",
+    "Lore Database Entry",
+    "Northeast POI"
+   ],
+   "description": "=== Description === A Memorial at 40.4N, 34.5E near Holtburg. New location of Holtburg Redoubt and the Historical Marker, which were relocated during the The Calm event from 39.0N, 35.8E. Holtburg Red",
+   "src": "inline"
+  }
+ ],
+ "0x62D5": [
+  {
+   "title": "72.2N, 36.1W - Zefir Tower",
+   "lat": 68.6,
+   "lat_dir": "N",
+   "lng": 23.2,
+   "lng_dir": "W",
+   "categories": [
+    "Minor POI",
+    "Northwest POI"
+   ],
+   "description": "=== Description === An Empyrean Stone Tower at 72.2N, 36.1W  between Stonehold and Beach Fort full of Zefirs and Virindi. Nearby is the 72.1N, 35.6W - Banderling Cave. On top of the tower is a steady ",
+   "src": "inline"
+  }
+ ],
+ "0x52D9": [
+  {
+   "title": "72.2N, 36.1W - Zefir Tower",
+   "lat": 72.2,
+   "lat_dir": "N",
+   "lng": 36.1,
+   "lng_dir": "W",
+   "categories": [
+    "Minor POI",
+    "Northwest POI"
+   ],
+   "description": "=== Description === An Empyrean Stone Tower at 72.2N, 36.1W  between Stonehold and Beach Fort full of Zefirs and Virindi. Nearby is the 72.1N, 35.6W - Banderling Cave. On top of the tower is a steady ",
+   "src": "inline"
+  }
+ ],
+ "0xC6A9": [
+  {
+   "title": "Tou-Tou/Archive",
+   "lat": 33.8,
+   "lat_dir": "N",
+   "lng": 56.4,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Tou-Tou is a coastal Sho village located at the end of a peninsula which shares its name with the town. The people of Tou-Tou simply refer to it as the town of the eastern tower, for northeast of tow",
+   "src": "inline"
+  }
+ ],
+ "0xBD9F": [
+  {
+   "title": "Cragstone",
+   "lat": 25.5,
+   "lat_dir": "N",
+   "lng": 49.7,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "<br><br> \"Cragstone is the capital city of the Aluvians, named after the fallen hero of the Olthoi Rebellion Thorsten Cragstone, father of Prince Borelean Strathelar. It is the second oldest human set",
+   "src": "map_point"
+  }
+ ],
+ "0x957A": [
+  {
+   "title": "A Small Cave",
+   "lat": 4.2,
+   "lat_dir": "S",
+   "lng": 17.3,
+   "lng_dir": "E",
+   "categories": [
+    "Dungeon"
+   ],
+   "description": "}} == General == == Maps ==",
+   "src": "map_point"
+  }
+ ],
+ "0xE922": [
+  {
+   "title": "Kryst",
+   "lat": 74.3,
+   "lat_dir": "S",
+   "lng": 84.6,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Kryst was founded by a band of Isparians who had escaped their Olthoi taskmasters in the days before Elysa Strathelar defeated the Olthoi Queen of Dereth. They were led to freedom by Zenzaburou Hensu",
+   "src": "inline"
+  }
+ ],
+ "0x7AE8": [
+  {
+   "title": "Frozen Valley",
+   "lat": 83.8,
+   "lat_dir": "N",
+   "lng": 4.3,
+   "lng_dir": "W",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "=== Description === Located in the Esper Mountain Range of Northern Osteth, the Frozen Valley is the result of one of Geraine's experiments, and the birthplace of the Gurog race.  It is a level 200+ a",
+   "src": "inline"
+  }
+ ],
+ "0x93CB": [
+  {
+   "title": "Mount Esper",
+   "lat": 60.6,
+   "lat_dir": "N",
+   "lng": 15.7,
+   "lng_dir": "E",
+   "categories": [
+    "Geographic Area"
+   ],
+   "description": "}} === Description === The largest volcano in Dereth. It is home to many Fire Elementals and other heat-loving creatures including a large fire elemental, which when killed drops a fire infusion used ",
+   "src": "inline"
+  }
+ ],
+ "0xE822": [
+  {
+   "title": "Kryst",
+   "lat": 74.6,
+   "lat_dir": "S",
+   "lng": 84.2,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Kryst was founded by a band of Isparians who had escaped their Olthoi taskmasters in the days before Elysa Strathelar defeated the Olthoi Queen of Dereth. They were led to freedom by Zenzaburou Hensu",
+   "src": "inline"
+  }
+ ],
+ "0xA0A4": [
+  {
+   "title": "Glenden Wood",
+   "lat": 29.7,
+   "lat_dir": "N",
+   "lng": 26.5,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Glenden Wood is an Aluvian town nestled in the Tiofor Woods west of Cragstone. It was a peaceful town until Thistledown, 16 PY when the army of New Viamont invaded. Although the war between Viamontia",
+   "src": "inline"
+  }
+ ],
+ "0xA0A3": [
+  {
+   "title": "Glenden Wood",
+   "lat": 28.9,
+   "lat_dir": "N",
+   "lng": 26.3,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Glenden Wood is an Aluvian town nestled in the Tiofor Woods west of Cragstone. It was a peaceful town until Thistledown, 16 PY when the army of New Viamont invaded. Although the war between Viamontia",
+   "src": "inline"
+  }
+ ],
+ "0xE92D": [
+  {
+   "title": "Kryst",
+   "lat": 65.7,
+   "lat_dir": "S",
+   "lng": 84.9,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Kryst was founded by a band of Isparians who had escaped their Olthoi taskmasters in the days before Elysa Strathelar defeated the Olthoi Queen of Dereth. They were led to freedom by Zenzaburou Hensu",
+   "src": "inline"
+  }
+ ],
+ "0xDA54": [
+  {
+   "title": "Tou-Tou/Archive",
+   "lat": 34.1,
+   "lat_dir": "S",
+   "lng": 73.1,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Tou-Tou is a coastal Sho village located at the end of a peninsula which shares its name with the town. The people of Tou-Tou simply refer to it as the town of the eastern tower, for northeast of tow",
+   "src": "inline"
+  }
+ ],
+ "0xDB3C": [
+  {
+   "title": "Tou-Tou/Archive",
+   "lat": 54.0,
+   "lat_dir": "S",
+   "lng": 73.9,
+   "lng_dir": "E",
+   "categories": [
+    "Town"
+   ],
+   "description": "\"Tou-Tou is a coastal Sho village located at the end of a peninsula which shares its name with the town. The people of Tou-Tou simply refer to it as the town of the eastern tower, for northeast of tow",
+   "src": "inline"
+  }
+ ]
+}

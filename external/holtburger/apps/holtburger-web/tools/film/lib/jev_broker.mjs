@@ -10,7 +10,7 @@
 // (`?filmMode=on`). Without the binding the pilot flies on its code policy.
 //
 // WHAT: createJevBroker({client, page, mode, maxInFlight, log, …}) →
-//   {install, handler, stats, setMode, mode, setDecideOptions, telemetry, dumpTelemetry}
+//   {install, handler, stats, setMode, mode, setDecideOptions, telemetry, telemetryMark, dumpTelemetry}
 //   handler(json) resolves to a JSON string:
 //     ok    {answers, usage:{inputTokens, outputTokens, costUsd}, ms, seq, id, model}
 //     error {error:{kind, message, retryable}, seq}
@@ -21,14 +21,18 @@
 //     'internal' — a bug; the message never contains the key or the state
 // Telemetry: one entry per request (seq, outcome, kind, question ids, normalized
 // answers, ms, cost, bytes, in-flight count — never the state) in a ring of the
-// last 500. dumpTelemetry(path) writes it as JSONL.
+// last 500. dumpTelemetry(path) writes it as JSONL. One broker serves a whole
+// `film shoot`, so a per-shot file takes `const m = broker.telemetryMark()` when
+// the shot starts and `dumpTelemetry(path, {since: m})` writes only the entries
+// recorded after that mark (the shot's rehearsal and attempts, no earlier shot).
 //
 // Usage (film CLI):
 //   const broker = createJevBroker({client: jev, page, maxInFlight: 4, log});
 //   await broker.install();                        // window.__filmJev now exists
 //   broker.setDecideOptions({timeoutMs: 1200, maxRetries: 0});   // realtime takes
+//   const mark = broker.telemetryMark();
 //   …take…
-//   broker.dumpTelemetry(`${takeDir}/jev.jsonl`);
+//   broker.dumpTelemetry(`${takeDir}/jev.jsonl`, {since: mark});   // this take's entries only
 
 import fs from "node:fs";
 import path from "node:path";
@@ -99,8 +103,8 @@ function pickDecideOptions(o) {
  * @param {{timeoutMs?: number, maxRetries?: number, model?: string, trace?: object}} [opts.decideOptions]
  * @returns {{install: () => Promise<{ok: true, already: boolean}>, handler: (json: unknown) => Promise<string>,
  *   stats: () => object, setMode: (m: string) => string, readonly mode: string,
- *   setDecideOptions: (o: object) => void, telemetry: () => object[],
- *   dumpTelemetry: (file: string) => {path: string, count: number}}}
+ *   setDecideOptions: (o: object) => void, telemetry: (o?: {since?: number|null}) => object[],
+ *   telemetryMark: () => number, dumpTelemetry: (file: string, o?: {since?: number|null}) => {path: string, count: number}}}
  */
 export function createJevBroker(opts = {}) {
   const {
@@ -132,6 +136,8 @@ export function createJevBroker(opts = {}) {
   let installing = null;
   let lastSeq = null;
   const ring = [];
+  // Entries ever recorded = dropped (fell off the ring) + ring.length; a mark is that total at some moment.
+  let dropped = 0;
   const counters = { requests: 0, ok: 0, errors: 0 };
   const byKind = {};
 
@@ -146,7 +152,18 @@ export function createJevBroker(opts = {}) {
 
   function record(entry) {
     ring.push(entry);
-    if (ring.length > telemetryLimit) ring.splice(0, ring.length - telemetryLimit);
+    if (ring.length > telemetryLimit) {
+      const n = ring.length - telemetryLimit;
+      ring.splice(0, n);
+      dropped += n;
+    }
+  }
+
+  // The ring entries recorded after `since` (a telemetryMark() value); null/undefined → the whole ring.
+  function entriesSince(since) {
+    if (since === null || since === undefined) return ring.slice();
+    if (!Number.isInteger(since) || since < 0) throw new JevError("config", "telemetry since must be a telemetryMark() value (integer ≥ 0)");
+    return ring.slice(Math.max(0, since - dropped));
   }
 
   /**
@@ -340,23 +357,39 @@ export function createJevBroker(opts = {}) {
     };
   }
 
-  /** Copy of the telemetry ring, oldest first. */
-  function telemetry() {
-    return ring.slice();
+  /**
+   * Copy of the telemetry ring, oldest first; with `{since: mark}` only the entries recorded after that
+   * telemetryMark() (entries that already fell off the ring are gone).
+   * @param {{since?: number|null}} [o]
+   * @returns {object[]}
+   */
+  function telemetry(o = {}) {
+    return entriesSince(o?.since);
   }
 
   /**
-   * Writes the telemetry ring as JSONL (one entry per line, oldest first). Creates
-   * parent directories as needed and overwrites the file.
+   * How many telemetry entries this broker has recorded so far (including those that fell off the ring). Take it
+   * when a shot starts and pass it as `since` to telemetry()/dumpTelemetry() for that shot's entries only.
+   * @returns {number}
+   */
+  function telemetryMark() {
+    return dropped + ring.length;
+  }
+
+  /**
+   * Writes the telemetry ring as JSONL (one entry per line, oldest first); with `{since: mark}` only the entries
+   * recorded after that telemetryMark(). Creates parent directories as needed and overwrites the file.
    * @param {string} file
+   * @param {{since?: number|null}} [o]
    * @returns {{path: string, count: number}}
    */
-  function dumpTelemetry(file) {
+  function dumpTelemetry(file, o = {}) {
     if (typeof file !== "string" || !file) throw new JevError("config", "dumpTelemetry needs a file path");
+    const list = entriesSince(o?.since);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const body = ring.map((e) => JSON.stringify(e)).join("\n");
-    fs.writeFileSync(file, ring.length ? `${body}\n` : "");
-    return { path: file, count: ring.length };
+    const body = list.map((e) => JSON.stringify(e)).join("\n");
+    fs.writeFileSync(file, list.length ? `${body}\n` : "");
+    return { path: file, count: list.length };
   }
 
   return {
@@ -369,6 +402,7 @@ export function createJevBroker(opts = {}) {
     },
     setDecideOptions,
     telemetry,
+    telemetryMark,
     dumpTelemetry,
   };
 }

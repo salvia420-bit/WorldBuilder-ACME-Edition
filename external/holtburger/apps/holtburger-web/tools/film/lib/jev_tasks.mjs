@@ -25,12 +25,16 @@
 // (source 'code') built from the same words and boundaries. JEV errors are thrown as
 // JevError; the CLI can retry with client = null to get the code verdict.
 //
-// Exports: bandOf, intentWords, buildPickCandidateRequest, pickCandidate,
+// Exports: bandOf, intentWords, PICK_HIDDEN_WORDS, PICK_TOO_CLOSE_WORDS, PICK_INSTRUCTIONS,
+// buildPickCandidateRequest, pickCandidate,
 // takeReportWords, judgeTakeWords, buildKeepOrRetakeRequest, keepOrRetake,
 // FIT_LEVELS, buildSiteFitRequest, scoreSiteForLine, ENERGY_WORDS, TEMPO_WORDS,
-// SECTION_ROLES, energyWordOf, tempoWordOf, TECHNIQUE_FAMILIES,
-// buildSectionFamilyRequest, codeTechniqueFamily, sectionTechniqueFamily, jevPing.
+// SECTION_ROLES (re-exported from audio/structure.mjs), SECTION_ROLE_ALIASES, sectionRoleOf,
+// energyWordOf, tempoWordOf, TECHNIQUE_FAMILIES, buildSectionFamilyRequest,
+// codeTechniqueFamily, sectionTechniqueFamily, jevPing.
 
+import { quoteBand, wordsUpTo } from "../../../scene3d/film/pilot/sense_words.js";
+import { SECTION_ROLES } from "../audio/structure.mjs";
 import { JEV_LIMITS, JevError, choiceQ, noulQ, scoreQ } from "./jev.mjs";
 
 /** Band thresholds for choice/score confidence. */
@@ -192,18 +196,50 @@ function normalizeCandidates(candidates) {
   });
 }
 
-const PICK_INSTRUCTIONS =
+// JS objects iterate integer-like keys ("0", "7", "42") first, in ascending numeric
+// order, so criteria keyed by numeric candidate ids would lose the caller's order,
+// and with it the conservative-default-first rule. Lists with such an id get
+// positional option keys c1…cN, mapped back to the ids afterwards.
+function isIndexLikeKey(k) {
+  return /^(0|[1-9]\d{0,9})$/.test(k) && Number(k) <= 4294967294;
+}
+
+function optionKeysFor(list) {
+  if (!list.some((c) => isIndexLikeKey(c.id))) return list.map((c) => c.id);
+  return list.map((_, i) => `c${i + 1}`);
+}
+
+// The words the pick rule quotes come from the pilot's WORD_BOUNDS (sense_words.js), the same
+// bands scene/solver.js describeCandidate writes into every option ("subject mostly hidden by
+// tree", "nearest rock very close (1.5 m)"), so the rule's words always appear verbatim in the
+// options it judges and the two cannot drift apart.
+/** Visibility words that make a candidate unacceptable: "fully hidden", "mostly hidden". */
+export const PICK_HIDDEN_WORDS = Object.freeze(wordsUpTo("visibility", "mostly hidden"));
+/** Clearance (distance) words that make a candidate unacceptable: "touching", "very close". */
+export const PICK_TOO_CLOSE_WORDS = Object.freeze(wordsUpTo("distance", "very close"));
+
+function quotedOr(scale, words) {
+  const qs = words.map((w) => quoteBand(scale, w));
+  return qs.length <= 1 ? qs.join("") : `${qs.slice(0, -1).join(", ")} or ${qs[qs.length - 1]}`;
+}
+
+/** The pickCandidate instructions (exported for the words-contract tests). */
+export const PICK_INSTRUCTIONS =
   "Choose the camera candidate whose description best delivers the shot intent in the state. " +
   "Judge each option only by its description. An option is unacceptable when its subject is " +
-  "'mostly hidden' or 'fully hidden', or when an obstacle is 'touching' or 'very close' to the camera; " +
+  `${quotedOr("visibility", PICK_HIDDEN_WORDS)}, or when its nearest obstacle is ` +
+  `${quotedOr("distance", PICK_TOO_CLOSE_WORDS)} to the camera; ` +
   "choose such an option only if every option has that problem. When options fit about equally well, " +
   "choose the one listed first.";
 
 /**
  * Builds the pickCandidate request. Option order = candidate order, so pass the
  * solver's ranked list best-first: the first candidate is the conservative default.
+ * Option keys are the candidate ids, unless some id is integer-like ("3"), which JS
+ * would reorder; then every option gets a positional key c1…cN. `keyToId` maps
+ * option keys back to candidate ids either way.
  * @param {{intent?: string|object, candidates: Array<{id: string|number, words: string|string[]|object}>}} input
- * @returns {{state: object, questions: {candidate: object}}}
+ * @returns {{state: object, questions: {candidate: object}, keyToId: Record<string,string>}}
  * @throws {JevError} 'bad-request' for fewer than 2 candidates, duplicate ids or empty words
  */
 export function buildPickCandidateRequest({ intent, candidates } = {}) {
@@ -211,11 +247,17 @@ export function buildPickCandidateRequest({ intent, candidates } = {}) {
   if (list.length < JEV_LIMITS.choiceOptionsMin) {
     throw new JevError("bad-request", "a JEV choice needs at least 2 candidates (pickCandidate short-circuits a single one)");
   }
+  const keys = optionKeysFor(list);
   const criteria = {};
-  for (const c of list) criteria[c.id] = c.words;
+  const keyToId = {};
+  list.forEach((c, i) => {
+    criteria[keys[i]] = c.words;
+    keyToId[keys[i]] = c.id;
+  });
   return {
     state: { task: "choose the camera position for one shot", intent: intentWords(intent), options: list.length },
     questions: { candidate: choiceQ(PICK_INSTRUCTIONS, criteria) },
+    keyToId,
   };
 }
 
@@ -224,6 +266,8 @@ export function buildPickCandidateRequest({ intent, candidates } = {}) {
  * words (e.g. scene/solver.js describeCandidate), in the given order.
  * - one candidate → returned without a call (source 'trivial')
  * - client null → the first candidate (the solver's best), band 'confirm', source 'code'
+ * - `choice` and `probabilities` use candidate ids; `raw` is JEV's answer as sent,
+ *   keyed by option key (c1…cN when some id was integer-like)
  * @param {{decide: Function}|null} client
  * @param {{intent?: string|object, candidates: Array<{id: string|number, words: string|string[]|object}>}} input
  * @param {{thresholds?: {act?: number, confirm?: number}, sessionId?: string, trace?: object, log?: Function}} [opts]
@@ -241,11 +285,14 @@ export async function pickCandidate(client, input = {}, opts = {}) {
   const req = buildPickCandidateRequest({ intent: input.intent, candidates: list });
   const r = await decideWith(client, req, opts);
   const a = r.answers.candidate;
+  const idOf = (k) => (Object.prototype.hasOwnProperty.call(req.keyToId, k) ? req.keyToId[k] : k);
+  const choice = idOf(a.choice);
   const confidence = a.confidence ?? a.probabilities?.[a.choice] ?? null;
+  const probabilities = a.probabilities ? Object.fromEntries(Object.entries(a.probabilities).map(([k, p]) => [idOf(k), p])) : null;
   const thresholds = { ...BAND_THRESHOLDS, ...opts?.thresholds };
   const band = bandOf(confidence, thresholds);
-  note(opts, "pickCandidate", r, { choice: a.choice, confidence, band, thresholds });
-  return { choice: a.choice, confidence, probabilities: a.probabilities ?? null, band, raw: a, source: "jev", meta: meta(r) };
+  note(opts, "pickCandidate", r, { choice, confidence, band, thresholds });
+  return { choice, confidence, probabilities, band, raw: a, source: "jev", meta: meta(r) };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,15 +387,20 @@ export function takeReportWords(report = {}) {
 const KEEP_INSTRUCTIONS =
   "Decide whether this film take is good enough to keep. Judge only the take facts in the state; " +
   "each fact is a word from a fixed scale.";
+// Same boundaries as judgeTakeWords. Min visibility alone never forces a retake: a
+// subject 'mostly hidden' or 'fully hidden' for a 'brief' pass behind a tree is
+// normal footage; hidden for 'a while' or 'long' is not.
 const KEEP_CRITERIA = Object.freeze({
   true:
-    "Keep: dropped_frames is 'none' or 'a few'; safety_adjustments is 'none', 'a few' or 'some'; " +
-    "subject_longest_unseen is 'not hidden' or 'brief' (any value is fine when shot_kind is 'reveal' or " +
-    "subject_min_visibility is 'no subject'); pop_in is 'none' or 'one'.",
+    "Keep when ALL hold: dropped_frames is 'none' or 'a few'; safety_adjustments is 'none', 'a few' or 'some'; " +
+    "pop_in is 'none' or 'one'; subject_longest_unseen is 'not hidden' or 'brief'; subject_min_visibility is " +
+    "'clear', 'partly hidden' or 'not measured', or it is 'mostly hidden' or 'fully hidden' for only a short pass " +
+    "behind something (subject_longest_unseen 'not hidden' or 'brief'). Both subject facts are ignored when " +
+    "shot_kind is 'reveal' or subject_min_visibility is 'no subject'.",
   false:
-    "Retake: dropped_frames is 'some' or 'many'; or safety_adjustments is 'many'; or " +
-    "subject_longest_unseen is 'a while' or 'long' while shot_kind is not 'reveal' and there is a subject; " +
-    "or pop_in is 'a few' or 'many'.",
+    "Retake when ANY holds: dropped_frames is 'some' or 'many'; safety_adjustments is 'many'; pop_in is 'a few' or " +
+    "'many'; or, for a shot with a subject whose shot_kind is not 'reveal', subject_longest_unseen is 'a while' or " +
+    "'long' (the subject stayed hidden too long, whatever subject_min_visibility says).",
 });
 
 /**
@@ -556,8 +608,28 @@ export async function scoreSiteForLine(client, input = {}, opts = {}) {
 export const ENERGY_WORDS = Object.freeze(["very low", "low", "medium", "high", "very high"]);
 /** Tempo words, slow → fast (tempoWordOf buckets BPM). */
 export const TEMPO_WORDS = Object.freeze(["very slow", "slow", "moderate", "fast", "very fast"]);
-/** Section roles from the song analysis. */
-export const SECTION_ROLES = Object.freeze(["intro", "verse", "prechorus", "chorus", "bridge", "solo", "outro", "unknown"]);
+// Section roles: the song analyser's own vocabulary (tools/film/audio/structure.mjs SECTION_ROLES, written into
+// SongAnalysis.sections[].role) — imported, not mirrored, so the family rules can't drift from what the analyser
+// emits. structure.mjs is pure (no imports), so this stays Node-only and dependency-light.
+export { SECTION_ROLES };
+
+/**
+ * Role words a director may type that the analyser spells differently → the analyser's role. A guitar 'solo' is
+ * an 'instrumental' section.
+ */
+export const SECTION_ROLE_ALIASES = Object.freeze({ solo: "instrumental" });
+
+/**
+ * A section role (any case, aliases allowed) → the analyser's role word; empty or missing → 'unknown'. A word
+ * that is neither a role nor an alias passes through lower-cased (no firm rule quotes it).
+ * @param {string} role
+ * @returns {string}
+ */
+export function sectionRoleOf(role) {
+  const r = lower(role);
+  if (!r) return "unknown";
+  return Object.hasOwn(SECTION_ROLE_ALIASES, r) ? SECTION_ROLE_ALIASES[r] : r;
+}
 
 /**
  * Section energy (0..1, relative to the song) → ENERGY_WORDS. Buckets: <0.2 'very low',
@@ -630,7 +702,7 @@ export const TECHNIQUE_FAMILIES = Object.freeze([
     techniques: Object.freeze(["drone.rising-reveal", "drone.boom-rise", "drone.tilt-reveal", "drone.flyover", "drone.dronie", "classic.pull-out-reveal"]),
     criteria:
       "Drone reveal (rising reveal, boom rise, tilt reveal, flyover). Choose when role is 'intro' or 'outro', or when " +
-      "the lyric names a wide place (land, sea, sky, horizon, city, home, the world) and energy is 'low', 'medium' or 'high'.",
+      "the lyric names a wide place (land, sea, sky, horizon, city, home, the world) and energy is 'medium' or 'high'.",
   }),
   Object.freeze({
     key: "fpv-kinetic",
@@ -646,21 +718,28 @@ export const TECHNIQUE_FAMILIES = Object.freeze([
     label: "top-down",
     techniques: Object.freeze(["drone.top-down", "drone.top-down-rise", "drone.top-down-track", "classic.birds-eye", "drone.spiral-descent"]),
     criteria:
-      "Top-down view (bird's-eye, top-down track or rise, spiral descent). Choose when role is 'bridge' or 'solo' " +
-      "(or an instrumental break) and energy is 'low' or 'medium', or when the lyric is about patterns, maps, being " +
-      "lost or looking down on the world.",
+      "Top-down view (bird's-eye, top-down track or rise, spiral descent). Choose when role is 'bridge' or " +
+      "'instrumental' and energy is 'low' or 'medium', or when the lyric is about patterns, maps, being lost or " +
+      "looking down on the world.",
   }),
 ]);
 
 const FAMILY_BY_KEY = new Map(TECHNIQUE_FAMILIES.map((f) => [f.key, f]));
 
+// The firm rules are codeTechniqueFamily steps 1–4, in the same order; the lyric
+// decides only among the options left open after them.
 const FAMILY_INSTRUCTIONS =
-  "Choose the camera technique family for this section of a music video. Use the section's role, energy word, " +
-  "tempo word and lyric in the state; each option names the exact words that call for it.";
+  "Choose the camera technique family for this section of a music video from the section's role, energy, tempo " +
+  "and lyric in the state. Apply these firm rules in order and stop at the first that matches: " +
+  "1) role 'intro' or 'outro' → drone-reveal; " +
+  "2) energy 'high' or 'very high' AND tempo 'fast' or 'very fast' → fpv-kinetic; " +
+  "3) role 'bridge' or 'instrumental' with energy 'low' or 'medium' → top-down; " +
+  "4) energy 'very low' or 'low', or tempo 'very slow' or 'slow' → static-slow. " +
+  "If none matches, choose by the option descriptions, letting the lyric decide.";
 
 function sectionWords({ role, energyWord, tempoWord, lyric } = {}) {
   return {
-    role: lower(role) || "unknown",
+    role: sectionRoleOf(role),
     energy: lower(energyWord) || "unknown",
     tempo: lower(tempoWord) || "unknown",
     lyric: nonEmpty(lyric) ? lyric.trim() : "(instrumental)",
@@ -682,7 +761,7 @@ export function buildSectionFamilyRequest(input = {}) {
  * The no-key rule table, using the same boundaries as the criteria. Precedence:
  *   1. intro/outro → 'drone-reveal'
  *   2. high energy and fast tempo → 'fpv-kinetic'
- *   3. bridge/solo with low or medium energy → 'top-down'
+ *   3. bridge/instrumental (alias 'solo') with low or medium energy → 'top-down'
  *   4. low energy or slow tempo → 'static-slow'
  *   5. chorus with medium-or-higher energy, or any 'very high' energy → 'orbit'
  *   6. medium or high energy → 'tracking'
@@ -696,7 +775,7 @@ export function codeTechniqueFamily(input = {}) {
   const fast = t === "fast" || t === "very fast";
   if (r === "intro" || r === "outro") return "drone-reveal";
   if (high && fast) return "fpv-kinetic";
-  if ((r === "bridge" || r === "solo") && (e === "low" || e === "medium")) return "top-down";
+  if ((r === "bridge" || r === "instrumental") && (e === "low" || e === "medium")) return "top-down";
   if (e === "very low" || e === "low" || t === "very slow" || t === "slow") return "static-slow";
   if (r === "chorus" && (e === "medium" || high)) return "orbit";
   if (e === "very high") return "orbit";

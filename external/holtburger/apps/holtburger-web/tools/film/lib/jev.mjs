@@ -535,9 +535,10 @@ const tokenCount = (x) => {
 
 /**
  * Usage → {inputTokens, outputTokens, costUsd}. Uses `usage.cost` when present, else
- * input_tokens × $0.042/M (output is free). A response with no usage at all is
- * charged at `fallbackInputTokens` (the pre-flight estimate) and gets
- * `estimated: true`, so budget caps never under-count.
+ * input_tokens × $0.042/M (output is free). A response with no usage at all, or a
+ * usage object with neither `cost` nor `input_tokens`, is charged at
+ * `fallbackInputTokens` (the pre-flight estimate) and gets `estimated: true`, so
+ * budget caps never under-count.
  * @param {unknown} usage
  * @param {{fallbackInputTokens?: number}} [opts]
  * @returns {{inputTokens:number, outputTokens:number, costUsd:number, estimated?:boolean}}
@@ -547,10 +548,17 @@ export function costFromUsage(usage, { fallbackInputTokens = 0 } = {}) {
     const inputTokens = tokenCount(fallbackInputTokens);
     return { inputTokens, outputTokens: 0, costUsd: inputTokens * JEV_USD_PER_INPUT_TOKEN, estimated: true };
   }
-  const inputTokens = tokenCount(usage.input_tokens);
   const outputTokens = tokenCount(usage.output_tokens);
   const c = usage.cost == null ? NaN : Number(usage.cost);
-  const costUsd = Number.isFinite(c) && c >= 0 ? c : inputTokens * JEV_USD_PER_INPUT_TOKEN;
+  const hasCost = Number.isFinite(c) && c >= 0;
+  const reported = usage.input_tokens == null ? NaN : Number(usage.input_tokens);
+  if (!hasCost && !Number.isFinite(reported)) {
+    // Neither cost nor input_tokens: charge the pre-flight estimate (never $0).
+    const inputTokens = tokenCount(fallbackInputTokens);
+    return { inputTokens, outputTokens, costUsd: inputTokens * JEV_USD_PER_INPUT_TOKEN, estimated: true };
+  }
+  const inputTokens = tokenCount(reported);
+  const costUsd = hasCost ? c : inputTokens * JEV_USD_PER_INPUT_TOKEN;
   return { inputTokens, outputTokens, costUsd };
 }
 
@@ -625,7 +633,8 @@ function readHeader(headers, name) {
  *   - malformed response → 'bad-response'
  *   Before every attempt (retries included) the client checks the budget:
  *   calls/minute counts HTTP attempts; $/hour sums the reported cost of
- *   successful calls plus a pre-flight estimate for this one.
+ *   successful calls, the pre-flight estimates of attempts still in flight, and
+ *   a pre-flight estimate for this one.
  * stats() → {calls, errors, retries, refused, inputTokens, outputTokens, costUsd,
  *   lastMinuteCalls, lastHourCostUsd, inFlight, errorsByKind, closed}
  *   - calls: decide() calls that succeeded
@@ -737,6 +746,9 @@ export function createJevClient(opts = {}) {
   const hourCost = createWindow(HOUR_MS);
   const totals = { calls: 0, errors: 0, retries: 0, refused: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
   const errorsByKind = {};
+  // Estimated cost of attempts still on the wire. Concurrent calls (the page broker
+  // pipelines up to maxInFlight) reserve it, so together they cannot pass the $/hour check.
+  let reservedUsd = 0;
 
   const emit = (entry) => {
     if (!log) return;
@@ -761,11 +773,13 @@ export function createJevClient(opts = {}) {
       });
     }
     const spent = hourCost.sum();
-    if (spent + estCostUsd > maxUsdPerHour) {
+    const reserved = reservedUsd > 0 ? reservedUsd : 0;
+    if (spent + reserved + estCostUsd > maxUsdPerHour) {
+      const inFlightNote = reserved > 0 ? ` (+ ≈$${reserved.toFixed(6)} reserved by in-flight calls)` : "";
       throw new JevError(
         "budget",
-        `JEV budget: $${spent.toFixed(6)} spent in the last hour + ≈$${estCostUsd.toFixed(6)} for this call would exceed the $${maxUsdPerHour}/hour cap`,
-        { code: "usd-per-hour", retryable: false, retryAfterMs: hourCost.timeUntilSumAtMost(maxUsdPerHour - estCostUsd, t) },
+        `JEV budget: $${spent.toFixed(6)} spent in the last hour${inFlightNote} + ≈$${estCostUsd.toFixed(6)} for this call would exceed the $${maxUsdPerHour}/hour cap`,
+        { code: "usd-per-hour", retryable: false, retryAfterMs: hourCost.timeUntilSumAtMost(maxUsdPerHour - estCostUsd - reserved, t) },
       );
     }
   }
@@ -919,7 +933,13 @@ export function createJevClient(opts = {}) {
         attempts++;
         minuteCalls.push(now(), 1);
         try {
-          const res = await attemptOnce(bodyStr, attemptTimeoutMs);
+          let res;
+          reservedUsd += estCostUsd;
+          try {
+            res = await attemptOnce(bodyStr, attemptTimeoutMs);
+          } finally {
+            reservedUsd -= estCostUsd;
+          }
           const out = interpret(res, normQ, useModel, est.inputTokens);
           const tDone = now();
           totals.calls++;

@@ -5,10 +5,13 @@
 //   1. Tempo — autocorrelation of the onset envelope over lags for 50–220 BPM, weighted by a log-normal prior
 //      (centre 120 BPM, σ 0.9 octave); parabolic peak refinement, then a harmonic refinement that re-measures the
 //      period from the peaks at 2..8 × the lag (precision ~0.1 frame); then the double/half check below.
-//   2. Octave (double/half) check by harmonic support: put a pulse comb at the winning period, best phase. If the
-//      off-beat midpoints carry ≥ 0.75 of the on-beat onset strength the true beat is twice as fast (e.g. a 174 BPM
-//      track whose ac/prior favoured 87); if, at the slower candidate, the alternate beats carry < 0.3 of the
-//      others, the beat is half as fast. Both candidates must stay inside [minBpm, maxBpm].
+//   2. Octave (double/half) check by harmonic support: put a pulse comb at the slower grid, best phase, and take
+//      off/on = mean onset strength at the grid's midpoints ÷ at its pulses, scaled by prior(fast)/prior(slow). If
+//      that is ≥ 0.55 the true beat is twice as fast (a 140 BPM kick/snare loop whose ac/prior favoured 70: the
+//      backbeat snares carry ~0.6 of the kicks); if, checking the half tempo, it is < 0.3 the beat is half as fast.
+//      Both candidates must stay inside [minBpm, maxBpm]. Measured on synthetic loops, eighth-note hats at a slow
+//      tempo score ≤ 0.52 (70 BPM) and backbeats at the doubled tempo ≥ 0.6 up to ~170 BPM; fast drum loops with a
+//      weak backbeat (≥ ~170 BPM) can still read at half tempo, the usual metrical-level ambiguity.
 //   3. Beats — Ellis (2007) dynamic programming, librosa-style (Gaussian local score σ = period/32, transition
 //      window [−2P, −P/2], cost −tightness·log²(Δ/P), tightness 100, weak-edge trim), then each beat is moved to the
 //      onset peak within ±0.1 period (parabolic sub-frame), then the grid is regularised (beats closer than 0.6 IBI
@@ -29,7 +32,7 @@ export const TEMPO_DEFAULTS = Object.freeze({
   maxBpm: 220,
   priorBpm: 120,
   priorSigmaOct: 0.9,
-  octaveUpRatio: 0.75,
+  octaveUpRatio: 0.55,
   octaveDownRatio: 0.3,
   tightness: 100,
   beatsPerBar: 4,
@@ -237,16 +240,18 @@ export function estimateTempo(env, frameRate, opts = {}) {
   period = refinePeriodHarmonics(acn, period);
   let octave = /** @type {'kept'|'doubled'|'halved'} */ ("kept");
   const bpmOf = (p) => (60 * frameRate) / p;
+  // Effective off/on ratio of the slower grid, scaled by how much the prior prefers the faster tempo.
+  const priorFavour = (pSlow) => tempoPrior(bpmOf(pSlow / 2), o) / Math.max(1e-9, tempoPrior(bpmOf(pSlow), o));
   if (bpmOf(period / 2) <= o.maxBpm * 1.02 && period / 2 >= 2) {
     const up = combSupport(env, period);
-    if (up.ratio >= o.octaveUpRatio) {
+    if (up.ratio * priorFavour(period) >= o.octaveUpRatio) {
       period /= 2;
       octave = "doubled";
     }
   }
   if (octave === "kept" && bpmOf(period * 2) >= o.minBpm * 0.98 && period * 2 < n / 4) {
     const down = combSupport(env, period * 2);
-    if (down.on > 0 && down.ratio < o.octaveDownRatio) {
+    if (down.on > 0 && down.ratio * priorFavour(period * 2) < o.octaveDownRatio) {
       period *= 2;
       octave = "halved";
     }

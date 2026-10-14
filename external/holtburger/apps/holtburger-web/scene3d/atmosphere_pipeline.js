@@ -42,6 +42,7 @@ import {
   BlendFunction,
   BloomEffect,
   ClearPass,
+  DepthOfFieldEffect,
   Effect,
   EffectAttribute,
   EffectComposer,
@@ -826,6 +827,119 @@ export function syncAerialSun(ap, atmosphereSky) {
   return true;
 }
 
+// ── Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF) ─────────────────────────
+// One pmndrs DepthOfFieldEffect for film takes (scene3d/film/SPEC.md §4 item 8),
+// built once at pipeline construction and ONLY under the exact-match flag:
+// absent (or `=1` / `=true` / `=ON`) nothing is constructed, no `window.__dof`
+// exists and both effect lists are unchanged.
+// IDLE = OUT OF THE SHADER. While `__dof.enabled` is false the effect's blend
+// function is DST, which EffectPass.updateMaterial leaves out of the compound
+// shader entirely (postprocessing 6.39.1: only its DEPTH attribute bit is
+// kept, a no-op — the composer hands its depth texture to every pass added
+// after the first depth user anyway), and its update() — CoC, CoC blur,
+// mask and four bokeh passes — is skipped. So `?filmDof=on` with the DoF idle
+// compiles the SAME compound shaders as the flag off (no sampler, no texture
+// fetch, no pass). `enabled = true` flips it to NORMAL at opacity 1: the
+// owning EffectPass recompiles ONCE (a one-off program compile — toggle it
+// between shots, never per frame; the setter ignores a no-change write).
+// `enabled = false` recompiles back to the idle GLSL (pmndrs merges and never
+// prunes material defines/uniforms, so the DoF's renamed keys stay behind
+// unused and that program is one more compile, not a cache hit).
+// SAMPLER BUDGET (counted 2026-10-13 in node on the real compound shaders,
+// defines applied): enabled it adds FOUR fragment samplers (near/far colour +
+// near/far CoC; pmndrs' default MULTIPLY_RGB mask keeps the far CoC texture).
+// Legacy single fxPass: 8 → 12 at the defaults, 10 → 14 with ssao + fxGlow +
+// fxDistort + fxDecals (ANGLE/D3D11 links at most 16). Split chain's post
+// half (`?clouds=on`): 4 → 8.
+// PLACEMENT: appended at the TAIL of each list; it carries
+// EffectAttribute.DEPTH and EffectPass sorts by attributes (descending,
+// stable), so it lands right after the last DEPTH effect — after
+// aerialPerspective / horizonDissolve in the legacy list, first in the split
+// chain's post half (after a CONVOLUTION lensFlare only) — and ahead of fxGlow,
+// bloom, vignette, tone mapping, grade and dithering on both. CAVEAT (legacy
+// single pass only): pmndrs effects' update() read the pass INPUT, so the
+// defocused colour there is the scene before this pass's aerial perspective /
+// horizon dissolve (in-focus pixels are exact; a fully defocused far
+// background shows un-hazed), and the AO composite (attribute NONE) lands
+// after it. The split chain (`?clouds=on`, `?cloudsMainPass` default on)
+// defocuses the finished atmosphere + late particles — the chain for film.
+// Depth: the CoC material decodes the logarithmic depth buffer itself (pmndrs
+// sets LOG_DEPTH in initialize() from renderer.capabilities) — never
+// hand-decode it a second time. Its near/far are copied BY VALUE on a camera
+// (re)target only, so never animate them. Focus is the euclidean camera
+// distance in metres (the Pose `focus` channel maps 1:1); `target` is a
+// THREE-world Vector3 for autofocus (an AC point maps through acToThree:
+// [x, z, -y]) and overrides focusDistance every enabled frame.
+
+/** Film mode, DEFAULT OFF: `?filmDof=on` exactly, or a boolean `opts.filmDof`. */
+function filmDofWanted(opts) {
+  if (typeof opts?.filmDof === "boolean") return opts.filmDof;
+  try {
+    if (typeof window === "undefined" || typeof location === "undefined") return false;
+    return new URLSearchParams(location.search).get("filmDof") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * The film DoF effect and its `window.__dof` handle (installed by the
+ * pipeline). Setters validate: numbers must be finite (focusRange > 0, the
+ * rest ≥ 0); `target` takes a THREE.Vector3 (kept by reference, so the caller
+ * may move it every frame), an `[x, y, z]` / `{x, y, z}` (copied) or null;
+ * anything else throws.
+ */
+function createFilmDof(camera) {
+  const effect = new DepthOfFieldEffect(camera, {
+    // Idle: DST = left out of the compound shader (see the block note above).
+    blendFunction: BlendFunction.DST,
+    focusDistance: 10,
+    focusRange: 5,
+    bokehScale: 1,
+    resolutionScale: 0.5,
+  });
+  let enabled = false;
+  // EffectPass.render calls update() on EVERY effect each frame, DST or not:
+  // while idle skip the seven internal passes (nothing reads their targets).
+  const runUpdate = effect.update.bind(effect);
+  effect.update = (renderer, inputBuffer, deltaTime) => {
+    if (enabled) runUpdate(renderer, inputBuffer, deltaTime);
+  };
+  const num = (name, v, positive) => {
+    if (typeof v !== "number" || !Number.isFinite(v) || (positive ? v <= 0 : v < 0)) {
+      throw new RangeError(`__dof.${name}: expected a finite number ${positive ? "> 0" : ">= 0"} (got ${v})`);
+    }
+    return v;
+  };
+  const handle = {
+    get enabled() { return enabled; },
+    set enabled(on) {
+      const want = !!on;
+      if (want === enabled) return; // every blendFunction write recompiles
+      enabled = want;
+      effect.blendMode.blendFunction = want ? BlendFunction.NORMAL : BlendFunction.DST;
+    },
+    get target() { return effect.target; },
+    set target(v) {
+      if (v === null || v === undefined) { effect.target = null; return; }
+      if (v.isVector3 === true) { effect.target = v; return; }
+      const xyz = Array.isArray(v) ? v : [v.x, v.y, v.z];
+      if (xyz.length !== 3 || !xyz.every(Number.isFinite)) {
+        throw new TypeError("__dof.target: expected a THREE.Vector3, [x, y, z] or {x, y, z} (THREE world), or null");
+      }
+      effect.target = new THREE.Vector3(xyz[0], xyz[1], xyz[2]);
+    },
+    get focusDistance() { return effect.cocMaterial.focusDistance; },
+    set focusDistance(v) { effect.cocMaterial.focusDistance = num("focusDistance", v, false); },
+    get focusRange() { return effect.cocMaterial.focusRange; },
+    set focusRange(v) { effect.cocMaterial.focusRange = num("focusRange", v, true); },
+    get bokehScale() { return effect.bokehScale; },
+    set bokehScale(v) { effect.bokehScale = num("bokehScale", v, false); },
+    get effect() { return effect; },
+  };
+  return { effect, handle };
+}
+
 export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const {
     skyScene,
@@ -1517,6 +1631,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fog: () => (scene && scene.fog) || null,
     ...(typeof opts?.fxDecals === "boolean" ? { enabled: opts.fxDecals } : {}),
   });
+  // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the film depth of field
+  // (createFilmDof above; placement + idle-is-DST notes there), or null — then
+  // both effect lists below are exactly as before.
+  const filmDof = filmDofWanted(opts) ? createFilmDof(camera) : null;
 
   // Clouds in the main pass (`?cloudsMainPass=on`). The CloudOverlay is built
   // by index.js before this pipeline (its `?clouds=on` block runs first);
@@ -1594,6 +1712,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // → Dithering.
     const atmosEffects = [heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
     const postEffects = [fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
+    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): DoF over the finished
+    // clouds + aerial + late particles, sorted ahead of fxGlow / bloom.
+    if (filmDof) postEffects.push(filmDof.effect);
     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
     if (nanScrubOn) {
       lateScrubPass = new PostChainSourcePass(camera, particlesOverCloudsPass, makeNanScrub());
@@ -1627,6 +1748,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // is added after the atmosphere and before lens flare / bloom. Tier 2:
       // fxDecals sits after the AO composite, before the clouds / aerial.
       ...[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
+      // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): appended; the
+      // attribute sort seats it after horizonDissolve, ahead of fxGlow.
+      ...(filmDof ? [filmDof.effect] : []),
     );
   }
   if (nanScrubOn) {
@@ -1674,6 +1798,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   installColorGradeHandle(colorGrade);
   installSsaoHandle(ssaoPass);
   installLayerHazeHandle(layeredHaze);
+  // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the live DoF handle —
+  // `window.__dof {enabled, target, focusDistance, focusRange, bokehScale,
+  // effect}`. Never installed with the flag off.
+  if (filmDof && typeof window !== "undefined") window.__dof = filmDof.handle;
 
   // `?particlesOverClouds` runtime state. `lateArmed` is the no-reload A/B
   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
@@ -1778,6 +1906,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     if (fxPostPass) fxPostPass.mainCamera = cam;
     // `.camera`: ParticlesOverCloudsPass is a base Pass (no-op mainCamera).
     if (particlesOverCloudsPass) particlesOverCloudsPass.camera = cam;
+    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the EffectPass setters
+    // above already fan `mainCamera` out to the DoF (its own setter re-copies
+    // near/far + PERSPECTIVE_CAMERA into the CoC material and moves the
+    // autofocus camera); set it directly too, so autofocus can never measure
+    // from a stale camera whichever pass holds the effect. Idempotent.
+    if (filmDof) filmDof.effect.mainCamera = cam;
   }
 
   // Bug 11 diag: one line per resize (rate-limited) — correlate any
@@ -1843,6 +1977,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass,
     fxPostPass,
     particlesOverCloudsPass,
+    // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the DoF effect, present
+    // only with the flag (the off object keeps its exact shape).
+    ...(filmDof ? { filmDof: filmDof.effect } : null),
 
     /**
      * ?indoorDepthSplit (2026-08-04) — arm/disarm retail's indoor
@@ -2278,6 +2415,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;
       if (layeredHaze) installLayerHazeHandle(null);
       dithering.dispose?.();
+      // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the effect went with
+      // its pass above; drop the global handle while it is still this one's.
+      if (filmDof && typeof window !== "undefined" && window.__dof === filmDof.handle) delete window.__dof;
     },
   };
 }

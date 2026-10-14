@@ -9,8 +9,10 @@
 //   3. Foote checkerboard novelty with a Gaussian-tapered kernel (half-width 4 bars, σ = 2 bars, main diagonal
 //      excluded): novelty(i) = weighted mean same-side similarity − weighted mean cross similarity at the bar line
 //      between bars i−1 and i.
-//   4. Adaptive peak picking: a local maximum within ±2 bars that exceeds (mean novelty within ±8 bars + 0.25 × the
-//      global std) and 0.02, accepted greedily by height with a 4-bar minimum section (also from both ends).
+//   4. Adaptive peak picking: a local maximum within ±1 bar that exceeds (mean novelty within ±8 bars + 0.25 × the
+//      global std) and 0.02, accepted greedily by height with a 4-bar minimum section (also from both ends). The
+//      local-max window is ±1 (not ±2) because a 4-bar section under the 8-bar-wide kernel also lights up its own
+//      middle; a ±2 window let that (later rejected) mid-section bump mask the section's real end boundary.
 //      Boundaries are bar indices, i.e. snapped to downbeats by construction.
 //   5. Segment similarity = best mean similarity along a diagonal stripe of the two segments' block (bar k of one
 //      against bar k + s of the other, small alignment slack, ≥ half overlap) on a path-enhanced SSM (3-bar diagonal
@@ -27,7 +29,7 @@ export const STRUCTURE_DEFAULTS = Object.freeze({
   noveltyHalfWidth: 4,
   noveltySigma: 2,
   minSectionBars: 4,
-  peakWindow: 2,
+  peakWindow: 1,
   thresholdWindow: 8,
   thresholdK: 0.25,
   minNovelty: 0.02,

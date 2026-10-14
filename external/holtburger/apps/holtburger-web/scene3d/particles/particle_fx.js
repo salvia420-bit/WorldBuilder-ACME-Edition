@@ -427,6 +427,10 @@ export const FX_UNIFORMS = {
   uFxStretchT: { value: 0.04 },
   uFxViewH: { value: 1080 },
   uFxMinPx: { value: 1.5 },
+  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a global near-fade floor
+  // in metres of clip w — the shader fades with max(row nearFade, this). 0 (the
+  // default) is the per-row fade exactly. Set via setFxNearFadeMin.
+  uFxNearFadeMin: { value: 0 },
 };
 
 // ---------------------------------------------------------------------------
@@ -513,6 +517,46 @@ export function particleFxLightFor(night, indoor, out = [0, 0, 0]) {
   return out;
 }
 
+// ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────────────
+// film/runtime/film_clock.js routes the FX shader clock through the film clock
+// for a stepped take (`setFxTimeSource(() => filmMs)`) and restores it with
+// null; it may raise the near-fade floor for fly-throughs. Never called with
+// the flag off: the source stays null and the floor 0.
+let _fxTimeSource = null;
+/**
+ * Clock for `particleFxFrame()` calls that pass no finite `nowMs` (the live
+ * path): `fn()` → milliseconds, or null for performance.now(). A source that
+ * throws or returns a non-finite value falls back to performance.now() for
+ * that frame.
+ * @param {(() => number)|null} fn
+ */
+export function setFxTimeSource(fn) {
+  if (fn !== null && fn !== undefined && typeof fn !== "function") {
+    throw new TypeError("setFxTimeSource: expected a function or null");
+  }
+  _fxTimeSource = fn || null;
+}
+function _fxSourceNowMs() {
+  let t = NaN;
+  try { t = _fxTimeSource(); } catch (_) { t = NaN; }
+  return Number.isFinite(t) ? t : (typeof performance !== "undefined" ? performance.now() : 0);
+}
+/**
+ * Set the global particle near-fade floor (metres, ≥ 0; 0 = off): every FX
+ * program fades with max(row nearFade, m), so a lens-filling cloud melts as the
+ * camera flies through it. Uniform-only — no program-key change. Returns the
+ * previous floor.
+ * @param {number} m
+ */
+export function setFxNearFadeMin(m) {
+  if (typeof m !== "number" || !Number.isFinite(m) || m < 0) {
+    throw new RangeError(`setFxNearFadeMin: expected a finite number >= 0 (got ${m})`);
+  }
+  const prev = FX_UNIFORMS.uFxNearFadeMin.value;
+  FX_UNIFORMS.uFxNearFadeMin.value = m;
+  return prev;
+}
+
 let _lastFrameStamp = -1;
 let _lightCountdown = 0;
 const _lightScratch = [1, 1, 1];
@@ -523,7 +567,9 @@ const _bufSize = new THREE.Vector2();
  * @param {number} [nowMs] test seam
  */
 export function particleFxFrame(nowMs) {
-  const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : 0);
+  const now = Number.isFinite(nowMs) ? nowMs
+    : _fxTimeSource !== null ? _fxSourceNowMs()
+    : (typeof performance !== "undefined" ? performance.now() : 0);
   if (now === _lastFrameStamp) return;
   _lastFrameStamp = now;
   // Wrapped so GPU-side t·hz stays small (fract/sin precision); a jump every
@@ -816,6 +862,7 @@ uniform float uFxAlphaCal;
 uniform float uFxAddCal;
 uniform highp sampler2D uFxSceneW;
 uniform vec2 uFxInvRes;
+uniform float uFxNearFadeMin;
 varying vec4 vFxA;
 varying vec4 vFxB;
 varying vec4 vFxC;
@@ -999,7 +1046,9 @@ const FRAG_COLOR = /* glsl */`
 			fxA *= clamp( ( fxSceneW - vFxD.w ) / vFxD.x, 0.0, 1.0 );
 		}
 	#endif
-		if ( vFxD.y > 0.0 ) fxA *= smoothstep( 0.35 * vFxD.y, vFxD.y, vFxD.w );
+		// near fade: the row's distance, floored by the film-mode global (0 = the row's exactly)
+		float fxNf = max( vFxD.y, uFxNearFadeMin );
+		if ( fxNf > 0.0 ) fxA *= smoothstep( 0.35 * fxNf, fxNf, vFxD.w );
 	#if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
 		#ifdef HB_FX_ADDITIVE
 		fxC *= vColor.r * uFxAddCal;
@@ -1053,6 +1102,8 @@ export function patchParticleFxShader(shader) {
   shader.uniforms.uFxAddCal = FX_UNIFORMS.uFxAddCal;
   shader.uniforms.uFxSceneW = FX_UNIFORMS.uFxSceneW;
   shader.uniforms.uFxInvRes = FX_UNIFORMS.uFxInvRes;
+  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): the near-fade floor (0).
+  shader.uniforms.uFxNearFadeMin = FX_UNIFORMS.uFxNearFadeMin;
   // tier 1 (bound always; three uploads only what the program declares)
   shader.uniforms.uFxNoise = FX_UNIFORMS.uFxNoise;
   shader.uniforms.uFxSunWorld = FX_UNIFORMS.uFxSunWorld;

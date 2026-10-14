@@ -1,8 +1,85 @@
-# HANDOFF — Asheron's Call FILM MODE (2026-10-13, paused mid-build)
+# HANDOFF — Asheron's Call FILM MODE (started 2026-10-13; implementation completed 2026-10-14)
 
-**Status: research + recon DONE, contracts FROZEN, implementation ~15% (partial, untested, NOT wired in).**
-Nothing in this commit changes the running client: every existing file is byte-identical to its parent commit;
-the new code under `scene3d/film/` and `tools/film/` is imported by nothing yet and has no gate suites.
+**Status (2026-10-14): implementation COMPLETE, wired in behind `?filmMode=on` (default OFF), every film suite and
+the full JS gate green, adversarially reviewed and fixed over four rounds. The ONLY step left is the owner-run
+1070 eye-test batch (§8 / step 7) — it was never run by an agent (owner rule). Nothing is committed yet.**
+The original 2026-10-13 pause text is kept below §0 as history; §0 supersedes §4–§5 where they disagree.
+
+## 0. Status 2026-10-14 — what exists now, how it was verified, what is left
+
+### 0.1 Delivered (all under `apps/holtburger-web` unless absolute)
+| Area | Where | Size |
+|---|---|---|
+| Page runtime + pure modules | `scene3d/film/**` (core, shots, drone, pilot, scene, runtime, `index.js`, `flags.js`) | ~30k lines |
+| Node tooling | `tools/film/**` (`film.mjs` CLI with 21 subcommands, `lib/`, `audio/`, `plan/`, `sites/`, `data/`, `install-claude.sh`) | ~14.6k lines |
+| Gate suites | 33 × `tests/film_*.test.mjs`, all registered in TIER5 (`filmMode(<topic>)`) | ~27k lines |
+| Integration seams (existing files) | `scene3d/{index,cells,entities,statics,animated_scenery,atmosphere_pipeline}.js`, `scene3d/particles/{particle_manager,particle_fx}.js` — each zero-cost / byte-identical when film is off (`tests/film_hooks.test.mjs`) | +~450 lines |
+| Flags | `?filmMode=on`, `?filmDof=on` (both exact `=== "on"`, default OFF) — rows in `docs/url-flags.md` §4 + §0 | |
+| Contracts | `scene3d/film/SPEC.md` (kept in sync with the code: §3.2 JEV envelope, §5.2 Plan/Timeline/Take, seams, live subjects, fades), `scene3d/film/runtime/SEAMS.md`, `scene3d/film/README.md` | |
+| Claude packaging | `$REPO/.claude/skills/film-mode/` (SKILL.md + reference/{workflow,plan-format,pilot,music-video,techniques,1070}.md), `$REPO/.claude/agents/film-director.md`, installer `tools/film/install-claude.sh` | |
+| Site gazetteer | built: `/mnt/wbterminal2/film-projects/_gazetteer/film_gazetteer.jsonl` (5,419 sites: 61 towns, 1,400 dungeons, 1,578 POIs, 1,967 landmarks, 13 regions, 400 wilderness) — `film sites build --spawns` to rebuild | |
+
+### 0.2 Verification
+- Every film suite passes standalone (each < ~6 s); full gate `capped-build node harness/run-js-headless.mjs --quiet`:
+  **728 passed, 0 failed, 0 skipped** (2026-10-14, final tree, all 33 film suites included). `--coverage`: 0 unregistered. `lint-url-flags` (+`--strict`), `audit-flag-defaults
+  --mismatch`, `lint-event-consumers`, `gen-modulepreload --check`: all exit 0. `lint-harness-params` exits 1 on 4
+  PRE-EXISTING dead params in non-film harness files (`flag`, `kickDance`, `other`, `x`) — not film-related; every
+  param of the film boot URL has a reader and a docs row (checked by hand).
+- Real ffmpeg 7.0.2 smoke of the assembly graph (dissolve/cut/fade/gaps): output frames = `timeline.frames`.
+- Adversarial review (`docs/film-mode-2026-10-13/review/`): 6 dimensions → 47 findings, 2–3 independent refuters
+  each → 39 confirmed (several duplicates), 8 refuted; fixed in 4 rounds, every fix cluster independently checked
+  (mutation checks against /tmp copies). Records: `review-2026-10-14.json`, `round{1..4}-fix-results-2026-10-14.json`.
+- NOT verified (needs the owner's 1070 session): anything GPU/browser — WebCodecs on the real canvas, DoF look,
+  stepped clock against the real loop, CDP drain throughput, the pass-over image at nadir, JEV live calls.
+
+### 0.3 Decisions made during the build (now in SPEC; do not re-derive)
+- **Scenery fades are OFF in v1.** A wasm `CollisionHit` has no placement identity, and geometric attribution
+  proved unreliable on real census data (a boulder next to a tree produced a false clear view). Fades work for
+  placed (Stab) trees/props of known size, entities and particle smoke; procedural trees/rocks are rerouted around.
+  **v2:** add a scenery placement index to `CollisionHit` (wasm scenery sweep) for exact fades.
+- Live (moving) subjects: tracking/chase rigs are re-anchored to the live subject every frame with an exact
+  feed-forward; a subject turning ≥ ~90°/s can push flown side-track/chase rigs outside ±15 % (the CLI prints a
+  `tracking-gap` warning > 2 m).
+- Prepare runs an acceleration-aware **dry-fly** flight check (10 Hz) and reports `overspeed` with a verified minimum
+  duration; the realised gap can be larger than the dry-flown one (fpv-dive up to ~+90 %).
+- Realtime capture records on the film grid (constant rate, re-stamped frames) so the constant-fps mux is exact.
+- The stepped clock yields one rAF per film frame (rAF-driven subsystems advance), keeps the `particleClock=sim`
+  clock continuous, and never leaves two rAF chains.
+- Fog looks: re-applying the same fog is a no-op; takes wait (≤ 30 s, reported) for the retail fog transition.
+- `world.teleport` / `world.command` refuse with FILM_BUSY during prepare/rehearse/shoot/scout; teleports park the
+  film viewer cell. The particle-cull seam is passed through `installFilmMode` deps (recheck every frame in takes).
+- Plans: an indoor/outdoor technique mismatch the page cannot build is a validation ERROR; `{bars}` shots starting
+  before the first downbeat count from it (half-beat tolerance); `bounds` and the technique `capture:'realtime'`
+  hint are honoured.
+- CLI: `film status [--release|--own]`, `film jev task <pick|keep|site-fit|family>`, `run --song-analysis/--song-audio`;
+  password only from `--password`/`FILM_PASSWORD`, scrubbed everywhere incl. the heavy-lock owner file.
+
+### 0.4 What is left (owner)
+1. Install the director packaging: `tools/film/install-claude.sh --dry-run`, then without `--dry-run` (symlinks
+   `~/.claude/skills/film-mode` and `~/.claude/agents/film-director.md`; refuses to clobber real files).
+2. 1070 test Chrome: add `--enable-automation` to `launch-wls.bat` so `browser check`/`boot` can verify
+   `--mute-audio` (else pass `--assume-muted`); boot also mutes the page's own AudioManager.
+3. JEV key for metered runs: `OPENROUTER_API_KEY` env (or `~/.config/holtburger-film/openrouter.key`, mode 600).
+   Without a key the pilot uses its code policy (same rules, no cost).
+4. The §8 eye-test batch on the 1070 (owner-requested session only): `reference/1070.md` in the skill has the
+   runbook, the boot URL and a validated eye-test plan. `film status` records the per-item status JSON.
+5. Commit when satisfied (nothing was committed by the agents; ~110 new/changed files under `external/holtburger/` plus
+   `.claude/skills/film-mode/` and `.claude/agents/film-director.md` (one repo: WorldBuilder-ACME-Edition); `install-claude.sh` must keep
+   its exec bit). `docs/film-mode-2026-10-13/wip/hooks-lane-WIP-untested.patch` is superseded by the tree.
+
+### 0.5 Known non-blocking limitations (documented in SPEC/skill)
+Scenery fades (above); a scenery LABEL can read 'tree' for a boulder beside a tree (labels only, never keys);
+fpv hard-mount path techniques fly > 240°/s on some paths (pre-existing feel, nominal validates); depth of field in
+the default legacy pass blurs the pre-aerial scene (`clouds=on` gives the full chain — owner's call, GPU cost);
+`lint-harness-params` pre-existing failure (above). Session note: on 2026-10-14 the laptop paused ~3 h and the
+Claude process exited twice; workflow resume-by-cache replays only an in-order prefix, so for pipelines continue
+from the journal (`review/round*-fix-results*.json` show the pattern) instead of resuming.
+
+---
+## (history) 2026-10-13 pause text
+**Status at pause: research + recon DONE, contracts FROZEN, implementation ~15% (partial, untested, NOT wired in).**
+Nothing in that commit changed the running client: every existing file was byte-identical to its parent commit;
+the new code under `scene3d/film/` and `tools/film/` was imported by nothing yet and had no gate suites.
 Paused by the owner ("this seems like an overnight job … wrap up and write a handoff").
 
 ## 1. The goal (owner's words)

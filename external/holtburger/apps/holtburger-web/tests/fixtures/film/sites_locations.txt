@@ -1,0 +1,44 @@
+A Cave | Dungeon | 0x018B0191 [50 -10 0] -0.003491 0 0 -0.999994
+A Drudge Nest | Dungeon | 0x01D80108 [21.4 -1.3 0] 0.233445 0 0 -0.97237
+A Drudge Nest | Dungeon | 0x01DC015C [32.3 -12 6] -0.9262 0 0 -0.377033
+Abandoned Mine | Dungeon | 0x01C9022D [72.9 -30.2 0] 0.139173 0 0 -0.990268
+Al-Arqas | Town | 0x8F58003B [183.851 60.183 9.326] 0.707107 0 0 -0.707107
+Al-Arqas Portal | Dungeon | 0x8F58003B [183.851 60.183 9.326] 0.707107 0 0 -0.707107
+Base of Mt. Zabool | Dungeon | 0x979A0036 [148.7 125.8 41.2] 0.968148 0 0 -0.25038
+Battlefield of Ayn Tayn | Dungeon | 0xC14B0007 [16.4 159.7 20.6] -0.766044 0 0 -0.642788
+Cragstone | Town | 0xBB9F0040 [169.358 168.251 54.005] 0.578683 0 0 -0.815552
+Cragstone Portal | Dungeon | 0xBB9F0040 [169.358 168.251 54.005] 0.578684 0 0 -0.815552
+Cragstone Portal | Dungeon | 0xBD9F0039 [176.5 22.6 2] -0.748956 0 0 -0.66262
+Cragstone Waterfall Portal | Dungeon | 0xB6A30011 [56 1.1 1.9] -0.97437 0 0 -0.224951
+Crater Lake Village | POI | 0x90D00107 95.521004 84 277.204987 -0.707107 0 0 -0.707107
+Crescent Lane Cottages Portal | Dungeon | 0xD26D001A [76.45 45.134 44.005] 0.999787 0 0 -0.02062
+Destroyed Portal to Holtburg | Dungeon | 0xA9B40019 [84 7.1 94] 0.996917 0 0 -0.078459
+Emote Test Portal | Dungeon | 0xBA6F0036 [167.7 129.5 6.1] -0.636078 0 0 -0.771625
+Empyrean Garrison | Dungeon | 0x01610264 [80 -80 0] -0.707107 0 0 -0.707107
+Exit portal | Dungeon | 0x5BA0002D [140.001 112.791 31.672] 1 0 0 0
+Exit portal | Dungeon | 0xBBBF001C [75 78 222.3] -0.063661 0 0 -0.997972
+Exit portal | Dungeon | 0xC5D00029 [128.49 5.692 116.108] 0.95567 0 0 -0.294441
+Exit to Holtburg | Dungeon | 0xA9B40019 [84 7.1 94] 0.996917 0 0 -0.078459
+Frozen Fortress | Dungeon | 0x594F02C2 [140.003 -156.686 0.005] -0.999961 0 0 0.008883
+Frozen Tomb | Dungeon | 0x77E702E4 [25.1647 31.3589 124.805] 0.67559 0 0 -0.737277
+Glenden Wood | Dungeon | 0xA0A40017 [69.0695 148.739 66.8883] 1 0 0 0
+Glenden Wood | Town | 0xA0A40025 [96.302 119.847 59.955] 0.707107 0 0 -0.707107
+Glenden Wood Dungeon | Dungeon | 0x01E3033D [161 -150 0] -0.983255 0 0 -0.182236
+Holtburg | Dungeon | 0xA7B70037 [155.9 146.26 28] -0.022687 0 0 -0.999743
+Holtburg | Town | 0xA9B40019 [84 7.1 94] 0.996917 0 0 -0.078459
+Holtburg Casino VIP Portal | Dungeon | 0xA9B2001D [84 102 94] 0 0 0 -1
+Holtburg Dungeon | Dungeon | 0x01F60289 [96.7 -10 0] -0.719279 0 0 -0.694721
+Holtburg Meeting Hall Portal | Dungeon | 0x01250126 [30 -60 6] 1 0 0 0
+Holtburg Portal | Dungeon | 0xAFB60019 [87.4 6.2 99.3] -0.992115 0 0 -0.125333
+Holtburg Redoubt | Dungeon | 0x016301AC [140 -40 0] -0.707107 0 0 -0.707107
+Hotel Swank | POI | 0x018A024F [120 -79.9 0] -0.707107 0 0 -0.707107
+Icecliff Cottages Portal | Dungeon | 0xE53F0026 [0 0 0] 1 0 0 0
+JumpShaft6 Portal | Dungeon | 0xE53F0026 [0 0 0] 1 0 0 0
+Kryst | Town | 0xE822002A [132.7 37.9 20.1] -0.866025 0 0 -0.5
+Linvak Tukal | POI | 0xA21E001A [83 38 560.4] 1 0 0 0
+Olthoi Tunnel | Dungeon | 0x18B40001 [11.5048 0.0807 22.005] 0 0 0 -1
+Olthoi Tunnel | Dungeon | 0x3EEB0001 [9.6898 22.5287 14.005] 0 0 0 -1
+Storage | POI | 0x01110108 [10 -10 0] -0.382683 0 0 -0.92388
+The Underground City | Town | 0x01E901C2 [152.333 -2.372 -12] -0.929307 0 0 -0.369309
+Town Network | POI | 0x00070143 [70 -60 0.005] 0 0 0 -1
+Yanshi | Town | 0xB46F001E [75.2 124.1 34.69] 1 0 0 0

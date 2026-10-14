@@ -1,0 +1,332 @@
+{
+ "fix:r4-scenery-fade": {
+  "fixed": [
+   {
+    "id": "scenery-never-keyed (code, previous run, verified and kept)",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/world_query.js: FADEABLE_STATIC_SOURCES = ['object']. describeHit labels a SCENERY hit with sceneryLabelRow (kind and did of the absolutely nearest axis that could own the hit under SCENERY_HIT_RULES, else the nearest axis) and never returns a fadeKey for it. Only statics hits (STATIC_HIT_RULES, through fadeableHit) produce keys. placementOfKey/staticFadeTargets return null for a scenery key. The label helpers (staticAxisDistance, sceneryColliderReach, colliderSideFit, colliderModelOf) are all still used for labelling, so there is no dead code. The staticKindOf JSDoc and file header now say tip-flex is the thin weapon-like pole archetype, not bushes or grass, and is only a label. I re-ran the round-3 checker probes /tmp/claude-1000/r3perc-chk/p4_bigrock_tree.mjs, p5_offaxis_tree.mjs and p7_samescene.mjs against the current code. Every configuration (boulder 0x02001065 at scales 0.6/1.0/1.4 with BIG/PINE behind it, the same-scene oak and bush, 035F/0251 with neighbours) gives fadeKey null. The p4 end-to-end runs report {visibleFrac 0, occluderIds []} both before and after the fade (round 3 gave 0.8 after the fade)."
+   },
+   {
+    "id": "sensors-no-scenery-seen-through (code, previous run, verified and kept)",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/sensors.js refine(): on a scenery-layer hit, both the guid and the fadeKey are dropped. A fadeKey is kept only when isFadeableStaticKey (an object-source key). A scenery hit therefore can never enter occluderIds or count as seenThrough through ctx.fadedIds, even when a world query returns a key for it (S17)."
+   },
+   {
+    "id": "questions-occluder-text (previous run, verified and kept)",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/questions.js occluder_action instructions now read: 'the film runtime fades placed props and placed trees of known size, entities and particle smoke; procedural (terrain) trees and rocks are rerouted around, \u2026'. film_pilot_words and film_pilot_policy pin this wording and check that the criteria agree with codePolicy and the mapper (fade with no id \u2192 reroute)."
+   },
+   {
+    "id": "perception-tests (previous run, verified and kept)",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_perception.test.mjs (39/39): W10, W11, W13, W14 and S12\u2013S14 now expect no scenery key. New W16 covers the checker's 15 configurations with the census colliders (0x02001065 with BIG/PINE/oak/bush; 035F/0251/02DC with neighbours), with and without a normal: no key, and the label names a placement in the scene. New S16 runs the same configurations with the real sensors: subject hidden, occluderIds [], fading every hand-made scenery key still hidden, staticFadeTargets null, and codePolicy plus the mapper give reroute. New S17 feeds the sensors a hostile describeHit."
+   },
+   {
+    "id": "mutation-check",
+    "what": "Mutants of /tmp copies, swapped in through a loader hook (/tmp/claude-1000/r4-scenery-fade/mut/; the repo was not touched). The identity copies give 39/0, 65/0 and 21/0. M1 (scenery keys restored: sources ['object','scenery'] plus a key from the label row): perception fails 10 checks (W10, W11, W13, W14\u00d72, S12, S14, W16, S16, S17), runtime_capture fails 'T2 r4' and film_api fails A11. M2 (world_query issues scenery keys, staticFadeTargets still refuses them): perception fails 6 (W16, W14\u00d72, W10, W11, W13). M3 (staticFadeTargets resolves scenery keys): perception fails 5 (S16, S12, S14, W10, W13), plus T2 r4 and A11. M4 (sensors keep ids on scenery hits): perception fails S17. M5 (questions.js reverted to 'props and trees \u2026 rocks rerouted'): words fails 1 and policy fails 1."
+   },
+   {
+    "id": "runtime_capture-e2e",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_runtime_capture.test.mjs: the T2 fixtures now use placed 'object' keys, because a faded tree is always a placed one in v1. New check 'T2 r4' runs the REAL createWorldQuery (scenery and object SoA rows, a live staticsGroup) under the real take player. With the scenery key in fadeIds the scenery draw is never hidden on any frame, faded.statics is 0 and fallbackFrames equals frames (reroute every frame). With the placed tree's object key the draw is hidden during the take and restored exactly, statics is 1 and fallbackFrames is 0. Suite: 65/0."
+   },
+   {
+    "id": "film_api-A11 (OUTSIDE my file list, disclosed)",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_api.test.mjs: the brief told me to run film_api, but its 2 A11 checks asserted that a SCENERY oak gets OAK_KEY, which is exactly the behaviour the binding decision removes, so the suite failed 19/2. The edit is minimal. The oak now expects kind 'tree', did OAK_DID and fadeKey null, plus staticFadeTargets(OAK_KEY) === null; the A11 titles and the header line were reworded. The catalog-wiring coverage (oak = tree with catalog dims; barrel = fadeable prop) is unchanged. The round-4 script runs its fix agents one after another and no other cluster lists this file, so there is no merge conflict. Now 21/0."
+   },
+   {
+    "id": "SPEC.md",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md. \u00a73.1 subject.occluderIds is rewritten: keys are only placed-static 'placement:<lb>:object:<row>'. Statics hits keep STATIC_HIT_RULES (buildings never keyed). Scenery hits are NEVER keyed in v1 (FADEABLE_STATIC_SOURCES); the section explains the limitation (CollisionHit has no placement; the 0x02001065 and multi-trunk evidence) and documents the label-only SCENERY_HIT_RULES. The sensors drop scenery ids and staticFadeTargets returns null, so a procedural tree's fade reroutes. Added the 'v2: exact scenery fades need a placement index on CollisionHit from the wasm scenery sweep' note there. Also: \u00a71.1 now says the collider source feeds the LABEL rule; the degrade consequence (empty catalog \u2192 scenery labelled rock and never faded; a placed tree reads as a prop sized by its selection sphere) changes only the consequence, not the condition, which belongs to r4-nits. \u00a72.14 mapper fallback examples now include any procedural tree or rock. The \u00a73 world_query bullet says keys of PLACED statics only (and that bullet was reflowed to \u2264120 columns). \u00a74 item 4 says 'placed tree / prop'. All edited lines are \u2264120 columns."
+   },
+   {
+    "id": "SEAMS.md",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/SEAMS.md. Hides: the statics fade seam is for PLACED tree/prop occluders only, with the v1 scenery rule (no key, sensors drop ids, staticFadeTargets returns null, reroute bias, v2 pointer). Static catalogs: the archetype is a label for scenery; the collider source feeds the label rule only; the empty-catalog consequence is updated."
+   },
+   {
+    "id": "README.md",
+    "what": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md. The world_query row says statics/building hits follow STATIC_HIT_RULES (placed tree or small prop of known size gets a key). Scenery hits are label-only (SCENERY_HIT_RULES helpers) and never keyed in v1 (FADEABLE_STATIC_SOURCES; v2 pointer). staticFadeTargets covers placed statics only. The sensors row now describes occluderIds (no id from a scenery hit). The statics.js seam row says 'placed tree / prop'."
+   },
+   {
+    "id": "director-docs",
+    "what": "Updated /home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md (occluder_action row example; recipe item 3), reference/workflow.md (Foliage/smoke troubleshooting row), reference/techniques.md (Occluders note) and SKILL.md (standing orders). They now say what really fades: PLACED trees marked by the VFX catalog, small placed props of known size \u2264 2 m, entity rigs that read as props, and smoke/fire. Procedural (terrain) trees, bushes and rocks never fade in v1 and the camera reroutes around them on its own (faded.fallbackFrames). Directors should still name foliage as fadeable, and tree-line shots should be framed clear of trunks. The stale tip-flex parentheticals are removed. ?visual=off now says placed trees read as props; that sentence is left for r4-nits to qualify with ?windGeo."
+   }
+  ],
+  "skipped": [
+   {
+    "id": "mapper.js docblock",
+    "why": "Outside my file list. /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/mapper.js lines 119-121 still give 'a rock-like scenery trunk without a placement' as the example of a fade with no id. Suggested text: 'any procedural scenery tree or rock (v1: never keyed), a big or unsized prop, overlapping placements'. Comment only; behaviour is correct (S16 and the T2 r4 check exercise the fallback)."
+   },
+   {
+    "id": "sense_words.js comment",
+    "why": "Outside my file list. /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/sense_words.js:205 says 'soft things the runtime may fade (foliage, small props, particle clouds)'. It is a class description, not a promise, but it could add '(placed foliage; procedural trees are rerouted)'. Comment only."
+   },
+   {
+    "id": "census collider table / exact scenery fades",
+    "why": "Out of scope under the binding orchestrator decision: v1 never fades scenery. Exact attribution needs a placement index on CollisionHit from the wasm scenery sweep; that is the v2 note in SPEC \u00a73.1. The colliderOf seam stays unwired and only sharpens labels."
+   },
+   {
+    "id": "?visual=off / ?windGeo condition wording",
+    "why": "Belongs to the r4-nits brief (item 3). I changed only the consequence clause in SPEC \u00a71.1, SEAMS, pilot.md, workflow.md and techniques.md (scenery labelled rock and never faded; placed trees read as props). The condition under which the catalog stays empty is left for r4-nits to fix."
+   }
+  ],
+  "filesTouched": [
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/world_query.js",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/sensors.js",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/questions.js",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_perception.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_pilot_words.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_pilot_policy.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_pilot_loop.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_runtime_capture.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_api.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/SEAMS.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/README.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/SKILL.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/techniques.md"
+  ],
+  "tests": [
+   {
+    "file": "tests/film_perception.test.mjs",
+    "passed": 39,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_words.test.mjs",
+    "passed": 36,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_policy.test.mjs",
+    "passed": 60,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_loop.test.mjs",
+    "passed": 34,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_runtime_capture.test.mjs",
+    "passed": 65,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_api.test.mjs",
+    "passed": 21,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_hooks.test.mjs",
+    "passed": 68,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_runtime_camera.test.mjs",
+    "passed": 30,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_cli_session.test.mjs",
+    "passed": 40,
+    "failed": 0
+   }
+  ]
+ },
+ "fix:r4-nits": {
+  "fixed": [
+   {
+    "id": "r4-nits-1 (shoot.mjs fields + fallback wording + comments)",
+    "what": "tools/film/lib/shoot.mjs: ISSUE_FIELDS now keeps the page's limitedBy and minDurationVerified on overspeed issues. An explicit null minDurationVerified is kept, because on the page it means 'not verified'. Other nulls are still dropped, and mergeIssues never overwrites the kept null. overspeedFromFlight (the fallback when a result has only a flight block) is now worded like take_player overspeedIssue. A verified minimum reads 'use duration \u2265 X s (dry-flown within 1 m there)' (from minDurationVerified true or minDurationCheck 'verified'). An estimate reads '(an estimate: not dry-flown within the check's budget)' (from null or 'unverified'). An older block that has neither field gets no qualifier, so existing output is unchanged. limitedBy 'acceleration' moves now read 'within the drone's N m/s, but turns or changes speed harder than it can follow (\u2264 amax; the path asks for \u2026): dry-flown, the craft trails \u2026 (tolerance 1 m)' instead of the wrong 'flies \u2264 vmax'. The fallback also carries limitedBy, minDurationVerified and the dry-flown maxGapM. The stale FLIGHT_GAP_WARN_M comment (round 2's speed-only check) is rewritten: the dry flight samples at 10 Hz and flies the reference nominal, not the path re-anchored to a live subject. The header now says a page issue prints once per shot and a tracking-gap once per run whose gap differs. The pageIssuesOf JSDoc and the per-shot comment are updated. issueLine's own duration hint adds ', an estimate' when minDurationVerified is null. Small addition beyond the brief: a flown carry rig's tracking-gap (liveSubject.mode 'carry' on the same result) now appends a hint naming the live subject's turn and the gentler-move fix. New regression check S10k in tests/film_cli_session.test.mjs runs the REAL take_player prepare(): boom-rise 4 s (acceleration, verified), boomerang 5 s (speed, verified), and a prebuilt-trajectory take (no spec, an estimate). It checks the fields through pageIssuesOf, the fallback, mergeIssues, judgeInput, issueLine and shootSchedule (reports/<shot>.json keeps JSON null, shoot-log rows, keepOrRetake input), plus the fallback edge cases and the live-carry hint. A mutation run through a loader hook (scratch only, repo untouched) applied 7 mutants: fields, nullable, estimate note, acceleration branch, live hint, issueLine hint, fallback field. S10k fails on every one."
+   },
+   {
+    "id": "r4-nits-2 (workflow.md maxGapM meaning)",
+    "what": "In the reports/ row of workflow.md, the issue shape now lists limitedBy? and minDurationVerified? (true / null / false explained). It also states that maxGapM on an 'overspeed' is the gap dry-flown at prepare, sampled at 10 Hz, while on a 'tracking-gap' it is the realised gap. Deviation from the brief: I did not write 'up to ~20 % larger', because measurements contradict it. Re-running the checker probe /tmp/claude-1000/r3-subject-chk/verify_minD.mjs gives boomerang 0.63 \u2192 0.76 / 0.80 m (+21\u201327 %) and fpv-dive 0.65 \u2192 1.07 / 1.24 m (+65\u201390 %). The doc says 'typically up to ~30 % more, nearly twice as far on a fast fpv dive (0.65 m dry, 1.24 m flown at 60 fps)'. SPEC \u00a73 and \u00a75.2 also note dry vs realised maxGapM."
+   },
+   {
+    "id": "r4-nits-3 (exact VFX-catalog degrade condition)",
+    "what": "SPEC.md \u00a71.1 'Degrade' and runtime/SEAMS.md 'Static catalogs' now state the exact rule. The statics bake loads the catalog for the GPU tree sway (off with ?treeWindGpu=off, ?treeWind=on, ?windGeo=on or ?visual=off) and for the ?windGeo=on wind peel, which has NO ?visual gate (statics.js ~2730 / ~3608). Entity spawns load it for ?tipFlex, ?weaponFx and ?gemSparkle (default on under ?visualAll, all off under ?visual=off). So the catalog stays empty exactly when ?windGeo=on is absent and either ?visual=off is set or every other path is off. pilot.md, workflow.md and techniques.md share one sentence: 'When the client has not loaded its VFX catalog \u2014 under ?visual=off unless ?windGeo=on (which still loads it), or with every client VFX path off (SPEC \u00a71.1) \u2014 placed trees read as props and fade only when small.' Probe /tmp/claude-1000/r4-nits/catalog_rule.mjs runs the real flag readers on all 5 call-site gates: the documented rule agrees on 14 of 14 flag combinations."
+   },
+   {
+    "id": "r4-nits-4 (SPEC \u00a73 minDurationCheck rule)",
+    "what": "The SPEC \u00a73 Prepare summary now matches take_player.js ~1189-1191. 'unverified' means the budget ran out or a rebuild threw. Only a take built from a ShotSpec is searched. A prebuilt-trajectory take is 'unverified' only when the check made an estimate; otherwise minDurationCheck, minDurationSec and minDurationVerified stay null (e.g. only the dry-flown gap failed and peakAccel \u2264 amax). Probe /tmp/claude-1000/r4-nits/shapes.mjs confirmed this with a flight model that lags 2 m (lagging-craft case: limitedBy 'acceleration', minDurationCheck null). The overspeed issue bullet now also says its maxGapM is the dry-flown gap, not the realised one."
+   },
+   {
+    "id": "r4-nits-5 (SPEC line reflow)",
+    "what": "Re-wrapped the two over-long non-table lines without changing their meaning: the take_player bullet ('cull with recheckInterval: 1 \u2026 (before the clock', was 126 chars) and \u00a74 item 1 (was 121 chars, now a 2-line break). Every non-table line of SPEC.md is now \u2264 120 characters, including all new text. Table rows were left alone because Markdown rows cannot wrap."
+   },
+   {
+    "id": "r4-nits-6 (measured live-subject floor)",
+    "what": "SPEC \u00a75.2 Live subjects now gives the measured floor. I re-ran /tmp/claude-1000/r3-subject-chk/turns.mjs at 24/30/60 fps against the current code (3 m/s subject turning at 90\u00b0/s). Cinema quarter turn: chase / lead / side-track 0.86\u20131.14\u00d7, with side-track reaching 1.155\u00d7 turning one way (0.5 % past the band), craft < 2 m off. 180\u00b0 U-turn: chase 0.74\u00d7, lead 1.28\u00d7 (26\u201328 % off), side-track 0.87\u20131.04\u00d7, craft 2.2\u20132.3 m behind. Heavy preset: 0.77\u20131.31\u00d7 and 3.0\u20133.2 m on a quarter turn. The section says the CLI tracking-gap warning (> 2 m) is the signal to shoot again with a gentler move, and that a retake of the same plan repeats it. The SPEC \u00a75.2 CLI-walk paragraph now names the kept fields and the per-run tracking-gap warning. techniques.md has a new \u00a71 'Turning subjects' bullet and a technique-specific 'Turns:' line on drone.chase, drone.lead and drone.side-track. The workflow.md tracking-gap troubleshooting row covers the live-subject case."
+   }
+  ],
+  "skipped": [
+   {
+    "id": "brief's '~20 % larger' figure (item 2)",
+    "why": "Measured realised gaps are up to +90 % on fpv-dive (0.65 \u2192 1.24 m) and +21\u201327 % on boomerang, so the docs give the measured figures instead of ~20 %."
+   },
+   {
+    "id": "brief's '~0.5\u201325 % outside \u00b115 %' wording (item 6)",
+    "why": "This range is ambiguous, so the docs give the measured distance ratios directly (1.155\u00d7 is 0.5 % past the band; the U-turn gives 0.74\u00d7 / 1.28\u00d7, which is 26\u201328 % off). The U-turn side-track ratio stays inside the band (0.87\u20131.04\u00d7), so the side-track pointer does not claim a 25 % distance error."
+   },
+   {
+    "id": "out-of-lane follow-ups",
+    "why": "These are not in my editable files. .claude/agents/film-director.md:93 still tells the director to raise the duration on a tracking-gap, and SKILL.md:141-148 has the same gap; both should mention the live-subject case (a gentler turn). scene3d/film/scene/world_query.js:503 has a comment saying loading the catalog 'would change the client's VFX under ?visual=off'. The README rows were left unchanged."
+   }
+  ],
+  "filesTouched": [
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tools/film/lib/shoot.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/tests/film_cli_session.test.mjs",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/SPEC.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/runtime/SEAMS.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/workflow.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/pilot.md",
+   "/home/wbterminal/WorldBuilder-ACME-Edition/.claude/skills/film-mode/reference/techniques.md"
+  ],
+  "tests": [
+   {
+    "file": "tests/film_cli_session.test.mjs",
+    "passed": 41,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_cli.test.mjs",
+    "passed": 34,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r4-nits/mut (7 shoot.mjs mutants via loader hook; S10k fails on each, other 40 pass)",
+    "passed": 7,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r4-nits/catalog_rule.mjs (documented VFX-catalog rule vs real flag gates, 14 combinations)",
+    "passed": 14,
+    "failed": 0
+   }
+  ]
+ },
+ "check:r4-scenery-fade": {
+  "ok": true,
+  "problems": [
+   "VERIFIED (code): /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/scene/world_query.js sets FADEABLE_STATIC_SOURCES = ['object']. In describeHit, the scenery branch only sets refined/did from sceneryLabelRow. A fade key can come only from boundsPick (statics/buildingMesh, filtered to source 'object'), through fadeableHit, which also checks FADEABLE_STATIC_SOURCES. placementOfKey rejects a scenery key, so staticFadeTargets(sceneryKey) is null. The label helpers (staticAxisDistance, sceneryColliderReach, colliderSideFit, colliderModelOf) are all still called by sceneryLabelRow, so there is no dead code. The staticKindOf JSDoc (line 269) and the file header (line 25) now describe tip-flex correctly (a thin flexing-tip pole archetype, not bushes or grass; a label only).",
+   "VERIFIED (no seen-through path): sensors.js refine() drops both the guid and the fadeKey on any scenery-layer hit, and keeps a key only when isFadeableStaticKey(key), which also checks FADEABLE_STATIC_SOURCES. The only fadedIds consumer is subjectJob's F.faded.has(id), and id is null for a scenery hit, so seenThrough cannot happen. In take_player.fade(), a scenery key passes isStaticFadeKey, staticFadeTargets returns null, nothing is undone, a fadeMiss is recorded and handled stays 0, so the take falls back to the reroute bias. No other film module (index.js, tools/film) consumes describeHit or fadeKey.",
+   "VERIFIED (round-3 checker probes re-run against current code): /tmp/claude-1000/r3perc-chk/p4_bigrock_tree.mjs gives fadeKey null in all 5 configurations (boulder 0x02001065 at scale 1.0/1.4/0.6 with BIG/PINE behind it), and {visibleFrac 0, occluderIds []} both before and after the fade (round 3 gave 0.8 after the fade). p5_offaxis_tree.mjs: 035F alone, +BIG, +PINE, 0251 alone and +BIG all give fadeKey null. p7_samescene.mjs: oak and bush at scales 0.7 and 1 all give fadeKey null.",
+   "VERIFIED (statics/entity/particle fades still work end to end): my own probe /tmp/claude-1000/r4sf-chk/e2e_fades.mjs uses the real world_query, the real VFX catalog, the real sensors, codePolicy and the mapper, with the same cylinder occluder in three forms. (a) PLACED oak, statics layer: occluderIds ['placement:05050000:object:0'], visibleFrac 1 after the fade, policy fade, setpoint fadeIds [key], staticFadeTargets resolves 1 draw. (b) PROCEDURAL oak, scenery layer: ids [], still 0 after the fade, policy fade, setpoint fadeIds [] with reroute true. (c) Creature rig, objects layer: ids [guid], visibleFrac 1 after the fade. The policy answer for a creature is 'wait', which is pre-existing by design. Suites: runtime_capture T2 (statics node/instance/batch restore), T2 r4 (real world query: the scenery key never hides anything and falls back every frame; the placed key hides and restores exactly), 'entities:1, particles:1' (line 1250) and seams-7 (smoke) all pass. Perception S4 (particle key) and S12 (placed tree key) pass.",
+   "VERIFIED (mutation check, loader-hook copies under /tmp/claude-1000/r4sf-chk/mut/; repo sha256 unchanged: world_query 03fde8b0\u2026, sensors 79d4fcc8\u2026, questions 837531d1\u2026). The identity copies give perception 39/0, runtime_capture 65/0 and film_api 21/0. MA (scenery-null rule reverted: sources ['object','scenery'] plus a key from the label row): perception 29/10 (W10, S12, W11, W13, W14\u00d72, S14, W16, S16, S17), runtime_capture fails T2 r4, film_api fails A11\u00d72. MB (sensors keep guid/key on scenery hits): perception fails S17. MC (sensors accept any placement key): perception fails S17.",
+   "VERIFIED (docs): questions.js OCCLUDER_INSTRUCTIONS reads 'the film runtime fades placed props and placed trees of known size, entities and particle smoke; procedural (terrain) trees and rocks are rerouted around \u2026', and words 36/0 and policy 60/0 pin it. SPEC.md \u00a73.1 has the rewritten subject.occluderIds rule plus the '**v2:** exact scenery fades need a placement index on CollisionHit from the wasm scenery sweep' note. \u00a72.14 lists procedural trees and rocks as fallback examples. \u00a71.1 says the collider source feeds the LABEL rule. \u00a74 says 'placed tree / prop'. SEAMS.md Hides and Static catalogs, the README world_query, sensors and statics.js rows, and SKILL.md, reference/pilot.md (occluder_action row and recipe item 3), workflow.md (Foliage/smoke row) and techniques.md (Occluders) all state the v1 rule. The remaining 'may be faded' standing-order examples in 1070.md and plan-format.md match the docs' instruction to keep naming foliage as fadeable.",
+   "VERIFIED (zero-cost-when-off): world_query.js, sensors.js and questions.js are imported only by film modules and tests (the docs/workflows JS files only mention the paths). The exact `get(\"filmMode\") === \"on\"` dynamic-import gate in scene3d/index.js:4531 is intact.",
+   "NON-BLOCKING: the scenery LABEL is still often wrong for the main boulder 0x02001065. In p4 (BIG/PINE behind the boulder at scale 1.0 and 0.6) and p7 (oak or bush behind it at scale 0.7), describeHit labels the hit 'tree' with the neighbour's did, so occluderKind reads 'tree' and the nearest/sector words say tree where it is really rock. Under the binding decision this is harmless for fades: no key, so codePolicy or JEV 'fade' becomes the mapper's reroute, which S16 asserts. It is still a wording inaccuracy the JEV pilot sees (for example 'branches may cross the frame' standing orders against a boulder). The v2 placement index fixes this too.",
+   "NON-BLOCKING (comment-only, outside the fix's file list, disclosed by the fixer): /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/film/pilot/mapper.js:119-121 still gives 'a rock-like scenery trunk without a placement' as the example. It would read better as 'any procedural scenery tree or rock (v1: never keyed), a big or unsized prop, overlapping placements'. sense_words.js:205 says 'foliage' without 'placed'. take_player.js:72 says '(world_query staticFadeTargets: tree / prop)' and could say 'placed tree / prop'.",
+   "NON-BLOCKING: tests/film_cli_session.test.mjs now gives 41/0, not the 40 in the fix report. The file mtime (14:19) is after this fix, so another lane probably added a check. It passes."
+  ],
+  "tests": [
+   {
+    "file": "tests/film_perception.test.mjs",
+    "passed": 39,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_words.test.mjs",
+    "passed": 36,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_policy.test.mjs",
+    "passed": 60,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_pilot_loop.test.mjs",
+    "passed": 34,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_runtime_capture.test.mjs",
+    "passed": 65,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_api.test.mjs",
+    "passed": 21,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_hooks.test.mjs",
+    "passed": 68,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_runtime_camera.test.mjs",
+    "passed": 30,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_cli_session.test.mjs",
+    "passed": 41,
+    "failed": 0
+   }
+  ]
+ },
+ "check:r4-nits": {
+  "ok": true,
+  "problems": [
+   "VERIFIED (1) tools/film/lib/shoot.mjs. ISSUE_FIELDS now includes limitedBy and minDurationVerified. ISSUE_NULLABLE keeps an explicit null minDurationVerified, and mergeIssues fills only fields that are undefined, so the kept null is never overwritten. overspeedFromFlight mirrors take_player.js overspeedIssue (lines 1072-1104). A verified duration ('dry-flown within N m there', from minDurationVerified true or minDurationCheck 'verified') and an estimate ('an estimate: not dry-flown within the check's budget') are worded like the page. An acceleration-limited move no longer reads 'flies \u2264 vmax', and the fallback carries limitedBy, minDurationVerified and the dry-flown maxGapM. The FLIGHT_GAP_WARN_M comment is rewritten; its 'up to about 0.6 m more on a fast fpv dive dry-flown at 0.65 m' matches my re-run (1.24 \u2212 0.65). The header (lines 14-21) says a page issue warns once per shot and a tracking-gap once per run whose gap differs, which matches the warned/sameIssue logic (lines 756-767, 279-283). jsonReplacer keeps null, and S10k checks that reports/<shot>.json keeps it. Round-3 probes re-run on the current code: docs3-check/tracking_gap.mjs passes 6/0, and its CLI overspeed keys now include limitedBy and minDurationVerified; r3small-check/shoot_probe.mjs passes 6/0.",
+   "VERIFIED (1) test coverage. S10k drives the REAL take_player prepare(). Its three cases return acceleration/verified/true, speed/verified/true and (no spec) acceleration/unverified/null as asserted. I wrote 8 mutants of my own, served through a loader hook so the repo was not changed. S10k kills 6: merge overwriting the null, verified read from the flag only, the live hint on any liveSubject mode, limitedBy dropped from ISSUE_FIELDS, every null kept (S10j fails too), and the acceleration wording branch removed.",
+   "NON-BLOCKING (test gap, defensive branches only): 2 of my mutants survive. (A) The fallback's estimate qualifier reads only minDurationCheck 'unverified' and ignores minDurationVerified null. (I) issueLine's ', an estimate' is triggered by !minDurationVerified instead of === null, which differs only for an issue with minDurationSec set and NO minDurationVerified whose message omits the number. The real page always sets minDurationCheck together with minDurationSec (take_player.js:1189-1191), so neither changes real output.",
+   "VERIFIED (2) workflow.md:36 issue shape. It lists limitedBy? and minDurationVerified? (true / null / false explained), and says maxGapM is the gap DRY-flown at prepare (sampled at 10 Hz) on 'overspeed' and the REALISED gap on 'tracking-gap'. The fixer's departure from the brief's '~20 %' is justified. I re-ran /tmp/claude-1000/r3-subject-chk/verify_minD.mjs on the current code: fpv-dive dry 0.65 m \u2192 realised 1.07 / 1.24 m at 30 / 60 fps (+65 % / +91 %), boomerang 0.63 \u2192 0.76 / 0.80 m (+21 % / +27 %), boom-rise 0.90 \u2192 0.92 m. So 'typically up to ~30 % more, nearly twice as far on a fast fpv dive (0.65 m dry, 1.24 m flown at 60 fps)' is exact. SPEC \u00a73 overspeed bullet and \u00a75.2 CLI walk state the same split.",
+   "VERIFIED (3) VFX-catalog degrade rule in SPEC \u00a71.1 lines 109-118 and SEAMS.md:27, with the identical sentence in pilot.md:81-83, workflow.md:182 and techniques.md:65-67. I checked it against the code: ensureVfxCatalog is called only at statics.js 2720 / 3598 (windSwayGpu && visual), statics.js 2730 / 3608 (windGeo, no visual gate), and entities.js 5185 (tipFlex), 5202 (weaponFx) and 6076 \u2192 14888 (gemSparkle), each && visual. windSwayGpuEnabled is false under treeWind or windGeo, and tipFlex / weaponFx / gemSparkle default to visualAllEffects(). My own probe /tmp/claude-1000/r4-nits-chk/cat_rule.mjs runs each flag combination in a fresh process with the real readers and compares it with the documented rule evaluated from the URL alone: 20/20 agree, including visual=off&windGeo=on, treeWindGpu=off&visualAll=off (+/\u2212 each per-effect flag) and visual=all. No stale '?visual=off \u2192 reads as rock' wording is left in SPEC, SEAMS, README, SKILL, the agent file or the references.",
+   "VERIFIED (4) SPEC \u00a73 Prepare summary (lines 393-404) states the real rule from take_player.js:1189-1191. Only a take built from a ShotSpec (spec plus ctx, always paired by resolveTrajectory) is searched. A prebuilt trajectory is 'unverified' only when minDurationSec was estimated; otherwise minDurationCheck, minDurationSec and minDurationVerified stay null. The fixer's /tmp/claude-1000/r4-nits/shapes.mjs, re-run, shows the lagging no-spec case as {lim 'acceleration', minD null, chk null, ver null} and the no-spec boom-rise / boomerang as 'unverified' with 'an estimate' in the message.",
+   "VERIFIED (5) SPEC.md has no non-table line over 120 characters (measured in Unicode characters). Against the fixer's pre-reflow snapshot (/tmp/claude-1000/r4-nits/SPEC.before-reflow.md) the diff is exactly the two re-wraps. In the take_player bullet, 'the clock' moved to the next line. In \u00a74 item 1, a ']' inside the inline code moved to the next line, which keeps the same JS meaning. No other lane's text was clobbered.",
+   "VERIFIED (6) SPEC \u00a75.2 Live subjects (lines 678-688), the techniques.md \u00a71 'Turning subjects' bullet (line 45) and the Turns: lines under drone.chase (1216), drone.lead (1236) and drone.side-track (1256). The workflow.md:184 tracking-gap row covers the live-subject case. I re-ran /tmp/claude-1000/r3-subject-chk/turns.mjs at 24 / 30 / 60 fps on the current code, cinema preset. Quarter turn: chase 0.900-1.067, lead 0.986-1.139, side-track east 0.857-1.058 and west 1.000-1.155, gap \u2264 1.87 m. U-turn: chase 0.735-0.743, lead 1.271-1.278, side-track 0.867-1.043, gap 2.23-2.34 m. All match the stated '0.86\u20131.14\u00d7 (1.155\u00d7 one way)', '0.74\u00d7 / 1.28\u00d7 (26\u201328 % off; side-track 0.87\u20131.04\u00d7)' and '2.2\u20132.3 m'. The CLI's tracking-gap above 2 m and the carry-rig live hint are tested in S10k (e) and (f). The fixer replaced the brief's '~0.5\u201325 %' with measured ratios; that is reasonable.",
+   "NON-BLOCKING (rounding): heavy preset, quarter turn, measured now: side-track turning east 0.764-0.765\u00d7, lead 1.292-1.294\u00d7, side-track west up to 1.311\u00d7, gap 2.98-3.27 m (lead at 24 fps 3.27 m). SPEC \u00a75.2 says '0.77\u20131.31\u00d7, 3.0\u20133.2 m behind' (techniques.md says 'about 3 m'). '0.76\u20131.31\u00d7, 3.0\u20133.3 m' would be exact.",
+   "NON-BLOCKING (precision of 'exactly'): the SPEC / SEAMS rule 'the catalog stays empty exactly when \u2026' covers the flags. The catalog also stays empty when its fetch fails (fail-soft, vfx_catalog.js:139-155), and the entity paths load it only once an entity spawns. Neither changes the advice.",
+   "NON-BLOCKING (out of lane, already flagged by the fixer, still open): .claude/agents/film-director.md:93 and SKILL.md steps 10/11 (lines 139-152) still advise only duration / path / ease / preset on a tracking-gap. Neither mentions that a live subject's turn needs a gentler move, although the warning text itself now says so. README.md:107 (the shoot.mjs row) still names only durationHelps among the fields kept on page issues, not limitedBy or minDurationVerified.",
+   "VERIFIED, no regression, zero cost when off: r4-nits changed only tools/film/lib/shoot.mjs (a node CLI that page code never imports; its only importers are tools/film/film.mjs and the two CLI test suites), one test file and docs. The page gate in scene3d/index.js:4531 is still the exact `get(\"filmMode\") === \"on\"` dynamic import. scene3d/film/scene/sensors.js, world_query.js and pilot/questions.js changed after 12:00, but those belong to another lane (they are not in r4-nits's filesTouched) and I did not review them here. No repo file was changed by this check; my probes are under /tmp/claude-1000/r4-nits-chk/."
+  ],
+  "tests": [
+   {
+    "file": "tests/film_cli_session.test.mjs",
+    "passed": 41,
+    "failed": 0
+   },
+   {
+    "file": "tests/film_cli.test.mjs",
+    "passed": 34,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r4-nits-chk/cat_rule.mjs (own probe: documented VFX-catalog rule vs real client flag gates, 20 combos, fresh process each)",
+    "passed": 20,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r4-nits-chk/mut (8 own shoot.mjs mutants via loader hook; passed = killed by S10k/S10j, failed = survived \u2014 2 benign defensive-branch survivors, NON-BLOCKING)",
+    "passed": 6,
+    "failed": 2
+   },
+   {
+    "file": "/tmp/claude-1000/r3-subject-chk/verify_minD.mjs (fpv-dive 3.5, boomerang 5, boom-rise 4: dry vs realised maxGapM figures in workflow.md / shoot.mjs reproduced)",
+    "passed": 3,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r3-subject-chk/turns.mjs (cinema turn90/turnW90/uturn x chase/lead/side-track x 24/30/60 fps + heavy turn90/turnW90: SPEC \u00a75.2 / techniques.md figures reproduced; heavy within rounding)",
+    "passed": 45,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r4-nits/shapes.mjs (re-run: SPEC \u00a73 minDurationCheck null / unverified rule)",
+    "passed": 1,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/docs3-check/tracking_gap.mjs (round-3 probe re-run against current shoot.mjs)",
+    "passed": 6,
+    "failed": 0
+   },
+   {
+    "file": "/tmp/claude-1000/r3small-check/shoot_probe.mjs (round-3 probe re-run against current shoot.mjs)",
+    "passed": 6,
+    "failed": 0
+   }
+  ]
+ }
+}

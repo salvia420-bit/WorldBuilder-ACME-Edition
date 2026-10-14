@@ -2968,12 +2968,15 @@ const _omegaScratchQ = new THREE.Quaternion();
 // composite `stateVisible && !renderCullHidden`. Both setters below funnel
 // through `_applyEntityVisible`, which is the single writer of
 // `root.visible`. Defaults: stateVisible=true (spawn-visible), cull clear.
+// Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) adds a third, render-only
+// producer, `inst._filmHidden` (EntityManager.setFilmHidden); it is never set
+// with the flag off, so the composite stays exactly the two terms above.
 
 function _applyEntityVisible(inst) {
   if (!inst || !inst.root) return;
   const stateVisible = inst._stateVisible !== false; // undefined → visible
   const cullHidden = inst._renderCullHidden === true;
-  const want = stateVisible && !cullHidden;
+  const want = stateVisible && !cullHidden && !inst._filmHidden;
   if (inst.root.visible !== want) inst.root.visible = want;
 }
 
@@ -5566,6 +5569,13 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a rig rebuilt while its
+    // guid is film-hidden (the respawn fallback, visibility churn) comes back
+    // hidden. `_filmHiddenGuids` only exists once setFilmHidden has run.
+    if (this._filmHiddenGuids?.has(guid)) {
+      inst._filmHidden = true;
+      _applyEntityVisible(inst);
+    }
     // P6/A10-O1 — the FIRST rig committing is the in-world signal: arm the
     // one-shot archetype-matrix warm (self-guarded; later calls and
     // `?archetypeWarm=off` no-op). Any-entity, NOT local-player-gated: the
@@ -7134,6 +7144,56 @@ export class EntityManager {
         !!visible && !inst._projectileImpacted && this._projectileLightingOn(guid),
       );
     }
+  }
+
+  /**
+   * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — hide / show a rig for a
+   * shot (the cameraman avatar, an occluding NPC) WITHOUT touching its server
+   * visibility: the third, render-only term of `_applyEntityVisible`
+   * (`root.visible = stateVisible && !renderCullHidden && !filmHidden`), so the
+   * frustum cull and NoDraw / attach state keep composing underneath it. A
+   * hidden rig casts no shadow (three skips invisible subtrees in the shadow
+   * pass) and its wielded children go with its root. Deliberately NOT routed
+   * through `setVisibility`, which plays the PS_Hidden / PS_UnHide scripts.
+   * The guid is remembered, so a rig rebuilt by a respawn comes back hidden.
+   * Pool-fed lights (a held torch) keep shining; particles keep drawing.
+   *
+   * @param {number} guid
+   * @param {boolean} on  true = hide
+   * @returns {boolean} true when the entity exists now (visibility re-applied)
+   */
+  setFilmHidden(guid, on) {
+    const g = guid >>> 0;
+    const hide = !!on;
+    if (hide) {
+      if (!this._filmHiddenGuids) this._filmHiddenGuids = new Set();
+      this._filmHiddenGuids.add(g);
+    } else if (this._filmHiddenGuids) {
+      this._filmHiddenGuids.delete(g);
+    }
+    const inst = this.entityMap.get(g);
+    if (!inst) return false;
+    inst._filmHidden = hide;
+    _applyEntityVisible(inst);
+    return true;
+  }
+
+  /**
+   * Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) — drop every film hide
+   * (end of a take / `world.avatar(true)` sweep) and forget the remembered
+   * guids. Returns how many live rigs were un-hidden.
+   */
+  clearAllFilmHidden() {
+    let n = 0;
+    for (const inst of this.entityMap.values()) {
+      if (inst && inst._filmHidden === true) {
+        inst._filmHidden = false;
+        _applyEntityVisible(inst);
+        n += 1;
+      }
+    }
+    if (this._filmHiddenGuids) this._filmHiddenGuids.clear();
+    return n;
   }
 
   /**

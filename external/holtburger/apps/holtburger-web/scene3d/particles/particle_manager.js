@@ -1336,6 +1336,39 @@ function _rp6ShouldCull(emitter, camera) {
 // the current mode in addEmitter.
 const _allManagers = new Set();
 
+// ── Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF) ─────────────────────────
+// Read-only enumeration + a take-scoped RP6 retune for scene3d/film/ (particle
+// queries, safety). Nothing in the client calls either with the flag off.
+
+/** Every live ParticleManager — a COPY of the module-private registry (the
+ *  world manager from entities.js and the static one(s) from statics.js). */
+export function allParticleManagers() {
+  return [..._allManagers];
+}
+
+/**
+ * Retune the RP6 cull that every manager reads live: `maxDistance` (metres,
+ * > 0; the 220 m cap — `Infinity` drops the distance term) and
+ * `recheckInterval` (ticks, an integer ≥ 1; 1 re-evaluates every tick, so no
+ * emitter stays frozen after a cut). An omitted / null field is left as is;
+ * an invalid value throws a RangeError and changes nothing. Returns the
+ * PREVIOUS `{maxDistance, recheckInterval}` so the caller can restore it.
+ */
+export function setParticleCullConfig({ maxDistance, recheckInterval } = {}) {
+  const prev = { maxDistance: _RP6.maxDistance, recheckInterval: _RP6.recheckInterval };
+  const setDist = maxDistance !== undefined && maxDistance !== null;
+  const setRecheck = recheckInterval !== undefined && recheckInterval !== null;
+  if (setDist && !(typeof maxDistance === "number" && maxDistance > 0)) {
+    throw new RangeError(`setParticleCullConfig: maxDistance must be a number > 0 (got ${maxDistance})`);
+  }
+  if (setRecheck && !(Number.isInteger(recheckInterval) && recheckInterval >= 1)) {
+    throw new RangeError(`setParticleCullConfig: recheckInterval must be an integer >= 1 (got ${recheckInterval})`);
+  }
+  if (setDist) _RP6.maxDistance = maxDistance;
+  if (setRecheck) _RP6.recheckInterval = recheckInterval;
+  return prev;
+}
+
 function _forEachParticleMaterial(fn) {
   const seen = new Set();
   const visit = (mat, isBucket) => {
@@ -2336,6 +2369,17 @@ export class ParticleManager {
 
       if (!emitter.updateParticles()) {
         removeIds.push(id);
+      } else if (emitter.filmHidden === true) {
+        // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): render-only lens
+        // hide (film/runtime/safety.js — a cloud on the lens). Same shape as
+        // the cell gate below: the simulation above already ran; instanced =
+        // no append (its instances vanish with this tick's bucket reset),
+        // per-mesh = occupied slots hidden, re-asserted every tick. Clearing
+        // the flag restores both next tick (the append resumes; updateParticles
+        // re-shows live slots). Only the film runtime sets the flag.
+        if (emitter._instKey === null || emitter._instKey === undefined) {
+          _setPartsVisible(emitter, false);
+        }
       } else if (cellGate && _emitterCellHidden(emitter, cellLookup)) {
         // `?particleCellGate=on`: the anchor's EnvCell is not drawn this frame.
         // The simulation above already ran (retail CObjCell::IsInView == 1 —
