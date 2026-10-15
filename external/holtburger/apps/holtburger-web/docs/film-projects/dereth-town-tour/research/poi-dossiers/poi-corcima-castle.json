@@ -1,0 +1,301 @@
+{
+ "name": "Corcima Castle",
+ "title": "Corcima Castle",
+ "siteId": "poi-corcima-castle",
+ "summary": "The Viamontian Corcima Castle at 83.2N 50.4W, divided into wards on separate sea stacks that rise sheer from the frozen sea (z 0). The central ward and the Platinum ward (north) share a 200 m mesa. The Copper (west), Silver (east) and Gold (south) wards stand on 160 m stacks. The wards carry 12 m dark stone walls, 34 gold-spired 26 m corner towers, nine 26 m lighthouse towers, T'thuun pillars and four Destroyed Portals to Zaikhal. The kit covers only the central 3x3 landblocks (x 12096-12672, y 44160-44736), and every camera stays inside that area.",
+ "landmarks": [
+  {
+   "name": "Central ward courtyard",
+   "pos": [
+    12384.0,
+    44444.0,
+    200.0
+   ],
+   "heightM": 26,
+   "note": "Walled 190 m ward on the 200 m mesa, four lighthouse towers 0x010036EA and gold-spired corners 0x01003611."
+  },
+  {
+   "name": "South-east corner tower",
+   "pos": [
+    12476.0,
+    44356.0,
+    200.0
+   ],
+   "heightM": 26,
+   "note": "0x01003611, over the chasm to the east ward."
+  },
+  {
+   "name": "Platinum ward",
+   "pos": [
+    12384.7,
+    44631.2,
+    200.0
+   ],
+   "heightM": 26,
+   "note": "North ward, gazetteer teleport, T'thuun pillar and Destroyed Portal to Zaikhal."
+  },
+  {
+   "name": "Silver ward stack",
+   "pos": [
+    12588.0,
+    44436.0,
+    160.0
+   ],
+   "heightM": 26,
+   "note": "East ward on a 160 m stack."
+  }
+ ],
+ "site": {
+  "id": "poi-corcima-castle",
+  "name": "Corcima Castle",
+  "gazetteerId": "corcima-castle-platinum-ward",
+  "teleport": "@teleloc 0x40E80024 96.69 87.17 200 -0.029987 0 0 -0.99955",
+  "anchor": [
+   12384.0,
+   44444.0,
+   200.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer corcima-castle-platinum-ward (the north ward on the 200 m mesa, 190 m north of the central courtyard)."
+ },
+ "insertAfter": "beach-fort",
+ "insertBefore": "eastwatch",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 83.2,
+   "ew": -50.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1736,
+  "coveredBy": "path:beach-fort.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Corcima_Castle.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-corcima-castle.01",
+   "site": "poi-corcima-castle",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     3.5,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12384.0,
+     44444.0,
+     200.0
+    ],
+    "height": 26,
+    "radius": 60
+   },
+   "params": {
+    "startPitchDeg": -50,
+    "endPitchDeg": -3,
+    "heightAGL": 12,
+    "distance": 235,
+    "drift": 6,
+    "bearingDeg": 118,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Hover 212 m above the frozen sea south-east of the island looking steeply down at the floe, then tilt up to reveal Corcima Castle crowning its 200 m sea stacks, the sun behind the lens; drift 6 m, nothing near.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Tilt reveal. The camera hovers 212 m above the frozen sea and floe, south of the east ward, 235 m south-east of the central ward. It tilts from -50 deg to -3 deg, and Corcima Castle rises into frame on its 200 m sea stacks, gold spires catching the high late-morning sun from behind the lens. The castle enters the frame at t 4.1, so the 5.5 s window from t 3.5 keeps it in frame 87 % of the time. Verified (check.mjs, full take flown): take 0-9 s: AGL 212..212 m, nearest drawn 71.99 m (static 0x41E7#18 0x01003611), vmax 1.05 m/s, LOS blocked 0/37, subject in frame 54%, over water 60%; edit 3.5-9 s: AGL 212..212 m, nearest drawn 71.99 m (static 0x41E7#18 0x01003611), vmax 1.05 m/s, LOS blocked 0/23, subject in frame 87%, over water 35%; flight cinema peak 1.04 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-corcima-castle.02",
+   "site": "poi-corcima-castle",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12384.0,
+     44444.0,
+     200.0
+    ],
+    "height": 26,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 62,
+    "speed": 6,
+    "headingDeg": 315,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "maxPitchRateDeg": 60,
+    "smoothTime": 0.3,
+    "minClearance": 3
+   },
+   "standingOrder": "Cross the central ward north-westward 62 m above the courtyard, keeping its gold-spired towers and walls in frame through vertical; stay 30 m above every spire.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over. The camera crosses the central ward north-westward 62 m above the courtyard (36 m above the spire tops), the gimbal slewing through vertical. The four lighthouse towers, the gold-spired walls and the courtyard pass beneath, with the sea 260 m below at the frame edges. Verified (check.mjs, full take flown): take 0-11 s: AGL 62..62 m, nearest drawn 36.53 m (static 0x40E7#50 0x010036EA), vmax 6 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 62..62 m, nearest drawn 42.21 m (static 0x40E7#50 0x010036EA), vmax 6 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-corcima-castle.03",
+   "site": "poi-corcima-castle",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.5,
+     8.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12476.0,
+     44356.0,
+     200.0
+    ],
+    "height": 26,
+    "radius": 6
+   },
+   "params": {
+    "offset": 24,
+    "heightAGL": 14,
+    "speed": 7,
+    "side": "left",
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "standingOrder": "Fly north 214 m above the frozen sea along the chasm between the central and east wards and sweep past the gold-spired south-east corner tower 24 m off its east face; keep 20 m from the walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Fly-by. The camera flies north at z 214, 180 m above the frozen sea, through the chasm between the central and east ward stacks, and sweeps past the gold-spired south-east corner tower 24 m off its sunlit east face. The sheer stack walls fall to the floe below. The nearest object is the ward wall at 21 m. Verified (check.mjs, full take flown): take 0-9 s: AGL 180.67..214 m, nearest drawn 21.19 m (static 0x40E7#36 0x01003605), vmax 7 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 180.67..180.7 m, nearest drawn 21.19 m (static 0x40E7#36 0x01003605), vmax 7 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-corcima-castle.04",
+   "site": "poi-corcima-castle",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12384.0,
+     44444.0,
+     200.0
+    ],
+    "height": 26,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 70,
+    "radiusEnd": 50,
+    "heightStart": 85,
+    "heightEnd": 45,
+    "revolutions": 0.15,
+    "direction": "cw",
+    "bearingDeg": 60,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Spiral down clockwise from 85 m to 45 m above the central ward, closing from 70 m to 50 m out, until the courtyard, its towers and the sea far below fill the frame; stay 19 m above every spire.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Spiral descent. The camera spirals clockwise from 85 m to 45 m above the central ward, closing from 70 m to 50 m, and arrives over the courtyard, its towers and the sea beyond. It stays 19 m above the spire tops and 20 m from the lighthouse tower. Verified (check.mjs, full take flown): take 0-11 s: AGL 45..85 m, nearest drawn 20.09 m (bldg 0x40E7#50 0x010036EA four-story tower with tapered roof, hollow interior), vmax 10.35 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 46.81..78.1 m, nearest drawn 22.67 m (static 0x40E7#50 0x010036EA), vmax 10.35 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 10.33 m/s (cap 12), max tracking gap 0.08 m."
+  }
+ ],
+ "verification": {
+  "poi-corcima-castle.01": "take 0-9 s: AGL 212..212 m, nearest drawn 71.99 m (static 0x41E7#18 0x01003611), vmax 1.05 m/s, LOS blocked 0/37, subject in frame 54%, over water 60%; edit 3.5-9 s: AGL 212..212 m, nearest drawn 71.99 m (static 0x41E7#18 0x01003611), vmax 1.05 m/s, LOS blocked 0/23, subject in frame 87%, over water 35%; flight cinema peak 1.04 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-corcima-castle.02": "take 0-11 s: AGL 62..62 m, nearest drawn 36.53 m (static 0x40E7#50 0x010036EA), vmax 6 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 62..62 m, nearest drawn 42.21 m (static 0x40E7#50 0x010036EA), vmax 6 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-corcima-castle.03": "take 0-9 s: AGL 180.67..214 m, nearest drawn 21.19 m (static 0x40E7#36 0x01003605), vmax 7 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 180.67..180.7 m, nearest drawn 21.19 m (static 0x40E7#36 0x01003605), vmax 7 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-corcima-castle.04": "take 0-11 s: AGL 45..85 m, nearest drawn 20.09 m (bldg 0x40E7#50 0x010036EA four-story tower with tapered roof, hollow interior), vmax 10.35 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 46.81..78.1 m, nearest drawn 22.67 m (static 0x40E7#50 0x010036EA), vmax 10.35 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 10.33 m/s (cap 12), max tracking gap 0.08 m"
+ }
+}

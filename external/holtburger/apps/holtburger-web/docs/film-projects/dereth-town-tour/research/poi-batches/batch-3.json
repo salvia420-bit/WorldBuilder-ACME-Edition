@@ -1,0 +1,2038 @@
+{
+ "batch": 3,
+ "quota": 34,
+ "pois": [
+  {
+   "title": "15.6N, 49.9W - Tumerok Tower",
+   "name": "Tumerok Tower",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tower with a few Tumeroks Outpost at 15.6N, 49.9W in the Dires near Fort Tethana, close to the Northern Landbridge.<br> It is one of the POIs incidated on the Ingame Map. See Points of Interest Map, no. 25.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/15_6N_49_9W_Tumerok_Tower.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     15.6,
+     -49.9
+    ],
+    [
+     16.5,
+     -50.5
+    ],
+    [
+     45.4,
+     -42.3
+    ]
+   ],
+   "map": {
+    "ns": 15.6,
+    "ew": -49.9
+   },
+   "world": [
+    12492.0,
+    28212.0
+   ],
+   "lb": "0x4192",
+   "coveredDistM": 5380,
+   "coveredBy": "path:danbys-outpost.03",
+   "nearestSite": "danbys-outpost",
+   "nearestSiteM": 5422,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-tower-4192",
+     "name": "Tumerok Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 15.60N 49.90W",
+     "pos": null,
+     "map": {
+      "ns": 15.6,
+      "ew": -49.9
+     }
+    },
+    {
+     "id": "tumerok-tower-501a",
+     "name": "Tumerok Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 80.60S 37.50W",
+     "pos": null,
+     "map": {
+      "ns": -80.6,
+      "ew": -37.5
+     }
+    },
+    {
+     "id": "tumerok-tower-db77",
+     "name": "Tumerok Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 6.30S 73.60E",
+     "pos": null,
+     "map": {
+      "ns": -6.3,
+      "ew": 73.6
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 68,
+   "timeOfDay": 0.49,
+   "grade": "neutral",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-tower"
+  },
+  {
+   "title": "1.9N, 56.7W - Tumerok Outpost",
+   "name": "Tumerok Outpost",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Outpost at 1.9N, 56.7W in the Dires near Fort Tethana.<br> The door to the outpost is locked (300 difficulty). Inside is four chests that spawn tier 3/4 Loot.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/1_9N_56_7W_Tumerok_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     1.9,
+     -56.7
+    ]
+   ],
+   "map": {
+    "ns": 1.9,
+    "ew": -56.7
+   },
+   "world": [
+    10860.0,
+    24924.0
+   ],
+   "lb": "0x3881",
+   "coveredDistM": 3580,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 3631,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-outpost-01bf",
+     "name": "Tumerok Outpost",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BF01A3 37.45 -57.21 0 -0.640914 0 0 -0.767613",
+     "pos": [
+      229.45,
+      36614.79,
+      0
+     ],
+     "map": {
+      "ns": 1.9,
+      "ew": -56.7
+     }
+    },
+    {
+     "id": "tumerok-outpost-2d8a",
+     "name": "Tumerok Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 9.00N 65.70W",
+     "pos": null,
+     "map": {
+      "ns": 9,
+      "ew": -65.7
+     }
+    },
+    {
+     "id": "tumerok-outpost-portal",
+     "name": "Tumerok Outpost Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x519D0100 138.975 11.776 22.805 -0.707107 0 0 -0.707107",
+     "pos": [
+      15690.975,
+      30155.776,
+      22.805
+     ],
+     "map": {
+      "ns": 23.7,
+      "ew": -36.57
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 501,
+   "timeOfDay": 0.58,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-outpost-19n-567w"
+  },
+  {
+   "title": "3.1N, 60.5W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Fort at 3.1N, 60.5W in the Dires near Fort Tethana.<br> It is one of the POIs incidated on the Ingame Map. See Points of Interest Map, no. 27. There is a chest in one of the towers that spawns low tier 3 Loot.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/3_1N_60_5W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     3.1,
+     -60.5
+    ]
+   ],
+   "map": {
+    "ns": 3.1,
+    "ew": -60.5
+   },
+   "world": [
+    9948.0,
+    25212.0
+   ],
+   "lb": "0x3383",
+   "coveredDistM": 2697,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2743,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 195,
+   "timeOfDay": 0.6,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-31n-605w"
+  },
+  {
+   "title": "9.0N, 65.7W - Tumerok Outpost",
+   "name": "Tumerok Outpost",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Outpost at 9.0N, 65.7W in the Dires near Fort Tethana.<br> There are some Empyrean Statues nearby that create a trail leading to the bunker.<br> It is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 28.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/9_0N_65_7W_Tumerok_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     9.0,
+     -65.7
+    ]
+   ],
+   "map": {
+    "ns": 9.0,
+    "ew": -65.7
+   },
+   "world": [
+    8700.0,
+    26628.0
+   ],
+   "lb": "0x2D8A",
+   "coveredDistM": 2306,
+   "coveredBy": "shot:fort-tethana.04",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2315,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-outpost-01bf",
+     "name": "Tumerok Outpost",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BF01A3 37.45 -57.21 0 -0.640914 0 0 -0.767613",
+     "pos": [
+      229.45,
+      36614.79,
+      0
+     ],
+     "map": {
+      "ns": 1.9,
+      "ew": -56.7
+     }
+    },
+    {
+     "id": "tumerok-outpost-2d8a",
+     "name": "Tumerok Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 9.00N 65.70W",
+     "pos": null,
+     "map": {
+      "ns": 9,
+      "ew": -65.7
+     }
+    },
+    {
+     "id": "tumerok-outpost-portal",
+     "name": "Tumerok Outpost Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x519D0100 138.975 11.776 22.805 -0.707107 0 0 -0.707107",
+     "pos": [
+      15690.975,
+      30155.776,
+      22.805
+     ],
+     "map": {
+      "ns": 23.7,
+      "ew": -36.57
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 241,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-outpost-90n-657w"
+  },
+  {
+   "title": "Shadow March",
+   "name": "Shadow March",
+   "cats": [
+    "Northwest POI",
+    "Historical Site"
+   ],
+   "desc": "=== Description === A large blackened area around 15.9N, 68.8W. It is a former Battleground. See Lord Marsan's Log Book for associated Lore. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Shadow_March.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     15.9,
+     -69.9
+    ],
+    [
+     15.9,
+     -68.8
+    ],
+    [
+     15.9,
+     -68.7
+    ]
+   ],
+   "map": {
+    "ns": 15.9,
+    "ew": -68.8
+   },
+   "world": [
+    7956.0,
+    28284.0
+   ],
+   "lb": "0x2993",
+   "coveredDistM": 3514,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 3520,
+   "gazNear": [
+    {
+     "id": "the-dark-spiral-portal",
+     "name": "The Dark Spiral Portal",
+     "kind": "landmark",
+     "d": 23,
+     "teleport": "@teleloc 0x29930023 105.987 53.9843 116.94 0.073566 0 0 -0.99729",
+     "pos": [
+      7977.987,
+      28277.984,
+      116.94
+     ]
+    },
+    {
+     "id": "graels-chamber-portal",
+     "name": "Grael's Chamber Portal",
+     "kind": "landmark",
+     "d": 274,
+     "teleport": "@teleloc 0x28930003 1.82834 60.3729 29.937 0.707107 0 0 -0.707107",
+     "pos": [
+      7681.828,
+      28284.373,
+      29.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "shadow-march",
+     "name": "Shadow March",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 15.90N 68.80W",
+     "pos": null,
+     "map": {
+      "ns": 15.9,
+      "ew": -68.8
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 1707,
+   "timeOfDay": 0.59,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-shadow-march"
+  },
+  {
+   "title": "10.3N, 68.8W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Fort at 10.3N, 68.8W in the Dires near Fort Tethana.<br> It is one of the POIs incidated on the Ingame Map. See Points of Interest Map, no. 30.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/10_3N_68_8W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     10.3,
+     -68.8
+    ]
+   ],
+   "map": {
+    "ns": 10.3,
+    "ew": -68.8
+   },
+   "world": [
+    7956.0,
+    26940.0
+   ],
+   "lb": "0x298C",
+   "coveredDistM": 2217,
+   "coveredBy": "shot:fort-tethana.04",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2222,
+   "gazNear": [
+    {
+     "id": "tumerok-post-portal",
+     "name": "Tumerok Post Portal",
+     "kind": "landmark",
+     "d": 483,
+     "teleport": "@teleloc 0x2A8E0016 56.5986 129.798 64.739 0.002931 0 0 -0.999996",
+     "pos": [
+      8120.599,
+      27393.798,
+      64.739
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 743,
+   "timeOfDay": 0.62,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-103n-688w"
+  },
+  {
+   "title": "12.3N, 73.7W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Fort at 12.3N, 73.7W in the Dires near Fort Tethana.<br> This is the final fort in the Overlord's Sword Quest and the location of the dungeon where the Overlord himself is found. It is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 29",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/12_3N_73_7W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     12.3,
+     -73.7
+    ]
+   ],
+   "map": {
+    "ns": 12.3,
+    "ew": -73.7
+   },
+   "world": [
+    6780.0,
+    27420.0
+   ],
+   "lb": "0x238E",
+   "coveredDistM": 2589,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2619,
+   "gazNear": [
+    {
+     "id": "tumerok-fortress-portal",
+     "name": "Tumerok Fortress Portal",
+     "kind": "landmark",
+     "d": 1,
+     "teleport": "@teleloc 0x238E0017 60.158 155.306 275.12 0 0 0 -1",
+     "pos": [
+      6780.158,
+      27419.306,
+      275.12
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 2139,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-123n-737w"
+  },
+  {
+   "title": "Renegade Encampment",
+   "name": "Renegade Encampment",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === Main base for the Renegade forces that are attacking Fort Tethana. The Renegade leaders Renegade Commander Kianar, Renegade Commander Walanawa and General Garsh are stationed here and drop the Renegade Bow, Tumerok Hunting Brace and the Quadruple-bladed Axe respectively.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Renegade_Encampment.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     0.5,
+     -73.3
+    ],
+    [
+     1.4,
+     -73.5
+    ]
+   ],
+   "map": {
+    "ns": 1.4,
+    "ew": -73.5
+   },
+   "world": [
+    6828.0,
+    24804.0
+   ],
+   "lb": "0x2381",
+   "coveredDistM": 341,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 404,
+   "gazNear": [
+    {
+     "id": "renegade-incursion-portal",
+     "name": "Renegade Incursion Portal",
+     "kind": "landmark",
+     "d": 221,
+     "teleport": "@teleloc 0x23800031 159.046 13.4355 219.937 0.937562 0 0 -0.347817",
+     "pos": [
+      6879.046,
+      24589.436,
+      219.937
+     ]
+    },
+    {
+     "id": "nullified-statue-of-a-grievver",
+     "name": "Nullified Statue of a Grievver",
+     "kind": "landmark",
+     "d": 363,
+     "teleport": "@teleloc 0x2581001C 84.0636 83.7832 226.805 0.749242 0 0 -0.662297",
+     "pos": [
+      7188.064,
+      24851.783,
+      226.805
+     ]
+    },
+    {
+     "id": "portal-to-town-network-2581",
+     "name": "Portal to Town Network",
+     "kind": "landmark",
+     "d": 417,
+     "teleport": "@teleloc 0x2581002C 138.929 72.6891 220.198 -0.724326 0 0 0.689458",
+     "pos": [
+      7242.929,
+      24840.689,
+      220.198
+     ]
+    },
+    {
+     "id": "hilltop-portal-2681",
+     "name": "Hilltop Portal",
+     "kind": "landmark",
+     "d": 493,
+     "teleport": "@teleloc 0x26810005 18.9244 112.749 220.005 -0.954826 0 0 0.297165",
+     "pos": [
+      7314.924,
+      24880.749,
+      220.005
+     ]
+    },
+    {
+     "id": "fort-tethana",
+     "name": "Fort Tethana",
+     "kind": "town",
+     "d": 550,
+     "teleport": "@telepoi Fort Tethana",
+     "pos": [
+      7373.7,
+      24876.1,
+      240
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "renegade-encampment",
+     "name": "Renegade Encampment",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.40N 73.50W",
+     "pos": null,
+     "map": {
+      "ns": 1.4,
+      "ew": -73.5
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 272,
+   "timeOfDay": 0.68,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate (near existing coverage: 341 m from shot:fort-tethana.03)",
+   "siteId": "poi-renegade-encampment"
+  },
+  {
+   "title": "Floating Spire",
+   "name": "Floating Spire",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A floating Advocate Tower above a hill near Fort Teth that can only be accessed via a portal in The Floating City's The Floating City (Lost Chamber). It contains a random Direlands portal. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Floating_Spire.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": -3.7,
+    "ew": -69.2
+   },
+   "world": [
+    7860.0,
+    23580.0
+   ],
+   "lb": "0x287A",
+   "coveredDistM": 1356,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 1409,
+   "gazNear": [
+    {
+     "id": "direlands-desert-northeast-portal",
+     "name": "Direlands Desert Northeast Portal",
+     "kind": "landmark",
+     "d": 4,
+     "teleport": "@teleloc 0x287A003F 180.031 159.997 508.805 1 0 0 0",
+     "pos": [
+      7860.031,
+      23583.997,
+      508.805
+     ]
+    },
+    {
+     "id": "gloaming-festival-stone",
+     "name": "Gloaming Festival Stone",
+     "kind": "poi",
+     "d": 201,
+     "teleport": "@teleloc 0x277A0040 173.5 189.8 380 0.453991 0 0 -0.891007",
+     "pos": [
+      7661.5,
+      23613.8,
+      380
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "floating-spire",
+     "name": "Floating Spire",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x287A0100 180 152 500 1 0 0 0",
+     "pos": [
+      7860,
+      23576,
+      500
+     ],
+     "map": {
+      "ns": -98.2,
+      "ew": -91.4
+     }
+    },
+    {
+     "id": "floating-spires",
+     "name": "Floating Spires",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 99.40S 97.60W",
+     "pos": null,
+     "map": {
+      "ns": -99.4,
+      "ew": -97.6
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 380,
+   "timeOfDay": 0.69,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-floating-spire"
+  },
+  {
+   "title": "Festival Stone of Gloaming",
+   "name": "Festival Stone of Gloaming",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Gloaming lies at approximately 4.3S, 70.7W. This stone lies within the heart of the Direlands, and we can only speculate what those lands may have been like long ago. \" -- Alatar Locke, The Festival Stones of the Empyreans",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Gloaming.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -4.3,
+     -70.7
+    ],
+    [
+     -3.6,
+     -70.0
+    ]
+   ],
+   "map": {
+    "ns": -4.3,
+    "ew": -70.7
+   },
+   "world": [
+    7500.0,
+    23436.0
+   ],
+   "lb": "0x277A",
+   "coveredDistM": 1388,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 1430,
+   "gazNear": [
+    {
+     "id": "gloaming-festival-stone",
+     "name": "Gloaming Festival Stone",
+     "kind": "poi",
+     "d": 240,
+     "teleport": "@teleloc 0x277A0040 173.5 189.8 380 0.453991 0 0 -0.891007",
+     "pos": [
+      7661.5,
+      23613.8,
+      380
+     ]
+    },
+    {
+     "id": "direlands-desert-northeast-portal",
+     "name": "Direlands Desert Northeast Portal",
+     "kind": "landmark",
+     "d": 389,
+     "teleport": "@teleloc 0x287A003F 180.031 159.997 508.805 1 0 0 0",
+     "pos": [
+      7860.031,
+      23583.997,
+      508.805
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-gloaming",
+     "name": "Festival Stone of Gloaming",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 3.60S 70.00W",
+     "pos": null,
+     "map": {
+      "ns": -3.6,
+      "ew": -70
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 154,
+   "timeOfDay": 0.69,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-gloaming"
+  },
+  {
+   "title": "Slaughterhouse",
+   "name": "Slaughterhouse",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Fort at 0.2N, 80.3W near Fort Tethana, specialized in processing bovine animals.<br> The door to the fort is locked (resistance 250) and can be opened by using a lockpick or the Simple Tumerok Key found on the corpse of a Tumerok Worker inside the 80.6S, 37.5W - Tumerok Tower at 80.6S, 37.5W.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Slaughterhouse.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -80.6,
+     -37.5
+    ],
+    [
+     0.2,
+     -80.3
+    ]
+   ],
+   "map": {
+    "ns": 0.2,
+    "ew": -80.3
+   },
+   "world": [
+    5196.0,
+    24516.0
+   ],
+   "lb": "0x1B7F",
+   "coveredDistM": 1998,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2060,
+   "gazNear": [
+    {
+     "id": "slaughterhouse",
+     "name": "Slaughterhouse",
+     "kind": "poi",
+     "d": 76,
+     "teleport": "@teleloc 0x1B7F0018 64.925 186.86 80.1 -0.292372 0 0 -0.956305",
+     "pos": [
+      5248.925,
+      24570.86,
+      80.1
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "slaughterhouse",
+     "name": "Slaughterhouse",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x1B7F0018 64.925 186.86 80.1 -0.292372 0 0 -0.956305",
+     "pos": [
+      5248.925,
+      24570.86,
+      80.1
+     ],
+     "map": {
+      "ns": 0.43,
+      "ew": -80.08
+     }
+    },
+    {
+     "id": "slaughterhouse-portal-1568",
+     "name": "Slaughterhouse Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x15680105 158.648 -0.335721 -63.995 0.009482 0 0 -0.999955",
+     "pos": [
+      4190.648,
+      19967.664,
+      -63.995
+     ],
+     "map": {
+      "ns": -18.75,
+      "ew": -84.49
+     }
+    },
+    {
+     "id": "slaughterhouse-portal-501a",
+     "name": "Slaughterhouse Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x501A002E 124.177 138.749 68.005 0.917919 0 0 0.396768",
+     "pos": [
+      15484.177,
+      5130.749,
+      68.005
+     ],
+     "map": {
+      "ns": -80.57,
+      "ew": -37.43
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 1353,
+   "timeOfDay": 0.69,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-slaughterhouse"
+  },
+  {
+   "title": "Teth Golem Mountain",
+   "name": "Teth Golem Mountain",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A series of Caves at 9.4S, 72.0W with quite a few different Golems south of Fort Tethana.<br> Each Cave holds something special...",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Teth_Golem_Mountain.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -9.4,
+     -72.0
+    ]
+   ],
+   "map": {
+    "ns": -9.4,
+    "ew": -72.0
+   },
+   "world": [
+    7188.0,
+    22212.0
+   ],
+   "lb": "0x2573",
+   "coveredDistM": 2596,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2628,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "teth-golem-mountain",
+     "name": "Teth Golem Mountain",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 9.40S 72.00W",
+     "pos": null,
+     "map": {
+      "ns": -9.4,
+      "ew": -72
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 91,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-teth-golem-mountain"
+  },
+  {
+   "title": "Humming Crystal",
+   "name": "Humming Crystal",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A strange humming crystal and a floating Advocate Spire located at 2.8S 82.8W high atop the mountain over the buried fortress city of Vasith. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Humming_Crystal.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -2.8,
+     -82.8
+    ]
+   ],
+   "map": {
+    "ns": -2.8,
+    "ew": -82.8
+   },
+   "world": [
+    4596.0,
+    23796.0
+   ],
+   "lb": "0x177B",
+   "coveredDistM": 2780,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 2833,
+   "gazNear": [
+    {
+     "id": "humming-crystal",
+     "name": "Humming Crystal",
+     "kind": "poi",
+     "d": 7,
+     "teleport": "@teleloc 0x177B0040 180 187 560 0 0 0 -1",
+     "pos": [
+      4596,
+      23803,
+      560
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "humming-crystal",
+     "name": "Humming Crystal",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x177B0040 180 187 560 0 0 0 -1",
+     "pos": [
+      4596,
+      23803,
+      560
+     ],
+     "map": {
+      "ns": -2.77,
+      "ew": -82.8
+     }
+    },
+    {
+     "id": "humming-crystal-portal-3eaf",
+     "name": "Humming Crystal Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x3EAF0001 66.513115 84.25997 0 1 0 0 0",
+     "pos": [
+      11970.513,
+      33684.26,
+      0
+     ],
+     "map": {
+      "ns": 38.4,
+      "ew": -52.07
+     }
+    },
+    {
+     "id": "humming-crystal-portal-5417",
+     "name": "Humming Crystal Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x54170001 108.859985 163.65419 68 1 0 0 0",
+     "pos": [
+      16236.86,
+      4579.654,
+      68
+     ],
+     "map": {
+      "ns": -82.87,
+      "ew": -34.3
+     }
+    },
+    {
+     "id": "humming-crystal-portal-5eb1",
+     "name": "Humming Crystal Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x5EB10001 14.219478 7.478786 35.958332 1 0 0 0",
+     "pos": [
+      18062.219,
+      33991.479,
+      35.958
+     ],
+     "map": {
+      "ns": 39.68,
+      "ew": -26.69
+     }
+    },
+    {
+     "id": "humming-crystal-portal-6099",
+     "name": "Humming Crystal Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x60990001 5.211726 28.242462 0 1 0 0 0",
+     "pos": [
+      18437.212,
+      29404.242,
+      0
+     ],
+     "map": {
+      "ns": 20.57,
+      "ew": -25.13
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 1346,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-humming-crystal"
+  },
+  {
+   "title": "9.7S, 63.3W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A huge fort with loads of Augmented Tumeroks at 9.7S, 63.3W in the Dires near Fort Tethana. Some entrances to the fort have been blocked with Standing Stones and rocks, but the doorways are clear on the south side.<br> There are two chests in the fort: one outside the walls at 9.9S, 62.8W that is unlocked and spawns tier 3 Loot and another inside the fort with a Sturdy Iron loc",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/9_7S_63_3W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -9.9,
+     -62.8
+    ],
+    [
+     -9.7,
+     -63.3
+    ]
+   ],
+   "map": {
+    "ns": -9.7,
+    "ew": -63.3
+   },
+   "world": [
+    9276.0,
+    22140.0
+   ],
+   "lb": "0x3073",
+   "coveredDistM": 3330,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 3388,
+   "gazNear": [
+    {
+     "id": "tumerok-dungeon-portal",
+     "name": "Tumerok Dungeon Portal",
+     "kind": "landmark",
+     "d": 90,
+     "teleport": "@teleloc 0x30730034 146.502 83.067 36.005 -0.707107 0 0 -0.707107",
+     "pos": [
+      9362.502,
+      22163.067,
+      36.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 1562,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-97s-633w"
+  },
+  {
+   "title": "1.4S, 86.2W - Tumerok Towers",
+   "name": "Tumerok Towers",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === Two Tower with Tumeroks at 1.4S 86.2W in the Dires near Fort Tethana, close to the Obsidian Rim Portal.<br> It is one of the POIs incidated on the Ingame Map. See Points of Interest Map, no. 31.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/1_4S_86_2W_Tumerok_Towers.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -1.4,
+     -86.2
+    ]
+   ],
+   "map": {
+    "ns": -1.4,
+    "ew": -86.2
+   },
+   "world": [
+    3780.0,
+    24132.0
+   ],
+   "lb": "0x137D",
+   "coveredDistM": 3461,
+   "coveredBy": "shot:fort-tethana.03",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 3522,
+   "gazNear": [
+    {
+     "id": "old-talisman-dungeon-portal",
+     "name": "Old Talisman Dungeon Portal",
+     "kind": "landmark",
+     "d": 257,
+     "teleport": "@teleloc 0x147C001D 81 109.1 148.288 0.382683 0 0 -0.92388",
+     "pos": [
+      3921,
+      23917.1,
+      148.288
+     ]
+    },
+    {
+     "id": "northwest-direlands-147c",
+     "name": "Northwest Direlands",
+     "kind": "poi",
+     "d": 271,
+     "teleport": "@teleloc 0x147C0014 54 77.8 150 0.97437 0 0 -0.224951",
+     "pos": [
+      3894,
+      23885.8,
+      150
+     ]
+    },
+    {
+     "id": "heartland-portal-147c",
+     "name": "Heartland Portal",
+     "kind": "landmark",
+     "d": 281,
+     "teleport": "@teleloc 0x147C0013 57.5786 69.2374 149.09 -0.212667 0 0 0.977125",
+     "pos": [
+      3897.579,
+      23877.237,
+      149.09
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 2321,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-towers"
+  },
+  {
+   "title": "Walled Portals",
+   "name": "Walled Portals",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A Walled Fort at 21.6S, 74.5W in the Dires. Since the steps are from outside to the inside, this used to be a rather dangerous place for a young toon.<br> This is one of the easier ways to gain access to the Dires.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Walled_Portals.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -21.6,
+     -74.5
+    ]
+   ],
+   "map": {
+    "ns": -21.6,
+    "ew": -74.5
+   },
+   "world": [
+    6588.0,
+    19284.0
+   ],
+   "lb": "0x2264",
+   "coveredDistM": 5566,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 5593,
+   "gazNear": [
+    {
+     "id": "outside-accursed-halls-portal",
+     "name": "Outside Accursed Halls Portal",
+     "kind": "landmark",
+     "d": 10,
+     "teleport": "@teleloc 0x22640014 54.6793 92.8648 119.937 0.707107 0 0 -0.707107",
+     "pos": [
+      6582.679,
+      19292.865,
+      119.937
+     ]
+    },
+    {
+     "id": "walled-portals",
+     "name": "Walled Portals",
+     "kind": "poi",
+     "d": 27,
+     "teleport": "@teleloc 0x2264000D 36.3 96.9 120 0.026177 0 0 -0.999657",
+     "pos": [
+      6564.3,
+      19296.9,
+      120
+     ]
+    },
+    {
+     "id": "ridge-tower-portal",
+     "name": "Ridge Tower Portal",
+     "kind": "landmark",
+     "d": 42,
+     "teleport": "@teleloc 0x22640005 21.436 99.414 119.937 0.707107 0 0 -0.707107",
+     "pos": [
+      6549.436,
+      19299.414,
+      119.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "walled-portals",
+     "name": "Walled Portals",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x2264000D 36.3 96.9 120 0.026177 0 0 -0.999657",
+     "pos": [
+      6564.3,
+      19296.9,
+      120
+     ],
+     "map": {
+      "ns": -21.55,
+      "ew": -74.6
+     }
+    },
+    {
+     "id": "walled-portals-portal-1568",
+     "name": "Walled Portals Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x1568010E 141.69 16.2184 -63.995 -0.707107 0 0 -0.707107",
+     "pos": [
+      4173.69,
+      19984.218,
+      -63.995
+     ],
+     "map": {
+      "ns": -18.68,
+      "ew": -84.56
+     }
+    },
+    {
+     "id": "walled-portals-portal-3761",
+     "name": "Walled Portals Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x37610013 52.6106 66.1486 39.937 0.707107 0 0 -0.707107",
+     "pos": [
+      10612.611,
+      18690.149,
+      39.937
+     ],
+     "map": {
+      "ns": -24.07,
+      "ew": -57.73
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 88,
+   "timeOfDay": 0.72,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-walled-portals"
+  },
+  {
+   "title": "Chalicmere Castle",
+   "name": "Chalicmere Castle",
+   "cats": [
+    "Southwest POI",
+    "Auberean Location",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === Mentioned at length in Aerfalle's Letter, Chalicmere is an open fortress in the heart of the Direlands at 17.0S 57.4W. <br>You can either unlock the front door (Resistance 242) or use the roofs to jump your way over the wall. <br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chalicmere_Castle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -53.0,
+     61.0
+    ],
+    [
+     -49.5,
+     62.8
+    ],
+    [
+     -17.0,
+     -57.4
+    ],
+    [
+     -17.0,
+     -57.3
+    ]
+   ],
+   "map": {
+    "ns": -17.0,
+    "ew": -57.4
+   },
+   "world": [
+    10692.0,
+    20388.0
+   ],
+   "lb": "0x376A",
+   "coveredDistM": 5582,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 5640,
+   "gazNear": [
+    {
+     "id": "chalicmere-castle",
+     "name": "Chalicmere Castle",
+     "kind": "poi",
+     "d": 22,
+     "teleport": "@teleloc 0x376A0022 110 33 35 0.707107 0 0 -0.707107",
+     "pos": [
+      10670,
+      20385,
+      35
+     ]
+    },
+    {
+     "id": "life-stone-at-18-1s-56-9w",
+     "name": "Life Stone at 18.1S 56.9W",
+     "kind": "landmark",
+     "d": 286,
+     "teleport": "@teleloc 0x38680017 68.7585 164.861 43.4683 0.981655 0 0 -0.190665",
+     "pos": [
+      10820.759,
+      20132.861,
+      43.468
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "chalicmere-castle",
+     "name": "Chalicmere Castle",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x376A0022 110 33 35 0.707107 0 0 -0.707107",
+     "pos": [
+      10670,
+      20385,
+      35
+     ],
+     "map": {
+      "ns": -17.01,
+      "ew": -57.49
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 3032,
+   "timeOfDay": 0.72,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-chalicmere-castle"
+  },
+  {
+   "title": "Vale of Giant Flowers",
+   "name": "Vale of Giant Flowers",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "Flowers from Another World}} === Description === A valley of giant flowers found in the Mid Direlands. The flowers first start to appear at 26.0S, 75.0W and then stretch south past the Acid Guardian Lair (the flowers were once found here also but the land has been scarred from an explosion) before going east where they are found in vast numbers around the outside of the Valley of Death. From here,",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Vale_of_Giant_Flowers.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -29.8,
+     -60.6
+    ],
+    [
+     -26.0,
+     -75.0
+    ]
+   ],
+   "map": {
+    "ns": -26.0,
+    "ew": -75.0
+   },
+   "world": [
+    6468.0,
+    18228.0
+   ],
+   "lb": "0x215E",
+   "coveredDistM": 6629,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 6656,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "vale-of-giant-flowers",
+     "name": "Vale of Giant Flowers",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 26.00S 75.00W",
+     "pos": null,
+     "map": {
+      "ns": -26,
+      "ew": -75
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 118,
+   "timeOfDay": 0.73,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-vale-of-giant-flowers"
+  },
+  {
+   "title": "Outside Accursed Halls",
+   "name": "Outside Accursed Halls",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A Walled Fort at 24.0S, 57.8W in the Direlands. Since the steps are from inside to the outside, this used to be one of the leveling spots for a young archer or mage.<br> This is one of the easier ways to gain access to the Dires.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Outside_Accursed_Halls.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -24.0,
+     -57.8
+    ]
+   ],
+   "map": {
+    "ns": -24.0,
+    "ew": -57.8
+   },
+   "world": [
+    10596.0,
+    18708.0
+   ],
+   "lb": "0x3761",
+   "coveredDistM": 6941,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 6995,
+   "gazNear": [
+    {
+     "id": "outside-accursed-halls",
+     "name": "Outside Accursed Halls",
+     "kind": "poi",
+     "d": 4,
+     "teleport": "@teleloc 0x3761000C 37.31 80.17 40 0 0 0 -1",
+     "pos": [
+      10597.31,
+      18704.17,
+      40
+     ]
+    },
+    {
+     "id": "accursed-halls-portal",
+     "name": "Accursed Halls Portal",
+     "kind": "landmark",
+     "d": 18,
+     "teleport": "@teleloc 0x37610004 19.5545 77.8227 39.937 -0.707107 0 0 -0.707107",
+     "pos": [
+      10579.555,
+      18701.823,
+      39.937
+     ]
+    },
+    {
+     "id": "walled-portals-portal-3761",
+     "name": "Walled Portals Portal",
+     "kind": "landmark",
+     "d": 24,
+     "teleport": "@teleloc 0x37610013 52.6106 66.1486 39.937 0.707107 0 0 -0.707107",
+     "pos": [
+      10612.611,
+      18690.149,
+      39.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "outside-accursed-halls",
+     "name": "Outside Accursed Halls",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x3761000C 37.31 80.17 40 0 0 0 -1",
+     "pos": [
+      10597.31,
+      18704.17,
+      40
+     ],
+     "map": {
+      "ns": -24.02,
+      "ew": -57.79
+     }
+    },
+    {
+     "id": "outside-accursed-halls-portal",
+     "name": "Outside Accursed Halls Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x22640014 54.6793 92.8648 119.937 0.707107 0 0 -0.707107",
+     "pos": [
+      6582.679,
+      19292.865,
+      119.937
+     ],
+     "map": {
+      "ns": -21.56,
+      "ew": -74.52
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 2999,
+   "timeOfDay": 0.73,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-outside-accursed-halls"
+  },
+  {
+   "title": "Renegade Fortress",
+   "name": "Renegade Fortress",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A huge fortress built by the Renegade Lugians and Tumeroks north of the Valley of Death (28.9S, 65.5W). The only way in is via the main door which is impossible to pick but destroyable. However, you will come under fire as soon as you get near the fortress walls. The Gotrok Fortress Guards will also tip hot liquid on you lowering your health even more. :<font color=green>You lo",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Renegade_Fortress.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -28.9,
+     -65.5
+    ]
+   ],
+   "map": {
+    "ns": -28.9,
+    "ew": -65.5
+   },
+   "world": [
+    8748.0,
+    17532.0
+   ],
+   "lb": "0x2D5B",
+   "coveredDistM": 7421,
+   "coveredBy": "shot:fort-tethana.02",
+   "nearestSite": "fort-tethana",
+   "nearestSiteM": 7464,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "renegade-fortress",
+     "name": "Renegade Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x624803E8 90 -190.593 0.005 1 0 0 0",
+     "pos": [
+      18906,
+      13633.407,
+      0.005
+     ],
+     "map": {
+      "ns": -28.9,
+      "ew": -65.5
+     }
+    },
+    {
+     "id": "renegade-fortress-120",
+     "name": "Renegade Fortress (120+)",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 00CC",
+     "pos": null,
+     "map": {
+      "ns": -29.5,
+      "ew": -65.6
+     }
+    },
+    {
+     "id": "renegade-fortress-60",
+     "name": "Renegade Fortress (60+)",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 6248",
+     "pos": null,
+     "map": {
+      "ns": -29.5,
+      "ew": -65.5
+     }
+    },
+    {
+     "id": "renegade-fortress-portal",
+     "name": "Renegade Fortress Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x2D5A0104 107.82 98.2997 3.25459 -0.011278 0 0 -0.999936",
+     "pos": [
+      8747.82,
+      17378.3,
+      3.255
+     ],
+     "map": {
+      "ns": -29.54,
+      "ew": -65.5
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 1402,
+   "timeOfDay": 0.73,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-renegade-fortress"
+  },
+  {
+   "title": "Mount Lethe",
+   "name": "Mount Lethe",
+   "cats": [
+    "Southwest POI",
+    "Geographic Area"
+   ],
+   "desc": "=== Description === One of three mountains that spawn a Hellfire and its fire infusion used to upgrade the Sword of Lost Light. The Mount Lethe Hellfire spawns in the crater of the mountain at 34.4S, 84.9W when the Tenkarrdun Hellfire is killed as part of the Lady Aerfalle Quest. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Lethe.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -34.4,
+     -84.9
+    ],
+    [
+     -33.8,
+     -85.3
+    ]
+   ],
+   "map": {
+    "ns": -33.8,
+    "ew": -85.3
+   },
+   "world": [
+    3996.0,
+    16356.0
+   ],
+   "lb": "0x1455",
+   "coveredDistM": 6250,
+   "coveredBy": "shot:ayan-baqur.03",
+   "nearestSite": "ayan-baqur",
+   "nearestSiteM": 6298,
+   "gazNear": [
+    {
+     "id": "mount-tenkarrdun-1455",
+     "name": "Mount Tenkarrdun",
+     "kind": "poi",
+     "d": 11,
+     "teleport": "@teleloc 0x14550032 163.519 28.263 70.005 -0.922093 0 0 -0.386969",
+     "pos": [
+      4003.519,
+      16348.263,
+      70.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "mount-lethe-magma-tubes",
+     "name": "Mount Lethe Magma Tubes",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x0146029B 70 -20 0 0.026177 0 0 -0.999657",
+     "pos": [
+      262,
+      13420,
+      0
+     ],
+     "map": {
+      "ns": -33.8,
+      "ew": -85.3
+     }
+    },
+    {
+     "id": "mount-lethe",
+     "name": "Mount Lethe",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 33.80S 85.30W",
+     "pos": null,
+     "map": {
+      "ns": -33.8,
+      "ew": -85.3
+     }
+    },
+    {
+     "id": "mount-lethe-magma-tubes-portal",
+     "name": "Mount Lethe Magma Tubes Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x14550100 181.082 14.6518 64.805 -0.778928 0 0 0.627114",
+     "pos": [
+      4021.082,
+      16334.652,
+      64.805
+     ],
+     "map": {
+      "ns": -33.89,
+      "ew": -85.2
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 128,
+   "timeOfDay": 0.75,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-mount-lethe"
+  }
+ ]
+}

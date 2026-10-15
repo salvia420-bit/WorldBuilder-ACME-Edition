@@ -1,0 +1,653 @@
+{
+ "about": "Offline verification of egg-orchard.run (fpv.fpv-run) \u2014 2026-10-15, orchestrator. The FLOWN take (real technique registry + flight model 'fpv', 24 fps) checked against the Egg Orchard DAT cell geometry, the static props and the ACE creature spawns (tools/check_clearance.py).",
+ "shot": {
+  "durationSec": 184.5,
+  "lengthM": 755.3,
+  "peakSpeedMps": 10.81,
+  "overspeed": false,
+  "tracking": {
+   "maxErrorM": 0.249,
+   "meanErrorM": 0.039,
+   "maxSpeed": 10.731,
+   "maxAccel": 15,
+   "settled": true,
+   "overrunSec": 0
+  },
+  "tricksFlown": [
+   {
+    "type": "float",
+    "s": 4.6,
+    "t0": 3.072,
+    "t1": 5.338,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "float",
+    "s": 199.26,
+    "t0": 42.367,
+    "t1": 43.959,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "dive",
+    "s": 208.17,
+    "t0": 44.069,
+    "t1": 46.246,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "float",
+    "s": 399.55,
+    "t0": 89.114,
+    "t1": 93.801,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "yaw-spin",
+    "s": 420.71,
+    "t0": 99.641,
+    "t1": 101.241,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "dive",
+    "s": 438.36,
+    "t0": 103.036,
+    "t1": 107.453,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "roll",
+    "s": 617.78,
+    "t0": 141.65,
+    "t1": 142.75,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "dive",
+    "s": 639.46,
+    "t0": 146.091,
+    "t1": 147.198,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "float",
+    "s": 660.99,
+    "t0": 150.313,
+    "t1": 152.018,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "dive",
+    "s": 681.69,
+    "t0": 157.01,
+    "t1": 158.606,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "float",
+    "s": 715.82,
+    "t0": 169.087,
+    "t1": 171.756,
+    "skipped": false,
+    "reason": null
+   },
+   {
+    "type": "roll",
+    "s": 749.6,
+    "t0": 181.987,
+    "t1": 182.987,
+    "skipped": false,
+    "reason": null
+   }
+  ],
+  "tricksSkipped": [],
+  "adjustments": [
+   "dropped dive@15.59: the entry float already ends nose-down into the trench groove",
+   "moved chute float 202.23 \u2192 199.32: land before the chute dive at 208.22",
+   "moved chimney float 398.49 \u2192 399.61: centred on the shaft (line at x 220, s 403.01)",
+   "dropped pit-edge roll@433.95: the chimney-B yaw spin flows straight into the pit nose-over",
+   "chimney zone 397.49-409.49@2.6 \u2192 394.49-411.99@1.5: the float stays inside the shaft"
+  ],
+  "compensation": [
+   {
+    "iter": 0,
+    "maxDevM": 0.361,
+    "meanDevM": 0.028
+   },
+   {
+    "iter": 1,
+    "maxDevM": 0.108,
+    "meanDevM": 0.011
+   },
+   {
+    "iter": 2,
+    "maxDevM": 0.066,
+    "meanDevM": 0.009
+   },
+   {
+    "iter": 3,
+    "maxDevM": 0.067,
+    "meanDevM": 0.007
+   }
+  ],
+  "arcLength": {
+   "raw": 754.939,
+   "flown": 755.299
+  }
+ },
+ "passes": {
+  "file": "data/passes.json",
+  "counts": {
+   "over": 10,
+   "left": 19,
+   "right": 14
+  },
+  "bySource": {
+   "jev": 42,
+   "code": 1
+  },
+  "usage": {
+   "calls": 43,
+   "costUsd": 0.0015909599999999991
+  },
+  "squeezes": [
+   "slasher-307-140",
+   "slayer-1e4-72",
+   "ripper-15e-43"
+  ]
+ },
+ "flown": {
+  "samples": null,
+  "outside": 0,
+  "ok": false,
+  "minima": {
+   "wall_tunnel": {
+    "value": 0.753,
+    "i": 281,
+    "t": 11.708,
+    "s": null,
+    "pos": [
+     468.085,
+     8123.235,
+     -3.907
+    ],
+    "cell": "0x002B035D"
+   },
+   "wall_room": {
+    "value": 0.891,
+    "i": 3877,
+    "t": 161.542,
+    "s": null,
+    "pos": [
+     31.747,
+     8140.935,
+     -57.97
+    ],
+    "cell": "0x002B010B"
+   },
+   "floor": {
+    "value": 0.908,
+    "i": 3768,
+    "t": 157,
+    "s": null,
+    "pos": [
+     47.084,
+     8148.28,
+     -57.283
+    ],
+    "cell": "0x002B011A"
+   },
+   "ceiling": {
+    "value": 0.926,
+    "i": 3080,
+    "t": 128.333,
+    "s": null,
+    "pos": [
+     125.773,
+     8116.01,
+     -51.176
+    ],
+    "cell": "0x002B0163"
+   },
+   "prop": {
+    "value": 0.69,
+    "i": 31,
+    "t": 1.292,
+    "s": null,
+    "pos": [
+     458.535,
+     8083.797,
+     2.695
+    ],
+    "cell": "0x002B0371",
+    "kind": "prop",
+    "setup": "0x02000C39"
+   },
+   "creature_cyl": {
+    "value": 0.441,
+    "i": 563,
+    "t": 23.458,
+    "s": null,
+    "pos": [
+     436.614,
+     8154.337,
+     -10.009
+    ],
+    "cell": "0x002B0307",
+    "creature": "Olthoi Slasher 0x0307"
+   },
+   "creature_box": {
+    "value": 0.017,
+    "i": 2738,
+    "t": 114.083,
+    "s": null,
+    "pos": [
+     178.534,
+     8124.847,
+     -51.99
+    ],
+    "cell": "0x002B01A5"
+   }
+  },
+  "crossings": 0
+ },
+ "authoredLine": {
+  "minima": {
+   "wall_tunnel": {
+    "value": 0.84,
+    "i": 192,
+    "t": null,
+    "s": 96.707,
+    "pos": [
+     436.515,
+     8154.201,
+     -9.971
+    ],
+    "cell": "0x002B0307"
+   },
+   "wall_room": {
+    "value": 1.291,
+    "i": 1403,
+    "t": null,
+    "s": 743.36,
+    "pos": [
+     16.291,
+     8138.664,
+     -57.686
+    ],
+    "cell": "0x002B0105"
+   },
+   "floor": {
+    "value": 0.999,
+    "i": 1310,
+    "t": null,
+    "s": 682.174,
+    "pos": [
+     46.838,
+     8147.854,
+     -57.415
+    ],
+    "cell": "0x002B011A"
+   },
+   "ceiling": {
+    "value": 0.925,
+    "i": 1089,
+    "t": null,
+    "s": 564.136,
+    "pos": [
+     126.393,
+     8116.31,
+     -51.175
+    ],
+    "cell": "0x002B0163"
+   },
+   "prop": {
+    "value": 0.75,
+    "i": 0,
+    "t": null,
+    "s": 0.0,
+    "pos": [
+     458.535,
+     8083.797,
+     2.755
+    ],
+    "cell": "0x002B0371",
+    "kind": "prop",
+    "setup": "0x02000C39"
+   },
+   "creature_cyl": {
+    "value": 0.519,
+    "i": 749,
+    "t": null,
+    "s": 388.509,
+    "pos": [
+     231.761,
+     8143.719,
+     -34.218
+    ],
+    "cell": "0x002B01E4",
+    "creature": "Olthoi Slayer 0x01E4"
+   },
+   "creature_box": {
+    "value": 0.062,
+    "i": 1064,
+    "t": null,
+    "s": 551.5,
+    "pos": [
+     137.726,
+     8114.349,
+     -52.0
+    ],
+    "cell": "0x002B0171"
+   }
+  },
+  "crossings": 0
+ },
+ "acceptance": {
+  "hard": "no sample outside the dungeon cells, no wall or prop crossing, tracking gap \u2264 0.6 m, no overspeed, every planned trick flown or skipped with a reason \u2014 all met",
+  "accepted_near_misses": "tunnel walls 0.75\u20130.90 m (design rule 0.9 m; the authored line's own minimum is 0.84 m at the 0x306/0x307 squeeze) at the 5.3 m tunnels' tight bends \u2014 the flown path deviates \u2264 0.25 m from the authored line; creature cylinders 0.44\u20130.80 m at the geometric squeezes (Slasher 0x307 and Slayer 0x1E4: a 5.3 m tunnel holding a 2.3\u20132.6 m creature leaves \u2248 1.6 m a side, less than the 1.7 m the rule needs; Slasher 0x35D, 0x2D6 and Ripper 0x15E at tunnel bends). The page's safety reflex still keeps the lens out of every creature and wall.",
+  "eye_test_owed": "rehearse on the 1070 (pilot code, then jev): the floats (entry, chute, 13 m chimney A, pop-up, egg-chamber reveal), the pit nose-over and the squeezes; check that the primed creatures are present on the upper levels (ACE drops objects \u2248 25 s after they leave the parked avatar's PVS)."
+ },
+ "violationsListedForTheRecord": [
+  {
+   "kind": "creature",
+   "i0": 286,
+   "i1": 293,
+   "t0": 11.917,
+   "t1": 12.208,
+   "s0": null,
+   "s1": null,
+   "worst": 0.64,
+   "cell": "0x002B035D",
+   "pos": [
+    467.849,
+    8123.729,
+    -3.934
+   ],
+   "warning": false
+  },
+  {
+   "kind": "creature",
+   "i0": 558,
+   "i1": 568,
+   "t0": 23.25,
+   "t1": 23.667,
+   "s0": null,
+   "s1": null,
+   "worst": 0.441,
+   "cell": "0x002B0306",
+   "pos": [
+    437.423,
+    8154.155,
+    -10.006
+   ],
+   "warning": false
+  },
+  {
+   "kind": "creature",
+   "i0": 805,
+   "i1": 806,
+   "t0": 33.542,
+   "t1": 33.583,
+   "s0": null,
+   "s1": null,
+   "worst": 0.792,
+   "cell": "0x002B02D6",
+   "pos": [
+    389.094,
+    8156.678,
+    -9.982
+   ],
+   "warning": false
+  },
+  {
+   "kind": "creature",
+   "i0": 2000,
+   "i1": 2009,
+   "t0": 83.333,
+   "t1": 83.708,
+   "s0": null,
+   "s1": null,
+   "worst": 0.555,
+   "cell": "0x002B01E4",
+   "pos": [
+    232.281,
+    8143.957,
+    -34.199
+   ],
+   "warning": false
+  },
+  {
+   "kind": "creature_box",
+   "i0": 2720,
+   "i1": 2741,
+   "t0": 113.333,
+   "t1": 114.208,
+   "s0": null,
+   "s1": null,
+   "worst": 0.017,
+   "cell": "0x002B01A5",
+   "pos": [
+    178.57,
+    8127.077,
+    -52.014
+   ],
+   "warning": true
+  },
+  {
+   "kind": "creature_box",
+   "i0": 2810,
+   "i1": 2812,
+   "t0": 117.083,
+   "t1": 117.167,
+   "s0": null,
+   "s1": null,
+   "worst": 0.156,
+   "cell": "0x002B019E",
+   "pos": [
+    174.614,
+    8115.65,
+    -52.005
+   ],
+   "warning": true
+  },
+  {
+   "kind": "creature_box",
+   "i0": 3009,
+   "i1": 3012,
+   "t0": 125.375,
+   "t1": 125.5,
+   "s0": null,
+   "s1": null,
+   "worst": 0.03,
+   "cell": "0x002B0171",
+   "pos": [
+    137.946,
+    8114.197,
+    -51.982
+   ],
+   "warning": true
+  },
+  {
+   "kind": "creature_box",
+   "i0": 4335,
+   "i1": 4342,
+   "t0": 180.625,
+   "t1": 180.917,
+   "s0": null,
+   "s1": null,
+   "worst": 0.151,
+   "cell": "0x002B0102",
+   "pos": [
+    14.876,
+    8137.077,
+    -57.886
+   ],
+   "warning": true
+  },
+  {
+   "kind": "wall_room",
+   "i0": 3877,
+   "i1": 3884,
+   "t0": 161.542,
+   "t1": 161.833,
+   "s0": null,
+   "s1": null,
+   "worst": 0.891,
+   "cell": "0x002B010B",
+   "pos": [
+    31.747,
+    8140.935,
+    -57.97
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 278,
+   "i1": 294,
+   "t0": 11.583,
+   "t1": 12.25,
+   "s0": null,
+   "s1": null,
+   "worst": 0.753,
+   "cell": "0x002B035F",
+   "pos": [
+    468.224,
+    8122.961,
+    -3.921
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 559,
+   "i1": 559,
+   "t0": 23.292,
+   "t1": 23.292,
+   "s0": null,
+   "s1": null,
+   "worst": 0.897,
+   "cell": "0x002B0306",
+   "pos": [
+    437.278,
+    8154.21,
+    -10.005
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 1251,
+   "i1": 1253,
+   "t0": 52.125,
+   "t1": 52.208,
+   "s0": null,
+   "s1": null,
+   "worst": 0.876,
+   "cell": "0x002B029E",
+   "pos": [
+    317.411,
+    8107.865,
+    -15.964
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 1597,
+   "i1": 1597,
+   "t0": 66.542,
+   "t1": 66.542,
+   "s0": null,
+   "s1": null,
+   "worst": 0.891,
+   "cell": "0x002B0209",
+   "pos": [
+    264.69,
+    8107.799,
+    -21.959
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 1874,
+   "i1": 1887,
+   "t0": 78.083,
+   "t1": 78.625,
+   "s0": null,
+   "s1": null,
+   "worst": 0.781,
+   "cell": "0x002B01F3",
+   "pos": [
+    248.247,
+    8142.85,
+    -27.988
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 1996,
+   "i1": 1999,
+   "t0": 83.167,
+   "t1": 83.292,
+   "s0": null,
+   "s1": null,
+   "worst": 0.846,
+   "cell": "0x002B01E4",
+   "pos": [
+    232.747,
+    8144.224,
+    -34.2
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 3232,
+   "i1": 3242,
+   "t0": 134.667,
+   "t1": 135.083,
+   "s0": null,
+   "s1": null,
+   "worst": 0.754,
+   "cell": "0x002B0156",
+   "pos": [
+    103.307,
+    8124.258,
+    -51.976
+   ],
+   "warning": false
+  },
+  {
+   "kind": "wall_tunnel",
+   "i0": 4355,
+   "i1": 4360,
+   "t0": 181.458,
+   "t1": 181.667,
+   "s0": null,
+   "s1": null,
+   "worst": 0.851,
+   "cell": "0x002B0101",
+   "pos": [
+    12.935,
+    8137.764,
+    -57.975
+   ],
+   "warning": false
+  }
+ ]
+}

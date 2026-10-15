@@ -1,0 +1,220 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-tumerok-tower",
+   "name": "Tumerok Tower",
+   "decision": "include",
+   "reason": "Real place: a 31 m Tumerok spire tower with three glowing fire pits stands on the beach under a 220 m sea cliff, with the Tumerok Fortification on the cliff top. It is 5.4 km from any tour frame and has water and flames. Two shots.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-tower.json"
+  },
+  {
+   "siteId": "poi-tumerok-outpost-19n-567w",
+   "name": "Tumerok Outpost",
+   "decision": "include",
+   "reason": "Real place: a walled Tumerok outpost of black stone halls crowned with stakes, on a rocky ledge 3.6 km from Fort Tethana's frames. It is small, so it gets one rank-3 tilt reveal.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-outpost-19n-567w.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-31n-605w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real place: a Tumerok fort on a flat mesa top, with three spire towers and a lone fourth tower. Two shots, a helix and a low angle.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-31n-605w.json"
+  },
+  {
+   "siteId": "poi-tumerok-outpost-90n-657w",
+   "name": "Tumerok Outpost",
+   "decision": "include",
+   "reason": "Real place: it has the acpedia trail of candle-bearing Empyrean statues leading to the bunker and its spire tower. One rank-3 rack focus from a statue to the tower.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-outpost-90n-657w.json"
+  },
+  {
+   "siteId": "poi-shadow-march",
+   "name": "Shadow March",
+   "decision": "include",
+   "reason": "Real and distinctive: a black obsidian plain around an 88 m black hill with The Dark Spiral portal on top, Lord Marsan's battlefield of corpses and banners, and Grael's Chamber portal between two Ice Totems. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-shadow-march.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-103n-688w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real place: a Tumerok fort that fills a narrow rock valley. One canyon run up the valley (an assigned technique).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-103n-688w.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-123n-737w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real place: the Overlord's eight-tower fort with the Tumerok Fortress portal and fire pits on a forested ridge. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-123n-737w.json"
+  },
+  {
+   "siteId": "poi-renegade-encampment",
+   "name": "Renegade Encampment",
+   "decision": "exclude",
+   "reason": "Its landblocks 0x2380 and 0x2381 have no WBT statics or structures in the kit (like Fort Tethana's 0x2480-0x2581), so the camp cannot be located or cleared. It is also only 341 m from Fort Tethana's existing framing (fort-tethana.03).",
+   "shots": 0,
+   "file": null
+  },
+  {
+   "siteId": "poi-floating-spire",
+   "name": "Floating Spire",
+   "decision": "include",
+   "reason": "A unique floating Advocate tower over a forested hill, filmed with a locked-off tilt from a fully loaded landblock 115 m away. Its own landblock 0x287A has no WBT statics, so its geometry is estimated from its portal spawn and the identical Humming Crystal spire. Rank 2, flagged.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-floating-spire.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-gloaming",
+   "name": "Festival Stone of Gloaming",
+   "decision": "include",
+   "reason": "Real place: a festival stone with its Anniversary glow (ACE spawns) on the Floating Spire hill's west flank. One rank-3 arc from the loaded landblock north of it. The statics of its own landblock 0x277A are unverified.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-gloaming.json"
+  },
+  {
+   "siteId": "poi-slaughterhouse",
+   "name": "Slaughterhouse",
+   "decision": "include",
+   "reason": "Real place: the walled Tumerok slaughterhouse, whose tower and cattle pens fill a V-shaped valley. Two shots, a dronie and a high angle.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-slaughterhouse.json"
+  },
+  {
+   "siteId": "poi-teth-golem-mountain",
+   "name": "Teth Golem Mountain",
+   "decision": "include",
+   "reason": "Real place: a barren mesa ringed by seven golem cave mouths. One rank-3 pass-over.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-teth-golem-mountain.json"
+  },
+  {
+   "siteId": "poi-humming-crystal",
+   "name": "Humming Crystal",
+   "decision": "include",
+   "reason": "Spectacular: the humming crystal sits on a stepped 190 m obsidian needle with an Advocate spire floating above it. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-humming-crystal.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-97s-633w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real place: the huge 200 x 220 m Tumerok fort with eight towers, entrances blocked by totem stones and the Tumerok Dungeon portal inside. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-97s-633w.json"
+  },
+  {
+   "siteId": "poi-tumerok-towers",
+   "name": "Tumerok Towers",
+   "decision": "include",
+   "reason": "Real place: two Tumerok spire towers side by side on a ridge. One two-shot (an assigned technique).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-towers.json"
+  },
+  {
+   "siteId": "poi-walled-portals",
+   "name": "Walled Portals",
+   "decision": "include",
+   "reason": "Real place: a walled fort with two portal swirls on a desert ridge. One boom rise (an assigned technique).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-walled-portals.json"
+  },
+  {
+   "siteId": "poi-chalicmere-castle",
+   "name": "Chalicmere Castle",
+   "decision": "include",
+   "reason": "Real place: a red-roofed castle with spire towers and a tree-filled courtyard in a Dires valley. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-chalicmere-castle.json"
+  },
+  {
+   "siteId": "poi-vale-of-giant-flowers",
+   "name": "Vale of Giant Flowers",
+   "decision": "include",
+   "reason": "Real place: 86 giant purple flowers (10-26 m) stand in the meadow west of the Renegade Fortress, part of the vale acpedia describes. The acpedia start point has only 6, so the site is anchored in the dense field. Two shots.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-vale-of-giant-flowers.json"
+  },
+  {
+   "siteId": "poi-outside-accursed-halls",
+   "name": "Outside Accursed Halls",
+   "decision": "include",
+   "reason": "Real place: the twin walled court of Walled Portals, with two portal swirls. One rank-3 top-down rise.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-outside-accursed-halls.json"
+  },
+  {
+   "siteId": "poi-renegade-fortress",
+   "name": "Renegade Fortress",
+   "decision": "include",
+   "reason": "Spectacular: a domed gate, a courtyard sunk inside 90 m earth walls with two 59 m pyramids and a lion-head shrine, and burning liquid on the walls. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-renegade-fortress.json"
+  },
+  {
+   "siteId": "poi-mount-lethe",
+   "name": "Mount Lethe",
+   "decision": "include",
+   "reason": "A volcano with a glowing lava crater (the Hellfire spawn) next to a plateau of geysers, firespurts and steam. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-lethe.json"
+  }
+ ],
+ "totalShots": 38,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json gives \"valid: 0 error(s), 0 warning(s)\" for 20 sites and 38 shots, dry build included. check.mjs over the full takes passes all 38 shots in the acceptance audit, run twice with identical numbers.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.low-angle": 3,
+  "classic.worms-eye": 2,
+  "drone.canyon-run": 2,
+  "drone.dronie": 2,
+  "drone.helix": 2,
+  "drone.orbit-poi": 2,
+  "drone.rising-reveal": 2,
+  "classic.arc": 1,
+  "classic.crane": 1,
+  "classic.establishing": 1,
+  "classic.high-angle": 1,
+  "classic.orbit": 1,
+  "classic.pedestal": 1,
+  "classic.push-in": 1,
+  "classic.rack-focus": 1,
+  "classic.reveal-from-occluder": 1,
+  "classic.roll": 1,
+  "classic.static": 1,
+  "classic.tilt": 1,
+  "classic.two-shot": 1,
+  "drone.boom-rise": 1,
+  "drone.fly-by": 1,
+  "drone.pass-over": 1,
+  "drone.spiral-descent": 1,
+  "drone.terrain-skim": 1,
+  "drone.tilt-reveal": 1,
+  "drone.top-down": 1,
+  "drone.top-down-rise": 1,
+  "drone.vertigo-drone": 1,
+  "fpv.fpv-proximity": 1
+ },
+ "notes": [
+  "Files: 20 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json and the scratch plan at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json (window and rank removed). The generator and helpers are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/poi-b3/ (spec.py, notes.py, gen.py, ev.py, final.py, pt.mjs, obs.mjs, proj.mjs, zgrid.mjs).",
+  "Shot totals: 38 shots are proposed against a quota of 34 (rank 1: 9, rank 2: 17, rank 3: 12), and the ideal edit windows sum to 212.5 s. Every take is 8-12 s with an edit window of 5-6.5 s, pilot code and bounds 1/1. The batch uses 30 distinct techniques, none more than 3 times (classic.low-angle). All 7 assigned techniques are used: roll (rank 1), orbit (rank 1), fpv-proximity (rank 1), canyon-run (x2), two-shot, reveal-from-occluder and boom-rise. If the rank-3 shots are dropped first, no assigned technique is lost.",
+  "No facade pans (no classic.truck or drone.parallax-slide). fpv-proximity at poi-tumerok-fort-97s-633w.01 runs fast (10.5 m/s) 4 m off the fort's south wall toward a corner tower and is not a slow facade pan; count it as one if the orchestrator disagrees.",
+  "Reveal lead-ins inside the edit window, all at 20% or less: tumerok-tower.02 reveal-from-occluder (LOS 2/23, clear from about t 4 s), tumerok-fort-123n-737w.01 rising-reveal over a 36 m tree (4/25, clear from about t 7 s), walled-portals.01 boom-rise over the spiked wall (2/23), renegade-fortress.01 rising-reveal over the gate arch (3/23). The rest have 0 blocked samples and 96-100% of the subject in frame.",
+  "Unverified geometry: (1) Floating Spire: landblock 0x287A has no WBT statics. The spire is assumed at about z 490-525 from its portal spawn at z 508.8 and the identical floating Advocate Spire model 0x01001776 (18.7 x 18.7 x 35.2 m) at the Humming Crystal. The camera sits in fully loaded landblock 0x297B, 115 m away. (2) Festival Stone of Gloaming: its landblock 0x277A also lacks WBT statics. The stone and glow are ACE spawns, and the camera stays in loaded landblock 0x277B. (3) Renegade Encampment was excluded for the same kit gap.",
+  "Kit edges: Mount Lethe landblocks south of y 16128 are missing, so all cameras stay north of the crater centre. Shadow March .03 sits 8 m east of the missing landblock 0x2793. Its terrain is not needed because the camera is east of x 7689 and looks up.",
+  "Site placement: the Vale of Giant Flowers is anchored at the dense flower field (8545,17380, about 29.3S 66.4W), 229 m west of the Renegade Fortress anchor. The acpedia start point 26.0S 75.0W has only 6 flowers in the kit, and acpedia says they grow 'in vast numbers around the outside of the Valley of Death ... past the Renegade Fortress'. The Floating Spire and Gloaming anchors are 189 m apart on the same hill. Both pairs keep the batch's route position fort-tethana -> ayan-baqur.",
+  "Teleports: 13 are derived @teleloc commands at ground + 0.5, at least 5 m from obstacles and not in water (Tumerok Tower, Tumerok Outpost 1.9N, Tumerok Fort 3.1N, Tumerok Outpost 9.0N, Shadow March, Tumerok Fort 10.3N, Tumerok Fort 12.3N, Floating Spire, Teth Golem Mountain, Tumerok Fort 9.7S, Tumerok Towers, Vale, Renegade Fortress). The rest are exact gazetteer telelocs. Gazetteer telelocs that land on a portal swirl were avoided (Dark Spiral, Tumerok Fortress, Tumerok Dungeon, Floating Spire's interior portal).",
+  "Repetition risk: 9 of the 20 sites are Tumerok forts or outposts built from the same kit (flat-roofed black halls with stake palisades, 0x01001161/0x01001117 spire towers). They are separated by terrain (beach and cliff, mesa, cliff ledge, statue trail, rock valley, forested ridge, V-valley slaughterhouse, huge flat fort, twin towers), by technique and by light. If the film is over quota, drop the rank-3 Tumerok shots first.",
+  "FX shots depend on runtime spawns: burning liquid and caltrops (Renegade Fortress), geysers, firespurts, steam and lava emitters (Mount Lethe), portal swirls (Dark Spiral, Grael's Chamber, Walled Portals, Outside Accursed Halls, Tumerok Dungeon), the Anniversary glow (Gloaming) and the fire pits (Tumerok Tower, Overlord's fort). The Tumerok Fortress portal sits on a platform of the central tower and may be partly hidden by the tower's walls, so shot 123n-737w.02 frames the tower.",
+  "Default-bake forest: the Overlord's fort (12.3N) is ringed by default-bake trees up to z 292, with some inside the yard. The rising reveal climbs past one of them, keeping 5.3 m or more from it; the retail-bake tree there is 5.5 m away. Keep the default ?sceneryBake. No shot comes within 5 m of a retail-bake tree."
+ ]
+}

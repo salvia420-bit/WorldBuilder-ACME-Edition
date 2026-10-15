@@ -53,6 +53,8 @@ const {
   sharedTerrainTimeSec,
   readWaterReflect,
   WATER_REFLECT_DEFAULT,
+  readWaterSheenFade,
+  WATER_SHEEN_FADE_DEFAULT,
   PHASE_2_2_WATER_CODES,
   WATER_SURFACE_CODES,
 } = await import(terrainUrl);
@@ -208,8 +210,31 @@ check("two ripple octaves drift different ways",
 // a few tens of metres one pixel spans many wave periods and the specular
 // aliases into long streaks across the whole sea (observed live, attributed by
 // forcing uWaterEnvEnabled=0). The fade is the fix, not decoration.
-check("sheen is distance-faded (anti-alias, live-observed streaks)",
-  /float sheenFade = 1\.0 - smoothstep\(30\.0, 160\.0, vViewDepth\);/.test(FRAG));
+check("sheen is distance-faded (anti-alias, live-observed streaks) over the uWaterSheenFade range",
+  /float sheenFade = \(1\.0 - smoothstep\(uWaterSheenFade\.x, uWaterSheenFade\.y, vViewDepth\)\) \* footFade;/.test(FRAG)
+  && /uniform vec2 uWaterSheenFade;/.test(FRAG));
+// 2026-10-15 — film boots ?waterSheenFade=40,500 so drone shots keep the ripples and glint at range. A far range
+// also fades by the pixel's ground footprint (Nyquist for the 0.47 m octave); the derivatives must be taken in
+// uniform control flow (before the water branch), and at the default range nothing changes. With ?terrainGradUv
+// (default on) the footprint reuses the grid-UV gradients from the top of main(), so the program keeps its single
+// dFdx/dFdy pair (test_terrain_micro.mjs); only ?terrainGradUv=off takes its own pair here.
+check("the footprint reuses gTerrainGridDx/Dy (metres = 24 x grid UV) when terrainGradUv is on",
+  /\$\{TERRAIN_MICRO\.gradUv\s*\?\s*"  float wFoot = 24\.0 \* max\(length\(gTerrainGridDx\), length\(gTerrainGridDy\)\);"/.test(FRAG));
+check("the footprint term is computed before the water branch and only applies to a far range (> 160 m)",
+  FRAG.indexOf("float wFoot = max(length(dFdx(gpFoot)), length(dFdy(gpFoot)));") > 0
+  && FRAG.indexOf("float wFoot = max(") < FRAG.indexOf("if (uWaterEnvEnabled > 0.5 && waterW > 0.0) {")
+  && /float footFade = uWaterSheenFade\.y > 160\.5 \? 1\.0 - smoothstep\(0\.2, 0\.6, wFoot\) : 1\.0;/.test(FRAG));
+check("?waterSheenFade: default [30, 160], 'near,far' parsed, junk / reversed / out of range = default",
+  JSON.stringify(WATER_SHEEN_FADE_DEFAULT) === "[30,160]" && JSON.stringify(readWaterSheenFade("")) === "[30,160]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=40,500")) === "[40,500]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=x")) === "[30,160]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=500,40")) === "[30,160]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=-1,100")) === "[30,160]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=10,5000")) === "[30,160]"
+  && JSON.stringify(readWaterSheenFade("?waterSheenFade=40")) === "[30,160]");
+check("uWaterSheenFade is fed from the ring options (reader) and the wire-mode shape carries the default",
+  /waterSheenFade: readWaterSheenFade\(\),/.test(SRC) && /waterSheenFade: WATER_SHEEN_FADE_DEFAULT\.slice\(\),/.test(SRC)
+  && /uWaterSheenFade: \{ value: new THREE\.Vector2\(/.test(SRC));
 check("the wave normal flattens with distance",
   /wN = normalize\(vec3\(slope \* sheenFade, 1\.0\)\);/.test(FRAG));
 check("the env reflection blurs up the mip chain with distance",

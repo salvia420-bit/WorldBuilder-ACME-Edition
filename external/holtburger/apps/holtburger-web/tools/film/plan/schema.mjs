@@ -18,24 +18,44 @@
 //   examplePlan() → a complete, valid music-video plan (3 sites, 8 shots) for docs and tests
 //   PLAN_FIELDS → field reference table {path, type, required, default, desc} (docs lane renders it)
 //   + constants: PLAN_VERSION, PLAN_DEFAULTS, TRANSITION_TYPES, XFADE_FOR, XFADE_TRANSITIONS, SUBJECT_KINDS,
-//     PILOT_MODES, CAPTURE_MODES, FRAMING_NAMES, KNOWN_TECHNIQUE_IDS, LOOK_TIMES, LOOK_FOGS, LOOK_GRADES,
-//     LOOK_DOF_KEYS, SHOT_BOUND_RULES, DRY_ROUTE_LEG_M, STANDING_ORDER_MAX, ID_PATTERN; helpers parseDuration,
-//     parseStart, checkStandingOrder, techniqueFamily.
+//     PILOT_MODES, PILOT_FADE_MODES, CAPTURE_MODES, FRAMING_NAMES, KNOWN_TECHNIQUE_IDS, LOOK_TIMES, LOOK_FOGS,
+//     LOOK_GRADES, LOOK_DOF_KEYS, SHOT_BOUND_RULES, TRIM_KEYS, EDIT_KEYS, TAIL_KEYS, PRIME_MAX, OVERLAY_KEYS,
+//     OVERLAY_PROP_KEYS, OVERLAY_PROP_STYLES, PLAN_PARAM_TYPES, DRY_ROUTE_LEG_M, STANDING_ORDER_MAX, ID_PATTERN;
+//     helpers parseDuration, parseStart, checkStandingOrder, techniqueFamily, tailIndexOf.
 //
 // Plan JSON v1 (all positions are SPEC §1 AC world metres [x east, y north, z up]; headings compass radians):
 //   { version: 1, title, kind?: 'music-video'|'story'|'reel',
 //     format: {width=1920, height=1080, fps=30, capture='stepped'},
 //     song?: {file?, analysis?, offsetSec=0}          (edit t=0 ↔ song t=offsetSec; indices below are SONG indices)
 //     defaults?: {transition='cut', pilot:{mode='jev'}, look:{}, framing?, ease?},
-//     edit?: {fadeInSec=0, fadeOutSec=0},
+//     edit?: {fadeInSec=0, fadeOutSec=0, tail?:{from, gapSec=1.5, fadeOutSec=3}},
 //     sites: [{id, name?, gazetteerId?, teleport:'@…', anchor:[x,y,z] | {cell, local:[x,y,z]}, cell?, indoor?,
-//              lbKeys?, interiorLb?, settleSec=0, ready:{settleSec=3, timeoutSec=90}, look?, notes?}],
+//              lbKeys?, interiorLb?, settleSec=0, ready:{settleSec=3, timeoutSec=90}, prime?:['@…' ≤ 12], look?,
+//              notes?}],
 //     shots: [{id, site, technique, duration:{sec}|{beats}|{bars} (or 4 / "2 bars" / "8 beats" / "3.5s"),
 //              start?:{sec}|{beat}|{bar}|{section}, params?, framing?, subject?, path?, route?, fov?, roll?, ease?,
-//              seed?, bounds?, transition? (INTO this shot), standingOrder, pilot?, capture?, actor?, look?, cell?,
-//              lyric?, notes?}] }
+//              seed?, bounds?, trim?, transition? (INTO this shot), standingOrder, pilot?:{mode, fade?}, capture?,
+//              actor?, look?, cell?, overlay?, lyric?, notes?}] }
+//   edit.tail: {from: '<shot id>', gapSec=1.5, fadeOutSec=3} (or the shot id string) — the shots from `from` on are a
+//     SILENT TAIL appended after the music: exact seconds (never beat-snapped), no {beats}/{bars}, no `start`; the
+//     music part compiles exactly as without a tail, edit.fadeOutSec fades its LAST shot (element-local), `gapSec` of
+//     black follows, a non-cut transition into the first tail shot is a fade-in from black/white, and
+//     tail.fadeOutSec is the program fade-out on the last shot. `from` may not be the first shot.
+//   site.prime: ['@teleloc …', …] — up to PRIME_MAX admin commands (checked like `teleport`) that `film shoot` sends
+//     BEFORE the site teleport, each followed by its readiness gate: walks the hidden player through a dungeon so the
+//     server sends the creatures of every cell the run passes (its PVS), then the site teleport stands it at the
+//     site. A failing prime only warns.
+//   shot.overlay: {props: {style: 'freestyle'|'cinewhoop', opacity?: 0..1, tint?: '#rrggbb'}} → item.take.overlay
+//     (null when absent): the page's lens overlay (FPV propellers at the top of the frame; drawn only with the boot
+//     flag ?filmProps=on). Unknown keys warn (the page ignores them).
+//   shot.pilot.fade: 'never' | 'auto' — 'never' forbids the JEV pilot to fade anything in the take (passed through).
 //   bounds: {maxLateral?, maxRise?, maxSink?, minSpeedScale?, maxSpeedScale?, maxDistanceScale?} — ShotSpec.bounds,
 //     the director's override of the JEV pilot bounds (missing keys = the technique's defaultBounds).
+//   trim: {takeSec, inSec} — fly the move as a take of `takeSec` s (ShotSpec.duration) and cut the edit from `inSec`
+//     into it: a shorter edit keeps the move's speed and shows its best stretch (the compiler places the window).
+//   params: checked against the registry's param schema; a param type this file does not know (e.g. a technique's
+//     `list` of zones/tricks) is checked by the registry itself (buildShot's own param validation, see
+//     checkRegistryParams), so its errors are plan errors with the exact path.
 //   subject: {kind:'point', pos, radius?, height?, heading?} | {kind:'entity', ref, moving=false, radius?, height?}
 //          | {kind:'player', moving?} | {kind:'path', points:[[x,y,z]…≥2]}  ('player' string = {kind:'player'})
 //     player `moving` is normalized to true when the shot's actor walks (actor.moveTo / actor.moves) — the page then
@@ -87,6 +107,33 @@ export const SUBJECT_KINDS = Object.freeze(["point", "entity", "player", "path"]
 
 /** JEV pilot modes (SPEC §2.14 createPilot). */
 export const PILOT_MODES = Object.freeze(["jev", "code", "shadow"]);
+
+/** `shot.pilot.fade`: 'never' = the pilot may fade nothing (mapper maxFadeIds 0); 'auto' = the pilot's own rules. */
+export const PILOT_FADE_MODES = Object.freeze(["never", "auto"]);
+
+/** Keys of `plan.edit` (others warn). */
+export const EDIT_KEYS = Object.freeze(["fadeInSec", "fadeOutSec", "tail"]);
+
+/** Keys of `plan.edit.tail` (`from` required; others are errors — a typo would silently fall back to a default). */
+export const TAIL_KEYS = Object.freeze(["from", "gapSec", "fadeOutSec"]);
+
+/** Most `site.prime` commands per site (each costs a teleport + a readiness gate before the site teleport). */
+export const PRIME_MAX = 12;
+
+/** Keys of `shot.overlay` (others warn: the page ignores them). */
+export const OVERLAY_KEYS = Object.freeze(["props"]);
+
+/** Keys of `shot.overlay.props` (others warn). */
+export const OVERLAY_PROP_KEYS = Object.freeze(["style", "opacity", "tint"]);
+
+/** `shot.overlay.props.style`: the FPV frame the propellers belong to. */
+export const OVERLAY_PROP_STYLES = Object.freeze(["freestyle", "cinewhoop"]);
+
+/**
+ * Registry param types validated here (checkParams). A param of any other type (a technique's `list`, …) is
+ * validated by the registry's own buildShot param check (checkRegistryParams).
+ */
+export const PLAN_PARAM_TYPES = Object.freeze(["number", "string", "boolean", "enum", "vec3"]);
 
 /** Capture modes (SPEC §0: stepped film clock vs wall clock for server-driven motion). */
 export const CAPTURE_MODES = Object.freeze(["stepped", "realtime"]);
@@ -155,7 +202,7 @@ export const KNOWN_TECHNIQUE_IDS = Object.freeze([
     "top-down-rise", "top-down-track", "pass-over", "parallax-slide", "terrain-skim", "canyon-run", "chase", "lead",
     "side-track", "boomerang", "fly-by", "spiral-descent", "pano-360", "hyperlapse-orbit", "vertigo-drone",
   ].map((n) => `drone.${n}`),
-  ...["fpv-dive", "fpv-proximity", "fpv-gap", "fpv-flip", "fpv-corridor"].map((n) => `fpv.${n}`),
+  ...["fpv-dive", "fpv-proximity", "fpv-gap", "fpv-flip", "fpv-corridor", "fpv-run"].map((n) => `fpv.${n}`),
 ]);
 
 const TECHNIQUE_ID_RE = /^(classic|drone|fpv)\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -172,14 +219,18 @@ export const PLAN_DEFAULTS = Object.freeze({
   songOffsetSec: 0,
   fadeInSec: 0,
   fadeOutSec: 0,
+  /** edit.tail.gapSec: black hold between the music part's fade-out and the tail. */
+  tailGapSec: 1.5,
+  /** edit.tail.fadeOutSec: program fade-out on the last tail shot. */
+  tailFadeOutSec: 3,
 });
 
 const TOP_KEYS = ["version", "title", "kind", "format", "song", "defaults", "edit", "sites", "shots", "notes", "script", "meta"];
 const SITE_KEYS = ["id", "name", "gazetteerId", "teleport", "anchor", "cell", "indoor", "lbKeys", "interiorLb", "settleSec",
-  "ready", "look", "notes", "tags"];
+  "ready", "prime", "look", "notes", "tags"];
 const SHOT_KEYS = ["id", "site", "technique", "family", "duration", "start", "params", "framing", "subject", "path", "route",
-  "fov", "roll", "ease", "seed", "bounds", "transition", "standingOrder", "pilot", "capture", "actor", "look", "cell",
-  "lyric", "notes", "goal"];
+  "fov", "roll", "ease", "seed", "bounds", "trim", "transition", "standingOrder", "pilot", "capture", "actor", "look", "cell",
+  "overlay", "lyric", "notes", "goal"];
 /** Shot keys that look like positions but are not: point the director at `start`. */
 const START_LIKE_KEYS = { section: "start: {section: N}", bar: "start: {bar: N}", beat: "start: {beat: N}", at: "start: {sec: T}", startSec: "start: {sec: T}" };
 const ACTOR_KEYS = ["emote", "motion", "face", "moveTo", "moves", "at"];
@@ -437,6 +488,7 @@ function normShot(shot, ctx) {
   if (s.route === undefined) s.route = null;
   if (s.seed === undefined || s.seed === null) s.seed = hashString(`${ctx.title}|${typeof s.id === "string" ? s.id : ""}`);
   if (s.bounds === undefined) s.bounds = null;
+  if (s.trim === undefined) s.trim = null;
   s.transition = normTransition(s.transition, ctx.defaults.transition);
   if (typeof s.standingOrder === "string") s.standingOrder = s.standingOrder.trim() || null;
   else if (s.standingOrder === undefined) s.standingOrder = null;
@@ -476,7 +528,8 @@ function normShot(shot, ctx) {
  * for validatePlan to report, it never throws. Non-object input is returned unchanged.
  *
  * Defaults: version 1; format 1920×1080 @ 30 fps, capture 'stepped'; defaults.transition 'cut' (non-cut durationSec
- * 0.5, xfade per XFADE_FOR); defaults.pilot.mode 'jev'; song.offsetSec 0; edit fades 0; site cell → hex string,
+ * 0.5, xfade per XFADE_FOR); defaults.pilot.mode 'jev'; song.offsetSec 0; edit fades 0; edit.tail (only when given;
+ * a string is the `from` shot id) gapSec 1.5, fadeOutSec 3; site cell → hex string,
  * indoor from the cell, lbKeys from the cell (else the anchor's landblock), interiorLb for indoor cells, settleSec 0,
  * ready {settleSec:3, timeoutSec:90}; shot duration/start shorthand parsed, family from the technique id, params {},
  * seed = hashString(`${title}|${id}`), bounds null, a player subject `moving: true` when the actor walks (moveTo /
@@ -513,6 +566,12 @@ export function normalizePlan(plan, opts = {}) {
   if (isObj(p.edit)) {
     if (p.edit.fadeInSec === undefined) p.edit.fadeInSec = PLAN_DEFAULTS.fadeInSec;
     if (p.edit.fadeOutSec === undefined) p.edit.fadeOutSec = PLAN_DEFAULTS.fadeOutSec;
+    // edit.tail only when given (a plan without one normalizes — and hashes — exactly as before it existed)
+    if (typeof p.edit.tail === "string") p.edit.tail = { from: p.edit.tail };
+    if (isObj(p.edit.tail)) {
+      if (p.edit.tail.gapSec === undefined) p.edit.tail.gapSec = PLAN_DEFAULTS.tailGapSec;
+      if (p.edit.tail.fadeOutSec === undefined) p.edit.tail.fadeOutSec = PLAN_DEFAULTS.tailFadeOutSec;
+    }
   }
   if (Array.isArray(p.sites)) p.sites = p.sites.map(normSite);
   const siteById = new Map();
@@ -649,17 +708,107 @@ function checkDof(dof, path, err, warn) {
   }
 }
 
-function checkTeleport(cmd, path, err, warn) {
+/** A site teleport (or, with `what` 'prime command', one of its `prime` commands): '@…', one line, ≤ 200 chars. */
+function checkTeleport(cmd, path, err, warn, what = "teleport") {
   if (!isNonEmptyStr(cmd)) {
-    err(path, "teleport must be an ACE admin command string starting with '@' (e.g. \"@telepoi Holtburg\")");
+    err(path, `${what} must be an ACE admin command string starting with '@' (e.g. "${what === "teleport" ? "@telepoi Holtburg" : "@teleloc 0x002B035D 469.8 -130.2 -6"}")`);
     return;
   }
-  if (!cmd.startsWith("@")) err(path, `teleport must start with '@' (world.teleport only sends admin commands); got ${JSON.stringify(cmd)}`);
+  if (!cmd.startsWith("@")) err(path, `${what} must start with '@' (world.teleport only sends admin commands); got ${JSON.stringify(cmd)}`);
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(cmd)) err(path, "teleport must be a single line without control characters");
-  if (cmd.length > 200) err(path, `teleport command is ${cmd.length} characters (max 200)`);
+  if (/[\u0000-\u001f\u007f]/.test(cmd)) err(path, `${what} must be a single line without control characters`);
+  if (cmd.length > 200) err(path, `${what === "teleport" ? "teleport command" : what} is ${cmd.length} characters (max 200)`);
   if (cmd.startsWith("@") && !/^@(teleloc|telepoi|tele|teledungeon|teleto)\b/.test(cmd)) {
-    warn(path, `teleport ${JSON.stringify(cmd.split(/\s+/)[0])} is not one of @teleloc/@telepoi/@tele/@teledungeon/@teleto`);
+    warn(path, `${what} ${JSON.stringify(cmd.split(/\s+/)[0])} is not one of @teleloc/@telepoi/@tele/@teledungeon/@teleto`);
+  }
+}
+
+/**
+ * `site.prime`: an array of at most PRIME_MAX admin commands, each checked like the site teleport. `film shoot`
+ * sends them before the site teleport (each followed by its readiness gate), so the hidden player walks through a
+ * dungeon and the server streams the creatures along the way.
+ */
+function checkPrime(prime, path, err, warn) {
+  if (prime === undefined || prime === null) return;
+  if (!Array.isArray(prime)) {
+    err(path, `prime must be an array of '@…' admin commands (≤ ${PRIME_MAX}) sent before the site teleport, e.g. ["@teleloc 0x002B035D 469.8 -130.2 -6"] (got ${JSON.stringify(prime)})`);
+    return;
+  }
+  if (prime.length > PRIME_MAX) err(path, `prime has ${prime.length} commands (max ${PRIME_MAX}): each costs a teleport + a readiness gate before the site teleport`);
+  prime.forEach((c, j) => checkTeleport(c, `${path}[${j}]`, err, warn, "prime command"));
+}
+
+/**
+ * The index of the first silent-tail shot of a NORMALIZED plan (`edit.tail.from`), or -1 when the plan has no tail
+ * or `from` is not a shot id after the first.
+ * @param {object} plan normalized plan
+ * @returns {number}
+ */
+export function tailIndexOf(plan) {
+  const t = isObj(plan) && isObj(plan.edit) ? plan.edit.tail : null;
+  if (!isObj(t) || typeof t.from !== "string" || !Array.isArray(plan.shots)) return -1;
+  const k = plan.shots.findIndex((s) => isObj(s) && s.id === t.from);
+  return k >= 1 ? k : -1;
+}
+
+/**
+ * `edit.tail` {from, gapSec, fadeOutSec} (normalized): `from` names a shot after the first; gapSec / fadeOutSec are
+ * seconds in [0, 10]; unknown keys are errors. Returns the tail's first shot index, or -1.
+ */
+function checkTail(t, shots, err) {
+  const path = "edit.tail";
+  if (!isObj(t)) {
+    err(path, `edit.tail must be {from: "<shot id>", gapSec?, fadeOutSec?} or the shot id (got ${JSON.stringify(t)})`);
+    return -1;
+  }
+  for (const k of Object.keys(t)) if (!TAIL_KEYS.includes(k)) err(`${path}.${k}`, `unknown edit.tail key "${k}"${suggest(k, TAIL_KEYS)} (valid: ${TAIL_KEYS.join(", ")})`);
+  checkNum(t.gapSec, `${path}.gapSec`, err, { min: 0, max: 10, label: "edit.tail.gapSec (seconds of black between the music and the tail)" });
+  checkNum(t.fadeOutSec, `${path}.fadeOutSec`, err, { min: 0, max: 10, label: "edit.tail.fadeOutSec (program fade-out on the last tail shot)" });
+  const ids = Array.isArray(shots) ? shots.filter(isObj).map((s) => s.id).filter((id) => typeof id === "string") : [];
+  if (typeof t.from !== "string" || !t.from) {
+    err(`${path}.from`, `edit.tail.from must be the id of the first shot of the silent tail (got ${JSON.stringify(t.from)})`);
+    return -1;
+  }
+  const k = Array.isArray(shots) ? shots.findIndex((s) => isObj(s) && s.id === t.from) : -1;
+  if (k < 0) {
+    err(`${path}.from`, `edit.tail.from "${t.from}" is not a shot id${suggest(t.from, ids)}`);
+    return -1;
+  }
+  if (k === 0) {
+    err(`${path}.from`, `edit.tail.from "${t.from}" is the first shot: the tail is appended AFTER the music part, so at least one shot must come before it`);
+    return -1;
+  }
+  return k;
+}
+
+/**
+ * `shot.overlay`: {props: {style, opacity?, tint?}} — the page's lens overlay (FPV propellers). style is
+ * 'freestyle' | 'cinewhoop', opacity 0..1, tint '#rrggbb'; unknown keys warn (the page ignores them).
+ */
+function checkOverlay(o, path, err, warn) {
+  if (o === undefined || o === null) return;
+  if (!isObj(o)) {
+    err(path, `overlay must be an object {props: {style, opacity?, tint?}} (got ${JSON.stringify(o)})`);
+    return;
+  }
+  for (const k of Object.keys(o)) {
+    if (!OVERLAY_KEYS.includes(k)) warn(`${path}.${k}`, `unknown overlay key "${k}"${suggest(k, OVERLAY_KEYS)} — the page ignores it (known: ${OVERLAY_KEYS.join(", ")})`);
+  }
+  const pr = o.props;
+  if (pr === undefined || pr === null) return;
+  if (!isObj(pr)) {
+    err(`${path}.props`, `overlay.props must be {style: ${OVERLAY_PROP_STYLES.map((s) => JSON.stringify(s)).join("|")}, opacity?, tint?} (got ${JSON.stringify(pr)})`);
+    return;
+  }
+  for (const k of Object.keys(pr)) {
+    if (!OVERLAY_PROP_KEYS.includes(k)) warn(`${path}.props.${k}`, `unknown overlay.props key "${k}"${suggest(k, OVERLAY_PROP_KEYS)} — the page ignores it (known: ${OVERLAY_PROP_KEYS.join(", ")})`);
+  }
+  if (!OVERLAY_PROP_STYLES.includes(pr.style)) {
+    err(`${path}.props.style`, `overlay.props.style must be one of ${OVERLAY_PROP_STYLES.map((s) => JSON.stringify(s)).join(", ")} (got ${JSON.stringify(pr.style)})${typeof pr.style === "string" ? suggest(pr.style, OVERLAY_PROP_STYLES) : ""}`);
+  }
+  if (pr.opacity !== undefined && pr.opacity !== null) checkNum(pr.opacity, `${path}.props.opacity`, err, { min: 0, max: 1, label: "overlay.props.opacity" });
+  if (pr.tint !== undefined && pr.tint !== null && !(typeof pr.tint === "string" && /^#[0-9a-fA-F]{6}$/.test(pr.tint))) {
+    err(`${path}.props.tint`, `overlay.props.tint must be a "#rrggbb" colour (got ${JSON.stringify(pr.tint)})`);
   }
 }
 
@@ -721,6 +870,32 @@ function checkBounds(b, path, err) {
   }
 }
 
+/** Keys of a shot's `trim` (both required). */
+export const TRIM_KEYS = Object.freeze(["takeSec", "inSec"]);
+
+function checkTrim(t, duration, path, err, warn, songDeclared) {
+  if (t === null || t === undefined) return;
+  if (!isObj(t)) {
+    err(path, `trim must be an object {takeSec, inSec} (got ${JSON.stringify(t)})`);
+    return;
+  }
+  for (const k of Object.keys(t)) if (!TRIM_KEYS.includes(k)) err(`${path}.${k}`, `unknown trim key "${k}"${suggest(k, TRIM_KEYS)} (valid: ${TRIM_KEYS.join(", ")})`);
+  const okTake = checkNum(t.takeSec, `${path}.takeSec`, err, { min: 0, max: 600, exclusiveMin: true, label: "trim.takeSec (seconds the move is flown)" });
+  const okIn = checkNum(t.inSec, `${path}.inSec`, err, { min: 0, label: "trim.inSec (seconds into the take where the edit starts)" });
+  if (!okTake || !okIn) return;
+  if (t.inSec >= t.takeSec) {
+    err(`${path}.inSec`, `trim.inSec ${t.inSec} s must be inside the ${t.takeSec} s take`);
+    return;
+  }
+  if (isObj(duration) && isNum(duration.sec) && duration.sec > t.takeSec + 1e-9) {
+    // With a song the beat grid may still cut the edit inside the take (compile is the real check); without one the
+    // seconds are used as written, so the window can never fit.
+    const msg = `the ${duration.sec} s edit is longer than the ${t.takeSec} s take it is cut from (shorten duration; a longer trim.takeSec slows the move)`;
+    if (songDeclared) warn(path, `${msg} — compile fails unless the beat grid shortens the edit`);
+    else err(path, msg);
+  }
+}
+
 function checkParams(params, def, path, err) {
   if (!isObj(params)) {
     err(path, "params must be an object");
@@ -761,7 +936,36 @@ function checkParams(params, def, path, err) {
         if (!isVec3(v)) err(p, `${name} must be [x, y, z] finite numbers (got ${JSON.stringify(v)})`);
         break;
       default:
-        break; // unknown schema type: accept (the registry's buildShot is the final judge)
+        break; // a type this file does not know (e.g. 'list'): checkRegistryParams asks the registry itself
+    }
+  }
+}
+
+/**
+ * Framing name the param probe passes so the registry's buildShot stops right after its own param check
+ * (registry.js buildShot: duration → fillParams/coerceParam → framing), before any context or build work.
+ */
+const PARAM_PROBE_FRAMING = "\u0000plan-param-probe";
+
+/**
+ * Params whose registry type is not one of PLAN_PARAM_TYPES (a technique's `list` of zones / tricks, …) are checked
+ * by the registry's OWN validation: `registry.buildShot({technique, duration: 1, params, framing: <invalid>}, {})`
+ * runs its param check first and stops at the framing check right after it, so nothing is built. A BAD_PARAM that
+ * names one of those params becomes an error at `<path>.<param>` with the registry's message; anything else (the
+ * probe's own framing error, a missing context, a registry without that order) proves nothing and is ignored — the
+ * params of known types are checkParams' job and the dry build still runs.
+ */
+function checkRegistryParams(params, def, technique, registry, path, err) {
+  if (!isObj(params) || !def || !registry || typeof registry.buildShot !== "function") return;
+  const schema = isObj(def.params) ? def.params : {};
+  const own = Object.keys(params).filter((k) => isObj(schema[k]) && !PLAN_PARAM_TYPES.includes(schema[k].type));
+  if (!own.length) return;
+  try {
+    registry.buildShot({ technique, duration: 1, params: clone(params), framing: PARAM_PROBE_FRAMING }, {});
+  } catch (e) {
+    const name = e && isObj(e.details) ? e.details.param : undefined;
+    if (e && e.code === "BAD_PARAM" && own.includes(name)) {
+      err(`${path}.${name}`, `${name} (${schema[name].type}): ${e.message ? String(e.message) : "rejected by the registry"}`);
     }
   }
 }
@@ -819,8 +1023,13 @@ function dryContext(shot, site, plan) {
  * Errors make `ok` false; warnings are advice the director should read (missing standing order, a moving actor
  * captured stepped, beats without a song, unused sites, unknown keys…).
  *
+ * edit.tail: `from` must name a shot after the first, gapSec / fadeOutSec in [0, 10], unknown tail keys are errors,
+ * and every tail shot needs a {sec} duration and no `start`. site.prime: ≤ PRIME_MAX commands, each checked like the
+ * teleport. shot.overlay: props.style 'freestyle' | 'cinewhoop', opacity 0..1, tint '#rrggbb' (unknown keys warn).
+ * shot.pilot.fade: 'never' | 'auto'. Unknown edit keys warn.
  * With `registry` (SPEC §2.11), unknown technique ids are errors (with "did you mean"), params are checked against
- * `def.params` (unknown name, number min/max, string, boolean, enum values, vec3), `needs.subject` / `needs.path`
+ * `def.params` (unknown name, number min/max, string, boolean, enum values, vec3; any other type — a `list` — by the
+ * registry's own param check, see checkRegistryParams), `needs.subject` / `needs.path`
  * are enforced and `needs.indoor` mismatches the page cannot satisfy are errors. Without it, ids outside KNOWN_TECHNIQUE_IDS only warn.
  * With a registry, the technique's capture hint is honoured: a 'realtime' hint (moving-subject techniques) makes
  * capture default to realtime for an entity/player subject, and WARNS when the take stays stepped because the
@@ -903,10 +1112,15 @@ export function validatePlan(plan, opts = {}) {
   }
 
   // edit
-  if (!isObj(p.edit)) err("edit", "edit must be an object {fadeInSec?, fadeOutSec?}");
+  let tailAt = -1;
+  if (!isObj(p.edit)) err("edit", "edit must be an object {fadeInSec?, fadeOutSec?, tail?}");
   else {
+    for (const k of Object.keys(p.edit)) {
+      if (!EDIT_KEYS.includes(k)) warn(`edit.${k}`, `unknown edit key "${k}"${suggest(k, EDIT_KEYS)} (known: ${EDIT_KEYS.join(", ")})`);
+    }
     checkNum(p.edit.fadeInSec, "edit.fadeInSec", err, { min: 0, max: 10 });
     checkNum(p.edit.fadeOutSec, "edit.fadeOutSec", err, { min: 0, max: 10 });
+    if (p.edit.tail !== undefined && p.edit.tail !== null) tailAt = checkTail(p.edit.tail, p.shots, err);
   }
 
   // sites
@@ -925,6 +1139,7 @@ export function validatePlan(plan, opts = {}) {
       } else if (siteIds.has(s.id)) err(`${path}.id`, `duplicate site id "${s.id}" (first at sites[${siteIds.get(s.id)}])`);
       else siteIds.set(s.id, i);
       checkTeleport(s.teleport, `${path}.teleport`, err, warn);
+      checkPrime(s.prime, `${path}.prime`, err, warn);
       if (!isVec3(s.anchor)) {
         err(`${path}.anchor`, `anchor must be [x, y, z] AC world metres or {cell, local:[x, y, z]} (got ${JSON.stringify(s.anchor)})`);
       } else if (s.indoor !== true) {
@@ -1022,10 +1237,22 @@ export function validatePlan(plan, opts = {}) {
           if (k !== "sec" && !songDeclared) warn(`${path}.start`, `{${k}} needs a song analysis at compile time (plan.song is missing)`);
         }
       }
+      // the silent tail (edit.tail.from and every shot after it): exact seconds, placed after the music part
+      const inTail = tailAt > 0 && i >= tailAt;
+      if (inTail) {
+        const tailFrom = p.edit.tail.from;
+        if (isObj(d) && (has(d, "beats") || has(d, "bars"))) {
+          err(`${path}.duration`, `${label} is in the silent tail (edit.tail.from "${tailFrom}"): its duration must be {sec} — the tail is not on the song's beat grid (got ${JSON.stringify(d)})`);
+        }
+        if (s.start !== null && s.start !== undefined) {
+          err(`${path}.start`, `${label} is in the silent tail (edit.tail.from "${tailFrom}"): no explicit start — the tail follows the music part after edit.tail.gapSec of black`);
+        }
+      }
       // params + registry needs
       let indoorMismatch = false;
       if (def) {
         checkParams(s.params, def, `${path}.params`, err);
+        checkRegistryParams(s.params, def, s.technique, registry, `${path}.params`, err);
         const needs = isObj(def.needs) ? def.needs : {};
         const hasPath = Array.isArray(s.path) || (isObj(s.subject) && s.subject.kind === "path") || isObj(s.route);
         if (needs.subject === true && (!isObj(s.subject) || s.subject.kind === "path")) {
@@ -1057,6 +1284,9 @@ export function validatePlan(plan, opts = {}) {
       }
       checkNum(s.seed, `${path}.seed`, err, { min: 0, max: 4294967295, integer: true });
       checkBounds(s.bounds, `${path}.bounds`, err);
+      // a tail shot's seconds are used as written (no beat grid), so a {sec} edit longer than its take never fits
+      checkTrim(s.trim, s.duration, `${path}.trim`, err, warn, songDeclared && !inTail);
+      checkOverlay(s.overlay, `${path}.overlay`, err, warn);
       // subject / path / route
       checkSubject(s.subject, `${path}.subject`, err);
       if (s.path !== null && s.path !== undefined) checkPoints(s.path, `${path}.path`, err, 2);
@@ -1083,7 +1313,12 @@ export function validatePlan(plan, opts = {}) {
       }
       // pilot
       if (!isObj(s.pilot)) err(`${path}.pilot`, "pilot must be an object {mode, …}");
-      else if (!PILOT_MODES.includes(s.pilot.mode)) err(`${path}.pilot.mode`, `pilot mode must be one of ${PILOT_MODES.join(", ")} (got ${JSON.stringify(s.pilot.mode)})`);
+      else {
+        if (!PILOT_MODES.includes(s.pilot.mode)) err(`${path}.pilot.mode`, `pilot mode must be one of ${PILOT_MODES.join(", ")} (got ${JSON.stringify(s.pilot.mode)})`);
+        if (s.pilot.fade !== undefined && s.pilot.fade !== null && !PILOT_FADE_MODES.includes(s.pilot.fade)) {
+          err(`${path}.pilot.fade`, `pilot.fade must be "never" (the pilot fades nothing in this take) or "auto" (got ${JSON.stringify(s.pilot.fade)})${typeof s.pilot.fade === "string" ? suggest(s.pilot.fade, PILOT_FADE_MODES) : ""}`);
+        }
+      }
       // actor
       if (s.actor !== null && s.actor !== undefined) {
         if (!isObj(s.actor)) err(`${path}.actor`, "actor must be an object {emote?, motion?, face?, moveTo?, moves?, at?}");
@@ -1111,10 +1346,12 @@ export function validatePlan(plan, opts = {}) {
         warn(`${path}.capture.mode`, `${label}: ${s.technique} is made for a moving, server-driven subject (capture hint "realtime") but the subject is ${what}, so the take is captured stepped — follow {kind:"entity"} or {kind:"player"} (capture then defaults to realtime), or set capture.mode "realtime" if something server-driven must move in frame`);
       }
       checkLook(s.look, `${path}.look`, err, warn);
-      // optional dry build with the real registry
-      if (dryBuild && def && registry && typeof registry.buildShot === "function" && site && !indoorMismatch && isObj(s.duration) && has(s.duration, "sec")) {
+      // optional dry build with the real registry (a trimmed shot is built at its take length)
+      const dryDur = isObj(s.trim) && isNum(s.trim.takeSec) && s.trim.takeSec > 0 ? s.trim.takeSec
+        : isObj(s.duration) && has(s.duration, "sec") ? s.duration.sec : null;
+      if (dryBuild && def && registry && typeof registry.buildShot === "function" && site && !indoorMismatch && dryDur !== null) {
         try {
-          registry.buildShot(shotSpec(s, s.duration.sec), dryContext(s, site, p));
+          registry.buildShot(shotSpec(s, dryDur), dryContext(s, site, p));
         } catch (e) {
           warn(path, `${label}: dry build of ${s.technique} failed against a flat offline context: ${e && e.message ? e.message : e}`);
         }
@@ -1217,7 +1454,8 @@ export const PLAN_FIELDS = Object.freeze([
   { path: "defaults.transition", type: "transition", required: false, default: "cut", desc: "transition into each shot unless the shot sets one" },
   { path: "defaults.pilot.mode", type: "'jev'|'code'|'shadow'", required: false, default: "jev", desc: "JEV pilot mode for every shot" },
   { path: "defaults.look / defaults.framing / defaults.ease", type: "look / framing / easing", required: false, default: "{} / null / null", desc: "plan-wide fallbacks" },
-  { path: "edit.fadeInSec / edit.fadeOutSec", type: "seconds 0..10", required: false, default: "0 / 0", desc: "fade from / to black at the very start / end" },
+  { path: "edit.fadeInSec / edit.fadeOutSec", type: "seconds 0..10", required: false, default: "0 / 0", desc: "fade from / to black at the very start / end (with edit.tail: fadeOutSec fades the last MUSIC shot, element-local)" },
+  { path: "edit.tail", type: "{from, gapSec?, fadeOutSec?} | shot id", required: false, default: "absent; gapSec 1.5, fadeOutSec 3", desc: "a SILENT TAIL after the music: the shots from `from` (not the first shot) on are exact seconds (snap 'none'; no {beats}/{bars}, no start); the music part compiles as without a tail; gapSec (0..10) of black follows the music's fade-out; a non-cut transition into `from` is a fade-in from black/white (no handles); fadeOutSec (0..10) is the program fade-out; timeline.musicEnd {sec, frame, fadeOutSec}; assembly pads the song with silence" },
   { path: "sites[].id", type: "id", required: true, default: null, desc: "unique; referenced by shots[].site" },
   { path: "sites[].teleport", type: "'@…' command", required: true, default: null, desc: "the ACE admin teleport (gazetteer teleport.best), e.g. \"@telepoi Holtburg\"" },
   { path: "sites[].anchor", type: "[x,y,z] | {cell, local:[x,y,z]}", required: true, default: null, desc: "site centre in AC world metres (orders the schedule; ShotContext.anchor)" },
@@ -1226,6 +1464,7 @@ export const PLAN_FIELDS = Object.freeze([
   { path: "sites[].lbKeys / sites[].interiorLb", type: "landblock ids", required: false, default: "from cell or anchor", desc: "readiness gate inputs (world.ready)" },
   { path: "sites[].settleSec", type: "seconds", required: false, default: 0, desc: "extra pre-roll before every take at this site (particles/foliage warm-up)" },
   { path: "sites[].ready", type: "{settleSec, timeoutSec}", required: false, default: "{3, 90}", desc: "world.ready options after the teleport" },
+  { path: "sites[].prime", type: "['@…' admin commands] (≤ 12)", required: false, default: null, desc: "sent by `film shoot` BEFORE the site teleport, each followed by its readiness gate (event 'prime' in shoot-log.jsonl; a failure only warns): walk the hidden player through a dungeon so the server streams every creature along the route (its PVS), then the site teleport stands it at the site; each checked like `teleport`; estimateShootTime counts each as a teleport + settle" },
   { path: "sites[].look / name / gazetteerId / notes", type: "look / strings", required: false, default: null, desc: "site look applies to its shots" },
   { path: "shots[].id", type: "id", required: true, default: null, desc: "unique; names takes/<id>.mp4" },
   { path: "shots[].site", type: "site id", required: true, default: null, desc: "where the take is shot" },
@@ -1235,11 +1474,13 @@ export const PLAN_FIELDS = Object.freeze([
   { path: "shots[].params", type: "object", required: false, default: {}, desc: "technique params (checked against the registry schema)" },
   { path: "shots[].framing / fov / roll / ease / seed", type: "FRAMING / deg / rad / easing / uint32", required: false, default: "null … seed=hash(title|id)", desc: "ShotSpec fields" },
   { path: "shots[].bounds", type: "{maxLateral?, maxRise?, maxSink?, minSpeedScale?, maxSpeedScale?, maxDistanceScale?}", required: false, default: null, desc: "ShotSpec.bounds: override of how far the JEV pilot may push the shot — metres ≥ 0 (lateral / rise / sink off the path), minSpeedScale 0..1, maxSpeedScale ≥ 1, maxDistanceScale ≥ 1; missing keys = the technique's defaultBounds" },
+  { path: "shots[].trim", type: "{takeSec, inSec}", required: false, default: null, desc: "fly the move as a take of takeSec s (ShotSpec.duration, 0 < s ≤ 600) and cut the edit from inSec into it: a shorter edit keeps the move's speed and shows its best stretch. Compile keeps the window inside the take (moved to fit the dissolve handles, with a warning); an edit + handles longer than takeSec is a compile error (a {sec} request longer than takeSec: a validation error without a song, a warning with one)" },
   { path: "shots[].subject", type: "{kind:'point'|'entity'|'player'|'path', …}", required: false, default: null, desc: "point {pos}; entity {ref, moving}; player {moving?: true when the actor walks}; path {points}" },
   { path: "shots[].path / shots[].route", type: "[[x,y,z]…] / {fromCell, toCell}", required: false, default: null, desc: "ShotContext.path; indoor route request for dungeon techniques" },
   { path: "shots[].transition", type: "'cut'|'dissolve'|'fade'|'fadewhite'|{type, durationSec, xfade?}", required: false, default: "defaults.transition", desc: "INTO this shot; non-cuts add handles (= durationSec) to both takes" },
   { path: "shots[].standingOrder", type: "one sentence ≤ 300 chars", required: false, default: null, desc: "read by the JEV pilot every tick (warns when missing)" },
-  { path: "shots[].pilot", type: "{mode, …}", required: false, default: "defaults.pilot", desc: "pilot config for the take" },
+  { path: "shots[].pilot", type: "{mode, fade?, …}", required: false, default: "defaults.pilot", desc: "pilot config for the take; fade 'never' | 'auto' ('never': the pilot may fade nothing — e.g. a monster run)" },
+  { path: "shots[].overlay", type: "{props: {style: 'freestyle'|'cinewhoop', opacity?: 0..1, tint?: '#rrggbb'}}", required: false, default: null, desc: "→ item.take.overlay (null when absent): the page's lens overlay — FPV propellers at the top of the frame, drawn only on a page booted with ?filmProps=on; unknown keys warn" },
   { path: "shots[].capture.mode", type: "'stepped'|'realtime'", required: false, default: "realtime when the actor/entity moves, or the technique hints realtime (registry) and the subject is an entity/player; else format.capture", desc: "moving server-driven content needs realtime (a realtime-hint technique on a point subject warns)" },
   { path: "shots[].actor", type: "{emote?, motion?, face?, moveTo?, moves?, at?}", required: false, default: null, desc: "player-as-actor cue (world.actor)" },
   { path: "shots[].look / cell / lyric / notes", type: "look / cell id / strings", required: false, default: null, desc: "look merges defaults ← site ← shot" },

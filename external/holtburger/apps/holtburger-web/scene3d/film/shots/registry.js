@@ -35,8 +35,14 @@ import {
 /** Technique families (the id prefix). @type {ReadonlyArray<'classic'|'drone'|'fpv'>} */
 export const FAMILIES = Object.freeze(["classic", "drone", "fpv"]);
 
-/** Parameter schema types. @type {ReadonlyArray<'number'|'string'|'boolean'|'enum'|'vec3'>} */
-export const PARAM_TYPES = Object.freeze(["number", "string", "boolean", "enum", "vec3"]);
+/** Parameter schema types. @type {ReadonlyArray<'number'|'string'|'boolean'|'enum'|'vec3'|'list'>} */
+export const PARAM_TYPES = Object.freeze(["number", "string", "boolean", "enum", "vec3", "list"]);
+
+/** Scalar types a `list` item field may have (no nested lists). */
+export const LIST_ITEM_TYPES = Object.freeze(["number", "string", "boolean", "enum", "vec3"]);
+
+/** Largest number of items a `list` param accepts when its schema names no maxItems. */
+export const MAX_LIST_ITEMS = 256;
 
 /** Capture hints a technique may declare (moving server-driven subjects need realtime). */
 export const CAPTURE_MODES = Object.freeze(["stepped", "realtime"]);
@@ -72,13 +78,20 @@ export const REGISTRY_ERROR_CODES = Object.freeze({
 
 /**
  * @typedef {Object} ParamSchema
- * @property {'number'|'string'|'boolean'|'enum'|'vec3'} type
+ * @property {'number'|'string'|'boolean'|'enum'|'vec3'|'list'} type
  * @property {string} desc         what the parameter does (shown to the director)
  * @property {*} [default]          omitted → the parameter is required
  * @property {number} [min] @property {number} [max]   numbers only (inclusive, finite)
  * @property {boolean} [integer]    numbers only
  * @property {Array<string|number>} [values]           enum only
  * @property {string} [unit]        e.g. 'm', 'deg', 's', 'm/s'
+ * @property {boolean} [optional]   list item fields only: may be omitted (no default, not required)
+ * @property {Object<string, ParamSchema>} [item]       list only: the fields of every item (scalar schemas)
+ * @property {{key:string, fields:Object<string, Object<string, ParamSchema>>}} [variants]
+ *   list only: extra fields per value of the enum item field `key` (a discriminated union, e.g. a trick's type)
+ * @property {number} [minItems] @property {number} [maxItems]   list only (integers; maxItems default MAX_LIST_ITEMS)
+ * @property {(item:Object, index:number) => (string|null)} [check]  list only: cross-field check of a filled item
+ *   (returns an error message or null; not catalogued)
  */
 
 /**
@@ -230,15 +243,98 @@ export function specSeed(spec) {
 // definitions
 // ---------------------------------------------------------------------------
 
-/** Validate one param schema; returns a frozen normalised copy. */
-function normalizeParamSchema(defId, name, schema) {
+/** Deep-freeze a coerced param value (vec3 arrays, list items and their vec3 fields). */
+function freezeValue(v) {
+  if (Array.isArray(v)) {
+    for (const x of v) freezeValue(x);
+    return Object.freeze(v);
+  }
+  if (isPlainObject(v)) {
+    for (const k of Object.keys(v)) freezeValue(v[k]);
+    return Object.freeze(v);
+  }
+  return v;
+}
+
+/** Fresh mutable copy of a (possibly frozen) param value. */
+function copyValue(v) {
+  if (Array.isArray(v)) return v.map(copyValue);
+  if (isPlainObject(v)) {
+    const o = {};
+    for (const k of Object.keys(v)) o[k] = copyValue(v[k]);
+    return o;
+  }
+  return v;
+}
+
+/** Normalised field schemas of a list's item (or of one variant). */
+function normalizeItemFields(defId, name, fields, what) {
+  const bad = (msg) => shotError(`technique ${defId}: param "${name}": ${msg}`, REGISTRY_ERROR_CODES.BAD_TECHNIQUE_DEF, { technique: defId, param: name });
+  if (!isPlainObject(fields) || Object.keys(fields).length === 0) throw bad(`${what} must be a non-empty object {field: schema}`);
+  const out = {};
+  for (const f of Object.keys(fields)) {
+    const fs = fields[f];
+    if (isPlainObject(fs) && !LIST_ITEM_TYPES.includes(fs.type)) {
+      throw bad(`${what} field "${f}": type must be one of ${LIST_ITEM_TYPES.join(" | ")} (got ${show(fs.type)})`);
+    }
+    out[f] = normalizeParamSchema(defId, `${name}.${f}`, fs, true);
+  }
+  return Object.freeze(out);
+}
+
+/** List-specific schema keys (item, variants, minItems, maxItems, check), validated. */
+function normalizeListSchema(defId, name, schema, out, bad) {
+  out.item = normalizeItemFields(defId, name, schema.item, "item");
+  if (schema.variants !== undefined) {
+    const vr = schema.variants;
+    if (!isPlainObject(vr) || typeof vr.key !== "string" || !isPlainObject(vr.fields)) {
+      throw bad("variants must be {key: <enum item field>, fields: {<value>: {field: schema}}}");
+    }
+    const keyField = out.item[vr.key];
+    if (!keyField || keyField.type !== "enum") throw bad(`variants.key "${vr.key}" must name an enum field of item`);
+    const fields = {};
+    for (const val of Object.keys(vr.fields)) {
+      if (!keyField.values.includes(val)) throw bad(`variants.fields "${val}" is not a value of item.${vr.key} (${keyField.values.join(", ")})`);
+      const vf = normalizeItemFields(defId, name, vr.fields[val], `variants.fields.${val}`);
+      for (const f of Object.keys(vf)) if (out.item[f]) throw bad(`variant "${val}" field "${f}" collides with a common item field`);
+      fields[val] = vf;
+    }
+    out.variants = Object.freeze({ key: vr.key, fields: Object.freeze(fields) });
+  }
+  for (const k of ["minItems", "maxItems"]) {
+    if (schema[k] === undefined) continue;
+    if (!(Number.isInteger(schema[k]) && schema[k] >= 0)) throw bad(`${k} must be an integer ≥ 0`);
+    out[k] = schema[k];
+  }
+  if (out.minItems !== undefined && out.maxItems !== undefined && out.minItems > out.maxItems) throw bad(`minItems ${out.minItems} > maxItems ${out.maxItems}`);
+  if (schema.check !== undefined) {
+    if (typeof schema.check !== "function") throw bad("check must be a function (item, index) → error message | null");
+    out.check = schema.check;
+  }
+}
+
+/** Validate one param schema; returns a frozen normalised copy (`inItem`: a list item field). */
+function normalizeParamSchema(defId, name, schema, inItem = false) {
   const where = `technique ${defId}: param "${name}"`;
   const bad = (msg) => shotError(`${where}: ${msg}`, REGISTRY_ERROR_CODES.BAD_TECHNIQUE_DEF, { technique: defId, param: name });
-  if (!PARAM_NAME_RE.test(name)) throw bad("name must be an identifier (letters, digits, _)");
+  if (!PARAM_NAME_RE.test(inItem ? name.slice(name.lastIndexOf(".") + 1) : name)) throw bad("name must be an identifier (letters, digits, _)");
   if (!isPlainObject(schema)) throw bad("schema must be an object {type, desc, default, ...}");
   if (!PARAM_TYPES.includes(schema.type)) throw bad(`type must be one of ${PARAM_TYPES.join(" | ")} (got ${show(schema.type)})`);
   if (!nonEmpty(schema.desc)) throw bad("desc (documentation for the director) is required");
   const out = { type: schema.type, desc: schema.desc.trim() };
+  if (schema.optional !== undefined) {
+    if (!inItem) throw bad("optional is only valid for list item fields");
+    if (typeof schema.optional !== "boolean") throw bad("optional must be a boolean");
+    if (schema.optional && schema.default !== undefined) throw bad("an optional field has no default");
+    if (schema.optional) out.optional = true;
+  }
+  const isList = schema.type === "list";
+  if (isList) normalizeListSchema(defId, name, schema, out, bad);
+  else {
+    for (const k of ["item", "variants", "minItems", "maxItems", "check"]) {
+      if (schema[k] !== undefined) throw bad(`${k} is only valid for list params`);
+    }
+  }
   if (schema.unit !== undefined) {
     if (!nonEmpty(schema.unit)) throw bad("unit must be a non-empty string");
     out.unit = schema.unit;
@@ -274,9 +370,81 @@ function normalizeParamSchema(defId, name, schema) {
     } catch (e) {
       throw bad(`default is invalid: ${e && e.message ? e.message.replace(/^.*?param "[^"]*" /, "") : String(e)}`);
     }
-    out.default = Array.isArray(d) ? Object.freeze(d) : d;
+    out.default = freezeValue(d);
   }
   return Object.freeze(out);
+}
+
+/** Closest names (edit distance) for an unknown item field. */
+function nearNames(name, names) {
+  return suggest(name, names).map((x) => `"${x}"`).join(" or ");
+}
+
+/**
+ * Validate a `list` param value: an array of plain-object items (minItems..maxItems), each
+ * with its common fields + its variant's fields (by the variant key) — unknown fields, missing
+ * required fields and bad values are BAD_PARAM errors naming `param` (the list) plus
+ * `index`, `field` and `path` (`tricks[2].radius`) in details. Returns fresh items with
+ * defaults filled (optional fields left out when absent).
+ */
+function coerceList(techId, name, schema, v) {
+  const bad = (msg, extra) => shotError(`${techId}: param "${name}" ${msg}`, REGISTRY_ERROR_CODES.BAD_PARAM,
+    { technique: techId, param: name, value: v === undefined ? null : v, ...extra });
+  const fieldsDesc = Object.keys(schema.item).join(", ");
+  if (!Array.isArray(v)) throw bad(`must be a list (array) of {${fieldsDesc}} items (got ${show(v)})`);
+  const maxItems = schema.maxItems ?? MAX_LIST_ITEMS;
+  if (v.length > maxItems) throw bad(`has ${v.length} items (at most ${maxItems})`, { max: maxItems });
+  if (schema.minItems !== undefined && v.length < schema.minItems) throw bad(`has ${v.length} items (at least ${schema.minItems})`, { min: schema.minItems });
+  return v.map((it, i) => {
+    const at = `${name}[${i}]`;
+    if (!isPlainObject(it)) throw bad(`item [${i}] must be an object {${fieldsDesc}, ...} (got ${show(it)})`, { index: i, path: at });
+    const vr = schema.variants;
+    let fields = schema.item;
+    let variant = null;
+    if (vr && it[vr.key] !== undefined) {
+      const kv = coerceItemField(techId, name, i, vr.key, schema.item[vr.key], it[vr.key]);
+      variant = kv;
+      fields = { ...schema.item, ...(vr.fields[kv] || {}) };
+    }
+    const label = variant !== null ? `item [${i}] (${show(variant)})` : `item [${i}]`;
+    const names = Object.keys(fields);
+    for (const k of Object.keys(it)) {
+      if (!Object.prototype.hasOwnProperty.call(fields, k)) {
+        const near = nearNames(k, names);
+        throw bad(`${label}: unknown field "${k}"${near ? ` (did you mean ${near}?)` : ""} — valid fields: ${names.join(", ")}`,
+          { index: i, field: k, path: `${at}.${k}`, valid: names });
+      }
+    }
+    const out = {};
+    for (const f of names) {
+      const fs = fields[f];
+      if (it[f] === undefined) {
+        if (fs.default !== undefined) out[f] = copyValue(fs.default);
+        else if (!fs.optional) throw bad(`${label}: field "${f}" is required (${fs.desc})`, { index: i, field: f, path: `${at}.${f}` });
+        continue;
+      }
+      out[f] = coerceItemField(techId, name, i, f, fs, it[f]);
+    }
+    if (schema.check) {
+      const msg = schema.check(out, i);
+      if (typeof msg === "string" && msg) throw bad(`${label}: ${msg}`, { index: i, path: at });
+    }
+    return out;
+  });
+}
+
+/** One list item field through coerceParam, re-thrown with the LIST as the param (details.path = tricks[i].field). */
+function coerceItemField(techId, name, i, f, fs, value) {
+  const path = `${name}[${i}].${f}`;
+  try {
+    return coerceParam(techId, path, fs, value);
+  } catch (e) {
+    if (e instanceof FilmShotError) {
+      const d = isPlainObject(e.details) ? e.details : {};
+      throw shotError(e.message, REGISTRY_ERROR_CODES.BAD_PARAM, { ...d, technique: techId, param: name, index: i, field: f, path, value });
+    }
+    throw e;
+  }
 }
 
 /**
@@ -310,6 +478,8 @@ function coerceParam(techId, name, schema, v) {
     case "vec3":
       if (!(Array.isArray(v) && v.length === 3 && isFiniteV(v))) throw bad(`must be a finite [x, y, z] array (got ${show(v)})`);
       return [v[0], v[1], v[2]];
+    case "list":
+      return coerceList(techId, name, schema, v);
     default:
       throw bad(`has unknown type ${show(schema.type)}`);
   }
@@ -410,20 +580,33 @@ export function defineTechnique(def) {
   return Object.freeze(out);
 }
 
+/** JSON-safe catalog entry of one normalised param schema (lists: item fields, variants, item limits). */
+function paramEntry(s) {
+  const p = { type: s.type, desc: s.desc };
+  if (s.default !== undefined) p.default = copyValue(s.default);
+  else if (s.optional) p.optional = true;
+  else p.required = true;
+  if (s.min !== undefined) p.min = s.min;
+  if (s.max !== undefined) p.max = s.max;
+  if (s.integer) p.integer = true;
+  if (s.values) p.values = s.values.slice();
+  if (s.unit) p.unit = s.unit;
+  if (s.type === "list") {
+    const fieldsOf = (fs) => Object.fromEntries(Object.entries(fs).map(([k, f]) => [k, paramEntry(f)]));
+    p.item = fieldsOf(s.item);
+    if (s.variants) {
+      p.variants = { key: s.variants.key, fields: Object.fromEntries(Object.entries(s.variants.fields).map(([k, fs]) => [k, fieldsOf(fs)])) };
+    }
+    if (s.minItems !== undefined) p.minItems = s.minItems;
+    p.maxItems = s.maxItems ?? MAX_LIST_ITEMS;
+  }
+  return p;
+}
+
 /** JSON-safe catalog entry of a normalised def. */
 function catalogEntry(def) {
   const params = {};
-  for (const [name, s] of Object.entries(def.params)) {
-    const p = { type: s.type, desc: s.desc };
-    if (s.default !== undefined) p.default = Array.isArray(s.default) ? s.default.slice() : s.default;
-    else p.required = true;
-    if (s.min !== undefined) p.min = s.min;
-    if (s.max !== undefined) p.max = s.max;
-    if (s.integer) p.integer = true;
-    if (s.values) p.values = s.values.slice();
-    if (s.unit) p.unit = s.unit;
-    params[name] = p;
-  }
+  for (const [name, s] of Object.entries(def.params)) params[name] = paramEntry(s);
   const e = {
     id: def.id,
     family: def.family,
@@ -606,7 +789,7 @@ function fillParams(def, given) {
       if (schema.default === undefined) {
         throw shotError(`${def.id}: param "${name}" is required (${schema.desc})`, REGISTRY_ERROR_CODES.BAD_PARAM, { technique: def.id, param: name });
       }
-      out[name] = Array.isArray(schema.default) ? schema.default.slice() : schema.default;
+      out[name] = copyValue(schema.default);
     } else {
       out[name] = coerceParam(def.id, name, schema, v);
     }

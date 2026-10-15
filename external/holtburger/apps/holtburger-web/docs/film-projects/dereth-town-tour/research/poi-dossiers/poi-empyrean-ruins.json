@@ -1,0 +1,275 @@
+{
+ "name": "Empyrean Ruins (11.3S, 37.6E)",
+ "title": "11.3S, 37.6E - Empyrean Ruins",
+ "siteId": "poi-empyrean-ruins",
+ "summary": "A compact Empyrean ruin field in a valley floor west of Yanshi: a low stone platform with the Abandoned Arena portal, the Colosseum portal, three moss-brick portal arches (Riverbend, North Desert Edge, Desert Ridge Border) and a ring of ten Empyrean statues, between hills.",
+ "landmarks": [
+  {
+   "name": "Platform with the Abandoned Arena portal",
+   "pos": [
+    33468.0,
+    21756.0,
+    20.0
+   ],
+   "heightM": 2.0,
+   "note": "0x01000F67, portal on top (z 22)."
+  },
+  {
+   "name": "Riverbend portal arch",
+   "pos": [
+    33484.6,
+    21737.4,
+    20.0
+   ],
+   "heightM": 6.4,
+   "note": "Moss-brick arch 0x02000395 with the portal under it."
+  },
+  {
+   "name": "North Desert Edge portal arch",
+   "pos": [
+    33467.5,
+    21725.7,
+    21.0
+   ],
+   "heightM": 6.4,
+   "note": "0x02000395."
+  },
+  {
+   "name": "Desert Ridge Border portal arch",
+   "pos": [
+    33444.5,
+    21780.2,
+    20.9
+   ],
+   "heightM": 6.4,
+   "note": "0x02000395."
+  },
+  {
+   "name": "The Colosseum portal",
+   "pos": [
+    33477.5,
+    21770.5,
+    20.0
+   ],
+   "heightM": 3.5,
+   "note": "Free-standing portal."
+  },
+  {
+   "name": "Empyrean statues",
+   "pos": [
+    33468.0,
+    21752.0,
+    20.0
+   ],
+   "heightM": 2.8,
+   "note": "Ten 0x02000397 statues in a ring 13-30 m around the platform."
+  }
+ ],
+ "site": {
+  "id": "poi-empyrean-ruins",
+  "name": "Empyrean Ruins (11.3S, 37.6E)",
+  "gazetteerId": "the-colosseum-portal",
+  "teleport": "@teleloc 0xAE71001C 77.50 74.50 20.96 1 0 0 0",
+  "anchor": [
+   33468.0,
+   21752.0,
+   20.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer the-colosseum-portal (outdoor, beside the platform). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0xAE710014 69.4794 74.5075 20 0.026548 0 0 0.999648' because the gazetteer the-colosseum-portal drop is the Colosseum portal itself (0.0 m, weenieType Portal): a hidden player there would be ported away. Derived drop 8 m east on flat ground, 8.0 m from the Colosseum portal, 6.8 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -11.3,
+   "ew": 37.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1042,
+  "coveredBy": "shot:yanshi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/11_3S_37_6E_Empyrean_Ruins.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-empyrean-ruins.01",
+   "site": "poi-empyrean-ruins",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 1.8
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     9.2
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33468.0,
+     21756.0,
+     22.0
+    ],
+    "height": 3.5,
+    "radius": 6
+   },
+   "params": {
+    "heightAGL": 20,
+    "speed": 4.5,
+    "headingDeg": 340,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 40,
+    "minClearance": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Cross the Empyrean ruin field north-north-west 20 m above the Abandoned Arena platform with the gimbal tracking through vertical; stay 16 m above the portal arches and statues.",
+   "notes": "Pass over the ruin field: the platform with the Abandoned Arena portal, the Colosseum portal and three moss-brick portal arches (Riverbend, North Desert Edge, Desert Ridge Border) inside a ring of ten Empyrean statues; flying away from the south-south-east sun so the faces are lit, five portal swirls in frame at the crossing. Verified (check.mjs, full take flown): take 0-10 s: AGL 21.53..22 m, nearest drawn 16.05 m (static 0xAE71#11 0x02000395), vmax 4.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 1.8-8.3 s: AGL 21.88..22 m, nearest drawn 16.48 m (spawn Abandoned Arena), vmax 4.5 m/s, LOS blocked 0/26, subject in frame 100%; flight cinema peak 4.51 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-empyrean-ruins.02",
+   "site": "poi-empyrean-ruins",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.8,
+     7.5
+    ],
+    "anchor": 4.0
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33484.6,
+     21737.4,
+     20.0
+    ],
+    "height": 6.4,
+    "radius": 5
+   },
+   "params": {
+    "azimuthDeg": 340,
+    "azimuthRef": "compass",
+    "distance": 26,
+    "elevationDeg": -3,
+    "thirds": "right",
+    "fromTarget": "metres",
+    "fromM": 14.5,
+    "toTarget": "subject",
+    "at": 0.5,
+    "pullSec": 1.6,
+    "driftM": 0.3
+   },
+   "look": {
+    "dof": {
+     "focusRange": 3,
+     "bokehScale": 2
+    }
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 1.8 m up north of the ruins with an Empyrean statue 14.5 m ahead in focus, then pull focus to the Riverbend portal under its moss-brick arch 26 m away; stay 3.7 m from the platform.",
+   "notes": "Backlit portal swirl: looking south-south-east toward the high sun, a statue sits soft in the foreground until the focus pull (t 4 s) lands on the Riverbend portal under its moss-brick arch on the right third. Verified (check.mjs, full take flown): take 0-8 s: AGL 1.84..1.9 m, nearest drawn 3.72 m (static 0xAE71#13 0x01000F67), vmax 0.06 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 1.84..1.9 m, nearest drawn 3.73 m (static 0xAE71#13 0x01000F67), vmax 0.06 m/s, LOS blocked 0/22, subject in frame 100%."
+  },
+  {
+   "id": "poi-empyrean-ruins.03",
+   "site": "poi-empyrean-ruins",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33468.0,
+     21754.0,
+     20.0
+    ],
+    "height": 3.5,
+    "radius": 6
+   },
+   "params": {
+    "heightAGL": 55,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang 55 m straight above the Abandoned Arena platform and turn the image 40 degrees clockwise; the lens never moves and nothing is within 50 m.",
+   "notes": "Graphic nadir over the ruin field: five portal swirls and ten statues around the platform turn like a dial (pitch -88 so the portal particles do not spin at exact nadir). Verified (check.mjs, full take flown): take 0-9 s: AGL 55..55 m, nearest drawn 50 m (spawn Abandoned Arena), vmax 0.14 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 55..55 m, nearest drawn 50.02 m (spawn Abandoned Arena), vmax 0.14 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 0.14 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-empyrean-ruins.01": "take 0-10 s: AGL 21.53..22 m, nearest drawn 16.05 m (static 0xAE71#11 0x02000395), vmax 4.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 1.8-8.3 s: AGL 21.88..22 m, nearest drawn 16.48 m (spawn Abandoned Arena), vmax 4.5 m/s, LOS blocked 0/26, subject in frame 100%; flight cinema peak 4.51 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-empyrean-ruins.02": "take 0-8 s: AGL 1.84..1.9 m, nearest drawn 3.72 m (static 0xAE71#13 0x01000F67), vmax 0.06 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 1.84..1.9 m, nearest drawn 3.73 m (static 0xAE71#13 0x01000F67), vmax 0.06 m/s, LOS blocked 0/22, subject in frame 100%",
+  "poi-empyrean-ruins.03": "take 0-9 s: AGL 55..55 m, nearest drawn 50 m (spawn Abandoned Arena), vmax 0.14 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 55..55 m, nearest drawn 50.02 m (spawn Abandoned Arena), vmax 0.14 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 0.14 m/s (cap 12), max tracking gap 0 m"
+ }
+}

@@ -1,0 +1,221 @@
+{
+ "name": "Ruins of Degar'Alesh",
+ "title": "Ruins of Degar'Alesh",
+ "siteId": "poi-ruins-of-degaralesh",
+ "summary": "A large set of ruins on Degar'Alesh. The great temple is the Freebooter drop point, a smaller temple to the south holds the Ithaenc Archipelago portal, and the Deru Tree stands to the north (acpedia). In the kit, a symmetrical cross-shaped temple about 150 m square stands at z 48. A 51 m five-storey central tower with an arched door is ringed by four 37 m halls, colonnaded corner halls and red-roofed outer ranges. A southern avenue lined with golden skull towers and 8 m wooden masks leads to the smaller castle-like temple, all in jungle.",
+ "landmarks": [
+  {
+   "name": "Central temple tower (0x010034C6)",
+   "pos": [
+    47508,
+    9516,
+    48
+   ],
+   "heightM": 51.3,
+   "note": "Arched doorway, top z 99.3."
+  },
+  {
+   "name": "South gate house (0x010034D9)",
+   "pos": [
+    47508,
+    9444,
+    48
+   ],
+   "heightM": 12.6,
+   "note": "The terrain-skim's subject."
+  },
+  {
+   "name": "Skull-tower avenue (0x0100286C/0x020003B1)",
+   "pos": [
+    47508,
+    9396,
+    48
+   ],
+   "heightM": 8.0,
+   "note": "Golden skull towers and giant masks at x 47484/47532."
+  },
+  {
+   "name": "South temple (0x01003369)",
+   "pos": [
+    47508,
+    9324,
+    48
+   ],
+   "heightM": 27.3,
+   "note": "With the Ithaenc Archipelago portal."
+  },
+  {
+   "name": "Deru Tree",
+   "pos": [
+    47520,
+    9672,
+    74
+   ],
+   "heightM": 105,
+   "note": "North."
+  }
+ ],
+ "site": {
+  "id": "poi-ruins-of-degaralesh",
+  "name": "Ruins of Degar'Alesh",
+  "gazetteerId": "ruins-of-degaralesh",
+  "teleport": "@teleloc 0xF7310019 84.00 16.00 48.50 1 0 0 0",
+  "anchor": [
+   47508,
+   9516,
+   48
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.38,
+   "grade": "neutral"
+  },
+  "notes": "The gazetteer entry for this POI is only a map @tele and the nearest exact teleport (Olthoi Tunnel) is a dungeon mouth 135 m south; derived @teleloc on the open temple avenue 92 m south of the great temple, between the skull towers (ground z 48.0, nearest bush 9.1 m)."
+ },
+ "insertAfter": "mayoi",
+ "insertBefore": "kryst",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -62.3,
+   "ew": 96.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   47508.0,
+   9516.0
+  ],
+  "coveredDistM": 2943,
+  "coveredBy": "shot:freehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ruins_of_Degar_Alesh.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ruins-of-degaralesh.01",
+   "site": "poi-ruins-of-degaralesh",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47508,
+     9516,
+     48
+    ],
+    "height": 51.3,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 120,
+    "rotateDeg": 35,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "standingOrder": "Hang 120 m straight above the great temple of Degar'Alesh and turn slowly so its cross of red-roofed halls and the jungle around wheel like a mandala; stay 60 m above the central tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down from 120 m over the great temple, turning 35 degrees. Its cross of red-roofed halls round the 51 m central tower reads like a mandala in the jungle, with the skull-tower avenue leading south and the morning shadows (0.38) cast north-west. The camera hangs 69 m above the tower. Verified (check.mjs, full take flown): take 0-9 s: AGL 120..120 m, nearest drawn 83.6 m (static 0xF731#20 0x010034CA), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 120..120 m, nearest drawn 83.6 m (static 0xF731#20 0x010034CA), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m."
+  },
+  {
+   "id": "poi-ruins-of-degaralesh.02",
+   "site": "poi-ruins-of-degaralesh",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47508,
+     9444,
+     48
+    ],
+    "height": 12.6,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 4,
+    "speed": 6,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "lookAhead": 40,
+    "tiltDeg": 6,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     47512,
+     9362,
+     52
+    ],
+    [
+     47512,
+     9414,
+     52
+    ]
+   ],
+   "standingOrder": "Skim 4 m above the temple avenue heading north between the golden skull towers and the giant wooden masks toward the temple's south gate house with the great tower rising behind it, the morning sun over your right shoulder; keep 5 m off every bush.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Terrain skim 4 m above the temple avenue at 5 m/s, heading north between the golden skull towers and the giant wooden masks toward the south gate house, with the great tower rising behind it. The morning sun is over the right shoulder. The path runs 24 m from both rows and 5 m from the nearest bush. The opt-in retail bake has a tree on the avenue; keep the default ?sceneryBake. Verified (check.mjs, full take flown): take 0-10 s: AGL 4..4 m, nearest drawn 5.09 m (spawn Linkable Monster Generator), vmax 5.2 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 4..4 m, nearest drawn 5.51 m (scenery-default 0x02000E71@47502,9406), vmax 5.2 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.21 m/s (cap 12), max tracking gap 0.02 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-ruins-of-degaralesh.01": "take 0-9 s: AGL 120..120 m, nearest drawn 83.6 m (static 0xF731#20 0x010034CA), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 120..120 m, nearest drawn 83.6 m (static 0xF731#20 0x010034CA), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m",
+  "poi-ruins-of-degaralesh.02": "take 0-10 s: AGL 4..4 m, nearest drawn 5.09 m (spawn Linkable Monster Generator), vmax 5.2 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 4..4 m, nearest drawn 5.51 m (scenery-default 0x02000E71@47502,9406), vmax 5.2 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.21 m/s (cap 12), max tracking gap 0.02 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

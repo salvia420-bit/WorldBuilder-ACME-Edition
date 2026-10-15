@@ -47,6 +47,9 @@ import { DRONE_PRESETS } from "../drone/flight_model.js";
 import { aimPointForFraming, distanceForFraming } from "./framing.js";
 import { defineTechnique } from "./registry.js";
 import { aimSubject, clampToEnvelope, makeTrajectory, orientLookAt, smoothLookAt, subjectAtTime } from "./trajectory.js";
+import {
+  buildFpvRun, checkZoneItem, FPV_TRICK_ITEM, FPV_TRICK_VARIANTS, FPV_ZONE_ITEM, requireRunLine,
+} from "./fpv_tricks.js";
 
 const DEG = Math.PI / 180;
 const HALF_PI = Math.PI / 2;
@@ -68,6 +71,7 @@ const B_CLOSE = Object.freeze({ maxLateral: 1.5, maxRise: 2, maxSink: 0.75, minS
 const B_FPV = Object.freeze({ maxLateral: 1.5, maxRise: 1.5, maxSink: 0.75, minSpeedScale: 0.4, maxSpeedScale: 1.15, maxDistanceScale: 1.1 });
 const B_GAP = Object.freeze({ maxLateral: 0.3, maxRise: 0.3, maxSink: 0.3, minSpeedScale: 0.4, maxSpeedScale: 1.1, maxDistanceScale: 1 });
 const B_CORRIDOR = Object.freeze({ maxLateral: 0.5, maxRise: 0.4, maxSink: 0.3, minSpeedScale: 0.3, maxSpeedScale: 1.1, maxDistanceScale: 1 });
+const B_RUN = Object.freeze({ maxLateral: 1.0, maxRise: 0.8, maxSink: 0.5, minSpeedScale: 0.6, maxSpeedScale: 1.1, maxDistanceScale: 1 });
 
 // ---------------------------------------------------------------------------
 // shared parameter schemas
@@ -2104,6 +2108,99 @@ const fpvCorridor = defineTechnique({
   },
 });
 
+/** Racing line of fpv.fpv-run: fillet + curvature smoothing (window 0.6·r + 0.8 m), lifted over the terrain outdoors. */
+function runLine(ctx, points, P) {
+  const r = P.cornerRadius;
+  const pts = r > 0 ? filletPolyline(points, r, { arcSegments: 12 }) : points;
+  let path = smoothPath(makePath(pts, { samples: 2048 }), 0.6 * r + 0.8);
+  const L = path.length;
+  if (ctx.indoor || !(L > 1e-6)) return path;
+  const floor = makeFloor(ctx, (s) => path.at(clamp(s, 0, L)), 0, L, { step: 0.5, ahead: Math.max(2, P.lookAhead), behind: 2, maxSamples: 8000 });
+  if (!floor) return path;
+  const n = Math.max(8, Math.min(8000, Math.ceil(L / 0.25)));
+  let lifted = false;
+  const lp = [];
+  for (let i = 0; i <= n; i++) {
+    const s = (L * i) / n;
+    const b = path.at(s);
+    const z = softMax(b[2], floor(s) + P.minClearance, 1);
+    if (z > b[2] + 1e-9) lifted = true;
+    lp.push([b[0], b[1], z]);
+  }
+  return lifted ? makePath(lp, { tangents: null, samples: Math.max(2048, 2 * n) }) : path;
+}
+
+const fpvRun = defineTechnique({
+  id: "fpv.fpv-run",
+  name: "FPV run",
+  description: "A long FPV run along a racing line (ctx.path = shot.path, else ctx.indoor.route) with real FPV character and tricks. Corners are filleted (cornerRadius) and curvature-smoothed. A speed plan sets the pace by arc length: cruise `speed` (the fit may raise it up to speedMax so the run lasts exactly the shot), `zones` that cap the speed between two arc lengths, corners slowed to v ≤ √(alat·r), punchy acceleration/braking at amax, and gravity-assisted dives (≈ g down steep drops). With ends 'rest' the run starts with a hover (startHoldSec, idle bob) and punches off, and ends settled. The camera is the hard-mounted, up-tilted FPV body: the pitch comes from the thrust vector (a punch dips the view, braking flares it), plus uptiltDeg, mixed with the path's own pitch (lookAlongPath). The heading looks lookAhead metres along the line, the bank is coordinated with the turn, and a seeded throttle bob and prop-wash wobble are added. `tricks` are spliced in deterministically with C²-continuous joins: float (punch up, cut the throttle, true free fall, catch), roll, yaw-spin, power-loop and split-s (they leave and re-join the line and add their time), dive (nose down through a drop), and dip. A trick that does not fit (geometry, headroom, overlap, end of shot) is skipped and listed in meta.tricks with a reason. The ease is ignored: the run is timed by its physics.",
+  whenToUse: "The long FPV piece: racing through a dungeon from its entrance drop to the bottom portal, a canyon or town run with tricks at the big spaces. Give an explicit, offline-verified racing line in shot.path (pass lanes around monsters already baked in), place tricks only where there is room (float ≥ rise + 1 m headroom; a loop needs ≈ 2.1·radius above the line), and slow the tight parts with zones. Use fpv.fpv-corridor for a short, simple corridor move.",
+  params: {
+    speed: { type: "number", default: 8, min: 1, max: 25, unit: "m/s", desc: "Cruise speed on straights (outside zones). The duration fit scales it (up to speedMax) so the run lasts exactly the shot." },
+    speedMax: { type: "number", default: 16, min: 1, max: 25, unit: "m/s", desc: "Highest cruise speed the duration fit may use; a run that still does not fit is time-compressed and reports meta.overspeed." },
+    amax: { type: "number", default: 9, min: 1, max: 13, unit: "m/s²", desc: "Punch / brake acceleration along the line (the speed profile is jerk-smoothed to ≤ 45 m/s³)." },
+    alat: { type: "number", default: 12, min: 1, max: 14, unit: "m/s²", desc: "Lateral acceleration limit in turns: v ≤ √(alat·r)." },
+    cornerRadius: { type: "number", default: 2, min: 0, max: 30, unit: "m", desc: "Fillet radius of the line's corners (capped at 45% of the adjacent legs); the line is also curvature-smoothed over 0.6·cornerRadius + 0.8 m." },
+    lookAhead: { type: "number", default: 5, min: 0.5, max: 40, unit: "m", desc: "How far along the line the heading (and the path pitch) looks." },
+    uptiltDeg: { type: "number", default: 25, min: 0, max: 50, unit: "deg", desc: "FPV camera uptilt above the body's nose: visible on punches, in dives and floats." },
+    lookAlongPath: { type: "number", default: 0.55, min: 0, max: 1, desc: "Camera pitch mix: 0 = pure body attitude + uptilt (thrust-derived), 1 = looks along the path's pitch." },
+    bankGain: { type: "number", default: 1.2, min: 0, max: 3, desc: "Bank multiplier on the coordinated-turn roll (0 = level horizon)." },
+    maxBankDeg: { type: "number", default: 60, min: 0, max: 85, unit: "deg", desc: "Largest bank into turns (smooth tanh saturation)." },
+    throttleBobM: { type: "number", default: 0.1, min: 0, max: 0.5, unit: "m", desc: "Seeded throttle bob amplitude (vertical; faded out around tricks)." },
+    bobHz: { type: "number", default: 1.1, min: 0.1, max: 4, unit: "Hz", desc: "Throttle bob rate." },
+    wobbleDeg: { type: "number", default: 0.4, min: 0, max: 5, unit: "deg", desc: "Seeded fine attitude wobble (always on)." },
+    propwashDeg: { type: "number", default: 0.8, min: 0, max: 8, unit: "deg", desc: "Prop-wash oscillation amplitude when descending through the craft's own wash and on hard catches." },
+    startHoldSec: { type: "number", default: 0.8, min: 0, max: 30, unit: "s", desc: "Hover at the start before the punch (ends 'rest'; at least ≈ 0.4 s of spool-up)." },
+    ends: { type: "enum", values: ["rest", "cruise"], default: "rest", desc: "rest = starts hovering (startHoldSec) and ends settled; cruise = starts and ends at speed (cut in on motion)." },
+    minClearance: { type: "number", default: 1.5, min: 0.7, max: 50, unit: "m", desc: "Outdoors only: the line is lifted to stay this high above the smoothed terrain." },
+    zones: {
+      type: "list", default: [], maxItems: 64, item: FPV_ZONE_ITEM, check: checkZoneItem,
+      desc: "Speed plan: [{s0, s1, speed}] caps the speed between arc lengths s0 and s1 (m along the line). Outside the zones `speed` (fitted) applies. Zones are absolute caps (a zone is honoured to within the jerk smoothing; the duration fit never raises them).",
+    },
+    tricks: {
+      type: "list", default: [], maxItems: 32, item: FPV_TRICK_ITEM, variants: FPV_TRICK_VARIANTS,
+      desc: "Tricks [{type, s, ...}] at arc length s (m along the line): float {rise, punchAccel, catchAccel, hangSec?, lookDownDeg} · roll {turns, dir, durationSec, rise} · yaw-spin {turns, dir, durationSec} · power-loop {radius} · split-s {radius, dir, rollSec} (needs the line to come back the other way ≈ 2·radius lower) · dive {pitchDeg} (at the top of a drop) · dip {depth, durationSec}. Each lands in meta.tricks with its time window (or skipped + reason) and in meta.lockWindows.",
+    },
+  },
+  needs: { subject: false, path: false, indoor: null },
+  defaultBounds: B_RUN,
+  defaultDuration: 30,
+  defaultFraming: "WS",
+  defaultFov: 75,
+  defaultEase: "linear",
+  tags: ["fpv", "run", "trick", "indoor", "dungeon", "speed", "90-degree"],
+  build(spec, ctx) {
+    const P = spec.params;
+    const { points } = requireRunLine(spec, ctx);
+    let hint = 0;
+    for (let i = 1; i < points.length; i++) {
+      const dx = points[i][0] - points[0][0], dy = points[i][1] - points[0][1];
+      if (Math.hypot(dx, dy) > 1e-6) {
+        hint = Math.atan2(dx, dy);
+        break;
+      }
+    }
+    const line = runLine(ctx, points, P);
+    const run = buildFpvRun({ spec, ctx, line, P, headingHint: hint, seed: ctx.seed });
+    return finish(spec, ctx, "fpv", { positionAt: run.positionAt, orientAt: run.orientAt, keyframes: run.keyframes, meta: run.meta });
+  },
+});
+
+/**
+ * The racing line fpv.fpv-run flies for a polyline (fillet cornerRadius, curvature smoothing,
+ * lifted over ctx.groundZ outdoors) — for placing `tricks[].s` / `zones[]` in arc length offline:
+ * `{length, at(s), tangentAt(s), nearestS(point)}`. Same defaults as the technique's params.
+ * @param {number[][]} points racing line [[x,y,z], …] (≥ 2)
+ * @param {{cornerRadius?:number, lookAhead?:number, minClearance?:number}} [params]
+ * @param {{indoor?:*, groundZ?:Function}} [ctx] indoor (default) or an outdoor groundZ
+ * @returns {{length:number, at:(s:number)=>number[], tangentAt:(s:number)=>number[], nearestS:(p:number[])=>number}}
+ */
+export function fpvRunLine(points, params = {}, ctx = { indoor: {} }) {
+  const P = { cornerRadius: 2, lookAhead: 5, minClearance: 1.5, ...(params || {}) };
+  const line = runLine(ctx || { indoor: {} }, points.map((p) => [p[0], p[1], p[2]]), P);
+  return { length: line.length, at: (s) => line.at(s), tangentAt: (s) => line.tangentAt(s), nearestS: (p) => nearestS(line, p) };
+}
+
 /**
  * Drone technique definitions (`drone.*`, SPEC §2.12), normalised defineTechnique results in
  * catalog order — registered by shots/index.js: flyover, flythrough, orbit-poi, helix, dronie,
@@ -2120,7 +2217,7 @@ export const DRONE_TECHNIQUES = [
 
 /**
  * FPV technique definitions (`fpv.*`, SPEC §2.12), normalised defineTechnique results —
- * registered by shots/index.js: fpv-dive, fpv-proximity, fpv-gap, fpv-flip, fpv-corridor.
+ * registered by shots/index.js: fpv-dive, fpv-proximity, fpv-gap, fpv-flip, fpv-corridor, fpv-run.
  * @type {Array<Readonly<import('./registry.js').TechniqueDef>>}
  */
-export const FPV_TECHNIQUES = [fpvDive, fpvProximity, fpvGap, fpvFlip, fpvCorridor];
+export const FPV_TECHNIQUES = [fpvDive, fpvProximity, fpvGap, fpvFlip, fpvCorridor, fpvRun];

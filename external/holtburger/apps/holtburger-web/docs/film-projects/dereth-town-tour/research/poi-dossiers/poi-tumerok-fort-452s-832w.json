@@ -1,0 +1,122 @@
+{
+ "name": "Tumerok Fort (45.2S, 83.2W)",
+ "title": "45.2S, 83.2W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-452s-832w",
+ "summary": "A Renegade Tumerok fort on a flat mesa top (z 68, about 60 m across) in the forested West Dires 3.7 km north of Ayan Baqur: three 30.75 m stone spire towers at (4500, 13596), (4524, 13620) and (4524, 13644) rise over four 5 m timber halls with plank spikes; the forest slopes 45 m down to the west (tower chest of low tier-4 loot, Gotrok Lugians and Tumeroks).",
+ "landmarks": [
+  {
+   "name": "Spire towers",
+   "pos": [
+    4512,
+    13620,
+    68
+   ],
+   "heightM": 30.75,
+   "note": "Three 0x01001161, tops z 98.75."
+  },
+  {
+   "name": "West slope",
+   "pos": [
+    4420,
+    13600,
+    45
+   ],
+   "heightM": 0,
+   "note": "Forest floor z 22-30 rising to the rim at x 4460."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-452s-832w",
+  "name": "Tumerok Fort (45.2S, 83.2W)",
+  "teleport": "@teleloc 0x17470011 64.0 8.0 66.50 1 0 0 0",
+  "anchor": [
+   4506,
+   13620,
+   68
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.77,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport on the mesa top 33 m west-north-west of the fort centre, 18 m from the nearest hut."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -45.2,
+   "ew": -83.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3666,
+  "coveredBy": "shot:ayan-baqur.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/45_2S_83_2W_Tumerok_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-452s-832w.01",
+   "site": "poi-tumerok-fort-452s-832w",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.6
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     3.0,
+     9.6
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4510,
+     13620,
+     68
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "distance": 125,
+    "obstacleDistance": 72,
+    "obstacleHeight": 40,
+    "heightStart": 3,
+    "clearance": 10,
+    "forward": 22,
+    "endPitchDeg": -6,
+    "bearingDeg": 258,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Rise from the forest floor west of the mesa up its slope and over the rim so the Tumerok fort and its three spire towers appear against the golden sky; keep 10 m above the rim.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Rising reveal up the forested west slope of the mesa: starts 3 m above the forest floor looking up the slope (the three 30.75 m spire towers peek over the rim), climbs 47 m while drifting 22 m forward and pitching from +13 to -6 deg until the whole fort, its huts and towers stand against the golden sky (0.77, sun behind). LOS to the subject centre is blocked by the rim until t 4.5 by design (the reveal's lead-in): 4/24 in the window. Verified (check.mjs, full take flown): take 0-10 s: AGL 3..38.2 m, nearest drawn 6.6 m (scenery-default 0x02001063@4397,13594), vmax 8.15 m/s, LOS blocked 19/41, subject in frame 100% (retail-bake tree 0 m); edit 3.6-9.6 s: AGL 14.74..38 m, nearest drawn 9.45 m (scenery-default 0x02000258@4403,13619), vmax 8.15 m/s, LOS blocked 4/24, subject in frame 100% (retail-bake tree 0 m); flight cinema peak 8.14 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-tumerok-fort-452s-832w.01": "take 0-10 s: AGL 3..38.2 m, nearest drawn 6.6 m (scenery-default 0x02001063@4397,13594), vmax 8.15 m/s, LOS blocked 19/41, subject in frame 100% (retail-bake tree 0 m); edit 3.6-9.6 s: AGL 14.74..38 m, nearest drawn 9.45 m (scenery-default 0x02000258@4403,13619), vmax 8.15 m/s, LOS blocked 4/24, subject in frame 100% (retail-bake tree 0 m); flight cinema peak 8.14 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

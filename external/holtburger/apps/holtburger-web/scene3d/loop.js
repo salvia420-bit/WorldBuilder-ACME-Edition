@@ -2972,7 +2972,11 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
     // and same remedy, as the R1#14 terrain-light and R4#5 IBL throttles.
     // terrain_vfx derives its own dt from successive live stamps; the frameTime
     // dt stays as the fallback for callers that pass no live clock.
-    terrainVfxTick(scene3d?.frameTime?.dt ?? 0, scene3d, _rp3TsSec);
+    // Film mode (2026-10-15): a stepped take parks the loop (film.holdLoop) and stamps frameTime with each film
+    // frame's timestamp (never frozen during a hold), so grass sway and the ambient fields follow the film clock
+    // instead of the wall time between rendered frames. Flag off: `film` is never set → unchanged.
+    const _vfxTsSec = scene3d?.film?.holdLoop && Number.isFinite(scene3d?.frameTime?.tsSec) ? scene3d.frameTime.tsSec : _rp3TsSec;
+    terrainVfxTick(scene3d?.frameTime?.dt ?? 0, scene3d, _vfxTsSec);
   } catch (e) {
     // eslint-disable-next-line no-console
     if (!scene3d._terrainVfxTickWarned) {

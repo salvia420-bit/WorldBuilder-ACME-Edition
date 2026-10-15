@@ -1,0 +1,134 @@
+{
+ "name": "High Mountain Valley",
+ "title": "High Mountain Valley",
+ "siteId": "poi-high-mountain-valley",
+ "summary": "A valley in the Linvak Mountains with an Empyrean ruin site: a bunker, an Empyrean platform and a meeting hall with a portal to Desert Ridge Border. The Lost Garden Ruins are nearby (acpedia). In the kit, a moss-green two-storey meeting hall, a small pitched-roof bunker and a 20 m fabric-covered Empyrean platform sit on the flat valley floor at z 168. Forested slopes rise 20-80 m to the north and east.",
+ "landmarks": [
+  {
+   "name": "Empyrean platform (0x010011C6)",
+   "pos": [
+    38964,
+    8796,
+    168
+   ],
+   "heightM": 0.4,
+   "note": "20 m fabric-covered platform."
+  },
+  {
+   "name": "Meeting hall (0x01000F69)",
+   "pos": [
+    38964,
+    8820,
+    168
+   ],
+   "heightM": 10.1,
+   "note": "Portal to Desert Ridge Border."
+  },
+  {
+   "name": "Bunker (0x010011C0)",
+   "pos": [
+    38964,
+    8772,
+    168
+   ],
+   "heightM": 4.1,
+   "note": ""
+  }
+ ],
+ "site": {
+  "id": "poi-high-mountain-valley",
+  "name": "High Mountain Valley",
+  "gazetteerId": "high-mountain-valley",
+  "teleport": "@teleloc 0xCA2D0038 160.3 180.6 167.5 -0.284015 0 0 -0.95882",
+  "anchor": [
+   38960,
+   8796,
+   168
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.6,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer high-mountain-valley (outdoor, on the valley floor 32 m north-west of the Empyrean platform). Landblocks north of y 9024 (0xC92F-0xCC2F) and east of x 39168 (0xCC2C-0xCC2E) are missing from the kit: every camera stays south-west of them."
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -65.3,
+   "ew": 60.3
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   38940.0,
+   8796.0
+  ],
+  "coveredDistM": 3708,
+  "coveredBy": "shot:baishi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/High_Mountain_Valley.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-high-mountain-valley.01",
+   "site": "poi-high-mountain-valley",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     3.0,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38964,
+     8796,
+     168
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 30,
+    "endDistance": 76,
+    "startHeight": 10,
+    "endHeight": 38,
+    "bearingDeg": 262,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Pull back and up west from the Empyrean platform and its moss-green meeting hall, the afternoon sun behind you, until the ruins sit small on the floor of the high Linvak valley; 8 m above every tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie from 30 m off the Empyrean platform and the moss-green meeting hall, pulling back west and up to 38 m. The ruins shrink on the floor of the high Linvak valley as the forested slopes rise behind them. The afternoon sun (0.60) is 46 degrees behind-right of the lens. The bearing is chosen to pass 13 m clear of the valley's 24 m pine. Verified (check.mjs, full take flown): take 0-11 s: AGL 12.3..46.3 m, nearest drawn 9.56 m (scenery-default 0x02000246@38936,8803), vmax 7.69 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 20.25..46.1 m, nearest drawn 13.15 m (scenery-default 0x02000258@38936,8766), vmax 7.69 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.68 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-high-mountain-valley.01": "take 0-11 s: AGL 12.3..46.3 m, nearest drawn 9.56 m (scenery-default 0x02000246@38936,8803), vmax 7.69 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 20.25..46.1 m, nearest drawn 13.15 m (scenery-default 0x02000258@38936,8766), vmax 7.69 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.68 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

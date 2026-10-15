@@ -1,0 +1,136 @@
+{
+ "name": "East Nanto Outpost",
+ "title": "East Nanto Outpost",
+ "siteId": "poi-east-nanto-outpost",
+ "summary": "A Sho starter outpost destroyed by Martine (acpedia). In the kit, the same ruined green-lit monument tower model (top z 109.9) stands on a grassy shelf at z 82 in rugged hills rising to z 150-200. A wooden shopkeeper's house with a red roof and lanterns, the Life Stone with two signs and a well are beside it.",
+ "landmarks": [
+  {
+   "name": "Ruined monument tower (0x01002866)",
+   "pos": [
+    44964,
+    11844,
+    82
+   ],
+   "heightM": 27.9,
+   "note": "Green lights at z 105.8."
+  },
+  {
+   "name": "Shopkeeper's house (0x010009D4)",
+   "pos": [
+    44940,
+    11892,
+    78
+   ],
+   "heightM": 7.0,
+   "note": "Hon Fo the Shopkeeper."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    44958,
+    11894.4,
+    78.5
+   ],
+   "heightM": 3.5,
+   "note": "With two LIFESTONES signs."
+  }
+ ],
+ "site": {
+  "id": "poi-east-nanto-outpost",
+  "name": "East Nanto Outpost",
+  "gazetteerId": "east-nanto-outpost",
+  "teleport": "@teleloc 0xEA3D0017 57.00 158.00 81.33 1 0 0 0",
+  "anchor": [
+   44955,
+   11868,
+   80
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  },
+  "notes": "The gazetteer entry for this POI is only a map @tele and the nearest exact teleport (life-stone-near-nanto-ea3d) lands on the Life Stone itself; derived @teleloc on open grass 33 m north-east of the monument tower instead (ground z 80.8, nearest tree 8.7 m). Landblocks west of x 44736 (0xE83C-0xE83F) and north of y 12096 (0xE93F-0xEB3F) are missing from the kit: every camera stays inside x 44800-45150, y 11700-12050."
+ },
+ "insertAfter": "nanto",
+ "insertBefore": "mayoi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -52.5,
+   "ew": 85.4
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   44964.0,
+   11868.0
+  ],
+  "coveredDistM": 794,
+  "coveredBy": "shot:nanto.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Nanto_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-nanto-outpost.01",
+   "site": "poi-east-nanto-outpost",
+   "technique": "classic.whip-pan",
+   "duration": {
+    "sec": 5.0
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.0,
+    "keep": [
+     0.4,
+     6.5
+    ],
+    "anchor": 3.15
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44964,
+     11844,
+     82
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 225,
+    "elevationDeg": 4,
+    "distance": 45,
+    "angleDeg": 32,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "standingOrder": "Hold on the Life Stone and the ruined shopkeeper's house, then whip right onto the green-lit monument tower and hold it against the sky; the lens stays put 45 m south-west of the tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Whip pan from a fixed lens 45 m south-west of the outpost: hold on the Life Stone and the shopkeeper's red-roofed house, then whip 32 degrees right in 0.3 s at t 3.15 onto the green-lit monument tower and hold it against the sky. The afternoon sun (0.63) is behind the lens. Verified (check.mjs, full take flown): take 0-7 s: AGL 13.8..13.8 m, nearest drawn 9.32 m (scenery-default 0x020007A3@44933,11821), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 13.8..13.8 m, nearest drawn 9.32 m (scenery-default 0x020007A3@44933,11821), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-east-nanto-outpost.01": "take 0-7 s: AGL 13.8..13.8 m, nearest drawn 9.32 m (scenery-default 0x020007A3@44933,11821), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 13.8..13.8 m, nearest drawn 9.32 m (scenery-default 0x020007A3@44933,11821), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%"
+ }
+}

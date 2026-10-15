@@ -1,0 +1,269 @@
+{
+ "name": "Obsidian Span",
+ "title": "Obsidian Span",
+ "siteId": "poi-obsidian-span",
+ "summary": "The Obsidian Span, an Empyrean ruin once hidden by a ward, bridges the broad river north-east of Holtburg, 560 m east-south-east of the Pet Shop. In the kit it is a 290 m chain of black-and-green Empyrean structures standing in running water (z 28) from a rock island in mid-river (z 52) to the east bank: 10-storey piers (to z 61), 6-8-storey halls (to z 68.6), a central deck (z 57-62.6) and two diamond-patterned towers (z 78). The river is ~250 m wide; trees line the banks. Landblocks 0xB4A9-AB (x > 34560) are missing from the kit: all cameras stay west of x 34550 (the gazetteer teleport is on the east bank in 0xB4AA, which is fine for the hidden player).",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 34.6,
+   "ew": 41.2
+  },
+  "mapWorld": [
+   34356.0,
+   32772.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Obsidian_Span.txt",
+  "coveredDistM": 2548,
+  "coveredBy": "shot:holtburg.05"
+ },
+ "landmarks": [
+  {
+   "name": "Central tower",
+   "pos": [
+    34452.0,
+    32772.0,
+    52.0
+   ],
+   "heightM": 26,
+   "note": "0x0100196C, deck at 57.6, top z 78."
+  },
+  {
+   "name": "South face of the span (8-storey hall)",
+   "pos": [
+    34428.0,
+    32736.0,
+    28.0
+   ],
+   "heightM": 40.6,
+   "note": "0x0100196F, faces the south approach; used as the framing point."
+  },
+  {
+   "name": "10-storey piers",
+   "pos": [
+    34404.0,
+    32772.0,
+    28.0
+   ],
+   "heightM": 33.2,
+   "note": "0x01001971 at x 34308 / 34404 / 34500."
+  },
+  {
+   "name": "North face",
+   "pos": [
+    34428.0,
+    32808.0,
+    28.0
+   ],
+   "heightM": 40.6,
+   "note": "0x01001968, backlit from the north."
+  }
+ ],
+ "site": {
+  "id": "poi-obsidian-span",
+  "name": "Obsidian Span",
+  "gazetteerId": "obsidian-span",
+  "teleport": "@teleloc 0xB4AA0005 5.8 112.6 51.3 -0.707107 0 0 -0.707107",
+  "anchor": [
+   34440.0,
+   32772.0,
+   28.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.59,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34428.0,
+     32736.0,
+     28.0
+    ],
+    "height": 40,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 222,
+    "azimuthRef": "compass",
+    "distance": 165,
+    "heightM": 28,
+    "driftDeg": 8,
+    "pushPct": 6
+   },
+   "standingOrder": "Hang 28 m over the river 165 m south-west of the span and drift 8 deg while easing 6 % closer; open water only beneath the lens, nothing nearer than 70 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing view of the Obsidian Span, an Empyrean ruin that bridges the wide river west of the Pet Shop: a 290 m chain of piers, halls and towers (tops 45-78 m) standing in running water. Wide and high from the south-west with the 0.59 sun behind the camera, so the whole south face is lit and the river reflects the sky. Verified with poi-kit check.mjs - take 9s: AGL 28..28 m, nearest 73.23 m (scenery-default 0x0200062B@34329,32709), vmax 4.27 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 1.5-7.5s: AGL 28..28 m, nearest 74.69 m, LOS blocked 0/25, in frame 100%, water 100%."
+  },
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "path": [
+    [
+     34428,
+     32590,
+     32
+    ],
+    [
+     34428,
+     32650,
+     32
+    ]
+   ],
+   "params": {
+    "heightAGL": 4,
+    "speed": 6.5,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "lookAhead": 14,
+    "tiltDeg": 7,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "standingOrder": "Skim due north 4 m above the river along x 34428 toward the span at 6.5 m/s, stopping 86 m short of its south face; water only beneath, nothing within 50 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water shot: a low, fast-looking glide up the river straight at the span, which grows across the whole frame between its piers; tilt +7 deg so the 60-78 m towers stay in frame. Subject-less (looks ahead), so LOS/frame checks do not apply. Verified with poi-kit check.mjs - take 9s: AGL 4..4 m, nearest 53.77 m (scenery-default 0x020003EA@34389,32705), vmax 6.67 m/s, water 100%; edit 2-8s: AGL 4..4 m, nearest 59.46 m, water 100%; flight cinema: peak 6.68 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34428.0,
+     32808.0,
+     28.0
+    ],
+    "height": 40,
+    "radius": 6
+   },
+   "params": {
+    "distance": 75,
+    "heightStart": 2,
+    "heightEnd": 24,
+    "bearingDeg": 15,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "tiltDeg": 0,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up from 2 m to 24 m above the river 75 m north-north-east of the span, keeping it centred as it silhouettes against the sun; open water only, nothing within 50 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Backlit closer: from the north the 0.59 afternoon sun sits behind the span, so the piers and towers read as silhouettes over a glittering river while the lens lifts out of the water. Rise speed peaks 3.8 m/s. Verified with poi-kit check.mjs - take 9s: AGL 2.06..24 m, nearest 51.69 m (scenery-default 0x020007A3@34501,32873), vmax 3.84 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 2-8s: AGL 4.57..23.3 m, nearest 51.69 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 3.83 m/s (cap 12), tracking gap 0.03 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-obsidian-span.01",
+   "technique": "classic.establishing",
+   "rank": 1,
+   "check": "take 9s: AGL 28..28 m, nearest 73.23 m (scenery-default 0x0200062B@34329,32709), vmax 4.27 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 1.5-7.5s: AGL 28..28 m, nearest 74.69 m, LOS blocked 0/25, in frame 100%, water 100%"
+  },
+  {
+   "shot": "poi-obsidian-span.02",
+   "technique": "drone.terrain-skim",
+   "rank": 1,
+   "check": "take 9s: AGL 4..4 m, nearest 53.77 m (scenery-default 0x020003EA@34389,32705), vmax 6.67 m/s, water 100%; edit 2-8s: AGL 4..4 m, nearest 59.46 m, water 100%; flight cinema: peak 6.68 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-obsidian-span.03",
+   "technique": "drone.boom-rise",
+   "rank": 2,
+   "check": "take 9s: AGL 2.06..24 m, nearest 51.69 m (scenery-default 0x020007A3@34501,32873), vmax 3.84 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 2-8s: AGL 4.57..23.3 m, nearest 51.69 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 3.83 m/s (cap 12), tracking gap 0.03 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 18,
+ "techniques": [
+  "classic.establishing",
+  "drone.terrain-skim",
+  "drone.boom-rise"
+ ]
+}

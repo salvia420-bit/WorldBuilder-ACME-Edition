@@ -1,0 +1,121 @@
+{
+ "name": "Small Hill Base",
+ "title": "Small Hill Base",
+ "siteId": "poi-small-hill-base",
+ "summary": "Drop point of the Small Hill Base portal, 330 m east of Wai Jhou: a Master's Sentinel statue and the Small Black Hill portal stand in a little valley at z 11, under the Small Black Hill, a 137 m black obsidian pillar crowned by a three-storey brick hall (z 148-167) with the Small Hill Base portal beside it.",
+ "landmarks": [
+  {
+   "name": "Drop point statue and portal",
+   "pos": [
+    12460,
+    9590,
+    11.5
+   ],
+   "heightM": 3,
+   "note": "Master's Sentinel (12461.9,9592.6), portal (12458.3,9586.5)."
+  },
+  {
+   "name": "Hall on the Small Black Hill",
+   "pos": [
+    12372,
+    9540,
+    148
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106; Small Hill Base Portal at (12380.8,9573.2,148)."
+  }
+ ],
+ "site": {
+  "id": "poi-small-hill-base",
+  "name": "Small Hill Base",
+  "gazetteerId": "small-hill-base",
+  "teleport": "@teleloc 0x40320039 174.80 1.10 12.30 1 0 0 0",
+  "anchor": [
+   12462,
+   9590,
+   11.5
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.55,
+   "grade": "warm"
+  },
+  "notes": "[critic b4-7 2026-10-15: teleport changed from '@teleloc 0x40310040 174.8 179.1 11.5 -0.241922 0 0 -0.970296' because the gazetteer small-hill-base drop was 4.5 m from the Small Black Hill portal. Derived drop 14 m north in the same valley (ground 11.8), 15.2 m from the portal, 6.4 m from the nearest tree. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -62.0,
+   "ew": -50.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 298,
+  "coveredBy": "shot:wai-jhou.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Small_Hill_Base.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-small-hill-base.01",
+   "site": "poi-small-hill-base",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     2.0,
+     8.6
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12372,
+     9540,
+     148
+    ],
+    "height": 19,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 77,
+    "elevationDeg": -26,
+    "distance": 195,
+    "fromDeg": -28,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "From the eastern slope above the drop-point valley, tilt 28 degrees up the black face of the 137 m Small Black Hill to the brick hall on its summit; locked position.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off tilt from the eastern slope (camera 8 m above it, 195 m from the hall): starts on the foot of the 137 m black obsidian pillar above the drop-point valley (the Master's Sentinel statue and the portal sit just below the frame) and tilts 28 deg up its face to the brick hall on the summit, where the Small Hill Base portal stands; noon sun from the left. proj.mjs: the hall enters the frame at t 2.6 and the window starts on it. Verified (check.mjs, full take flown): take 0-9 s: AGL 8.06..8.1 m, nearest drawn 23.2 m (scenery-default 0x02000258@12512,9589), vmax 0 m/s, LOS blocked 0/37, subject in frame 70% (retail-bake tree 13.6 m); edit 2.5-8.5 s: AGL 8.06..8.1 m, nearest drawn 23.2 m (scenery-default 0x02000258@12512,9589), vmax 0 m/s, LOS blocked 0/25, subject in frame 96% (retail-bake tree 13.6 m)."
+  }
+ ],
+ "verification": {
+  "poi-small-hill-base.01": "take 0-9 s: AGL 8.06..8.1 m, nearest drawn 23.2 m (scenery-default 0x02000258@12512,9589), vmax 0 m/s, LOS blocked 0/37, subject in frame 70% (retail-bake tree 13.6 m); edit 2.5-8.5 s: AGL 8.06..8.1 m, nearest drawn 23.2 m (scenery-default 0x02000258@12512,9589), vmax 0 m/s, LOS blocked 0/25, subject in frame 96% (retail-bake tree 13.6 m)"
+ }
+}

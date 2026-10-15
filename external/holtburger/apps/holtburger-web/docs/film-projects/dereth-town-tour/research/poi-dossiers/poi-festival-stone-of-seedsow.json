@@ -1,0 +1,141 @@
+{
+ "name": "Festival Stone of Seedsow",
+ "title": "Festival Stone of Seedsow",
+ "siteId": "poi-festival-stone-of-seedsow",
+ "summary": "'The Stone of Seedsow can be found in the woods to the west of the fortress of Lytelthorpe' (Alatar Locke). In the kit the Festival Stone and its Anniversary glow stand on a forest knoll (z 64) inside a cross of four mossy candle sentinels ('Master's Sentinel', 3 m) and four wax candles with blue flames, ringed by tall default-bake trees.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Seedsow",
+   "pos": [
+    35652.0,
+    24611.5,
+    64.0
+   ],
+   "heightM": 3.0,
+   "note": "Gazetteer seedsow-festival-stone 11 m south."
+  },
+  {
+   "name": "Candle sentinels (0x0200039B)",
+   "pos": [
+    35657.0,
+    24611.5,
+    64.0
+   ],
+   "heightM": 3.0,
+   "note": "At 5 m N/E/S/W of the stone."
+  },
+  {
+   "name": "Wax candles (0x02000397)",
+   "pos": [
+    35655.8,
+    24615.4,
+    64.0
+   ],
+   "heightM": 2.8,
+   "note": "Four corner candles with blue flames 0x020005BB."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-seedsow",
+  "name": "Festival Stone of Seedsow",
+  "gazetteerId": "seedsow-festival-stone",
+  "teleport": "@teleloc 0xB980002A 134.2 24.5 64 -0.996917 0 0 -0.078459",
+  "anchor": [
+   35652,
+   24611.5,
+   64
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.76,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer seedsow-festival-stone (on the knoll 11 m south of the stone, z 64)."
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 0.5,
+   "ew": 46.1
+  },
+  "coordSrc": "index",
+  "coveredDistM": 1185,
+  "coveredBy": "shot:lytelthorpe.06",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Seedsow.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-seedsow.01",
+   "site": "poi-festival-stone-of-seedsow",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     7.5
+    ],
+    "anchor": 4.0
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35652,
+     24611.5,
+     64
+    ],
+    "height": 3,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 63,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "distance": 10,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 5,
+    "toTarget": "subject",
+    "at": 0.5,
+    "pullSec": 1.8,
+    "driftM": 0.4
+   },
+   "standingOrder": "Hold low north-east of the Seedsow stone with the mossy candle sentinels sharp in the foreground against the low sun, then pull focus to the glowing Festival Stone in the wood; stay 3 m from every candle.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "look": {
+    "dof": {
+     "focusRange": 2,
+     "bokehScale": 2.5
+    }
+   },
+   "notes": "Rack focus in the woods west of Lytelthorpe: lens ~3.6 m up, 10 m NE of the Seedsow Festival Stone on its knoll, the mossy candle sentinels sharp in the foreground (proj.mjs: NE candle NDC 0.48,-0.47, east sentinel -0.55,-0.37) with their blue flames against the low golden sun, then focus pulls (at 50 %, 1.8 s) to the stone and its Anniversary glow. Verified (check.mjs, full take flown): take 0-8 s: AGL 3.57..3.6 m, nearest drawn 4.02 m (static 0xB980#11 0x02000397), vmax 0.07 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 3.58..3.6 m, nearest drawn 4.03 m (static 0xB980#11 0x02000397), vmax 0.07 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-seedsow.01": "take 0-8 s: AGL 3.57..3.6 m, nearest drawn 4.02 m (static 0xB980#11 0x02000397), vmax 0.07 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 3.58..3.6 m, nearest drawn 4.03 m (static 0xB980#11 0x02000397), vmax 0.07 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

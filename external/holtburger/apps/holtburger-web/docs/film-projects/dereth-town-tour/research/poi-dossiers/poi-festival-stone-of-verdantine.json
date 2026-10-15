@@ -1,0 +1,184 @@
+{
+ "name": "Festival Stone of Verdantine",
+ "title": "Festival Stone of Verdantine",
+ "siteId": "poi-festival-stone-of-verdantine",
+ "summary": "'The Stone of Verdantine stands tall over the road leading southwest out of Samsur' (Alatar Locke); 'on the edge of a bluff and flanked by two Empyrean Statues' (acpedia). In the kit: the stone and its glow on the south-west corner of a flat bluff (z 60) between two 3 m candle sentinels, with the road valley 40 m below to the south and west.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Verdantine",
+   "pos": [
+    28308.0,
+    23628.0,
+    60.0
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary glow."
+  },
+  {
+   "name": "Candle sentinels (0x0200039B)",
+   "pos": [
+    28308.0,
+    23628.0,
+    60.0
+   ],
+   "heightM": 3.0,
+   "note": "At (28303,23633) and (28313,23623) with blue lights."
+  },
+  {
+   "name": "Bluff",
+   "pos": [
+    28315.0,
+    23640.0,
+    60.0
+   ],
+   "heightM": 40.0,
+   "note": "Drops from 60 to 20 within 30 m south and 40 m west."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-verdantine",
+  "name": "Festival Stone of Verdantine",
+  "gazetteerId": "verdantine-festival-stone",
+  "teleport": "@teleloc 0x937B0019 75.3 3.4 60 0.936672 0 0 -0.350207",
+  "anchor": [
+   28308.0,
+   23628.0,
+   60.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer verdantine-festival-stone (bluff top, 12 m south-west of the stone)."
+ },
+ "insertAfter": "tufa",
+ "insertBefore": "samsur",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -3.5,
+   "ew": 15.7
+  },
+  "coordSrc": "index",
+  "coveredDistM": 726,
+  "coveredBy": "shot:samsur.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Verdantine.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-verdantine.01",
+   "site": "poi-festival-stone-of-verdantine",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28308.0,
+     23628.0,
+     60.0
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 165,
+    "azimuthRef": "compass",
+    "elevationDeg": 16,
+    "distance": 34,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "cw"
+   },
+   "standingOrder": "Arc 40 degrees round the south face of the bluff 34 m out and 10 m above the stone, holding the Festival Stone and its two sentinels on the rim; stay 25 m from the sentinels and 30 m above the slope, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arc round the bluff on which the Festival Stone of Verdantine 'stands tall over the road leading south-west out of Samsur': the stone and its two candle sentinels hold on the rim as the camera sweeps 40 degrees 30-45 m above the drop; low morning sun from the east. Verified (check.mjs, full take flown): take 0-9 s: AGL 34.82..44.7 m, nearest drawn 25.88 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 3.98 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 36.06..44.7 m, nearest drawn 25.97 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 3.98 m/s, LOS blocked 0/27, subject in frame 100%."
+  },
+  {
+   "id": "poi-festival-stone-of-verdantine.02",
+   "site": "poi-festival-stone-of-verdantine",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28308.0,
+     23628.0,
+     60.0
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "nearDistance": 10,
+    "farDistance": 55,
+    "direction": "out",
+    "heightAGL": 4,
+    "minFovDeg": 12,
+    "maxFovDeg": 70,
+    "bearingDeg": 55,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Back away north-east over the bluff top from 10 m to 55 m while zooming in so the stone and its sentinels hold their size and the road valley swells behind them; stay 4 m above the grass and 10 m from the sentinels.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Drone dolly-zoom on the stone: the camera backs off from 10 m to 55 m over the bluff top while the lens narrows, so the stone and sentinels keep their size and the road valley and the far plains swell behind them; morning sun behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 4..9.8 m, nearest drawn 10.43 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 7.07 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 4..9.5 m, nearest drawn 13.95 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 7.07 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.05 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-verdantine.01": "take 0-9 s: AGL 34.82..44.7 m, nearest drawn 25.88 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 3.98 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 36.06..44.7 m, nearest drawn 25.97 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 3.98 m/s, LOS blocked 0/27, subject in frame 100%",
+  "poi-festival-stone-of-verdantine.02": "take 0-10 s: AGL 4..9.8 m, nearest drawn 10.43 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 7.07 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 4..9.5 m, nearest drawn 13.95 m (static 0x937B#0 0x0200039B Master's Sentinel), vmax 7.07 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.05 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

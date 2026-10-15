@@ -1,4 +1,4 @@
-# Techniques — the shot grammar (63 ids)
+# Techniques — the shot grammar (64 ids)
 
 Source: `scene3d/film/shots/{classic,drone}.js` registered by `scene3d/film/shots/index.js`. The catalog in §3–§4
 is generated from `$FILM techniques --json` (2026-10-14); when in doubt run `$FILM techniques [--family=classic|drone|fpv]`
@@ -96,10 +96,10 @@ Energy → speed: low-energy sections favour `classic.*` with `ease: sineInOut` 
 energy favours drone/fpv at 8–14 m/s (`drone.terrain-skim` says keep it believable at 8–14), `ease: linear`, and
 shorter shots (1–2 bars).
 
-<!-- GENERATED SECTION BELOW from `node tools/film/film.mjs techniques --json` (63 techniques, 2026-10-14). -->
+<!-- GENERATED SECTION BELOW from `node tools/film/film.mjs techniques --json` (63 techniques, 2026-10-14; fpv.fpv-run added 2026-10-15). -->
 <!-- Regenerate the catalog when scene3d/film/shots/{classic,drone}.js change; the cheat-sheet above is hand-written, and so are the "Director note" quotes inside entries (keep them when regenerating). -->
 
-## 3. Index (all 63 techniques)
+## 3. Index (all 64 techniques)
 
 Needs: `subject` = the shot must have a point/entity/player subject; `path` = `shot.path`, a `{kind:'path'}` subject or an indoor `route`; `outdoor only` = an ERROR on an indoor site (§1). Capture `realtime` is a hint for moving server-driven subjects: with the registry (the CLI always loads it) the compiler makes such a shot realtime for an entity / player subject and warns when it stays stepped on a point or path subject (see §1).
 
@@ -171,7 +171,7 @@ Needs: `subject` = the shot must have a point/entity/player subject; `path` = `s
 | `drone.hyperlapse-orbit` | Hyperlapse orbit | outdoor only | 15 s · WS | stepped | Passage of time over a landmark or town: sunset into night, a storm rolling in. Use a static subject; moving NPCs would blur. |
 | `drone.vertigo-drone` | Vertigo (drone dolly-zoom) | subject | 8 s · MS | stepped | Unease, epiphany or dread: a character realising the scale of what is behind them, a tower looming. Needs open space along the bearing behind the camera. |
 
-### FPV (`fpv.*`) — 5
+### FPV (`fpv.*`) — 6
 
 | id | name | needs | default dur · framing | capture | when to use |
 |---|---|---|---|---|---|
@@ -180,6 +180,7 @@ Needs: `subject` = the shot must have a point/entity/player subject; `path` = `s
 | `fpv.fpv-gap` | FPV gap | — | 6 s · WS | stepped | Through arches, between tree trunks, under bridges, through a window. Use drone.flythrough for the slow, level cinematic version. |
 | `fpv.fpv-flip` | FPV flip | — | 8 s · WS | stepped | Punctuation on a beat drop, celebration moments and transitions: barrel-roll past a banner or flip over a gate. Roll flips keep the horizon in view longer than pitch flips. |
 | `fpv.fpv-corridor` | FPV corridor | — | 10 s · WS | stepped | Dungeon and interior fly-throughs: down a hallway, round corners, through doorways into a hall. The route's z should already be at camera height (doorway control points at ≈55% of door height). |
+| `fpv.fpv-run` | FPV run | — (racing line: `path` or route) | 30 s · WS | stepped | The long FPV piece: a dungeon run from the entrance drop to the bottom portal, a canyon or town run, with a speed plan (`zones`) and tricks (`tricks`: float, roll, yaw-spin, power-loop, split-s, dive, dip) at the big spaces. |
 
 ## 4. Full catalog
 
@@ -1526,3 +1527,69 @@ Flies a dungeon or building route (ctx.indoor.route, e.g. from planIndoorPath, e
 | `maxBankDeg` | number | `35` | 0 … 70 deg | Largest bank into turns. |
 | `ends` | enum | `"cruise"` | `"cruise"` · `"rest"` | cruise = the take starts and ends already moving (cut in on motion); rest = it starts and ends hovering. |
 
+#### `fpv.fpv-run` — FPV run
+
+*needs: a racing line (`path`, else the indoor route) · default 30 s · framing WS · fov 75° · ease ignored (physics-timed) · capture stepped · tags fpv, run, trick, indoor, dungeon, speed, 90-degree*
+
+A long FPV run along a racing line (ctx.path = `shot.path`, else ctx.indoor.route). The line's corners are filleted (`cornerRadius`) and curvature-smoothed over 0.6·cornerRadius + 0.8 m, then flown as a C² curve. Outdoors it is also lifted `minClearance` above the smoothed terrain. A **speed plan** sets the pace by arc length:
+- cruise `speed` on straights; the duration fit scales it, up to `speedMax`, so the run lasts exactly the shot;
+- `zones` cap the speed between two arc lengths (absolute caps);
+- corners are slowed to v ≤ √(alat·r), and also where the curvature changes fast (a hairpin, a chute);
+- punch and brake at `amax`, jerk-smoothed to ≤ 45 m/s³;
+- a `dive` builds speed at ≈ g down the steep part of the line.
+
+With `ends: "rest"` the run hovers for `startHoldSec` (idle bob), spools up and punches off, and ends settled; with `"cruise"` it cuts in and out at speed.
+
+The camera is a hard-mounted, up-tilted FPV body:
+- the pitch comes from the thrust vector (a punch dips the view, braking flares it, tilt ≤ 60°), plus `uptiltDeg`, mixed with the path's own pitch by `lookAlongPath`;
+- the heading looks `lookAhead` m along the line and turns smoothly through vertical shafts;
+- the bank is coordinated with the turn;
+- seeded throttle bob (`throttleBobM` at `bobHz`, vertical, faded out around tricks), fine wobble (`wobbleDeg`) and prop-wash (`propwashDeg`, when sinking through the craft's own wash and on hard catches) come from the shot seed.
+
+`tricks` are spliced in deterministically with C²-continuous joins (position, velocity and acceleration match the line at both ends) and quaternion-continuous attitude.
+
+**When:** The long FPV piece: racing through a dungeon from its entrance drop to the bottom portal, a canyon or town run with tricks at the big spaces. Give an explicit, offline-verified racing line in `shot.path`, with pass lanes around monsters already baked in. Place tricks only where there is room: a float needs ≥ rise + 1 m of headroom, a loop ≈ 2.1·radius above the line. Slow the tight parts with `zones`. Use `fpv.fpv-corridor` for a short, simple corridor move.
+
+**Pilot bounds:** lateral ±1 m · rise 0.8 m · sink 0.5 m · speed ×0.6–1.1 · distance ×1
+
+| param | type | default | range / values | meaning |
+|---|---|---|---|---|
+| `speed` | number | `8` | 1 … 25 m/s | Cruise speed on straights (outside zones). The duration fit scales it (up to speedMax) so the run lasts exactly the shot. |
+| `speedMax` | number | `16` | 1 … 25 m/s | Highest cruise speed the duration fit may use; a run that still does not fit is time-compressed and reports meta.overspeed. |
+| `amax` | number | `9` | 1 … 13 m/s² | Punch / brake acceleration along the line (the speed profile is jerk-smoothed to ≤ 45 m/s³). |
+| `alat` | number | `12` | 1 … 14 m/s² | Lateral acceleration limit in turns: v ≤ √(alat·r). |
+| `cornerRadius` | number | `2` | 0 … 30 m | Fillet radius of the line's corners (capped at 45% of the adjacent legs); the line is also curvature-smoothed over 0.6·cornerRadius + 0.8 m. |
+| `lookAhead` | number | `5` | 0.5 … 40 m | How far along the line the heading (and the path pitch) looks. |
+| `uptiltDeg` | number | `25` | 0 … 50 deg | FPV camera uptilt above the body's nose: visible on punches, in dives and floats. |
+| `lookAlongPath` | number | `0.55` | 0 … 1 | Camera pitch mix: 0 = pure body attitude + uptilt (thrust-derived), 1 = looks along the path's pitch. |
+| `bankGain` | number | `1.2` | 0 … 3 | Bank multiplier on the coordinated-turn roll (0 = level horizon). |
+| `maxBankDeg` | number | `60` | 0 … 85 deg | Largest bank into turns (smooth tanh saturation). |
+| `throttleBobM` | number | `0.1` | 0 … 0.5 m | Seeded throttle bob amplitude (vertical; faded out around tricks). |
+| `bobHz` | number | `1.1` | 0.1 … 4 Hz | Throttle bob rate. |
+| `wobbleDeg` | number | `0.4` | 0 … 5 deg | Seeded fine attitude wobble (always on). |
+| `propwashDeg` | number | `0.8` | 0 … 8 deg | Prop-wash oscillation amplitude when descending through the craft's own wash and on hard catches. |
+| `startHoldSec` | number | `0.8` | 0 … 30 s | Hover at the start before the punch (ends 'rest'; ≈ 0.4 s of spool-up follows it). |
+| `ends` | enum | `"rest"` | `"rest"` · `"cruise"` | rest = starts hovering (startHoldSec) and ends settled; cruise = starts and ends at speed (cut in on motion). |
+| `minClearance` | number | `1.5` | 0.7 … 50 m | Outdoors only: the line is lifted to stay this high above the smoothed terrain. |
+| `zones` | list | `[]` | ≤ 64 items `{s0, s1, speed}` | Speed plan: caps the speed between arc lengths s0 < s1 (m along the line); outside the zones `speed` (fitted) applies. Zones are absolute caps: the duration fit never raises them. |
+| `tricks` | list | `[]` | ≤ 32 items `{type, s, …}` | Tricks at arc length `s` (m along the line), per type below. Each lands in meta.tricks with its time window, or is skipped with a reason, and in meta.lockWindows. |
+
+**`tricks[]` by type** (common fields: `type`, `s` — required):
+
+| type | fields (default) | what it does |
+|---|---|---|
+| `float` | `rise` (2.5 m; optional), `punchAccel` 8, `catchAccel` 12 (m/s², 7.2…13), `hangSec` (optional), `lookDownDeg` 30 | Punch up, cut the throttle, **true free fall** (a = −g exactly), catch back onto the line (net Δz = 0). Every phase ramps at 45 m/s³. Apex = exactly `rise`. With `hangSec` alone the apex is solved for the hang (≈ 0.6 s at 2.5 m, ≈ 1.4 s at ≈ 8 m). The nose tips `lookDownDeg` toward the landing at the apex. Forward motion continues along the line. A low ceiling (`indoor.ceiling`, checked at s and at the apex) lowers the rise. |
+| `roll` | `turns` 1, `dir` right\|left, `durationSec` 1.1, `rise` 0.3 m | Barrel roll(s) about the view axis while flying the line, with a small pop-up. Stretched so the peak rate stays ≤ 700°/s. |
+| `yaw-spin` | `turns` 1, `dir` right\|left, `durationSec` 1.6 | 360° yaw spin(s) while the craft keeps flying the line (pit tornado). |
+| `power-loop` | `radius` 3 m (1.5…15) | Leaves the line into a vertical loop in the travel plane and re-joins it ≈ 1.56·radius further on. It **adds its time**. Flown at √(1.1·g·radius) (5.7 m/s at 3 m) with clothoid curvature ramps; climbs ≈ 2.05·radius. Needs a near-straight, not-steep stretch and headroom. |
+| `split-s` | `radius` 2.5 m, `dir` right\|left, `rollSec` 0.5 | Half roll to inverted, then a half loop down: it comes out ≈ 2.05·radius lower heading the other way, and **adds its time**. Only where the line itself comes back that way at that spot (within max(0.75, 0.3·radius) m and ≈ 20°), else skipped with the distance found. |
+| `dive` | `pitchDeg` −80 (−90…−30) | Put it at the top of a drop: the nose goes to `pitchDeg` (the camera shows pitchDeg + uptiltDeg) and the speed builds at ≈ g down the steep part after s. The run's corners at the top and bottom of the drop still cap the speed at √(alat·r), so give them a larger radius for a faster drop. |
+| `dip` | `depth` 1 m, `durationSec` 1.6 | Skims `depth` below the line (C² bump), lengthened so its jerk stays flyable; shallower when the floor (`indoor.floor` / ground) is close. |
+
+> **Director note** (hand-written):
+> - Arc lengths are measured on the smoothed line the technique flies, not on the raw polyline (each 90° fillet of radius r shortens it by ≈ 0.43·r). Compute them with `fpvRunLine(points, params).nearestS([x, y, z])` from `scene3d/film/shots/drone.js` (pure, offline).
+> - `meta.tricks[i]` = `{type, s, t0, t1, …}`, or `{skipped: true, reason}` with `t0 = t1 = null`. `meta.lockWindows` = the merged trick windows: the take player freezes the pilot residual and pins speedScale = 1 inside them.
+> - `meta.validate = {maxAngularSpeedDeg: 900}`: validateTrajectory honours it by default, because loops and rolls exceed the default 240°/s.
+> - `meta.throttleAt(t)` gives |thrust|/g: ≈ 1 hovering, ≈ 0 in free fall, > 1 on punches and catches.
+> - Also in meta: `overspeed`, `cruiseSpeed`, `peakSpeed`, `lengthM`, `startHoldSec`.
+> - Flown through the `fpv` preset, the synthetic test runs with every trick track within ≈ 0.1 m (`tests/film_fpv_tricks.test.mjs`, `tests/film_shots_fpv_run.test.mjs`).

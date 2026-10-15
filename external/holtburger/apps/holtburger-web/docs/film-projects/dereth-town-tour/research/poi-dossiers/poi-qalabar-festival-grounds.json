@@ -1,0 +1,194 @@
+{
+ "name": "Qalaba'r Festival Grounds",
+ "title": "74.2S, 21.9E - Qalaba'r Festival Grounds",
+ "siteId": "poi-qalabar-festival-grounds",
+ "summary": "One of the Festival Grounds, a short run east of Qalaba'r (acpedia: two shopkeepers in tents, two chessboards, target drudges, a fountain). In the kit: two avenues of dark wooden archways (x 29718 and 29733-29738, 3.9 m) lined with blue glass lamps, two octagon towers with red flags, two chessboard platforms, benches, stone monuments, a fountain and straw/wood/oak target drudges on flat grass at z 108, below the Wintersebb knoll.",
+ "landmarks": [
+  {
+   "name": "Arch avenues (0x0200004F)",
+   "pos": [
+    29726.0,
+    6622.0,
+    108.0
+   ],
+   "heightM": 3.9,
+   "note": "18 wooden archways in two rows with 17 blue lamps."
+  },
+  {
+   "name": "Octagon towers with flags",
+   "pos": [
+    29702.5,
+    6577.0,
+    108.0
+   ],
+   "heightM": 8.0,
+   "note": "Two 0x01000F06 towers (top 112.5) with red flags to 116."
+  },
+  {
+   "name": "Chessboard platforms",
+   "pos": [
+    29724.0,
+    6660.0,
+    108.3
+   ],
+   "heightM": 1.0,
+   "note": "0x01002C0C platforms with Chess Board spawns at (29724,6660) and (29748,6588)."
+  },
+  {
+   "name": "Fountain",
+   "pos": [
+    29715.9,
+    6575.9,
+    108.0
+   ],
+   "heightM": 2.0,
+   "note": "Fountain spawn (gazetteer fountain-near-qalabar)."
+  }
+ ],
+ "site": {
+  "id": "poi-qalabar-festival-grounds",
+  "name": "Qalaba'r Festival Grounds",
+  "teleport": "@teleloc 0x9B220005 10.00 97.00 108.50 1 0 0 0",
+  "anchor": [
+   29726.0,
+   6622.0,
+   108.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc on the open ground 44 m east of the arch avenues (ground + 0.5, nothing within 10 m); the gazetteer fountain-near-qalabar teleport lands on the fountain spawn."
+ },
+ "insertAfter": "qalabar",
+ "insertBefore": "khayyaban",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -74.2,
+   "ew": 21.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 574,
+  "coveredBy": "site:qalabar",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/74_2S_21_9E_Qalaba_r_Festival_Grounds.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-qalabar-festival-grounds.01",
+   "site": "poi-qalabar-festival-grounds",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29726.0,
+     6622.0,
+     108.0
+    ],
+    "height": 4.0,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 95,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "distance": 70,
+    "thirds": "center",
+    "riseM": 12,
+    "swingDeg": 18,
+    "armM": 14
+   },
+   "standingOrder": "Jib up 12 m and swing 18 degrees from 70 m east of the grounds over the arch avenues and chessboard platforms to the Wintersebb knoll beyond; keep 15 m from every tent, flag and arch, wandering drudges may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Jib from the east edge of the grounds: a slow 12 m rise with an 18 degree swing lifts over the arch avenues, chessboard platforms and flags to show the Wintersebb knoll and its stone 90 m beyond; morning sun from behind the camera. Verified (check.mjs, full take flown): take 0-9 s: AGL 11.74..23.7 m, nearest drawn 17.98 m (static 0x9B22#11 0x020007BB), vmax 2.3 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 12.5..23.4 m, nearest drawn 18.49 m (static 0x9B22#11 0x020007BB), vmax 2.3 m/s, LOS blocked 0/27, subject in frame 100%."
+  },
+  {
+   "id": "poi-qalabar-festival-grounds.02",
+   "site": "poi-qalabar-festival-grounds",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": 5.0
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29726.0,
+     6622.0,
+     108.0
+    ],
+    "height": 4.0,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 24,
+    "speed": 4.5,
+    "headingDeg": 275,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "maxPitchRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 6
+   },
+   "standingOrder": "Fly west 24 m above the Festival Grounds straight over the two avenues of wooden arches, blue lamps and flags, gimbal tracking them through vertical toward the Wintersebb knoll; stay 12 m above every flag pole, target drudges may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Overhead crossing of the Qalaba'r Festival Grounds: two avenues of dark wooden archways with blue glass lamps, red flags on the octagon towers and the chessboard platforms pass beneath, the gimbal tracking the avenue centre through vertical (yaw-slew 45 deg/s) and ending on the Wintersebb knoll; the low morning sun is behind the lens at the start, so arches and flags cast long west-pointing shadows across the grass. Verified (check.mjs, full take flown): take 0-10 s: AGL 17.69..24 m, nearest drawn 20.69 m (static 0x9A22#9 0x0200004F), vmax 4.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 22.73..24 m, nearest drawn 20.69 m (static 0x9A22#9 0x0200004F), vmax 4.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.51 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-qalabar-festival-grounds.01": "take 0-9 s: AGL 11.74..23.7 m, nearest drawn 17.98 m (static 0x9B22#11 0x020007BB), vmax 2.3 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 12.5..23.4 m, nearest drawn 18.49 m (static 0x9B22#11 0x020007BB), vmax 2.3 m/s, LOS blocked 0/27, subject in frame 100%",
+  "poi-qalabar-festival-grounds.02": "take 0-10 s: AGL 17.69..24 m, nearest drawn 20.69 m (static 0x9A22#9 0x0200004F), vmax 4.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 22.73..24 m, nearest drawn 20.69 m (static 0x9A22#9 0x0200004F), vmax 4.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.51 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

@@ -1,0 +1,131 @@
+{
+ "name": "East Yaraq Outpost",
+ "title": "East Yaraq Outpost",
+ "siteId": "poi-east-yaraq-outpost",
+ "summary": "Old starter outpost near Yaraq that Martine never attacked; new arrivals now portal straight into Yaraq (acpedia). In the kit it sits in a sand gully below a mesa: a green-lit three-storey Empyrean hall with tapered roof (0x010014C3, top 54.9), an octagon tower, a cottage, the Life Stone with its sign and a glowing red stone frame, and on the mesa top 120 m south-west a 31 m spire tower (top 110.8).",
+ "landmarks": [
+  {
+   "name": "Empyrean hall (0x010014C3)",
+   "pos": [
+    24780.0,
+    19308.0,
+    30.0
+   ],
+   "heightM": 24.9,
+   "note": "Green lamps at 54."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    24787.2,
+    19348.0,
+    24.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-yaraq-8164."
+  },
+  {
+   "name": "Mesa spire tower (0x01001117)",
+   "pos": [
+    24684.0,
+    19260.0,
+    80.0
+   ],
+   "heightM": 30.8,
+   "note": "On the mesa top, top 110.8."
+  }
+ ],
+ "site": {
+  "id": "poi-east-yaraq-outpost",
+  "name": "East Yaraq Outpost",
+  "gazetteerId": "life-stone-near-yaraq-8164",
+  "teleport": "@teleloc 0x81640007 19.2176 148.024 24 0.614668 0 0 0.788786",
+  "anchor": [
+   24770.0,
+   19335.0,
+   26.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.79,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-yaraq-8164 (the outpost Life Stone, 21 m from the anchor)."
+ },
+ "insertAfter": "al-arqas",
+ "insertBefore": "yaraq",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -21.3,
+   "ew": 1.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 480,
+  "coveredBy": "shot:yaraq.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Yaraq_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-yaraq-outpost.01",
+   "site": "poi-east-yaraq-outpost",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24780.0,
+     19308.0,
+     30.0
+    ],
+    "height": 25,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 45,
+    "azimuthRef": "compass",
+    "elevationDeg": -14,
+    "distance": 60,
+    "thirds": "center",
+    "riseM": 14,
+    "swingDeg": -16,
+    "armM": 14
+   },
+   "standingOrder": "Jib up 14 m from 4 m above the sand 60 m north-east of the green-lit Empyrean hall, swinging 16 degrees as the spire tower on the mesa behind catches the low sun; keep 30 m from the Life Stone sign, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Crane at East Yaraq Outpost, the one starter outpost Martine never destroyed: rising from near the Life Stone, the green-lit Empyrean hall and, behind it, the spire tower on the mesa top (z 80-111) are backlit by the low golden sun for silhouettes and rim light. Verified (check.mjs, full take flown): take 0-9 s: AGL 5.98..20 m, nearest drawn 32.24 m (spawn LIFESTONES SIGN), vmax 2.65 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 6.85..19.6 m, nearest drawn 32.24 m (spawn LIFESTONES SIGN), vmax 2.65 m/s, LOS blocked 0/27, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-east-yaraq-outpost.01": "take 0-9 s: AGL 5.98..20 m, nearest drawn 32.24 m (spawn LIFESTONES SIGN), vmax 2.65 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 6.85..19.6 m, nearest drawn 32.24 m (spawn LIFESTONES SIGN), vmax 2.65 m/s, LOS blocked 0/27, subject in frame 100%"
+ }
+}

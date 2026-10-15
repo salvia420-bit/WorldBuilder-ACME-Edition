@@ -26,7 +26,8 @@ the shooting schedule (grouped by site).
 | `defaults.pilot` | `{mode, …}` | `{mode: "jev"}` | pilot config merged under every shot's `pilot` |
 | `defaults.look` | look | `{}` | plan-wide look (merged under site and shot looks) |
 | `defaults.framing` / `defaults.ease` | framing / easing name | null | fallbacks for shots |
-| `edit.fadeInSec` / `edit.fadeOutSec` | seconds 0…10 | 0 / 0 | fade from / to black at the very start / end |
+| `edit.fadeInSec` / `edit.fadeOutSec` | seconds 0…10 | 0 / 0 | fade from / to black at the very start / end (with `edit.tail`: `fadeOutSec` fades the last MUSIC shot instead, element-local) |
+| `edit.tail` | `{from, gapSec?, fadeOutSec?}` or the `from` shot id | absent; `gapSec` 1.5, `fadeOutSec` 3 | a **silent tail** appended after the music (§5): the shots from `from` (never the first shot) to the end; `gapSec` 0…10 of black after the music's fade-out; `fadeOutSec` 0…10 = the program fade-out on the last tail shot. Unknown tail keys are errors; any other `edit` key warns |
 | `sites` | array, ≥ 1 | — | each site = one teleport |
 | `shots` | array, ≥ 1 | — | in EDIT order |
 | `notes`, `script`, `meta` | any | — | accepted, ignored. Any other top-level key → warning ("did you mean") |
@@ -44,6 +45,7 @@ the shooting schedule (grouped by site).
 | `interiorLb` | landblock id \| null | the cell's landblock when indoor | readiness: wait for that landblock's EnvCells |
 | `settleSec` | seconds 0…60 | 0 | extra pre-roll before EVERY take here (particles/foliage warm-up) |
 | `ready` | `{settleSec 0…120, timeoutSec 1…600}` | `{3, 90}` | the readiness gate after the teleport |
+| `prime` | `["@…", …]` ≤ 12 | none | admin commands `film shoot` sends BEFORE the site teleport, each followed by its own readiness gate (`ready` settle/timeout + the `@teleloc` cell). Use it to walk the hidden player down a dungeon so the server streams every creature on the route: ACE only sends the creatures in the player's current cell's visible set (PVS), so a run filmed far from the player shows empty halls. The site `teleport` then stands the player where it should stay (e.g. near the bottom of the run, ≥ 6 m from portals). Each command is checked like `teleport` (`@…`, one line, ≤ 200 chars; a non-teleport verb warns). A refused or not-ready prime only warns; each is an `event: "prime"` row in `reports/shoot-log.jsonl` and the site's take reports get `prime: {sent, ready, failed}`. `estimateShootTime` counts each as a teleport + settle |
 | `look` | look | `{}` | applies to every shot at this site |
 | `name`, `gazetteerId`, `notes`, `tags` | strings | name = id | informational. Other keys → warning. |
 
@@ -66,13 +68,15 @@ landblock 0x0000 (local coordinates pasted as world — use `{cell, local}`); `z
 | `ease` | easing name | `defaults.ease` | `linear, sineIn, sineOut, sineInOut, quadIn, quadOut, quadInOut, cubicIn, cubicOut, cubicInOut, quintInOut, expoInOut, smoothstep, smootherstep` |
 | `seed` | uint32 | `hashString(title + "\|" + id)` | deterministic shake/noise |
 | `bounds` | `{maxLateral?, maxRise?, maxSink?, minSpeedScale?, maxSpeedScale?, maxDistanceScale?}` | null = the technique's `defaultBounds` | override of how far JEV may push this shot (`ShotSpec.bounds`, below) |
+| `trim` | `{takeSec, inSec}` | null | fly the move as a take of `takeSec` s (0 < s ≤ 600; the technique builds it at that length) and cut the edit from `inSec` into it — a shorter edit that keeps the move's speed and shows its best stretch (§5) |
 | `subject` | §4 or `"player"` | null | what the camera frames |
-| `path` | `[[x,y,z], …]` ≥ 2 | null | `ShotContext.path` (canyon-run, flyover routes…) |
+| `path` | `[[x,y,z], …]` ≥ 2 | null | `ShotContext.path` (canyon-run, flyover routes…); allowed at an indoor site too — an explicit, offline-verified racing line instead of a planned `route` |
 | `route` | `{fromCell, toCell}` EnvCell ids | null | indoor route: the page plans a doorway-to-doorway path (`planIndoorPath`) → `ctx.indoor.route`; on an outdoor site → warning |
 | `transition` | §6 | `defaults.transition` | INTO this shot |
 | `standingOrder` | one sentence, one line, ≤ 300 chars | null | read by JEV every decision; missing → warning; two sentences / newline / control chars / too long → error |
 | `goal` | string | null | optional short goal passed to the pilot state (`shot.goal`) |
-| `pilot` | `{mode, …}` | `defaults.pilot` | §7 |
+| `pilot` | `{mode, fade?, …}` | `defaults.pilot` | §7 |
+| `overlay` | `{props: {style, opacity?, tint?}}` | null | the page's **lens overlay**: FPV propellers at the top of the frame (hard-mounted, drawn after every post effect, spun from the drone's throttle on the film clock). `style` `"freestyle"` \| `"cinewhoop"` (required), `opacity` 0…1, `tint` `"#rrggbb"`. Reaches the page as `take.overlay` (null when absent) and draws only on a page booted with `?filmProps=on` (`film boot` always adds it). Unknown keys warn |
 | `capture` | `{mode}` or `"stepped"`/`"realtime"` | realtime (`auto: true`) when the actor moves, an entity/player subject is `moving`, or the technique's capture hint is `realtime` and the subject is an entity or the player; else `format.capture` | explicit always wins; stepped + moving subject → warning; a realtime-hint technique left stepped on a point subject → warning |
 | `actor` | §8 | null | player-as-actor cue (shows the avatar for the take) |
 | `look` | look (§9) | `{}` | merged: defaults ← site ← shot |
@@ -133,8 +137,33 @@ actor `moveTo`, which still warns.
   (warning); at or before the previous shot's START is an error (shots must be in edit order).
 - Every take is longer than its edit length: `takeDuration = editDuration + handleIn + handleOut`. Each take is
   preceded by `preRollSec = max(6/fps, 0.25) + site.settleSec` of rendered, never-recorded frames.
+- **Trim** (`trim: {takeSec, inSec}`): to shorten a shot WITHOUT speeding up its move, keep the move's length in
+  `takeSec` and give the shorter edit length in `duration`; the take is flown at `takeSec` (so every frame matches
+  the full-length move) and the edit is the window from `inSec`: `handleIn = inSec`,
+  `handleOut = takeSec − inSec − edit`, and `assemble`/the EDL cut that window — plus any dissolve material around
+  it — out of the one take. A window that would leave too little head or tail for a dissolve is moved inside the
+  take (warning `trim.inSec moved from … to …`); an edit + transition handles longer than `takeSec` is an error
+  (`PLAN_INVALID`: shorten the edit — a longer take would slow the move). Validation errors: not an object, an
+  unknown key, `takeSec` outside (0, 600], `inSec` < 0 or ≥ `takeSec`, a `{sec}` duration longer than `takeSec` (a warning
+  when the plan has a song: the beat grid may still snap the edit inside the take — compile decides).
+  The dry build and the page build the trajectory at `takeSec`. The rendered take is `takeSec` long, so shooting
+  time follows `takeSec`, not the edit length. The timeline item reports `trim: {takeSec, inSec, requestedInSec}`.
+- **Silent tail** (`edit.tail: {from, gapSec = 1.5, fadeOutSec = 3}`): to append footage AFTER the song (an
+  epilogue, a long FPV run) without moving a single cut of the music video. The shots before `from` are the MUSIC
+  PART and compile exactly as they would without the tail (same items, frames and handles). Then:
+  `edit.fadeOutSec` becomes an element-local fade-out on the last music shot (`items[k−1].fadeOut`); `gapSec` of
+  black follows (frame-quantised); the tail starts at `musicEnd + gapSec`. Tail shots are **exact seconds** (`snap:
+  "none"`, no section; `{beats}`/`{bars}` or a `start` there is an error; a trimmed tail shot's `{sec}` longer than
+  its `takeSec` is an error even with a song). A non-cut transition INTO `from` is an element-local fade-in from
+  black (`fadewhite`: white), `items[k].fadeIn`, with no handles — the finale's `trim` window never moves.
+  Transitions between tail shots are ordinary. The program fade-out is `tail.fadeOutSec` on the last shot. The
+  timeline gains `musicEnd: {sec, frame, fadeOutSec}`; the "past the end of the song" warning compares `musicEnd`.
+  `assemble` cuts the song at `musicEnd`, fades it there and pads it with silence to the program length
+  (`atrim → afade → apad=whole_dur`, `-shortest` kept); the EDL's audio event ends at `musicEnd`. Without
+  `edit.tail`, shots after the song are beat-snapped to an imaginary grid, the music fade moves to the program end,
+  a fade into them steals the finale's handles, and the picture is cut off where the audio ends — always use the tail.
 - The schedule groups shots by site, orders sites greedily by nearest anchor starting with the first site in edit
-  order, and keeps edit order inside a site. Prewarm points = the anchor (+ point/path subjects, `path` and
+  order, and keeps edit order inside a site. A site's `prime` commands ride on its schedule entry. Prewarm points = the anchor (+ point/path subjects, `path` and
   `actor.moveTo` outdoors), radius 96 m.
 
 ## 6. Transitions (INTO a shot)
@@ -150,11 +179,12 @@ the first shot it is a fade-in from black/white. Too little room → shortened, 
 ## 7. Pilot (`defaults.pilot`, `shots[].pilot`)
 
 `mode`: `"jev"` (JEV steers; code policy on any error), `"code"` (deterministic code policy, no JEV calls),
-`"shadow"` (code steers, JEV is asked too and agreement is logged). Only `mode` is validated; these optional keys
-pass through to the page pilot (`createPilot`, `createResidualMapper`, the take player):
+`"shadow"` (code steers, JEV is asked too and agreement is logged). `mode` and `fade` are validated; these optional
+keys pass through to the page pilot (`createPilot`, `createResidualMapper`, the take player):
 
 | Key | Default | Meaning |
 |---|---|---|
+| `fade` | the pilot's own rules | `"never"`: the pilot may fade nothing in this take (the mapper's `maxFadeIds` = 0 — use it for a monster run: creatures must stay visible); `"auto"`: the default rules (the page never fades creatures, NPCs or players). Any other value is an error |
 | `decisionHz` | 5 | max decision rate (realtime takes) |
 | `maxInFlight` | 2 | pipelined JEV requests (realtime) |
 | `minDispatchSec` | 0.12 | min gap between dispatches |
@@ -195,11 +225,17 @@ reference; bad teleport (not `@…`, multi-line, > 200 chars); bad anchor/cell/l
 range; malformed technique id or unknown technique; bad params; missing subject/path for a technique that needs one;
 an outdoor-only technique at an indoor site, or an indoor technique at an outdoor site without a shot `route` (the
 page's build would throw MISSING_CONTEXT after the teleport); bad duration/start; bad subject/path/route; bad `bounds` (unknown key, value out of its range); bad transition/xfade;
-invalid standing order; bad actor fields; bad look values (incl. `dof.focusRange` ≤ 0, a negative
-`dof.focusDistance`/`bokehScale`, non-boolean `dof.enabled`, malformed `dof.target`).
+bad `trim` (§5); invalid standing order; bad actor fields; bad look values (incl. `dof.focusRange` ≤ 0, a negative
+`dof.focusDistance`/`bokehScale`, non-boolean `dof.enabled`, malformed `dof.target`); `edit.tail` not an object, an
+unknown tail key, `from` not a shot id / the first shot, `gapSec`/`fadeOutSec` outside 0…10, a `{beats}`/`{bars}`
+duration or a `start` on a tail shot; `site.prime` not an array, > 12 commands, a command that is not `@…` / multi-line
+/ > 200 chars; `overlay` not an object, `props` not an object, `props.style` not `freestyle`/`cinewhoop`,
+`props.opacity` outside 0…1, `props.tint` not `#rrggbb`; `pilot.fade` not `never`/`auto`; a param of a type the
+schema does not check itself (a technique's `list`, e.g. zones / tricks) that the registry's own param check rejects
+(the error is at `shots[i].params.<name>` with the registry's message).
 
-Warnings (exit 0, read them): missing `version`/`title`; unknown keys anywhere (incl. `look.dof`); unusual teleport
-verb; suspicious outdoor anchor; indoor site without `cell`; an indoor technique on an outdoor site whose shot carries
+Warnings (exit 0, read them): missing `version`/`title`; unknown keys anywhere (incl. `look.dof`, `edit`,
+`overlay`, `overlay.props`); unusual teleport or prime verb; suspicious outdoor anchor; indoor site without `cell`; an indoor technique on an outdoor site whose shot carries
 its own `route`; route on an outdoor site; beats/bars/musical start without `plan.song`; missing standing order; stepped capture for a
 moving actor/entity/player; a player subject with `moving: false` whose actor walks; a realtime-hint technique (tracking/chase/lead/side-track/top-down-track) captured stepped
 because its subject is a point; a `dof.target` that looks like AC world coordinates; an unused site; a failed
@@ -215,23 +251,30 @@ already failed the indoor/outdoor technique check (the page refuses that build t
 
 Compile adds: `SONG_REQUIRED`, `SONG_INVALID`, a start before the edit begins, a start at/before the previous
 shot's start, a shot rounding to 0 frames (errors); beat-snap changes, gaps, overlaps/trims, transitions shortened or
-turned into cuts, `start.beat`/`start.bar` past the song (extrapolated), the edit running past the song's end,
-fade-out shortened (warnings).
+turned into cuts, `start.beat`/`start.bar` past the song (extrapolated), the edit — with a tail, the music part —
+running past the song's end, fade-out (or music fade-out) shortened (warnings).
 
 ## 11. What compile produces (`timeline.json`)
 
 `{version:1, title, kind, fps, width, height, duration, frames, song:{file, analysis, offsetSec, bpm, durationSec},
-fadeIn, fadeOut, items:[…], schedule:[…], warnings, source:{planHash}}`.
+fadeIn, fadeOut, musicEnd?, items:[…], schedule:[…], warnings, source:{planHash}}`. `musicEnd: {sec, frame,
+fadeOutSec}` exists only with `edit.tail` (where the music part ends; `duration`/`frames` include the gap and the
+tail). A plan without a tail, prime or overlay compiles to the same timeline as before these existed (plus
+`take.overlay: null`).
 
 - `items[]` (edit order): `shotId, siteId, editIn, editOut, editDuration, editInFrame, editOutFrame, takeDuration,
-  takeFrames, handleIn, handleOut, transitionIn, preRollSec, technique, family, captureMode, snap
-  (none|beat|bar|section), explicitStart, requested, section:{i, label, role}, lyric, notes, take`.
+  takeFrames, handleIn, handleOut, transitionIn, [fadeIn | fadeOut: {durationSec, color}, element-local, only on
+  the first tail shot / the last music shot], preRollSec, technique, family, captureMode, snap
+  (none|beat|bar|section), explicitStart, requested, trim ({takeSec, inSec, requestedInSec} | null), section:{i,
+  label, role}, lyric, notes, take`.
 - `item.take` is exactly what `window.__film.prepare(take)` receives: `shotId, siteId, technique, family, spec
   (ShotSpec with duration = takeDuration, + `bounds` with the shot's non-null override keys when set), subject, path,
   route, standingOrder, goal, pilot, capture:{mode, fps, width, height} (the mode after the capture-hint default),
-  look (merged), actor, cell, indoor, anchor (world), editOffsetSec (= handleIn), preRollSec, showAvatar`.
-- `schedule[]` (shooting order): `siteId, name, teleport, anchor, cell, indoor, travelM, ready:{lbKeys (uint32),
-  interiorLb, settleSec, timeoutSec}, prewarm:{points, radius}, shots:[ids], takeSec`.
+  look (merged), actor, cell, indoor, anchor (world), editOffsetSec (= handleIn), preRollSec, showAvatar, overlay
+  (the shot's `overlay` or null)`. `pilot.fade` reaches the page inside `pilot`.
+- `schedule[]` (shooting order): `siteId, name, teleport, prime? (only when the site has one), anchor, cell, indoor,
+  travelM, ready:{lbKeys (uint32), interiorLb, settleSec, timeoutSec}, prewarm:{points, radius}, shots:[ids],
+  takeSec`.
 
 ## 12. A complete, verified example
 
@@ -390,3 +433,8 @@ chorus (`start:{section:2}`), dungeon takes get 2.25 s pre-roll (0.25 + `settleS
 - `"dof": {"focusRange": 0}` for "razor thin" → error; use a small positive value such as `0.5`.
 - `bounds` keys copied from techniques.md prose (`lateral`, `rise`) → error; the keys are `maxLateral`, `maxRise`,
   `maxSink`, `minSpeedScale`, `maxSpeedScale`, `maxDistanceScale`.
+- Shots appended after the song WITHOUT `edit.tail` → beat-snapped past the song, the music fade lands on the last
+  shot, a fade into them moves the finale's window, and `assemble` truncates the picture at the end of the audio.
+  Use `edit.tail` (§5).
+- A dungeon run filmed hundreds of metres from the hidden player → the creatures there are never sent (ACE PVS).
+  Give the site a `prime` list (§2) and make its `teleport` the place the player should stand during the take.

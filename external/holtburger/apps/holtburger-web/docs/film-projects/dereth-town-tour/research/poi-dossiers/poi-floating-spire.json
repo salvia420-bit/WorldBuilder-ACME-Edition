@@ -1,0 +1,134 @@
+{
+ "name": "Floating Spire",
+ "title": "Floating Spire",
+ "siteId": "poi-floating-spire",
+ "summary": "A floating Advocate tower hanging above a forested hilltop near Fort Tethana. It can only be entered by a portal from The Floating City's Lost Chamber, and a random Direlands portal waits inside. In the kit the hill rises to z 440 among pines, and the spire's portal spawns sit at z 508.8. The spire's own landblock (0x287A) has no WBT statics, so its shape is taken from the identical floating Advocate Spire at the Humming Crystal (0x01001776, 18.7 x 18.7 x 35.2 m). That puts it at about z 490-525, roughly 50 m above the hilltop.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -3.7,
+   "ew": -69.2
+  },
+  "mapWorld": [
+   7860.0,
+   23580.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Floating_Spire.txt",
+  "coveredDistM": 1356,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Floating Advocate tower (estimated)",
+   "pos": [
+    7860,
+    23580,
+    490
+   ],
+   "heightM": 35,
+   "note": "Not in the kit: Direlands Desert Northeast Portal at (7860,23584,508.8). Dungeon teleloc cell 0x287A0100 at z 500."
+  },
+  {
+   "name": "Hilltop",
+   "pos": [
+    7850,
+    23578,
+    440
+   ],
+   "heightM": 0,
+   "note": "Summit flat at z 440, pines all around (default bake)."
+  }
+ ],
+ "site": {
+  "id": "poi-floating-spire",
+  "name": "Floating Spire",
+  "gazetteerId": "direlands-desert-northeast-portal",
+  "teleport": "@teleloc 0x297A001C 78 76 362.2 1 0 0 0",
+  "anchor": [
+   7860,
+   23580,
+   440
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.69,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc in loaded landblock 0x297A at (7950,23500), ground 361.7, 16.5 m from the nearest tree. The gazetteer's direlands-desert-northeast-portal teleloc is inside the spire."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-floating-spire.01",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7860,
+     23580,
+     490
+    ],
+    "height": 35,
+    "radius": 10
+   },
+   "params": {
+    "azimuthDeg": 60,
+    "azimuthRef": "compass",
+    "elevationDeg": -38,
+    "distance": 115,
+    "fromDeg": -34,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "Locked off 58 m above the forested slope east-north-east of the hill, tilt up from the summit to the Advocate tower floating 50 m above it against the late sun; no camera movement.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Backlit silhouette: the lens hovers 58 m above the pine-covered slope east-north-east of the hill and 33 m over the crowns. It is locked off and tilts from 26 deg below the subject up to it: the forested summit (z 440), then the Advocate tower floating about 50 m above it, black against the low afternoon sun. UNVERIFIED GEOMETRY: the spire's landblock 0x287A has no WBT statics in the kit. Its position comes from its portal spawn (7860, 23584, 508.8) and its size from the identical floating Advocate Spire at the Humming Crystal (model 0x01001776, 18.7 x 18.7 x 35.2 m), so the subject is assumed at z 490-525. The camera is in the fully loaded landblock 0x297B, 115 m from the spire. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 58.28..58.3 m, nearest 24.49 m (scenery-default 0x020002DB@7957,23606), vmax 0 m/s, LOS blocked 0/37, in frame 76%, water 0%, retail-bake tree 24.1 m (not drawn by the default bake); edit 2-7.5s: AGL 58.28..58.3 m, nearest 24.49 m (scenery-default 0x020002DB@7957,23606), vmax 0 m/s, LOS blocked 0/23, in frame 96%, water 0%, retail-bake tree 24.1 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-floating-spire.01",
+   "technique": "classic.tilt",
+   "rank": 2,
+   "check": "take 9s: AGL 58.28..58.3 m, nearest 24.49 m (scenery-default 0x020002DB@7957,23606), vmax 0 m/s, LOS blocked 0/37, in frame 76%, water 0%, retail-bake tree 24.1 m (not drawn by the default bake); edit 2-7.5s: AGL 58.28..58.3 m, nearest 24.49 m (scenery-default 0x020002DB@7957,23606), vmax 0 m/s, LOS blocked 0/23, in frame 96%, water 0%, retail-bake tree 24.1 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5.5,
+ "techniques": [
+  "classic.tilt"
+ ]
+}

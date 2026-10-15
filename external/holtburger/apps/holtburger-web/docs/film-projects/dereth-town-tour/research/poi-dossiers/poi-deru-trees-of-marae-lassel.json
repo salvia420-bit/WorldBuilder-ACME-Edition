@@ -1,0 +1,195 @@
+{
+ "name": "Deru Trees of Marae Lassel",
+ "title": "Deru Trees of Marae Lassel",
+ "siteId": "poi-deru-trees-of-marae-lassel",
+ "summary": "The three talking Deru Trees (Skuld, Urd and Verdandi) on the north-east Marescent Plateau at 51.9N 72.7W, which T'thuun assaulted. They are giant 'Tall Tree' NPC weenies (setup 0x020003A1 at scale 0.8, so about 50 m tall with crowns about 25 m across) at (6998,36922), (6998,36904) and (7021,36926), on an olthoi-ground rise at z 134. FX emitters run up their trunks. Ferns, a mossy diamond rock, T'thuun tentacles and eyestalks, and insect remains surround them, and Marae invasion generators are nearby. The trees are ACE entities, so the kit does not model them; their clearance below is computed by hand.",
+ "landmarks": [
+  {
+   "name": "Deru tree (Tall Tree 10930)",
+   "pos": [
+    6998.1,
+    36903.8,
+    135.5
+   ],
+   "heightM": 50,
+   "note": "ACE NPC, setup 0x020003A1 at scale 0.8."
+  },
+  {
+   "name": "Deru tree (Tall Tree 10931)",
+   "pos": [
+    6998.4,
+    36921.9,
+    134.8
+   ],
+   "heightM": 50,
+   "note": "ACE NPC."
+  },
+  {
+   "name": "Deru tree (Tall Tree 10932)",
+   "pos": [
+    7020.8,
+    36925.7,
+    134.0
+   ],
+   "heightM": 50,
+   "note": "ACE NPC."
+  },
+  {
+   "name": "Mossy diamond rock",
+   "pos": [
+    7013.8,
+    36916.6,
+    134.0
+   ],
+   "heightM": 5.8,
+   "note": "0x0100424B among the trees."
+  }
+ ],
+ "site": {
+  "id": "poi-deru-trees-of-marae-lassel",
+  "name": "Deru Trees of Marae Lassel",
+  "teleport": "@teleloc 0x24C00021 118.0 16.0 125.8 1 0 0 0",
+  "anchor": [
+   7006.0,
+   36917.0,
+   134.5
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.57,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on open olthoi ground 40 m south-east of the three Deru trees (ground 125.3, >= 8 m from the nearest rock and pine); the gazetteer's nearest outdoor entry is the Ancient Empyrean Grotto portal 183 m north."
+ },
+ "insertAfter": "sanamar-royal-hall",
+ "insertBefore": "ahurenga",
+ "acpedia": {
+  "categories": [
+   "Northwest POI",
+   "Deity Character",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": 51.9,
+   "ew": -72.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2243,
+  "coveredBy": "shot:timaru.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Deru_Trees_of_Marae_Lassel.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-deru-trees-of-marae-lassel.02",
+   "site": "poi-deru-trees-of-marae-lassel",
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.0,
+     8.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "MS",
+   "fov": 70,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7014.0,
+     36884.0,
+     131.3
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 6.04
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 24,
+    "lookYawDeg": 0,
+    "advanceM": 3,
+    "bobM": 0.02,
+    "stepHz": 1.6,
+    "turnLag": 0.5
+   },
+   "standingOrder": "A traveller's eyes 33 m south of the three Deru trees, looking up their 50 m trunks into the crowns while creeping 3 m forward; keep 25 m from every trunk, the ferns stay below the frame.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "POV of discovery. A traveller's eyes (1.66 m) stand 33 m south of the three Deru trees, look 24 deg up into their crowns and creep 3 m forward with a slight gait. The subject is the camera, so the subject-in-frame figure is 0 % by design. The kit's projection of the three crowns (z 159-160) gives 100 % in frame over the take and the window (proj.mjs: NDC x -0.30 to +0.31, y +0.25 to +0.81). The nearest trunk is 25 m away, 13 m outside its crown. Verified (check.mjs, full take flown): take 0-9 s: AGL 0.94..1.6 m, nearest drawn 12.22 m (static 0x24C0#2 0x02000254), vmax 0.52 m/s, LOS blocked 0/37, subject in frame 0%; edit 1.5-7.5 s: AGL 0.97..1.5 m, nearest drawn 12.41 m (static 0x24C0#2 0x02000254), vmax 0.52 m/s, LOS blocked 0/25, subject in frame 0%."
+  },
+  {
+   "id": "poi-deru-trees-of-marae-lassel.01",
+   "site": "poi-deru-trees-of-marae-lassel",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7012.0,
+     36916.0,
+     134.0
+    ],
+    "height": 50,
+    "radius": 8
+   },
+   "params": {
+    "radius": 70,
+    "heightAGL": 40,
+    "revolutions": 0.1,
+    "direction": "cw",
+    "bearingDeg": 238,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Circle slowly clockwise from west-south-west to west 70 m out and 14 m above the canopy, the three giant Deru trees towering over the plateau forest and lit by the afternoon sun behind the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Orbit. The camera circles 36 deg clockwise from west-south-west to west, 70 m out and 40 m above the trees' base (z 174, 14 m above the default canopy). The three 50 m Deru trees tower over the plateau forest, front-lit by the afternoon sun behind the lens. The trees are ACE NPCs that the kit does not model. Measured from their positions (crown radius 12.5 m at scale 0.8), the orbit stays at least 39 m outside the nearest crown. Verified (check.mjs, full take flown): take 0-10 s: AGL 26..32 m, nearest drawn 22.86 m (scenery-default 0x02000B3A@6960,36880), vmax 4.4 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 26..32 m, nearest drawn 22.94 m (scenery-default 0x02000AB6@6965,36910), vmax 4.4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.41 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-deru-trees-of-marae-lassel.01": "take 0-10 s: AGL 26..32 m, nearest drawn 22.86 m (scenery-default 0x02000B3A@6960,36880), vmax 4.4 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 26..32 m, nearest drawn 22.94 m (scenery-default 0x02000AB6@6965,36910), vmax 4.4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.41 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-deru-trees-of-marae-lassel.02": "take 0-9 s: AGL 0.94..1.6 m, nearest drawn 12.22 m (static 0x24C0#2 0x02000254), vmax 0.52 m/s, LOS blocked 0/37, subject in frame 0%; edit 1.5-7.5 s: AGL 0.97..1.5 m, nearest drawn 12.41 m (static 0x24C0#2 0x02000254), vmax 0.52 m/s, LOS blocked 0/25, subject in frame 0%"
+ }
+}

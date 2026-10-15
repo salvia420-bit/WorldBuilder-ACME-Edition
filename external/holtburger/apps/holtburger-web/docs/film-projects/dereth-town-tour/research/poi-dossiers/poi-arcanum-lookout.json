@@ -1,0 +1,120 @@
+{
+ "name": "Arcanum Lookout",
+ "title": "Arcanum Lookout",
+ "siteId": "poi-arcanum-lookout",
+ "summary": "A floating octagonal platform (24 m, z 25.8-30) 26 m above the eastern edge of the Graveyard (65.3S 43.3W), reached by the Up to Arcanum Lookout portal on the ground beneath it (Down to Surface portal on the deck); acpedia lists four NPCs on it. The Graveyard's tombstones, candle shrines and Massilor's Crypt portal spread to the west.",
+ "landmarks": [
+  {
+   "name": "Floating platform",
+   "pos": [
+    14076,
+    8796,
+    25.8
+   ],
+   "heightM": 4.2,
+   "note": "0x010029FF."
+  },
+  {
+   "name": "Up to Arcanum Lookout portal",
+   "pos": [
+    14075.6,
+    8796.7,
+    4
+   ],
+   "heightM": 3,
+   "note": "Ground portal under the platform."
+  }
+ ],
+ "site": {
+  "id": "poi-arcanum-lookout",
+  "name": "Arcanum Lookout",
+  "gazetteerId": "up-to-arcanum-lookout",
+  "teleport": "@teleloc 0x492D0017 59.8273 156.007 29.5805 1 0 0 0",
+  "anchor": [
+   14076,
+   8796,
+   4
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.56,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "routeNote": "Moved from candeth-keep -> qalabar to wai-jhou -> candeth-keep to cut with Knathtead Excavation and Burning Wood (same Graveyard valley); insert cost 2.71 km vs 2.05 km for the given slot (teleport hops, so the extra 0.66 km is free on the shoot).",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -65.3,
+   "ew": -43.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2080,
+  "coveredBy": "shot:wai-jhou.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Arcanum_Lookout.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-arcanum-lookout.01",
+   "site": "poi-arcanum-lookout",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     2.0,
+     9.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14076,
+     8796,
+     4
+    ],
+    "height": 26,
+    "radius": 12
+   },
+   "params": {
+    "distance": 42,
+    "heightStart": 2,
+    "heightEnd": 36,
+    "keepAim": true,
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Rise straight up 42 m south-south-west of the floating platform, from beside the ground portal to 10 m above its deck; nothing within 30 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertical boom 42 m south-south-west of the floating platform: from beside the Up to Arcanum Lookout portal on the ground, rising past the platform's rim to 10 m above its deck, the Graveyard spreading behind; sun behind. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.69..37.7 m, nearest drawn 15.24 m (scenery-default 0x02000258@14080,8756), vmax 5.34 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 37 m); edit 2.5-8.5 s: AGL 8.67..35.8 m, nearest drawn 15.24 m (scenery-default 0x02000258@14080,8756), vmax 5.34 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 37 m); flight cinema peak 5.33 m/s (cap 12), max tracking gap 0.04 m."
+  }
+ ],
+ "verification": {
+  "poi-arcanum-lookout.01": "take 0-10 s: AGL 3.69..37.7 m, nearest drawn 15.24 m (scenery-default 0x02000258@14080,8756), vmax 5.34 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 37 m); edit 2.5-8.5 s: AGL 8.67..35.8 m, nearest drawn 15.24 m (scenery-default 0x02000258@14080,8756), vmax 5.34 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 37 m); flight cinema peak 5.33 m/s (cap 12), max tracking gap 0.04 m"
+ }
+}

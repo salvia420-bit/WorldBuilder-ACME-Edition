@@ -1,0 +1,243 @@
+{
+ "name": "Fort Witshire",
+ "title": "Fort Witshire",
+ "siteId": "poi-fort-witshire",
+ "summary": "A fort built by a man named Witshire upon the ruins of an Empyrean fortress west of Cragstone, abandoned after the Tumeroks were driven back; Hollow Minions loyal to Martine have since barricaded it (Elysa's Favor). In the kit: a 72 m square fort on a raised plateau (z 90) - four 31 m spire towers at the corners (tops z 120.75), low curtain walls, a gatehouse on the east with a spiked wooden barricade, and Witshire's three-storey cottage-keep in the centre - with the slopes falling 15-20 m to the fields around.",
+ "landmarks": [
+  {
+   "name": "Witshire's cottage-keep (0x0100082E)",
+   "pos": [
+    33539.9,
+    30467.7,
+    90.0
+   ],
+   "heightM": 12.5,
+   "note": "Three-storey keep in the centre, top z 102.5."
+  },
+  {
+   "name": "Corner spire towers (0x01001161)",
+   "pos": [
+    33564.0,
+    30444.0,
+    90.0
+   ],
+   "heightM": 30.75,
+   "note": "At (33516|33564, 30444|30492), 19 m footprints, tops z 120.75."
+  },
+  {
+   "name": "East gate and barricade",
+   "pos": [
+    33561.4,
+    30468.0,
+    90.0
+   ],
+   "heightM": 5.0,
+   "note": "Gatehouse 0x01001130 with spiked wooden barricade (0x01001126-28) and the Fort Witshire Door."
+  },
+  {
+   "name": "Curtain walls (0x01001124)",
+   "pos": [
+    33540.0,
+    30444.0,
+    90.0
+   ],
+   "heightM": 5.0,
+   "note": "North, west and south walls, 24 m each."
+  }
+ ],
+ "site": {
+  "id": "poi-fort-witshire",
+  "name": "Fort Witshire",
+  "gazetteerId": "fort-witshire-surface",
+  "teleport": "@teleloc 0xAE9E0025 115.8 118.7 90 0.829038 0 0 -0.559193",
+  "anchor": [
+   33540,
+   30468,
+   90
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer fort-witshire-surface (inside the fort's south-west quarter, 21 m from the keep)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 25.0,
+   "ew": 37.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2427,
+  "coveredBy": "shot:cragstone.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fort_Witshire.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-fort-witshire.01",
+   "site": "poi-fort-witshire",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 7
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7,
+    "keep": [
+     1.0,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33540,
+     30468,
+     90
+    ],
+    "height": 12.5,
+    "radius": 7
+   },
+   "params": {
+    "heightAGL": 42,
+    "speed": 7,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "minClearance": 10
+   },
+   "standingOrder": "Fly due north straight over Witshire's cottage keep 42 m up, between the four spire towers, gimbal tracking the keep through vertical; stay 9 m above every spire tip.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flagship pass-over: due north 42 m above the plateau (z 132, 11 m above the four spire tips at z 120.75) straight over Witshire's cottage-keep between the four corner spire towers, the gimbal tracking the keep through vertical (yaw-slew <= 45 deg/s): the square curtain walls, the barricaded east gate and the four towers wheel under the lens. Noon sun from the south. Verified (check.mjs, full take flown): take 0-11 s: AGL 42..42.8 m, nearest drawn 16.45 m (static 0xAE9E#126 0x01001161), vmax 7 m/s, LOS blocked 0/45, subject in frame 100%; edit 2-9 s: AGL 42..42 m, nearest drawn 16.45 m (static 0xAE9E#126 0x01001161), vmax 7 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-fort-witshire.02",
+   "site": "poi-fort-witshire",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33564,
+     30444,
+     90
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": -27,
+    "distance": 30,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Look up at the south-east spire tower from the grass outside the fort with the noon sun on its face; creep 1.5 m closer and keep 10 m from the stone.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle on the south-east spire tower from the grass slope outside the fort (30 m out, lens ~5 m above the slope, below the tower's base level), looking up 27 deg at the 31 m tower and its spire with the noon sun on its south face; creeps 1.5 m closer. Verified (check.mjs, full take flown): take 0-8 s: AGL 4.77..5.1 m, nearest drawn 7.06 m (spawn Banderling Striker Bandit Generator), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.78..5 m, nearest drawn 7.06 m (spawn Banderling Striker Bandit Generator), vmax 0.29 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-fort-witshire.03",
+   "site": "poi-fort-witshire",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33516,
+     30444,
+     90
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "params": {
+    "offset": 14,
+    "heightAGL": 18,
+    "speed": 8,
+    "side": "right",
+    "headingDeg": 315,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Sweep north-west past the south-west spire tower 14 m off its corner at 18 m, the head whipping round to hold it; keep 8 m from the stone and the wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Fly-by: 8 m/s north-west past the south-west spire tower at 14 m offset and 18 m above the plateau base (outside the walls, over the west slope), the head whipping round to hold the tower while the curtain wall and the far towers slide behind it; peak yaw rate ~0.6 rad/s. Verified (check.mjs, full take flown): take 0-9 s: AGL 18..26 m, nearest drawn 21.75 m (scenery-default 0x020007A3@33485,30446), vmax 8 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 18..23.4 m, nearest drawn 21.75 m (scenery-default 0x020007A3@33485,30446), vmax 8 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m."
+  }
+ ],
+ "verification": {
+  "poi-fort-witshire.01": "take 0-11 s: AGL 42..42.8 m, nearest drawn 16.45 m (static 0xAE9E#126 0x01001161), vmax 7 m/s, LOS blocked 0/45, subject in frame 100%; edit 2-9 s: AGL 42..42 m, nearest drawn 16.45 m (static 0xAE9E#126 0x01001161), vmax 7 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-fort-witshire.02": "take 0-8 s: AGL 4.77..5.1 m, nearest drawn 7.06 m (spawn Banderling Striker Bandit Generator), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.78..5 m, nearest drawn 7.06 m (spawn Banderling Striker Bandit Generator), vmax 0.29 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-fort-witshire.03": "take 0-9 s: AGL 18..26 m, nearest drawn 21.75 m (scenery-default 0x020007A3@33485,30446), vmax 8 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 18..23.4 m, nearest drawn 21.75 m (scenery-default 0x020007A3@33485,30446), vmax 8 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m"
+ }
+}

@@ -42,6 +42,14 @@ import { WORD_BOUNDS, leadingWord, offsetWord, sizeWord } from "./sense_words.js
 /** Pilot modes: 'jev' acts on JEV, 'code' on the code policy only, 'shadow' on code while asking JEV. */
 export const PILOT_MODES = Object.freeze(["jev", "code", "shadow"]);
 
+/**
+ * Occluder fade policies of a shot (`pilot.fade`): 'auto' lets an occluder_action 'fade'
+ * answer hide the occluders the sensors name; 'never' fades nothing (the mapper's
+ * `limits.maxFadeIds` = 0 — a 'fade' answer reroutes instead). An FPV run past
+ * monsters flies 'never': a creature must never vanish from the footage.
+ */
+export const PILOT_FADE_POLICIES = Object.freeze(["auto", "never"]);
+
 /** Telemetry sources: which decision drove a tick. */
 export const PILOT_SOURCES = Object.freeze(["jev", "code", "reuse", "none"]);
 
@@ -170,9 +178,13 @@ function costOf(res) {
  * @param {{bridge?:object|null, mode?:'jev'|'code'|'shadow', decisionHz?:number, maxInFlight?:number,
  *   minDispatchSec?:number, consult?:{withinM?:number, unseenSec?:number, framing?:boolean},
  *   reuseSec?:number, mapper?:object, log?:(entry:object)=>void, timeoutSec?:number,
- *   steppedTimeoutMs?:number, timers?:{setTimeout:Function, clearTimeout:Function}}} [opts]
+ *   steppedTimeoutMs?:number, timers?:{setTimeout:Function, clearTimeout:Function},
+ *   fade?:'auto'|'never', limits?:object}} [opts]
  *   timeoutSec: realtime in-flight limit on the pilot clock (default 1.5 s);
- *   steppedTimeoutMs: stepped-mode wait limit (default 15000 ms, via `timers`).
+ *   steppedTimeoutMs: stepped-mode wait limit (default 15000 ms, via `timers`);
+ *   fade / limits: only used when no `mapper` is injected — the pilot's own mapper gets
+ *   `limits` (mapper DEFAULT_MAPPER_LIMITS keys) and, for fade 'never', maxFadeIds 0
+ *   (PILOT_FADE_POLICIES; anything else = 'auto'). stats().fade reports the policy.
  * @returns {{tick:(sensorFrame:object, ctx?:object, now?:number) => {setpoint:object, telemetry:object},
  *   tickStepped:(sensorFrame:object, ctx?:object, now?:number) => Promise<{setpoint:object, telemetry:object}>,
  *   stats:() => object, reset:() => void, decisions:() => object[], readonly mode:string,
@@ -202,7 +214,11 @@ export function createPilot(opts = {}) {
       : typeof globalThis.setTimeout === "function"
         ? { setTimeout: globalThis.setTimeout.bind(globalThis), clearTimeout: globalThis.clearTimeout.bind(globalThis) }
         : null;
-  const mapper = o.mapper && typeof o.mapper.apply === "function" ? o.mapper : createResidualMapper({});
+  const fade = o.fade === "never" ? "never" : "auto";
+  const ownLimits = o.limits && typeof o.limits === "object" ? { ...o.limits } : null;
+  const mapper = o.mapper && typeof o.mapper.apply === "function"
+    ? o.mapper
+    : createResidualMapper(fade === "never" || ownLimits ? { limits: { ...(ownLimits || {}), ...(fade === "never" ? { maxFadeIds: 0 } : {}) } } : {});
   const log = typeof o.log === "function" ? o.log : null;
 
   let epoch = 0;
@@ -754,8 +770,17 @@ export function createPilot(opts = {}) {
         perQuestion,
       },
       lastScene: sceneSeq,
+      // The occluder fade policy in effect: 'never' when the mapper fades nothing (maxFadeIds 0).
+      fade: mapperFadePolicy(),
       mapper: typeof mapper.stats === "function" ? mapper.stats() : null,
     };
+  }
+
+  /** 'never' when the mapper in effect fades nothing (its maxFadeIds is 0), else 'auto'. */
+  function mapperFadePolicy() {
+    const cfg = mapper && mapper.config && typeof mapper.config === "object" ? mapper.config : null;
+    const max = cfg && cfg.limits && typeof cfg.limits === "object" ? Number(cfg.limits.maxFadeIds) : NaN;
+    return Number.isFinite(max) && max < 1 ? "never" : "auto";
   }
 
   /** New take: forget in-flight requests (late answers are ignored), answers, counters, mapper state. */

@@ -1,0 +1,129 @@
+{
+ "name": "Festival Stone of Wintersebb",
+ "title": "Festival Stone of Wintersebb",
+ "siteId": "poi-festival-stone-of-wintersebb",
+ "summary": "One of the Empyrean Festival Stones, 'on a rise east of Qalaba'r' (Alatar Locke). In the kit the stone and its Anniversary glow stand on the top of a grassy knoll (z 131) between two 5.5 m black weathered Empyrean columns, a 24 m tree just west; the Qalaba'r Festival Grounds lie 90 m east and 23 m lower.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Wintersebb",
+   "pos": [
+    29636.4,
+    6618.7,
+    131.3
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary Effect glow 8 m above it."
+  },
+  {
+   "name": "Empyrean columns (0x020003C7)",
+   "pos": [
+    29636.0,
+    6618.7,
+    131.2
+   ],
+   "heightM": 5.5,
+   "note": "Two black ancient columns 3.5 m north and south of the stone."
+  },
+  {
+   "name": "Knoll tree (0x020002D3)",
+   "pos": [
+    29626.9,
+    6621.8,
+    130.7
+   ],
+   "heightM": 24.0,
+   "note": "Default-bake tree 10 m west of the stone."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-wintersebb",
+  "name": "Festival Stone of Wintersebb",
+  "gazetteerId": "wintersebb-festival-stone",
+  "teleport": "@teleloc 0x9A22001C 78.8 92.5 132.3 -0.622515 0 0 -0.782608",
+  "anchor": [
+   29636.4,
+   6618.7,
+   131.3
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer wintersebb-festival-stone (knoll top, 10 m east of the stone)."
+ },
+ "insertAfter": "qalabar",
+ "insertBefore": "khayyaban",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -74.4,
+   "ew": 21.5
+  },
+  "coordSrc": "index",
+  "coveredDistM": 471,
+  "coveredBy": "site:qalabar",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Wintersebb.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-wintersebb.01",
+   "site": "poi-festival-stone-of-wintersebb",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29636.4,
+     6618.7,
+     131.3
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 100,
+    "azimuthRef": "compass",
+    "elevationDeg": -16,
+    "distance": 10,
+    "thirds": "center",
+    "pushM": 0.8
+   },
+   "standingOrder": "From knee height 10 m east-south-east look up at the glowing Wintersebb stone between its two black Empyrean columns against the morning sky, easing 0.8 m closer; keep 4 m from the columns, the tree crown behind may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low-angle hero of the Wintersebb Festival Stone on its knoll above the Qalaba'r Festival Grounds: the lens sits at knee height on the east slope, so the stone, its Anniversary glow and the two 5.5 m black Empyrean columns that flank it stand against the morning sky; the low ESE sun is behind the lens and lights their faces, and the 24 m tree 10 m behind the stone fills the frame edge. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.7..0.7 m, nearest drawn 8.54 m (static 0x9A22#1 0x020003C7), vmax 0.15 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 0.7..0.7 m, nearest drawn 8.57 m (static 0x9A22#1 0x020003C7), vmax 0.15 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-wintersebb.01": "take 0-8 s: AGL 0.7..0.7 m, nearest drawn 8.54 m (static 0x9A22#1 0x020003C7), vmax 0.15 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 0.7..0.7 m, nearest drawn 8.57 m (static 0x9A22#1 0x020003C7), vmax 0.15 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

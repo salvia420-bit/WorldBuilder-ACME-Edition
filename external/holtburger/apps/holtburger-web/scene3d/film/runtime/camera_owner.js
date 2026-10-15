@@ -33,6 +33,15 @@
 //     prevCell)` (sub-stepped every 8 m — the wasm walk caps at 256 × 0.25 m),
 //     seeded from the plan's cell on cuts (`setCutCell`), else from a
 //     player-head walk, and publishes `liveScene3d.filmViewer = {cell}`;
+//   * the light-pool reference point: lighting.js ranks its nearest-N light pool
+//     (and carries the retail viewer light) at `cameraSwitcher.getPlayerWorldPosition`
+//     — the followed player, rotation-invariant for the follow camera. A film take
+//     flies far from the parked, hidden player (an FPV run 400 m down a dungeon),
+//     so while owned a per-instance wrapper answers the FILM EYE instead (the same
+//     three-space point the camera is written to) and the torches along the flight
+//     stay lit; released, the prototype method (or a previous own-property
+//     wrapper) is put back. Film mode only (this module loads under ?filmMode=on)
+//     and only while owned;
 //   * the per-frame film hooks `liveScene3d.film = {preFrame(ts, dt),
 //     postRender(), holdLoop}` the hooks lane wired into index.js tick()
 //     (`ensureFilmHooks`): listener lists so the take player (preFrame), the
@@ -239,8 +248,11 @@ export function ensureFilmHooks(liveScene3d, opts = {}) {
  *   csmFitFov and the avatar fade. Idempotent. Throws FilmError
  *   `FILM_CAMERA_UNAVAILABLE` when no camera exists yet (cameraSwitcher arrives
  *   ≈35 s after in-world).
- * - `release()` → `{ok, wasOwned}`: unwraps positionCamera (an own-property
- *   wrapper from `?camDebug=on` is put back), restores mode / followYaw /
+ *   While owned, `cameraSwitcher.getPlayerWorldPosition(out)` (lighting.js's light-pool
+ *   reference) answers the film eye (a per-instance wrapper; only installed when the
+ *   switcher has that method).
+ * - `release()` → `{ok, wasOwned}`: unwraps positionCamera and getPlayerWorldPosition
+ *   (an own-property wrapper from `?camDebug=on` is put back), restores mode / followYaw /
  *   followPitch / fov / csmFitFov, `_prevEyeAc = null` (the next follow frame
  *   snaps), pushes the saved avatar fade (default 1) through
  *   `_applyCameraPlayerFade`, deletes `liveScene3d.filmViewer`. Idempotent.
@@ -287,6 +299,9 @@ export function createCameraOwner(deps = {}) {
     /** @type {Function|null} */ wrapper: null,
     /** @type {Function|null} */ prevPosition: null,
     hadOwnPosition: false,
+    /** @type {Function|null} */ eyeRefWrapper: null,
+    /** @type {Function|null} */ prevPlayerPos: null,
+    hadOwnPlayerPos: false,
     saved: null,
     /** @type {OwnedPose|null} */ pose: null,
     cell: 0,
@@ -294,7 +309,7 @@ export function createCameraOwner(deps = {}) {
     pendingCut: 0,
     pendingReseed: false,
   };
-  const counters = { writes: 0, rejected: 0, reasserts: 0, cellWalks: 0, cellSeeds: 0, cuts: 0, focusWrites: 0, parks: 0 };
+  const counters = { writes: 0, rejected: 0, reasserts: 0, cellWalks: 0, cellSeeds: 0, cuts: 0, focusWrites: 0, parks: 0, eyeLightRefs: 0 };
 
   /** The persp camera to own (cameraSwitcher.persp, else liveScene3d.camera). */
   function findCamera() {
@@ -471,6 +486,7 @@ export function createCameraOwner(deps = {}) {
       };
       state.wrapper = wrapper;
       cs.positionCamera = wrapper;
+      installEyeLightRef(cs);
     }
     state.cs = cs;
     state.camera = cam;
@@ -495,6 +511,7 @@ export function createCameraOwner(deps = {}) {
         if (state.hadOwnPosition) cs.positionCamera = state.prevPosition;
         else delete cs.positionCamera;
       }
+      removeEyeLightRef(cs);
       cs._prevEyeAc = null;
       if (saved.followYaw !== undefined) cs.followYaw = saved.followYaw;
       if (saved.followPitch !== undefined) cs.followPitch = saved.followPitch;
@@ -536,6 +553,55 @@ export function createCameraOwner(deps = {}) {
     publishCell();
     emit({ message: "released" });
     return { ok: true, wasOwned: true };
+  }
+
+  // ---- light-pool reference (lighting.js getPlayerWorldPosition) -------------
+
+  /**
+   * While owned, `cs.getPlayerWorldPosition(out)` answers the film eye: lighting.js ranks the
+   * nearest-light pool and carries the viewer light there, so a take far from the parked
+   * player keeps the lights along its flight. Per-instance wrapper (the prototype method, or
+   * a previous own-property wrapper, is called once released or before the first write).
+   */
+  function installEyeLightRef(cs) {
+    if (typeof cs.getPlayerWorldPosition !== "function") return;
+    state.hadOwnPlayerPos = Object.prototype.hasOwnProperty.call(cs, "getPlayerWorldPosition");
+    state.prevPlayerPos = cs.getPlayerWorldPosition;
+    const prev = state.prevPlayerPos;
+    const wrapper = function filmEyeWorldPosition(out) {
+      if (state.owned && state.eyeRefWrapper === wrapper && state.pose && out && typeof out.set === "function") {
+        const tp = acToThreePos(state.pose.pos);
+        if (Number.isFinite(tp[0]) && Number.isFinite(tp[1]) && Number.isFinite(tp[2])) {
+          out.set(tp[0], tp[1], tp[2]);
+          counters.eyeLightRefs += 1;
+          return out;
+        }
+      }
+      return prev.call(this, out);
+    };
+    try {
+      cs.getPlayerWorldPosition = wrapper;
+    } catch (_) {
+      return; // a sealed switcher keeps ranking at the player
+    }
+    if (cs.getPlayerWorldPosition === wrapper) state.eyeRefWrapper = wrapper;
+  }
+
+  /** Put the player reference back (only if our wrapper is still the one installed). */
+  function removeEyeLightRef(cs) {
+    const w = state.eyeRefWrapper;
+    state.eyeRefWrapper = null;
+    if (!w) return;
+    if (cs.getPlayerWorldPosition === w) {
+      try {
+        if (state.hadOwnPlayerPos) cs.getPlayerWorldPosition = state.prevPlayerPos;
+        else delete cs.getPlayerWorldPosition;
+      } catch (_) {
+        /* sealed: the wrapper passes through once not owned */
+      }
+    }
+    state.prevPlayerPos = null;
+    state.hadOwnPlayerPos = false;
   }
 
   // ---- writes -------------------------------------------------------------
@@ -671,6 +737,6 @@ export function createCameraOwner(deps = {}) {
     onPostRender: (fn) => hooks.addPostRender(fn),
     camera: () => state.camera || findCamera().cam,
     dispose,
-    stats: () => ({ ...counters, owned: state.owned, cell: state.cell >>> 0, pendingCut: state.pendingCut >>> 0 }),
+    stats: () => ({ ...counters, owned: state.owned, cell: state.cell >>> 0, pendingCut: state.pendingCut >>> 0, eyeLightRef: state.eyeRefWrapper !== null }),
   };
 }

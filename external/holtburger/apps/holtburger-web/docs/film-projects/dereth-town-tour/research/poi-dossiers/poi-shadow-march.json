@@ -1,0 +1,268 @@
+{
+ "name": "Shadow March",
+ "title": "Shadow March",
+ "siteId": "poi-shadow-march",
+ "summary": "Shadow March is a large blackened former battlefield: an obsidian plain (z 30) around a black hill that rises 88 m to a rounded summit (z 118), with The Dark Spiral portal on top. Lord Marsan's battlefield lies at its foot: golden skeletons, fallen armoured bodies, staves and torn red-and-gold banners lie in clusters north-west and south of the hill. On the west edge, Grael's Chamber portal stands between two 7.9 m Black Spear Ice Totems. Shadow Wraiths and Nightmares roam.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI",
+   "Historical Site"
+  ],
+  "map": {
+   "ns": 15.9,
+   "ew": -68.8
+  },
+  "mapWorld": [
+   7956.0,
+   28284.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Shadow_March.txt",
+  "coveredDistM": 3514,
+  "coveredBy": "shot:fort-tethana.03"
+ },
+ "landmarks": [
+  {
+   "name": "The Dark Spiral portal (summit)",
+   "pos": [
+    7978,
+    28278,
+    116.9
+   ],
+   "heightM": 3.5,
+   "note": "Spawn on the hilltop. The hill rises from z 30 to z 118 within 90 m."
+  },
+  {
+   "name": "South battlefield",
+   "pos": [
+    8030,
+    28078,
+    30
+   ],
+   "heightM": 1,
+   "note": "About 40 corpse, skeleton and banner statics (0x020003CC/CD, 0x02001310/11, 0x0200152A/B) on the flat obsidian."
+  },
+  {
+   "name": "North-west battlefield",
+   "pos": [
+    7885,
+    28375,
+    30
+   ],
+   "heightM": 1,
+   "note": "The larger cluster, Lord Marsan's log book area."
+  },
+  {
+   "name": "Grael's Chamber portal and Ice Totems",
+   "pos": [
+    7681.8,
+    28284.4,
+    30
+   ],
+   "heightM": 7.9,
+   "note": "Black Spear Ice Totems 0x020015E5 at (7681.8,28287.9) and (7681.7,28280.9). Landblock 0x2793 to the west is not in the kit."
+  }
+ ],
+ "site": {
+  "id": "poi-shadow-march",
+  "name": "Shadow March",
+  "gazetteerId": "the-dark-spiral-portal",
+  "teleport": "@teleloc 0x2992002D 138 118 30.5 1 0 0 0",
+  "anchor": [
+   7975,
+   28278,
+   116
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.59,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the obsidian plain at (8010,28150), ground 30, 28 m from the nearest spawn. The Dark Spiral portal teleport is on the summit and would touch the portal."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-shadow-march.01",
+   "technique": "classic.roll",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8030,
+     28078,
+     30
+    ],
+    "height": 1.5,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 170,
+    "azimuthRef": "compass",
+    "elevationDeg": 9,
+    "distance": 16,
+    "thirds": "center",
+    "fromDeg": -4,
+    "toDeg": 13,
+    "pushM": 1.2
+   },
+   "standingOrder": "Low over the fallen of Lord Marsan's battlefield south of the hill, roll slowly off level while creeping 1 m toward the corpses and torn banners with the black hill of Shadow March looming behind; stay 2 m above the dead.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dutch angle for a haunted battlefield. Lord Marsan's dead (golden skeletons, fallen armoured bodies and torn red-and-gold banners lying on the obsidian) are scattered across the black plain south of the hill. The lens is 3.5 m above them, 16 m south, and rolls from -4 to +13 deg while creeping 1.2 m in. The black hill of Shadow March fills the top of the frame, with its summit at the frame edge (ndc y 0.66-1.0). The sun is behind the left shoulder. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 3.43..3.6 m, nearest 3.32 m (static 0x2992#19 0x020003CC), vmax 0.21 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 123.4 m (not drawn by the default bake); edit 2-7.5s: AGL 3.45..3.6 m, nearest 3.34 m (static 0x2992#19 0x020003CC), vmax 0.21 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 123.4 m (not drawn by the default bake)."
+  },
+  {
+   "id": "poi-shadow-march.02",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7978,
+     28278,
+     116.9
+    ],
+    "height": 3.5,
+    "radius": 2
+   },
+   "params": {
+    "radius": 48,
+    "heightAGL": 16,
+    "revolutions": 0.11,
+    "direction": "cw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "standingOrder": "Circle the summit of the blackened hill clockwise 48 m out and 16 m above the Dark Spiral portal, keeping the swirl centred over the obsidian plain; hold height.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The drone circles the summit of the blackened hill clockwise from bearing 200 to 240 deg. It stays 48 m out and 16 m above The Dark Spiral portal, the swirl on the hilltop (z 117), 87 m above the obsidian plain. The plain, the battlefield and the far ridges turn behind the swirl. The south-west sun is behind the lens. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 24.06..27.9 m, nearest 99.1 m (scenery-default 0x020005C9@8050,28222), vmax 3.32 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 99.1 m (not drawn by the default bake); edit 2-8.5s: AGL 24.06..27 m, nearest 104.78 m (scenery-default 0x020005C9@8050,28222), vmax 3.32 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 104.8 m (not drawn by the default bake); flight cinema: peak 3.33 m/s (cap 12), tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-shadow-march.03",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7681.8,
+     28284.4,
+     30
+    ],
+    "height": 7.9,
+    "radius": 4
+   },
+   "params": {
+    "azimuthDeg": 95,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 8,
+    "spinDeg": 8
+   },
+   "standingOrder": "From just above the obsidian, 8 m east of Grael's Chamber portal, look up between the two Black Spear Ice Totems into the afternoon sun; never cross west of the portal.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Portal and totems: the lens is 0.8 m above the obsidian, 8 m east of Grael's Chamber portal, and looks up 38 deg on a 75 deg lens between the two 7.9 m Black Spear Ice Totems (red and purple magical spears) into the afternoon sky, so the swirl and the totems are backlit by the south-west sun. The camera stays east of x 7689: landblock 0x2793 just west of the portal is not in the kit. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 0.8..0.8 m, nearest 7.13 m (static 0x2893#18 0x020015E5 Black Spear Ice Totem), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 25.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.8..0.8 m, nearest 7.13 m (static 0x2893#18 0x020015E5 Black Spear Ice Totem), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 25.2 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-shadow-march.01",
+   "technique": "classic.roll",
+   "rank": 1,
+   "check": "take 9s: AGL 3.43..3.6 m, nearest 3.32 m (static 0x2992#19 0x020003CC), vmax 0.21 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 123.4 m (not drawn by the default bake); edit 2-7.5s: AGL 3.45..3.6 m, nearest 3.34 m (static 0x2992#19 0x020003CC), vmax 0.21 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 123.4 m (not drawn by the default bake)"
+  },
+  {
+   "shot": "poi-shadow-march.02",
+   "technique": "drone.orbit-poi",
+   "rank": 2,
+   "check": "take 10s: AGL 24.06..27.9 m, nearest 99.1 m (scenery-default 0x020005C9@8050,28222), vmax 3.32 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 99.1 m (not drawn by the default bake); edit 2-8.5s: AGL 24.06..27 m, nearest 104.78 m (scenery-default 0x020005C9@8050,28222), vmax 3.32 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 104.8 m (not drawn by the default bake); flight cinema: peak 3.33 m/s (cap 12), tracking gap 0.02 m"
+  },
+  {
+   "shot": "poi-shadow-march.03",
+   "technique": "classic.worms-eye",
+   "rank": 2,
+   "check": "take 8s: AGL 0.8..0.8 m, nearest 7.13 m (static 0x2893#18 0x020015E5 Black Spear Ice Totem), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 25.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.8..0.8 m, nearest 7.13 m (static 0x2893#18 0x020015E5 Black Spear Ice Totem), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 25.2 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 17.0,
+ "techniques": [
+  "classic.roll",
+  "drone.orbit-poi",
+  "classic.worms-eye"
+ ]
+}

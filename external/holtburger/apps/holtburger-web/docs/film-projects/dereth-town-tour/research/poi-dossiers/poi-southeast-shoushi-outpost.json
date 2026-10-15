@@ -1,0 +1,155 @@
+{
+ "name": "Southeast Shoushi Outpost",
+ "title": "Southeast Shoushi Outpost",
+ "siteId": "poi-southeast-shoushi-outpost",
+ "summary": "One of the original Sho starter outposts. According to acpedia, Martine never attacked it, but new arrivals now portal straight into Shoushi instead of appearing here. In the kit it stands on lush grassland at z 16. A green-lit three-storey Sho tower with a tapered roof (top z 40.9, four green lights at its crown) is its centrepiece. An octagonal bamboo-roofed shop stands 49 m west, a 31 m five-storey spire tower with a candelabra 54 m south-east, the well 46 m west and the Life Stone 65 m south-west. A river (running water) flows 100 m to the east.",
+ "landmarks": [
+  {
+   "name": "Green-lit tapered Sho tower (0x010014C3)",
+   "pos": [
+    42708,
+    15684,
+    16
+   ],
+   "heightM": 24.9,
+   "note": "Four green lights at z 39.8; the outpost's centre."
+  },
+  {
+   "name": "Octagon shop (0x01000D6B)",
+   "pos": [
+    42659.4,
+    15683.8,
+    16
+   ],
+   "heightM": 12.1,
+   "note": "Bamboo-roofed, lanterns at its door; Oi Ra the Shopkeeper."
+  },
+  {
+   "name": "Five-storey spire tower (0x01001117)",
+   "pos": [
+    42732,
+    15636,
+    14
+   ],
+   "heightM": 30.8,
+   "note": "Candelabra on its upper floor."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    42651.1,
+    15653.4,
+    17.3
+   ],
+   "heightM": 3.5,
+   "note": "With the LIFESTONES sign; the gazetteer teleport lands on it."
+  },
+  {
+   "name": "River",
+   "pos": [
+    42830,
+    15700,
+    6
+   ],
+   "heightM": 0,
+   "note": "Running-water terrain 100 m east."
+  }
+ ],
+ "site": {
+  "id": "poi-southeast-shoushi-outpost",
+  "name": "Southeast Shoushi Outpost",
+  "gazetteerId": "southeast-shoushi-outpost",
+  "teleport": "@teleloc 0xDE510017 61.00 153.00 16.50 1 0 0 0",
+  "anchor": [
+   42700,
+   15675,
+   16
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "The gazetteer entry for this POI is only a map @tele (36.60S 76.00E) and the nearest exact teleport (Life Stone near Shoushi) lands on the Life Stone; derived @teleloc on open grass 31 m north-west of the tapered tower instead (ground z 16.0, nearest tree 8.2 m)."
+ },
+ "insertAfter": "shoushi",
+ "insertBefore": "hebian-to",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -36.6,
+   "ew": 76.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   42708.0,
+   15684.0
+  ],
+  "coveredDistM": 1038,
+  "coveredBy": "shot:shoushi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Southeast_Shoushi_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-southeast-shoushi-outpost.01",
+   "site": "poi-southeast-shoushi-outpost",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42708,
+     15684,
+     16
+    ],
+    "height": 24.9,
+    "radius": 8
+   },
+   "params": {
+    "distance": 45,
+    "heightStart": 2.5,
+    "heightEnd": 38,
+    "bearingDeg": 315,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "tiltDeg": 0,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up 45 m north-west of the outpost's tapered green-lit tower, the low sun over your right shoulder, until the spire tower, the octagon hall and the river beyond spread out below; 10 m from every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boom rise 45 m north-west of the outpost's green-lit tapered Sho tower: the lens lifts from 2.5 m to 38 m with the gimbal locked on the tower, so the octagon shop, the 31 m spire tower and the river glinting beyond rise into view. The golden-hour sun (0.74) comes from the west, behind-right of the lens, and side-lights the tower's western faces. The default-bake tree 5.5 m from the start is the nearest object. The opt-in retail bake puts a tree crown on the start point; keep the default ?sceneryBake. Verified (check.mjs, full take flown): take 0-10 s: AGL 2.5..38 m, nearest drawn 5.55 m (scenery-default 0x02000246@42668,15712), vmax 5.58 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 7.7..37.1 m, nearest drawn 5.65 m (scenery-default 0x02000246@42668,15712), vmax 5.58 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.56 m/s (cap 12), max tracking gap 0.05 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-southeast-shoushi-outpost.01": "take 0-10 s: AGL 2.5..38 m, nearest drawn 5.55 m (scenery-default 0x02000246@42668,15712), vmax 5.58 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 7.7..37.1 m, nearest drawn 5.65 m (scenery-default 0x02000246@42668,15712), vmax 5.58 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.56 m/s (cap 12), max tracking gap 0.05 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

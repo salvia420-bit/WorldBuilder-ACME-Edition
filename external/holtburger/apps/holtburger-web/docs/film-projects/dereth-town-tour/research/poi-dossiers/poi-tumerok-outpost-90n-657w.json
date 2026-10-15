@@ -1,0 +1,154 @@
+{
+ "name": "Tumerok Outpost (9.0N, 65.7W)",
+ "title": "9.0N, 65.7W - Tumerok Outpost",
+ "siteId": "poi-tumerok-outpost-90n-657w",
+ "summary": "A small Tumerok outpost over the Tumerok Base dungeon on a ledge (z 128) below a high ridge in the Dires near Fort Tethana. It has a 31 m spire tower, flat-roofed halls with stake palisades and a tapered-roof brick bunker (0x0100110A, 17 interior cells). As acpedia says, a trail of candle-bearing Empyrean statues (Master's Sentinel, 3 m) leads north from the bunker.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 9.0,
+   "ew": -65.7
+  },
+  "mapWorld": [
+   8700.0,
+   26628.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/9_0N_65_7W_Tumerok_Outpost.txt",
+  "coveredDistM": 2306,
+  "coveredBy": "shot:fort-tethana.04"
+ },
+ "landmarks": [
+  {
+   "name": "Spire tower",
+   "pos": [
+    8700,
+    26604,
+    128
+   ],
+   "heightM": 30.75,
+   "note": "0x01001161."
+  },
+  {
+   "name": "Bunker",
+   "pos": [
+    8676,
+    26628,
+    128
+   ],
+   "heightM": 4.4,
+   "note": "Tapered-roof brick structure 0x0100110A."
+  },
+  {
+   "name": "Empyrean statue trail",
+   "pos": [
+    8678.6,
+    26665.4,
+    127.7
+   ],
+   "heightM": 3,
+   "note": "Master's Sentinel statues 0x0200039B at (8678.6,26665.4), (8643.4,26714.7,140.3) and (8710.2,26727.4,110.8)."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-outpost-90n-657w",
+  "name": "Tumerok Outpost (9.0N, 65.7W)",
+  "teleport": "@teleloc 0x2D8A001F 82 144 118.5 1 0 0 0",
+  "anchor": [
+   8695,
+   26630,
+   128
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.61,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc at (8722,26640), ground 118, 22 m from the halls."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-outpost-90n-657w.01",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8700,
+     26604,
+     128
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 338.5,
+    "azimuthRef": "compass",
+    "elevationDeg": -15.7,
+    "distance": 76,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 10,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 1.6,
+    "driftM": 0.8
+   },
+   "standingOrder": "Hold level with the head of the candle-bearing Empyrean sentinel 10 m away on the trail, sharp in the lower left, then pull focus 76 m to the spire tower of the bunker; drift under 1 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "look": {
+    "dof": {
+     "focusRange": 6,
+     "bokehScale": 3
+    }
+   },
+   "notes": "Rack focus on the statue trail: acpedia says Empyrean statues mark a trail to the bunker. The lens sits level with the head of the northern candle-bearing Master's Sentinel, 10 m from it. The statue's head is sharp in the lower left (ndc -0.4, -0.5) and the 31 m spire tower of the outpost is centred 76 m away. At 45% of the take, focus pulls over 1.6 s from the statue to the tower. The fov is widened to 55 so the statue stays in frame. The SW sun is ahead-right, so the statue and tower are rim-lit. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 4.58..4.6 m, nearest 6.66 m (static 0x2D8A#33 0x0200039B Master's Sentinel), vmax 0.15 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 117 m (not drawn by the default bake); edit 1.5-6.5s: AGL 4.59..4.6 m, nearest 6.73 m (static 0x2D8A#33 0x0200039B Master's Sentinel), vmax 0.15 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 117 m (not drawn by the default bake).",
+   "fov": 55
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-outpost-90n-657w.01",
+   "technique": "classic.rack-focus",
+   "rank": 3,
+   "check": "take 8s: AGL 4.58..4.6 m, nearest 6.66 m (static 0x2D8A#33 0x0200039B Master's Sentinel), vmax 0.15 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 117 m (not drawn by the default bake); edit 1.5-6.5s: AGL 4.59..4.6 m, nearest 6.73 m (static 0x2D8A#33 0x0200039B Master's Sentinel), vmax 0.15 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 117 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5,
+ "techniques": [
+  "classic.rack-focus"
+ ]
+}

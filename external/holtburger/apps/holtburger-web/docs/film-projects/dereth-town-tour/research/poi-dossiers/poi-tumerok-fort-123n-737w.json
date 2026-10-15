@@ -1,0 +1,275 @@
+{
+ "name": "Tumerok Fort (12.3N, 73.7W)",
+ "title": "12.3N, 73.7W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-123n-737w",
+ "summary": "The Overlord's fort, the final fort of the Overlord's Sword Quest and home of the Tumerok Fortress dungeon. It sits on a forested ridge plateau (z 260): eight 31 m spire towers (0x01001161) and rows of flat-roofed halls with stake palisades over about 120 x 100 m. The Tumerok Fortress portal is on a lantern-lit platform (z 275) of the central tower. Glowing red fire pits and ember beds, benches and a Vat are in the yard, and dense default-bake forest (trees to z 292) surrounds the plateau.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 12.3,
+   "ew": -73.7
+  },
+  "mapWorld": [
+   6780.0,
+   27420.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/12_3N_73_7W_Tumerok_Fort.txt",
+  "coveredDistM": 2589,
+  "coveredBy": "shot:fort-tethana.03"
+ },
+ "landmarks": [
+  {
+   "name": "Central tower with the Tumerok Fortress portal",
+   "pos": [
+    6780,
+    27420,
+    260
+   ],
+   "heightM": 30.75,
+   "note": "Portal at (6780.2,27419.3,275.1), with four lanterns 0x020001BC at z 278, pedestals and crystals."
+  },
+  {
+   "name": "Fire pits",
+   "pos": [
+    6752,
+    27414.7,
+    260
+   ],
+   "heightM": 0.4,
+   "note": "Glowing 0x02000354 pits and 0x02000485 embers at (6773.5,27416.9), (6752,27414.7) and (6748.9,27414.5)."
+  },
+  {
+   "name": "West towers",
+   "pos": [
+    6660,
+    27384,
+    260
+   ],
+   "heightM": 30.75,
+   "note": "Towers at (6660,27396), (6660,27372), (6684,27420) and (6684,27324)."
+  },
+  {
+   "name": "Vat",
+   "pos": [
+    6663,
+    27389,
+    260
+   ],
+   "heightM": 2,
+   "note": "Spawn."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-123n-737w",
+  "name": "Tumerok Fort (12.3N, 73.7W)",
+  "gazetteerId": "tumerok-fortress-portal",
+  "teleport": "@teleloc 0x228E0040 172 176 257.2 1 0 0 0",
+  "anchor": [
+   6732,
+   27384,
+   260
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.61,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc at (6700,27440), ground 256.7, 7.3 m from a tree and 13 m from a tower. The gazetteer's tumerok-fortress-portal teleloc lands on the portal itself."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-123n-737w.01",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 12,
+    "inSec": 6.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     5.9,
+     12
+    ],
+    "anchor": 6.8
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6660,
+     27384,
+     260
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "distance": 76.7,
+    "bearingDeg": 248,
+    "relativeToSubject": false,
+    "obstacleDistance": 15,
+    "obstacleHeight": 38,
+    "heightStart": 2,
+    "clearance": 25,
+    "forward": 5,
+    "endPitchDeg": -6,
+    "minClearance": 2
+   },
+   "standingOrder": "Rise straight up behind a 38 m tree on the west slope, 8 m off its crown, and over it to reveal the west towers of the Overlord's fort on the ridge; climb 61 m, drift only 5 m forward.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing reveal of the Overlord's fort, the final fort of the Overlord's Sword Quest. The lens starts 2 m above the west slope, 8 m behind the crown of a 36 m forest tree, and rises 61 m straight up past it. The crown slides down the frame and the west towers and halls of the eight-tower fort appear on the ridge (LOS clear from about t 7 s). The early-afternoon sun is behind the lens. The forest around the fort is drawn by the default scenery bake, so the reveal is real. Verified with poi-kit check.mjs (full take flown) - take 12s: AGL 2.29..60.3 m, nearest 5.34 m (scenery-default 0x020002D9@6604,27358), vmax 8.01 m/s, LOS blocked 28/49, in frame 100%, water 0%, retail-bake tree 5.5 m (not drawn by the default bake); edit 6-12s: AGL 31.14..60.3 m, nearest 5.34 m (scenery-default 0x020002D9@6604,27358), vmax 8.01 m/s, LOS blocked 4/25, in frame 100%, water 0%, retail-bake tree 5.5 m (not drawn by the default bake); flight cinema: peak 8 m/s (cap 12), tracking gap 0.14 m."
+  },
+  {
+   "id": "poi-tumerok-fort-123n-737w.02",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6780,
+     27420,
+     260
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "radius": 42,
+    "heightAGL": 20,
+    "revolutions": 0.1,
+    "direction": "cw",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Arc clockwise 42 m around the central tower that holds the Tumerok Fortress portal, 20 m up at the lantern platform, from south-south-east to south-south-west; keep 15 m above every hall roof.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The drone arcs clockwise 36 deg (from bearing 160 to 196) around the central spire tower, 42 m out and 20 m up at the height of the lantern-lit platform where the Tumerok Fortress portal sits (z 275). It looks slightly up at the moss-streaked tower, with the other spire towers and the forest behind. The flight stays 15 m above the hall roofs. The portal swirl is on the tower and may be partly hidden by the tower's own walls from some angles, so the shot frames the tower. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 20..20 m, nearest 5.41 m (scenery-default 0x02000258@6793,27391), vmax 2.64 m/s, LOS blocked 4/41, in frame 100%, water 0%, retail-bake tree 7.6 m (not drawn by the default bake); edit 2-8s: AGL 20..20 m, nearest 6.84 m (scenery-default 0x02000258@6793,27391), vmax 2.64 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 7.9 m (not drawn by the default bake); flight cinema: peak 2.64 m/s (cap 12), tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-tumerok-fort-123n-737w.03",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6752,
+     27414.7,
+     260
+    ],
+    "height": 2,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 215,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 14,
+    "thirds": "center",
+    "riseM": 6,
+    "swingDeg": 25,
+    "armM": 6
+   },
+   "standingOrder": "Jib up 6 m from beside the glowing fire pits in the fort yard, swinging 25 degrees so the spire towers rise behind the embers; keep 3 m from the benches and pits and 4 m from the halls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flames: the lens starts 3 m above the yard 14 m south-west of the glowing red fire pits and ember beds in the fort yard. It jibs up 6 m while swinging 25 deg, so the spire towers rise behind the embers. The sun is behind the lens, and the benches and the pits are kept 3.5 m or more away. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 2.78..8.8 m, nearest 3.5 m (static 0x238E#159 0x02000120), vmax 1.34 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 29.7 m (not drawn by the default bake); edit 1.5-6.5s: AGL 3.25..8.3 m, nearest 4.04 m (static 0x238E#159 0x02000120), vmax 1.34 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 29.7 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-fort-123n-737w.01",
+   "technique": "drone.rising-reveal",
+   "rank": 1,
+   "check": "take 12s: AGL 2.29..60.3 m, nearest 5.34 m (scenery-default 0x020002D9@6604,27358), vmax 8.01 m/s, LOS blocked 28/49, in frame 100%, water 0%, retail-bake tree 5.5 m (not drawn by the default bake); edit 6-12s: AGL 31.14..60.3 m, nearest 5.34 m (scenery-default 0x020002D9@6604,27358), vmax 8.01 m/s, LOS blocked 4/25, in frame 100%, water 0%, retail-bake tree 5.5 m (not drawn by the default bake); flight cinema: peak 8 m/s (cap 12), tracking gap 0.14 m"
+  },
+  {
+   "shot": "poi-tumerok-fort-123n-737w.02",
+   "technique": "drone.orbit-poi",
+   "rank": 2,
+   "check": "take 10s: AGL 20..20 m, nearest 5.41 m (scenery-default 0x02000258@6793,27391), vmax 2.64 m/s, LOS blocked 4/41, in frame 100%, water 0%, retail-bake tree 7.6 m (not drawn by the default bake); edit 2-8s: AGL 20..20 m, nearest 6.84 m (scenery-default 0x02000258@6793,27391), vmax 2.64 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 7.9 m (not drawn by the default bake); flight cinema: peak 2.64 m/s (cap 12), tracking gap 0.01 m"
+  },
+  {
+   "shot": "poi-tumerok-fort-123n-737w.03",
+   "technique": "classic.crane",
+   "rank": 3,
+   "check": "take 8s: AGL 2.78..8.8 m, nearest 3.5 m (static 0x238E#159 0x02000120), vmax 1.34 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 29.7 m (not drawn by the default bake); edit 1.5-6.5s: AGL 3.25..8.3 m, nearest 4.04 m (static 0x238E#159 0x02000120), vmax 1.34 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 29.7 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 17,
+ "techniques": [
+  "drone.rising-reveal",
+  "drone.orbit-poi",
+  "classic.crane"
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): rising-reveal window {'minSec': 4.5, 'idealSec': 6, 'keep': [5.5, 12], 'anchor': 6.8} -> keep [5.9, 12]. The v2 build gave it 5.25 s at 5.5-10.73 s, so the hidden lead-in behind the 38 m tree took 6/21 LOS samples (29 %). Re-checked with check.mjs at inSec 5.917: edit 5.92-11.15 s LOS blocked 4/21 (19 %, ~0.9 s lead-in, fort clear from t~7), AGL 30.5..59.5, nearest 5.3 m, in frame 100 %, gap 0.14 m."
+ ]
+}

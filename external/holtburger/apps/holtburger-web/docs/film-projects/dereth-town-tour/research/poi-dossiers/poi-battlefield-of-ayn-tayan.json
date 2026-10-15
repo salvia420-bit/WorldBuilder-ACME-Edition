@@ -1,0 +1,214 @@
+{
+ "name": "Battlefield of Ayn Tayan",
+ "title": "Battlefield of Ayn Tayan",
+ "siteId": "poi-battlefield-of-ayn-tayan",
+ "summary": "The battlefield where the undead factions held Bael'Zharon for three days in the Third Sending of Darkness. Acpedia describes a Bael'Zharon statue among bones at the foot of a skeleton-covered hill, and green mist and cairns where Nerash fell at the top. In the kit, the Statue of Death (4.8 m) stands in a carpet of 322 bone piles at z 20. Six pressure plates and whirling-blade traps ring it, and three 8 m giant wooden masks form a triangle around it. The hilltop 130 m west (z 57) holds four dark cairn stones, a 6.8 m stone head (model 0x020003B2, the acpedia 'large Empyrean head') and a light (the green mist).",
+ "landmarks": [
+  {
+   "name": "Statue of Death (0x0200042B)",
+   "pos": [
+    37099,
+    14559.4,
+    20
+   ],
+   "heightM": 4.8,
+   "note": "Bael'Zharon's statue, ringed by pressure plates."
+  },
+  {
+   "name": "Giant mask west (0x020003B1)",
+   "pos": [
+    37084.3,
+    14540.4,
+    20
+   ],
+   "heightM": 8.0,
+   "note": "9.7 m wide wooden face."
+  },
+  {
+   "name": "Giant mask north (0x020003B1)",
+   "pos": [
+    37091.2,
+    14581.6,
+    20
+   ],
+   "heightM": 8.0,
+   "note": ""
+  },
+  {
+   "name": "Giant mask east (0x020003B1)",
+   "pos": [
+    37122.9,
+    14561.2,
+    20
+   ],
+   "heightM": 8.0,
+   "note": ""
+  },
+  {
+   "name": "Hilltop cairns and mist (0x02000418/0x02000693)",
+   "pos": [
+    36964,
+    14583,
+    57
+   ],
+   "heightM": 1.1,
+   "note": "Four dark stones and a light where Nerash fell."
+  },
+  {
+   "name": "Hilltop stone head (0x020003B2)",
+   "pos": [
+    36968.4,
+    14573.7,
+    56.3
+   ],
+   "heightM": 6.8,
+   "note": "The acpedia 'large Empyrean head'; not filmed (both shots are at the statue)."
+  }
+ ],
+ "site": {
+  "id": "poi-battlefield-of-ayn-tayan",
+  "name": "Battlefield of Ayn Tayan",
+  "gazetteerId": "battlefield-of-ayn-tayn",
+  "teleport": "@teleloc 0xC14B0007 16.4 159.7 20.6 -0.766044 0 0 -0.642788",
+  "anchor": [
+   37099,
+   14559,
+   20
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.69,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer battlefield-of-ayn-tayn (outdoor, 27 m west of the Statue of Death, clear of the six pressure plates and the whirling-blade traps that ring it). Landblocks west of x 36864 (0xBF4A-0xBF4D) and north of y 14784 (0xC04D-0xC24D) are missing from the kit."
+ },
+ "insertAfter": "tou-tou",
+ "insertBefore": "baishi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -41.3,
+   "ew": 52.6
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   37092.0,
+   14556.0
+  ],
+  "coveredDistM": 3078,
+  "coveredBy": "shot:baishi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Battlefield_of_Ayn_Tayan.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-battlefield-of-ayn-tayan.01",
+   "site": "poi-battlefield-of-ayn-tayan",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37101,
+     14560,
+     20
+    ],
+    "height": 6,
+    "radius": 26
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 42,
+    "rotateDeg": 28,
+    "riseM": 6
+   },
+   "standingOrder": "Look straight down from 42 m on the Statue of Death in its carpet of bones, the three giant wooden masks around it forming a triangle, and turn slowly as you rise 6 m; nothing below the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Bird's-eye from 42 m, straight down, turning 28 degrees while rising 6 m. The Statue of Death sits in its carpet of 322 bone piles, and the three 8 m giant wooden masks form a triangle around it, with the long afternoon shadows (0.69) pointing east-north-east. A graphic, map-like image of the battlefield. Verified (check.mjs, full take flown): take 0-9 s: AGL 42..48 m, nearest drawn 29.87 m (scenery-default 0x02000258@37082,14554), vmax 1.05 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 42.4..47.8 m, nearest drawn 30.22 m (scenery-default 0x02000258@37082,14554), vmax 1.05 m/s, LOS blocked 0/27, subject in frame 100%."
+  },
+  {
+   "id": "poi-battlefield-of-ayn-tayan.02",
+   "site": "poi-battlefield-of-ayn-tayan",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37099,
+     14559.4,
+     20
+    ],
+    "height": 4.8,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 228,
+    "elevationDeg": -10,
+    "distance": 12,
+    "thirds": "center",
+    "pushM": 1.2
+   },
+   "standingOrder": "Look up at Bael'Zharon's Statue of Death from among the bones south-west of it with the low sun behind the lens and a giant mask looming beyond; a slow 1.2 m push between the pressure plates.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle 12 m south-west of Bael'Zharon's Statue of Death, 1.5 m off the bones, with a slow 1.2 m push. The afternoon sun is behind the lens and a giant mask looms beyond the statue. The camera sits in the 58 degree gap between the pressure plates; the invisible plate boxes are 3 m and more away, and LOS is clear. Verified (check.mjs, full take flown): take 0-8 s: AGL 1.5..1.7 m, nearest drawn 3.2 m (scenery-default 0x02000258@37082,14554), vmax 0.24 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 1.51..1.7 m, nearest drawn 3.23 m (scenery-default 0x02000258@37082,14554), vmax 0.24 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 3.1 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-battlefield-of-ayn-tayan.01": "take 0-9 s: AGL 42..48 m, nearest drawn 29.87 m (scenery-default 0x02000258@37082,14554), vmax 1.05 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 42.4..47.8 m, nearest drawn 30.22 m (scenery-default 0x02000258@37082,14554), vmax 1.05 m/s, LOS blocked 0/27, subject in frame 100%",
+  "poi-battlefield-of-ayn-tayan.02": "take 0-8 s: AGL 1.5..1.7 m, nearest drawn 3.2 m (scenery-default 0x02000258@37082,14554), vmax 0.24 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 1.51..1.7 m, nearest drawn 3.23 m (scenery-default 0x02000258@37082,14554), vmax 0.24 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 3.1 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

@@ -1,0 +1,1945 @@
+{
+ "batch": 7,
+ "quota": 33,
+ "pois": [
+  {
+   "title": "Southeast Shoushi Outpost",
+   "name": "Southeast Shoushi Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. Unlike most of the other outposts this one was not attacked by Martine and still functions, however, instead of appearing here new arrivals portal directly into Shoushi proper. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Southeast_Shoushi_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -36.6,
+     76.0
+    ]
+   ],
+   "map": {
+    "ns": -36.6,
+    "ew": 76.0
+   },
+   "world": [
+    42708.0,
+    15684.0
+   ],
+   "lb": "0xDE51",
+   "coveredDistM": 1038,
+   "coveredBy": "shot:shoushi.03",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 1081,
+   "gazNear": [
+    {
+     "id": "life-stone-near-shoushi-de51",
+     "name": "Life Stone near Shoushi",
+     "kind": "landmark",
+     "d": 65,
+     "teleport": "@teleloc 0xDE51000D 27.1355 101.376 17.3011 -0.321188 0 0 -0.947015",
+     "pos": [
+      42651.136,
+      15653.376,
+      17.301
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "southeast-shoushi-outpost",
+     "name": "Southeast Shoushi Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 36.60S 76.00E",
+     "pos": null,
+     "map": {
+      "ns": -36.6,
+      "ew": 76
+     }
+    }
+   ],
+   "insertAfter": "shoushi",
+   "insertBefore": "hebian-to",
+   "insertCostM": 66,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-southeast-shoushi-outpost"
+  },
+  {
+   "title": "Fort Aimaru",
+   "name": "Fort Aimaru",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === \"Since the Sho abandoned this place, nothing but drudges here.\" -- Alatar Locke, Quick Reference Card <br><br>In the early days of Dereth, Alatar's description was correct. Since then, a tribe of dark mosswarts has evicted the drudges and taken the fort for themselves. They guard a runed chest (resistance: 200, tier 4 Loot) and an unlocked loot chest (tier 1 Loot). Nearby is an",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fort_Aimaru.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -34.2,
+     80.7
+    ],
+    [
+     -33.7,
+     79.9
+    ]
+   ],
+   "map": {
+    "ns": -34.2,
+    "ew": 80.7
+   },
+   "world": [
+    43836.0,
+    16260.0
+   ],
+   "lb": "0xE454",
+   "coveredDistM": 1080,
+   "coveredBy": "shot:hebian-to.01",
+   "nearestSite": "hebian-to",
+   "nearestSiteM": 1317,
+   "gazNear": [
+    {
+     "id": "life-stone-near-hebian-to-e355",
+     "name": "Life Stone near Hebian-to",
+     "kind": "landmark",
+     "d": 239,
+     "teleport": "@teleloc 0xE3550013 51.1372 68.6835 4.005 0.342939 0 0 -0.939358",
+     "pos": [
+      43635.137,
+      16388.684,
+      4.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "fort-aimaru",
+     "name": "Fort Aimaru",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 33.70S 79.90E",
+     "pos": null,
+     "map": {
+      "ns": -33.7,
+      "ew": 79.9
+     }
+    }
+   ],
+   "insertAfter": "tou-tou",
+   "insertBefore": "baishi",
+   "insertCostM": 107,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-fort-aimaru"
+  },
+  {
+   "title": "Advocate Ruins",
+   "name": "Advocate Ruins",
+   "cats": [
+    "Southeast POI",
+    "Historical Site",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === These ruins were the secret training grounds and headquarters for Strathelar's Order of Advocates. With the disbanding of the order the Advocate Dungeon has been removed, but the ruins and lifestone remain. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Advocate_Ruins.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -28.6,
+     78.1
+    ]
+   ],
+   "map": {
+    "ns": -28.6,
+    "ew": 78.1
+   },
+   "world": [
+    43212.0,
+    17604.0
+   ],
+   "lb": "0xE15B",
+   "coveredDistM": 1700,
+   "coveredBy": "shot:shoushi.01",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 1721,
+   "gazNear": [
+    {
+     "id": "life-stone-at-28-6s-78-3e",
+     "name": "Life Stone at 28.6S 78.3E",
+     "kind": "landmark",
+     "d": 53,
+     "teleport": "@teleloc 0xE15B0016 64.5134 133.26 11.3811 0.750839 0 0 0.660485",
+     "pos": [
+      43264.513,
+      17605.26,
+      11.381
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "advocate-ruins",
+     "name": "Advocate Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 28.60S 78.10E",
+     "pos": null,
+     "map": {
+      "ns": -28.6,
+      "ew": 78.1
+     }
+    }
+   ],
+   "insertAfter": "tou-tou",
+   "insertBefore": "baishi",
+   "insertCostM": 986,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-advocate-ruins"
+  },
+  {
+   "title": "Castle of Baron Nuvillus",
+   "name": "Castle of Baron Nuvillus",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "(Rumors) === Description === An Empyrean castle Northeast of Shoushi ruled by Baron Nuvillus. The Baron drops the Crown of Bone. The Spinning Wheel is located here.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Castle_of_Baron_Nuvillus.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -24.2,
+     76.8
+    ]
+   ],
+   "map": {
+    "ns": -24.2,
+    "ew": 76.8
+   },
+   "world": [
+    42900.0,
+    18660.0
+   ],
+   "lb": "0xDF61",
+   "coveredDistM": 2386,
+   "coveredBy": "shot:shoushi.01",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 2414,
+   "gazNear": [
+    {
+     "id": "castle-of-baron-nuvillus",
+     "name": "Castle of Baron Nuvillus",
+     "kind": "poi",
+     "d": 76,
+     "teleport": "@teleloc 0xDF600017 71.1825 152.756 16.7346 1 0 0 0",
+     "pos": [
+      42887.183,
+      18584.756,
+      16.735
+     ]
+    },
+    {
+     "id": "life-stone-at-25-7s-74-8e",
+     "name": "Life Stone at 25.7S 74.8E",
+     "kind": "landmark",
+     "d": 600,
+     "teleport": "@teleloc 0xDC5F003B 177.111 64.327 22.7642 0.982533 0 0 0.186088",
+     "pos": [
+      42417.111,
+      18304.327,
+      22.764
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "castle-of-baron-nuvillus",
+     "name": "Castle of Baron Nuvillus",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xDF600017 71.1825 152.756 16.7346 1 0 0 0",
+     "pos": [
+      42887.183,
+      18584.756,
+      16.735
+     ],
+     "map": {
+      "ns": -24.51,
+      "ew": 76.75
+     }
+    }
+   ],
+   "insertAfter": "tou-tou",
+   "insertBefore": "baishi",
+   "insertCostM": 2096,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-castle-of-baron-nuvillus"
+  },
+  {
+   "title": "North Nanto Outpost",
+   "name": "North Nanto Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Nanto_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -48.9,
+     81.7
+    ]
+   ],
+   "map": {
+    "ns": -48.9,
+    "ew": 81.7
+   },
+   "world": [
+    44076.0,
+    12732.0
+   ],
+   "lb": "0xE542",
+   "coveredDistM": 817,
+   "coveredBy": "shot:nanto.04",
+   "nearestSite": "nanto",
+   "nearestSiteM": 872,
+   "gazNear": [
+    {
+     "id": "life-stone-near-nanto-e542",
+     "name": "Life Stone near Nanto",
+     "kind": "landmark",
+     "d": 41,
+     "teleport": "@teleloc 0xE542001A 85.5193 25.5125 58.005 0.75579 0 0 -0.654814",
+     "pos": [
+      44053.519,
+      12697.513,
+      58.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "north-nanto-outpost",
+     "name": "North Nanto Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 48.90S 81.70E",
+     "pos": null,
+     "map": {
+      "ns": -48.9,
+      "ew": 81.7
+     }
+    }
+   ],
+   "insertAfter": "tou-tou",
+   "insertBefore": "baishi",
+   "insertCostM": 1154,
+   "timeOfDay": 0.72,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-north-nanto-outpost"
+  },
+  {
+   "title": "Battlefield of Ayn Tayan",
+   "name": "Battlefield of Ayn Tayan",
+   "cats": [
+    "Southeast POI",
+    "Lore Database Entry"
+   ],
+   "desc": "=== General Information === This point of interest consists of a small hill populated mostly by low level skeletons (mostly Warriors). At the base of the hill lies a statue of Bael'Zharon surrounded by many bones. Traveling up the hill you will find to carpeted with bones and some Skeletons. At the top of the hill you will find more bones and skeletons as well as a large Empyrean style head with a",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Battlefield_of_Ayn_Tayan.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -50.1,
+     63.5
+    ],
+    [
+     -41.3,
+     52.6
+    ],
+    [
+     -27.2,
+     59.9
+    ]
+   ],
+   "map": {
+    "ns": -41.3,
+    "ew": 52.6
+   },
+   "world": [
+    37092.0,
+    14556.0
+   ],
+   "lb": "0xC14B",
+   "coveredDistM": 3078,
+   "coveredBy": "shot:baishi.01",
+   "nearestSite": "baishi",
+   "nearestSiteM": 3086,
+   "gazNear": [
+    {
+     "id": "battlefield-of-ayn-tayn",
+     "name": "Battlefield of Ayn Tayn",
+     "kind": "poi",
+     "d": 20,
+     "teleport": "@teleloc 0xC14B0007 16.4 159.7 20.6 -0.766044 0 0 -0.642788",
+     "pos": [
+      37072.4,
+      14559.7,
+      20.6
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "battlefield-of-ayn-tayan",
+     "name": "Battlefield of Ayn Tayan",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 41.30S 52.60E",
+     "pos": null,
+     "map": {
+      "ns": -41.3,
+      "ew": 52.6
+     }
+    }
+   ],
+   "insertAfter": "tou-tou",
+   "insertBefore": "baishi",
+   "insertCostM": 4412,
+   "timeOfDay": 0.69,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-battlefield-of-ayn-tayan"
+  },
+  {
+   "title": "Drunken Madman's Tower",
+   "name": "Drunken Madman's Tower",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === An Empyrean Stone Tower at 53.1S, 61.0E on the ridge of the mountains near Baishi. Also known as \"Ridge Tower\", at least the portal in Walled Portals names the portal back to the tower as such.<br> In the early days of AC, it was one of the leveling spots for young toons, before they were ready to perch at the Outside Accursed Halls.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Drunken_Madman_s_Tower.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -53.1,
+     61.0
+    ]
+   ],
+   "map": {
+    "ns": -53.1,
+    "ew": 61.0
+   },
+   "world": [
+    39108.0,
+    11724.0
+   ],
+   "lb": "0xCB3D",
+   "coveredDistM": 825,
+   "coveredBy": "shot:baishi.03",
+   "nearestSite": "baishi",
+   "nearestSiteM": 932,
+   "gazNear": [
+    {
+     "id": "tower-of-the-madman",
+     "name": "Tower of the Madman",
+     "kind": "poi",
+     "d": 15,
+     "teleport": "@teleloc 0xCB3D002A 136.6 26 195 1 0 0 0",
+     "pos": [
+      39112.6,
+      11738,
+      195
+     ]
+    },
+    {
+     "id": "ridge-tower",
+     "name": "Ridge Tower",
+     "kind": "poi",
+     "d": 31,
+     "teleport": "@teleloc 0xCB3D0032 147.556 38.682 175.409 0.92388 0 0 -0.382684",
+     "pos": [
+      39123.556,
+      11750.682,
+      175.409
+     ]
+    },
+    {
+     "id": "south-shore-heights-portal-cd3b",
+     "name": "South Shore Heights Portal",
+     "kind": "landmark",
+     "d": 540,
+     "teleport": "@teleloc 0xCD3B0032 155.856 41.9099 232.969 -0.447698 0 0 0.894185",
+     "pos": [
+      39515.856,
+      11369.91,
+      232.969
+     ]
+    },
+    {
+     "id": "chamber-of-scrolls-portal",
+     "name": "Chamber of Scrolls Portal",
+     "kind": "landmark",
+     "d": 573,
+     "teleport": "@teleloc 0xCE3E001A 90 28 67.7703 0.382683 0 0 -0.92388",
+     "pos": [
+      39642,
+      11932,
+      67.77
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "drunken-madmans-tower",
+     "name": "Drunken Madman's Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 53.10S 61.00E",
+     "pos": null,
+     "map": {
+      "ns": -53.1,
+      "ew": 61
+     }
+    }
+   ],
+   "insertAfter": "baishi",
+   "insertBefore": "lin",
+   "insertCostM": 1043,
+   "timeOfDay": 0.66,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-drunken-madmans-tower"
+  },
+  {
+   "title": "South Osteth Peak",
+   "name": "South Osteth Peak",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === An unclimbable mountain peak at 52.3S, 67.9E near Baishi. <br> A few Esper Ursuins live here.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Osteth_Peak.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -53.2,
+     67.1
+    ],
+    [
+     -52.8,
+     67.3
+    ],
+    [
+     -52.3,
+     67.9
+    ]
+   ],
+   "map": {
+    "ns": -52.3,
+    "ew": 67.9
+   },
+   "world": [
+    40764.0,
+    11916.0
+   ],
+   "lb": "0xD43E",
+   "coveredDistM": 1373,
+   "coveredBy": "site:lin",
+   "nearestSite": "lin",
+   "nearestSiteM": 1373,
+   "gazNear": [
+    {
+     "id": "south-osteth-peak",
+     "name": "South Osteth Peak",
+     "kind": "poi",
+     "d": 0,
+     "teleport": "@teleloc 0xD43E0011 60 12 520.005 1 0 0 0",
+     "pos": [
+      40764,
+      11916,
+      520.005
+     ]
+    },
+    {
+     "id": "the-old-keep",
+     "name": "The Old Keep",
+     "kind": "poi",
+     "d": 159,
+     "teleport": "@teleloc 0xD53E0009 27.146 17.452 342.914 0.118595 0 0 -0.992943",
+     "pos": [
+      40923.146,
+      11921.452,
+      342.914
+     ]
+    },
+    {
+     "id": "south-osteth-peak-portal",
+     "name": "South Osteth Peak Portal",
+     "kind": "landmark",
+     "d": 172,
+     "teleport": "@teleloc 0xD33D0024 119.296 95.2932 408.063 -0.910437 0 0 0.413649",
+     "pos": [
+      40631.296,
+      11807.293,
+      408.063
+     ]
+    },
+    {
+     "id": "the-lee-side-of-the-mountain-portal",
+     "name": "The Lee Side of The Mountain Portal",
+     "kind": "landmark",
+     "d": 181,
+     "teleport": "@teleloc 0xD53D0010 46.1183 170.129 340.005 0.372555 0 0 -0.92801",
+     "pos": [
+      40942.118,
+      11882.129,
+      340.005
+     ]
+    },
+    {
+     "id": "the-lee-side-of-the-mountain",
+     "name": "The Lee Side of The Mountain",
+     "kind": "poi",
+     "d": 291,
+     "teleport": "@teleloc 0xD53F0019 85.521 13.554 296.515 -0.981551 0 0 -0.191203",
+     "pos": [
+      40981.521,
+      12109.554,
+      296.515
+     ]
+    },
+    {
+     "id": "the-old-keep-portal",
+     "name": "The Old Keep Portal",
+     "kind": "landmark",
+     "d": 323,
+     "teleport": "@teleloc 0xD53D0034 164.7 75.4061 204.603 0.417618 0 0 -0.908623",
+     "pos": [
+      41060.7,
+      11787.406,
+      204.603
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "south-osteth-peak",
+     "name": "South Osteth Peak",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xD43E0011 60 12 520.005 1 0 0 0",
+     "pos": [
+      40764,
+      11916,
+      520.005
+     ],
+     "map": {
+      "ns": -52.3,
+      "ew": 67.9
+     }
+    },
+    {
+     "id": "south-osteth-peak-portal",
+     "name": "South Osteth Peak Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xD33D0024 119.296 95.2932 408.063 -0.910437 0 0 0.413649",
+     "pos": [
+      40631.296,
+      11807.293,
+      408.063
+     ],
+     "map": {
+      "ns": -52.75,
+      "ew": 67.35
+     }
+    }
+   ],
+   "insertAfter": "baishi",
+   "insertBefore": "lin",
+   "insertCostM": 2,
+   "timeOfDay": 0.65,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-south-osteth-peak"
+  },
+  {
+   "title": "Old Keep",
+   "name": "Old Keep",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "(Rumor) === Description === This point of interest maybe more commonly known as the \"Lin Lich Tower\" even though it has been updated and no longer contains any Liches.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Old_Keep.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -52.8,
+     69.1
+    ],
+    [
+     -52.3,
+     68.6
+    ],
+    [
+     -51.5,
+     68.8
+    ]
+   ],
+   "map": {
+    "ns": -52.3,
+    "ew": 68.6
+   },
+   "world": [
+    40932.0,
+    11916.0
+   ],
+   "lb": "0xD53E",
+   "coveredDistM": 1220,
+   "coveredBy": "site:lin",
+   "nearestSite": "lin",
+   "nearestSiteM": 1220,
+   "gazNear": [
+    {
+     "id": "the-old-keep",
+     "name": "The Old Keep",
+     "kind": "poi",
+     "d": 10,
+     "teleport": "@teleloc 0xD53E0009 27.146 17.452 342.914 0.118595 0 0 -0.992943",
+     "pos": [
+      40923.146,
+      11921.452,
+      342.914
+     ]
+    },
+    {
+     "id": "the-lee-side-of-the-mountain-portal",
+     "name": "The Lee Side of The Mountain Portal",
+     "kind": "landmark",
+     "d": 35,
+     "teleport": "@teleloc 0xD53D0010 46.1183 170.129 340.005 0.372555 0 0 -0.92801",
+     "pos": [
+      40942.118,
+      11882.129,
+      340.005
+     ]
+    },
+    {
+     "id": "south-osteth-peak",
+     "name": "South Osteth Peak",
+     "kind": "poi",
+     "d": 168,
+     "teleport": "@teleloc 0xD43E0011 60 12 520.005 1 0 0 0",
+     "pos": [
+      40764,
+      11916,
+      520.005
+     ]
+    },
+    {
+     "id": "the-old-keep-portal",
+     "name": "The Old Keep Portal",
+     "kind": "landmark",
+     "d": 182,
+     "teleport": "@teleloc 0xD53D0034 164.7 75.4061 204.603 0.417618 0 0 -0.908623",
+     "pos": [
+      41060.7,
+      11787.406,
+      204.603
+     ]
+    },
+    {
+     "id": "the-lee-side-of-the-mountain",
+     "name": "The Lee Side of The Mountain",
+     "kind": "poi",
+     "d": 200,
+     "teleport": "@teleloc 0xD53F0019 85.521 13.554 296.515 -0.981551 0 0 -0.191203",
+     "pos": [
+      40981.521,
+      12109.554,
+      296.515
+     ]
+    },
+    {
+     "id": "south-osteth-peak-portal",
+     "name": "South Osteth Peak Portal",
+     "kind": "landmark",
+     "d": 320,
+     "teleport": "@teleloc 0xD33D0024 119.296 95.2932 408.063 -0.910437 0 0 0.413649",
+     "pos": [
+      40631.296,
+      11807.293,
+      408.063
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "the-old-keep",
+     "name": "The Old Keep",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xD53E0009 27.146 17.452 342.914 0.118595 0 0 -0.992943",
+     "pos": [
+      40923.146,
+      11921.452,
+      342.914
+     ],
+     "map": {
+      "ns": -52.28,
+      "ew": 68.56
+     }
+    },
+    {
+     "id": "the-old-keep-portal",
+     "name": "The Old Keep Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xD53D0034 164.7 75.4061 204.603 0.417618 0 0 -0.908623",
+     "pos": [
+      41060.7,
+      11787.406,
+      204.603
+     ],
+     "map": {
+      "ns": -52.84,
+      "ew": 69.14
+     }
+    }
+   ],
+   "insertAfter": "baishi",
+   "insertBefore": "lin",
+   "insertCostM": 0,
+   "timeOfDay": 0.65,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-old-keep"
+  },
+  {
+   "title": "Festival Stone of Morntide",
+   "name": "Festival Stone of Morntide",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Morntide overlooks the surrounding plains from a hill west of Nanto's Blue Ghost Falls, near 53.1S, 78.1E. \"<br> -- Alatar Locke, The Festival Stones of the Empyreans<br><br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Morntide.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -53.1,
+     78.1
+    ],
+    [
+     -53.1,
+     78.6
+    ]
+   ],
+   "map": {
+    "ns": -53.1,
+    "ew": 78.1
+   },
+   "world": [
+    43212.0,
+    11724.0
+   ],
+   "lb": "0xE13D",
+   "coveredDistM": 632,
+   "coveredBy": "shot:nanto.01",
+   "nearestSite": "nanto",
+   "nearestSiteM": 898,
+   "gazNear": [
+    {
+     "id": "morningtide-festival-stone",
+     "name": "Morningtide Festival Stone",
+     "kind": "poi",
+     "d": 128,
+     "teleport": "@teleloc 0xE13D0029 140 1.3 157.9 -0.920505 0 0 -0.390731",
+     "pos": [
+      43340,
+      11713.3,
+      157.9
+     ]
+    },
+    {
+     "id": "saadias-retreat-portal",
+     "name": "Saadia's Retreat Portal",
+     "kind": "landmark",
+     "d": 375,
+     "teleport": "@teleloc 0xDF3C000C 41.017 84.518 29.4247 0.787452 0 0 -0.616376",
+     "pos": [
+      42857.017,
+      11604.518,
+      29.425
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-bluespire-e33d",
+     "name": "Destroyed Portal to Bluespire",
+     "kind": "landmark",
+     "d": 418,
+     "teleport": "@teleloc 0xE33D000D 34.72 109.689 124.6 -0.708414 0 0 -0.705797",
+     "pos": [
+      43618.72,
+      11821.689,
+      124.6
+     ]
+    },
+    {
+     "id": "life-stone-near-nanto-e33d",
+     "name": "Life Stone near Nanto",
+     "kind": "landmark",
+     "d": 504,
+     "teleport": "@teleloc 0xE33D002D 122.843 108.621 131.77 0.629569 0 0 0.776944",
+     "pos": [
+      43706.843,
+      11820.621,
+      131.77
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-yanshi-e33d",
+     "name": "Destroyed Portal to Yanshi",
+     "kind": "landmark",
+     "d": 542,
+     "teleport": "@teleloc 0xE33D0035 161.304 108.1 129.015 0.127525 0 0 -0.991835",
+     "pos": [
+      43745.304,
+      11820.1,
+      129.015
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-morntide",
+     "name": "Festival Stone of Morntide",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 53.10S 78.10E",
+     "pos": null,
+     "map": {
+      "ns": -53.1,
+      "ew": 78.1
+     }
+    }
+   ],
+   "insertAfter": "lin",
+   "insertBefore": "nanto",
+   "insertCostM": 4,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate (near existing coverage: 632 m from shot:nanto.01)",
+   "siteId": "poi-festival-stone-of-morntide"
+  },
+  {
+   "title": "East Nanto Outpost",
+   "name": "East Nanto Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Nanto_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -52.5,
+     85.4
+    ]
+   ],
+   "map": {
+    "ns": -52.5,
+    "ew": 85.4
+   },
+   "world": [
+    44964.0,
+    11868.0
+   ],
+   "lb": "0xEA3D",
+   "coveredDistM": 794,
+   "coveredBy": "shot:nanto.05",
+   "nearestSite": "nanto",
+   "nearestSiteM": 864,
+   "gazNear": [
+    {
+     "id": "life-stone-near-nanto-ea3d",
+     "name": "Life Stone near Nanto",
+     "kind": "landmark",
+     "d": 27,
+     "teleport": "@teleloc 0xEA3D0010 30.032 182.433 78.5093 0.9974 0 0 -0.07206",
+     "pos": [
+      44958.032,
+      11894.433,
+      78.509
+     ]
+    },
+    {
+     "id": "mysterious-tunnels-portal",
+     "name": "Mysterious Tunnels Portal",
+     "kind": "landmark",
+     "d": 597,
+     "teleport": "@teleloc 0xE73D0003 21.7517 66.573 106.695 1 0 0 0",
+     "pos": [
+      44373.752,
+      11778.573,
+      106.695
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "east-nanto-outpost",
+     "name": "East Nanto Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 52.50S 85.40E",
+     "pos": null,
+     "map": {
+      "ns": -52.5,
+      "ew": 85.4
+     }
+    }
+   ],
+   "insertAfter": "nanto",
+   "insertBefore": "mayoi",
+   "insertCostM": 1000,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-east-nanto-outpost"
+  },
+  {
+   "title": "Deru Tree of Degar'Alesh",
+   "name": "Deru Tree of Degar'Alesh",
+   "cats": [
+    "Southeast POI",
+    "Deity Character",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === <br>This Deru Tree is located on Degar'Alesh, also known as Freebooter Isle. It was already dead when Isparians were first able to reach the island, killed by the Old One T'thuun.<ref name=Fortiore>2008/08 Ancient Powers - Viviana Fortiore#Lore & Dialog</ref><ref>2008/08 Ancient Powers - Luciana du Maki#Lore & Dialog</ref><ref>2008/08 Ancient Powers - Francesca du Orza #Lore & ",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Deru_Tree_of_Degar_Alesh.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": -62.0,
+    "ew": 96.0
+   },
+   "world": [
+    47508.0,
+    9588.0
+   ],
+   "lb": "0xF731",
+   "coveredDistM": 3012,
+   "coveredBy": "shot:freehold.04",
+   "nearestSite": "freehold",
+   "nearestSiteM": 3063,
+   "gazNear": [
+    {
+     "id": "olthoi-tunnel-f730",
+     "name": "Olthoi Tunnel",
+     "kind": "poi",
+     "d": 205,
+     "teleport": "@teleloc 0xF7300030 123.776 171.058 48.005 -0.642788 0 0 -0.766044",
+     "pos": [
+      47547.776,
+      9387.058,
+      48.005
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "mayoi",
+   "insertBefore": "kryst",
+   "insertCostM": 4252,
+   "timeOfDay": 0.38,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-deru-tree-of-degaralesh"
+  },
+  {
+   "title": "Ruins of Degar'Alesh",
+   "name": "Ruins of Degar'Alesh",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A large set of ruins located on Degar'Alesh, also known as Freebooter Isle. The large temple is centered at 62.3S, 96.0E and is the drop point for Freebooter. To the south is a smaller temple which contains a portal to the Ithaenc Archipelago (Portal). To the north is the Deru Tree of Degar'Alesh. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ruins_of_Degar_Alesh.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -62.3,
+     96.0
+    ]
+   ],
+   "map": {
+    "ns": -62.3,
+    "ew": 96.0
+   },
+   "world": [
+    47508.0,
+    9516.0
+   ],
+   "lb": "0xF731",
+   "coveredDistM": 2943,
+   "coveredBy": "shot:freehold.04",
+   "nearestSite": "freehold",
+   "nearestSiteM": 2994,
+   "gazNear": [
+    {
+     "id": "olthoi-tunnel-f730",
+     "name": "Olthoi Tunnel",
+     "kind": "poi",
+     "d": 135,
+     "teleport": "@teleloc 0xF7300030 123.776 171.058 48.005 -0.642788 0 0 -0.766044",
+     "pos": [
+      47547.776,
+      9387.058,
+      48.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "ruins-of-degaralesh",
+     "name": "Ruins of Degar'Alesh",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 62.30S 96.00E",
+     "pos": null,
+     "map": {
+      "ns": -62.3,
+      "ew": 96
+     }
+    }
+   ],
+   "insertAfter": "mayoi",
+   "insertBefore": "kryst",
+   "insertCostM": 4202,
+   "timeOfDay": 0.38,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-ruins-of-degaralesh"
+  },
+  {
+   "title": "Freebooter Keep",
+   "name": "Freebooter Keep",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A Stronghold located at 64.0S 97.5E on Freebooter Isle.<br> Inside is the Freebooter Keep Black Market",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Freebooter_Keep.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -64.0,
+     97.5
+    ]
+   ],
+   "map": {
+    "ns": -64.0,
+    "ew": 97.5
+   },
+   "world": [
+    47868.0,
+    9108.0
+   ],
+   "lb": "0xF92F",
+   "coveredDistM": 2708,
+   "coveredBy": "shot:freehold.04",
+   "nearestSite": "freehold",
+   "nearestSiteM": 2752,
+   "gazNear": [
+    {
+     "id": "olthoi-tunnel-f730",
+     "name": "Olthoi Tunnel",
+     "kind": "poi",
+     "d": 425,
+     "teleport": "@teleloc 0xF7300030 123.776 171.058 48.005 -0.642788 0 0 -0.766044",
+     "pos": [
+      47547.776,
+      9387.058,
+      48.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "freebooter-keep-black-market",
+     "name": "Freebooter Keep Black Market",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon F92F",
+     "pos": null,
+     "map": {
+      "ns": -64,
+      "ew": 97.5
+     }
+    },
+    {
+     "id": "celestial-hand-freebooter-keep-black-market",
+     "name": "Celestial Hand Freebooter Keep Black Market",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0xF92F0266 46.7594 75.1555 94.805 0.421771 0 0 -0.906702",
+     "pos": [
+      47854.759,
+      9099.156,
+      94.805
+     ],
+     "map": {
+      "ns": -64.04,
+      "ew": 97.44
+     }
+    },
+    {
+     "id": "freebooter-keep",
+     "name": "Freebooter Keep",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0xF92F0293 63.7124 66.072 124.805 0.707107 0 0 0.707107",
+     "pos": [
+      47871.712,
+      9090.072,
+      124.805
+     ],
+     "map": {
+      "ns": -64.07,
+      "ew": 97.52
+     }
+    },
+    {
+     "id": "celestial-hand-freebooter-keep-black-market-portal",
+     "name": "Celestial Hand Freebooter Keep Black Market Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0xF92F0284 40.1641 66.001 118.805 0.707107 0 0 -0.707107",
+     "pos": [
+      47848.164,
+      9090.001,
+      118.805
+     ],
+     "map": {
+      "ns": -64.07,
+      "ew": 97.42
+     }
+    },
+    {
+     "id": "eldrytch-web-freebooter-keep-black-market-portal",
+     "name": "Eldrytch Web Freebooter Keep Black Market Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0xF92F0284 40.1641 66.001 118.805 0.707107 0 0 -0.707107",
+     "pos": [
+      47848.164,
+      9090.001,
+      118.805
+     ],
+     "map": {
+      "ns": -64.07,
+      "ew": 97.42
+     }
+    }
+   ],
+   "insertAfter": "mayoi",
+   "insertBefore": "kryst",
+   "insertCostM": 4596,
+   "timeOfDay": 0.39,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-freebooter-keep"
+  },
+  {
+   "title": "Ithaenc Cathedral",
+   "name": "Ithaenc Cathedral",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === Located at 82.4S, 93.4E on the Ithaenc Island, the largest of the Vesayen Isles.<br> Nearby are the Ithaenc waterfalls, one of the biggest waterfalls in Dereth, and a good place to hunt for Niffis Pearls.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ithaenc_Cathedral.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -83.0,
+     49.2
+    ],
+    [
+     -82.5,
+     93.6
+    ],
+    [
+     -82.4,
+     93.4
+    ]
+   ],
+   "map": {
+    "ns": -82.4,
+    "ew": 93.0
+   },
+   "world": [
+    46788.0,
+    4692.0
+   ],
+   "lb": "0xF318",
+   "coveredDistM": 1769,
+   "coveredBy": "shot:freehold.02",
+   "nearestSite": "freehold",
+   "nearestSiteM": 1976,
+   "gazNear": [
+    {
+     "id": "catacombs-of-ithaenc-portal",
+     "name": "Catacombs of Ithaenc Portal",
+     "kind": "landmark",
+     "d": 96,
+     "teleport": "@teleloc 0xF418000C 36.003 79.267 197 1 0 0 0",
+     "pos": [
+      46884.003,
+      4687.267,
+      197
+     ]
+    },
+    {
+     "id": "cathedral-ruins",
+     "name": "Cathedral Ruins",
+     "kind": "poi",
+     "d": 99,
+     "teleport": "@teleloc 0xF418000B 36 60 191 1 0 0 0",
+     "pos": [
+      46884,
+      4668,
+      191
+     ]
+    },
+    {
+     "id": "lost-ruins-portal",
+     "name": "Lost Ruins Portal",
+     "kind": "landmark",
+     "d": 441,
+     "teleport": "@teleloc 0xF518003A 187.589 46.1457 129.79 0.834345 0 0 -0.551242",
+     "pos": [
+      47227.589,
+      4654.146,
+      129.79
+     ]
+    },
+    {
+     "id": "cathedral-wedding",
+     "name": "Cathedral Wedding",
+     "kind": "poi",
+     "d": 484,
+     "teleport": "@teleloc 0xF618000C 40 89 182 -0.766044 0 0 -0.642788",
+     "pos": [
+      47272,
+      4697,
+      182
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "ithaenc-cathedral",
+     "name": "Ithaenc Cathedral",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 82.40S 93.00E",
+     "pos": null,
+     "map": {
+      "ns": -82.4,
+      "ew": 93
+     }
+    }
+   ],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 1939,
+   "timeOfDay": 0.56,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-ithaenc-cathedral"
+  },
+  {
+   "title": "Camp of the Latzimestal",
+   "name": "Camp of the Latzimestal",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === Three tents at 83.0S, 93.2E near Ithaenc Cathedral.<br> The Camp of the Latzimestal was the gathering point for the Dericost forces, including Anadil, Asmolum the Worm, Rytheran, Aerfalle and Elleina of Berkesh prior to the  battle of the undead army against Bael'Zharon in P.Y. 11.<ref>2000/08 - Taste of Twilight -  Dark Revenant Note Translation</ref><ref> 2000/08 - Taste of T",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Camp_of_the_Latzimestal.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -83.0,
+     93.2
+    ]
+   ],
+   "map": {
+    "ns": -83.0,
+    "ew": 93.2
+   },
+   "world": [
+    46836.0,
+    4548.0
+   ],
+   "lb": "0xF317",
+   "coveredDistM": 1917,
+   "coveredBy": "shot:freehold.02",
+   "nearestSite": "freehold",
+   "nearestSiteM": 2124,
+   "gazNear": [
+    {
+     "id": "cathedral-ruins",
+     "name": "Cathedral Ruins",
+     "kind": "poi",
+     "d": 129,
+     "teleport": "@teleloc 0xF418000B 36 60 191 1 0 0 0",
+     "pos": [
+      46884,
+      4668,
+      191
+     ]
+    },
+    {
+     "id": "catacombs-of-ithaenc-portal",
+     "name": "Catacombs of Ithaenc Portal",
+     "kind": "landmark",
+     "d": 147,
+     "teleport": "@teleloc 0xF418000C 36.003 79.267 197 1 0 0 0",
+     "pos": [
+      46884.003,
+      4687.267,
+      197
+     ]
+    },
+    {
+     "id": "lost-ruins-portal",
+     "name": "Lost Ruins Portal",
+     "kind": "landmark",
+     "d": 406,
+     "teleport": "@teleloc 0xF518003A 187.589 46.1457 129.79 0.834345 0 0 -0.551242",
+     "pos": [
+      47227.589,
+      4654.146,
+      129.79
+     ]
+    },
+    {
+     "id": "cathedral-wedding",
+     "name": "Cathedral Wedding",
+     "kind": "poi",
+     "d": 461,
+     "teleport": "@teleloc 0xF618000C 40 89 182 -0.766044 0 0 -0.642788",
+     "pos": [
+      47272,
+      4697,
+      182
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "camp-of-the-latzimestal",
+     "name": "Camp of the Latzimestal",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 83.00S 93.20E",
+     "pos": null,
+     "map": {
+      "ns": -83,
+      "ew": 93.2
+     }
+    }
+   ],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 2133,
+   "timeOfDay": 0.56,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-camp-of-the-latzimestal"
+  },
+  {
+   "title": "Chapel of Xi Ru",
+   "name": "Chapel of Xi Ru",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A Structure, much like the Ithaenc Cathedral on the Vesayen Isles, located at  90.6S 87.5E, not far from the drop by means of the Portalling Device on Xi Ru's Island.<br> It is indicated on the Ingame Map. See Points of Interest Map, no. 68.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chapel_of_Xi_Ru.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -90.6,
+     87.5
+    ],
+    [
+     -83.4,
+     89.8
+    ]
+   ],
+   "map": {
+    "ns": -90.6,
+    "ew": 87.5
+   },
+   "world": [
+    45468.0,
+    2724.0
+   ],
+   "lb": "0xEC0E",
+   "coveredDistM": 3900,
+   "coveredBy": "shot:freehold.02",
+   "nearestSite": "kryst",
+   "nearestSiteM": 3982,
+   "gazNear": [
+    {
+     "id": "xi-rus-chapel-portal",
+     "name": "Xi Ru's Chapel Portal",
+     "kind": "landmark",
+     "d": 11,
+     "teleport": "@teleloc 0xEC0E0032 155.764 24.553 30.977 0 0 0 -1",
+     "pos": [
+      45467.764,
+      2712.553,
+      30.977
+     ]
+    },
+    {
+     "id": "roots-of-the-deru-tree-portal",
+     "name": "Roots of the Deru Tree Portal",
+     "kind": "landmark",
+     "d": 87,
+     "teleport": "@teleloc 0xEC0E002D 120.912 115.15 -0.163 1 0 0 0",
+     "pos": [
+      45432.912,
+      2803.15,
+      -0.163
+     ]
+    },
+    {
+     "id": "portalling-device",
+     "name": "Portalling Device",
+     "kind": "poi",
+     "d": 135,
+     "teleport": "@teleloc 0xEC0D002C 137.96 94.428 0.005 0 0 0 -1",
+     "pos": [
+      45449.96,
+      2590.428,
+      0.005
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 2897,
+   "timeOfDay": 0.58,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-chapel-of-xi-ru"
+  },
+  {
+   "title": "High Mountain Valley",
+   "name": "High Mountain Valley",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A valley situated in the Linvak Mountain Range. An Empyrean Ruins site is found here at 65.3S, 60.3E with a Bunker, an Empyrean Platform and a Meeting Hall Style Building that has a portal to Desert Ridge Border.<br> This is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 66<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/High_Mountain_Valley.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -65.8,
+     59.3
+    ],
+    [
+     -65.3,
+     60.3
+    ]
+   ],
+   "map": {
+    "ns": -65.3,
+    "ew": 60.3
+   },
+   "world": [
+    38940.0,
+    8796.0
+   ],
+   "lb": "0xCA2D",
+   "coveredDistM": 3708,
+   "coveredBy": "shot:baishi.03",
+   "nearestSite": "baishi",
+   "nearestSiteM": 3824,
+   "gazNear": [
+    {
+     "id": "high-mountain-valley",
+     "name": "High Mountain Valley",
+     "kind": "poi",
+     "d": 25,
+     "teleport": "@teleloc 0xCA2D0038 160.3 180.6 167.5 -0.284015 0 0 -0.95882",
+     "pos": [
+      38944.3,
+      8820.6,
+      167.5
+     ]
+    },
+    {
+     "id": "destroyed-mayoi-portal-ca2c",
+     "name": "Destroyed Mayoi Portal",
+     "kind": "landmark",
+     "d": 274,
+     "teleport": "@teleloc 0xCA2C0024 106.895 78.266 152.913 0 0 0 -1",
+     "pos": [
+      38890.895,
+      8526.266,
+      152.913
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "high-mountain-valley",
+     "name": "High Mountain Valley",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xCA2D0038 160.3 180.6 167.5 -0.284015 0 0 -0.95882",
+     "pos": [
+      38944.3,
+      8820.6,
+      167.5
+     ],
+     "map": {
+      "ns": -65.2,
+      "ew": 60.32
+     }
+    },
+    {
+     "id": "high-mountain-valley-portal-b132",
+     "name": "High Mountain Valley Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0xB132010A 88.1006 18.8529 52.097 0.707107 0 0 -0.707107",
+     "pos": [
+      34072.101,
+      9618.853,
+      52.097
+     ],
+     "map": {
+      "ns": -61.87,
+      "ew": 40.02
+     }
+    },
+    {
+     "id": "high-mountain-valley-portal-cfa0",
+     "name": "High Mountain Valley Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0xCFA00108 47.7108 72.0798 1.205 1 0 0 0",
+     "pos": [
+      39791.711,
+      30792.08,
+      1.205
+     ],
+     "map": {
+      "ns": 26.35,
+      "ew": 63.85
+     }
+    }
+   ],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 2260,
+   "timeOfDay": 0.6,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-high-mountain-valley"
+  },
+  {
+   "title": "Festival Stone of Coldeve",
+   "name": "Festival Stone of Coldeve",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Coldeve awaits the bold at 83.5S, 48.5E, near a town of little importance. This Stone rests upon a cliff, overlooking a magnificent channel which leads in from the sea. <br> -- Alatar Locke, The Festival Stones of the Empyreans<br><br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Coldeve.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -83.5,
+     48.5
+    ],
+    [
+     -83.0,
+     49.2
+    ]
+   ],
+   "map": {
+    "ns": -83.5,
+    "ew": 48.5
+   },
+   "world": [
+    36108.0,
+    4428.0
+   ],
+   "lb": "0xBC17",
+   "coveredDistM": 325,
+   "coveredBy": "shot:kara.03",
+   "nearestSite": "kara",
+   "nearestSiteM": 342,
+   "gazNear": [
+    {
+     "id": "direvale-villas-portal",
+     "name": "Direvale Villas Portal",
+     "kind": "landmark",
+     "d": 154,
+     "teleport": "@teleloc 0xBB170026 111.64 134.977 133.619 -0.442334 0 0 0.89685",
+     "pos": [
+      36015.64,
+      4550.977,
+      133.619
+     ]
+    },
+    {
+     "id": "brazenn-domain-portal",
+     "name": "Brazenn Domain Portal",
+     "kind": "landmark",
+     "d": 156,
+     "teleport": "@teleloc 0xBB170026 116.441 140.637 132.533 -0.442334 0 0 0.89685",
+     "pos": [
+      36020.441,
+      4556.637,
+      132.533
+     ]
+    },
+    {
+     "id": "ikama-cottages-portal",
+     "name": "Ikama Cottages Portal",
+     "kind": "landmark",
+     "d": 160,
+     "teleport": "@teleloc 0xBB17002F 122.146 149.782 132.72 -0.458459 0 0 0.888716",
+     "pos": [
+      36026.146,
+      4565.782,
+      132.72
+     ]
+    },
+    {
+     "id": "norstead-portal",
+     "name": "Norstead Portal",
+     "kind": "landmark",
+     "d": 165,
+     "teleport": "@teleloc 0xBB17002F 124.329 156.057 133.448 -0.690991 0 0 0.722864",
+     "pos": [
+      36028.329,
+      4572.057,
+      133.448
+     ]
+    },
+    {
+     "id": "harmonious-blade-cottages-portal",
+     "name": "Harmonious Blade Cottages Portal",
+     "kind": "landmark",
+     "d": 172,
+     "teleport": "@teleloc 0xBB17001E 87.442 138.38 128.942 -0.766527 0 0 -0.642213",
+     "pos": [
+      35991.442,
+      4554.38,
+      128.942
+     ]
+    },
+    {
+     "id": "ishilai-inlet-settlement-portal",
+     "name": "Ishilai Inlet Settlement Portal",
+     "kind": "landmark",
+     "d": 172,
+     "teleport": "@teleloc 0xBB17002F 123.575 164.121 133.197 -0.873749 0 0 0.486377",
+     "pos": [
+      36027.575,
+      4580.121,
+      133.197
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-coldeve",
+     "name": "Festival Stone of Coldeve",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 83.00S 49.20E",
+     "pos": null,
+     "map": {
+      "ns": -83,
+      "ew": 49.2
+     }
+    }
+   ],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 22,
+   "timeOfDay": 0.64,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate (near existing coverage: 325 m from shot:kara.03)",
+   "siteId": "poi-festival-stone-of-coldeve"
+  },
+  {
+   "title": "Ishilai Lyceum",
+   "name": "Ishilai Lyceum",
+   "cats": [
+    "Southeast POI",
+    "Auberean Location",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ishilai_Lyceum.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -88.0,
+     48.9
+    ]
+   ],
+   "map": {
+    "ns": -88.0,
+    "ew": 48.9
+   },
+   "world": [
+    36204.0,
+    3348.0
+   ],
+   "lb": "0xBC11",
+   "coveredDistM": 1181,
+   "coveredBy": "shot:kara.03",
+   "nearestSite": "kara",
+   "nearestSiteM": 1212,
+   "gazNear": [],
+   "gazName": [],
+   "insertAfter": "freehold",
+   "insertBefore": "kara",
+   "insertCostM": 1076,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-ishilai-lyceum"
+  },
+  {
+   "title": "Ancient Town",
+   "name": "Ancient Town",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A larger site at 61.9S, 40.0E with Empyrean Ruins: <br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ancient_Town.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -61.9,
+     40.0
+    ],
+    [
+     -50.1,
+     63.5
+    ]
+   ],
+   "map": {
+    "ns": -61.9,
+    "ew": 40.0
+   },
+   "world": [
+    34068.0,
+    9612.0
+   ],
+   "lb": "0xB132",
+   "coveredDistM": 3720,
+   "coveredBy": "shot:frost-haven.01",
+   "nearestSite": "frost-haven",
+   "nearestSiteM": 3853,
+   "gazNear": [
+    {
+     "id": "heartland-portal-b132",
+     "name": "Heartland Portal",
+     "kind": "landmark",
+     "d": 25,
+     "teleport": "@teleloc 0xB132001A 89 36 52.005 0.707107 0 0 -0.707107",
+     "pos": [
+      34073,
+      9636,
+      52.005
+     ]
+    },
+    {
+     "id": "ancient-town",
+     "name": "Ancient Town",
+     "kind": "poi",
+     "d": 32,
+     "teleport": "@teleloc 0xB1320012 66.2 39.1 50.5 0 0 0 -1",
+     "pos": [
+      34050.2,
+      9639.1,
+      50.5
+     ]
+    },
+    {
+     "id": "life-stone-at-61-8s-39-9e",
+     "name": "Life Stone at 61.8S 39.9E",
+     "kind": "landmark",
+     "d": 33,
+     "teleport": "@teleloc 0xB1320012 62.1586 36.5546 50.4461 0.59874 0 0 0.800943",
+     "pos": [
+      34046.159,
+      9636.555,
+      50.446
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "ancient-town",
+     "name": "Ancient Town",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xB1320012 66.2 39.1 50.5 0 0 0 -1",
+     "pos": [
+      34050.2,
+      9639.1,
+      50.5
+     ],
+     "map": {
+      "ns": -61.79,
+      "ew": 39.93
+     }
+    }
+   ],
+   "insertAfter": "kara",
+   "insertBefore": "frost-haven",
+   "insertCostM": 2974,
+   "timeOfDay": 0.69,
+   "grade": "warm",
+   "chapter": "ch8",
+   "pre": "candidate",
+   "siteId": "poi-ancient-town"
+  }
+ ]
+}

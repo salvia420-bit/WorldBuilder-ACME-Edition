@@ -1,0 +1,274 @@
+{
+ "name": "Shimena Keep",
+ "title": "Shimena Keep",
+ "siteId": "poi-shimena-keep",
+ "summary": "Shimena Keep, built on Aerlinthe's north-east islet to guard the northern approaches to the Ireth Lassel research colony from Pelagian sea-nomads. The kit shows a stone bridge on 10 m piers with metal decking and blue lamps running 110 m north across the strait from the main island to a cliff-sided islet (z 30), where eight halls with rooftop turrets (to z 55.5) ring a courtyard holding a tapered tower (z 66.9, runed chests on top) and a 62 m Tall Tree; Empyrean magical defense batteries line the walls.",
+ "acpedia": {
+  "categories": [
+   "Auberean Location",
+   "Northeast POI",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": 91.6,
+   "ew": 49.6
+  },
+  "mapWorld": [
+   36372.0,
+   46452.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Shimena_Keep.txt",
+  "coveredDistM": 3580,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "Tall Tree",
+   "pos": [
+    36395.7,
+    46356.1,
+    30.0
+   ],
+   "heightM": 58.6,
+   "note": "0x020003A1, top z 88.6."
+  },
+  {
+   "name": "Tapered tower",
+   "pos": [
+    36396.0,
+    46379.1,
+    42.1
+   ],
+   "heightM": 24.8,
+   "note": "0x01001776, top z 66.9."
+  },
+  {
+   "name": "Bridge piers",
+   "pos": [
+    36396.0,
+    46248.0,
+    -0.1
+   ],
+   "heightM": 12.4,
+   "note": "0x02000248 + metal deck 0x01000B53, y 46196-46300."
+  },
+  {
+   "name": "Keep halls",
+   "pos": [
+    36372.0,
+    46332.0,
+    30.0
+   ],
+   "heightM": 25.5,
+   "note": "0x01001783/84/85/81/82 around the courtyard."
+  }
+ ],
+ "site": {
+  "id": "poi-shimena-keep",
+  "name": "Shimena Keep",
+  "gazetteerId": "shimena-keep",
+  "teleport": "@teleloc 0xBDF00024 99 93 12 1 0 0 0",
+  "anchor": [
+   36396.0,
+   46368.0,
+   30.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.47,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "classic.pan",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36395.7,
+     46356.1,
+     50.0
+    ],
+    "height": 38.6,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 189.5,
+    "azimuthRef": "compass",
+    "elevationDeg": -18.5,
+    "distance": 196.8,
+    "fromDeg": 40,
+    "toDeg": 0,
+    "relative": true,
+    "pitchDeg": 0
+   },
+   "standingOrder": "Lock off 2.4 m above the south shore at the bridgehead and pan 40 deg left from the bridge piers marching out to sea onto Shimena Keep and its tall tree; nothing within 13 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Shimena Keep, the castle on Aerlinthe's north-east islet that guarded Ireth Lassel from Pelagian sea-nomads: a 10 m-pier stone bridge with blue lamps crosses the strait to the walled islet (cliffs to z 30) where eight halls with rooftop turrets ring a courtyard, a tapered tower (66.9 m) and a 62 m Tall Tree. The pan starts on the near piers and ends on the keep's crown, sun behind the camera. Verified with poi-kit check.mjs - take 8s: AGL 2.42..2.4 m, nearest 13.05 m (spawn Ghost Phantom Camp Gen), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 2.42..2.4 m, nearest 13.05 m, LOS blocked 0/25, in frame 100%, water 0%."
+  },
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "path": [
+    [
+     36409,
+     46206,
+     4
+    ],
+    [
+     36409,
+     46262,
+     4
+    ]
+   ],
+   "params": {
+    "heightAGL": 4,
+    "speed": 6.2,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "lookAhead": 14,
+    "tiltDeg": 8,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "standingOrder": "Skim north 4 m above the strait 13 m east of the bridge piers at 6.2 m/s toward the keep, stopping 40 m short of the islet cliff; open water only, nothing within 10 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water shot along the bridge: the stone piers stream past on the left while the keep's cliff and walls rise ahead. Subject-less (looks ahead). Verified with poi-kit check.mjs - take 9s: AGL 4..4 m, nearest 10.48 m (static 0xBDF0#11 0x02000248), vmax 6.22 m/s, water 89%; edit 2-8s: AGL 4..4 m, nearest 10.48 m, water 100%; flight cinema: peak 6.24 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36395.7,
+     46356.1,
+     30.0
+    ],
+    "height": 58.6,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 70,
+    "radiusEnd": 80,
+    "heightStart": 30,
+    "heightEnd": 55,
+    "revolutions": 0.1,
+    "direction": "ccw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb a 36 deg counter-clockwise corkscrew round the keep at 70 m to 80 m radius, 30 m to 55 m above its courtyard; keep 25 m from every roof, turret and the Tall Tree's crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hero helix of the keep: the walled islet, its turreted halls, tower and great tree turn and drop away as the drone climbs over the strait, open sea around. Noon sun from the south. Verified with poi-kit check.mjs - take 11s: AGL 60..85 m, nearest 27.08 m (static 0xBDF1#85 0x01001783), vmax 7.76 m/s, LOS blocked 0/45, in frame 100%, water 49%; edit 2.5-9s: AGL 63.05..83 m, nearest 30.64 m, LOS blocked 0/27, in frame 100%, water 52%; flight cinema: peak 7.75 m/s (cap 12), tracking gap 0.06 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-shimena-keep.01",
+   "technique": "classic.pan",
+   "rank": 2,
+   "check": "take 8s: AGL 2.42..2.4 m, nearest 13.05 m (spawn Ghost Phantom Camp Gen), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 2.42..2.4 m, nearest 13.05 m, LOS blocked 0/25, in frame 100%, water 0%"
+  },
+  {
+   "shot": "poi-shimena-keep.02",
+   "technique": "drone.terrain-skim",
+   "rank": 1,
+   "check": "take 9s: AGL 4..4 m, nearest 10.48 m (static 0xBDF0#11 0x02000248), vmax 6.22 m/s, water 89%; edit 2-8s: AGL 4..4 m, nearest 10.48 m, water 100%; flight cinema: peak 6.24 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-shimena-keep.03",
+   "technique": "drone.helix",
+   "rank": 1,
+   "check": "take 11s: AGL 60..85 m, nearest 27.08 m (static 0xBDF1#85 0x01001783), vmax 7.76 m/s, LOS blocked 0/45, in frame 100%, water 49%; edit 2.5-9s: AGL 63.05..83 m, nearest 30.64 m, LOS blocked 0/27, in frame 100%, water 52%; flight cinema: peak 7.75 m/s (cap 12), tracking gap 0.06 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 18.5,
+ "techniques": [
+  "classic.pan",
+  "drone.terrain-skim",
+  "drone.helix"
+ ]
+}

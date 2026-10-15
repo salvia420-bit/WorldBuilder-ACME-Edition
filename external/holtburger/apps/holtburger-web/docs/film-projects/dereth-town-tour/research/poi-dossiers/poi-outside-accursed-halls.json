@@ -1,0 +1,139 @@
+{
+ "name": "Outside Accursed Halls",
+ "title": "Outside Accursed Halls",
+ "siteId": "poi-outside-accursed-halls",
+ "summary": "The twin of Walled Portals, deeper in the Direlands: a small walled court of six flat-roofed halls with stake palisades on a rocky shelf (z 40) in the sedimentary badlands. It holds the Accursed Halls portal and the Walled Portals return portal. Its steps lead from inside to outside, which once made it a levelling spot for young archers and mages.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -24.0,
+   "ew": -57.8
+  },
+  "mapWorld": [
+   10596.0,
+   18708.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Outside_Accursed_Halls.txt",
+  "coveredDistM": 6941,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Accursed Halls Portal",
+   "pos": [
+    10579.5,
+    18701.8,
+    39.9
+   ],
+   "heightM": 3.5,
+   "note": "Spawn."
+  },
+  {
+   "name": "Walled Portals portal",
+   "pos": [
+    10612.6,
+    18690.2,
+    39.9
+   ],
+   "heightM": 3.5,
+   "note": "Spawn."
+  }
+ ],
+ "site": {
+  "id": "poi-outside-accursed-halls",
+  "name": "Outside Accursed Halls",
+  "gazetteerId": "outside-accursed-halls",
+  "teleport": "@teleloc 0x3761000C 37.31 80.17 40 0 0 0 -1",
+  "anchor": [
+   10596,
+   18696,
+   40
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.73,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer outside-accursed-halls teleloc (10597.3,18704.2,40) in the court."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [],
+ "verification": [
+  {
+   "shot": "poi-outside-accursed-halls.01",
+   "technique": "drone.top-down-rise",
+   "rank": 3,
+   "check": "take 10s: AGL 18..75 m, nearest 14.51 m (static 0x3761#32 0x020003FB), vmax 8.95 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2.5-8s: AGL 26.35..69.6 m, nearest 22.52 m (static 0x3761#32 0x020003FB), vmax 8.95 m/s, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 8.94 m/s (cap 12), tracking gap 0.07 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5.5,
+ "techniques": [
+  "drone.top-down-rise"
+ ],
+ "criticRemovedShots": [
+  {
+   "id": "poi-outside-accursed-halls.01",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10596,
+     18696,
+     40
+    ],
+    "height": 5,
+    "radius": 30
+   },
+   "params": {
+    "heightStart": 18,
+    "heightEnd": 75,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 3
+   },
+   "standingOrder": "Rise straight up from 18 m to 75 m over the walled court and its two portal swirls, the image turning 40 degrees as the badlands open around it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down rise: the drone looks straight down at the small walled court with its two portal swirls (Accursed Halls and Walled Portals). It climbs from 18 m to 75 m as the image turns 40 deg, and the court shrinks into the cracked sedimentary badlands. Rank 3: this is the twin of the Walled Portals fort. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 18..75 m, nearest 14.51 m (static 0x3761#32 0x020003FB), vmax 8.95 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2.5-8s: AGL 26.35..69.6 m, nearest 22.52 m (static 0x3761#32 0x020003FB), vmax 8.95 m/s, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 8.94 m/s (cap 12), tracking gap 0.07 m.",
+   "criticReason": "Duplicate view: the dossier itself calls this 'the twin of Walled Portals' - the same Tumerok walled court (two 0x01001124 walls, four corner halls, identical stake palisades) with two portal swirls, and the build places it back to back with poi-walled-portals.01 (edit 1706.1 s top-down-rise, 1711.0 s boom-rise over the same kind of wall onto the same two swirls). Rank 3; site dropped, Walled Portals keeps the shot."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed drone.top-down-rise: Duplicate view: the dossier itself calls this 'the twin of Walled Portals' - the same Tumerok walled court (two 0x01001124 walls, four corner halls, identical stake palisades) with two portal swirls, and the build places it back to back with poi-walled-portals.01 (edit 1706.1 s top-down-rise, 1711.0 s boom-rise over the same kind of wall onto the same two swirls). Rank 3; site dropped, Walled Portals keeps the shot."
+ ]
+}

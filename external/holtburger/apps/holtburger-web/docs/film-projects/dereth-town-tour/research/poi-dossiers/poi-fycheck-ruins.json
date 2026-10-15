@@ -1,0 +1,193 @@
+{
+ "name": "Fycheck Ruins",
+ "title": "Fycheck Ruins",
+ "siteId": "poi-fycheck-ruins",
+ "summary": "An Empyrean ruin site on the south end of the same 238 m ridge as Fycheck Outpost: two stone bunkers, a meeting hall, three statues, pillar rows and a 19 m Empyrean Stone Tower on the edge of the eastern drop.",
+ "landmarks": [
+  {
+   "name": "Empyrean Stone Tower",
+   "pos": [
+    40116.0,
+    15756.0,
+    238.0
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106 on the east rim, broken stones on top (z 254)."
+  },
+  {
+   "name": "Meeting hall",
+   "pos": [
+    40086.0,
+    15780.8,
+    238.0
+   ],
+   "heightM": 10.1,
+   "note": "0x01000F69 with pillar rows."
+  },
+  {
+   "name": "Stone bunkers",
+   "pos": [
+    40072.8,
+    15780.0,
+    238.0
+   ],
+   "heightM": 4.1,
+   "note": "0x010011C0 and 0x0100107D (40048, 15825)."
+  },
+  {
+   "name": "Empyrean statues",
+   "pos": [
+    40072.8,
+    15785.8,
+    238.0
+   ],
+   "heightM": 2.8,
+   "note": "Three 0x02000397."
+  }
+ ],
+ "site": {
+  "id": "poi-fycheck-ruins",
+  "name": "Fycheck Ruins",
+  "teleport": "@teleloc 0xD052001B 94.0 56.0 238.2 1 0 0 0",
+  "anchor": [
+   40080.0,
+   15775.0,
+   238.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.78,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry; teleport derived on the ridge top 40 m west of the ruins (ground 237.7, nearest drawn object 6.1 m)."
+ },
+ "insertAfter": "sawato",
+ "insertBefore": "shoushi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI",
+   "Historical Site",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -36.2,
+   "ew": 65.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1984,
+  "coveredBy": "shot:shoushi.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fycheck_Ruins.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-fycheck-ruins.01",
+   "site": "poi-fycheck-ruins",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40116.0,
+     15756.0,
+     238.0
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 58,
+    "radiusEnd": 32,
+    "heightStart": 46,
+    "heightEnd": 14,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Spiral down clockwise around the Empyrean Stone Tower of Fycheck Ruins from 58 m out and 46 m up to 32 m out and 14 m up; stay 6 m from the tall pine on the ridge.",
+   "notes": "Spiral down onto the ridge-top ruin field: the 19 m Empyrean Stone Tower on the edge of the 100 m eastern drop, the bunkers, the meeting hall and the pillar rows; golden west sun behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 14..44.2 m, nearest drawn 6.7 m (scenery-default 0x02000258@40058,15751), vmax 7.68 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 16.54..40.8 m, nearest drawn 6.7 m (scenery-default 0x02000258@40058,15751), vmax 7.68 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.66 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-fycheck-ruins.02",
+   "site": "poi-fycheck-ruins",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     6.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40116.0,
+     15756.0,
+     238.0
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 315,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 15,
+    "spinDeg": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.8 m above the summit 15 m north-west of the Empyrean Stone Tower and look steeply up its sunlit face while the sky rolls 8 degrees; keep 7 m from the trees.",
+   "notes": "Worm's-eye up the sunlit west face of the Empyrean Stone Tower, broken stones on its top against the sky. Verified (check.mjs, full take flown): take 0-7 s: AGL 0.8..0.8 m, nearest drawn 7.74 m (scenery-default 0x02000246@40099,15757), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 7.74 m (scenery-default 0x02000246@40099,15757), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-fycheck-ruins.01": "take 0-11 s: AGL 14..44.2 m, nearest drawn 6.7 m (scenery-default 0x02000258@40058,15751), vmax 7.68 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 16.54..40.8 m, nearest drawn 6.7 m (scenery-default 0x02000258@40058,15751), vmax 7.68 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.66 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-fycheck-ruins.02": "take 0-7 s: AGL 0.8..0.8 m, nearest drawn 7.74 m (scenery-default 0x02000246@40099,15757), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 7.74 m (scenery-default 0x02000246@40099,15757), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%"
+ }
+}

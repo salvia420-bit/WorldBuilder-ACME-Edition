@@ -1,0 +1,271 @@
+{
+ "name": "Tumerok Fort (9.7S, 63.3W)",
+ "title": "9.7S, 63.3W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-97s-633w",
+ "summary": "A huge Tumerok fort with loads of Augmented Tumeroks (acpedia, Points of Interest Map no. 32), the largest fortification in this batch. It is about 200 x 220 m of flat-roofed black halls with stake palisades and eight 31 m spire towers on a flat valley floor (z 36). Shards of the Abyssal Totem standing stones block several entrances, and the Tumerok Dungeon portal is in the inner courtyard.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -9.7,
+   "ew": -63.3
+  },
+  "mapWorld": [
+   9276.0,
+   22140.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/9_7S_63_3W_Tumerok_Fort.txt",
+  "coveredDistM": 3330,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "South wall and corner towers",
+   "pos": [
+    9336,
+    22044,
+    36
+   ],
+   "heightM": 30.75,
+   "note": "Wall face at y 22042, with towers at (9278,22046) and (9393,22047)."
+  },
+  {
+   "name": "Tumerok Dungeon portal",
+   "pos": [
+    9362.5,
+    22163.1,
+    36
+   ],
+   "heightM": 3.5,
+   "note": "Spawn in the inner courtyard."
+  },
+  {
+   "name": "Abyssal Totem shards",
+   "pos": [
+    9279.8,
+    22139.8,
+    36
+   ],
+   "heightM": 1.2,
+   "note": "0x0200068C at the west entrance and at (9301,22211)."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-97s-633w",
+  "name": "Tumerok Fort (9.7S, 63.3W)",
+  "gazetteerId": "tumerok-dungeon-portal",
+  "teleport": "@teleloc 0x3072000E 34 132 35.3 1 0 0 0",
+  "anchor": [
+   9372,
+   22152,
+   36
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc outside the south-west corner at (9250,22020), ground 34.8, 25 m from the tower. The gazetteer tumerok-dungeon-portal teleloc lands on the portal."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-97s-633w.01",
+   "technique": "fpv.fpv-proximity",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9393,
+     22047,
+     36
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "offset": 4,
+    "side": "left",
+    "heightAGL": 2.5,
+    "speed": 10,
+    "cornerRadius": 5,
+    "alat": 10,
+    "lookAhead": 12,
+    "leanDeg": 8,
+    "maxBankDeg": 25,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     9294,
+     22042.3,
+     36
+    ],
+    [
+     9378,
+     22042.3,
+     36
+    ]
+   ],
+   "standingOrder": "Race east 4 m off the fort's long south wall at head height between its two spire towers, wall on the left; never closer than 3 m to the stone.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "FPV proximity: the drone races east at 10.5 m/s, 2.5 m above the ground and 4 m off the long south wall of the huge Tumerok fort (flat-roofed black halls with stake palisades), between its two corner spire towers. The south-east tower grows ahead-left (subject ndc up to -0.25, 0.66). The late-afternoon sun lights the wall from behind-right. The wall is a backdrop rather than a facade pan: it is fast, close and tracks a tower ahead. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 2.5..2.5 m, nearest 3.95 m (static 0x3072#125 0x01001124), vmax 10.5 m/s, LOS blocked 0/33, in frame 97%, water 0%, retail-bake tree 212.6 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.5..2.5 m, nearest 3.95 m (static 0x3072#125 0x01001124), vmax 10.5 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 225.6 m (not drawn by the default bake); flight fpv: peak 10.55 m/s (cap 25), tracking gap 0.04 m."
+  },
+  {
+   "id": "poi-tumerok-fort-97s-633w.02",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9372,
+     22152,
+     36
+    ],
+    "height": 31,
+    "radius": 110
+   },
+   "params": {
+    "azimuthDeg": 225,
+    "azimuthRef": "compass",
+    "distance": 250,
+    "heightM": 85,
+    "driftDeg": 10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hang 250 m south-west and 85 m above the huge Tumerok fort with the sun behind, drifting 10 degrees and easing 8 percent closer over its eight spire towers and walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing: the lens hangs 250 m south-west of the fort and 87 m up with the sun behind it. It drifts 10 deg and eases 8% closer over the 200 x 220 m fortification: eight spire towers, rows of halls, courtyards and the standing stones that block its entrances. It is the scale shot of the batch's biggest Tumerok fort. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 87..87 m, nearest 96.84 m (static 0x3072#124 0x01001161), vmax 7.3 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 158.9 m (not drawn by the default bake); edit 2-8.5s: AGL 87..87 m, nearest 97.24 m (static 0x3072#124 0x01001161), vmax 7.3 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 159.7 m (not drawn by the default bake)."
+  },
+  {
+   "id": "poi-tumerok-fort-97s-633w.03",
+   "technique": "classic.push-in",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9362.5,
+     22163.1,
+     36
+    ],
+    "height": 3.5,
+    "radius": 2
+   },
+   "params": {
+    "azimuthDeg": 255,
+    "azimuthRef": "compass",
+    "elevationDeg": 3,
+    "thirds": "center",
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "standingOrder": "Push slowly through the courtyard toward the Tumerok Dungeon portal swirl at the heart of the fort; keep 3 m from the halls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Portal: the lens pushes slowly east-north-east through the inner courtyard toward the Tumerok Dungeon portal swirl at the heart of the fort, 2-2.4 m up, with halls 8 m or more to either side. Rank 3 detail. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 2.04..2.4 m, nearest 7.99 m (static 0x3073#461 0x01001201), vmax 1.33 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 168.6 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.06..2.3 m, nearest 8.19 m (static 0x3073#461 0x01001201), vmax 1.33 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 168.9 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-fort-97s-633w.01",
+   "technique": "fpv.fpv-proximity",
+   "rank": 1,
+   "check": "take 8s: AGL 2.5..2.5 m, nearest 3.95 m (static 0x3072#125 0x01001124), vmax 10.5 m/s, LOS blocked 0/33, in frame 97%, water 0%, retail-bake tree 212.6 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.5..2.5 m, nearest 3.95 m (static 0x3072#125 0x01001124), vmax 10.5 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 225.6 m (not drawn by the default bake); flight fpv: peak 10.55 m/s (cap 25), tracking gap 0.04 m"
+  },
+  {
+   "shot": "poi-tumerok-fort-97s-633w.02",
+   "technique": "classic.establishing",
+   "rank": 2,
+   "check": "take 10s: AGL 87..87 m, nearest 96.84 m (static 0x3072#124 0x01001161), vmax 7.3 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 158.9 m (not drawn by the default bake); edit 2-8.5s: AGL 87..87 m, nearest 97.24 m (static 0x3072#124 0x01001161), vmax 7.3 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 159.7 m (not drawn by the default bake)"
+  },
+  {
+   "shot": "poi-tumerok-fort-97s-633w.03",
+   "technique": "classic.push-in",
+   "rank": 3,
+   "check": "take 8s: AGL 2.04..2.4 m, nearest 7.99 m (static 0x3073#461 0x01001201), vmax 1.33 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 168.6 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.06..2.3 m, nearest 8.19 m (static 0x3073#461 0x01001201), vmax 1.33 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 168.9 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 16.5,
+ "techniques": [
+  "fpv.fpv-proximity",
+  "classic.establishing",
+  "classic.push-in"
+ ]
+}

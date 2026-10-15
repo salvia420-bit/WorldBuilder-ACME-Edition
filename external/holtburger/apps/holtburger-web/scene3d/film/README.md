@@ -20,7 +20,7 @@ the owner's GTX-1070 box, off-screen and muted, stepped on a film clock and enco
 | Pilot (System One) | JEV `typesafe/jev-1.13`, OpenRouter `POST /api/alpha/decisions` | ≈ 3–8 decisions/s, only when needed | `pilot/*` (page) ⇄ `runtime/jev_bridge_page.js` ⇄ `window.__filmJev` ⇄ `tools/film/lib/jev_broker.mjs` → `jev.mjs` |
 | Reflexes + flight | page code | every frame | `runtime/take_player.js`: trajectory → `drone/flight_model.js` → pilot residual → `runtime/safety.js` → `runtime/camera_owner.js` → render → `runtime/recorder.js` |
 | Perception | page code | ≈ 10–20 Hz, ≤ 16 sweeps/frame | `scene/{world_query,sensors,los,particles_query,terrain_corridor}.js` → SensorFrame → `pilot/sense_words.js` words |
-| Planning (pure) | page + Node | per shot | `shots/*` (63 techniques), `scene/{solver,dungeon_route}.js`, `core/*` |
+| Planning (pure) | page + Node | per shot | `shots/*` (64 techniques), `scene/{solver,dungeon_route}.js`, `core/*` |
 | Tooling (Node) | the CLI | per command | `tools/film/{film.mjs, lib, plan, audio, sites, data}` |
 
 Per stepped frame k (film time k/fps; the normal loop is held): `traj.sample(progress)` (re-anchored to a live

@@ -1,0 +1,144 @@
+{
+ "name": "Festival Stone of Coldeve",
+ "title": "Festival Stone of Coldeve",
+ "siteId": "poi-festival-stone-of-coldeve",
+ "summary": "The Festival Stone of Coldeve, which 'rests upon a cliff, overlooking a magnificent channel which leads in from the sea' (Alatar Locke). In the kit, the stone with its Anniversary Effect glow stands between two ancient 5.5 m columns on a cliff ledge at z 172.7. The ground falls 90 m to the north-east into the valley toward the Ishilai Inlet. The stone is 510 m east of Kara's centre.",
+ "landmarks": [
+  {
+   "name": "Festival Stone",
+   "pos": [
+    36280.4,
+    4545.6,
+    172.7
+   ],
+   "heightM": 3.5,
+   "note": "Anniversary Effect at z 180.7."
+  },
+  {
+   "name": "Ancient column south (0x020003C7)",
+   "pos": [
+    36279.3,
+    4541.6,
+    172.7
+   ],
+   "heightM": 5.5,
+   "note": ""
+  },
+  {
+   "name": "Ancient column north (0x020003C7)",
+   "pos": [
+    36280.2,
+    4549.3,
+    172.7
+   ],
+   "heightM": 5.5,
+   "note": ""
+  },
+  {
+   "name": "Kara",
+   "pos": [
+    35893,
+    4419,
+    168
+   ],
+   "heightM": 0,
+   "note": "The tour town, 510 m west-south-west."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-coldeve",
+  "name": "Festival Stone of Coldeve",
+  "gazetteerId": "coldeve-festival-stone",
+  "teleport": "@teleloc 0xBC17003E 169.1 133.2 173.9 0.601815 0 0 -0.798636",
+  "anchor": [
+   36280,
+   4545,
+   172.7
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.64,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer coldeve-festival-stone (outdoor, on the cliff ledge 16 m west of the stone). The acpedia map point (83.5S 48.5E) is a mountainside 209 m south-west of the real stone; the stone is 509 m east of Kara's centre and is not framed by any existing Kara shot. Landblocks south of y 4224 (0xBA15-0xBD15) are missing from the kit."
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -83.5,
+   "ew": 48.5
+  },
+  "coordSrc": "index",
+  "world": [
+   36108.0,
+   4428.0
+  ],
+  "coveredDistM": 325,
+  "coveredBy": "shot:kara.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Coldeve.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-coldeve.01",
+   "site": "poi-festival-stone-of-coldeve",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36280.4,
+     4545.6,
+     172.74
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 230,
+    "elevationDeg": 4,
+    "distance": 10,
+    "thirds": "center",
+    "riseM": 6,
+    "keepAim": true
+   },
+   "standingOrder": "Rise 6 m behind the Festival Stone of Coldeve and its two ancient columns, the afternoon sun at your back, until the cliff edge drops away and the channel opens beyond; stay 2 m clear of the columns.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pedestal rise of 6 m, 10 m south-west of the Festival Stone of Coldeve and its two ancient columns, with the afternoon sun (0.64) at the back. The camera tilts down as it climbs, so the cliff edge drops away and the valley toward the Ishilai channel opens beyond the stone. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.78..8.8 m, nearest drawn 5.92 m (static 0xBC17#0 0x020003C7), vmax 1.18 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 3.01..8.6 m, nearest drawn 5.92 m (static 0xBC17#0 0x020003C7), vmax 1.18 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-coldeve.01": "take 0-8 s: AGL 2.78..8.8 m, nearest drawn 5.92 m (static 0xBC17#0 0x020003C7), vmax 1.18 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 3.01..8.6 m, nearest drawn 5.92 m (static 0xBC17#0 0x020003C7), vmax 1.18 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

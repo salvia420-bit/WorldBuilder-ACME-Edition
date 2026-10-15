@@ -1,0 +1,3709 @@
+{
+ "batch": 0,
+ "shots": [
+  {
+   "id": "holtburg.01",
+   "site": "holtburg",
+   "technique": "drone.rising-reveal",
+   "takeSec": 14.333333,
+   "origEditSec": 14.333333,
+   "origInSec": 0,
+   "origEditIn": 0,
+   "section": {
+    "i": 0,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "distance": 268,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "obstacleDistance": 13,
+    "obstacleHeight": 10.5,
+    "heightStart": 1.8,
+    "clearance": 12,
+    "forward": 10,
+    "endPitchDeg": -9,
+    "minClearance": 1.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32556,
+     34840,
+     28
+    ],
+    "height": 10,
+    "radius": 60
+   },
+   "standingOrder": "Rise straight up the south wall of the hilltop hall and over its roof to reveal the lower town and the River Prosper below; stay 6 m off the wall and 5 m above the roof.",
+   "notes": "Film-opening rise: lens starts 1.9 m above the hilltop grass beside the Life Stone, staring up the 10 m south wall of the brick hilltop hall (S121, top z 104.2), climbs 20.6 m straight up the face and over the roofline while pitching from +15 to -9 deg, revealing the lower-town rooftops and the River Prosper 270 m north (subject hidden for the first ~9.75 s by design, clear from t=10). Morning sun from the east side-lights the hall. Clearance: wall 13 m ahead at the start, 12.4 m at the end, end z 116.5 = 12.3 m above the roof; nearest prop a candelabra 4.5 m; vmax 2.6 m/s. JEV candidate if the film's hero budget allows.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "holtburg.02",
+   "site": "holtburg",
+   "technique": "classic.low-angle",
+   "takeSec": 9.125,
+   "origEditSec": 9.125,
+   "origInSec": 0,
+   "origEditIn": 14.333333,
+   "section": {
+    "i": 1,
+    "label": "B",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthDeg": 120,
+    "azimuthRef": "compass",
+    "elevationDeg": -25,
+    "distance": 5.5,
+    "thirds": "center",
+    "pushM": 1.0
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32529.3,
+     34571.8,
+     94
+    ],
+    "height": 3.2,
+    "radius": 1.2
+   },
+   "standingOrder": "Look up at the Holtburg Life Stone from just above the grass with the morning sky behind it; creep 1 m closer and keep 2 m from the crystal.",
+   "notes": "Life Stone detail: lens 0.7 m above the hilltop grass ESE of the crystal (bearing 120, sun behind the camera), looking up at the 3.6 m sparkling stone against the morning sky and creeping 1 m closer. Alcott the greeter stands 3 m NE of the stone, off-axis. Clearance: 4 m from the stone centre (>= 2.2 m from its 3 m-wide setup bounds), no static within 4 m (WBT query-radius 0 hits).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "holtburg.03",
+   "site": "holtburg",
+   "technique": "drone.parallax-slide",
+   "takeSec": 12.291667,
+   "origEditSec": 12.291667,
+   "origInSec": 0,
+   "origEditIn": 23.458333,
+   "section": {
+    "i": 2,
+    "label": "C",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "distance": 13,
+    "heightAGL": 3.0,
+    "slide": 34,
+    "panAmount": 0.15,
+    "direction": "right",
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32532,
+     34688,
+     66
+    ],
+    "height": 10,
+    "radius": 12
+   },
+   "standingOrder": "Glide east along the timbered fronts of the lower-town halls at walking pace, 9 m off the walls and 3 m up, past the forges and lanterns; nothing may cross between lens and wall.",
+   "notes": "The town's one facade pan (Aluvian timber-and-stone halls): glides 34 m east along the south fronts of S118, S114 and S117 on the lower terrace, 7.5-9 m off the walls and 2.6-3.8 m above the sloping street, ending on the brass lanterns and the Fletching Forge glow. Morning sun rakes the facades from the right. Clearance: nearest wall 7.5 m, no static/scenery within 4 m of the line (query-radius 0 hits), vmax 4.5 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "holtburg.04",
+   "site": "holtburg",
+   "technique": "drone.terrain-skim",
+   "takeSec": 11.291667,
+   "origEditSec": 11.291667,
+   "origInSec": 0,
+   "origEditIn": 35.75,
+   "section": {
+    "i": 3,
+    "label": "D",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 4,
+    "speed": 7,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": 6,
+    "ends": "cruise"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32556,
+     34596,
+     94
+    ],
+    "height": 12,
+    "radius": 30
+   },
+   "standingOrder": "Skim south 4 m above the River Prosper toward Holtburg on its hill; stay over open water and 30 m from the banks.",
+   "notes": "Water: skims south 4 m above the running water of the River Prosper (terrain type WaterRunning, z 28) for 80 m with Holtburg's lower terrace and hilltop roofs rising ahead (the roofs peek over the terrace edge, the town on its hill as in the lore). Path given explicitly (32556,34935)->(32556,34855); whole path over water, banks and trees >= 31.5 m away; vmax 7.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "holtburg.05",
+   "site": "holtburg",
+   "technique": "drone.pano-360",
+   "takeSec": 17.041667,
+   "origEditSec": 16.25,
+   "origInSec": 0,
+   "origEditIn": 47.041667,
+   "section": {
+    "i": 4,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 30,
+    "yawDeg": 300,
+    "direction": "cw",
+    "startHeadingDeg": 0,
+    "relativeToSubject": false,
+    "tiltDeg": -12,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32566,
+     34586,
+     94
+    ],
+    "height": 12,
+    "radius": 40
+   },
+   "standingOrder": "Hover 30 m above the hilltop square and turn slowly clockwise from the river round over the Tiofor woods and the eastern towers; hold height, no drift.",
+   "notes": "Closing panorama: hovers 30 m above the hilltop square (z 124, 17 m above the tallest hilltop roof 106.7) and turns 300 deg clockwise from the river north through the eastern spire towers, the southern woods and back west; clouds on. Clearance 19.8 m to the nearest roof; no translation.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "glenden-wood.01",
+   "site": "glenden-wood",
+   "technique": "classic.establishing",
+   "takeSec": 13,
+   "origEditSec": 12.208333,
+   "origInSec": 0.791667,
+   "origEditIn": 63.291667,
+   "section": {
+    "i": 6,
+    "label": "F",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthDeg": 10,
+    "azimuthRef": "compass",
+    "distance": 150,
+    "heightM": 55,
+    "driftDeg": -8,
+    "pushPct": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30995,
+     31615,
+     50
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "standingOrder": "Drift slowly in over the northern road and look down into the forest bowl of Glenden Wood; stay 8 m above every tree top.",
+   "notes": "Establishing: from 46 m above the north road (z 105) the camera drifts 8 deg and pushes 10 % toward the town, looking down into the forest bowl of Glenden Wood (z 50) ringed by 25-60 m trees, the giant tree and the cottages in the clearing. Noon light from high east. Clearance: 24.6 m to the nearest crown, >= 18 m above every tree top in view; line of sight to the town centre clear in all samples.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "glenden-wood.02",
+   "site": "glenden-wood",
+   "technique": "classic.pov",
+   "takeSec": 12.916667,
+   "origEditSec": 12.916667,
+   "origInSec": 0,
+   "origEditIn": 75.5,
+   "section": {
+    "i": 7,
+    "label": "G",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": null,
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 4,
+    "lookYawDeg": 0,
+    "advanceM": 22,
+    "bobM": 0.03,
+    "stepHz": 1.8,
+    "turnLag": 0.35
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30866,
+     31603.5,
+     50
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 1.45
+   },
+   "standingOrder": "Walk east along the forest road into Glenden Wood at an easy pace with the Life Stone and the giant trees ahead; keep to the road, 4 m from every trunk.",
+   "notes": "POV walk-in: eye height 1.66 m on the west forest road (z 50, flat), walking 22 m east at an easy pace with a light step bob; the Life Stone sparkles right of centre (NDC x 0.33->0.60) and the giant tree's canopy fills the upper frame (NDC y 0.5->0.8); foliage pollen/leaves catch the noon light. Clearance: passes 2.7 m from a 2.3 m bush and >= 4.6 m from every trunk; query-radius 4 m = 0 statics.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "glenden-wood.03",
+   "site": "glenden-wood",
+   "technique": "classic.tilt",
+   "takeSec": 10,
+   "origEditSec": 10,
+   "origInSec": 0,
+   "origEditIn": 88.416667,
+   "section": {
+    "i": 8,
+    "label": "H",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthDeg": 85,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 14,
+    "fromDeg": 42,
+    "toDeg": 0,
+    "relative": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31058.4,
+     31606.8,
+     50.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Start on the forest canopy above the cottages and tilt down slowly onto the blue swirl of the Town Network portal; hold position 10 m from the portal.",
+   "notes": "Particle detail: locked position 14 m east of the Town Network portal (open lawn, sun behind), tilting from 42 deg above the portal (the canopy of a 33 m tree and the cottage roofs against the sky) down onto the blue swirl. Clearance: 3.2 m from a signpost that stays out of frame (60 deg off-axis), no other static within 4 m. Note: the opt-in retail scenery bake would place a pine at this spot; the default bake (what renders) is clear.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "glenden-wood.04",
+   "site": "glenden-wood",
+   "technique": "drone.helix",
+   "takeSec": 16.083333,
+   "origEditSec": 16.083333,
+   "origInSec": 0,
+   "origEditIn": 98.416667,
+   "section": {
+    "i": 9,
+    "label": "I",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 36,
+    "radiusEnd": 50,
+    "heightStart": 50,
+    "heightEnd": 82,
+    "revolutions": 0.28,
+    "direction": "cw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30931.3,
+     31601.6,
+     50
+    ],
+    "height": 58,
+    "radius": 12
+   },
+   "standingOrder": "Spiral slowly up and around the giant tree of Glenden Wood with the town bowl behind it; stay 8 m above every tree top and 20 m from the giant crown.",
+   "notes": "Hero aerial: helix 0.28 turn clockwise around the 58 m giant tree from SW to N, radius 36->50 m, rising z 100->132, the town clearing beside it. Clearance: >= 14 m above the default-bake pine tops (<= 86), 19.7 m to the nearest crown, 30+ m from the giant crown; vmax 8.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "glenden-wood.05",
+   "site": "glenden-wood",
+   "technique": "drone.top-down-rise",
+   "takeSec": 14.916667,
+   "origEditSec": 14.125,
+   "origInSec": 0,
+   "origEditIn": 114.5,
+   "section": {
+    "i": 11,
+    "label": "K",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightStart": 16,
+    "heightEnd": 82,
+    "rotateDeg": 60,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30990,
+     31615,
+     50
+    ],
+    "height": 6,
+    "radius": 40
+   },
+   "standingOrder": "Look straight down on the town square and rise vertically out of the forest bowl while turning slowly; stay 15 m from every crown.",
+   "notes": "Closing top-down: straight down on the town square at noon (short shadows), rising 16->82 m above it while turning 60 deg; roofs, wells, the siege tent and canopy rings become a pattern. Clearance: 17 m horizontally from the nearest crown (top 83) at the lowest point; vmax 7.4 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "cragstone.01",
+   "site": "cragstone",
+   "technique": "drone.tilt-reveal",
+   "takeSec": 14.416667,
+   "origEditSec": 13.625,
+   "origInSec": 0.791667,
+   "origEditIn": 128.625,
+   "section": {
+    "i": 12,
+    "label": "L",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -5,
+    "heightAGL": 20,
+    "distance": 235,
+    "drift": 10,
+    "bearingDeg": 76,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36240,
+     30630,
+     40
+    ],
+    "height": 30,
+    "radius": 120
+   },
+   "standingOrder": "Start looking straight down at the sunlit bay, then tilt up while drifting in to reveal Cragstone's terraces climbing to the windmill; hold 55 m above the water.",
+   "notes": "Water opener: starts 58 m above Victory Bay (shallow sea, z 2) looking almost straight down at the water (-80 deg), then tilts up to -5 deg while drifting 10 m in, revealing the sunlit terraces of Cragstone climbing from the shore ridge to the windmill on the skyline (morning sun behind the camera). Nothing within 60 m.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "cragstone.02",
+   "site": "cragstone",
+   "technique": "classic.over-the-shoulder",
+   "takeSec": 9.541667,
+   "origEditSec": 9.541667,
+   "origInSec": 0,
+   "origEditIn": 142.25,
+   "section": {
+    "i": 14,
+    "label": "N",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "secondary": [
+     36277.7,
+     30629.7,
+     38.8
+    ],
+    "secondaryHeight": 2.2,
+    "shoulder": "right",
+    "shoulderM": 0.9,
+    "backM": 2.0,
+    "raiseM": 0.3,
+    "composeThirds": true,
+    "autoFov": false,
+    "pushM": 0.4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36274.4,
+     30606.8,
+     32.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Look over Thorsten Cragstone's bronze shoulder from his plinth down at the swirling Town Network portal in the square; stay 1 m off the statue.",
+   "notes": "Landmark: over the bronze shoulder of the Statue of Thorsten Cragstone on his 6.8 m plinth, looking down onto the swirling Town Network portal in the square 26 m away (portal NDC 0.32,-0.15; statue head NDC -0.24,0.20). Camera 2.1 m behind and 0.9 m right of the statue's base centre, 2.1 m above the plinth top (human setup 0x02000001 is 1.82 m; robust to a scaled statue). query-radius 4 m hits only the plinth (by design).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "cragstone.03",
+   "site": "cragstone",
+   "technique": "classic.crane",
+   "takeSec": 10.875,
+   "origEditSec": 10.875,
+   "origInSec": 0,
+   "origEditIn": 151.791667,
+   "section": {
+    "i": 15,
+    "label": "O",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthDeg": 185,
+    "azimuthRef": "compass",
+    "elevationDeg": -22,
+    "distance": 24,
+    "thirds": "center",
+    "riseM": 14,
+    "swingDeg": -30,
+    "armM": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35964,
+     30584,
+     72
+    ],
+    "height": 19,
+    "radius": 9
+   },
+   "standingOrder": "Jib up from the grass in front of the windmill, rising past its turning sails while the arm swings left; stay 14 m from the sails.",
+   "notes": "Windmill crane: jib rises 14 m from 5 m above the plateau in front of the windmill (24 m south of its turning sails) to above the hub while the arm swings 30 deg; sails stay centred. Side light from the east. Clearance: 19.8 m from the sail disc (blade box), terrain z 67.5-68.7 under the arc.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "cragstone.04",
+   "site": "cragstone",
+   "technique": "drone.dronie",
+   "takeSec": 14.791667,
+   "origEditSec": 14.791667,
+   "origInSec": 0,
+   "origEditIn": 162.666667,
+   "section": {
+    "i": 16,
+    "label": "P",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "startDistance": 12,
+    "endDistance": 92,
+    "startHeight": 17,
+    "endHeight": 52,
+    "bearingDeg": 10,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36277.5,
+     30629.8,
+     32
+    ],
+    "height": 10.3,
+    "radius": 4
+   },
+   "standingOrder": "Pull back and up from the statue of Thorsten Cragstone over the rooftops to the harbour cliff in one smooth line; stay 6 m above every roof.",
+   "notes": "Closing dronie: pulls back and up from the statue (start 12 m, z 49) to 92 m away (z 84) toward the harbour cliff, over the cottage roofs (S74 top 42.2: >= 6.8 m above, 8.8 m min distance). vmax 9.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "cragstone.05",
+   "site": "cragstone",
+   "technique": "classic.time-lapse",
+   "takeSec": 13,
+   "origEditSec": 12.208333,
+   "origInSec": 0,
+   "origEditIn": 177.458333,
+   "section": {
+    "i": 17,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": 12,
+    "distance": 130,
+    "thirds": "center",
+    "rate": 0.01
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36300,
+     30850,
+     0
+    ],
+    "height": 12,
+    "radius": 60
+   },
+   "standingOrder": "Lock off 10 m above the harbour cliff looking north-north-east over Victory Harbor while clouds race across the bay; do not move and keep 11 m from the cliff-top trees.",
+   "notes": "Time-lapse: locked off 10 m above the harbour cliff looking NNE over Victory Harbor; rate 0.01 game-days per film second (sun climbs from 0.42 to 0.54, always up) so the clouds race over the bay. Nearest scenery 11.5 m.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "arwic.01",
+   "site": "arwic",
+   "technique": "drone.top-down",
+   "takeSec": 14.291667,
+   "origEditSec": 13.5,
+   "origInSec": 0.791667,
+   "origEditIn": 189.666667,
+   "section": {
+    "i": 18,
+    "label": "Q",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 105,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38088,
+     32508,
+     42
+    ],
+    "height": 31,
+    "radius": 65
+   },
+   "standingOrder": "Hang straight above the walled square of Arwic and rotate slowly so its walls, towers and courtyards turn like a map; hold height 30 m above the central tower.",
+   "notes": "Map shot: hangs 105 m above the walled square (z 147, 74 m above the central tower) looking straight down and rotating 45 deg; the 120 x 86 m wall ring, four corner towers, two spired gates, the inner cross-wall and the plaza fit the frame (corner towers at NDC +/-0.7). Late-afternoon sun from the west adds long tower shadows.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "arwic.02",
+   "site": "arwic",
+   "technique": "classic.truck",
+   "takeSec": 12.583333,
+   "origEditSec": 12.583333,
+   "origInSec": 0,
+   "origEditIn": 203.166667,
+   "section": {
+    "i": 20,
+    "label": "S",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthDeg": 270,
+    "azimuthRef": "compass",
+    "elevationDeg": -8,
+    "distance": 13,
+    "thirds": "center",
+    "travelM": 32,
+    "direction": "right",
+    "keepAim": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38035,
+     32520,
+     42
+    ],
+    "height": 8,
+    "radius": 12
+   },
+   "standingOrder": "Truck south along the sunlit west wall of Arwic past the gate and its spired gatehouses, 13 m off the stone and 2.5 m up; nothing may come between lens and wall.",
+   "notes": "The town's facade pan (fortress walls): trucks 32 m south along the sunlit west wall at 2.2 m above the grass, 11-13 m off the stone, past the spired gatehouses and through the axis of the ruined pillar avenue (pillars 7.6 m from the lens). Sun at the camera's back fully lights the wall. Clearance: nearest pillar 7.6 m, wall 11 m, query-radius 4 m = 0 statics; vmax 4.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "arwic.03",
+   "site": "arwic",
+   "technique": "drone.fly-by",
+   "takeSec": 9,
+   "origEditSec": 9,
+   "origInSec": 0,
+   "origEditIn": 215.75,
+   "section": {
+    "i": 21,
+    "label": "T",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "offset": 12,
+    "heightAGL": 13,
+    "speed": 10,
+    "side": "right",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38028,
+     32556,
+     42
+    ],
+    "height": 19.6,
+    "radius": 4
+   },
+   "standingOrder": "Fly fast and level east along the north side of the walls, whipping past the north-west corner tower 12 m off its stones; climb rather than swerve if anything comes within 6 m.",
+   "notes": "Energetic fly-by: 10 m/s level pass east along the outside of the north wall, 13 m above the grass, whipping past the NW corner tower at 12 m offset (peak yaw ~0.8 rad/s). Clearance: 17 m to the tower box, nothing else within 28 m.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "arwic.04",
+   "site": "arwic",
+   "technique": "classic.high-angle",
+   "takeSec": 10.541667,
+   "origEditSec": 10.541667,
+   "origInSec": 0,
+   "origEditIn": 224.75,
+   "section": {
+    "i": 23,
+    "label": "U",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthDeg": 352,
+    "azimuthRef": "compass",
+    "elevationDeg": 34,
+    "distance": 24,
+    "thirds": "center",
+    "pushM": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38095.5,
+     32501,
+     42.2
+    ],
+    "height": 8,
+    "radius": 8
+   },
+   "standingOrder": "Look down the plaza from above the Life Stone onto the swirling Town Network portal and the silver fountain beside the central tower, easing 3 m closer; stay 5 m above the roofs.",
+   "notes": "Particle + water detail: high angle (34 deg) from above the Life Stone looking down the plaza onto the swirling Town Network portal (NDC 0.03,-0.5) with the silver fountain just beyond it (NDC -0.04,0.09) and the central tower's foot at left, easing 3 m closer. Camera 16-18 m above the plaza, 9 m from the nearest roof edge (S68 top 54.5).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "arwic.05",
+   "site": "arwic",
+   "technique": "drone.vertigo-drone",
+   "takeSec": 16.208333,
+   "origEditSec": 15.416667,
+   "origInSec": 0,
+   "origEditIn": 235.291667,
+   "section": {
+    "i": 24,
+    "label": "V",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "nearDistance": 45,
+    "farDistance": 120,
+    "direction": "out",
+    "heightAGL": 26,
+    "minFovDeg": 18,
+    "maxFovDeg": 90,
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38108.5,
+     32504.5,
+     42
+    ],
+    "height": 31,
+    "radius": 6
+   },
+   "standingOrder": "Fly straight back from the central tower over the south wall while zooming in so the tower holds its size and the hills swell behind it; stay 12 m above the walls.",
+   "notes": "Vertigo closer: flies straight back from the central tower (Aun Laokhe's tower, top 72.9) 45->120 m SSW at 26 m above the plain while zooming 55->23 deg so the tower holds its size and the Lost Wish hills swell behind it. Clearance: 11 m above the south gatehouse spire (top 57.1), 14 m above the southern pillar avenue; vmax 7.9 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastham.01",
+   "site": "eastham",
+   "technique": "drone.flyover",
+   "takeSec": 14.75,
+   "origEditSec": 13.958333,
+   "origInSec": 0.791667,
+   "origEditIn": 250.708333,
+   "section": {
+    "i": 25,
+    "label": "W",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 22,
+    "speed": 7,
+    "headingDeg": 225,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -9,
+    "minClearance": 15
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40060,
+     28910,
+     0
+    ],
+    "height": 2,
+    "radius": 20
+   },
+   "standingOrder": "Fly in level from the shallow sea toward the Eastham shore with the windmill dead ahead and the town beyond; hold 20 m above the water.",
+   "notes": "Water opener: level 22 m above the shallow sea NE of town, flying 98 m SW toward the coast with the windmill dead ahead (NDC 0.04,0.34) and Eastham's roofs beyond; morning sun behind the camera lights the shore. All over water/beach (terrain types WaterShallowSea and SandGrey), nothing within 28 m.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "eastham.02",
+   "site": "eastham",
+   "technique": "classic.static",
+   "takeSec": 10,
+   "origEditSec": 10,
+   "origInSec": 0,
+   "origEditIn": 264.666667,
+   "section": {
+    "i": 25,
+    "label": "W",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": -16,
+    "distance": 52,
+    "thirds": "center"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39902,
+     28764,
+     20
+    ],
+    "height": 21,
+    "radius": 9
+   },
+   "standingOrder": "Hold a locked-off frame 1.8 m above the meadow 52 m south-south-east of the windmill, its sails turning and the Life Stone and portal glowing at its foot; do not move, nothing within 6 m.",
+   "notes": "Locked-off static (motion lives inside the frame): the windmill's east-facing sails turn against the morning sky, Asheron's Island portal swirls at its foot (NDC -0.05,-0.33) and the Life Stone sparkles at left (NDC -0.76,-0.33). Camera 52 m SSE at 1.8 m above the meadow. Clearance 12.4 m (default bake) and 6.5 m (opt-in retail bake); query-radius 4 m = 0.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastham.03",
+   "site": "eastham",
+   "technique": "classic.whip-pan",
+   "takeSec": 8.25,
+   "origEditSec": 8.25,
+   "origInSec": 0,
+   "origEditIn": 274.666667,
+   "section": {
+    "i": 26,
+    "label": "X",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthDeg": 79.4,
+    "azimuthRef": "compass",
+    "elevationDeg": -1.2,
+    "distance": 158,
+    "angleDeg": 178,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39635,
+     28716,
+     20
+    ],
+    "height": 10,
+    "radius": 12
+   },
+   "standingOrder": "Stand 2.3 m above the shore road, hold on the windmill, then whip 178 degrees right onto the rooftops of Eastham 158 m west and hold; the lens never moves and nothing comes within 20 m.",
+   "notes": "Whip-pan: from the shore road (2.3 m up) the frame holds the windmill silhouetted against the low eastern sun, then whips 178 deg right in 0.3 s at 45 % onto the sunlit rooftops of Eastham 158 m west and holds. No obstacle within 22 m.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastham.04",
+   "site": "eastham",
+   "technique": "classic.reveal-from-occluder",
+   "takeSec": 12.75,
+   "origEditSec": 12.75,
+   "origInSec": 0,
+   "origEditIn": 282.916667,
+   "section": {
+    "i": 27,
+    "label": "Y",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthDeg": 196,
+    "azimuthRef": "compass",
+    "elevationDeg": 2,
+    "distance": 44,
+    "occluder": [
+     39667,
+     28692,
+     20
+    ],
+    "occluderRadius": 4.4,
+    "direction": "right",
+    "holdFrac": 0.25,
+    "settleFrac": 0.25,
+    "marginM": 1.0
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39675.8,
+     28722.8,
+     20.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Hold behind the Banderling statue's plinth with the Town Network portal hidden, then truck right until its blue swirl and the square open up beyond; stay 5 m from the plinth.",
+   "notes": "Reveal: starts 12 m behind the Banderling statue's 6.8 m plinth with the Town Network portal 44 m beyond completely hidden (25/53 samples blocked by design), holds, then trucks 12 m right until the blue swirl, the well and the square open up. Clearance: 3.5 m from the well (2.7 m-tall setup), 5 m from the nearest NPC, >= 6.8 m from the plinth; vmax 3.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastham.05",
+   "site": "eastham",
+   "technique": "drone.hyperlapse-orbit",
+   "takeSec": 17.166667,
+   "origEditSec": 16.375,
+   "origInSec": 0,
+   "origEditIn": 295.666667,
+   "section": {
+    "i": 29,
+    "label": "M",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 68,
+    "heightAGL": 34,
+    "revolutions": 0.22,
+    "timeRate": 110,
+    "direction": "ccw",
+    "bearingDeg": 120,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39672,
+     28700,
+     20
+    ],
+    "height": 12,
+    "radius": 50
+   },
+   "standingOrder": "Orbit slowly high around the Eastham square while the clouds race and the morning light swings across the roofs; keep 15 m above every roof and tree.",
+   "notes": "Hyperlapse closer: 0.22 turn counter-clockwise around the town square at radius 68 m, 34 m up (>= 21 m above every roof), while the sky clock runs 110x (0.23 game-day: sun 0.30 -> 0.53, always up) so clouds race and the light swings across the roofs. vmax 5.9 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "dryreach.01",
+   "site": "dryreach",
+   "technique": "drone.spiral-descent",
+   "takeSec": 17.958333,
+   "origEditSec": 17.166667,
+   "origInSec": 0.791667,
+   "origEditIn": 312.041667,
+   "section": {
+    "i": 31,
+    "label": "O",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 140,
+    "radiusEnd": 96,
+    "heightStart": 80,
+    "heightEnd": 40,
+    "revolutions": 0.13,
+    "direction": "ccw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42000,
+     22536,
+     18
+    ],
+    "height": 31,
+    "radius": 70
+   },
+   "standingOrder": "Descend in a wide slow spiral over the plain toward the walled fortress of Dryreach with its four spired towers in the golden light; stay 10 m above the spire tips.",
+   "notes": "Arrival: wide counter-clockwise spiral descent from 80 m to 40 m above the plain (radius 140->96 m) toward the fortress, its four 31 m spire towers and spiked palisade glowing in the low golden sun from behind the camera. Clearance: 31 m to the nearest tower, >= 9 m above the spire tips at the end; vmax 10.6 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "dryreach.02",
+   "site": "dryreach",
+   "technique": "drone.parallax-slide",
+   "takeSec": 12.208333,
+   "origEditSec": 12.208333,
+   "origInSec": 0,
+   "origEditIn": 329.208333,
+   "section": {
+    "i": 32,
+    "label": "P",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "distance": 13,
+    "heightAGL": 2.5,
+    "slide": 32,
+    "panAmount": 0.12,
+    "direction": "right",
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41964,
+     22524,
+     18
+    ],
+    "height": 9,
+    "radius": 14
+   },
+   "standingOrder": "Glide south along the sunlit west palisade of Dryreach past its gate and spiked stakes, 13 m off the wall and 2.5 m up; nothing may come between lens and wall.",
+   "notes": "The town's facade pan (fortress wall): glides 32 m south along the west palisade and gatehouse, 13 m off the stone and 2.5 m above the flat plain, the golden western sun at the camera's back lighting the wall, its wooden stakes and the gate. Clearance: 11.3 m to the wall, query-radius 4 m = 0, nearest tree 19 m; vmax 4.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "dryreach.03",
+   "site": "dryreach",
+   "technique": "drone.pass-over",
+   "takeSec": 12.375,
+   "origEditSec": 12.375,
+   "origInSec": 0,
+   "origEditIn": 341.416667,
+   "section": {
+    "i": 33,
+    "label": "M",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 30,
+    "speed": 6,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41989,
+     22526,
+     18
+    ],
+    "height": 4,
+    "radius": 8
+   },
+   "standingOrder": "Pass straight over the Dryreach courtyard from east to west 30 m up, keeping the well in frame through vertical as the golden light rakes the walls; stay 12 m above every roof and spire.",
+   "notes": "Pass-over: straight east-to-west pass 30 m above the courtyard (z 48), the gimbal yaw-slewing through vertical over the well with the cottages, portal and spired corners rotating beneath. Clearance 19.8 m to the nearest roof, tower tips 48.8 never closer than 30 m horizontally; 6 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "dryreach.04",
+   "site": "dryreach",
+   "technique": "classic.pedestal",
+   "takeSec": 11.541667,
+   "origEditSec": 11.541667,
+   "origInSec": 0,
+   "origEditIn": 353.791667,
+   "section": {
+    "i": 34,
+    "label": "Q",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthDeg": 5,
+    "azimuthRef": "compass",
+    "elevationDeg": 0.5,
+    "distance": 40,
+    "thirds": "center",
+    "riseM": 12,
+    "keepAim": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41981.2,
+     22572.2,
+     18.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Rise straight up outside the north gate until the lens clears the palisade stakes and looks down on the blue Town Network portal in the courtyard; stay 12 m from the wall.",
+   "notes": "Particle reveal: pedestal rises 12 m outside the north gate (40 m from the portal): first the gate and stakes fill the frame, then the lens clears the palisade (top ~25) and looks down on the blue Town Network portal in the NW courtyard (blocked 27/49 samples by design, clear from t~6.7). Clearance: 11.7 m to the nearest bush, 12.5 m to the NW tower; vmax 1.6 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "dryreach.05",
+   "site": "dryreach",
+   "technique": "fpv.fpv-dive",
+   "takeSec": 9.666667,
+   "origEditSec": 8.875,
+   "origInSec": 0,
+   "origEditIn": 365.333333,
+   "section": {
+    "i": 35,
+    "label": "Q",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": null,
+   "params": {
+    "heightStart": 37,
+    "bottomAGL": 3,
+    "diveAngleDeg": -78,
+    "approach": 16,
+    "standoff": 5,
+    "exitLength": 40,
+    "pullOutRadius": 9,
+    "speed": 13,
+    "alat": 11,
+    "uptiltDeg": 20,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41969,
+     22602,
+     18
+    ],
+    "height": 30.8,
+    "radius": 2
+   },
+   "standingOrder": "Cross the north-west spire 6 m above its tip, then dive straight down its north face 5 m off the stone and pull out low over the plain heading north; never closer than 3 m to the tower or trees.",
+   "notes": "Hero FPV dive (JEV): crosses the NW spire tower level at z 56 (7 m above its tip), crests and dives at -78 deg down the north face 5 m off the stone, pulls out 3 m above the plain and races 40 m north. Clearance: >= 4.6 m from the tower box at the closest, trees >= 19 m; fpv preset, vmax 11.7 m/s (cap 25).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "oolutangas-refuge.01",
+   "site": "oolutangas-refuge",
+   "technique": "drone.spiral-descent",
+   "takeSec": 16.875,
+   "origEditSec": 16.083333,
+   "origInSec": 0.791667,
+   "origEditIn": 374.208333,
+   "section": {
+    "i": 37,
+    "label": "S",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 75,
+    "radiusEnd": 32,
+    "heightStart": 60,
+    "heightEnd": 22,
+    "revolutions": 0.22,
+    "direction": "ccw",
+    "bearingDeg": 175,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47377.3,
+     25023.4,
+     58.0
+    ],
+    "height": 14,
+    "radius": 6
+   },
+   "standingOrder": "Spiral down from high over the jungle mesa onto the portal clearing; stay 5 m above every roof, deck and canopy; foliage may be faded, never a trunk.",
+   "notes": "ESTABLISHING. Opens 60 m above the jungle south of the mesa looking north over the ring of tusker stilt halls and treehouse decks, then corkscrews counter-clockwise (0.22 rev) down to 22 m over the clearing, ending east of the swirling Town Network portal looking west across the rope walkways to the giant-tree platforms and the lowland jungle beyond; morning sun from the east lights every deck. Verified offline (real technique code, WBT terrain, 0.05 s samples): camera z 118 -> 80, AGL 60.6 -> 22.0 (WBT get-height start 57.35 / end 58.0), >= 12.1 m from every static (rope bridge 0x02000E58 at the end), >= 17 m from default-bake trees; the retail-bake-only jungle tree 0x020007D9 (top 75) would sit 5.1 m below the last frame. Roof tops 72.1 -> camera 7.9 m above them at the end. vmax 9.5 m/s (cinema preset).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "oolutangas-refuge.02",
+   "site": "oolutangas-refuge",
+   "technique": "drone.parallax-slide",
+   "takeSec": 12.375,
+   "origEditSec": 12.375,
+   "origInSec": 0,
+   "origEditIn": 390.291667,
+   "section": {
+    "i": 38,
+    "label": "T",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 29,
+    "heightAGL": 2.5,
+    "slide": 40,
+    "panAmount": 0.3,
+    "direction": "right",
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     25005.0,
+     63.45
+    ],
+    "height": 6,
+    "radius": 12
+   },
+   "standingOrder": "Slide north at deck height along the two treehouse platforms and their rope walkway, 17 m off the deck edge; stop before the walkway to the stilt house; never closer than 4 m to a bridge or tree.",
+   "notes": "FACADE PAN (1 of 2 in this batch): Tumerok/tusker treehouse architecture. Slides 40 m north at deck height (z 66, 2.5 m above the decks) along x 47345, 17 m off the deck edges of the Jeweler's and Grocer's treehouse platforms (24 m square decks around giant trees, z 63.45) and the rope walkway between them, a 30% counter-pan holding the pair while the near jungle trees and the clearing slide past; sun behind the camera. Stops at y 25025, 16 m short of the walkway from the Grocer's deck to the stilt hall (z 62.5-67.6). Verified: AGL 14.4 -> 9.7 over falling ground (WBT 51.58 -> 56.25), >= 7.0 m from every static (the 6 m tree 0x020007BF top 63.9, 2 m below the lens), >= 25 m from default and retail scenery. vmax 5.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "oolutangas-refuge.03",
+   "site": "oolutangas-refuge",
+   "technique": "classic.rack-focus",
+   "takeSec": 9.166667,
+   "origEditSec": 9.166667,
+   "origInSec": 0,
+   "origEditIn": 402.666667,
+   "section": {
+    "i": 39,
+    "label": "T",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 150.1,
+    "distance": 43.0,
+    "elevationDeg": -3.5,
+    "fromTarget": "metres",
+    "fromM": 3.4,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.2,
+    "driftM": 0.4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47377.3,
+     25023.4,
+     58.0
+    ],
+    "height": 5,
+    "radius": 3.5
+   },
+   "standingOrder": "Hold low beside the tiki torch with its flame soft at frame right, then pull focus across the clearing to the swirling portal; keep 3 m from the torch and 4 m from the stilt house.",
+   "notes": "FX: FLAME + PORTAL. Locked low beside the tiki torch 0x02000AB9 at (47397.6, 24989.3) whose flame (0x020005B3 flame-tongue + firelight, catalog 0x32000640/0x32000829) burns soft and out of focus 3.4 m away at upper frame right; at 45% the focus pulls 43 m across the clearing to the purple Town Network swirl on its glowing blue stone base (47377.3, 25023.4), the green-roofed stilt hall and treehouse decks behind it, front-lit by the morning sun behind the camera. Verified: camera (47398.7, 24986.2, 59.9), ground 57.89 (WBT), AGL 2.0; nearest static the flame emitter 2.7 m (the torch pole 3.4 m), the nearest bamboo stilt of stilt hall H3 5.3 m east; default-bake trees >= 10.3 m and none on the sight line; with the opt-in retail bake a 30 m jungle tree (0x020007D4) would stand in front of the portal. DoF look: focusRange 3, bokeh 2.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "oolutangas-refuge.04",
+   "site": "oolutangas-refuge",
+   "technique": "classic.high-angle",
+   "takeSec": 10.041667,
+   "origEditSec": 10.041667,
+   "origInSec": 0,
+   "origEditIn": 411.833333,
+   "section": {
+    "i": 40,
+    "label": "A2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 125,
+    "elevationDeg": 32,
+    "distance": 26,
+    "pushM": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     25048.0,
+     63.45
+    ],
+    "height": 3,
+    "radius": 8
+   },
+   "standingOrder": "Look down on the Grocer's treehouse deck from the south-east and creep in; stay 6 m above the rope walkway and 5 m from the canopy.",
+   "notes": "LANDMARK DETAIL. High angle (32 deg) from the south-east onto the Grocer's treehouse deck (47316, 25048, 63.45): market tables of apples, fruit and fish, barrels, the rope walkway leaving east, the giant tree's canopy through the deck; a 4 m creep-in. Verified: camera (47334.1, 25035.4, 78.7) -> (47331.3, 25037.3, 76.6), AGL 21.9 -> 19.9, 9.7 m from the tree canopy 0x020007D4, 11 m above and 6 m south of the rope bridge, scenery >= 36 m.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "oolutangas-refuge.05",
+   "site": "oolutangas-refuge",
+   "technique": "drone.boom-rise",
+   "takeSec": 14.916667,
+   "origEditSec": 14.125,
+   "origInSec": 0,
+   "origEditIn": 421.875,
+   "section": {
+    "i": 42,
+    "label": "C",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 32,
+    "heightStart": 6,
+    "heightEnd": 76,
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 0,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     24996.0,
+     52.0
+    ],
+    "height": 12,
+    "radius": 12
+   },
+   "standingOrder": "Rise straight up 70 m from 5 m above the clearing floor past the treehouse deck and canopy into open sky, the jungle and sea revealed west; climb only, keep 8 m from trees and 20 m from the platform.",
+   "notes": "CLOSING / TRANSITION. Boom straight up 70 m from the clearing floor (x 47348) with a level gimbal looking west: starts below the level of the Jeweler's treehouse deck, looking at its underside and the giant trunk, rises through deck and canopy level and keeps climbing until the jungle plain 45 m below the mesa and the distant western sea fill the frame (horizon dropping), front-lit by the morning sun. Verified: z 58 -> 128 (ground 53.0 WBT, AGL 5 -> 75), nearest static the 6 m tree 0x020007BF 8.3 m (top 61, passed by 3 s), the platform deck edge 20 m; scenery >= 25 m. vmax 7.9 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "rithwic.01",
+   "site": "rithwic",
+   "technique": "drone.boom-rise",
+   "takeSec": 12.916667,
+   "origEditSec": 12.125,
+   "origInSec": 0.791667,
+   "origEditIn": 436,
+   "section": {
+    "i": 43,
+    "label": "F",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "distance": 110,
+    "heightStart": 4,
+    "heightEnd": 48,
+    "bearingDeg": 357,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "standingOrder": "Rise straight up from just above Lake Blessed while keeping the bridge in the river neck centred; stay over open water, 4 m above the surface at the start.",
+   "notes": "[rw-lake-boom | establishing, optional] Opener over Lake Blessed: the drone hangs 4 m above the open lake 110 m north of the bridge (38610.2, 27169.8) and rises straight up from z 8 to z 52 while the gimbal tilts from +4 to -18 deg on the span, so the narrow River Prosper gorge, the stone arch and both cliff-top halves of Rithwic (chimney smoke on the smithy and East Rithwic roofs, torch posts at both bridge heads) unfold below; afternoon sun rakes in from the right (west) and lights the east cliff and Archmage's quarter. Clearance verified: WBT get-height 4.0 (water) under the camera, nearest object a fishing-hole spawn 11.3 m away, nothing overhead; the tallest roofs (z 34.7) are >100 m away.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "rithwic.02",
+   "site": "rithwic",
+   "technique": "classic.rack-focus",
+   "takeSec": 6.791667,
+   "origEditSec": 6.791667,
+   "origInSec": 0,
+   "origEditIn": 448.125,
+   "section": {
+    "i": 44,
+    "label": "C2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "azimuthDeg": -8,
+    "azimuthRef": "front",
+    "elevationDeg": 0,
+    "distance": 18,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 4.0,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.0,
+    "driftM": 0.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38452.27,
+     27000.75,
+     22.3
+    ],
+    "height": 2.83,
+    "radius": 1.41,
+    "heading": 1.3125
+   },
+   "standingOrder": "Hold low on the town square with the street torch flame sharp at frame right, then pull focus to the purple Town Network portal swirl; stay 4 m from the torch.",
+   "notes": "[rw-portal-rackfocus | flame + portal FX] Locked low frame on the town square: camera (38468.9, 27007.7, z 24.85, 2.85 m AGL) 18 m ENE of the Portal to Town Network, almost face-on to its purple 7 m vortex (swirl disc faces heading 75 deg, camera at 67 deg) inside its glowing stone ring (0x020019E3); the square's street torch (0x020005D8, flame tongue at 38464.9, 27007.4, z 24.15) burns 4.0 m from the lens at frame right (~18 deg right, 10 deg low) in sharp focus, then focus pulls (at 45%, 2 s) to the portal, with the statue column and Collector behind in warm backlight. Clearance verified: torch post 3.3 m, flame 4.0 m, camera outside the 8.7 m faint-glow halo, LOS to the portal clear (only its own frame), WBT ground 22.0.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "rithwic.03",
+   "site": "rithwic",
+   "technique": "drone.flythrough",
+   "takeSec": 16.875,
+   "origEditSec": 16.875,
+   "origInSec": 0,
+   "origEditIn": 454.916667,
+   "section": {
+    "i": 44,
+    "label": "C2",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "gapNormal": [
+     0,
+     1,
+     0
+    ],
+    "gapWidth": 42,
+    "gapHeight": 10.5,
+    "speed": 11,
+    "gapSpeed": 0.45,
+    "cornerRadius": 20,
+    "lookAhead": 12,
+    "tiltDeg": -4,
+    "ends": "cruise"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "height": 11,
+    "radius": 22
+   },
+   "standingOrder": "Skim north up the river 5 m above the water, slow under the bridge arch on the centre line, then climb out over Lake Blessed; never closer than 1 m to deck, water or banks.",
+   "notes": "[rw-under-bridge | HERO, JEV] The drone skims north up the River Prosper gorge 5 m above the water at 10 m/s, starting 45 m south of the bridge between the two 18 m cliffs, eases to 4.6 m/s as it threads the centre of the arch (gap at t 6.35 s), then accelerates and climbs from z 10.5 to z 21 as the gorge opens onto Lake Blessed; tilt -4 keeps the water rushing below on the approach and lifts the horizon into open sky and clouds on the exit. Bridge geometry (obj-export of the four GfxObjs, LandBlockInfo buildings without cells): deck 0x01000D6F/0x01000D70 at x 38592-38640, y 27055-27065 (10 m wide), soffit 15.95 m at the abutment joints rising to 18.95 m at the crown x 38616, walkway 24.95-25.95, parapet top 26.95; abutments 0x01000D72/0x01000D71 with sloping soffits down to z 10.55 where they meet the banks at x 38583.2 / 38648.8 (WBT get-height 10.6 there); water z 4.0 from x 38592 to 38640 (WBT, terrain WaterRunning/mud). Verified on the dry-built trajectory: under the deck the camera is 9.1 m below the soffit and 5.5 m above the water, 22 m from the nearest abutment; nearest scenery 5.9 m (bank tree at the south mouth), fishing-hole spawns >= 3.2 m below; peak speed 10.2 m/s (cinema cap 12), no overspeed.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "rithwic.04",
+   "site": "rithwic",
+   "technique": "drone.parallax-slide",
+   "takeSec": 10.041667,
+   "origEditSec": 10.041667,
+   "origInSec": 0,
+   "origEditIn": 471.791667,
+   "section": {
+    "i": 45,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 72,
+    "heightAGL": 11,
+    "slide": 22,
+    "panAmount": 0.3,
+    "direction": "left",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "standingOrder": "Slide slowly across the river pool south of the bridge, 11 m above the water, keeping the whole span between the cliffs in frame; stay 5 m above the bank trees.",
+   "notes": "[rw-bridge-slide | companion of the hero] Broadside of the Rithwic bridge from over the river pool SSE of it: 11 m above the water (z 15) the drone slides 22 m west at 72 m from the span with a 30% counter-pan, so the whole crossing (four stone pieces, 96 m incl. abutments, deck soffit 16-19 m, parapet 27 m) spans the 18 m deep gorge between the two cliff-top halves of town; torch posts burn at both bridge heads, chimney smoke drifts over the smithy, a big bankside tree frames the left edge and Lake Blessed glints through the arch. Side light from the west. Clearance verified: water under the camera all the way (WBT get-height 4.0), nearest object a 9 m bank tree 5.9 m away (camera above its crown), LOS to the span >= 5.4 m clear.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "rithwic.05",
+   "site": "rithwic",
+   "technique": "drone.orbit-poi",
+   "takeSec": 10.791667,
+   "origEditSec": 10,
+   "origInSec": 0,
+   "origEditIn": 481.833333,
+   "section": {
+    "i": 46,
+    "label": "D2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "radius": 14,
+    "heightAGL": 4.5,
+    "revolutions": 0.17,
+    "direction": "ccw",
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38767.55,
+     27137.84,
+     22.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "standingOrder": "Arc slowly around the ruined Greenspire portal with its lightning arcs centred, 14 m out and 4.5 m up; keep 6 m from the arcs and 4 m from the pines.",
+   "notes": "[rw-ruin-lightning | lightning/particle FX, optional] East Rithwic's ruined arrival point beside the Life Stone: the shattered Destroyed Portal to Greenspire (crystal ruin 0x02000B61, 6 m wide) wreathed in a standing tesla cluster (3x setup 0x02000B6F, emitter 0x32000648, bolts 0.2-4.3 m crackling at z 25.6) plus arc fountains at its base (0x020007C5). Slow ccw arc at 14 m radius and z 27 (5 m AGL) from bearing 250 to 190 deg, looking ENE then N so the dark giant pine behind (0x02000258) makes the white-blue arcs pop while the sun lights the crystals from behind the camera. Clearance verified: flat plateau z 22 (WBT), >= 9.8 m from any shipped-bake scenery, >= 9 m from the arc tips; with ?sceneryBake=retail a 3.8 m bush comes within 1.9 m, so keep the default bake (or raise heightAGL to 6).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.01",
+   "site": "lytelthorpe",
+   "technique": "drone.rising-reveal",
+   "takeSec": 13.083333,
+   "origEditSec": 12.291667,
+   "origInSec": 0.791667,
+   "origEditIn": 491.833333,
+   "section": {
+    "i": 47,
+    "label": "E2",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": "EWS",
+   "params": {
+    "distance": 88.5,
+    "bearingDeg": 164.9,
+    "relativeToSubject": false,
+    "obstacleDistance": 7.8,
+    "obstacleHeight": 13.3,
+    "heightStart": 1.8,
+    "clearance": 6,
+    "forward": 2,
+    "endPitchDeg": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36732,
+     24708,
+     54
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "standingOrder": "Rise straight up the face of the bowyer's house past its burning door torch and over the roofline to reveal Lytelthorpe Keep on its hill; stay 6 m off the facade and 5 m above the roof.",
+   "notes": "[lyt-010] Opener. Starts at eye level in the main street facing the Bowyer/Tailor house (0x0100082E, top z 52.5) whose door torch (0x020005D8, flame + warm glow 0x32000829) burns lower-right of frame (ndc 0.44,-0.92), rises 17.5 m past the facade and over the roofline; the keep is hidden by the house for the first ~6.5 s (LOS blocked 26/49 samples) and is revealed centred with both spire towers against the clouds. Verified: start (36755.1,24622.6,41.3) ground 39.5 (WBT get-height 39.57); facade 6.3-7.8 m away during the rise, end 6.3 m above the roof plane and 8.4 m off the face; nearest scenery 4.3 m (shrub 0x020002F2 top 42.7) and 4.4 m (tree 0x02000246 crown 36-45, behind camera); query-radius 6 m = 0 statics; vmax 2.3 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "lytelthorpe.02",
+   "site": "lytelthorpe",
+   "technique": "drone.orbit-poi",
+   "takeSec": 13.958333,
+   "origEditSec": 13.958333,
+   "origInSec": 0,
+   "origEditIn": 504.125,
+   "section": {
+    "i": 48,
+    "label": "E2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 52,
+    "heightAGL": 36,
+    "revolutions": 0.29,
+    "direction": "ccw",
+    "bearingDeg": 262,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36732,
+     24708,
+     54
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "standingOrder": "Orbit the keep at a steady 52 m radius, 36 m above the courtyard; keep the keep and both spire towers in frame and stay outside the tower spires.",
+   "notes": "[lyt-020] Grand aerial: 0.29-rev counter-clockwise orbit from WSW (sun behind the camera, keep front-lit) round to SSE (raking side light), 52 m radius, z 90 = 5.2 m above the keep/tower spire tips (z 84.75) and 31 m above the curtain walls; whole square fortress, its three pyramid-roofed towers, the wooded courtyard and the town below. Verified: AGL 36.5-44 over terrain 45.8-53.3; nearest object 28.6 m (NW tower AABB); no scenery within 32 m; vmax 6.8 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.03",
+   "site": "lytelthorpe",
+   "technique": "drone.pass-over",
+   "takeSec": 12.791667,
+   "origEditSec": 12.791667,
+   "origInSec": 0,
+   "origEditIn": 518.083333,
+   "section": {
+    "i": 49,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 38,
+    "speed": 5,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36732,
+     24708,
+     54
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "standingOrder": "Cross the fortress northward 38 m above the courtyard with the gimbal tracking straight down past the keep's spire roof; climb rather than swerve if any spire comes within 6 m.",
+   "notes": "[lyt-050] Flagship crossing: level northward pass at z 92 (38 m above the courtyard), gimbal tracks the keep down through nadir (yaw-slew <=45 deg/s) and back up behind - curtain walls, courtyard trees, the gate and the two north spire towers wheel through frame. Verified: 7.25 m above the keep spire tip (84.75) at closest, NW/NE spires >= 14 m away horizontally, AGL 38 over flat plateau z 54; path y 24678->24738 at x 36732; vmax 5 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.04",
+   "site": "lytelthorpe",
+   "technique": "classic.truck",
+   "takeSec": 11.958333,
+   "origEditSec": 11.958333,
+   "origInSec": 0,
+   "origEditIn": 530.875,
+   "section": {
+    "i": 51,
+    "label": "F2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": -12,
+    "distance": 9.5,
+    "travelM": 32,
+    "direction": "right",
+    "keepAim": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36727,
+     24682.25,
+     54
+    ],
+    "height": 9,
+    "radius": 1
+   },
+   "standingOrder": "Truck east along the south curtain wall and gatehouse 9 m off the stones and 2.5 m high with the head locked north; never drift toward the wall or the low shrub at the east end.",
+   "notes": "[lyt-030] Building-side pan: classic truck parallel to the south curtain wall and gatehouse (0x01001130, gate door wcid 568, guard Chandler Hammett) on the open plateau apron, head locked north, gate crossing frame centre at mid-move; keep tip and NW spire stay in the upper frame (ndc y 0.91 / 0.43), low western sun rakes the wall. Verified: line y 24673.0 (9.3 m off the gatehouse face 24682.25, 9.3 m off the SW/SE bastions), x 36711->36743, z 56.5 = 2.5 m AGL on flat ground z 54.0 (WBT); nearest obstacle a 0.8 m shrub 0x020007A2 4.35 m away (below lens), bush 0x020002F2 5.8 m at the east end; query-radius 6 m = 0 statics; LOS to wall clear; vmax 4.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.05",
+   "site": "lytelthorpe",
+   "technique": "classic.rack-focus",
+   "takeSec": 7.333333,
+   "origEditSec": 7.333333,
+   "origInSec": 0,
+   "origEditIn": 542.833333,
+   "section": {
+    "i": 52,
+    "label": "G2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 189.5,
+    "elevationDeg": -15.4,
+    "distance": 88.4,
+    "fromTarget": "metres",
+    "fromM": 6.6,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 1.8,
+    "thirds": "right"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36732,
+     24708,
+     54
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "standingOrder": "Hold still 1.9 m up beside the magic shop with its door torch sharp 6.6 m away in the lower left, then pull focus to the keep 88 m up the hill; nothing may cross the lens, keep 5 m from the house.",
+   "notes": "[lyt-080] Particle effect (fire) + rack focus: locked off beside the Magic of Iiwah shop, its door torch (0x020005D8 flame + glow) sharp in the lower left (ndc -0.63,-0.63, 6.6 m), focus pulls at 45% to Lytelthorpe Keep on the hill 88 m away (right third, ndc 0.31). Verified: camera (36717.9,24623.9,45.9), ground 44.0 (WBT), 1.9 m AGL; house 0x01000827 5.3 m; LOS to keep clears the gatehouse and slope (0/29 samples blocked); query-radius 6 m = 0 statics; dof focusRange 10 keeps the whole keep crisp after the pull.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.06",
+   "site": "lytelthorpe",
+   "technique": "classic.worms-eye",
+   "takeSec": 6.333333,
+   "origEditSec": 6.333333,
+   "origInSec": 0,
+   "origEditIn": 550.166667,
+   "section": {
+    "i": 52,
+    "label": "G2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 240,
+    "heightM": 1.0,
+    "horizontalM": 13,
+    "spinDeg": 0
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36708,
+     24732,
+     54
+    ],
+    "height": 30.75,
+    "radius": 6
+   },
+   "standingOrder": "Hold low at the foot of the north-west spire tower looking steeply up its sunlit face into the clouds; keep 6 m from the stones.",
+   "notes": "[lyt-040] Low-angle detail: lens 1 m off the grass 13 m WSW of the NW spire tower (0x01001161, 30.75 m, pyramid spire tip z 84.75), looking up 48 deg at its sun-lit west face with the spire in the upper third (ndc y 0.44) and clouds behind. Verified: camera (36696.7,24725.5,55.0), ground 54.0; tower wall polygon 5.8-6.1 m away (conservative AABB 4.3 m); default-scenery nearest 6.8 m (a retail-bake-only 1 m shrub sits 2.9 m behind the camera and is not rendered in the film's default scenery bake); query-radius 6 m = 0 statics.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.07",
+   "site": "lytelthorpe",
+   "technique": "classic.push-in",
+   "takeSec": 6.625,
+   "origEditSec": 6.625,
+   "origInSec": 0,
+   "origEditIn": 556.5,
+   "section": {
+    "i": 52,
+    "label": "G2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 255,
+    "elevationDeg": 6,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36811.2,
+     24646.7,
+     34.2
+    ],
+    "height": 4,
+    "radius": 1.3
+   },
+   "standingOrder": "Slow push toward the swirling Town Network portal in the square by the well; stop at least 3 m from the portal and never cross the well.",
+   "notes": "[lyt-070] Particle effect (magic): slow perceptual push from WS (13.7 m) to FS (6.3 m) on the swirling Portal to Town Network in the open square, the well on the left edge, Sitrath's Smithy behind; western sun behind the camera. Verified: line from (36798.0,24643.2,37.6) to (36805.1,24645.1,36.9), 2.9-3.6 m AGL over z 34.0 (WBT); Healer house 0x01000BC3 >= 5.0 m, tree 0x02000240 >= 6.5 m, portal >= 4.9 m (6.3 m to centre), well 11.6 m; LOS clear; vmax 1.7 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lytelthorpe.08",
+   "site": "lytelthorpe",
+   "technique": "drone.dronie",
+   "takeSec": 17.333333,
+   "origEditSec": 16.541667,
+   "origInSec": 0,
+   "origEditIn": 563.125,
+   "section": {
+    "i": 53,
+    "label": "H2",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": "WS",
+   "params": {
+    "startDistance": 16,
+    "endDistance": 90,
+    "startHeight": 2.5,
+    "endHeight": 42,
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36732,
+     24708,
+     69.2
+    ],
+    "height": 3,
+    "radius": 7
+   },
+   "standingOrder": "Start level with the keep's open lookout under its spire roof where the braziers burn, then pull back and up in one straight line to the south-south-west until the fortress, town and farmland open up; stay 7 m clear of the keep.",
+   "notes": "[lyt-060] Closing dronie: starts level with the keep's open top lookout (floor z 69.2, parapet 70, pyramid eave 72) where Lord Aleval stands among four tall fire braziers (0x0200034C, fire plume 0x320001AF + smoke), both brazier flames near frame centre (ndc +-0.3), then pulls back and up 16 s to the SSW until the whole fortress, the town and the farmland spread out. Verified: start (36725.2,24693.5,71.7) is 7.5 m from the keep's eave AABB, 12.7 m above the gatehouse/bastion tops (59); end (36694.0,24626.4,111.2) 69 m AGL; nearest object 7.5 m at t=0 then > 11 m; vmax 8.2 m/s (cinema preset 12).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "bandit-castle.01",
+   "site": "bandit-castle",
+   "technique": "classic.arc",
+   "takeSec": 14.708333,
+   "origEditSec": 13.916667,
+   "origInSec": 0.791667,
+   "origEditIn": 579.666667,
+   "section": {
+    "i": 54,
+    "label": "I2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 84,
+    "elevationDeg": 15,
+    "distance": 158,
+    "arcDeg": 32,
+    "direction": "ccw"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "standingOrder": "Sweep a slow 32-degree arc 158 m out from east-south-east to east-north-east of the hilltop castle, the western lowlands falling away behind it; stay 9 m above every pine top.",
+   "notes": "ESTABLISHING. A 32-degree counter-clockwise arc 158 m out and 15 deg up (z 232.9) from east-south-east to east-north-east of the castle: the octagonal curtain wall with its round towers, the four-storey keep and the east gatehouse crowning the hill at z 186, front-lit by the late-morning sun, with the western escarpment falling ~90 m to the lowlands behind it. Sector chosen by a line-of-sight sweep: 34-37 m pines ring the hill and block most low views; from 70-100 deg all five probe points (keep, N/S/W towers, gate) are visible. Verified: AGL 54-61, 9.8 m above/beside the tallest pine 0x02000258 (top 223) at t 6.5, no static within 60 m. vmax 9.6 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "bandit-castle.02",
+   "site": "bandit-castle",
+   "technique": "drone.top-down",
+   "takeSec": 10.25,
+   "origEditSec": 10.25,
+   "origInSec": 0,
+   "origEditIn": 593.583333,
+   "section": {
+    "i": 56,
+    "label": "K2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 72,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "standingOrder": "Hang straight above the keep and let the octagonal curtain wall turn slowly beneath; hold 60 m above the keep roof.",
+   "notes": "PATTERN / TOP-DOWN. Nadir hover 72 m above the keep (z 258) while the image turns 40 deg: the castle's concentric geometry (octagonal keep inside the octagonal curtain wall, four round towers, radial walls dividing the bailey into quadrants, the east gatehouse) reads like a seal, surrounded by the dark pines. Verified: 60 m above the keep roof (z 198), 55-60 m from the nearest tree tops; no motion except rotation.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "bandit-castle.03",
+   "site": "bandit-castle",
+   "technique": "classic.pan",
+   "takeSec": 13.125,
+   "origEditSec": 13.125,
+   "origInSec": 0,
+   "origEditIn": 603.833333,
+   "section": {
+    "i": 57,
+    "label": "L2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": 24,
+    "distance": 90,
+    "fromDeg": -100,
+    "toDeg": 0,
+    "relative": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "standingOrder": "Hover still 90 m south of the keep and pan right from the sunlit western lowlands across the wooded slope onto the castle; no translation, keep 25 m above the pines.",
+   "notes": "VISTA PAN. Fixed drone position 90 m south of the keep and 24 deg up (z 228.6, AGL 70.8): pans 100 deg clockwise from the western lowlands below the escarpment (heading 260, sun behind) across the wooded southern slope onto the castle (heading 0), ending with the gatehouse and keep side-lit from the east. Position chosen by the same LOS sweep (all probe points visible from 180 deg at 90 m / 24 deg). Verified: 26.9 m from the nearest pine top (0x02000258 top 211), 66.8 m from any static.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "bandit-castle.04",
+   "site": "bandit-castle",
+   "technique": "drone.rising-reveal",
+   "takeSec": 11.958333,
+   "origEditSec": 11.958333,
+   "origInSec": 0,
+   "origEditIn": 616.958333,
+   "section": {
+    "i": 58,
+    "label": "M2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "distance": 180,
+    "obstacleDistance": 14,
+    "obstacleHeight": 8,
+    "heightStart": 1.6,
+    "clearance": 6,
+    "forward": 4,
+    "endPitchDeg": -9,
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36250.0,
+     40416.0,
+     100.0
+    ],
+    "height": 10,
+    "radius": 20
+   },
+   "standingOrder": "Start low in the north-west courtyard looking past the sparkling Life Stone at the curtain wall, then rise over the battlements to reveal the sunlit western lowlands; keep 5 m from the Life Stone and the walls.",
+   "notes": "FX + REVEAL. Starts 1.6 m above the north-west bailey quadrant (36430, 40416) looking west at the curtain wall with the sparkling Life Stone (36418.5, 40412.5) left of centre 12 m ahead, then rises 12.4 m while easing 4 m forward and pitching from +10 to -9 deg until it clears the battlements (wall top ~192) and the sunlit western lowlands open 90 m below. Morning sun behind the camera. Verified against the castle's exported meshes (1 m raster): start 5.7 m from the keep's north-west face, the quadrant's radial wall 7+ m east, the curtain wall >= 8 m ahead at all times, Life Stone >= 8.3 m; ground 186.0 (WBT), AGL 1.6 -> 14.0; nearest scenery 18.9 m. vmax 1.6 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "bandit-castle.05",
+   "site": "bandit-castle",
+   "technique": "classic.time-lapse",
+   "takeSec": 13.041667,
+   "origEditSec": 12.25,
+   "origInSec": 0,
+   "origEditIn": 628.916667,
+   "section": {
+    "i": 59,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 235,
+    "elevationDeg": 2,
+    "distance": 220,
+    "thirds": "center",
+    "rate": 0.012
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "standingOrder": "Lock off 220 m south-west of the castle and 106 m above the lowland looking up at the keep while the clouds race and the shadows shorten; keep the frame still and 30 m from the pines.",
+   "notes": "TIME-LAPSE CLOSER. Locked off 220 m south-west of the castle, 2 deg above it (z 199.7, AGL 106 over the lowland) looking north-east up at the hilltop castle on its escarpment against the sky while the sky clock runs at 0.012 day/s: 0.40 -> 0.544 over 12 s (sun 47 -> 75 deg, never sets), clouds race and the pine shadows on the slope shorten. Verified: nearest scenery 32 m (retail) / 65 m (default), clear line of sight to the keep and all towers.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "merwart-village.01",
+   "site": "merwart-village",
+   "technique": "drone.tilt-reveal",
+   "takeSec": 13.833333,
+   "origEditSec": 13.041667,
+   "origInSec": 0.791667,
+   "origEditIn": 641.166667,
+   "section": {
+    "i": 59,
+    "label": "A",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "startPitchDeg": -82,
+    "endPitchDeg": -5,
+    "heightAGL": 8,
+    "distance": 215,
+    "drift": 18,
+    "bearingDeg": 350,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38652.0,
+     43692.0,
+     24.0
+    ],
+    "height": 34,
+    "radius": 10
+   },
+   "standingOrder": "Hover over the sea looking down at the shallows, then tilt up to reveal the slime cliff and the two giant Merwart lodges beyond; stay 10 m above the water and the cliff top.",
+   "notes": "WATER ESTABLISHING. Hovers 32 m over the shallow sea north of Vissidal (WBT terrain type 18 WaterShallowSea, z 0 under the whole move) looking straight down at the water, drifts 18 m south while tilting up to -5 deg to reveal the beach, the 20 m slime-covered cliff and the two giant cone lodges of Merwart Village 200 m beyond (lodge tips z 57.6 / 47.6). Noon sun. Verified: AGL 32 throughout, nearest scenery 21.6 m (a low retail shore plant), the cliff top (z 18-26) stays 6+ m below the lens; line of sight to lodge A clear. vmax 2.2 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "merwart-village.02",
+   "site": "merwart-village",
+   "technique": "classic.two-shot",
+   "takeSec": 11.416667,
+   "origEditSec": 11.416667,
+   "origInSec": 0,
+   "origEditIn": 654.208333,
+   "section": {
+    "i": 60,
+    "label": "N2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "secondary": [
+     38652.0,
+     43692.0,
+     24.0
+    ],
+    "secondaryHeight": 34,
+    "side": "right",
+    "distance": 0,
+    "elevationDeg": 6,
+    "driftDeg": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38676.0,
+     43644.0,
+     14.0
+    ],
+    "height": 34,
+    "radius": 10
+   },
+   "standingOrder": "Frame the two giant cone lodges side by side from the sunlit east and drift slowly round them; keep 4 m from every rock and plant.",
+   "notes": "LANDMARK TWO-SHOT. The two giant Merwart cone lodges (0x01003D13, 16 m wide x 34 m tall) framed as a pair from the sunlit east-north-east: lodge B on the lower market terrace (38676, 43644, z 14) and lodge A on the upper terrace (38652, 43692, z 24), the slime cliffs and sea horizon beyond; a 10 deg drift. Camera z 43.7 (AGL 17.7 -> 21.6) on the plateau by the Life Stone. Verified: >= 14.5 m from all scenery, 60+ m from both lodges, LOS clear.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "merwart-village.03",
+   "site": "merwart-village",
+   "technique": "classic.push-in",
+   "takeSec": 10.125,
+   "origEditSec": 10.125,
+   "origInSec": 0,
+   "origEditIn": 665.625,
+   "section": {
+    "i": 61,
+    "label": "O2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 120,
+    "elevationDeg": 8,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38725.8,
+     43715.4,
+     26.0
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "standingOrder": "Push slowly in on the sparkling Life Stone with the open plateau and the sea horizon behind it; stop 4 m short of the stone and the shore rocks.",
+   "notes": "FX: LIFE STONE. Perceptual push-in (WS -> FS, fov 40) from the east-south-east on the Merwart Life Stone (38725.8, 43715.4, z 26) - its sparkle column against the open slime plateau and the sea horizon to the north-west, noon sun. Verified: camera (38734.6, 43710.3, 28.9) -> (38729.9, 43713.1, 28.2), ground 26.0 (WBT), AGL 2.2-2.9, ends 4.6 m from the stone, 4.9 m from the 3 m shore rock 0x020014AF; no statics within 30 m.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "merwart-village.04",
+   "site": "merwart-village",
+   "technique": "drone.helix",
+   "takeSec": 16.333333,
+   "origEditSec": 16.333333,
+   "origInSec": 0,
+   "origEditIn": 675.75,
+   "section": {
+    "i": 62,
+    "label": "P2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 24,
+    "radiusEnd": 34,
+    "heightStart": 6,
+    "heightEnd": 44,
+    "revolutions": 0.4,
+    "direction": "ccw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38652.0,
+     43692.0,
+     24.0
+    ],
+    "height": 34,
+    "radius": 10
+   },
+   "standingOrder": "Corkscrew up around the tall cone lodge from its doorway to above its tip; keep 8 m from the lodge wall and 5 m above its peak at the top.",
+   "notes": "HERO DRONE MOVE. Helix around lodge A (38652, 43692, z 24): starts 24 m south-south-west at z 30 looking up at its south doorway, climbs counter-clockwise 0.4 rev past the market terrace and lodge B while the radius opens to 34 m, finishing 10 m above the lodge's 34 m tip (z 68) east-north-east of it, looking down over both lodges, the market and the sand flats. Verified against the lodge mesh: >= 11.6 m from the lodge surface, >= 11.8 m from scenery, AGL 9.2 -> 42.3, vmax 8.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "merwart-village.05",
+   "site": "merwart-village",
+   "technique": "classic.crane",
+   "takeSec": 12.916667,
+   "origEditSec": 12.125,
+   "origInSec": 0,
+   "origEditIn": 692.083333,
+   "section": {
+    "i": 64,
+    "label": "P2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 260,
+    "elevationDeg": -9,
+    "distance": 24,
+    "riseM": 12,
+    "swingDeg": -20,
+    "armM": 8,
+    "thirds": "center"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38664.0,
+     43644.0,
+     14.0
+    ],
+    "height": 12,
+    "radius": 8
+   },
+   "standingOrder": "Rise on the jib from behind the glowing smithy forge up past the doorway of the near cone lodge to look over the market terrace; keep 4 m from the stalls and barrels.",
+   "notes": "FX: FORGE + CLOSER. Jib rise from 2.2 m above the open-air market (38640.7, 43639.9) behind Blacksmith Bulidurg's outdoor forge - glowing coals 0x02000354 with firelight and a fire script, 10.4 m ahead at frame lower right - up 12 m past the dark doorway of lodge B (aim at its west door) to look over the market terrace; sun overhead. Verified: AGL 2.2 -> 14, nearest static the barrel stack 5.2 m north, stalls/doors 7+ m, scenery 4.8 m (retail) / 7.3 m (default); forge in frame at the start (15 deg right, 17 deg below centre).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "neydisa-castle.01",
+   "site": "neydisa-castle",
+   "technique": "classic.establishing",
+   "takeSec": 13.833333,
+   "origEditSec": 13.041667,
+   "origInSec": 0.791667,
+   "origEditIn": 704.208333,
+   "section": {
+    "i": 64,
+    "label": "P2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 45,
+    "distance": 170,
+    "heightM": 48,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28692.0,
+     41170.0,
+     100.0
+    ],
+    "height": 30,
+    "radius": 35
+   },
+   "standingOrder": "Hang wide and high north-east of the spired castle and drift slowly, the Esper mountains behind; stay 15 m above every treetop.",
+   "notes": "ESTABLISHING. Wide, high and slow from the north-east (170 m out, 48 m up, z 148): the compact Empyrean castle on its grassy shelf - keep spire (z 131.5), spired corner towers, red banners - drifting 12 deg with a 10% push, the Esper mountains rising beyond to the south-west, morning sun from behind-left. Verified: AGL 60.5-65.4, nearest default scenery 39.7 m, retail 7.3 m (a 13 m pine top), no statics.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "neydisa-castle.02",
+   "site": "neydisa-castle",
+   "technique": "fpv.fpv-gap",
+   "takeSec": 9.958333,
+   "origEditSec": 9.958333,
+   "origInSec": 0,
+   "origEditIn": 717.25,
+   "section": {
+    "i": 65,
+    "label": "Q2",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     28956.0,
+     41160.0,
+     94.0
+    ],
+    "gapNormal": [
+     -1,
+     0,
+     0
+    ],
+    "gapWidth": 10,
+    "gapHeight": 8,
+    "heightAGL": 6,
+    "approachAngleDeg": 22,
+    "approachFrom": "left",
+    "approachDistance": 45,
+    "alignDistance": 14,
+    "exitDistance": 50,
+    "cornerRadius": 14,
+    "speed": 11,
+    "alat": 8,
+    "lookAhead": 8,
+    "maxBankDeg": 35,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Carve in from the south-east and thread the gap between the twin Empyrean spires along the road, then race on toward the castle; keep 5 m from both towers and 3 m above the road.",
+   "notes": "HERO FPV (JEV candidate if the budget allows; code is safe). Carves in from the south-east and threads the gap between the twin 30.75 m Empyrean spires that flank the road 260 m east of the castle (gate at 28956, 41160, z 94), then flies straight on along the road toward Neydisa Castle, which fills the end of the frame. Spire bodies are +-5.5 m (eave +-7 at 18 m, above the lens), so the 13 m gap leaves 6.5 m each side at the crossing (mesh-verified at t 5.5). Verified: AGL 9.6 -> 2.8 (WBT ground 84.36 -> 91.17), scenery >= 14.7 m, vmax 10.9 m/s (fpv preset).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "neydisa-castle.03",
+   "site": "neydisa-castle",
+   "technique": "classic.truck",
+   "takeSec": 11.75,
+   "origEditSec": 11.75,
+   "origInSec": 0,
+   "origEditIn": 727.208333,
+   "section": {
+    "i": 65,
+    "label": "Q2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 90,
+    "elevationDeg": -6,
+    "distance": 16,
+    "travelM": 34,
+    "direction": "right",
+    "keepAim": false,
+    "thirds": "center"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28716.0,
+     41170.0,
+     100.0
+    ],
+    "height": 8,
+    "radius": 25
+   },
+   "standingOrder": "Truck north along the sunlit east wall at walking pace, 12 m off the stones and 2 m up; nothing between lens and wall.",
+   "notes": "FACADE PAN (2 of 2 in this batch): Empyrean castle wall. Pure lateral truck 34 m north along x 28731.9, 12 m off the sunlit east curtain wall, lens 2.3 m above the lawn and tilted 6 deg up: the spired south-east tower, the 6 m wall and its north-east corner slide past while the keep's spire and the red banners rise behind; morning sun straight onto the wall. Lawn between wall and the eastern grove verified empty: no static or scenery within 12.1 m of the camera line (default scenery 18.8 m, retail 13.7 m), ground 100.0 -> 99.5 (WBT). vmax 4.5 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "neydisa-castle.04",
+   "site": "neydisa-castle",
+   "technique": "classic.push-in",
+   "takeSec": 12.25,
+   "origEditSec": 12.25,
+   "origInSec": 0,
+   "origEditIn": 738.958333,
+   "section": {
+    "i": 66,
+    "label": "R2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 30,
+    "elevationDeg": 10,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28446.2,
+     41233.6,
+     129.9
+    ],
+    "height": 10,
+    "radius": 6
+   },
+   "standingOrder": "Push slowly toward the menhir ring and its rising blue glow with the pine grove behind; stay 5 m outside the stones.",
+   "notes": "FX: MENHIR RING. 250 m west of the castle on the spire hill, a ring of eight 3.5 m menhirs encircles the 'Chemical Reaction' emitter 0x0200067B (catalog 0x320003E9: 26 blue glow clouds swarming up and swelling to 8 m over 10 s). Slow push from 24 m to 13 m out of the north-north-east, 10 deg down, into the blue mist with the pine grove behind. Verified: AGL 10.9 -> 7.7 (WBT 128.16 -> 129.08), ends 5.1 m from the nearest menhir; default scenery 2.9 m from the AABB corner of a scale-2.8 pine whose trunk is 29 m away (crown radius ~22 m); this spot assumes the default scenery bake - with ?sceneryBake=retail the ring sits inside a dense grove.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "neydisa-castle.05",
+   "site": "neydisa-castle",
+   "technique": "drone.top-down-rise",
+   "takeSec": 13.583333,
+   "origEditSec": 12.791667,
+   "origInSec": 0,
+   "origEditIn": 751.208333,
+   "section": {
+    "i": 68,
+    "label": "T2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 22,
+    "heightEnd": 100,
+    "rotateDeg": 50,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28694.0,
+     41172.0,
+     100.0
+    ],
+    "height": 2,
+    "radius": 20
+   },
+   "standingOrder": "Look straight down into the courtyard and climb away, the Life Stone and portal shrinking as the spired castle and its towers turn below; keep 10 m above the keep spire.",
+   "notes": "CLOSING TOP-DOWN RISE. Nadir view 22 m above the courtyard (z 122) - the Town Network swirl, the Life Stone's sparkle in the north-east corner, the two courtyard trees, candelabra flames - climbing to z 200 while the image turns 50 deg, so the spired towers, keep spire and curtain walls close around the courtyard and the shelf opens up. Verified: camera column x 28694 y 41172 is 19 m north of the keep spire tip (z 131.5) and 11.9 m from the courtyard tree tops; AGL 22 -> 100; vmax 9.4 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "stonehold.01",
+   "site": "stonehold",
+   "technique": "classic.establishing",
+   "takeSec": 14.75,
+   "origEditSec": 13.958333,
+   "origInSec": 0.791667,
+   "origEditIn": 764,
+   "section": {
+    "i": 68,
+    "label": "T2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 75,
+    "distance": 170,
+    "heightM": 80,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19285,
+     40985,
+     78
+    ],
+    "height": 40,
+    "radius": 60
+   },
+   "standingOrder": "Drift slowly 12 degrees around the terraced town from 170 m out and 80 m up over the eastern hillside, the ridge and western lowlands in frame; stay 50 m above every pine.",
+   "notes": "ESTABLISHING (classic.establishing, assigned). Camera hangs over the eastern hillside 170 m ENE of the plaza at z 158 (66-79 m AGL) and drifts from bearing 69 to 81 while pushing 10 % in, looking WSW down on the whole terrace town with the morning sun behind it: stone houses, the column plaza, the chapel, then the land falling away to the wooded western lowlands and the pine plateau with the Rat Tower on the right. Subject height 40 lifts the aim so the frame keeps ~6 deg of sky with clouds at the top. Line-of-sight sweep: from bearings 65-85 at this height all six probe points (plaza, four roofs, column) are clear of trees; at 45 m height every bearing was blocked by 30 m pines. Verified offline (real registry build + WBT terrain): start (19443.7,41045.9,158.0) end (19436.1,41008.9,158.0), min AGL 66.4 m, nearest static/building/tree 55.2 m (0x02000246@19426,41101), peak 4.3 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "stonehold.02",
+   "site": "stonehold",
+   "technique": "classic.rack-focus",
+   "takeSec": 12.041667,
+   "origEditSec": 12.041667,
+   "origInSec": 0,
+   "origEditIn": 777.958333,
+   "section": {
+    "i": 69,
+    "label": "U2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 138,
+    "elevationDeg": -13,
+    "distance": 13,
+    "thirds": "left",
+    "fromTarget": "metres",
+    "fromM": 3.3,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.0,
+    "driftM": 1.0
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19283.8,
+     40979.3,
+     78
+    ],
+    "height": 9.5,
+    "radius": 3
+   },
+   "standingOrder": "Hold at eye height 3 m behind the burning candelabrum and pull focus from its flames to the Tumerok statue on the plaza column; never closer than 2 m to the candelabrum.",
+   "notes": "FLAME FX + LANDMARK (classic.rack-focus, real DoF). Camera 1.8 m above the plaza, 13 m south-east of the column (bearing 138), with the candelabrum at (19291.2,40973.0) 3.3 m ahead and ~10 deg right of centre; the statue column sits on the left third. Focus starts on the flame (3.3 m) with the column soft, then pulls (2 s, centred at 45 %) to the column/statue - warm flicker in the foreground, morning-lit stone behind. dof focusRange 2, bokeh 2. Verified offline (real registry build + WBT terrain): start (19292.3,40969.9,79.8) end (19291.6,40970.6,80.1), min AGL 1.8 m, nearest static/building/tree 2.1 m (0x64D5#24 0x020005D8), peak 0.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "stonehold.03",
+   "site": "stonehold",
+   "technique": "classic.tilt",
+   "takeSec": 12.166667,
+   "origEditSec": 12.166667,
+   "origInSec": 0,
+   "origEditIn": 790,
+   "section": {
+    "i": 71,
+    "label": "V2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": -18.8,
+    "distance": 42.25,
+    "fromDeg": -4,
+    "toDeg": 30,
+    "relative": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19332,
+     41220,
+     158
+    ],
+    "height": 30.75,
+    "radius": 7
+   },
+   "standingOrder": "Stay locked 40 m south of the Rat Tower at 2 m above the plateau and tilt from its door up to the spire roof against the sky; do not translate.",
+   "notes": "LANDMARK (classic.tilt, assigned). Fixed camera on the pine plateau 40 m due south of the five-storey Rat Tower; absolute tilt from -4 deg (door, mossy base, plateau grass) to +30 deg so the spire roof (188.75) rises into the upper third with sky and clouds above - the tower's height revealed. Sun from the east side-lights the south face. Camera ground 157.7 (WBT). Verified offline (real registry build + WBT terrain): start (19332.0,41180.0,159.8) end (19332.0,41180.0,159.8), min AGL 2.1 m, nearest static/building/tree 6.2 m (0x02000246@19334,41171), peak 0.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "stonehold.04",
+   "site": "stonehold",
+   "technique": "drone.spiral-descent",
+   "takeSec": 11.875,
+   "origEditSec": 11.875,
+   "origInSec": 0,
+   "origEditIn": 802.166667,
+   "section": {
+    "i": 72,
+    "label": "W2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "radiusStart": 34,
+    "radiusEnd": 11,
+    "heightStart": 24,
+    "heightEnd": 3,
+    "revolutions": 0.21,
+    "direction": "ccw",
+    "bearingDeg": 290,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19492.3,
+     40924.9,
+     102.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "standingOrder": "Spiral down from 48 m over the western drop to 8 m off the cliff ledge, ending level with the crackling crystal of the destroyed portal; keep 5 m from the pine beside it.",
+   "notes": "LIGHTNING FX (drone.spiral-descent). Starts 34 m west of the Destroyed Ahurenga Portal, 24 m above its ledge (48 m over the ravine floor) and spirals 75 deg counter-clockwise down to 11 m south-west of it at ledge height (105.5, 8 m above the slope), ending level on the crystal with its arc cluster and arc fountain spitting blue-white bolts against the shadowed cliff (morning sun behind the cliff = arcs read strongly). The 16 m pine 5 m east of the portal stays behind the subject. Ravine ground 76-97. Verified offline (real registry build + WBT terrain): start (19460.4,40936.5,126.5) end (19486.1,40915.8,105.5), min AGL 8.0 m, nearest static/building/tree 5.3 m (0x020004BE@19497,40927), peak 5.8 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "stonehold.05",
+   "site": "stonehold",
+   "technique": "drone.pano-360",
+   "takeSec": 14.75,
+   "origEditSec": 13.958333,
+   "origInSec": 0,
+   "origEditIn": 814.041667,
+   "section": {
+    "i": 73,
+    "label": "X2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 50,
+    "yawDeg": 360,
+    "direction": "cw",
+    "startHeadingDeg": 180,
+    "relativeToSubject": false,
+    "tiltDeg": -12,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19290,
+     41150,
+     150
+    ],
+    "height": 4,
+    "radius": 4
+   },
+   "standingOrder": "Hover 50 m above the pine plateau north of town and turn one slow full circle, tilted 12 degrees down over the town, the Rat Tower and the western valley; no translation.",
+   "notes": "CLOSING VISTA (drone.pano-360, assigned, on the hilltop). Hover at z 200 over the plateau edge (ground 149.3) between town and tower, starting south (the terrace town 80 m below), turning clockwise through the western lowlands, the Rat Tower and the pine plateau to the eastern mountains and back - a 360 of Stonehold's setting under morning cloud. Pines stay 24 m away. Verified offline (real registry build + WBT terrain): start (19290.0,41150.0,200.0) end (19290.0,41150.0,200.0), min AGL 50.7 m, nearest static/building/tree 23.9 m (0x020002D3@19302,41132), peak 0.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hoshino-fortress.01",
+   "site": "hoshino-fortress",
+   "technique": "drone.boom-rise",
+   "takeSec": 18.125,
+   "origEditSec": 17.333333,
+   "origInSec": 0.791667,
+   "origEditIn": 828,
+   "section": {
+    "i": 74,
+    "label": "Y2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 40,
+    "heightStart": 3,
+    "heightEnd": 42,
+    "bearingDeg": 190,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 10,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14316,
+     43236,
+     58
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "standingOrder": "Rise straight up 40 m south of the village pagoda from 3 m to 42 m with the gimbal held 10 degrees up, so the pagoda roof sinks and the fortress walls rise above it; keep 6 m from the pine behind.",
+   "notes": "OPENING REVEAL (drone.boom-rise, keepAim off). From 3 m over the Hoshino Town lane 40 m SSW of the octagonal pagoda, the camera rises 39 m in 16 s with a fixed +10 deg tilt toward NNE: first the three tiered pagoda roofs fill the frame, then they sink to the bottom edge while the 31 m walls, gate houses and 60 m pagoda towers of the fortress appear on the plateau 100-170 m above (terrain LOS: walls visible above z 176-190 from this column). Ground 57.7 (WBT). Verified offline (real registry build + WBT terrain): start (14309.1,43196.6,61.0) end (14309.1,43196.6,100.0), min AGL 3.3 m, nearest static/building/tree 6.0 m (0x020002DA@14296,43189), peak 3.8 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "hoshino-fortress.02",
+   "site": "hoshino-fortress",
+   "technique": "classic.orbit",
+   "takeSec": 16.791667,
+   "origEditSec": 16.791667,
+   "origInSec": 0,
+   "origEditIn": 845.333333,
+   "section": {
+    "i": 75,
+    "label": "Z2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 70,
+    "elevationDeg": 8,
+    "distance": 75,
+    "thirds": "center",
+    "revolutions": 0.25,
+    "direction": "ccw"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14279.6,
+     43706.7,
+     172
+    ],
+    "height": 30,
+    "radius": 34
+   },
+   "standingOrder": "Circle the floating tower a quarter turn counter-clockwise from east to north at 75 m and level with its middle; keep 35 m from the floating blue spires.",
+   "notes": "SPECTRAL FX + LANDMARK (classic.orbit, assigned). Quarter orbit at 75 m around the hovering Hoshino Tower, camera at z 197 (116-154 m above the slope), from bearing 70 to 340: the four-storey Sho hall floats in 21 swelling blue spectral-fog clouds, its two floating cathedral spires either side, the ground 100 m below and the fortress walls behind it from the north. Starts at 70 deg so the east spire never blocks the view (blocked at 90 deg). Verified offline (real registry build + WBT terrain): start (14349.4,43732.1,197.4) end (14254.2,43776.5,197.4), min AGL 116.4 m, nearest static/building/tree 35.2 m (0x4AE3#1 0x01004BCC), peak 7.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hoshino-fortress.03",
+   "site": "hoshino-fortress",
+   "technique": "drone.flyover",
+   "takeSec": 17.416667,
+   "origEditSec": 17.416667,
+   "origInSec": 0,
+   "origEditIn": 862.125,
+   "section": {
+    "i": 77,
+    "label": "P2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 80,
+    "speed": 10,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -25,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14360,
+     43420,
+     172
+    ],
+    "height": 63,
+    "radius": 150
+   },
+   "standingOrder": "Fly level due north at 10 m/s, 80 m above the plateau, over the courtyards toward the floating tower; climb rather than descend if any roof comes within 15 m.",
+   "notes": "AERIAL TRAVEL (drone.flyover, gimbal -25). Level line at z 252 from above the south slope (y 43340, 157 m AGL) across the fortress centre (80 m above the plateau) to y 43500: the courtyards, gates and pagoda roofs pass below while the floating Hoshino Tower in its blue haze grows at the top of the frame. Closest roof: pagoda tower 0x02001B75 top 234.7, 17 m below (19 m 3-D). Verified offline (real registry build + WBT terrain): start (14360.0,43340.0,252.0) end (14360.0,43500.0,252.0), min AGL 80.0 m, nearest static/building/tree 19.0 m (0x4AE2#1 0x02001B75), peak 10.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hoshino-fortress.04",
+   "site": "hoshino-fortress",
+   "technique": "drone.top-down",
+   "takeSec": 17.916667,
+   "origEditSec": 17.125,
+   "origInSec": 0,
+   "origEditIn": 879.541667,
+   "section": {
+    "i": 79,
+    "label": "P",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 190,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14365,
+     43515,
+     172
+    ],
+    "height": 63,
+    "radius": 150
+   },
+   "standingOrder": "Hang straight above the fortress centre at 190 m and let the courtyard grid turn 40 degrees beneath; no translation.",
+   "notes": "PATTERN / TRANSITION (drone.top-down, assigned). Nadir hover at z 362 over the fortress centre (190 m above the plateau, 127 m above the gate house roof) turning 40 deg: the walled courtyards, gates and pagoda roofs read as a Sho seal, the floating tower at the top edge - the acpedia 'bird's eye showing the courtyards' view. Frame ~330 x 185 m. Verified offline (real registry build + WBT terrain): start (14365.0,43515.0,362.0) end (14365.0,43515.0,362.0), min AGL 190.0 m, nearest static/building/tree 127.1 m (0x4AE2#5 0x02001B78), peak 0.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "beach-fort.01",
+   "site": "beach-fort",
+   "technique": "drone.terrain-skim",
+   "takeSec": 12.125,
+   "origEditSec": 11.333333,
+   "origInSec": 0.791667,
+   "origEditIn": 896.666667,
+   "section": {
+    "i": 82,
+    "label": "C3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 3,
+    "speed": 7,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": 0,
+    "ends": "cruise",
+    "maxBankDeg": 0
+   },
+   "subject": null,
+   "standingOrder": "Skim east 3 m above the sea at 6.7 m/s straight at the palisade and settle 30 m short of it; never lower than 2.5 m over the water.",
+   "notes": "WATER (drone.terrain-skim). An 80 m straight path along y 42712 from x 12572 to 12652, 3 m above the sea (100 % over water, WBT ground 0), looking 30 m ahead: waves and sun glitter rush under the lens while the stake palisade and its blockhouses grow on the beach ahead with the pine hill behind. Ends 30 m from the west wall. Verified offline (real registry build + WBT terrain): start (12572.0,42712.0,3.0) end (12652.0,42712.0,3.0), min AGL 3.0 m, nearest static/building/tree 30.2 m (0x42DE#104 0x01001124), peak 6.7 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "beach-fort.02",
+   "site": "beach-fort",
+   "technique": "drone.top-down-rise",
+   "takeSec": 12.166667,
+   "origEditSec": 12.166667,
+   "origInSec": 0,
+   "origEditIn": 908,
+   "section": {
+    "i": 82,
+    "label": "C3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 14,
+    "heightEnd": 80,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "standingOrder": "Rise straight up from 14 m to 80 m above the fort centre looking straight down while the frame turns 45 degrees.",
+   "notes": "PATTERN (drone.top-down-rise). Nadir over the palisade centre: the stake rectangle, blockhouses and the two stone houses as a graphic square, then rising to 80 m the beach, the surf line and the open sea open up on one side and the pine hill on the other. Starts 7 m above the tallest stake (8.8 m 3-D). Verified offline (real registry build + WBT terrain): start (12696.0,42708.0,14.0) end (12696.0,42708.0,80.0), min AGL 14.0 m, nearest static/building/tree 8.8 m (0x42DE#80 0x01001127), peak 8.6 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "beach-fort.03",
+   "site": "beach-fort",
+   "technique": "drone.orbit-poi",
+   "takeSec": 12.666667,
+   "origEditSec": 12.666667,
+   "origInSec": 0,
+   "origEditIn": 920.166667,
+   "section": {
+    "i": 83,
+    "label": "D3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 35,
+    "heightAGL": 10,
+    "revolutions": 0.25,
+    "direction": "ccw",
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12516.3,
+     42492,
+     21.5
+    ],
+    "height": 3,
+    "radius": 3
+   },
+   "standingOrder": "Orbit the temple summit portal a quarter turn counter-clockwise at 35 m radius and 10 m above it; stay 4 m above the temple top and 15 m from the pines.",
+   "notes": "PORTAL FX (drone.orbit-poi). Quarter orbit at z 31.5 (4 m above the temple's highest point, 35 m out) around the shadow portal and red glyph on the Moarsman Temple summit, from ESE to SSW over the sea (41 % over water): the black swirl with its red rim, the Quiddity Rift above it, the green crystal path and red pillar portal at the foot, coral, and the coast running north to Beach Fort. Verified offline (real registry build + WBT terrain): start (12550.8,42485.9,31.5) end (12522.4,42526.5,31.5), min AGL 31.5 m, nearest static/building/tree 17.4 m (0x020002D3@12572,42488), peak 3.9 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "beach-fort.04",
+   "site": "beach-fort",
+   "technique": "drone.dronie",
+   "takeSec": 12.166667,
+   "origEditSec": 12.166667,
+   "origInSec": 0,
+   "origEditIn": 932.833333,
+   "section": {
+    "i": 84,
+    "label": "E3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "startDistance": 20,
+    "endDistance": 84,
+    "startHeight": 12,
+    "endHeight": 42,
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "standingOrder": "Fly back and up from just outside the west wall to 84 m out over the sea and 42 m high, keeping the fort centred; never closer than 5 m to the stakes.",
+   "notes": "CLOSING (drone.dronie). Starts 20 m WSW of the fort centre, 12 m up (5 m above the stake tips), and pulls back along bearing 250 over the beach and out over the sea to 84 m / 42 m: the little fort shrinks against the pine hill while the coast, the surf and the temple to the south-west open up. Verified offline (real registry build + WBT terrain): start (12677.2,42701.2,12.0) end (12617.1,42679.3,42.0), min AGL 12.0 m, nearest static/building/tree 8.2 m (0x42DE#62 0x01001127), peak 9.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "beach-fort.05",
+   "site": "beach-fort",
+   "technique": "classic.hyperlapse",
+   "takeSec": 14.541667,
+   "origEditSec": 13.75,
+   "origInSec": 0,
+   "origEditIn": 945,
+   "section": {
+    "i": 86,
+    "label": "G3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 248,
+    "elevationDeg": 7,
+    "distance": 72,
+    "thirds": "center",
+    "move": "truck",
+    "moveM": 16,
+    "direction": "right",
+    "rate": 0.008
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "standingOrder": "Truck 16 m to the right 12 m above the shallows looking ENE at the fort while the sky clock races; hold height and keep the fort centred.",
+   "notes": "HYPERLAPSE + WATER (classic.hyperlapse, assigned). Camera 72 m WSW of the fort over the shallow sea (z 12.3, 100 % over water), trucking 16 m right in 14 s while sky time runs 0.008 day/s (0.44 -> 0.55, sun 55 -> 80 deg, never sets): clouds and their shadows race over the palisade and the pine hill, the beach and surf in the foreground. Verified offline (real registry build + WBT terrain): start (12626.7,42688.6,12.3) end (12632.7,42673.8,12.3), min AGL 12.3 m, nearest static/building/tree 46.2 m (0x02000258@12675,42631), peak 1.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastwatch.01",
+   "site": "eastwatch",
+   "technique": "drone.rising-reveal",
+   "takeSec": 16.833333,
+   "origEditSec": 16.041667,
+   "origInSec": 0.791667,
+   "origEditIn": 958.75,
+   "section": {
+    "i": 87,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "distance": 140,
+    "obstacleDistance": 80,
+    "obstacleHeight": 170,
+    "heightStart": 100,
+    "clearance": 14,
+    "forward": 25,
+    "endPitchDeg": -8,
+    "bearingDeg": 95,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14124,
+     46140,
+     170
+    ],
+    "height": 26,
+    "radius": 60
+   },
+   "standingOrder": "Rise from 100 m to 184 m over the sea 55-80 m off the east cliff while easing 25 m toward it, until the plateau edge drops away and the outpost appears; stay 50 m from the cliff face.",
+   "notes": "ESTABLISHING REVEAL (drone.rising-reveal). Starts over open sea 140 m east of the outpost, 100 m up, facing the sunlit 170 m ice-and-rock sea cliff 80 m ahead; rises 84 m in 16 s while drifting 25 m forward and pitching from -11 to -8 deg until it clears the crest at x 14183: the lighthouse towers, keep and plateau of Eastwatch appear over the edge with the frozen Isle of Ruin behind. 100 % over water (ground 0); ends 62 m from the east lighthouse. Verified offline (real registry build + WBT terrain): start (14263.5,46127.8,100.0) end (14238.6,46130.0,184.0), min AGL 100.0 m, nearest static/building/tree 61.7 m (0x49F0#20 0x010036EA), peak 8.6 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "eastwatch.02",
+   "site": "eastwatch",
+   "technique": "classic.whip-pan",
+   "takeSec": 8.333333,
+   "origEditSec": 8.333333,
+   "origInSec": 0,
+   "origEditIn": 974.791667,
+   "section": {
+    "i": 89,
+    "label": "I3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 244.4,
+    "elevationDeg": -12.19,
+    "distance": 54.5,
+    "angleDeg": 110.0,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.5,
+    "land": "subject"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14172,
+     46116,
+     170
+    ],
+    "height": 26.35,
+    "radius": 6
+   },
+   "standingOrder": "Stand locked 2 m above the snow south of the keep, hold on the west lighthouse, then whip right to land on the east lighthouse.",
+   "notes": "GRAMMAR (classic.whip-pan between the two lighthouses). Camera at (14124,46093,171.7), 1.7 m above the plateau south of the keep: holds on the west lighthouse (bearing 316), whips 110 deg right in 0.3 s at mid-shot and lands on the east lighthouse at the cliff edge (bearing 66) with the sea beyond. Both lines of sight pass clear of the keep (16 m away). Verified offline (real registry build + WBT terrain): start (14124.0,46093.0,171.7) end (14124.0,46093.0,171.7), min AGL 1.7 m, nearest static/building/tree 16.0 m (0x49F0#17 0x010036E3), peak 0.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastwatch.03",
+   "site": "eastwatch",
+   "technique": "classic.low-angle",
+   "takeSec": 14.166667,
+   "origEditSec": 14.166667,
+   "origInSec": 0,
+   "origEditIn": 983.125,
+   "section": {
+    "i": 89,
+    "label": "I3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "elevationDeg": -22.5,
+    "distance": 16.2,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14124,
+     46123,
+     170
+    ],
+    "height": 16,
+    "radius": 2
+   },
+   "standingOrder": "Push 2 m toward the keep's north door from 15 m out at eye height, looking up past the two blue-flame lamps to the golden roof; stay 3 m from the signpost and lamps.",
+   "notes": "BLUE FLAME FX + LANDMARK (classic.low-angle). Camera 1.8 m above the plaza 15 m north of the keep-tower, pitched up 23 deg: the two golden lamps with tall blue flame tongues flank the door in the shaded north face (sun on the far side), the stone tower climbs to its golden tapered roof against the sky; slow 2 m push. Nearest lamp 6 m behind the camera. Verified offline (real registry build + WBT terrain): start (14124.0,46138.0,171.8) end (14124.0,46136.1,172.6), min AGL 1.8 m, nearest static/building/tree 3.5 m (Eastwatch Outpost), peak 0.2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastwatch.04",
+   "site": "eastwatch",
+   "technique": "drone.vertigo-drone",
+   "takeSec": 12.166667,
+   "origEditSec": 12.166667,
+   "origInSec": 0,
+   "origEditIn": 997.291667,
+   "section": {
+    "i": 90,
+    "label": "J3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "nearDistance": 14,
+    "farDistance": 55,
+    "direction": "out",
+    "heightAGL": 13,
+    "minFovDeg": 10,
+    "maxFovDeg": 80,
+    "bearingDeg": 240,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14172,
+     46116,
+     170
+    ],
+    "height": 26.35,
+    "radius": 6
+   },
+   "standingOrder": "Fly back 14 to 55 m from the east lighthouse along bearing 240 at 13 m height while zooming in so the tower keeps its size and the sea horizon swells behind it.",
+   "notes": "VERTIGO (drone.vertigo-drone on a tower). Camera at z 183 (mid-tower, 13 m above the plateau) retreats WSW from 14 to 55 m while the fov narrows 60 -> 17 deg: the lighthouse holds its size while the sea, the ice spires and the horizon behind it loom and compress. Path passes 20 m south of the keep; ground 168-170. Verified offline (real registry build + WBT terrain): start (14159.9,46109.0,183.0) end (14124.4,46088.5,183.0), min AGL 13.0 m, nearest static/building/tree 6.8 m (0x49F0#20 0x010036EA), peak 5.4 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "eastwatch.05",
+   "site": "eastwatch",
+   "technique": "fpv.fpv-dive",
+   "takeSec": 14.25,
+   "origEditSec": 14.25,
+   "origInSec": 0,
+   "origEditIn": 1009.458333,
+   "section": {
+    "i": 92,
+    "label": "L3",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": "WS",
+   "params": {
+    "heightStart": 176,
+    "bottomAGL": 4,
+    "diveAngleDeg": -80,
+    "approach": 35,
+    "standoff": 3,
+    "exitLength": 30,
+    "pullOutRadius": 12,
+    "speed": 20,
+    "alat": 11,
+    "uptiltDeg": 20,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14208,
+     46143,
+     0
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "standingOrder": "Run east 7 m over the plateau, crest the cliff edge and dive the 170 m sea cliff at -80 degrees, pulling out 4 m above the ice between the rocks; FPV speed, keep 7 m from the ice rocks.",
+   "notes": "SPECTACLE (fpv.fpv-dive, FPV preset, peak 18.7 m/s). Level approach at z 177 (7 m above the plateau), crest at x 14211, near-vertical dive down the sea cliff (dive line 28 m off the face) and pull-out into level flight 4 m above the ice shelf and sea, threading between the 8.6 m and 12.2 m ice rocks (7.5 m clear) toward open water. JEV-eligible hero candidate. Verified offline (real registry build + WBT terrain): start (14173.0,46143.0,177.0) end (14271.3,46143.0,4.0), min AGL 4.0 m, nearest static/building/tree 7.5 m (0x010036E8@14259,46164), peak 18.7 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "egg-orchard-portal.01",
+   "site": "egg-orchard-portal",
+   "technique": "classic.push-in",
+   "takeSec": 10.875,
+   "origEditSec": 10.083333,
+   "origInSec": 0,
+   "origEditIn": 1023.708333,
+   "section": {
+    "i": 93,
+    "label": "M3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": 9,
+    "fromFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12923.83,
+     47556.72,
+     100.14
+    ],
+    "height": 5,
+    "radius": 3.5
+   },
+   "standingOrder": "Push slowly up the frozen valley floor toward the three red Egg Orchard portals; keep the middle portal centred and stay 3 m above the ice.",
+   "notes": "Effect shot before the dungeon: three red portal swirls (setup 0x020005D5, 7 m discs) - West 12910.98,47553.81 / Mid 12923.83,47556.72 / East 12940.19,47553.42 - between giant spikes (0x02000AC0, 7.8 m), glowing mucor and a mushroom tree that erupts grey ash (0x02000AC4), blue-ice walls rising 100-180 m behind. Push 48 m -> 15 m along x 12923.83 from the south, sun behind the camera. WBT get-height: AGL 2.6-5.2 m; query-radius 6 m around every sample = 0 statics; the spikes flank the line of sight 3.8 m and 4.4 m off it; camera stops 4.2 m short of the low rock shelf 0x02000F7D and 2.8 m above it.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "egg-orchard.01",
+   "site": "egg-orchard",
+   "technique": "fpv.fpv-corridor",
+   "takeSec": 14.041667,
+   "origEditSec": 13.25,
+   "origInSec": 0.791667,
+   "origEditIn": 1033.791667,
+   "section": {
+    "i": 94,
+    "label": "N3",
+    "role": "unknown"
+   },
+   "pilot": "jev",
+   "framing": null,
+   "params": {
+    "cornerRadius": 3.5,
+    "speed": 6,
+    "amax": 6,
+    "alat": 12,
+    "lookAhead": 4.5,
+    "heightOffset": -0.1,
+    "bankGain": 1.5,
+    "maxBankDeg": 35,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Thread the toxic-vent tunnels of the lowest level at speed, banking through every bend, then burst into the egg chamber; keep 1 m from walls and vent spouts; green gas may be faded.",
+   "notes": "HERO. Floor Z -60 (bottom level), 16 cells, 75.5 m: corridor south -> right-angle west past a green gas vent -> 45-degree bend SW -> T-junction south -> bend west -> across the north edge of the south egg room (eggs 3-4 m to the left) -> right-angle north through its doorway vestibule -> right-angle west past a second vent -> bend NW -> straight north between two staggered vents -> into the west egg chamber (hive glowing 10 m to the left, eggs right). Verified offline with the page's own planIndoorPath + fpv-corridor build on a graph rebuilt from the EnvCell/Environment DAT records: peak 5.9 m/s, min 2.2 m/s, no overspeed, bank up to 32 deg, camera 1.4-3.2 m above the floor; wall clearance min 1.01 m (45-degree bends), median 1.8 m; vent clearance 1.0-1.35 m at camera height (top flares 1.8 m); eggs 1.8 m+; hive never closer than 7 m.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "egg-orchard.02",
+   "site": "egg-orchard",
+   "technique": "classic.push-in",
+   "takeSec": 8.708333,
+   "origEditSec": 7.916667,
+   "origInSec": 0,
+   "origEditIn": 1047.041667,
+   "section": {
+    "i": 95,
+    "label": "O3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 75,
+    "elevationDeg": 10,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     20.02,
+     8125.95,
+     -59.94
+    ],
+    "height": 4,
+    "radius": 2.9
+   },
+   "standingOrder": "Push slowly in on the glowing toxic hive at the heart of the egg chamber over the cluster of olthoi eggs; stay 1.5 m from the hive and the eggs; green fog may be faded.",
+   "notes": "Effect shot: the toxic hive (0x02000F97, 5.6 x 5.4 x 2.3 m, green fog + throbbing 8.7 m green halo) in cell 0x002B0106 with three enchanted olthoi eggs (0x02000AE1) just in front, in green ghost-haze (0x02000693). Camera 10.7 m -> 4.9 m from the hive centre (1.75 m from its edge at the end), z -56.1 -> -57.1 (3-4 m above the floor of the 12 m tall chamber), starting in cell 0x002B010C.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "fiun-outpost.01",
+   "site": "fiun-outpost",
+   "technique": "drone.tilt-reveal",
+   "takeSec": 17.125,
+   "origEditSec": 16.333333,
+   "origInSec": 0.791667,
+   "origEditIn": 1054.958333,
+   "section": {
+    "i": 95,
+    "label": "O3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -6,
+    "heightAGL": 22,
+    "distance": 110,
+    "drift": 10,
+    "bearingDeg": 10,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10836,
+     47440,
+     2
+    ],
+    "height": 12,
+    "radius": 30
+   },
+   "standingOrder": "Hover 22 m above the sea 110 m north of the outpost and tilt from straight down on the water up to the towers and the ice wall; barely drift.",
+   "notes": "ESTABLISHING + WATER (drone.tilt-reveal). Over open sea (100 % water, z 24) 110 m NNE of the outpost: starts looking -80 deg down into the dark Arctic water and floe, then tilts up to -6 deg revealing the frozen shore, the Life Stone sparkling at the ice edge, the two Sho towers with chimney smoke and the 100 m ice wall behind, drifting 10 m toward it. Nearest scenery 41 m. Verified offline (real registry build + WBT terrain): start (10855.1,47548.3,24.0) end (10853.4,47538.5,24.0), min AGL 24.0 m, nearest static/building/tree 40.7 m (0x010036E7@10854,47489), peak 1.0 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "fiun-outpost.02",
+   "site": "fiun-outpost",
+   "technique": "classic.crane",
+   "takeSec": 12.083333,
+   "origEditSec": 12.083333,
+   "origInSec": 0,
+   "origEditIn": 1071.291667,
+   "section": {
+    "i": 97,
+    "label": "L",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 20,
+    "elevationDeg": 6,
+    "distance": 9,
+    "thirds": "center",
+    "riseM": 7,
+    "swingDeg": 35,
+    "armM": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10766.5,
+     47438.9,
+     2.0
+    ],
+    "height": 1.2,
+    "radius": 0.6
+   },
+   "standingOrder": "Crane up from 1.5 m to 8.5 m while swinging 35 degrees round the trainers' brazier, ending looking down into the ring of Fiun; stay 4 m outside the ring.",
+   "notes": "FLAME FX (classic.crane). Starts 9 m NNE of the smouldering brazier at eye height with the ring of flames and the six Fiun augmentation trainers around it, the ice wall behind; the arm rises 7 m and swings 35 deg, ending above the ring looking down on the fire glow on snow. 8 m from the snow rock. Verified offline (real registry build + WBT terrain): start (10769.6,47447.3,3.5) end (10767.2,47449.1,10.5), min AGL 1.5 m, nearest static/building/tree 8.0 m (0x38F7#6 0x010036AE), peak 1.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "fiun-outpost.03",
+   "site": "fiun-outpost",
+   "technique": "classic.reveal-from-occluder",
+   "takeSec": 12.375,
+   "origEditSec": 12.375,
+   "origInSec": 0,
+   "origEditIn": 1083.375,
+   "section": {
+    "i": 98,
+    "label": "P3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 148,
+    "elevationDeg": 6,
+    "distance": 62,
+    "occluder": [
+     10860,
+     47436,
+     2.1
+    ],
+    "occluderRadius": 9.5,
+    "direction": "right",
+    "holdFrac": 0.2,
+    "settleFrac": 0.2,
+    "marginM": 0.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10835.6,
+     47475.8,
+     -0.1
+    ],
+    "height": 2.6,
+    "radius": 1
+   },
+   "standingOrder": "Start hidden behind the east tower 15 m beyond it, then truck 15 m to the right until the Life Stone and open sea appear; keep 6 m from the tower.",
+   "notes": "PARTICLE FX + WATER (classic.reveal-from-occluder). Camera 62 m SSE of the Life Stone at z 7.7 (4.4-5.7 m above the ice) with the east Sho tower filling the frame; it holds, then trucks ~15 m to the right until the Life Stone's sparkle column stands clear on the sea ice with the open sea behind (line of sight clear from t ~5 s). Verified offline (real registry build + WBT terrain): start (10867.8,47423.2,7.7) end (10881.5,47431.6,7.7), min AGL 4.4 m, nearest static/building/tree 6.2 m (0x38F7#13 0x01003905), peak 3.5 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "fiun-outpost.04",
+   "site": "fiun-outpost",
+   "technique": "fpv.fpv-flip",
+   "takeSec": 10.208333,
+   "origEditSec": 10.208333,
+   "origInSec": 0,
+   "origEditIn": 1095.75,
+   "section": {
+    "i": 99,
+    "label": "Q3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 7,
+    "rise": 2,
+    "tiltDeg": -8,
+    "headingDeg": 95,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10915,
+     47455,
+     1
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "standingOrder": "Fly east at 6 m/s 7 m above the open ice and roll one full turn at mid-shot; nothing within 15 m.",
+   "notes": "FPV FLOURISH (fpv.fpv-flip over open ground). 60 m pass along y ~47455 from x 10885 to 10945, 6.4-8.6 m above the frozen flats, one 3 s barrel roll at mid-shot: ice crystals, the sea on the left and the Silyun portal hut ahead spin through the frame. Nearest object 17 m. Verified offline (real registry build + WBT terrain): start (10885.1,47457.6,8.0) end (10944.9,47452.4,8.0), min AGL 6.4 m, nearest static/building/tree 17.4 m (0x38F7#4 0x010036AD), peak 6.4 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "fiun-outpost.05",
+   "site": "fiun-outpost",
+   "technique": "classic.push-in",
+   "takeSec": 15.083333,
+   "origEditSec": 14.291667,
+   "origInSec": 0,
+   "origEditIn": 1105.958333,
+   "section": {
+    "i": 100,
+    "label": "K2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 300,
+    "elevationDeg": 4,
+    "thirds": "center",
+    "fromFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10977.7,
+     47418.9,
+     1.94
+    ],
+    "height": 3.5,
+    "radius": 1.6
+   },
+   "standingOrder": "Push from 34 m in to 5 m from the Portal to Silyun at eye height, keeping the swirl centred; never closer than 4 m.",
+   "notes": "PORTAL FX / TRANSITION (classic.push-in, perceptual). From WNW of the portal (bearing 300) the camera glides from 34 m to 4.8 m at 2-4 m height until the swirling portal fills the frame - the cut to Silyun, its destination. Suggest a dissolve or fadewhite into the next town. Verified offline (real registry build + WBT terrain): start (10948.5,47435.8,6.0) end (10973.5,47421.3,4.0), min AGL 2.0 m, nearest static/building/tree 3.0 m (Portal to Silyun), peak 4.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "silyun.01",
+   "site": "silyun",
+   "technique": "drone.helix",
+   "takeSec": 17.291667,
+   "origEditSec": 16.5,
+   "origInSec": 0.791667,
+   "origEditIn": 1120.25,
+   "section": {
+    "i": 101,
+    "label": "K2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 14,
+    "radiusEnd": 30,
+    "heightStart": 9,
+    "heightEnd": 66,
+    "revolutions": 0.45,
+    "direction": "ccw",
+    "bearingDeg": 170,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7545.7,
+     45413.2,
+     80.1
+    ],
+    "height": 8.9,
+    "radius": 2
+   },
+   "standingOrder": "Climb in a widening helix from 9 m to 66 m around the statue, radius 14 to 30 m, half a turn counter-clockwise; stay within 30 m of the statue until above z 130 (the giant-tree tops) and 8 m from every tree.",
+   "notes": "ESTABLISHING (drone.helix around the plaza). Starts 14 m south of the 9 m Statue of Eleonora at 9 m height, corkscrews counter-clockwise past the east side and up to 66 m above the plaza, 30 m north over the great hall: the statue, flower bed, blue-flame lamps, golden hall roof and finally the whole mesa town among its giant trees. Radius kept under 28 m until above the tree tops (z 128); closest giant tree 8.6 m (box) at t 11 s. Verified offline (real registry build + WBT terrain): start (7548.1,45399.4,89.1) end (7549.9,45442.9,146.1), min AGL 9.1 m, nearest static/building/tree 8.6 m (0x27EC#92 0x0200129A), peak 8.6 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "silyun.02",
+   "site": "silyun",
+   "technique": "drone.parallax-slide",
+   "takeSec": 12.166667,
+   "origEditSec": 12.166667,
+   "origInSec": 0,
+   "origEditIn": 1136.75,
+   "section": {
+    "i": 102,
+    "label": "R3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 12,
+    "heightAGL": 2.5,
+    "slide": 22,
+    "panAmount": 0.4,
+    "direction": "right",
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7550,
+     45436,
+     80
+    ],
+    "height": 18,
+    "radius": 10
+   },
+   "standingOrder": "Slide 22 m east 12 m in front of the great hall at 2.5 m height, panning partly to hold the balcony; nothing within 3 m of the lens.",
+   "notes": "FACADE PAN (drone.parallax-slide; Viamontian great hall). Camera line along y 45424 from x 7539 to 7561, 2.5 m above the plaza and 12 m from the hall's south face, pitched up 22 deg: columns, the golden roof, the balcony with braziers, paper lanterns and purple stag banners slide past with the lamps and benches in the foreground (parallax); late sun rakes across from the west. Nearest object 3.7 m (flower tuft). Verified offline (real registry build + WBT terrain): start (7539.0,45424.0,82.5) end (7561.0,45424.0,82.5), min AGL 2.5 m, nearest static/building/tree 3.7 m (0x02001293@7566,45428), peak 2.9 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "silyun.03",
+   "site": "silyun",
+   "technique": "classic.over-the-shoulder",
+   "takeSec": 11.833333,
+   "origEditSec": 11.833333,
+   "origInSec": 0,
+   "origEditIn": 1148.916667,
+   "section": {
+    "i": 103,
+    "label": "S3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "secondary": [
+     7545.7,
+     45413.2,
+     80.1
+    ],
+    "secondaryHeight": 8.9,
+    "shoulder": "right",
+    "shoulderM": 2.0,
+    "backM": 3.0,
+    "raiseM": 0,
+    "composeThirds": true,
+    "autoFov": true,
+    "pushM": 0.3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7551.2,
+     45438.1,
+     84
+    ],
+    "height": 2,
+    "radius": 0.6
+   },
+   "standingOrder": "Hold behind the statue's right shoulder 7 m up and look past it to the Grand Mother on the balcony; never closer than 1 m to the statue.",
+   "notes": "BRAZIER FX + NARRATIVE (classic.over-the-shoulder, statue as the secondary). Camera 3 m behind and 2 m right of the 9 m statue at its shoulder height (z 87.4), telephoto (auto fov ~33 deg) on the hall balcony 26 m away: the Grand Mother between the two brazier flames and paper lanterns, the stone shoulder of Eleonora soft in the foreground (look.dof focus 26 m, range 10). Verified offline (real registry build + WBT terrain): start (7547.0,45409.8,87.4) end (7547.0,45410.1,87.4), min AGL 7.4 m, nearest static/building/tree 1.1 m (Statue of Eleonora du Bellenesse), peak 0.0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "silyun.04",
+   "site": "silyun",
+   "technique": "classic.handheld",
+   "takeSec": 10.208333,
+   "origEditSec": 10.208333,
+   "origInSec": 0,
+   "origEditIn": 1160.75,
+   "section": {
+    "i": 104,
+    "label": "T3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 40,
+    "elevationDeg": 6,
+    "distance": 7,
+    "thirds": "center",
+    "base": "push-in",
+    "pushM": 1.5,
+    "amplitudeDeg": 0.5,
+    "frequencyHz": 1.0,
+    "posAmplitude": 0.02,
+    "roughness": 0.4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7542.2,
+     45377.4,
+     80
+    ],
+    "height": 2.5,
+    "radius": 1
+   },
+   "standingOrder": "Handheld push 1.5 m toward the open forge from 7 m north-east at eye height; stay 5 m from the flames and clear of the porch columns.",
+   "notes": "FORGE FX (classic.handheld). Documentary push-in on the smithy porch from bearing 40: forge fire glowing in the shaded NE porch between the stone columns, anvil, bellows, hanging chains and the blacksmith; gentle 0.5 deg / 1 Hz operator shake. Verified offline (real registry build + WBT terrain): start (7546.7,45382.7,82.0) end (7545.7,45381.6,81.8), min AGL 1.8 m, nearest static/building/tree 1.3 m (0x27EC#158 0x01003904), peak 0.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "silyun.05",
+   "site": "silyun",
+   "technique": "classic.pull-out-reveal",
+   "takeSec": 15.208333,
+   "origEditSec": 14.416667,
+   "origInSec": 0,
+   "origEditIn": 1170.958333,
+   "section": {
+    "i": 105,
+    "label": "U3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "elevationDeg": 5,
+    "toFraming": "EWS",
+    "rise": true,
+    "endElevationDeg": 25,
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7552.9,
+     45415.7,
+     80
+    ],
+    "height": 3.4,
+    "radius": 0.6
+   },
+   "standingOrder": "Pull back from the blue-flame lamp and rise to 25 degrees over the plaza, revealing statue, hall and town; keep 2.5 m from the flower beds and benches.",
+   "notes": "CLOSING (classic.pull-out-reveal). Starts 4 m from the golden lamp's blue flame tongue at eye height (bearing 200) and pulls out and up to EWS 29 m away at 25 deg elevation (z 94): the lamp shrinks to a blue spark beside the statue of Eleonora, with the great hall and the town behind in warm late light. Verified offline (real registry build + WBT terrain): start (7551.5,45411.8,82.1) end (7543.9,45390.9,94.0), min AGL 2.1 m, nearest static/building/tree 2.8 m (0x27EC#81 0x02001294), peak 3.5 m/s.",
+   "transitionIn": "cut"
+  }
+ ]
+}

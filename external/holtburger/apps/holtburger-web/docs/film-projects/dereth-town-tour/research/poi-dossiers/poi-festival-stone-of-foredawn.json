@@ -1,0 +1,247 @@
+{
+ "name": "Festival Stone of Foredawn",
+ "title": "Festival Stone of Foredawn",
+ "siteId": "poi-festival-stone-of-foredawn",
+ "summary": "Two rows of twelve Empyrean pillars cross the river east of Shoushi, the unbroken ones crowned with eternal flames; 128 m east of the last pillar the Festival Stone of Foredawn stands between two Master's Sentinel candles with its Anniversary glow, and behind it a meeting hall with pillars and the Refreshing Fountain.",
+ "landmarks": [
+  {
+   "name": "Flaming pillar avenue",
+   "pos": [
+    42563.0,
+    16355.0,
+    5.5
+   ],
+   "heightM": 9.0,
+   "note": "Two rows (y 16350 / 16360) of Empyrean pillars from x 42497 to 42630 across the river, 12 Flames spawns on top (z 10.7-14.6)."
+  },
+  {
+   "name": "Festival Stone of Foredawn",
+   "pos": [
+    42757.0,
+    16355.5,
+    13.1
+   ],
+   "heightM": 3.5,
+   "note": "With two Master's Sentinel candles and the Anniversary Effect glow (z 21)."
+  },
+  {
+   "name": "Meeting hall and Refreshing Fountain",
+   "pos": [
+    42804.0,
+    16356.0,
+    16.0
+   ],
+   "heightM": 10.1,
+   "note": "0x01000F69 with pillars; fountain at (42794, 16356)."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-foredawn",
+  "name": "Festival Stone of Foredawn",
+  "gazetteerId": "foredawn-festival-stone",
+  "teleport": "@teleloc 0xDE55002A 124.8 38.2 12.4 0.656059 0 0 -0.75471",
+  "anchor": [
+   42700.0,
+   16355.0,
+   10.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.75,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer foredawn-festival-stone (bank 9 m west of the stone); the pillar avenue is 130-260 m west, inside the 300 m site radius."
+ },
+ "insertAfter": "shoushi",
+ "insertBefore": "hebian-to",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -33.8,
+   "ew": 75.1
+  },
+  "coordSrc": "index",
+  "coveredDistM": 518,
+  "coveredBy": "shot:shoushi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Foredawn.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-foredawn.01",
+   "site": "poi-festival-stone-of-foredawn",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.2,
+     10.2
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42497.5,
+     16355.0,
+     5.5
+    ],
+    "height": 9,
+    "radius": 6
+   },
+   "path": [
+    [
+     42632.0,
+     16355.0,
+     6.0
+    ],
+    [
+     42546.0,
+     16355.0,
+     6.0
+    ]
+   ],
+   "params": {
+    "heightAGL": 9,
+    "speed": 8,
+    "alat": 3,
+    "cornerRadius": 15,
+    "lookAhead": 20,
+    "tiltDeg": -4,
+    "maxBankDeg": 10,
+    "bankGain": 1,
+    "minClearance": 3,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly due west at 8 m/s, 9 m above the river, down the centre of the double row of flaming Empyrean pillars toward the setting sun; stay 3.8 m from every flame.",
+   "notes": "Flagship flame shot: flies down the centre of the two rows of Empyrean pillars across the river, eternal flames on top of the pillars passing 4 m either side at eye level, toward the low setting sun (0.75) for full backlight on flames and water. Verified (check.mjs, full take flown): take 0-11 s: AGL 9..9 m, nearest drawn 3.82 m (spawn Flames), vmax 7.82 m/s, LOS blocked 0/45, subject in frame 100%, over water 100%; edit 2.2-8.7 s: AGL 9..9 m, nearest drawn 3.89 m (spawn Flames), vmax 7.82 m/s, LOS blocked 0/26, subject in frame 100%, over water 100%; flight cinema peak 7.84 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-festival-stone-of-foredawn.02",
+   "site": "poi-festival-stone-of-foredawn",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7.5,
+    "inSec": 1.2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.8,
+     7.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42629.5,
+     16360.0,
+     5.6
+    ],
+    "height": 9,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 70,
+    "azimuthRef": "compass",
+    "elevationDeg": -18,
+    "distance": 12,
+    "thirds": "center",
+    "pushM": 0.8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.7 m above the east bank 12 m from the last flaming pillar and look up at its eternal flame against the low sun, pushing 0.8 m in; nothing is within 11 m.",
+   "notes": "Low angle up the easternmost flaming pillar from the river bank, the eternal flame against the low sun (backlit). Verified (check.mjs, full take flown): take 0-7.5 s: AGL 0.72..0.8 m, nearest drawn 11.98 m (scenery-default 0x02000240@42637,16379), vmax 0.16 m/s, LOS blocked 0/31, subject in frame 100%; edit 1.2-6.2 s: AGL 0.72..0.7 m, nearest drawn 11.99 m (scenery-default 0x02000240@42637,16379), vmax 0.16 m/s, LOS blocked 0/20, subject in frame 100%."
+  },
+  {
+   "id": "poi-festival-stone-of-foredawn.03",
+   "site": "poi-festival-stone-of-foredawn",
+   "technique": "classic.dolly-zoom",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.3
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.8,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42757.0,
+     16355.5,
+     13.1
+    ],
+    "height": 8,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 262,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "toFovDeg": 24
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Dolly back west from 17 m to 47 m from the glowing Festival Stone while zooming in so it holds its size and the meeting hall swells behind it; stay 4.5 m from the trees.",
+   "notes": "Vertigo on the Festival Stone of Foredawn with its two Master's Sentinel candles and the Anniversary glow: the stone holds its size while the meeting hall with its pillars and the Refreshing Fountain swell behind it; the low west sun is behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 7.84..14.4 m, nearest drawn 4.69 m (scenery-default 0x02000251@42715,16332), vmax 5.84 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.3-6.8 s: AGL 8.28..14 m, nearest drawn 4.91 m (scenery-default 0x02000251@42715,16332), vmax 5.84 m/s, LOS blocked 0/22, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-foredawn.01": "take 0-11 s: AGL 9..9 m, nearest drawn 3.82 m (spawn Flames), vmax 7.82 m/s, LOS blocked 0/45, subject in frame 100%, over water 100%; edit 2.2-8.7 s: AGL 9..9 m, nearest drawn 3.89 m (spawn Flames), vmax 7.82 m/s, LOS blocked 0/26, subject in frame 100%, over water 100%; flight cinema peak 7.84 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-festival-stone-of-foredawn.02": "take 0-7.5 s: AGL 0.72..0.8 m, nearest drawn 11.98 m (scenery-default 0x02000240@42637,16379), vmax 0.16 m/s, LOS blocked 0/31, subject in frame 100%; edit 1.2-6.2 s: AGL 0.72..0.7 m, nearest drawn 11.99 m (scenery-default 0x02000240@42637,16379), vmax 0.16 m/s, LOS blocked 0/20, subject in frame 100%",
+  "poi-festival-stone-of-foredawn.03": "take 0-8 s: AGL 7.84..14.4 m, nearest drawn 4.69 m (scenery-default 0x02000251@42715,16332), vmax 5.84 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.3-6.8 s: AGL 8.28..14 m, nearest drawn 4.91 m (scenery-default 0x02000251@42715,16332), vmax 5.84 m/s, LOS blocked 0/22, subject in frame 100%"
+ }
+}

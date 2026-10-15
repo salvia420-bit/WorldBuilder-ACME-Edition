@@ -1,0 +1,203 @@
+{
+ "name": "Festival Stone of Evensong",
+ "title": "Festival Stone of Evensong",
+ "siteId": "poi-festival-stone-of-evensong",
+ "summary": "The Festival Stone of Evensong 'guards the shore of the river we call Prosper ... near the end of the ruins of a temple complex built over the river; a monolithic head statue suggests that this was not a temple in the favor of the High Empyrean' (Alatar Locke). In the kit the stone and its Anniversary glow stand on the mud shore at z 27.9; south of it a 100 m line of ruins stands in the running water: a moss-brick block, ancient seals and stubs, bamboo islands and, at the south end, a gateway of four 10 m stone wall blocks with a 7 m monolithic head rock between them.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Evensong",
+   "pos": [
+    33251.9,
+    34668.1,
+    27.9
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary Effect glow 8 m above it."
+  },
+  {
+   "name": "Temple gateway with monolithic head",
+   "pos": [
+    33252.2,
+    34575.0,
+    27.1
+   ],
+   "heightM": 10.0,
+   "note": "Four 0x02000248 wall blocks (z 27-37) around the 0x020003B2 head rock (6.8 m), standing in the river."
+  },
+  {
+   "name": "Moss-brick ruin (0x02000395)",
+   "pos": [
+    33260.9,
+    34638.2,
+    27.6
+   ],
+   "heightM": 6.3,
+   "note": "10 x 10 m ruin block at the water's edge."
+  },
+  {
+   "name": "Bamboo islands (0x0200024C)",
+   "pos": [
+    33251.0,
+    34610.0,
+    27.1
+   ],
+   "heightM": 4.8,
+   "note": "Five bamboo clumps along the ruin line."
+  },
+  {
+   "name": "River Prosper",
+   "pos": [
+    33230.0,
+    34600.0,
+    28.0
+   ],
+   "heightM": 0.0,
+   "note": "Running water (z 28) west and south of the stone."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-evensong",
+  "name": "Festival Stone of Evensong",
+  "gazetteerId": "evensong-festival-stone",
+  "teleport": "@teleloc 0xADB4000C 44.3 91.6 27.9 -0.96363 0 0 -0.267238",
+  "anchor": [
+   33251.9,
+   34668.1,
+   27.9
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer evensong-festival-stone (shore 18 m south-east of the stone, z 27.9)."
+ },
+ "insertAfter": "holtburg",
+ "insertBefore": "glenden-wood",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 42.5,
+   "ew": 36.6
+  },
+  "coordSrc": "index",
+  "coveredDistM": 691,
+  "coveredBy": "shot:holtburg.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Evensong.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-evensong.01",
+   "site": "poi-festival-stone-of-evensong",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33252.2,
+     34575,
+     27.1
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 20,
+    "speed": 5,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 40,
+    "minClearance": 8
+   },
+   "standingOrder": "Fly north 20 m above the River Prosper straight over the drowned temple gateway, its twin stone walls and monolithic head, toward the Evensong Festival Stone on the shore; stay 10 m above the walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flagship water shot of the batch: level pass due north 20 m above the River Prosper (running water, z 28) straight over the drowned temple gateway - twin 10 m stone wall blocks, the 7 m monolithic head rock between them, bamboo islands - with the gimbal tracking the gateway down through vertical (yaw-slew <= 40 deg/s) and the Evensong Festival Stone and its glow on the shore ahead. Low morning sun from the east side-lights the walls and glints on the water. Verified (check.mjs, full take flown): take 0-10 s: AGL 19.1..19.1 m, nearest drawn 11.44 m (static 0xADB4#8 0x02000248), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 19.1..19.1 m, nearest drawn 11.44 m (static 0xADB4#8 0x02000248), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-festival-stone-of-evensong.02",
+   "site": "poi-festival-stone-of-evensong",
+   "technique": "classic.pan",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     7.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33251.9,
+     34668.1,
+     27.9
+    ],
+    "height": 4,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 112,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "distance": 35,
+    "fromDeg": -40,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "From the east bank pan right off the bamboo and broken temple stones in the river onto the glowing Evensong Festival Stone at the water's edge; the camera holds still and only turns.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pan from the east bank (35 m ESE of the stone, 5.6 m above the mud shore): the head starts 40 deg left on the bamboo islands and broken temple stones standing in the river and swings right onto the Festival Stone and its Anniversary glow at the water's edge, the morning sun behind the lens. The camera never moves. The far south gateway is outside the frame; the middle ruins carry the first half. Verified (check.mjs, full take flown): take 0-8 s: AGL 5.56..5.6 m, nearest drawn 12.12 m (scenery-default 0x02001065@33275,34669), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7.5 s: AGL 5.56..5.6 m, nearest drawn 12.12 m (scenery-default 0x02001065@33275,34669), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-evensong.01": "take 0-10 s: AGL 19.1..19.1 m, nearest drawn 11.44 m (static 0xADB4#8 0x02000248), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 19.1..19.1 m, nearest drawn 11.44 m (static 0xADB4#8 0x02000248), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-festival-stone-of-evensong.02": "take 0-8 s: AGL 5.56..5.6 m, nearest drawn 12.12 m (scenery-default 0x02001065@33275,34669), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7.5 s: AGL 5.56..5.6 m, nearest drawn 12.12 m (scenery-default 0x02001065@33275,34669), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%"
+ }
+}

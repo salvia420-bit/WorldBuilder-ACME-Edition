@@ -1,0 +1,193 @@
+{
+ "name": "Old Yanshi",
+ "title": "Old Yanshi",
+ "siteId": "poi-old-yanshi",
+ "summary": "The remains of the original Yanshi destroyed in the Atonement event: scorched obsidian/volcanic ground, broken halls and a central rock hall, the Destroyed Statue of a Reedshark, Beldin's octagon pavilion and the Harbinger tunnels' generators.",
+ "landmarks": [
+  {
+   "name": "Central rock hall",
+   "pos": [
+    35603.5,
+    21420.0,
+    10.0
+   ],
+   "heightM": 8.5,
+   "note": "0x01000E0D."
+  },
+  {
+   "name": "Destroyed Statue of a Reedshark",
+   "pos": [
+    35582.9,
+    21403.7,
+    10.0
+   ],
+   "heightM": 3.0,
+   "note": "Spawn wcid 21282 (size not in the kit)."
+  },
+  {
+   "name": "Ruined halls",
+   "pos": [
+    35604.0,
+    21372.0,
+    10.0
+   ],
+   "heightM": 3.8,
+   "note": "0x01002A5F / 0x01002A5D / 0x01002A5A / 0x01002A5B broken halls on obsidian ground."
+  },
+  {
+   "name": "Beldin's octagon pavilion",
+   "pos": [
+    35508.1,
+    21397.5,
+    10.0
+   ],
+   "heightM": 4.5,
+   "note": "0x010019CD with stairs and arch."
+  }
+ ],
+ "site": {
+  "id": "poi-old-yanshi",
+  "name": "Old Yanshi",
+  "gazetteerId": "destroyed-statue-of-a-reedshark",
+  "teleport": "@teleloc 0xB96F0014 62.8831 91.666 10.004 -0.558599 0 0 0.829438",
+  "anchor": [
+   35600.0,
+   21410.0,
+   10.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.5,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer destroyed-statue-of-a-reedshark."
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -12.7,
+   "ew": 46.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 963,
+  "coveredBy": "shot:yanshi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Old_Yanshi.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-old-yanshi.01",
+   "site": "poi-old-yanshi",
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": 5.5
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35603.5,
+     21420.0,
+     10.0
+    ],
+    "height": 8.5,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 32,
+    "speed": 5.5,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "gimbal": "track",
+    "tiltDeg": -38,
+    "minClearance": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly due north at 5.5 m/s 32 m above the ruins of Old Yanshi with the gimbal tracking the central rock hall until it passes beneath; stay 25 m above every tree and ruin.",
+   "notes": "Over the remains of the original town destroyed in the Atonement: obsidian/volcanic ground, broken halls and the central rock hall; the gimbal tracks the rock hall down to vertical as it passes beneath; noon sun behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 32..33 m, nearest drawn 25.13 m (static 0xB96F#3 0x02000246), vmax 5.5 m/s, LOS blocked 0/45, subject in frame 76%; edit 1-7.5 s: AGL 32..32 m, nearest drawn 25.13 m (static 0xB96F#3 0x02000246), vmax 5.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.51 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-old-yanshi.02",
+   "site": "poi-old-yanshi",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.8,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35582.9,
+     21403.7,
+     10.0
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "distance": 9,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "cw"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Arc 40 degrees clockwise 9 m around the Destroyed Statue of a Reedshark at 3 m height with the rock hall behind it; keep 12 m from the spire-roofed ruin.",
+   "notes": "Slow arc around the Destroyed Statue of a Reedshark with the rock hall 20 m behind it; south sun behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 3.18..3.2 m, nearest drawn 12.15 m (static 0xB96F#22 0x01002A5A), vmax 1.23 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 3.18..3.2 m, nearest drawn 12.47 m (static 0xB96F#22 0x01002A5A), vmax 1.23 m/s, LOS blocked 0/22, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-old-yanshi.01": "take 0-11 s: AGL 32..33 m, nearest drawn 25.13 m (static 0xB96F#3 0x02000246), vmax 5.5 m/s, LOS blocked 0/45, subject in frame 76%; edit 1-7.5 s: AGL 32..32 m, nearest drawn 25.13 m (static 0xB96F#3 0x02000246), vmax 5.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.51 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-old-yanshi.02": "take 0-8 s: AGL 3.18..3.2 m, nearest drawn 12.15 m (static 0xB96F#22 0x01002A5A), vmax 1.23 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 3.18..3.2 m, nearest drawn 12.47 m (static 0xB96F#22 0x01002A5A), vmax 1.23 m/s, LOS blocked 0/22, subject in frame 100%"
+ }
+}

@@ -22,7 +22,12 @@
 //       build failures wrapped, determinism of seeded builds;
 //   R6  listTechniques JSON round trip, family filter; shots/index.js exports
 //       and registers every shipped technique (catalog ids unique, families
-//       match prefixes, catalog JSON-safe) — classic/drone lanes add entries.
+//       match prefixes, catalog JSON-safe) — classic/drone lanes add entries;
+//   R7  `list` params (fpv.fpv-run zones / tricks): item schema + per-type
+//       variants + optional fields + a cross-field check, validated in
+//       defineTechnique and buildShot with readable BAD_PARAMs that name the
+//       list (details.param) and the item path, defaults deep-copied, and the
+//       item schema in the JSON catalog.
 //
 // Flag: filmMode (DEFAULT OFF, `?filmMode=on`) — these are its pure shot modules.
 // Run from apps/holtburger-web/: node tests/film_registry.test.mjs
@@ -497,6 +502,110 @@ check("R6 shots/index.js: API exported, shipped catalog registered, unique, JSON
   for (const d of SH.DRONE_TECHNIQUES) assert.equal(d.family, "drone");
   for (const d of SH.FPV_TECHNIQUES) assert.equal(d.family, "fpv");
   assert.throws(() => SH.buildShot({ technique: "classic.not-a-real-technique", duration: 2 }), shotErr("UNKNOWN_TECHNIQUE"));
+});
+
+// ---------------------------------------------------------------------------
+// R7 list params
+// ---------------------------------------------------------------------------
+
+/** A list param: waypoints {kind, at, …} with per-kind fields, an optional field and a check. */
+const LIST_PARAM = {
+  type: "list",
+  desc: "Waypoints along the move.",
+  default: [{ kind: "pause", at: 1 }],
+  maxItems: 3,
+  item: {
+    kind: { type: "enum", values: ["pause", "look", "spin"], desc: "What happens at the waypoint." },
+    at: { type: "number", min: 0, max: 100, unit: "s", desc: "When it happens." },
+    note: { type: "string", optional: true, desc: "Free note (optional)." },
+  },
+  variants: {
+    key: "kind",
+    fields: {
+      look: { target: { type: "vec3", default: [0, 0, 0], desc: "Point to look at." } },
+      spin: { turns: { type: "number", integer: true, default: 1, min: 1, max: 3, desc: "Full turns." }, dir: { type: "enum", values: ["cw", "ccw"], default: "cw", desc: "Spin direction." } },
+    },
+  },
+  check: (it) => (it.kind === "spin" && it.at < 0.5 ? `a spin needs at ≥ 0.5 (got ${it.at})` : null),
+};
+
+check("R7 list params: item / variants / optional / check validated; defaults filled per item and deep-copied; catalog shows the schema", () => {
+  const reg = fresh({ params: { ...dollyDef().params, marks: LIST_PARAM } });
+  const def = reg.getTechnique("classic.test-dolly");
+  assert.equal(def.params.marks.type, "list");
+  assert.ok(RG.PARAM_TYPES.includes("list"));
+  let seen = null;
+  const spy = RG.createRegistry();
+  spy.registerTechnique(dollyDef({ params: { ...dollyDef().params, marks: LIST_PARAM }, build: (spec, ctx) => { seen = spec.params.marks; return buildDolly(spec, ctx); } }));
+  spy.buildShot({ technique: "classic.test-dolly", params: { marks: [{ kind: "spin", at: 2 }, { kind: "look", at: 3, note: "hi" }, { kind: "pause", at: 4 }] } }, CTX);
+  assert.deepEqual(seen, [{ kind: "spin", at: 2, turns: 1, dir: "cw" }, { kind: "look", at: 3, note: "hi", target: [0, 0, 0] }, { kind: "pause", at: 4 }]);
+  // defaults: filled, and never shared (mutating one build's params cannot leak into the next)
+  spy.buildShot({ technique: "classic.test-dolly" }, CTX);
+  assert.deepEqual(seen, [{ kind: "pause", at: 1 }]);
+  seen[0].at = 99;
+  spy.buildShot({ technique: "classic.test-dolly" }, CTX);
+  assert.equal(seen[0].at, 1, "default deep-copied");
+  assert.ok(Object.isFrozen(def.params.marks.default) && Object.isFrozen(def.params.marks.default[0]));
+  // catalog: JSON-safe, item + variants + optional + maxItems, no functions
+  const e = reg.listTechniques()[0].params.marks;
+  assert.deepEqual(JSON.parse(JSON.stringify(e)), e);
+  assert.deepEqual(e.default, [{ kind: "pause", at: 1 }]);
+  assert.equal(e.item.at.required, true);
+  assert.equal(e.item.note.optional, true);
+  assert.deepEqual(e.variants.fields.spin.turns, { type: "number", desc: "Full turns.", default: 1, min: 1, max: 3, integer: true });
+  assert.equal(e.maxItems, 3);
+  assert.equal(e.check, undefined);
+});
+
+check("R7 list params: bad values are BAD_PARAM naming the list (details.param) and the item path, with suggestions", () => {
+  const reg = fresh({ params: { ...dollyDef().params, marks: LIST_PARAM } });
+  const err = (marks) => {
+    try {
+      reg.buildShot({ technique: "classic.test-dolly", params: { marks } }, CTX);
+    } catch (e) {
+      return e;
+    }
+    assert.fail("expected BAD_PARAM");
+  };
+  const cases = [
+    [{ kind: "pause", at: 1 }, /param "marks" must be a list \(array\) of \{kind, at, note\} items/, {}],
+    [[1, 2, 3, 4], /has 4 items \(at most 3\)/, {}],
+    [[7], /item \[0\] must be an object/, { index: 0 }],
+    [[{ kind: "pause" }], /item \[0\] \("pause"\): field "at" is required \(When it happens\.\)/, { index: 0, field: "at" }],
+    [[{ kind: "spin", at: 2, trns: 2 }], /item \[0\] \("spin"\): unknown field "trns" \(did you mean "turns"\?\) — valid fields: kind, at, note, turns, dir/, { field: "trns", path: "marks[0].trns" }],
+    [[{ kind: "pause", at: 2, turns: 2 }], /unknown field "turns"/, {}],
+    [[{ kind: "spin", at: 2, turns: 1.5 }], /param "marks\[0\]\.turns" must be an integer/, { path: "marks[0].turns", field: "turns", index: 0 }],
+    [[{ kind: "jump", at: 2 }], /param "marks\[0\]\.kind" must be one of "pause" \| "look" \| "spin"/, { path: "marks[0].kind" }],
+    [[{ kind: "look", at: 2, target: [1, 2] }], /marks\[0\]\.target" must be a finite \[x, y, z\]/, {}],
+    [[{ kind: "pause", at: 1 }, { kind: "spin", at: 0.2 }], /item \[1\] \("spin"\): a spin needs at ≥ 0\.5 \(got 0\.2\)/, { index: 1 }],
+    [[{ kind: "pause", at: -1 }], /marks\[0\]\.at" must be in \[0, 100\] s \(got -1\)/, {}],
+  ];
+  for (const [v, re, det] of cases) {
+    const e = err(v);
+    assert.ok(e instanceof FilmShotError, String(e));
+    assert.equal(e.code, "BAD_PARAM", e.message);
+    assert.match(e.message, re);
+    assert.equal(e.details.param, "marks", `details.param for ${e.message}`);
+    assert.equal(e.details.technique, "classic.test-dolly");
+    for (const [k, x] of Object.entries(det)) assert.deepEqual(e.details[k], x, `details.${k} (${e.message})`);
+  }
+});
+
+check("R7 list params: malformed list schemas are BAD_TECHNIQUE_DEF", () => {
+  const bad = (marks, re) => assert.throws(() => RG.defineTechnique(dollyDef({ params: { ...dollyDef().params, marks } })), shotErr("BAD_TECHNIQUE_DEF", re));
+  const base = { type: "list", desc: "x", default: [] };
+  bad({ ...base }, /item must be a non-empty object/);
+  bad({ ...base, item: { a: { type: "list", desc: "nested", item: { b: { type: "number", desc: "b" } } } } }, /item field "a": type must be one of number \| string \| boolean \| enum \| vec3/);
+  bad({ ...base, item: { "a-b": { type: "number", desc: "x" } } }, /identifier/);
+  bad({ ...base, item: { a: { type: "number", desc: "a" } }, variants: { key: "a", fields: {} } }, /variants\.key "a" must name an enum field/);
+  bad({ ...base, item: { k: { type: "enum", values: ["x"], desc: "k" } }, variants: { key: "k", fields: { y: { z: { type: "number", desc: "z" } } } } }, /"y" is not a value of item\.k/);
+  bad({ ...base, item: { k: { type: "enum", values: ["x"], desc: "k" } }, variants: { key: "k", fields: { x: { k: { type: "number", desc: "z" } } } } }, /collides/);
+  bad({ ...base, item: { a: { type: "number", desc: "a" } }, maxItems: 1.5 }, /maxItems must be an integer/);
+  bad({ ...base, item: { a: { type: "number", desc: "a", optional: true, default: 1 } } }, /optional field has no default/);
+  bad({ ...base, default: [{ b: 1 }], item: { a: { type: "number", desc: "a" } } }, /default is invalid/);
+  bad({ ...base, item: { a: { type: "number", desc: "a" } }, check: "nope" }, /check must be a function/);
+  assert.throws(() => RG.defineTechnique(dollyDef({ params: { ...dollyDef().params, n: { type: "number", desc: "n", optional: true } } })), shotErr("BAD_TECHNIQUE_DEF", /optional is only valid for list item fields/));
+  assert.throws(() => RG.defineTechnique(dollyDef({ params: { ...dollyDef().params, n: { type: "number", desc: "n", maxItems: 3 } } })), shotErr("BAD_TECHNIQUE_DEF", /maxItems is only valid for list params/));
 });
 
 console.log(`film_registry: ${passed} passed, ${failed} failed`);

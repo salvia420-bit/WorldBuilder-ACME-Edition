@@ -1,0 +1,234 @@
+{
+ "name": "Caulcano",
+ "title": "Caulcano",
+ "siteId": "poi-caulcano",
+ "summary": "The crater at the centre of Singularity Caul (94.4S 94.6W): a lava floor (VolcanoLava terrain, z 13-30) about 250 x 300 m, walled by 200-280 m cliffs to the west, north and east and a 100-220 m rim to the south. On the floor stand two Empyrean stone towers (19 m) at (1764, 1812) and (1692, 1788), three statues of Bael'Zharon (one wearing a Virindi mask at (1858.6, 1743.2)), a Volcanic Vent at (1736, 1739) and the Fiery Refuge entrance to the south.",
+ "landmarks": [
+  {
+   "name": "Empyrean stone towers",
+   "pos": [
+    1728,
+    1800,
+    14
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106 x2."
+  },
+  {
+   "name": "Masked statue of Bael'Zharon",
+   "pos": [
+    1858.6,
+    1743.2,
+    22
+   ],
+   "heightM": 5,
+   "note": "ACE spawn (Statue wcid 11638); size estimated."
+  },
+  {
+   "name": "Volcanic Vent",
+   "pos": [
+    1736.2,
+    1738.7,
+    14
+   ],
+   "heightM": 2,
+   "note": "ACE spawn; look depends on the runtime."
+  }
+ ],
+ "site": {
+  "id": "poi-caulcano",
+  "name": "Caulcano",
+  "gazetteerId": "center-of-the-singularity-caul",
+  "teleport": "@teleloc 0x09090003 1.3 54.1 14 0 0 0 -1",
+  "anchor": [
+   1764,
+   1780,
+   13.3
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "acpedia": {
+  "categories": [
+   "Southwest POI",
+   "Geographic Area"
+  ],
+  "map": {
+   "ns": -94.4,
+   "ew": -94.6
+  },
+  "coordSrc": "index",
+  "coveredDistM": 6550,
+  "coveredBy": "shot:egg-orchard.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Caulcano.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-caulcano.01",
+   "site": "poi-caulcano",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     1765,
+     1760,
+     13.6
+    ],
+    "height": 40,
+    "radius": 120
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 187,
+    "distance": 170,
+    "heightM": 55,
+    "driftDeg": 10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hang 55 m up in the southern mouth of the crater and drift slowly round, looking north over the lava floor, the stone towers and the 250 m crater walls; keep 20 m above the ground.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature establishing in the southern mouth of the crater, 55 m above the lava floor: looking north over the volcanic floor, the volcanic vent, the two Empyrean stone towers and the statues of Bael'Zharon against the 200-270 m crater walls, drifting 10 deg and pushing 8 %; afternoon sun behind-left. Verified (check.mjs, full take flown): take 0-10 s: AGL 53.42..54.6 m, nearest drawn 56.22 m (scenery-default 0x020007BC@1689,1577), vmax 4.96 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 48.9 m); edit 2-8.5 s: AGL 53.88..54.6 m, nearest drawn 56.72 m (scenery-default 0x020007BC@1689,1577), vmax 4.96 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 50 m)."
+  },
+  {
+   "id": "poi-caulcano.02",
+   "site": "poi-caulcano",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     1858.6,
+     1743.2,
+     22
+    ],
+    "height": 5,
+    "radius": 2
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 230,
+    "elevationDeg": -15,
+    "distance": 14,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Look up at the masked statue of Bael'Zharon from the south-west, sun behind, the eastern crater wall looming over it; keep 8 m from the statue.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle 14 m south-west of the masked statue of Bael'Zharon (lens 1 m above the lava floor), looking up at it with the eastern crater wall looming behind; sun behind the lens. The statue is an ACE spawn: its size is estimated at 5 m. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.88..1.3 m, nearest drawn 20.48 m (spawn Central Singularity Caul Gen), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 77.6 m); edit 1-6.5 s: AGL 0.89..1.2 m, nearest drawn 20.52 m (spawn Central Singularity Caul Gen), vmax 0.29 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 77.6 m)."
+  },
+  {
+   "id": "poi-caulcano.03",
+   "site": "poi-caulcano",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     1728,
+     1800,
+     14
+    ],
+    "height": 20,
+    "radius": 50
+   },
+   "params": {
+    "radiusStart": 90,
+    "radiusEnd": 65,
+    "heightStart": 78,
+    "heightEnd": 40,
+    "revolutions": 0.07,
+    "direction": "cw",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "standingOrder": "Spiral down from 78 m into the crater toward the twin Empyrean stone towers on the lava floor; keep 30 m from the crater walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Spiral descent from 78 m to 40 m, radius 90 -> 65 m, into the crater toward the twin Empyrean stone towers on the lava floor, the crater walls wheeling behind them. Verified (check.mjs, full take flown): take 0-11 s: AGL 39.51..77 m, nearest drawn 37.2 m (spawn Linkable Monster Generator), vmax 8.13 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 125.7 m); edit 3-9.5 s: AGL 41.33..70.6 m, nearest drawn 38.57 m (spawn Linkable Monster Generator), vmax 8.13 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 125.7 m); flight cinema peak 8.12 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-caulcano.01": "take 0-10 s: AGL 53.42..54.6 m, nearest drawn 56.22 m (scenery-default 0x020007BC@1689,1577), vmax 4.96 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 48.9 m); edit 2-8.5 s: AGL 53.88..54.6 m, nearest drawn 56.72 m (scenery-default 0x020007BC@1689,1577), vmax 4.96 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 50 m)",
+  "poi-caulcano.02": "take 0-8 s: AGL 0.88..1.3 m, nearest drawn 20.48 m (spawn Central Singularity Caul Gen), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 77.6 m); edit 1-6.5 s: AGL 0.89..1.2 m, nearest drawn 20.52 m (spawn Central Singularity Caul Gen), vmax 0.29 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 77.6 m)",
+  "poi-caulcano.03": "take 0-11 s: AGL 39.51..77 m, nearest drawn 37.2 m (spawn Linkable Monster Generator), vmax 8.13 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 125.7 m); edit 3-9.5 s: AGL 41.33..70.6 m, nearest drawn 38.57 m (spawn Linkable Monster Generator), vmax 8.13 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 125.7 m); flight cinema peak 8.12 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

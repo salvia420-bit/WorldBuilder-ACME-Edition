@@ -18,7 +18,8 @@
 //       algorithm, is stable below the quantum, changes above it;
 //   T5  validateTrajectory flags NaN, teleports (> maxLinearSpeed), angular
 //       spikes, heading flips (stateless look-at pass-over) but NOT a smooth
-//       pitch through the pole; respects declared cuts; caps issues;
+//       pitch through the pole; respects declared cuts; caps issues; honours a
+//       technique's meta.validate limits by default (opts > meta > defaults);
 //   T6  timeWarp / withOffset / concatTrajectories (cut + blend) behave;
 //   T7  helpers: orientLookAt, smoothLookAt (pre-simulated look controller:
 //       the pass-over that flips stateless stays flip-free), aimSubject,
@@ -374,6 +375,30 @@ check("T5 heading flip: stateless look-at pass-over IS flagged, a smooth pitch t
   const w = TR.validateTrajectory(through, { fps: 30 });
   assert.equal(w.ok, true, JSON.stringify(w.issues.slice(0, 3)));
   for (const t of [0, 0.9, 1.0, 1.1, 2]) assert.ok(Math.abs(through.sample(t).p) <= HALF_PI);
+});
+
+check("T5 validateTrajectory honours meta.validate by default (opts > meta > defaults; tables carry it; useMetaLimits:false opts out)", () => {
+  const spin = (meta) => TR.makeTrajectory({ duration: 2, positionAt: [0, 0, 2], orientAt: (t) => ({ h: t * 400 * DEG, p: 0 }), meta });
+  const plain = TR.validateTrajectory(spin());
+  assert.ok(plain.counts["angular-spike"] > 0, "400°/s fails the default 240°/s");
+  assert.equal(plain.limits.maxAngularSpeedDeg, 240);
+  assert.equal(plain.limits.source.maxAngularSpeedDeg, "default");
+  const declared = spin({ validate: { maxAngularSpeedDeg: 900 } });
+  const v = TR.validateTrajectory(declared);
+  assert.ok(v.ok, JSON.stringify(v.issues.slice(0, 2)));
+  assert.equal(v.limits.maxAngularSpeedDeg, 900);
+  assert.equal(v.limits.source.maxAngularSpeedDeg, "meta");
+  assert.equal(v.limits.source.maxLinearSpeed, "default");
+  assert.ok(TR.validateTrajectory(TR.bakeTrajectory(declared, 30)).ok, "a baked table carries the meta limits");
+  const strict = TR.validateTrajectory(declared, { maxAngularSpeedDeg: 300 });
+  assert.ok(strict.counts["angular-spike"] > 0, "an explicit opts limit wins over the meta");
+  assert.equal(strict.limits.source.maxAngularSpeedDeg, "opts");
+  assert.ok(!TR.validateTrajectory(declared, { useMetaLimits: false }).ok, "useMetaLimits:false ignores meta.validate");
+  // invalid meta values fall back to the defaults; other limits honoured too
+  assert.equal(TR.validateTrajectory(spin({ validate: { maxAngularSpeedDeg: -5 } })).limits.maxAngularSpeedDeg, 240);
+  const fast = TR.makeTrajectory({ duration: 1, positionAt: (t) => [100 * t, 0, 2], orientAt: { h: 0, p: 0 }, meta: { validate: { maxLinearSpeed: 150 } } });
+  assert.ok(TR.validateTrajectory(fast).ok);
+  assert.ok(TR.validateTrajectory(fast, { useMetaLimits: false }).counts.teleport > 0);
 });
 
 check("T5 validateTrajectory: pitch/fov range on hand-made trajectories, structure errors, issue cap", () => {

@@ -1,0 +1,145 @@
+{
+ "name": "Festival Stone of Morntide",
+ "title": "Festival Stone of Morntide",
+ "siteId": "poi-festival-stone-of-morntide",
+ "summary": "One of the Empyrean Festival Stones, which 'overlooks the surrounding plains from a hill west of Nanto's Blue Ghost Falls' (Alatar Locke). In the kit, the Festival Stone with its Anniversary Effect glow stands on a flat grassy hilltop at z 157, flanked by two moss-green Master's Sentinel candles. It is 500 m west of the falls that nanto.01 dives.",
+ "landmarks": [
+  {
+   "name": "Festival Stone",
+   "pos": [
+    43332,
+    11722,
+    157.2
+   ],
+   "heightM": 3.5,
+   "note": "With the Anniversary Effect at z 165."
+  },
+  {
+   "name": "Master's Sentinel west",
+   "pos": [
+    43327,
+    11721,
+    157.2
+   ],
+   "heightM": 3.0,
+   "note": "Moss-green candle; the rack-focus foreground."
+  },
+  {
+   "name": "Master's Sentinel east",
+   "pos": [
+    43337,
+    11721,
+    157.2
+   ],
+   "heightM": 3.0,
+   "note": ""
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-morntide",
+  "name": "Festival Stone of Morntide",
+  "gazetteerId": "morningtide-festival-stone",
+  "teleport": "@teleloc 0xE13D0029 140 1.3 157.9 -0.920505 0 0 -0.390731",
+  "anchor": [
+   43332,
+   11722,
+   157
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer morningtide-festival-stone (outdoor, on the hilltop 12 m south-east of the stone). The acpedia map point (53.1S 78.1E) is 120 m west of the stone, down the slope. Landblocks west of x 43008 and south of y 11520 are missing from the kit: cameras stay on the hilltop."
+ },
+ "insertAfter": "lin",
+ "insertBefore": "nanto",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -53.1,
+   "ew": 78.1
+  },
+  "coordSrc": "index",
+  "world": [
+   43212.0,
+   11724.0
+  ],
+  "coveredDistM": 632,
+  "coveredBy": "shot:nanto.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Morntide.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-morntide.01",
+   "site": "poi-festival-stone-of-morntide",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": 3.6
+   },
+   "rank": 2,
+   "framing": "MS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43332,
+     11722,
+     157.2
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 250,
+    "elevationDeg": 6,
+    "distance": 14,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 9,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 1.8,
+    "driftM": 0.5
+   },
+   "standingOrder": "Hold on the hilltop west-south-west of the Festival Stone of Morntide with the moss-green Master's Sentinel candle sharp in the foreground, then pull focus to the glowing stone between the two candles; no move beyond a 0.5 m drift.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "look": {
+    "dof": {
+     "focusRange": 2,
+     "bokehScale": 2.5
+    }
+   },
+   "notes": "Rack focus on the hilltop west-south-west of the Festival Stone of Morntide. The moss-green Master's Sentinel candle is sharp at 9 m in the foreground, and focus pulls to the glowing stone at 14 m around t 3.6. The low sun (0.70) is behind the lens. Needs the dof look (focusRange 2, bokehScale 2.5). Verified (check.mjs, full take flown): take 0-8 s: AGL 4.31..4.4 m, nearest drawn 7.84 m (static 0xE13D#1 0x0200039B Master's Sentinel), vmax 0.09 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.32..4.4 m, nearest drawn 7.86 m (static 0xE13D#1 0x0200039B Master's Sentinel), vmax 0.09 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-morntide.01": "take 0-8 s: AGL 4.31..4.4 m, nearest drawn 7.84 m (static 0xE13D#1 0x0200039B Master's Sentinel), vmax 0.09 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.32..4.4 m, nearest drawn 7.86 m (static 0xE13D#1 0x0200039B Master's Sentinel), vmax 0.09 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

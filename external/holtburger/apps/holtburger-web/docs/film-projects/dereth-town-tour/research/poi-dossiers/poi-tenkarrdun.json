@@ -1,0 +1,200 @@
+{
+ "name": "Tenkarrdun crater",
+ "title": "Tenkarrdun",
+ "siteId": "poi-tenkarrdun",
+ "summary": "Tenkarrdun is the huge crater in the middle of Aerlinthe where the Tenkarrdun Hellfire and the Behemoth spawn. The kit shows a bowl ~300 m across: an obsidian-and-lava floor (z 93-97) rising to walls of 140-215 m and to 398 m at the north rim, with three Volcanic Vents and glowing red sphere lamps, Volcano Heat and Erupt Tenkarrdun emitters on the floor. Landblocks south of y 46080, west of x 35328 and east of x 35904 are missing from the kit; all cameras stay on the north side.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI",
+   "Geographic Area"
+  ],
+  "map": {
+   "ns": 90.3,
+   "ew": 46.3
+  },
+  "mapWorld": [
+   35580.0,
+   46140.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tenkarrdun.txt",
+  "coveredDistM": 3928,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "Volcano Heat (crater floor)",
+   "pos": [
+    35603.4,
+    46140.0,
+    94.0
+   ],
+   "heightM": 6,
+   "note": "Heat/eruption emitters around it."
+  },
+  {
+   "name": "West vent",
+   "pos": [
+    35574.2,
+    46145.5,
+    95.5
+   ],
+   "heightM": 3,
+   "note": "Volcanic Vent + glowing red sphere lamp."
+  },
+  {
+   "name": "East vent",
+   "pos": [
+    35625.8,
+    46146.0,
+    96.6
+   ],
+   "heightM": 3,
+   "note": "Volcanic Vent."
+  }
+ ],
+ "site": {
+  "id": "poi-tenkarrdun",
+  "name": "Tenkarrdun crater",
+  "gazetteerId": "mount-tenkarrdun-b9f0",
+  "teleport": "@teleloc 0xB9F0001A 89 45 94 1 0 0 0",
+  "anchor": [
+   35600.0,
+   46120.0,
+   94.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 7
+   },
+   "trim": {
+    "takeSec": 12,
+    "inSec": 3
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7,
+    "keep": [
+     2,
+     12
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35603.4,
+     46140.0,
+     94.0
+    ],
+    "height": 6,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 90,
+    "radiusEnd": 58,
+    "heightStart": 60,
+    "heightEnd": 24,
+    "revolutions": 0.09,
+    "direction": "ccw",
+    "bearingDeg": 20,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "standingOrder": "Spiral down 32 deg counter-clockwise into the crater from 60 m to 24 m above the vents, radius 90 m to 58 m, on its north side; keep 9 m above the crater floor and 35 m from the vents.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Descent into Tenkarrdun, the huge volcanic crater in the middle of Aerlinthe: the bowl's obsidian walls rise 100-300 m around a floor of volcanic vents that glow red and breathe heat (Volcano Heat, Erupt Tenkarrdun emitters). From the north the high noon sun backlights the vents' haze. Verified with poi-kit check.mjs - take 12s: AGL 9.22..31.2 m, nearest 39.58 m (spawn Erupt Tenkarrdun Gen), vmax 8.39 m/s, LOS blocked 0/49, in frame 100%, water 0%; edit 3-10s: AGL 10.81..29.3 m, nearest 40.56 m, LOS blocked 0/29, in frame 100%, water 0%; flight cinema: peak 8.37 m/s (cap 12), tracking gap 0.06 m."
+  },
+  {
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35574.2,
+     46145.5,
+     95.5
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 345,
+    "azimuthRef": "compass",
+    "elevationDeg": -8,
+    "distance": 9,
+    "thirds": "center",
+    "pushM": 1.2
+   },
+   "standingOrder": "Look up at the west volcanic vent from 0.7 m above the crater floor 9 m north of it, creeping 1 m closer; nothing within 28 m except the vent itself, flames may never be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Backlit fire: the glowing vent and its red sphere lamp seen low from the north with the noon sun behind it, the crater wall rising behind. Vent height (3 m) is an estimate. Verified with poi-kit check.mjs - take 8s: AGL 0.7..0.8 m, nearest 28.63 m (spawn Erupt Tenkarrdun Gen), vmax 0.24 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 0.7..0.8 m, nearest 28.66 m, LOS blocked 0/21, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tenkarrdun.01",
+   "technique": "drone.spiral-descent",
+   "rank": 1,
+   "check": "take 12s: AGL 9.22..31.2 m, nearest 39.58 m (spawn Erupt Tenkarrdun Gen), vmax 8.39 m/s, LOS blocked 0/49, in frame 100%, water 0%; edit 3-10s: AGL 10.81..29.3 m, nearest 40.56 m, LOS blocked 0/29, in frame 100%, water 0%; flight cinema: peak 8.37 m/s (cap 12), tracking gap 0.06 m"
+  },
+  {
+   "shot": "poi-tenkarrdun.02",
+   "technique": "classic.low-angle",
+   "rank": 2,
+   "check": "take 8s: AGL 0.7..0.8 m, nearest 28.63 m (spawn Erupt Tenkarrdun Gen), vmax 0.24 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 0.7..0.8 m, nearest 28.66 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 12,
+ "techniques": [
+  "drone.spiral-descent",
+  "classic.low-angle"
+ ]
+}

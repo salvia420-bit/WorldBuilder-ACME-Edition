@@ -1,0 +1,132 @@
+{
+ "about": "Trick placements for fpv.fpv-run `tricks` (s = arc length in m along data/racing_line.json where the trick starts). tEstimate = time from the zone/curvature profile (no trick time).",
+ "line": "data/racing_line.json",
+ "tricks": [
+  {
+   "type": "float",
+   "s": 4.59,
+   "rise": 2.4,
+   "punchAccel": 8.0,
+   "why": "entry hall: punch up between the mushroom caps (AC1 top 4.46, hall ceiling 9), cut throttle, float over the mound",
+   "tEstimate": 1.95
+  },
+  {
+   "type": "dive",
+   "s": 15.59,
+   "pitchDeg": -35,
+   "why": "nose down into the groove cut through the mound -> trench 0x375",
+   "tEstimate": 4.15
+  },
+  {
+   "type": "float",
+   "s": 202.23,
+   "rise": 1.0,
+   "punchAccel": 7.5,
+   "why": "-12 hall: cut throttle over the 6.4 x 5.9 m floor hole",
+   "tEstimate": 30.72
+  },
+  {
+   "type": "dive",
+   "s": 208.22,
+   "pitchDeg": -40,
+   "why": "floor chute: 33 deg dive under the roof lip into the -18 tunnel",
+   "tEstimate": 31.75
+  },
+  {
+   "type": "float",
+   "s": 398.49,
+   "rise": 13.0,
+   "punchAccel": 12.0,
+   "why": "chimney A over 0x1E0 (10 x 10 m, lid at -12): punch up ~13 m, cut throttle, float, drop back",
+   "tEstimate": 56.96
+  },
+  {
+   "type": "yaw-spin",
+   "s": 420.81,
+   "turns": 1,
+   "dir": "right",
+   "durationSec": 1.6,
+   "why": "0x1DC under chimney B (open above): one flat yaw spin",
+   "tEstimate": 63.05
+  },
+  {
+   "type": "roll",
+   "s": 433.95,
+   "turns": 1,
+   "dir": "left",
+   "durationSec": 0.9,
+   "rise": 0.2,
+   "why": "roll out over the pit edge (lid 3.4 m above: no room for a split-S)",
+   "tEstimate": 65.24
+  },
+  {
+   "type": "dive",
+   "s": 438.45,
+   "pitchDeg": -80,
+   "why": "THE PIT: nose-over, ~16 m near-ballistic drop, pull out over the two pit-bottom Rippers",
+   "tEstimate": 66.26
+  },
+  {
+   "type": "roll",
+   "s": 617.79,
+   "turns": 1,
+   "dir": "right",
+   "durationSec": 1.1,
+   "why": "ramp hall 0x150 swoop (20 m wide, ceiling -45)",
+   "tEstimate": 89.82
+  },
+  {
+   "type": "dive",
+   "s": 639.51,
+   "pitchDeg": -35,
+   "why": "-60: dive into trench 0x130",
+   "tEstimate": 93.36
+  },
+  {
+   "type": "float",
+   "s": 661.03,
+   "rise": 1.2,
+   "punchAccel": 8.0,
+   "why": "-60: pop up out of trench 0x122 into room 0x121",
+   "tEstimate": 96.96
+  },
+  {
+   "type": "dive",
+   "s": 681.67,
+   "pitchDeg": -35,
+   "why": "-60: dive into trench 0x11B",
+   "tEstimate": 100.59
+  },
+  {
+   "type": "float",
+   "s": 715.58,
+   "rise": 3.5,
+   "punchAccel": 8.0,
+   "hangSec": 1.2,
+   "lookDownDeg": 45,
+   "why": "west egg chamber: float-up reveal over the eggs, larvae and the toxic hive",
+   "tEstimate": 107.29
+  },
+  {
+   "type": "roll",
+   "s": 749.24,
+   "turns": 1,
+   "dir": "left",
+   "durationSec": 1.0,
+   "why": "roll into the Surface portal swirl",
+   "tEstimate": 115.6
+  }
+ ],
+ "skipped": [
+  {
+   "type": "split-S",
+   "where": "pit edge 0x1D8 -> 0x1D4",
+   "reason": "the pit lid (-30) is only ~3.4 m above the line at the edge; a half-roll + half-loop down needs ~2 r of height above the entry and would invert the drone under the lid. Roll + nose-over dive instead."
+  },
+  {
+   "type": "power-loop",
+   "where": "anywhere",
+   "reason": "not requested by DESIGN 4; the tallest straight spaces (chimneys, pit) are 10 m wide - a loop of radius >= 3.5 m would need a straight 10 m+ run inside them"
+  }
+ ]
+}

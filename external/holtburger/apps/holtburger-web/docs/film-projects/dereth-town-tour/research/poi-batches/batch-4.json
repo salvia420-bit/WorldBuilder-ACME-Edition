@@ -1,0 +1,2243 @@
+{
+ "batch": 4,
+ "quota": 34,
+ "pois": [
+  {
+   "title": "Precarious Sojourn",
+   "name": "Precarious Sojourn",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === This location is part of the Arcane Pedestal quest. You acquire both the Imaging Crystal- Arcane Pedestal imprinted and Unframed map of Dereth here. The tower is the home of the famed Alatar Locke.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Precarious_Sojourn.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     2.3,
+     -0.8
+    ]
+   ],
+   "map": {
+    "ns": -38.1,
+    "ew": -60.3
+   },
+   "world": [
+    9996.0,
+    15324.0
+   ],
+   "lb": "0x344F",
+   "coveredDistM": 5878,
+   "coveredBy": "path:wai-jhou.01",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 6111,
+   "gazNear": [
+    {
+     "id": "precarious-sojourn",
+     "name": "Precarious Sojourn",
+     "kind": "poi",
+     "d": 6,
+     "teleport": "@teleloc 0x344F0007 11.968 149.905 92 0.969991 0 0 -0.243141",
+     "pos": [
+      9995.968,
+      15317.905,
+      92
+     ]
+    },
+    {
+     "id": "precarious-sojourn-exit-portal",
+     "name": "Precarious Sojourn Exit Portal",
+     "kind": "landmark",
+     "d": 11,
+     "teleport": "@teleloc 0x344F0007 12.1478 145.202 89.7757 0.035958 0 0 0.999353",
+     "pos": [
+      9996.148,
+      15313.202,
+      89.776
+     ]
+    },
+    {
+     "id": "black-ferahs-vault-portal",
+     "name": "Black Ferah's Vault Portal",
+     "kind": "landmark",
+     "d": 237,
+     "teleport": "@teleloc 0x344E0015 69.3536 118.521 19.5413 1 0 0 0",
+     "pos": [
+      10053.354,
+      15094.521,
+      19.541
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "precarious-sojourn",
+     "name": "Precarious Sojourn",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x344F0007 11.968 149.905 92 0.969991 0 0 -0.243141",
+     "pos": [
+      9995.968,
+      15317.905,
+      92
+     ],
+     "map": {
+      "ns": -38.13,
+      "ew": -60.3
+     }
+    },
+    {
+     "id": "precarious-sojourn-exit",
+     "name": "Precarious Sojourn Exit",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x7E82001B 77.523 66.741 154.115 -0.698215 0 0 -0.715888",
+     "pos": [
+      24269.523,
+      25026.741,
+      154.115
+     ],
+     "map": {
+      "ns": 2.33,
+      "ew": -0.83
+     }
+    },
+    {
+     "id": "precarious-sojourn-exit-portal",
+     "name": "Precarious Sojourn Exit Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x344F0007 12.1478 145.202 89.7757 0.035958 0 0 0.999353",
+     "pos": [
+      9996.148,
+      15313.202,
+      89.776
+     ],
+     "map": {
+      "ns": -38.14,
+      "ew": -60.3
+     }
+    },
+    {
+     "id": "precarious-sojourn-portal",
+     "name": "Precarious Sojourn Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x7E82001B 81.5142 67.0897 154.823 0.712005 0 0 -0.702175",
+     "pos": [
+      24273.514,
+      25027.09,
+      154.823
+     ],
+     "map": {
+      "ns": 2.33,
+      "ew": -0.81
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 3112,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-precarious-sojourn"
+  },
+  {
+   "title": "40.0S, 54.9W - Tumerok Stronghold",
+   "name": "Tumerok Stronghold",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A huge double structure with loads of Tumeroks at 40.0S, 54.9W in the East Direlands.<br> The NE one is an open structure with 3 towers, the SW one is a closed, and locked, walled structure.<br> One of the towers has a locked chest (difficulty 80) that contains tier 3 Loot, and the other tower has a portal to Dryreach.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/40_0S_54_9W_Tumerok_Stronghold.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -40.0,
+     -54.9
+    ],
+    [
+     -8.1,
+     74.5
+    ]
+   ],
+   "map": {
+    "ns": -40.0,
+    "ew": -54.9
+   },
+   "world": [
+    11292.0,
+    14868.0
+   ],
+   "lb": "0x3A4D",
+   "coveredDistM": 5109,
+   "coveredBy": "path:wai-jhou.01",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 5335,
+   "gazNear": [
+    {
+     "id": "east-direlands-swamp-3b4d",
+     "name": "East Direlands Swamp",
+     "kind": "poi",
+     "d": 209,
+     "teleport": "@teleloc 0x3B4D0037 163.769 144.452 34.91 0.488804 0 0 -0.872394",
+     "pos": [
+      11491.769,
+      14928.452,
+      34.91
+     ]
+    },
+    {
+     "id": "small-complex-portal",
+     "name": "Small Complex Portal",
+     "kind": "landmark",
+     "d": 428,
+     "teleport": "@teleloc 0x3C4E002D 137.903 114.449 33.0343 0.606947 0 0 -0.794742",
+     "pos": [
+      11657.903,
+      15090.449,
+      33.034
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tumerok-stronghold",
+     "name": "Tumerok Stronghold",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 40.00S 54.90W",
+     "pos": null,
+     "map": {
+      "ns": -40,
+      "ew": -54.9
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 4778,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-stronghold"
+  },
+  {
+   "title": "38.1S, 47.3W - Kivik Lir's Temple",
+   "name": "Kivik Lir's Temple",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A Falacatot Temple with loads of Buruns at 38.1S, 47.3W in the Direlands Swamps.<br> It is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 36.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/38_1S_47_3W_Kivik_Lir_s_Temple.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -38.1,
+     -47.3
+    ]
+   ],
+   "map": {
+    "ns": -38.1,
+    "ew": -47.3
+   },
+   "world": [
+    13116.0,
+    15324.0
+   ],
+   "lb": "0x444F",
+   "coveredDistM": 5612,
+   "coveredBy": "path:wai-jhou.01",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 5807,
+   "gazNear": [
+    {
+     "id": "incunabula-vault-portal-4452",
+     "name": "Incunabula Vault Portal",
+     "kind": "landmark",
+     "d": 539,
+     "teleport": "@teleloc 0x4452001D 77.8163 119.002 20.005 -0.795805 0 0 -0.605552",
+     "pos": [
+      13133.816,
+      15863.002,
+      20.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "center-of-kivik-lirs-temple",
+     "name": "Center of Kivik Lir's Temple",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 00F4",
+     "pos": null,
+     "map": {
+      "ns": -38.1,
+      "ew": -47.3
+     }
+    },
+    {
+     "id": "kivik-lirs-temple-00fa",
+     "name": "Kivik Lir's Temple",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 00FA",
+     "pos": null,
+     "map": {
+      "ns": -38.1,
+      "ew": -47.3
+     }
+    },
+    {
+     "id": "kivik-lirs-temple-01f2",
+     "name": "Kivik Lir's Temple",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 01F2",
+     "pos": null,
+     "map": {
+      "ns": -38.1,
+      "ew": -47.3
+     }
+    },
+    {
+     "id": "secrets-of-kivik-lirs-temple",
+     "name": "Secrets of Kivik Lir's Temple",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 38.10S 47.30W",
+     "pos": null,
+     "map": {
+      "ns": -38.1,
+      "ew": -47.3
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 7011,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-kivik-lirs-temple"
+  },
+  {
+   "title": "45.2S, 83.2W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A Renegade Fort in the West Dires near Ayan Baqur.<br> There is a chest in one of the towers that spawns low tier 4 Loot.<br> The fort is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 38",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/45_2S_83_2W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -45.2,
+     -83.2
+    ]
+   ],
+   "map": {
+    "ns": -45.2,
+    "ew": -83.2
+   },
+   "world": [
+    4500.0,
+    13620.0
+   ],
+   "lb": "0x1746",
+   "coveredDistM": 3666,
+   "coveredBy": "shot:ayan-baqur.03",
+   "nearestSite": "ayan-baqur",
+   "nearestSiteM": 3710,
+   "gazNear": [
+    {
+     "id": "life-stone-at-43-6s-83-0w",
+     "name": "Life Stone at 43.6S 83.0W",
+     "kind": "landmark",
+     "d": 387,
+     "teleport": "@teleloc 0x17480030 132.042 179.916 16.4034 -0.376507 0 0 -0.926414",
+     "pos": [
+      4548.042,
+      14003.916,
+      16.403
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 8,
+   "timeOfDay": 0.77,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-452s-832w"
+  },
+  {
+   "title": "51.1S, 82.0W - Tumerok Fort",
+   "name": "Tumerok Fort",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A Tumerok Fort in the West Dires near Ayan Baqur. The door is unlocked using the Heavy Tumerok Key and a High Priest in one of the towers drops a key used to unlock the final 12.3N, 73.7W - Tumerok Fort in the Overlord's Sword Quest.<br> This fort is one of the POIs incidated on the Ingame Map. See Points of Interest Map, no. 39",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/51_1S_82_0W_Tumerok_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -51.1,
+     -82.0
+    ],
+    [
+     12.3,
+     -73.7
+    ]
+   ],
+   "map": {
+    "ns": -51.1,
+    "ew": -82.0
+   },
+   "world": [
+    4788.0,
+    12204.0
+   ],
+   "lb": "0x183F",
+   "coveredDistM": 2513,
+   "coveredBy": "shot:ayan-baqur.05",
+   "nearestSite": "ayan-baqur",
+   "nearestSiteM": 2551,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-fortress",
+     "name": "Tumerok Fortress",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01BE01C2 69.6 -66.9 -6 0.04803 0 0 -0.998846",
+     "pos": [
+      261.6,
+      36413.1,
+      -6
+     ],
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    },
+    {
+     "id": "tumerok-fort-1746",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 45.20S 83.20W",
+     "pos": null,
+     "map": {
+      "ns": -45.2,
+      "ew": -83.2
+     }
+    },
+    {
+     "id": "tumerok-fort-183f",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.10S 82.00W",
+     "pos": null,
+     "map": {
+      "ns": -51.1,
+      "ew": -82
+     }
+    },
+    {
+     "id": "tumerok-fort-1b81",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.60N 79.60W",
+     "pos": null,
+     "map": {
+      "ns": 1.6,
+      "ew": -79.6
+     }
+    },
+    {
+     "id": "tumerok-fort-238e",
+     "name": "Tumerok Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 12.30N 73.70W",
+     "pos": null,
+     "map": {
+      "ns": 12.3,
+      "ew": -73.7
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 172,
+   "timeOfDay": 0.78,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-fort-511s-820w"
+  },
+  {
+   "title": "Festival Stone of Darktide",
+   "name": "Festival Stone of Darktide",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "The Festival Stones}} === Description === One of the Festival Stones, located west of Ayan Baqur on a little island for the coast at at 59.7S, 90.0W.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Darktide.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -60.3,
+     -90.7
+    ],
+    [
+     -59.7,
+     -90.0
+    ]
+   ],
+   "map": {
+    "ns": -59.7,
+    "ew": -90.0
+   },
+   "world": [
+    2868.0,
+    10140.0
+   ],
+   "lb": "0x0E34",
+   "coveredDistM": 272,
+   "coveredBy": "shot:ayan-baqur.01",
+   "nearestSite": "ayan-baqur",
+   "nearestSiteM": 495,
+   "gazNear": [
+    {
+     "id": "darktide-festival-stone",
+     "name": "Darktide Festival Stone",
+     "kind": "poi",
+     "d": 10,
+     "teleport": "@teleloc 0x0E34003F 175.5 146.8 34 0.913545 0 0 -0.406737",
+     "pos": [
+      2863.5,
+      10130.8,
+      34
+     ]
+    },
+    {
+     "id": "gatekeepers-portal",
+     "name": "Gatekeepers Portal",
+     "kind": "landmark",
+     "d": 220,
+     "teleport": "@teleloc 0x0E340001 14.1702 11.3778 -0.895 0.947651 0 0 -0.319309",
+     "pos": [
+      2702.17,
+      9995.378,
+      -0.895
+     ]
+    },
+    {
+     "id": "blighted-grimy-moarsman-tunnels-portal",
+     "name": "Blighted Grimy Moarsman Tunnels Portal",
+     "kind": "landmark",
+     "d": 299,
+     "teleport": "@teleloc 0x0F330013 70.0122 59.9945 -0.163 -0.707107 0 0 -0.707107",
+     "pos": [
+      2950.012,
+      9851.995,
+      -0.163
+     ]
+    },
+    {
+     "id": "holtburg-casino-vip-portal-1035",
+     "name": "Holtburg Casino VIP Portal",
+     "kind": "landmark",
+     "d": 361,
+     "teleport": "@teleloc 0x10350027 105 150 71.937 -0.707107 0 0 -0.707107",
+     "pos": [
+      3177,
+      10326,
+      71.937
+     ]
+    },
+    {
+     "id": "shoushi-casino-vip-portal-1035",
+     "name": "Shoushi Casino VIP Portal",
+     "kind": "landmark",
+     "d": 364,
+     "teleport": "@teleloc 0x10350027 105 156 71.937 -0.707107 0 0 -0.707107",
+     "pos": [
+      3177,
+      10332,
+      71.937
+     ]
+    },
+    {
+     "id": "yaraq-casino-vip-portal-1035",
+     "name": "Yaraq Casino VIP Portal",
+     "kind": "landmark",
+     "d": 367,
+     "teleport": "@teleloc 0x10350027 105 162 71.937 -0.707107 0 0 -0.707107",
+     "pos": [
+      3177,
+      10338,
+      71.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-darktide",
+     "name": "Festival Stone of Darktide",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 59.70S 90.00W",
+     "pos": null,
+     "map": {
+      "ns": -59.7,
+      "ew": -90
+     }
+    }
+   ],
+   "insertAfter": "fort-tethana",
+   "insertBefore": "ayan-baqur",
+   "insertCostM": 579,
+   "timeOfDay": 0.8,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate (near existing coverage: 272 m from shot:ayan-baqur.01)",
+   "siteId": "poi-festival-stone-of-darktide"
+  },
+  {
+   "title": "Aerbax's Citadel (POI)",
+   "name": "Aerbax's Citadel",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === Aerbax's Citadel high up in the air around 65.0S 63.8W in the center of the Obsidian Plains. It consists of many side platforms around a center. See the quest. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aerbax_s_Citadel_POI.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -65.0,
+     -63.8
+    ]
+   ],
+   "map": {
+    "ns": -65.0,
+    "ew": -63.8
+   },
+   "world": [
+    9156.0,
+    8868.0
+   ],
+   "lb": "0x2F2E",
+   "coveredDistM": 3028,
+   "coveredBy": "path:wai-jhou.01",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 3068,
+   "gazNear": [
+    {
+     "id": "south-gate-portal",
+     "name": "South Gate Portal",
+     "kind": "landmark",
+     "d": 3,
+     "teleport": "@teleloc 0x2F2E002A 129 34.3 13.225 -0.5 0 0 -0.866025",
+     "pos": [
+      9153,
+      8866.3,
+      13.225
+     ]
+    },
+    {
+     "id": "singularity-bore-portal",
+     "name": "Singularity Bore Portal",
+     "kind": "landmark",
+     "d": 217,
+     "teleport": "@teleloc 0x2F2F002B 125.575 61.1697 2.005 0.164662 0 0 -0.98635",
+     "pos": [
+      9149.575,
+      9085.17,
+      2.005
+     ]
+    },
+    {
+     "id": "emissarys-return-portal",
+     "name": "Emissary's Return Portal",
+     "kind": "landmark",
+     "d": 273,
+     "teleport": "@teleloc 0x2F2F0033 276.015 75.800095 291.992 1 0 0 0",
+     "pos": [
+      9300.015,
+      9099.8,
+      291.992
+     ]
+    },
+    {
+     "id": "obsidian-plains",
+     "name": "Obsidian Plains",
+     "kind": "poi",
+     "d": 437,
+     "teleport": "@teleloc 0x2D2F0034 147.5 78.6 47.1 0.446198 0 0 -0.894934",
+     "pos": [
+      8787.5,
+      9102.6,
+      47.1
+     ]
+    },
+    {
+     "id": "twisted-refuge-portal",
+     "name": "Twisted Refuge Portal",
+     "kind": "landmark",
+     "d": 586,
+     "teleport": "@teleloc 0x2E300020 83.2204 186.458 47.7464 0.307505 0 0 -0.951546",
+     "pos": [
+      8915.22,
+      9402.458,
+      47.746
+     ]
+    },
+    {
+     "id": "seed-of-misery-portal",
+     "name": "Seed of Misery Portal",
+     "kind": "landmark",
+     "d": 597,
+     "teleport": "@teleloc 0x2D30002D 123.318 101.473 60.1166 0.56494 0 0 -0.825132",
+     "pos": [
+      8763.318,
+      9317.473,
+      60.117
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "ayan-baqur",
+   "insertBefore": "wai-jhou",
+   "insertCostM": 202,
+   "timeOfDay": 0.64,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-aerbaxs-citadel"
+  },
+  {
+   "title": "Necropolis",
+   "name": "Necropolis",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === Ancient burial ground with two bunkers that contain various Mu-miyah. One of bunkers has double stairs that go deeper into catacombs with sarcophagi and multiple chests. One of those chests requires a Sturdy Iron Key, the second spawns low tier loot and the third is unlocked and contains part of Staff of the Nomads. Various Direland creatures spawn on the surface and there is a",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Necropolis.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -49.9,
+     -53.7
+    ],
+    [
+     -49.4,
+     -54.1
+    ],
+    [
+     -49.0,
+     -54.3
+    ]
+   ],
+   "map": {
+    "ns": -49.0,
+    "ew": -54.3
+   },
+   "world": [
+    11436.0,
+    12708.0
+   ],
+   "lb": "0x3B42",
+   "coveredDistM": 2957,
+   "coveredBy": "path:wai-jhou.01",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 3186,
+   "gazNear": [
+    {
+     "id": "life-stone-at-49-9s-53-7w",
+     "name": "Life Stone at 49.9S 53.7W",
+     "kind": "landmark",
+     "d": 258,
+     "teleport": "@teleloc 0x3C410011 66.872 18.362 12.26 -0.498896 0 0 -0.866662",
+     "pos": [
+      11586.872,
+      12498.362,
+      12.26
+     ]
+    },
+    {
+     "id": "knath-lair-portal",
+     "name": "Knath Lair Portal",
+     "kind": "landmark",
+     "d": 510,
+     "teleport": "@teleloc 0x39410002 15.713 46.722 0.696 0.9822 0 0 -0.187836",
+     "pos": [
+      10959.713,
+      12526.722,
+      0.696
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "necropolis",
+     "name": "Necropolis",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 49.00S 54.30W",
+     "pos": null,
+     "map": {
+      "ns": -49,
+      "ew": -54.3
+     }
+    }
+   ],
+   "insertAfter": "ayan-baqur",
+   "insertBefore": "wai-jhou",
+   "insertCostM": 2887,
+   "timeOfDay": 0.62,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-necropolis"
+  },
+  {
+   "title": "Small Hill Base",
+   "name": "Small Hill Base",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === Drop point of Small Hill Base Portal located on the Small Black Hill.<br> A short distance from Wai Jhou.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Small_Hill_Base.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -62.2,
+     -52.3
+    ],
+    [
+     -62.1,
+     -50.4
+    ],
+    [
+     -62.0,
+     -50.0
+    ]
+   ],
+   "map": {
+    "ns": -62.0,
+    "ew": -50.0
+   },
+   "world": [
+    12468.0,
+    9588.0
+   ],
+   "lb": "0x4031",
+   "coveredDistM": 298,
+   "coveredBy": "shot:wai-jhou.04",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 333,
+   "gazNear": [
+    {
+     "id": "small-hill-base",
+     "name": "Small Hill Base",
+     "kind": "poi",
+     "d": 5,
+     "teleport": "@teleloc 0x40310040 174.8 179.1 11.5 -0.241922 0 0 -0.970296",
+     "pos": [
+      12462.8,
+      9587.1,
+      11.5
+     ]
+    },
+    {
+     "id": "small-black-hill-portal-4031",
+     "name": "Small Black Hill Portal",
+     "kind": "landmark",
+     "d": 10,
+     "teleport": "@teleloc 0x40310040 170.297 178.532 11.8136 0.692169 0 0 0.721735",
+     "pos": [
+      12458.297,
+      9586.532,
+      11.814
+     ]
+    },
+    {
+     "id": "small-hill-base-portal",
+     "name": "Small Hill Base Portal",
+     "kind": "landmark",
+     "d": 88,
+     "teleport": "@teleloc 0x4031001F 92.783 165.164 148.005 -0.31579 0 0 -0.948829",
+     "pos": [
+      12380.783,
+      9573.164,
+      148.005
+     ]
+    },
+    {
+     "id": "small-black-hill",
+     "name": "Small Black Hill",
+     "kind": "poi",
+     "d": 111,
+     "teleport": "@teleloc 0x4031001F 73 150 148.2 0.300706 0 0 -0.953717",
+     "pos": [
+      12361,
+      9558,
+      148.2
+     ]
+    },
+    {
+     "id": "black-hill-portal-4031",
+     "name": "Black Hill Portal",
+     "kind": "landmark",
+     "d": 139,
+     "teleport": "@teleloc 0x40310016 49.726 130.579 148.005 -0.707107 0 0 -0.707107",
+     "pos": [
+      12337.726,
+      9538.579,
+      148.005
+     ]
+    },
+    {
+     "id": "sho-roadside-portal-4031",
+     "name": "Sho Roadside Portal",
+     "kind": "landmark",
+     "d": 160,
+     "teleport": "@teleloc 0x4031002A 137.21 26.2009 15.9294 0.408732 0 0 -0.912655",
+     "pos": [
+      12425.21,
+      9434.201,
+      15.929
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "small-hill-base",
+     "name": "Small Hill Base",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x40310040 174.8 179.1 11.5 -0.241922 0 0 -0.970296",
+     "pos": [
+      12462.8,
+      9587.1,
+      11.5
+     ],
+     "map": {
+      "ns": -62,
+      "ew": -50.02
+     }
+    },
+    {
+     "id": "small-hill-base-portal",
+     "name": "Small Hill Base Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x4031001F 92.783 165.164 148.005 -0.31579 0 0 -0.948829",
+     "pos": [
+      12380.783,
+      9573.164,
+      148.005
+     ],
+     "map": {
+      "ns": -62.06,
+      "ew": -50.36
+     }
+    }
+   ],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 502,
+   "timeOfDay": 0.55,
+   "grade": "neutral",
+   "chapter": "ch5",
+   "pre": "candidate (near existing coverage: 298 m from shot:wai-jhou.04)",
+   "siteId": "poi-small-hill-base"
+  },
+  {
+   "title": "Knathtead Excavation",
+   "name": "Knathtead Excavation",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A narrow valley at 63.1S 44.3W full of higher level Knathteads. Their Mother can be found at the end of the valley. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Knathtead_Excavation.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -63.1,
+     -44.3
+    ]
+   ],
+   "map": {
+    "ns": -63.1,
+    "ew": -44.3
+   },
+   "world": [
+    13836.0,
+    9324.0
+   ],
+   "lb": "0x4830",
+   "coveredDistM": 1691,
+   "coveredBy": "shot:wai-jhou.04",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 1723,
+   "gazNear": [
+    {
+     "id": "gardens-of-menilesh-portal",
+     "name": "Gardens of Menilesh Portal",
+     "kind": "landmark",
+     "d": 401,
+     "teleport": "@teleloc 0x482E002D 135 110 5.937 0.707107 0 0 -0.707107",
+     "pos": [
+      13959,
+      8942,
+      5.937
+     ]
+    },
+    {
+     "id": "down-to-surface",
+     "name": "Down to Surface",
+     "kind": "poi",
+     "d": 568,
+     "teleport": "@teleloc 0x492D000F 38 160 5.33833 1 0 0 0",
+     "pos": [
+      14054,
+      8800,
+      5.338
+     ]
+    },
+    {
+     "id": "massilors-crypt-portal",
+     "name": "Massilor's Crypt Portal",
+     "kind": "landmark",
+     "d": 573,
+     "teleport": "@teleloc 0x482D003E 180 136 5.937 0.92388 0 0 -0.382683",
+     "pos": [
+      14004,
+      8776,
+      5.937
+     ]
+    },
+    {
+     "id": "graveyard",
+     "name": "Graveyard",
+     "kind": "poi",
+     "d": 577,
+     "teleport": "@teleloc 0x482D003E 176.204 130.368 6.005 0.464097 0 0 0.885785",
+     "pos": [
+      14000.204,
+      8770.368,
+      6.005
+     ]
+    },
+    {
+     "id": "up-to-arcanum-lookout-portal",
+     "name": "Up to Arcanum Lookout Portal",
+     "kind": "landmark",
+     "d": 579,
+     "teleport": "@teleloc 0x492D0017 59.6104 156.702 4.02797 -0.468859 0 0 -0.883273",
+     "pos": [
+      14075.61,
+      8796.702,
+      4.028
+     ]
+    },
+    {
+     "id": "up-to-arcanum-lookout",
+     "name": "Up to Arcanum Lookout",
+     "kind": "poi",
+     "d": 580,
+     "teleport": "@teleloc 0x492D0017 59.8273 156.007 29.5805 1 0 0 0",
+     "pos": [
+      14075.827,
+      8796.007,
+      29.581
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 2536,
+   "timeOfDay": 0.57,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-knathtead-excavation"
+  },
+  {
+   "title": "Forger's Hideout",
+   "name": "Forger's Hideout",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === This location is on the top of an obsidian spire at 76.0S 67.1W and can only be accessed as part of the Counterfeit Writ quest. <br> The Building is a Mansion-like Structure, with the same lay-out.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Forger_s_Hideout.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -76.0,
+     -67.1
+    ]
+   ],
+   "map": {
+    "ns": -76.0,
+    "ew": -67.1
+   },
+   "world": [
+    8364.0,
+    6228.0
+   ],
+   "lb": "0x2B20",
+   "coveredDistM": 2720,
+   "coveredBy": "path:candeth-keep.01",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 2771,
+   "gazNear": [
+    {
+     "id": "bandit-castle-portal-2b20",
+     "name": "Bandit Castle Portal",
+     "kind": "landmark",
+     "d": 2,
+     "teleport": "@teleloc 0x2B200024 107.961 85.5609 199.937 -0.400626 0 0 -0.916242",
+     "pos": [
+      8363.961,
+      6229.561,
+      199.937
+     ]
+    },
+    {
+     "id": "keep-out",
+     "name": "KEEP OUT!",
+     "kind": "poi",
+     "d": 8,
+     "teleport": "@teleloc 0x2B200024 113.84 89.6186 200.005 -0.464193 0 0 -0.885734",
+     "pos": [
+      8369.84,
+      6233.619,
+      200.005
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 628,
+   "timeOfDay": 0.62,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-forgers-hideout"
+  },
+  {
+   "title": "Planetarium",
+   "name": "Planetarium",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === This is one of the POIs seen in the Ingame Map (no. 57 on Points of Interest Map).<br> A large area with different kind of Empyrean Ruins at 78.8S, 73.8W in the South West Dires near Candeth Keep:",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Planetarium.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -90.2,
+     -64.5
+    ],
+    [
+     -78.9,
+     -73.6
+    ],
+    [
+     -78.8,
+     -73.8
+    ],
+    [
+     -78.8,
+     -73.7
+    ],
+    [
+     -78.8,
+     -73.3
+    ],
+    [
+     -78.7,
+     -73.4
+    ],
+    [
+     -78.3,
+     -73.7
+    ],
+    [
+     -77.7,
+     -73.4
+    ]
+   ],
+   "map": {
+    "ns": -78.8,
+    "ew": -73.8
+   },
+   "world": [
+    6756.0,
+    5556.0
+   ],
+   "lb": "0x231C",
+   "coveredDistM": 2514,
+   "coveredBy": "path:candeth-keep.01",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 2651,
+   "gazNear": [
+    {
+     "id": "direlands-desert-edge",
+     "name": "Direlands Desert Edge",
+     "kind": "poi",
+     "d": 95,
+     "teleport": "@teleloc 0x231D0029 125 20 56 0.707107 0 0 -0.707107",
+     "pos": [
+      6845,
+      5588,
+      56
+     ]
+    },
+    {
+     "id": "life-stone-at-78-9s-73-4w",
+     "name": "Life Stone at 78.9S 73.4W",
+     "kind": "landmark",
+     "d": 107,
+     "teleport": "@teleloc 0x231C002F 139.183 150.765 44.005 0.94477 0 0 0.327733",
+     "pos": [
+      6859.183,
+      5526.765,
+      44.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "planetarium",
+     "name": "Planetarium",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 78.80S 73.80W",
+     "pos": null,
+     "map": {
+      "ns": -78.8,
+      "ew": -73.8
+     }
+    }
+   ],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 2180,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-planetarium"
+  },
+  {
+   "title": "Ancient Lugian Fortress",
+   "name": "Ancient Lugian Fortress",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === An ancient Lugian fortress that is seemingly rising from the sea. It has the same layout as Linvak Tukal. Various Lugian relics are strewn about the city, including the Well-Balanced Lugian Greataxe. At the top of the center tower is a Lugian Lifestone. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ancient_Lugian_Fortress.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -89.7,
+     -76.1
+    ]
+   ],
+   "map": {
+    "ns": -99.1,
+    "ew": -87.1
+   },
+   "world": [
+    3564.0,
+    684.0
+   ],
+   "lb": "0x1203",
+   "coveredDistM": 5380,
+   "coveredBy": "path:candeth-keep.01",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 5555,
+   "gazNear": [
+    {
+     "id": "lugian-lifestone-1203",
+     "name": "Lugian Lifestone",
+     "kind": "landmark",
+     "d": 30,
+     "teleport": "@teleloc 0x1203001C 86.3982 87.6325 51 -0.945018 0 0 -0.327018",
+     "pos": [
+      3542.398,
+      663.632,
+      51
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "ancient-lugian-fortress",
+     "name": "Ancient Lugian Fortress",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 89.70S 76.10W",
+     "pos": null,
+     "map": {
+      "ns": -89.7,
+      "ew": -76.1
+     }
+    }
+   ],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 10721,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-ancient-lugian-fortress"
+  },
+  {
+   "title": "Caulcano",
+   "name": "Caulcano",
+   "cats": [
+    "Southwest POI",
+    "Geographic Area"
+   ],
+   "desc": "=== Description === A huge crater in the center of Singularity Caul.<br> It is indicated on the Ingame Map. See Points of Interest Map, no. 40.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Caulcano.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -95.3,
+     -94.1
+    ],
+    [
+     -94.7,
+     -94.3
+    ],
+    [
+     -94.4,
+     -94.6
+    ]
+   ],
+   "map": {
+    "ns": -94.4,
+    "ew": -94.6
+   },
+   "world": [
+    1764.0,
+    1812.0
+   ],
+   "lb": "0x0909",
+   "coveredDistM": 6550,
+   "coveredBy": "shot:egg-orchard.02",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 6814,
+   "gazNear": [
+    {
+     "id": "center-of-the-singularity-caul",
+     "name": "Center of the Singularity Caul",
+     "kind": "poi",
+     "d": 46,
+     "teleport": "@teleloc 0x09090003 1.3 54.1 14 0 0 0 -1",
+     "pos": [
+      1729.3,
+      1782.1,
+      14
+     ]
+    },
+    {
+     "id": "statue-at-94-7s-94-2w",
+     "name": "Statue at 94.7S 94.2W",
+     "kind": "landmark",
+     "d": 117,
+     "teleport": "@teleloc 0x09090029 130.551 15.1832 22 0.743979 0 0 -0.668203",
+     "pos": [
+      1858.551,
+      1743.183,
+      22
+     ]
+    },
+    {
+     "id": "statue-at-94-7s-95-0w",
+     "name": "Statue at 94.7S 95.0W",
+     "kind": "landmark",
+     "d": 126,
+     "teleport": "@teleloc 0x08090029 127.803 8.3913 16.005 -0.669273 0 0 -0.743017",
+     "pos": [
+      1663.803,
+      1736.391,
+      16.005
+     ]
+    },
+    {
+     "id": "statue-at-95-1s-94-1w",
+     "name": "Statue at 95.1S 94.1W",
+     "kind": "landmark",
+     "d": 200,
+     "teleport": "@teleloc 0x09080035 148.614 111.013 28 0.839979 0 0 -0.542619",
+     "pos": [
+      1876.614,
+      1647.013,
+      28
+     ]
+    },
+    {
+     "id": "firey-refuge-portal",
+     "name": "Firey Refuge Portal",
+     "kind": "landmark",
+     "d": 247,
+     "teleport": "@teleloc 0x0908002B 140.35 51.7706 17.498 -0.2785 0 0 0.960436",
+     "pos": [
+      1868.35,
+      1587.771,
+      17.498
+     ]
+    },
+    {
+     "id": "tunnel-of-love-portal",
+     "name": "Tunnel of Love Portal",
+     "kind": "landmark",
+     "d": 470,
+     "teleport": "@teleloc 0x0609002C 141.837 82.4742 71.937 -0.707107 0 0 -0.707107",
+     "pos": [
+      1293.837,
+      1810.474,
+      71.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "caulcano",
+     "name": "Caulcano",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 94.40S 94.60W",
+     "pos": null,
+     "map": {
+      "ns": -94.4,
+      "ew": -94.6
+     }
+    }
+   ],
+   "insertAfter": "wai-jhou",
+   "insertBefore": "candeth-keep",
+   "insertCostM": 12583,
+   "timeOfDay": 0.62,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-caulcano"
+  },
+  {
+   "title": "Tombs of the Sand Kings",
+   "name": "Tombs of the Sand Kings",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === === Lore === The left most bunker to the west houses Anadil's Tomb. Anadil of Shakrassekor was one of the Sand Kings and was also the leader of the Dericost forces that attempted to thwart the return of the Hopeslayer by protecting the Soul Stones from being destroyed. He was killed during the Should the Stars Fall event whilst defending the Shard of the Herald at Ithaenc Cathe",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tombs_of_the_Sand_Kings.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -87.7,
+     -65.6
+    ],
+    [
+     11.0,
+     14.7
+    ]
+   ],
+   "map": {
+    "ns": -87.7,
+    "ew": -65.6
+   },
+   "world": [
+    8724.0,
+    3420.0
+   ],
+   "lb": "0x2D11",
+   "coveredDistM": 292,
+   "coveredBy": "shot:candeth-keep.04",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 349,
+   "gazNear": [
+    {
+     "id": "crypts-of-the-sand-kings",
+     "name": "Crypts of the Sand Kings",
+     "kind": "poi",
+     "d": 25,
+     "teleport": "@teleloc 0x2D110027 108 148 56 1 0 0 0",
+     "pos": [
+      8748,
+      3412,
+      56
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-hebian-to-2e11",
+     "name": "Destroyed Portal to Hebian-To",
+     "kind": "landmark",
+     "d": 265,
+     "teleport": "@teleloc 0x2E11002A 131.327 41.6024 56.005 0.137884 0 0 0.990448",
+     "pos": [
+      8963.327,
+      3305.602,
+      56.005
+     ]
+    },
+    {
+     "id": "direlands-midland",
+     "name": "Direlands Midland",
+     "kind": "poi",
+     "d": 301,
+     "teleport": "@teleloc 0x2E110031 155.536 10.249 56.005 1 0 0 0",
+     "pos": [
+      8987.536,
+      3274.249,
+      56.005
+     ]
+    },
+    {
+     "id": "life-stone-near-candeth-keep-2e11",
+     "name": "Life Stone near Candeth Keep",
+     "kind": "landmark",
+     "d": 301,
+     "teleport": "@teleloc 0x2E110031 155.536 10.2494 56.005 -0.999326 0 0 0.036707",
+     "pos": [
+      8987.536,
+      3274.249,
+      56.005
+     ]
+    },
+    {
+     "id": "fountain-near-candeth-keep-2b11",
+     "name": "Fountain near Candeth Keep",
+     "kind": "landmark",
+     "d": 330,
+     "teleport": "@teleloc 0x2B11002F 138.286 147.611 48.005 0 0 0 -1",
+     "pos": [
+      8394.286,
+      3411.611,
+      48.005
+     ]
+    },
+    {
+     "id": "fountain-near-candeth-keep-2b12",
+     "name": "Fountain near Candeth Keep",
+     "kind": "landmark",
+     "d": 344,
+     "teleport": "@teleloc 0x2B12002A 129.309 24.7879 48.005 0.993688 0 0 0.112182",
+     "pos": [
+      8385.309,
+      3480.788,
+      48.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tombs-of-the-sand-kings",
+     "name": "Tombs of the Sand Kings",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 87.70S 65.60W",
+     "pos": null,
+     "map": {
+      "ns": -87.7,
+      "ew": -65.6
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 12,
+   "timeOfDay": 0.66,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate (near existing coverage: 292 m from shot:candeth-keep.04)",
+   "siteId": "poi-tombs-of-the-sand-kings"
+  },
+  {
+   "title": "Abandoned Observatory",
+   "name": "Abandoned Observatory",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === An Observatory that has been taken over by Shadows, it houses a chest which contains a note with the wheareabouts of part of the Staff of the Nomads. The two pieces of the staff were originally held to the south east at the Tombs of the Sand Kings inside Anadil's Tomb. The tombs were raided by the Shadows stationed here under Black Ferah's instructions.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Abandoned_Observatory.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -86.4,
+     -63.8
+    ],
+    [
+     11.0,
+     14.7
+    ]
+   ],
+   "map": {
+    "ns": -86.4,
+    "ew": -63.8
+   },
+   "world": [
+    9156.0,
+    3732.0
+   ],
+   "lb": "0x2F13",
+   "coveredDistM": 805,
+   "coveredBy": "shot:candeth-keep.04",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 826,
+   "gazNear": [
+    {
+     "id": "destroyed-portal-to-hebian-to-2e11",
+     "name": "Destroyed Portal to Hebian-To",
+     "kind": "landmark",
+     "d": 468,
+     "teleport": "@teleloc 0x2E11002A 131.327 41.6024 56.005 0.137884 0 0 0.990448",
+     "pos": [
+      8963.327,
+      3305.602,
+      56.005
+     ]
+    },
+    {
+     "id": "direlands-midland",
+     "name": "Direlands Midland",
+     "kind": "poi",
+     "d": 488,
+     "teleport": "@teleloc 0x2E110031 155.536 10.249 56.005 1 0 0 0",
+     "pos": [
+      8987.536,
+      3274.249,
+      56.005
+     ]
+    },
+    {
+     "id": "life-stone-near-candeth-keep-2e11",
+     "name": "Life Stone near Candeth Keep",
+     "kind": "landmark",
+     "d": 488,
+     "teleport": "@teleloc 0x2E110031 155.536 10.2494 56.005 -0.999326 0 0 0.036707",
+     "pos": [
+      8987.536,
+      3274.249,
+      56.005
+     ]
+    },
+    {
+     "id": "crypts-of-the-sand-kings",
+     "name": "Crypts of the Sand Kings",
+     "kind": "poi",
+     "d": 519,
+     "teleport": "@teleloc 0x2D110027 108 148 56 1 0 0 0",
+     "pos": [
+      8748,
+      3412,
+      56
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "abandoned-observatory",
+     "name": "Abandoned Observatory",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 86.40S 63.80W",
+     "pos": null,
+     "map": {
+      "ns": -86.4,
+      "ew": -63.8
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 16,
+   "timeOfDay": 0.65,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-abandoned-observatory"
+  },
+  {
+   "title": "The Pit of Heretics",
+   "name": "The Pit of Heretics",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === This ziggurat is located southeast of Candeth Keep at 88.0S, 55.0W and is referenced by Ulgrim the Unpleasant: :<font color=green>You give Ulgrim the Unpleasant Stout.</font><br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Pit_of_Heretics.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -88.0,
+     -55.5
+    ],
+    [
+     -88.0,
+     -55.0
+    ],
+    [
+     -88.0,
+     -54.5
+    ],
+    [
+     -87.9,
+     -55.9
+    ],
+    [
+     -87.9,
+     -54.5
+    ]
+   ],
+   "map": {
+    "ns": -88.0,
+    "ew": -55.0
+   },
+   "world": [
+    11268.0,
+    3348.0
+   ],
+   "lb": "0x3A11",
+   "coveredDistM": 2832,
+   "coveredBy": "shot:candeth-keep.04",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 2893,
+   "gazNear": [
+    {
+     "id": "temple-door-portal",
+     "name": "Temple Door Portal",
+     "kind": "landmark",
+     "d": 145,
+     "teleport": "@teleloc 0x3A110025 194.2639 215.069 64.055 1 0 0 0",
+     "pos": [
+      11330.264,
+      3479.069,
+      64.055
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "the-pit-of-heretics",
+     "name": "The Pit of Heretics",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 88.00S 55.00W",
+     "pos": null,
+     "map": {
+      "ns": -88,
+      "ew": -55
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 58,
+   "timeOfDay": 0.62,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-the-pit-of-heretics"
+  },
+  {
+   "title": "Festival Stone of Dawnsong",
+   "name": "Festival Stone of Dawnsong",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "The Festival Stones}} === Description === One of the Festival Stones, located east of Candeth Keep near the Southern Landbridge.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Dawnsong.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -89.9,
+     -44.3
+    ],
+    [
+     -89.2,
+     -43.8
+    ],
+    [
+     -86.9,
+     -42.6
+    ]
+   ],
+   "map": {
+    "ns": -89.9,
+    "ew": -44.3
+   },
+   "world": [
+    13836.0,
+    2892.0
+   ],
+   "lb": "0x480F",
+   "coveredDistM": 5421,
+   "coveredBy": "shot:candeth-keep.04",
+   "nearestSite": "candeth-keep",
+   "nearestSiteM": 5489,
+   "gazNear": [
+    {
+     "id": "dawnsong-festival-stone",
+     "name": "Dawnsong Festival Stone",
+     "kind": "poi",
+     "d": 208,
+     "teleport": "@teleloc 0x480F0030 123.2 188.3 120 0.25038 0 0 -0.968148",
+     "pos": [
+      13947.2,
+      3068.3,
+      120
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-dawnsong",
+     "name": "Festival Stone of Dawnsong",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 89.20S 43.80W",
+     "pos": null,
+     "map": {
+      "ns": -89.2,
+      "ew": -43.8
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 231,
+   "timeOfDay": 0.58,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-dawnsong"
+  },
+  {
+   "title": "Assassin's Roost",
+   "name": "Assassin's Roost",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Assassin_s_Roost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -73.9,
+     -43.7
+    ]
+   ],
+   "map": {
+    "ns": -73.9,
+    "ew": -43.7
+   },
+   "world": [
+    13980.0,
+    6732.0
+   ],
+   "lb": "0x4823",
+   "coveredDistM": 3400,
+   "coveredBy": "shot:wai-jhou.05",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 3410,
+   "gazNear": [
+    {
+     "id": "north-desert-edge-portal-4924",
+     "name": "North Desert Edge Portal",
+     "kind": "landmark",
+     "d": 305,
+     "teleport": "@teleloc 0x4924001D 76.9503 102.871 4.005 0.833357 0 0 -0.552735",
+     "pos": [
+      14092.95,
+      7014.871,
+      4.005
+     ]
+    },
+    {
+     "id": "south-direlands-portal-4924",
+     "name": "South Direlands Portal",
+     "kind": "landmark",
+     "d": 326,
+     "teleport": "@teleloc 0x49240025 98.4631 117.059 4.005 0.477366 0 0 -0.878705",
+     "pos": [
+      14114.463,
+      7029.059,
+      4.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "assassins-roost",
+     "name": "Assassin's Roost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 73.90S 43.70W",
+     "pos": null,
+     "map": {
+      "ns": -73.9,
+      "ew": -43.7
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 658,
+   "timeOfDay": 0.57,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-assassins-roost"
+  },
+  {
+   "title": "Burning Wood",
+   "name": "Burning Wood",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === The Burning Wood is the area of the Graveyard found in the valley to the southwest. During the night time, a unique creature called the Corrupted Pyre Oak sometimes appears in the wood at 66.5S, 44.8W. Lord Hendrel also spawns in this area as part of the Castle of Lord Mhoire Quest.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burning_Wood.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -66.5,
+     -44.8
+    ]
+   ],
+   "map": {
+    "ns": -66.5,
+    "ew": -44.8
+   },
+   "world": [
+    13716.0,
+    8508.0
+   ],
+   "lb": "0x472C",
+   "coveredDistM": 1911,
+   "coveredBy": "shot:wai-jhou.04",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 1921,
+   "gazNear": [
+    {
+     "id": "graveyard",
+     "name": "Graveyard",
+     "kind": "poi",
+     "d": 387,
+     "teleport": "@teleloc 0x482D003E 176.204 130.368 6.005 0.464097 0 0 0.885785",
+     "pos": [
+      14000.204,
+      8770.368,
+      6.005
+     ]
+    },
+    {
+     "id": "massilors-crypt-portal",
+     "name": "Massilor's Crypt Portal",
+     "kind": "landmark",
+     "d": 393,
+     "teleport": "@teleloc 0x482D003E 180 136 5.937 0.92388 0 0 -0.382683",
+     "pos": [
+      14004,
+      8776,
+      5.937
+     ]
+    },
+    {
+     "id": "down-to-surface",
+     "name": "Down to Surface",
+     "kind": "poi",
+     "d": 447,
+     "teleport": "@teleloc 0x492D000F 38 160 5.33833 1 0 0 0",
+     "pos": [
+      14054,
+      8800,
+      5.338
+     ]
+    },
+    {
+     "id": "down-to-surface-portal",
+     "name": "Down to Surface Portal",
+     "kind": "landmark",
+     "d": 456,
+     "teleport": "@teleloc 0x492D0017 60.0659 148.216 29.5125 0.029407 0 0 0.999568",
+     "pos": [
+      14076.066,
+      8788.216,
+      29.513
+     ]
+    },
+    {
+     "id": "up-to-arcanum-lookout",
+     "name": "Up to Arcanum Lookout",
+     "kind": "poi",
+     "d": 461,
+     "teleport": "@teleloc 0x492D0017 59.8273 156.007 29.5805 1 0 0 0",
+     "pos": [
+      14075.827,
+      8796.007,
+      29.581
+     ]
+    },
+    {
+     "id": "up-to-arcanum-lookout-portal",
+     "name": "Up to Arcanum Lookout Portal",
+     "kind": "landmark",
+     "d": 461,
+     "teleport": "@teleloc 0x492D0017 59.6104 156.702 4.02797 -0.468859 0 0 -0.883273",
+     "pos": [
+      14075.61,
+      8796.702,
+      4.028
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "burning-wood",
+     "name": "Burning Wood",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 66.50S 44.80W",
+     "pos": null,
+     "map": {
+      "ns": -66.5,
+      "ew": -44.8
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 1904,
+   "timeOfDay": 0.56,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-burning-wood"
+  },
+  {
+   "title": "Arcanum Lookout",
+   "name": "Arcanum Lookout",
+   "cats": [
+    "Southwest POI"
+   ],
+   "desc": "=== Description === A floating platform with NPCs on the edge of Graveyard. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Arcanum_Lookout.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": -65.3,
+    "ew": -43.3
+   },
+   "world": [
+    14076.0,
+    8796.0
+   ],
+   "lb": "0x492D",
+   "coveredDistM": 2080,
+   "coveredBy": "shot:wai-jhou.04",
+   "nearestSite": "wai-jhou",
+   "nearestSiteM": 2101,
+   "gazNear": [
+    {
+     "id": "up-to-arcanum-lookout",
+     "name": "Up to Arcanum Lookout",
+     "kind": "poi",
+     "d": 0,
+     "teleport": "@teleloc 0x492D0017 59.8273 156.007 29.5805 1 0 0 0",
+     "pos": [
+      14075.827,
+      8796.007,
+      29.581
+     ]
+    },
+    {
+     "id": "up-to-arcanum-lookout-portal",
+     "name": "Up to Arcanum Lookout Portal",
+     "kind": "landmark",
+     "d": 1,
+     "teleport": "@teleloc 0x492D0017 59.6104 156.702 4.02797 -0.468859 0 0 -0.883273",
+     "pos": [
+      14075.61,
+      8796.702,
+      4.028
+     ]
+    },
+    {
+     "id": "down-to-surface-portal",
+     "name": "Down to Surface Portal",
+     "kind": "landmark",
+     "d": 8,
+     "teleport": "@teleloc 0x492D0017 60.0659 148.216 29.5125 0.029407 0 0 0.999568",
+     "pos": [
+      14076.066,
+      8788.216,
+      29.513
+     ]
+    },
+    {
+     "id": "down-to-surface",
+     "name": "Down to Surface",
+     "kind": "poi",
+     "d": 22,
+     "teleport": "@teleloc 0x492D000F 38 160 5.33833 1 0 0 0",
+     "pos": [
+      14054,
+      8800,
+      5.338
+     ]
+    },
+    {
+     "id": "massilors-crypt-portal",
+     "name": "Massilor's Crypt Portal",
+     "kind": "landmark",
+     "d": 75,
+     "teleport": "@teleloc 0x482D003E 180 136 5.937 0.92388 0 0 -0.382683",
+     "pos": [
+      14004,
+      8776,
+      5.937
+     ]
+    },
+    {
+     "id": "graveyard",
+     "name": "Graveyard",
+     "kind": "poi",
+     "d": 80,
+     "teleport": "@teleloc 0x482D003E 176.204 130.368 6.005 0.464097 0 0 0.885785",
+     "pos": [
+      14000.204,
+      8770.368,
+      6.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "up-to-arcanum-lookout",
+     "name": "Up to Arcanum Lookout",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x492D0017 59.8273 156.007 29.5805 1 0 0 0",
+     "pos": [
+      14075.827,
+      8796.007,
+      29.581
+     ],
+     "map": {
+      "ns": -65.3,
+      "ew": -43.3
+     }
+    },
+    {
+     "id": "up-to-arcanum-lookout-portal",
+     "name": "Up to Arcanum Lookout Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x492D0017 59.6104 156.702 4.02797 -0.468859 0 0 -0.883273",
+     "pos": [
+      14075.61,
+      8796.702,
+      4.028
+     ],
+     "map": {
+      "ns": -65.3,
+      "ew": -43.3
+     }
+    }
+   ],
+   "insertAfter": "candeth-keep",
+   "insertBefore": "qalabar",
+   "insertCostM": 2046,
+   "timeOfDay": 0.56,
+   "grade": "warm",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-arcanum-lookout"
+  }
+ ]
+}

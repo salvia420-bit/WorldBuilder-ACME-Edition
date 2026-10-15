@@ -1,0 +1,140 @@
+{
+ "name": "Rithwic Festival Grounds",
+ "title": "10.4N, 53.5E - Rithwic Festival Grounds",
+ "siteId": "poi-rithwic-festival-grounds",
+ "summary": "One of the Festival Grounds, just west of Rithwic (Darkness Ascendant): two shopkeepers in tents, two chessboards, a running track and target drudges. In the kit (z 24): two striped octagon tents with flags, eleven red pennant poles, a running track of wooden archways lit by candles and candelabras, a 20 x 20 m dance canvas, two chessboards on pads, benches and target drudges; the Leafdawning Festival Stone (batch 1) on the hill 160 m east.",
+ "landmarks": [
+  {
+   "name": "Octagon tents (0x01000F06)",
+   "pos": [
+    37304.0,
+    26964.0,
+    24.0
+   ],
+   "heightM": 5.9,
+   "note": "Two, at y 26964 and 26988, flags on top."
+  },
+  {
+   "name": "Running-track arches (0x0200004F)",
+   "pos": [
+    37284.0,
+    26944.0,
+    24.0
+   ],
+   "heightM": 3.9,
+   "note": "Twelve wooden archways with candelabras 0x020005D8."
+  },
+  {
+   "name": "Dance canvas (0x010011C6)",
+   "pos": [
+    37356.0,
+    26964.0,
+    24.0
+   ],
+   "heightM": 0.4,
+   "note": "20 x 20 m fabric."
+  },
+  {
+   "name": "Chessboards",
+   "pos": [
+    37356.0,
+    26988.0,
+    24.45
+   ],
+   "heightM": 0.5,
+   "note": "On pads at y 26940 and 26988."
+  }
+ ],
+ "site": {
+  "id": "poi-rithwic-festival-grounds",
+  "name": "Rithwic Festival Grounds",
+  "gazetteerId": "rithwic-festival-grounds",
+  "teleport": "@teleloc 0xC28C001A 78.00 25.00 24.50 1 0 0 0",
+  "anchor": [
+   37325,
+   26964,
+   24
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.73,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer has only a map @tele for the grounds (the nearest @teleloc is the Leafdawning Festival Stone, 163 m east, which belongs to POI batch 1); derived @teleloc on open grass 59 m south of the grounds."
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 10.4,
+   "ew": 53.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1145,
+  "coveredBy": "shot:rithwic.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/10_4N_53_5E_Rithwic_Festival_Grounds.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-rithwic-festival-grounds.01",
+   "site": "poi-rithwic-festival-grounds",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37327,
+     26964,
+     24
+    ],
+    "height": 6,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 48,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 15
+   },
+   "standingOrder": "Hang 48 m above the festival grounds and turn slowly: the two striped octagon tents, the red pennants, the candle-lit running-track arches, the dance canvas and the chessboards laid out like a board game in the evening light; hold height, no drift.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down 48 m above the festival grounds, pitch -88 (candle flames never spin at nadir), turning 45 deg: the two striped octagon tents with their pennants, the red flag poles, the candle-lit running-track arches, the 20 m dance canvas and the chessboards laid out like a board game in warm evening light (0.73). Verified (check.mjs, full take flown): take 0-9 s: AGL 48..48 m, nearest drawn 45.56 m (static 0xC28C#0 0x020007BB), vmax 0.14 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 48..48 m, nearest drawn 45.56 m (static 0xC28C#0 0x020007BB), vmax 0.14 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.14 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-rithwic-festival-grounds.01": "take 0-9 s: AGL 48..48 m, nearest drawn 45.56 m (static 0xC28C#0 0x020007BB), vmax 0.14 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 48..48 m, nearest drawn 45.56 m (static 0xC28C#0 0x020007BB), vmax 0.14 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.14 m/s (cap 12), max tracking gap 0 m"
+ }
+}

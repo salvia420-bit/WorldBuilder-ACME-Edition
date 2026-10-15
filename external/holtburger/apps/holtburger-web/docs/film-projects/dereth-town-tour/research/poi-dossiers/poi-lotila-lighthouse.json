@@ -1,0 +1,162 @@
+{
+ "name": "Lotila Lighthouse",
+ "title": "Lotila Lighthouse",
+ "siteId": "poi-lotila-lighthouse",
+ "summary": "An unlit Empyrean lighthouse on the west coast of Lotila Island at 79.2N 76.8W: a 73 m black stone tower, 20 x 20 m, on a 40 m bluff above the shore and the open sea.",
+ "landmarks": [
+  {
+   "name": "Lotila Lighthouse",
+   "pos": [
+    6036.0,
+    43476.0,
+    40.0
+   ],
+   "heightM": 73.2,
+   "note": "0x01003700, top z 113.25, on a 40 m bluff."
+  }
+ ],
+ "site": {
+  "id": "poi-lotila-lighthouse",
+  "name": "Lotila Lighthouse",
+  "teleport": "@teleloc 0x1FE20016 48.0 138.0 6.5 1 0 0 0",
+  "anchor": [
+   6036.0,
+   43476.0,
+   40.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.54,
+   "grade": "neutral"
+  },
+  "notes": "Derived @teleloc on the grassy shore terrace 64 m north-west of the lighthouse (ground 6.0, no object within 40 m, a creature generator 18 m away); the gazetteer only has a map @tele for it."
+ },
+ "insertAfter": "silyun",
+ "insertBefore": "westwatch",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 79.2,
+   "ew": -76.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1744,
+  "coveredBy": "site:westwatch",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Lotila_Lighthouse.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-lotila-lighthouse.01",
+   "site": "poi-lotila-lighthouse",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.0,
+     8.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6036.0,
+     43476.0,
+     40.0
+    ],
+    "height": 73,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 2,
+    "azimuthRef": "compass",
+    "elevationDeg": -52,
+    "distance": 70,
+    "fromDeg": 24,
+    "toDeg": 60,
+    "relative": false
+   },
+   "standingOrder": "Lock off 10 m above the shore slope 43 m north of Lotila Lighthouse and tilt up from its rocky bluff to the black 73 m tower's lantern roof against the sky, the sea at frame right.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Tilt. A locked lens 10 m above the shore slope, 43 m north of the lighthouse, tilts from +24 deg to +60 deg. It climbs from the rocky bluff up the 73 m black tower to its roof against the sky, with the sea at frame right and the noon sun high overhead. Verified (check.mjs, full take flown): take 0-9 s: AGL 10.55..10.6 m, nearest drawn 16.6 m (scenery-default 0x02001292@6051,43524), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 10.55..10.6 m, nearest drawn 16.6 m (scenery-default 0x02001292@6051,43524), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-lotila-lighthouse.02",
+   "site": "poi-lotila-lighthouse",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6036.0,
+     43476.0,
+     40.0
+    ],
+    "height": 73,
+    "radius": 8
+   },
+   "params": {
+    "radius": 95,
+    "heightAGL": 40,
+    "revolutions": 0.12,
+    "timeRate": 120,
+    "direction": "ccw",
+    "bearingDeg": 305,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Circle counter-clockwise from north-west to west 95 m out over the shore and sea, 40 m above the bluff, while the sky clock runs and clouds race past the lighthouse; stay 40 m from every tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hyperlapse orbit. The camera circles counter-clockwise from north-west to west, 95 m out over the shore and sea and 40 m above the bluff (z 80). The sky clock runs at 120x, so clouds race past the tower and the sun moves from 0.54 to about 0.70, staying up in the west. The nearest tree is 72 m away. Verified (check.mjs, full take flown): take 0-10 s: AGL 77.03..78 m, nearest drawn 72.45 m (scenery-default 0x0200035F@5936,43446), vmax 7.16 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 78..78 m, nearest drawn 75.65 m (scenery-default 0x0200035F@5920,43506), vmax 7.16 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.18 m/s (cap 12), max tracking gap 0.03 m."
+  }
+ ],
+ "verification": {
+  "poi-lotila-lighthouse.01": "take 0-9 s: AGL 10.55..10.6 m, nearest drawn 16.6 m (scenery-default 0x02001292@6051,43524), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 10.55..10.6 m, nearest drawn 16.6 m (scenery-default 0x02001292@6051,43524), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-lotila-lighthouse.02": "take 0-10 s: AGL 77.03..78 m, nearest drawn 72.45 m (scenery-default 0x0200035F@5936,43446), vmax 7.16 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 78..78 m, nearest drawn 75.65 m (scenery-default 0x0200035F@5920,43506), vmax 7.16 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.18 m/s (cap 12), max tracking gap 0.03 m"
+ }
+}

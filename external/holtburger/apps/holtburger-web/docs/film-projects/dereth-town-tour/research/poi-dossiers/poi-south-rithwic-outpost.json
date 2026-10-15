@@ -1,0 +1,150 @@
+{
+ "name": "South Rithwic Outpost",
+ "title": "South Rithwic Outpost",
+ "siteId": "poi-south-rithwic-outpost",
+ "summary": "Another starter outpost destroyed by Martine in The First Strike (Brentsella, Girdweld the Shopkeeper, chickens). In the kit: the Life Stone and its two signs on the low ground (z 28) east of a three-storey cottage ringed by oaks, a stone shop and well to the west, and on a rise to the south-west (z 38) the 28 m ruined Empyrean monument tower (top z 65.9) among dark dead trees.",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    38501.4,
+    26284.2,
+    28.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-rithwic-c888."
+  },
+  {
+   "name": "Cottage (0x0100082E)",
+   "pos": [
+    38485.5,
+    26289.2,
+    28.0
+   ],
+   "heightM": 12.5,
+   "note": "Three-storey cottage, top z 40.5."
+  },
+  {
+   "name": "Monument tower (0x01002866)",
+   "pos": [
+    38460.0,
+    26244.0,
+    38.0
+   ],
+   "heightM": 27.9,
+   "note": "On the rise, top z 65.9."
+  },
+  {
+   "name": "Leafy bush (0x020007A3)",
+   "pos": [
+    38509.1,
+    26273.8,
+    29.5
+   ],
+   "heightM": 7.7,
+   "note": "Default-bake bush used as the reveal occluder."
+  }
+ ],
+ "site": {
+  "id": "poi-south-rithwic-outpost",
+  "name": "South Rithwic Outpost",
+  "gazetteerId": "south-rithwic-outpost",
+  "teleport": "@teleloc 0xC8880028 101.437 172.17 28.005 0.870746 0 0 -0.491733",
+  "anchor": [
+   38484,
+   26280,
+   28
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-rithwic-c888 (the outpost's Life Stone, z 28); the gazetteer's own south-rithwic-outpost entry is only a map @tele."
+ },
+ "insertAfter": "rithwic",
+ "insertBefore": "lytelthorpe",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 7.6,
+   "ew": 58.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 709,
+  "coveredBy": "shot:rithwic.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Rithwic_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-south-rithwic-outpost.01",
+   "site": "poi-south-rithwic-outpost",
+   "technique": "classic.reveal-from-occluder",
+   "duration": {
+    "sec": 5.8
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.9
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.8,
+    "keep": [
+     4.2,
+     9.7
+    ],
+    "anchor": "start"
+   },
+   "rank": 3,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38501.4,
+     26284.2,
+     28
+    ],
+    "height": 3.6,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": 9,
+    "distance": 28,
+    "occluder": [
+     38509.1,
+     26273.8,
+     29.5
+    ],
+    "occluderRadius": 3.8,
+    "direction": "right",
+    "holdFrac": 0.1,
+    "settleFrac": 0.35,
+    "marginM": 0.8
+   },
+   "standingOrder": "Start with a leafy bush hiding the outpost's Life Stone, then truck slowly right until its sparkle and the cottage behind come clear in the low golden side-light; keep 3 m from the bush and the trees.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Reveal from occluder: starts with a 7 m leafy bush (SE of the Life Stone) hiding the outpost's Life Stone, holds, then trucks right ~14 m until the sparkle, the cottage and the monument tower on its rise behind come clear in raking golden side-light (0.74). LOS blocked in the first ~0.8 s of the edit window (until the reveal at t 4.7) is the lead-in by design. Verified (check.mjs, full take flown): take 0-10 s: AGL 2.56..5.5 m, nearest drawn 5.03 m (scenery-default 0x020007A3@38531,26263), vmax 4.1 m/s, LOS blocked 20/41, subject in frame 100%; edit 3.9-9.7 s: AGL 4.07..5.5 m, nearest drawn 5.03 m (scenery-default 0x020007A3@38531,26263), vmax 4.08 m/s, LOS blocked 4/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-south-rithwic-outpost.01": "take 0-10 s: AGL 2.56..5.5 m, nearest drawn 5.03 m (scenery-default 0x020007A3@38531,26263), vmax 4.1 m/s, LOS blocked 20/41, subject in frame 100%; edit 3.9-9.7 s: AGL 4.07..5.5 m, nearest drawn 5.03 m (scenery-default 0x020007A3@38531,26263), vmax 4.08 m/s, LOS blocked 4/23, subject in frame 100%"
+ },
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): window {'minSec': 3.5, 'idealSec': 5.8, 'keep': [3.9, 9.7], 'anchor': 'end'} -> keep [4.2, 9.7] anchor start. The v2 build placed the 3.67 s edit at 5.54-9.23 s, after the reveal (LOS clears at t~4.7) and mostly on the static hold, so the reveal-from-occluder showed no reveal. Re-checked with check.mjs at inSec 4.208: edit 4.21-7.9 s LOS blocked 3/15 (lead-in by design), reveal and truck included, AGL 4.3..5.5, nearest 5.0 m, in frame 100%."
+ ]
+}

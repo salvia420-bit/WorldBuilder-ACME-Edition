@@ -1,0 +1,143 @@
+{
+ "name": "Knathtead Excavation",
+ "title": "Knathtead Excavation",
+ "siteId": "poi-knathtead-excavation",
+ "summary": "A narrow valley at 63.1S 44.3W that climbs from the Graveyard plain (z 5) to a crystal field at z 82, its walls rising 40-100 m on both sides; about 75 glowing blue crystals carpet the valley head around (13836, 9324) and blue light props line the floor; the Knathtead Mother lairs at its end.",
+ "landmarks": [
+  {
+   "name": "Crystal field",
+   "pos": [
+    13836,
+    9324,
+    84
+   ],
+   "heightM": 3,
+   "note": "0x01004150 / 0x0100414F glowing blue crystals."
+  },
+  {
+   "name": "Valley narrows",
+   "pos": [
+    13857,
+    9400,
+    58
+   ],
+   "heightM": 0,
+   "note": "35 m wide between 104-180 m walls."
+  }
+ ],
+ "site": {
+  "id": "poi-knathtead-excavation",
+  "name": "Knathtead Excavation",
+  "teleport": "@teleloc 0x48300004 2.0 88.0 75.83 1 0 0 0",
+  "anchor": [
+   13836,
+   9324,
+   82
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.57,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport in the valley 22 m south-west of the crystal field centre, 6 m from the nearest crystal."
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -63.1,
+   "ew": -44.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1691,
+  "coveredBy": "shot:wai-jhou.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Knathtead_Excavation.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-knathtead-excavation.01",
+   "site": "poi-knathtead-excavation",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     2.5,
+     9.6
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13836,
+     9324,
+     84
+    ],
+    "height": 5,
+    "radius": 20
+   },
+   "params": {
+    "heightAGL": 8,
+    "speed": 6,
+    "alat": 3,
+    "cornerRadius": 15,
+    "lookAhead": 25,
+    "tiltDeg": -2,
+    "maxBankDeg": 12,
+    "minClearance": 4,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     13860,
+     9395,
+     0
+    ],
+    [
+     13851,
+     9368,
+     0
+    ],
+    [
+     13844,
+     9346,
+     0
+    ],
+    [
+     13840,
+     9330,
+     0
+    ]
+   ],
+   "standingOrder": "Fly up the narrow valley 8 m above its floor toward the glowing blue crystal field and the sun; keep 8 m from both walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Canyon run up the narrow Knathtead valley at 6-8 m/s, 8 m above its rising floor between 40-100 m walls, toward the field of 75 glowing blue crystals at its head and into the afternoon sun (backlit glow); the window stops before the camera overflies the field. Verified (check.mjs, full take flown): take 0-11 s: AGL 4..15.7 m, nearest drawn 3.96 m (static 0x4830#40 0x0100414F), vmax 7.73 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 52.4 m); edit 3-9 s: AGL 11.42..15.7 m, nearest drawn 8.11 m (static 0x4830#135 0x02001820), vmax 7.73 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 52.4 m); flight cinema peak 7.8 m/s (cap 12), max tracking gap 0.8 m."
+  }
+ ],
+ "verification": {
+  "poi-knathtead-excavation.01": "take 0-11 s: AGL 4..15.7 m, nearest drawn 3.96 m (static 0x4830#40 0x0100414F), vmax 7.73 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 52.4 m); edit 3-9 s: AGL 11.42..15.7 m, nearest drawn 8.11 m (static 0x4830#135 0x02001820), vmax 7.73 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 52.4 m); flight cinema peak 7.8 m/s (cap 12), max tracking gap 0.8 m"
+ }
+}

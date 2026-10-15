@@ -1553,6 +1553,7 @@ uniform float uIblEnabled;            // 0.0 OFF / 1.0 ON (default)
 uniform float uEnvIntensity;
 uniform float uWaterEnvEnabled;       // terrainplan s4 default tier: water sheen gate
 uniform float uWaterReflect;          // 2026-10-08 — sky reflection strength over water (?waterReflect, default 0.35)
+uniform vec2 uWaterSheenFade;         // 2026-10-15 — ripple + glint view-depth fade (?waterSheenFade=near,far, default 30,160)
 uniform float uSunGlint;              // 2026-10-08 — water sun-glint multiplier: 1 by day, 0 once the sky's sun is down (loop.js light tick)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
@@ -3443,7 +3444,22 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   //     uEnvIntensity x 0.55 (~0.11, the diurnal AMBIENT term) near the camera
   //     and nothing at all beyond 160 m. The retail water texture underneath is
   //     unchanged.
-  float sheenFade = 1.0 - smoothstep(30.0, 160.0, vViewDepth);
+  // 2026-10-15 — the fade range is uWaterSheenFade (?waterSheenFade=near,far;
+  // default 30,160 = the values above). Film boots a far range (40,500) so drone
+  // shots see the ripples and the sun glint; past 160 m a pixel can span a
+  // whole ripple period, so a far range also fades by the pixel's ground
+  // footprint (0.2 → 0.6 m keeps the 0.47 m octave above Nyquist). The
+  // footprint reuses the grid-UV gradients taken at the top of main()
+  // (?terrainGradUv, default on; vGridUv is metres / 24) so the program keeps
+  // its single derivative pair; with ?terrainGradUv=off it takes its own pair
+  // here, in uniform control flow, before the water branch. At the default
+  // range the footprint term is not applied, so a default session renders
+  // exactly as before.
+${TERRAIN_MICRO.gradUv
+    ? "  float wFoot = 24.0 * max(length(gTerrainGridDx), length(gTerrainGridDy));"
+    : "  vec2 gpFoot = vec2(vWorldPos.x, -vWorldPos.z);\n  float wFoot = max(length(dFdx(gpFoot)), length(dFdy(gpFoot)));"}
+  float footFade = uWaterSheenFade.y > 160.5 ? 1.0 - smoothstep(0.2, 0.6, wFoot) : 1.0;
+  float sheenFade = (1.0 - smoothstep(uWaterSheenFade.x, uWaterSheenFade.y, vViewDepth)) * footFade;
   // The sun glint is added further down, once the cloud and cast shadows are
   // known (direct sunlight does not glint under a cloud or a roof).
   vec3 waterGlint = vec3(0.0);
@@ -4182,6 +4198,7 @@ export async function resolveTerrainRingOpts(
       pbrNormalAoTex: null,
       waterEnvEnabled: false,
       waterReflect: WATER_REFLECT_DEFAULT,
+      waterSheenFade: WATER_SHEEN_FADE_DEFAULT.slice(),
       farHarmonize: 0,
       paintLight: 0,
       splatNoiseAmp: 0,
@@ -4930,6 +4947,8 @@ export async function resolveTerrainRingOpts(
     waterEnvEnabled: readWaterEnvFlag(),
     // 2026-10-08 — its sky reflection strength (?waterReflect=<0..1.5>).
     waterReflect: readWaterReflect(),
+    // 2026-10-15 — how far its ripples + sun glint reach (?waterSheenFade=near,far).
+    waterSheenFade: readWaterSheenFade(),
     // 2026-10-08 — far harmonize strength (?farHarmonize=<0..1> / off).
     farHarmonize: readFarHarmonize(),
     // 2026-10-08 — painted light strength (?paintLight=<0..2> / off).
@@ -5525,6 +5544,32 @@ export function readWaterReflect(search) {
     return Number.isFinite(n) ? Math.min(1.5, Math.max(0, n)) : WATER_REFLECT_DEFAULT;
   } catch (_) {
     return WATER_REFLECT_DEFAULT;
+  }
+}
+
+/** 2026-10-15 — default view-depth range (m) of the water ripples + sun glint (see the sheen block). */
+export const WATER_SHEEN_FADE_DEFAULT = Object.freeze([30, 160]);
+
+/**
+ * 2026-10-15 — `?waterSheenFade=<near>,<far>` (metres of view depth): the ripple
+ * normal and the sun glint are full strength nearer than `near` and gone past
+ * `far`. Film boots 40,500 so drone shots keep the water's life at range (a far
+ * range above 160 also fades by the pixel's ground footprint, see the shader).
+ * Missing, junk, near ≥ far, near < 0 or far > 2000 = WATER_SHEEN_FADE_DEFAULT.
+ * @returns {number[]} [near, far]
+ */
+export function readWaterSheenFade(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("waterSheenFade");
+    if (v == null || v === "") return WATER_SHEEN_FADE_DEFAULT.slice();
+    const parts = String(v).split(",").map((x) => Number(x.trim()));
+    if (parts.length !== 2 || !parts.every(Number.isFinite)) return WATER_SHEEN_FADE_DEFAULT.slice();
+    const [near, far] = parts;
+    if (near < 0 || far > 2000 || !(near < far)) return WATER_SHEEN_FADE_DEFAULT.slice();
+    return [near, far];
+  } catch (_) {
+    return WATER_SHEEN_FADE_DEFAULT.slice();
   }
 }
 
@@ -6154,6 +6199,9 @@ export async function bakeTerrainForLandblock(
         PAINT_LIGHT_START_M, PAINT_LIGHT_END_M, 0) },
       // 2026-10-08 — sky reflection over water (?waterReflect, default 0.35).
       uWaterReflect: { value: Number.isFinite(opts.waterReflect) ? opts.waterReflect : WATER_REFLECT_DEFAULT },
+      // 2026-10-15 — ripple + glint view-depth fade (?waterSheenFade, default 30,160).
+      uWaterSheenFade: { value: new THREE.Vector2(
+        ...(Array.isArray(opts.waterSheenFade) && opts.waterSheenFade.length === 2 ? opts.waterSheenFade : WATER_SHEEN_FADE_DEFAULT)) },
       // 2026-10-08 — pushed on the light tick (loop.js tickTerrainSunDir).
       uSunGlint: { value: 1.0 },
       // T1 splat-noise borders (default on; ?splatNoise=off → amp 0 no-op).

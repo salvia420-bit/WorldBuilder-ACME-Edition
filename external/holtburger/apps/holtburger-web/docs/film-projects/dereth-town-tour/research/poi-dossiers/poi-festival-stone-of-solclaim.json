@@ -1,0 +1,120 @@
+{
+ "name": "Festival Stone of Solclaim",
+ "title": "Festival Stone of Solclaim",
+ "siteId": "poi-festival-stone-of-solclaim",
+ "summary": "One of the Festival Stones, 'in the parched wastelands to the east of Al-Arqas' (Alatar Locke). In the kit the stone and its glow stand on a low dune (z 24) at the centre of a 20 m square of four 3 m candle sentinels with blue lights; bare yellow sand all round, no trees.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Solclaim",
+   "pos": [
+    28571.8,
+    17076.0,
+    24.1
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary glow."
+  },
+  {
+   "name": "Four candle sentinels (0x0200039B)",
+   "pos": [
+    28572.0,
+    17076.0,
+    24.0
+   ],
+   "heightM": 3.0,
+   "note": "At the corners (28562/28582, 17066/17086) with blue lights."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-solclaim",
+  "name": "Festival Stone of Solclaim",
+  "gazetteerId": "solclaim-festival-stone",
+  "teleport": "@teleloc 0x94580038 145.1 187.7 27.1 0.461749 0 0 -0.887011",
+  "anchor": [
+   28571.8,
+   17076.0,
+   24.1
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.68,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer solclaim-festival-stone (dune 13 m north-west of the stone, inside the sentinel square)."
+ },
+ "insertAfter": "uziz",
+ "insertBefore": "al-arqas",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -30.8,
+   "ew": 17.1
+  },
+  "coordSrc": "index",
+  "coveredDistM": 814,
+  "coveredBy": "shot:al-arqas.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Solclaim.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-solclaim.01",
+   "site": "poi-festival-stone-of-solclaim",
+   "technique": "classic.orbit",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28571.8,
+     17076.0,
+     24.1
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 180,
+    "azimuthRef": "compass",
+    "elevationDeg": 20,
+    "distance": 24,
+    "thirds": "center",
+    "revolutions": 0.25,
+    "direction": "cw"
+   },
+   "standingOrder": "Circle a quarter turn 24 m out and 10 m above the glowing Solclaim stone and its square of four candle sentinels on the bare yellow dunes; keep 10 m from every sentinel, desert rats may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Quarter orbit of the Solclaim Festival Stone in its square of four 3 m candle sentinels with blue lights, alone on bare yellow dunes (Alatar Locke: 'the parched wastelands east of Al-Arqas'); the afternoon WSW sun rakes the dunes and the sentinels' shadows. Verified (check.mjs, full take flown): take 0-10 s: AGL 11.5..14.3 m, nearest drawn 10.24 m (static 0x9458#0 0x0200039B Master's Sentinel), vmax 3.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 11.5..14 m, nearest drawn 10.24 m (static 0x9458#0 0x0200039B Master's Sentinel), vmax 3.54 m/s, LOS blocked 0/27, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-solclaim.01": "take 0-10 s: AGL 11.5..14.3 m, nearest drawn 10.24 m (static 0x9458#0 0x0200039B Master's Sentinel), vmax 3.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 11.5..14 m, nearest drawn 10.24 m (static 0x9458#0 0x0200039B Master's Sentinel), vmax 3.54 m/s, LOS blocked 0/27, subject in frame 100%"
+ }
+}

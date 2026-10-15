@@ -1,0 +1,213 @@
+{
+ "name": "Aun Settlement (Menhir Ring)",
+ "title": "Aun Settlement",
+ "siteId": "poi-aun-settlement",
+ "summary": "A small Aun Tumerok settlement (Aun Tikakhe, Saritea, Aulakhe - Buadren and Invoker quests) at 82.7N 21.0E around a Menhir Ring holding one of the Menhir Research mana fields. The kit shows the ring: four 3.7 m menhirs and four 2.9 m stones in two circles around four metal sculptures and a burning torch, a wooden longhouse with fish, cups and a lantern, four green tents around a campfire (Akiekie Ember / Hot Air), and the Entrance to Portal Space swirl 45 m north-east.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 82.7,
+   "ew": 21.0
+  },
+  "mapWorld": [
+   29508.0,
+   44316.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aun_Settlement.txt",
+  "coveredDistM": 3244,
+  "coveredBy": "shot:neydisa-castle.03"
+ },
+ "landmarks": [
+  {
+   "name": "Menhir Ring torch",
+   "pos": [
+    29505.2,
+    44319.4,
+    78.0
+   ],
+   "heightM": 3,
+   "note": "0x02000AB9 at the ring centre."
+  },
+  {
+   "name": "East menhir",
+   "pos": [
+    29516.0,
+    44320.0,
+    78.0
+   ],
+   "heightM": 3.7,
+   "note": "0x02000374 (the OTS shoulder)."
+  },
+  {
+   "name": "Entrance to Portal Space",
+   "pos": [
+    29548.5,
+    44332.5,
+    77.6
+   ],
+   "heightM": 3.5,
+   "note": "Portal spawn (height estimated)."
+  },
+  {
+   "name": "Campfire and tents",
+   "pos": [
+    29556.9,
+    44313.1,
+    77.9
+   ],
+   "heightM": 4,
+   "note": "Akiekie Ember / Hot Air FX inside four 0x02000A50 tents."
+  }
+ ],
+ "site": {
+  "id": "poi-aun-settlement",
+  "name": "Aun Settlement (Menhir Ring)",
+  "teleport": "@teleloc 0x99E60026 114.0 140.0 78.5 1 0 0 0",
+  "anchor": [
+   29520.0,
+   44320.0,
+   78.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.41,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29505.2,
+     44319.4,
+     78.0
+    ],
+    "height": 3,
+    "radius": 2
+   },
+   "params": {
+    "heightAGL": 30,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "standingOrder": "Hover 30 m above the menhir ring's torch looking straight down and rotate 40 deg; nothing within 9 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Aun Settlement's Menhir Ring from above: four 3.7 m menhirs, four smaller stones and four metal sculptures in concentric rings around a burning torch, a graphic circle on the grass; pitch -88 so the torch flame does not spin. Verified with poi-kit check.mjs - take 8s: AGL 30..30 m, nearest 9.47 m (scenery-default 0x020002D9@29490,44331), vmax 0.09 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 30..30 m, nearest 9.6 m, LOS blocked 0/21, in frame 100%, water 0%; flight cinema: peak 0.09 m/s (cap 12), tracking gap 0 m."
+  },
+  {
+   "technique": "classic.over-the-shoulder",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29548.5,
+     44332.5,
+     77.6
+    ],
+    "height": 3.5,
+    "radius": 2
+   },
+   "params": {
+    "secondary": [
+     29516.0,
+     44320.0,
+     78.0
+    ],
+    "secondaryHeight": 3.7,
+    "shoulder": "left",
+    "shoulderM": 0.9,
+    "backM": 2.0,
+    "raiseM": 0.9,
+    "composeThirds": true,
+    "autoFov": true,
+    "pushM": 0.3
+   },
+   "standingOrder": "Hold just behind and above the ring's east menhir with a long lens on the Entrance to Portal Space 36 m east, easing 0.3 m forward; keep 1.4 m from the menhir, which may cross the frame edge.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Over the shoulder of the menhir: the weathered stone fills one side of the frame while the swirl of the Entrance to Portal Space glows on the left third beyond the Aun camp, compressed by a long lens; side light from the late-morning sun. Verified with poi-kit check.mjs - take 8s: AGL 3.92..3.9 m, nearest 1.45 m (static 0x99E6#1 0x02000374), vmax 0.06 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 3.92..3.9 m, nearest 1.46 m, LOS blocked 0/23, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-aun-settlement.01",
+   "technique": "drone.top-down",
+   "rank": 3,
+   "check": "take 8s: AGL 30..30 m, nearest 9.47 m (scenery-default 0x020002D9@29490,44331), vmax 0.09 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 30..30 m, nearest 9.6 m, LOS blocked 0/21, in frame 100%, water 0%; flight cinema: peak 0.09 m/s (cap 12), tracking gap 0 m"
+  },
+  {
+   "shot": "poi-aun-settlement.02",
+   "technique": "classic.over-the-shoulder",
+   "rank": 2,
+   "check": "take 8s: AGL 3.92..3.9 m, nearest 1.45 m (static 0x99E6#1 0x02000374), vmax 0.06 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 3.92..3.9 m, nearest 1.46 m, LOS blocked 0/23, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 10.5,
+ "techniques": [
+  "drone.top-down",
+  "classic.over-the-shoulder"
+ ]
+}

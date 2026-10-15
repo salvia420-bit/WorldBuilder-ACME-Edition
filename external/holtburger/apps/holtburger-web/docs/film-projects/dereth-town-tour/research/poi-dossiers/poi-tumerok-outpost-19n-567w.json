@@ -1,0 +1,134 @@
+{
+ "name": "Tumerok Outpost (1.9N, 56.7W)",
+ "title": "1.9N, 56.7W - Tumerok Outpost",
+ "siteId": "poi-tumerok-outpost-19n-567w",
+ "summary": "A small walled Tumerok outpost (locked door, four loot chests inside per acpedia) on a rocky ledge in the Dires south-east of Fort Tethana. The kit shows a compact block of flat-roofed black stone halls and doorways (0x01001130, 0x01001124, 0x0100115E), about 75 x 30 m at z 128, crowned with wooden stake palisades. The barren rock falls away 40 m to the north and west, and a rock-cave hut (granite golems) sits on the slope 110 m south-west.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 1.9,
+   "ew": -56.7
+  },
+  "mapWorld": [
+   10860.0,
+   24924.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/1_9N_56_7W_Tumerok_Outpost.txt",
+  "coveredDistM": 3580,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Outpost halls",
+   "pos": [
+    10850,
+    24936,
+    128
+   ],
+   "heightM": 5,
+   "note": "Flat-roofed black stone halls with stake palisades on the roofs (props 0x01001126/27/28 at z 133-135)."
+  },
+  {
+   "name": "Rock-cave hut",
+   "pos": [
+    10791.4,
+    24832.8,
+    150
+   ],
+   "heightM": 5.4,
+   "note": "0x010011A9 with a Granite Golem generator."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-outpost-19n-567w",
+  "name": "Tumerok Outpost (1.9N, 56.7W)",
+  "teleport": "@teleloc 0x38810026 98 127 135.6 1 0 0 0",
+  "anchor": [
+   10850,
+   24936,
+   128
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.58,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc at (10850,24895), ground 135.1, 27.5 m from the halls. The gazetteer's 'Tumerok Outpost' is the dungeon."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-outpost-19n-567w.01",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     3,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10850,
+     24936,
+     128
+    ],
+    "height": 7,
+    "radius": 35
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -12,
+    "heightAGL": 32,
+    "distance": 60,
+    "drift": 6,
+    "bearingDeg": 195,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Hover 18 m above the rocky slope 60 m south-south-west of the outpost looking almost straight down, then tilt up over its spiked roofs to the falling ground and the Dires beyond; drift only 6 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The lens hovers 18-20 m above the rocky slope 60 m south-south-west of the walled outpost (flat-roofed black stone halls crowned with wooden stake palisades, z 128). It looks almost straight down and tilts from -80 deg to -12 deg while drifting 6 m, so the stake-lined roofs slide up through the frame and the ground falls away to the north into the Dires. The early-afternoon sun is behind the left shoulder. The subject enters the frame during the tilt (take 59%), and the edit window starts once it is in frame (96%). Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 17.55..19.6 m, nearest 23.54 m (scenery-default 0x020005C9@10814,24874), vmax 0.94 m/s, LOS blocked 0/41, in frame 59%, water 0%, retail-bake tree 23.5 m (not drawn by the default bake); edit 4-10s: AGL 18.27..19.6 m, nearest 24.36 m (scenery-default 0x020005C9@10814,24874), vmax 0.94 m/s, LOS blocked 0/25, in frame 96%, water 0%, retail-bake tree 24.3 m (not drawn by the default bake); flight cinema: peak 0.94 m/s (cap 12), tracking gap 0.01 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-outpost-19n-567w.01",
+   "technique": "drone.tilt-reveal",
+   "rank": 3,
+   "check": "take 10s: AGL 17.55..19.6 m, nearest 23.54 m (scenery-default 0x020005C9@10814,24874), vmax 0.94 m/s, LOS blocked 0/41, in frame 59%, water 0%, retail-bake tree 23.5 m (not drawn by the default bake); edit 4-10s: AGL 18.27..19.6 m, nearest 24.36 m (scenery-default 0x020005C9@10814,24874), vmax 0.94 m/s, LOS blocked 0/25, in frame 96%, water 0%, retail-bake tree 24.3 m (not drawn by the default bake); flight cinema: peak 0.94 m/s (cap 12), tracking gap 0.01 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "drone.tilt-reveal"
+ ]
+}

@@ -1,0 +1,153 @@
+{
+ "name": "Tumerok Fort (10.3N, 68.8W)",
+ "title": "10.3N, 68.8W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-103n-688w",
+ "summary": "A Tumerok fort (three loot chests in the tower per acpedia) that fills the floor of a narrow north-south rock valley (z 102) in the Dires. Flat-roofed halls with stake palisades form a 50 x 75 m block, with a 31 m spire tower at its north-east corner (barrels on its platform). The valley walls rise 12-20 m to the west and 30-50 m to the east, and the valley opens to a flat at its south end.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 10.3,
+   "ew": -68.8
+  },
+  "mapWorld": [
+   7956.0,
+   26940.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/10_3N_68_8W_Tumerok_Fort.txt",
+  "coveredDistM": 2217,
+  "coveredBy": "shot:fort-tethana.04"
+ },
+ "landmarks": [
+  {
+   "name": "Fort halls",
+   "pos": [
+    7956,
+    26976,
+    102
+   ],
+   "heightM": 5,
+   "note": "0x01001130/0x0100115E/0x01001124/0x01001201 halls from y 26935 to 27019."
+  },
+  {
+   "name": "Spire tower",
+   "pos": [
+    7980,
+    27012,
+    102
+   ],
+   "heightM": 30.75,
+   "note": "0x01001161 with barrels at z 117."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-103n-688w",
+  "name": "Tumerok Fort (10.3N, 68.8W)",
+  "teleport": "@teleloc 0x298C0019 88 15 102.5 1 0 0 0",
+  "anchor": [
+   7956,
+   26976,
+   102
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the valley floor at (7960,26895), ground 102, 39 m from the first hall."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-103n-688w.01",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     2,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7956,
+     26976,
+     102
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 10,
+    "speed": 8,
+    "alat": 3,
+    "cornerRadius": 20,
+    "lookAhead": 35,
+    "tiltDeg": -6,
+    "maxBankDeg": 15,
+    "bankGain": 1,
+    "minClearance": 4,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     7964,
+     26790,
+     102
+    ],
+    [
+     7961,
+     26840,
+     102
+    ],
+    [
+     7958,
+     26885,
+     102
+    ]
+   ],
+   "standingOrder": "Fly north up the narrow valley floor 10 m above the rock toward the walled Tumerok fort that blocks it, banking gently with the valley; stop 50 m short of the first hall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Canyon run: the drone flies north 10 m above the floor of a narrow rock valley (z 102), whose walls rise 12 m to the west and 30-50 m to the east, toward the walled Tumerok fort that fills the valley. It flies 95 m at 9.5 m/s and ends 50 m short of the first hall, with the fort's halls and its 31 m spire tower ahead (subject ndc y 0.24-0.29). The SW sun is behind the left shoulder. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 10..10 m, nearest 12.73 m (scenery-default 0x020005C9@7954,26789), vmax 9.52 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 12.7 m (not drawn by the default bake); edit 3.5-9.5s: AGL 10..10 m, nearest 20.94 m (spawn Harvest Reaper Generator), vmax 9.52 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 35.8 m (not drawn by the default bake); flight cinema: peak 9.54 m/s (cap 12), tracking gap 0.04 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-fort-103n-688w.01",
+   "technique": "drone.canyon-run",
+   "rank": 2,
+   "check": "take 10s: AGL 10..10 m, nearest 12.73 m (scenery-default 0x020005C9@7954,26789), vmax 9.52 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 12.7 m (not drawn by the default bake); edit 3.5-9.5s: AGL 10..10 m, nearest 20.94 m (spawn Harvest Reaper Generator), vmax 9.52 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 35.8 m (not drawn by the default bake); flight cinema: peak 9.54 m/s (cap 12), tracking gap 0.04 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "drone.canyon-run"
+ ]
+}

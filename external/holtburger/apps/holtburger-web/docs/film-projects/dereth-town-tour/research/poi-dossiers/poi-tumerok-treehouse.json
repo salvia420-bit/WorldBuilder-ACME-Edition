@@ -1,0 +1,117 @@
+{
+ "name": "Tumerok Treehouse",
+ "title": "Tumerok Treehouse",
+ "siteId": "poi-tumerok-treehouse",
+ "summary": "An Empyrean platform in the Tiofor Woods at 43.9N 10.8E, once the Banderling treehouse. A 15.6 m wooden staircase climbs to a plank platform at z 55, built into a giant Tall Tree (static 0x020003A1, 31 m crown, 62 m tall) that stands in a forest hollow at z 40. The chest and a gift box are up on the platform, and a low brick foundation, a barrel and a red-glowing frame lie at its foot. Pines 30-77 m tall ring the hollow. The landblocks east of x 27264 are missing from the kit.",
+ "landmarks": [
+  {
+   "name": "Wooden staircase",
+   "pos": [
+    27059.6,
+    35001.9,
+    40.1
+   ],
+   "heightM": 15.6,
+   "note": "0x020003EC, up to the plank platform at z 55.4."
+  },
+  {
+   "name": "Tall Tree",
+   "pos": [
+    27067.8,
+    35007.8,
+    41.0
+   ],
+   "heightM": 62.4,
+   "note": "0x020003A1 static weenie 'Tall Tree', crown box 31 x 31 m."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-treehouse",
+  "name": "Tumerok Treehouse",
+  "teleport": "@teleloc 0x8CB60032 160.0 38.0 39.6 1 0 0 0",
+  "anchor": [
+   27060.0,
+   35002.0,
+   40.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc in the forest hollow 28 m south-west of the staircase (ground 39.1, clear of the giant tree's box and the hollow's pines); no gazetteer entry within 600 m."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 43.9,
+   "ew": 10.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5064,
+  "coveredBy": "site:glenden-wood",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tumerok_Treehouse.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-tumerok-treehouse.01",
+   "site": "poi-tumerok-treehouse",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27060.0,
+     35002.0,
+     40.0
+    ],
+    "height": 15.6,
+    "radius": 4
+   },
+   "params": {
+    "azimuthDeg": 225,
+    "azimuthRef": "compass",
+    "heightM": 0.75,
+    "horizontalM": 26,
+    "spinDeg": 0
+   },
+   "standingOrder": "Lie 0.75 m above the forest floor 27 m south-west of the wooden staircase and look up it to the plank platform in the giant tree's crown; keep 8 m from every plant and trunk.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's eye. A locked lens 0.75 m above the forest floor, 27 m south-west of the staircase, looking up 17 deg with a 75 deg fov. The wooden staircase climbs to the plank platform at z 55 inside the giant Tall Tree's crown (top z 99.5), framed by the hollow's pines. The nearest drawn object is a 1-2 m plant at 8.5 m. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.75..0.8 m, nearest drawn 8.55 m (scenery-default 0x02001063@27030,34985), vmax 0 m/s, LOS blocked 0/33, subject in frame 100% (opt-in retail-bake tree 0 m); edit 1.5-7 s: AGL 0.75..0.8 m, nearest drawn 8.55 m (scenery-default 0x02001063@27030,34985), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (opt-in retail-bake tree 0 m)."
+  }
+ ],
+ "verification": {
+  "poi-tumerok-treehouse.01": "take 0-8 s: AGL 0.75..0.8 m, nearest drawn 8.55 m (scenery-default 0x02001063@27030,34985), vmax 0 m/s, LOS blocked 0/33, subject in frame 100% (opt-in retail-bake tree 0 m); edit 1.5-7 s: AGL 0.75..0.8 m, nearest drawn 8.55 m (scenery-default 0x02001063@27030,34985), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (opt-in retail-bake tree 0 m)"
+ }
+}

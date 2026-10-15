@@ -1,0 +1,119 @@
+{
+ "name": "Northwest Samsur Outpost",
+ "title": "Northwest Samsur Outpost",
+ "siteId": "poi-northwest-samsur-outpost",
+ "summary": "Old starter outpost north-west of Samsur, destroyed by Martine in The First Strike (acpedia). In the kit: a 28 m Empyrean tower with green lamps, an octagon tower, a cottage and the Life Stone on a flat sand-and-rock plain.",
+ "landmarks": [
+  {
+   "name": "Empyrean tower (0x01002866)",
+   "pos": [
+    28356.0,
+    24492.0,
+    34.0
+   ],
+   "heightM": 27.9,
+   "note": "Top 61.9, green lamps at 57.8."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    28379.1,
+    24499.6,
+    33.5
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-samsur-937f."
+  }
+ ],
+ "site": {
+  "id": "poi-northwest-samsur-outpost",
+  "name": "Northwest Samsur Outpost",
+  "gazetteerId": "life-stone-near-samsur-937f",
+  "teleport": "@teleloc 0x937F0035 155.134 115.58 33.4509 -0.482851 0 0 0.875703",
+  "anchor": [
+   28375.0,
+   24492.0,
+   34.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.4,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-samsur-937f (the outpost Life Stone, 9 m from the anchor)."
+ },
+ "insertAfter": "samsur",
+ "insertBefore": "al-jalima",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 0.1,
+   "ew": 16.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 960,
+  "coveredBy": "shot:samsur.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Northwest_Samsur_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-northwest-samsur-outpost.01",
+   "site": "poi-northwest-samsur-outpost",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28356.0,
+     24492.0,
+     34.0
+    ],
+    "height": 28,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 130,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "distance": 75,
+    "thirds": "left",
+    "rate": 0.01
+   },
+   "standingOrder": "Lock off 75 m south-east of the Northwest Samsur outpost with the green-lit Empyrean tower on the left third while the sky clock runs and clouds race over it; nothing within 25 m, chickens may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Time-lapse lock-off of the ruined Northwest Samsur outpost: the 28 m green-lit Empyrean tower, octagon tower and cottage on the sand-rock plain while the sky runs (0.40 to about 0.48, sun up) and clouds race. Verified (check.mjs, full take flown): take 0-8 s: AGL 22.61..22.6 m, nearest drawn 27.44 m (scenery-default 0x02000247@28390,24450), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 22.61..22.6 m, nearest drawn 27.44 m (scenery-default 0x02000247@28390,24450), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-northwest-samsur-outpost.01": "take 0-8 s: AGL 22.61..22.6 m, nearest drawn 27.44 m (scenery-default 0x02000247@28390,24450), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 22.61..22.6 m, nearest drawn 27.44 m (scenery-default 0x02000247@28390,24450), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

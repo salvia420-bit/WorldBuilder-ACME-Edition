@@ -8,12 +8,15 @@
 // analysis built in-test (beats, bars, sections), plus edge cases: no song, off-grid beats, song offset, gaps,
 // overlaps, clamped transitions, the greedy site order, the shoot-time estimate, the exact ffmpeg filter string for
 // 3 segments with one dissolve, one shared 1/fps time base at every xfade (concat re-timed with settb — verified
-// once against real ffmpeg 7.0.2, see edl.mjs), audio mapping, and CMX3600 timecodes at 30 fps. Pure string
-// building — nothing runs.
+// once against real ffmpeg 7.0.2, see edl.mjs), audio mapping, and CMX3600 timecodes at 30 fps; the silent tail
+// (edit.tail: exact-seconds tail after the music, element-local fades, padded audio, BL events) with a sha-256
+// regression that a plan without a tail compiles and assembles exactly as before; site.prime on the schedule and
+// in the shoot-time estimate; shot.overlay → take.overlay. Pure string building — nothing runs.
 //
 // Run from apps/holtburger-web/: node tests/film_plan_compile.test.mjs
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   COMPILE_DEFAULTS,
   compilePlan,
@@ -594,6 +597,59 @@ check("3 segments, one 1 s dissolve: trims, source ranges and the exact filter s
   assert.equal(len, a.totalFrames);
 });
 
+check("trim: the move is flown at takeSec, the edit is its window from inSec (moved to fit a dissolve, warned); EDL cuts it from the one take", () => {
+  const plan = secPlan([
+    { duration: 4, trim: { takeSec: 10, inSec: 3 } },
+    { duration: 4, transition: { type: "dissolve", durationSec: 1 }, trim: { takeSec: 9, inSec: 0.2 } },
+    { duration: 4 },
+  ], { title: "Trimmed" });
+  const tl = compilePlan(plan);
+  const it = byId(tl);
+  assert.deepEqual([it.s1.takeDuration, it.s1.handleIn, it.s1.handleOut], [10, 3, 3], "10 s take = 3 s head + 4 s edit + 3 s tail");
+  assert.deepEqual(it.s1.trim, { takeSec: 10, inSec: 3, requestedInSec: 3 });
+  assert.deepEqual([it.s2.takeDuration, it.s2.handleIn, it.s2.handleOut], [9, 1, 4], "inSec 0.2 → 1 (the dissolve needs 1 s of head)");
+  assert.deepEqual(it.s2.trim, { takeSec: 9, inSec: 1, requestedInSec: 0.2 });
+  assert.deepEqual([it.s3.takeDuration, it.s3.handleIn, it.s3.handleOut, it.s3.trim], [4, 0, 0, null], "untrimmed shot unchanged");
+  assert.deepEqual(tl.items.map((x) => [x.editIn, x.editOut]), [[0, 4], [4, 8], [8, 12]], "edit times do not move");
+  for (const x of tl.items) {
+    assert.equal(x.take.spec.duration, x.takeDuration, `${x.shotId}: the page builds the move at the take length`);
+    assert.equal(x.take.editOffsetSec, x.handleIn);
+    assert.equal(x.takeFrames, Math.round(x.takeDuration * 30));
+  }
+  const w = tl.warnings.filter((x) => /trim/.test(x.path));
+  assert.equal(w.length, 1, JSON.stringify(tl.warnings));
+  assert.equal(w[0].path, "shots[1].trim.inSec");
+  assert.match(w[0].message, /s2: trim\.inSec moved from 0\.2 s to 1 s so the 4 s edit \+ 1 s of transition handles stays inside the 9 s take/);
+  // the assembly cuts each window (and its dissolve material) out of the full take
+  const a = buildAssembly(tl, takesFor(tl));
+  assert.deepEqual(a.segments.map((s) => [s.shotId, s.trimIn, s.trimOut, s.srcIn, s.srcOut]), [
+    ["s1", 3, 7, 3, 7.5],
+    ["s2", 1, 5, 0.5, 5],
+    ["s3", 0, 4, 0, 4],
+  ]);
+  assert.equal(a.totalSec, 12);
+  // the window shows the SAME move: the trimmed take's trajectory equals the untrimmed 10 s shot's
+  const full = compilePlan(secPlan([{ duration: 10, technique: "drone.orbit-poi", subject: { kind: "point", pos: [1000, 1010, 52] } }]), { registry: REAL });
+  const cut = compilePlan(secPlan([{ duration: 4, technique: "drone.orbit-poi", subject: { kind: "point", pos: [1000, 1010, 52] }, trim: { takeSec: 10, inSec: 3 } }]), { registry: REAL });
+  const ctx = { subject: { pos: [1000, 1010, 52], radius: 0.6, height: 1.8 }, anchor: [1000, 1000, 50], groundZ: () => 50, aspect: 16 / 9, fps: 30 };
+  const A = SHOTS.buildShot(full.items[0].take.spec, ctx);
+  const B = SHOTS.buildShot(cut.items[0].take.spec, ctx);
+  for (const t of [3, 5, 7]) assert.deepEqual(B.sample(t).pos, A.sample(t).pos, `same camera at take t=${t}`);
+  assert.equal(cut.items[0].handleIn, 3);
+});
+
+check("trim: an edit + handles longer than the take throws PLAN_INVALID (a longer take would slow the move)", () => {
+  const err = throwsCode(() => compilePlan(secPlan([
+    { duration: 4, trim: { takeSec: 4.4, inSec: 0 } },
+    { duration: 4, transition: { type: "dissolve", durationSec: 1 } },
+  ])), "PLAN_INVALID", /s1: the 4 s edit \+ 1 s of transition handles does not fit in its 4\.4 s take/);
+  assert.deepEqual(err.details, { shot: "s1", editSec: 4, takeSec: 4.4, handleSec: 1 });
+  // on the beat grid the snapped edit is what must fit: 3.8 s → 4 s (a beat) inside a 4 s take is exact
+  const tl = compilePlan(secPlan([{ duration: { sec: 3.8 }, trim: { takeSec: 4, inSec: 0.5 } }], { song: { offsetSec: 0 } }), { song: song120() });
+  assert.deepEqual([tl.items[0].editDuration, tl.items[0].handleIn, tl.items[0].handleOut], [4, 0, 0]);
+  assert.match(tl.warnings.find((x) => x.path === "shots[0].trim.inSec").message, /moved from 0\.5 s to 0 s/);
+});
+
 check("odd-frame dissolve (0.5 s = 15 frames) splits 7 before / 8 after the cut; offset rounds down", () => {
   const tl = threeShot(0.5);
   const a = buildAssembly(tl, takesFor(tl));
@@ -794,6 +850,224 @@ check("CMX3600 of the realistic timeline: one event per shot + fade-out, record 
   assert.ok(edl.includes("01:00:31:00 01:00:32:00\n* FROM CLIP NAME: s060.mp4\n* TO CLIP NAME: BLACK"));
   assert.ok(edl.includes("D    030 "), "the 1 s fade into s050 is a 30-frame dissolve event");
   assert.ok(KNOWN_TECHNIQUE_IDS.length > 0);
+});
+
+// ── silent tail (edit.tail), site.prime, shot.overlay ─────────────────────────────────────────────────────────
+
+console.log("film_plan_compile: silent tail, prime, overlay");
+
+const sha = (s) => createHash("sha256").update(s).digest("hex").slice(0, 16);
+/** The timeline JSON without take.overlay (the one key every take gained; null when the shot has no overlay). */
+const withoutOverlay = (tl) => JSON.stringify({ ...tl, items: tl.items.map((it) => { const { overlay, ...take } = it.take; return { ...it, take }; }) });
+/** The R2 edge plan: fade-in from white, a dissolve, a gap, a fade into a trimmed shot, program fades, a song. */
+function edgePlanR2() {
+  return secPlan([
+    { duration: 3, transition: { type: "fadewhite", durationSec: 0.5 } },
+    { duration: 3, transition: { type: "dissolve", durationSec: 1 } },
+    { duration: 2, start: { sec: 7 } },
+    { duration: 4, transition: { type: "fade", durationSec: 1 }, trim: { takeSec: 8, inSec: 2 } },
+    { duration: 3 },
+  ], { edit: { fadeInSec: 0.5, fadeOutSec: 1.5 }, song: { file: "/music/x.mp3", offsetSec: 2 } });
+}
+
+check("(d) no tail: timeline, filter graph, ffmpeg argv and EDL are byte-identical to before edit.tail/prime/overlay existed (sha-256 snapshots, 2026-10-15)", () => {
+  // Snapshots taken with the code of 2026-10-15 before the change (scratch snap.mjs, same fixtures as here).
+  const R1 = compilePlan(realisticPlan(), { song: song120() });
+  const a1 = buildAssembly(R1, takesFor(R1));
+  assert.deepEqual({
+    timeline: sha(withoutOverlay(R1)), filter: sha(a1.ffmpeg.filterComplex),
+    argv: sha(JSON.stringify(assemblyArgv(a1, { out: "edit/final.mp4" }))), edl: sha(toCmx3600(R1, takesFor(R1))),
+  }, { timeline: "a4f57cdf0af21ce7", filter: "890e96c6e471bea9", argv: "b10875f55085f7dd", edl: "0e77390a2ee01659" });
+  for (const it of R1.items) assert.equal(it.take.overlay, null, `${it.shotId}: take.overlay null without shot.overlay`);
+  assert.ok(!("musicEnd" in R1) && R1.items.every((it) => !("fadeIn" in it) && !("fadeOut" in it)), "no tail keys");
+  assert.ok(R1.schedule.every((e) => !("prime" in e)), "no prime key without site.prime");
+  // R2 has a black filler in a cut run that is cross-faded: the one change is `fps=30` in that filler's chain — the
+  // old graph made ffmpeg 7.0.2 refuse the xfade ("second input link xfade frame rate (1/0)", 2026-10-15)
+  const R2 = compilePlan(edgePlanR2());
+  const a2 = buildAssembly(R2, takesFor(R2));
+  const filler = "color=c=black:s=1920x1080:r=30,trim=end_frame=30,setpts=PTS-STARTPTS,fps=30,setsar=1,format=yuv420p[e2]";
+  assert.ok(a2.ffmpeg.filterComplex.includes(filler), a2.ffmpeg.filterComplex);
+  const old = (s) => s.replace(filler, filler.replace(",fps=30,", ","));
+  assert.deepEqual({
+    timeline: sha(withoutOverlay(R2)), filter: sha(old(a2.ffmpeg.filterComplex)),
+    argv: sha(old(JSON.stringify(assemblyArgv(a2, { out: "edit/final.mp4" })))), edl: sha(toCmx3600(R2, takesFor(R2))),
+  }, { timeline: "f78e8756126d7884", filter: "2b3a7edb01c5b8f1", argv: "516a8e1259da321d", edl: "d59358d2716bd590" });
+  // a filler in a graph without any xfade keeps its old chain (the "gaps become exact black fillers" check above)
+});
+
+/** A 16 s song: beats every 0.5 s, 2 s bars, one section. */
+function song16() {
+  const beats = [];
+  for (let k = 0; k <= 31; k++) beats.push(k * 0.5);
+  const bars = [];
+  for (let i = 0; i < 8; i++) bars.push({ i, start: i * 2, end: i * 2 + 2 });
+  return { version: 1, durationSec: 16, tempo: { bpm: 120 }, beats, downbeats: bars.map((b) => b.start), bars, sections: [{ i: 0, start: 0, end: 16, label: "A", role: "verse" }] };
+}
+/** Music m1 {bars:4} + m2 {sec:7.8} (dissolve, trimmed) on the 16 s song, then the tail t1 (fade 2 s) + t2 (fadewhite). */
+function tailPlan(tail = { from: "t1", gapSec: 1.5, fadeOutSec: 3 }, over = {}) {
+  return secPlan([
+    { id: "m1", duration: { bars: 4 } },
+    { id: "m2", duration: { sec: 7.8 }, transition: "dissolve", trim: { takeSec: 12, inSec: 3.5 } },
+    { id: "t1", duration: { sec: 8.3 }, transition: { type: "fade", durationSec: 2 } },
+    { id: "t2", duration: { sec: 20.1 }, transition: { type: "fadewhite", durationSec: 0.8 } },
+  ], { title: "Tail", song: { file: "song/track.mp3", offsetSec: 0 }, edit: { fadeOutSec: 4, ...(tail ? { tail } : {}) }, ...over });
+}
+
+check("(a) tail: exact seconds (snap 'none', no section), editIn = musicEnd + gapSec, element-local fades, program fade = tail.fadeOutSec, timeline.musicEnd, no 'past the song' warning", () => {
+  const tl = compilePlan(tailPlan(), { song: song16() });
+  const it = byId(tl);
+  assert.deepEqual(tl.musicEnd, { sec: 16, frame: 480, fadeOutSec: 4 });
+  assert.deepEqual([it.m2.editOut, it.m2.editOutFrame, it.m2.snap], [16, 480, "beat"], "the music part still ends on the beat grid");
+  assert.deepEqual([it.t1.editIn, it.t1.editInFrame, it.t1.editDuration, it.t1.snap, it.t1.section], [17.5, 525, 8.3, "none", null]);
+  assert.deepEqual([it.t2.editIn, it.t2.editDuration, it.t2.snap, it.t2.section], [25.8, 20.1, "none", null]);
+  assert.deepEqual([tl.duration, tl.frames], [45.9, 1377]);
+  assert.deepEqual(it.m2.fadeOut, { durationSec: 4, color: "black" }, "edit.fadeOutSec fades the last MUSIC shot");
+  assert.deepEqual(it.t1.fadeIn, { durationSec: 2, color: "black" });
+  assert.deepEqual(it.t1.transitionIn, { type: "fade", durationSec: 2, fromColor: "black" });
+  assert.deepEqual([it.m2.handleOut, it.t1.handleIn], [0.5, 0], "an element-local fade takes no handles (m2's 0.5 s = the rest of its 12 s take)");
+  assert.deepEqual([it.t1.handleOut, it.t2.handleIn], [0.8, 0.8], "a dissolve inside the tail is an ordinary one (handles = its length)");
+  assert.deepEqual(tl.fadeOut, { durationSec: 3, color: "black" });
+  assert.equal(tl.fadeIn, null);
+  assert.ok(!tl.warnings.some((w) => /past the end of the song/.test(w.message)), JSON.stringify(tl.warnings));
+  assert.deepEqual(tl.warnings, []);
+  // a fadewhite into the tail fades in from white; gapSec 0 butts the tail against the music end (still element-local)
+  const w = byId(compilePlan(tailPlan({ from: "t1", gapSec: 0, fadeOutSec: 0 }, {}), { song: song16() }));
+  assert.deepEqual([w.t1.editIn, w.t1.handleIn, w.m2.handleOut, w.m2.trim.inSec], [16, 0, 0.5, 3.5], "no handles: m2 keeps its window");
+  const white = tailPlan();
+  white.shots[2].transition = { type: "fadewhite", durationSec: 1 };
+  const wt = compilePlan(white, { song: song16() });
+  assert.deepEqual(byId(wt).t1.fadeIn, { durationSec: 1, color: "white" });
+  // tail.fadeOutSec 0 → no program fade; edit.fadeOutSec 0 → no music fade (musicEnd.fadeOutSec 0)
+  const noFades = compilePlan(tailPlan({ from: "t1", gapSec: 1.5, fadeOutSec: 0 }, { edit: { fadeOutSec: 0, tail: { from: "t1", fadeOutSec: 0 } } }), { song: song16() });
+  assert.equal(noFades.fadeOut, null);
+  assert.deepEqual(noFades.musicEnd, { sec: 16, frame: 480, fadeOutSec: 0 });
+  assert.ok(!("fadeOut" in byId(noFades).m2));
+  // a music part longer than the song still warns — comparing musicEnd, not the whole program
+  const long = tailPlan();
+  long.shots[1].duration = { sec: 11.8 };
+  long.shots[1].trim = null;
+  const lt = compilePlan(long, { song: song16() });
+  assert.ok(lt.warnings.some((x) => x.path === "shots" && /^the music part \(20 s, before the silent tail at t1\) runs 4 s past the end of the song/.test(x.message)), JSON.stringify(lt.warnings));
+});
+
+check("(b) the music part compiles exactly as without the tail: same items and frames; the finale's trim window does not move (no handles taken)", () => {
+  const withTail = compilePlan(tailPlan(), { song: song16() });
+  const musicOnly = compilePlan({ ...tailPlan(null), shots: tailPlan(null).shots.slice(0, 2) }, { song: song16() });
+  const strip = (it) => { const { fadeOut, ...rest } = it; return { ...rest, take: { ...rest.take } }; };
+  for (const id of ["m1", "m2"]) {
+    const a = strip(byId(withTail)[id]);
+    const b = strip(byId(musicOnly)[id]);
+    assert.deepEqual(a, b, `${id} identical with and without the tail`);
+  }
+  assert.deepEqual(byId(withTail).m2.trim, { takeSec: 12, inSec: 3.5, requestedInSec: 3.5 }, "trim.inSec unchanged");
+  assert.deepEqual(byId(musicOnly).m2.trim, { takeSec: 12, inSec: 3.5, requestedInSec: 3.5 });
+  assert.deepEqual(musicOnly.fadeOut, { durationSec: 4, color: "black" }, "without the tail the same 4 s is the program fade-out");
+  // today's naive way (a fade into a shot appended after the song) steals the finale's handles: the tail does not
+  const naive = tailPlan(null);
+  const nt = compilePlan(naive, { song: song16() });
+  assert.equal(byId(nt).m2.trim.inSec, 2, "control: a 2 s fade INTO t1 without a tail takes 2 s of handle and moves m2's window 3.5 → 2 s");
+  assert.ok(nt.warnings.some((x) => x.path === "shots[1].trim.inSec"));
+});
+
+check("(c) tail shots: {beats}/{bars} durations and an explicit start are PLAN_INVALID; edit.tail.from must be a later shot", () => {
+  const beats = tailPlan();
+  beats.shots[2].duration = { beats: 16 };
+  let e = throwsCode(() => compilePlan(beats, { song: song16() }), "PLAN_INVALID", /shots\[2\]\.duration: t1 is in the silent tail/);
+  assert.ok(e.details.errors.some((x) => x.path === "shots[2].duration"));
+  const bars = tailPlan();
+  bars.shots[3].duration = { bars: 2 };
+  e = throwsCode(() => compilePlan(bars, { song: song16() }), "PLAN_INVALID", /shots\[3\]\.duration/);
+  const start = tailPlan();
+  start.shots[2].start = { sec: 30 };
+  e = throwsCode(() => compilePlan(start, { song: song16() }), "PLAN_INVALID", /shots\[2\]\.start: t1 is in the silent tail/);
+  throwsCode(() => compilePlan(tailPlan({ from: "m1" }), { song: song16() }), "PLAN_INVALID", /edit\.tail\.from: edit\.tail\.from "m1" is the first shot/);
+  throwsCode(() => compilePlan(tailPlan({ from: "t9" }), { song: song16() }), "PLAN_INVALID", /edit\.tail\.from "t9" is not a shot id/);
+  // a music-part shot may still use {bars}
+  assert.equal(compilePlan(tailPlan(), { song: song16() }).items[0].snap, "bar");
+});
+
+check("(e) buildAssembly with a tail: element-local out/in fades, a gapSec·fps black filler, audio atrim → afade → apad=whole_dur, program = music + gap + tail", () => {
+  const tl = compilePlan(tailPlan(), { song: song16() });
+  const a = buildAssembly(tl, takesFor(tl));
+  const fc = a.ffmpeg.filterComplex;
+  const chains = fc.split(";");
+  // m2 feeds 7 dissolve frames + 240 edit frames: its own chain fades out over its last 120 frames
+  assert.equal(chains[1], `[1:v]trim=start_frame=98:end_frame=345,${CHAIN},fade=t=out:start_frame=127:nb_frames=120:color=black[e1]`);
+  assert.equal(chains[2], "color=c=black:s=1920x1080:r=30,trim=end_frame=45,setpts=PTS-STARTPTS,fps=30,setsar=1,format=yuv420p[e2]", "1.5 s of black");
+  assert.equal(chains[3], `[2:v]trim=start_frame=0:end_frame=261,${CHAIN},fade=t=in:start_frame=0:nb_frames=60:color=black[e3]`);
+  assert.ok(fc.includes("[e1][e2][e3]concat=n=3:v=1:a=0,settb=1/30[r1]"), fc);
+  assert.match(fc, /\[x2\]fade=t=out:start_frame=1287:nb_frames=90:color=black,format=yuv420p\[vout\]/, "program fade-out = tail.fadeOutSec, global, at the very end");
+  assert.ok(!/fade=t=in/.test(chains.find((c) => c.endsWith("[vout]"))), "no global fade-in");
+  assert.equal(chains.at(-1), "[4:a]atrim=duration=16,asetpts=PTS-STARTPTS,afade=t=out:st=12:d=4,apad=whole_dur=45.9[aout]");
+  assert.deepEqual([a.totalFrames, a.totalSec], [1377, 45.9]);
+  assert.equal(a.totalFrames, 480 + 45 + 249 + 603, "music + gap + t1 + t2");
+  assert.deepEqual(a.musicEnd, { sec: 16, frame: 480, fadeOutSec: 4, tailSec: 29.9 });
+  assert.deepEqual(a.segments.map((s) => [s.kind, s.shotId, s.editIn, s.editOut, s.fadeIn ?? null, s.fadeOut ?? null]), [
+    ["take", "m1", 0, 8, null, null],
+    ["take", "m2", 8, 16, null, { frames: 120, color: "black" }],
+    ["black", null, 16, 17.5, null, null],
+    ["take", "t1", 17.5, 25.8, { frames: 60, color: "black" }, null],
+    ["take", "t2", 25.8, 45.9, null, null],
+  ]);
+  assert.ok(assemblyArgv(a, { out: "f.mp4" }).includes("-shortest"), "-shortest stays: the padded audio is the program length");
+  // the music fade is frame-identical to the old global fade on the same last shot: last 120 frames of m2's edit
+  const fadeStartInProgram = a.segments[1].editIn * 30 - 7 + 127;
+  assert.equal(fadeStartInProgram, 480 - 120);
+});
+
+check("(f) CMX3600 with a tail: the song's audio event ends at musicEnd; the music fade-out, the gap and the tail fade-in are BL events", () => {
+  const tl = compilePlan(tailPlan(), { song: song16() });
+  const edl = toCmx3600(tl, takesFor(tl));
+  const lines = edl.split("\n");
+  assert.ok(lines.includes("003  AX       V     C        00:00:07:15 00:00:07:15 01:00:12:00 01:00:12:00"), edl);
+  assert.ok(lines.includes("003  BL       V     D    120 00:00:00:00 00:00:04:00 01:00:12:00 01:00:16:00"), "music fade-out → BL ends at musicEnd");
+  assert.ok(lines.includes("004  BL       V     C        00:00:00:00 00:00:01:15 01:00:16:00 01:00:17:15"), "the 1.5 s gap");
+  assert.ok(lines.includes("005  BL       V     C        00:00:00:00 00:00:00:00 01:00:17:15 01:00:17:15"));
+  assert.ok(lines.includes("005  AX       V     D    060 00:00:00:00 00:00:07:27 01:00:17:15 01:00:25:12"), "tail fade-in from BL (alone until the fadewhite into t2 starts)");
+  const audio = lines.find((l) => / A {5}C /.test(l));
+  assert.equal(audio, "008  AX       A     C        00:00:00:00 00:00:16:00 01:00:00:00 01:00:16:00", "audio record-out = musicEnd");
+  assert.ok(edl.includes("01:00:42:27 01:00:45:27\n* FROM CLIP NAME: t2.mp4\n* TO CLIP NAME: BLACK"), "program fade-out at the end");
+});
+
+check("site.prime rides on the schedule entry (only when set); estimateShootTime counts each prime as a teleport + settle", () => {
+  const plan = secPlan([{ duration: 2 }, { duration: 2, site: "b" }], {
+    sites: [
+      { id: "a", teleport: "@telepoi Holtburg", anchor: [1000, 1000, 50] },
+      { id: "b", teleport: "@teleloc 0x002B0105 20 -125 -60", indoor: true, cell: "0x002B0105", anchor: { cell: "0x002B0105", local: [20, -125, -60] },
+        prime: ["@teleloc 0x002B035D 469.8 -130.2 -6 ", "@teleloc 0x002B0163 130 -140 -54"] },
+    ],
+  });
+  plan.shots[1].technique = "classic.static";
+  const tl = compilePlan(plan);
+  const e = Object.fromEntries(tl.schedule.map((x) => [x.siteId, x]));
+  assert.deepEqual(e.b.prime, ["@teleloc 0x002B035D 469.8 -130.2 -6", "@teleloc 0x002B0163 130 -140 -54"], "trimmed, in order");
+  assert.deepEqual(Object.keys(e.b).slice(0, 4), ["siteId", "name", "teleport", "prime"]);
+  assert.ok(!("prime" in e.a));
+  const est = estimateShootTime(tl, { teleportSec: 12, settleSec: 5, stepFps: 8 });
+  assert.deepEqual([est.teleports, est.primes], [4, 2], "2 site teleports + 2 primes");
+  assert.equal(est.teleportTotalSec, 48);
+  assert.equal(est.perSite.find((x) => x.siteId === "b").sec, 3 * 17 + est.perShot.find((x) => x.shotId === "s2").sec);
+  assert.match(est.text, /4 teleport\(s\) \(2 of them site\.prime\) × \(12 s \+ 5 s settle\)/);
+  const none = estimateShootTime(compilePlan(secPlan([{ duration: 2 }])));
+  assert.deepEqual([none.teleports, none.primes], [1, 0]);
+  assert.match(none.text, /1 teleport\(s\) × /);
+});
+
+check("shot.overlay → item.take.overlay (a copy; null when absent); pilot.fade and an indoor shot.path pass through to the take", () => {
+  const overlay = { props: { style: "freestyle", opacity: 0.85, tint: "#c0c8d0" } };
+  const plan = secPlan([{ duration: 2, overlay, pilot: { mode: "code", fade: "never" } }, { duration: 2 }]);
+  const tl = compilePlan(plan);
+  assert.deepEqual(tl.items[0].take.overlay, overlay);
+  assert.notEqual(tl.items[0].take.overlay, plan.shots[0].overlay, "a copy, not the plan's object");
+  assert.equal(tl.items[1].take.overlay, null);
+  assert.deepEqual(tl.items[0].take.pilot, { mode: "code", fade: "never" });
+  // the run: an explicit racing line (shot.path) at an indoor site, starting in its own cell
+  const run = secPlan([{ duration: 4, technique: "fpv.fpv-corridor", path: [[458.5, 8083.8, 1.6], [470, 8101, 1.6], [470, 8110, -1]], cell: "0x002B0371" }], {
+    sites: [{ id: "a", teleport: "@teleloc 0x002B0105 20 -125 -60", indoor: true, cell: "0x002B0105", anchor: { cell: "0x002B0105", local: [20, -125, -60] } }],
+  });
+  const rt = compilePlan(run, { registry: REAL });
+  assert.deepEqual(rt.items[0].take.path, run.shots[0].path);
+  assert.deepEqual([rt.items[0].take.cell, rt.items[0].take.indoor], ["0x002B0371", true]);
 });
 
 console.log(`film_plan_compile: ${passed} passed, ${failed} failed`);

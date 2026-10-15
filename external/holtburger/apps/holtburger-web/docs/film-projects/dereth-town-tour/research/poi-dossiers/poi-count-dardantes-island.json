@@ -1,0 +1,199 @@
+{
+ "name": "Count Dardante's Island",
+ "title": "Count Dardante's Island",
+ "siteId": "poi-count-dardantes-island",
+ "summary": "Count Dardante's island stronghold, just off the Isle of Ruin at 91.3N 38.4W. A rock about 110 m across rises 84 m sheer out of the deep sea. It is crowned by a walled Viamontian villa (a 16 m mansion with columns, red lion banners and a candelabrum), ringed by twelve 26 m gold-roofed stone towers and wall towers.",
+ "landmarks": [
+  {
+   "name": "Villa",
+   "pos": [
+    15252.0,
+    46380.0,
+    84.0
+   ],
+   "heightM": 16.3,
+   "note": "0x010022CE mansion with columns, banners and candelabrum."
+  },
+  {
+   "name": "East towers",
+   "pos": [
+    15300.0,
+    46380.0,
+    84.0
+   ],
+   "heightM": 26.3,
+   "note": "0x01003AAE / 0x01003AA2 on the east cliff edge."
+  },
+  {
+   "name": "Island rock",
+   "pos": [
+    15252.0,
+    46355.0,
+    0.0
+   ],
+   "heightM": 84,
+   "note": "Sheer 84 m sea cliff, plateau x 15195-15310, y 46300-46410."
+  }
+ ],
+ "site": {
+  "id": "poi-count-dardantes-island",
+  "name": "Count Dardante's Island",
+  "gazetteerId": "count-dardantes-island",
+  "teleport": "@teleloc 0x4FF1001A 84.4807 43.2229 84.006 -1 0 0 0",
+  "anchor": [
+   15252.0,
+   46380.0,
+   84.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.47,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer count-dardantes-island (the island's south gate court, z 84, 65 m south of the villa)."
+ },
+ "insertAfter": "beach-fort",
+ "insertBefore": "eastwatch",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 91.3,
+   "ew": -38.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1071,
+  "coveredBy": "shot:eastwatch.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Count_Dardante_s_Island.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-count-dardantes-island.01",
+   "site": "poi-count-dardantes-island",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     15300.0,
+     46380.0,
+     84.0
+    ],
+    "height": 26,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 3,
+    "speed": 8,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "lookAhead": 60,
+    "tiltDeg": 10,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     15548,
+     46378,
+     3
+    ],
+    [
+     15468,
+     46378,
+     3
+    ]
+   ],
+   "standingOrder": "Skim west 3 m over the open sea straight at Count Dardante's island fortress with the late-morning sun behind, the east towers rising over the 84 m cliff; stop 128 m short of the cliff foot.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature water shot. A 3 m skim west over the open deep sea straight at the island, with the late-morning sun behind. The east towers rise over the 84 m cliff, and the climb in the lens tilt (+10 deg) keeps them in frame. The skim ends 128 m short of the cliff foot, 100 % over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 3..3 m, nearest drawn 114.52 m (scenery-default 0x02000847@15332,46375), vmax 8 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2.5-9 s: AGL 3..3 m, nearest drawn 122.5 m (scenery-default 0x02000847@15332,46375), vmax 8 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-count-dardantes-island.02",
+   "site": "poi-count-dardantes-island",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     15252.0,
+     46380.0,
+     84.0
+    ],
+    "height": 26,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 110,
+    "radiusEnd": 125,
+    "heightStart": 38,
+    "heightEnd": 58,
+    "revolutions": 0.07,
+    "direction": "ccw",
+    "bearingDeg": 150,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Climb counter-clockwise from south-south-east to south-east round the island, 110 to 125 m out and 38 to 58 m above its plateau, the villa and its gold-roofed towers turning against the open sea; stay 33 m from every tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Helix. The camera climbs 25 deg counter-clockwise, 110-125 m out and 38-58 m above the plateau, over the sea and ice ring south-east of the island. The walled villa and its twelve gold-roofed towers turn against the open sea. A tower roof clips the line of sight once in the window (1/27). Verified (check.mjs, full take flown): take 0-11 s: AGL 122..142 m, nearest drawn 33.21 m (static 0x4FF1#18 0x01003AAE), vmax 8.21 m/s, LOS blocked 13/45, subject in frame 100%, over water 25%; edit 3-9.5 s: AGL 125.45..141.1 m, nearest drawn 40.33 m (static 0x4FF1#18 0x01003AAE), vmax 8.21 m/s, LOS blocked 1/27, subject in frame 100%, over water 20%; flight cinema peak 8.2 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-count-dardantes-island.01": "take 0-10 s: AGL 3..3 m, nearest drawn 114.52 m (scenery-default 0x02000847@15332,46375), vmax 8 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2.5-9 s: AGL 3..3 m, nearest drawn 122.5 m (scenery-default 0x02000847@15332,46375), vmax 8 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-count-dardantes-island.02": "take 0-11 s: AGL 122..142 m, nearest drawn 33.21 m (static 0x4FF1#18 0x01003AAE), vmax 8.21 m/s, LOS blocked 13/45, subject in frame 100%, over water 25%; edit 3-9.5 s: AGL 125.45..141.1 m, nearest drawn 40.33 m (static 0x4FF1#18 0x01003AAE), vmax 8.21 m/s, LOS blocked 1/27, subject in frame 100%, over water 20%; flight cinema peak 8.2 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

@@ -32,7 +32,7 @@
 //       flythrough/fpv-gap through the gap, fpv-dive, fpv-proximity);
 //   D9  readable errors for missing context / bad params; degenerate inputs;
 //   D10 every speed-profiled technique (flythrough, terrain-skim, canyon-run, fpv
-//       dive / proximity / gap / corridor) reports meta.lengthM, overspeed AND
+//       dive / proximity / gap / corridor / run) reports meta.lengthM, overspeed AND
 //       peakSpeed (≈ the measured peak) — the take player's flight check reads them.
 //
 // Flag: filmMode (DEFAULT OFF, `?filmMode=on`) — these are its pure shot modules.
@@ -133,7 +133,7 @@ const INDOOR = (route) => ({ route, floor: () => 0, ceiling: () => 3.4 });
 const SPEC_DRONE = ["flyover", "flythrough", "orbit-poi", "helix", "dronie", "boom-rise", "rising-reveal", "tilt-reveal",
   "top-down", "top-down-rise", "top-down-track", "pass-over", "parallax-slide", "terrain-skim", "canyon-run", "chase",
   "lead", "side-track", "boomerang", "fly-by", "spiral-descent", "pano-360", "hyperlapse-orbit", "vertigo-drone"].map((n) => `drone.${n}`);
-const SPEC_FPV = ["fpv-dive", "fpv-proximity", "fpv-gap", "fpv-flip", "fpv-corridor"].map((n) => `fpv.${n}`);
+const SPEC_FPV = ["fpv-dive", "fpv-proximity", "fpv-gap", "fpv-flip", "fpv-corridor", "fpv-run"].map((n) => `fpv.${n}`);
 const ALL = [...SH.DRONE_TECHNIQUES, ...SH.FPV_TECHNIQUES];
 
 /** Techniques that aim the camera at the subject the whole shot (SPEC: keep it in frame ≥ 95 %). */
@@ -145,7 +145,8 @@ const AIMING = new Set(["drone.orbit-poi", "drone.helix", "drone.dronie", "drone
 function ctxFor(def, extra = {}) {
   if (def.id === "fpv.fpv-corridor") return { indoor: INDOOR(ROUTE_L), anchor: [100, 200, 0], ...extra };
   const c = { subject: SUBJECT, groundZ: ground, aspect: 16 / 9, fps: FPS };
-  if (def.needs.path) c.path = VALLEY;
+  // fpv.fpv-run flies a racing line (ctx.path or ctx.indoor.route; needs.path is false so a route alone works)
+  if (def.needs.path || def.id === "fpv.fpv-run") c.path = VALLEY;
   return { ...c, ...extra };
 }
 const isOutdoor = (def) => def.id !== "fpv.fpv-corridor";
@@ -180,7 +181,7 @@ check("every def documents its params, declares non-default sensible bounds, a d
     assert.ok(d.defaultDuration > 0, `${d.id} defaultDuration`);
   }
   const cat = SH.listTechniques({ family: ["drone", "fpv"] });
-  assert.equal(cat.length, 29);
+  assert.equal(cat.length, 30);
   assert.deepEqual(JSON.parse(JSON.stringify(cat)), cat);
   for (const id of ["drone.chase", "drone.lead", "drone.side-track", "drone.top-down-track"]) assert.equal(SH.getTechnique(id).capture, "realtime");
   for (const id of ["drone.rising-reveal", "drone.tilt-reveal"]) assert.equal(SH.getTechnique(id).reveal, true);
@@ -811,7 +812,7 @@ function measuredPeak(tr, fps = 60) {
   for (let i = 1; i < fr.length; i++) pk = Math.max(pk, dist3(fr[i].pos, fr[i - 1].pos) / (fr[i].t - fr[i - 1].t));
   return pk;
 }
-const PROFILED = ["drone.flythrough", "drone.terrain-skim", "drone.canyon-run", "fpv.fpv-dive", "fpv.fpv-proximity", "fpv.fpv-gap", "fpv.fpv-corridor"];
+const PROFILED = ["drone.flythrough", "drone.terrain-skim", "drone.canyon-run", "fpv.fpv-dive", "fpv.fpv-proximity", "fpv.fpv-gap", "fpv.fpv-corridor", "fpv.fpv-run"];
 check("every technique flown on a fitted speed profile reports meta.lengthM, meta.overspeed AND meta.peakSpeed (≈ the measured peak at linear ease)", () => {
   const seen = [];
   for (const def of ALL) {
@@ -846,6 +847,8 @@ check("missing context / bad params give readable FilmShotErrors", () => {
   assert.throws(() => SH.buildShot({ technique: "drone.dronie" }, { anchor: [0, 0, 0] }), shotErr("MISSING_CONTEXT", /needs a subject/));
   assert.throws(() => SH.buildShot({ technique: "drone.canyon-run" }, base), shotErr("MISSING_CONTEXT", /needs a path/));
   assert.throws(() => SH.buildShot({ technique: "fpv.fpv-corridor" }, { anchor: [0, 0, 0] }), shotErr("MISSING_CONTEXT", /ctx\.indoor\.route/));
+  assert.throws(() => SH.buildShot({ technique: "fpv.fpv-run" }, { anchor: [0, 0, 0] }), shotErr("MISSING_CONTEXT", /racing line/));
+  assert.throws(() => SH.buildShot({ technique: "fpv.fpv-run", params: { tricks: [{ type: "loop", s: 1 }] } }, { path: VALLEY }), shotErr("BAD_PARAM", /tricks\[0\]\.type/));
   assert.throws(() => SH.buildShot({ technique: "drone.terrain-skim" }, { ...base, indoor: { floor: () => 0 } }), shotErr("MISSING_CONTEXT", /outdoor-only/));
   assert.throws(() => SH.buildShot({ technique: "drone.orbit-poi", params: { radius: -1 } }, base), shotErr("BAD_PARAM", /radius/));
   assert.throws(() => SH.buildShot({ technique: "fpv.fpv-flip", params: { turns: 1.5 } }, base), shotErr("BAD_PARAM", /integer/));
@@ -857,6 +860,9 @@ check("degenerate inputs stay finite: coincident route, zero-length moves, ancho
   const still = SH.buildShot({ technique: "fpv.fpv-corridor", duration: 2 }, { indoor: { route: [[5, 5, 1.5], [5, 5, 1.5]] } });
   assert.ok(TR.validateTrajectory(still).ok);
   assert.deepEqual(still.sample(1).pos, [5, 5, 1.5]);
+  const hoverRun = SH.buildShot({ technique: "fpv.fpv-run", duration: 2, params: { throttleBobM: 0 } }, { indoor: { route: [[5, 5, 1.5], [5, 5, 1.5]] } });
+  assert.ok(TR.validateTrajectory(hoverRun).ok);
+  assert.deepEqual(hoverRun.sample(1).pos, [5, 5, 1.5]);
   for (const id of ["drone.orbit-poi", "drone.pass-over", "drone.flyover", "drone.top-down", "drone.pano-360", "drone.flythrough", "fpv.fpv-gap", "fpv.fpv-flip", "fpv.fpv-dive", "drone.terrain-skim", "fpv.fpv-proximity"]) {
     const tr = SH.buildShot({ technique: id, duration: 3 }, { anchor: [1000, 2000, 30] });
     const v = TR.validateTrajectory(tr);

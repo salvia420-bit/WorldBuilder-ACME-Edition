@@ -1,0 +1,199 @@
+{
+ "name": "Ancient Town",
+ "title": "Ancient Town",
+ "siteId": "poi-ancient-town",
+ "summary": "A larger Empyrean ruin site with a stone tower, bunkers (one with the Dungeon of Tatters portal), a meeting hall with a portal to High Mountain Valley, and an Empyrean platform with pillars and the Heartland portal (acpedia). In the kit, on flat ground at z 50, a moss-green Empyrean ruin tower stands in a ring of 11 broken stone pillars and 8 ancient columns. Around it are a three-storey brick meeting hall, a low bunker, a pillared platform carrying the Heartland portal swirl, and the Life Stone on a fabric platform.",
+ "landmarks": [
+  {
+   "name": "Empyrean ruin tower (0x01000F69)",
+   "pos": [
+    34067.8,
+    9618.7,
+    50
+   ],
+   "heightM": 10.0,
+   "note": "In a ring of 11 broken pillars."
+  },
+  {
+   "name": "Pillared platform with Heartland portal",
+   "pos": [
+    34070,
+    9636,
+    50
+   ],
+   "heightM": 3.5,
+   "note": "Columns at y 9633/9639; portal swirl at z 52."
+  },
+  {
+   "name": "Meeting hall (0x01001106)",
+   "pos": [
+    34068,
+    9588,
+    50
+   ],
+   "heightM": 19.4,
+   "note": "Portal to High Mountain Valley."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    34046.2,
+    9636.5,
+    50.5
+   ],
+   "heightM": 3.5,
+   "note": "On the fabric platform."
+  }
+ ],
+ "site": {
+  "id": "poi-ancient-town",
+  "name": "Ancient Town",
+  "gazetteerId": "ancient-town",
+  "teleport": "@teleloc 0xB1320012 66.2 39.1 50.5 0 0 0 -1",
+  "anchor": [
+   34066,
+   9620,
+   50
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.69,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer ancient-town (outdoor, beside the Life Stone 23 m west of the Heartland portal; clear of the swirl). Landblocks south of y 9408 (0xB030-0xB230) are missing from the kit: every camera stays north of y 9500."
+ },
+ "insertAfter": "kara",
+ "insertBefore": "frost-haven",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -61.9,
+   "ew": 40.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   34068.0,
+   9612.0
+  ],
+  "coveredDistM": 3720,
+  "coveredBy": "shot:frost-haven.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ancient_Town.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ancient-town.01",
+   "site": "poi-ancient-town",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     2.0,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34067.8,
+     9618.7,
+     50
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 54,
+    "radiusEnd": 26,
+    "heightStart": 40,
+    "heightEnd": 10,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 196,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "standingOrder": "Spiral down clockwise from south-south-west to west-south-west onto the Empyrean ruin tower and its ring of broken pillars, the low sun behind the lens, ending 26 m out level with the platform; 6 m above every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Spiral descent of 43 degrees clockwise from south-south-west to west-south-west, closing from 54 m to 26 m and dropping from 40 m to 10 m. The drone arrives at the moss-green Empyrean ruin tower and its ring of broken pillars, with the pillared Heartland-portal platform beyond. The low sun (0.69) is behind the lens. Peak 7.3 m/s. Verified (check.mjs, full take flown): take 0-11 s: AGL 10.88..41 m, nearest drawn 5.57 m (scenery-default 0x02000240@34048,9603), vmax 7.33 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9.5 s: AGL 12.28..37.3 m, nearest drawn 6.94 m (scenery-default 0x02000240@34048,9603), vmax 7.33 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.31 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-ancient-town.02",
+   "site": "poi-ancient-town",
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34070,
+     9636,
+     50
+    ],
+    "height": 7,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 255,
+    "elevationDeg": 4,
+    "distance": 34,
+    "thirds": "center",
+    "travelM": 12,
+    "direction": "right",
+    "keepAim": false
+   },
+   "standingOrder": "Truck slowly right past the Life Stone in the foreground, the head fixed east-north-east, so the pillared platform and the Heartland portal swirl slide across the frame in the low western sun; keep 3 m from the Life Stone.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The batch's single facade-style truck: a 12 m truck with the head fixed east-north-east. The Life Stone slides by in the foreground and the pillared platform and the Heartland portal swirl cross the frame with parallax in the low western sun. Verified (check.mjs, full take flown): take 0-8 s: AGL 5.87..6.1 m, nearest drawn 3.22 m (scenery-default 0x020002F5@34034,9630), vmax 2.36 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 5.87..6 m, nearest drawn 3.22 m (scenery-default 0x020002F5@34034,9630), vmax 2.36 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-ancient-town.01": "take 0-11 s: AGL 10.88..41 m, nearest drawn 5.57 m (scenery-default 0x02000240@34048,9603), vmax 7.33 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9.5 s: AGL 12.28..37.3 m, nearest drawn 6.94 m (scenery-default 0x02000240@34048,9603), vmax 7.33 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.31 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-ancient-town.02": "take 0-8 s: AGL 5.87..6.1 m, nearest drawn 3.22 m (scenery-default 0x020002F5@34034,9630), vmax 2.36 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 5.87..6 m, nearest drawn 3.22 m (scenery-default 0x020002F5@34034,9630), vmax 2.36 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

@@ -1,0 +1,110 @@
+{
+ "name": "Sho Roadside",
+ "title": "Sho Roadside",
+ "siteId": "poi-sho-roadside",
+ "summary": "The lone Sho dome house where all Sho Roadside portals land, with its peddler at the door, in open grassland with scattered trees.",
+ "landmarks": [
+  {
+   "name": "Sho dome house",
+   "pos": [
+    40860.0,
+    17794.0,
+    14.0
+   ],
+   "heightM": 10.0,
+   "note": "0x01000BFE with the peddler at the south door."
+  }
+ ],
+ "site": {
+  "id": "poi-sho-roadside",
+  "name": "Sho Roadside",
+  "gazetteerId": "sho-roadside",
+  "teleport": "@teleloc 0xD45C003D 176.1 102.1 14 0.669131 0 0 -0.743145",
+  "anchor": [
+   40862.0,
+   17790.0,
+   14.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.78,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer sho-roadside."
+ },
+ "insertAfter": "sawato",
+ "insertBefore": "shoushi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -27.9,
+   "ew": 68.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1672,
+  "coveredBy": "shot:shoushi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Sho_Roadside.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-sho-roadside.01",
+   "site": "poi-sho-roadside",
+   "technique": "classic.dolly-in",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40860.0,
+     17794.0,
+     14.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "thirds": "center",
+    "fromFraming": "WS",
+    "profile": "linear"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Dolly in from 27 m to 12 m toward the Sho Roadside dome house from the south-south-west at 6 m height; stop 4 m short of the peddler at its door.",
+   "notes": "Slow dolly toward the lone Sho dome house where all Sho Roadside portals land, its peddler at the door; golden west light grazes the south face. Verified (check.mjs, full take flown): take 0-8 s: AGL 5.86..6.9 m, nearest drawn 4.24 m (spawn Sliding Door), vmax 2.84 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 5.9..6.8 m, nearest drawn 4.63 m (spawn Sliding Door), vmax 2.84 m/s, LOS blocked 0/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-sho-roadside.01": "take 0-8 s: AGL 5.86..6.9 m, nearest drawn 4.24 m (spawn Sliding Door), vmax 2.84 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 5.9..6.8 m, nearest drawn 4.63 m (spawn Sliding Door), vmax 2.84 m/s, LOS blocked 0/23, subject in frame 100%"
+ }
+}

@@ -1,0 +1,109 @@
+{
+ "name": "Tombs of the Sand Kings",
+ "title": "Tombs of the Sand Kings",
+ "siteId": "poi-tombs-of-the-sand-kings",
+ "summary": "Three small stone tomb bunkers (7.8 m, 4 m tall) in a row on a narrow sandstone ridge (z 56) 300 m east of Candeth Keep (87.7S 65.6W); the westernmost is Anadil's Tomb, and Garaena the Emissary waits here. The Direlands Midland drop, a Life Stone and the destroyed portal to Hebian-To are 300 m to the south-east.",
+ "landmarks": [
+  {
+   "name": "Tomb bunkers",
+   "pos": [
+    8748,
+    3420,
+    56
+   ],
+   "heightM": 4,
+   "note": "0x010011C0 at x 8724 / 8748 / 8772."
+  }
+ ],
+ "site": {
+  "id": "poi-tombs-of-the-sand-kings",
+  "name": "Tombs of the Sand Kings",
+  "gazetteerId": "crypts-of-the-sand-kings",
+  "teleport": "@teleloc 0x2D110027 108 148 56 1 0 0 0",
+  "anchor": [
+   8748,
+   3420,
+   56
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.66,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "candeth-keep",
+ "insertBefore": "qalabar",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -87.7,
+   "ew": -65.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 292,
+  "coveredBy": "shot:candeth-keep.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tombs_of_the_Sand_Kings.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-tombs-of-the-sand-kings.01",
+   "site": "poi-tombs-of-the-sand-kings",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8748,
+     3420,
+     56
+    ],
+    "height": 4,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 55,
+    "rotateDeg": 35,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 5
+   },
+   "standingOrder": "Hold straight down 55 m above the three tomb bunkers on the ridge and rotate 35 degrees; nothing near the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down 55 m above the three stone tomb bunkers on the narrow sandstone ridge, rotating 35 deg: the bunkers in a row on the ridge band with the desert falling away on both sides. Verified (check.mjs, full take flown): take 0-9 s: AGL 55..55 m, nearest drawn 50.56 m (static 0x2D11#1 0x02000624), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 149.4 m); edit 1.5-7 s: AGL 55..55 m, nearest drawn 50.56 m (static 0x2D11#1 0x02000624), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 149.4 m); flight cinema peak 0 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-tombs-of-the-sand-kings.01": "take 0-9 s: AGL 55..55 m, nearest drawn 50.56 m (static 0x2D11#1 0x02000624), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 149.4 m); edit 1.5-7 s: AGL 55..55 m, nearest drawn 50.56 m (static 0x2D11#1 0x02000624), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 149.4 m); flight cinema peak 0 m/s (cap 12), max tracking gap 0 m"
+ }
+}

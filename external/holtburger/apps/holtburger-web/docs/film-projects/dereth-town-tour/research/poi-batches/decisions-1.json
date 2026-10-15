@@ -1,0 +1,214 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-festival-stone-of-leafdawning",
+   "name": "Festival Stone of Leafdawning",
+   "decision": "include",
+   "reason": "Real and photogenic: the Festival Stone inside a ring of eight Empyrean statues in a grove at the gazetteer spot. It gets one golden-hour crane through the only clear gap between the grove trees.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-leafdawning.json"
+  },
+  {
+   "siteId": "poi-chapel-blackspire",
+   "name": "Chapel Blackspire",
+   "decision": "include",
+   "reason": "The open-air church exists: 10 pews, an altar group and a 20 m black spire on a meadow. It gets one locked tilt up the spire.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-chapel-blackspire.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-morningthaw",
+   "name": "Festival Stone of Morningthaw",
+   "decision": "include",
+   "reason": "Real stone flanked by ancient columns and the Broken Seal on a plateau. The acpedia map point is 186 m off, so the gazetteer position was used (it matches acpedia's second coordinate). Rank 3.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-morningthaw.json"
+  },
+  {
+   "siteId": "poi-obsidian-span",
+   "name": "Obsidian Span",
+   "decision": "include",
+   "reason": "A spectacular 290 m Empyrean ruin bridging a 250 m-wide river, with water. It gets an establishing shot, a river skim and a backlit boom-rise, all kept west of the landblocks missing from the kit (0xB4xx).",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-obsidian-span.json"
+  },
+  {
+   "siteId": "poi-pet-shop",
+   "name": "Pet Shop",
+   "decision": "include",
+   "reason": "A real Aluvian cottage with rabbit hutches on a terrace above the river. Small, so one rank-3 arc.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-pet-shop.json"
+  },
+  {
+   "siteId": "poi-sea-coast-rocks",
+   "name": "Sea Coast Rocks",
+   "decision": "include",
+   "reason": "The Shallows Pillars exist exactly as acpedia describes: four stone pillars in the surf under a 150 m+ sea cliff. They get a parallax slide and a backlit vertigo dolly-zoom.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-sea-coast-rocks.json"
+  },
+  {
+   "siteId": "poi-paradox-touched-valley-tent",
+   "name": "Paradox-touched Valley Tent",
+   "decision": "include",
+   "reason": "A real tent with the Strathelar pennant on a ridge above the valley ruins. It gets one rank-3 dronie out over the drop, kept north-east of the missing landblocks.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-paradox-touched-valley-tent.json"
+  },
+  {
+   "siteId": "poi-citadel-apex",
+   "name": "Citadel Apex",
+   "decision": "include",
+   "reason": "A 66 m green-glass broken tower on a peak, very photogenic. It gets a helix and an overhead pass-over.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-citadel-apex.json"
+  },
+  {
+   "siteId": "poi-citadel-valley",
+   "name": "Citadel Valley",
+   "decision": "include",
+   "reason": "Surface valley with the crashed Gaerlan's Citadel (a 5x5 grid of halls and spires) and a row of five ziggurat portals. It gets a spiral descent and a backlit fly-by of the portals.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-citadel-valley.json"
+  },
+  {
+   "siteId": "poi-colier",
+   "name": "Colier",
+   "decision": "include",
+   "reason": "The ruined mining town exists under giant trees, with the grave Monolith, burnt stumps and a Life Stone on the hill. It gets a handheld shot at the Monolith, a top-down of the canopy and a low-angle on the Life Stone.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-colier.json"
+  },
+  {
+   "siteId": "poi-the-deep-vissidal",
+   "name": "The Deep (Vissidal)",
+   "decision": "include",
+   "reason": "It is an object/quest page, but a visible landmark stands at the coordinates: a mossy round spire structure with portalspace-rift lights. One rank-3 pedestal shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-the-deep-vissidal.json"
+  },
+  {
+   "siteId": "poi-temple-of-ncthail",
+   "name": "Temple of N'cthail",
+   "decision": "include",
+   "reason": "A spectacular cross-shaped temple rising from the sea, with a 51 m central tower and Statues of Transport. It gets a sea skim, a high orbit and a graphic top-down.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-temple-of-ncthail.json"
+  },
+  {
+   "siteId": "poi-the-deep-dark-isle",
+   "name": "The Deep (Dark Isle)",
+   "decision": "include",
+   "reason": "Object page, but the visible landmark is real: the same spire structure in the shallows on coral, ringed by hourglass sculptures, with the Trial of the Deep portal at its foot. It gets one low orbit over the water.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-the-deep-dark-isle.json"
+  },
+  {
+   "siteId": "poi-vaeshoks-cave",
+   "name": "Vaeshok's Cave",
+   "decision": "include",
+   "reason": "The cave is a dungeon, but its surface shrine is visible on the hilltop: the spire structure with the Black Spear Ice Totem and skeleton pedestals. Exterior only, one rank-3 worm's-eye.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-vaeshoks-cave.json"
+  },
+  {
+   "siteId": "poi-relic-town",
+   "name": "Relic Town",
+   "decision": "include",
+   "reason": "The terraced ash ruins with towers, colonnades and glowing lamps exist 250 m north of the acpedia map point, matching acpedia's text coordinate. It gets a harbour establishing shot and a high angle, both kept south of the missing landblocks.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-relic-town.json"
+  },
+  {
+   "siteId": "poi-shimena-keep",
+   "name": "Shimena Keep",
+   "decision": "include",
+   "reason": "A castle islet reached by a pier bridge across the strait, with a tower and a 62 m Tall Tree. It gets a pan from the shore, a skim along the bridge and a helix.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-shimena-keep.json"
+  },
+  {
+   "siteId": "poi-tenkarrdun",
+   "name": "Tenkarrdun",
+   "decision": "include",
+   "reason": "A huge volcanic crater with glowing vents and heat/eruption emitters. It gets a spiral descent and a backlit low-angle on a vent, both on the north side because the south landblocks are missing.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tenkarrdun.json"
+  },
+  {
+   "siteId": "poi-aurlanaas-aerie",
+   "name": "Aurlanaa's Aerie",
+   "decision": "include",
+   "reason": "The gromnatross nest on a z-300 pinnacle with the white Empyrean hall beside it. It gets an orbit over the drop and a vertigo shot.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-aurlanaas-aerie.json"
+  },
+  {
+   "siteId": "poi-portal-to-bur",
+   "name": "Portal to Bur",
+   "decision": "include",
+   "reason": "The portal sits on a snow summit between four towers, with glowing orbs on pedestals. It gets a helix above the tower roofs and a backlit low-angle.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-portal-to-bur.json"
+  },
+  {
+   "siteId": "poi-northwatch-castle",
+   "name": "Northwatch Castle",
+   "decision": "include",
+   "reason": "A real walled castle with a spired keep and a crystal-array platform, ringed by forest. It gets a high establishing shot and a fly-by. All gazetteer teleports are interior, so the outdoor teleport is derived.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-northwatch-castle.json"
+  },
+  {
+   "siteId": "poi-aun-settlement",
+   "name": "Aun Settlement",
+   "decision": "include",
+   "reason": "A Menhir Ring with a torch, a longhouse, tents around a campfire and the Entrance to Portal Space swirl. It gets a top-down of the ring and an over-the-shoulder past a menhir onto the portal.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-aun-settlement.json"
+  }
+ ],
+ "totalShots": 38,
+ "validate": "film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json: valid, 0 errors, 0 warnings (21 sites, 38 shots, dry build included).",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.arc": 2,
+  "classic.crane": 1,
+  "classic.establishing": 3,
+  "classic.handheld": 1,
+  "classic.high-angle": 1,
+  "classic.low-angle": 3,
+  "classic.over-the-shoulder": 1,
+  "classic.pan": 1,
+  "classic.pedestal": 1,
+  "classic.tilt": 1,
+  "classic.worms-eye": 1,
+  "drone.boom-rise": 1,
+  "drone.dronie": 1,
+  "drone.fly-by": 2,
+  "drone.helix": 3,
+  "drone.orbit-poi": 3,
+  "drone.parallax-slide": 1,
+  "drone.pass-over": 1,
+  "drone.spiral-descent": 2,
+  "drone.terrain-skim": 3,
+  "drone.top-down": 3,
+  "drone.vertigo-drone": 2
+ },
+ "notes": [
+  "All 21 candidates are included, with 38 ranked shots (quota 34 + 4): 14 at rank 1, 16 at rank 2 and 8 at rank 3. The rank-3 shots are dropped first: aun-settlement.01, colier.02, morningthaw.01, paradox-tent.01, pet-shop.01, relic-town.02, deep-vissidal.01 and vaeshoks-cave.01. Total edit time is 221.5 s.",
+  "Every shot passes ACCEPTANCE in check.mjs over the full take, and the edit-window LOS and in-frame figures pass too. On the full take: minimum height above ground is 1.5 m or more (only the low-angle and worm's-eye shots go down to 0.7-0.8 m), drone and fast shots stay 2 m or more from obstacles, slow classic shots 1.2 m or more (the closest is the Aun over-the-shoulder at 1.4 m from its menhir), and the tracking gap is 0.07 m or less. In every edit window LOS is 0 blocked and the subject is in frame 100%.",
+  "Speeds: the two spiral descents peak at 8.1 m/s (Citadel Valley) and 8.4 m/s (Tenkarrdun). That is just above the 8 m/s aim but under the 12 m/s cap.",
+  "All 22 techniques are used at most 3 times, and all 7 assigned techniques are used. There are no facade pans: the one parallax-slide passes sea pillars, not a building.",
+  "Doubtful point: the size and look of some spawned objects are estimates, because the kit has no setup sizes for them. This covers the Festival Stones (4 m assumed), the Monolith (4 m), the portal swirls (3.5-4 m) and the volcanic vents (3 m).",
+  "Doubtful point: the round spire structure 0x01003D10 used at both Deeps and at Vaeshok's Cave is described from the kit only (24 m across, 18.4 m tall, open layout, moss and bark tags). Nobody has looked at it in the game.",
+  "Doubtful point: at Leafdawning the big canopy tree's bounding box contains the stone, so the checker treats it as the subject's own body and does not count it as an obstacle. The camera stays west of the stone, between the two grove trees, so it never enters that canopy.",
+  "Coordinates corrected from the acpedia map points: Morningthaw uses the gazetteer stone, 186 m off the map point. Relic Town uses the ruins 250 m north of the map point, which match acpedia's text coordinate 86.0N 45.4E.",
+  "Teleports: the gazetteer best entry is used at Leafdawning, Morningthaw, Obsidian Span, Citadel Apex, Colier, Temple, Shimena and Bur. The Obsidian Span gazetteer spot is in kit-missing landblock 0xB4AA; that is fine for the hidden player, and all cameras stay west of x 34550. The Citadel Apex teleport lands the player on the tower's open floor at z 382.75.",
+  "Teleports derived instead: Chapel, Pet Shop, Sea Coast, Paradox tent, Citadel Valley (the gazetteer spot is on a slope at z 160), Vissidal, Dark Isle (sand 115 m from the spire, avoiding the Trial portal), Vaeshok, Relic, Aerie, Northwatch (the gazetteer entries are interior) and Aun (avoiding the Entrance to Portal Space portal). Each is on land, 5 m or more from statics, at ground z + 0.5.",
+  "The insertAfter/insertBefore route positions are kept as given in the batch.",
+  "Sun directions in the notes are approximate (morning south-east, noon south, afternoon south-west); no runtime eye-check was done. The opt-in retail-bake tree distances reported by the checker (as close as 0-2 m at Northwatch and Leafdawning) are for information only, since that bake is not drawn by default.",
+  "Files written: 21 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<slug>.json (paths in decisions) and the scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json, which has notes but no window or rank fields. No repo files were edited and no heavy jobs were run."
+ ]
+}

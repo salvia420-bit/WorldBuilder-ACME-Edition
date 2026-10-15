@@ -1,0 +1,207 @@
+{
+ "name": "Advocate Ruins",
+ "title": "Advocate Ruins",
+ "siteId": "poi-advocate-ruins",
+ "summary": "The secret training grounds of Strathelar's Order of Advocates. The dungeon is gone, but the ruins and the Life Stone remain (acpedia). In the kit, Empyrean ruins fill a grassy hollow at z 4: a moss-green two-storey hall with four stone pillars and ancient columns, the Broken Seal of the Elder Spirits, a fabric-covered platform and a brick foundation. The hollow is ringed by a plateau (z 12-14) that carries a three-storey brick hall, the Life Stone, candle sentinels, pyramid stones and a bunker.",
+ "landmarks": [
+  {
+   "name": "Moss-green pillared hall (0x01000F69)",
+   "pos": [
+    43212,
+    17604,
+    4
+   ],
+   "heightM": 10.1,
+   "note": "Four 5.5 m pillars, ancient columns, the Broken Seal."
+  },
+  {
+   "name": "Three-storey brick hall (0x01001106)",
+   "pos": [
+    43260,
+    17628,
+    12
+   ],
+   "heightM": 19.4,
+   "note": "On the east rim."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    43264.5,
+    17605.3,
+    11.4
+   ],
+   "heightM": 3.5,
+   "note": "On the east rim beside a big jungle tree."
+  },
+  {
+   "name": "Broken Seal of the Elder Spirits",
+   "pos": [
+    43209.5,
+    17600,
+    6
+   ],
+   "heightM": 3.2,
+   "note": "Weenie static by the hall."
+  },
+  {
+   "name": "Bunker (0x0100107D)",
+   "pos": [
+    43140,
+    17604,
+    12
+   ],
+   "heightM": 4.1,
+   "note": "On the west rim."
+  }
+ ],
+ "site": {
+  "id": "poi-advocate-ruins",
+  "name": "Advocate Ruins",
+  "gazetteerId": "advocate-ruins",
+  "teleport": "@teleloc 0xE15B000D 40.00 118.00 8.00 1 0 0 0",
+  "anchor": [
+   43232,
+   17608,
+   4
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "The gazetteer entry advocate-ruins is only a map @tele and the nearest exact teleport (life-stone-at-28-6s-78-3e) lands on the Life Stone itself; derived @teleloc on the open slope 29 m south-west of it instead (ground z 7.5, nearest tree 12.6 m). Landblocks west of x 43008 (0xDF5A-0xDF5C) are missing from the kit: every camera stays east of x 43120."
+ },
+ "insertAfter": "tou-tou",
+ "insertBefore": "baishi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI",
+   "Historical Site",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -28.6,
+   "ew": 78.1
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   43212.0,
+   17604.0
+  ],
+  "coveredDistM": 1700,
+  "coveredBy": "shot:shoushi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Advocate_Ruins.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-advocate-ruins.01",
+   "site": "poi-advocate-ruins",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43232,
+     17608,
+     4
+    ],
+    "height": 14,
+    "radius": 30
+   },
+   "params": {
+    "radius": 66,
+    "heightAGL": 38,
+    "revolutions": 0.08,
+    "direction": "cw",
+    "bearingDeg": 236,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Arc slowly clockwise round the Advocate ruins 66 m out and 38 m up with the low sun behind the lens, holding the moss-green hall, its columns and the Life Stone on the rim in frame; 10 m over every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Slow 29 degree clockwise arc, 66 m out and 38 m above the hollow, from south-west to west of the Advocates' ruin. The moss-green pillared hall, the Broken Seal, the three-storey brick hall and the Life Stone on the rim turn in the golden light (0.74) coming from behind the lens. The orbit stays 34 m above the plateau, and every camera stays east of x 43160, well inside the kit. Verified (check.mjs, full take flown): take 0-10 s: AGL 33.09..35.3 m, nearest drawn 9.76 m (scenery-default 0x020004BE@43168,17608), vmax 3.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 33.48..35.3 m, nearest drawn 10.26 m (scenery-default 0x020004BE@43168,17608), vmax 3.32 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 3.33 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-advocate-ruins.02",
+   "site": "poi-advocate-ruins",
+   "technique": "classic.push-in",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43264.5,
+     17605.3,
+     11.38
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 335,
+    "elevationDeg": 8,
+    "thirds": "center",
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "standingOrder": "Push slowly in from beside the three-storey hall on the Advocates' Life Stone on the ruin's eastern rim, the low western sun raking across it and the ruin hollow beyond; nothing between lens and stone.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Perceptual push-in on the Life Stone, from wide to medium-wide, starting beside the three-storey hall to its north-north-west. The low western sun rakes across the stone. The big jungle tree south of the stone frames the right of the shot. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.79..3.1 m, nearest drawn 3.91 m (static 0xE15B#22 0x01001106), vmax 1.81 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 2.79..3.1 m, nearest drawn 4.4 m (static 0xE15B#22 0x01001106), vmax 1.81 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 5.1 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-advocate-ruins.01": "take 0-10 s: AGL 33.09..35.3 m, nearest drawn 9.76 m (scenery-default 0x020004BE@43168,17608), vmax 3.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 33.48..35.3 m, nearest drawn 10.26 m (scenery-default 0x020004BE@43168,17608), vmax 3.32 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 3.33 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-advocate-ruins.02": "take 0-8 s: AGL 2.79..3.1 m, nearest drawn 3.91 m (static 0xE15B#22 0x01001106), vmax 1.81 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 2.79..3.1 m, nearest drawn 4.4 m (static 0xE15B#22 0x01001106), vmax 1.81 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 5.1 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

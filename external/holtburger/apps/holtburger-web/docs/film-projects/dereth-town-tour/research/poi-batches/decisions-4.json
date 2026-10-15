@@ -1,0 +1,214 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-precarious-sojourn",
+   "name": "Precarious Sojourn",
+   "decision": "include",
+   "reason": "Real and spectacular: a maze of floating Empyrean platforms, bridges and ramps 75-160 m above a Sho gorge, looping round a 130 m rock pinnacle (Alatar Locke's home), 5.9 km from any tour frame. Three shots: west-crag establishing (rank 1), FPV under a plank bridge, top-down pattern.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-precarious-sojourn.json"
+  },
+  {
+   "siteId": "poi-tumerok-stronghold",
+   "name": "Tumerok Stronghold",
+   "decision": "include",
+   "reason": "Real: three 30.75 m Tumerok spire towers plus the walled compound on a grassy shelf, 5.1 km from the tour. Fly-by (rank 1) and a closing dronie.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-stronghold.json"
+  },
+  {
+   "siteId": "poi-kivik-lirs-temple",
+   "name": "Kivik Lir's Temple",
+   "decision": "include",
+   "reason": "The surface Falacatot temple (24 m, 17 m) stands on the swamp mud flats beside a stream, 5.6 km from the tour. Its dungeons are underground, so it gets one water skim (rank 2).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-kivik-lirs-temple.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-452s-832w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real mesa-top Tumerok fort with three spire towers above the forested West Dires, 3.7 km from ayan-baqur.03. One rising reveal over the mesa rim (rank 2). It uses the same tower model as the Stronghold.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-452s-832w.json"
+  },
+  {
+   "siteId": "poi-tumerok-fort-511s-820w",
+   "name": "Tumerok Fort",
+   "decision": "include",
+   "reason": "Real mesa fort with two spire towers on its north rim, 2.5 km from ayan-baqur.05. The towers repeat the Stronghold model, so it gets one low-angle (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-fort-511s-820w.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-darktide",
+   "name": "Festival Stone of Darktide",
+   "decision": "include",
+   "reason": "The ayan-baqur.01 flyover passes 272 m away but heads east with the islet behind it, so the stone is never framed. This is the Festival Stone and glow on its islet, plus two rows of flame-crowned pillars in the sea, which matches acpedia exactly. Push-in (rank 2) and a backlit skim between the flaming pillars (rank 1).",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-darktide.json"
+  },
+  {
+   "siteId": "poi-aerbaxs-citadel",
+   "name": "Aerbax's Citadel",
+   "decision": "include",
+   "reason": "Spectacular floating citadel 125-220 m above the Obsidian Plains, with a South Gate beam, walkways, a 60 m central spire and four red pinnacles. It is 3 km from the tour. Establishing (rank 1), boom up the beam, pass-over the core.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-aerbaxs-citadel.json"
+  },
+  {
+   "siteId": "poi-necropolis",
+   "name": "Necropolis",
+   "decision": "include",
+   "reason": "Real but small: two grass-roofed burial bunkers on a wooded terrace, 3 km from the tour. One high arc (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-necropolis.json"
+  },
+  {
+   "siteId": "poi-small-hill-base",
+   "name": "Small Hill Base",
+   "decision": "include",
+   "reason": "wai-jhou.04 at 298 m frames a giant tree, not this place. The drop point sits under the 137 m Small Black Hill, an obsidian pillar crowned by a brick hall, which is real and photogenic. One tilt up the pillar to the hall (rank 2).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-small-hill-base.json"
+  },
+  {
+   "siteId": "poi-knathtead-excavation",
+   "name": "Knathtead Excavation",
+   "decision": "include",
+   "reason": "Real narrow valley climbing to a field of about 75 glowing blue crystals, 1.7 km from the tour. One backlit canyon run (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-knathtead-excavation.json"
+  },
+  {
+   "siteId": "poi-forgers-hideout",
+   "name": "Forger's Hideout",
+   "decision": "include",
+   "reason": "Spectacular: a four-building mansion with a 31 m clock tower on the summit of a 200 m obsidian spire, 2.7 km from the tour. Helix (rank 1), zoom from the plain, fly-by.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-forgers-hideout.json"
+  },
+  {
+   "siteId": "poi-planetarium",
+   "name": "Planetarium",
+   "decision": "include",
+   "reason": "Real Empyrean ruins on a mesa (octagon temple, broken advocate hall, stone tower) with a Life Stone below, 2.5 km from the tour. Orbit and a Life Stone low angle (rank 2).",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-planetarium.json"
+  },
+  {
+   "siteId": "poi-ancient-lugian-fortress",
+   "name": "Ancient Lugian Fortress",
+   "decision": "include",
+   "reason": "Spectacular Mare Tukal: 47 Lugian towers up to 116 m in a sunken sea basin ringed by running-water walls, 5.4 km from the tour. Tilt reveal (rank 1), high orbit, time-lapse.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ancient-lugian-fortress.json"
+  },
+  {
+   "siteId": "poi-caulcano",
+   "name": "Caulcano",
+   "decision": "include",
+   "reason": "Spectacular lava-floored crater with 200-280 m walls, two Empyrean towers, statues of Bael'Zharon and a volcanic vent, 6.5 km from the tour. Establishing (rank 1), statue low angle, spiral descent.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-caulcano.json"
+  },
+  {
+   "siteId": "poi-tombs-of-the-sand-kings",
+   "name": "Tombs of the Sand Kings",
+   "decision": "include",
+   "reason": "candeth-keep.04 at 292 m is a low angle on Candeth's gate looking north-west, with the tombs behind it. This is the real row of three tomb bunkers on the ridge. One top-down (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tombs-of-the-sand-kings.json"
+  },
+  {
+   "siteId": "poi-abandoned-observatory",
+   "name": "Abandoned Observatory",
+   "decision": "include",
+   "reason": "A real lone octagonal observatory on a sandstone ridge, 805 m from candeth-keep.04 and not framed there. One cloud time-lapse (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-abandoned-observatory.json"
+  },
+  {
+   "siteId": "poi-the-pit-of-heretics",
+   "name": "The Pit of Heretics",
+   "decision": "include",
+   "reason": "Spectacular 150 m stepped ziggurat crowned by portal pillars, with statue platforms and the southern sea, 2.8 km from the tour. Orbit (rank 1), boomerang to the summit, worm's-eye up the stair.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-the-pit-of-heretics.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-dawnsong",
+   "name": "Festival Stone of Dawnsong",
+   "decision": "include",
+   "reason": "The Festival Stone at the tip of a 120 m sea-cliff ridge over the southern ocean (the gazetteer drop is 208 m from the acpedia index point and was verified at the stone). Helix (rank 1) and dronie.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-dawnsong.json"
+  },
+  {
+   "siteId": "poi-assassins-roost",
+   "name": "Assassin's Roost",
+   "decision": "include",
+   "reason": "Real 78 m Empyrean lighthouse alone on a mound in a crater, 3.4 km from the tour. The interior is quest-only, but the surface tower is freely visible. Helix (rank 1) and vertigo dolly.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-assassins-roost.json"
+  },
+  {
+   "siteId": "poi-burning-wood",
+   "name": "Burning Wood",
+   "decision": "include",
+   "reason": "Real graveyard valley of 26 m dead antler trees, tombstones, a bunker and candlesticks, 1.9 km from the tour. One god's-eye rise (rank 3), moved to cut with Knathtead and Arcanum.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-burning-wood.json"
+  },
+  {
+   "siteId": "poi-arcanum-lookout",
+   "name": "Arcanum Lookout",
+   "decision": "include",
+   "reason": "Real floating octagonal platform 26 m above the Graveyard's edge, with its up-portal below it, 2.1 km from the tour. One boom rise past the deck (rank 2), moved next to Knathtead and Burning Wood.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-arcanum-lookout.json"
+  }
+ ],
+ "totalShots": 38,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-4.json returns \"valid: 0 error(s), 0 warning(s)\" for 21 sites and 38 shots, dry build included. node poi-kit/check.mjs over all 38 full takes passes acceptance on every shot. The audit is acc.py: AGL, nearest drawn obstacle, flight peak and tracking gap, and edit-window frame and LOS.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.establishing": 3,
+  "classic.low-angle": 3,
+  "drone.helix": 3,
+  "drone.orbit-poi": 3,
+  "classic.time-lapse": 2,
+  "drone.boom-rise": 2,
+  "drone.dronie": 2,
+  "drone.fly-by": 2,
+  "drone.terrain-skim": 2,
+  "drone.top-down": 2,
+  "classic.arc": 1,
+  "classic.push-in": 1,
+  "classic.tilt": 1,
+  "classic.worms-eye": 1,
+  "classic.zoom": 1,
+  "drone.boomerang": 1,
+  "drone.canyon-run": 1,
+  "drone.pass-over": 1,
+  "drone.rising-reveal": 1,
+  "drone.spiral-descent": 1,
+  "drone.tilt-reveal": 1,
+  "drone.top-down-rise": 1,
+  "drone.vertigo-drone": 1,
+  "fpv.fpv-gap": 1
+ },
+ "notes": [
+  "Files: 21 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json and the scratch plan at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-4.json. The generator and helpers (gen.py, defs.py, texts.py, acc.py, q.mjs, spot.mjs, proj.mjs, hmap.py) and the check output (res.jsonl, check-final.txt) are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/poi-b4/.",
+  "Shot totals: 38 proposed against a quota of 34 (rank 1: 10, rank 2: 19, rank 3: 9). The 9 rank-3 shots are the first to drop. Ideal windows sum to 232.5 s. There are 24 distinct techniques, none used more than 3 times. All 7 assigned techniques are used. There are no facade pans. Every shot has pilot code, bounds 1/1, a trim take of 7.5-11 s and an ideal window of 5.0-6.5 s, with at least 0.4 s of dissolve handle at each end. Every camera stays within 292 m of its site anchor.",
+  "Lead-ins hidden by design (in the window): poi-tumerok-fort-452s-832w.01 rising reveal has LOS 4/24 blocked by the mesa rim until t 4.5. poi-small-hill-base.01 tilt has the subject in frame 96% (the hall enters at t 2.6). poi-ancient-lugian-fortress.01 tilt reveal has the subject in frame 96%. poi-precarious-sojourn.02 FPV gap has the subject in frame 90%, because the window ends as the bridge deck passes overhead.",
+  "Subject points: for big compound places (citadel core, mansion, city, ziggurat, towers) the check subject is the signature building with radius <= 8, so it counts as the subject's body (the kit and the runtime do not count it as an occluder). The dossier landmarks give the place's full extent.",
+  "Retail scenery bake (opt-in, not drawn by the default bake the film uses): crowns come within 0-5 m of the lens in poi-kivik-lirs-temple.01 (0 m), poi-tumerok-fort-452s-832w.01 (0 m), poi-precarious-sojourn.02 (0.8 m), poi-tumerok-stronghold.01 (1.2 m), poi-festival-stone-of-darktide.01 (1.5 m), poi-festival-stone-of-darktide.02 (3.3 m) and poi-aerbaxs-citadel.02 (4.7 m). Keep the default ?sceneryBake.",
+  "Derived @teleloc teleports (ground + 0.5, at least 6 m from every drawn object and spawn box, not water): Kivik Lir's Temple, both Tumerok Forts, Knathtead Excavation, Abandoned Observatory, Assassin's Roost and Burning Wood have no outdoor gazetteer entry within 300 m. Aerbax's Citadel's gazetteer South Gate Portal lands on the Harmonic Transference Field. The Pit of Heretics' only nearby entry is the Temple Door portal. The Planetarium's Direlands Desert Edge drop point sits inside a brick ruin model. The Necropolis Life Stone entry is 258 m away and 28 m lower. Gazetteer teleports were kept for the other 11 sites. The Small Hill Base drop is 4.5 m from the Small Black Hill portal, Precarious Sojourn's is 5 m from its exit portal and Arcanum Lookout's (on the platform) is 7.8 m from the Down to Surface portal: watch for accidental portal use by the hidden player.",
+  "Runtime-dependent looks, not verifiable offline: the Aerbax Beam, the Flames on the Darktide pillars, both Festival Stones' Anniversary Effect glow, the Life Stone sparkle, the Caulcano Volcanic Vent and the Bael'Zharon statue (ACE spawn; size estimated at 5 m). The Lugian basin walls are running-water terrain from z 2 to 50 and may read as sloped water rather than falling water. The Caulcano floor is VolcanoLava terrain.",
+  "Route: Burning Wood and Arcanum Lookout move from candeth-keep -> qalabar to wai-jhou -> candeth-keep, so they cut together with Knathtead Excavation (all three in the Graveyard valley, within 800 m). This adds insert cost (+0.17 km and +0.66 km), which is free on the shoot. All other insert positions are kept as given.",
+  "Repetition: the Stronghold and both Tumerok Forts share the same 30.75 m spire-tower model. They get different techniques (fly-by/dronie, rising reveal, low angle), and the forts are rank 2 and 3. Precarious Sojourn and Aerbax's Citadel share the floating octagon platform kit, filmed from different angles.",
+  "Kit edges: Aerbax's 3x3 ends at y 9216, the citadel's north edge, so every camera stays south of it. Precarious Sojourn's ends at y 15552, and Caulcano's has missing landblocks west of x 1536 and south of y 1536. No shot samples a missing landblock (AGL is finite in every check).",
+  "Light: lit subjects have the sun behind or beside the camera. Backlit by design: poi-festival-stone-of-darktide.02 (skims into the golden sun so the flames glow), poi-knathtead-excavation.01 (crystal glow) and poi-planetarium.02 (Life Stone sparkle). The two time-lapses run at 0.010-0.012 game-days/s, so the sun stays up (it ends before 0.75)."
+ ]
+}

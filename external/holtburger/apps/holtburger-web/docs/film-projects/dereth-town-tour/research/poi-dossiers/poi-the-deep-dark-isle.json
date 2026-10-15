@@ -1,0 +1,143 @@
+{
+ "name": "The Deep (Dark Isle)",
+ "title": "The Deep (Dark Isle)",
+ "siteId": "poi-the-deep-dark-isle",
+ "summary": "The Deep (Dark Isle) is the haze at 85.5N 57.2E that takes Dark Isle trophies and hands out Ancient Relic Armor. The kit shows the mossy round spire structure (0x01003D10, 18.4 m) standing in the shallows on a reef of coral, ringed by four hourglass sculptures (12.5 m), mossy rocks and portalspace rifts, with the Trial of the Deep portal at its foot and the Dark Isle shore 150 m north.",
+ "acpedia": {
+  "categories": [
+   "Quest NPC",
+   "Northeast POI",
+   "Object"
+  ],
+  "map": {
+   "ns": 85.5,
+   "ew": 57.2
+  },
+  "mapWorld": [
+   38196.0,
+   44988.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Deep_Dark_Isle.txt",
+  "coveredDistM": 1374,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "The Deep's spire",
+   "pos": [
+    38196.0,
+    44988.0,
+    0.0
+   ],
+   "heightM": 18.4,
+   "note": "0x01003D10 in the shallows."
+  },
+  {
+   "name": "Trial of the Deep portal",
+   "pos": [
+    38184.9,
+    44979.8,
+    -0.1
+   ],
+   "heightM": 3.5,
+   "note": "Portal spawn (height estimated)."
+  },
+  {
+   "name": "Hourglass sculptures",
+   "pos": [
+    38201.3,
+    44953.9,
+    -0.1
+   ],
+   "heightM": 12.5,
+   "note": "0x020014A3 x4 around the spire."
+  }
+ ],
+ "site": {
+  "id": "poi-the-deep-dark-isle",
+  "name": "The Deep (Dark Isle)",
+  "teleport": "@teleloc 0xC7EA0019 92.0 2.0 0.5 1 0 0 0",
+  "anchor": [
+   38196.0,
+   44988.0,
+   0.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.49,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38196.0,
+     44988.0,
+     0.0
+    ],
+    "height": 18.4,
+    "radius": 8
+   },
+   "params": {
+    "radius": 42,
+    "heightAGL": 16,
+    "revolutions": 0.12,
+    "direction": "ccw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Orbit 43 deg counter-clockwise at 42 m around The Deep's spire on the reef, 16 m above the water; keep 6 m above and beside the hourglass sculptures, open sea beneath.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Deep on Dark Isle: the same mossy spire structure standing in the shallows on a ring of coral, hourglass sculptures and portalspace rifts, with the Trial of the Deep portal swirl at its foot. A low orbit over the water with the noon sun behind the camera turns it against the Dark Isle shore. Verified with poi-kit check.mjs - take 10s: AGL 16..16 m, nearest 6.12 m (static 0xC6EA#22 0x020014A3), vmax 3.17 m/s, LOS blocked 0/41, in frame 100%, water 81%; edit 2-8s: AGL 16..16 m, nearest 6.59 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 3.17 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-the-deep-dark-isle.01",
+   "technique": "drone.orbit-poi",
+   "rank": 2,
+   "check": "take 10s: AGL 16..16 m, nearest 6.12 m (static 0xC6EA#22 0x020014A3), vmax 3.17 m/s, LOS blocked 0/41, in frame 100%, water 81%; edit 2-8s: AGL 16..16 m, nearest 6.59 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 3.17 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "drone.orbit-poi"
+ ]
+}

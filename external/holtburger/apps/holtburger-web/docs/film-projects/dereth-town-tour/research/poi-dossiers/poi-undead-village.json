@@ -1,0 +1,119 @@
+{
+ "name": "Undead Village (21.4N, 24.8W)",
+ "title": "21.4N, 24.8W - Undead Village",
+ "siteId": "poi-undead-village",
+ "summary": "A few Gharu'ndim houses full of lower undead at 21.4N 24.8W: a pitched-roof house, a 10 m stone house and an octagon tower. They stand with an ancient column, a well, a corpse and skeleton remains in a small forest clearing (z 2) near the coast. Undead and zombie generators are inside, and Humming Crystal portals stand 100-200 m south-west.",
+ "landmarks": [
+  {
+   "name": "Village clearing",
+   "pos": [
+    18555.0,
+    29603.0,
+    2.0
+   ],
+   "heightM": 10,
+   "note": "Pitched-roof house 0x01000E40, stone house 0x01000E11, octagon tower 0x01000F06, column 0x020003C7, well."
+  },
+  {
+   "name": "Humming Crystal portal",
+   "pos": [
+    18437.2,
+    29548.2,
+    8.0
+   ],
+   "heightM": 3,
+   "note": "130 m south-west under the trees."
+  }
+ ],
+ "site": {
+  "id": "poi-undead-village",
+  "name": "Undead Village (21.4N, 24.8W)",
+  "teleport": "@teleloc 0x609A002A 128.0 32.0 2.5 1 0 0 0",
+  "anchor": [
+   18555.0,
+   29603.0,
+   2.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc in the village's clearing between the three houses (ground 2.0, 5.7 m from the column, 11 m from the nearest crown, 15 m from the octagon tower); the gazetteer's nearest outdoor entry is a Humming Crystal portal 215 m south-west."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 21.4,
+   "ew": -24.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1043,
+  "coveredBy": "shot:danbys-outpost.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/21_4N_24_8W_Undead_Village.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-undead-village.01",
+   "site": "poi-undead-village",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     2.5,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     18555.0,
+     29603.0,
+     2.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "heightStart": 42,
+    "heightEnd": 90,
+    "rotateDeg": -40,
+    "headingDeg": 300,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 2
+   },
+   "standingOrder": "Look straight down on the undead village's three Gharu'ndim houses, column and well in their forest clearing and climb from 42 m to 90 m, rotating 40 degrees, until the coast opens to the south-west; stay 6 m above every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down rise. The camera looks straight down on the three Gharu'ndim houses, the column and the well in their forest clearing, and climbs from 42 m to 90 m, rotating 40 deg. The clearing shrinks into the forest and the coast opens to the south-west. It stays 8 m or more above the 36 m crowns. Verified (check.mjs, full take flown): take 0-10 s: AGL 42..90 m, nearest drawn 19.11 m (scenery-default 0x020002D9@18578,29600), vmax 7.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-8.5 s: AGL 51.89..87.4 m, nearest drawn 25.71 m (scenery-default 0x020002D9@18578,29600), vmax 7.54 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 7.52 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-undead-village.01": "take 0-10 s: AGL 42..90 m, nearest drawn 19.11 m (scenery-default 0x020002D9@18578,29600), vmax 7.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-8.5 s: AGL 51.89..87.4 m, nearest drawn 25.71 m (scenery-default 0x020002D9@18578,29600), vmax 7.54 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 7.52 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

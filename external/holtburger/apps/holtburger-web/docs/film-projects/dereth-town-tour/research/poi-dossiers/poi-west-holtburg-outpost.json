@@ -1,0 +1,154 @@
+{
+ "name": "West Holtburg Outpost",
+ "title": "West Holtburg Outpost",
+ "siteId": "poi-west-holtburg-outpost",
+ "summary": "Twin of South Holtburg Outpost, 1.1 km west of Holtburg: an old starter outpost never attacked by Martine (acpedia: Wantorth the Shopkeeper, Sentry, chest, Life Stone, well). It sits at the foot of a wooded hill (z 46) with the river marsh to the east: a two-storey shop, a brass-lantern hall with a wooden deck, a cottage, the Life Stone and well, and up the slope a green-lit tapered-roof Empyrean hall (top z 76.9) and a 31 m spire tower (top z 106.8).",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    31854.1,
+    34663.1,
+    46.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-holtburg-a5b4; LIFESTONES sign 4 m south."
+  },
+  {
+   "name": "Shop (0x01000830)",
+   "pos": [
+    31856.9,
+    34620.2,
+    46.0
+   ],
+   "heightM": 9.3,
+   "note": "Two-storey stone shop, top z 55.3."
+  },
+  {
+   "name": "Lantern hall (0x01000BC3)",
+   "pos": [
+    31855.6,
+    34641.5,
+    46.0
+   ],
+   "heightM": 9.7,
+   "note": "Timber-and-stone hall with two brass lanterns at its door and Wantorth the Shopkeeper."
+  },
+  {
+   "name": "Tapered-roof Empyrean hall (0x010014C3)",
+   "pos": [
+    31813.4,
+    34622.2,
+    52.0
+   ],
+   "heightM": 24.8,
+   "note": "Green ethereal lamps at z 75.8."
+  },
+  {
+   "name": "Spire tower (0x01001117)",
+   "pos": [
+    31764.0,
+    34644.0,
+    76.0
+   ],
+   "heightM": 30.8,
+   "note": "On the hill west of the outpost, top z 106.8."
+  }
+ ],
+ "site": {
+  "id": "poi-west-holtburg-outpost",
+  "name": "West Holtburg Outpost",
+  "gazetteerId": "west-holtburg-outpost",
+  "teleport": "@teleloc 0xA5B4003D 174.116 103.073 46.005 0.924714 0 0 -0.380662",
+  "anchor": [
+   31845,
+   34640,
+   46
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-holtburg-a5b4 (the outpost's Life Stone, z 46); the gazetteer's own west-holtburg-outpost entry is only a map @tele."
+ },
+ "insertAfter": "holtburg",
+ "insertBefore": "glenden-wood",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 42.3,
+   "ew": 30.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 695,
+  "coveredBy": "shot:holtburg.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/West_Holtburg_Outpost.txt"
+ },
+ "shots": [],
+ "verification": {
+  "poi-west-holtburg-outpost.01": "take 0-8 s: AGL 47.81..49.2 m, nearest drawn 15.44 m (scenery-default 0x020002D3@31877,34627), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 47.86..49.2 m, nearest drawn 15.51 m (scenery-default 0x020002D3@31877,34627), vmax 0.39 m/s, LOS blocked 0/25, subject in frame 100%"
+ },
+ "criticRemovedShots": [
+  {
+   "id": "poi-west-holtburg-outpost.01",
+   "site": "poi-west-holtburg-outpost",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31842,
+     34638,
+     46
+    ],
+    "height": 22,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 95,
+    "azimuthRef": "compass",
+    "elevationDeg": 34,
+    "distance": 62,
+    "thirds": "center",
+    "pushM": 2.0
+   },
+   "standingOrder": "Look down from above the eastern meadow onto the outpost's shop, Life Stone and well with the Empyrean towers climbing the wooded hill behind, the morning sun at the lens's back; ease 2 m closer.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High angle (34 deg) from 62 m east over the meadow, easing 2 m closer: the shop, the Life Stone with its sign and well, the brass-lantern hall and the cottage below, the green-lit tapered Empyrean hall and the 31 m spire tower climbing the wooded hill behind. Morning sun (0.36) from the east behind the lens. Twin of South Holtburg Outpost, so it gets the opposite (downward, east-facing) treatment. Verified (check.mjs, full take flown): take 0-8 s: AGL 47.81..49.2 m, nearest drawn 15.44 m (scenery-default 0x020002D3@31877,34627), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 47.86..49.2 m, nearest drawn 15.51 m (scenery-default 0x020002D3@31877,34627), vmax 0.39 m/s, LOS blocked 0/25, subject in frame 100%.",
+   "criticReason": "Duplicate view: the same starter-outpost kit as poi-south-holtburg-outpost (cottage 0x01000830, Empyrean hall 0x010014C3, 0x01001050, Life Stone, well, 31 m spire tower on the hill behind) filmed the same way - camera ~50 m up east of the outpost looking west and down (AGL 48 vs 50 m) - and the build puts the two back to back (edit 51.6 s and 56.6 s). The dossier's 'opposite treatment' is in fact the same east-side high view. South Holtburg keeps the longer establishing shot."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.high-angle: Duplicate view: the same starter-outpost kit as poi-south-holtburg-outpost (cottage 0x01000830, Empyrean hall 0x010014C3, 0x01001050, Life Stone, well, 31 m spire tower on the hill behind) filmed the same way - camera ~50 m up east of the outpost looking west and down (AGL 48 vs 50 m) - and the build puts the two back to back (edit 51.6 s and 56.6 s). The dossier's 'opposite treatment' is in fact the same east-side high view. South Holtburg keeps the longer establishing shot."
+ ]
+}

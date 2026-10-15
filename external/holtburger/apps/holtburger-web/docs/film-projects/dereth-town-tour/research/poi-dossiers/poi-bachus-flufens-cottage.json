@@ -1,0 +1,118 @@
+{
+ "name": "Bachus Flufens' Cottage",
+ "title": "Bachus Flufens' Cottage",
+ "siteId": "poi-bachus-flufens-cottage",
+ "summary": "Bachus Flufens' former homestead at 43.6N 85.4W, from which the Hea Tumeroks chased her. A 24 m bamboo cottage with a tapered grass roof stands on a bluff (z 20) above the reedy marsh and the sea. Around it are a cabbage patch, a metal cage (now holding Reedshark pups), a bench and stools, and a 27 m tree beside it.",
+ "landmarks": [
+  {
+   "name": "Cottage",
+   "pos": [
+    3971.9,
+    34933.0,
+    20.0
+   ],
+   "heightM": 10,
+   "note": "0x010022A2 bamboo cottage, 24 x 23 m."
+  },
+  {
+   "name": "Cabbage patch and cage",
+   "pos": [
+    3967.0,
+    34925.0,
+    20.0
+   ],
+   "heightM": 2.2,
+   "note": "Cabbages, the rusted metal cage 0x0200063C, flowers."
+  }
+ ],
+ "site": {
+  "id": "poi-bachus-flufens-cottage",
+  "name": "Bachus Flufens' Cottage",
+  "teleport": "@teleloc 0x14B60031 150.0 21.0 21.2 1 0 0 0",
+  "anchor": [
+   3971.9,
+   34933.0,
+   20.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.59,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the bluff meadow 37 m north-east of the cottage (ground 20.5, 5.9 m from the nearest plant, >= 8 m from the pines); no gazetteer entry within 600 m."
+ },
+ "insertAfter": "ahurenga",
+ "insertBefore": "timaru",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 43.6,
+   "ew": -85.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 849,
+  "coveredBy": "shot:redspire.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Bachus_Flufens_Cottage.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-bachus-flufens-cottage.01",
+   "site": "poi-bachus-flufens-cottage",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3971.9,
+     34933.0,
+     20.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 222,
+    "azimuthRef": "compass",
+    "elevationDeg": 32,
+    "distance": 48,
+    "thirds": "center",
+    "pushM": 4
+   },
+   "standingOrder": "Hang 48 m south-west of Bachus Flufens' bamboo cottage over the reedy marsh edge, looking down 32 degrees at it, its cabbage patch and Reedshark cage on the bluff, easing 4 m closer; keep 6 m from the bluff pines.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High angle. The camera hangs 48 m south-west of the cottage over the bluff edge, looking down 32 deg at the bamboo cottage, the cabbage patch and the Reedshark cage, with the reedy marsh and the sea below the bluff. It eases 4 m closer, with the afternoon sun behind the lens. A small rank-3 look. Verified (check.mjs, full take flown): take 0-8 s: AGL 39.21..43.2 m, nearest drawn 27.06 m (scenery-default 0x02000246@3969,34902), vmax 0.79 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 39.36..42.9 m, nearest drawn 27.18 m (scenery-default 0x02000246@3969,34902), vmax 0.79 m/s, LOS blocked 0/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-bachus-flufens-cottage.01": "take 0-8 s: AGL 39.21..43.2 m, nearest drawn 27.06 m (scenery-default 0x02000246@3969,34902), vmax 0.79 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 39.36..42.9 m, nearest drawn 27.18 m (scenery-default 0x02000246@3969,34902), vmax 0.79 m/s, LOS blocked 0/23, subject in frame 100%"
+ }
+}

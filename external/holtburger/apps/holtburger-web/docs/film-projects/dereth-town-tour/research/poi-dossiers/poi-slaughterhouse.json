@@ -1,0 +1,196 @@
+{
+ "name": "Slaughterhouse",
+ "title": "Slaughterhouse",
+ "siteId": "poi-slaughterhouse",
+ "summary": "A Tumerok fort 'specialized in processing bovine animals' (acpedia). It is a walled block of flat-roofed halls with stake palisades and one 31 m spire tower at its north-west corner, filling the floor of a V-shaped valley (z 80) whose walls rise to 150 m and close to a point 150 m south. Cows, aurochs and slabs of meat fill the yard, and a bench, an axe and a blood-stained block sit in the south pen. The valley opens north onto a broad flat.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 0.2,
+   "ew": -80.3
+  },
+  "mapWorld": [
+   5196.0,
+   24516.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Slaughterhouse.txt",
+  "coveredDistM": 1998,
+  "coveredBy": "shot:fort-tethana.03"
+ },
+ "landmarks": [
+  {
+   "name": "Spire tower",
+   "pos": [
+    5196,
+    24516,
+    80
+   ],
+   "heightM": 30.75,
+   "note": "0x01001161 at the north-west corner."
+  },
+  {
+   "name": "Pens and halls",
+   "pos": [
+    5244,
+    24468,
+    80
+   ],
+   "heightM": 5,
+   "note": "Halls from x 5196 to 5292 and y 24420 to 24516. Cows, aurochs and meat spawns."
+  }
+ ],
+ "site": {
+  "id": "poi-slaughterhouse",
+  "name": "Slaughterhouse",
+  "gazetteerId": "slaughterhouse",
+  "teleport": "@teleloc 0x1B7F0018 64.925 186.86 80.1 -0.292372 0 0 -0.956305",
+  "anchor": [
+   5244,
+   24480,
+   80
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.69,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer slaughterhouse teleloc (5248.9,24570.9,80.1), on the valley flat north of the fort."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-slaughterhouse.01",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     2.5,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5196,
+     24516,
+     80
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 30,
+    "endDistance": 88,
+    "startHeight": 10,
+    "endHeight": 42,
+    "bearingDeg": 330,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Pull straight back north-north-west and up from the slaughterhouse tower, 30 m to 88 m out and 10 m to 42 m high, until the walled pens fill the V of the valley; climb clear of the plain.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie: the drone starts 30 m north-north-west of the slaughterhouse's 31 m spire tower, 10 m up. It flies back and up in one line to 88 m out and 42 m up. The walled Tumerok fort, its stake palisades and the cattle pens (cows, aurochs and slabs of meat in the yard) shrink into the V of a valley whose walls rise to 150 m. The west sun side-lights the tower from the right. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 10..42 m, nearest 25.1 m (spawn Linkable Monster Generator), vmax 9.46 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 264.3 m (not drawn by the default bake); edit 4-10s: AGL 19.35..41.4 m, nearest 41.5 m (spawn Linkable Monster Generator), vmax 9.46 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 278.9 m (not drawn by the default bake); flight cinema: peak 9.44 m/s (cap 12), tracking gap 0.07 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-slaughterhouse.01",
+   "technique": "drone.dronie",
+   "rank": 2,
+   "check": "take 11s: AGL 10..42 m, nearest 25.1 m (spawn Linkable Monster Generator), vmax 9.46 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 264.3 m (not drawn by the default bake); edit 4-10s: AGL 19.35..41.4 m, nearest 41.5 m (spawn Linkable Monster Generator), vmax 9.46 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 278.9 m (not drawn by the default bake); flight cinema: peak 9.44 m/s (cap 12), tracking gap 0.07 m"
+  },
+  {
+   "shot": "poi-slaughterhouse.02",
+   "technique": "classic.high-angle",
+   "rank": 3,
+   "check": "take 8s: AGL 41.47..42.4 m, nearest 33.52 m (scenery-default 0x020005C9@5146,24449), vmax 0.39 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 212 m (not drawn by the default bake); edit 1.5-6.5s: AGL 41.55..42.3 m, nearest 33.57 m (scenery-default 0x020005C9@5146,24449), vmax 0.39 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 212.1 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 11,
+ "techniques": [
+  "drone.dronie",
+  "classic.high-angle"
+ ],
+ "criticRemovedShots": [
+  {
+   "id": "poi-slaughterhouse.02",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5244,
+     24468,
+     80
+    ],
+    "height": 5,
+    "radius": 40
+   },
+   "params": {
+    "azimuthDeg": 262,
+    "azimuthRef": "compass",
+    "elevationDeg": 28,
+    "distance": 85,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "standingOrder": "Look down from the west wall of the valley onto the slaughterhouse pens, roofs and cattle with the sun behind the lens; ease 2 m closer, keep 20 m above the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High angle: from 85 m west of the fort, 42 m above the valley floor, the lens looks down 28 deg onto the slaughterhouse roofs, palisades and pens with the late-afternoon sun directly behind it, easing 2 m closer. Rank 3. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 41.47..42.4 m, nearest 33.52 m (scenery-default 0x020005C9@5146,24449), vmax 0.39 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 212 m (not drawn by the default bake); edit 1.5-6.5s: AGL 41.55..42.3 m, nearest 33.57 m (scenery-default 0x020005C9@5146,24449), vmax 0.39 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 212.1 m (not drawn by the default bake).",
+   "criticReason": "Spare that would return to the quota after other removals: it adds an 11th Tumerok-kit shot to the 1545-1700 s stretch; the batch designers asked for rank-3 Tumerok shots to be dropped first. Rank 3."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.high-angle: Spare that would return to the quota after other removals: it adds an 11th Tumerok-kit shot to the 1545-1700 s stretch; the batch designers asked for rank-3 Tumerok shots to be dropped first. Rank 3."
+ ]
+}

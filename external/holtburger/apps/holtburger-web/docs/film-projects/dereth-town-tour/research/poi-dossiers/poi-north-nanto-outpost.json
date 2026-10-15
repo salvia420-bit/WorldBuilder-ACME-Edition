@@ -1,0 +1,144 @@
+{
+ "name": "North Nanto Outpost",
+ "title": "North Nanto Outpost",
+ "siteId": "poi-north-nanto-outpost",
+ "summary": "A Sho starter outpost destroyed by Martine during The First Strike (acpedia). In the kit it sits in a clearing of tall pines (some are 60 m 'Tall Trees') on a forested ridge at z 58-62. It holds a ruined four-storey monument tower with a tapered roof and green lights at its crown (top z 89.9), a domed two-storey shop hall, the Life Stone with its sign, an apple tree and a vat.",
+ "landmarks": [
+  {
+   "name": "Ruined monument tower (0x01002866)",
+   "pos": [
+    44100,
+    12732,
+    62
+   ],
+   "heightM": 27.9,
+   "note": "Green lights at z 85.8."
+  },
+  {
+   "name": "Domed shop hall (0x01000BFE)",
+   "pos": [
+    44079.3,
+    12684.1,
+    58
+   ],
+   "heightM": 10.0,
+   "note": "Yao Lun the Shopkeeper."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    44053.5,
+    12697.5,
+    58
+   ],
+   "heightM": 3.5,
+   "note": "The gazetteer teleport lands on it."
+  },
+  {
+   "name": "Tall Tree",
+   "pos": [
+    44054.8,
+    12761.2,
+    58
+   ],
+   "heightM": 62,
+   "note": "The tallest of the pines round the clearing."
+  }
+ ],
+ "site": {
+  "id": "poi-north-nanto-outpost",
+  "name": "North Nanto Outpost",
+  "gazetteerId": "north-nanto-outpost",
+  "teleport": "@teleloc 0xE5420023 102.00 48.00 59.50 1 0 0 0",
+  "anchor": [
+   44085,
+   12712,
+   60
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.72,
+   "grade": "warm"
+  },
+  "notes": "The gazetteer entry for this POI is only a map @tele and the nearest exact teleport (Life Stone near Nanto) lands on the Life Stone; derived @teleloc on the open forest floor between the monument tower and the domed hall instead (ground z 59.0, nearest tree 8.0 m)."
+ },
+ "insertAfter": "tou-tou",
+ "insertBefore": "baishi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -48.9,
+   "ew": 81.7
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   44076.0,
+   12732.0
+  ],
+  "coveredDistM": 817,
+  "coveredBy": "shot:nanto.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Nanto_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-north-nanto-outpost.01",
+   "site": "poi-north-nanto-outpost",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44082,
+     12710,
+     60
+    ],
+    "height": 28,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 88,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 15
+   },
+   "standingOrder": "Hover 88 m straight above the ruined Nanto outpost and turn slowly so the green-lit monument tower, the domed hall and the Life Stone wheel in the pine clearing; stay 18 m above the tallest tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Map-like top-down from 88 m, pitched -88 so the outpost's green crown lights do not spin at exact nadir, turning 40 degrees. The ruined monument tower, the domed shop and the Life Stone wheel in their clearing among 60 m pines. The view stays 53 m clear of the tallest tree. This is the same monument-tower model as four batch-0 outposts, so it is ranked 3. Verified (check.mjs, full take flown): take 0-9 s: AGL 88..88.1 m, nearest drawn 52.84 m (static 0xE542#68 0x020003A1 Tall Tree), vmax 0.2 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 88.03..88.1 m, nearest drawn 52.92 m (static 0xE542#68 0x020003A1 Tall Tree), vmax 0.2 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.2 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-north-nanto-outpost.01": "take 0-9 s: AGL 88..88.1 m, nearest drawn 52.84 m (static 0xE542#68 0x020003A1 Tall Tree), vmax 0.2 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 88.03..88.1 m, nearest drawn 52.92 m (static 0xE542#68 0x020003A1 Tall Tree), vmax 0.2 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.2 m/s (cap 12), max tracking gap 0 m"
+ }
+}

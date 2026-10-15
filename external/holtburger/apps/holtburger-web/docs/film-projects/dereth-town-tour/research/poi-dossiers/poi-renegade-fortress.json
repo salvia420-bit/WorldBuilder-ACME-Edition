@@ -1,0 +1,259 @@
+{
+ "name": "Renegade Fortress",
+ "title": "Renegade Fortress",
+ "siteId": "poi-renegade-fortress",
+ "summary": "The huge fortress the Renegade Lugians and Tumeroks built north of the Valley of Death. In the kit, a curtain wall with a domed gate arch (0x010021D9, 20 m) and two 20 m towers stands on a shelf (z 32). Inside, a courtyard sinks to z 0, ringed by 90 m earth walls that carry two 59 m stone pyramids (0x01001F26). The courtyard holds pitched-roof houses, a 21 m lion-head shrine (0x010026FC), glowing blue columns and cattle pens. The walls are lined with burning-liquid and caltrop spawns, matching acpedia's hot liquid poured by the Gotrok Fortress Guards. The Vale of Giant Flowers covers the slopes outside.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -28.9,
+   "ew": -65.5
+  },
+  "mapWorld": [
+   8748.0,
+   17532.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Renegade_Fortress.txt",
+  "coveredDistM": 7421,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Domed gate arch",
+   "pos": [
+    8748,
+    17526,
+    32
+   ],
+   "heightM": 17.4,
+   "note": "0x010021D9, top z 49.4."
+  },
+  {
+   "name": "Sunken courtyard",
+   "pos": [
+    8760,
+    17405,
+    0
+   ],
+   "heightM": 21,
+   "note": "Houses 0x01002EA8/0x01002F25, lion-head shrine 0x010026FC at (8748,17388) and glowing columns 0x02000F8B."
+  },
+  {
+   "name": "Stone pyramids",
+   "pos": [
+    8676,
+    17460,
+    90
+   ],
+   "heightM": 58.9,
+   "note": "0x01001F26 at (8676,17460) and (8844,17460), on top of the 90 m earth walls."
+  }
+ ],
+ "site": {
+  "id": "poi-renegade-fortress",
+  "name": "Renegade Fortress",
+  "teleport": "@teleloc 0x2D5B002D 120 113 40.5 1 0 0 0",
+  "anchor": [
+   8760,
+   17460,
+   32
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.73,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the shelf north of the gate at (8760,17585), ground 40, 10.6 m from the nearest static. Gazetteer entries for this POI are dungeon or portal cells."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-renegade-fortress.03",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8748,
+     17526,
+     32
+    ],
+    "height": 20,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 345,
+    "azimuthRef": "compass",
+    "elevationDeg": -18,
+    "distance": 34,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Look up at the domed gate arch of the Renegade Fortress from 34 m north, lens 2 m above the shelf, creeping 1.5 m closer while burning liquid pours from the walls; keep 6 m from the caltrops.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle on the gate: the lens is 0.7-0.9 m above the shelf, 34 m north of the domed gate arch, and looks up 18 deg at it, creeping 1.5 m. Spawns of burning liquid (the hot liquid the Gotrok guards pour on attackers) and caltrops line the wall. The low west sun side-lights the arch. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 0.7..0.9 m, nearest 23.47 m (spawn Burning Liquid), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 132 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.7..0.9 m, nearest 23.58 m (spawn Burning Liquid), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 132.1 m (not drawn by the default bake)."
+  },
+  {
+   "id": "poi-renegade-fortress.01",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 4.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     3.5,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8760,
+     17405,
+     0
+    ],
+    "height": 21,
+    "radius": 50
+   },
+   "params": {
+    "distance": 185,
+    "bearingDeg": 2,
+    "relativeToSubject": false,
+    "obstacleDistance": 64,
+    "obstacleHeight": 17,
+    "heightStart": 3,
+    "clearance": 22,
+    "forward": 20,
+    "endPitchDeg": -16,
+    "minClearance": 2
+   },
+   "standingOrder": "Rise from the shelf north of the fortress gate over its domed arch to reveal the sunken courtyard, the lion head and the two pyramids on the 90 m walls; stay 20 m above the arch.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature reveal: the lens starts 3 m above the shelf, 64 m north of the fortress's domed gate arch (20 m), which hides the sunken courtyard. It rises 36 m and pitches down to -16 deg, clearing the arch by 30 m. Beyond it appear the courtyard sunk 30 m below the gate shelf, the houses, the 21 m lion-head shrine and the two 59 m stone pyramids standing on the 90 m earth walls. LOS is clear from about t 5.5 s. The low west sun is on the right. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 3..39 m, nearest 12.82 m (spawn Linkable Monster Generator ( 5 Min.)), vmax 6.47 m/s, LOS blocked 21/41, in frame 100%, water 0%, retail-bake tree 135.5 m (not drawn by the default bake); edit 4.5-10s: AGL 18.18..39 m, nearest 24 m (static 0x2D5B#23 0x02000C39), vmax 6.47 m/s, LOS blocked 3/23, in frame 100%, water 0%, retail-bake tree 146 m (not drawn by the default bake); flight cinema: peak 6.46 m/s (cap 12), tracking gap 0.05 m."
+  },
+  {
+   "id": "poi-renegade-fortress.02",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8760,
+     17405,
+     0
+    ],
+    "height": 21,
+    "radius": 45
+   },
+   "params": {
+    "heightAGL": 125,
+    "rotateDeg": 30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "standingOrder": "Hover 125 m straight above the sunken courtyard of the fortress, the image turning 30 degrees over the houses, the lion-head shrine and the pyramids on the rim.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down: the drone hovers 125 m straight above the sunken courtyard while the image turns 30 deg. Pitch-roofed houses, the lion-head shrine, the glowing blue columns, the cattle pens and the two pyramids sit on the rim of the 90 m walls, with giant flowers on the outside slopes. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 125..125 m, nearest 60.64 m (scenery-default 0x020004C1@8774,17355), vmax 0 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 65.6 m (not drawn by the default bake); edit 2-7.5s: AGL 125..125 m, nearest 60.64 m (scenery-default 0x020004C1@8774,17355), vmax 0 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 65.6 m (not drawn by the default bake); flight cinema: peak 0 m/s (cap 12), tracking gap 0 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-renegade-fortress.01",
+   "technique": "drone.rising-reveal",
+   "rank": 1,
+   "check": "take 10s: AGL 3..39 m, nearest 12.82 m (spawn Linkable Monster Generator ( 5 Min.)), vmax 6.47 m/s, LOS blocked 21/41, in frame 100%, water 0%, retail-bake tree 135.5 m (not drawn by the default bake); edit 4.5-10s: AGL 18.18..39 m, nearest 24 m (static 0x2D5B#23 0x02000C39), vmax 6.47 m/s, LOS blocked 3/23, in frame 100%, water 0%, retail-bake tree 146 m (not drawn by the default bake); flight cinema: peak 6.46 m/s (cap 12), tracking gap 0.05 m"
+  },
+  {
+   "shot": "poi-renegade-fortress.02",
+   "technique": "drone.top-down",
+   "rank": 2,
+   "check": "take 9s: AGL 125..125 m, nearest 60.64 m (scenery-default 0x020004C1@8774,17355), vmax 0 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 65.6 m (not drawn by the default bake); edit 2-7.5s: AGL 125..125 m, nearest 60.64 m (scenery-default 0x020004C1@8774,17355), vmax 0 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 65.6 m (not drawn by the default bake); flight cinema: peak 0 m/s (cap 12), tracking gap 0 m"
+  },
+  {
+   "shot": "poi-renegade-fortress.03",
+   "technique": "classic.low-angle",
+   "rank": 2,
+   "check": "take 8s: AGL 0.7..0.9 m, nearest 23.47 m (spawn Burning Liquid), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 132 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.7..0.9 m, nearest 23.58 m (spawn Burning Liquid), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 132.1 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 16.0,
+ "techniques": [
+  "drone.rising-reveal",
+  "drone.top-down",
+  "classic.low-angle"
+ ]
+}

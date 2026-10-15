@@ -1,0 +1,144 @@
+{
+ "name": "Walled Portals",
+ "title": "Walled Portals",
+ "siteId": "poi-walled-portals",
+ "summary": "A small walled fort on a sand-and-rock ridge (z 120) in the Dires. It is a 60 x 36 m court of flat-roofed halls with stake palisades, with two portals inside: Outside Accursed Halls and Ridge Tower, which leads back to the Drunken Madman. Acpedia notes the steps lead from outside to inside, which made it dangerous for young characters. It is a main entry into the Dires, and the twin of Outside Accursed Halls.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -21.6,
+   "ew": -74.5
+  },
+  "mapWorld": [
+   6588.0,
+   19284.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Walled_Portals.txt",
+  "coveredDistM": 5566,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Outside Accursed Halls Portal",
+   "pos": [
+    6582.7,
+    19292.9,
+    119.9
+   ],
+   "heightM": 3.5,
+   "note": "Spawn in the court."
+  },
+  {
+   "name": "Ridge Tower portal",
+   "pos": [
+    6549.4,
+    19299.4,
+    119.9
+   ],
+   "heightM": 3.5,
+   "note": "Spawn in the court."
+  },
+  {
+   "name": "West halls",
+   "pos": [
+    6540,
+    19296,
+    120
+   ],
+   "heightM": 7,
+   "note": "0x01001201 halls, 5 m walls with 2 m stakes on top."
+  }
+ ],
+ "site": {
+  "id": "poi-walled-portals",
+  "name": "Walled Portals",
+  "gazetteerId": "walled-portals",
+  "teleport": "@teleloc 0x2264000D 36.3 96.9 120 0.026177 0 0 -0.999657",
+  "anchor": [
+   6566,
+   19296,
+   120
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.72,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer walled-portals teleloc (6564.3,19296.9,120) in the court."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-walled-portals.01",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     3,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6566,
+     19296,
+     120
+    ],
+    "height": 4,
+    "radius": 20
+   },
+   "params": {
+    "distance": 42,
+    "heightStart": 2,
+    "heightEnd": 24,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up 42 m west of the walled fort, from 2 m to 24 m, over its spiked wall to reveal the two portal swirls inside; stay 9 m off the wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boom rise: the drone rises from 2 m to 24 m, 42 m west of the walled fort on its sand-and-rock ridge. As it clears the halls' spiked roofline (LOS clear from about t 4 s), the two portal swirls inside the court (Outside Accursed Halls and Ridge Tower) come into view. The low west sun is behind the lens. The subject is hidden behind the wall until about t 4 s by design. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 2.06..24 m, nearest 9.1 m (static 0x2264#0 0x020003FB), vmax 3.84 m/s, LOS blocked 16/37, in frame 100%, water 0%, retail-bake tree 68.7 m (not drawn by the default bake); edit 3.5-9s: AGL 9.24..24 m, nearest 10.31 m (static 0x2264#0 0x020003FB), vmax 3.84 m/s, LOS blocked 2/23, in frame 100%, water 0%, retail-bake tree 68.7 m (not drawn by the default bake); flight cinema: peak 3.83 m/s (cap 12), tracking gap 0.03 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-walled-portals.01",
+   "technique": "drone.boom-rise",
+   "rank": 2,
+   "check": "take 9s: AGL 2.06..24 m, nearest 9.1 m (static 0x2264#0 0x020003FB), vmax 3.84 m/s, LOS blocked 16/37, in frame 100%, water 0%, retail-bake tree 68.7 m (not drawn by the default bake); edit 3.5-9s: AGL 9.24..24 m, nearest 10.31 m (static 0x2264#0 0x020003FB), vmax 3.84 m/s, LOS blocked 2/23, in frame 100%, water 0%, retail-bake tree 68.7 m (not drawn by the default bake); flight cinema: peak 3.83 m/s (cap 12), tracking gap 0.03 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5.5,
+ "techniques": [
+  "drone.boom-rise"
+ ]
+}

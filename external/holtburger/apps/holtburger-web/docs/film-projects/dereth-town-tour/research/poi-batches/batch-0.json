@@ -1,0 +1,2118 @@
+{
+ "batch": 0,
+ "quota": 34,
+ "pois": [
+  {
+   "title": "South Holtburg Outpost",
+   "name": "South Holtburg Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. Unlike most of the other outposts this one was not attacked by Martine and still functions, however, instead of appearing here new arrivals portal directly into Holtburg. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Holtburg_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     39.5,
+     33.3
+    ]
+   ],
+   "map": {
+    "ns": 39.5,
+    "ew": 33.3
+   },
+   "world": [
+    32460.0,
+    33948.0
+   ],
+   "lb": "0xA9B0",
+   "coveredDistM": 623,
+   "coveredBy": "site:holtburg",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 623,
+   "gazNear": [
+    {
+     "id": "life-stone-near-holtburg-a9b0",
+     "name": "Life Stone near Holtburg",
+     "kind": "landmark",
+     "d": 13,
+     "teleport": "@teleloc 0xA9B00007 21.5862 146.569 58.005 -0.824891 0 0 -0.565292",
+     "pos": [
+      32469.586,
+      33938.569,
+      58.005
+     ]
+    },
+    {
+     "id": "a-rat-nest-portal",
+     "name": "A Rat Nest Portal",
+     "kind": "landmark",
+     "d": 268,
+     "teleport": "@teleloc 0xA8B10006 2.245 140.642 56.5 0.636078 0 0 -0.771625",
+     "pos": [
+      32258.245,
+      34124.642,
+      56.5
+     ]
+    },
+    {
+     "id": "holtburg-casino-vip",
+     "name": "Holtburg Casino VIP",
+     "kind": "poi",
+     "d": 338,
+     "teleport": "@teleloc 0xA9B2001D 84 102 94 0 0 0 -1",
+     "pos": [
+      32532,
+      34278,
+      94
+     ]
+    },
+    {
+     "id": "holtburg-redoubt-portal",
+     "name": "Holtburg Redoubt Portal",
+     "kind": "landmark",
+     "d": 354,
+     "teleport": "@teleloc 0xAAB10028 99.7059 180.63 124.005 0.536112 0 0 0.844147",
+     "pos": [
+      32739.706,
+      34164.63,
+      124.005
+     ]
+    },
+    {
+     "id": "drudge-hideout-portal",
+     "name": "Drudge Hideout Portal",
+     "kind": "landmark",
+     "d": 450,
+     "teleport": "@teleloc 0xA9B30002 5.44567 29.4682 94.005 -0.445343 0 0 -0.89536",
+     "pos": [
+      32453.446,
+      34397.468,
+      94.005
+     ]
+    },
+    {
+     "id": "lilyglen-cottages-portal",
+     "name": "Lilyglen Cottages Portal",
+     "kind": "landmark",
+     "d": 453,
+     "teleport": "@teleloc 0xABB10016 51.9049 124.297 97.3868 0.925737 0 0 -0.378169",
+     "pos": [
+      32883.905,
+      34108.297,
+      97.387
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "south-holtburg-outpost",
+     "name": "South Holtburg Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 39.50N 33.30E",
+     "pos": null,
+     "map": {
+      "ns": 39.5,
+      "ew": 33.3
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 62,
+   "timeOfDay": 0.36,
+   "grade": "cool",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 623 m from site:holtburg)",
+   "siteId": "poi-south-holtburg-outpost"
+  },
+  {
+   "title": "West Holtburg Outpost",
+   "name": "West Holtburg Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. Unlike most of the other outposts this one was not attacked by Martine and still functions, however, instead of appearing here new arrivals portal directly into Holtburg. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/West_Holtburg_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     42.3,
+     30.7
+    ]
+   ],
+   "map": {
+    "ns": 42.3,
+    "ew": 30.7
+   },
+   "world": [
+    31836.0,
+    34620.0
+   ],
+   "lb": "0xA5B4",
+   "coveredDistM": 695,
+   "coveredBy": "shot:holtburg.02",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 698,
+   "gazNear": [
+    {
+     "id": "hollow-lair-near-al-arqas",
+     "name": "Hollow Lair near Al-Arqas",
+     "kind": "poi",
+     "d": 7,
+     "teleport": "@teleloc 0xA5B40033 158.08 66.886 48.5 0.863774 0 0 -0.50388",
+     "pos": [
+      31838.08,
+      34626.886,
+      48.5
+     ]
+    },
+    {
+     "id": "life-stone-near-holtburg-a5b4",
+     "name": "Life Stone near Holtburg",
+     "kind": "landmark",
+     "d": 47,
+     "teleport": "@teleloc 0xA5B4003D 174.116 103.073 46.005 0.924714 0 0 -0.380662",
+     "pos": [
+      31854.116,
+      34663.073,
+      46.005
+     ]
+    },
+    {
+     "id": "fountain-near-holtburg",
+     "name": "Fountain near Holtburg",
+     "kind": "landmark",
+     "d": 468,
+     "teleport": "@teleloc 0xA7B30039 175 13.75 32.005 -0.715699 0 0 -0.698409",
+     "pos": [
+      32239,
+      34381.75,
+      32.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "west-holtburg-outpost",
+     "name": "West Holtburg Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 42.30N 30.70E",
+     "pos": null,
+     "map": {
+      "ns": 42.3,
+      "ew": 30.7
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 457,
+   "timeOfDay": 0.36,
+   "grade": "cool",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 695 m from shot:holtburg.02)",
+   "siteId": "poi-west-holtburg-outpost"
+  },
+  {
+   "title": "Festival Stone of Evensong",
+   "name": "Festival Stone of Evensong",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Evensong guards the shore of the river we call Prosper, near Holtburg at 36.5E, 42.1N. This stone seems to lie near the end of the ruins of a temple complex built over the river. The presence of a monolithic head statue suggests that this was not a temple in the favor of the High Empyrean -- but that is a lesson for another day.\" -- Alatar Lo",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Evensong.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     42.5,
+     36.6
+    ]
+   ],
+   "map": {
+    "ns": 42.5,
+    "ew": 36.6
+   },
+   "world": [
+    33252.0,
+    34668.0
+   ],
+   "lb": "0xADB4",
+   "coveredDistM": 691,
+   "coveredBy": "shot:holtburg.05",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 727,
+   "gazNear": [
+    {
+     "id": "evensong-festival-stone",
+     "name": "Evensong Festival Stone",
+     "kind": "poi",
+     "d": 18,
+     "teleport": "@teleloc 0xADB4000C 44.3 91.6 27.9 -0.96363 0 0 -0.267238",
+     "pos": [
+      33260.3,
+      34651.6,
+      27.9
+     ]
+    },
+    {
+     "id": "dungeon-fern-portal",
+     "name": "Dungeon Fern Portal",
+     "kind": "landmark",
+     "d": 237,
+     "teleport": "@teleloc 0xADB50035 165.098 114.724 105.32 0.707107 0 0 -0.707107",
+     "pos": [
+      33381.098,
+      34866.724,
+      105.32
+     ]
+    },
+    {
+     "id": "life-stone-near-holtburg-abb3",
+     "name": "Life Stone near Holtburg",
+     "kind": "landmark",
+     "d": 418,
+     "teleport": "@teleloc 0xABB30008 17.9975 185.42 57.5064 0.947312 0 0 -0.320312",
+     "pos": [
+      32849.997,
+      34553.42,
+      57.506
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-sanamar-abb2",
+     "name": "Destroyed Portal to Sanamar",
+     "kind": "landmark",
+     "d": 451,
+     "teleport": "@teleloc 0xABB20036 154 128 65.7902 0.92388 0 0 -0.382683",
+     "pos": [
+      32986,
+      34304,
+      65.79
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-evensong",
+     "name": "Festival Stone of Evensong",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 42.50N 36.60E",
+     "pos": null,
+     "map": {
+      "ns": 42.5,
+      "ew": 36.6
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 1218,
+   "timeOfDay": 0.36,
+   "grade": "cool",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 691 m from shot:holtburg.05)",
+   "siteId": "poi-festival-stone-of-evensong"
+  },
+  {
+   "title": "Access to Crystal Mines",
+   "name": "Access to Crystal Mines",
+   "cats": [
+    "Portal",
+    "Northeast POI"
+   ],
+   "desc": "=== Description === Six giant platforms suspended in the air, five of which have a portal to each version of the Crystal Mine. The actual platforms are found west of the Mount Esper at 70.5N, 8.1W (see map to the right). === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Access_to_Crystal_Mines.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     46.8,
+     30.5
+    ],
+    [
+     70.5,
+     -8.1
+    ]
+   ],
+   "map": {
+    "ns": 46.8,
+    "ew": 30.5
+   },
+   "world": [
+    31788.0,
+    35700.0
+   ],
+   "lb": "0xA5B9",
+   "coveredDistM": 1084,
+   "coveredBy": "path:holtburg.04",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 1355,
+   "gazNear": [
+    {
+     "id": "access-to-crystal-mines-portal-a5b9",
+     "name": "Access to Crystal Mines Portal",
+     "kind": "landmark",
+     "d": 2,
+     "teleport": "@teleloc 0xA5B90028 106.181 178.585 129.157 0.239978 0 0 -0.970778",
+     "pos": [
+      31786.181,
+      35698.585,
+      129.157
+     ]
+    },
+    {
+     "id": "asuger-temple-portal",
+     "name": "Asuger Temple Portal",
+     "kind": "landmark",
+     "d": 417,
+     "teleport": "@teleloc 0xA5B7001F 76.7235 148.413 99.2244 0.278249 0 0 -0.960509",
+     "pos": [
+      31756.724,
+      35284.413,
+      99.224
+     ]
+    },
+    {
+     "id": "lilyglen-cottages",
+     "name": "Lilyglen Cottages",
+     "kind": "poi",
+     "d": 419,
+     "teleport": "@teleloc 0xA3BB003C 182.033 77.688 32.005 -0.779272 0 0 -0.626685",
+     "pos": [
+      31478.033,
+      35981.688,
+      32.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "access-to-crystal-mines",
+     "name": "Access to Crystal Mines",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x75D70015 59.981 108.173 430.18 -0.707107 0 0 -0.707107",
+     "pos": [
+      22523.981,
+      41388.173,
+      430.18
+     ],
+     "map": {
+      "ns": 70.5,
+      "ew": -8.1
+     }
+    },
+    {
+     "id": "access-to-crystal-mines-portal-75d7",
+     "name": "Access to Crystal Mines Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x75D70005 8.62307 103.312 235.286 -0.728768 0 0 0.684761",
+     "pos": [
+      22472.623,
+      41383.312,
+      235.286
+     ],
+     "map": {
+      "ns": 70.48,
+      "ew": -8.31
+     }
+    },
+    {
+     "id": "access-to-crystal-mines-portal-a5b9",
+     "name": "Access to Crystal Mines Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xA5B90028 106.181 178.585 129.157 0.239978 0 0 -0.970778",
+     "pos": [
+      31786.181,
+      35698.585,
+      129.157
+     ],
+     "map": {
+      "ns": 46.79,
+      "ew": 30.49
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 2141,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-access-to-crystal-mines"
+  },
+  {
+   "title": "Edelbar",
+   "name": "Edelbar",
+   "cats": [
+    "Historical Site",
+    "Northeast POI",
+    "Lore Database Entry"
+   ],
+   "desc": "(Rumor) === Description === \"Here's where my friend Galtith died helping the townsfolk escape from Tumeroks\" -- Alatar Locke, <ref name=QuickCard>1999/11 Release - Quick Reference Card</ref>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Edelbar.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     3.3,
+     26.6
+    ],
+    [
+     41.4,
+     26.3
+    ],
+    [
+     41.4,
+     27.2
+    ],
+    [
+     42.1,
+     25.8
+    ],
+    [
+     42.4,
+     25.9
+    ],
+    [
+     42.5,
+     26.8
+    ],
+    [
+     42.6,
+     25.9
+    ],
+    [
+     42.9,
+     26.3
+    ]
+   ],
+   "map": {
+    "ns": 43.2,
+    "ew": 25.9
+   },
+   "world": [
+    30684.0,
+    34836.0
+   ],
+   "lb": "0x9FB5",
+   "coveredDistM": 1854,
+   "coveredBy": "shot:holtburg.03",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 1867,
+   "gazNear": [
+    {
+     "id": "life-stone-at-43-2n-25-9e",
+     "name": "Life Stone at 43.2N 25.9E",
+     "kind": "landmark",
+     "d": 3,
+     "teleport": "@teleloc 0x9FB50034 157.726 85.8647 94.022 -0.976599 0 0 -0.215068",
+     "pos": [
+      30685.726,
+      34837.865,
+      94.022
+     ]
+    },
+    {
+     "id": "banderling-camp-9eb6",
+     "name": "Banderling Camp",
+     "kind": "poi",
+     "d": 247,
+     "teleport": "@teleloc 0x9EB60029 132 12 112.005 0.980067 0 0 -0.198669",
+     "pos": [
+      30468,
+      34956,
+      112.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "edelbar",
+     "name": "Edelbar",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 43.20N 25.90E",
+     "pos": null,
+     "map": {
+      "ns": 43.2,
+      "ew": 25.9
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 1678,
+   "timeOfDay": 0.39,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-edelbar"
+  },
+  {
+   "title": "Power Plant",
+   "name": "Power Plant",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Power_Plant.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -0.9,
+     19.0
+    ],
+    [
+     38.6,
+     9.6
+    ]
+   ],
+   "map": {
+    "ns": 38.6,
+    "ew": 9.6
+   },
+   "world": [
+    26772.0,
+    33732.0
+   ],
+   "lb": "0x8BAF",
+   "coveredDistM": 4568,
+   "coveredBy": "site:glenden-wood",
+   "nearestSite": "glenden-wood",
+   "nearestSiteM": 4568,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "power-plant",
+     "name": "Power Plant",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 0.90S 19.00E",
+     "pos": null,
+     "map": {
+      "ns": -0.9,
+      "ew": 19
+     }
+    },
+    {
+     "id": "power-plant-mansion",
+     "name": "Power Plant Mansion",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 27.30N 11.90E",
+     "pos": null,
+     "map": {
+      "ns": 27.3,
+      "ew": 11.9
+     }
+    }
+   ],
+   "insertAfter": "holtburg",
+   "insertBefore": "glenden-wood",
+   "insertCostM": 6968,
+   "timeOfDay": 0.43,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-power-plant"
+  },
+  {
+   "title": "Hilltop Tower",
+   "name": "Hilltop Tower",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "Hilltop}} (Rumor) === Description === A Empyrean Fortress Tower south of Holtburg atop a hill. Many portals (called Hilltop Portals) lead to this location. There are several drudges and a locked runed chest (resistance 100, tier 1 Loot) at the top of the tower. A random Herb (Spell Component) usually spawns on the floor.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Hilltop_Tower.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.7,
+     34.7
+    ]
+   ],
+   "map": {
+    "ns": 32.7,
+    "ew": 34.7
+   },
+   "world": [
+    32796.0,
+    32316.0
+   ],
+   "lb": "0xAAA8",
+   "coveredDistM": 1877,
+   "coveredBy": "shot:glenden-wood.03",
+   "nearestSite": "glenden-wood",
+   "nearestSiteM": 2103,
+   "gazNear": [
+    {
+     "id": "hilltop",
+     "name": "Hilltop",
+     "kind": "poi",
+     "d": 23,
+     "teleport": "@teleloc 0xAAA80034 152.4 82.3 171.3 -0.999391 0 0 -0.034899",
+     "pos": [
+      32792.4,
+      32338.3,
+      171.3
+     ]
+    },
+    {
+     "id": "taralla",
+     "name": "Taralla",
+     "kind": "poi",
+     "d": 504,
+     "teleport": "@teleloc 0xACA6002D 140.041 100.202 151.655 -0.745453 0 0 -0.666558",
+     "pos": [
+      33164.041,
+      31972.202,
+      151.655
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "hilltop-tower",
+     "name": "Hilltop Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 32.70N 34.70E",
+     "pos": null,
+     "map": {
+      "ns": 32.7,
+      "ew": 34.7
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 423,
+   "timeOfDay": 0.47,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-hilltop-tower"
+  },
+  {
+   "title": "Fort Witshire",
+   "name": "Fort Witshire",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A huge fort near Cragstone.<br> This structure is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 42",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fort_Witshire.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     25.0,
+     37.8
+    ],
+    [
+     26.3,
+     46.3
+    ]
+   ],
+   "map": {
+    "ns": 25.0,
+    "ew": 37.8
+   },
+   "world": [
+    33540.0,
+    30468.0
+   ],
+   "lb": "0xAE9E",
+   "coveredDistM": 2427,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 2544,
+   "gazNear": [
+    {
+     "id": "fort-witshire-surface",
+     "name": "Fort Witshire Surface",
+     "kind": "poi",
+     "d": 21,
+     "teleport": "@teleloc 0xAE9E0025 115.8 118.7 90 0.829038 0 0 -0.559193",
+     "pos": [
+      33523.8,
+      30454.7,
+      90
+     ]
+    },
+    {
+     "id": "heartland",
+     "name": "Heartland",
+     "kind": "poi",
+     "d": 598,
+     "teleport": "@teleloc 0xAD9B003E 186.1 126.3 62 0.594823 0 0 -0.803857",
+     "pos": [
+      33402.1,
+      29886.3,
+      62
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "fort-witshire",
+     "name": "Fort Witshire",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 26.30N 46.30E",
+     "pos": null,
+     "map": {
+      "ns": 26.3,
+      "ew": 46.3
+     }
+    },
+    {
+     "id": "fort-witshire-surface",
+     "name": "Fort Witshire Surface",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xAE9E0025 115.8 118.7 90 0.829038 0 0 -0.559193",
+     "pos": [
+      33523.8,
+      30454.7,
+      90
+     ],
+     "map": {
+      "ns": 24.94,
+      "ew": 37.73
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 161,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-fort-witshire"
+  },
+  {
+   "title": "Heartland",
+   "name": "Heartland",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === The point where Heartland Portals drops at 22.6N, 37.2E. You will find a small farmstead here with a Farmer, a few Cows and an empty unlocked Chest. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Heartland.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     22.6,
+     37.2
+    ]
+   ],
+   "map": {
+    "ns": 22.6,
+    "ew": 37.2
+   },
+   "world": [
+    33396.0,
+    29892.0
+   ],
+   "lb": "0xAD9B",
+   "coveredDistM": 2660,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 2796,
+   "gazNear": [
+    {
+     "id": "heartland",
+     "name": "Heartland",
+     "kind": "poi",
+     "d": 8,
+     "teleport": "@teleloc 0xAD9B003E 186.1 126.3 62 0.594823 0 0 -0.803857",
+     "pos": [
+      33402.1,
+      29886.3,
+      62
+     ]
+    },
+    {
+     "id": "fort-witshire-surface",
+     "name": "Fort Witshire Surface",
+     "kind": "poi",
+     "d": 577,
+     "teleport": "@teleloc 0xAE9E0025 115.8 118.7 90 0.829038 0 0 -0.559193",
+     "pos": [
+      33523.8,
+      30454.7,
+      90
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "heartland-yard",
+     "name": "Heartland Yard",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x78000161 83.74 -93.75 0 0.39314 0 0 -0.919479",
+     "pos": [
+      23123.74,
+      -93.75,
+      0
+     ],
+     "map": null
+    },
+    {
+     "id": "heartland",
+     "name": "Heartland",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xAD9B003E 186.1 126.3 62 0.594823 0 0 -0.803857",
+     "pos": [
+      33402.1,
+      29886.3,
+      62
+     ],
+     "map": {
+      "ns": 22.58,
+      "ew": 37.23
+     }
+    },
+    {
+     "id": "heartland-portal-147c",
+     "name": "Heartland Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x147C0013 57.5786 69.2374 149.09 -0.212667 0 0 0.977125",
+     "pos": [
+      3897.579,
+      23877.237,
+      149.09
+     ],
+     "map": {
+      "ns": -2.46,
+      "ew": -85.71
+     }
+    },
+    {
+     "id": "heartland-portal-2938",
+     "name": "Heartland Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x29380101 60.057 7 32.005 0 0 0 -1",
+     "pos": [
+      7932.057,
+      10759,
+      32.005
+     ],
+     "map": {
+      "ns": -57.12,
+      "ew": -68.9
+     }
+    },
+    {
+     "id": "heartland-portal-64d5",
+     "name": "Heartland Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x64D50035 146.924 111.837 77.5176 0.817856 0 0 -0.575423",
+     "pos": [
+      19346.924,
+      41007.837,
+      77.518
+     ],
+     "map": {
+      "ns": 68.92,
+      "ew": -21.34
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 558,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-heartland"
+  },
+  {
+   "title": "Festival Stone of Thistledown",
+   "name": "Festival Stone of Thistledown",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Thistledown overlooks Cragstone Falls from the western bank, near 27.7N, 42.9E. Obviously, the Empyrean appreciated the magnificence of the view. I am reassured of their aesthetic sense.\" -- Alatar Locke, The Festival Stones of the Empyreans",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Thistledown.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     27.7,
+     42.9
+    ],
+    [
+     28.4,
+     43.6
+    ]
+   ],
+   "map": {
+    "ns": 27.7,
+    "ew": 42.9
+   },
+   "world": [
+    34764.0,
+    31116.0
+   ],
+   "lb": "0xB5A2",
+   "coveredDistM": 1313,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 1375,
+   "gazNear": [
+    {
+     "id": "thistledown-festival-stone",
+     "name": "Thistledown Festival Stone",
+     "kind": "poi",
+     "d": 241,
+     "teleport": "@teleloc 0xB5A20040 188.3 176.4 44 -0.999048 0 0 -0.043619",
+     "pos": [
+      34940.3,
+      31280.4,
+      44
+     ]
+    },
+    {
+     "id": "cragstone-waterfall",
+     "name": "Cragstone Waterfall",
+     "kind": "poi",
+     "d": 297,
+     "teleport": "@teleloc 0xB6A30011 56 1.1 1.9 -0.97437 0 0 -0.224951",
+     "pos": [
+      35000,
+      31297.1,
+      1.9
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-thistledown",
+     "name": "Festival Stone of Thistledown",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 28.40N 43.60E",
+     "pos": null,
+     "map": {
+      "ns": 28.4,
+      "ew": 43.6
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 18,
+   "timeOfDay": 0.44,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-thistledown"
+  },
+  {
+   "title": "Cragstone Falls",
+   "name": "Cragstone Falls",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === Waterfalls at 29.0N, 43.9E  near Cragstone. <br> The Falls are mentioned in a text about the Festival Stones:<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Cragstone_Falls.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     27.7,
+     42.9
+    ],
+    [
+     29.0,
+     43.9
+    ]
+   ],
+   "map": {
+    "ns": 29.0,
+    "ew": 43.9
+   },
+   "world": [
+    35004.0,
+    31428.0
+   ],
+   "lb": "0xB6A3",
+   "coveredDistM": 1278,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 1296,
+   "gazNear": [
+    {
+     "id": "cragstone-waterfall",
+     "name": "Cragstone Waterfall",
+     "kind": "poi",
+     "d": 131,
+     "teleport": "@teleloc 0xB6A30011 56 1.1 1.9 -0.97437 0 0 -0.224951",
+     "pos": [
+      35000,
+      31297.1,
+      1.9
+     ]
+    },
+    {
+     "id": "thistledown-festival-stone",
+     "name": "Thistledown Festival Stone",
+     "kind": "poi",
+     "d": 161,
+     "teleport": "@teleloc 0xB5A20040 188.3 176.4 44 -0.999048 0 0 -0.043619",
+     "pos": [
+      34940.3,
+      31280.4,
+      44
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "cragstone-falls",
+     "name": "Cragstone Falls",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 29.00N 43.90E",
+     "pos": null,
+     "map": {
+      "ns": 29,
+      "ew": 43.9
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 152,
+   "timeOfDay": 0.44,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-cragstone-falls"
+  },
+  {
+   "title": "Drudge Fort",
+   "name": "Drudge Fort",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A huge wooden Fort at 25.4N 45.9E near Cragstone.<br> It's quite full of Drudges.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Drudge_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     25.4,
+     45.9
+    ]
+   ],
+   "map": {
+    "ns": 25.4,
+    "ew": 45.9
+   },
+   "world": [
+    35484.0,
+    30564.0
+   ],
+   "lb": "0xB89F",
+   "coveredDistM": 480,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 604,
+   "gazNear": [
+    {
+     "id": "far-horizon-cottages-portal",
+     "name": "Far Horizon Cottages Portal",
+     "kind": "landmark",
+     "d": 198,
+     "teleport": "@teleloc 0xB9A00011 54.7267 19.4542 54.005 0.039372 0 0 0.999225",
+     "pos": [
+      35574.727,
+      30739.454,
+      54.005
+     ]
+    },
+    {
+     "id": "south-victory-harbor-portal",
+     "name": "South Victory Harbor Portal",
+     "kind": "landmark",
+     "d": 203,
+     "teleport": "@teleloc 0xB9A00012 51.2218 27.7619 54.005 -0.36487 0 0 -0.931058",
+     "pos": [
+      35571.222,
+      30747.762,
+      54.005
+     ]
+    },
+    {
+     "id": "cragstone-farms-portal",
+     "name": "Cragstone Farms Portal",
+     "kind": "landmark",
+     "d": 207,
+     "teleport": "@teleloc 0xB9A00012 59.694 27.2464 54.005 -0.1692 0 0 -0.985582",
+     "pos": [
+      35579.694,
+      30747.246,
+      54.005
+     ]
+    },
+    {
+     "id": "forgotten-hills-portal",
+     "name": "Forgotten Hills Portal",
+     "kind": "landmark",
+     "d": 211,
+     "teleport": "@teleloc 0xB9A00012 50.2756 36.6571 54.005 -0.648457 0 0 -0.761251",
+     "pos": [
+      35570.276,
+      30756.657,
+      54.005
+     ]
+    },
+    {
+     "id": "ispan-hill-portal",
+     "name": "Ispan Hill Portal",
+     "kind": "landmark",
+     "d": 211,
+     "teleport": "@teleloc 0xB9A00012 66.9201 28.6189 54.005 -0.257668 0 0 0.966233",
+     "pos": [
+      35586.92,
+      30748.619,
+      54.005
+     ]
+    },
+    {
+     "id": "haliana-portal",
+     "name": "Haliana Portal",
+     "kind": "landmark",
+     "d": 218,
+     "teleport": "@teleloc 0xB9A00012 51.2603 44.1078 54.005 0.869993 0 0 0.493065",
+     "pos": [
+      35571.26,
+      30764.108,
+      54.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "drudge-fort-cave",
+     "name": "Drudge Fort Cave",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 00EE",
+     "pos": null,
+     "map": {
+      "ns": 25.4,
+      "ew": 45.9
+     }
+    },
+    {
+     "id": "under-drudge-fort",
+     "name": "Under Drudge Fort",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x00EE03A4 160 -150 0.005 1 0 0 0",
+     "pos": [
+      160,
+      45546,
+      0.005
+     ],
+     "map": {
+      "ns": 25.4,
+      "ew": 45.9
+     }
+    }
+   ],
+   "insertAfter": "glenden-wood",
+   "insertBefore": "cragstone",
+   "insertCostM": 51,
+   "timeOfDay": 0.43,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 480 m from shot:cragstone.03)",
+   "siteId": "poi-drudge-fort"
+  },
+  {
+   "title": "Asheron's Castle",
+   "name": "Asheron's Castle",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === The home of Asheron on Asheron's Island. Located at 21.1N, 69.3E on top of a huge mountain, with a long spiraling path up.<br> The castle has been playing a major role during the A Time of Chaos story arc. Since then, the Castle has been accessible on and off during different story arcs. <br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Asheron_s_Castle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     17.9,
+     64.3
+    ],
+    [
+     21.1,
+     69.3
+    ]
+   ],
+   "map": {
+    "ns": 21.1,
+    "ew": 69.3
+   },
+   "world": [
+    41100.0,
+    29532.0
+   ],
+   "lb": "0xD699",
+   "coveredDistM": 1212,
+   "coveredBy": "shot:eastham.01",
+   "nearestSite": "eastham",
+   "nearestSiteM": 1720,
+   "gazNear": [
+    {
+     "id": "eastham-castle",
+     "name": "Eastham Castle",
+     "kind": "poi",
+     "d": 18,
+     "teleport": "@teleloc 0xD599003F 186.2 151.8 374 -0.87462 0 0 -0.48481",
+     "pos": [
+      41082.2,
+      29527.8,
+      374
+     ]
+    },
+    {
+     "id": "asherons-castle",
+     "name": "Asheron's Castle",
+     "kind": "poi",
+     "d": 46,
+     "teleport": "@teleloc 0xD59A0039 177 1.21 373.501 0 0 0 -1",
+     "pos": [
+      41073,
+      29569.21,
+      373.501
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "asherons-castle",
+     "name": "Asheron's Castle",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xD59A0039 177 1.21 373.501 0 0 0 -1",
+     "pos": [
+      41073,
+      29569.21,
+      373.501
+     ],
+     "map": {
+      "ns": 21.26,
+      "ew": 69.19
+     }
+    },
+    {
+     "id": "asherons-castle-portal",
+     "name": "Asheron's Castle Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xD6930006 20.1916 132.842 -0.033125 0.999733 0 0 -0.023105",
+     "pos": [
+      41108.192,
+      28356.842,
+      -0.033
+     ],
+     "map": {
+      "ns": 16.2,
+      "ew": 69.33
+     }
+    }
+   ],
+   "insertAfter": "arwic",
+   "insertBefore": "eastham",
+   "insertCostM": 1681,
+   "timeOfDay": 0.42,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-asherons-castle"
+  },
+  {
+   "title": "Riverbend Tower",
+   "name": "Riverbend Tower",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === An Empyrean Stone Tower located along the River Prosper. Riverbend Portals drop here. There is a Renegade Stronghold nearby at 2.4S, 63.7E. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Riverbend_Tower.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -2.4,
+     63.7
+    ],
+    [
+     -2.3,
+     63.2
+    ]
+   ],
+   "map": {
+    "ns": -2.3,
+    "ew": 63.2
+   },
+   "world": [
+    39636.0,
+    23916.0
+   ],
+   "lb": "0xCE7C",
+   "coveredDistM": 2678,
+   "coveredBy": "shot:dryreach.05",
+   "nearestSite": "dryreach",
+   "nearestSiteM": 2733,
+   "gazNear": [
+    {
+     "id": "riverbend",
+     "name": "Riverbend",
+     "kind": "poi",
+     "d": 21,
+     "teleport": "@teleloc 0xCE7C0025 105.4 109.6 24 0.461749 0 0 -0.887011",
+     "pos": [
+      39657.4,
+      23917.6,
+      24
+     ]
+    },
+    {
+     "id": "renegade-stronghold-portal-cf7c",
+     "name": "Renegade Stronghold Portal",
+     "kind": "landmark",
+     "d": 132,
+     "teleport": "@teleloc 0xCF7C0004 19.894667 75.2291 4.005 1 0 0 0",
+     "pos": [
+      39763.895,
+      23883.229,
+      4.005
+     ]
+    },
+    {
+     "id": "riverbend-cottages",
+     "name": "Riverbend Cottages",
+     "kind": "poi",
+     "d": 468,
+     "teleport": "@teleloc 0xD07B0011 68.801 12.543 16.005 -0.998716 0 0 -0.050663",
+     "pos": [
+      40004.801,
+      23628.543,
+      16.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "riverbend-tower",
+     "name": "Riverbend Tower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 2.30S 63.20E",
+     "pos": null,
+     "map": {
+      "ns": -2.3,
+      "ew": 63.2
+     }
+    }
+   ],
+   "insertAfter": "eastham",
+   "insertBefore": "dryreach",
+   "insertCostM": 921,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-riverbend-tower"
+  },
+  {
+   "title": "East Rithwic Outpost",
+   "name": "East Rithwic Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Rithwic_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     10.4,
+     61.4
+    ]
+   ],
+   "map": {
+    "ns": 10.4,
+    "ew": 61.4
+   },
+   "world": [
+    39204.0,
+    26964.0
+   ],
+   "lb": "0xCC8C",
+   "coveredDistM": 470,
+   "coveredBy": "shot:rithwic.05",
+   "nearestSite": "rithwic",
+   "nearestSiteM": 596,
+   "gazNear": [
+    {
+     "id": "life-stone-near-rithwic-cc8c",
+     "name": "Life Stone near Rithwic",
+     "kind": "landmark",
+     "d": 8,
+     "teleport": "@teleloc 0xCC8C000C 34.3448 76.644 24.005 -0.999474 0 0 0.032436",
+     "pos": [
+      39202.345,
+      26956.644,
+      24.005
+     ]
+    },
+    {
+     "id": "new-cannthalo-portal",
+     "name": "New Cannthalo Portal",
+     "kind": "landmark",
+     "d": 394,
+     "teleport": "@teleloc 0xCB8A0024 109.152 92.6545 17.7262 -0.277118 0 0 0.960836",
+     "pos": [
+      39085.152,
+      26588.655,
+      17.726
+     ]
+    },
+    {
+     "id": "glystaene-cottages-portal",
+     "name": "Glystaene Cottages Portal",
+     "kind": "landmark",
+     "d": 398,
+     "teleport": "@teleloc 0xCB8A0024 101.342 90.8878 17.579 -0.324793 0 0 0.945785",
+     "pos": [
+      39077.342,
+      26586.888,
+      17.579
+     ]
+    },
+    {
+     "id": "destroyed-lytelthorpe-portal",
+     "name": "Destroyed Lytelthorpe Portal",
+     "kind": "landmark",
+     "d": 403,
+     "teleport": "@teleloc 0xCA8B001B 73.2267 69.7721 8.21607 -0.686718 0 0 0.726924",
+     "pos": [
+      38857.227,
+      26757.772,
+      8.216
+     ]
+    },
+    {
+     "id": "siege-road-villas-portal",
+     "name": "Siege Road Villas Portal",
+     "kind": "landmark",
+     "d": 406,
+     "teleport": "@teleloc 0xCB8A001C 93.7959 84.5303 16.9939 -0.929687 0 0 -0.368351",
+     "pos": [
+      39069.796,
+      26580.53,
+      16.994
+     ]
+    },
+    {
+     "id": "slinker-meadows-portal",
+     "name": "Slinker Meadows Portal",
+     "kind": "landmark",
+     "d": 414,
+     "teleport": "@teleloc 0xCB8A001C 91.5895 76.9193 16.4149 -0.883581 0 0 -0.468278",
+     "pos": [
+      39067.59,
+      26572.919,
+      16.415
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "east-rithwic-outpost",
+     "name": "East Rithwic Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 10.40N 61.40E",
+     "pos": null,
+     "map": {
+      "ns": 10.4,
+      "ew": 61.4
+     }
+    }
+   ],
+   "insertAfter": "oolutangas-refuge",
+   "insertBefore": "rithwic",
+   "insertCostM": 1,
+   "timeOfDay": 0.7,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 470 m from shot:rithwic.05)",
+   "siteId": "poi-east-rithwic-outpost"
+  },
+  {
+   "title": "South Rithwic Outpost",
+   "name": "South Rithwic Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Rithwic_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     7.6,
+     58.4
+    ]
+   ],
+   "map": {
+    "ns": 7.6,
+    "ew": 58.4
+   },
+   "world": [
+    38484.0,
+    26292.0
+   ],
+   "lb": "0xC888",
+   "coveredDistM": 709,
+   "coveredBy": "shot:rithwic.02",
+   "nearestSite": "rithwic",
+   "nearestSiteM": 779,
+   "gazNear": [
+    {
+     "id": "life-stone-near-rithwic-c888",
+     "name": "Life Stone near Rithwic",
+     "kind": "landmark",
+     "d": 19,
+     "teleport": "@teleloc 0xC8880028 101.437 172.17 28.005 0.870746 0 0 -0.491733",
+     "pos": [
+      38501.437,
+      26284.17,
+      28.005
+     ]
+    },
+    {
+     "id": "destroyed-lytelthorpe-portal",
+     "name": "Destroyed Lytelthorpe Portal",
+     "kind": "landmark",
+     "d": 597,
+     "teleport": "@teleloc 0xCA8B001B 73.2267 69.7721 8.21607 -0.686718 0 0 0.726924",
+     "pos": [
+      38857.227,
+      26757.772,
+      8.216
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "south-rithwic-outpost",
+     "name": "South Rithwic Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 7.60N 58.40E",
+     "pos": null,
+     "map": {
+      "ns": 7.6,
+      "ew": 58.4
+     }
+    }
+   ],
+   "insertAfter": "rithwic",
+   "insertBefore": "lytelthorpe",
+   "insertCostM": 120,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-south-rithwic-outpost"
+  },
+  {
+   "title": "East Lytelthorpe Outpost",
+   "name": "East Lytelthorpe Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event.<br> This outpost has a long row of Empyrean Pillars that lead to the nearby Forgotten Temple.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Lytelthorpe_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     0.9,
+     54.2
+    ]
+   ],
+   "map": {
+    "ns": 0.9,
+    "ew": 54.2
+   },
+   "world": [
+    37476.0,
+    24684.0
+   ],
+   "lb": "0xC380",
+   "coveredDistM": 666,
+   "coveredBy": "shot:lytelthorpe.07",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 716,
+   "gazNear": [
+    {
+     "id": "life-stone-near-lytelthorpe-c380",
+     "name": "Life Stone near Lytelthorpe",
+     "kind": "landmark",
+     "d": 25,
+     "teleport": "@teleloc 0xC3800006 17.9662 125.489 34.005 -0.437001 0 0 0.899461",
+     "pos": [
+      37457.966,
+      24701.489,
+      34.005
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-bluespire-c280",
+     "name": "Destroyed Portal to Bluespire",
+     "kind": "landmark",
+     "d": 87,
+     "teleport": "@teleloc 0xC2800040 179.601 180.062 36.5 0.236117 0 0 -0.971725",
+     "pos": [
+      37427.601,
+      24756.062,
+      36.5
+     ]
+    },
+    {
+     "id": "setabs-barracks-portal",
+     "name": "Setab's Barracks Portal",
+     "kind": "landmark",
+     "d": 471,
+     "teleport": "@teleloc 0xC2820017 57.8179 162.889 54.005 -0.876503 0 0 -0.481396",
+     "pos": [
+      37305.818,
+      25122.889,
+      54.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "east-lytelthorpe-outpost",
+     "name": "East Lytelthorpe Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 0.90N 54.20E",
+     "pos": null,
+     "map": {
+      "ns": 0.9,
+      "ew": 54.2
+     }
+    }
+   ],
+   "insertAfter": "rithwic",
+   "insertBefore": "lytelthorpe",
+   "insertCostM": 325,
+   "timeOfDay": 0.78,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 666 m from shot:lytelthorpe.07)",
+   "siteId": "poi-east-lytelthorpe-outpost"
+  },
+  {
+   "title": "West Lytelthorpe Outpost",
+   "name": "West Lytelthorpe Outpost",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/West_Lytelthorpe_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     1.0,
+     48.3
+    ]
+   ],
+   "map": {
+    "ns": 1.0,
+    "ew": 48.3
+   },
+   "world": [
+    36060.0,
+    24708.0
+   ],
+   "lb": "0xBB80",
+   "coveredDistM": 648,
+   "coveredBy": "shot:lytelthorpe.06",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 701,
+   "gazNear": [
+    {
+     "id": "fountain-near-lytelthorpe",
+     "name": "Fountain near Lytelthorpe",
+     "kind": "landmark",
+     "d": 14,
+     "teleport": "@teleloc 0xBB80003E 169.751 135.654 44.005 -0.690042 0 0 0.72377",
+     "pos": [
+      36073.751,
+      24711.654,
+      44.005
+     ]
+    },
+    {
+     "id": "life-stone-near-lytelthorpe-bb80",
+     "name": "Life Stone near Lytelthorpe",
+     "kind": "landmark",
+     "d": 24,
+     "teleport": "@teleloc 0xBB80003F 171.236 150.405 44.005 0.993073 0 0 -0.117497",
+     "pos": [
+      36075.236,
+      24726.405,
+      44.005
+     ]
+    },
+    {
+     "id": "seedsow-festival-stone",
+     "name": "Seedsow Festival Stone",
+     "kind": "poi",
+     "d": 420,
+     "teleport": "@teleloc 0xB980002A 134.2 24.5 64 -0.996917 0 0 -0.078459",
+     "pos": [
+      35654.2,
+      24600.5,
+      64
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-holtburg-bd81",
+     "name": "Destroyed Portal to Holtburg",
+     "kind": "landmark",
+     "d": 426,
+     "teleport": "@teleloc 0xBD810035 165.119 104.77 55.715 -0.135711 0 0 0.990748",
+     "pos": [
+      36453.119,
+      24872.77,
+      55.715
+     ]
+    },
+    {
+     "id": "north-yanshi-plains-settlement-portal",
+     "name": "North Yanshi Plains Settlement Portal",
+     "kind": "landmark",
+     "d": 563,
+     "teleport": "@teleloc 0xBE820012 68.023 27.7925 39.4914 -0.595708 0 0 -0.803201",
+     "pos": [
+      36548.023,
+      24987.793,
+      39.491
+     ]
+    },
+    {
+     "id": "neu-gerz-villas-portal",
+     "name": "Neu Gerz Villas Portal",
+     "kind": "landmark",
+     "d": 565,
+     "teleport": "@teleloc 0xBE820019 75.6442 18.1893 38.1855 -0.196192 0 0 -0.980565",
+     "pos": [
+      36555.644,
+      24978.189,
+      38.186
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "west-lytelthorpe-outpost",
+     "name": "West Lytelthorpe Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 1.00N 48.30E",
+     "pos": null,
+     "map": {
+      "ns": 1,
+      "ew": 48.3
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 665,
+   "timeOfDay": 0.77,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate (near existing coverage: 648 m from shot:lytelthorpe.06)",
+   "siteId": "poi-west-lytelthorpe-outpost"
+  },
+  {
+   "title": "Festival Stone of Seedsow",
+   "name": "Festival Stone of Seedsow",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Seedsow can be found in the woods to the west of the fortress of Lytelthorpe. Look near 0.5N, 46.1E.\"<br> -- Alatar Locke, The Festival Stones of the Empyreans<br><br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Seedsow.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     0.5,
+     46.1
+    ],
+    [
+     0.6,
+     46.6
+    ]
+   ],
+   "map": {
+    "ns": 0.5,
+    "ew": 46.1
+   },
+   "world": [
+    35532.0,
+    24588.0
+   ],
+   "lb": "0xB980",
+   "coveredDistM": 1185,
+   "coveredBy": "shot:lytelthorpe.06",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 1231,
+   "gazNear": [
+    {
+     "id": "seedsow-festival-stone",
+     "name": "Seedsow Festival Stone",
+     "kind": "poi",
+     "d": 123,
+     "teleport": "@teleloc 0xB980002A 134.2 24.5 64 -0.996917 0 0 -0.078459",
+     "pos": [
+      35654.2,
+      24600.5,
+      64
+     ]
+    },
+    {
+     "id": "olthoi-chasm-portal",
+     "name": "Olthoi Chasm Portal",
+     "kind": "landmark",
+     "d": 336,
+     "teleport": "@teleloc 0xB7800013 63.2432 59.1481 24.005 -0.537186 0 0 -0.843464",
+     "pos": [
+      35199.243,
+      24635.148,
+      24.005
+     ]
+    },
+    {
+     "id": "fountain-near-lytelthorpe",
+     "name": "Fountain near Lytelthorpe",
+     "kind": "landmark",
+     "d": 556,
+     "teleport": "@teleloc 0xBB80003E 169.751 135.654 44.005 -0.690042 0 0 0.72377",
+     "pos": [
+      36073.751,
+      24711.654,
+      44.005
+     ]
+    },
+    {
+     "id": "life-stone-near-lytelthorpe-bb80",
+     "name": "Life Stone near Lytelthorpe",
+     "kind": "landmark",
+     "d": 561,
+     "teleport": "@teleloc 0xBB80003F 171.236 150.405 44.005 0.993073 0 0 -0.117497",
+     "pos": [
+      36075.236,
+      24726.405,
+      44.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-seedsow",
+     "name": "Festival Stone of Seedsow",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 0.50N 46.10E",
+     "pos": null,
+     "map": {
+      "ns": 0.5,
+      "ew": 46.1
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 1336,
+   "timeOfDay": 0.76,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-seedsow"
+  },
+  {
+   "title": "Frest Greelving's Mansion",
+   "name": "Frest Greelving's Mansion",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Frest_Greelving_s_Mansion.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     2.2,
+     50.5
+    ],
+    [
+     6.5,
+     43.9
+    ]
+   ],
+   "map": {
+    "ns": 6.5,
+    "ew": 43.9
+   },
+   "world": [
+    35004.0,
+    26028.0
+   ],
+   "lb": "0xB687",
+   "coveredDistM": 2141,
+   "coveredBy": "shot:lytelthorpe.06",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 2220,
+   "gazNear": [
+    {
+     "id": "haunted-mansion",
+     "name": "Haunted Mansion",
+     "kind": "poi",
+     "d": 121,
+     "teleport": "@teleloc 0xB6860008 21.1143 185.136 40.6206 1 0 0 0",
+     "pos": [
+      34965.114,
+      25913.136,
+      40.621
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "frest-greelvings-mansion",
+     "name": "Frest Greelving's Mansion",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 6.50N 43.90E",
+     "pos": null,
+     "map": {
+      "ns": 6.5,
+      "ew": 43.9
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 931,
+   "timeOfDay": 0.74,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-frest-greelvings-mansion"
+  },
+  {
+   "title": "10.4N, 53.5E - Rithwic Festival Grounds",
+   "name": "Rithwic Festival Grounds",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the Festival Grounds, this one located at 10.4N, 53.5E just a bit W from Rithwic. <br> It has two shopkeepers located in tents, two Chessboards, a running track, a few Target Drudges to practice on, and many more items to have a day out in the fields.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/10_4N_53_5E_Rithwic_Festival_Grounds.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     10.4,
+     53.5
+    ]
+   ],
+   "map": {
+    "ns": 10.4,
+    "ew": 53.5
+   },
+   "world": [
+    37308.0,
+    26964.0
+   ],
+   "lb": "0xC28C",
+   "coveredDistM": 1145,
+   "coveredBy": "shot:rithwic.02",
+   "nearestSite": "rithwic",
+   "nearestSiteM": 1312,
+   "gazNear": [
+    {
+     "id": "leafdawning-festival-stone",
+     "name": "Leafdawning Festival Stone",
+     "kind": "poi",
+     "d": 163,
+     "teleport": "@teleloc 0xC38C000D 28.8 112.6 40 -0.267238 0 0 -0.963631",
+     "pos": [
+      37468.8,
+      26992.6,
+      40
+     ]
+    },
+    {
+     "id": "trothyrs-rest-portal",
+     "name": "Trothyr's Rest Portal",
+     "kind": "landmark",
+     "d": 334,
+     "teleport": "@teleloc 0xC48C0004 10.2642 72.9759 29.1503 -0.707107 0 0 -0.707107",
+     "pos": [
+      37642.264,
+      26952.976,
+      29.15
+     ]
+    },
+    {
+     "id": "a-ruin-portal-c48d",
+     "name": "A Ruin Portal",
+     "kind": "landmark",
+     "d": 453,
+     "teleport": "@teleloc 0xC48D000F 45.2677 154.041 15.7426 0.464293 0 0 0.885682",
+     "pos": [
+      37677.268,
+      27226.041,
+      15.743
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "rithwic-festival-grounds",
+     "name": "Rithwic Festival Grounds",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 10.40N 53.50E",
+     "pos": null,
+     "map": {
+      "ns": 10.4,
+      "ew": 53.5
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 89,
+   "timeOfDay": 0.73,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-rithwic-festival-grounds"
+  }
+ ]
+}

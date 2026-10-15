@@ -1,0 +1,165 @@
+{
+ "name": "Assassin's Roost",
+ "title": "Assassin's Roost",
+ "siteId": "poi-assassins-roost",
+ "summary": "A 78 m Empyrean lighthouse tower (28 m base, z 64-142) on a conical mound (z 32-64) in the middle of the north-east crater of the South Direlands Craters (73.9S 43.7W), the headquarters of Selaina the Subtle and Creed; it can only be entered through its quest, but the surface tower is freely visible.",
+ "landmarks": [
+  {
+   "name": "Lighthouse tower",
+   "pos": [
+    13980,
+    6732,
+    64
+   ],
+   "heightM": 78,
+   "note": "0x010011F3."
+  }
+ ],
+ "site": {
+  "id": "poi-assassins-roost",
+  "name": "Assassin's Roost",
+  "teleport": "@teleloc 0x4822001F 94.0 156.0 35.00 1 0 0 0",
+  "anchor": [
+   13980,
+   6732,
+   64
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.57,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport on the crater floor 78 m west-south-west of the tower, 7 m from the nearest rock."
+ },
+ "insertAfter": "candeth-keep",
+ "insertBefore": "qalabar",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -73.9,
+   "ew": -43.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3400,
+  "coveredBy": "shot:wai-jhou.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Assassin_s_Roost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-assassins-roost.01",
+   "site": "poi-assassins-roost",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13980,
+     6732,
+     64
+    ],
+    "height": 78,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 48,
+    "radiusEnd": 62,
+    "heightStart": 20,
+    "heightEnd": 52,
+    "revolutions": 0.14,
+    "direction": "cw",
+    "bearingDeg": 170,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb slowly round the 78 m lighthouse tower in the crater, 48 to 62 m out, climbing from 20 m to 52 m up its 78 m shaft with the sun behind; keep 30 m from the tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature helix around the 78 m Empyrean lighthouse in the crater: radius 48 -> 62 m, climbing from 20 to 52 m above its mound, 0.14 turn from south toward south-west, the crater rim wheeling behind; sun behind. Verified (check.mjs, full take flown): take 0-11 s: AGL 52..84 m, nearest drawn 21.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.55 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 21.7 m); edit 3-9.5 s: AGL 57.52..82.6 m, nearest drawn 27.18 m (scenery-default 0x020003EE@13978,6687), vmax 8.55 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 27.2 m); flight cinema peak 8.54 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-assassins-roost.02",
+   "site": "poi-assassins-roost",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13980,
+     6732,
+     64
+    ],
+    "height": 78,
+    "radius": 8
+   },
+   "params": {
+    "nearDistance": 45,
+    "farDistance": 100,
+    "direction": "out",
+    "heightAGL": 6,
+    "minFovDeg": 10,
+    "maxFovDeg": 90,
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Dolly back across the crater floor from the tower while zooming in so the lighthouse holds its size and the crater rim swells behind it; keep 4 m above the ground.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertigo dolly: backs off from 45 to 100 m across the crater floor while the lens zooms in so the lighthouse keeps its size and the crater rim swells behind it; sun behind. Verified (check.mjs, full take flown): take 0-10 s: AGL 25.66..38 m, nearest drawn 7.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.64 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 7.7 m); edit 2-8 s: AGL 27.04..38 m, nearest drawn 7.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.64 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 7.7 m); flight cinema peak 8.62 m/s (cap 12), max tracking gap 0.07 m."
+  }
+ ],
+ "verification": {
+  "poi-assassins-roost.01": "take 0-11 s: AGL 52..84 m, nearest drawn 21.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.55 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 21.7 m); edit 3-9.5 s: AGL 57.52..82.6 m, nearest drawn 27.18 m (scenery-default 0x020003EE@13978,6687), vmax 8.55 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 27.2 m); flight cinema peak 8.54 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-assassins-roost.02": "take 0-10 s: AGL 25.66..38 m, nearest drawn 7.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.64 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 7.7 m); edit 2-8 s: AGL 27.04..38 m, nearest drawn 7.66 m (scenery-default 0x020003EE@13978,6687), vmax 8.64 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 7.7 m); flight cinema peak 8.62 m/s (cap 12), max tracking gap 0.07 m"
+ }
+}

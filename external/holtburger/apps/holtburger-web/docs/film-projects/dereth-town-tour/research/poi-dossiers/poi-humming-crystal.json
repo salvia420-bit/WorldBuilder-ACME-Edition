@@ -1,0 +1,256 @@
+{
+ "name": "Humming Crystal",
+ "title": "Humming Crystal",
+ "siteId": "poi-humming-crystal",
+ "summary": "A strange humming crystal and a floating Advocate spire high atop the mountain over the buried fortress city of Vasith. In the kit it is a stepped obsidian needle that rises from z 370 to a tiny summit at z 560. The Strange Humming Crystal sits on the summit, ringed by four metallic sculptures, with two exit portals beside it. The floating Advocate Spire (0x01001776, 18.7 x 18.7 x 35.2 m) hangs directly above it from z 562.5 to 597.75.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -2.8,
+   "ew": -82.8
+  },
+  "mapWorld": [
+   4596.0,
+   23796.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Humming_Crystal.txt",
+  "coveredDistM": 2780,
+  "coveredBy": "shot:fort-tethana.03"
+ },
+ "landmarks": [
+  {
+   "name": "Strange Humming Crystal",
+   "pos": [
+    4596,
+    23795.8,
+    560
+   ],
+   "heightM": 2.5,
+   "note": "Spawn on the summit, with blue light emitters."
+  },
+  {
+   "name": "Floating Advocate Spire",
+   "pos": [
+    4596,
+    23796,
+    562.5
+   ],
+   "heightM": 35.2,
+   "note": "0x01001776, floor z 572.9, top z 597.75."
+  },
+  {
+   "name": "Sculptures and exit portals",
+   "pos": [
+    4586.9,
+    23786.6,
+    560
+   ],
+   "heightM": 2.3,
+   "note": "0x020003B7/B8 sculptures 4 m from the crystal, and two Exit Portals."
+  }
+ ],
+ "site": {
+  "id": "poi-humming-crystal",
+  "name": "Humming Crystal",
+  "gazetteerId": "humming-crystal",
+  "teleport": "@teleloc 0x177B0040 180 187 560 0 0 0 -1",
+  "anchor": [
+   4596,
+   23796,
+   560
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer humming-crystal teleloc (4596,23803,560) on the summit, 7 m from the crystal."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-humming-crystal.01",
+   "technique": "classic.orbit",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4596,
+     23796,
+     560
+    ],
+    "height": 38,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 205,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "distance": 46,
+    "thirds": "center",
+    "revolutions": 0.25,
+    "direction": "cw"
+   },
+   "standingOrder": "Orbit a quarter turn clockwise 46 m around the needle summit with the Advocate spire floating over the humming crystal, at the spire's height; keep 25 m clear of the rock.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view: a quarter orbit clockwise from bearing 205 to 295, 46 m from the needle summit at the height of the Advocate spire floating over the Strange Humming Crystal (lens z 584, the summit at z 560). The stepped obsidian peak drops 190 m below, and the Dires, the buried city of Vasith's mountains and the sky turn behind the floating tower. The afternoon sun is behind the lens. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 57.83..80.1 m, nearest 37.04 m (spawn Exit Portal), vmax 6.53 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 226.7 m (not drawn by the default bake); edit 2.5-9s: AGL 58.15..80.1 m, nearest 37.05 m (spawn Exit Portal), vmax 6.53 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 226.7 m (not drawn by the default bake)."
+  },
+  {
+   "id": "poi-humming-crystal.02",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     2.5,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4596,
+     23796,
+     560
+    ],
+    "height": 3,
+    "radius": 2
+   },
+   "params": {
+    "startDistance": 14,
+    "endDistance": 72,
+    "startHeight": 5,
+    "endHeight": 40,
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Pull back west-south-west and up from the strange humming crystal, 14 m to 72 m out, until the stepped needle mountain and its floating spire stand alone over the Dires.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie: the drone starts 14 m west-south-west of the humming crystal, 5 m up. It flies back and up to 72 m out and 40 m up, so the crystal, its ring of metallic sculptures, the two exit portals and the floating spire shrink onto the tip of the needle, and the stepped mountain and the Dires open below. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 6.93..132.8 m, nearest 4.71 m (spawn Exit Portal), vmax 9.67 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 226.4 m (not drawn by the default bake); edit 4-10s: AGL 43.71..130.2 m, nearest 22.17 m (spawn Exit Portal), vmax 9.67 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 226.8 m (not drawn by the default bake); flight cinema: peak 9.66 m/s (cap 12), tracking gap 0.07 m."
+  },
+  {
+   "id": "poi-humming-crystal.03",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4596,
+     23796,
+     562.5
+    ],
+    "height": 35,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 300,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 9,
+    "spinDeg": 10
+   },
+   "standingOrder": "From the summit rock 9 m from the crystal, look straight up at the underside of the floating Advocate spire turning slowly against the sky; keep 2 m from the sculptures.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye: the lens is 0.8 m above the summit rock, 9 m north-west of the crystal, and looks up 75 deg on a 75 deg lens at the underside of the floating Advocate spire hanging 2-38 m overhead against the sky, rolling 10 deg. Rank 3. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 0.8..0.8 m, nearest 3.88 m (static 0x177B#1 0x020003B7), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 226.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.8..0.8 m, nearest 3.88 m (static 0x177B#1 0x020003B7), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 226.2 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-humming-crystal.01",
+   "technique": "classic.orbit",
+   "rank": 1,
+   "check": "take 11s: AGL 57.83..80.1 m, nearest 37.04 m (spawn Exit Portal), vmax 6.53 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 226.7 m (not drawn by the default bake); edit 2.5-9s: AGL 58.15..80.1 m, nearest 37.05 m (spawn Exit Portal), vmax 6.53 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 226.7 m (not drawn by the default bake)"
+  },
+  {
+   "shot": "poi-humming-crystal.02",
+   "technique": "drone.dronie",
+   "rank": 2,
+   "check": "take 11s: AGL 6.93..132.8 m, nearest 4.71 m (spawn Exit Portal), vmax 9.67 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 226.4 m (not drawn by the default bake); edit 4-10s: AGL 43.71..130.2 m, nearest 22.17 m (spawn Exit Portal), vmax 9.67 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 226.8 m (not drawn by the default bake); flight cinema: peak 9.66 m/s (cap 12), tracking gap 0.07 m"
+  },
+  {
+   "shot": "poi-humming-crystal.03",
+   "technique": "classic.worms-eye",
+   "rank": 3,
+   "check": "take 8s: AGL 0.8..0.8 m, nearest 3.88 m (static 0x177B#1 0x020003B7), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 226.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 0.8..0.8 m, nearest 3.88 m (static 0x177B#1 0x020003B7), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 226.2 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 17.5,
+ "techniques": [
+  "classic.orbit",
+  "drone.dronie",
+  "classic.worms-eye"
+ ]
+}

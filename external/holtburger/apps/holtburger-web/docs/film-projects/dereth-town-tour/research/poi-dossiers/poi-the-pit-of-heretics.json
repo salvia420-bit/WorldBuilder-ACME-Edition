@@ -1,0 +1,232 @@
+{
+ "name": "The Pit of Heretics",
+ "title": "The Pit of Heretics",
+ "siteId": "poi-the-pit-of-heretics",
+ "summary": "A stepped ziggurat about 150 m square of red-roofed stone tiers (z 8-45) south-east of Candeth Keep (88.0S 55.0W), crowned by a hall with four portal pillars and a green-blue disc (z 45-52); two statue platforms (35 m discs) 168 m east and west hold the Lord-test statues, and the southern sea lies 200 m to the south-east.",
+ "landmarks": [
+  {
+   "name": "Summit hall and portal pillars",
+   "pos": [
+    11220,
+    3372,
+    33
+   ],
+   "heightM": 19,
+   "note": "0x010041F5 + Portal Pillars at z 44.6 + disc 0x010041F2 at z 51.6."
+  },
+  {
+   "name": "South stair",
+   "pos": [
+    11220,
+    3300,
+    8
+   ],
+   "heightM": 12.6,
+   "note": "0x010041E6 staircase tier."
+  },
+  {
+   "name": "Statue platforms",
+   "pos": [
+    11388,
+    3372,
+    8
+   ],
+   "heightM": 2.6,
+   "note": "Also at (11052,3372); statues are ACE spawns."
+  }
+ ],
+ "site": {
+  "id": "poi-the-pit-of-heretics",
+  "name": "The Pit of Heretics",
+  "teleport": "@teleloc 0x3A110032 164.0 36.0 13.83 1 0 0 0",
+  "anchor": [
+   11220,
+   3372,
+   8
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport 100 m south-east of the ziggurat on the open sand (the gazetteer Temple Door Portal entry lands on a portal)."
+ },
+ "insertAfter": "candeth-keep",
+ "insertBefore": "qalabar",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -88.0,
+   "ew": -55.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2832,
+  "coveredBy": "shot:candeth-keep.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Pit_of_Heretics.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-the-pit-of-heretics.01",
+   "site": "poi-the-pit-of-heretics",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     11220,
+     3372,
+     33
+    ],
+    "height": 19,
+    "radius": 8
+   },
+   "params": {
+    "radius": 125,
+    "heightAGL": 45,
+    "revolutions": 0.09,
+    "direction": "cw",
+    "bearingDeg": 195,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "standingOrder": "Orbit a slow arc 125 m out and 78 m up around the stepped ziggurat with the sun behind; keep 40 m from its tiers.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature orbit 125 m out and 78 m up around the stepped ziggurat: the red-roofed tiers, the portal-crowned summit and one of the statue platforms, the southern sea beyond; sun behind. Subject point = the summit hall (its prism is the subject body). Verified (check.mjs, full take flown): take 0-10 s: AGL 64.1..67.2 m, nearest drawn 62.69 m (scenery-default 0x020004B1@11127,3237), vmax 7.07 m/s, LOS blocked 1/41, subject in frame 100% (retail-bake tree 62.6 m); edit 2-8.5 s: AGL 64.1..66.7 m, nearest drawn 62.69 m (scenery-default 0x020004B1@11127,3237), vmax 7.07 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 62.6 m); flight cinema peak 7.08 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-the-pit-of-heretics.02",
+   "site": "poi-the-pit-of-heretics",
+   "technique": "drone.boomerang",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.0,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     11220,
+     3372,
+     33
+    ],
+    "height": 19,
+    "radius": 8
+   },
+   "params": {
+    "far": 65,
+    "near": 42,
+    "heightStart": 22,
+    "heightNear": 16,
+    "rise": 8,
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly in toward the portal-crowned summit of the ziggurat, stop 40 m out and drift back out climbing; keep 15 m above the tiers.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boomerang: flies in from the south-west toward the portal-crowned summit, stops 42 m out at 49 m (the four portal pillars and the green disc on the top hall) and drifts back out climbing; music-video beat; peak 7.7 m/s. Verified (check.mjs, full take flown): take 0-11 s: AGL 23.27..45.9 m, nearest drawn 16.4 m (static 0x3A11#22 0x010034D0), vmax 7.69 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 73 m); edit 1.5-7.5 s: AGL 23.27..35 m, nearest drawn 16.4 m (static 0x3A11#22 0x010034D0), vmax 6.96 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 75.7 m); flight cinema peak 7.72 m/s (cap 12), max tracking gap 0.09 m."
+  },
+  {
+   "id": "poi-the-pit-of-heretics.03",
+   "site": "poi-the-pit-of-heretics",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     11220,
+     3300,
+     8
+    ],
+    "height": 37,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "heightM": 0.8,
+    "horizontalM": 24,
+    "spinDeg": 0
+   },
+   "standingOrder": "From the sand at the foot of the south stair, look straight up the ziggurat's steps to its summit; locked low position.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye 0.8 m above the sand 24 m south of the south stair, looking up the stepped face of the ziggurat to its summit 40 m above; sun behind-left. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.8..0.8 m, nearest drawn 27.96 m (spawn Skeletal Hero Camp Generator), vmax 0 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 96.2 m); edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 27.96 m (spawn Skeletal Hero Camp Generator), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 96.2 m)."
+  }
+ ],
+ "verification": {
+  "poi-the-pit-of-heretics.01": "take 0-10 s: AGL 64.1..67.2 m, nearest drawn 62.69 m (scenery-default 0x020004B1@11127,3237), vmax 7.07 m/s, LOS blocked 1/41, subject in frame 100% (retail-bake tree 62.6 m); edit 2-8.5 s: AGL 64.1..66.7 m, nearest drawn 62.69 m (scenery-default 0x020004B1@11127,3237), vmax 7.07 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 62.6 m); flight cinema peak 7.08 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-the-pit-of-heretics.02": "take 0-11 s: AGL 23.27..45.9 m, nearest drawn 16.4 m (static 0x3A11#22 0x010034D0), vmax 7.69 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 73 m); edit 1.5-7.5 s: AGL 23.27..35 m, nearest drawn 16.4 m (static 0x3A11#22 0x010034D0), vmax 6.96 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 75.7 m); flight cinema peak 7.72 m/s (cap 12), max tracking gap 0.09 m",
+  "poi-the-pit-of-heretics.03": "take 0-8 s: AGL 0.8..0.8 m, nearest drawn 27.96 m (spawn Skeletal Hero Camp Generator), vmax 0 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 96.2 m); edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 27.96 m (spawn Skeletal Hero Camp Generator), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 96.2 m)"
+ }
+}

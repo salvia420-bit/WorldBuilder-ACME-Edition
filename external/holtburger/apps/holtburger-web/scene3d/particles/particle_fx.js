@@ -104,6 +104,7 @@ import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
 import { viewerIndoorOr } from "../viewer_cell.js";
 import { fxTier1Enabled } from "../vfx/fx_tier1.js";
 import { fxTier2Enabled } from "../vfx/fx_tier2.js";
+import { setFxClockSource } from "../fx_clock.js";
 
 const OFF_FORMS = new Set(["off", "0", "false", "no"]);
 
@@ -535,6 +536,10 @@ export function setFxTimeSource(fn) {
     throw new TypeError("setFxTimeSource: expected a function or null");
   }
   _fxTimeSource = fn || null;
+  // 2026-10-15 — the GPU FX modules that keep their own clock (vfx/fx_lights, fx_distort, fx_decals, fx_showcase,
+  // fx_ribbons, lifestone_fx) read fx_clock.js fxNowMs(): the same source, so a stepped film take animates them on
+  // the film clock too.
+  setFxClockSource(_fxTimeSource);
 }
 function _fxSourceNowMs() {
   let t = NaN;

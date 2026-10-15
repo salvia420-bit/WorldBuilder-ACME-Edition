@@ -1,0 +1,120 @@
+{
+ "name": "Grievver Valley",
+ "title": "Grievver Valley",
+ "siteId": "poi-grievver-valley",
+ "summary": "A deep, wooded valley full of grievvers at 75.9N 19.0W, near Stonehold. The floor runs from z 50 to 75 between walls that rise 90-130 m. At the valley head, at the foot of a 90 m wall, a stone-framed 28 m ruin floor with scattered stones marks the mouth of the Grievver Caves, added in Castling. A cluster of glowing spider webs hangs at (19788, 42636) on the floor.",
+ "landmarks": [
+  {
+   "name": "Grievver Caves mouth",
+   "pos": [
+    19882.6,
+    42684.0,
+    70.0
+   ],
+   "heightM": 2.2,
+   "note": "Stone-framed ruin floor 0x010029E2 (28 x 29 m) with 29 scattered stones at the foot of the 90 m head wall."
+  },
+  {
+   "name": "Spider webs",
+   "pos": [
+    19788.5,
+    42636.0,
+    52.0
+   ],
+   "heightM": 4,
+   "note": "Seven web props, one glowing."
+  }
+ ],
+ "site": {
+  "id": "poi-grievver-valley",
+  "name": "Grievver Valley",
+  "teleport": "@teleloc 0x67DE001A 94.0 41.0 73.7 1 0 0 0",
+  "anchor": [
+   19882.6,
+   42684.0,
+   70.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc on the open valley floor 22 m south-west of the cave-mouth ruin (ground 73.2, 5.2 m from the ruin floor's edge, >= 6 m from the pines); the gazetteer has no outdoor entry in the valley."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northwest POI",
+   "Geographic Area"
+  ],
+  "map": {
+   "ns": 75.9,
+   "ew": -19.0
+  },
+  "coordSrc": "index",
+  "coveredDistM": 1573,
+  "coveredBy": "shot:stonehold.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Grievver_Valley.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-grievver-valley.01",
+   "site": "poi-grievver-valley",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     2.5,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19882.6,
+     42684.0,
+     70.0
+    ],
+    "height": 2.2,
+    "radius": 8
+   },
+   "params": {
+    "heightStart": 32,
+    "heightEnd": 85,
+    "rotateDeg": 35,
+    "headingDeg": 250,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 2
+   },
+   "standingOrder": "Look straight down on the stone-framed mouth of the Grievver Caves at the foot of the valley's 90 m head wall and climb from 32 m to 85 m, rotating 35 degrees, until the wooded Grievver Valley opens around it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down rise. The camera looks straight down on the stone-framed Grievver Caves mouth at the foot of the valley's 90 m head wall and climbs from 32 m to 85 m, rotating 35 deg. The wooded valley, its walls and the grievver ground open around the dungeon entrance. A small rank-3 view. Verified (check.mjs, full take flown): take 0-10 s: AGL 32..85 m, nearest drawn 18.55 m (scenery-default 0x020003EA@19856,42687), vmax 8.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-8.5 s: AGL 42.92..82.1 m, nearest drawn 25.61 m (scenery-default 0x020003EA@19856,42687), vmax 8.32 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 8.31 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-grievver-valley.01": "take 0-10 s: AGL 32..85 m, nearest drawn 18.55 m (scenery-default 0x020003EA@19856,42687), vmax 8.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-8.5 s: AGL 42.92..82.1 m, nearest drawn 25.61 m (scenery-default 0x020003EA@19856,42687), vmax 8.32 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 8.31 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

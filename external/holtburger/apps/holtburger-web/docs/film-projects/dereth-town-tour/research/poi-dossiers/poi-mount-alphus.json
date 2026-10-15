@@ -1,0 +1,192 @@
+{
+ "name": "Mount Alphus",
+ "title": "Mount Alphus",
+ "siteId": "poi-mount-alphus",
+ "summary": "The Mount Alphus summit: a 130 x 160 m mesa at 224 m with cliffs on every side. It holds the Mount Alphus Menhir Ring (five standing stones with a Menhir Mana Field and mushroom circle) 35 m from the east rim, the tent of Zalphoos the Shopkeeper, a well, ferns, and the Base of Mt. Alphus and South Zabool portals.",
+ "landmarks": [
+  {
+   "name": "Mount Alphus Menhir Ring",
+   "pos": [
+    28726.0,
+    29100.8,
+    224.0
+   ],
+   "heightM": 3.7,
+   "note": "Five standing stones (0x02000374 x3, 0x02000375 x2), Menhir Mana Field and mushroom circle."
+  },
+  {
+   "name": "Tent of Zalphoos the Shopkeeper",
+   "pos": [
+    28691.8,
+    29100.4,
+    224.0
+   ],
+   "heightM": 5.5,
+   "note": "Tent 0x01000EDC with a well 7 m west."
+  },
+  {
+   "name": "Base of Mt. Alphus portal",
+   "pos": [
+    28659.8,
+    29146.1,
+    224.0
+   ],
+   "heightM": 3.5,
+   "note": "Portal down to the base."
+  },
+  {
+   "name": "South Zabool portal",
+   "pos": [
+    28750.3,
+    29202.1,
+    224.0
+   ],
+   "heightM": 3.5,
+   "note": "North end of the plateau."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-alphus",
+  "name": "Mount Alphus",
+  "gazetteerId": "mount-alphus",
+  "teleport": "@teleloc 0x95980029 132.20 11.90 224.50 1 0 0 0",
+  "anchor": [
+   28712.0,
+   29104.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.61,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer mount-alphus (north end of the plateau by the South Zabool portal, 100 m from the menhir ring). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0x95980029 140.2 15.9 224 -0.317305 0 0 -0.948324' because the gazetteer drop was 3.0 m from the South Zabool portal (weenieType Portal). Derived drop 9 m south-west on flat summit ground (224.0, level within 1 m for 12 m around), 11.8 m from the portal, 10.2 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 19.3,
+   "ew": 17.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3271,
+  "coveredBy": "site:glenden-wood",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Alphus.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mount-alphus.01",
+   "site": "poi-mount-alphus",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.8,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28726.0,
+     29100.8,
+     224.0
+    ],
+    "height": 3.7,
+    "radius": 4.5
+   },
+   "params": {
+    "azimuthDeg": 225,
+    "azimuthRef": "compass",
+    "elevationDeg": -8,
+    "distance": 9,
+    "thirds": "center",
+    "pushM": 1.2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.7 m above the plateau 9 m south-west of the Mount Alphus Menhir Ring, look up through the standing stones at the sky and push 1.2 m in; never closer than 3 m to any stone.",
+   "notes": "Heroic low angle through the Mount Alphus Menhir Ring - five 2.9-3.7 m standing stones around the Menhir Mana Field and a mushroom circle - looking north-east so the stones stand against open sky with the east cliff edge 35 m beyond; the south-west afternoon sun behind the lens lights the stone faces. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.74..0.8 m, nearest drawn 3.89 m (static 0x9597#13 0x02000375), vmax 0.23 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.75..0.8 m, nearest drawn 3.93 m (static 0x9597#13 0x02000375), vmax 0.23 m/s, LOS blocked 0/23, subject in frame 100%."
+  },
+  {
+   "id": "poi-mount-alphus.02",
+   "site": "poi-mount-alphus",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28726.0,
+     29100.8,
+     224.0
+    ],
+    "height": 3.7,
+    "radius": 4.5
+   },
+   "params": {
+    "heightAGL": 42,
+    "rotateDeg": 50,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang 42 m straight above the Mount Alphus Menhir Ring and turn the image 50 degrees clockwise; the lens never moves and nothing is within 35 m.",
+   "notes": "Map-like nadir (pitch -88 so the mana-field sparkle does not spin at exact nadir): the ring of stones and the mushroom circle centre frame on the flat mesa top, the tent of Zalphoos and the well at the frame's west side and the east cliff rim (34 m away) inside the frame as the image turns. Verified (check.mjs, full take flown): take 0-10 s: AGL 42..42 m, nearest drawn 38.36 m (static 0x9597#11 0x02000374), vmax 0.12 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 42..42 m, nearest drawn 38.38 m (static 0x9597#11 0x02000374), vmax 0.12 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.12 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-mount-alphus.01": "take 0-8 s: AGL 0.74..0.8 m, nearest drawn 3.89 m (static 0x9597#13 0x02000375), vmax 0.23 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.75..0.8 m, nearest drawn 3.93 m (static 0x9597#13 0x02000375), vmax 0.23 m/s, LOS blocked 0/23, subject in frame 100%",
+  "poi-mount-alphus.02": "take 0-10 s: AGL 42..42 m, nearest drawn 38.36 m (static 0x9597#11 0x02000374), vmax 0.12 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 42..42 m, nearest drawn 38.38 m (static 0x9597#11 0x02000374), vmax 0.12 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.12 m/s (cap 12), max tracking gap 0 m"
+ }
+}

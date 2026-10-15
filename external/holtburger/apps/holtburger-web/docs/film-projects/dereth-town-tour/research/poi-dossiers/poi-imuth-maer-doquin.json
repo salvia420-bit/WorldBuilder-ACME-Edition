@@ -1,0 +1,193 @@
+{
+ "name": "Imuth Maer Doquin",
+ "title": "Imuth Maer Doquin",
+ "siteId": "poi-imuth-maer-doquin",
+ "summary": "A line of ancient Empyrean buildings on a gentle wooded slope: a 19 m Empyrean stone tower with an open plank top, two stone bunkers with golden plates, a giant tree and an octagon spire hall at the east end.",
+ "landmarks": [
+  {
+   "name": "Octagon spire hall",
+   "pos": [
+    38436.0,
+    21660.0,
+    46.0
+   ],
+   "heightM": 14.7,
+   "note": "0x01000F49."
+  },
+  {
+   "name": "Empyrean stone tower",
+   "pos": [
+    38268.0,
+    21684.0,
+    38.0
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106 with plank floor on top (z 53.2)."
+  },
+  {
+   "name": "Stone bunkers",
+   "pos": [
+    38388.0,
+    21660.0,
+    44.0
+   ],
+   "heightM": 4.5,
+   "note": "Two 0x0100110A bunkers (38388,21660) and (38316,21684) with golden plates."
+  },
+  {
+   "name": "Giant tree",
+   "pos": [
+    38311.3,
+    21663.3,
+    40.6
+   ],
+   "heightM": 17.6,
+   "note": "0x020002D7."
+  }
+ ],
+ "site": {
+  "id": "poi-imuth-maer-doquin",
+  "name": "Imuth Maer Doquin",
+  "teleport": "@teleloc 0xC7710029 142.0 4.0 40.5 1 0 0 0",
+  "anchor": [
+   38352.0,
+   21672.0,
+   42.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.61,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry; teleport derived on open ground 30 m north of the bunkers (ground 40.0, nearest drawn object 14.4 m)."
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -11.6,
+   "ew": 57.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3345,
+  "coveredBy": "shot:lytelthorpe.07",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Imuth_Maer_Doquin.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-imuth-maer-doquin.01",
+   "site": "poi-imuth-maer-doquin",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38436.0,
+     21660.0,
+     46.0
+    ],
+    "height": 14.7,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 36,
+    "radiusEnd": 46,
+    "heightStart": 15,
+    "heightEnd": 32,
+    "revolutions": 0.16,
+    "direction": "cw",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Climb clockwise around the octagon spire hall of Imuth Maer Doquin from 36 m out and 15 m up to 46 m out and 32 m up; stay 15 m above the trees.",
+   "notes": "Helix on the octagon spire hall at the east end of the Empyrean ruins line (two stone bunkers, the hall, a stone tower and a giant tree); south-west sun lights the hall as the camera climbs above the tree tops. Verified (check.mjs, full take flown): take 0-11 s: AGL 13.18..32 m, nearest drawn 15.78 m (scenery-default 0x020007A3@38464,21635), vmax 6.56 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 15.38..30.5 m, nearest drawn 20.19 m (scenery-default 0x020007A3@38431,21613), vmax 6.56 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.54 m/s (cap 12), max tracking gap 0.05 m."
+  },
+  {
+   "id": "poi-imuth-maer-doquin.02",
+   "site": "poi-imuth-maer-doquin",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38268.0,
+     21684.0,
+     38.0
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "distance": 18,
+    "heightStart": 3,
+    "heightEnd": 27,
+    "bearingDeg": 225,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 1
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up 18 m south-west of the Empyrean stone tower from 3 m to 27 m, tilting down over its open top; keep 5 m from the trees at its foot.",
+   "notes": "Boom up the 19 m Empyrean stone tower's sunlit south-west face to its open plank top, revealing the bunkers and the giant tree to the east. Verified (check.mjs, full take flown): take 0-9 s: AGL 3..27 m, nearest drawn 5.36 m (scenery-default 0x02001064@38250,21669), vmax 4.19 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 5.81..25.4 m, nearest drawn 6.17 m (scenery-default 0x02000246@38248,21678), vmax 4.19 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 4.18 m/s (cap 12), max tracking gap 0.04 m."
+  }
+ ],
+ "verification": {
+  "poi-imuth-maer-doquin.01": "take 0-11 s: AGL 13.18..32 m, nearest drawn 15.78 m (scenery-default 0x020007A3@38464,21635), vmax 6.56 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 15.38..30.5 m, nearest drawn 20.19 m (scenery-default 0x020007A3@38431,21613), vmax 6.56 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.54 m/s (cap 12), max tracking gap 0.05 m",
+  "poi-imuth-maer-doquin.02": "take 0-9 s: AGL 3..27 m, nearest drawn 5.36 m (scenery-default 0x02001064@38250,21669), vmax 4.19 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 5.81..25.4 m, nearest drawn 6.17 m (scenery-default 0x02000246@38248,21678), vmax 4.19 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 4.18 m/s (cap 12), max tracking gap 0.04 m"
+ }
+}

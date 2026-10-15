@@ -1,0 +1,202 @@
+{
+ "name": "Aurlanaa's Aerie",
+ "title": "Aurlanaa's Aerie",
+ "siteId": "poi-aurlanaas-aerie",
+ "summary": "Aurlanaa's Aerie, the Blessing of Aerlinthe: the gromnatross nest on the peaks of Cunara, overlooking a lava stream, with a white Empyrean meeting-hall-style building nearby. The kit shows the nest of dark sticks and blue-lit stones on the southern tip of a narrow summit ridge at z 300, the white hall 72 m north on the same summit, sheer drops on every side (to 170 m ledges with a rock house and dark spire, and to the sea in the west). Landblocks east of x 34944 and north of y 46080 are missing.",
+ "acpedia": {
+  "categories": [
+   "Historical Site",
+   "Lore Database Entry",
+   "Northeast POI",
+   "Auberean Location"
+  ],
+  "map": {
+   "ns": 89.0,
+   "ew": 42.8
+  },
+  "mapWorld": [
+   34740.0,
+   45828.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aurlanaa_s_Aerie.txt",
+  "coveredDistM": 4457,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "Aurlanaa's nest",
+   "pos": [
+    34739.0,
+    45830.0,
+    300.0
+   ],
+   "heightM": 5,
+   "note": "0x02000D66/67/68 sticks, blue lights."
+  },
+  {
+   "name": "White Empyrean hall",
+   "pos": [
+    34740.0,
+    45900.0,
+    300.0
+   ],
+   "heightM": 10,
+   "note": "0x01001C2D with columns."
+  },
+  {
+   "name": "Ledge spire",
+   "pos": [
+    34739.5,
+    45789.5,
+    170.0
+   ],
+   "heightM": 19.8,
+   "note": "0x020006CD below the nest."
+  }
+ ],
+ "site": {
+  "id": "poi-aurlanaas-aerie",
+  "name": "Aurlanaa's Aerie",
+  "teleport": "@teleloc 0xB4EE0038 160.0 174.0 300.5 1 0 0 0",
+  "anchor": [
+   34740.0,
+   45850.0,
+   300.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34739.0,
+     45830.0,
+     300.0
+    ],
+    "height": 5,
+    "radius": 8
+   },
+   "params": {
+    "radius": 45,
+    "heightAGL": 14,
+    "revolutions": 0.13,
+    "direction": "cw",
+    "bearingDeg": 145,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Orbit 47 deg clockwise at 45 m round Aurlanaa's nest on the pinnacle's south tip, 14 m above it, over the 140 m drop; nothing within 33 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Aurlanaa's Aerie, the gromnatross nest of dark sticks on the peaks of Cunara (z 300) overlooking Aerlinthe's harbour and lava flows: the orbit hangs over the void south of the pinnacle so the nest, the summit and the white Empyrean meeting hall behind it turn against the sky, sun behind the camera. Verified with poi-kit check.mjs - take 10s: AGL 140.51..144 m, nearest 33.5 m (static 0xB4EE#3 0x02000D68), vmax 3.68 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2-8.5s: AGL 142.38..144 m, nearest 34.56 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 3.68 m/s (cap 12), tracking gap 0.02 m."
+  },
+  {
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34739.0,
+     45830.0,
+     300.0
+    ],
+    "height": 5,
+    "radius": 8
+   },
+   "params": {
+    "nearDistance": 12,
+    "farDistance": 48,
+    "direction": "out",
+    "heightAGL": 7,
+    "minFovDeg": 14,
+    "maxFovDeg": 90,
+    "bearingDeg": 25,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Back away 12 m to 48 m north-north-east along the summit, 7 m above the nest, while the lens narrows from 60 to 17 deg to hold the nest's size; keep 3 m from the nest sticks, nothing else within 14 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertigo on the nest: as the drone backs along the summit and zooms in, the nest stays the same size while the fall-away and the sea far below it swell behind, the southern sun ahead and slightly left. Verified with poi-kit check.mjs - take 9s: AGL 7.73..27.2 m, nearest 3.34 m (static 0xB4EE#2 0x02000D68), vmax 6.28 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-8s: AGL 10.91..27.2 m, nearest 5.77 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 6.27 m/s (cap 12), tracking gap 0.05 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-aurlanaas-aerie.01",
+   "technique": "drone.orbit-poi",
+   "rank": 1,
+   "check": "take 10s: AGL 140.51..144 m, nearest 33.5 m (static 0xB4EE#3 0x02000D68), vmax 3.68 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2-8.5s: AGL 142.38..144 m, nearest 34.56 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 3.68 m/s (cap 12), tracking gap 0.02 m"
+  },
+  {
+   "shot": "poi-aurlanaas-aerie.02",
+   "technique": "drone.vertigo-drone",
+   "rank": 2,
+   "check": "take 9s: AGL 7.73..27.2 m, nearest 3.34 m (static 0xB4EE#2 0x02000D68), vmax 6.28 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-8s: AGL 10.91..27.2 m, nearest 5.77 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 6.27 m/s (cap 12), tracking gap 0.05 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 12.5,
+ "techniques": [
+  "drone.orbit-poi",
+  "drone.vertigo-drone"
+ ]
+}

@@ -32,19 +32,24 @@
 // write re-seeds it). pose, release, world.teleport and world.command answer
 // FILM_BUSY while a take, prepare, shoot, rehearse or scout runs (never a teleport
 // or an admin command recorded mid-take, or sent while prepare reads the world).
+// The FPV props lens overlay (runtime/lens_overlay.js) is made on the first take that
+// asks for it (`take.overlay.props`) and draws only with `?filmProps=on`
+// (deps.filmProps overrides the flag for tests / tools) on recorded frames. The pilot
+// gets the mapper `limits` of take.pilot (and `pilot.fade: 'never'` → maxFadeIds 0).
 // No Anthropic API anywhere: JEV is reached only through the CLI's broker.
 
 import { FilmError, toErrorJSON } from "./core/errors.js";
 import { hashString, mulberry32, seedOf } from "./core/rng.js";
 import { hex32, parseCellId, worldFromLocal } from "./core/units.js";
 import * as FLIGHT from "./drone/flight_model.js";
-import { filmDofEnabled, filmModeEnabled } from "./flags.js";
+import { filmDofEnabled, filmModeEnabled, filmPropsEnabled } from "./flags.js";
 import { createResidualMapper } from "./pilot/mapper.js";
 import { createPilot } from "./pilot/pilot.js";
 import { createCameraOwner } from "./runtime/camera_owner.js";
 import { createCleanFrame } from "./runtime/clean_frame.js";
 import { createFilmClock } from "./runtime/film_clock.js";
 import { JEV_BRIDGE_TIMEOUTS, createPageBridge } from "./runtime/jev_bridge_page.js";
+import { createLensOverlay } from "./runtime/lens_overlay.js";
 import { createLook } from "./runtime/look.js";
 import { createRecorder } from "./runtime/recorder.js";
 import { createSafety } from "./runtime/safety.js";
@@ -289,7 +294,9 @@ function angleForTechnique(id) {
  * `particleCull` = particle_manager.js `{setParticleCullConfig, allParticleManagers}`,
  * each optional), plus test / tool overrides: `window`, `document`, `canvas`, `VideoEncoder`,
  * `VideoFrame`, `requestAnimationFrame`, `modules` ({timeRng, fxTime, sceneryTime,
- * vfxCatalog} — a given key, even null, skips that dynamic import), `worldQuery`.
+ * vfxCatalog} — a given key, even null, skips that dynamic import), `worldQuery`,
+ * `filmProps` (boolean: replaces the `?filmProps=on` read), `lensOverlay` (an overlay
+ * instance replacing the one built from THREE + liveScene3d.renderer).
  * The world query reads the client's VFX catalog (`../vfx_catalog.js`, dynamic import:
  * scenery archetype → tree vs rock, DAT bounds) and `wasmExports.fetchSetupSelectionSphere`
  * (other Setups' sizes) through world_query `createStaticCatalogs`.
@@ -316,7 +323,7 @@ function angleForTechnique(id) {
  *   log?:(entry:object)=>void, window?:object|null, document?:object|null, canvas?:object,
  *   VideoEncoder?:Function, VideoFrame?:Function, requestAnimationFrame?:Function,
  *   modules?:{timeRng?:object|null, fxTime?:object|null, sceneryTime?:object|null, vfxCatalog?:object|null},
- *   worldQuery?:object}} [deps]
+ *   worldQuery?:object, filmProps?:boolean, lensOverlay?:object}} [deps]
  * @returns {object} the window.__film api
  */
 export function installFilmMode(deps = {}) {
@@ -458,6 +465,11 @@ export function installFilmMode(deps = {}) {
     bridge.configure({ mode: c.captureMode === "realtime" ? "realtime" : "stepped" });
     const mapperOpts = { bounds: c.bounds };
     for (const k of ["commitSec", "overrideRisk", "staleSec", "minConfidence"]) if (Number.isFinite(c[k])) mapperOpts[k] = c[k];
+    // take.pilot.limits (mapper DEFAULT_MAPPER_LIMITS keys) and pilot.fade: 'never' (nothing is
+    // ever faded: maxFadeIds 0, a 'fade' answer reroutes) reach the residual mapper.
+    const limits = isObj(c.limits) ? { ...c.limits } : null;
+    if (c.fade === "never") mapperOpts.limits = { ...(limits || {}), maxFadeIds: 0 };
+    else if (limits) mapperOpts.limits = limits;
     return createPilot({
       bridge,
       mode: c.mode,
@@ -495,6 +507,16 @@ export function installFilmMode(deps = {}) {
     VideoFrame: d.VideoFrame !== undefined ? d.VideoFrame : (win && typeof win.VideoFrame === "function" ? win.VideoFrame : undefined),
     log,
   });
+  // The FPV props lens overlay: built on the first take that asks for it (THREE + the live renderer).
+  let lensOverlay = isObj(d.lensOverlay) ? d.lensOverlay : null;
+  const lensOverlayOf = () => {
+    if (lensOverlay) return lensOverlay;
+    const r = live.renderer;
+    if (!d.THREE || !r || typeof r.render !== "function") return null;
+    lensOverlay = createLensOverlay({ THREE: d.THREE, renderer: r, log });
+    return lensOverlay;
+  };
+  const propsEnabled = () => (typeof d.filmProps === "boolean" ? d.filmProps : filmPropsEnabled());
   const takePlayer = createTakePlayer({
     cameraOwner,
     clock: () => clock,
@@ -512,6 +534,8 @@ export function installFilmMode(deps = {}) {
     actor: (cue) => world.actor(cue),
     requestAnimationFrame: typeof d.requestAnimationFrame === "function" ? d.requestAnimationFrame : undefined,
     particleCull,
+    lensOverlay: lensOverlayOf,
+    propsEnabled,
   });
 
   // ---- state --------------------------------------------------------------------
@@ -986,6 +1010,7 @@ export function installFilmMode(deps = {}) {
       flags: {
         filmMode: filmModeEnabled(),
         filmDof: filmDofEnabled(),
+        filmProps: propsEnabled(),
         dof: !!dof,
         dofEnabled: dof ? !!dof.enabled : false,
         jevBridge: bridge.available,
@@ -1025,6 +1050,7 @@ export function installFilmMode(deps = {}) {
         preRollSec: take.preRollSec,
         actor: take.actor ?? null,
         seed: take.seed ?? (r.spec ? r.spec.seed : undefined),
+        overlay: isObj(take.overlay) ? take.overlay : null,
       });
       preparedTake = { shotId: typeof take.shotId === "string" ? take.shotId : null };
       // The take's look (defaults ← site ← shot) is applied once the take is valid:
@@ -1132,6 +1158,11 @@ export function installFilmMode(deps = {}) {
 
   function dispose() {
     takePlayer.abort();
+    try {
+      if (lensOverlay && typeof lensOverlay.dispose === "function" && lensOverlay !== d.lensOverlay) lensOverlay.dispose();
+    } catch (_) {
+      /* best effort */
+    }
     try {
       cleanFrame.restore();
     } catch (_) {

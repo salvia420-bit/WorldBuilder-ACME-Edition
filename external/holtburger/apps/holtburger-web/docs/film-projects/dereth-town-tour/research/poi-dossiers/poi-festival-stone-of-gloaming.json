@@ -1,0 +1,134 @@
+{
+ "name": "Festival Stone of Gloaming",
+ "title": "Festival Stone of Gloaming",
+ "siteId": "poi-festival-stone-of-gloaming",
+ "summary": "The Festival Stone of Gloaming is one of the Empyrean festival stones in the heart of the Direlands (Alatar Locke). It stands on the pine-covered west flank (z 380) of the Floating Spire hill, with its Anniversary Effect glow 8 m above it and a Giant Snowman NPC 62 m east. The stone and its glow are ACE spawns. Its landblock 0x277A has terrain, trees and spawns in the kit but no WBT statics.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -4.3,
+   "ew": -70.7
+  },
+  "mapWorld": [
+   7500.0,
+   23436.0
+  ],
+  "coordSrc": "index",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Gloaming.txt",
+  "coveredDistM": 1388,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Festival Stone",
+   "pos": [
+    7673.5,
+    23608,
+    380
+   ],
+   "heightM": 3,
+   "note": "Spawn wcid 5381, with the Anniversary Effect at z 388."
+  },
+  {
+   "name": "Giant Snowman",
+   "pos": [
+    7735.2,
+    23591.8,
+    399.9
+   ],
+   "heightM": 4,
+   "note": "NPC spawn."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-gloaming",
+  "name": "Festival Stone of Gloaming",
+  "gazetteerId": "gloaming-festival-stone",
+  "teleport": "@teleloc 0x277A0040 173.5 189.8 380 0.453991 0 0 -0.891007",
+  "anchor": [
+   7673.5,
+   23608,
+   380
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.69,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer gloaming-festival-stone teleloc (7661.5,23613.8,380), 12 m from the stone."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-gloaming.01",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7673.5,
+     23608,
+     380
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 330,
+    "azimuthRef": "compass",
+    "elevationDeg": 10,
+    "distance": 18,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "cw"
+   },
+   "standingOrder": "Sweep 40 degrees around the north-north-west side of the Festival Stone of Gloaming 18 m out, its glow backlit by the low sun; stay north of the stone and 4 m above the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Festival Stone of Gloaming and its Anniversary Effect glow on the west flank of the Floating Spire hill. The lens sweeps 40 deg around the north-north-west side, 18 m out and 7-10 m above the slope, with the stone backlit by the low south-west sun. The camera stays in landblock 0x277B. The stone's own landblock 0x277A has terrain, default-bake trees and ACE spawns in the kit but no WBT statics. The stone and glow come from ACE spawns, so any static next to the stone is unverified. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 7.24..9.8 m, nearest 9.59 m (scenery-default 0x02000258@7686,23621), vmax 2.43 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 9.5 m (not drawn by the default bake); edit 1.5-6.5s: AGL 7.56..9.7 m, nearest 10.61 m (scenery-default 0x02000258@7686,23621), vmax 2.43 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 9.6 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-festival-stone-of-gloaming.01",
+   "technique": "classic.arc",
+   "rank": 3,
+   "check": "take 8s: AGL 7.24..9.8 m, nearest 9.59 m (scenery-default 0x02000258@7686,23621), vmax 2.43 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 9.5 m (not drawn by the default bake); edit 1.5-6.5s: AGL 7.56..9.7 m, nearest 10.61 m (scenery-default 0x02000258@7686,23621), vmax 2.43 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 9.6 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5,
+ "techniques": [
+  "classic.arc"
+ ]
+}

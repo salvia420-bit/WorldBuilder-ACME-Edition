@@ -1,0 +1,134 @@
+{
+ "name": "Kivik Lir's Temple",
+ "title": "38.1S, 47.3W - Kivik Lir's Temple",
+ "siteId": "poi-kivik-lirs-temple",
+ "summary": "A horned Falacatot temple (24 m square, 17 m, spire roof, archway entrance) on the mud flats of the Direlands swamp at 38.1S 47.3W, with a still stream/pond running west-north-west of it (y 15348-15372), ore outcrops, carts and blades of a Burun camp around it. Its dungeons (Center of / Secrets of Kivik Lir's Temple) are underground; only the surface temple is filmed.",
+ "landmarks": [
+  {
+   "name": "Falacatot temple",
+   "pos": [
+    13092,
+    15324,
+    0
+   ],
+   "heightM": 17.1,
+   "note": "0x01003482, 26 interior cells."
+  },
+  {
+   "name": "Swamp stream",
+   "pos": [
+    13000,
+    15360,
+    0
+   ],
+   "heightM": 0,
+   "note": "Water vertices x 12948-13068, y 15348-15372."
+  }
+ ],
+ "site": {
+  "id": "poi-kivik-lirs-temple",
+  "name": "Kivik Lir's Temple",
+  "teleport": "@teleloc 0x444F0010 36.0 186.0 0.50 1 0 0 0",
+  "anchor": [
+   13092,
+   15324,
+   0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport (no gazetteer outdoor entry within 300 m): 30 m north of the temple on the stream bank, 6 m from the nearest bush."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -38.1,
+   "ew": -47.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5612,
+  "coveredBy": "path:wai-jhou.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/38_1S_47_3W_Kivik_Lir_s_Temple.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-kivik-lirs-temple.01",
+   "site": "poi-kivik-lirs-temple",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.5,
+     10.8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13092,
+     15324,
+     0
+    ],
+    "height": 17,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 2.5,
+    "speed": 8.5,
+    "headingDeg": 95,
+    "relativeToSubject": false,
+    "lookAhead": 35,
+    "tiltDeg": 2,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     12955,
+     15360,
+     2.5
+    ],
+    [
+     13048,
+     15352,
+     2.5
+    ]
+   ],
+   "standingOrder": "Skim east 2.5 m above the swamp stream with the sun behind, the horned Falacatot temple growing ahead-right; stop 50 m short of it and keep 4 m from rocks and reeds.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water shot: terrain-skim 2.5 m above the still stream west of the temple (100 % of samples over water), heading east with the low sun behind, the horned 17 m Falacatot temple growing ahead-right and stopping 52 m short of it. Subject point = the temple (its prism is the subject body). Verified (check.mjs, full take flown): take 0-11 s: AGL 2.5..2.5 m, nearest drawn 14.67 m (scenery-default 0x02001063@12985,15373), vmax 8.49 m/s, LOS blocked 0/45, subject in frame 100%, over water 100% (retail-bake tree 0 m); edit 4-10.5 s: AGL 2.5..2.5 m, nearest drawn 15.86 m (scenery-default 0x02001063@12985,15373), vmax 8.49 m/s, LOS blocked 0/27, subject in frame 100%, over water 100% (retail-bake tree 0 m); flight cinema peak 8.51 m/s (cap 12), max tracking gap 0.04 m."
+  }
+ ],
+ "verification": {
+  "poi-kivik-lirs-temple.01": "take 0-11 s: AGL 2.5..2.5 m, nearest drawn 14.67 m (scenery-default 0x02001063@12985,15373), vmax 8.49 m/s, LOS blocked 0/45, subject in frame 100%, over water 100% (retail-bake tree 0 m); edit 4-10.5 s: AGL 2.5..2.5 m, nearest drawn 15.86 m (scenery-default 0x02001063@12985,15373), vmax 8.49 m/s, LOS blocked 0/27, subject in frame 100%, over water 100% (retail-bake tree 0 m); flight cinema peak 8.51 m/s (cap 12), max tracking gap 0.04 m"
+ }
+}

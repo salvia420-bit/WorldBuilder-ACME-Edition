@@ -1,0 +1,172 @@
+{
+ "name": "Mount Dalt",
+ "title": "Mount Dalt",
+ "siteId": "poi-mount-dalt",
+ "summary": "Middle mountain of the Mount Alphus range, with portals to Mount Gemm and Mount Syliph (acpedia). In the kit: a flat summit plateau (~120 x 135 m) at z 224 with 60-65 degree flanks to the plain at 108-120; the North Syliph portal stands on the south-west rim and the South Gemm portal on the north-east rim; Mount Gemm rises 500 m north-east.",
+ "landmarks": [
+  {
+   "name": "Summit plateau",
+   "pos": [
+    27588.0,
+    27930.0,
+    224.0
+   ],
+   "heightM": 110.0,
+   "note": "Flat top z 224."
+  },
+  {
+   "name": "South Gemm portal",
+   "pos": [
+    27647.0,
+    27980.2,
+    224.0
+   ],
+   "heightM": 3.0,
+   "note": "Portal swirl on the north-east rim."
+  },
+  {
+   "name": "North Syliph portal",
+   "pos": [
+    27507.9,
+    27840.9,
+    224.0
+   ],
+   "heightM": 3.0,
+   "note": "Portal swirl on the south-west rim."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-dalt",
+  "name": "Mount Dalt",
+  "gazetteerId": "north-dalt",
+  "teleport": "@teleloc 0x8F91003E 178.90 132.00 224.50 1 0 0 0",
+  "anchor": [
+   27588.0,
+   27930.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer north-dalt (summit plateau, north-east corner by the South Gemm portal). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0x8F91003E 188.9 138 224 -0.333807 0 0 -0.942642' because the gazetteer north-dalt drop was 3.0 m from the South Gemm portal (weenieType Portal) on the summit rim. Derived drop 12 m south-west on flat summit ground (224.0, level within 1 m for 12 m around), 14.6 m from the portal, 13 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 14.5,
+   "ew": 13.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2606,
+  "coveredBy": "shot:al-jalima.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Dalt.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mount-dalt.01",
+   "site": "poi-mount-dalt",
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 28,
+    "speed": 7,
+    "headingDeg": 45,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -18,
+    "minClearance": 6
+   },
+   "standingOrder": "Fly north-east 28 m over the flat summit of Mount Dalt with the gimbal fixed, the rim and the pillar of Mount Gemm rising ahead; stay 25 m above the plateau, patrolling tumeroks may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Travelling vista across the summit of Mount Dalt, gimbal fixed at -18 degrees, the plateau rim ahead and the pillar of Mount Gemm rising beyond it. No subject (flyover vista). Verified (check.mjs, full take flown): take 0-10 s: AGL 28..28 m, nearest drawn 47.76 m (spawn South Gemm), vmax 7 m/s; edit 2-8.5 s: AGL 28..28 m, nearest drawn 56.94 m (spawn South Gemm), vmax 7 m/s; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-mount-dalt.02",
+   "site": "poi-mount-dalt",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27647.0,
+     27980.2,
+     224.0
+    ],
+    "height": 3.0,
+    "radius": 1.5
+   },
+   "params": {
+    "heightStart": 10,
+    "heightEnd": 62,
+    "rotateDeg": 20,
+    "headingDeg": 45,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "minClearance": 5
+   },
+   "standingOrder": "Rise straight up from 10 m over the South Gemm portal swirl on the north-east rim of Mount Dalt to 62 m, turning 20 degrees, until the summit plateau and the drop beyond its rim fill the frame; nothing above the summit within 50 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down rise over the South Gemm portal swirl on the north-east rim of Mount Dalt (pitch -88 for the portal particles): from 10 m to 62 m the swirl shrinks and the flat summit plateau and the drop beyond its rim open around it. Verified (check.mjs, full take flown): take 0-10 s: AGL 10..62 m, nearest drawn 56.94 m (spawn Tumerok Patrol Generator), vmax 8.17 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 14.97..59.2 m, nearest drawn 57.76 m (spawn Tumerok Patrol Generator), vmax 8.17 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.16 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-mount-dalt.01": "take 0-10 s: AGL 28..28 m, nearest drawn 47.76 m (spawn South Gemm), vmax 7 m/s; edit 2-8.5 s: AGL 28..28 m, nearest drawn 56.94 m (spawn South Gemm), vmax 7 m/s; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-mount-dalt.02": "take 0-10 s: AGL 10..62 m, nearest drawn 56.94 m (spawn Tumerok Patrol Generator), vmax 8.17 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 14.97..59.2 m, nearest drawn 57.76 m (spawn Tumerok Patrol Generator), vmax 8.17 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.16 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

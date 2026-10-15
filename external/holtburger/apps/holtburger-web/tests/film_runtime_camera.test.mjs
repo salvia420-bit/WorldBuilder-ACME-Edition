@@ -20,6 +20,8 @@
 //       setCutCell seeding, long-jump re-seed, liveScene3d.filmViewer published;
 //       parkCell() (world.teleport, review seams-11) unpublishes it until the next write;
 //   C4  release(): every saved value restored (camDebug wrapper put back);
+//   C6  the light-pool reference (lighting.js getPlayerWorldPosition) answers the film eye
+//       while owned (an FPV run far from the parked player keeps its torches), restored on release;
 //   C5  film hooks: preFrame/postRender fan-out, throwing listeners isolated;
 //   K1  film_clock: strictly increasing ts = base + k·1000/fps, sources installed
 //       and read the frame ts, seeded RNG, sky time + time-lapse, end() waits for
@@ -453,6 +455,61 @@ check("C4 a camDebug own-property wrapper is put back on release; no camera → 
   assert.equal(o2.own().camera, "camera");
   assert.equal(o2.write({ pos: [10, 20, 30], h: 0, p: 0, fov: 45 }), true);
   nearV(cam.position.toArray(), [10, 30, -20], 1e-12);
+});
+
+check("C6 light-pool reference: while owned cameraSwitcher.getPlayerWorldPosition answers the FILM EYE (lighting.js ranks torches there); restored on release", () => {
+  class LitSwitcher extends FakeSwitcher {
+    getPlayerWorldPosition(out) {
+      out.set(-7, 8, -9); // the parked player, far from the take
+      return out;
+    }
+  }
+  const cs = new LitSwitcher();
+  const sh = makeSessionHandle();
+  const live = { cameraSwitcher: cs, sessionHandle: sh, camera: cs.persp };
+  const owner = CO.createCameraOwner({ liveScene3d: live, THREE, sessionHandle: sh, window: {} });
+  const ref = new THREE.Vector3();
+  assert.equal(cs.getPlayerWorldPosition(ref), ref);
+  assert.deepEqual(ref.toArray(), [-7, 8, -9], "not owned: the player");
+  owner.own();
+  assert.ok(Object.prototype.hasOwnProperty.call(cs, "getPlayerWorldPosition"), "per-instance wrapper");
+  assert.equal(owner.stats().eyeLightRef, true);
+  const eye = [LBX + 95, LBY + 50, 20];
+  assert.equal(owner.write({ pos: eye, h: 0.3, p: -0.1, r: 0, fov: 70 }), true);
+  assert.equal(cs.getPlayerWorldPosition(ref), ref, "returns out (lighting.js tests != null)");
+  nearV(ref.toArray(), GB.acToThreePos(eye), 1e-9, "the film eye in three space");
+  nearV(ref.toArray(), cs.persp.position.toArray(), 1e-9, "= the owned camera's position");
+  const eye2 = [LBX + 160, LBY + 20, -40];
+  owner.write({ pos: eye2, h: 0, p: 0, r: 0, fov: 70 });
+  cs.getPlayerWorldPosition(ref);
+  nearV(ref.toArray(), GB.acToThreePos(eye2), 1e-9, "follows every write");
+  assert.ok(owner.stats().eyeLightRefs >= 2);
+  owner.release();
+  assert.equal(Object.prototype.hasOwnProperty.call(cs, "getPlayerWorldPosition"), false, "own property removed");
+  cs.getPlayerWorldPosition(ref);
+  assert.deepEqual(ref.toArray(), [-7, 8, -9], "released: the player again");
+  assert.equal(owner.stats().eyeLightRef, false);
+  // A pre-existing own-property wrapper (another tool's) is put back on release.
+  let foreign = 0;
+  const mine = function (out) {
+    foreign += 1;
+    return LitSwitcher.prototype.getPlayerWorldPosition.call(this, out);
+  };
+  cs.getPlayerWorldPosition = mine;
+  owner.own();
+  owner.write({ pos: eye, h: 0, p: 0, r: 0, fov: 70 });
+  cs.getPlayerWorldPosition(ref);
+  assert.equal(foreign, 0, "the film eye answers while owned");
+  owner.release();
+  assert.equal(cs.getPlayerWorldPosition, mine);
+  cs.getPlayerWorldPosition(ref);
+  assert.equal(foreign, 1);
+  // A switcher without the method (headless harness) is left alone.
+  const { cs: plain, owner: o2 } = makeOwner();
+  o2.own();
+  assert.equal("getPlayerWorldPosition" in plain, false);
+  assert.equal(o2.stats().eyeLightRef, false);
+  o2.release();
 });
 
 check("C5 film hooks: one shared liveScene3d.film object, fan-out, isolation, unsubscribe", () => {

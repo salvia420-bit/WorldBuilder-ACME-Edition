@@ -1,0 +1,259 @@
+{
+ "name": "Temple of N'cthail",
+ "title": "Temple of N'cthail",
+ "siteId": "poi-temple-of-ncthail",
+ "summary": "The Temple of N'cthail rises from the sea west of Vissidal Island (part of Raising Grael's Island); inside are the portals to the Eastern, Western and Northern Temple Catacombs and the Vault of Eternal Slumber. The kit shows a cross-shaped complex ~170 m across standing in shallow sea: a 51 m central tower (0x010034C6) with four Statues of Transport on its terrace (z 36.6), four 37 m pitched-roof halls on its sides, three-storey colonnaded halls and red-roofed buildings (12.6-24.6 m) on the arms; the catacomb portals glow inside the halls at z 11.9 and the Temple Exit at the north end.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 80.1,
+   "ew": 54.4
+  },
+  "mapWorld": [
+   37524.0,
+   43692.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Temple_of_N_cthail.txt",
+  "coveredDistM": 1128,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "Central tower",
+   "pos": [
+    37524.0,
+    43668.0,
+    0.0
+   ],
+   "heightM": 51.3,
+   "note": "0x010034C6."
+  },
+  {
+   "name": "Statues of Transport",
+   "pos": [
+    37514.1,
+    43677.8,
+    36.6
+   ],
+   "heightM": 2.4,
+   "note": "Four 0x020011AA on the tower terrace."
+  },
+  {
+   "name": "Side halls",
+   "pos": [
+    37524.0,
+    43644.0,
+    0.0
+   ],
+   "heightM": 37.3,
+   "note": "0x010034CA x4."
+  }
+ ],
+ "site": {
+  "id": "poi-temple-of-ncthail",
+  "name": "Temple of N'cthail",
+  "gazetteerId": "temple-of-ncthail",
+  "teleport": "@teleloc 0xC3E30019 83.9943 8.87318 5.005 1 0 0 0",
+  "anchor": [
+   37524.0,
+   43668.0,
+   0.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.49,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "path": [
+    [
+     37405,
+     43530,
+     3
+    ],
+    [
+     37450,
+     43573,
+     3
+    ]
+   ],
+   "params": {
+    "heightAGL": 3.5,
+    "speed": 6.5,
+    "headingDeg": 45,
+    "relativeToSubject": false,
+    "lookAhead": 14,
+    "tiltDeg": 5,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "standingOrder": "Skim north-east 3.5 m above the sea toward the temple at 6.5 m/s along the line from (37405, 43530), stopping 38 m short of its south-west wing; open water only.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water approach to the Temple of N'cthail, the drowned temple rising from the sea west of Vissidal: a cross-shaped complex of red-roofed halls (12-37 m) around a 51 m central tower crowned with Statues of Transport. The skim starts on open sea and runs at the temple, which spreads across the frame; noon sun from the right. Verified with poi-kit check.mjs - take 9s: AGL 3.5..3.5 m, nearest 37.7 m (static 0xC3E3#20 0x010034D6), vmax 6.92 m/s, water 100%; edit 2-8s: AGL 3.5..3.5 m, nearest 44.08 m, water 100%; flight cinema: peak 6.93 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37524.0,
+     43668.0,
+     25.3
+    ],
+    "height": 26,
+    "radius": 8
+   },
+   "params": {
+    "radius": 115,
+    "heightAGL": 48,
+    "revolutions": 0.09,
+    "direction": "cw",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Orbit 32 deg clockwise at 115 m around the central tower, 73 m above the sea, keeping its upper storeys clear of the halls; open sea beneath, nothing within 69 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hero orbit of the temple in the sea: from the south the whole cross plan, the halls and the central tower with its Statues of Transport turn against the open water, sun behind the camera. Verified with poi-kit check.mjs - take 10s: AGL 73.3..73.3 m, nearest 69.87 m (bldg 0xC3E3#34 0x010034D9 two-story building with tapered roof), vmax 6.5 m/s, LOS blocked 0/41, in frame 100%, water 100%; edit 2-8s: AGL 73.3..73.3 m, nearest 69.87 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 6.52 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37524.0,
+     43668.0,
+     0.0
+    ],
+    "height": 51.3,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 150,
+    "rotateDeg": 30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "standingOrder": "Hover 150 m above the central tower looking straight down and rotate 30 deg; nothing within 110 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Graphic top-down: the temple's cross-shaped plan (about 170 m across) laid out on the shallow sea like a seal, rotating slowly. Verified with poi-kit check.mjs - take 9s: AGL 150..150 m, nearest 111.79 m (static 0xC3E3#4 0x020011AA Statue of Transport), vmax 0 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-7.5s: AGL 150..150 m, nearest 111.79 m, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 0 m/s (cap 12), tracking gap 0 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-temple-of-ncthail.01",
+   "technique": "drone.terrain-skim",
+   "rank": 1,
+   "check": "take 9s: AGL 3.5..3.5 m, nearest 37.7 m (static 0xC3E3#20 0x010034D6), vmax 6.92 m/s, water 100%; edit 2-8s: AGL 3.5..3.5 m, nearest 44.08 m, water 100%; flight cinema: peak 6.93 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-temple-of-ncthail.02",
+   "technique": "drone.orbit-poi",
+   "rank": 1,
+   "check": "take 10s: AGL 73.3..73.3 m, nearest 69.87 m (bldg 0xC3E3#34 0x010034D9 two-story building with tapered roof), vmax 6.5 m/s, LOS blocked 0/41, in frame 100%, water 100%; edit 2-8s: AGL 73.3..73.3 m, nearest 69.87 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 6.52 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-temple-of-ncthail.03",
+   "technique": "drone.top-down",
+   "rank": 2,
+   "check": "take 9s: AGL 150..150 m, nearest 111.79 m (static 0xC3E3#4 0x020011AA Statue of Transport), vmax 0 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-7.5s: AGL 150..150 m, nearest 111.79 m, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 0 m/s (cap 12), tracking gap 0 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 17.5,
+ "techniques": [
+  "drone.terrain-skim",
+  "drone.orbit-poi",
+  "drone.top-down"
+ ]
+}

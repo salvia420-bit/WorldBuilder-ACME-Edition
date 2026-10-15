@@ -1,0 +1,205 @@
+{
+ "name": "East Samsur Outpost",
+ "title": "East Samsur Outpost",
+ "siteId": "poi-east-samsur-outpost",
+ "summary": "The ruined starter outpost east of Samsur on a low sandy ridge: a 28 m Empyrean tower with green crown lights, two octagon towers, a Life Stone and a candle sentinel; the Destroyed Portal to Redspire crystal lies 117 m south-east, and 165 m west a pair of 8 m carved wooden masks with columns and Broken Seals of the Elder Spirits flank a gully path.",
+ "landmarks": [
+  {
+   "name": "Empyrean tower",
+   "pos": [
+    29820.0,
+    23724.0,
+    18.0
+   ],
+   "heightM": 27.9,
+   "note": "0x01002866 with green ethereal lights at the crown (z 41.8)."
+  },
+  {
+   "name": "Octagon tower",
+   "pos": [
+    29778.2,
+    23729.9,
+    16.0
+   ],
+   "heightM": 5.9,
+   "note": "0x01000F06; a second one 49 m south on the ridge."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    29789.7,
+    23720.5,
+    16.5
+   ],
+   "heightM": 3.5,
+   "note": "Outpost Life Stone."
+  },
+  {
+   "name": "Destroyed Portal to Redspire",
+   "pos": [
+    29846.2,
+    23633.3,
+    20.7
+   ],
+   "heightM": 3.8,
+   "note": "Coloured crystal 0x02000B61."
+  },
+  {
+   "name": "Giant wooden masks",
+   "pos": [
+    29611.8,
+    23735.6,
+    10.0
+   ],
+   "heightM": 8.0,
+   "note": "Two 0x020003B1 masks with ancient columns and Broken Seals of the Elder Spirits."
+  }
+ ],
+ "site": {
+  "id": "poi-east-samsur-outpost",
+  "name": "East Samsur Outpost",
+  "gazetteerId": "life-stone-near-samsur-9b7b",
+  "teleport": "@teleloc 0x9B7B000D 29.7163 104.495 16.483 0.468905 0 0 0.883249",
+  "anchor": [
+   29800.0,
+   23718.0,
+   16.5
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.55,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-samsur-9b7b (the outpost Life Stone)."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -3.1,
+   "ew": 22.1
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 610,
+  "coveredBy": "shot:samsur.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Samsur_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-samsur-outpost.01",
+   "site": "poi-east-samsur-outpost",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29820.0,
+     23724.0,
+     18.0
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 34,
+    "radiusEnd": 44,
+    "heightStart": 8,
+    "heightEnd": 30,
+    "revolutions": 0.18,
+    "direction": "ccw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Climb counter-clockwise around the outpost's Empyrean tower from 34 m out and 8 m up to 44 m out and 30 m up, ending level with its glowing crown; stay 24 m off the tower walls.",
+   "notes": "Helix on the 28 m Empyrean tower of the ruined starter outpost, with green ethereal lights on its crown; the octagon tower, the Life Stone and the candle sentinel sit on the sandy ridge below; south-south-west sun (0.55) side-lights the tower as the camera climbs from looking up at it to level with its crown. Verified (check.mjs, full take flown): take 0-10 s: AGL 7.3..29.8 m, nearest drawn 10.44 m (spawn Samsur Outpost), vmax 7.94 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 9.83..28.6 m, nearest drawn 17.02 m (spawn Samsur Outpost), vmax 7.94 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.92 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-east-samsur-outpost.02",
+   "site": "poi-east-samsur-outpost",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     1,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29611.8,
+     23735.6,
+     10.0
+    ],
+    "height": 8,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 255,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "distance": 26,
+    "thirds": "center",
+    "arcDeg": 35,
+    "direction": "ccw"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Arc 35 degrees counter-clockwise around the two giant wooden masks west of the outpost from 26 m out at 6.7 m height; keep 8 m from the stone columns and seals.",
+   "notes": "Curiosity beside the outpost: two 8 m carved wooden masks flank a gully path 165 m west of the Life Stone, framed by ancient stone columns and two Broken Seals of the Elder Spirits; the camera stays on the west side and arcs slowly so the masks change profile; sun from the south-south-west. Verified (check.mjs, full take flown): take 0-8 s: AGL 6.72..6.7 m, nearest drawn 8.29 m (static 0x9A7B#6 0x020003C9), vmax 3.1 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-6.5 s: AGL 6.72..6.7 m, nearest drawn 8.4 m (static 0x9A7B#6 0x020003C9), vmax 3.1 m/s, LOS blocked 0/21, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-east-samsur-outpost.01": "take 0-10 s: AGL 7.3..29.8 m, nearest drawn 10.44 m (spawn Samsur Outpost), vmax 7.94 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 9.83..28.6 m, nearest drawn 17.02 m (spawn Samsur Outpost), vmax 7.94 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.92 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-east-samsur-outpost.02": "take 0-8 s: AGL 6.72..6.7 m, nearest drawn 8.29 m (static 0x9A7B#6 0x020003C9), vmax 3.1 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-6.5 s: AGL 6.72..6.7 m, nearest drawn 8.4 m (static 0x9A7B#6 0x020003C9), vmax 3.1 m/s, LOS blocked 0/21, subject in frame 100%"
+ }
+}

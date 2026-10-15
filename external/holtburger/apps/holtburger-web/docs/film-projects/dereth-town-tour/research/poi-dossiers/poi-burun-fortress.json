@@ -1,0 +1,300 @@
+{
+ "name": "Burun Fortress",
+ "title": "Burun Fortress",
+ "siteId": "poi-burun-fortress",
+ "summary": "A huge Burun fortress in the Blackmire swamp, about 71 x 86 m: corner buildings of 31 m, two central keeps of 48 m, tapered east towers of 41 m, and a gatehouse on the south side fronted by a field of fallen Burun and the Blueprints table.",
+ "landmarks": [
+  {
+   "name": "Central keeps",
+   "pos": [
+    35580.0,
+    18336.0,
+    6.0
+   ],
+   "heightM": 42.5,
+   "note": "0x01003424 / 0x01003420, top z 48.5 / 47.6."
+  },
+  {
+   "name": "Gatehouse",
+   "pos": [
+    35580.0,
+    18303.5,
+    6.0
+   ],
+   "heightM": 22.0,
+   "note": "0x0100341C on the south side."
+  },
+  {
+   "name": "Corner buildings",
+   "pos": [
+    35556.0,
+    18300.0,
+    6.0
+   ],
+   "heightM": 25.5,
+   "note": "0x0100342C / 0x01003434 / 0x01003428 / 0x01003430, top z 31.5."
+  },
+  {
+   "name": "Field of fallen Burun and Blueprints table",
+   "pos": [
+    35575.0,
+    18285.0,
+    6.0
+   ],
+   "heightM": 1.0,
+   "note": "Bodies 0x02001132-34 and the Blueprints for a Burun Fortress at (35556, 18278.7)."
+  }
+ ],
+ "site": {
+  "id": "poi-burun-fortress",
+  "name": "Burun Fortress",
+  "teleport": "@teleloc 0xB95E0031 152.0 10.0 7.5 1 0 0 0",
+  "anchor": [
+   35580.0,
+   18336.0,
+   6.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry; teleport derived 60 m south of the south wall (ground 6.0, nearest drawn object 5.7 m). [orchestrator 2026-10-15: teleport corrected from '@teleloc 0xB95E0035 152.0 10.0 6.5 1 0 0 0' — outdoor cell index for local (152, 10) is 0x31, and kit ground there is 7.0 → z 7.5]"
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -25.8,
+   "ew": 46.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3055,
+  "coveredBy": "shot:sawato.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burun_Fortress.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-burun-fortress.02",
+   "site": "poi-burun-fortress",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35580.0,
+     18336.0,
+     6.0
+    ],
+    "height": 42.5,
+    "radius": 8
+   },
+   "params": {
+    "radius": 115,
+    "heightAGL": 52,
+    "revolutions": 0.09,
+    "direction": "cw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Orbit Burun Fortress clockwise at 115 m radius and 52 m height from south-west toward west; stay 14 m from the giant swamp tree crowns.",
+   "notes": "Hero orbit of the whole fortress - corner towers, the two central keeps and the tapered east towers - above the swamp; south-west sun (0.63) lights the faces the camera sees. Verified (check.mjs, full take flown): take 0-10 s: AGL 46.57..51 m, nearest drawn 14.61 m (scenery-default 0x020003EE@35483,18273), vmax 6.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 46.57..49.3 m, nearest drawn 14.61 m (scenery-default 0x020003EE@35483,18273), vmax 6.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.52 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-burun-fortress.01",
+   "site": "poi-burun-fortress",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35580.0,
+     18336.0,
+     30.0
+    ],
+    "height": 18.5,
+    "radius": 8
+   },
+   "params": {
+    "distance": 96,
+    "obstacleDistance": 52,
+    "obstacleHeight": 25.5,
+    "heightStart": 3,
+    "clearance": 8,
+    "forward": 6,
+    "endPitchDeg": -12,
+    "bearingDeg": 196,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise from 3 m to 33 m above the battlefield 96 m south of Burun Fortress, drifting 6 m north, until the keeps clear the south wall; stay 3.5 m from the bushes and 40 m from the walls.",
+   "notes": "Opener for the Blackmire fortress: rises from the battlefield in front of the gate until the two 48 m central keeps clear the 28-31 m south wall; LOS to the keep is blocked by the wall for the first ~2 s of the window by design (the reveal). Verified (check.mjs, full take flown): take 0-11 s: AGL 3..33.5 m, nearest drawn 3.62 m (scenery-default 0x02001063@35557,18243), vmax 4.44 m/s, LOS blocked 21/45, subject in frame 100%; edit 3-9.5 s: AGL 8.26..32.1 m, nearest drawn 7.38 m (scenery-default 0x02001063@35557,18243), vmax 4.44 m/s, LOS blocked 9/27, subject in frame 100%; flight cinema peak 4.43 m/s (cap 12), max tracking gap 0.04 m. [critic b4-7 2026-10-15: window.anchor center -> end. LOS to the keeps is blocked by the south wall until t 5.5; the centred 6.2 s window [3.17, 9.37] spent 2.3 s (8/25 LOS samples, 32%) on the wall and cut the settle at the top. Anchored at the keep end (10.5) the window is about [4.3, 10.5]: about 1.2 s of lead-in, then the keeps clear the wall and the climb eases to its hold.]"
+  },
+  {
+   "id": "poi-burun-fortress.03",
+   "site": "poi-burun-fortress",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.8,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35580.0,
+     18303.5,
+     6.0
+    ],
+    "height": 22,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 185,
+    "azimuthRef": "compass",
+    "elevationDeg": -22,
+    "distance": 38,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.7 m above the ground 38 m south of the fortress gatehouse beyond the fallen Burun and look up at its 22 m wall, pushing 2 m in; keep 3 m from the trees.",
+   "notes": "Low angle on the gatehouse beyond the field of fallen Burun and the Blueprints table; afternoon sun from the south-west. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.7..0.7 m, nearest drawn 3.4 m (scenery-default 0x020012FC@35584,18268), vmax 0.36 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.7..0.7 m, nearest drawn 3.41 m (scenery-default 0x020012FC@35584,18268), vmax 0.36 m/s, LOS blocked 0/23, subject in frame 100%."
+  },
+  {
+   "id": "poi-burun-fortress.04",
+   "site": "poi-burun-fortress",
+   "technique": "fpv.fpv-proximity",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "path": [
+    [
+     35544.5,
+     18282.0,
+     6.0
+    ],
+    [
+     35544.5,
+     18374.0,
+     6.0
+    ]
+   ],
+   "params": {
+    "offset": 5,
+    "side": "right",
+    "heightAGL": 15,
+    "speed": 11,
+    "leanDeg": 6,
+    "maxBankDeg": 20,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Race north 5 m off the west wall of Burun Fortress at 15 m height and 11.5 m/s with the wall on the right; stay 7 m above the tree tops and never drift toward the wall.",
+   "notes": "Fast FPV skim along the sunlit west wall (sun south-west) at 15 m, the corner towers and wall faces streaking past on the right; subject metrics not applicable (path move). Verified (check.mjs, full take flown): take 0-8 s: AGL 15..15 m, nearest drawn 5 m (static 0xB95F#58 0x0100342C), vmax 11.5 m/s; edit 1.5-6.5 s: AGL 15..15 m, nearest drawn 5 m (static 0xB95F#58 0x0100342C), vmax 11.5 m/s; flight fpv peak 11.55 m/s (cap 25), max tracking gap 0.05 m."
+  }
+ ],
+ "verification": {
+  "poi-burun-fortress.01": "take 0-11 s: AGL 3..33.5 m, nearest drawn 3.62 m (scenery-default 0x02001063@35557,18243), vmax 4.44 m/s, LOS blocked 21/45, subject in frame 100%; edit 3-9.5 s: AGL 8.26..32.1 m, nearest drawn 7.38 m (scenery-default 0x02001063@35557,18243), vmax 4.44 m/s, LOS blocked 9/27, subject in frame 100%; flight cinema peak 4.43 m/s (cap 12), max tracking gap 0.04 m",
+  "poi-burun-fortress.02": "take 0-10 s: AGL 46.57..51 m, nearest drawn 14.61 m (scenery-default 0x020003EE@35483,18273), vmax 6.5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 46.57..49.3 m, nearest drawn 14.61 m (scenery-default 0x020003EE@35483,18273), vmax 6.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.52 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-burun-fortress.03": "take 0-8 s: AGL 0.7..0.7 m, nearest drawn 3.4 m (scenery-default 0x020012FC@35584,18268), vmax 0.36 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.7..0.7 m, nearest drawn 3.41 m (scenery-default 0x020012FC@35584,18268), vmax 0.36 m/s, LOS blocked 0/23, subject in frame 100%",
+  "poi-burun-fortress.04": "take 0-8 s: AGL 15..15 m, nearest drawn 5 m (static 0xB95F#58 0x0100342C), vmax 11.5 m/s; edit 1.5-6.5 s: AGL 15..15 m, nearest drawn 5 m (static 0xB95F#58 0x0100342C), vmax 11.5 m/s; flight fpv peak 11.55 m/s (cap 25), max tracking gap 0.05 m"
+ }
+}

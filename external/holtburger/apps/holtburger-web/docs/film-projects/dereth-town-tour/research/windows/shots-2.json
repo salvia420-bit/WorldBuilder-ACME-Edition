@@ -1,0 +1,3465 @@
+{
+ "batch": 2,
+ "shots": [
+  {
+   "id": "tufa.01",
+   "site": "tufa",
+   "technique": "classic.birds-eye",
+   "takeSec": 14.375,
+   "origEditSec": 13.583333,
+   "origInSec": 0.791667,
+   "origEditIn": 2301.791667,
+   "section": {
+    "i": 200,
+    "label": "Y4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "heightM": 72,
+    "riseM": 40,
+    "rotateDeg": 40
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25752,
+     21118,
+     0
+    ],
+    "height": 4,
+    "radius": 30
+   },
+   "standingOrder": "Look straight down on the crater and rise slowly while the image turns; nothing is within 30 m of the lens.",
+   "notes": "ESTABLISHING / DISTINCTIVE TOP-DOWN (classic.birds-eye). Straight down on the crater (south up) from 72 m, rising to 112 m while the image turns 40 deg: the dark bowl in the yellow sand, the menhir stones, the Life Stone, the stream and the white water sheets of the falls at the top of frame, the tent and its blue flame; the desert rim and palms enter as it rises. Exact nadir: if particle billboards spin at nadir, substitute drone.top-down with pitchDeg -88 (same position). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25752, 21118, 72) end (25752, 21118, 112), min AGL 72 m (WBT get-height on 9 camera points: min AGL 72 m, ground 0-0), nearest static/building/default-bake scenery 55.43 m (scenery:0x020004B1), nearest building 71.92 m, retail-bake scenery 69.01 m, peak 4.83 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "tufa.02",
+   "site": "tufa",
+   "technique": "classic.pan",
+   "takeSec": 12.541667,
+   "origEditSec": 12.541667,
+   "origInSec": 0,
+   "origEditIn": 2315.375,
+   "section": {
+    "i": 201,
+    "label": "Z5",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "distance": 98,
+    "elevationDeg": 1.2,
+    "fromDeg": 50,
+    "toDeg": -30,
+    "relative": true,
+    "pitchDeg": -9
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25740,
+     21090,
+     8
+    ],
+    "height": 20,
+    "radius": 20
+   },
+   "standingOrder": "Hold position 2 m above the north rim and pan slowly left from the ruined rim houses across the falls to the crater tent; the lens never moves.",
+   "notes": "CONTEXT (classic.pan). Locked 2 m above the north rim (z 20.1) and 98 m from the falls, the head pans left 80 deg from the two ruined rim houses with their blue flames in the west, across the waterfall, to the crater tent: the whole ruined crater in one breath. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25740, 21188.0, 20.1) end (25740, 21188.0, 20.1), min AGL 2.06 m (WBT get-height on 9 camera points: min AGL 2.06 m, ground 17.99-17.99), nearest static/building/default-bake scenery 43.73 m (scenery:0x020004B2), nearest building 79.21 m, retail-bake scenery 18.09 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tufa.03",
+   "site": "tufa",
+   "technique": "classic.zoom",
+   "takeSec": 11.375,
+   "origEditSec": 11.375,
+   "origInSec": 0,
+   "origEditIn": 2327.916667,
+   "section": {
+    "i": 202,
+    "label": "H4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 8,
+    "distance": 52,
+    "elevationDeg": -14,
+    "toFraming": "MS"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25740,
+     21086,
+     2
+    ],
+    "height": 26,
+    "radius": 16
+   },
+   "standingOrder": "Locked off on the crater floor; only the lens zooms into the falling sheets; stay 20 m clear of the spray.",
+   "notes": "WATER DETAIL (classic.zoom). Locked on the crater floor 2.4 m up, 52 m north of the falls; the lens zooms from 60 to 14 deg up the cascade to the four spouts throwing their water sheets, the menhir stones in the foreground at the start, mist at the foot. Camera 50 m clear of the spray. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25747.0, 21136.0, 2.4) end (25747.0, 21136.0, 2.4), min AGL 2.42 m (WBT get-height on 9 camera points: min AGL 2.42 m, ground 0-0), nearest static/building/default-bake scenery 8.98 m (scenery:0x020004B2), nearest building 34.92 m, retail-bake scenery 10.79 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tufa.04",
+   "site": "tufa",
+   "technique": "drone.helix",
+   "takeSec": 17.083333,
+   "origEditSec": 17.083333,
+   "origInSec": 0,
+   "origEditIn": 2339.291667,
+   "section": {
+    "i": 203,
+    "label": "X5",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 14,
+    "radiusEnd": 34,
+    "heightStart": 3,
+    "heightEnd": 46,
+    "revolutions": 0.42,
+    "direction": "cw",
+    "bearingDeg": 290,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25737.6,
+     21116.9,
+     -0.4
+    ],
+    "height": 3,
+    "radius": 5
+   },
+   "standingOrder": "Corkscrew from 3 m above the stream beside the menhir ring up to 46 m, widening from 14 m to 34 m radius with the stones centred and the falls behind; keep 4 m from the stones and climb over the rim.",
+   "notes": "WATER + MAGIC HERO (drone.helix). Corkscrew from 3 m above the stream beside the broken menhir ring (radius 14) up and out of the crater to 46 m (radius 34), 0.42 turn clockwise from WNW to ESE: the stones stay centred with the falls behind, the Life Stone and the blue-flame tent slide under, and the climb lifts over the rim to reveal the desert, the oasis and the tents. JEV-eligible hero move if a slot is free; code pilot is safe. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25724.4, 21121.7, 3.1) end (25771.2, 21122.1, 45.6), min AGL 3.09 m (WBT get-height on 9 camera points: min AGL 3.09 m, ground 0-10.21), nearest static/building/default-bake scenery 3.79 m (static:0x020008FE#16), nearest building 39.94 m, retail-bake scenery 6.42 m, peak 8.03 m/s, 32% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tufa.05",
+   "site": "tufa",
+   "technique": "drone.fly-by",
+   "takeSec": 11.166667,
+   "origEditSec": 10.375,
+   "origInSec": 0,
+   "origEditIn": 2356.375,
+   "section": {
+    "i": 204,
+    "label": "A6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "offset": 18,
+    "heightAGL": 6,
+    "speed": 4,
+    "side": "right",
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25854.2,
+     20894.7,
+     10
+    ],
+    "height": 7,
+    "radius": 3
+   },
+   "standingOrder": "Glide past the statue and the town portal at 6 m; keep 6 m from the tents.",
+   "notes": "CLOSING / MAGIC (drone.fly-by). Glide north at 4 m/s 18 m west of the Nullified Statue of a Skeleton, 4 m above the sand: the statue on its pedestal slides past with the Town Network portal swirling behind it under the oasis palms. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25836.2, 20874.7, 16) end (25836.2, 20914.7, 16), min AGL 3.15 m (WBT get-height on 9 camera points: min AGL 3.15 m, ground 11.97-12.85), nearest static/building/default-bake scenery 7.33 m (scenery:0x020004B1), nearest building 12.78 m, retail-bake scenery 7.06 m, peak 4 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "samsur.01",
+   "site": "samsur",
+   "technique": "drone.canyon-run",
+   "takeSec": 16.416667,
+   "origEditSec": 15.625,
+   "origInSec": 0.791667,
+   "origEditIn": 2366.75,
+   "section": {
+    "i": 205,
+    "label": "I4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 19,
+    "speed": 11,
+    "alat": 3,
+    "cornerRadius": 25,
+    "lookAhead": 30,
+    "tiltDeg": -6,
+    "maxBankDeg": 12,
+    "minClearance": 3,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Fly the road up the gorge between the mesas at 19 m and arrive over the town; stay 4 m above every palm and the church tower.",
+   "notes": "ESTABLISHING / ARRIVAL (drone.canyon-run). Fly the road up the gorge between the sandstone mesas at 19 m, banking gently through two bends, and arrive over the valley floor with the domed tavern and the church tower of Samsur ahead; morning light rakes the mesa walls. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29000, 23590, 19) end (29052, 23726, 19), min AGL 19 m (WBT get-height on 9 camera points: min AGL 19 m, ground 0-0), nearest static/building/default-bake scenery 14.25 m (scenery:0x020004B1), nearest building 14.58 m, retail-bake scenery 11.11 m, peak 9.15 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "samsur.02",
+   "site": "samsur",
+   "technique": "classic.worms-eye",
+   "takeSec": 9.416667,
+   "origEditSec": 9.416667,
+   "origInSec": 0,
+   "origEditIn": 2382.375,
+   "section": {
+    "i": 206,
+    "label": "X3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 150,
+    "heightM": 0.9,
+    "horizontalM": 16,
+    "spinDeg": 18
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28956,
+     23724,
+     20
+    ],
+    "height": 24.8,
+    "radius": 9.4
+   },
+   "standingOrder": "Lens at knee height 5 m from the tower wall looking up at the beacon; let the sky turn slowly.",
+   "notes": "LANDMARK + GLOW (classic.worms-eye). Lens 0.9 m above the mesa, 16 m SSE of the Advocate Tower's centre (4.5 m off its wall), looking up 53 deg at the 25 m tower and its four orange beacon glows against the morning sky; the sky rolls 18 deg over 10 s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (28964, 23710.1, 20.9) end (28964, 23710.1, 20.9), min AGL 0.9 m (WBT get-height on 9 camera points: min AGL 0.9 m, ground 20-20), nearest static/building/default-bake scenery 4.5 m (building:0x010014C3#7), nearest building 4.5 m, retail-bake scenery 13.47 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "samsur.03",
+   "site": "samsur",
+   "technique": "classic.whip-pan",
+   "takeSec": 8.458333,
+   "origEditSec": 8.458333,
+   "origInSec": 0,
+   "origEditIn": 2391.791667,
+   "section": {
+    "i": 206,
+    "label": "X3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 238,
+    "distance": 86,
+    "elevationDeg": -3,
+    "angleDeg": 150,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29099.5,
+     23772.5,
+     0
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "standingOrder": "Stand 2.5 m up at the gorge mouth, hold on the Advocate Tower 86 m west, then whip 150 degrees right onto the domed tavern and hold; the lens never moves, nothing within 8 m.",
+   "notes": "TRANSITION BETWEEN TWO LANDMARKS (classic.whip-pan). From the gorge mouth (2.5 m up) hold on the Advocate Tower on its mesa to the west, then whip 150 deg right in 0.3 s onto the domed tavern; cut on the blur if needed. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29026.7, 23727.0, 2.5) end (29026.7, 23727.0, 2.5), min AGL 2.5 m (WBT get-height on 9 camera points: min AGL 2.5 m, ground 0-0), nearest static/building/default-bake scenery 13.92 m (scenery:0x020004BC), nearest building 38.48 m, retail-bake scenery 8.25 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "samsur.04",
+   "site": "samsur",
+   "technique": "classic.dolly-in",
+   "takeSec": 13.875,
+   "origEditSec": 13.875,
+   "origInSec": 0,
+   "origEditIn": 2400.25,
+   "section": {
+    "i": 207,
+    "label": "B6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": 50,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29165.2,
+     23790,
+     0
+    ],
+    "height": 10,
+    "radius": 4
+   },
+   "standingOrder": "Ease down the east street toward the Fountain of Musansayn and its blue flames; stay 5 m above the flat roofs.",
+   "notes": "WATER + FLAME (classic.dolly-in). From 27 m east of and above the fountain square, ease down a 50 deg line to 10 m: the Fountain of Musansayn and its ring of blue-flame lamps in the tiny chamfered square between four sandstone halls. Ends 5.6 m above the nearest flat roof (top 8). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29182.4, 23788.5, 25.5) end (29170.3, 23789.5, 13.6), min AGL 13.62 m (WBT get-height on 9 camera points: min AGL 13.62 m, ground 0-0), nearest static/building/default-bake scenery 5.62 m (building:0x01000E40#67), nearest building 5.62 m, retail-bake scenery 25.43 m, peak 2.14 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "samsur.05",
+   "site": "samsur",
+   "technique": "fpv.fpv-flip",
+   "takeSec": 13.208333,
+   "origEditSec": 12.416667,
+   "origInSec": 0,
+   "origEditIn": 2414.125,
+   "section": {
+    "i": 208,
+    "label": "P5",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3.2,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 7,
+    "rise": 2,
+    "tiltDeg": -4,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29118,
+     23640,
+     20
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "standingOrder": "Cruise north over the bare mesa at 7 m, barrel-roll once and level out facing the town; nothing within 10 m.",
+   "notes": "CLOSING (fpv.fpv-flip). Cruise north at 6 m/s 7 m above the bare mesa top, barrel-roll once (3.2 s) and level out facing the town in the valley beyond. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29118, 23601, 27) end (29118, 23679, 27), min AGL 7 m (WBT get-height on 9 camera points: min AGL 7 m, ground 18-20), nearest static/building/default-bake scenery 12.67 m (spawn:Desert Rabbit), nearest building 55.86 m, retail-bake scenery 5.9 m, peak 6.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "al-jalima.01",
+   "site": "al-jalima",
+   "technique": "drone.terrain-skim",
+   "takeSec": 15.666667,
+   "origEditSec": 14.875,
+   "origInSec": 0.791667,
+   "origEditIn": 2426.541667,
+   "section": {
+    "i": 210,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 3,
+    "speed": 10,
+    "lookAhead": 30,
+    "tiltDeg": -2,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Skim the bare hillside 3 m up and run down into the town bowl; nothing stands within 40 m of the line.",
+   "notes": "ARRIVAL (drone.terrain-skim). Skim 3 m over the bare south-west hillside and run 33 m down into the bowl at 10 m/s, the dome and church tower of Al-Jalima rising ahead; no static, building or tree within 50 m of the line (only a wandering chicken spawn). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25574, 26046, 129.3) end (25640, 26180, 96.1), min AGL 3 m (WBT get-height on 9 camera points: min AGL 3.0 m, ground 92.67-126.33), nearest static/building/default-bake scenery 2.68 m (spawn:Chicken), nearest building 53.09 m, retail-bake scenery 136.94 m, peak 10.81 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "al-jalima.02",
+   "site": "al-jalima",
+   "technique": "classic.dolly-out",
+   "takeSec": 10.875,
+   "origEditSec": 10.875,
+   "origInSec": 0,
+   "origEditIn": 2441.416667,
+   "section": {
+    "i": 210,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 70,
+    "elevationDeg": 22,
+    "toFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25575.5,
+     26211.8,
+     86
+    ],
+    "height": 4,
+    "radius": 2.5
+   },
+   "standingOrder": "Back away from the fountain and its blue flame along the lens axis, rising gently; keep 3 m above the Life Stone.",
+   "notes": "WATER + FLAME (classic.dolly-out). Start 5 m from the flower-ringed fountain and its blue flame and back away ENE along the lens axis, rising at 22 deg, to 34 m: the Life Stone, the well, the church tower and the hills open up around the little plaza. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25579.8, 26213.4, 89.8) end (25605.4, 26222.7, 100.8), min AGL 3.85 m (WBT get-height on 9 camera points: min AGL 3.85 m, ground 86-86), nearest static/building/default-bake scenery 2.49 m (spawn:Fountain), nearest building 9.86 m, retail-bake scenery 178.3 m, peak 5.15 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "al-jalima.03",
+   "site": "al-jalima",
+   "technique": "drone.boomerang",
+   "takeSec": 11.833333,
+   "origEditSec": 11.833333,
+   "origInSec": 0,
+   "origEditIn": 2452.291667,
+   "section": {
+    "i": 211,
+    "label": "C6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "far": 36,
+    "near": 15,
+    "heightStart": 9,
+    "heightNear": 7,
+    "rise": 12,
+    "bearingDeg": 140,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25615.4,
+     26240.7,
+     86
+    ],
+    "height": 10.3,
+    "radius": 4
+   },
+   "standingOrder": "Fly in toward the skeleton statue and the town portal, then swing back out and up; never closer than 10 m to the pedestal.",
+   "notes": "MAGIC (drone.boomerang). Fly in from the south-east toward the skeleton statue on its pedestal with the Town Network portal swirling behind it to 15 m, then swing back out and up 12 m. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25638.5, 26213.1, 95) end (25638.5, 26213.1, 107), min AGL 5.85 m (WBT get-height on 9 camera points: min AGL 5.85 m, ground 86.46-89.15), nearest static/building/default-bake scenery 9.16 m (building:0x01002A1B#72), nearest building 9.16 m, retail-bake scenery 208.97 m, peak 6.59 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "al-jalima.04",
+   "site": "al-jalima",
+   "technique": "classic.arc",
+   "takeSec": 11.166667,
+   "origEditSec": 11.166667,
+   "origInSec": 0,
+   "origEditIn": 2464.125,
+   "section": {
+    "i": 212,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 5,
+    "elevationDeg": 10,
+    "distance": 32,
+    "arcDeg": 70,
+    "direction": "cw"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25596,
+     26268,
+     86
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "standingOrder": "Arc slowly round the north side of the domed tavern at 32 m; keep 6 m from the tent and the meeting-hall tower.",
+   "notes": "LANDMARK (classic.arc). A 70 deg clockwise arc at 32 m around the north side of the domed tavern, 9-13 m above the ground: the yellow-brick dome rim-lit by the afternoon sun, the church tower and statue sliding behind it. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25580.2, 26295.3, 98.6) end (25616.3, 26292.1, 98.6), min AGL 8.11 m (WBT get-height on 9 camera points: min AGL 8.11 m, ground 86-90.45), nearest static/building/default-bake scenery 8.06 m (building:0x01000EFC#70), nearest building 8.06 m, retail-bake scenery 147.31 m, peak 5.49 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "al-jalima.05",
+   "site": "al-jalima",
+   "technique": "drone.dronie",
+   "takeSec": 13.708333,
+   "origEditSec": 12.916667,
+   "origInSec": 0,
+   "origEditIn": 2475.291667,
+   "section": {
+    "i": 213,
+    "label": "B6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "startDistance": 6,
+    "endDistance": 75,
+    "startHeight": 3,
+    "endHeight": 42,
+    "bearingDeg": 150,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25600.7,
+     26216.4,
+     86
+    ],
+    "height": 3.6,
+    "radius": 1.5
+   },
+   "standingOrder": "Pull back and up from the Life Stone in one line to the south-east until the bowl and its hills fill the frame; 3 m from the stone at the start.",
+   "notes": "CLOSING (drone.dronie). Pull back and up from the glowing Life Stone (6 -> 75 m out, 3 -> 42 m up) to the south-east until the whole town and its bowl of hills fill the frame. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25603.7, 26211.2, 89) end (25638.2, 26151.5, 128), min AGL 3 m (WBT get-height on 9 camera points: min AGL 3 m, ground 86-96.71), nearest static/building/default-bake scenery 4.37 m (spawn:Life Stone), nearest building 22.09 m, retail-bake scenery 199.23 m, peak 9.57 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "zaikhal.01",
+   "site": "zaikhal",
+   "technique": "drone.tilt-reveal",
+   "takeSec": 15.291667,
+   "origEditSec": 14.5,
+   "origInSec": 0.791667,
+   "origEditIn": 2488.208333,
+   "section": {
+    "i": 215,
+    "label": "X3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "startPitchDeg": -78,
+    "endPitchDeg": -10,
+    "heightAGL": 46,
+    "distance": 150,
+    "drift": 8,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24630,
+     27760,
+     124
+    ],
+    "height": 14,
+    "radius": 40
+   },
+   "standingOrder": "Hover 46 m above the southern plateau, tilt up from the ground to the capital and the northern hills while easing forward; 8 m above every tree.",
+   "notes": "ESTABLISHING (drone.tilt-reveal). Hover 46 m above the southern plateau, 150 m south of the plaza, and tilt from -78 to -10 deg while easing 8 m forward: from the grass up to the capital - domes, sandstone halls and shade trees - with the library hill and the northern hills behind; the sun behind-left. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24630, 27610, 170) end (24630, 27618, 170), min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 124-124), nearest static/building/default-bake scenery 37.99 m (scenery:0x02000246), nearest building 47.12 m, retail-bake scenery 15.46 m, peak 0.9 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "zaikhal.02",
+   "site": "zaikhal",
+   "technique": "classic.pov",
+   "takeSec": 11.208333,
+   "origEditSec": 11.208333,
+   "origInSec": 0,
+   "origEditIn": 2502.708333,
+   "section": {
+    "i": 216,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 2,
+    "advanceM": 7,
+    "bobM": 0.025,
+    "stepHz": 1.7
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24653,
+     27713.8,
+     123.67
+    ],
+    "height": 1.8,
+    "radius": 0.5,
+    "heading": 4.8
+   },
+   "standingOrder": "Walk west into the plaza at eye height past the domed hall toward the town portal; stay 7 m off the hall wall.",
+   "notes": "STREET (classic.pov). Eye-level walk 7 m west into the plaza along the domed tavern's south side toward the Town Network portal: the dome on the right, the blue-flame lamps and the portal swirl ahead, a gentle walking bob. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24652.7, 27713.8, 125.3) end (24645.7, 27714.4, 125.3), min AGL 1.32 m (WBT get-height on 9 camera points: min AGL 1.32 m, ground 123.22-124), nearest static/building/default-bake scenery 7.56 m (building:0x01000E3B#104), nearest building 7.56 m, retail-bake scenery 8.83 m, peak 1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "zaikhal.03",
+   "site": "zaikhal",
+   "technique": "classic.two-shot",
+   "takeSec": 12.583333,
+   "origEditSec": 12.583333,
+   "origInSec": 0,
+   "origEditIn": 2513.916667,
+   "section": {
+    "i": 217,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "secondary": [
+     24642.69,
+     27542.47,
+     124
+    ],
+    "secondaryHeight": 4,
+    "elevationDeg": 6,
+    "side": "auto",
+    "driftDeg": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24631.75,
+     27535.95,
+     124
+    ],
+    "height": 4,
+    "radius": 2
+   },
+   "standingOrder": "Frame both Radiant Blood portals with the red-and-gold banners and drift slowly; keep 6 m from the guardian figures.",
+   "notes": "MAGIC (classic.two-shot). The two Radiant Blood society portals - Stronghold and Gauntlet - framed together with the red-and-gold banners and red-eyed guardian figures, a slow 8 deg drift; camera 3 m up, 11 m away. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24631.6, 27547.3, 127.0) end (24632.8, 27548.0, 127.0), min AGL 3.04 m (WBT get-height on 9 camera points: min AGL 3.04 m, ground 124-124), nearest static/building/default-bake scenery 8.04 m (spawn:Ayesha of the Radiant Blood), nearest building 37.37 m, retail-bake scenery 24.06 m, peak 0.18 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "zaikhal.04",
+   "site": "zaikhal",
+   "technique": "drone.vertigo-drone",
+   "takeSec": 11.5,
+   "origEditSec": 11.5,
+   "origInSec": 0,
+   "origEditIn": 2526.5,
+   "section": {
+    "i": 218,
+    "label": "C6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "nearDistance": 24,
+    "farDistance": 70,
+    "direction": "out",
+    "heightAGL": 8,
+    "minFovDeg": 18,
+    "maxFovDeg": 70,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24948,
+     27804,
+     124
+    ],
+    "height": 26.3,
+    "radius": 6
+   },
+   "standingOrder": "Back away west from the Gold Legion Keep while zooming in so the tower holds its size and the valley behind it swells; 10 m from the trees.",
+   "notes": "LANDMARK - VIAMONTIAN TOWER (drone.vertigo-drone). Back away west from the Gold Legion Keep 24 -> 70 m at 8 m height while the fov narrows 60 -> 23 deg: the gold-roofed tower holds its size while the eastern valley and hills swell behind it. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24924, 27804, 132) end (24878, 27804, 132), min AGL 8 m (WBT get-height on 9 camera points: min AGL 8 m, ground 111.17-124), nearest static/building/default-bake scenery 14.93 m (spawn:Viamontian Counselor), nearest building 18.52 m, retail-bake scenery 12.54 m, peak 6.56 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "zaikhal.05",
+   "site": "zaikhal",
+   "technique": "classic.time-lapse",
+   "takeSec": 15.375,
+   "origEditSec": 14.583333,
+   "origInSec": 0,
+   "origEditIn": 2538,
+   "section": {
+    "i": 219,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 245,
+    "distance": 118,
+    "elevationDeg": 19,
+    "thirds": "center",
+    "rate": 0.0085
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24636,
+     27732,
+     124
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "standingOrder": "Locked off high over the western slope while the clouds race over the capital; nothing within 15 m of the lens.",
+   "notes": "CLOSING (classic.time-lapse). Locked high to the WSW (45 m above the plateau, 118 m from the dome) over the capital while the sky clock runs 0.01 day/s (0.68 -> 0.82): clouds race over the domes and the shadows stretch into golden light. Last shot of the town so the clock jump is hidden by the cut. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24534.9, 27684.8, 169.4) end (24534.9, 27684.8, 169.4), min AGL 45.42 m (WBT get-height on 9 camera points: min AGL 45.42 m, ground 124-124), nearest static/building/default-bake scenery 29.62 m (scenery:0x02000258), nearest building 53.63 m, retail-bake scenery 13.42 m, peak 0 m/s. [final plan: rate 0.01 -> 0.0085 so the sun stays above ~0.83 including pre-roll]",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "yanshi.01",
+   "site": "yanshi",
+   "technique": "drone.top-down",
+   "takeSec": 13,
+   "origEditSec": 12.208333,
+   "origInSec": 0.791667,
+   "origEditIn": 2552.583333,
+   "section": {
+    "i": 220,
+    "label": "D6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 112,
+    "rotateDeg": 22,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34656,
+     21588,
+     42
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "standingOrder": "Hang 112 m straight above the walled town and let the square of walls and the pagoda turn slowly; nothing is near.",
+   "notes": "ESTABLISHING (drone.top-down). 112 m above the walled town (gimbal -88 deg so the lanterns, portal and life stone below never spin), image east-up turning 22 deg: the square of brick walls, the gate towers, the pagoda and the Sho roofs as a map. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34652.4, 21588, 154) end (34652.7, 21589.3, 154), min AGL 108.67 m (WBT get-height on 9 camera points: min AGL 108.67 m, ground 45-45.33), nearest static/building/default-bake scenery 75.75 m (building:0x01002E64#95), nearest building 75.75 m, retail-bake scenery 238.87 m, peak 0.11 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "yanshi.02",
+   "site": "yanshi",
+   "technique": "fpv.fpv-gap",
+   "takeSec": 8.25,
+   "origEditSec": 8.25,
+   "origInSec": 0,
+   "origEditIn": 2564.791667,
+   "section": {
+    "i": 221,
+    "label": "E6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     34656,
+     21524.5,
+     46
+    ],
+    "gapNormal": [
+     0,
+     1,
+     0
+    ],
+    "gapWidth": 30,
+    "gapHeight": 14,
+    "heightAGL": 4,
+    "approachAngleDeg": 20,
+    "approachFrom": "left",
+    "approachDistance": 40,
+    "alignDistance": 12,
+    "exitDistance": 30,
+    "cornerRadius": 12,
+    "speed": 12,
+    "alat": 8,
+    "lookAhead": 8,
+    "maxBankDeg": 30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Bank in from the memorial road and shoot through the middle of the south gate between the two towers into the town; 12 m from each tower.",
+   "notes": "HERO FPV THROUGH THE GATE (fpv.fpv-gap). Bank in from the memorial road (the giant Antius Blackmoor statue passes 25 m to the left), align, and shoot through the middle of the 34 m south gate between the two 19.6 m towers into the town toward the Life Stone; 17 m from each tower at 4 m height. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34642.3, 21474.9, 46) end (34656, 21554.5, 46), min AGL 4 m (WBT get-height on 9 camera points: min AGL 4 m, ground 39.51-42), nearest static/building/default-bake scenery 12.91 m (static:0x02000180#34), nearest building 17 m, retail-bake scenery 212.83 m, peak 9.1 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "yanshi.03",
+   "site": "yanshi",
+   "technique": "classic.steadicam",
+   "takeSec": 13.958333,
+   "origEditSec": 13.958333,
+   "origInSec": 0,
+   "origEditIn": 2573.041667,
+   "section": {
+    "i": 221,
+    "label": "E6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "mode": "lead",
+    "distance": 30,
+    "elevationDeg": -9,
+    "glideM": 12,
+    "lag": 1,
+    "bobM": 0.012,
+    "stepHz": 1.6,
+    "swayDeg": 0.35
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34470.5,
+     21399,
+     20
+    ],
+    "height": 8.3,
+    "radius": 6,
+    "heading": 3.14159
+   },
+   "standingOrder": "Glide up the wedding aisle at walking height toward the arch and its two sparkling crystal fountains; keep 5 m from the lantern posts.",
+   "notes": "PARTICLES / WEDDING SITE (classic.steadicam). A floaty walk up the wedding-aisle carpet between the stone benches and topiary toward the red-and-white wedding arch and its two sparkling crystal fountains where Prince Borelean and Hoshino Kei were wed; lens 1.5-3.4 m up above the 8 cm aisle carpet, benches 0.57 m tall 2.2 m to either side. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34470.5, 21369.4, 21.5) end (34470.5, 21381.4, 23.4), min AGL 1.5 m (WBT get-height on 9 camera points: min AGL 1.5 m, ground 20-20), nearest static/building/default-bake scenery 2.22 m (static:0x010043DE#61), nearest building 19.37 m, retail-bake scenery 414.72 m, peak 1.5 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "yanshi.04",
+   "site": "yanshi",
+   "technique": "fpv.fpv-proximity",
+   "takeSec": 14.583333,
+   "origEditSec": 14.583333,
+   "origInSec": 0,
+   "origEditIn": 2587,
+   "section": {
+    "i": 223,
+    "label": "D6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "offset": 5,
+    "side": "right",
+    "heightAGL": 4,
+    "speed": 12,
+    "cornerRadius": 5,
+    "alat": 8,
+    "lookAhead": 10,
+    "leanDeg": 6,
+    "maxBankDeg": 25,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Race north along the outside of the west wall 5 m off the stone at 4 m height; 3 m clear of the corner towers.",
+   "notes": "FPV WALL HUG (fpv.fpv-proximity). Race north 160 m along the outside of the west town wall, 5 m off the brick at 4 m height, past both corner towers (>= 3.6 m). Fast FPV wall run (not a classic facade pan). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34597.4, 21508, 46) end (34597.4, 21668, 46), min AGL 4 m (WBT get-height on 9 camera points: min AGL 4 m, ground 42-42), nearest static/building/default-bake scenery 3.6 m (building:0x01002D1B#122), nearest building 3.6 m, retail-bake scenery 263.89 m, peak 11.43 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "yanshi.05",
+   "site": "yanshi",
+   "technique": "classic.hyperlapse",
+   "takeSec": 15.875,
+   "origEditSec": 15.083333,
+   "origInSec": 0,
+   "origEditIn": 2601.583333,
+   "section": {
+    "i": 225,
+    "label": "E6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 165,
+    "elevationDeg": -28,
+    "distance": 32,
+    "thirds": "center",
+    "move": "truck",
+    "moveM": 30,
+    "direction": "right",
+    "rate": 0.012
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34644,
+     21612,
+     48
+    ],
+    "height": 31,
+    "radius": 8.5
+   },
+   "standingOrder": "Truck slowly east past the pagoda's south face with its lanterns while the clouds race; keep 10 m off its platform.",
+   "notes": "FACADE PAN - SHO PAGODA + CLOSING (classic.hyperlapse, move truck). Truck 30 m east past the pagoda's south face, 4-6 m above the ground and 30 m out, looking up at the octagonal tiers and the door lanterns while the sky clock runs 0.012 day/s (0.44 -> 0.62): clouds race over the roof. Last shot of the town (clock jump hidden by the cut). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34636.8, 21580.8, 48.5) end (34665.8, 21588.6, 48.5), min AGL 4.01 m (WBT get-height on 9 camera points: min AGL 4.04 m, ground 42.7-44.44), nearest static/building/default-bake scenery 7.23 m (building:0x01000D14#120), nearest building 7.23 m, retail-bake scenery 199.56 m, peak 2 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "sawato.01",
+   "site": "sawato",
+   "technique": "drone.flyover",
+   "takeSec": 14.791667,
+   "origEditSec": 14,
+   "origInSec": 0.791667,
+   "origEditIn": 2616.666667,
+   "section": {
+    "i": 226,
+    "label": "D6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 50,
+    "speed": 8,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -24,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38556,
+     17585,
+     6
+    ],
+    "height": 2,
+    "radius": 4
+   },
+   "standingOrder": "Fly level east at 56 m over the swamp pools toward the hidden village; stay 10 m above the tallest cypress crowns.",
+   "notes": "ESTABLISHING + WATER (drone.flyover). Level east at 56 m over the western swamp pools between the cypress crowns (28% of the pass over standing water), gimbal -24 deg, toward the clearing; the golden sun behind the camera lights the green roofs ahead. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38500, 17585, 56) end (38612, 17585, 56), min AGL 50 m (WBT get-height on 9 camera points: min AGL 50 m, ground 6-6), nearest static/building/default-bake scenery 24.6 m (scenery:0x020003EE), nearest building 48.85 m, retail-bake scenery 15.27 m, peak 8 m/s, 28% of samples over water.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "sawato.02",
+   "site": "sawato",
+   "technique": "drone.top-down-rise",
+   "takeSec": 12.083333,
+   "origEditSec": 12.083333,
+   "origInSec": 0,
+   "origEditIn": 2630.666667,
+   "section": {
+    "i": 227,
+    "label": "G6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 48,
+    "heightEnd": 130,
+    "rotateDeg": -30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38705,
+     17582,
+     12
+    ],
+    "height": 8,
+    "radius": 40
+   },
+   "standingOrder": "Look straight down on the village square from 48 m and rise to 130 m until the clearing sits small in the swamp; nothing near the lens.",
+   "notes": "GRAPHIC REVEAL (drone.top-down-rise). Straight down (pitch -88) on the village square from 48 m, rising to 130 m and turning -30 deg: the square, the statue and the green Sho roofs shrink into a clearing in the endless swamp canopy. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38705, 17580.5, 60) end (38707.2, 17578.2, 142), min AGL 48 m (WBT get-height on 9 camera points: min AGL 48 m, ground 12-12), nearest static/building/default-bake scenery 37.93 m (spawn:Nullified Statue of a Sclavus), nearest building 41.05 m, retail-bake scenery 37.76 m, peak 10.73 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "sawato.03",
+   "site": "sawato",
+   "technique": "classic.static",
+   "takeSec": 10.375,
+   "origEditSec": 10.375,
+   "origInSec": 0,
+   "origEditIn": 2642.75,
+   "section": {
+    "i": 228,
+    "label": "X3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 10,
+    "distance": 30,
+    "elevationDeg": -6,
+    "thirds": "center"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38700,
+     17582,
+     12
+    ],
+    "height": 10.5,
+    "radius": 3.5
+   },
+   "standingOrder": "Lock off 2 m above the north plaza 30 m from the Sclavus statue with the glowing lantern post in front; nothing within 6 m of the lens.",
+   "notes": "FLAME / GLOW (classic.static). Locked off at eye height (2 m) in the north plaza: a street lantern and its warm glow halo in the foreground, the Sclavus statue on its pedestal among three small trees behind, the life stone beyond. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38705.2, 17611.4, 14.1) end (38705.2, 17611.4, 14.1), min AGL 2.11 m (WBT get-height on 9 camera points: min AGL 2.11 m, ground 12-12), nearest static/building/default-bake scenery 6.07 m (spawn:Mosswart Cynic), nearest building 8.54 m, retail-bake scenery 11.6 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "sawato.04",
+   "site": "sawato",
+   "technique": "classic.crane",
+   "takeSec": 11.916667,
+   "origEditSec": 11.916667,
+   "origInSec": 0,
+   "origEditIn": 2653.125,
+   "section": {
+    "i": 230,
+    "label": "B6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 265,
+    "distance": 24,
+    "elevationDeg": -8,
+    "riseM": 16,
+    "swingDeg": -25,
+    "armM": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38723.2,
+     17603.3,
+     12
+    ],
+    "height": 10,
+    "radius": 9
+   },
+   "standingOrder": "Rise on the jib from street level beside the lantern post until the arched Sho house's green roof and the swamp beyond are revealed; 3 m from the lantern.",
+   "notes": "LANDMARK (classic.crane). Jib rising 1.7 -> 17.7 m beside a lantern post as the arm swings 25 deg, aimed at the green-roofed Sho hall with its dome and archways: the roof and the swamp beyond are revealed. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38699.5, 17601.2, 13.7) end (38698.7, 17603.7, 29.7), min AGL 1.66 m (WBT get-height on 9 camera points: min AGL 1.66 m, ground 12-12), nearest static/building/default-bake scenery 3.54 m (static:0x0200071A#79), nearest building 10.61 m, retail-bake scenery 19.25 m, peak 2.49 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "sawato.05",
+   "site": "sawato",
+   "technique": "drone.pano-360",
+   "takeSec": 14.833333,
+   "origEditSec": 14.041667,
+   "origInSec": 0,
+   "origEditIn": 2665.041667,
+   "section": {
+    "i": 231,
+    "label": "P5",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 46,
+    "yawDeg": 360,
+    "direction": "cw",
+    "startHeadingDeg": 90,
+    "relativeToSubject": false,
+    "tiltDeg": -10,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38700,
+     17582,
+     12
+    ],
+    "height": 10,
+    "radius": 5
+   },
+   "standingOrder": "Hover 46 m above the square and turn a full circle over the sea of cypress crowns; the lens never moves.",
+   "notes": "CLOSING (drone.pano-360). 46 m above the square, a full slow turn over the sea of cypress crowns in golden light; above every tree in both scenery bakes. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38700, 17582, 58) end (38700, 17582, 58), min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 12-12), nearest static/building/default-bake scenery 35.7 m (spawn:Nullified Statue of a Sclavus), nearest building 38.7 m, retail-bake scenery 40.87 m, peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "shoushi.01",
+   "site": "shoushi",
+   "technique": "classic.pan",
+   "takeSec": 15.333333,
+   "origEditSec": 14.541667,
+   "origInSec": 0.791667,
+   "origEditIn": 2679.083333,
+   "section": {
+    "i": 232,
+    "label": "X3",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 261,
+    "distance": 230,
+    "elevationDeg": 8.2,
+    "fromDeg": -38,
+    "toDeg": 4,
+    "relative": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41940.0,
+     16476.0,
+     20.0
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "standingOrder": "Hold 12 m above the wooded hill 230 m west of Shoushi and pan 42 degrees right across the walled courtyards until the green pagoda settles in frame; the lens never moves, pine tops 6 m below may be faded.",
+   "notes": "ESTABLISHING (classic.pan). From 12 m above the wooded hill 230 m west of town (z 68), a slow 42 deg pan right: from the five-storey spire tower and the northern halls across the grid of low Yaosai walls and green-roofed compounds, landing on the octagon pagoda (Spire of Serenity) just left of centre; the low western sun is behind the camera, so walls and roofs are front-lit with long shadows. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41715.2,16440.4,68.3) end (41715.2,16440.4,68.3), min AGL 12.0 m, nearest static/building/spawn box 6.3 m (scenery:0x020002D8), nearest building 127.5 m, trees by crown profile 6.3 m (default bake) / 6.6 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 9 samples matched the checker terrain to 0.002 m (min WBT AGL 12.04 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "shoushi.02",
+   "site": "shoushi",
+   "technique": "fpv.fpv-gap",
+   "takeSec": 6.916667,
+   "origEditSec": 6.916667,
+   "origInSec": 0,
+   "origEditIn": 2693.625,
+   "section": {
+    "i": 233,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     41836.0,
+     16428.0,
+     21.6
+    ],
+    "gapNormal": [
+     1,
+     0,
+     0
+    ],
+    "gapWidth": 5,
+    "gapHeight": 3.5,
+    "approachAngleDeg": 20,
+    "approachFrom": "right",
+    "approachDistance": 18,
+    "alignDistance": 10,
+    "exitDistance": 30,
+    "cornerRadius": 10,
+    "speed": 11,
+    "alat": 8,
+    "lookAhead": 6,
+    "maxBankDeg": 30,
+    "relativeToSubject": false,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Bank in 1.6 m above the western field and shoot straight through the 5 m wide roofed west gate on its centre line, then 30 m on into town; clear each gate post by 2.5 m and the lintel by 1.9 m.",
+   "notes": "FPV GAP (fpv.fpv-gap). A low banked approach over the western field from the south-west, aligned 10 m out, then straight through the roofed west gate of the old Yaosai wall 1.6 m above the ground and 30 m on into town between the dome hall and the two-storey hall; sun behind the camera. Gate opening parsed from GfxObj 0x01000E65: 5 m wide (posts at +/-2.5 m) x 3.5 m high, so the line clears each post by 2.5 m and the lintel by 1.9 m (the 0.5 m 'minClr' below is the wall's whole-length AABB). Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41809.1,16421.8,21.6) end (41866.0,16428.0,21.6), min AGL 1.6 m, nearest static/building/spawn box 0.5 m (building:0x01000E65#4), nearest building 0.5 m, trees by crown profile 22.2 m (default bake) / 10.0 m (opt-in retail bake), peak 8.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.60 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "shoushi.03",
+   "site": "shoushi",
+   "technique": "classic.truck",
+   "takeSec": 13.791667,
+   "origEditSec": 13.791667,
+   "origInSec": 0,
+   "origEditIn": 2700.541667,
+   "section": {
+    "i": 234,
+    "label": "C6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 270,
+    "distance": 12,
+    "elevationDeg": -6,
+    "thirds": "center",
+    "travelM": 32,
+    "direction": "right",
+    "keepAim": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41978.0,
+     16422.0,
+     20.0
+    ],
+    "height": 7,
+    "radius": 11
+   },
+   "standingOrder": "Truck 32 m south 12 m off the Three Swords Hall at 2.2 m height with the head fixed, lanterns sliding past below; keep 4 m from the lantern posts and the townsfolk.",
+   "notes": "FACADE PAN (classic.truck). Fixed-head truck 32 m south along the green-roofed two-storey Three Swords Hall on the east side of the plaza, 12 m off its west face at 2.2 m height; street lanterns (flame flicker) slide through the bottom of frame and the low western sun lights the facade straight on. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41966.1,16438.0,22.2) end (41966.1,16406.0,22.2), min AGL 2.2 m, nearest static/building/spawn box 3.9 m (spawn:Collector), nearest building 5.8 m, trees by crown profile 43.4 m (default bake) / 43.4 m (opt-in retail bake), peak 3.9 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 2.25 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "shoushi.04",
+   "site": "shoushi",
+   "technique": "classic.handheld",
+   "takeSec": 14.75,
+   "origEditSec": 14.75,
+   "origInSec": 0,
+   "origEditIn": 2714.333333,
+   "section": {
+    "i": 235,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 20.6,
+    "distance": 16.2,
+    "elevationDeg": -2.3,
+    "thirds": "center",
+    "base": "push-in",
+    "pushM": 1.5,
+    "amplitudeDeg": 0.5,
+    "frequencyHz": 0.9,
+    "posAmplitude": 0.025,
+    "roughness": 0.35
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41944.8,
+     16423.1,
+     20.0
+    ],
+    "height": 2.6,
+    "radius": 1.2
+   },
+   "standingOrder": "Stand 1.7 m up in the north-east corner of the walled court and drift 1.5 m toward the fountain and the Life Stone with a gentle handheld breath; keep 1.5 m from the wall behind.",
+   "notes": "WATER + MAGIC + FLAME (classic.handheld). Standing quietly in the north-east corner of the walled court at eye height, a gentle handheld push of 1.5 m toward the Life Stone (sparkle column), the fountain spraying in the right foreground, a lantern flickering between them and the flowering court tree and the well beside; the south gate roof and the hall beyond close the frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41950.5,16438.2,21.7) end (41950.0,16436.8,21.8), min AGL 1.7 m, nearest static/building/spawn box 1.5 m (building:0x01000E61#132), nearest building 1.5 m, trees by crown profile 57.9 m (default bake) / 57.9 m (opt-in retail bake), peak 0.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 1.69 m). [critic F2: held 2.35 s longer through the Scherzo's last chords and the silence; cut on the Finale's opening downbeat 2729.09 s]",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "shoushi.05",
+   "site": "shoushi",
+   "technique": "classic.tilt",
+   "takeSec": 11.583333,
+   "origEditSec": 10.791667,
+   "origInSec": 0,
+   "origEditIn": 2729.083333,
+   "section": {
+    "i": 236,
+    "label": "H6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "distance": 26,
+    "elevationDeg": -30,
+    "fromDeg": -24,
+    "toDeg": 18,
+    "relative": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41940.0,
+     16476.0,
+     20.0
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "standingOrder": "From the plaza 26 m south of the green octagon pagoda tilt slowly up from its doors to its spire against the sky; the lens never moves, nothing within 5 m.",
+   "notes": "LANDMARK / CLOSING (classic.tilt). From the plaza 26 m south of the 31 m octagon pagoda (Spire of Serenity, roof z 51), a slow tilt from its doors (+6 deg) up to its spire against the sky (+48 deg); warm side light from the west. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41940.0,16453.5,22.5) end (41940.0,16453.5,22.5), min AGL 2.5 m, nearest static/building/spawn box 5.7 m (static:0x0200071A#110), nearest building 10.5 m, trees by crown profile 65.7 m (default bake) / 65.7 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 2.50 m). [critic F2: starts on the Eroica Finale's fortissimo opening (bar downbeat 2729.09 s), 2.35 s shorter]",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hebian-to.01",
+   "site": "hebian-to",
+   "technique": "drone.flyover",
+   "takeSec": 14.708333,
+   "origEditSec": 13.916667,
+   "origInSec": 0.791667,
+   "origEditIn": 2739.875,
+   "section": {
+    "i": 237,
+    "label": "I6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 9,
+    "speed": 7,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -1,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44436.0,
+     15362.0,
+     0.0
+    ],
+    "height": 1,
+    "radius": 1
+   },
+   "standingOrder": "Fly level 9 m above the shallow bay for 98 m due south toward the bluff of Hebian-to, the green pagoda rising over the cliff ahead; stay over open water and 25 m from the shore.",
+   "notes": "WATER / ESTABLISHING (drone.flyover). Straight, level 98 m pass due south 9 m above the shallow bay at the mouth of the River Prosper (100 % of the path over water), gimbal near level: the shoreline, the green bluff and the roofs of the Sho capital with the 31 m West Wind Tower pagoda rising over the cliff edge grow ahead; the afternoon sun from the right glitters on the water. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44436.0,15411.0,9.0) end (44436.0,15313.0,9.0), min AGL 9.0 m, nearest static/building/spawn box 25.2 m (spawn:Green Phyntos Wasp), nearest building 170.4 m, trees by crown profile 42.9 m (default bake) / 42.9 m (opt-in retail bake), peak 7.0 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 9.00 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "hebian-to.02",
+   "site": "hebian-to",
+   "technique": "classic.truck",
+   "takeSec": 12.458333,
+   "origEditSec": 12.458333,
+   "origInSec": 0,
+   "origEditIn": 2753.791667,
+   "section": {
+    "i": 238,
+    "label": "J6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "distance": 20,
+    "elevationDeg": -11,
+    "thirds": "center",
+    "travelM": 44,
+    "direction": "right",
+    "keepAim": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44436.0,
+     15124.0,
+     32.0
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "standingOrder": "Truck 44 m east 20 m off the green octagon pagoda at 3.2 m height with the head fixed, lanterns sliding past in front; keep 3 m from the Life Stone and the lantern posts.",
+   "notes": "FACADE PAN (classic.truck). Fixed-head truck 44 m east along the south face of the West Wind Tower, the great green octagon pagoda on the north side of the plaza, 20 m off its face at 3.2 m height and tilted up 11 deg: street lanterns slide through the foreground while the pagoda's doors and lower tiers cross the frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44414.0,15104.4,35.2) end (44458.0,15104.4,35.2), min AGL 3.2 m, nearest static/building/spawn box 3.0 m (spawn:Life Stone), nearest building 15.8 m, trees by crown profile 5.3 m (default bake) / 3.8 m (opt-in retail bake), peak 5.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 3.18 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hebian-to.03",
+   "site": "hebian-to",
+   "technique": "classic.over-the-shoulder",
+   "takeSec": 10.375,
+   "origEditSec": 10.375,
+   "origInSec": 0,
+   "origEditIn": 2766.25,
+   "section": {
+    "i": 239,
+    "label": "K6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "secondary": [
+     44408.0,
+     15015.8,
+     38.8
+    ],
+    "secondaryHeight": 2.6,
+    "shoulder": "right",
+    "shoulderM": 0.7,
+    "backM": 1.6,
+    "raiseM": 0.1,
+    "composeThirds": true,
+    "autoFov": false,
+    "pushM": 0.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44420.3,
+     15068.2,
+     32.0
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Look over the right shoulder of the statue of Ben Ten from 1.6 m behind it across the plaza to the swirling portal, the Life Stone and the pagoda; push no more than 0.5 m and stay 2 m from the hall wall.",
+   "notes": "MAGIC (classic.over-the-shoulder). From 1.6 m behind the right shoulder of the nullified statue of Ben Ten on its 6.8 m pedestal (camera z 41, 36 deg lens): the statue's shoulder fills the lower left while the swirling Town Network portal sits on the right third with the Life Stone sparkle and the pagoda stacked beyond it across the plaza; slow 0.5 m push. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44408.3,15014.1,41.0) end (44408.4,15014.6,41.0), min AGL 9.0 m, nearest static/building/spawn box 0.0 m (spawn:Anniversary Effect), nearest building 2.2 m, trees by crown profile 21.4 m (default bake) / 21.4 m (opt-in retail bake), peak 0.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 8.97 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hebian-to.04",
+   "site": "hebian-to",
+   "technique": "classic.zoom",
+   "takeSec": 11.291667,
+   "origEditSec": 11.291667,
+   "origInSec": 0,
+   "origEditIn": 2776.625,
+   "section": {
+    "i": 240,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 70,
+    "distance": 311,
+    "elevationDeg": 3.4,
+    "thirds": "left",
+    "toFovDeg": 9
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44052.0,
+     15060.0,
+     12.0
+    ],
+    "height": 15,
+    "radius": 12
+   },
+   "standingOrder": "Lock the camera 9 m above the bluff edge on the river mouth and the bay, then zoom slowly onto the Sho Library and its Life Stone 311 m away; the lens never moves, nothing within 25 m.",
+   "notes": "WATER + LANDMARK (classic.zoom). Locked on the north-west lip of the bluff 9 m above the grass (z 38): wide on the mouth of the River Prosper and the bay, then a slow zoom from 55 to 9 deg onto the two-storey Sho Library (home of Fanzen San, translator of the Falatacot texts) and its Life Stone on the river terrace 311 m away. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44343.7,15166.2,37.9) end (44343.7,15166.2,37.9), min AGL 9.3 m, nearest static/building/spawn box 25.6 m (static:0x0200071A#110), nearest building 46.7 m, trees by crown profile 32.7 m (default bake) / 29.0 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.002 m (min WBT AGL 9.32 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "hebian-to.05",
+   "site": "hebian-to",
+   "technique": "drone.hyperlapse-orbit",
+   "takeSec": 14.291667,
+   "origEditSec": 13.5,
+   "origInSec": 0,
+   "origEditIn": 2787.916667,
+   "section": {
+    "i": 240,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 80,
+    "heightAGL": 40,
+    "revolutions": 0.27,
+    "timeRate": 25,
+    "direction": "cw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44436.0,
+     15090.0,
+     32.0
+    ],
+    "height": 20,
+    "radius": 40
+   },
+   "standingOrder": "Circle the Sho capital at 85 m and 40 m above the town, 9 m above the pagoda roof, while clouds race over the plaza and the river mouth; keep 25 m from every roof.",
+   "notes": "CLOSING (drone.hyperlapse-orbit). A 0.27-revolution clockwise orbit 85 m from the plaza at z 72 (40 m above the town, 9 m above the pagoda's roof) from south-south-west round to west-north-west while the sky runs 25x: clouds race over the pagoda, the green roofs and the river mouth; the sun stays high (0.70 to about 0.75). Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44408.6,15014.8,72.0) end (44364.8,15126.6,72.0), min AGL 40.0 m, nearest static/building/spawn box 24.9 m (building:0x01000E01#141), nearest building 24.9 m, trees by crown profile 29.9 m (default bake) / 32.8 m (opt-in retail bake), peak 9.7 m/s; WBT get-height at 9 samples matched the checker terrain to 0.004 m (min WBT AGL 40.00 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tou-tou.01",
+   "site": "tou-tou",
+   "technique": "classic.establishing",
+   "takeSec": 15.291667,
+   "origEditSec": 14.5,
+   "origInSec": 0.791667,
+   "origEditIn": 2801.416667,
+   "section": {
+    "i": 241,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 212,
+    "distance": 125,
+    "heightM": 34,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47465.0,
+     17730.0,
+     20.0
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "standingOrder": "Hang 34 m above the scorched peninsula 125 m south-west of the ruins, drifting toward Tou-Tou and the lighthouse beyond; keep 16 m from the dead trees, fire smoke may be faded.",
+   "notes": "ESTABLISHING (classic.establishing). Hanging 34 m above the scorched peninsula 125 m south-west of the ruins, drifting 12 deg and pushing 10 %: the burnt-out village with its pillars of fire, black shadow smoke and dead trees, and the 78 m Empyrean lighthouse on its hill beyond with its crystal beacon near the top of frame; low western sun raking in from the left. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47410.2,17617.7,54.0) end (47395.7,17641.3,54.0), min AGL 31.9 m, nearest static/building/spawn box 16.6 m (scenery:0x020002D7), nearest building 24.9 m, trees by crown profile 16.6 m (default bake) / 16.6 m (opt-in retail bake), peak 3.1 m/s; WBT get-height at 9 samples matched the checker terrain to 0.003 m (min WBT AGL 31.86 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "tou-tou.02",
+   "site": "tou-tou",
+   "technique": "classic.rack-focus",
+   "takeSec": 11.375,
+   "origEditSec": 11.375,
+   "origInSec": 0,
+   "origEditIn": 2815.916667,
+   "section": {
+    "i": 243,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 249.33,
+    "distance": 40.91,
+    "elevationDeg": -4.06,
+    "thirds": "right",
+    "fromTarget": "metres",
+    "fromM": 6.5,
+    "toTarget": "subject",
+    "at": 0.5,
+    "pullSec": 2.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47478.76,
+     17715.6,
+     20.0
+    ],
+    "height": 9,
+    "radius": 4
+   },
+   "standingOrder": "Lock off 1.6 m up 6.5 m from a pillar of fire with the flames sharp, then pull focus to the Banderling statue 41 m away; flames and smoke may cross the frame, nothing else within 4 m.",
+   "notes": "FLAME (classic.rack-focus). Locked low (1.6 m) 6.5 m from a Pillar of Fire: flames sharp in the foreground left of centre, then focus pulls (2.5 s, centred mid-shot) 41 m to the nullified Banderling statue on its pedestal on the right third, the lighthouse far behind on the upper left; DoF look focusRange 3, bokehScale 2.5. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47440.6,17701.2,21.6) end (47440.6,17701.2,21.6), min AGL 1.6 m, nearest static/building/spawn box 4.2 m (static:0x020005C9#33), nearest building 27.8 m, trees by crown profile 65.4 m (default bake) / 66.0 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.60 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tou-tou.03",
+   "site": "tou-tou",
+   "technique": "classic.pov",
+   "takeSec": 11.291667,
+   "origEditSec": 11.291667,
+   "origInSec": 0,
+   "origEditIn": 2827.291667,
+   "section": {
+    "i": 243,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": null,
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": -3,
+    "lookYawDeg": 0,
+    "advanceM": 18,
+    "bobM": 0.025,
+    "stepHz": 1.7
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47536.0,
+     17745.0,
+     20.0
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 4.712389
+   },
+   "standingOrder": "Walk 18 m west down the ruined street at 1.65 m eye height past a pillar of fire 10 m to the left, smoke and burnt halls ahead; keep 4 m from every ruin, smoke may be faded.",
+   "notes": "FLAME + SHADOW (classic.pov). A survivor's-eye walk 18 m west down the ruined street (1.65 m eye height, gentle step bob), a Pillar of Fire burning 10 m to the left, black shadow's-breath smoke drifting, the glowing metallic roof of a ruined hall ahead; walking into the low western sun backlights the flames and smoke. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47535.8,17745.0,21.7) end (47517.8,17745.0,21.7), min AGL 1.6 m, nearest static/building/spawn box 4.4 m (static:0x02000397#71), nearest building 22.5 m, trees by crown profile 29.4 m (default bake) / 29.4 m (opt-in retail bake), peak 2.6 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.65 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tou-tou.04",
+   "site": "tou-tou",
+   "technique": "drone.spiral-descent",
+   "takeSec": 16.083333,
+   "origEditSec": 16.083333,
+   "origInSec": 0,
+   "origEditIn": 2838.583333,
+   "section": {
+    "i": 244,
+    "label": "L6",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 55,
+    "radiusEnd": 34,
+    "heightStart": 68,
+    "heightEnd": 14,
+    "revolutions": 0.35,
+    "direction": "cw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47748.0,
+     18132.0,
+     100.0
+    ],
+    "height": 60,
+    "radius": 14
+   },
+   "standingOrder": "Spiral down 0.35 turn around the Empyrean lighthouse from 20 m above its crystal beacon, closing from 55 m to 34 m radius; keep 17 m from the lighthouse and its beacon effects.",
+   "notes": "LANDMARK + MAGIC (drone.spiral-descent). A 0.35-turn clockwise spiral from 20 m above the lighthouse's crystal beacon (z 168) down to z 114, radius 55 to 34 m: the Empyrean lighthouse with its glowing crystal and the light emitters spiralling up its shaft, the sea and the Tou peninsula wheeling behind; the view tilts from -35 to +25 deg to keep the beacon in frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47716.4,18087.0,168.0) end (47736.9,18164.2,114.0), min AGL 54.1 m, nearest static/building/spawn box 17.5 m (building:0x010011F3#23), nearest building 17.5 m, trees by crown profile 123.3 m (default bake) / 123.1 m (opt-in retail bake), peak 11.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 54.08 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "tou-tou.05",
+   "site": "tou-tou",
+   "technique": "classic.whip-pan",
+   "takeSec": 10.208333,
+   "origEditSec": 9.416667,
+   "origInSec": 0,
+   "origEditIn": 2854.666667,
+   "section": {
+    "i": 245,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 36.2,
+    "distance": 163.0,
+    "elevationDeg": 9.07,
+    "angleDeg": 178,
+    "direction": "left",
+    "whipSec": 0.3,
+    "at": 0.55,
+    "land": "subject"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47465.0,
+     17730.0,
+     20.0
+    ],
+    "height": 10,
+    "radius": 45
+   },
+   "standingOrder": "Stand 6 m above the hillside road, hold on the lighthouse, then whip 178 degrees left onto the burning ruins of Tou-Tou with the Shadow Spire beyond; the lens never moves, nothing within 17 m.",
+   "notes": "TRANSITION / CLOSING (classic.whip-pan). From 6 m above the hillside road north-east of the ruins, hold on the lighthouse and its beacon, then whip 178 deg left in 0.3 s onto the burning ruins of Tou-Tou with the tip of the 180 m Shadow Spire rising beyond them. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47560.1,17859.9,50.7) end (47560.1,17859.9,50.7), min AGL 6.0 m, nearest static/building/spawn box 17.7 m (building:0x01002A5F#0), nearest building 17.7 m, trees by crown profile 62.4 m (default bake) / 55.7 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.001 m (min WBT AGL 6.04 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "baishi.01",
+   "site": "baishi",
+   "technique": "drone.pano-360",
+   "takeSec": 16.208333,
+   "origEditSec": 15.416667,
+   "origInSec": 0.791667,
+   "origEditIn": 2864.083333,
+   "section": {
+    "i": 246,
+    "label": "M6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 75,
+    "yawDeg": 360,
+    "direction": "cw",
+    "startHeadingDeg": 200,
+    "relativeToSubject": false,
+    "tiltDeg": -14,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39468.0,
+     12600.0,
+     54.0
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "standingOrder": "Hover 75 m above the square of Baishi, 30 m above every pine crown, and turn one slow full circle over the giant pines, the green roofs and the snow-capped peaks; hold height, no drift.",
+   "notes": "ESTABLISHING (drone.pano-360). Hovering 75 m above the square (z 129, 30+ m above every pine crown) and turning one slow full circle tilted -14 deg: the green roofs of Baishi in their clearing, the Seven Stars Tower poking through a sea of 30-50 m giant pines, and the snow-capped ranges ringing the dale. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39468.0,12600.0,129.0) end (39468.0,12600.0,129.0), min AGL 75.0 m, nearest static/building/spawn box 23.8 m (spawn:April 2003 Raining Mad Cows Gen), nearest building 61.0 m, trees by crown profile 58.0 m (default bake) / 47.4 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 75.00 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "baishi.02",
+   "site": "baishi",
+   "technique": "classic.two-shot",
+   "takeSec": 12.25,
+   "origEditSec": 12.25,
+   "origInSec": 0,
+   "origEditIn": 2879.5,
+   "section": {
+    "i": 248,
+    "label": "N6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "secondary": [
+     39468.3,
+     12605.1,
+     54.0
+    ],
+    "secondaryHeight": 3.5,
+    "side": "right",
+    "driftDeg": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39470.0,
+     12589.5,
+     60.8
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "standingOrder": "Frame the nullified golem and the glowing town portal together from 7 m up on the east side of the square, drifting 10 degrees around the pair; keep 4 m from the hall roof behind the lens.",
+   "notes": "MAGIC (classic.two-shot). A two-shot from the east side of the square, 7 m up: the nullified golem on its pedestal on the left and the swirling Town Network portal on the right, drifting 10 deg around the pair, green-roofed halls behind, high afternoon sun. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39482.5,12600.0,61.2) end (39482.8,12597.6,61.2), min AGL 7.2 m, nearest static/building/spawn box 4.3 m (building:0x01000DDA#109), nearest building 4.3 m, trees by crown profile 31.0 m (default bake) / 0.0 m (opt-in retail bake), peak 0.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 7.20 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "baishi.03",
+   "site": "baishi",
+   "technique": "classic.worms-eye",
+   "takeSec": 10.958333,
+   "origEditSec": 10.958333,
+   "origInSec": 0,
+   "origEditIn": 2891.75,
+   "section": {
+    "i": 248,
+    "label": "N6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 0.75,
+    "horizontalM": 17.5,
+    "spinDeg": 25
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39467.3,
+     12466.4,
+     54.0
+    ],
+    "height": 31,
+    "radius": 10
+   },
+   "standingOrder": "Lie 0.75 m above the glade grass 17.5 m north of the Seven Stars Tower and look steeply up its 31 m octagon while the pine crowns and sky turn around the spire; shrubs 1.5 m away may be faded.",
+   "notes": "LANDMARK (classic.worms-eye). Lens 0.75 m above the grass of the little glade north of the Seven Stars Tower, 17.5 m from its foot, looking steeply up (+40 deg) at the three-storey 31 m octagon while the pine crowns and the sky roll 25 deg around its spire. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39467.3,12483.9,54.8) end (39467.3,12483.9,54.8), min AGL 0.8 m, nearest static/building/spawn box 1.5 m (scenery:0x02000258), nearest building 2.4 m, trees by crown profile 20.5 m (default bake) / 2.9 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 0.75 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "baishi.04",
+   "site": "baishi",
+   "technique": "drone.top-down",
+   "takeSec": 11.5,
+   "origEditSec": 11.5,
+   "origInSec": 0,
+   "origEditIn": 2902.708333,
+   "section": {
+    "i": 248,
+    "label": "N6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 62,
+    "rotateDeg": -35,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 14,
+    "driftHeadingDeg": 0,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39478.0,
+     12600.0,
+     54.0
+    ],
+    "height": 2,
+    "radius": 20
+   },
+   "standingOrder": "Look straight down from 62 m over the square of Baishi and drift 14 m north, the golem, portal, well and green roofs passing below; stay 30 m above every pine crown.",
+   "notes": "PATTERN (drone.top-down). Straight down from 62 m over the square, drifting 14 m north while the image turns 35 deg: the golem on its pedestal, the town portal ring, the well, the green roofs and the dark crowns of the giant pines as a living map. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39478.0,12593.0,116.0) end (39478.0,12607.0,116.0), min AGL 62.0 m, nearest static/building/spawn box 37.5 m (spawn:April 2003 Raining Mad Cows Gen), nearest building 51.5 m, trees by crown profile 52.5 m (default bake) / 31.4 m (opt-in retail bake), peak 1.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 62.00 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "baishi.05",
+   "site": "baishi",
+   "technique": "drone.dronie",
+   "takeSec": 16.125,
+   "origEditSec": 15.333333,
+   "origInSec": 0,
+   "origEditIn": 2914.208333,
+   "section": {
+    "i": 249,
+    "label": "N",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "startDistance": 8,
+    "endDistance": 100,
+    "startHeight": 14,
+    "endHeight": 66,
+    "bearingDeg": 15,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39470.0,
+     12589.5,
+     54.0
+    ],
+    "height": 10.3,
+    "radius": 3
+   },
+   "standingOrder": "Pull back and up from 8 m off the golem statue to 100 m out and 66 m up over the north roofs in one straight line, Baishi shrinking into its dale; keep 6 m from every roof and pine crown.",
+   "notes": "CLOSING (drone.dronie). From 8 m off and 14 m above the golem statue, one straight pull back and up toward the north-north-east to 100 m out and 66 m up over the north roofs: Baishi shrinks into its clearing in the dale of giant pines. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39472.1,12597.2,68.0) end (39495.9,12686.1,120.0), min AGL 14.0 m, nearest static/building/spawn box 7.0 m (spawn:Anniversary Effect), nearest building 7.6 m, trees by crown profile 27.8 m (default bake) / 10.5 m (opt-in retail bake), peak 11.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.005 m (min WBT AGL 14.00 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lin.01",
+   "site": "lin",
+   "technique": "drone.canyon-run",
+   "takeSec": 14.708333,
+   "origEditSec": 13.916667,
+   "origInSec": 0.791667,
+   "origEditIn": 2929.541667,
+   "section": {
+    "i": 251,
+    "label": "P2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 20,
+    "speed": 8,
+    "alat": 3,
+    "cornerRadius": 25,
+    "lookAhead": 28,
+    "tiltDeg": -14,
+    "maxBankDeg": 10,
+    "bankGain": 0.8,
+    "minClearance": 6,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Glide 107 m north up the forested gorge of Lin 20 m above the valley floor between its cliffs, the Life Stone, portal and statue ahead; pine branches within 5 m may be faded, trunks never.",
+   "notes": "ESTABLISHING + GORGE (drone.canyon-run). A 107 m glide north up Lin's forested gorge 20 m above the valley floor (the cliffs rise 26-48 m and the pine-clad rims higher on both sides), looking 28 m ahead and 14 deg down with a gentle bank through one bend: the valley-floor halls, the Life Stone, the town portal and the skeleton statue come up ahead under the high sun. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42029.0,11280.0,20.0) end (42036.0,11386.0,20.0), min AGL 20.0 m, nearest static/building/spawn box 5.4 m (scenery:0x02000258), nearest building 9.9 m, trees by crown profile 6.8 m (default bake) / 0.0 m (opt-in retail bake), peak 7.7 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 20.00 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "lin.02",
+   "site": "lin",
+   "technique": "classic.static",
+   "takeSec": 11.041667,
+   "origEditSec": 11.041667,
+   "origInSec": 0,
+   "origEditIn": 2943.458333,
+   "section": {
+    "i": 252,
+    "label": "O6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 242.4,
+    "distance": 36.2,
+    "elevationDeg": 0,
+    "thirds": "right"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42037.6,
+     11380.8,
+     0.0
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "standingOrder": "Hold still 1.8 m above the gorge floor 36 m from the statue, the Life Stone glowing left, the portal and statue right and the cliffs behind; nothing within 7 m of the lens.",
+   "notes": "MAGIC (classic.static). A locked eye-level frame on the gorge floor: the Life Stone glowing on the left, the skeleton statue on its pedestal in the middle and the swirling Town Network portal on the right third, with the pine-clad cliffs rising behind. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42005.5,11364.0,1.8) end (42005.5,11364.0,1.8), min AGL 1.8 m, nearest static/building/spawn box 7.6 m (scenery:0x02000258), nearest building 22.0 m, trees by crown profile 9.8 m (default bake) / 2.3 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.75 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lin.03",
+   "site": "lin",
+   "technique": "classic.pedestal",
+   "takeSec": 8.916667,
+   "origEditSec": 8.916667,
+   "origInSec": 0,
+   "origEditIn": 2954.5,
+   "section": {
+    "i": 253,
+    "label": "P6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 265,
+    "distance": 12,
+    "elevationDeg": -15,
+    "thirds": "center",
+    "riseM": 8,
+    "keepAim": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42035.3,
+     11394.0,
+     0.0
+    ],
+    "height": 9,
+    "radius": 3
+   },
+   "standingOrder": "Rise 8 m from 1.4 m to 9.4 m, 12 m west of the nullified skeleton statue, until it stands against the forested cliff; keep 7 m from the hall and 5 m from the pines.",
+   "notes": "LANDMARK (classic.pedestal). 12 m west of the nullified skeleton statue the camera rises 8 m (1.4 to 9.4 m) up its 6.8 m pedestal until the skeleton stands level with the lens against the eastern cliff and the forest; the high western sun behind the camera lights it. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42023.8,11393.0,1.4) end (42023.8,11393.0,9.4), min AGL 1.4 m, nearest static/building/spawn box 7.5 m (building:0x01000D67#66), nearest building 7.5 m, trees by crown profile 10.6 m (default bake) / 5.8 m (opt-in retail bake), peak 1.4 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.39 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lin.04",
+   "site": "lin",
+   "technique": "drone.boomerang",
+   "takeSec": 12.708333,
+   "origEditSec": 12.708333,
+   "origInSec": 0,
+   "origEditIn": 2963.416667,
+   "section": {
+    "i": 254,
+    "label": "Q6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "far": 62,
+    "near": 28,
+    "heightStart": 16,
+    "heightNear": 13,
+    "rise": 12,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42108.0,
+     11412.0,
+     26.0
+    ],
+    "height": 31,
+    "radius": 10
+   },
+   "standingOrder": "Fly in level from 62 m to 28 m off the octagon tower's candle-lit west face over the gorge, pause, then drift back out climbing 12 m; keep 10 m from the pines and the tower.",
+   "notes": "LANDMARK + FLAME (drone.boomerang). Flies in level over the gorge from 62 m west (z 42) toward the three-storey octagon tower on the eastern rim, eases to a stop 28 m from its candle-lit west face, then drifts back out climbing 12 m: one continuous gesture across the gorge. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42046.0,11412.0,42.0) end (42046.0,11412.0,54.0), min AGL 29.3 m, nearest static/building/spawn box 9.8 m (scenery:0x02000258), nearest building 16.0 m, trees by crown profile 16.2 m (default bake) / 0.0 m (opt-in retail bake), peak 9.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.006 m (min WBT AGL 29.33 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "lin.05",
+   "site": "lin",
+   "technique": "drone.boom-rise",
+   "takeSec": 14.875,
+   "origEditSec": 14.083333,
+   "origInSec": 0,
+   "origEditIn": 2976.125,
+   "section": {
+    "i": 255,
+    "label": "W2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 2.5,
+    "heightEnd": 58,
+    "bearingDeg": 230,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": -6,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42035.3,
+     11394.0,
+     0.0
+    ],
+    "height": 9,
+    "radius": 2
+   },
+   "standingOrder": "Rise straight up from 2.5 m to 58 m beside the skeleton statue until the forested valley of Lin and its octagon tower open below; keep 4.5 m from the hall, pine branches may be faded.",
+   "notes": "CLOSING (drone.boom-rise). From 2.5 m above the gorge floor beside the skeleton statue, a straight vertical rise to 58 m with the camera held toward the north-east: the statue, the great broad tree and the halls drop away as the forested valley, the octagon tower on the rim and the hills beyond open up. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42027.6,11387.6,2.6) end (42027.6,11387.6,58.0), min AGL 2.6 m, nearest static/building/spawn box 4.7 m (building:0x01002A1B#69), nearest building 4.7 m, trees by crown profile 12.5 m (default bake) / 1.5 m (opt-in retail bake), peak 6.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 2.56 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "nanto.01",
+   "site": "nanto",
+   "technique": "fpv.fpv-dive",
+   "takeSec": 11.125,
+   "origEditSec": 10.333333,
+   "origInSec": 0.791667,
+   "origEditIn": 2990.208333,
+   "section": {
+    "i": 256,
+    "label": "B",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 34,
+    "bottomAGL": 3,
+    "diveAngleDeg": -72,
+    "approach": 16,
+    "standoff": 5,
+    "exitLength": 36,
+    "pullOutRadius": 10,
+    "speed": 12,
+    "alat": 8,
+    "uptiltDeg": 18,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 2.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43825.0,
+     11878.0,
+     120.0
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "standingOrder": "Run 16 m level 17 m above the cascades of Blue Ghost Falls, dive down the falling water 5 m off it and pull out 3 m above the upper pool past the torch-lit hut; spray may be faded, rocks never within 2.5 m.",
+   "notes": "WATER (fpv.fpv-dive). Hard-mounted FPV: a 16 m level run 17 m above the upper cascades of Blue Ghost Falls, crest over the pool's edge and a -72 deg dive down the falling water (5 m standoff, spray emitters alongside) to 3 m above the upper pool, then a pull-out south low over the water past the torch-lit bamboo fishing hut. The 0.7 m 'minClr' is a Fishing Hole marker on the water surface 3 m below the lens. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43825.0,11894.0,155.0) end (43825.0,11826.9,123.5), min AGL 2.6 m, nearest static/building/spawn box 0.7 m (spawn:Fishing Hole), nearest building 32.3 m, trees by crown profile 6.6 m (default bake) / 0.0 m (opt-in retail bake), peak 8.6 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 2.60 m).",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "nanto.02",
+   "site": "nanto",
+   "technique": "classic.reveal-from-occluder",
+   "takeSec": 12.458333,
+   "origEditSec": 12.458333,
+   "origInSec": 0,
+   "origEditIn": 3000.541667,
+   "section": {
+    "i": 256,
+    "label": "B",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 135.3,
+    "distance": 61.0,
+    "elevationDeg": -10.2,
+    "occluder": [
+     43860.0,
+     11850.0,
+     120.0
+    ],
+    "occluderRadius": 4,
+    "direction": "left",
+    "holdFrac": 0.25,
+    "settleFrac": 0.25,
+    "marginM": 1.5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43825.0,
+     11882.0,
+     120.0
+    ],
+    "height": 28,
+    "radius": 12
+   },
+   "standingOrder": "Start 3 m up behind the bamboo fishing hut with its torches, then truck 25 m left until Blue Ghost Falls pours into its pool beyond the flames; keep 3 m from the hut and the trees.",
+   "notes": "FLAME + WATER (classic.reveal-from-occluder). Starting 3 m up behind the bamboo fishing hut with two of its four torches burning in the foreground, the camera holds, then trucks 25 m left until Blue Ghost Falls appears pouring down its staircase of cliffs into the pool, the torches sliding off to the right; the western sun backlights the spray. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43869.3,11841.5,123.2) end (43852.9,11823.5,123.2), min AGL 1.8 m, nearest static/building/spawn box 2.9 m (scenery:0x02000240), nearest building 7.5 m, trees by crown profile 2.8 m (default bake) / 3.1 m (opt-in retail bake), peak 6.4 m/s; WBT get-height at 9 samples matched the checker terrain to 0.003 m (min WBT AGL 1.78 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "nanto.03",
+   "site": "nanto",
+   "technique": "drone.fly-by",
+   "takeSec": 11.083333,
+   "origEditSec": 11.083333,
+   "origInSec": 0,
+   "origEditIn": 3013,
+   "section": {
+    "i": 257,
+    "label": "W2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "offset": 22,
+    "heightAGL": 5,
+    "speed": 6,
+    "side": "right",
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     43848.5,
+     11760.0,
+     70.0
+    ],
+    "height": 24,
+    "radius": 6
+   },
+   "standingOrder": "Fly 66 m west 5 m above the lower pool, yawing to hold the lower cascade of Blue Ghost Falls 22 m to the right as it slides past; keep 3 m above the water and 10 m from the huts.",
+   "notes": "WATER (drone.fly-by). A slow 66 m pass west 5 m above the lower pool (69 % of the path over water), yawing to hold the lower cascade 22 m to the right as it slides past, Farmer Ar'Oyd's hut on the far bank; flying into the afternoon sun for glitter on the water. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43881.5,11738.0,75.0) end (43815.5,11738.0,75.7), min AGL 3.0 m, nearest static/building/spawn box 1.7 m (spawn:Harmless Sho Generator), nearest building 10.1 m, trees by crown profile 10.8 m (default bake) / 10.8 m (opt-in retail bake), peak 6.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.003 m (min WBT AGL 3.02 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "nanto.04",
+   "site": "nanto",
+   "technique": "drone.vertigo-drone",
+   "takeSec": 11.25,
+   "origEditSec": 11.25,
+   "origInSec": 0,
+   "origEditIn": 3024.083333,
+   "section": {
+    "i": 258,
+    "label": "R6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "nearDistance": 22,
+    "farDistance": 54,
+    "direction": "out",
+    "heightAGL": 3,
+    "minFovDeg": 18,
+    "maxFovDeg": 80,
+    "bearingDeg": 272,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44052.0,
+     11915.0,
+     118.0
+    ],
+    "height": 31,
+    "radius": 10
+   },
+   "standingOrder": "Back away west along the hilltop road from 22 m to 54 m, 2 to 3 m up, while the lens narrows so the octagon tower above the Life Stone holds its size; keep 5 m from the lanterns and 10 m from walls.",
+   "notes": "LANDMARK + MAGIC (drone.vertigo-drone). 2-3 m above the hilltop road, the drone backs west from 22 to 54 m while the lens narrows from 78 to 40 deg: the three-storey octagon tower holds its size while the eastern hills swell behind it and the Life Stone glows in the lower left; front-lit by the sun behind the camera. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44030.0,11915.8,121.9) end (43998.0,11916.9,124.6), min AGL 2.0 m, nearest static/building/spawn box 5.4 m (static:0x0200071A#9), nearest building 9.8 m, trees by crown profile 13.1 m (default bake) / 13.1 m (opt-in retail bake), peak 4.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.005 m (min WBT AGL 2.00 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "nanto.05",
+   "site": "nanto",
+   "technique": "classic.hyperlapse",
+   "takeSec": 15.333333,
+   "origEditSec": 14.541667,
+   "origInSec": 0,
+   "origEditIn": 3035.333333,
+   "section": {
+    "i": 259,
+    "label": "S6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 185,
+    "distance": 185,
+    "elevationDeg": 15,
+    "thirds": "center",
+    "move": "arc",
+    "moveM": 26,
+    "direction": "right",
+    "rate": 0.004
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44170.0,
+     11865.0,
+     96.0
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "standingOrder": "Arc 26 m high above the south slope, 80 m above the ground and 185 m from town, while the sky clock runs and clouds race over the terraced hillside and its two octagon towers; nothing within 70 m.",
+   "notes": "CLOSING (classic.hyperlapse). A 26 m arc high over the south slope (80 m above the ground, 185 m from town) while the sky clock runs at 0.004 day/s (0.74 to 0.80, sun 50 to about 32 deg): clouds race over the terraced hillside of Nanto, its two octagon towers framing the terraces. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44167.4,11686.3,153.9) end (44141.5,11688.6,153.9), min AGL 79.8 m, nearest static/building/spawn box 73.1 m (scenery:0x02000246), nearest building 121.6 m, trees by crown profile 73.1 m (default bake) / 72.8 m (opt-in retail bake), peak 1.9 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 79.83 m).",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "mayoi.01",
+   "site": "mayoi",
+   "technique": "classic.establishing",
+   "takeSec": 16.541667,
+   "origEditSec": 15.75,
+   "origInSec": 0.791667,
+   "origEditIn": 3049.875,
+   "section": {
+    "i": 260,
+    "label": "T6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "distance": 160,
+    "heightM": 60,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44205,
+     9690,
+     28
+    ],
+    "height": 31,
+    "radius": 80
+   },
+   "standingOrder": "Hold the whole terrace town, Zhen's Tower and the bay beyond in one wide frame while drifting slowly east; stay 15 m above the southern hilltops.",
+   "notes": "ESTABLISHING (classic.establishing). From 60 m over the southern hills, 160 m SSW of town, a slow drift and push holds the whole terrace town, Zhen's Tower on its bluff and the bay beyond (bay ~24 deg right of centre) under the morning sun. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44166.3, 9534.8, 88) end (44141.9, 9560.6, 88); min AGL 36.13 m (WBT get-height on 9 camera points: min AGL 36.23 m, ground 50.1-51.8); nearest static/building/default-bake scenery/spawn 24.63 m (scenery:0x02000246), nearest building 65.11 m, retail-bake scenery 30.29 m; peak 3.73 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "mayoi.02",
+   "site": "mayoi",
+   "technique": "drone.flyover",
+   "takeSec": 12.916667,
+   "origEditSec": 12.916667,
+   "origInSec": 0,
+   "origEditIn": 3065.625,
+   "section": {
+    "i": 262,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 6,
+    "speed": 5.5,
+    "headingDeg": 238,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": 3,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44425,
+     9835,
+     0
+    ],
+    "height": 2,
+    "radius": 5
+   },
+   "standingOrder": "Skim 6 m above the calm bay toward the beach, Zhen's Tower rising on the bluff ahead; never lower than 4 m over the water and stop short of the palms.",
+   "notes": "WATER (drone.flyover). 6 m above the calm bay, flying WSW with the sun behind, toward the palm beach with Zhen's Tower rising on its bluff ahead (tower ~10 deg above frame centre at the end); 100% of samples over WaterShallowSea, stops 16 m short of the first palm. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44455.3, 9853.9, 6) end (44394.7, 9816.1, 6); min AGL 6 m (WBT get-height on 9 camera points: min AGL 6 m, ground 0-0); nearest static/building/default-bake scenery/spawn 8.46 m (spawn:Skeleton Lord), nearest building 45.48 m, retail-bake scenery 21.12 m; peak 5.5 m/s; 100% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "mayoi.03",
+   "site": "mayoi",
+   "technique": "classic.pov",
+   "takeSec": 10.875,
+   "origEditSec": 10.875,
+   "origInSec": 0,
+   "origEditIn": 3078.541667,
+   "section": {
+    "i": 263,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": null,
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 2,
+    "lookYawDeg": 0,
+    "advanceM": 6,
+    "bobM": 0.02,
+    "stepHz": 1.6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44170,
+     9663,
+     25.6
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 3.14159
+   },
+   "standingOrder": "Walk slowly up out of the hollow toward the glowing town portal between the two Sho halls; nothing within 2 m of the lens.",
+   "notes": "MAGIC FX (classic.pov). A traveller's eyes walking 6 m up out of the wooded hollow toward the swirling Town Network portal and its glowing blue pad between two Sho halls, lantern posts either side. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44170, 9662.8, 27.3) end (44170, 9656.8, 27.3); min AGL 1.45 m (WBT get-height on 9 camera points: min AGL 1.45 m, ground 24.4-25.8); nearest static/building/default-bake scenery/spawn 5.77 m (scenery:0x02000257), nearest building 16.19 m, retail-bake scenery 5.75 m; peak 0.86 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "mayoi.04",
+   "site": "mayoi",
+   "technique": "classic.dolly-zoom",
+   "takeSec": 9.291667,
+   "origEditSec": 9.291667,
+   "origInSec": 0,
+   "origEditIn": 3089.416667,
+   "section": {
+    "i": 264,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": -6,
+    "toFovDeg": 24
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44268,
+     9732,
+     28
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "standingOrder": "Back away east from Zhen's Tower over the bluff while zooming in so the pagoda holds its size and the western hills tower up behind it; stay 15 m above the slope.",
+   "notes": "LANDMARK (classic.dolly-zoom). Camera east of Zhen's Tower over the bluff dollies back 31 -> 84 m while the fov narrows 60 -> 24 deg: the front-lit pagoda holds its size and the western hills tower up behind it. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44298.6, 9729.3, 40.3) end (44351.1, 9724.7, 34.7); min AGL 29.31 m (WBT get-height on 9 camera points: min AGL 29.31 m, ground 0-11.0); nearest static/building/default-bake scenery/spawn 17.26 m (scenery:0x02000246), nearest building 18.59 m, retail-bake scenery 26.73 m; peak 9.24 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "mayoi.05",
+   "site": "mayoi",
+   "technique": "classic.birds-eye",
+   "takeSec": 15.125,
+   "origEditSec": 14.333333,
+   "origInSec": 0,
+   "origEditIn": 3098.708333,
+   "section": {
+    "i": 265,
+    "label": "I6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 52,
+    "rotateDeg": 50,
+    "riseM": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44195,
+     9625,
+     28
+    ],
+    "height": 10,
+    "radius": 30
+   },
+   "standingOrder": "Look straight down on the southern street, the life stone and the town portal while turning slowly and rising; keep 10 m above every tree top.",
+   "notes": "CLOSING (classic.birds-eye). Straight down on the southern street - spire halls, the golem statue, the town portal pad and the life stone - turning 50 deg while rising 52 -> 64 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44195, 9625, 80) end (44195, 9625, 92); min AGL 52 m (WBT get-height on 9 camera points: min AGL 52 m, ground 28-28); nearest static/building/default-bake scenery/spawn 41.5 m (building:0x01000DDA#33), nearest building 41.5 m, retail-bake scenery 21.04 m; peak 1.35 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kryst.01",
+   "site": "kryst",
+   "technique": "classic.steadicam",
+   "takeSec": 13.625,
+   "origEditSec": 12.833333,
+   "origInSec": 0.791667,
+   "origEditIn": 3113.041667,
+   "section": {
+    "i": 267,
+    "label": "P4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "mode": "lead",
+    "distance": 22,
+    "elevationDeg": 6,
+    "glideM": 9,
+    "lag": 1.2,
+    "bobM": 0.015,
+    "stepHz": 1.6,
+    "swayDeg": 0.4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44698.9,
+     6665.3,
+     0
+    ],
+    "height": 3.6,
+    "radius": 1.5,
+    "heading": 1.5708
+   },
+   "standingOrder": "Walk west along the waterline toward the glowing life stone with the surf on the right; keep 2 m from the stone and never step into the huts.",
+   "notes": "MAGIC + WATER (classic.steadicam, assigned). A floating walk west along the waterline toward the glowing beach Life Stone (22 -> 13 m) with the surf on the right and the domed Wildsong Inn on the left; gait bob and sway on. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44720.8, 6665.3, 5.0) end (44711.7, 6665.3, 4.0); min AGL 4.03 m (WBT get-height on 9 camera points: min AGL 4.03 m, ground 0-0); nearest static/building/default-bake scenery/spawn 11.58 m (spawn:Life Stone), nearest building 21.76 m, retail-bake scenery 22.19 m; peak 1.14 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "kryst.02",
+   "site": "kryst",
+   "technique": "classic.over-the-shoulder",
+   "takeSec": 9.583333,
+   "origEditSec": 9.583333,
+   "origInSec": 0,
+   "origEditIn": 3125.875,
+   "section": {
+    "i": 268,
+    "label": "V4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "MS",
+   "params": {
+    "secondary": [
+     44765.4,
+     6643.6,
+     6.8
+    ],
+    "secondaryHeight": 2.6,
+    "shoulder": "left",
+    "shoulderM": 0.8,
+    "backM": 2.8,
+    "raiseM": 0.4,
+    "composeThirds": true,
+    "autoFov": true,
+    "pushM": 0.4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44725.7,
+     6632.4,
+     0.2
+    ],
+    "height": 3.6,
+    "radius": 1.6
+   },
+   "standingOrder": "Look over the stone sclavus's shoulder down at the town portal and the guards on the sand; keep 0.8 m off the statue.",
+   "notes": "LANDMARK (classic.over-the-shoulder, assigned). Over the stone Sclavus's shoulder 9 m up on its pedestal, a long lens looks down at the town portal swirl with the guards on the sand between; camera 2.8 m behind the statue's centre. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44768.3, 6643.6, 9.3) end (44767.9, 6643.5, 9.3); min AGL 9.28 m (WBT get-height on 9 camera points: min AGL 9.28 m, ground 0-0); nearest static/building/default-bake scenery/spawn 1.35 m (spawn:Nullified Statue of a Sclavus), nearest building 2.48 m, retail-bake scenery 11.13 m; peak 0.06 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kryst.03",
+   "site": "kryst",
+   "technique": "classic.static",
+   "takeSec": 10.291667,
+   "origEditSec": 10.291667,
+   "origInSec": 0,
+   "origEditIn": 3135.458333,
+   "section": {
+    "i": 269,
+    "label": "P4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 5,
+    "elevationDeg": 2,
+    "distance": 72
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44752,
+     6628,
+     0
+    ],
+    "height": 10,
+    "radius": 40
+   },
+   "standingOrder": "Lock off from the shallows 7 m above the water on the beach, the domed huts and the jungle hill; nothing moves but the sea and the sky.",
+   "notes": "WATER (classic.static). Locked off 7.5 m above the shallows 72 m out: beach, domed huts, guards and the jungle hill, nothing moving but the sea and the clouds. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44758.3, 6699.7, 7.5) end (44758.3, 6699.7, 7.5); min AGL 7.51 m (WBT get-height on 9 camera points: min AGL 7.51 m, ground 0-0); nearest static/building/default-bake scenery/spawn 52.98 m (building:0x01002A1B#4), nearest building 52.98 m, retail-bake scenery 55.12 m; peak 0 m/s; 100% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kryst.04",
+   "site": "kryst",
+   "technique": "drone.dronie",
+   "takeSec": 14.041667,
+   "origEditSec": 14.041667,
+   "origInSec": 0,
+   "origEditIn": 3145.75,
+   "section": {
+    "i": 269,
+    "label": "P4",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "startDistance": 9,
+    "endDistance": 85,
+    "startHeight": 7,
+    "endHeight": 45,
+    "bearingDeg": 12,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44765.4,
+     6643.6,
+     0
+    ],
+    "height": 9.3,
+    "radius": 3
+   },
+   "standingOrder": "Pull back and up from the sclavus statue and its guards over the sand and out across the bay in one line until the jungle island fills the frame; 5 m from the statue at the start.",
+   "notes": "CLOSING (drone.dronie). From 9 m off the statue and its guards, pull back NNE and up to 85 m / 45 m over the bay until the jungle island fills the frame - the hand-off to Freehold. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44767.3, 6652.4, 7) end (44783.1, 6726.7, 45); min AGL 7 m (WBT get-height on 9 camera points: min AGL 7 m, ground 0-0); nearest static/building/default-bake scenery/spawn 5.63 m (building:0x01002A1B#4), nearest building 5.63 m, retail-bake scenery 13.07 m; peak 9.53 m/s; 79% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kryst.05",
+   "site": "kryst",
+   "technique": "drone.hyperlapse-orbit",
+   "takeSec": 14.541667,
+   "origEditSec": 13.75,
+   "origInSec": 0,
+   "origEditIn": 3159.791667,
+   "section": {
+    "i": 271,
+    "label": "W6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 115,
+    "heightAGL": 30,
+    "revolutions": 0.12,
+    "timeRate": 100,
+    "direction": "cw",
+    "bearingDeg": 332,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44770,
+     6628,
+     0
+    ],
+    "height": 10,
+    "radius": 70
+   },
+   "standingOrder": "Drift slowly round the bay side of the beach village 30 m up while the clouds race over the jungle; stay over the water and the sand.",
+   "notes": "ESTABLISHING + WATER (drone.hyperlapse-orbit). 30 m over the bay, 115 m out, a slow 43 deg arc round the beach village while the sky runs 100x (0.45 -> 0.63, sun stays high): clouds race over the jungle hill, the sea fills the foreground. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44716.0, 6729.5, 30) end (44800.2, 6739.0, 30); min AGL 30 m (WBT get-height on 9 camera points: min AGL 30 m, ground 0-0); nearest static/building/default-bake scenery/spawn 70.17 m (spawn:Life Stone), nearest building 88.44 m, retail-bake scenery 71.73 m; peak 6.19 m/s; 100% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "freehold.01",
+   "site": "freehold",
+   "technique": "drone.orbit-poi",
+   "takeSec": 15.166667,
+   "origEditSec": 14.375,
+   "origInSec": 0.791667,
+   "origEditIn": 3173.541667,
+   "section": {
+    "i": 272,
+    "label": "X6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radius": 175,
+    "heightAGL": 22,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 55,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46615,
+     6665,
+     18
+    ],
+    "height": 17,
+    "radius": 90
+   },
+   "standingOrder": "Circle slowly over the sea east of the island 40 m up, holding the whole hilltop freehold in frame; stay over the water.",
+   "notes": "ESTABLISHING + WATER (drone.orbit-poi). A slow 43 deg arc 175 m out over the eastern sea at 40 m, holding the whole hilltop freehold - halls, chapel, jungle crowns - over a foreground of open water. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46758.3, 6765.4, 40) end (46788.2, 6640.0, 40); min AGL 40 m (WBT get-height on 9 camera points: min AGL 40 m, ground 0-0); nearest static/building/default-bake scenery/spawn 37.91 m (spawn:Cursed Wisp), nearest building 117.06 m, retail-bake scenery 53.12 m; peak 9.42 m/s; 100% of samples over water.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "freehold.02",
+   "site": "freehold",
+   "technique": "fpv.fpv-flip",
+   "takeSec": 10.458333,
+   "origEditSec": 10.458333,
+   "origInSec": 0,
+   "origEditIn": 3187.916667,
+   "section": {
+    "i": 272,
+    "label": "X6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 6,
+    "rise": 3,
+    "tiltDeg": 2,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46612,
+     6452,
+     0
+    ],
+    "height": 2,
+    "radius": 5
+   },
+   "standingOrder": "Race north 6 m over the open sea toward MacNiall's island and barrel-roll once mid-shot; nothing but water within 40 m.",
+   "notes": "WATER + TRICK (fpv.fpv-flip, assigned). FPV racing north 6 m over the open sea toward MacNiall's island with a 3 s barrel roll mid-shot (pop-up 3 m); 100% of samples over water, nothing within 20 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46612, 6422, 6) end (46612, 6482, 6); min AGL 6 m (WBT get-height on 9 camera points: min AGL 6 m, ground 0-0); nearest static/building/default-bake scenery/spawn 20.77 m (spawn:Foul Moarsman), nearest building 107.19 m, retail-bake scenery 46.5 m; peak 6.71 m/s; 100% of samples over water.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "freehold.03",
+   "site": "freehold",
+   "technique": "drone.boomerang",
+   "takeSec": 16.958333,
+   "origEditSec": 16.958333,
+   "origInSec": 0,
+   "origEditIn": 3198.375,
+   "section": {
+    "i": 273,
+    "label": "Y6",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "far": 80,
+    "near": 28,
+    "heightStart": 30,
+    "heightNear": 22,
+    "rise": 16,
+    "bearingDeg": 305,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46622.8,
+     6666.2,
+     18
+    ],
+    "height": 9.5,
+    "radius": 3
+   },
+   "standingOrder": "Sweep in over the west beach toward the sclavus statue in the plaza, stop 28 m out above the rooftops and swing back out climbing; 8 m above every tree crown.",
+   "notes": "LANDMARK (drone.boomerang, assigned). From over the west beach the drone sweeps in above the rooftops to 28 m from the sclavus statue in the plaza, stops, and swings back out climbing 16 m; stays 22 m above ground, 17 m from the nearest roof. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46557.3, 6712.1, 48) end (46557.3, 6712.1, 64); min AGL 22 m (WBT get-height on 9 camera points: min AGL 22 m, ground 0-18); nearest static/building/default-bake scenery/spawn 17.15 m (building:0x01000D14#37), nearest building 17.15 m, retail-bake scenery 22.8 m; peak 11.23 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "freehold.04",
+   "site": "freehold",
+   "technique": "classic.handheld",
+   "takeSec": 10.458333,
+   "origEditSec": 10.458333,
+   "origInSec": 0,
+   "origEditIn": 3215.333333,
+   "section": {
+    "i": 275,
+    "label": "A7",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 215,
+    "elevationDeg": 4,
+    "distance": 14,
+    "base": "push-in",
+    "pushM": 2,
+    "amplitudeDeg": 0.5,
+    "frequencyHz": 0.9,
+    "posAmplitude": 0.02,
+    "roughness": 0.45
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46593.2,
+     6718.4,
+     18.2
+    ],
+    "height": 3.6,
+    "radius": 1.6
+   },
+   "standingOrder": "Creep handheld toward the swirling town portal past the lantern posts; keep 2 m from the portal stone and the lanterns.",
+   "notes": "MAGIC + FLAME (classic.handheld). A handheld creep from the south-west (push-in 2 m, light seeded shake) toward the swirling town portal on its glowing blue pad, a burning lantern post just right of it and the spire hall rising behind (ndc 0.37 and -0.05). Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46585.2, 6707.0, 21.0) end (46586.3, 6708.6, 20.8); min AGL 2.84 m (WBT get-height on 9 camera points: min AGL 2.84 m, ground 18-18); nearest static/building/default-bake scenery/spawn 6.54 m (static:0x020019E3#26), nearest building 22.36 m, retail-bake scenery 13.91 m; peak 0.33 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "freehold.05",
+   "site": "freehold",
+   "technique": "classic.roll",
+   "takeSec": 12.083333,
+   "origEditSec": 11.291667,
+   "origInSec": 0,
+   "origEditIn": 3225.791667,
+   "section": {
+    "i": 275,
+    "label": "A7",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 290,
+    "elevationDeg": -22,
+    "distance": 26,
+    "thirds": "center",
+    "fromDeg": 0,
+    "toDeg": 10,
+    "pushM": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46572,
+     6612,
+     18
+    ],
+    "height": 11.6,
+    "radius": 10
+   },
+   "standingOrder": "From the foot of the west cliff look up at the blue-stone chapel tower on the plateau edge and slowly lean the horizon while easing in; 6 m from the trees.",
+   "notes": "CLOSING (classic.roll). From the foot of the west cliff (ground ~10 m), look up at the blue-stone chapel tower standing on the plateau edge against the sky and slowly lean the horizon 0 -> 10 deg while easing in 2 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46549.3, 6620.2, 14.1) end (46551.1, 6619.6, 14.8); min AGL 3.49 m (WBT get-height on 9 camera points: min AGL 3.49 m, ground 10.0-11.3); nearest static/building/default-bake scenery/spawn 14.38 m (scenery:0x02000E71), nearest building 16.76 m, retail-bake scenery 7.87 m; peak 0.29 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kara.01",
+   "site": "kara",
+   "technique": "drone.boom-rise",
+   "takeSec": 16.375,
+   "origEditSec": 15.583333,
+   "origInSec": 0.791667,
+   "origEditIn": 3237.083333,
+   "section": {
+    "i": 277,
+    "label": "L3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "distance": 168,
+    "heightStart": 3,
+    "heightEnd": 100,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 5,
+    "minClearance": 2
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35748,
+     4500,
+     50
+    ],
+    "height": 113,
+    "radius": 12
+   },
+   "standingOrder": "Lift straight up from 3 m above the calm lake until Kara and its pagoda rise over the brow of the hill; nothing but water under the drone.",
+   "notes": "ESTABLISHING + WATER (drone.boom-rise, assigned). Lift straight up from 3 m above the calm lake (168 m west of the pagoda) to 100 m, level gimbal tilted +5: the wooded slope slides down the frame until Kara and its pagoda crown the hill on the lower third with open sky above. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35580, 4500, 53) end (35580, 4500, 150); min AGL 3 m (WBT get-height on 9 camera points: min AGL 3 m, ground 50-50); nearest static/building/default-bake scenery/spawn 12.62 m (scenery:0x020003D2), nearest building 156 m, retail-bake scenery 12.62 m; peak 10.15 m/s; 100% of samples over water.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "kara.02",
+   "site": "kara",
+   "technique": "classic.pedestal",
+   "takeSec": 11.166667,
+   "origEditSec": 11.166667,
+   "origInSec": 0,
+   "origEditIn": 3252.666667,
+   "section": {
+    "i": 278,
+    "label": "L3",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 135,
+    "elevationDeg": -12,
+    "distance": 15,
+    "thirds": "center",
+    "riseM": 9,
+    "keepAim": true
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35778.4,
+     4482.2,
+     132
+    ],
+    "height": 10,
+    "radius": 3
+   },
+   "standingOrder": "Rise slowly from eye level inside the gate, holding the shadow statue, the town portal and the forge glow below the pagoda; 4 m from every wall.",
+   "notes": "MAGIC + FLAME (classic.pedestal, assigned). From inside the gate, rise from eye level 1.9 -> 10.9 m holding the shadow statue: the glowing forge hearth right of it, the town portal swirl left, a lantern in the left foreground and the pagoda roofs behind until the camera tops the plaza (life stone just off the left edge). Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35788.8, 4471.8, 133.9) end (35788.8, 4471.8, 142.9); min AGL 1.88 m (WBT get-height on 9 camera points: min AGL 1.88 m, ground 132-132); nearest static/building/default-bake scenery/spawn 5.47 m (scenery:0x020007A3), nearest building 8.53 m, retail-bake scenery 28.7 m; peak 1.28 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kara.03",
+   "site": "kara",
+   "technique": "classic.truck",
+   "takeSec": 13.5,
+   "origEditSec": 13.5,
+   "origInSec": 0,
+   "origEditIn": 3263.833333,
+   "section": {
+    "i": 279,
+    "label": "B7",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": -4.6,
+    "distance": 21,
+    "thirds": "center",
+    "travelM": 46,
+    "direction": "right",
+    "keepAim": false
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35784,
+     4452,
+     132
+    ],
+    "height": 12,
+    "radius": 12
+   },
+   "standingOrder": "Slide east along the Sho house fronts 10 m off the walls at head height, the pagoda roof peeping over them; nothing between the lens and the facades.",
+   "notes": "FACADE PAN (classic.truck, keepAim off). Slide 46 m east along the Sho house fronts on the south side, 10-12 m off the walls at 2.3-4.9 m above the path, the pagoda finial over their roofs; the town's only pan. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35761, 4431.1, 136.3) end (35807, 4431.1, 136.3); min AGL 2.25 m (WBT get-height on 9 camera points: min AGL 2.25 m, ground 131.4-134.1); nearest static/building/default-bake scenery/spawn 4.51 m (spawn:Sign), nearest building 9.93 m, retail-bake scenery 14.34 m; peak 5.55 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kara.04",
+   "site": "kara",
+   "technique": "drone.top-down",
+   "takeSec": 11.125,
+   "origEditSec": 11.125,
+   "origInSec": 0,
+   "origEditIn": 3277.333333,
+   "section": {
+    "i": 280,
+    "label": "C7",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightAGL": 46,
+    "rotateDeg": 70,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35772,
+     4484,
+     132
+    ],
+    "height": 10,
+    "radius": 30
+   },
+   "standingOrder": "Look straight down on the little plaza, its statue, portal, life stone and forge glow, turning slowly; 14 m above the pagoda finial.",
+   "notes": "TOP-DOWN (drone.top-down). 46 m straight above the little plaza turning 70 deg: statue, portal pad, life stone, forge glow and the pagoda's octagonal roof as a pattern. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35772, 4484, 178) end (35772, 4484, 178); min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 132-132); nearest static/building/default-bake scenery/spawn 8.52 m (spawn:Mad Cow), nearest building 19.62 m, retail-bake scenery 51.94 m; peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "kara.05",
+   "site": "kara",
+   "technique": "drone.spiral-descent",
+   "takeSec": 16.375,
+   "origEditSec": 15.583333,
+   "origInSec": 0,
+   "origEditIn": 3288.458333,
+   "section": {
+    "i": 281,
+    "label": "C7",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "radiusStart": 46,
+    "radiusEnd": 30,
+    "heightStart": 56,
+    "heightEnd": 27,
+    "revolutions": 0.38,
+    "direction": "ccw",
+    "bearingDeg": 300,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35748,
+     4500,
+     132
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "standingOrder": "Spiral down around the pagoda from high over the western slope, ending level with its upper eaves; 15 m from the roof edges and 10 m above the trees.",
+   "notes": "CLOSING (drone.spiral-descent). Spiral down around the pagoda from 56 to 27 m above the plaza (radius 46 -> 30), starting high over the wooded western slope above the lake and ending level with its upper eaves. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35708.2, 4523, 188) end (35756.7, 4471.3, 159); min AGL 27 m (WBT get-height on 9 camera points: min AGL 27 m, ground 90.5-132); nearest static/building/default-bake scenery/spawn 16.72 m (building:0x01000D15#67), nearest building 16.72 m, retail-bake scenery 25.45 m; peak 10.28 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "frost-haven.01",
+   "site": "frost-haven",
+   "technique": "drone.pano-360",
+   "takeSec": 15.833333,
+   "origEditSec": 15.041667,
+   "origInSec": 0.791667,
+   "origEditIn": 3304.041667,
+   "section": {
+    "i": 282,
+    "label": "D7",
+    "role": "bridge"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 9,
+    "yawDeg": 170,
+    "direction": "cw",
+    "startHeadingDeg": 225,
+    "relativeToSubject": false,
+    "tiltDeg": -7,
+    "minClearance": 4
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30720,
+     7990,
+     352
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "standingOrder": "Hover over the snowy east ridge and turn slowly from the valley past the snowman village in its bowl to the white flank of Mount Ingot; stay 7 m above the snow.",
+   "notes": "ESTABLISHING (drone.pano-360). Hovering 7.5 m over the snowy east ridge, a slow 170 deg turn from the western valley past the snowman village in its bowl to Mount Ingot's white flank. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30720, 7990, 361) end (30720, 7990, 361); min AGL 7.5 m (WBT get-height on 9 camera points: min AGL 7.5 m, ground 353.5-353.5); nearest static/building/default-bake scenery/spawn 12.53 m (scenery:0x020012FB), nearest building 140.59 m, retail-bake scenery 12.19 m; peak 0 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "frost-haven.02",
+   "site": "frost-haven",
+   "technique": "drone.top-down-rise",
+   "takeSec": 12.833333,
+   "origEditSec": 12.833333,
+   "origInSec": 0,
+   "origEditIn": 3319.083333,
+   "section": {
+    "i": 284,
+    "label": "E7",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "heightStart": 18,
+    "heightEnd": 95,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30566,
+     8006,
+     290
+    ],
+    "height": 7,
+    "radius": 30
+   },
+   "standingOrder": "Look straight down on the ring of snow huts and lanterns and rise until the whole snow bowl shows; start 7 m above the tallest snow tree.",
+   "notes": "CLOSING (drone.top-down-rise). Straight down on the ring of snow huts and lanterns, rising 18 -> 95 m and turning 45 deg until the whole snow bowl shows. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30566, 8006, 308) end (30566, 8006, 385); min AGL 18 m (WBT get-height on 9 camera points: min AGL 18 m, ground 290-290); nearest static/building/default-bake scenery/spawn 14.51 m (spawn:Nip), nearest building 14.75 m, retail-bake scenery 19.35 m; peak 9.3 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "frost-haven.03",
+   "site": "frost-haven",
+   "technique": "classic.dolly-in",
+   "takeSec": 11.375,
+   "origEditSec": 11.375,
+   "origInSec": 0,
+   "origEditIn": 3331.916667,
+   "section": {
+    "i": 285,
+    "label": "P6",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 280,
+    "elevationDeg": 4,
+    "thirds": "center",
+    "fromFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30593.3,
+     7998.5,
+     290
+    ],
+    "height": 2.2,
+    "radius": 3
+   },
+   "standingOrder": "Dolly in on Robert the snowman beside the bed of glowing blue flowers and the lantern; stop 3 m short and keep clear of the snow-laden trees.",
+   "notes": "FLAME + GLOW (classic.dolly-in). Dolly in from the west (19 -> 6 m, eye level) on Robert the snowman and the bed of glowing blue flowers, a burning lantern passing the left of frame; frost wash and breath fog on show. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30574.8, 8001.8, 292.4) end (30587.5, 7999.5, 291.5); min AGL 1.51 m (WBT get-height on 9 camera points: min AGL 1.51 m, ground 290-290); nearest static/building/default-bake scenery/spawn 4.26 m (static:0x010030AC#33), nearest building 8.92 m, retail-bake scenery 0.45 m; peak 2.03 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "frost-haven.04",
+   "site": "frost-haven",
+   "technique": "classic.two-shot",
+   "takeSec": 10.75,
+   "origEditSec": 10.75,
+   "origInSec": 0,
+   "origEditIn": 3343.291667,
+   "section": {
+    "i": 287,
+    "label": "F7",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "MWS",
+   "params": {
+    "secondary": [
+     30564.64,
+     8007.79,
+     290
+    ],
+    "secondaryHeight": 2.0,
+    "side": "auto",
+    "distance": 7,
+    "elevationDeg": 6,
+    "driftDeg": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30563.9,
+     8004.26,
+     290
+    ],
+    "height": 2.0,
+    "radius": 0.8
+   },
+   "standingOrder": "Frame the snowmen Numb and Nip together in the middle of the village, drifting a few degrees; 3 m from both.",
+   "notes": "CHARACTER (classic.two-shot). Numb and Nip together in the middle of the clearing, a gentle 8 deg drift, 7 m off; backlit by the western sun. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30571.2, 8005.1, 292.2) end (30571.0, 8004.1, 292.2); min AGL 2.22 m (WBT get-height on 9 camera points: min AGL 2.22 m, ground 290-290); nearest static/building/default-bake scenery/spawn 5.53 m (spawn:Nip), nearest building 8.2 m, retail-bake scenery 14.19 m; peak 0.14 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "frost-haven.05",
+   "site": "frost-haven",
+   "technique": "classic.time-lapse",
+   "takeSec": 12.875,
+   "origEditSec": 12.083333,
+   "origInSec": 0,
+   "origEditIn": 3354.041667,
+   "section": {
+    "i": 288,
+    "label": "F7",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 195,
+    "elevationDeg": 12,
+    "distance": 280,
+    "thirds": "center",
+    "rate": 0.006
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30610,
+     8130,
+     310
+    ],
+    "height": 50,
+    "radius": 120
+   },
+   "standingOrder": "Lock off 38 m above the south ridge looking north over the village roofs to Mount Ingot while clouds race and the light warms; nothing within 45 m of the lens.",
+   "notes": "SKY (classic.time-lapse, rate 0.006 game-days/s). Locked off 38 m above the south ridge looking north: the village at the lower third (ndc y -0.65) and Mount Ingot's summit at the top (0.80) while clouds race and the light warms from 0.72 to ~0.79. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30539.1, 7865.4, 393.2) end (30539.1, 7865.4, 393.2); min AGL 37.86 m (WBT get-height on 9 camera points: min AGL 37.87 m, ground 355.4-355.4); nearest static/building/default-bake scenery/spawn 49.06 m (static:0x02000441#64), nearest building 145.92 m, retail-bake scenery 84.95 m; peak 0 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "linvak-tukal.01",
+   "site": "linvak-tukal",
+   "technique": "drone.boom-rise",
+   "takeSec": 15.833333,
+   "origEditSec": 15.041667,
+   "origInSec": 0.791667,
+   "origEditIn": 3366.125,
+   "section": {
+    "i": 288,
+    "label": "F7",
+    "role": "verse"
+   },
+   "pilot": "code",
+   "framing": "EWS",
+   "params": {
+    "distance": 175,
+    "heightStart": 2,
+    "heightEnd": 110,
+    "bearingDeg": 315,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31188,
+     5844,
+     560
+    ],
+    "height": 116,
+    "radius": 84
+   },
+   "standingOrder": "Rise straight up north-west of the fortress from below its battlements until the Lugian towers and the snowfields beyond stand in golden light; 30 m from the slope.",
+   "notes": "ESTABLISHING (drone.boom-rise, assigned). 175 m north-west of the fortress, rise straight up from wall-base level (z 562, 43 m above the slope) to z 670, keepAim: the battlements give way to the towers and the great spire, the snowfields beyond, all in low golden side-light. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31064.3, 5967.7, 562) end (31064.3, 5967.7, 670); min AGL 43.12 m (WBT get-height on 9 camera points: min AGL 43.12 m, ground 518.9-518.9); nearest static/building/default-bake scenery/spawn 10.62 m (scenery:0x020003A7), nearest building 56.21 m, retail-bake scenery 53.4 m; peak 11.3 m/s.",
+   "transitionIn": "dissolve"
+  },
+  {
+   "id": "linvak-tukal.02",
+   "site": "linvak-tukal",
+   "technique": "fpv.fpv-proximity",
+   "takeSec": 12.75,
+   "origEditSec": 12.75,
+   "origInSec": 0,
+   "origEditIn": 3381.166667,
+   "section": {
+    "i": 289,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "jev",
+   "framing": "WS",
+   "params": {
+    "offset": 10,
+    "side": "left",
+    "heightAGL": 12,
+    "speed": 12,
+    "cornerRadius": 5,
+    "alat": 6,
+    "lookAhead": 14,
+    "leanDeg": 6,
+    "maxBankDeg": 20,
+    "ends": "cruise"
+   },
+   "subject": null,
+   "standingOrder": "Skim east along the south wall of the fortress 10 m off the stone and 12 m above the slope, past the south gate; never closer than 6 m to the wall or the rocks.",
+   "notes": "FACADE / FORTRESS WALL (fpv.fpv-proximity, JEV hero). FPV skims east along the south wall 10 m off the stone and 12 m above the steep slope (z ~560, level with the wall base) past the recessed south gate, the wall filling the left of frame; Linvak's only pan. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31082, 5750, 560.3) end (31248, 5750, 560.3); min AGL 12 m (WBT get-height on 9 camera points: min AGL 12.0 m, ground 534.3-548.3); nearest static/building/default-bake scenery/spawn 8.95 m (scenery:0x020003A4), nearest building 10 m, retail-bake scenery 8.96 m; peak 13.83 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "linvak-tukal.03",
+   "site": "linvak-tukal",
+   "technique": "classic.high-angle",
+   "takeSec": 10.666667,
+   "origEditSec": 10.666667,
+   "origInSec": 0,
+   "origEditIn": 3393.916667,
+   "section": {
+    "i": 290,
+    "label": "J2",
+    "role": "chorus"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": 55,
+    "distance": 95,
+    "thirds": "center",
+    "pushM": 6
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31200,
+     5844,
+     570
+    ],
+    "height": 30,
+    "radius": 20
+   },
+   "standingOrder": "Look steeply down from high over the east rooftops into the brazier-lit central ramp and the town portal terrace; stay 15 m above every roof.",
+   "notes": "FLAME + MAGIC (classic.high-angle). From z ~660 (66+ m above the east rooftops, 30 m from the nearest tower) looking steeply down (55 deg) into the brazier-lit central ramp: the Town Network portal terrace, the braziers at z 570/590/611 and Kresovus' quarters all near frame centre, easing in 6 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31254.3, 5839.2, 662.8) end (31250.8, 5839.6, 657.9); min AGL 97.9 m (WBT get-height on 9 camera points: min AGL 97.9 m, ground 560-560); nearest static/building/default-bake scenery/spawn 30.4 m (building:0x01001F18#49), nearest building 30.4 m, retail-bake scenery 107.17 m; peak 0.86 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "linvak-tukal.04",
+   "site": "linvak-tukal",
+   "technique": "drone.vertigo-drone",
+   "takeSec": 11.041667,
+   "origEditSec": 11.041667,
+   "origInSec": 0,
+   "origEditIn": 3404.583333,
+   "section": {
+    "i": 291,
+    "label": "K2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "FS",
+   "params": {
+    "nearDistance": 80,
+    "farDistance": 150,
+    "direction": "out",
+    "heightAGL": 72,
+    "minFovDeg": 12,
+    "maxFovDeg": 70,
+    "bearingDeg": 225,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31140,
+     5784,
+     560
+    ],
+    "height": 100,
+    "radius": 14
+   },
+   "standingOrder": "Fly back south-west from the mage tower while zooming in so the tower holds its size and the fortress swells behind it; keep 40 m above the slope.",
+   "notes": "LANDMARK (drone.vertigo-drone). South-west of the Mage Tower at z 632, fly back 80 -> 150 m while the fov narrows 60 -> 35: the tower holds its size and the fortress swells behind it. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31083.4, 5727.4, 632) end (31033.9, 5677.9, 632); min AGL 104.28 m (WBT get-height on 9 camera points: min AGL 104.28 m, ground 465.3-527.7); nearest static/building/default-bake scenery/spawn 53.86 m (building:0x01001F03#21), nearest building 53.86 m, retail-bake scenery 88.82 m; peak 9.99 m/s.",
+   "transitionIn": "cut"
+  },
+  {
+   "id": "linvak-tukal.05",
+   "site": "linvak-tukal",
+   "technique": "drone.dronie",
+   "takeSec": 16.125,
+   "origEditSec": 16.125,
+   "origInSec": 0,
+   "origEditIn": 3415.625,
+   "section": {
+    "i": 292,
+    "label": "K2",
+    "role": "unknown"
+   },
+   "pilot": "code",
+   "framing": "WS",
+   "params": {
+    "startDistance": 45,
+    "endDistance": 152,
+    "startHeight": 75,
+    "endHeight": 110,
+    "bearingDeg": 255,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31170,
+     5860,
+     600
+    ],
+    "height": 76,
+    "radius": 30
+   },
+   "standingOrder": "Pull back west and up from the crown of the great towers until the whole Lugian super-fortress glows on its snowy summit in the evening sun; 20 m clear of every tower.",
+   "notes": "FINALE (drone.dronie). From 45 m off the crown of the great towers, pull back west-south-west and up to 152 m / z 670 (fov 66) until the whole Lugian super-fortress glows gold on its snowy summit - the end. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31126.5, 5848.4, 675) end (31023.2, 5820.7, 710); min AGL 115 m (WBT get-height on 9 camera points: min AGL 115 m, ground 499.4-560); nearest static/building/default-bake scenery/spawn 23.81 m (building:0x01001F29#38), nearest building 23.81 m, retail-bake scenery 121.41 m; peak 11.05 m/s.",
+   "transitionIn": "cut"
+  }
+ ]
+}

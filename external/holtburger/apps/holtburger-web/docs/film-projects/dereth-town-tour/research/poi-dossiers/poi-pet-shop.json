@@ -1,0 +1,131 @@
+{
+ "name": "Pet Shop",
+ "title": "Pet Shop",
+ "siteId": "poi-pet-shop",
+ "summary": "The Pet Shop is a single Aluvian stone-and-timber cottage on a terrace (z 58) above the river valley, 560 m west-north-west of the Obsidian Span, where many pets (Armoredillo pup, baby drudge, ursuin cub...) are sold by six NPCs. Rabbit hutches stand by its south door, a 28 m tree behind it on the hillside.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 35.2,
+   "ew": 39.3
+  },
+  "mapWorld": [
+   33900.0,
+   32916.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Pet_Shop.txt",
+  "coveredDistM": 2137,
+  "coveredBy": "shot:holtburg.05"
+ },
+ "landmarks": [
+  {
+   "name": "Pet Shop cottage",
+   "pos": [
+    33900.0,
+    32916.0,
+    58.0
+   ],
+   "heightM": 10.4,
+   "note": "0x01000A2B, 20 x 18 m, doors north and south."
+  },
+  {
+   "name": "Rabbit hutches",
+   "pos": [
+    33897.2,
+    32909.2,
+    58.0
+   ],
+   "heightM": 2.5,
+   "note": "Two 0x0200040F by the south door."
+  }
+ ],
+ "site": {
+  "id": "poi-pet-shop",
+  "name": "Pet Shop",
+  "teleport": "@teleloc 0xB0AB002D 133.0 103.0 58.5 1 0 0 0",
+  "anchor": [
+   33900.0,
+   32916.0,
+   58.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.59,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33901.0,
+     32915.0,
+     58.0
+    ],
+    "height": 10.4,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 125,
+    "azimuthRef": "compass",
+    "elevationDeg": 14,
+    "distance": 30,
+    "thirds": "center",
+    "arcDeg": 30,
+    "direction": "cw"
+   },
+   "standingOrder": "Arc 30 deg clockwise at 30 m around the Pet Shop cottage, 12 m above the terrace on its south-east side; keep 6 m from the two trees south of the cottage, their leaves may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Aluvian cottage near the Obsidian Span where pets are sold: stone-and-timber walls, a door each side, rabbit hutches by the south door, set on a terrace above the river valley with a 28 m tree behind it. A short sweeping arc from the south-east, sun from the right. Verified with poi-kit check.mjs - take 8s: AGL 12.46..12.5 m, nearest 6.09 m (scenery-default 0x02000246@33926,32891), vmax 2.99 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 12.46..12.5 m, nearest 6.09 m, LOS blocked 0/21, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-pet-shop.01",
+   "technique": "classic.arc",
+   "rank": 3,
+   "check": "take 8s: AGL 12.46..12.5 m, nearest 6.09 m (scenery-default 0x02000246@33926,32891), vmax 2.99 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 12.46..12.5 m, nearest 6.09 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 5,
+ "techniques": [
+  "classic.arc"
+ ]
+}

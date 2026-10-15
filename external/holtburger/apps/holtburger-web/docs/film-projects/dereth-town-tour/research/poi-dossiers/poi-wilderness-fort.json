@@ -1,0 +1,190 @@
+{
+ "name": "Wilderness Fort",
+ "title": "Wilderness Fort",
+ "siteId": "poi-wilderness-fort",
+ "summary": "A fort near Zaikhal with NPCs and a Life Stone whose portals to Hebian-To and Zaikhal were destroyed in Shifting Gears; built like the walls of Bandit Castle (acpedia). In the kit: six two-storey wall buildings (7-8 m) forming a 46 x 64 m diamond on the flat z 240 plateau, with the Life Stone, a pool, glowing green plants and the two destroyed portals in wooden archways inside, and trees in the courtyards.",
+ "landmarks": [
+  {
+   "name": "Fort centre (keep walls 0x01000802)",
+   "pos": [
+    22608.0,
+    30108.0,
+    240.0
+   ],
+   "heightM": 8.0,
+   "note": "Central wall buildings."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    22612.4,
+    30098.3,
+    240.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-at-23-5n-7-7w."
+  },
+  {
+   "name": "Pool",
+   "pos": [
+    22605.6,
+    30089.9,
+    240.0
+   ],
+   "heightM": 0.5,
+   "note": "Pool spawn in the south courtyard."
+  },
+  {
+   "name": "Destroyed Portal to Zaikhal",
+   "pos": [
+    22598.6,
+    30086.7,
+    240.0
+   ],
+   "heightM": 3.9,
+   "note": "In a wooden archway."
+  }
+ ],
+ "site": {
+  "id": "poi-wilderness-fort",
+  "name": "Wilderness Fort",
+  "gazetteerId": "life-stone-at-23-5n-7-7w",
+  "teleport": "@teleloc 0x759C0037 148.412 146.292 240.005 -0.796061 0 0 0.605217",
+  "anchor": [
+   22608.0,
+   30108.0,
+   240.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.64,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-at-23-5n-7-7w (south courtyard, next to the Life Stone). The acpedia/gazetteer name match '@tele 5.70N 4.30E' is the Mimiana Villas route start, not the fort."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 23.5,
+   "ew": -7.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3091,
+  "coveredBy": "shot:zaikhal.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Wilderness_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-wilderness-fort.01",
+   "site": "poi-wilderness-fort",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     4.5,
+     10.75
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     22608.0,
+     30108.0,
+     240.0
+    ],
+    "height": 8,
+    "radius": 8
+   },
+   "params": {
+    "distance": 47,
+    "heightStart": 4,
+    "heightEnd": 28,
+    "bearingDeg": 183,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 1
+   },
+   "standingOrder": "Rise straight up from 4 m outside the south point of the fort wall until the courtyard opens over it, pool and Life Stone below and the inner keep beyond; keep 15 m from the wall, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boom rise over the south point of the fort walls: starting below the wall top (7 m), the camera climbs to 28 m and the courtyard with the pool, Life Stone, destroyed-portal archways and the inner keep opens behind the wall (lead-in by design until t 5.5). Verified (check.mjs, full take flown): take 0-11 s: AGL 4..28 m, nearest drawn 15.34 m (static 0x759C#62 0x01000803), vmax 3.43 m/s, LOS blocked 22/45, subject in frame 100%; edit 4.5-10.5 s: AGL 12.62..27.9 m, nearest drawn 16.33 m (static 0x759C#62 0x01000803), vmax 3.43 m/s, LOS blocked 4/25, subject in frame 100%; flight cinema peak 3.42 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-wilderness-fort.02",
+   "site": "poi-wilderness-fort",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     22608.0,
+     30108.0,
+     240.0
+    ],
+    "height": 8,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 0,
+    "azimuthRef": "compass",
+    "heightM": 70,
+    "rotateDeg": 30,
+    "riseM": 10
+   },
+   "standingOrder": "Look straight down from 70 m on the diamond of fort walls, the pool, Life Stone and courtyard trees, turning 30 degrees and rising 10 m; nothing within 45 m, banderlings may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Bird's-eye of the Wilderness Fort: the diamond of Bandit-Castle-style walls, the pool, Life Stone and courtyard trees in the plateau grass, turning 30 degrees and rising 10 m. Verified (check.mjs, full take flown): take 0-9 s: AGL 70..80 m, nearest drawn 48.25 m (scenery-default 0x02000258@22593,30157), vmax 1.75 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 70.67..79.7 m, nearest drawn 48.68 m (scenery-default 0x02000258@22593,30157), vmax 1.75 m/s, LOS blocked 0/27, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-wilderness-fort.01": "take 0-11 s: AGL 4..28 m, nearest drawn 15.34 m (static 0x759C#62 0x01000803), vmax 3.43 m/s, LOS blocked 22/45, subject in frame 100%; edit 4.5-10.5 s: AGL 12.62..27.9 m, nearest drawn 16.33 m (static 0x759C#62 0x01000803), vmax 3.43 m/s, LOS blocked 4/25, subject in frame 100%; flight cinema peak 3.42 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-wilderness-fort.02": "take 0-9 s: AGL 70..80 m, nearest drawn 48.25 m (scenery-default 0x02000258@22593,30157), vmax 1.75 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 70.67..79.7 m, nearest drawn 48.68 m (scenery-default 0x02000258@22593,30157), vmax 1.75 m/s, LOS blocked 0/27, subject in frame 100%"
+ }
+}

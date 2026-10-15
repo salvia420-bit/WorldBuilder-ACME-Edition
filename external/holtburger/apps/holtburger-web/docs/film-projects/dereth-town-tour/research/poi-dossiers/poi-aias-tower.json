@@ -1,0 +1,306 @@
+{
+ "name": "Aia's Tower",
+ "title": "Aia's Tower",
+ "siteId": "poi-aias-tower",
+ "summary": "Aia's Tower, built by the Empyrean architect Saolor Lentain (acpedia), reached in game through the Tower Base Dungeon (its portal is at the mesa foot, 92 m north). In the kit it is a row of five Empyrean towers (0x01002D37-39, 34-74 m tall with tops at z 152-192, stone head statues on the tops) standing E-W across a narrow mesa top at z 113-118 that rises 70-90 m out of a treed grass plain (z 27-50). The 'Upper Tower' area on the central tower roof holds the Stone Plaque and the note from Tamian Wilmot; undead (Champions and Warlocks of the Blood) spawn on it. Landblocks west (0xA7xx) and north (0xA855-0xAA55) are missing from the kit, so every camera stays south and east of the tower within 250 m.",
+ "landmarks": [
+  {
+   "name": "Tower row centre (0x01002D37, top 152.5)",
+   "pos": [
+    32532.2,
+    16045.4,
+    118.0
+   ],
+   "heightM": 34.5,
+   "note": "Central lower tower, the Upper Tower roof area with Stone Plaque."
+  },
+  {
+   "name": "West tower (0x01002D39)",
+   "pos": [
+    32484.3,
+    16046.5,
+    118.0
+   ],
+   "heightM": 74.2,
+   "note": "Top 192.2, stone head statue at 195.7."
+  },
+  {
+   "name": "East tower (0x01002D39)",
+   "pos": [
+    32580.0,
+    16043.2,
+    118.0
+   ],
+   "heightM": 74.3,
+   "note": "Top 192.3, stone head statue at 194.8."
+  },
+  {
+   "name": "Mesa",
+   "pos": [
+    32530.0,
+    16044.0,
+    113.0
+   ],
+   "heightM": 85.0,
+   "note": "Mesa top 108-118 over a plain at 27-50; the south cliff drops to a 70 m shelf then the plain."
+  },
+  {
+   "name": "Tower Base Dungeon portal",
+   "pos": [
+    32532.9,
+    16132.8,
+    52.5
+   ],
+   "heightM": 3.0,
+   "note": "Dungeon entrance at the north foot of the mesa (not filmed)."
+  }
+ ],
+ "site": {
+  "id": "poi-aias-tower",
+  "name": "Aia's Tower",
+  "teleport": "@teleloc 0xA952001F 82.00 161.00 27.92 1 0 0 0",
+  "anchor": [
+   32532.0,
+   16044.0,
+   118.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  },
+  "notes": "Derived @teleloc on the open plain 139 m south of the tower row (ground + 0.5); the gazetteer upper-tower teleport lands inside a tower prism and tower-base-dungeon-portal is a portal swirl."
+ },
+ "insertAfter": "khayyaban",
+ "insertBefore": "uziz",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -35.1,
+   "ew": 33.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2618,
+  "coveredBy": "shot:uziz.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aia_s_Tower.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-aias-tower.01",
+   "site": "poi-aias-tower",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     4.5,
+     10.75
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32532.2,
+     16045.4,
+     118.0
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "startPitchDeg": -52,
+    "endPitchDeg": -3,
+    "heightAGL": 30,
+    "distance": 250,
+    "drift": 20,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Hover 120 m over the plain 250 m south of the mesa and tilt up from the slope to the five towers of Aia standing on the cliff, easing 20 m forward; stay 100 m above every tree, birds and creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Opener for the most dramatic structure of the batch: five Empyrean towers (34-74 m tall, tops at z 152-192) standing on a narrow 80 m-high mesa above the grass plain. The tilt starts on the treed slope below the cliff and rises to the full mesa-and-towers silhouette; noon sun high in the south lights the south faces. The tower row centre enters the frame at about t 5.2 (reveal by design; the edit window opens 0.7 s before it, on the cliff face). Verified (check.mjs, full take flown): take 0-11 s: AGL 118.28..119.9 m, nearest drawn 108.27 m (scenery-default 0x020004BE@32502,15806), vmax 2.86 m/s, LOS blocked 0/45, subject in frame 53%; edit 4.5-10.5 s: AGL 118.88..119.9 m, nearest drawn 108.27 m (scenery-default 0x020004BE@32502,15806), vmax 2.86 m/s, LOS blocked 0/25, subject in frame 88%; flight cinema peak 2.85 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-aias-tower.02",
+   "site": "poi-aias-tower",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32532.2,
+     16045.4,
+     118.0
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 180,
+    "azimuthRef": "compass",
+    "heightM": 1.5,
+    "horizontalM": 100,
+    "spinDeg": 10
+   },
+   "standingOrder": "Hold the lens 1.5 m off the plain 100 m south of the mesa and look straight up the cliff to the towers against the sky while the frame rolls 10 degrees; keep 25 m from the trees at the cliff foot, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye from the plain: the 90 m cliff and the towers above it soar straight up from a 1.5 m lens 100 m south of the mesa on a 75 degree lens, with a slow 10 degree roll of the sky. Scale shot. Verified (check.mjs, full take flown): take 0-8 s: AGL 1.5..1.5 m, nearest drawn 30.17 m (scenery-default 0x020004BE@32501,15926), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1.5..1.5 m, nearest drawn 30.17 m (scenery-default 0x020004BE@32501,15926), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-aias-tower.03",
+   "site": "poi-aias-tower",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.0,
+     9.0
+    ],
+    "anchor": 5.0
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32580.0,
+     16043.2,
+     118.0
+    ],
+    "height": 74,
+    "radius": 8
+   },
+   "params": {
+    "offset": 45,
+    "heightAGL": 62,
+    "speed": 7,
+    "side": "left",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "standingOrder": "Fly east 45 m south of the tower row at the level of the stone heads, 180 m above the plain, yawing to hold the east tower as it passes; keep 35 m from every tower, flying undead may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Level pass at the height of the stone head statues on the tower tops, 180 m above the plain, 45 m off the south face: the east tower (192 m top) slides past against open sky while the plain glows far below. Verified (check.mjs, full take flown): take 0-10 s: AGL 108.7..148.5 m, nearest drawn 36.06 m (bldg 0xA953#8 0x01002D38 5-story building), vmax 7 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 112.2..133.4 m, nearest drawn 36.06 m (bldg 0xA953#8 0x01002D38 5-story building), vmax 7 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-aias-tower.04",
+   "site": "poi-aias-tower",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32532.2,
+     16045.4,
+     118.0
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 95,
+    "radiusEnd": 115,
+    "heightStart": 25,
+    "heightEnd": 50,
+    "revolutions": 0.07,
+    "direction": "ccw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "standingOrder": "Corkscrew up and out round the south-west of the tower row from 95 m to 115 m out and from 25 m to 50 m above the mesa top; keep 75 m from every tower face, flying undead may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Rising corkscrew round the south-west of the tower row at mid-tower height (camera z 143 to 168, the towers rise from 118 to 192), the five towers turning against the sky and the plain falling away 100 m below. Verified (check.mjs, full take flown): take 0-11 s: AGL 89.13..133.7 m, nearest drawn 78.63 m (static 0xA953#6 0x01002D38), vmax 8.04 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 96.53..131.6 m, nearest drawn 82.58 m (static 0xA953#6 0x01002D38), vmax 8.04 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.03 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-aias-tower.01": "take 0-11 s: AGL 118.28..119.9 m, nearest drawn 108.27 m (scenery-default 0x020004BE@32502,15806), vmax 2.86 m/s, LOS blocked 0/45, subject in frame 53%; edit 4.5-10.5 s: AGL 118.88..119.9 m, nearest drawn 108.27 m (scenery-default 0x020004BE@32502,15806), vmax 2.86 m/s, LOS blocked 0/25, subject in frame 88%; flight cinema peak 2.85 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-aias-tower.02": "take 0-8 s: AGL 1.5..1.5 m, nearest drawn 30.17 m (scenery-default 0x020004BE@32501,15926), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1.5..1.5 m, nearest drawn 30.17 m (scenery-default 0x020004BE@32501,15926), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-aias-tower.03": "take 0-10 s: AGL 108.7..148.5 m, nearest drawn 36.06 m (bldg 0xA953#8 0x01002D38 5-story building), vmax 7 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 112.2..133.4 m, nearest drawn 36.06 m (bldg 0xA953#8 0x01002D38 5-story building), vmax 7 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-aias-tower.04": "take 0-11 s: AGL 89.13..133.7 m, nearest drawn 78.63 m (static 0xA953#6 0x01002D38), vmax 8.04 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 96.53..131.6 m, nearest drawn 82.58 m (static 0xA953#6 0x01002D38), vmax 8.04 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.03 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

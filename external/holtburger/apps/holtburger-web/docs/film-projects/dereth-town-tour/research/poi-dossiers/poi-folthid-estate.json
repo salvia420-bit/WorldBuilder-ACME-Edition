@@ -1,0 +1,140 @@
+{
+ "name": "Folthid Estate",
+ "title": "Folthid Estate",
+ "siteId": "poi-folthid-estate",
+ "summary": "Raxanza Folthid's two-story brick house in a deep forest clearing, with a well and a Life Stone; Felscuda's shack and the Folthid Cellar stand 140-190 m west.",
+ "landmarks": [
+  {
+   "name": "Raxanza Folthid's home",
+   "pos": [
+    37355.4,
+    22356.5,
+    24.0
+   ],
+   "heightM": 12.0,
+   "note": "0x01000827 brick house."
+  },
+  {
+   "name": "Well",
+   "pos": [
+    37364.7,
+    22349.0,
+    24.0
+   ],
+   "heightM": 3.0,
+   "note": "Beside the house."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    37386.4,
+    22383.3,
+    24.0
+   ],
+   "heightM": 3.5,
+   "note": "North-east of the house."
+  },
+  {
+   "name": "Felscuda's shack",
+   "pos": [
+    37212.0,
+    22356.0,
+    20.0
+   ],
+   "heightM": 4.5,
+   "note": "0x01001050, 144 m west (not filmed)."
+  }
+ ],
+ "site": {
+  "id": "poi-folthid-estate",
+  "name": "Folthid Estate",
+  "gazetteerId": "folthid-estate",
+  "teleport": "@teleloc 0xC274001C 94.5394 81.4253 24.005 1 0 0 0",
+  "anchor": [
+   37356.0,
+   22356.0,
+   24.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.57,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer folthid-estate."
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -8.8,
+   "ew": 53.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2355,
+  "coveredBy": "shot:lytelthorpe.07",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Folthid_Estate.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-folthid-estate.01",
+   "site": "poi-folthid-estate",
+   "technique": "classic.dolly-out",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37355.4,
+     22356.5,
+     24.0
+    ],
+    "height": 12,
+    "radius": 7
+   },
+   "params": {
+    "azimuthDeg": 205,
+    "azimuthRef": "compass",
+    "elevationDeg": 48,
+    "thirds": "center",
+    "toFraming": "WS",
+    "profile": "perceptual"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Start 4 m above the roof of the Folthid house and pull back south-south-west and up along the view line to 32 m away; stay 5 m from every tree crown.",
+   "notes": "Lonely house in the deep forest: starts just above the roof of Raxanza Folthid's brick house and pulls back and up (48 degrees) until the clearing, the well and the surrounding tall trees frame it; south-south-west sun behind the lens. Verified (check.mjs, full take flown): take 0-9 s: AGL 16.22..30.5 m, nearest drawn 5.59 m (scenery-default 0x020002D7@37352,22337), vmax 4.49 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 16.47..28.4 m, nearest drawn 5.59 m (scenery-default 0x020002D7@37352,22337), vmax 4.49 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-folthid-estate.01": "take 0-9 s: AGL 16.22..30.5 m, nearest drawn 5.59 m (scenery-default 0x020002D7@37352,22337), vmax 4.49 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 16.47..28.4 m, nearest drawn 5.59 m (scenery-default 0x020002D7@37352,22337), vmax 4.49 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

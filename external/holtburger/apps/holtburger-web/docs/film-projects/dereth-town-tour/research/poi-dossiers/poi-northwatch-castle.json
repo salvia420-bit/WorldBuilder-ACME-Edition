@@ -1,0 +1,206 @@
+{
+ "name": "Northwatch Castle",
+ "title": "Northwatch Castle",
+ "siteId": "poi-northwatch-castle",
+ "summary": "Northwatch Castle, one of the Land Control forts of North Osteth (Ancient Powers): society PKs fight for its Creeping Blight banners, and since What Once Was Lost a crystal array platform rises above the fort. The kit shows a walled courtyard (x 30394-30473, y 43994-44057, z 82) with a 6-storey red-roofed spired keep (top 113.5), a green-glass spire tower (104), a tapered-roof tower (103.7), the octagonal crystal-array platform (97.8), banner fields and supply crates; a blue-lit tower with stairs stands outside the west wall, the whole ringed by a dense forest. All gazetteer teleports are interior (black market), so the site uses a derived outdoor teleport.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 81.5,
+   "ew": 25.0
+  },
+  "mapWorld": [
+   30468.0,
+   44028.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Northwatch_Castle.txt",
+  "coveredDistM": 3352,
+  "coveredBy": "shot:neydisa-castle.03"
+ },
+ "landmarks": [
+  {
+   "name": "Keep",
+   "pos": [
+    30444.0,
+    44004.0,
+    82.0
+   ],
+   "heightM": 31.5,
+   "note": "0x01000DFF."
+  },
+  {
+   "name": "Green-glass spire tower",
+   "pos": [
+    30468.0,
+    44004.0,
+    82.0
+   ],
+   "heightM": 22,
+   "note": "0x01000E00."
+  },
+  {
+   "name": "Crystal array platform",
+   "pos": [
+    30444.0,
+    44028.0,
+    97.8
+   ],
+   "heightM": 0,
+   "note": "0x010029FF."
+  },
+  {
+   "name": "West stair tower (blue lights)",
+   "pos": [
+    30364.5,
+    44026.6,
+    88.0
+   ],
+   "heightM": 24.8,
+   "note": "0x01001776 + radiant lights 0x0200092F."
+  }
+ ],
+ "site": {
+  "id": "poi-northwatch-castle",
+  "name": "Northwatch Castle",
+  "teleport": "@teleloc 0x9EE50021 104.0 2.0 82.5 1 0 0 0",
+  "anchor": [
+   30436.0,
+   44025.0,
+   82.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.41,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30444.0,
+     44004.0,
+     82.0
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 160,
+    "azimuthRef": "compass",
+    "distance": 130,
+    "heightM": 62,
+    "driftDeg": 8,
+    "pushPct": 6
+   },
+   "standingOrder": "Hang 62 m above the castle floor 130 m south-south-east of the keep and drift 8 deg while easing 6 % closer; stay 15 m above the forest crowns, leaves may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Northwatch Castle, the Land Control fortress in North Osteth: a walled courtyard with a 6-storey spired keep, a green-glass spire tower and a crystal-array platform above the walls, ringed by forest. Seen from the south-south-east with the 0.41 sun behind the camera; the camera rides above the trees (crowns to z 109 within 60 m of the line). Verified with poi-kit check.mjs - take 9s: AGL 48.29..50.6 m, nearest 18.53 m (scenery-default 0x020002D9@30506,43900), vmax 3.36 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 48.51..50.5 m, nearest 18.76 m, LOS blocked 0/25, in frame 100%, water 0%."
+  },
+  {
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.8
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30444.0,
+     44004.0,
+     82.0
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "offset": 24,
+    "heightAGL": 28,
+    "speed": 6,
+    "side": "right",
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly west 28 m above the ground at 6 m/s, 24 m south of the keep, yawing to keep its spire centred; nothing within 19 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Fly-by at roof height: the keep's red-roofed spire and the green-glass tower whip past while the courtyard and walls slide underneath, morning sun from behind. Verified with poi-kit check.mjs - take 9s: AGL 27..28 m, nearest 19.64 m (bldg 0x9EE5#102 0x01000E00 single-story building with spire roof, 9 interior cells), vmax 6 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.8-7.3s: AGL 27.6..28 m, nearest 19.64 m, LOS blocked 0/22, in frame 100%, water 0%; flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-northwatch-castle.01",
+   "technique": "classic.establishing",
+   "rank": 1,
+   "check": "take 9s: AGL 48.29..50.6 m, nearest 18.53 m (scenery-default 0x020002D9@30506,43900), vmax 3.36 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 48.51..50.5 m, nearest 18.76 m, LOS blocked 0/25, in frame 100%, water 0%"
+  },
+  {
+   "shot": "poi-northwatch-castle.02",
+   "technique": "drone.fly-by",
+   "rank": 2,
+   "check": "take 9s: AGL 27..28 m, nearest 19.64 m (bldg 0x9EE5#102 0x01000E00 single-story building with spire roof, 9 interior cells), vmax 6 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.8-7.3s: AGL 27.6..28 m, nearest 19.64 m, LOS blocked 0/22, in frame 100%, water 0%; flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 11.5,
+ "techniques": [
+  "classic.establishing",
+  "drone.fly-by"
+ ]
+}

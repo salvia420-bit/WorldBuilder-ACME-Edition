@@ -13,12 +13,15 @@
 //                  neutral, stale answers frozen (never descend), return-to-path
 //                  only toward clear sides, every channel rate-limited and
 //                  clamped to the shot bounds, occluder / framing / lost mapping;
+//                  maxFadeIds 0 (pilot.fade 'never') fades nothing and reroutes
+//                  (the cap is checked before an id is taken), ⌊max⌋ caps;
 //   L2  pilot.js   consult gating, code mode, JEV pipelining (≤ maxInFlight,
 //                  ≥ dispatch interval, sequence numbers, older answers dropped,
 //                  duplicates skipped), fingerprint reuse ≤ reuseSec, bridge
 //                  errors / malformed answers / timeouts → code fallback for that
 //                  tick, shadow agreement, stepped determinism + timeout, reset,
-//                  telemetry / stats / logs.
+//                  telemetry / stats / logs; createPilot({fade:'never', limits}) builds its
+//                  own never-fade mapper and reports stats().fade.
 //
 // Flag: filmMode (DEFAULT OFF, `?filmMode=on`) — these are its pure pilot modules.
 // Run from apps/holtburger-web/: node tests/film_pilot_loop.test.mjs
@@ -365,6 +368,47 @@ await check("occluder_action fade with NO fadeable id (a scenery trunk) falls ba
   const m2 = M.createResidualMapper({});
   const sp2 = m2.apply(pol, { now: 0, sensorFrame: trunk });
   assert.deepEqual([sp2.fadeIds, sp2.reroute], [[], true], "code policy fade on a trunk → reroute");
+});
+
+await check("maxFadeIds 0 (pilot.fade 'never') → fadeIds [] and a reroute — the cap is checked before an id is taken (was: 1 id); ⌊max⌋ caps", () => {
+  const sf = frame({ subject: { visibleFrac: 0, occluderKind: "tree", occluderIds: [123, "placement:05050000:object:0", 456] } });
+  for (const max of [0, -1, 0.5, NaN]) {
+    const m = M.createResidualMapper({ limits: { maxFadeIds: max } });
+    const sp = m.apply(ans("hold_path", { occ: "fade" }), { now: 0, sensorFrame: sf });
+    if (Number.isNaN(max) || max < 0) {
+      assert.equal(m.config.limits.maxFadeIds, 16, `${max}: invalid → the default`);
+      assert.deepEqual(sp.fadeIds, [123, "placement:05050000:object:0", 456]);
+      continue;
+    }
+    assert.deepEqual([sp.fadeIds, sp.reroute], [[], true], `maxFadeIds ${max}: nothing to fade → reroute`);
+    assert.equal(m.stats().fadeFallbacks, 1);
+  }
+  const one = M.createResidualMapper({ limits: { maxFadeIds: 1.9 } });
+  assert.deepEqual(one.apply(ans("hold_path", { occ: "fade" }), { now: 0, sensorFrame: sf }).fadeIds, [123], "⌊1.9⌋ = 1");
+  const two = M.createResidualMapper({ limits: { maxFadeIds: 2 } });
+  assert.deepEqual(two.apply(ans("hold_path", { occ: "fade" }), { now: 0, sensorFrame: sf }).fadeIds, [123, "placement:05050000:object:0"]);
+  const dup = M.createResidualMapper({ limits: { maxFadeIds: 2 } });
+  assert.deepEqual(dup.apply(ans("hold_path", { occ: "fade" }), { now: 0, sensorFrame: frame({ subject: { occluderIds: [7, 7, NaN, "", 8, 9] } }) }).fadeIds, [7, 8], "duplicates / junk never use the cap");
+});
+
+await check("createPilot({fade:'never'}) builds its own mapper with maxFadeIds 0 (+ given limits); stats().fade; an injected mapper decides", async () => {
+  const OCC = frame({ subject: { visibleFrac: 0.1, unseenSec: 2, occluderKind: "tree", occluderIds: ["placement:05050000:object:0"] } });
+  const never = PL.createPilot({ mode: "code", fade: "never", limits: { slowSpeedScale: 0.4 } });
+  assert.equal(never.mapper.config.limits.maxFadeIds, 0);
+  assert.equal(never.mapper.config.limits.slowSpeedScale, 0.4, "other limits pass through");
+  assert.equal(never.stats().fade, "never");
+  const out = await never.tickStepped(OCC, { hasSubject: true }, 0);
+  assert.deepEqual([out.setpoint.fadeIds, out.setpoint.reroute], [[], true], "the code policy's fade becomes a reroute");
+  const auto = PL.createPilot({ mode: "code" });
+  assert.equal(auto.stats().fade, "auto");
+  assert.equal(auto.mapper.config.limits.maxFadeIds, 16);
+  const out2 = await auto.tickStepped(OCC, { hasSubject: true }, 0);
+  assert.deepEqual(out2.setpoint.fadeIds, ["placement:05050000:object:0"]);
+  assert.equal(PL.createPilot({ mode: "code", fade: "sometimes" }).stats().fade, "auto", "unknown policy = auto");
+  const injected = PL.createPilot({ mode: "code", fade: "never", mapper: M.createResidualMapper({}) });
+  assert.equal(injected.stats().fade, "auto", "an injected mapper is used as given (film/index.js sets its limits)");
+  assert.equal(PL.createPilot({ mode: "code", mapper: M.createResidualMapper({ limits: { maxFadeIds: 0 } }) }).stats().fade, "never");
+  assert.deepEqual([...PL.PILOT_FADE_POLICIES], ["auto", "never"]);
 });
 
 await check("subject_lost (noul ≥ 0.5) caps speed and freezes framing", () => {

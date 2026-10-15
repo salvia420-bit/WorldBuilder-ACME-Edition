@@ -1,0 +1,143 @@
+{
+ "name": "Chapel Blackspire",
+ "title": "Chapel Blackspire",
+ "siteId": "poi-chapel-blackspire",
+ "summary": "Chapel Blackspire is the open-air church south of Cragstone where Thorsten Cragstone's funeral was held. In the kit it is a quiet meadow (z 22) with ten wooden pews in two columns facing north-north-east toward an altar group (wooden pedestal, golden candelabrum, black stone column and block) and, 9 m behind the altar, a 20 m dark spire (the 'black spire'); scattered trees around, the shallow sea 200 m to the north-east.",
+ "acpedia": {
+  "categories": [
+   "Historical Site",
+   "Northeast POI",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": 19.1,
+   "ew": 46.3
+  },
+  "mapWorld": [
+   35580.0,
+   29052.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chapel_Blackspire.txt",
+  "coveredDistM": 1579,
+  "coveredBy": "shot:cragstone.03"
+ },
+ "landmarks": [
+  {
+   "name": "Black spire",
+   "pos": [
+    35588.2,
+    29073.7,
+    21.9
+   ],
+   "heightM": 19.8,
+   "note": "Static 0x020006CD, 8 x 7.6 m footprint."
+  },
+  {
+   "name": "Altar (pedestal + candelabrum + column)",
+   "pos": [
+    35583.6,
+    29064.2,
+    22.0
+   ],
+   "heightM": 1.8,
+   "note": "0x020002FD, 0x02000105, 0x02000274."
+  },
+  {
+   "name": "Pews",
+   "pos": [
+    35582.4,
+    29056.9,
+    22.0
+   ],
+   "heightM": 0.5,
+   "note": "Ten 0x02000120 benches in two columns, rows y 29052-29061."
+  }
+ ],
+ "site": {
+  "id": "poi-chapel-blackspire",
+  "name": "Chapel Blackspire",
+  "teleport": "@teleloc 0xB997000A 46.0 40.0 22.5 1 0 0 0",
+  "anchor": [
+   35583.0,
+   29062.0,
+   22.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.68,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35588.2,
+     29073.7,
+     21.9
+    ],
+    "height": 19.8,
+    "radius": 4
+   },
+   "params": {
+    "azimuthDeg": 196,
+    "azimuthRef": "compass",
+    "elevationDeg": -17,
+    "distance": 27,
+    "fromDeg": -16,
+    "toDeg": 4,
+    "relative": true
+   },
+   "standingOrder": "Lock off 2 m above the grass just behind the last pew, 25 m south-south-west of the black spire, and tilt from the altar up the spire to the sky; nothing passes the lens, keep 2.5 m from the pews.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The outdoor church where Thorsten Cragstone's funeral was held: ten wooden pews in two columns face an altar group (pedestal, golden candelabrum, stone column) and the 20 m dark spire behind it. A locked tilt from pew-and-altar level up the full height of the spire, warm 0.68 afternoon light from the right-behind. Camera at (35581.1, 29048.9, 23.9), pitch +1 -> +21 deg. Verified with poi-kit check.mjs - take 8s: AGL 1.91..1.9 m, nearest 2.91 m (static 0xB997#5 0x02000120), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7.5s: AGL 1.91..1.9 m, nearest 2.91 m, LOS blocked 0/25, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-chapel-blackspire.01",
+   "technique": "classic.tilt",
+   "rank": 2,
+   "check": "take 8s: AGL 1.91..1.9 m, nearest 2.91 m (static 0xB997#5 0x02000120), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7.5s: AGL 1.91..1.9 m, nearest 2.91 m, LOS blocked 0/25, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "classic.tilt"
+ ]
+}

@@ -1,0 +1,109 @@
+{
+ "name": "Leikotha's Crypt",
+ "title": "Leikotha's Crypt",
+ "siteId": "poi-leikothas-crypt",
+ "summary": "A small stone crypt with a statue on its roof, hidden inside a ring of eleven 8 m trees on flat grassland west of Yanshi.",
+ "landmarks": [
+  {
+   "name": "Leikotha's crypt",
+   "pos": [
+    31980.0,
+    22020.0,
+    26.0
+   ],
+   "heightM": 4.1,
+   "note": "Stone bunker 0x010011C0 with a 5.7 m statue 0x02000398 on its roof, ringed by eleven 8 m trees."
+  }
+ ],
+ "site": {
+  "id": "poi-leikothas-crypt",
+  "name": "Leikotha's Crypt",
+  "teleport": "@teleloc 0xA6720025 108.0 102.0 26.5 1 0 0 0",
+  "anchor": [
+   31980.0,
+   22020.0,
+   26.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.49,
+   "grade": "neutral"
+  },
+  "notes": "No gazetteer entry; teleport derived 30 m south of the crypt on open grass (ground 26.0, nearest drawn object 20 m)."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -10.1,
+   "ew": 31.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2573,
+  "coveredBy": "shot:yanshi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Leikotha_s_Crypt.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-leikothas-crypt.01",
+   "site": "poi-leikothas-crypt",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31979.9,
+     22018.4,
+     26.0
+    ],
+    "height": 9.7,
+    "radius": 4
+   },
+   "params": {
+    "distance": 26,
+    "heightStart": 2,
+    "heightEnd": 16,
+    "bearingDeg": 185,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 1
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up 26 m south of Leikotha's crypt from 2 m to 16 m while tilting down into its grove; stay 18 m from the trees and never cross over the canopy.",
+   "notes": "The small stone crypt with a statue on its roof stands inside a tight ring of eleven 8 m trees; the rise starts on the wall of trunks and foliage and ends tilted down over the canopy onto the crypt roof and its statue. Noon sun from the south behind the lens. Verified (check.mjs, full take flown): take 0-9 s: AGL 2..16 m, nearest drawn 18.08 m (spawn Linkable Newbie Monster Generator), vmax 2.44 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 3.64..15.1 m, nearest drawn 18.08 m (spawn Linkable Newbie Monster Generator), vmax 2.44 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 2.44 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-leikothas-crypt.01": "take 0-9 s: AGL 2..16 m, nearest drawn 18.08 m (spawn Linkable Newbie Monster Generator), vmax 2.44 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7.5 s: AGL 3.64..15.1 m, nearest drawn 18.08 m (spawn Linkable Newbie Monster Generator), vmax 2.44 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 2.44 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

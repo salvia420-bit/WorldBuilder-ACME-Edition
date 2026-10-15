@@ -1,0 +1,232 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-festival-stone-of-snowreap",
+   "name": "Festival Stone of Snowreap",
+   "decision": "include",
+   "reason": "Real and photogenic. The Festival Stone and its glow stand between two black columns on the shore of Mount Esper's caldera lake, which is full of steam vents and volcano eruptions; it is 1.35 km from the nearest framed shot (neydisa-castle.04).",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-snowreap.json"
+  },
+  {
+   "siteId": "poi-banderling-castle",
+   "name": "Banderling Castle",
+   "decision": "include",
+   "reason": "A real Tumerok fort: a spiked, walled courtyard with two 31 m spire towers and a bunker hall, 4.5 km from any covered shot.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-banderling-castle.json"
+  },
+  {
+   "siteId": "poi-northern-pass-watchtower",
+   "name": "Northern Pass Watchtower",
+   "decision": "include",
+   "reason": "A 31 m spire watchtower, a Life Stone and the destroyed Cragstone portal on a pinnacle plateau that falls 100-150 m on every side. It is spectacular and 5.4 km from coverage.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-northern-pass-watchtower.json"
+  },
+  {
+   "siteId": "poi-mountain-retreat",
+   "name": "Mountain Retreat",
+   "decision": "include",
+   "reason": "A real castle compound on a snow shelf: a 31.5 m keep, five towers, a courtyard Life Stone, a fountain and the Hilltop portal, 4.5 km from coverage.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mountain-retreat.json"
+  },
+  {
+   "siteId": "poi-tumerok-treehouse",
+   "name": "Tumerok Treehouse",
+   "decision": "include",
+   "reason": "Real: a wooden staircase up to a plank platform in a giant 62 m Tall Tree in the Tiofor Woods. It is small and enclosed by forest, so it gets one short low shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-tumerok-treehouse.json"
+  },
+  {
+   "siteId": "poi-ice-golem-shrine",
+   "name": "Ice Golem Shrine",
+   "decision": "include",
+   "reason": "Real: an Empyrean standing stone ringed by nine Ice Golems on a snowy summit between two portal archways. It is small, so it gets one shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ice-golem-shrine.json"
+  },
+  {
+   "siteId": "poi-patriarchs-valley",
+   "name": "Patriarch's Valley",
+   "decision": "include",
+   "reason": "Real: a Y-shaped canyon with 90-100 m ice cliffs, the T'thuun pillar and two pyramid portals, 3.5 km from coverage. It gets one canyon run.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-patriarchs-valley.json"
+  },
+  {
+   "siteId": "poi-grievver-valley",
+   "name": "Grievver Valley",
+   "decision": "include",
+   "reason": "A real wooded valley with the Grievver Caves mouth at the foot of its head wall, 1.6 km from stonehold.03. The view is modest, so it gets one rank-3 shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-grievver-valley.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-frostfell",
+   "name": "Festival Stone of Frostfell",
+   "decision": "include",
+   "reason": "Real: the stone between two blue-flamed candle statues on a pine ridge, 822 m from stonehold.05. The existing Stonehold shots look elsewhere (the plaza, the Rat Tower and a pano over the town), so it gets one short shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-frostfell.json"
+  },
+  {
+   "siteId": "poi-hoshinos-fortress",
+   "name": "Hoshino's Fortress",
+   "decision": "exclude",
+   "reason": "Hoshino's Fortress is already a tour town: site hoshino-fortress films the fortress, the floating Hoshino Tower and the Hoshino Towns at 79.4N 42.1W. The acpedia map point 78.1N 48.2W is open sea 543 m from Beach Fort.",
+   "shots": 0,
+   "file": null
+  },
+  {
+   "siteId": "poi-corcima-castle",
+   "name": "Corcima Castle",
+   "decision": "include",
+   "reason": "The batch's most spectacular site: walled wards with gold spires on 160-200 m sea stacks rising from the frozen sea, 1.7 km from beach-fort's path. Four shots, all inside the kit's 3x3 landblocks.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-corcima-castle.json"
+  },
+  {
+   "siteId": "poi-count-dardantes-island",
+   "name": "Count Dardante's Island",
+   "decision": "include",
+   "reason": "Real: a towered villa on an 84 m sea rock, 1.1 km from eastwatch.05. That shot dives the Eastwatch cliff and does not frame this island.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-count-dardantes-island.json"
+  },
+  {
+   "siteId": "poi-the-shadow-pass",
+   "name": "The Shadow Pass",
+   "decision": "include",
+   "reason": "Real: a narrow, dark-floored snow defile, the historical battlefield, 855 m from fiun-outpost.05. That shot frames the Fiun portal, not the pass. With no structures it gets one rank-3 time-lapse.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-the-shadow-pass.json"
+  },
+  {
+   "siteId": "poi-karluns-fort",
+   "name": "Karlun's Fort",
+   "decision": "include",
+   "reason": "Real: a fort with four gold spires on a 100 m pinnacle, its camp at the foot and a river below, 750-800 m from the Silyun plaza shots, which do not frame it. Two shots, one of them the batch's FPV dive.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-karluns-fort.json"
+  },
+  {
+   "siteId": "poi-cataracts-of-sabella",
+   "name": "Cataracts of Sabella",
+   "decision": "include",
+   "reason": "A three-tier cascade of four 30 m waterfall curtains between three lakes, the batch's best water, 1.46 km from coverage. Four shots.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-cataracts-of-sabella.json"
+  },
+  {
+   "siteId": "poi-lotila-lighthouse",
+   "name": "Lotila Lighthouse",
+   "decision": "include",
+   "reason": "Real: a 73 m black Empyrean lighthouse on a coastal bluff, 1.7 km from Westwatch.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-lotila-lighthouse.json"
+  },
+  {
+   "siteId": "poi-deru-trees-of-marae-lassel",
+   "name": "Deru Trees of Marae Lassel",
+   "decision": "include",
+   "reason": "Real: three 50 m Deru tree NPCs on the Marescent Plateau, 2.2 km from coverage. The kit does not model them (they are ACE entities), so their clearances were computed by hand.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-deru-trees-of-marae-lassel.json"
+  },
+  {
+   "siteId": "poi-east-fork-dam",
+   "name": "East Fork Dam",
+   "decision": "include",
+   "reason": "Real: a 96 m ancient stone dam between a reservoir and a lower pool, with the giant red hand of the hive in the water, 1 km from timaru.01. That shot frames the Timaru gorge.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-fork-dam.json"
+  },
+  {
+   "siteId": "poi-bachus-flufens-cottage",
+   "name": "Bachus Flufens' Cottage",
+   "decision": "include",
+   "reason": "Real but small: a bamboo cottage with a garden and cage on a marsh bluff, 849 m from redspire.04. That shot frames the Nanto portal ruin. One rank-3 shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-bachus-flufens-cottage.json"
+  },
+  {
+   "siteId": "poi-gold-hill-ruins",
+   "name": "Gold Hill Ruins",
+   "decision": "include",
+   "reason": "Real: Empyrean obelisks, walls and the Smoldering Brazier on an unclimbable mesa, 3.7 km from coverage.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-gold-hill-ruins.json"
+  },
+  {
+   "siteId": "poi-undead-village",
+   "name": "Undead Village",
+   "decision": "include",
+   "reason": "Real: three Gharu'ndim houses, a column and a well in a forest clearing, 1 km from danbys-outpost.01. That shot frames Danby's spire tower. It gets one top-down rise.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-undead-village.json"
+  },
+  {
+   "siteId": "poi-castle-pietrus",
+   "name": "Castle Pietrus",
+   "decision": "include",
+   "reason": "Real: a large Viamontian castle with gold spires and towers and a villa on a sea ridge, 5 km from coverage. Three shots, all in the kit's landblocks south of y 29376.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-castle-pietrus.json"
+  }
+ ],
+ "totalShots": 39,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-2.json: 'valid: 0 error(s), 0 warning(s)' (exit 0) for 21 sites and 39 shots, dry build included. node poi-kit/check.mjs over the full takes: 39 of 39 shots pass acceptance, and the classic.pov's 0 % subject-in-frame is by design.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.arc": 1,
+  "classic.birds-eye": 1,
+  "classic.crane": 1,
+  "classic.dolly-in": 1,
+  "classic.establishing": 1,
+  "classic.high-angle": 1,
+  "classic.low-angle": 1,
+  "classic.pan": 1,
+  "classic.pedestal": 1,
+  "classic.pov": 1,
+  "classic.pull-out-reveal": 1,
+  "classic.static": 1,
+  "classic.steadicam": 1,
+  "classic.tilt": 1,
+  "classic.time-lapse": 1,
+  "classic.worms-eye": 1,
+  "drone.boom-rise": 1,
+  "drone.canyon-run": 1,
+  "drone.dronie": 1,
+  "drone.fly-by": 1,
+  "drone.flyover": 1,
+  "drone.helix": 2,
+  "drone.hyperlapse-orbit": 1,
+  "drone.orbit-poi": 2,
+  "drone.pass-over": 2,
+  "drone.rising-reveal": 1,
+  "drone.spiral-descent": 1,
+  "drone.terrain-skim": 3,
+  "drone.tilt-reveal": 1,
+  "drone.top-down": 1,
+  "drone.top-down-rise": 2,
+  "drone.vertigo-drone": 1,
+  "fpv.fpv-dive": 1
+ },
+ "notes": [
+  "Files: 21 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json (each with summary, landmarks, site, insertAfter/insertBefore, acpedia, shots and verification) and the scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-2.json. The helpers are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/poi-b2/: spec.py is the source of every site and shot, content.py holds the summaries and notes, and final.py rebuilds and re-checks everything. q.py, proj.mjs, wallclear.py and tpcheck.py are query and projection tools.",
+  "Shot totals: 39 proposed against a quota of 35 (rank 1: 16, rank 2: 18, rank 3: 5). The rank-3 shots, dropped first, are mountain-retreat.02, grievver-valley.01, the-shadow-pass.01, bachus-flufens-cottage.01 and castle-pietrus.03. The ideal edit windows sum to 235 s, every take is 8-11 s and every window 5-7 s. There are 33 distinct techniques, and no technique is used more than 3 times (drone.terrain-skim 3). All 7 assigned techniques are used: classic.tilt (Lotila), classic.arc (Snowreap), classic.pov (Deru Trees), classic.steadicam (Castle Pietrus), drone.dronie (Northern Pass), drone.terrain-skim (Snowreap, Dardante, Cataracts) and fpv.fpv-dive (Karlun's Fort). There are no facade pans (classic.truck or drone.parallax-slide). Every shot uses pilot code and bounds of 1/1.",
+  "By-design deviations: (1) deru-trees.02 is a classic.pov, so the subject is the camera and the checker's subject-in-frame is 0 %. proj.mjs puts all three tree crowns in frame 100 % of the take and window. (2) corcima-castle.01 is a tilt-reveal: the castle enters the frame at t 4.1, so the window is pinned at keep [3.5, 9] and gives 87 %. (3) cataracts-of-sabella.04 is a rising reveal: the lower falls' lip hides the upper falls in the lead-in (take LOS 19/41, edit 1/23). (4) karluns-fort.01 is an fpv-dive: its window (keep [1.8, 7.6]) covers the crest and the dive with the cliff foot in frame 87 %, while the pull-out leaves it. (5) east-fork-dam.01 is a flyover that holds top-down after crossing the dam: take 73 %, edit 93 %.",
+  "The Deru Trees are ACE NPC weenies (Tall Tree wcid 10930-10932, setup 0x020003A1 at scale 0.8, about 50 m tall with 12.5 m crown radius), so the kit does not model them. Their clearances were computed from their spawn positions: the orbit stays at least 39 m outside any crown and the POV stays 13 m outside the nearest crown. Their look depends on the runtime spawning them.",
+  "Teleports: gazetteer entries are used where they are outdoor and not on a portal (Snowreap, Northern Pass, Mountain Retreat via the Life Stone, Patriarch's Valley, Frostfell, Corcima, Dardante, Karlun, Cataracts, Gold Hill). The gazetteer's Ice Golem Shrine entries and the Mountain Retreat Hilltop entry land on portal swirls, a portal-collision risk, so derived teleports are used instead. Derived @teleloc (ground + 0.5, not in water) for Banderling, Tumerok Treehouse, Ice Golem Shrine, Grievver Valley, Shadow Pass, Lotila, Deru Trees, East Fork Dam, Bachus, Undead Village and Castle Pietrus. All are at least 5 m from any drawn box: Grievver is 5.2 m from the ruin floor's edge, Bachus 5.9 m from a small plant, and the rest more. The Mountain Retreat Life Stone point sits inside the bounding box of the north-west tower static 0x01000E02, but that is a gazetteer-verified courtyard spot.",
+  "Missing landblocks near these sites: Mountain Retreat south (y < 38592), Tumerok Treehouse east (x >= 27264), Corcima's outer ring (all cameras stay in x 12096-12672, y 44160-44736), Shadow Pass north (y >= 46848), Castle Pietrus north (y >= 29376), East Fork Dam north (y >= 36288), Grievver Valley east and south. No take is NaN AGL.",
+  "Light: morning sites (0.36-0.47) have the sun in the east and afternoon sites (0.54-0.75) have it in the west, and the cameras are placed with the sun behind or beside them. Deliberate backlight: patriarchs-valley.01 flies toward the pyramid portal swirl into the morning sun, karluns-fort.02 frames the spire silhouettes against the golden western sky, and castle-pietrus.03 shows the ridge silhouette. Sky-clock moves: the-shadow-pass.01 runs 0.71 to 0.764 and lotila-lighthouse.02 runs about 0.54 to 0.70, so the sun stays up.",
+  "Opt-in retail scenery bake: banderling-castle.01, banderling-castle.02 and tumerok-treehouse.01 have a retail-bake crown at 0 m (information only). Keep the default ?sceneryBake.",
+  "Unverified runtime elements: the Festival Stone and Anniversary glow (Snowreap, Frostfell); the Mount Esper eruption and steam FX generators; the Smoldering Brazier flame, which sits inside a 6.3 m brick hearth and is visible only from above (gold-hill-ruins.01 looks down into it); the Falatacot Pyramid and Cathedral Portal spawns (not modelled); portal swirls; the blue Master's Sentinel and lamp flames. Creature spawns (Ice Golems, Banderlings, grievvers, Phantoms, undead) may wander into frame. ice-golem-shrine.01 starts 6.7 m from the nearest golem spawn point.",
+  "Speeds: the fastest drone move is corcima-castle.04 spiral-descent, peaking at 10.3 m/s against a 12 m/s cap. The FPV dive peaks at 18.5 m/s (cap 25), and every tracking gap is 0.15 m or less. Canyon walls: patriarchs-valley.01 keeps at least 15 m horizontally from any terrain above the lens, and karluns-fort.01 at least 16 m, sampled every 0.5 s by wallclear.py.",
+  "Hoshino's Fortress is excluded as a tour town (site hoshino-fortress); its acpedia map point is open sea. Every insertAfter/insertBefore is kept as given.",
+  "Laptop rule: no repository file, git, browser, CDP or WorldBuilder.Terminal was touched. Only short single node and python processes were run, one at a time, with at least 1.5 GB of memory available."
+ ]
+}

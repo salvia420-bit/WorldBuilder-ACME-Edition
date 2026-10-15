@@ -1,0 +1,165 @@
+{
+ "name": "Patriarch's Valley",
+ "title": "Patriarch's Valley",
+ "siteId": "poi-patriarchs-valley",
+ "summary": "A tri-node ice canyon in the North Osteth mountains at 58.5N 10.3W. Vertical ice cliffs 90-100 m high cut a Y-shaped canyon (floor z 78-95) around a central mesa (z 170-187), where Captain Tulmada and the Royal Scout stand. The north arm holds the glowing red-and-green T'thuun pillar of the Summoning T'thuun event. The east and west arms each end at an 'Entrance to the pyramid' portal beside Falatacot Pyramid and Cathedral Portal spawns, with red glow emitters at z 101 and 210 above each. Ice spires (5 m) dot the floor.",
+ "landmarks": [
+  {
+   "name": "Central mesa (Captain Tulmada)",
+   "pos": [
+    21996.0,
+    38507.0,
+    170.1
+   ],
+   "heightM": 0,
+   "note": "Gazetteer patriarchs-valley; the canyon floor is 80-90 m below."
+  },
+  {
+   "name": "T'thuun pillar",
+   "pos": [
+    21996.0,
+    38602.0,
+    81.5
+   ],
+   "heightM": 2,
+   "note": "0x02000C39 / 0x02000C3A on the north arm floor."
+  },
+  {
+   "name": "East pyramid portal",
+   "pos": [
+    22182.3,
+    38490.3,
+    95.8
+   ],
+   "heightM": 4,
+   "note": "Entrance to the pyramid, Falatacot Pyramid and Cathedral Portal spawns."
+  },
+  {
+   "name": "West pyramid portal",
+   "pos": [
+    21785.7,
+    38490.5,
+    95.8
+   ],
+   "heightM": 4,
+   "note": "Same set at the west arm's end."
+  }
+ ],
+ "site": {
+  "id": "poi-patriarchs-valley",
+  "name": "Patriarch's Valley",
+  "gazetteerId": "patriarchs-valley",
+  "teleport": "@teleloc 0x72C80025 108 107 170.088 1 0 0 0",
+  "anchor": [
+   21996.0,
+   38507.0,
+   170.1
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer patriarchs-valley (Captain Tulmada's post on the central mesa, z 170, 90 m above the canyon floor)."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 58.5,
+   "ew": -10.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3480,
+  "coveredBy": "shot:stonehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Patriarch_s_Valley.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-patriarchs-valley.01",
+   "site": "poi-patriarchs-valley",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.0,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     22182.3,
+     38490.3,
+     95.8
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "heightAGL": 10,
+    "speed": 9,
+    "alat": 3,
+    "cornerRadius": 25,
+    "lookAhead": 30,
+    "tiltDeg": -2,
+    "maxBankDeg": 15,
+    "bankGain": 1,
+    "minClearance": 3,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     22087,
+     38578,
+     80
+    ],
+    [
+     22106,
+     38558,
+     82
+    ],
+    [
+     22129,
+     38531,
+     85
+    ],
+    [
+     22150,
+     38508,
+     90
+    ]
+   ],
+   "standingOrder": "Fly 10 m above the frozen canyon floor out of the north arm and round the bend into the east arm between 90 m ice cliffs toward the pyramid portal, its swirl backlit by the morning sun; keep 15 m from both walls and 5 m from the ice spires.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Canyon run. The camera flies 9-12 m above the frozen canyon floor out of the north arm and round the bend into the east arm, between ice cliffs 90-100 m high. The nearest higher terrain stays at least 15 m from the lens horizontally (measured every 0.5 s with the kit terrain). The run heads toward the pyramid portal, whose swirl and red glow are backlit by the morning sun. The nearest object is a 5 m ice spire on the floor at 4.8-5.5 m. Verified (check.mjs, full take flown): take 0-11 s: AGL 9.17..11.7 m, nearest drawn 4.95 m (scenery-default 0x02000D68@22098,38562), vmax 8.62 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10 s: AGL 9.24..11.7 m, nearest drawn 5.53 m (scenery-default 0x02000D68@22117,38551), vmax 8.62 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.64 m/s (cap 12), max tracking gap 0.04 m."
+  }
+ ],
+ "verification": {
+  "poi-patriarchs-valley.01": "take 0-11 s: AGL 9.17..11.7 m, nearest drawn 4.95 m (scenery-default 0x02000D68@22098,38562), vmax 8.62 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10 s: AGL 9.24..11.7 m, nearest drawn 5.53 m (scenery-default 0x02000D68@22117,38551), vmax 8.62 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.64 m/s (cap 12), max tracking gap 0.04 m"
+ }
+}

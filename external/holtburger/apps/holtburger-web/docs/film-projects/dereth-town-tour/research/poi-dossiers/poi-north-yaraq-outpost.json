@@ -1,0 +1,150 @@
+{
+ "name": "North Yaraq Outpost",
+ "title": "North Yaraq Outpost",
+ "siteId": "poi-north-yaraq-outpost",
+ "summary": "Old starter outpost near Yaraq, never attacked by Martine (acpedia). In the kit it lies on the floor (z 10) of a sandstone canyon whose walls rise 40-70 m: the Life Stone and its sign, a fountain, a small tapered building and a cottage on the floor, a green-lit Empyrean hall on a shelf to the west and a 31 m spire tower on the east mesa (z 50-81); red-flowered trees grow along the canyon floor.",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    24108.1,
+    19982.2,
+    10.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-yaraq-7d68."
+  },
+  {
+   "name": "Fountain",
+   "pos": [
+    24106.3,
+    19987.0,
+    10.0
+   ],
+   "heightM": 2.0,
+   "note": "Gazetteer fountain-near-yaraq-7d68 (water)."
+  },
+  {
+   "name": "Empyrean hall (0x010014C3)",
+   "pos": [
+    24060.0,
+    19980.0,
+    14.0
+   ],
+   "heightM": 24.9,
+   "note": "Top 38.9, green lamps at 37.8."
+  },
+  {
+   "name": "East mesa spire tower (0x01001117)",
+   "pos": [
+    24180.0,
+    19932.0,
+    50.0
+   ],
+   "heightM": 30.8,
+   "note": "Top 80.8."
+  }
+ ],
+ "site": {
+  "id": "poi-north-yaraq-outpost",
+  "name": "North Yaraq Outpost",
+  "gazetteerId": "life-stone-near-yaraq-7d68",
+  "teleport": "@teleloc 0x7D680021 108.103 14.1641 10.005 0.717815 0 0 0.696234",
+  "anchor": [
+   24108.0,
+   19982.0,
+   10.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.72,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-yaraq-7d68 (canyon floor beside the outpost Life Stone)."
+ },
+ "insertAfter": "yaraq",
+ "insertBefore": "tufa",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -18.7,
+   "ew": -1.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 531,
+  "coveredBy": "shot:yaraq.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Yaraq_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-north-yaraq-outpost.01",
+   "site": "poi-north-yaraq-outpost",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 17,
+    "speed": 8,
+    "alat": 3,
+    "cornerRadius": 20,
+    "lookAhead": 25,
+    "tiltDeg": -12,
+    "maxBankDeg": 12,
+    "bankGain": 0.8,
+    "minClearance": 4,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     24103.0,
+     19905.0,
+     10.0
+    ],
+    [
+     24107.0,
+     19950.0,
+     10.0
+    ],
+    [
+     24111.0,
+     19990.0,
+     10.0
+    ]
+   ],
+   "standingOrder": "Fly north 17 m above the canyon floor between the rock walls toward the North Yaraq outpost, its Life Stone, fountain and Empyrean hall opening ahead; stay 5 m above every tree crown and 15 m off both walls, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Canyon run into North Yaraq Outpost: 17 m above the floor of a sandstone canyon between 40-70 m walls, past red-flowered trees, toward the outpost Life Stone, fountain and Empyrean hall, with the spire tower on the east mesa; WSW afternoon light on the east wall. No subject (path move). Verified (check.mjs, full take flown): take 0-10 s: AGL 17..17 m, nearest drawn 5.25 m (scenery-default 0x02000322@24102,19926), vmax 8.54 m/s; edit 2-8.5 s: AGL 17..17 m, nearest drawn 5.25 m (scenery-default 0x02000322@24102,19926), vmax 8.54 m/s; flight cinema peak 8.56 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 5 m (not drawn by the default bake the film uses)."
+  }
+ ],
+ "verification": {
+  "poi-north-yaraq-outpost.01": "take 0-10 s: AGL 17..17 m, nearest drawn 5.25 m (scenery-default 0x02000322@24102,19926), vmax 8.54 m/s; edit 2-8.5 s: AGL 17..17 m, nearest drawn 5.25 m (scenery-default 0x02000322@24102,19926), vmax 8.54 m/s; flight cinema peak 8.56 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 5 m (not drawn by the default bake the film uses)"
+ }
+}

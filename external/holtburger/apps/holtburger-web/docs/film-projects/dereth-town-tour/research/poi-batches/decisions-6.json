@@ -1,0 +1,217 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-mount-bellig",
+   "name": "Mount Bellig",
+   "decision": "include",
+   "reason": "Real and spectacular: a 224 m pillar mesa with 110 m cliffs and the Bellig Top and North Gemm portals on its summit (gazetteer bellig-top 12 m away); 3.5 km from any existing frame. Two drone shots hanging off the west cliff.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-bellig.json"
+  },
+  {
+   "siteId": "poi-mount-alphus",
+   "name": "Mount Alphus",
+   "decision": "include",
+   "reason": "The Alphus summit mesa exists as described: Menhir Ring with mana field and mushroom circle, Zalphoos's tent, a well and both portals at 224 m; 3.3 km from existing coverage. Low angle through the stones plus a top-down.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-alphus.json"
+  },
+  {
+   "siteId": "poi-mount-zabool",
+   "name": "Mount Zabool",
+   "decision": "include",
+   "reason": "Small 224 m summit with its Life Stone and the Zabool Tower and Mount Alphus portals (gazetteer top-of-mt-zabool 17 m); one backlit dronie off the Life Stone.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-zabool.json"
+  },
+  {
+   "siteId": "poi-east-samsur-outpost",
+   "name": "East Samsur Outpost",
+   "decision": "include",
+   "reason": "Ruined outpost is real (28 m Empyrean tower with green crown lights, octagon towers, Life Stone, destroyed Redspire portal crystal) and samsur.04 610 m away frames the town's fountain, not this ridge; a helix plus a rank-3 arc on the giant wooden masks 165 m west.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-samsur-outpost.json"
+  },
+  {
+   "siteId": "poi-leikothas-crypt",
+   "name": "Leikotha's Crypt",
+   "decision": "include",
+   "reason": "Real but tiny: a stone crypt with a roof statue inside a ring of eleven trees, matching 'a small bunker with some shrubbery'; one rank-3 boom rise.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-leikothas-crypt.json"
+  },
+  {
+   "siteId": "poi-nuhmudiras-mansion",
+   "name": "Nuhmudira's Mansion",
+   "decision": "include",
+   "reason": "The four-building mansion (51 m clock tower) stands at the map point, 2.4 km from any frame; a hero orbit plus a worm's-eye on the clock tower.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-nuhmudiras-mansion.json"
+  },
+  {
+   "siteId": "poi-desert-ridge-border",
+   "name": "Desert Ridge Border",
+   "decision": "include",
+   "reason": "The single Empyrean Stone Tower on the Falamar Hills edge is real (gazetteer desert-ridge-border 13 m); one rank-3 fly-by.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-desert-ridge-border.json"
+  },
+  {
+   "siteId": "poi-empyrean-ruins",
+   "name": "Empyrean Ruins (11.3S, 37.6E)",
+   "decision": "include",
+   "reason": "Platform with the Abandoned Arena portal, three portal arches, the Colosseum portal and ten statues are all in the kit at the map point (gazetteer portals 20-53 m); yanshi.03 is 1 km away. Pass-over, rack focus on a portal, rank-3 top-down.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-empyrean-ruins.json"
+  },
+  {
+   "siteId": "poi-old-yanshi",
+   "name": "Old Yanshi",
+   "decision": "include",
+   "reason": "The ruined original town (scorched obsidian ground, broken halls, rock hall, Destroyed Statue of a Reedshark) lies 963 m east of the new Yanshi framed by yanshi.01; flyover plus an arc on the statue.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-old-yanshi.json"
+  },
+  {
+   "siteId": "poi-north-yanshi-outpost",
+   "name": "North Yanshi Outpost",
+   "decision": "include",
+   "reason": "Real hilltop outpost (Empyrean tower, spire house with lantern, Life Stones) 1.1 km from yanshi.01; establishing shot plus a top-down of the ring of fifteen settlement portals 240 m west at the hill's foot (within the site radius).",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-north-yanshi-outpost.json"
+  },
+  {
+   "siteId": "poi-south-yanshi-outpost",
+   "name": "South Yanshi Outpost",
+   "decision": "include",
+   "reason": "Real outpost under giant canopy trees with a 28 m Empyrean tower, dome house, Life Stone and the destroyed Redspire crystal; the canopy blocks most aerial lines (a tilt-reveal from the marsh failed inside a 39 m tree), so one rank-3 tilt up the tower.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-south-yanshi-outpost.json"
+  },
+  {
+   "siteId": "poi-burun-ruuk-village",
+   "name": "Burun Ruuk Village",
+   "decision": "include",
+   "reason": "The swamp village around the Temple of Ixir Zi entrance is in the kit (huts with bronze symbols, eight 19 m totems, swamp channels; gazetteer blackmire-temple 65 m); top-down rise from the temple plus a water-level worm's-eye up a totem.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-burun-ruuk-village.json"
+  },
+  {
+   "siteId": "poi-folthid-estate",
+   "name": "Folthid Estate",
+   "decision": "include",
+   "reason": "Raxanza Folthid's house, well and Life Stone exist (gazetteer folthid-estate 14 m) but sit in dense forest; one high dolly-out from the roof (the assigned classic.dolly-out).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-folthid-estate.json"
+  },
+  {
+   "siteId": "poi-burun-fortress",
+   "name": "Burun Fortress",
+   "decision": "include",
+   "reason": "Huge fortress (two 48 m keeps, 31 m corner buildings, gatehouse with the field of fallen Burun and Blueprints table) 3 km from any frame; four shots: rising reveal, hero orbit, low angle on the gate, FPV wall skim.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-burun-fortress.json"
+  },
+  {
+   "siteId": "poi-imuth-maer-doquin",
+   "name": "Imuth Maer Doquin",
+   "decision": "include",
+   "reason": "The line of Empyrean buildings (stone tower, two bunkers with golden plates, octagon spire hall, giant tree) is in the kit at the map point, 3.3 km from coverage; helix plus boom rise.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-imuth-maer-doquin.json"
+  },
+  {
+   "siteId": "poi-fycheck-outpost",
+   "name": "Fycheck Outpost",
+   "decision": "include",
+   "reason": "Palisaded Sho outpost on a 238 m ridge top with the destroyed Eastham portal arch (gazetteer 52 m), 1.9 km from Shoushi's frames; pass-over plus a golden pano slice from the summit.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-fycheck-outpost.json"
+  },
+  {
+   "siteId": "poi-sho-roadside",
+   "name": "Sho Roadside",
+   "decision": "include",
+   "reason": "The lone Sho dome house with its peddler (gazetteer sho-roadside 7 m); small, one rank-3 dolly-in.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-sho-roadside.json"
+  },
+  {
+   "siteId": "poi-fycheck-ruins",
+   "name": "Fycheck Ruins",
+   "decision": "include",
+   "reason": "Bunkers, meeting hall, statues, pillar rows and the Empyrean Stone Tower on the south end of the Fycheck ridge match acpedia exactly; spiral descent plus worm's-eye on the tower.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-fycheck-ruins.json"
+  },
+  {
+   "siteId": "poi-west-shoushi-outpost",
+   "name": "West Shoushi Outpost",
+   "decision": "include",
+   "reason": "Working outpost with two towers, house, Life Stone and well on a ridge 745 m west of Shoushi, not framed by the Shoushi shots; one silhouette tilt reveal against the golden sun.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-west-shoushi-outpost.json"
+  },
+  {
+   "siteId": "poi-rat-kings-cave",
+   "name": "Rat King's Cave",
+   "decision": "include",
+   "reason": "The cave is a dungeon, but its rocky entrance mound stands on the surface under tall trees (shoushi.01 560 m away looks east, away from it); one rank-3 push-in on the cave mouth.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-rat-kings-cave.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-foredawn",
+   "name": "Festival Stone of Foredawn",
+   "decision": "include",
+   "reason": "Exactly as acpedia describes: two rows of Empyrean pillars with eternal flames across the river, the Festival Stone with its glow and sentinel candles, and the meeting hall behind; shoushi.03 518 m away frames the Three Swords Hall in town, not this. Flames + water + glow: canyon run between the flames, low angle on a flame, dolly zoom on the stone.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-foredawn.json"
+  }
+ ],
+ "totalShots": 38,
+ "validate": "valid: 0 error(s), 0 warning(s)",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.low-angle": 3,
+  "drone.top-down": 3,
+  "classic.worms-eye": 3,
+  "drone.spiral-descent": 2,
+  "drone.helix": 2,
+  "classic.arc": 2,
+  "drone.boom-rise": 2,
+  "drone.orbit-poi": 2,
+  "drone.pass-over": 2,
+  "drone.boomerang": 1,
+  "drone.dronie": 1,
+  "drone.fly-by": 1,
+  "classic.rack-focus": 1,
+  "drone.flyover": 1,
+  "classic.establishing": 1,
+  "classic.tilt": 1,
+  "drone.top-down-rise": 1,
+  "classic.dolly-out": 1,
+  "drone.rising-reveal": 1,
+  "fpv.fpv-proximity": 1,
+  "drone.pano-360": 1,
+  "classic.dolly-in": 1,
+  "drone.tilt-reveal": 1,
+  "classic.push-in": 1,
+  "drone.canyon-run": 1,
+  "classic.dolly-zoom": 1
+ },
+ "notes": [
+  "All 21 candidates are real surface places in the kit and none is framed by the existing film (nearest coverage 518 m, Foredawn vs shoushi.03 which frames the Three Swords Hall in town), so all are included; 38 shots ranked 13 x rank 1, 17 x rank 2, 8 x rank 3 (quota 34: drop rank 3 first - Leikotha's Crypt, Desert Ridge Border, South Yanshi, Burun Fortress .04 FPV skim, Sho Roadside, Rat King's Cave, Empyrean Ruins .03 top-down, East Samsur .02 masks).",
+  "All six assigned techniques used: classic.dolly-out (Folthid, rank 2), classic.dolly-zoom (Foredawn stone, rank 1), classic.low-angle x3, drone.flyover (Old Yanshi, rank 1), drone.top-down x3, drone.spiral-descent x2 (Bellig, Fycheck Ruins, both rank 1). 26 distinct techniques, max 3 uses each; no facade pans (no classic.truck / drone.parallax-slide).",
+  "Validation: plan validate 0 errors 0 warnings; check.mjs: every shot passes ACCEPTANCE over the full take (min AGL >= 1.5 m, >= 0.7 m only for the low-angle/worms-eye lenses; nearest drawn obstacle >= 3.4 m everywhere; drone peaks <= 7.95 m/s, fpv 11.6 m/s; max tracking gap 0.23 m; edit windows 96-100 % subject in frame).",
+  "Documented exception: poi-burun-fortress.01 (rising reveal) has LOS blocked 9/27 in the edit window by design - the 28-31 m south wall hides the keep tops until the camera clears it at about t 5.7 s.",
+  "No-subject shots by design: poi-fycheck-outpost.02 (drone.pano-360 slice, horizon vista) and poi-burun-fortress.04 (fpv.fpv-proximity path along the west wall) carry no point subject, so frame/LOS are not measured for them.",
+  "Retail-bake trees (info only, the film boots on the default bake): several forested/swamp shots report a retail-bake tree at 0-5 m (South Yanshi .01, Burun Ruuk .01/.02, Burun Fortress .01/.03/.04, Sho Roadside, Rat King's Cave, Foredawn .03). If the opt-in retail scenery is ever enabled these need a re-check.",
+  "Burun Ruuk Village and South Yanshi Outpost sit under giant default-bake swamp/canopy trees (25-39 m): a totem orbit and a marsh tilt-reveal were tried and rejected (camera inside canopies); the kept shots stay in clearings or above the canopy.",
+  "poi-north-yanshi-outpost.02 frames the ring of fifteen settlement portals 240 m west of the outpost, inside the 300 m site radius but a separate feature from the outpost itself.",
+  "poi-east-samsur-outpost.02 frames two giant wooden masks 165 m west of the outpost Life Stone (an unlabelled curiosity inside the outpost's landblocks).",
+  "Teleports derived (no gazetteer entry within 300 m): Leikotha's Crypt, Nuhmudira's Mansion, Burun Fortress, Imuth Maer Doquin, Fycheck Ruins, Rat King's Cave - each on open ground >= 5.7 m from any drawn object (computed with geo.mjs groundZ).",
+  "The three Alphus-range mesas (Bellig, Alphus, Zabool) are similar 224 m pillar mesas 450-550 m apart; they get 2+2+1 shots with different moves; their sites need cameras west of x 28608 (Bellig) because landblocks 0x9594/0x9595 east of it are missing from the kit.",
+  "insertAfter/insertBefore kept as given (Alphus range and the Yanshi-west sites between zaikhal and yanshi; Old/North/South Yanshi, Burun sites, Folthid and Imuth between yanshi and sawato; Fycheck/Sho Roadside/West Shoushi/Rat King between sawato and shoushi; Foredawn between shoushi and hebian-to)."
+ ]
+}

@@ -1,0 +1,212 @@
+{
+ "name": "East Lytelthorpe Outpost",
+ "title": "East Lytelthorpe Outpost",
+ "siteId": "poi-east-lytelthorpe-outpost",
+ "summary": "A starter outpost destroyed by Martine in The First Strike; 'a long row of Empyrean Pillars leads to the nearby Forgotten Temple' (Ercel, Riflyffa the Shopkeeper; portals to Bluespire and the Forgotten Temple). In the kit: the Life Stone under a huge oak canopy, a well, cottages and an apple tree, the 28 m ruined monument tower (top z 67.9), the shattered Destroyed Portal to Bluespire crackling with tesla lightning and pink arc fountains 85 m north-west, and eight 4.6 m stone pillars marching 350 m east toward the Forgotten Temple.",
+ "landmarks": [
+  {
+   "name": "Monument tower (0x01002866)",
+   "pos": [
+    37476.0,
+    24660.0,
+    40.0
+   ],
+   "heightM": 27.9,
+   "note": "Top z 67.9."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    37458.0,
+    24701.5,
+    34.0
+   ],
+   "heightM": 3.6,
+   "note": "Under the 28 m oak canopy 0x020002D7."
+  },
+  {
+   "name": "Pillar row (0x02000411)",
+   "pos": [
+    37547.4,
+    24659.1,
+    35.1
+   ],
+   "heightM": 4.6,
+   "note": "Pillars at x 37510, 37547, 37572, 37617, 37656, 37723, 37775, 37823."
+  },
+  {
+   "name": "Destroyed Portal to Bluespire",
+   "pos": [
+    37427.6,
+    24756.1,
+    36.0
+   ],
+   "heightM": 6.0,
+   "note": "Crystal ruin 0x02000B61 with tesla cluster 0x02000B6F and arc fountains 0x020007C5."
+  }
+ ],
+ "site": {
+  "id": "poi-east-lytelthorpe-outpost",
+  "name": "East Lytelthorpe Outpost",
+  "gazetteerId": "east-lytelthorpe-outpost",
+  "teleport": "@teleloc 0xC3800006 17.9662 125.489 34.005 -0.437001 0 0 0.899461",
+  "anchor": [
+   37476,
+   24680,
+   34
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.78,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-lytelthorpe-c380 (the outpost's Life Stone, z 34)."
+ },
+ "insertAfter": "rithwic",
+ "insertBefore": "lytelthorpe",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 0.9,
+   "ew": 54.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 666,
+  "coveredBy": "shot:lytelthorpe.07",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Lytelthorpe_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-lytelthorpe-outpost.01",
+   "site": "poi-east-lytelthorpe-outpost",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37476,
+     24660,
+     40
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 4,
+    "speed": 7.5,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": 4,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 8,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     37652,
+     24673.5,
+     40
+    ],
+    [
+     37577,
+     24673.5,
+     40
+    ]
+   ],
+   "standingOrder": "Skim west 4 m over the grass along the row of Empyrean pillars toward the outpost's monument tower silhouetted against the low golden sun; keep 2 m from every pillar and bush.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature skim: 4 m above the grass, 75 m due west along the row of Empyrean pillars that leads from the Forgotten Temple to the destroyed outpost, the pillars sliding past on the left and the outpost's ruined monument tower dead ahead, silhouetted against the low golden sun (0.78) - backlit by design. Verified (check.mjs, full take flown): take 0-10 s: AGL 4..5.5 m, nearest drawn 2.23 m (scenery-default 0x020002F5@37586,24677), vmax 7.52 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 4..4.1 m, nearest drawn 2.23 m (scenery-default 0x020002F5@37586,24677), vmax 7.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.52 m/s (cap 12), max tracking gap 0.08 m; opt-in retail-bake tree 3.4 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-east-lytelthorpe-outpost.01": "take 0-10 s: AGL 4..5.5 m, nearest drawn 2.23 m (scenery-default 0x020002F5@37586,24677), vmax 7.52 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 4..4.1 m, nearest drawn 2.23 m (scenery-default 0x020002F5@37586,24677), vmax 7.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.52 m/s (cap 12), max tracking gap 0.08 m; opt-in retail-bake tree 3.4 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-east-lytelthorpe-outpost.02": "take 0-8 s: AGL 4.46..4.5 m, nearest drawn 3.66 m (scenery-default 0x020002F2@37449,24765), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 4.46..4.5 m, nearest drawn 3.66 m (scenery-default 0x020002F2@37449,24765), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%"
+ },
+ "criticRemovedShots": [
+  {
+   "id": "poi-east-lytelthorpe-outpost.02",
+   "site": "poi-east-lytelthorpe-outpost",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37427.6,
+     24756.1,
+     36
+    ],
+    "height": 6,
+    "radius": 4
+   },
+   "params": {
+    "azimuthDeg": 82,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 21,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off east of the shattered Destroyed Portal to Bluespire and let its crackling lightning and pink arc fountains play against the low golden sun behind it; no movement.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off static 21 m east of the shattered Destroyed Portal to Bluespire: crystal shards wreathed in a standing tesla cluster and pink arc fountains (FX statics 0x02000B6F / 0x020007C5) crackling against the low golden sun behind it (backlit particles). Different treatment from rithwic.05's orbit of the sister ruin. Verified (check.mjs, full take flown): take 0-8 s: AGL 4.46..4.5 m, nearest drawn 3.66 m (scenery-default 0x020002F2@37449,24765), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 4.46..4.5 m, nearest drawn 3.66 m (scenery-default 0x020002F2@37449,24765), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%.",
+   "criticReason": "Spare that would return to the quota after other removals: a second static of the ruined monument tower 0x01002866, the same model already filmed at East Rithwic, East Lytelthorpe (skim) and West Lytelthorpe outposts within 110 s of edit. Rank 3."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.static: Spare that would return to the quota after other removals: a second static of the ruined monument tower 0x01002866, the same model already filmed at East Rithwic, East Lytelthorpe (skim) and West Lytelthorpe outposts within 110 s of edit. Rank 3."
+ ]
+}

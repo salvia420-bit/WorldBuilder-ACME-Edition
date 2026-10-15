@@ -1,0 +1,134 @@
+{
+ "name": "South Osteth Peak",
+ "title": "South Osteth Peak",
+ "siteId": "poi-south-osteth-peak",
+ "summary": "An unclimbable mountain peak near Baishi, reached only by the South Osteth Peak portal, with Esper Ursuins and a Mountain Climber exploration marker (acpedia). In the kit it is a flat snow-and-ice summit plateau about 110 m across at z 520, the highest ground for kilometres. The Old Keep stands on a ledge 170 m east and 180 m below, and the Linvak ranges and the coast round Lin lie all around.",
+ "landmarks": [
+  {
+   "name": "Summit plateau",
+   "pos": [
+    40764,
+    11916,
+    520
+   ],
+   "heightM": 0,
+   "note": "Flat snow and ice, about 110 m across."
+  },
+  {
+   "name": "Old Keep",
+   "pos": [
+    40932,
+    11892,
+    340
+   ],
+   "heightM": 30.8,
+   "note": "On a ledge 170 m east, 180 m below."
+  },
+  {
+   "name": "South Osteth Peak portal",
+   "pos": [
+    40631.3,
+    11807.3,
+    408
+   ],
+   "heightM": 3,
+   "note": "On the south-west shoulder."
+  }
+ ],
+ "site": {
+  "id": "poi-south-osteth-peak",
+  "name": "South Osteth Peak",
+  "gazetteerId": "south-osteth-peak",
+  "teleport": "@teleloc 0xD43E0011 60 12 520.005 1 0 0 0",
+  "anchor": [
+   40764,
+   11916,
+   520
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.65,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer south-osteth-peak (on the flat snow summit, z 520). Landblocks south of y 11712 (0xD33C-0xD53C) are missing from the kit; the pano hovers over the summit centre only."
+ },
+ "insertAfter": "baishi",
+ "insertBefore": "lin",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -52.3,
+   "ew": 67.9
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   40764.0,
+   11916.0
+  ],
+  "coveredDistM": 1373,
+  "coveredBy": "site:lin",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Osteth_Peak.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-south-osteth-peak.01",
+   "site": "poi-south-osteth-peak",
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     1.0,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40764,
+     11916,
+     520
+    ],
+    "height": 2,
+    "radius": 40
+   },
+   "params": {
+    "heightAGL": 22,
+    "yawDeg": 110,
+    "direction": "cw",
+    "startHeadingDeg": 10,
+    "relativeToSubject": false,
+    "tiltDeg": -12,
+    "minClearance": 10
+   },
+   "standingOrder": "Hover 22 m over the snow summit of South Osteth Peak and turn slowly clockwise from the northern ranges toward the Old Keep's ledge and the sea beyond Lin, the afternoon sun behind; never descend.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pano slice from 22 m over the 520 m snow summit, the highest ground for kilometres, yawing 92 degrees clockwise in the edit window from the northern Linvak ranges to east-south-east over the Old Keep's ledge, Lin and the sea. The afternoon sun (0.65) sits behind the turn. A pano does not frame its subject by design: the summit is directly below and the vista is the subject, so in-frame reads 0%. Verified (check.mjs, full take flown): take 0-11 s: AGL 22..22 m, nearest drawn 16.64 m (scenery-default 0x020003A4@40786,11923), vmax 0 m/s, LOS blocked 0/45, subject in frame 0%; edit 2-9 s: AGL 22..22 m, nearest drawn 16.64 m (scenery-default 0x020003A4@40786,11923), vmax 0 m/s, LOS blocked 0/29, subject in frame 0%; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-south-osteth-peak.01": "take 0-11 s: AGL 22..22 m, nearest drawn 16.64 m (scenery-default 0x020003A4@40786,11923), vmax 0 m/s, LOS blocked 0/45, subject in frame 0%; edit 2-9 s: AGL 22..22 m, nearest drawn 16.64 m (scenery-default 0x020003A4@40786,11923), vmax 0 m/s, LOS blocked 0/29, subject in frame 0%; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m"
+ }
+}

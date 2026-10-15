@@ -18,21 +18,24 @@
 //
 // Timeline v1 = { version:1, title, kind, fps, width, height, duration (s), frames, song:{file, analysis, offsetSec,
 //   bpm, durationSec}|null, fadeIn:{durationSec, color}|null, fadeOut:{durationSec, color}|null,
+//   musicEnd?:{sec, frame, fadeOutSec} (ONLY with edit.tail: where the music part ends — the song is cut there),
 //   items:[{index, shotId, siteId, editIn, editOut, editDuration, editInFrame, editOutFrame, takeDuration, takeFrames,
-//           handleIn, handleOut, transitionIn:{type, durationSec, xfade?, fromColor?}, preRollSec, technique, family,
+//           handleIn, handleOut, transitionIn:{type, durationSec, xfade?, fromColor?},
+//           fadeIn?:{durationSec, color}, fadeOut?:{durationSec, color} (element-local, ONLY around a silent tail),
+//           preRollSec, technique, family,
 //           captureMode, snap:'none'|'beat'|'bar'|'section', explicitStart, requested:{duration, start},
-//           section:{i, label, role}|null, lyric, notes, take}],
-//   schedule:[{siteId, name, teleport, anchor, cell, indoor, travelM, ready:{lbKeys, interiorLb, settleSec, timeoutSec},
-//              prewarm:{points, radius}, shots:[ids], takeSec}],
+//           trim:{takeSec, inSec, requestedInSec}|null, section:{i, label, role}|null, lyric, notes, take}],
+//   schedule:[{siteId, name, teleport, prime? (site.prime: ['@…'], only when set), anchor, cell, indoor, travelM,
+//              ready:{lbKeys, interiorLb, settleSec, timeoutSec}, prewarm:{points, radius}, shots:[ids], takeSec}],
 //   warnings:[{path, message}], source:{planHash} }
 // item.take = what `__film.prepare(take)` needs: {shotId, siteId, technique, family, spec (SPEC §2.11 ShotSpec with
 //   duration = takeDuration, + the shot's `bounds` override when set), subject (the normalized plan subject: a
 //   `moving: true` entity, or a player subject whose actor walks — normalized `moving: true` — is followed live by
 //   the page), path, route, standingOrder, goal,
-//   pilot, capture:{mode, fps, width, height} (mode as normalized WITH the registry: a technique's 'realtime' capture
-//   hint makes an entity/player subject realtime),
+//   pilot (incl. `fade` 'never'|'auto' when the plan sets it), capture:{mode, fps, width, height} (mode as normalized
+//   WITH the registry: a technique's 'realtime' capture hint makes an entity/player subject realtime),
 //   look, actor, cell, indoor, anchor, editOffsetSec (= handleIn: where the edit starts inside the take), preRollSec,
-//   showAvatar}.
+//   showAvatar, overlay (shot.overlay {props:{style, opacity?, tint?}} or null: the page's lens overlay)}.
 //
 // Rules (all times are EDIT seconds; frame-quantised at format.fps; song indices are 0-based SONG indices):
 //   • Items are contiguous in plan order; an explicit `start` jumps: a gap is black (warning); an overlap trims the
@@ -51,15 +54,29 @@
 //     is centred on the cut in the assembly; a non-cut transition on the first shot is a fade-in from black/white.
 //   • takeDuration = editDuration + handleIn + handleOut; preRollSec = max(6/fps, 0.25) + site.settleSec (rendered,
 //     never recorded, not part of the edit).
+//   • A shot with trim:{takeSec, inSec} is flown as a take of takeSec (its move keeps the speed it has at that length)
+//     and the edit is the window from inSec: handleIn = inSec, handleOut = takeSec − inSec − edit, so the EDL cuts the
+//     window (and any dissolve material around it) out of the one take. inSec is moved into
+//     [transition handle in, takeSec − edit − transition handle out] with a warning; an edit + handles longer than
+//     takeSec throws PLAN_INVALID (lengthening the take would slow the move — shorten the edit instead).
+//   • edit.tail {from, gapSec, fadeOutSec} (k = index of `from`, k ≥ 1): shots 0…k−1 are the MUSIC PART and compile
+//     exactly as they would without the tail (same items, same frames, same handles); musicEnd = the frame where
+//     shot k−1 ends. edit.fadeOutSec becomes items[k−1].fadeOut (element-local, same room rule as the program
+//     fade-out), then gapSec of black (frame-quantised), then the TAIL: items[k].editIn = musicEnd + gapSec, every
+//     tail shot exactly its {sec} (snap 'none', no section), contiguous. A non-cut transition into shot k is an
+//     element-local fade-in from black/white (items[k].fadeIn; no handles, so the finale's trim window never
+//     moves); transitions between tail shots are ordinary (handles from tail takes). The program fade-out is
+//     tail.fadeOutSec on the last shot; the "past the end of the song" warning compares musicEnd.
 //   • Schedule: sites grouped; order = greedy nearest anchor (straight line) starting from the first site in edit
-//     order, ties by first appearance; each site once; shots inside a site in edit order.
+//     order, ties by first appearance; each site once; shots inside a site in edit order. A site's `prime` commands
+//     ride along on its schedule entry (film shoot sends them before the site teleport).
 //
 // Pure: no I/O, no clocks; the same plan + song always compiles to the same JSON.
 
 import { FilmPlanError } from "../../../scene3d/film/core/errors.js";
 import { hashString } from "../../../scene3d/film/core/rng.js";
 import { parseCellId } from "../../../scene3d/film/core/units.js";
-import { shotSpec, shotUsesSong, validatePlan } from "./schema.mjs";
+import { shotSpec, shotUsesSong, tailIndexOf, validatePlan } from "./schema.mjs";
 
 /** Timeline schema version. */
 export const TIMELINE_VERSION = 1;
@@ -382,20 +399,29 @@ export function compilePlan(plan, opts = {}) {
   const grid = song ? songGrid(song, { offsetSec: offset }) : null;
   if (song && !isObj(p.song)) warn("song", "a song analysis was given but plan.song is missing (offsetSec 0 assumed; assembly gets no audio unless the CLI passes --song)");
 
+  // The silent tail (edit.tail): shots k… follow the music part after gapF black frames, in exact seconds.
+  const tail = isObj(p.edit) && isObj(p.edit.tail) ? p.edit.tail : null;
+  const k = tail ? tailIndexOf(p) : -1; // validated: ≥ 1 whenever a tail is set
+  const inTail = (i) => k > 0 && i >= k;
+  const gapF = k > 0 ? Math.round(tail.gapSec * fps) : 0;
+
   // ── pass 1: exact edit times ──
   const pos = [];
   let cursor = 0;
   shots.forEach((s, i) => {
     const path = `shots[${i}]`;
     let inT = cursor;
+    // the first tail shot starts gapF frames after the frame the music part ends on
+    if (i === k) inT = (Math.round(cursor * fps) + gapF) / fps;
     const explicit = s.start !== null && s.start !== undefined;
     if (explicit) inT = resolveStart(s.start, grid, s.id, warn, path);
     if (!(inT >= -1e-9)) {
       throw new FilmPlanError(`${s.id}: start resolves to ${r3(inT)} s, before the edit begins (song.offsetSec ${offset})`, "PLAN_INVALID");
     }
     inT = Math.max(0, inT);
-    const { t: outT, snap } = resolveEnd(inT, s.duration, grid, { fps, sectionSnapBars });
-    if (has(s.duration, "sec") && grid) {
+    // tail shots are never on the beat grid: resolveEnd without a grid = the seconds as written (snap 'none')
+    const { t: outT, snap } = resolveEnd(inT, s.duration, inTail(i) ? null : grid, { fps, sectionSnapBars });
+    if (has(s.duration, "sec") && grid && !inTail(i)) {
       const got = outT - inT;
       if (Math.abs(got - s.duration.sec) > COMPILE_DEFAULTS.snapWarnFraction * s.duration.sec + 1e-9) {
         warn(`${path}.duration`, `${s.id}: {sec: ${s.duration.sec}} became ${r3(got)} s on the beat grid (${snap} snap)`);
@@ -432,6 +458,7 @@ export function compilePlan(plan, opts = {}) {
   const postIn = new Array(n).fill(0);
   const trIn = new Array(n);
   let fadeIn = null;
+  let tailFadeIn = null;
   const minTr = COMPILE_DEFAULTS.minTransitionFrames;
   for (let i = 0; i < n; i++) {
     const t = shots[i].transition;
@@ -445,6 +472,15 @@ export function compilePlan(plan, opts = {}) {
       const f = Math.min(want, editF[0]);
       fadeIn = { durationSec: r6(f / fps), color: t.type === "fadewhite" ? "white" : "black" };
       trIn[i] = { type: t.type, durationSec: r6(f / fps), fromColor: fadeIn.color };
+      continue;
+    }
+    if (i === k) {
+      // Into the silent tail: an element-local fade-in from black/white, like the first shot's — no handles, so the
+      // music part's last take keeps its window. Its frames count as the shot's busy head (room for what follows).
+      const f = Math.min(want, editF[k]);
+      tailFadeIn = { durationSec: r6(f / fps), color: t.type === "fadewhite" ? "white" : "black" };
+      trIn[i] = { type: t.type, durationSec: r6(f / fps), fromColor: tailFadeIn.color };
+      postIn[i] = f;
       continue;
     }
     if (fr[i].inF !== fr[i - 1].outF) {
@@ -470,25 +506,53 @@ export function compilePlan(plan, opts = {}) {
     const f = Math.min(Math.max(1, Math.round(p.edit.fadeInSec * fps)), editF[0]);
     fadeIn = { durationSec: r6(f / fps), color: "black" };
   }
-  let fadeOut = null;
-  if (p.edit.fadeOutSec > 0) {
-    const room = editF[n - 1] - postIn[n - 1];
-    const want = Math.max(1, Math.round(p.edit.fadeOutSec * fps));
+  // A fade-out of `sec` on the end of shot j: never into the part of it a dissolve into it already uses.
+  const fadeOutOn = (j, sec, path, what) => {
+    const room = editF[j] - postIn[j];
+    const want = Math.max(1, Math.round(sec * fps));
     const f = Math.max(1, Math.min(want, room));
-    if (f !== want) warn("edit.fadeOutSec", `fade-out shortened to ${r3(f / fps)} s to fit the last shot`);
-    fadeOut = { durationSec: r6(f / fps), color: "black" };
+    if (f !== want) warn(path, `${what} shortened to ${r3(f / fps)} s to fit ${j === n - 1 ? "the last shot" : `${shots[j].id}, the last shot before the tail`}`);
+    return { durationSec: r6(f / fps), color: "black" };
+  };
+  let fadeOut = null;
+  let musicFade = null;
+  if (k > 0) {
+    // music part: edit.fadeOutSec fades its last shot (element-local); the program fade-out is the tail's
+    if (p.edit.fadeOutSec > 0) musicFade = fadeOutOn(k - 1, p.edit.fadeOutSec, "edit.fadeOutSec", "music fade-out");
+    if (tail.fadeOutSec > 0) fadeOut = fadeOutOn(n - 1, tail.fadeOutSec, "edit.tail.fadeOutSec", "fade-out");
+  } else if (p.edit.fadeOutSec > 0) {
+    fadeOut = fadeOutOn(n - 1, p.edit.fadeOutSec, "edit.fadeOutSec", "fade-out");
   }
   const hiF = dF.slice();
   const hoF = dF.slice(1).concat([0]);
+
+  // ── trims: the move is flown at trim.takeSec and the edit is a window of that one take ──
+  const takeFr = shots.map((s, i) => {
+    if (!isObj(s.trim)) return editF[i] + hiF[i] + hoF[i];
+    const takeF = Math.round(s.trim.takeSec * fps);
+    const lo = hiF[i];
+    const hi = takeF - editF[i] - hoF[i];
+    const hs = lo || hoF[i] ? ` + ${r3((lo + hoF[i]) / fps)} s of transition handles` : "";
+    if (hi < lo) {
+      throw new FilmPlanError(`${s.id}: the ${r3(editF[i] / fps)} s edit${hs} does not fit in its ${r3(takeF / fps)} s take (trim.takeSec) — shorten the duration (a longer trim.takeSec would slow the move)`,
+        { code: "PLAN_INVALID", details: { shot: s.id, editSec: r6(editF[i] / fps), takeSec: r6(takeF / fps), handleSec: r6((lo + hoF[i]) / fps) } });
+    }
+    const want = Math.round(s.trim.inSec * fps);
+    const inF = Math.min(Math.max(want, lo), hi);
+    if (inF !== want) warn(`shots[${i}].trim.inSec`, `${s.id}: trim.inSec moved from ${r3(want / fps)} s to ${r3(inF / fps)} s so the ${r3(editF[i] / fps)} s edit${hs} stays inside the ${r3(takeF / fps)} s take`);
+    hiF[i] = inF;
+    hoF[i] = takeF - inF - editF[i];
+    return takeF;
+  });
 
   // ── items ──
   const preRollBase = Math.max(COMPILE_DEFAULTS.preRollFrames / fps, COMPILE_DEFAULTS.minPreRollSec);
   const items = shots.map((s, i) => {
     const site = siteById.get(s.site);
-    const takeF = editF[i] + hiF[i] + hoF[i];
+    const takeF = takeFr[i];
     const takeDuration = r6(takeF / fps);
     const preRollSec = r6(preRollBase + (isNum(site.settleSec) ? site.settleSec : 0));
-    const sec = grid ? grid.sectionAt(fr[i].inF / fps + 1e-6) : null;
+    const sec = grid && !inTail(i) ? grid.sectionAt(fr[i].inF / fps + 1e-6) : null;
     const subject = s.subject;
     return {
       index: i,
@@ -504,6 +568,9 @@ export function compilePlan(plan, opts = {}) {
       handleIn: r6(hiF[i] / fps),
       handleOut: r6(hoF[i] / fps),
       transitionIn: trIn[i],
+      // element-local fades around the silent tail (absent otherwise: a plan without a tail compiles byte-identically)
+      ...(i === k && tailFadeIn ? { fadeIn: tailFadeIn } : {}),
+      ...(i === k - 1 && musicFade ? { fadeOut: musicFade } : {}),
       preRollSec,
       technique: s.technique,
       family: s.family,
@@ -511,6 +578,7 @@ export function compilePlan(plan, opts = {}) {
       snap: pos[i].snap,
       explicitStart: pos[i].explicit,
       requested: { duration: s.duration, start: s.start },
+      trim: isObj(s.trim) ? { takeSec: takeDuration, inSec: r6(hiF[i] / fps), requestedInSec: s.trim.inSec } : null,
       section: sec ? { i: sec.i, label: sec.label, role: sec.role } : null,
       lyric: s.lyric ?? null,
       notes: s.notes ?? null,
@@ -535,6 +603,7 @@ export function compilePlan(plan, opts = {}) {
         editOffsetSec: r6(hiF[i] / fps),
         preRollSec,
         showAvatar: (subject !== null && isObj(subject) && subject.kind === "player") || (s.actor !== null && s.actor !== undefined),
+        overlay: isObj(s.overlay) ? JSON.parse(JSON.stringify(s.overlay)) : null,
       },
     };
   });
@@ -566,6 +635,8 @@ export function compilePlan(plan, opts = {}) {
       siteId: id,
       name: site.name ?? id,
       teleport: site.teleport,
+      // sent by `film shoot` before the teleport (only when set: a plan without prime compiles byte-identically)
+      ...(Array.isArray(site.prime) && site.prime.length ? { prime: site.prime.map((c) => String(c).trim()) } : {}),
       anchor: site.anchor,
       cell: site.cell,
       indoor: site.indoor === true,
@@ -584,8 +655,13 @@ export function compilePlan(plan, opts = {}) {
 
   const totalF = fr[n - 1].outF;
   const duration = r6(totalF / fps);
-  if (grid && grid.endSec !== null && duration > grid.endSec + 1 / fps) {
-    warn("shots", `the edit (${r3(duration)} s) runs ${r3(duration - grid.endSec)} s past the end of the song (${r3(grid.endSec)} s after offset)`);
+  const musicEndF = k > 0 ? fr[k - 1].outF : totalF;
+  const musicSec = k > 0 ? r6(musicEndF / fps) : duration;
+  if (grid && grid.endSec !== null && musicSec > grid.endSec + 1 / fps) {
+    const m = musicSec;
+    warn("shots", k > 0
+      ? `the music part (${r3(m)} s, before the silent tail at ${shots[k].id}) runs ${r3(m - grid.endSec)} s past the end of the song (${r3(grid.endSec)} s after offset)`
+      : `the edit (${r3(duration)} s) runs ${r3(duration - grid.endSec)} s past the end of the song (${r3(grid.endSec)} s after offset)`);
   }
 
   return {
@@ -608,6 +684,7 @@ export function compilePlan(plan, opts = {}) {
       : null,
     fadeIn,
     fadeOut,
+    ...(k > 0 ? { musicEnd: { sec: r6(musicEndF / fps), frame: musicEndF, fadeOutSec: musicFade ? musicFade.durationSec : 0 } } : {}),
     items,
     schedule,
     warnings,
@@ -625,14 +702,16 @@ function humanSec(s) {
 }
 
 /**
- * Rough wall-clock estimate of shooting a compiled timeline: one teleport + readiness settle per schedule entry,
- * plus every take's frames (take + pre-roll) rendered at `stepFps` for stepped takes, or in real time for realtime
+ * Rough wall-clock estimate of shooting a compiled timeline: one teleport + readiness settle per schedule entry and
+ * per `prime` command of it (film shoot sends each before the site teleport, with its own readiness gate), plus
+ * every take's frames (take + pre-roll) rendered at `stepFps` for stepped takes, or in real time for realtime
  * takes. No rehearsals, retakes, muxing or boot are included.
  * @param {object} timeline compiled Timeline
  * @param {{teleportSec?:number, settleSec?:number, stepFps?:number}} [opts]
- * @returns {{totalSec:number, teleports:number, takes:number, frames:number, teleportTotalSec:number,
+ * @returns {{totalSec:number, teleports:number, primes:number, takes:number, frames:number, teleportTotalSec:number,
  *   settleTotalSec:number, renderTotalSec:number, perSite:{siteId:string, sec:number, shots:string[]}[],
- *   perShot:{shotId:string, mode:string, frames:number, sec:number}[], text:string}}
+ *   perShot:{shotId:string, mode:string, frames:number, sec:number}[], text:string}} `teleports` counts the prime
+ *   teleports too (`primes` of them)
  */
 export function estimateShootTime(timeline, opts = {}) {
   const { teleportSec = 12, settleSec = 5, stepFps = 8 } = opts || {};
@@ -648,12 +727,14 @@ export function estimateShootTime(timeline, opts = {}) {
     return { shotId: it.shotId, mode: it.captureMode, frames, sec: r3(sec) };
   });
   const byShot = new Map(perShot.map((x) => [x.shotId, x]));
+  const primesOf = (e) => (Array.isArray(e.prime) ? e.prime.length : 0);
   const perSite = timeline.schedule.map((e) => ({
     siteId: e.siteId,
     shots: e.shots.slice(),
-    sec: r3(teleportSec + settleSec + e.shots.reduce((a, id) => a + (byShot.get(id)?.sec ?? 0), 0)),
+    sec: r3((1 + primesOf(e)) * (teleportSec + settleSec) + e.shots.reduce((a, id) => a + (byShot.get(id)?.sec ?? 0), 0)),
   }));
-  const teleports = timeline.schedule.length;
+  const primes = timeline.schedule.reduce((a, e) => a + primesOf(e), 0);
+  const teleports = timeline.schedule.length + primes;
   const renderTotalSec = r3(perShot.reduce((a, x) => a + x.sec, 0));
   const frames = perShot.reduce((a, x) => a + x.frames, 0);
   const totalSec = r3(teleports * (teleportSec + settleSec) + renderTotalSec);
@@ -661,6 +742,7 @@ export function estimateShootTime(timeline, opts = {}) {
   return {
     totalSec,
     teleports,
+    primes,
     takes: perShot.length,
     frames,
     teleportTotalSec: r3(teleports * teleportSec),
@@ -668,7 +750,7 @@ export function estimateShootTime(timeline, opts = {}) {
     renderTotalSec,
     perSite,
     perShot,
-    text: `≈ ${humanSec(totalSec)} wall-clock: ${teleports} teleport(s) × (${teleportSec} s + ${settleSec} s settle), ` +
+    text: `≈ ${humanSec(totalSec)} wall-clock: ${teleports} teleport(s)${primes ? ` (${primes} of them site.prime)` : ""} × (${teleportSec} s + ${settleSec} s settle), ` +
       `${perShot.length} take(s) / ${frames} frames (${stepped} stepped at ${stepFps} fps, ${perShot.length - stepped} realtime)`,
   };
 }

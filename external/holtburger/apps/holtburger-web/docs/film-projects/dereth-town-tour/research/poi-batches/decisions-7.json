@@ -1,0 +1,217 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-southeast-shoushi-outpost",
+   "name": "Southeast Shoushi Outpost",
+   "decision": "include",
+   "reason": "A real, intact Sho outpost 1.0 km from Shoushi's filmed shots. It has a green-lit tapered tower, a spire tower, a shop and a Life Stone by the river. It gets one boom-rise.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-southeast-shoushi-outpost.json"
+  },
+  {
+   "siteId": "poi-fort-aimaru",
+   "name": "Fort Aimaru",
+   "decision": "include",
+   "reason": "The fort exists as described: twin 31 m spire towers flanking a palisaded hall near the coast. It is 1.1 km from any covered shot. Two shots: a pass-over and a fly-through between the towers.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-fort-aimaru.json"
+  },
+  {
+   "siteId": "poi-advocate-ruins",
+   "name": "Advocate Ruins",
+   "decision": "include",
+   "reason": "The ruins and the Life Stone are present as described, 1.7 km from any covered shot. The landblocks west of x 43008 are missing, so every camera stays east. One orbit plus one rank-3 push-in.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-advocate-ruins.json"
+  },
+  {
+   "siteId": "poi-castle-of-baron-nuvillus",
+   "name": "Castle of Baron Nuvillus",
+   "decision": "include",
+   "reason": "The castle is present (keep, towers, great hall, dead trees) and is 2.4 km from any covered shot. Three shots: a rising reveal, a low angle and a rank-3 arc.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-castle-of-baron-nuvillus.json"
+  },
+  {
+   "siteId": "poi-north-nanto-outpost",
+   "name": "North Nanto Outpost",
+   "decision": "include",
+   "reason": "A real ruined outpost (monument tower, domed hall, Life Stone) 817 m from nanto.04. It gets one map-like top-down at rank 3, because the same monument-tower model already features at four batch-0 outposts.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-north-nanto-outpost.json"
+  },
+  {
+   "siteId": "poi-battlefield-of-ayn-tayan",
+   "name": "Battlefield of Ayn Tayan",
+   "decision": "include",
+   "reason": "The statue, the bone field, the giant masks and the hilltop cairns all match acpedia. It is 3.1 km from any covered shot. Two shots: a bird's-eye and a low angle.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-battlefield-of-ayn-tayan.json"
+  },
+  {
+   "siteId": "poi-drunken-madmans-tower",
+   "name": "Drunken Madman's Tower",
+   "decision": "include",
+   "reason": "The ridge hall is present in its mountain saddle, matching both gazetteer entries (Tower of the Madman, Ridge Tower). It is 825 m from baishi.03, which frames Baishi, not the ridge. Two shots: an orbit and a fly-by.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-drunken-madmans-tower.json"
+  },
+  {
+   "siteId": "poi-south-osteth-peak",
+   "name": "South Osteth Peak",
+   "decision": "include",
+   "reason": "The summit plateau is real, with an exact gazetteer teleport, and a mountain top is the textbook pano subject. One pano-360 slice.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-south-osteth-peak.json"
+  },
+  {
+   "siteId": "poi-old-keep",
+   "name": "Old Keep",
+   "decision": "include",
+   "reason": "The green-flamed tower on its mountain ledge matches acpedia exactly and is 1.2 km from Lin's coverage. Two shots: a tilt and a helix.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-old-keep.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-morntide",
+   "name": "Festival Stone of Morntide",
+   "decision": "include",
+   "reason": "The stone is real, 120 m east of the acpedia map point on the hilltop, and photogenic with its two Sentinel candles. nanto.01 frames the falls 500 m east, not the stone. One rack-focus.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-morntide.json"
+  },
+  {
+   "siteId": "poi-east-nanto-outpost",
+   "name": "East Nanto Outpost",
+   "decision": "include",
+   "reason": "A real ruined outpost 794 m from nanto.05. It gets one whip-pan from the Life Stone to the tower; the whip-pan is an assigned technique.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-nanto-outpost.json"
+  },
+  {
+   "siteId": "poi-deru-tree-of-degaralesh",
+   "name": "Deru Tree of Degar'Alesh",
+   "decision": "include",
+   "reason": "The giant dead tree is present north of the temple, exactly as acpedia places it, and it is spectacular. It is 3 km from any covered shot. Two shots: a helix and a worm's-eye.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-deru-tree-of-degaralesh.json"
+  },
+  {
+   "siteId": "poi-ruins-of-degaralesh",
+   "name": "Ruins of Degar'Alesh",
+   "decision": "include",
+   "reason": "The temple complex matches acpedia, with the great temple, the south temple and the Deru Tree to the north. It is 2.9 km from any covered shot. Two shots: a top-down and a terrain skim.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ruins-of-degaralesh.json"
+  },
+  {
+   "siteId": "poi-freebooter-keep",
+   "name": "Freebooter Keep",
+   "decision": "include",
+   "reason": "The keep is present on its sea mesa and is spectacular. It is 2.7 km from any covered shot. Two shots: an orbit and a dronie. An FPV dive off the east cliff was tried and dropped because it overran the ravine.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-freebooter-keep.json"
+  },
+  {
+   "siteId": "poi-ithaenc-cathedral",
+   "name": "Ithaenc Cathedral",
+   "decision": "include",
+   "reason": "The cathedral and the two-tier Ithaenc falls are both present, with water, spray and towers, 1.8 km from freehold.02. Three shots: a tilt reveal, a low angle and a pass-over.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ithaenc-cathedral.json"
+  },
+  {
+   "siteId": "poi-camp-of-the-latzimestal",
+   "name": "Camp of the Latzimestal",
+   "decision": "include",
+   "reason": "The three tents exist at the acpedia coordinates. It is a small place, so it gets one top-down rise, an assigned technique, of a camp in the jungle.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-camp-of-the-latzimestal.json"
+  },
+  {
+   "siteId": "poi-chapel-of-xi-ru",
+   "name": "Chapel of Xi Ru",
+   "decision": "include",
+   "reason": "The chapel is present and dramatic, an island chapel under a 234 m cliff, 3.9 km from any covered shot. Three shots: a pass-over, a rank-3 crane and a dronie.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-chapel-of-xi-ru.json"
+  },
+  {
+   "siteId": "poi-high-mountain-valley",
+   "name": "High Mountain Valley",
+   "decision": "include",
+   "reason": "The ruin site is present on the valley floor and matches the gazetteer entry. It is small, so it gets one dronie revealing the valley.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-high-mountain-valley.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-coldeve",
+   "name": "Festival Stone of Coldeve",
+   "decision": "include",
+   "reason": "The 325 m coverage distance is measured from the acpedia point, which is 209 m off. The real stone is 510 m from Kara's centre and is not framed by kara.03, a truck on Kara's buildings. It gets one pedestal over the cliff.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-coldeve.json"
+  },
+  {
+   "siteId": "poi-ishilai-lyceum",
+   "name": "Ishilai Lyceum",
+   "decision": "include",
+   "reason": "The academy and the summit halls are present on the coastal mountain, 1.2 km from kara.03. Two shots: a tilt reveal from over the sea slope and a hyperlapse orbit.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ishilai-lyceum.json"
+  },
+  {
+   "siteId": "poi-ancient-town",
+   "name": "Ancient Town",
+   "decision": "include",
+   "reason": "All the acpedia elements are present (tower, platform with pillars, Heartland portal, meeting hall, bunkers, Life Stone). It is 3.7 km from any covered shot. Two shots: a spiral descent and the batch's single truck.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-ancient-town.json"
+  }
+ ],
+ "totalShots": 37,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-7.json gives \"valid: 0 error(s), 0 warning(s)\" for 21 sites and 37 shots, dry build included. check.mjs over the full takes: all 37 shots pass acceptance (min AGL, nearest drawn obstacle, flight peak and tracking gap; in-frame share and LOS in the edit window), with 0 failures in the audit script.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.low-angle": 3,
+  "drone.dronie": 3,
+  "drone.orbit-poi": 3,
+  "drone.pass-over": 3,
+  "drone.helix": 2,
+  "drone.tilt-reveal": 2,
+  "drone.top-down": 2,
+  "classic.arc": 1,
+  "classic.birds-eye": 1,
+  "classic.crane": 1,
+  "classic.pedestal": 1,
+  "classic.push-in": 1,
+  "classic.rack-focus": 1,
+  "classic.tilt": 1,
+  "classic.truck": 1,
+  "classic.whip-pan": 1,
+  "classic.worms-eye": 1,
+  "drone.boom-rise": 1,
+  "drone.fly-by": 1,
+  "drone.flythrough": 1,
+  "drone.hyperlapse-orbit": 1,
+  "drone.pano-360": 1,
+  "drone.rising-reveal": 1,
+  "drone.spiral-descent": 1,
+  "drone.terrain-skim": 1,
+  "drone.top-down-rise": 1
+ },
+ "notes": [
+  "Files: 21 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json and the scratch plan at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-7.json. The generator and helpers (common.py, s/*.py, assemble.py, notes.py, pois.py, gen_final.py, audit.py, probe.mjs, obs.mjs) are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/poi-b7/.",
+  "Shot totals: 37 proposed against a quota of 33 (rank 1: 14, rank 2: 19, rank 3: 4). The rank-3 shots, dropped first, are Nuvillus.03 arc, Advocate.02 push-in, Xi Ru.02 crane and North Nanto.01 top-down. The ideal edit windows sum to 231.0 s. There are 26 distinct techniques, none used more than 3 times. All 6 assigned techniques are used: classic.truck (Ancient Town, the single facade pan), classic.whip-pan (East Nanto), classic.birds-eye (Ayn Tayan), drone.flythrough (Fort Aimaru, between the twin towers), drone.top-down-rise (Camp of the Latzimestal) and drone.pano-360 (South Osteth Peak). Every shot has pilot code, bounds of 1/1 and trim takes of 7-11 s with windows of 5-7 s. Flight peaks are at most 7.7 m/s (cinema cap 12).",
+  "All 21 candidates are real and included; none is a tour town. The coverage figures for two of them are misleading. The Coldeve Festival Stone's 325 m is measured from an acpedia point 209 m off; the real stone is 510 m from Kara and not in kara.03's frame. The Morntide stone is 500 m west of the falls that nanto.01 dives.",
+  "By design in the edit window: south-osteth-peak.01 is a pano, so its subject (the summit below) is not framed and in-frame reads 0%. castle-of-baron-nuvillus.01 is a rising reveal with LOS to the keep's upper storeys blocked for 4/21 samples (19%) of the window, its lead-in as they clear the corner tower's spire. ithaenc-cathedral.01 (91% in frame) and ishilai-lyceum.01 (96%) are tilt reveals that begin as the subject enters the frame. Their window.keep values only let the window slide later.",
+  "Derived @teleloc teleports (ground + 0.5, at least 5 m from drawn objects, not in water) are used for: Southeast Shoushi, North Nanto and East Nanto (their only exact teleport lands on the Life Stone itself), Fort Aimaru, Advocate Ruins, Deru Tree, Ruins of Degar'Alesh, Freebooter Keep (all its gazetteer teleports are indoor), Camp of the Latzimestal, Chapel of Xi Ru (the nearby exact teleports are portals) and Ishilai Lyceum (no gazetteer entry). The other 10 use exact gazetteer @teleloc entries. Ithaenc's cathedral-ruins entry puts the hidden player at z 191 inside the open ruin hall, and High Mountain Valley's entry sits in a default-bake shrub. Both are verified gazetteer teleports and were kept.",
+  "Missing kit landblocks, which every camera avoids: west of Advocate Ruins, south of Baron Nuvillus, west and north of East Nanto, west and south of Morntide, west and north of Ayn Tayan, south of Madman's Tower, Osteth and the Old Keep, east of Ithaenc (the 0xF5xx falls side), south and east of Xi Ru, north and east of High Mountain Valley, south of Coldeve, and south of Ancient Town.",
+  "Retail scenery bake: the trees checked are the default bake the film client draws. With the opt-in retail bake, a crown comes within 0-3 m of the start of southeast-shoushi.01 and of the avenue in ruins-of-degaralesh.02. Keep the default ?sceneryBake.",
+  "Unverified at runtime: the Waterfall, Anniversary Effect, Portalspace Rift, rooftop portal swirls and Menhir mana fields are spawns or weenies, so their look depends on the runtime. The Old Keep's 'green flames' are taken to be the four 0x02000897 light props round its upper floor. Ayn Tayan's hilltop 'large Empyrean head' is taken to be the 6.8 m model 0x020003B2 beside the four cairn stones, the same model batch 0 identified as Evensong's head. It is not filmed; both shots work the statue, the bones and the three 8 m wooden masks.",
+  "Freebooter Keep: an fpv.fpv-dive off the 90 m east cliff into the ravine was tried. The fitted dive overran the ravine onto the outer ridge (tracking gap 19 m), so it was dropped and the batch has no fpv shot. The orbit and the dronie carry the site.",
+  "Sun azimuth was designed as about 90 + 360*(timeOfDay-0.25) degrees (0.38 gives SE, 0.56 SSW, 0.65 SW, 0.74 W). Every lit subject has the sun behind or beside the lens. The Ithaenc tilt reveal looks south into a high midday sun on purpose, to backlight the falls' spray, and the Old Keep tilt backlights the green flames.",
+  "insertAfter/insertBefore are kept as given for all 21 sites. The ruins, keep and tree on Freebooter Isle (Degar'Alesh) sit between mayoi and kryst, and the Ithaenc/Xi Ru/Lyceum group between freehold and kara.",
+  "Scratchpad note: everything lives in the private poi-b7/ folder. No repo files, git, browsers, WorldBuilder.Terminal or JEV were touched. Only short, single node/python processes were run, with free -m checked."
+ ]
+}

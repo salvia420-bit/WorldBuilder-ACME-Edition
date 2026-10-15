@@ -1,0 +1,141 @@
+{
+ "name": "Paradox-touched Valley Tent",
+ "title": "Paradox-touched Valley Tent",
+ "siteId": "poi-paradox-touched-valley-tent",
+ "summary": "A single tent on a ridge (z 318) overlooking the Paradox-touched Valley, staging point for the Arcanum agents and royal guards of the Paradox-touched quests (Ethan Wintermaine, Hisham al-Evv...). The kit shows the gold-trimmed fabric tent (16 m square) flying a Strathelar pennant, with chairs and a table outside; the valley floor 80 m below (z 240) holds three dark purple stone ruins, olthoi-infested slopes and snow peaks (to z 440) rise behind. Landblocks south of y 34752 and west of x 37440 are missing from the kit.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 43.8,
+   "ew": 54.9
+  },
+  "mapWorld": [
+   37644.0,
+   34980.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Paradox_touched_Valley_Tent.txt",
+  "coveredDistM": 2454,
+  "coveredBy": "shot:arwic.03"
+ },
+ "landmarks": [
+  {
+   "name": "Arcanum tent",
+   "pos": [
+    37645.9,
+    34977.6,
+    318.0
+   ],
+   "heightM": 3.5,
+   "note": "0x01002294, 16.2 x 16.2 m."
+  },
+  {
+   "name": "Strathelar Pennant",
+   "pos": [
+    37645.8,
+    34977.6,
+    321.5
+   ],
+   "heightM": 3.4,
+   "note": "Flag on the tent roof, top z 324.9."
+  },
+  {
+   "name": "Paradox ruins in the valley",
+   "pos": [
+    37715.8,
+    34907.9,
+    240.0
+   ],
+   "heightM": 2.2,
+   "note": "0x01004031 x3, purple stone."
+  }
+ ],
+ "site": {
+  "id": "poi-paradox-touched-valley-tent",
+  "name": "Paradox-touched Valley Tent",
+  "teleport": "@teleloc 0xC3B6003A 188.0 46.0 317.2 1 0 0 0",
+  "anchor": [
+   37645.9,
+   34977.6,
+   318.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.54,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37645.9,
+     34977.6,
+     318.0
+    ],
+    "height": 7,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 16,
+    "endDistance": 56,
+    "startHeight": 4,
+    "endHeight": 24,
+    "bearingDeg": 140,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Pull back and up from 16 m to 56 m south-east of the Arcanum tent, 4 m to 24 m above it, over the drop into the Paradox-touched Valley; keep the tent centred, nothing within 15 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The lone royal-guard tent with its Strathelar pennant on the ridge (z 318) above the Paradox-touched Valley (z 240): the dronie flies out over the valley edge so the ground falls away 90 m beneath the lens while the tent shrinks on its ridge against the snow peaks. Noon light from behind-left. Kit misses the landblocks south of y 34752; the move stays north-east of them. Verified with poi-kit check.mjs - take 10s: AGL 4.71..57.3 m, nearest 17.09 m (static 0xC4B6#3 0x0200011E), vmax 7.02 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2.5-8.5s: AGL 9.7..51.7 m, nearest 23.18 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 7.01 m/s (cap 12), tracking gap 0.06 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-paradox-touched-valley-tent.01",
+   "technique": "drone.dronie",
+   "rank": 3,
+   "check": "take 10s: AGL 4.71..57.3 m, nearest 17.09 m (static 0xC4B6#3 0x0200011E), vmax 7.02 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2.5-8.5s: AGL 9.7..51.7 m, nearest 23.18 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 7.01 m/s (cap 12), tracking gap 0.06 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "drone.dronie"
+ ]
+}

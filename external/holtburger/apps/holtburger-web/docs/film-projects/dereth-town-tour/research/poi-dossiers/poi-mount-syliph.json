@@ -1,0 +1,110 @@
+{
+ "name": "Mount Syliph",
+ "title": "Mount Syliph",
+ "siteId": "poi-mount-syliph",
+ "summary": "One of the mountains of the Mount Alphus range; a portal to the Syliph Tower dungeon is on it (acpedia). In the kit it is a flat-topped rock pillar: a ~90 x 100 m summit plateau at z 224 with sheer flanks falling to the plain at z 110; the South Dalt portal stands on the north rim and the Syliph Tower portal on the south-west. Landblocks to the west and south (0x8C8D-0x8C90, 0x8D8D, 0x8E8D, 0x8F8D) are missing; the shot hovers over the summit.",
+ "landmarks": [
+  {
+   "name": "Summit plateau",
+   "pos": [
+    27265.0,
+    27470.0,
+    224.0
+   ],
+   "heightM": 114.0,
+   "note": "Flat top z 224 over a plain at 110."
+  },
+  {
+   "name": "South Dalt portal",
+   "pos": [
+    27310.8,
+    27523.4,
+    224.0
+   ],
+   "heightM": 3.0,
+   "note": "Portal swirl on the north rim."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-syliph",
+  "name": "Mount Syliph",
+  "gazetteerId": "north-syliph",
+  "teleport": "@teleloc 0x8E8F000B 36.10 59.50 224.50 1 0 0 0",
+  "anchor": [
+   27265.0,
+   27470.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer north-syliph (the summit plateau, 8 m from the South Dalt portal on the north rim). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0x8E8F000B 42.1 65.5 224 -0.446198 0 0 -0.894934' because the gazetteer drop was 5.1 m from the South Dalt portal (weenieType Portal). Derived drop 8.5 m south-west on flat summit ground (224.0, level within 1 m for 12 m around), 13.3 m from the portal, 11.6 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 12.7,
+   "ew": 11.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2112,
+  "coveredBy": "shot:al-jalima.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Syliph.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mount-syliph.01",
+   "site": "poi-mount-syliph",
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "params": {
+    "heightAGL": 22,
+    "yawDeg": 120,
+    "direction": "cw",
+    "startHeadingDeg": 20,
+    "relativeToSubject": false,
+    "tiltDeg": -6,
+    "minClearance": 5
+   },
+   "standingOrder": "Hover 22 m above the flat summit of Mount Syliph and turn 120 degrees from the pillars of Dalt and Gemm in the north-east round to the plains in the south-east; nothing within 50 m, golems may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Slow 120 degree panorama from above the flat summit of Mount Syliph (z 224): the neighbouring table mountains Dalt and Gemm in the north-east, then the plains to the east and south-east 110 m below the sheer rim. No subject (pano). Verified (check.mjs, full take flown): take 0-10 s: AGL 22..22 m, nearest drawn 59.42 m (spawn Syliph Tower), vmax 0 m/s; edit 2-8.5 s: AGL 22..22 m, nearest drawn 59.42 m (spawn Syliph Tower), vmax 0 m/s; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-mount-syliph.01": "take 0-10 s: AGL 22..22 m, nearest drawn 59.42 m (spawn Syliph Tower), vmax 0 m/s; edit 2-8.5 s: AGL 22..22 m, nearest drawn 59.42 m (spawn Syliph Tower), vmax 0 m/s; flight cinema peak 0 m/s (cap 12), max tracking gap 0 m"
+ }
+}

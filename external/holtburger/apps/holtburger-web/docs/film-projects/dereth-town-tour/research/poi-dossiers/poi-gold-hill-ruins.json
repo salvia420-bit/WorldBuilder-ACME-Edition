@@ -1,0 +1,182 @@
+{
+ "name": "Gold Hill Ruins",
+ "title": "Gold Hill Ruins",
+ "siteId": "poi-gold-hill-ruins",
+ "summary": "A mesa-top Empyrean ruin at 21.2N 12.6W, on an unclimbable mountain 100-150 m above the plains (z 240). It has an avenue of obelisks, pillars and broken columns ending between twin 6 m towers, 10 m ruined walls topped with candles, portal-stone floor tiles, a gold-and-blue frame with candles, and a mossy brick hearth holding the Smoldering Brazier and the Runed Chest. Pines grow among the ruins, and Sclavus have made it their base.",
+ "landmarks": [
+  {
+   "name": "Smoldering Brazier hearth",
+   "pos": [
+    21500.5,
+    29588.7,
+    240.0
+   ],
+   "heightM": 6.3,
+   "note": "Brazier weenie inside the 10 m mossy brick enclosure 0x02000395; Runed Chest beside it."
+  },
+  {
+   "name": "Obelisk avenue",
+   "pos": [
+    21420.0,
+    29520.0,
+    240.0
+   ],
+   "heightM": 6,
+   "note": "Obelisks 0x02000410-16, columns, twin towers 0x02000398 at y 29539."
+  },
+  {
+   "name": "Ruined walls with candles",
+   "pos": [
+    21423.0,
+    29577.0,
+    240.0
+   ],
+   "heightM": 10,
+   "note": "0x02000248 walls topped with 0x0200039C candles."
+  }
+ ],
+ "site": {
+  "id": "poi-gold-hill-ruins",
+  "name": "Gold Hill Ruins",
+  "gazetteerId": "gold-hill-ruins",
+  "teleport": "@teleloc 0x6F9A0006 1.4 122.3 204.8 0.34939 0 0 -0.936978",
+  "anchor": [
+   21455.0,
+   29555.0,
+   240.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.43,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer gold-hill-ruins (the portal-gem landing ledge at z 205 on the mesa's north-west flank, 150 m from the ruins)."
+ },
+ "insertAfter": "plateau-village",
+ "insertBefore": "danbys-outpost",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 21.2,
+   "ew": -12.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3657,
+  "coveredBy": "shot:zaikhal.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Gold_Hill_Ruins.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-gold-hill-ruins.01",
+   "site": "poi-gold-hill-ruins",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     21500.5,
+     29588.7,
+     240.0
+    ],
+    "height": 6.3,
+    "radius": 5
+   },
+   "params": {
+    "radiusStart": 24,
+    "radiusEnd": 42,
+    "heightStart": 36,
+    "heightEnd": 60,
+    "revolutions": 0.15,
+    "direction": "cw",
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Climb clockwise from east to south-east round the mossy brick hearth where the Smoldering Brazier burns, 24 to 42 m out and over the mesa's canopy, until the Gold Hill ruins and the plains 150 m below open up; keep 24 m from every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Helix with flame. The camera climbs clockwise from east to south-east round the mossy brick hearth where the Smoldering Brazier burns, from 24 m to 42 m out and from 36 m to 60 m up, looking down into the hearth. It rises over the mesa's canopy (crowns at 24 m or more) until the obelisks, the ruined walls and the plains 150 m below open up. The late-morning sun shines from behind. Verified (check.mjs, full take flown): take 0-11 s: AGL 41.63..74.2 m, nearest drawn 24.35 m (scenery-default 0x02000258@21509,29573), vmax 6.23 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 47.39..73.4 m, nearest drawn 27.99 m (scenery-default 0x02000258@21509,29573), vmax 6.23 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.22 m/s (cap 12), max tracking gap 0.05 m."
+  },
+  {
+   "id": "poi-gold-hill-ruins.02",
+   "site": "poi-gold-hill-ruins",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     21420.0,
+     29520.0,
+     240.0
+    ],
+    "height": 6,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 0,
+    "azimuthRef": "compass",
+    "heightM": 44,
+    "rotateDeg": 30,
+    "riseM": 4
+   },
+   "standingOrder": "Look straight down from 44 m above the avenue of Empyrean obelisks, pillars and twin towers between the mesa's pines, rotating 30 degrees as it rises 4 m; nothing passes the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Bird's-eye. The camera looks straight down from 44 m above the avenue of Empyrean obelisks, pillars and twin towers between the mesa's pines, rotating 30 deg as it rises 4 m. The rows read as a pattern on the grass. Verified (check.mjs, full take flown): take 0-9 s: AGL 44..48 m, nearest drawn 24 m (scenery-default 0x02000258@21424,29492), vmax 0.7 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7 s: AGL 44.27..47.5 m, nearest drawn 24.18 m (scenery-default 0x02000258@21424,29492), vmax 0.7 m/s, LOS blocked 0/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-gold-hill-ruins.01": "take 0-11 s: AGL 41.63..74.2 m, nearest drawn 24.35 m (scenery-default 0x02000258@21509,29573), vmax 6.23 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 47.39..73.4 m, nearest drawn 27.99 m (scenery-default 0x02000258@21509,29573), vmax 6.23 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.22 m/s (cap 12), max tracking gap 0.05 m",
+  "poi-gold-hill-ruins.02": "take 0-9 s: AGL 44..48 m, nearest drawn 24 m (scenery-default 0x02000258@21424,29492), vmax 0.7 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7 s: AGL 44.27..47.5 m, nearest drawn 24.18 m (scenery-default 0x02000258@21424,29492), vmax 0.7 m/s, LOS blocked 0/23, subject in frame 100%"
+ }
+}

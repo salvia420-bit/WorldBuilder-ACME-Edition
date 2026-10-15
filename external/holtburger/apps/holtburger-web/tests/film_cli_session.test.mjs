@@ -58,6 +58,12 @@
 //   S6b rehearse / shoot / scout through main(): the same issues and the scout warnings, printed and saved
 //   S6c rehearse / shoot through main(): the tracking-gap warning and issue (none within the threshold), and an
 //       overspeed with durationHelps false kept in reports/<shot>.json without a duplicated hint
+//   S32 site.prime: the schedule entry's prime commands are teleported (with their readiness gates) before the site
+//       teleport, event 'prime' rows + stderr lines, a refused / not-ready prime only warns, r.primes
+//   S33 pageEnv: every take report records the page's look settings (redacted URL, quality, storm, cloud/storm/water
+//       URL values, terrain water/IBL uniforms) taken just before recording; a failing snapshot is null, never fatal
+//   S34 boot effects (2026-10-15 audit): quality ultra by default, --coverage → cloudCoverage, stormScan=retail and
+//       waterSheenFade=40,500 always, an out-of-range --coverage → exit 2 before navigating
 //   S7 a final scan: no output stream and no written file holds the password or the key
 // No browser, no network, no real ffmpeg (a temp node script records its argv).
 //
@@ -76,7 +82,7 @@ import { IVF_HEADER_BYTES, createTakeSink, ivfFileHeader, ivfFrameHeader, sniffC
 import { muxArgv } from "../tools/film/lib/ffmpeg.mjs";
 import { JEV_ENDPOINT, choiceQ } from "../tools/film/lib/jev.mjs";
 import { createJevBroker } from "../tools/film/lib/jev_broker.mjs";
-import { DECIDE_OPTIONS, FLIGHT_GAP_WARN_M, HOP_LIFT_M, PAGE_ABORT_MAX, PAGE_IDLE_WAIT_MS, STAND_HOP_M, flightOf, issueLine, judgeInput, mergeIssues, pageIssuesOf, selectSchedule, settlePage, shootSchedule, standPointOf } from "../tools/film/lib/shoot.mjs";
+import { DECIDE_OPTIONS, FLIGHT_GAP_WARN_M, HOP_LIFT_M, PAGE_ABORT_MAX, PAGE_ENV_FN, PAGE_IDLE_WAIT_MS, STAND_HOP_M, flightOf, issueLine, judgeInput, mergeIssues, pageIssuesOf, selectSchedule, settlePage, shootSchedule, standPointOf } from "../tools/film/lib/shoot.mjs";
 import { compilePlan } from "../tools/film/plan/compile.mjs";
 import { buildShot, createRegistry, defineTechnique } from "../scene3d/film/shots/index.js";
 import { makeTrajectory } from "../scene3d/film/shots/trajectory.js";
@@ -2203,6 +2209,127 @@ await check("S10k (r4-nits) the REAL page's overspeed (take_player prepare: acce
     ["k1", [["acceleration", true, accel.flight.dryFlight.maxGapM]]], ["k3", [["acceleration", null, noSpec.flight.dryFlight.maxGapM]]],
   ]);
   assert.deepEqual(inputs.map((x) => overOf(x.issues)), [[["acceleration", true, accel.flight.dryFlight.maxGapM]], [["acceleration", null, noSpec.flight.dryFlight.maxGapM]]]);
+});
+
+// ── S32–S34: site.prime, pageEnv, boot effects ───────────────────────────────────────────────────────────
+
+await check("S32 site.prime: before the site teleport each prime command goes through the teleport + readiness path (never during a take), logs event 'prime' and a stderr line; a refused or not-ready prime only warns; counted in r.primes", async () => {
+  const PRIME = ["@teleloc 0x002B035D 469.8 -130.2 -6", "@teleloc 0x002B02D2 380 -100 -12", "@teleloc 0x002B0163 130 -140 -54"];
+  const tp = makeTakePage({ teleportFails: [PRIME[1]] });
+  // the first prime lands but its cell never becomes ready (until the entry's 30 s timeout)
+  const ready = tp.film.world.ready;
+  tp.film.world.ready = (o) => {
+    if (tp.teleports.at(-1)?.cmd === PRIME[0]) {
+      tp.calls.push("ready");
+      return { ok: false, checks: { interior: false }, waitedMs: 1 };
+    }
+    return ready(o);
+  };
+  const tl = shootTimeline([{ id: "A", shots: [{ id: "a1" }] }, { id: "B", shots: [{ id: "b1" }] }]);
+  tl.schedule[0].prime = PRIME.slice();
+  const res = await runSchedule(tp, tl);
+  assert.equal(res.error, null, String(res.error?.stack ?? res.error));
+  const { r } = res;
+  assert.equal(r.ok, true, `a failing prime never fails the site: ${JSON.stringify(r.failures)}`);
+  assert.deepEqual([r.primes, r.teleports], [3, 2]);
+  assert.deepEqual(tp.teleports.map((t) => t.cmd), [...PRIME, "@telepoi A", "@telepoi B"], "primes first, then the site teleport; site B has none");
+  assert.ok(tp.teleports.every((t) => !t.takeRunning), "never during a take");
+  const at = (c) => tp.calls.indexOf(`teleport ${c}`);
+  assert.equal(tp.calls[at(PRIME[2]) + 1], "ready", "the readiness gate follows each prime");
+  assert.equal(tp.calls[at(PRIME[0]) + 1], "ready");
+  assert.ok(at(PRIME[2]) < at("@telepoi A") && at("@telepoi A") < tp.calls.indexOf("prepare a1"));
+  const rows = res.shootLog().filter((x) => x.event === "prime");
+  assert.deepEqual(rows.map((x) => [x.siteId, x.i, x.of, x.cmd, x.ok]), PRIME.map((c, i) => ["A", i, 3, c, i === 2]));
+  assert.match(rows[0].error, /not ready after 30 s/);
+  assert.match(rows[1].error, /__film\.world\.teleport failed: .*refused/);
+  assert.equal(rows[2].error, undefined);
+  assert.ok(res.infos.includes(`   prime 1/3: ${PRIME[0]}`), res.infos.join("\n"));
+  assert.ok(res.warns.some((w) => w.startsWith(`site A: prime 1/3 (${PRIME[0]}) not ready after 30 s — going on`)), res.warns.join("\n"));
+  assert.ok(res.warns.some((w) => w.startsWith(`site A: prime 2/3 (${PRIME[1]}) failed: __film.world.teleport failed`)), res.warns.join("\n"));
+  const a1 = JSON.parse(fs.readFileSync(path.join(res.paths.reports, "a1.json"), "utf8"));
+  assert.deepEqual([a1.prime.sent, a1.prime.ready, a1.prime.failed.map((f) => [f.i, f.cmd])], [3, 1, [[0, PRIME[0]], [1, PRIME[1]]]]);
+  assert.ok(!("prime" in JSON.parse(fs.readFileSync(path.join(res.paths.reports, "b1.json"), "utf8"))), "no prime note on a site without prime");
+  // a schedule without prime: no prime traffic at all
+  const plain = makeTakePage();
+  const res2 = await runSchedule(plain, shootTimeline([{ id: "A", shots: [{ id: "a1" }] }]));
+  assert.deepEqual([res2.r.primes, plain.teleports.map((t) => t.cmd)], [0, ["@telepoi A"]]);
+  assert.equal(res2.shootLog().filter((x) => x.event === "prime").length, 0);
+  // a page without the film API is a usage error, not a warning
+  const bare = makeTakePage();
+  delete bare.film.world.teleport;
+  const tl3 = shootTimeline([{ id: "A", shots: [{ id: "a1" }] }]);
+  tl3.schedule[0].prime = [PRIME[0]];
+  const res3 = await runSchedule(bare, tl3);
+  assert.ok(res3.error instanceof FilmCliError && res3.error.exitCode === EXIT.USAGE, String(res3.error));
+});
+
+await check("S33 pageEnv: every take report records the page's look settings just before recording (redacted URL, quality preset, storm, cloud/storm/water URL values, terrain water/IBL uniforms); unavailable parts are null; a failing snapshot never fails the take", async () => {
+  const tp = makeTakePage({
+    prepareExtra: (take) => {
+      if (take.shotId === "a2") {
+        win.__getWeather = () => { throw new Error("weather not ready"); };
+        delete win.liveScene3d;
+      }
+      return {};
+    },
+  });
+  const win = await tp.page.evaluate(() => window);
+  win.location = { href: `http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&filmMode=on&filmDof=on&filmProps=on&autoLogin=1&account=phase4demo&password=${encodeURIComponent(PAGE_PW)}&quality=ultra&clouds=on&cloudWeather=off&cloudCoverage=0.3&stormScan=retail&waterSheenFade=40,500` };
+  win.__quality = { preset: "ultra", flags: { grass: 2 }, source: "url" };
+  win.__getWeather = () => ({ is_storm: false, temperature_C: 11 });
+  win.liveScene3d = { terrainMaterials: [{ uniforms: { uWaterEnvEnabled: { value: 0 }, uIblEnabled: { value: 1 } } }, { uniforms: { uWaterEnvEnabled: { value: 1 } } }, null, {}] };
+  const res = await runSchedule(tp, shootTimeline([{ id: "A", shots: [{ id: "a1" }, { id: "a2" }] }]));
+  assert.equal(res.error, null, String(res.error?.stack ?? res.error));
+  assert.equal(res.r.ok, true);
+  const rep = (id) => JSON.parse(fs.readFileSync(path.join(res.paths.reports, `${id}.json`), "utf8"));
+  assert.deepEqual(rep("a1").pageEnv, {
+    url: "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&filmMode=on&filmDof=on&filmProps=on&autoLogin=1&account=[redacted]&password=[redacted]&quality=ultra&clouds=on&cloudWeather=off&cloudCoverage=0.3&stormScan=retail&waterSheenFade=40,500",
+    quality: "ultra", isStorm: false, cloudCoverage: "0.3", cloudWeather: "off", clouds: "on", stormScan: "retail", waterSheenFade: "40,500", filmProps: "on",
+    water: { materials: 2, waterEnvEnabled: true, iblEnabled: true },
+  });
+  const a2 = rep("a2").pageEnv;
+  assert.deepEqual([a2.isStorm, a2.water, a2.quality], [null, null, "ultra"], "a throwing weather getter and no liveScene3d → null, the rest still read");
+  assert.ok(!JSON.stringify(rep("a1")).includes(PAGE_PW), "the page password never reaches a report");
+  // the snapshot itself failing (the page evaluate throws) → pageEnv null, the take is still kept
+  const broken = makeTakePage();
+  const ev = broken.page.evaluate;
+  broken.page.evaluate = async (fn, arg) => {
+    if (fn === PAGE_ENV_FN) throw new Error("Execution context was destroyed");
+    return ev(fn, arg);
+  };
+  const res2 = await runSchedule(broken, shootTimeline([{ id: "A", shots: [{ id: "a1" }] }]));
+  assert.equal(res2.error, null, String(res2.error));
+  assert.deepEqual([res2.r.ok, rep2(res2, "a1").pageEnv], [true, null]);
+  // a bare page: every field null
+  const saved = globalThis.window;
+  try {
+    globalThis.window = {};
+    assert.deepEqual(PAGE_ENV_FN(), { url: null, quality: null, isStorm: null, cloudCoverage: null, cloudWeather: null, clouds: null, stormScan: null, waterSheenFade: null, filmProps: null, water: null });
+  } finally {
+    globalThis.window = saved;
+  }
+  function rep2(rr, id) {
+    return JSON.parse(fs.readFileSync(path.join(rr.paths.reports, `${id}.json`), "utf8"));
+  }
+});
+
+await check("S34 boot (effects audit): quality ultra by default, --coverage=0..1 → cloudCoverage (also with --weather=live), stormScan=retail + waterSheenFade=40,500 always; --coverage out of range → exit 2 before any navigation", async () => {
+  let world = createWorld();
+  let r = await run(world, ["boot"], { env: { FILM_PASSWORD: PASSWORD } });
+  assert.equal(r.code, 0, r.err + r.out);
+  let q = new URL(world.gotoUrls[0]).searchParams;
+  assert.deepEqual([q.get("quality"), q.get("cloudCoverage"), q.get("cloudWeather"), q.get("stormScan"), q.get("waterSheenFade"), q.get("filmProps")], ["ultra", "0.3", "off", "retail", "40,500", "on"]);
+  world = createWorld();
+  r = await run(world, ["boot", "--coverage=0.6", "--weather=live", "--quality=high"], { env: { FILM_PASSWORD: PASSWORD } });
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.deepEqual(world.gotoUrls, [buildFilmUrl({ password: PASSWORD, coverage: 0.6, weather: "live", quality: "high" })]);
+  q = new URL(world.gotoUrls[0]).searchParams;
+  assert.deepEqual([q.get("quality"), q.get("cloudCoverage"), q.has("cloudWeather"), q.get("stormScan")], ["high", "0.6", false, "retail"]);
+  world = createWorld();
+  r = await run(world, ["boot", "--coverage=2"], { env: { FILM_PASSWORD: PASSWORD } });
+  assert.equal(r.code, 2, r.err + r.out);
+  assert.match(r.err, /--coverage must be ≤ 1/);
+  assert.deepEqual(world.gotoUrls, [], "no navigation");
 });
 
 // ── S7: secrets ──────────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,1608 @@
+{
+ "about": "Egg Orchard pass-plan input (tools/passes.py inputs) for `film jev task pass-plan` / tools/pass_plan.mjs. Gaps in metres: left/right = from the creature physics radius to the wall on that side, bounded by the corridor the line flies; over = creature top to the ceiling (0 when flying over it would leave the line). left/right = the side the drone flies on, seen in the direction of travel. needs = verify rules + 0.1 m.",
+ "line": "data/racing_line.base.json",
+ "within": 6.0,
+ "creatures": [
+  {
+   "id": "slasher-35d-158",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B035D",
+   "s": 45.98,
+   "k": 92,
+   "distToLine": 1.14,
+   "region": "tunnel",
+   "pos": [
+    468.438,
+    8125.296,
+    -5.995
+   ],
+   "radius": 0.919,
+   "top": -3.196,
+   "lateral": -1.079,
+   "gaps": {
+    "over": 0.936,
+    "left": 1.968,
+    "right": 1.856
+   },
+   "bestHeight": {
+    "left": -4.0,
+    "right": -4.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 0.84,
+    "right": 3.0
+   }
+  },
+  {
+   "id": "slasher-354-156",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0354",
+   "s": 58.48,
+   "k": 117,
+   "distToLine": 3.35,
+   "region": "tunnel",
+   "pos": [
+    460.757,
+    8135.13,
+    -5.995
+   ],
+   "radius": 0.919,
+   "top": -3.196,
+   "lateral": -3.345,
+   "gaps": {
+    "over": 0.936,
+    "left": 4.166,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -4.0,
+    "right": -4.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "sideNotes": {
+    "right": "needs a 5.3 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 5.26
+   }
+  },
+  {
+   "id": "slasher-350-155",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0350",
+   "s": 75.98,
+   "k": 152,
+   "distToLine": 1.43,
+   "region": "tunnel",
+   "pos": [
+    441.281,
+    8136.514,
+    -5.995
+   ],
+   "radius": 0.919,
+   "top": -3.196,
+   "lateral": 1.428,
+   "gaps": {
+    "over": 0.936,
+    "left": 1.395,
+    "right": 1.842
+   },
+   "bestHeight": {
+    "left": -4.0,
+    "right": -4.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 3.35,
+    "right": 0.49
+   }
+  },
+  {
+   "id": "slasher-307-140",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0307",
+   "s": 96.47,
+   "k": 193,
+   "distToLine": 0.89,
+   "region": "tunnel",
+   "pos": [
+    436.816,
+    8155.682,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": -0.826,
+   "gaps": {
+    "over": 0.936,
+    "left": 1.598,
+    "right": 1.211
+   },
+   "bestHeight": {
+    "left": -10.0,
+    "right": -10.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 1.09,
+    "right": 2.75
+   }
+  },
+  {
+   "id": "slasher-2f1-136",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02F1",
+   "s": 112.47,
+   "k": 225,
+   "distToLine": 5.73,
+   "region": "tunnel",
+   "pos": [
+    420.767,
+    8161.608,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": -5.727,
+   "gaps": {
+    "over": 0.0,
+    "left": 7.358,
+    "right": -0.919
+   },
+   "bestHeight": {
+    "left": -10.0,
+    "right": -10.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "overNote": "creature outside the corridor the line flies",
+   "sideNotes": {
+    "right": "needs a 7.6 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 7.65
+   }
+  },
+  {
+   "id": "slasher-2f2-137",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02F2",
+   "s": 113.47,
+   "k": 227,
+   "distToLine": 3.08,
+   "region": "tunnel",
+   "pos": [
+    419.761,
+    8158.876,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": -3.081,
+   "gaps": {
+    "over": 0.936,
+    "left": 4.636,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -10.0,
+    "right": -10.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "sideNotes": {
+    "right": "needs a 5.0 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 5.0
+   }
+  },
+  {
+   "id": "slasher-2e2-132",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02E2",
+   "s": 128.96,
+   "k": 258,
+   "distToLine": 2.47,
+   "region": "tunnel",
+   "pos": [
+    408.731,
+    8146.279,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": 2.446,
+   "gaps": {
+    "over": 0.936,
+    "left": -0.01,
+    "right": 2.97
+   },
+   "bestHeight": {
+    "left": -10.6,
+    "right": -10.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "left": "needs a 4.4 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 4.37,
+    "right": 0.0
+   }
+  },
+  {
+   "id": "slasher-2d6-126",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02D6",
+   "s": 151.46,
+   "k": 303,
+   "distToLine": 0.97,
+   "region": "tunnel",
+   "pos": [
+    388.339,
+    8155.141,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": -0.951,
+   "gaps": {
+    "over": 0.936,
+    "left": 1.334,
+    "right": 1.858
+   },
+   "bestHeight": {
+    "left": -10.0,
+    "right": -10.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 0.97,
+    "right": 2.87
+   }
+  },
+  {
+   "id": "slasher-2c9-121",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02C9",
+   "s": 192.43,
+   "k": 385,
+   "distToLine": 1.5,
+   "region": "room",
+   "pos": [
+    359.108,
+    8134.045,
+    -11.995
+   ],
+   "radius": 0.919,
+   "top": -9.196,
+   "lateral": -0.118,
+   "gaps": {
+    "over": 5.495,
+    "left": 5.42,
+    "right": 3.681
+   },
+   "bestHeight": {
+    "left": -8.427,
+    "right": -8.427
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 1.8,
+    "right": 2.04
+   }
+  },
+  {
+   "id": "slayer-2a6-117",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B02A6",
+   "s": 227.9,
+   "k": 456,
+   "distToLine": 3.11,
+   "region": "tunnel",
+   "pos": [
+    329.86,
+    8125.143,
+    -17.995
+   ],
+   "radius": 1.011,
+   "top": -14.916,
+   "lateral": -3.106,
+   "gaps": {
+    "over": 0.656,
+    "left": 3.422,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -16.0,
+    "right": -16.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "straight",
+   "sideNotes": {
+    "right": "needs a 5.1 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 5.12
+   }
+  },
+  {
+   "id": "slayer-29e-115",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B029E",
+   "s": 250.39,
+   "k": 501,
+   "distToLine": 1.56,
+   "region": "tunnel",
+   "pos": [
+    316.997,
+    8105.617,
+    -17.995
+   ],
+   "radius": 1.011,
+   "top": -14.916,
+   "lateral": 1.52,
+   "gaps": {
+    "over": 0.046,
+    "left": -0.01,
+    "right": 2.254
+   },
+   "bestHeight": {
+    "left": -16.0,
+    "right": -16.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "sideNotes": {
+    "left": "needs a 3.5 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 3.53,
+    "right": 0.49
+   }
+  },
+  {
+   "id": "slayer-24a-89",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B024A",
+   "s": 265.39,
+   "k": 531,
+   "distToLine": 2.35,
+   "region": "tunnel",
+   "pos": [
+    301.923,
+    8106.123,
+    -23.995
+   ],
+   "radius": 1.011,
+   "top": -20.916,
+   "lateral": -2.35,
+   "gaps": {
+    "over": 0.656,
+    "left": 2.706,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -22.0,
+    "right": -22.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "right": "needs a 4.4 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 4.36
+   }
+  },
+  {
+   "id": "slayer-235-86",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B0235",
+   "s": 282.38,
+   "k": 565,
+   "distToLine": 0.03,
+   "region": "tunnel",
+   "pos": [
+    289.752,
+    8096.222,
+    -23.995
+   ],
+   "radius": 1.011,
+   "top": -20.916,
+   "lateral": 0.004,
+   "gaps": {
+    "over": 0.656,
+    "left": 3.589,
+    "right": 1.419
+   },
+   "bestHeight": {
+    "left": -22.6,
+    "right": -22.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 2.01,
+    "right": 2.01
+   }
+  },
+  {
+   "id": "slayer-20a-78",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B020A",
+   "s": 305.37,
+   "k": 611,
+   "distToLine": 0.42,
+   "region": "tunnel",
+   "pos": [
+    270.396,
+    8105.665,
+    -23.995
+   ],
+   "radius": 1.011,
+   "top": -20.916,
+   "lateral": 0.4,
+   "gaps": {
+    "over": 0.656,
+    "left": 1.324,
+    "right": 2.0
+   },
+   "bestHeight": {
+    "left": -22.0,
+    "right": -22.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 2.41,
+    "right": 1.61
+   }
+  },
+  {
+   "id": "slayer-202-77",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B0202",
+   "s": 326.87,
+   "k": 654,
+   "distToLine": 1.39,
+   "region": "tunnel",
+   "pos": [
+    252.176,
+    8116.949,
+    -23.995
+   ],
+   "radius": 1.011,
+   "top": -20.916,
+   "lateral": 1.383,
+   "gaps": {
+    "over": 0.656,
+    "left": 3.82,
+    "right": 1.722
+   },
+   "bestHeight": {
+    "left": -22.0,
+    "right": -22.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 3.39,
+    "right": 0.63
+   }
+  },
+  {
+   "id": "slayer-1f1-74",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B01F1",
+   "s": 354.86,
+   "k": 710,
+   "distToLine": 1.33,
+   "region": "tunnel",
+   "pos": [
+    249.786,
+    8144.012,
+    -29.995
+   ],
+   "radius": 1.011,
+   "top": -26.916,
+   "lateral": -1.281,
+   "gaps": {
+    "over": 0.656,
+    "left": 1.882,
+    "right": 1.258
+   },
+   "bestHeight": {
+    "left": -28.0,
+    "right": -28.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 0.73,
+    "right": 3.29
+   }
+  },
+  {
+   "id": "slayer-1e4-72",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B01E4",
+   "s": 373.85,
+   "k": 748,
+   "distToLine": 1.38,
+   "region": "tunnel",
+   "pos": [
+    230.68,
+    8144.802,
+    -35.995
+   ],
+   "radius": 1.011,
+   "top": -32.916,
+   "lateral": -1.358,
+   "gaps": {
+    "over": 0.656,
+    "left": 1.609,
+    "right": 1.61
+   },
+   "bestHeight": {
+    "left": -34.2,
+    "right": -34.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 0.65,
+    "right": 3.37
+   }
+  },
+  {
+   "id": "ripper-1de-69",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01DE",
+   "s": 392.84,
+   "k": 786,
+   "distToLine": 4.69,
+   "region": "room",
+   "pos": [
+    213.622,
+    8133.192,
+    -35.995
+   ],
+   "radius": 0.695,
+   "top": -34.007,
+   "lateral": 4.568,
+   "gaps": {
+    "over": 0.0,
+    "left": -0.01,
+    "right": 7.822
+   },
+   "bestHeight": {
+    "left": -33.603,
+    "right": -33.603
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "overNote": "creature 4.6 m off the line (> 4.5 m)",
+   "sideNotes": {
+    "left": "needs a 6.3 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 6.26,
+    "right": 0.0
+   }
+  },
+  {
+   "id": "ripper-1de-70",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01DE",
+   "s": 395.34,
+   "k": 791,
+   "distToLine": 1.28,
+   "region": "room",
+   "pos": [
+    214.155,
+    8139.129,
+    -35.995
+   ],
+   "radius": 0.695,
+   "top": -34.007,
+   "lateral": -0.785,
+   "gaps": {
+    "over": 30.0,
+    "left": 9.879,
+    "right": 1.739
+   },
+   "bestHeight": {
+    "left": -33.6,
+    "right": -33.6
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 0.91,
+    "right": 2.48
+   }
+  },
+  {
+   "id": "ripper-1d8-67",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01D8",
+   "s": 419.83,
+   "k": 840,
+   "distToLine": 0.92,
+   "region": "room",
+   "pos": [
+    199.232,
+    8155.111,
+    -35.995
+   ],
+   "radius": 0.695,
+   "top": -34.007,
+   "lateral": 0.685,
+   "gaps": {
+    "over": 30.0,
+    "left": 3.452,
+    "right": 5.246
+   },
+   "bestHeight": {
+    "left": -33.997,
+    "right": -33.997
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 2.38,
+    "right": 1.01
+   }
+  },
+  {
+   "id": "ripper-1a9-56",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A9",
+   "s": 442.82,
+   "k": 886,
+   "distToLine": 5.36,
+   "region": "room",
+   "pos": [
+    187.063,
+    8157.833,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -2.937,
+   "gaps": {
+    "over": 30.0,
+    "left": 7.305,
+    "right": 1.505
+   },
+   "bestHeight": {
+    "left": -49.815,
+    "right": -49.815
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 0.0,
+    "right": 4.63
+   }
+  },
+  {
+   "id": "ripper-1a9-57",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A9",
+   "s": 442.82,
+   "k": 886,
+   "distToLine": 5.44,
+   "region": "room",
+   "pos": [
+    193.885,
+    8156.921,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": 3.885,
+   "gaps": {
+    "over": 30.0,
+    "left": -0.01,
+    "right": 8.305
+   },
+   "bestHeight": {
+    "left": -49.815,
+    "right": -49.815
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "left": "needs a 5.6 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 5.58,
+    "right": 0.0
+   }
+  },
+  {
+   "id": "ripper-1aa-58",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01AA",
+   "s": 455.31,
+   "k": 911,
+   "distToLine": 0.28,
+   "region": "room",
+   "pos": [
+    189.235,
+    8142.514,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -0.27,
+   "gaps": {
+    "over": 1.757,
+    "left": 5.305,
+    "right": 3.705
+   },
+   "bestHeight": {
+    "left": -52.545,
+    "right": -52.545
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 1.43,
+    "right": 1.96
+   }
+  },
+  {
+   "id": "ripper-1a5-55",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A5",
+   "s": 475.31,
+   "k": 951,
+   "distToLine": 0.15,
+   "region": "tunnel",
+   "pos": [
+    180.209,
+    8125.859,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": 0.107,
+   "gaps": {
+    "over": 1.747,
+    "left": 1.767,
+    "right": 2.189
+   },
+   "bestHeight": {
+    "left": -52.0,
+    "right": -52.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 1.8,
+    "right": 1.59
+   }
+  },
+  {
+   "id": "ripper-19b-53",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B019B",
+   "s": 488.8,
+   "k": 978,
+   "distToLine": 2.14,
+   "region": "tunnel",
+   "pos": [
+    172.638,
+    8116.43,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -2.136,
+   "gaps": {
+    "over": 1.747,
+    "left": 3.311,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -52.0,
+    "right": -52.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "right": "needs a 3.8 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 3.83
+   }
+  },
+  {
+   "id": "ripper-18e-51",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B018E",
+   "s": 504.79,
+   "k": 1010,
+   "distToLine": 0.28,
+   "region": "tunnel",
+   "pos": [
+    161.486,
+    8105.889,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": 0.27,
+   "gaps": {
+    "over": 1.747,
+    "left": 3.705,
+    "right": 2.075
+   },
+   "bestHeight": {
+    "left": -52.6,
+    "right": -52.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 1.96,
+    "right": 1.43
+   }
+  },
+  {
+   "id": "ripper-171-46",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0171",
+   "s": 531.78,
+   "k": 1064,
+   "distToLine": 1.79,
+   "region": "tunnel",
+   "pos": [
+    139.135,
+    8115.568,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -1.764,
+   "gaps": {
+    "over": 1.747,
+    "left": 2.41,
+    "right": 1.393
+   },
+   "bestHeight": {
+    "left": -52.0,
+    "right": -52.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 0.0,
+    "right": 3.46
+   }
+  },
+  {
+   "id": "ripper-15e-43",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B015E",
+   "s": 547.77,
+   "k": 1096,
+   "distToLine": 0.98,
+   "region": "tunnel",
+   "pos": [
+    122.706,
+    8117.65,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": 0.976,
+   "gaps": {
+    "over": 1.747,
+    "left": 0.725,
+    "right": 1.637
+   },
+   "bestHeight": {
+    "left": -52.0,
+    "right": -52.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 2.67,
+    "right": 0.72
+   }
+  },
+  {
+   "id": "ripper-156-42",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0156",
+   "s": 569.26,
+   "k": 1139,
+   "distToLine": 0.8,
+   "region": "tunnel",
+   "pos": [
+    104.507,
+    8125.994,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -0.803,
+   "gaps": {
+    "over": 1.747,
+    "left": 2.03,
+    "right": 2.043
+   },
+   "bestHeight": {
+    "left": -52.0,
+    "right": -52.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 0.89,
+    "right": 2.5
+   }
+  },
+  {
+   "id": "ripper-153-41",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0153",
+   "s": 589.74,
+   "k": 1180,
+   "distToLine": 1.96,
+   "region": "room",
+   "pos": [
+    88.474,
+    8116.142,
+    -53.995
+   ],
+   "radius": 0.695,
+   "top": -52.007,
+   "lateral": -0.142,
+   "gaps": {
+    "over": 6.041,
+    "left": 4.447,
+    "right": 4.305
+   },
+   "bestHeight": {
+    "left": -50.703,
+    "right": -50.703
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 1.55,
+    "right": 1.84
+   }
+  },
+  {
+   "id": "ripper-150-39",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0150",
+   "s": 601.24,
+   "k": 1203,
+   "distToLine": 2.24,
+   "region": "room",
+   "pos": [
+    79.775,
+    8117.016,
+    -57.05
+   ],
+   "radius": 0.695,
+   "top": -55.062,
+   "lateral": 0.131,
+   "gaps": {
+    "over": 9.551,
+    "left": 5.499,
+    "right": 3.505
+   },
+   "bestHeight": {
+    "left": -53.891,
+    "right": -53.891
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 1.83,
+    "right": 1.56
+   }
+  },
+  {
+   "id": "ripper-12f-30",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B012F",
+   "s": 610.72,
+   "k": 1222,
+   "distToLine": 2.27,
+   "region": "tunnel",
+   "pos": [
+    70.709,
+    8121.024,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": 0.217,
+   "gaps": {
+    "over": 12.169,
+    "left": 5.217,
+    "right": 4.105
+   },
+   "bestHeight": {
+    "left": -57.4,
+    "right": -58.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "shift": {
+    "left": 1.91,
+    "right": 1.48
+   }
+  },
+  {
+   "id": "ripper-121-29",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0121",
+   "s": 643.18,
+   "k": 1287,
+   "distToLine": 5.82,
+   "region": "tunnel",
+   "pos": [
+    57.832,
+    8150.989,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": -4.864,
+   "gaps": {
+    "over": 0.0,
+    "left": 9.001,
+    "right": -0.495
+   },
+   "bestHeight": {
+    "left": -57.4,
+    "right": -58.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "overNote": "creature 4.9 m off the line (> 4.5 m)",
+   "sideNotes": {
+    "right": "needs a 6.6 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 6.56
+   }
+  },
+  {
+   "id": "larvae-11a-24",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B011A",
+   "s": 651.67,
+   "k": 1304,
+   "distToLine": 4.88,
+   "region": "tunnel",
+   "pos": [
+    50.446,
+    8149.99,
+    -59.995
+   ],
+   "radius": 0.619,
+   "top": -59.119,
+   "lateral": -3.919,
+   "gaps": {
+    "over": 6.032,
+    "left": 8.015,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -57.4,
+    "right": -58.6
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "left",
+   "sideNotes": {
+    "right": "needs a 5.5 m swing off the line (> 3.5 m in a tunnel)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 5.54
+   }
+  },
+  {
+   "id": "ripper-10b-10",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010B",
+   "s": 675.15,
+   "k": 1351,
+   "distToLine": 2.28,
+   "region": "room",
+   "pos": [
+    30.947,
+    8137.259,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": 1.423,
+   "gaps": {
+    "over": 1.757,
+    "left": 3.621,
+    "right": 10.18
+   },
+   "bestHeight": {
+    "left": -57.156,
+    "right": -57.156
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 3.12,
+    "right": 0.27
+   }
+  },
+  {
+   "id": "larvae-10b-11",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B010B",
+   "s": 675.65,
+   "k": 1352,
+   "distToLine": 5.14,
+   "region": "room",
+   "pos": [
+    33.039,
+    8135.446,
+    -59.995
+   ],
+   "radius": 0.619,
+   "top": -59.119,
+   "lateral": 4.029,
+   "gaps": {
+    "over": 30.0,
+    "left": -0.01,
+    "right": 11.381
+   },
+   "bestHeight": {
+    "left": -56.327,
+    "right": -56.927
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "left": "needs a 5.6 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 5.65,
+    "right": 0.0
+   }
+  },
+  {
+   "id": "ripper-10b-9",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010B",
+   "s": 682.14,
+   "k": 1365,
+   "distToLine": 4.36,
+   "region": "room",
+   "pos": [
+    25.84,
+    8132.259,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": -1.153,
+   "gaps": {
+    "over": 30.0,
+    "left": 9.551,
+    "right": 11.305
+   },
+   "bestHeight": {
+    "left": -53.974,
+    "right": -54.574
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 0.54,
+    "right": 2.85
+   }
+  },
+  {
+   "id": "ripper-10c-13",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010C",
+   "s": 682.14,
+   "k": 1365,
+   "distToLine": 5.78,
+   "region": "room",
+   "pos": [
+    30.712,
+    8130.312,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": 4.075,
+   "gaps": {
+    "over": 0.0,
+    "left": -0.01,
+    "right": 11.305
+   },
+   "bestHeight": {
+    "left": -53.974,
+    "right": -54.574
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "overNote": "creature outside the corridor the line flies",
+   "sideNotes": {
+    "left": "needs a 5.8 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 5.77,
+    "right": 0.0
+   }
+  },
+  {
+   "id": "larvae-106-6",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0106",
+   "s": 696.61,
+   "k": 1394,
+   "distToLine": 4.19,
+   "region": "room",
+   "pos": [
+    18.863,
+    8129.492,
+    -59.995
+   ],
+   "radius": 0.619,
+   "top": -59.119,
+   "lateral": -0.731,
+   "gaps": {
+    "over": 30.0,
+    "left": 3.305,
+    "right": 5.781
+   },
+   "bestHeight": {
+    "left": -55.372,
+    "right": -55.972
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "straight",
+   "shift": {
+    "left": 0.89,
+    "right": 2.35
+   }
+  },
+  {
+   "id": "larvae-105-5",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0105",
+   "s": 700.1,
+   "k": 1401,
+   "distToLine": 5.55,
+   "region": "room",
+   "pos": [
+    22.435,
+    8134.174,
+    -59.995
+   ],
+   "radius": 0.619,
+   "top": -59.119,
+   "lateral": -4.699,
+   "gaps": {
+    "over": 0.0,
+    "left": 7.436,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -57.501,
+    "right": -57.501
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "overNote": "creature 4.7 m off the line (> 4.5 m)",
+   "sideNotes": {
+    "right": "needs a 6.3 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 6.32
+   }
+  },
+  {
+   "id": "ripper-105-3",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0105",
+   "s": 701.59,
+   "k": 1404,
+   "distToLine": 3.65,
+   "region": "room",
+   "pos": [
+    18.752,
+    8138.235,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": -3.601,
+   "gaps": {
+    "over": 1.757,
+    "left": 5.834,
+    "right": -0.01
+   },
+   "bestHeight": {
+    "left": -57.86,
+    "right": -58.16
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "sideNotes": {
+    "right": "needs a 5.3 m swing off the line (> 5.0 m in a room)"
+   },
+   "shift": {
+    "left": 0.0,
+    "right": 5.3
+   }
+  },
+  {
+   "id": "larvae-105-2",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0105",
+   "s": 702.59,
+   "k": 1406,
+   "distToLine": 3.38,
+   "region": "room",
+   "pos": [
+    17.088,
+    8138.638,
+    -59.995
+   ],
+   "radius": 0.619,
+   "top": -59.119,
+   "lateral": -3.155,
+   "gaps": {
+    "over": 2.869,
+    "left": 5.135,
+    "right": 1.943
+   },
+   "bestHeight": {
+    "left": -57.905,
+    "right": -58.505
+   },
+   "needs": {
+    "left": 2.1,
+    "right": 2.1,
+    "over": 2.1
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 0.0,
+    "right": 4.77
+   }
+  },
+  {
+   "id": "ripper-101-0",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0101",
+   "s": 705.58,
+   "k": 1412,
+   "distToLine": 0.31,
+   "region": "tunnel",
+   "pos": [
+    12.903,
+    8136.201,
+    -59.995
+   ],
+   "radius": 0.695,
+   "top": -58.007,
+   "lateral": 0.308,
+   "gaps": {
+    "over": 1.747,
+    "left": 1.415,
+    "right": 1.965
+   },
+   "bestHeight": {
+    "left": -58.6,
+    "right": -58.0
+   },
+   "needs": {
+    "left": 1.8,
+    "right": 1.8,
+    "over": 1.8
+   },
+   "nextTurn": "right",
+   "shift": {
+    "left": 2.0,
+    "right": 1.39
+   }
+  }
+ ]
+}

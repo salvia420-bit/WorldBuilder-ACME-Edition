@@ -1,0 +1,1978 @@
+{
+ "batch": 1,
+ "quota": 34,
+ "pois": [
+  {
+   "title": "Festival Stone of Leafdawning",
+   "name": "Festival Stone of Leafdawning",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === One of the Festival Stones, located west of Rithwic at 10.5N, 54.2E .<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Leafdawning.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     10.1,
+     54.1
+    ],
+    [
+     10.4,
+     53.5
+    ],
+    [
+     10.5,
+     54.2
+    ]
+   ],
+   "map": {
+    "ns": 10.5,
+    "ew": 54.2
+   },
+   "world": [
+    37476.0,
+    26988.0
+   ],
+   "lb": "0xC38C",
+   "coveredDistM": 976,
+   "coveredBy": "shot:rithwic.02",
+   "nearestSite": "rithwic",
+   "nearestSiteM": 1142,
+   "gazNear": [
+    {
+     "id": "leafdawning-festival-stone",
+     "name": "Leafdawning Festival Stone",
+     "kind": "poi",
+     "d": 9,
+     "teleport": "@teleloc 0xC38C000D 28.8 112.6 40 -0.267238 0 0 -0.963631",
+     "pos": [
+      37468.8,
+      26992.6,
+      40
+     ]
+    },
+    {
+     "id": "trothyrs-rest-portal",
+     "name": "Trothyr's Rest Portal",
+     "kind": "landmark",
+     "d": 170,
+     "teleport": "@teleloc 0xC48C0004 10.2642 72.9759 29.1503 -0.707107 0 0 -0.707107",
+     "pos": [
+      37642.264,
+      26952.976,
+      29.15
+     ]
+    },
+    {
+     "id": "a-ruin-portal-c48d",
+     "name": "A Ruin Portal",
+     "kind": "landmark",
+     "d": 312,
+     "teleport": "@teleloc 0xC48D000F 45.2677 154.041 15.7426 0.464293 0 0 0.885682",
+     "pos": [
+      37677.268,
+      27226.041,
+      15.743
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-leafdawning",
+     "name": "Festival Stone of Leafdawning",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 10.40N 53.50E",
+     "pos": null,
+     "map": {
+      "ns": 10.4,
+      "ew": 53.5
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 145,
+   "timeOfDay": 0.73,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-leafdawning"
+  },
+  {
+   "title": "Chapel Blackspire",
+   "name": "Chapel Blackspire",
+   "cats": [
+    "Historical Site",
+    "Northeast POI",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === This outdoor church is where the funeral for Thorsten Cragstone was held.<ref>1999/11 Release - Quick Reference Card</ref> <br><br>No creatures, items, or portals are associated with this point of interest.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chapel_Blackspire.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     26.2,
+     46.3
+    ]
+   ],
+   "map": {
+    "ns": 19.1,
+    "ew": 46.3
+   },
+   "world": [
+    35580.0,
+    29052.0
+   ],
+   "lb": "0xB997",
+   "coveredDistM": 1579,
+   "coveredBy": "shot:cragstone.03",
+   "nearestSite": "cragstone",
+   "nearestSiteM": 1717,
+   "gazNear": [
+    {
+     "id": "lakeside-lair-portal",
+     "name": "Lakeside Lair Portal",
+     "kind": "landmark",
+     "d": 521,
+     "teleport": "@teleloc 0xBC970002 3.81672 30.4902 1.905 -0.91935 0 0 0.39344",
+     "pos": [
+      36099.817,
+      29022.49,
+      1.905
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "chapel-blackspire",
+     "name": "Chapel Blackspire",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 26.20N 46.30E",
+     "pos": null,
+     "map": {
+      "ns": 26.2,
+      "ew": 46.3
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 186,
+   "timeOfDay": 0.68,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-chapel-blackspire"
+  },
+  {
+   "title": "Festival Stone of Morningthaw",
+   "name": "Festival Stone of Morningthaw",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Morningthaw lies to the southeast of the Aluvian river-town of Rithwic, near 33.3N, 53.3E.\"<br> -- Alatar Locke, The Festival Stones of the Empyreans<br><br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Morningthaw.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     33.3,
+     53.3
+    ],
+    [
+     33.6,
+     54.0
+    ]
+   ],
+   "map": {
+    "ns": 33.3,
+    "ew": 53.3
+   },
+   "world": [
+    37260.0,
+    32460.0
+   ],
+   "lb": "0xC2A9",
+   "coveredDistM": 774,
+   "coveredBy": "shot:arwic.03",
+   "nearestSite": "arwic",
+   "nearestSiteM": 803,
+   "gazNear": [
+    {
+     "id": "morningthaw-festival-stone",
+     "name": "Morningthaw Festival Stone",
+     "kind": "poi",
+     "d": 186,
+     "teleport": "@teleloc 0xC2A9003C 184.8 80.2 108 -0.930418 0 0 -0.366501",
+     "pos": [
+      37432.8,
+      32528.2,
+      108
+     ]
+    },
+    {
+     "id": "a-ruin-portal-c4a8",
+     "name": "A Ruin Portal",
+     "kind": "landmark",
+     "d": 396,
+     "teleport": "@teleloc 0xC4A80006 15.9788 125.227 66.4929 -0.006882 0 0 -0.999976",
+     "pos": [
+      37647.979,
+      32381.227,
+      66.493
+     ]
+    },
+    {
+     "id": "life-stone-near-arwic-c4a8",
+     "name": "Life Stone near Arwic",
+     "kind": "landmark",
+     "d": 468,
+     "teleport": "@teleloc 0xC4A80011 55.2651 12.317 59.3998 0.392885 0 0 -0.919588",
+     "pos": [
+      37687.265,
+      32268.317,
+      59.4
+     ]
+    },
+    {
+     "id": "wedding-trials-dungeon-portal",
+     "name": "Wedding Trials Dungeon Portal",
+     "kind": "landmark",
+     "d": 479,
+     "teleport": "@teleloc 0xC4A8001C 91.5091 84.5421 60.3792 0.625116 0 0 -0.780532",
+     "pos": [
+      37723.509,
+      32340.542,
+      60.379
+     ]
+    },
+    {
+     "id": "abandoned-mine-portal",
+     "name": "Abandoned Mine Portal",
+     "kind": "landmark",
+     "d": 481,
+     "teleport": "@teleloc 0xC3AB0021 109.221 12.924 116.005 1 0 0 0",
+     "pos": [
+      37549.221,
+      32844.924,
+      116.005
+     ]
+    },
+    {
+     "id": "cold-feet",
+     "name": "Cold Feet",
+     "kind": "poi",
+     "d": 485,
+     "teleport": "@teleloc 0xC4A80024 96.2 75.7 60 -0.286525 0 0 -0.958073",
+     "pos": [
+      37728.2,
+      32331.7,
+      60
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-morningthaw",
+     "name": "Festival Stone of Morningthaw",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 33.30N 53.30E",
+     "pos": null,
+     "map": {
+      "ns": 33.3,
+      "ew": 53.3
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 55,
+   "timeOfDay": 0.6,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-morningthaw"
+  },
+  {
+   "title": "Obsidian Span",
+   "name": "Obsidian Span",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === === Route === === Items ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Obsidian_Span.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -10.3,
+     45.7
+    ],
+    [
+     34.6,
+     41.2
+    ]
+   ],
+   "map": {
+    "ns": 34.6,
+    "ew": 41.2
+   },
+   "world": [
+    34356.0,
+    32772.0
+   ],
+   "lb": "0xB2AA",
+   "coveredDistM": 2548,
+   "coveredBy": "shot:holtburg.05",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 2559,
+   "gazNear": [
+    {
+     "id": "obsidian-span",
+     "name": "Obsidian Span",
+     "kind": "poi",
+     "d": 211,
+     "teleport": "@teleloc 0xB4AA0005 5.8 112.6 51.3 -0.707107 0 0 -0.707107",
+     "pos": [
+      34565.8,
+      32752.6,
+      51.3
+     ]
+    },
+    {
+     "id": "banderling-ruin-portal",
+     "name": "Banderling Ruin Portal",
+     "kind": "landmark",
+     "d": 529,
+     "teleport": "@teleloc 0xB0AC003D 183.3 116 35.5 -0.965926 0 0 -0.258819",
+     "pos": [
+      33975.3,
+      33140,
+      35.5
+     ]
+    },
+    {
+     "id": "heart-of-innocence-portal",
+     "name": "Heart of Innocence Portal",
+     "kind": "landmark",
+     "d": 583,
+     "teleport": "@teleloc 0xB0A90006 13.893488 130.62042 88.005 1 0 0 0",
+     "pos": [
+      33805.893,
+      32578.62,
+      88.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "obsidian-span",
+     "name": "Obsidian Span",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xB4AA0005 5.8 112.6 51.3 -0.707107 0 0 -0.707107",
+     "pos": [
+      34565.8,
+      32752.6,
+      51.3
+     ],
+     "map": {
+      "ns": 34.52,
+      "ew": 42.07
+     }
+    },
+    {
+     "id": "obsidian-span-mansion",
+     "name": "Obsidian Span Mansion",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 37.60N 44.90E",
+     "pos": null,
+     "map": {
+      "ns": 37.6,
+      "ew": 44.9
+     }
+    },
+    {
+     "id": "obsidian-span-portal",
+     "name": "Obsidian Span Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x15680113 184.723 15.886 -63.995 -0.707107 0 0 -0.707107",
+     "pos": [
+      4216.723,
+      19983.886,
+      -63.995
+     ],
+     "map": {
+      "ns": -18.68,
+      "ew": -84.38
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 626,
+   "timeOfDay": 0.59,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-obsidian-span"
+  },
+  {
+   "title": "Pet Shop",
+   "name": "Pet Shop",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === An Aluvian building near the Obsidian Span where many pets may be acquired. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Pet_Shop.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     35.2,
+     39.3
+    ]
+   ],
+   "map": {
+    "ns": 35.2,
+    "ew": 39.3
+   },
+   "world": [
+    33900.0,
+    32916.0
+   ],
+   "lb": "0xB0AB",
+   "coveredDistM": 2137,
+   "coveredBy": "shot:holtburg.05",
+   "nearestSite": "holtburg",
+   "nearestSiteM": 2144,
+   "gazNear": [
+    {
+     "id": "banderling-ruin-portal",
+     "name": "Banderling Ruin Portal",
+     "kind": "landmark",
+     "d": 236,
+     "teleport": "@teleloc 0xB0AC003D 183.3 116 35.5 -0.965926 0 0 -0.258819",
+     "pos": [
+      33975.3,
+      33140,
+      35.5
+     ]
+    },
+    {
+     "id": "heart-of-innocence-portal",
+     "name": "Heart of Innocence Portal",
+     "kind": "landmark",
+     "d": 350,
+     "teleport": "@teleloc 0xB0A90006 13.893488 130.62042 88.005 1 0 0 0",
+     "pos": [
+      33805.893,
+      32578.62,
+      88.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "pet-shop",
+     "name": "Pet Shop",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 35.20N 39.30E",
+     "pos": null,
+     "map": {
+      "ns": 35.2,
+      "ew": 39.3
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 899,
+   "timeOfDay": 0.59,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-pet-shop"
+  },
+  {
+   "title": "Sea Coast Rocks",
+   "name": "Sea Coast Rocks",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A long the coast east of Arwic are a series of rock formations with some static creature spawns associated with them. Between the 3 different Shore Armoredillo spawns it would be a good place to camp for Spines or Hides. The different points are listed going from south to north along the coast. ----",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Sea_Coast_Rocks.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.9,
+     59.4
+    ],
+    [
+     40.1,
+     68.2
+    ],
+    [
+     41.7,
+     68.4
+    ],
+    [
+     42.7,
+     67.8
+    ],
+    [
+     43.2,
+     68.2
+    ]
+   ],
+   "map": {
+    "ns": 40.1,
+    "ew": 68.2
+   },
+   "world": [
+    40836.0,
+    34092.0
+   ],
+   "lb": "0xD4B1",
+   "coveredDistM": 3156,
+   "coveredBy": "shot:arwic.05",
+   "nearestSite": "arwic",
+   "nearestSiteM": 3222,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "sea-coast-rocks",
+     "name": "Sea Coast Rocks",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 40.10N 68.20E",
+     "pos": null,
+     "map": {
+      "ns": 40.1,
+      "ew": 68.2
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 2218,
+   "timeOfDay": 0.57,
+   "grade": "warm",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-sea-coast-rocks"
+  },
+  {
+   "title": "Paradox-touched Valley Tent",
+   "name": "Paradox-touched Valley Tent",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "}} === Description === A single tent overlooking the Paradox-touched Valley, containing several agents of The Arcanum and royal guard and serving as a staging point for quests in the area.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Paradox_touched_Valley_Tent.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.9,
+     59.4
+    ],
+    [
+     43.8,
+     54.9
+    ]
+   ],
+   "map": {
+    "ns": 43.8,
+    "ew": 54.9
+   },
+   "world": [
+    37644.0,
+    34980.0
+   ],
+   "lb": "0xC4B6",
+   "coveredDistM": 2454,
+   "coveredBy": "shot:arwic.03",
+   "nearestSite": "arwic",
+   "nearestSiteM": 2562,
+   "gazNear": [],
+   "gazName": [],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 166,
+   "timeOfDay": 0.54,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-paradox-touched-valley-tent"
+  },
+  {
+   "title": "Citadel Apex",
+   "name": "Citadel Apex",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === The main tower of Gaerlan's Citadel now sits atop a hill overlooking Citadel Valley after it broke off when the citadel crashed. It was once the location of a portal to Ispar but now the portal has disappeared and only Martine's mask and robe remains. Just after the beginning of the patch, the Citadel and the Apex were already at their final location, though officially, the val",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Citadel_Apex.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": 56.9,
+    "ew": 47.1
+   },
+   "world": [
+    35772.0,
+    38124.0
+   ],
+   "lb": "0xBAC6",
+   "coveredDistM": 2341,
+   "coveredBy": "shot:bandit-castle.04",
+   "nearestSite": "bandit-castle",
+   "nearestSiteM": 2377,
+   "gazNear": [
+    {
+     "id": "citadel-apex",
+     "name": "Citadel Apex",
+     "kind": "poi",
+     "d": 2,
+     "teleport": "@teleloc 0xBAC60015 58.5 109 382.75 0 0 0 -1",
+     "pos": [
+      35770.5,
+      38125,
+      382.75
+     ]
+    },
+    {
+     "id": "citadel-valley",
+     "name": "Citadel Valley",
+     "kind": "poi",
+     "d": 129,
+     "teleport": "@teleloc 0xBAC7001A 76.659 43.866 160 0.707107 0 0 -0.707107",
+     "pos": [
+      35788.659,
+      38251.866,
+      160
+     ]
+    },
+    {
+     "id": "lightning-ziggurat-portal-bbc6",
+     "name": "Lightning Ziggurat Portal",
+     "kind": "landmark",
+     "d": 150,
+     "teleport": "@teleloc 0xBBC60007 11.1841 152.128 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35915.184,
+      38168.128,
+      59.937
+     ]
+    },
+    {
+     "id": "acid-ziggurat-portal-bbc6",
+     "name": "Acid Ziggurat Portal",
+     "kind": "landmark",
+     "d": 156,
+     "teleport": "@teleloc 0xBBC60007 18.2197 151.58 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35922.22,
+      38167.58,
+      59.937
+     ]
+    },
+    {
+     "id": "fire-ziggurat-portal-bbc6",
+     "name": "Fire Ziggurat Portal",
+     "kind": "landmark",
+     "d": 163,
+     "teleport": "@teleloc 0xBBC6000F 25.0246 151.052 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35929.025,
+      38167.052,
+      59.937
+     ]
+    },
+    {
+     "id": "frost-ziggurat-portal-bbc6",
+     "name": "Frost Ziggurat Portal",
+     "kind": "landmark",
+     "d": 170,
+     "teleport": "@teleloc 0xBBC6000F 32.13 150.911 59.937 0.010093 0 0 0.999949",
+     "pos": [
+      35936.13,
+      38166.911,
+      59.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "citadel-apex",
+     "name": "Citadel Apex",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xBAC60015 58.5 109 382.75 0 0 0 -1",
+     "pos": [
+      35770.5,
+      38125,
+      382.75
+     ],
+     "map": {
+      "ns": 56.9,
+      "ew": 47.09
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 130,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-citadel-apex"
+  },
+  {
+   "title": "Citadel Valley",
+   "name": "Citadel Valley",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === Deep valley at 57.8N, 48.4E, surrounded by unclimbable cliffs. Only reachable by using a Citadel Valley (Portal) as part of the quest. This is where Gaerlan's Citadel crashed after Gaerlan and Martine battled.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Citadel_Valley.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     57.8,
+     48.4
+    ]
+   ],
+   "map": {
+    "ns": 57.8,
+    "ew": 48.4
+   },
+   "world": [
+    36084.0,
+    38340.0
+   ],
+   "lb": "0xBBC7",
+   "coveredDistM": 2083,
+   "coveredBy": "shot:bandit-castle.04",
+   "nearestSite": "bandit-castle",
+   "nearestSiteM": 2095,
+   "gazNear": [
+    {
+     "id": "citadel-surface",
+     "name": "Citadel Surface",
+     "kind": "poi",
+     "d": 81,
+     "teleport": "@teleloc 0xBBC70025 102.5 107 71.005 0.707107 0 0 -0.707107",
+     "pos": [
+      36006.5,
+      38315,
+      71.005
+     ]
+    },
+    {
+     "id": "prismatic-ziggurat-portal-bbc6",
+     "name": "Prismatic Ziggurat Portal",
+     "kind": "landmark",
+     "d": 223,
+     "teleport": "@teleloc 0xBBC6000F 40.207 150.863 59.937 -0.008727 0 0 -0.999962",
+     "pos": [
+      35944.207,
+      38166.863,
+      59.937
+     ]
+    },
+    {
+     "id": "frost-ziggurat-portal-bbc6",
+     "name": "Frost Ziggurat Portal",
+     "kind": "landmark",
+     "d": 228,
+     "teleport": "@teleloc 0xBBC6000F 32.13 150.911 59.937 0.010093 0 0 0.999949",
+     "pos": [
+      35936.13,
+      38166.911,
+      59.937
+     ]
+    },
+    {
+     "id": "fire-ziggurat-portal-bbc6",
+     "name": "Fire Ziggurat Portal",
+     "kind": "landmark",
+     "d": 232,
+     "teleport": "@teleloc 0xBBC6000F 25.0246 151.052 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35929.025,
+      38167.052,
+      59.937
+     ]
+    },
+    {
+     "id": "acid-ziggurat-portal-bbc6",
+     "name": "Acid Ziggurat Portal",
+     "kind": "landmark",
+     "d": 236,
+     "teleport": "@teleloc 0xBBC60007 18.2197 151.58 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35922.22,
+      38167.58,
+      59.937
+     ]
+    },
+    {
+     "id": "lightning-ziggurat-portal-bbc6",
+     "name": "Lightning Ziggurat Portal",
+     "kind": "landmark",
+     "d": 241,
+     "teleport": "@teleloc 0xBBC60007 11.1841 152.128 59.937 0.035086 0 0 0.999384",
+     "pos": [
+      35915.184,
+      38168.128,
+      59.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "citadel-valley",
+     "name": "Citadel Valley",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xBAC7001A 76.659 43.866 160 0.707107 0 0 -0.707107",
+     "pos": [
+      35788.659,
+      38251.866,
+      160
+     ],
+     "map": {
+      "ns": 57.43,
+      "ew": 47.17
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 45,
+   "timeOfDay": 0.45,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-citadel-valley"
+  },
+  {
+   "title": "Colier",
+   "name": "Colier",
+   "cats": [
+    "Historical Site",
+    "Northeast POI",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === Colier was an Aluvian mining town ran by the Baron Colier but now the town is overrun by banderlings and drudges and the miners are now all undead including the Baron himself. The town consists of several Aluvian style buildings arranged in a circle around a looping road. The road extends away from the town to a portal to Holtburg. A monolith with a grave warning stands along t",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Colier.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     56.8,
+     38.4
+    ],
+    [
+     57.4,
+     38.6
+    ]
+   ],
+   "map": {
+    "ns": 56.8,
+    "ew": 38.4
+   },
+   "world": [
+    33684.0,
+    38100.0
+   ],
+   "lb": "0xAFC6",
+   "coveredDistM": 3360,
+   "coveredBy": "path:holtburg.04",
+   "nearestSite": "bandit-castle",
+   "nearestSiteM": 3595,
+   "gazNear": [
+    {
+     "id": "ghost-town",
+     "name": "Ghost Town",
+     "kind": "poi",
+     "d": 109,
+     "teleport": "@teleloc 0xAEC6003D 168.6 104.5 114.1 0.642788 0 0 -0.766044",
+     "pos": [
+      33576.6,
+      38120.5,
+      114.1
+     ]
+    },
+    {
+     "id": "life-stone-at-57-4n-38-6e",
+     "name": "Life Stone at 57.4N 38.6E",
+     "kind": "landmark",
+     "d": 145,
+     "teleport": "@teleloc 0xAFC7002A 135.908 27.8177 171.398 -0.261358 0 0 0.965242",
+     "pos": [
+      33735.908,
+      38235.818,
+      171.398
+     ]
+    },
+    {
+     "id": "colier",
+     "name": "Colier",
+     "kind": "poi",
+     "d": 196,
+     "teleport": "@teleloc 0xAEC60027 97.4944 165.113 110.121 1 0 0 0",
+     "pos": [
+      33505.494,
+      38181.113,
+      110.121
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-holtburg-aec7",
+     "name": "Destroyed Portal to Holtburg",
+     "kind": "landmark",
+     "d": 259,
+     "teleport": "@teleloc 0xAEC7001C 94.6686 76.674 105.997 -0.999038 0 0 -0.043853",
+     "pos": [
+      33502.669,
+      38284.674,
+      105.997
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "colier-mine",
+     "name": "Colier Mine",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x01AE032C 76.59 -97.36 0 0.99814 0 0 -0.060961",
+     "pos": [
+      268.59,
+      33310.64,
+      0
+     ],
+     "map": {
+      "ns": 56.8,
+      "ew": 38.3
+     }
+    },
+    {
+     "id": "deeper-catacombs-colier-ohn",
+     "name": "Deeper Catacombs (Colier OHN)",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 5750",
+     "pos": null,
+     "map": {
+      "ns": 55.8,
+      "ew": 43.5
+     }
+    },
+    {
+     "id": "olthoi-horde-nest-colier",
+     "name": "Olthoi Horde Nest (Colier)",
+     "kind": "dungeon",
+     "indoor": false,
+     "teleport": "@tele 55.80N 43.50E",
+     "pos": null,
+     "map": {
+      "ns": 55.8,
+      "ew": 43.5
+     }
+    },
+    {
+     "id": "colier",
+     "name": "Colier",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xAEC60027 97.4944 165.113 110.121 1 0 0 0",
+     "pos": [
+      33505.494,
+      38181.113,
+      110.121
+     ],
+     "map": {
+      "ns": 57.14,
+      "ew": 37.66
+     }
+    },
+    {
+     "id": "colier-view-hill",
+     "name": "Colier View Hill",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xB2C90025 111.631 113.52 145.688 -0.007487 0 0 -0.999972",
+     "pos": [
+      34287.631,
+      38705.52,
+      145.688
+     ],
+     "map": {
+      "ns": 59.32,
+      "ew": 40.92
+     }
+    }
+   ],
+   "insertAfter": "lytelthorpe",
+   "insertBefore": "bandit-castle",
+   "insertCostM": 1636,
+   "timeOfDay": 0.48,
+   "grade": "neutral",
+   "chapter": "ch1",
+   "pre": "candidate",
+   "siteId": "poi-colier"
+  },
+  {
+   "title": "The Deep (Vissidal)",
+   "name": "The Deep (Vissidal)",
+   "cats": [
+    "Quest NPC",
+    "Northeast POI",
+    "Object"
+   ],
+   "desc": "== Quest Overview == == Trophies == Gold Shallows Shredder<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Deep_Vissidal.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     77.8,
+     67.1
+    ]
+   ],
+   "map": {
+    "ns": 77.8,
+    "ew": 67.1
+   },
+   "world": [
+    40572.0,
+    43140.0
+   ],
+   "lb": "0xD3E0",
+   "coveredDistM": 1934,
+   "coveredBy": "shot:merwart-village.03",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 1968,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "the-deep-vissidal",
+     "name": "The Deep (Vissidal)",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 77.80N 67.10E",
+     "pos": null,
+     "map": {
+      "ns": 77.8,
+      "ew": 67.1
+     }
+    }
+   ],
+   "insertAfter": "bandit-castle",
+   "insertBefore": "merwart-village",
+   "insertCostM": 2954,
+   "timeOfDay": 0.47,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-the-deep-vissidal"
+  },
+  {
+   "title": "Temple of N'cthail",
+   "name": "Temple of N'cthail",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === The Temple of N'cthail is located in the water west of Vissidal Island, at 80.1N 54.4E.  There is a portal a short run north of the Bandit Castle, at 70.4N 50.5E, restricted to characters level 100 or greater. The temple is part of the Raising Grael's Island, and has portals to the Eastern Temple Catacombs, Western Temple Catacombs, Northern Temple Catacombs, and the Vault of E",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Temple_of_N_cthail.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     66.5,
+     50.1
+    ],
+    [
+     70.4,
+     50.5
+    ],
+    [
+     70.5,
+     50.6
+    ],
+    [
+     80.1,
+     54.4
+    ]
+   ],
+   "map": {
+    "ns": 80.1,
+    "ew": 54.4
+   },
+   "world": [
+    37524.0,
+    43692.0
+   ],
+   "lb": "0xC3E3",
+   "coveredDistM": 1128,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 1156,
+   "gazNear": [
+    {
+     "id": "northern-temple-catacombs-portal",
+     "name": "Northern Temple Catacombs Portal",
+     "kind": "landmark",
+     "d": 16,
+     "teleport": "@teleloc 0xC3E3001E 84.353 123.832 11.9369 0.707107 0 0 -0.707107",
+     "pos": [
+      37524.353,
+      43707.832,
+      11.937
+     ]
+    },
+    {
+     "id": "western-temple-catacombs-portal",
+     "name": "Western Temple Catacombs Portal",
+     "kind": "landmark",
+     "d": 46,
+     "teleport": "@teleloc 0xC3E3000C 44.179 84.454 11.9369 1 0 0 0",
+     "pos": [
+      37484.179,
+      43668.454,
+      11.937
+     ]
+    },
+    {
+     "id": "eastern-temple-catacombs-portal",
+     "name": "Eastern Temple Catacombs Portal",
+     "kind": "landmark",
+     "d": 46,
+     "teleport": "@teleloc 0xC3E3002C 123.617 83.9052 11.9369 1 0 0 0",
+     "pos": [
+      37563.617,
+      43667.905,
+      11.937
+     ]
+    },
+    {
+     "id": "temple-exit-portal-c3e3",
+     "name": "Temple Exit Portal",
+     "kind": "landmark",
+     "d": 51,
+     "teleport": "@teleloc 0xC3E3001F 84.1221 159.467 4.937 1 0 0 0",
+     "pos": [
+      37524.122,
+      43743.467,
+      4.937
+     ]
+    },
+    {
+     "id": "temple-of-ncthail",
+     "name": "Temple of N'cthail",
+     "kind": "poi",
+     "d": 99,
+     "teleport": "@teleloc 0xC3E30019 83.9943 8.87318 5.005 1 0 0 0",
+     "pos": [
+      37523.994,
+      43592.873,
+      5.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "temple-of-ncthail",
+     "name": "Temple of N'cthail",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xC3E30019 83.9943 8.87318 5.005 1 0 0 0",
+     "pos": [
+      37523.994,
+      43592.873,
+      5.005
+     ],
+     "map": {
+      "ns": 79.69,
+      "ew": 54.4
+     }
+    },
+    {
+     "id": "temple-of-ncthail-portal",
+     "name": "Temple of N'cthail Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xBED70024 118.223 93.7958 306.166 0.457655 0 0 0.88913",
+     "pos": [
+      36598.223,
+      41373.796,
+      306.166
+     ],
+     "map": {
+      "ns": 70.44,
+      "ew": 50.54
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 43,
+   "timeOfDay": 0.49,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-temple-of-ncthail"
+  },
+  {
+   "title": "The Deep (Dark Isle)",
+   "name": "The Deep (Dark Isle)",
+   "cats": [
+    "Quest NPC",
+    "Northeast POI",
+    "Object"
+   ],
+   "desc": "=== Description === An amorphous Haze at 85.5N 57.2E on Dark Isle that accepts Dark Isle Trophies in exchange for xp and for every 100 trophies gives a random piece of Ancient Relic Armor. <font color=green>As you stare into the void, you feel the rage of The Deep enter you.<br></font>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Deep_Dark_Isle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     85.5,
+     57.2
+    ]
+   ],
+   "map": {
+    "ns": 85.5,
+    "ew": 57.2
+   },
+   "world": [
+    38196.0,
+    44988.0
+   ],
+   "lb": "0xC6EA",
+   "coveredDistM": 1374,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 1395,
+   "gazNear": [
+    {
+     "id": "trial-of-the-deep-portal",
+     "name": "Trial of the Deep Portal",
+     "kind": "landmark",
+     "d": 14,
+     "teleport": "@teleloc 0xC6EA003B 168.937 51.8072 -0.063 0.894439 0 0 -0.447189",
+     "pos": [
+      38184.937,
+      44979.807,
+      -0.063
+     ]
+    },
+    {
+     "id": "vissidal-island-portal-c7e9",
+     "name": "Vissidal Island Portal",
+     "kind": "landmark",
+     "d": 120,
+     "teleport": "@teleloc 0xC7E90017 68.1729 162.705 -0.163 0.819412 0 0 -0.573205",
+     "pos": [
+      38276.173,
+      44898.705,
+      -0.163
+     ]
+    },
+    {
+     "id": "dark-isle",
+     "name": "Dark Isle",
+     "kind": "poi",
+     "d": 309,
+     "teleport": "@teleloc 0xC8E9000B 38.069 60.3064 0.337795 -0.066654 0 0 -0.997776",
+     "pos": [
+      38438.069,
+      44796.306,
+      0.338
+     ]
+    },
+    {
+     "id": "life-stone-near-merwart-village-c8e9",
+     "name": "Life Stone near Merwart Village",
+     "kind": "landmark",
+     "d": 399,
+     "teleport": "@teleloc 0xC8E9002A 132.475 38.2142 0 -0.943277 0 0 -0.332007",
+     "pos": [
+      38532.475,
+      44774.214,
+      0
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 1340,
+   "timeOfDay": 0.49,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-the-deep-dark-isle"
+  },
+  {
+   "title": "Vaeshok's Cave",
+   "name": "Vaeshok's Cave",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A cave located on Dark Isle containing many Sclavus Acolytes of T'thuun and the Ruschk creature - Vaeshok. The cave is one of the two points of interest displayed on the ingame map for Dark Isle. See Points of Interest Map #20.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Vaeshok_s_Cave.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     86.9,
+     59.7
+    ]
+   ],
+   "map": {
+    "ns": 86.9,
+    "ew": 59.7
+   },
+   "world": [
+    38796.0,
+    45324.0
+   ],
+   "lb": "0xCAEC",
+   "coveredDistM": 1610,
+   "coveredBy": "shot:merwart-village.03",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 1648,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "vaeshoks-cave",
+     "name": "Vaeshok's Cave",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon CAEC",
+     "pos": null,
+     "map": {
+      "ns": 86.9,
+      "ew": 59.7
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 2276,
+   "timeOfDay": 0.48,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-vaeshoks-cave"
+  },
+  {
+   "title": "Relic Town",
+   "name": "Relic Town",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === On Aerlinthe Island on the inside Harbor near 86.0N 45.4E is an ash covered Relic Town. This is where the Relic Watchman spawns. Smith Ejan's plaintive whisperings can be heard.<br> It is indicated on the Ingame Map. See also Points of Interest Map, no. 17.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Relic_Town.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     86.0,
+     45.4
+    ]
+   ],
+   "map": {
+    "ns": 85.3,
+    "ew": 45.5
+   },
+   "world": [
+    35388.0,
+    44940.0
+   ],
+   "lb": "0xB8EA",
+   "coveredDistM": 3494,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 3525,
+   "gazNear": [
+    {
+     "id": "statue-at-86-4n-45-4e",
+     "name": "Statue at 86.4N 45.4E",
+     "kind": "landmark",
+     "d": 267,
+     "teleport": "@teleloc 0xB8EB000C 39.0725 86.0122 38.005 0.474521 0 0 -0.880244",
+     "pos": [
+      35367.073,
+      45206.012,
+      38.005
+     ]
+    },
+    {
+     "id": "northwest-direlands-portal-bae8",
+     "name": "Northwest Direlands Portal",
+     "kind": "landmark",
+     "d": 498,
+     "teleport": "@teleloc 0xBAE8001D 84 110 26.005 1 0 0 0",
+     "pos": [
+      35796,
+      44654,
+      26.005
+     ]
+    },
+    {
+     "id": "aerlinthe-island",
+     "name": "Aerlinthe Island",
+     "kind": "poi",
+     "d": 501,
+     "teleport": "@teleloc 0xBAE8001D 84 105 26 0 0 0 -1",
+     "pos": [
+      35796,
+      44649,
+      26
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 915,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-relic-town"
+  },
+  {
+   "title": "Shimena Keep",
+   "name": "Shimena Keep",
+   "cats": [
+    "Auberean Location",
+    "Northeast POI",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === <center>Shimena Keep was constructed on the northeast islet. Shimena guarded the northern approaches to Ireth Lassel research colony from Pelagian sea-nomads.</center><br> A castle-like structure at 91.6N, 49.6E on the NE side of Aerlinthe.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Shimena_Keep.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     91.6,
+     49.6
+    ]
+   ],
+   "map": {
+    "ns": 91.6,
+    "ew": 49.6
+   },
+   "world": [
+    36372.0,
+    46452.0
+   ],
+   "lb": "0xBDF1",
+   "coveredDistM": 3580,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 3607,
+   "gazNear": [
+    {
+     "id": "shimena-keep",
+     "name": "Shimena Keep",
+     "kind": "poi",
+     "d": 279,
+     "teleport": "@teleloc 0xBDF00024 99 93 12 1 0 0 0",
+     "pos": [
+      36387,
+      46173,
+      12
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "shimena-keep",
+     "name": "Shimena Keep",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xBDF00024 99 93 12 1 0 0 0",
+     "pos": [
+      36387,
+      46173,
+      12
+     ],
+     "map": {
+      "ns": 90.44,
+      "ew": 49.66
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 2635,
+   "timeOfDay": 0.47,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-shimena-keep"
+  },
+  {
+   "title": "Tenkarrdun",
+   "name": "Tenkarrdun",
+   "cats": [
+    "Northeast POI",
+    "Geographic Area"
+   ],
+   "desc": "=== Description === A huge crater around 90.3N 46.3E in the middle of Aerlinthe.<br> This is where the Tenkarrdun Hellfire and the Behemoth of Tenkarrdun spawn.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tenkarrdun.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     90.3,
+     46.3
+    ]
+   ],
+   "map": {
+    "ns": 90.3,
+    "ew": 46.3
+   },
+   "world": [
+    35580.0,
+    46140.0
+   ],
+   "lb": "0xB9F0",
+   "coveredDistM": 3928,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 3957,
+   "gazNear": [
+    {
+     "id": "mount-tenkarrdun-b9f0",
+     "name": "Mount Tenkarrdun",
+     "kind": "poi",
+     "d": 33,
+     "teleport": "@teleloc 0xB9F0001A 89 45 94 1 0 0 0",
+     "pos": [
+      35609,
+      46125,
+      94
+     ]
+    },
+    {
+     "id": "charged-niche-portal",
+     "name": "Charged Niche Portal",
+     "kind": "landmark",
+     "d": 347,
+     "teleport": "@teleloc 0xB9F10040 188.816 189.978 397.937 -0.99984 0 0 0.017895",
+     "pos": [
+      35708.816,
+      46461.978,
+      397.937
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "tenkarrdun-foundry",
+     "name": "Tenkarrdun Foundry",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 0116",
+     "pos": null,
+     "map": {
+      "ns": 88.8,
+      "ew": 42.8
+     }
+    },
+    {
+     "id": "mount-tenkarrdun-1455",
+     "name": "Mount Tenkarrdun",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x14550032 163.519 28.263 70.005 -0.922093 0 0 -0.386969",
+     "pos": [
+      4003.519,
+      16348.263,
+      70.005
+     ],
+     "map": {
+      "ns": -33.83,
+      "ew": -85.27
+     }
+    },
+    {
+     "id": "mount-tenkarrdun-b9f0",
+     "name": "Mount Tenkarrdun",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xB9F0001A 89 45 94 1 0 0 0",
+     "pos": [
+      35609,
+      46125,
+      94
+     ],
+     "map": {
+      "ns": 90.24,
+      "ew": 46.42
+     }
+    },
+    {
+     "id": "tenkarrdun-foundry-portal",
+     "name": "Tenkarrdun Foundry Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0xB4EE0100 171.395 108.224 164.805 0.999796 0 0 -0.020207",
+     "pos": [
+      34731.395,
+      45804.224,
+      164.805
+     ],
+     "map": {
+      "ns": 88.9,
+      "ew": 42.76
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 2159,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-tenkarrdun"
+  },
+  {
+   "title": "Aurlanaa's Aerie",
+   "name": "Aurlanaa's Aerie",
+   "cats": [
+    "Historical Site",
+    "Lore Database Entry",
+    "Northeast POI",
+    "Auberean Location"
+   ],
+   "desc": "=== Description === <center>The Blessing of Aerlinthe. A gromnatross makes her aerie on the peaks of Cunara. She is named Aurlanaa by the people of the port.<br></center><br> The rumored nest of a Gromnatross at 89.0N 42.8E on Aerlinthe, overlooking a lava stream. There's a white Empyrean Ruin Meeting Hall Style Building nearby.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aurlanaa_s_Aerie.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     89.0,
+     42.8
+    ]
+   ],
+   "map": {
+    "ns": 89.0,
+    "ew": 42.8
+   },
+   "world": [
+    34740.0,
+    45828.0
+   ],
+   "lb": "0xB4EE",
+   "coveredDistM": 4457,
+   "coveredBy": "shot:merwart-village.01",
+   "nearestSite": "merwart-village",
+   "nearestSiteM": 4487,
+   "gazNear": [],
+   "gazName": [],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 1830,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-aurlanaas-aerie"
+  },
+  {
+   "title": "Portal to Bur",
+   "name": "Portal to Bur",
+   "cats": [
+    "Portal",
+    "Northeast POI"
+   ],
+   "desc": "=== Description === === Route === === Objects ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Portal_to_Bur.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     8.8,
+     60.9
+    ],
+    [
+     67.4,
+     30.5
+    ]
+   ],
+   "map": {
+    "ns": 67.4,
+    "ew": 30.5
+   },
+   "world": [
+    31788.0,
+    40644.0
+   ],
+   "lb": "0xA5D3",
+   "coveredDistM": 3112,
+   "coveredBy": "site:neydisa-castle",
+   "nearestSite": "neydisa-castle",
+   "nearestSiteM": 3112,
+   "gazNear": [
+    {
+     "id": "dereth",
+     "name": "Dereth",
+     "kind": "poi",
+     "d": 11,
+     "teleport": "@teleloc 0xA5D30026 107.908 121.287 404.005 0 0 0 1",
+     "pos": [
+      31787.908,
+      40633.287,
+      404.005
+     ]
+    },
+    {
+     "id": "portal-summoning-site",
+     "name": "Portal Summoning Site",
+     "kind": "poi",
+     "d": 88,
+     "teleport": "@teleloc 0xA5D30040 178 185 394 -0.382683 0 0 -0.92388",
+     "pos": [
+      31858,
+      40697,
+      394
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 370,
+   "timeOfDay": 0.42,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-portal-to-bur"
+  },
+  {
+   "title": "Northwatch Castle",
+   "name": "Northwatch Castle",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the Land Control areas added during the Ancient Powers event. Northwatch Castle is located in North Osteth not far from Neydisa Castle at 81.5N 25E. In the middle of the castle is a tunnel leading down to a 180+ portal to the Northwatch Castle Black Market. The portal may only be used by members of the Society currently controlling the fort. Every 68 hours the Blight ret",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Northwatch_Castle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.9,
+     59.6
+    ],
+    [
+     66.2,
+     14.2
+    ],
+    [
+     66.6,
+     14.3
+    ],
+    [
+     69.6,
+     17.6
+    ],
+    [
+     75.3,
+     27.2
+    ],
+    [
+     81.5,
+     25.0
+    ],
+    [
+     83.3,
+     28.8
+    ],
+    [
+     84.3,
+     24.7
+    ]
+   ],
+   "map": {
+    "ns": 81.5,
+    "ew": 25.0
+   },
+   "world": [
+    30468.0,
+    44028.0
+   ],
+   "lb": "0x9EE5",
+   "coveredDistM": 3352,
+   "coveredBy": "shot:neydisa-castle.03",
+   "nearestSite": "neydisa-castle",
+   "nearestSiteM": 3354,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "northwatch-castle-black-market",
+     "name": "Northwatch Castle Black Market",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 9EE5",
+     "pos": null,
+     "map": {
+      "ns": 81.5,
+      "ew": 25
+     }
+    },
+    {
+     "id": "celestial-hand-northwatch-castle-black-market",
+     "name": "Celestial Hand Northwatch Castle Black Market",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0x9EE50266 121.238 20.8707 28.805 -0.881212 0 0 -0.472722",
+     "pos": [
+      30457.238,
+      43988.871,
+      28.805
+     ],
+     "map": {
+      "ns": 81.34,
+      "ew": 24.96
+     }
+    },
+    {
+     "id": "northwatch-castle",
+     "name": "Northwatch Castle",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0x9EE50293 104.166 30.0497 58.805 0.707107 0 0 -0.707107",
+     "pos": [
+      30440.166,
+      43998.05,
+      58.805
+     ],
+     "map": {
+      "ns": 81.38,
+      "ew": 24.88
+     }
+    },
+    {
+     "id": "celestial-hand-northwatch-castle-black-market-portal",
+     "name": "Celestial Hand Northwatch Castle Black Market Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x9EE50284 127.836 30 52.737 0.707107 0 0 0.707107",
+     "pos": [
+      30463.836,
+      43998,
+      52.737
+     ],
+     "map": {
+      "ns": 81.37,
+      "ew": 24.98
+     }
+    },
+    {
+     "id": "eldrytch-web-northwatch-castle-black-market-portal",
+     "name": "Eldrytch Web Northwatch Castle Black Market Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x9EE50284 127.836 30 52.737 0.707107 0 0 0.707107",
+     "pos": [
+      30463.836,
+      43998,
+      52.737
+     ],
+     "map": {
+      "ns": 81.37,
+      "ew": 24.98
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 1301,
+   "timeOfDay": 0.41,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-northwatch-castle"
+  },
+  {
+   "title": "Aun Settlement",
+   "name": "Aun Settlement",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A small Settlement at 82.7N 21.0E with three Aun Tumerok NPCs, all related to the Buadren Quest and the Invoker Quest. <br> ==== Menhir Ring ====",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aun_Settlement.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.9,
+     59.4
+    ],
+    [
+     82.7,
+     21.0
+    ],
+    [
+     82.8,
+     21.1
+    ],
+    [
+     82.8,
+     21.2
+    ]
+   ],
+   "map": {
+    "ns": 82.7,
+    "ew": 21.0
+   },
+   "world": [
+    29508.0,
+    44316.0
+   ],
+   "lb": "0x99E6",
+   "coveredDistM": 3244,
+   "coveredBy": "shot:neydisa-castle.03",
+   "nearestSite": "neydisa-castle",
+   "nearestSiteM": 3248,
+   "gazNear": [
+    {
+     "id": "entrance-to-portal-space-99e6",
+     "name": "Entrance to Portal Space",
+     "kind": "landmark",
+     "d": 44,
+     "teleport": "@teleloc 0x99E60040 172.46 172.542 77.555 0.998039 0 0 0.06259",
+     "pos": [
+      29548.46,
+      44332.542,
+      77.555
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "aun-settlement",
+     "name": "Aun Settlement",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 82.70N 21.00E",
+     "pos": null,
+     "map": {
+      "ns": 82.7,
+      "ew": 21
+     }
+    }
+   ],
+   "insertAfter": "merwart-village",
+   "insertBefore": "neydisa-castle",
+   "insertCostM": 2169,
+   "timeOfDay": 0.41,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-aun-settlement"
+  }
+ ]
+}

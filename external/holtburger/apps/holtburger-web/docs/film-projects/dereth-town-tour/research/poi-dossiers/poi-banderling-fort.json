@@ -1,0 +1,172 @@
+{
+ "name": "Banderling Fort",
+ "title": "Banderling Fort",
+ "siteId": "poi-banderling-fort",
+ "summary": "A fort near Zaikhal full of low-level Banderlings, 'several round buildings, like that found in the center of Bandit Castle' (acpedia). In the kit: five round four-storey bamboo towers (0x01000801, 24 m wide, 12 m tall) arranged in a cross on a high grass plateau (z 240) among giant trees up to 41 m tall; the plateau breaks off 120 m south-west into a 100 m drop.",
+ "landmarks": [
+  {
+   "name": "Centre tower (0x01000801)",
+   "pos": [
+    21972.0,
+    29916.0,
+    240.0
+   ],
+   "heightM": 12.0,
+   "note": "Middle of the cross of five round towers."
+  },
+  {
+   "name": "Plateau rim",
+   "pos": [
+    21860.0,
+    29820.0,
+    200.0
+   ],
+   "heightM": 100.0,
+   "note": "South-west cliff falling to z 133."
+  }
+ ],
+ "site": {
+  "id": "poi-banderling-fort",
+  "name": "Banderling Fort",
+  "teleport": "@teleloc 0x729B000D 27.00 110.00 240.50 1 0 0 0",
+  "anchor": [
+   21972.0,
+   29916.0,
+   240.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.65,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the open plateau 70 m south-west of the round towers (ground + 0.5, 12 m from the nearest tree). The gazetteer name matches (banderling-fort-8486, -b841) are other forts; nothing in the gazetteer within 600 m."
+ },
+ "insertAfter": "al-jalima",
+ "insertBefore": "zaikhal",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 22.5,
+   "ew": -10.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3411,
+  "coveredBy": "shot:zaikhal.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Banderling_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-banderling-fort.01",
+   "site": "poi-banderling-fort",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     21972.0,
+     29916.0,
+     240.0
+    ],
+    "height": 12,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 135,
+    "azimuthRef": "compass",
+    "elevationDeg": 30,
+    "distance": 90,
+    "thirds": "center",
+    "pushM": 4
+   },
+   "standingOrder": "Look down from 50 m up and 90 m south-east onto the cluster of round bamboo towers on the plateau, pushing 4 m closer; keep 30 m from every tree crown, banderlings may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High-angle overview of the round bamboo towers of Banderling Fort from the south-east with a slow 4 m push; the WSW sun side-lights the conical towers. Verified (check.mjs, full take flown): take 0-9 s: AGL 50.39..52.6 m, nearest drawn 30.32 m (scenery-default 0x02000258@22024,29840), vmax 0.7 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 50.46..52.4 m, nearest drawn 30.34 m (scenery-default 0x02000258@22024,29840), vmax 0.7 m/s, LOS blocked 0/27, subject in frame 100%."
+  },
+  {
+   "id": "poi-banderling-fort.02",
+   "site": "poi-banderling-fort",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": 5.0
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     21972.0,
+     29916.0,
+     240.0
+    ],
+    "height": 12,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 55,
+    "speed": 5,
+    "headingDeg": 45,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 40,
+    "maxPitchRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 8
+   },
+   "standingOrder": "Fly north-east 55 m above the plateau straight over the cross of round bamboo towers, gimbal tracking them down through vertical and back up; stay 20 m above the tallest tree crown, banderlings may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over of Banderling Fort: five round bamboo towers in a cross on the 240 m plateau among giant trees, the gimbal tracking the centre tower through vertical (yaw-slew 40 deg/s) on a north-east line, afternoon sun behind the lens at the start. Verified (check.mjs, full take flown): take 0-10 s: AGL 55..55 m, nearest drawn 23.83 m (scenery-default 0x020002D3@21970,29936), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 55..55 m, nearest drawn 23.83 m (scenery-default 0x020002D3@21970,29936), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m; opt-in retail-bake tree 5.3 m (not drawn by the default bake the film uses)."
+  }
+ ],
+ "verification": {
+  "poi-banderling-fort.01": "take 0-9 s: AGL 50.39..52.6 m, nearest drawn 30.32 m (scenery-default 0x02000258@22024,29840), vmax 0.7 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 50.46..52.4 m, nearest drawn 30.34 m (scenery-default 0x02000258@22024,29840), vmax 0.7 m/s, LOS blocked 0/27, subject in frame 100%",
+  "poi-banderling-fort.02": "take 0-10 s: AGL 55..55 m, nearest drawn 23.83 m (scenery-default 0x020002D3@21970,29936), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 55..55 m, nearest drawn 23.83 m (scenery-default 0x020002D3@21970,29936), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m; opt-in retail-bake tree 5.3 m (not drawn by the default bake the film uses)"
+ }
+}

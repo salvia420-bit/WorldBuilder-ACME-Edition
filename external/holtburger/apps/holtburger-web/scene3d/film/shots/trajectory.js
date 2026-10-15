@@ -1155,14 +1155,23 @@ export function trajectoryFromTable(table) {
  * A table input is replayed with trajectoryFromTable and checked at its own
  * fps unless `opts.fps` is given; an unusable input or an oversize frame grid
  * is a `structure` issue (never a throw).
+ * Per-trajectory limits: a technique may declare its own limits in
+ * `meta.validate` ({maxLinearSpeed?, maxAngularSpeedDeg?, maxHeadingJumpDeg?,
+ * maxFovRateDeg?} — e.g. fpv.fpv-run's loops and rolls turn at up to 900°/s);
+ * they apply BY DEFAULT (tables carry the meta too). Precedence per limit:
+ * an explicit `opts` value > `meta.validate` > the built-in default;
+ * `useMetaLimits: false` ignores meta.validate. The limits used are reported
+ * in `limits` (with `source` per key: 'opts' | 'meta' | 'default').
  * @param {Trajectory|BakedTable} trajOrTable
  * @param {{fps?:number, maxLinearSpeed?:number, maxAngularSpeedDeg?:number, maxHeadingJumpDeg?:number,
- *   maxFovRateDeg?:number, maxIssues?:number, respectCuts?:boolean}} [opts]
+ *   maxFovRateDeg?:number, maxIssues?:number, respectCuts?:boolean, useMetaLimits?:boolean}} [opts]
  *   defaults fps 30, maxLinearSpeed 80, maxAngularSpeedDeg 240, maxHeadingJumpDeg 90, maxFovRateDeg 240,
- *   maxIssues 64, respectCuts true
+ *   maxIssues 64, respectCuts true, useMetaLimits true
  * @returns {{ok:boolean, issues:Array<{code:string, frame:number, t:number, value:number|null, limit:number|null,
  *   message:string}>, counts:Object<string, number>, frames:number, duration:number,
- *   stats:{maxSpeed:number, maxAngularSpeedDeg:number, maxFovRateDeg:number}}}
+ *   stats:{maxSpeed:number, maxAngularSpeedDeg:number, maxFovRateDeg:number},
+ *   limits:{maxLinearSpeed:number, maxAngularSpeedDeg:number, maxHeadingJumpDeg:number, maxFovRateDeg:number,
+ *   source:Object<string, 'opts'|'meta'|'default'>}}}
  */
 export function validateTrajectory(trajOrTable, opts = {}) {
   const o = opts || {};
@@ -1170,12 +1179,27 @@ export function validateTrajectory(trajOrTable, opts = {}) {
   const fpsOk = (v) => Number.isFinite(v) && v > 0 && v <= 1000;
   const isTable = !!trajOrTable && typeof trajOrTable === "object" && trajOrTable.rows !== undefined && typeof trajOrTable.sample !== "function";
   const fps = num(o.fps, isTable ? num(trajOrTable.fps, 30, fpsOk) : 30, fpsOk);
-  const maxLin = num(o.maxLinearSpeed, 80, (v) => v > 0);
-  const maxAng = num(o.maxAngularSpeedDeg, 240, (v) => v > 0) * DEG;
-  const maxJump = num(o.maxHeadingJumpDeg, 90, (v) => v > 0 && v <= 180) * DEG;
-  const maxFovRate = num(o.maxFovRateDeg, 240, (v) => v > 0);
+  const metaV = o.useMetaLimits !== false && trajOrTable && typeof trajOrTable === "object" && trajOrTable.meta &&
+    typeof trajOrTable.meta === "object" && trajOrTable.meta.validate && typeof trajOrTable.meta.validate === "object"
+    ? trajOrTable.meta.validate : null;
+  const source = {};
+  /** opts value > meta.validate value > default, each only when it passes `ok`. */
+  const limit = (key, def, ok) => {
+    if (typeof o[key] === "number" && ok(o[key])) { source[key] = "opts"; return o[key]; }
+    if (metaV && typeof metaV[key] === "number" && ok(metaV[key])) { source[key] = "meta"; return metaV[key]; }
+    source[key] = "default";
+    return def;
+  };
+  const maxLinV = limit("maxLinearSpeed", 80, (v) => v > 0);
+  const maxAngV = limit("maxAngularSpeedDeg", 240, (v) => v > 0);
+  const maxJumpV = limit("maxHeadingJumpDeg", 90, (v) => v > 0 && v <= 180);
+  const maxFovRate = limit("maxFovRateDeg", 240, (v) => v > 0);
+  const maxLin = maxLinV;
+  const maxAng = maxAngV * DEG;
+  const maxJump = maxJumpV * DEG;
   const maxIssues = num(o.maxIssues, 64, (v) => Number.isInteger(v) && v >= 0);
   const respectCuts = o.respectCuts !== false;
+  const limits = { maxLinearSpeed: maxLinV, maxAngularSpeedDeg: maxAngV, maxHeadingJumpDeg: maxJumpV, maxFovRateDeg: maxFovRate, source };
 
   const issues = [];
   const counts = {};
@@ -1194,19 +1218,19 @@ export function validateTrajectory(trajOrTable, opts = {}) {
       traj = trajectoryFromTable(traj);
     } catch (e) {
       report(VALIDATION_CODES.STRUCTURE, -1, 0, null, null, `table: ${e && e.message ? e.message : String(e)}`);
-      return { ok: false, issues, counts, frames: 0, duration: 0, stats };
+      return { ok: false, issues, counts, frames: 0, duration: 0, stats, limits };
     }
   }
   if (!isTrajectory(traj)) {
     report(VALIDATION_CODES.STRUCTURE, -1, 0, null, null, "not a Trajectory (needs sample(t) and a finite duration ≥ 0)");
-    return { ok: false, issues, counts, frames: 0, duration: 0, stats };
+    return { ok: false, issues, counts, frames: 0, duration: 0, stats, limits };
   }
   let times;
   try {
     times = frameTimes(traj.duration, fps);
   } catch (e) {
     report(VALIDATION_CODES.STRUCTURE, -1, 0, null, null, e && e.message ? e.message : String(e));
-    return { ok: false, issues, counts, frames: 0, duration: traj.duration, stats };
+    return { ok: false, issues, counts, frames: 0, duration: traj.duration, stats, limits };
   }
   const cuts = respectCuts && traj.meta && Array.isArray(traj.meta.cuts) ? traj.meta.cuts.filter(Number.isFinite) : [];
 
@@ -1271,7 +1295,7 @@ export function validateTrajectory(trajOrTable, opts = {}) {
     prev = cur;
   }
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  return { ok: total === 0, issues, counts, frames: times.length, duration: traj.duration, stats };
+  return { ok: total === 0, issues, counts, frames: times.length, duration: traj.duration, stats, limits };
 }
 
 // ---------------------------------------------------------------------------

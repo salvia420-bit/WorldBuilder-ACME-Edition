@@ -24,6 +24,7 @@
 // vfx/fx_showcase.js feed it, the composer reads it.
 
 import { fxTier2Enabled } from "./fx_tier2.js";
+import { fxNowMs } from "../fx_clock.js";
 
 export const FX_DECAL_MAX = 32;
 export const FX_DECAL_PERSISTENT_MAX = 8;
@@ -43,7 +44,7 @@ const _persistent = new Set();
 const _stats = { spawned: 0, evicted: 0, persistent: 0, live: 0, drawn: 0 };
 
 function _now() {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  return fxNowMs(); // the film clock during a stepped take (fx_clock.js), else performance.now()
 }
 
 function _make(o, kindName) {

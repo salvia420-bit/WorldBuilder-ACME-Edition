@@ -1,0 +1,232 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-frost-haven",
+   "name": "Frost Haven",
+   "decision": "exclude",
+   "reason": "Tour town already filmed (town-frost-haven.json). The batch coordinate (index 74.8S 17.8E) is actually the Qalaba'r settlement-portal hub, 346 m from qalabar.05, not the Snowman village at 68.6S 25.4E.",
+   "shots": 0,
+   "file": null
+  },
+  {
+   "siteId": "poi-festival-stone-of-wintersebb",
+   "name": "Festival Stone of Wintersebb",
+   "decision": "include",
+   "reason": "Real and photogenic: the glowing stone stands between two 5.5 m black Empyrean columns on a knoll top 471 m from Qalaba'r, outside every existing frame. One low-angle shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-wintersebb.json"
+  },
+  {
+   "siteId": "poi-qalabar-festival-grounds",
+   "name": "Qalaba'r Festival Grounds",
+   "decision": "include",
+   "reason": "Real: two avenues of wooden archways with blue lamps, flagged octagon towers, chessboard platforms, a fountain and target drudges. Not covered (574 m from Qalaba'r). Pass-over plus crane.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-qalabar-festival-grounds.json"
+  },
+  {
+   "siteId": "poi-aias-tower",
+   "name": "Aia's Tower",
+   "decision": "include",
+   "reason": "Spectacular and unfilmed: five 34-74 m Empyrean towers (tops to z 192) on an 80 m mesa above a treed plain, 2.6 km from the nearest tour shot. Four shots, all south and east of the tower because landblocks west and north are missing.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-aias-tower.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-harvestgain",
+   "name": "Festival Stone of Harvestgain",
+   "decision": "include",
+   "reason": "Real: the stone and two candle sentinels at the foot of a 100 m rock slope near Uziz, 550 m from uziz.02. One pedestal shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-harvestgain.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-solclaim",
+   "name": "Festival Stone of Solclaim",
+   "decision": "include",
+   "reason": "Real: the stone in a square of four candle sentinels alone on the dunes east of Al-Arqas, 814 m from al-arqas.03. One orbit.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-solclaim.json"
+  },
+  {
+   "siteId": "poi-north-al-arqas-outpost",
+   "name": "North Al-Arqas Outpost",
+   "decision": "include",
+   "reason": "Real ruined outpost: green-lit 28 m Empyrean tower, a burning bonfire, Life Stone and destroyed-portal crystals, 739 m from al-arqas.03. Static flame shot plus tower tilt.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-north-al-arqas-outpost.json"
+  },
+  {
+   "siteId": "poi-west-al-arqas-outpost",
+   "name": "West Al-Arqas Outpost",
+   "decision": "include",
+   "reason": "Real ruined outpost: Empyrean tower and a domed arcaded hall, 604 m from Al-Arqas, unfilmed. One establishing shot (rank 3, it shares the tower model with the other outposts).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-west-al-arqas-outpost.json"
+  },
+  {
+   "siteId": "poi-the-sleepless-sentinels",
+   "name": "The Sleepless Sentinels",
+   "decision": "include",
+   "reason": "Real and unique: 55 Empyrean statues in a single 187 m file over a desert dune, 2.4 km from any tour shot. Three shots: skim, top-down, dolly-in. The gazetteer name match (33.5S 13.1E) is only the Hamud Cottages route start.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-the-sleepless-sentinels.json"
+  },
+  {
+   "siteId": "poi-east-yaraq-outpost",
+   "name": "East Yaraq Outpost",
+   "decision": "include",
+   "reason": "Real working outpost: Empyrean hall, Life Stone and a spire tower on the mesa above, 480 m from yaraq.05 (which frames a different bonfire tower). One backlit crane.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-yaraq-outpost.json"
+  },
+  {
+   "siteId": "poi-inner-sea-port-ruins",
+   "name": "Inner Sea Port Ruins",
+   "decision": "include",
+   "reason": "Real ruins with water and fire: a stone tower at the waterline, a colonnade of 12 columns running into the Inner Sea with two flame-crowned end columns, and the crypt bunker. 517 m from yaraq.01, which frames a fishing hut. Four shots.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-inner-sea-port-ruins.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-warmtide",
+   "name": "Festival Stone of Warmtide",
+   "decision": "include",
+   "reason": "Real: the stone in a hilltop shrine of four Empyrean obelisks above the port ruins and the cove, 621 m from yaraq.01. Orbit and dronie.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-warmtide.json"
+  },
+  {
+   "siteId": "poi-north-yaraq-outpost",
+   "name": "North Yaraq Outpost",
+   "decision": "include",
+   "reason": "Real working outpost on the floor of a sandstone canyon, with a fountain and Life Stone, 531 m from yaraq.04. One canyon run.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-north-yaraq-outpost.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-verdantine",
+   "name": "Festival Stone of Verdantine",
+   "decision": "include",
+   "reason": "Real: the stone and two sentinels on the rim of a 40 m bluff over the road south-west of Samsur, 726 m from samsur.02. Dolly-zoom and arc.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-verdantine.json"
+  },
+  {
+   "siteId": "poi-northwest-samsur-outpost",
+   "name": "Northwest Samsur Outpost",
+   "decision": "include",
+   "reason": "Real ruined outpost (Empyrean tower, octagon, cottage, Life Stone), 960 m from samsur.02. One time-lapse (rank 3).",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-northwest-samsur-outpost.json"
+  },
+  {
+   "siteId": "poi-banderling-fort",
+   "name": "Banderling Fort",
+   "decision": "include",
+   "reason": "Real: five round bamboo towers on a 240 m plateau among giant trees, 3.4 km from the nearest tour shot. Pass-over and high-angle. The gazetteer name matches are other forts.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-banderling-fort.json"
+  },
+  {
+   "siteId": "poi-four-towers",
+   "name": "Four Towers",
+   "decision": "include",
+   "reason": "Real walled fortress: four 31 m spire towers round a courtyard with bonfire, Life Stone and well. 419 m from zaikhal.04, which frames the Gold Legion Keep instead. Three shots.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-four-towers.json"
+  },
+  {
+   "siteId": "poi-suntik-village",
+   "name": "Suntik Village",
+   "decision": "include",
+   "reason": "Real ruined village on a table mountain with a 100 m east cliff, 781 m from zaikhal.04. Spiral descent and dronie.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-suntik-village.json"
+  },
+  {
+   "siteId": "poi-mount-syliph",
+   "name": "Mount Syliph",
+   "decision": "include",
+   "reason": "Real flat-topped rock pillar (summit z 224, plain z 110) with portals on the rim, 2.1 km from any tour shot. One panorama from above the summit.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-syliph.json"
+  },
+  {
+   "siteId": "poi-mount-dalt",
+   "name": "Mount Dalt",
+   "decision": "include",
+   "reason": "Real table mountain between Syliph and Gemm, with portals on the rim. Top-down rise over the South Gemm portal plus a summit flyover.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-dalt.json"
+  },
+  {
+   "siteId": "poi-wilderness-fort",
+   "name": "Wilderness Fort",
+   "decision": "include",
+   "reason": "Real fort: a diamond of Bandit-Castle walls with Life Stone, pool and destroyed portals, 3.1 km from the nearest tour shot. Bird's-eye and boom rise.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wilderness-fort.json"
+  },
+  {
+   "siteId": "poi-mount-gemm",
+   "name": "Mount Gemm",
+   "decision": "include",
+   "reason": "Real table mountain, the third pillar of the chain, 3 km from any tour shot. One establishing shot from the south-west, because the landblocks to the east are missing.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-mount-gemm.json"
+  }
+ ],
+ "totalShots": 39,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-5.json -> \"valid: 0 error(s), 0 warning(s)\" (exit 0, dry build included) for 21 sites and 39 shots. node poi-kit/check.mjs over the same file flies every full take: all 39 pass acceptance (min AGL >= 1.5 m, or >= 0.5 m for the low-angle/worms-eye/static lenses; nearest drawn obstacle >= 2 m for drone/fpv and >= 1.2 m for classic moves at or below 1.5 m/s; never inside a prism or under terrain; flight peak <= cap with tracking gap <= 0.48 m; edit window subject in frame >= 88 % and LOS blocked <= 16 %; window.keep ranges re-checked the same way). Audit script failures: 0.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "drone.fly-by": 3,
+  "classic.crane": 2,
+  "classic.establishing": 2,
+  "drone.dronie": 2,
+  "drone.pass-over": 2,
+  "drone.top-down": 2,
+  "classic.arc": 1,
+  "classic.birds-eye": 1,
+  "classic.dolly-in": 1,
+  "classic.high-angle": 1,
+  "classic.hyperlapse": 1,
+  "classic.low-angle": 1,
+  "classic.orbit": 1,
+  "classic.pedestal": 1,
+  "classic.pull-out-reveal": 1,
+  "classic.static": 1,
+  "classic.tilt": 1,
+  "classic.time-lapse": 1,
+  "classic.worms-eye": 1,
+  "drone.boom-rise": 1,
+  "drone.canyon-run": 1,
+  "drone.flyover": 1,
+  "drone.helix": 1,
+  "drone.hyperlapse-orbit": 1,
+  "drone.orbit-poi": 1,
+  "drone.pano-360": 1,
+  "drone.spiral-descent": 1,
+  "drone.terrain-skim": 1,
+  "drone.tilt-reveal": 1,
+  "drone.top-down-rise": 1,
+  "drone.vertigo-drone": 1,
+  "fpv.fpv-flip": 1
+ },
+ "notes": [
+  "Files: 21 dossiers /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json (one per included POI) and the scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-5.json. Helper scripts (common.py, try.py, gen.py, meta.py, s/*.py, final_check.txt) are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/poi-b5/.",
+  "Shot totals: 39 proposed against a quota of 35 (rank 1: 9, rank 2: 22, rank 3: 8). The ideal edit windows sum to 247.5 s. There are 32 distinct techniques; none is used more than 3 times (drone.fly-by x3). All 7 assigned techniques are used: classic.dolly-in (Sentinels), classic.pull-out-reveal (Inner Sea ruins), classic.high-angle (Banderling Fort), classic.hyperlapse (Four Towers), drone.tilt-reveal (Aia's Tower), drone.fly-by (Aia's Tower, Four Towers, Inner Sea ruins) and fpv.fpv-flip (Inner Sea ruins). None of them is rank 3. There are no facade pans (no classic.truck or drone.parallax-slide). Every shot has pilot code, bounds 1/1 and a trim take of 8-11 s with a 6-6.5 s window.",
+  "Rank-3 shots, to drop first: the Festival Grounds crane, the North Al-Arqas tilt, the West Al-Arqas establishing shot, the Inner Sea hyperlapse-orbit, the Warmtide dronie, the Verdantine arc, the Northwest Samsur time-lapse and the Mount Dalt flyover. Dropping the West Al-Arqas or Northwest Samsur shot removes that outpost entirely. Both are small ruined outposts whose Empyrean tower model also appears at North Al-Arqas, East Yaraq and North Yaraq.",
+  "Reveals with a lead-in by design: aias-tower.01 tilt-reveal (subject in frame 88 % in the window; the row centre enters at about t 5.2 of 11) and wilderness-fort.01 boom-rise (LOS 4/25 blocked by the south wall until about t 5.5). Their window.keep only lets the window slide later.",
+  "Subject-less moves, where in-frame and LOS do not apply: the-sleepless-sentinels.02 terrain-skim and north-yaraq-outpost.01 canyon-run (path moves), inner-sea-port-ruins.03 fpv-flip (forward FPV roll), mount-syliph.01 pano-360 and mount-dalt.01 flyover (fixed-gimbal vista).",
+  "Replaced during design: an fpv-dive off Mount Dalt's east face. Its base point sits behind the lens, so the subject metrics are meaningless, and the face is in afternoon shade. A rising reveal over Banderling Fort's south-west cliff: giant default-bake trees up to 60 m tall on the rim block the sight line. A rising reveal up the Suntik mesa: the 100 m climb needs about 12 m/s in an 11 s take. A rack-focus at North Al-Arqas: the bonfire foreground falls out of frame. They became a top-down-rise over the South Gemm portal, a pass-over, a spiral descent and a static bonfire shot.",
+  "Sky clock: classic.hyperlapse at Four Towers (rate 0.008, sun about 0.67 to 0.74), classic.time-lapse at Northwest Samsur (rate 0.01, about 0.40 to 0.48) and drone.hyperlapse-orbit at the Inner Sea ruins. That shot uses timeRate 30, not the default 150, which would run the 0.75 sun to about 0.95, past dusk; at 30 it ends near 0.79. The sun stays up in all three.",
+  "Retail scenery bake: these shots have an opt-in retail-bake tree within 6 m, which the default bake the film uses does not draw: festival-stone-of-harvestgain.01 (3.8 m), four-towers.02 (4.7 m), north-yaraq-outpost.01 (5.0 m) and banderling-fort.02 (5.3 m). Keep the default ?sceneryBake.",
+  "Missing kit landblocks avoided: Aia's Tower (0xA7xx to the west and 0xA855-0xAA55 to the north, so all cameras are south and east), the Sleepless Sentinels (0x9264-0x9266 to the east), Inner Sea (0x7863, 0x7B66), Suntik (0x8692-0x8694 to the east), and Syliph, Dalt and Gemm (several around). No sample in any take has a NaN AGL.",
+  "Teleports: derived ground + 0.5 @teleloc, each at least 5 m from any object and not in water, for Aia's Tower, the Sleepless Sentinels, Inner Sea Port Ruins, Banderling Fort, Suntik Village and the Qalaba'r Festival Grounds. At Aia's Tower the gazetteer upper-tower point is inside a tower prism and tower-base-dungeon-portal is a portal swirl. Every other site uses a gazetteer 'best' teleport. Some of these land close to features: four-towers-entrance is inside the courtyard 5 m from the bonfire, solclaim-festival-stone is inside the sentinel square, and life-stone-* sit next to Life Stones. Wrong gazetteer name matches, all ignored: 'Wilderness Fort' (@tele 5.70N 4.30E, the Mimiana Villas route start); 'Banderling Fort' (banderling-fort-8486 at 5.70N 4.30E and banderling-fort-b841 at 49.40S 45.80E, both elsewhere); 'The Sleepless Sentinels' (33.50S 13.10E, the Hamud Cottages start); and 'Frost Haven' (index 74.8S 17.8E, the Qalaba'r portal hub).",
+  "Kit limits worth knowing: each Four Towers quarter (spire plus wall) is one 31 m footprint prism, so the courtyard with its bonfire, Life Stone and well is shot from straight above (pitch -88 for the fire billboards). Wilderness Fort wall statics are full rotated model boxes, which is why its boom-rise looks at the fort centre rather than the Life Stone. Flames, Anniversary glows, portal swirls, fish and the water wisp are runtime spawns, so their look is not verified offline. Mount Dalt's top-down-rise uses pitch -88 over the South Gemm portal.",
+  "insertAfter/insertBefore are kept as given. Note that the Inner Sea Port Ruins and the Festival Stone of Warmtide are 120 m apart (separate sites, adjacent in the route), as are the Qalaba'r Festival Grounds and the Wintersebb stone (90 m).",
+  "Process: no repo files, git, browsers, cargo, wasm-pack, WorldBuilder.Terminal or JEV calls were used. Only single short python/node processes ran, one at a time, with at least 1.4 GB free. All helpers are in the private poi-b5/ scratch folder."
+ ]
+}

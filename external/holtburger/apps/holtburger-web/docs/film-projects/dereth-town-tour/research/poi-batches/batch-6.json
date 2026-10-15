@@ -1,0 +1,2356 @@
+{
+ "batch": 6,
+ "quota": 34,
+ "pois": [
+  {
+   "title": "Mount Bellig",
+   "name": "Mount Bellig",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the mountains in the Mount Alphus Range. Portals to Mount Gemm and the Bellig Tower can be found to the south of the mountain. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Bellig.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": 17.5,
+    "ew": 16.1
+   },
+   "world": [
+    28332.0,
+    28668.0
+   ],
+   "lb": "0x9395",
+   "coveredDistM": 3493,
+   "coveredBy": "shot:zaikhal.04",
+   "nearestSite": "al-jalima",
+   "nearestSiteM": 3662,
+   "gazNear": [
+    {
+     "id": "bellig-tower-portal",
+     "name": "Bellig Tower Portal",
+     "kind": "landmark",
+     "d": 8,
+     "teleport": "@teleloc 0x93950023 102.368 65.4781 224 0.275637 0 0 -0.961262",
+     "pos": [
+      28326.368,
+      28673.478,
+      224
+     ]
+    },
+    {
+     "id": "bellig-top",
+     "name": "Bellig Top",
+     "kind": "poi",
+     "d": 12,
+     "teleport": "@teleloc 0x93950023 98.4 67.7 224 0.275637 0 0 -0.961262",
+     "pos": [
+      28322.4,
+      28675.7,
+      224
+     ]
+    },
+    {
+     "id": "south-bellig",
+     "name": "South Bellig",
+     "kind": "poi",
+     "d": 64,
+     "teleport": "@teleloc 0x93950019 79.1 3 224 0.927184 0 0 -0.374607",
+     "pos": [
+      28303.1,
+      28611,
+      224
+     ]
+    },
+    {
+     "id": "north-gemm-portal",
+     "name": "North Gemm Portal",
+     "kind": "landmark",
+     "d": 66,
+     "teleport": "@teleloc 0x93950019 76.2 1.7 224 -0.317305 0 0 -0.948324",
+     "pos": [
+      28300.2,
+      28609.7,
+      224
+     ]
+    },
+    {
+     "id": "bellig-tower-base-portal",
+     "name": "Bellig Tower Base Portal",
+     "kind": "landmark",
+     "d": 81,
+     "teleport": "@teleloc 0x9395001E 82.5 137 106.9 0.292372 0 0 -0.956305",
+     "pos": [
+      28306.5,
+      28745,
+      106.9
+     ]
+    },
+    {
+     "id": "south-bellig-portal",
+     "name": "South Bellig Portal",
+     "kind": "landmark",
+     "d": 428,
+     "teleport": "@teleloc 0x91930037 165.8 166.7 224 0.942641 0 0 -0.333807",
+     "pos": [
+      28005.8,
+      28390.7,
+      224
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 1547,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-mount-bellig"
+  },
+  {
+   "title": "Mount Alphus",
+   "name": "Mount Alphus",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === The top of one of the Mountains in the Mount Alphus Range, situated around 19.3N, 17.7E. One of the features here is the 19.3N, 17.7E - Mount Alphus Menhir Ring. Also a tent with Zalphoos the Shopkeeper",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Alphus.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     19.3,
+     17.7
+    ],
+    [
+     21.7,
+     19.4
+    ],
+    [
+     27.9,
+     29.5
+    ]
+   ],
+   "map": {
+    "ns": 19.3,
+    "ew": 17.7
+   },
+   "world": [
+    28716.0,
+    29100.0
+   ],
+   "lb": "0x9597",
+   "coveredDistM": 3271,
+   "coveredBy": "site:glenden-wood",
+   "nearestSite": "glenden-wood",
+   "nearestSiteM": 3271,
+   "gazNear": [
+    {
+     "id": "base-of-mt-alphus-portal-9597",
+     "name": "Base of Mt. Alphus Portal",
+     "kind": "landmark",
+     "d": 73,
+     "teleport": "@teleloc 0x95970017 51.8 154.1 224 -0.737277 0 0 -0.67559",
+     "pos": [
+      28659.8,
+      29146.1,
+      224
+     ]
+    },
+    {
+     "id": "mount-alphus",
+     "name": "Mount Alphus",
+     "kind": "poi",
+     "d": 105,
+     "teleport": "@teleloc 0x95980029 140.2 15.9 224 -0.317305 0 0 -0.948324",
+     "pos": [
+      28748.2,
+      29199.9,
+      224
+     ]
+    },
+    {
+     "id": "south-zabool-portal",
+     "name": "South Zabool Portal",
+     "kind": "landmark",
+     "d": 108,
+     "teleport": "@teleloc 0x95980029 142.287 18.0833 224.005 0.929191 0 0 -0.369599",
+     "pos": [
+      28750.287,
+      29202.083,
+      224.005
+     ]
+    },
+    {
+     "id": "base-of-mt-alphus",
+     "name": "Base of Mt. Alphus",
+     "kind": "poi",
+     "d": 179,
+     "teleport": "@teleloc 0x94970030 131.7 170.3 109.8 0.96363 0 0 -0.267238",
+     "pos": [
+      28547.7,
+      29162.3,
+      109.8
+     ]
+    },
+    {
+     "id": "mt-alphus-valley-portal",
+     "name": "Mt. Alphus Valley Portal",
+     "kind": "landmark",
+     "d": 203,
+     "teleport": "@teleloc 0x94970027 105.6 165.9 108.8 -0.725375 0 0 -0.688354",
+     "pos": [
+      28521.6,
+      29157.9,
+      108.8
+     ]
+    },
+    {
+     "id": "mount-alphus-portal",
+     "name": "Mount Alphus Portal",
+     "kind": "landmark",
+     "d": 394,
+     "teleport": "@teleloc 0x96990024 99 73.2 224 -0.258819 0 0 -0.965926",
+     "pos": [
+      28899,
+      29449.2,
+      224
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "mount-alphus",
+     "name": "Mount Alphus",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x95980029 140.2 15.9 224 -0.317305 0 0 -0.948324",
+     "pos": [
+      28748.2,
+      29199.9,
+      224
+     ],
+     "map": {
+      "ns": 19.72,
+      "ew": 17.83
+     }
+    },
+    {
+     "id": "mount-alphus-menhir-ring",
+     "name": "Mount Alphus Menhir Ring",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 19.30N 17.70E",
+     "pos": null,
+     "map": {
+      "ns": 19.3,
+      "ew": 17.7
+     }
+    },
+    {
+     "id": "mount-alphus-range",
+     "name": "Mount Alphus Range",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 19.30N 17.70E",
+     "pos": null,
+     "map": {
+      "ns": 19.3,
+      "ew": 17.7
+     }
+    },
+    {
+     "id": "mount-alphus-portal",
+     "name": "Mount Alphus Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x96990024 99 73.2 224 -0.258819 0 0 -0.965926",
+     "pos": [
+      28899,
+      29449.2,
+      224
+     ],
+     "map": {
+      "ns": 20.75,
+      "ew": 18.46
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 2120,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-mount-alphus"
+  },
+  {
+   "title": "Mount Zabool",
+   "name": "Mount Zabool",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === One of the mountains in the Mount Alphus Range. Unlike the summits of most of the other mountains in the range, Zabool is not reached by using a mountain portal but by instead climbing the Zabool Tower. On the southern end of Zabool is a portal to the northern end of Mount Alphus. The plateau of Alphus may only be reached by using that portal.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Zabool.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": 21.1,
+    "ew": 18.5
+   },
+   "world": [
+    28908.0,
+    29532.0
+   ],
+   "lb": "0x9699",
+   "coveredDistM": 2820,
+   "coveredBy": "site:glenden-wood",
+   "nearestSite": "glenden-wood",
+   "nearestSiteM": 2820,
+   "gazNear": [
+    {
+     "id": "top-of-zabool-tower-portal",
+     "name": "Top of Zabool Tower Portal",
+     "kind": "landmark",
+     "d": 12,
+     "teleport": "@teleloc 0x96990027 101.9 166.1 224 -0.819152 0 0 -0.573576",
+     "pos": [
+      28901.9,
+      29542.1,
+      224
+     ]
+    },
+    {
+     "id": "top-of-mt-zabool",
+     "name": "Top of Mt. Zabool",
+     "kind": "poi",
+     "d": 17,
+     "teleport": "@teleloc 0x9699002F 122.9 164.5 224 0.587785 0 0 -0.809017",
+     "pos": [
+      28922.9,
+      29540.5,
+      224
+     ]
+    },
+    {
+     "id": "life-stone-at-21-0n-18-6e",
+     "name": "Life Stone at 21.0N 18.6E",
+     "kind": "landmark",
+     "d": 45,
+     "teleport": "@teleloc 0x9699002E 138.622 122.379 224.005 0.999854 0 0 0.017105",
+     "pos": [
+      28938.622,
+      29498.379,
+      224.005
+     ]
+    },
+    {
+     "id": "south-zabool",
+     "name": "South Zabool",
+     "kind": "poi",
+     "d": 80,
+     "teleport": "@teleloc 0x96990024 101.9 76.1 224 0.93358 0 0 -0.358368",
+     "pos": [
+      28901.9,
+      29452.1,
+      224
+     ]
+    },
+    {
+     "id": "mount-alphus-portal",
+     "name": "Mount Alphus Portal",
+     "kind": "landmark",
+     "d": 83,
+     "teleport": "@teleloc 0x96990024 99 73.2 224 -0.258819 0 0 -0.965926",
+     "pos": [
+      28899,
+      29449.2,
+      224
+     ]
+    },
+    {
+     "id": "zabool-tower-base-portal",
+     "name": "Zabool Tower Base Portal",
+     "kind": "landmark",
+     "d": 270,
+     "teleport": "@teleloc 0x979A002D 142.611 111.287 41.3892 0.18678 0 0 0.982402",
+     "pos": [
+      29134.611,
+      29679.287,
+      41.389
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 2681,
+   "timeOfDay": 0.6,
+   "grade": "warm",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-mount-zabool"
+  },
+  {
+   "title": "East Samsur Outpost",
+   "name": "East Samsur Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Samsur_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -3.1,
+     22.1
+    ]
+   ],
+   "map": {
+    "ns": -3.1,
+    "ew": 22.1
+   },
+   "world": [
+    29772.0,
+    23724.0
+   ],
+   "lb": "0x9B7B",
+   "coveredDistM": 610,
+   "coveredBy": "shot:samsur.04",
+   "nearestSite": "samsur",
+   "nearestSiteM": 644,
+   "gazNear": [
+    {
+     "id": "life-stone-near-samsur-9b7b",
+     "name": "Life Stone near Samsur",
+     "kind": "landmark",
+     "d": 18,
+     "teleport": "@teleloc 0x9B7B000D 29.7163 104.495 16.483 0.468905 0 0 0.883249",
+     "pos": [
+      29789.716,
+      23720.495,
+      16.483
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-redspire-9b7b",
+     "name": "Destroyed Portal to Redspire",
+     "kind": "landmark",
+     "d": 117,
+     "teleport": "@teleloc 0x9B7B0019 86.253 17.336 20.7 -0.864257 0 0 -0.50305",
+     "pos": [
+      29846.253,
+      23633.336,
+      20.7
+     ]
+    },
+    {
+     "id": "a-ruin-portal-997b",
+     "name": "A Ruin Portal",
+     "kind": "landmark",
+     "d": 386,
+     "teleport": "@teleloc 0x997B0003 12.3986 68.9923 20.005 0.780894 0 0 0.624664",
+     "pos": [
+      29388.399,
+      23684.992,
+      20.005
+     ]
+    },
+    {
+     "id": "life-stone-near-samsur-9c79",
+     "name": "Life Stone near Samsur",
+     "kind": "landmark",
+     "d": 463,
+     "teleport": "@teleloc 0x9C790038 157.008 174.992 23.424 0.813969 0 0 0.580908",
+     "pos": [
+      30109.008,
+      23406.992,
+      23.424
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "east-samsur-outpost",
+     "name": "East Samsur Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 3.10S 22.10E",
+     "pos": null,
+     "map": {
+      "ns": -3.1,
+      "ew": 22.1
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 92,
+   "timeOfDay": 0.55,
+   "grade": "neutral",
+   "chapter": "ch6",
+   "pre": "candidate (near existing coverage: 610 m from shot:samsur.04)",
+   "siteId": "poi-east-samsur-outpost"
+  },
+  {
+   "title": "Leikotha's Crypt",
+   "name": "Leikotha's Crypt",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A small bunker at 10.1S 31.3E with some shrubbery, occupied by Leikotha and a few less friendly Undead.<br> This might be the POI indicated on the Ingame Map. See Points of Interest Map, no. 47.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Leikotha_s_Crypt.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -10.1,
+     31.3
+    ],
+    [
+     -0.9,
+     18.9
+    ]
+   ],
+   "map": {
+    "ns": -10.1,
+    "ew": 31.3
+   },
+   "world": [
+    31980.0,
+    22044.0
+   ],
+   "lb": "0xA672",
+   "coveredDistM": 2573,
+   "coveredBy": "shot:yanshi.03",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 2715,
+   "gazNear": [
+    {
+     "id": "yinar",
+     "name": "Yinar",
+     "kind": "poi",
+     "d": 507,
+     "teleport": "@teleloc 0xA9730005 16.262 113.936 30.65 0.643743 0 0 -0.765242",
+     "pos": [
+      32464.262,
+      22193.936,
+      30.65
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "leikothas-crypt-mansion",
+     "name": "Leikotha's Crypt Mansion",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 6.40S 32.00E",
+     "pos": null,
+     "map": {
+      "ns": -6.4,
+      "ew": 32
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 250,
+   "timeOfDay": 0.49,
+   "grade": "neutral",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-leikothas-crypt"
+  },
+  {
+   "title": "Nuhmudira's Mansion",
+   "name": "Nuhmudira's Mansion",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === You can get access to Nuhmudira's Dungeon from the mansion's basement. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Nuhmudira_s_Mansion.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -4.0,
+     35.9
+    ],
+    [
+     2.2,
+     50.4
+    ]
+   ],
+   "map": {
+    "ns": -4.0,
+    "ew": 35.9
+   },
+   "world": [
+    33084.0,
+    23508.0
+   ],
+   "lb": "0xAC7A",
+   "coveredDistM": 2386,
+   "coveredBy": "path:yanshi.04",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 2481,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "nuhmudiras-mansion",
+     "name": "Nuhmudira's Mansion",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0xAC7A0151 58.86 77.605 -3.995 1 0 0 0",
+     "pos": [
+      33082.86,
+      23501.605,
+      -3.995
+     ],
+     "map": {
+      "ns": -4.03,
+      "ew": 35.9
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 173,
+   "timeOfDay": 0.49,
+   "grade": "neutral",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-nuhmudiras-mansion"
+  },
+  {
+   "title": "Desert Ridge Border",
+   "name": "Desert Ridge Border",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === An Empyrean Stone Tower with a Ghost Wisp on the edge of the Falamar Hills. This location is usually dense with various creature spawns. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Desert_Ridge_Border.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": -5.6,
+    "ew": 40.0
+   },
+   "world": [
+    34068.0,
+    23124.0
+   ],
+   "lb": "0xB178",
+   "coveredDistM": 1551,
+   "coveredBy": "path:yanshi.04",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 1645,
+   "gazNear": [
+    {
+     "id": "desert-ridge-border",
+     "name": "Desert Ridge Border",
+     "kind": "poi",
+     "d": 13,
+     "teleport": "@teleloc 0xB178001C 74.9 75.4 22.3 -0.71934 0 0 -0.694659",
+     "pos": [
+      34058.9,
+      23115.4,
+      22.3
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "desert-ridge-border",
+     "name": "Desert Ridge Border",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xB178001C 74.9 75.4 22.3 -0.71934 0 0 -0.694659",
+     "pos": [
+      34058.9,
+      23115.4,
+      22.3
+     ],
+     "map": {
+      "ns": -5.64,
+      "ew": 39.96
+     }
+    },
+    {
+     "id": "desert-ridge-border-portal-421d",
+     "name": "Desert Ridge Border Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x421D002F 136.241 164.86 31.937 0.42155 0 0 -0.906805",
+     "pos": [
+      12808.241,
+      5732.86,
+      31.937
+     ],
+     "map": {
+      "ns": -78.06,
+      "ew": -48.58
+     }
+    },
+    {
+     "id": "desert-ridge-border-portal-7ac3",
+     "name": "Desert Ridge Border Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x7AC3000B 36.2469 68.8212 232.943 0.520013 0 0 0.854158",
+     "pos": [
+      23460.247,
+      37508.821,
+      232.943
+     ],
+     "map": {
+      "ns": 54.34,
+      "ew": -4.2
+     }
+    },
+    {
+     "id": "desert-ridge-border-portal-9024",
+     "name": "Desert Ridge Border Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x9024003D 183.208 113.732 -0.095 0.412278 0 0 0.911058",
+     "pos": [
+      27831.208,
+      7025.732,
+      -0.095
+     ],
+     "map": {
+      "ns": -72.68,
+      "ew": 14.01
+     }
+    },
+    {
+     "id": "desert-ridge-border-portal-ae71",
+     "name": "Desert Ridge Border Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xAE71000C 36.9392 83.8978 20.9267 0.837102 0 0 0.547047",
+     "pos": [
+      33444.939,
+      21779.898,
+      20.927
+     ],
+     "map": {
+      "ns": -11.2,
+      "ew": 37.4
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 388,
+   "timeOfDay": 0.47,
+   "grade": "neutral",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-desert-ridge-border"
+  },
+  {
+   "title": "11.3S, 37.6E - Empyrean Ruins",
+   "name": "Empyrean Ruins",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A large Empyrean Ruins Site at 11.3S, 37.6E west of Yanshi with different portals and dungeons.<br> It consists of three Empyrean Three-legged Archs with portals, an Empyrean Platform with the portal to the Abandoned Arena, quite a few Empyrean Statues and the portal to the Colosseum",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/11_3S_37_6E_Empyrean_Ruins.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -11.3,
+     37.6
+    ]
+   ],
+   "map": {
+    "ns": -11.3,
+    "ew": 37.6
+   },
+   "world": [
+    33492.0,
+    21756.0
+   ],
+   "lb": "0xAE71",
+   "coveredDistM": 1042,
+   "coveredBy": "shot:yanshi.03",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 1176,
+   "gazNear": [
+    {
+     "id": "riverbend-portal",
+     "name": "Riverbend Portal",
+     "kind": "landmark",
+     "d": 20,
+     "teleport": "@teleloc 0xAE71001A 76.372 41.902 20.005 0.230933 0 0 -0.97297",
+     "pos": [
+      33484.372,
+      21737.902,
+      20.005
+     ]
+    },
+    {
+     "id": "the-colosseum-portal",
+     "name": "The Colosseum Portal",
+     "kind": "landmark",
+     "d": 21,
+     "teleport": "@teleloc 0xAE710014 69.4794 74.5075 20 0.026548 0 0 0.999648",
+     "pos": [
+      33477.479,
+      21770.508,
+      20
+     ]
+    },
+    {
+     "id": "abandoned-arena-portal",
+     "name": "Abandoned Arena Portal",
+     "kind": "landmark",
+     "d": 25,
+     "teleport": "@teleloc 0xAE710013 60 65 22.021 1 0 0 0",
+     "pos": [
+      33468,
+      21761,
+      22.021
+     ]
+    },
+    {
+     "id": "north-desert-edge-portal-ae71",
+     "name": "North Desert Edge Portal",
+     "kind": "landmark",
+     "d": 39,
+     "teleport": "@teleloc 0xAE710012 59.998 29.575 21.005 -0.765011 0 0 -0.644017",
+     "pos": [
+      33467.998,
+      21725.575,
+      21.005
+     ]
+    },
+    {
+     "id": "desert-ridge-border-portal-ae71",
+     "name": "Desert Ridge Border Portal",
+     "kind": "landmark",
+     "d": 53,
+     "teleport": "@teleloc 0xAE71000C 36.9392 83.8978 20.9267 0.837102 0 0 0.547047",
+     "pos": [
+      33444.939,
+      21779.898,
+      20.927
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "empyrean-ruins-0406",
+     "name": "Empyrean Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 96.80S 98.70W",
+     "pos": null,
+     "map": {
+      "ns": -96.8,
+      "ew": -98.7
+     }
+    },
+    {
+     "id": "empyrean-ruins-060d",
+     "name": "Empyrean Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 91.40S 96.50W",
+     "pos": null,
+     "map": {
+      "ns": -91.4,
+      "ew": -96.5
+     }
+    },
+    {
+     "id": "empyrean-ruins-0a03",
+     "name": "Empyrean Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 99.10S 93.50W",
+     "pos": null,
+     "map": {
+      "ns": -99.1,
+      "ew": -93.5
+     }
+    },
+    {
+     "id": "empyrean-ruins-0e0b",
+     "name": "Empyrean Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 92.40S 90.60W",
+     "pos": null,
+     "map": {
+      "ns": -92.4,
+      "ew": -90.6
+     }
+    },
+    {
+     "id": "empyrean-ruins-1748",
+     "name": "Empyrean Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 43.60S 83.00W",
+     "pos": null,
+     "map": {
+      "ns": -43.6,
+      "ew": -83
+     }
+    }
+   ],
+   "insertAfter": "zaikhal",
+   "insertBefore": "yanshi",
+   "insertCostM": 106,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch6",
+   "pre": "candidate",
+   "siteId": "poi-empyrean-ruins"
+  },
+  {
+   "title": "Old Yanshi",
+   "name": "Old Yanshi",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === === Route === === Dungeons ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Old_Yanshi.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -12.7,
+     46.4
+    ]
+   ],
+   "map": {
+    "ns": -12.7,
+    "ew": 46.4
+   },
+   "world": [
+    35604.0,
+    21420.0
+   ],
+   "lb": "0xB96F",
+   "coveredDistM": 963,
+   "coveredBy": "shot:yanshi.01",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 963,
+   "gazNear": [
+    {
+     "id": "destroyed-statue-of-a-reedshark",
+     "name": "Destroyed Statue of a Reedshark",
+     "kind": "landmark",
+     "d": 27,
+     "teleport": "@teleloc 0xB96F0014 62.8831 91.666 10.004 -0.558599 0 0 0.829438",
+     "pos": [
+      35582.883,
+      21403.666,
+      10.004
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-yaraq-b970",
+     "name": "Destroyed Portal to Yaraq",
+     "kind": "landmark",
+     "d": 143,
+     "teleport": "@teleloc 0xB9700013 60 56.6 16 -0.026177 0 0 -0.999657",
+     "pos": [
+      35580,
+      21560.6,
+      16
+     ]
+    },
+    {
+     "id": "a-ruin-portal-ba6f",
+     "name": "A Ruin Portal",
+     "kind": "landmark",
+     "d": 231,
+     "teleport": "@teleloc 0xBA6F0022 114 45.77 9.6 -0.694658 0 0 -0.71934",
+     "pos": [
+      35826,
+      21357.77,
+      9.6
+     ]
+    },
+    {
+     "id": "yanshi-tunnel-portal",
+     "name": "Yanshi Tunnel Portal",
+     "kind": "landmark",
+     "d": 249,
+     "teleport": "@teleloc 0xB8700013 68.3484 53.6156 16.005 0.854772 0 0 0.519004",
+     "pos": [
+      35396.348,
+      21557.616,
+      16.005
+     ]
+    },
+    {
+     "id": "elemental-sanctum",
+     "name": "Elemental Sanctum",
+     "kind": "poi",
+     "d": 277,
+     "teleport": "@teleloc 0xBA6F0036 167.7 129.5 6.1 -0.636078 0 0 -0.771625",
+     "pos": [
+      35879.7,
+      21441.5,
+      6.1
+     ]
+    },
+    {
+     "id": "life-stone-near-yanshi-b76f",
+     "name": "Life Stone near Yanshi",
+     "kind": "landmark",
+     "d": 318,
+     "teleport": "@teleloc 0xB76F0034 151.183 80.4998 18.005 -0.755412 0 0 -0.65525",
+     "pos": [
+      35287.183,
+      21392.5,
+      18.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "old-yanshi",
+     "name": "Old Yanshi",
+     "kind": "dungeon",
+     "indoor": false,
+     "teleport": "@tele 12.75S 46.45E",
+     "pos": null,
+     "map": {
+      "ns": -12.75,
+      "ew": 46.45
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 202,
+   "timeOfDay": 0.5,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-old-yanshi"
+  },
+  {
+   "title": "North Yanshi Outpost",
+   "name": "North Yanshi Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Yanshi_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -9.9,
+     46.6
+    ]
+   ],
+   "map": {
+    "ns": -9.9,
+    "ew": 46.6
+   },
+   "world": [
+    35652.0,
+    22092.0
+   ],
+   "lb": "0xB973",
+   "coveredDistM": 1116,
+   "coveredBy": "shot:yanshi.01",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 1116,
+   "gazNear": [
+    {
+     "id": "life-stone-near-yanshi-b973",
+     "name": "Life Stone near Yanshi",
+     "kind": "landmark",
+     "d": 20,
+     "teleport": "@teleloc 0xB9730031 151.326 15.9557 40.005 0.389077 0 0 -0.921205",
+     "pos": [
+      35671.326,
+      22095.956,
+      40.005
+     ]
+    },
+    {
+     "id": "life-stone-near-yanshi-b972",
+     "name": "Life Stone near Yanshi",
+     "kind": "landmark",
+     "d": 111,
+     "teleport": "@teleloc 0xB9720034 147.054 93.6479 34.005 -0.613228 0 0 0.789906",
+     "pos": [
+      35667.054,
+      21981.648,
+      34.005
+     ]
+    },
+    {
+     "id": "northwater-cottages-portal",
+     "name": "Northwater Cottages Portal",
+     "kind": "landmark",
+     "d": 221,
+     "teleport": "@teleloc 0xB872002C 133.723 90.9808 18.005 -0.274249 0 0 0.961659",
+     "pos": [
+      35461.723,
+      21978.981,
+      18.005
+     ]
+    },
+    {
+     "id": "snakehead-portal",
+     "name": "Snakehead Portal",
+     "kind": "landmark",
+     "d": 226,
+     "teleport": "@teleloc 0xB8720026 109.963 130.536 18.8414 -0.99059 0 0 0.136866",
+     "pos": [
+      35437.963,
+      22018.536,
+      18.841
+     ]
+    },
+    {
+     "id": "crescent-lane-cottages-portal",
+     "name": "Crescent Lane Cottages Portal",
+     "kind": "landmark",
+     "d": 230,
+     "teleport": "@teleloc 0xB872002C 125.265 88.2272 18.005 -0.163764 0 0 0.9865",
+     "pos": [
+      35453.265,
+      21976.227,
+      18.005
+     ]
+    },
+    {
+     "id": "west-yanshi-namoon-portal",
+     "name": "West Yanshi Namoon Portal",
+     "kind": "landmark",
+     "d": 236,
+     "teleport": "@teleloc 0xB8720026 100.478 128.996 18.7546 -0.993656 0 0 -0.112464",
+     "pos": [
+      35428.478,
+      22016.996,
+      18.755
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "north-yanshi-outpost",
+     "name": "North Yanshi Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 9.90S 46.60E",
+     "pos": null,
+     "map": {
+      "ns": -9.9,
+      "ew": 46.6
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 867,
+   "timeOfDay": 0.5,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-north-yanshi-outpost"
+  },
+  {
+   "title": "South Yanshi Outpost",
+   "name": "South Yanshi Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. It was destroyed by Martine during The First Strike event.<br> This outpost is the starting point for The Writings of Jhong Mi quest. One of the dungeons involved in the quest is just next to the outpost at 16.0S, 47.2E. There is also a portal to Redspire here and a spawn of Blue Phyntos Wasps amongst Em",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Yanshi_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -16.0,
+     47.2
+    ],
+    [
+     -15.6,
+     46.5
+    ]
+   ],
+   "map": {
+    "ns": -15.6,
+    "ew": 46.5
+   },
+   "world": [
+    35628.0,
+    20724.0
+   ],
+   "lb": "0xB96B",
+   "coveredDistM": 1291,
+   "coveredBy": "path:yanshi.04",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 1300,
+   "gazNear": [
+    {
+     "id": "life-stone-near-yanshi-b96b",
+     "name": "Life Stone near Yanshi",
+     "kind": "landmark",
+     "d": 6,
+     "teleport": "@teleloc 0xB96B0028 109.962 173.984 6 0.9998 0 0 -0.019982",
+     "pos": [
+      35629.962,
+      20717.984,
+      6
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-redspire-b96b",
+     "name": "Destroyed Portal to Redspire",
+     "kind": "landmark",
+     "d": 87,
+     "teleport": "@teleloc 0xB96B0035 156.023 107.709 6.5 0.866025 0 0 -0.5",
+     "pos": [
+      35676.023,
+      20651.709,
+      6.5
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-shoushi-b96d",
+     "name": "Destroyed Portal to Shoushi",
+     "kind": "landmark",
+     "d": 212,
+     "teleport": "@teleloc 0xB96D0021 119.5 7.4 10 1 0 0 0",
+     "pos": [
+      35639.5,
+      20935.4,
+      10
+     ]
+    },
+    {
+     "id": "mossy-cave-portal-b86d",
+     "name": "Mossy Cave Portal",
+     "kind": "landmark",
+     "d": 368,
+     "teleport": "@teleloc 0xB86D003E 175.751 142.413 -0.895 -0.804241 0 0 0.594303",
+     "pos": [
+      35503.751,
+      21070.413,
+      -0.895
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "south-yanshi-outpost",
+     "name": "South Yanshi Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 15.60S 46.50E",
+     "pos": null,
+     "map": {
+      "ns": -15.6,
+      "ew": 46.5
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 2,
+   "timeOfDay": 0.52,
+   "grade": "neutral",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-south-yanshi-outpost"
+  },
+  {
+   "title": "Burun Ruuk Village",
+   "name": "Burun Ruuk Village",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A village built by the Burun Ruuk shortly after they arrived to Dereth through portals in the Temple of Ixir Zi. The village itself is centered around the temple's entrance. The creatures here drop untranslated texts that are used in the Blackmire Lore quest. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burun_Ruuk_Village.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -21.7,
+     47.7
+    ],
+    [
+     -10.3,
+     45.7
+    ]
+   ],
+   "map": {
+    "ns": -21.7,
+    "ew": 47.7
+   },
+   "world": [
+    35916.0,
+    19260.0
+   ],
+   "lb": "0xBB64",
+   "coveredDistM": 2582,
+   "coveredBy": "shot:yanshi.03",
+   "nearestSite": "yanshi",
+   "nearestSiteM": 2647,
+   "gazNear": [
+    {
+     "id": "blackmire-temple",
+     "name": "Blackmire Temple",
+     "kind": "dungeon",
+     "d": 65,
+     "teleport": "@teleloc 0xBB64001B 76.086 49.2145 5.555 -1 0 0 -0.000074",
+     "pos": [
+      35980.086,
+      19249.215,
+      5.555
+     ]
+    },
+    {
+     "id": "life-stone-at-19-8s-47-9e",
+     "name": "Life Stone at 19.8S 47.9E",
+     "kind": "landmark",
+     "d": 455,
+     "teleport": "@teleloc 0xBB660016 69.0502 127.265 6.005 0.997055 0 0 0.076688",
+     "pos": [
+      35973.05,
+      19711.265,
+      6.005
+     ]
+    },
+    {
+     "id": "swamp-gardens-portal",
+     "name": "Swamp Gardens Portal",
+     "kind": "landmark",
+     "d": 508,
+     "teleport": "@teleloc 0xB863002A 126.961 37.7771 6.005 0.339913 0 0 -0.940457",
+     "pos": [
+      35454.961,
+      19045.777,
+      6.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "burun-ruuk-village",
+     "name": "Burun Ruuk Village",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 21.70S 47.70E",
+     "pos": null,
+     "map": {
+      "ns": -21.7,
+      "ew": 47.7
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 205,
+   "timeOfDay": 0.6,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-burun-ruuk-village"
+  },
+  {
+   "title": "Folthid Estate",
+   "name": "Folthid Estate",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === The Folthid estate is the home of Raxanza Folthid and her employee Felscuda. It is located northeast of Yanshi and south of Lytelthorpe. The estate has four points of interest: === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Folthid_Estate.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -8.8,
+     53.1
+    ],
+    [
+     -8.8,
+     53.7
+    ],
+    [
+     -8.7,
+     53.8
+    ],
+    [
+     -8.6,
+     52.9
+    ]
+   ],
+   "map": {
+    "ns": -8.8,
+    "ew": 53.7
+   },
+   "world": [
+    37356.0,
+    22356.0
+   ],
+   "lb": "0xC274",
+   "coveredDistM": 2355,
+   "coveredBy": "shot:lytelthorpe.07",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 2390,
+   "gazNear": [
+    {
+     "id": "folthid-estate",
+     "name": "Folthid Estate",
+     "kind": "poi",
+     "d": 14,
+     "teleport": "@teleloc 0xC274001C 94.5394 81.4253 24.005 1 0 0 0",
+     "pos": [
+      37342.539,
+      22353.425,
+      24.005
+     ]
+    },
+    {
+     "id": "life-stone-at-8-7s-53-8e",
+     "name": "Life Stone at 8.7S 53.8E",
+     "kind": "landmark",
+     "d": 41,
+     "teleport": "@teleloc 0xC274002D 138.373 111.336 24.005 -0.989899 0 0 -0.141772",
+     "pos": [
+      37386.373,
+      22383.336,
+      24.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "folthid-estate",
+     "name": "Folthid Estate",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xC274001C 94.5394 81.4253 24.005 1 0 0 0",
+     "pos": [
+      37342.539,
+      22353.425,
+      24.005
+     ],
+     "map": {
+      "ns": -8.81,
+      "ew": 53.64
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 2074,
+   "timeOfDay": 0.57,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-folthid-estate"
+  },
+  {
+   "title": "Burun Fortress",
+   "name": "Burun Fortress",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A huge fortress at 25.8S, 46.3E in the Blackmire Swamp near Yanshi, full of Burun. To the south is a destroyable Fortress Barrier. On the table just outside the Barrier, the Blueprints for a Burun Fortress can be picked up. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burun_Fortress.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -25.8,
+     46.3
+    ],
+    [
+     -25.5,
+     46.4
+    ],
+    [
+     -10.3,
+     45.6
+    ]
+   ],
+   "map": {
+    "ns": -25.8,
+    "ew": 46.3
+   },
+   "world": [
+    35580.0,
+    18276.0
+   ],
+   "lb": "0xB95F",
+   "coveredDistM": 3055,
+   "coveredBy": "shot:sawato.01",
+   "nearestSite": "sawato",
+   "nearestSiteM": 3196,
+   "gazNear": [
+    {
+     "id": "hidden-entrance-portal",
+     "name": "Hidden Entrance Portal",
+     "kind": "landmark",
+     "d": 371,
+     "teleport": "@teleloc 0xB9610011 48.5137 22.3314 5.905 -0.999926 0 0 0.012183",
+     "pos": [
+      35568.514,
+      18646.331,
+      5.905
+     ]
+    },
+    {
+     "id": "blackmire-edge-cottages",
+     "name": "Blackmire Edge Cottages",
+     "kind": "poi",
+     "d": 506,
+     "teleport": "@teleloc 0xB95C003E 185.652 121.417 10.534 -0.79008 0 0 -0.613004",
+     "pos": [
+      35705.652,
+      17785.417,
+      10.534
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "burun-fortress-central-mound",
+     "name": "Burun Fortress Central Mound",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 0278",
+     "pos": null,
+     "map": {
+      "ns": -25.5,
+      "ew": 46.4
+     }
+    },
+    {
+     "id": "burun-fortress-ne-mound",
+     "name": "Burun Fortress NE Mound",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 027A",
+     "pos": null,
+     "map": {
+      "ns": -25.5,
+      "ew": 46.4
+     }
+    },
+    {
+     "id": "burun-fortress-nw-mound",
+     "name": "Burun Fortress NW Mound",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 027B",
+     "pos": null,
+     "map": {
+      "ns": -25.5,
+      "ew": 46.4
+     }
+    },
+    {
+     "id": "burun-fortress-se-mound",
+     "name": "Burun Fortress SE Mound",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 0280",
+     "pos": null,
+     "map": {
+      "ns": -25.5,
+      "ew": 46.4
+     }
+    },
+    {
+     "id": "burun-fortress-sw-mound",
+     "name": "Burun Fortress SW Mound",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 0279",
+     "pos": null,
+     "map": {
+      "ns": -25.5,
+      "ew": 46.4
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 942,
+   "timeOfDay": 0.63,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-burun-fortress"
+  },
+  {
+   "title": "Imuth Maer Doquin",
+   "name": "Imuth Maer Doquin",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === A series of ancient Empyrean buildings populated by low level mosswarts and drudges located near the town of Yanshi. This was one of the first major points of interest in the game and even appears on the Ingame Map (See Points of Interest Map, no.48). Later on it was updated to include an alternative portal to the Wai Jhou Halls of Metos. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Imuth_Maer_Doquin.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -15.9,
+     60.7
+    ],
+    [
+     -12.1,
+     63.5
+    ],
+    [
+     -11.6,
+     57.9
+    ]
+   ],
+   "map": {
+    "ns": -11.6,
+    "ew": 57.9
+   },
+   "world": [
+    38364.0,
+    21684.0
+   ],
+   "lb": "0xC770",
+   "coveredDistM": 3345,
+   "coveredBy": "shot:lytelthorpe.07",
+   "nearestSite": "lytelthorpe",
+   "nearestSiteM": 3390,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "imuth-maer-doquin",
+     "name": "Imuth Maer Doquin",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 11.60S 57.90E",
+     "pos": null,
+     "map": {
+      "ns": -11.6,
+      "ew": 57.9
+     }
+    }
+   ],
+   "insertAfter": "yanshi",
+   "insertBefore": "sawato",
+   "insertCostM": 2133,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-imuth-maer-doquin"
+  },
+  {
+   "title": "Fycheck Outpost",
+   "name": "Fycheck Outpost",
+   "cats": [
+    "Southeast POI",
+    "Historical Site",
+    "Lore Database Entry"
+   ],
+   "desc": "(Rumor) === Description === An  abandoned Sho outpost. It was long unoccupied, until renegade Gotrok Lugians took it over. There was a lifestone in the outpost, but when the lugians took over, the lifestone was destroyed or relocated, and there is now one to the north. There is a portal to Eastham at the eastern end of the outpost. The lugians guard a Runed Chest (resistance: 200, tier 4 Loot). In",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fycheck_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -34.5,
+     68.3
+    ],
+    [
+     -34.4,
+     64.9
+    ],
+    [
+     -33.8,
+     68.6
+    ]
+   ],
+   "map": {
+    "ns": -34.4,
+    "ew": 64.9
+   },
+   "world": [
+    40044.0,
+    16212.0
+   ],
+   "lb": "0xD054",
+   "coveredDistM": 1910,
+   "coveredBy": "site:shoushi",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 1910,
+   "gazNear": [
+    {
+     "id": "destroyed-eastham-portal",
+     "name": "Destroyed Eastham Portal",
+     "kind": "landmark",
+     "d": 52,
+     "teleport": "@teleloc 0xD0540014 56.772 76.887 238.005 -0.707107 0 0 -0.707107",
+     "pos": [
+      39992.772,
+      16204.887,
+      238.005
+     ]
+    },
+    {
+     "id": "life-stone-at-33-9s-64-9e",
+     "name": "Life Stone at 33.9S 64.9E",
+     "kind": "landmark",
+     "d": 121,
+     "teleport": "@teleloc 0xD0550021 102.678 12.7019 238.005 -0.016965 0 0 -0.999856",
+     "pos": [
+      40038.678,
+      16332.702,
+      238.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "fycheck-outpost",
+     "name": "Fycheck Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 34.50S 68.30E",
+     "pos": null,
+     "map": {
+      "ns": -34.5,
+      "ew": 68.3
+     }
+    }
+   ],
+   "insertAfter": "sawato",
+   "insertBefore": "shoushi",
+   "insertCostM": 396,
+   "timeOfDay": 0.78,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-fycheck-outpost"
+  },
+  {
+   "title": "Sho Roadside",
+   "name": "Sho Roadside",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === The destination of all Sho Roadside Portals. A peddler has established a shop here, and keeps a pet white rat. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Sho_Roadside.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -27.9,
+     68.4
+    ],
+    [
+     -27.8,
+     68.3
+    ]
+   ],
+   "map": {
+    "ns": -27.9,
+    "ew": 68.4
+   },
+   "world": [
+    40884.0,
+    17772.0
+   ],
+   "lb": "0xD45C",
+   "coveredDistM": 1672,
+   "coveredBy": "shot:shoushi.01",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 1696,
+   "gazNear": [
+    {
+     "id": "sho-roadside",
+     "name": "Sho Roadside",
+     "kind": "poi",
+     "d": 7,
+     "teleport": "@teleloc 0xD45C003D 176.1 102.1 14 0.669131 0 0 -0.743145",
+     "pos": [
+      40880.1,
+      17766.1,
+      14
+     ]
+    },
+    {
+     "id": "cursed-swamp-portal",
+     "name": "Cursed Swamp Portal",
+     "kind": "landmark",
+     "d": 209,
+     "teleport": "@teleloc 0xD55D002B 140.661 58.377 6.005 1 0 0 0",
+     "pos": [
+      41036.661,
+      17914.377,
+      6.005
+     ]
+    },
+    {
+     "id": "chi-zou-cottages",
+     "name": "Chi Zou Cottages",
+     "kind": "poi",
+     "d": 497,
+     "teleport": "@teleloc 0xD65A003F 168.899 163.348 19.93 -0.396828 0 0 -0.917893",
+     "pos": [
+      41256.899,
+      17443.348,
+      19.93
+     ]
+    },
+    {
+     "id": "mosswart-camp-d75d",
+     "name": "Mosswart Camp",
+     "kind": "poi",
+     "d": 530,
+     "teleport": "@teleloc 0xD75D0029 127.339 2.50435 5.555 1 0 0 0",
+     "pos": [
+      41407.339,
+      17858.504,
+      5.555
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "sho-roadside",
+     "name": "Sho Roadside",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0xD45C003D 176.1 102.1 14 0.669131 0 0 -0.743145",
+     "pos": [
+      40880.1,
+      17766.1,
+      14
+     ],
+     "map": {
+      "ns": -27.92,
+      "ew": 68.38
+     }
+    },
+    {
+     "id": "sho-roadside-portal-4031",
+     "name": "Sho Roadside Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x4031002A 137.21 26.2009 15.9294 0.408732 0 0 -0.912655",
+     "pos": [
+      12425.21,
+      9434.201,
+      15.929
+     ],
+     "map": {
+      "ns": -62.64,
+      "ew": -50.18
+     }
+    },
+    {
+     "id": "sho-roadside-portal-47e4",
+     "name": "Sho Roadside Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x47E4003A 185.132 35.937 13 0.707107 0 0 -0.707107",
+     "pos": [
+      13817.132,
+      43811.937,
+      13
+     ],
+     "map": {
+      "ns": 80.6,
+      "ew": -44.38
+     }
+    },
+    {
+     "id": "sho-roadside-portal-89f4",
+     "name": "Sho Roadside Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x89F40006 1.8255 137.9 7.09453 1 0 0 0",
+     "pos": [
+      26305.826,
+      46985.9,
+      7.095
+     ],
+     "map": {
+      "ns": 93.82,
+      "ew": 7.66
+     }
+    },
+    {
+     "id": "sho-roadside-portal-90d0",
+     "name": "Sho Roadside Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x90D00116 84 113 284.005 1 0 0 0",
+     "pos": [
+      27732,
+      40049,
+      284.005
+     ],
+     "map": {
+      "ns": 64.92,
+      "ew": 13.6
+     }
+    }
+   ],
+   "insertAfter": "sawato",
+   "insertBefore": "shoushi",
+   "insertCostM": 454,
+   "timeOfDay": 0.78,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-sho-roadside"
+  },
+  {
+   "title": "Fycheck Ruins",
+   "name": "Fycheck Ruins",
+   "cats": [
+    "Southeast POI",
+    "Historical Site",
+    "Lore Database Entry"
+   ],
+   "desc": "(Rumor) === Description === A large Empyrean ruin site with wisps, rats, zefirs, and undead. There is an unlocked runed chest (tier 3 Loot) in the middle bunker. The ruins are made up of two Empyrean Stone Bunkers, a Meeting Hall Style Building, three Empyrean Statues, numerous Empyrean Pillars, and an Empyrean Stone Tower.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Fycheck_Ruins.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -36.2,
+     65.0
+    ],
+    [
+     -34.4,
+     64.9
+    ]
+   ],
+   "map": {
+    "ns": -36.2,
+    "ew": 65.0
+   },
+   "world": [
+    40068.0,
+    15780.0
+   ],
+   "lb": "0xD052",
+   "coveredDistM": 1984,
+   "coveredBy": "shot:shoushi.04",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 1987,
+   "gazNear": [
+    {
+     "id": "fathomless-chasm-portal",
+     "name": "Fathomless Chasm Portal",
+     "kind": "landmark",
+     "d": 430,
+     "teleport": "@teleloc 0xCE51002B 122.756 54.9958 245.584 -0.972528 0 0 0.232788",
+     "pos": [
+      39674.756,
+      15606.996,
+      245.584
+     ]
+    },
+    {
+     "id": "destroyed-eastham-portal",
+     "name": "Destroyed Eastham Portal",
+     "kind": "landmark",
+     "d": 431,
+     "teleport": "@teleloc 0xD0540014 56.772 76.887 238.005 -0.707107 0 0 -0.707107",
+     "pos": [
+      39992.772,
+      16204.887,
+      238.005
+     ]
+    },
+    {
+     "id": "life-stone-at-33-9s-64-9e",
+     "name": "Life Stone at 33.9S 64.9E",
+     "kind": "landmark",
+     "d": 553,
+     "teleport": "@teleloc 0xD0550021 102.678 12.7019 238.005 -0.016965 0 0 -0.999856",
+     "pos": [
+      40038.678,
+      16332.702,
+      238.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "fycheck-ruins",
+     "name": "Fycheck Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 34.40S 64.90E",
+     "pos": null,
+     "map": {
+      "ns": -34.4,
+      "ew": 64.9
+     }
+    }
+   ],
+   "insertAfter": "sawato",
+   "insertBefore": "shoushi",
+   "insertCostM": 815,
+   "timeOfDay": 0.78,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-fycheck-ruins"
+  },
+  {
+   "title": "West Shoushi Outpost",
+   "name": "West Shoushi Outpost",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === One of the old starter outposts where new arrivals to Dereth would appear. Unlike most of the other outposts this one was not attacked by Martine and still functions, however, instead of appearing here new arrivals portal directly into Shoushi proper. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/West_Shoushi_Outpost.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -33.6,
+     69.7
+    ]
+   ],
+   "map": {
+    "ns": -33.6,
+    "ew": 69.7
+   },
+   "world": [
+    41196.0,
+    16404.0
+   ],
+   "lb": "0xD655",
+   "coveredDistM": 745,
+   "coveredBy": "site:shoushi",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 745,
+   "gazNear": [
+    {
+     "id": "life-stone-near-shoushi-d655",
+     "name": "Life Stone near Shoushi",
+     "kind": "landmark",
+     "d": 43,
+     "teleport": "@teleloc 0xD6550034 151.276 81.7088 44.005 -0.125403 0 0 0.992106",
+     "pos": [
+      41239.276,
+      16401.709,
+      44.005
+     ]
+    },
+    {
+     "id": "fountain-near-shoushi-d855",
+     "name": "Fountain near Shoushi",
+     "kind": "landmark",
+     "d": 397,
+     "teleport": "@teleloc 0xD8550026 119.745 120.013 28.0611 0.92388 0 0 -0.382683",
+     "pos": [
+      41591.745,
+      16440.013,
+      28.061
+     ]
+    },
+    {
+     "id": "braid-mansion-ruin-portal",
+     "name": "Braid Mansion Ruin Portal",
+     "kind": "landmark",
+     "d": 567,
+     "teleport": "@teleloc 0xD954001D 76.9695 118.695 20.005 0.970063 0 0 -0.242852",
+     "pos": [
+      41740.97,
+      16246.695,
+      20.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "west-shoushi-outpost",
+     "name": "West Shoushi Outpost",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 33.60S 69.70E",
+     "pos": null,
+     "map": {
+      "ns": -33.6,
+      "ew": 69.7
+     }
+    }
+   ],
+   "insertAfter": "sawato",
+   "insertBefore": "shoushi",
+   "insertCostM": 71,
+   "timeOfDay": 0.77,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate",
+   "siteId": "poi-west-shoushi-outpost"
+  },
+  {
+   "title": "Rat King's Cave",
+   "name": "Rat King's Cave",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "=== Description === Home of the Rat King. Complete all tasks from the Rat Catcher quest to be flagged to loot the Rat King's tail. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Rat_King_s_Cave.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     -32.9,
+     70.5
+    ]
+   ],
+   "map": {
+    "ns": -32.9,
+    "ew": 70.5
+   },
+   "world": [
+    41388.0,
+    16572.0
+   ],
+   "lb": "0xD756",
+   "coveredDistM": 560,
+   "coveredBy": "shot:shoushi.01",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 566,
+   "gazNear": [
+    {
+     "id": "life-stone-near-shoushi-d655",
+     "name": "Life Stone near Shoushi",
+     "kind": "landmark",
+     "d": 226,
+     "teleport": "@teleloc 0xD6550034 151.276 81.7088 44.005 -0.125403 0 0 0.992106",
+     "pos": [
+      41239.276,
+      16401.709,
+      44.005
+     ]
+    },
+    {
+     "id": "fountain-near-shoushi-d855",
+     "name": "Fountain near Shoushi",
+     "kind": "landmark",
+     "d": 243,
+     "teleport": "@teleloc 0xD8550026 119.745 120.013 28.0611 0.92388 0 0 -0.382683",
+     "pos": [
+      41591.745,
+      16440.013,
+      28.061
+     ]
+    },
+    {
+     "id": "braid-mansion-ruin-portal",
+     "name": "Braid Mansion Ruin Portal",
+     "kind": "landmark",
+     "d": 480,
+     "teleport": "@teleloc 0xD954001D 76.9695 118.695 20.005 0.970063 0 0 -0.242852",
+     "pos": [
+      41740.97,
+      16246.695,
+      20.005
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-greenspire-d955",
+     "name": "Destroyed Portal to Greenspire",
+     "kind": "landmark",
+     "d": 486,
+     "teleport": "@teleloc 0xD955003C 182.184 89.697 20.5 -0.755962 0 0 -0.654616",
+     "pos": [
+      41846.184,
+      16409.697,
+      20.5
+     ]
+    },
+    {
+     "id": "portal-to-town-network-da55",
+     "name": "Portal to Town Network",
+     "kind": "landmark",
+     "d": 558,
+     "teleport": "@teleloc 0xDA550014 66.1818 92.2689 20.198 0.339298 0 0 0.940679",
+     "pos": [
+      41922.182,
+      16412.269,
+      20.198
+     ]
+    },
+    {
+     "id": "shoushi",
+     "name": "Shoushi",
+     "kind": "town",
+     "d": 574,
+     "teleport": "@telepoi Shoushi",
+     "pos": [
+      41940.8,
+      16419,
+      20
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "rat-kings-cave",
+     "name": "Rat King's Cave",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon D756",
+     "pos": null,
+     "map": {
+      "ns": -32.9,
+      "ew": 70.5
+     }
+    }
+   ],
+   "insertAfter": "sawato",
+   "insertBefore": "shoushi",
+   "insertCostM": 4,
+   "timeOfDay": 0.77,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate (near existing coverage: 560 m from shot:shoushi.01)",
+   "siteId": "poi-rat-kings-cave"
+  },
+  {
+   "title": "Festival Stone of Foredawn",
+   "name": "Festival Stone of Foredawn",
+   "cats": [
+    "Southeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Foredawn lies east of Shoushi, near 75.5E, 33.9S. This Stone appears to be the only one whose attendant temple facilities have survived the depredations of time.\" -- Alatar Locke, The Festival Stones of the Empyreans",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Foredawn.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     -33.8,
+     75.1
+    ],
+    [
+     -33.8,
+     75.7
+    ],
+    [
+     -33.8,
+     76.2
+    ],
+    [
+     -33.8,
+     76.4
+    ]
+   ],
+   "map": {
+    "ns": -33.8,
+    "ew": 75.1
+   },
+   "world": [
+    42492.0,
+    16356.0
+   ],
+   "lb": "0xDD55",
+   "coveredDistM": 518,
+   "coveredBy": "shot:shoushi.03",
+   "nearestSite": "shoushi",
+   "nearestSiteM": 559,
+   "gazNear": [
+    {
+     "id": "foredawn-festival-stone",
+     "name": "Foredawn Festival Stone",
+     "kind": "poi",
+     "d": 257,
+     "teleport": "@teleloc 0xDE55002A 124.8 38.2 12.4 0.656059 0 0 -0.75471",
+     "pos": [
+      42748.8,
+      16358.2,
+      12.4
+     ]
+    },
+    {
+     "id": "refreshing-fountain-de55",
+     "name": "Refreshing Fountain",
+     "kind": "landmark",
+     "d": 302,
+     "teleport": "@teleloc 0xDE55003A 170 36 16.05 0.707107 0 0 -0.707107",
+     "pos": [
+      42794,
+      16356,
+      16.05
+     ]
+    },
+    {
+     "id": "gan-zos-den-of-iniquity",
+     "name": "Gan Zo's Den of Iniquity",
+     "kind": "poi",
+     "d": 372,
+     "teleport": "@teleloc 0xDB54001E 85 132 20 0.707107 0 0 -0.707107",
+     "pos": [
+      42133,
+      16260,
+      20
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-sanamar-db54",
+     "name": "Destroyed Portal to Sanamar",
+     "kind": "landmark",
+     "d": 425,
+     "teleport": "@teleloc 0xDB54000D 36 108 19.7902 0.92388 0 0 -0.382683",
+     "pos": [
+      42084,
+      16236,
+      19.79
+     ]
+    },
+    {
+     "id": "nullified-statue-of-a-drudge-da55",
+     "name": "Nullified Statue of a Drudge",
+     "kind": "landmark",
+     "d": 538,
+     "teleport": "@teleloc 0xDA550026 105.727 129.164 26.839 0.896749 0 0 -0.442539",
+     "pos": [
+      41961.727,
+      16449.164,
+      26.839
+     ]
+    },
+    {
+     "id": "life-stone-near-shoushi-da55",
+     "name": "Life Stone near Shoushi",
+     "kind": "landmark",
+     "d": 551,
+     "teleport": "@teleloc 0xDA55001D 88.7966 103.088 20.005 0.514396 0 0 -0.857553",
+     "pos": [
+      41944.797,
+      16423.088,
+      20.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-foredawn",
+     "name": "Festival Stone of Foredawn",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 33.80S 75.10E",
+     "pos": null,
+     "map": {
+      "ns": -33.8,
+      "ew": 75.1
+     }
+    }
+   ],
+   "insertAfter": "shoushi",
+   "insertBefore": "hebian-to",
+   "insertCostM": 40,
+   "timeOfDay": 0.75,
+   "grade": "warm",
+   "chapter": "ch7",
+   "pre": "candidate (near existing coverage: 518 m from shot:shoushi.03)",
+   "siteId": "poi-festival-stone-of-foredawn"
+  }
+ ]
+}

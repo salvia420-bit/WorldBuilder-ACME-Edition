@@ -1,0 +1,242 @@
+{
+ "name": "Drudge Fort",
+ "title": "Drudge Fort",
+ "siteId": "poi-drudge-fort",
+ "summary": "A huge wooden fort near Cragstone, 'quite full of Drudges' since Prodigal Sons; destructible doors guard the way to the central house (Sergeant Shanks, Hoogan) and the Drudge Fort Cave. In the kit: a 210 m hilltop fort of concentric square timber palisades (17 m wall models) stepping up the hill from z 67 to the inner courtyard at z 84, four 17 m wooden towers round the courtyard, 24 tiki torches flanking the gates, three Drudge Bonfires in the courtyard and more outside, and the central house and two-storey hall.",
+ "landmarks": [
+  {
+   "name": "Inner courtyard and central hall (0x01000BC3)",
+   "pos": [
+    35506.4,
+    30539.4,
+    84.0
+   ],
+   "heightM": 9.7,
+   "note": "Two-storey hall where Sergeant Shanks stands, the central house 0x010011A9 (35507,30557) and three Drudge Bonfires."
+  },
+  {
+   "name": "Wooden towers (0x01004002)",
+   "pos": [
+    35484.0,
+    30516.0,
+    74.4
+   ],
+   "heightM": 17.0,
+   "note": "Four, at (35484|35532, 30516|30564), tops z 91.4."
+  },
+  {
+   "name": "South gate",
+   "pos": [
+    35508.2,
+    30442.3,
+    68.8
+   ],
+   "heightM": 12.0,
+   "note": "Gate in the outer palisade (0x01004010, top z 80.9) flanked by torches at (35503.2,30441.1) and (35513.2,30441.3)."
+  },
+  {
+   "name": "Outside bonfire",
+   "pos": [
+    35508.7,
+    30410.9,
+    67.2
+   ],
+   "heightM": 1.5,
+   "note": "Drudge Bonfire spawn 31 m south of the south gate."
+  }
+ ],
+ "site": {
+  "id": "poi-drudge-fort",
+  "name": "Drudge Fort",
+  "teleport": "@teleloc 0xB99E000A 28.00 44.00 56.17 1 0 0 0",
+  "anchor": [
+   35505,
+   30540,
+   84
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.43,
+   "grade": "neutral"
+  },
+  "notes": "No outdoor gazetteer teleport at the fort (gazetteer has only the Drudge Fort Cave dungeon and a portal 198 m away); derived @teleloc on open grass 160 m south-south-east of the fort, outside the outer palisade (ground z 55.7)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 25.4,
+   "ew": 45.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 480,
+  "coveredBy": "shot:cragstone.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Drudge_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-drudge-fort.01",
+   "site": "poi-drudge-fort",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35506.4,
+     30539.4,
+     84
+    ],
+    "height": 11,
+    "radius": 8
+   },
+   "params": {
+    "radius": 160,
+    "heightAGL": 60,
+    "revolutions": 0.065,
+    "direction": "cw",
+    "bearingDeg": 118,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Arc slowly clockwise 160 m out and 60 m above the courtyard round the drudges' wooden fort, its concentric palisades stepping up to the bonfire courtyard; hold 15 m above every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature aerial: 0.065 turn clockwise 160 m out and 60 m above the courtyard (88-99 m above the slopes) round the drudges' hilltop fort: concentric square palisade rings stepping up the hill to the bonfire courtyard and the four 17 m wooden towers, 24 gate torches; sun SE (0.43) behind the lens on the opening bearing. Verified (check.mjs, full take flown): take 0-10 s: AGL 87.71..98.6 m, nearest drawn 68.48 m (scenery-default 0x02000258@35625,30424), vmax 6.53 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 88.96..95.7 m, nearest drawn 68.48 m (scenery-default 0x02000258@35625,30424), vmax 6.53 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.55 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-drudge-fort.02",
+   "site": "poi-drudge-fort",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35508.2,
+     30442.3,
+     68.8
+    ],
+    "height": 12,
+    "radius": 5
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": -20,
+    "distance": 17,
+    "thirds": "center",
+    "pushM": 0.8
+   },
+   "standingOrder": "Look up from the grass outside the fort at the torch-flanked south gate in the 17 m palisade; creep 0.8 m closer and keep 2 m from the bushes and 8 m from the torches.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle from the grass outside the fort: lens ~1 m above the slope 17 m SE of the torch-flanked south gate in the outer palisade, looking up 20 deg at the 17 m wooden wall with the right-hand gate torch (proj.mjs NDC 0.33,-0.37) burning in frame, creeping 0.8 m closer; noon sun from the south-east. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.99..1.3 m, nearest drawn 4.3 m (scenery-default 0x020007A3@35509,30428), vmax 0.16 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1..1.2 m, nearest drawn 4.32 m (scenery-default 0x020007A3@35509,30428), vmax 0.16 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 3.6 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  },
+  {
+   "id": "poi-drudge-fort.03",
+   "site": "poi-drudge-fort",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35505,
+     30540,
+     84
+    ],
+    "height": 11,
+    "radius": 12
+   },
+   "params": {
+    "heightAGL": 62,
+    "rotateDeg": 50,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "standingOrder": "Hang 62 m straight above the inner courtyard and turn slowly so the square rings of palisades wheel round the bonfires; no drift, hold height.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down: hangs 62 m above the inner courtyard (z 146), pitch -88 (bonfire flames never spin at nadir), turning 50 deg: the concentric square palisades wheel round the three courtyard bonfires, Sergeant Shanks' house and the gate torches - a board-game pattern. Verified (check.mjs, full take flown): take 0-9 s: AGL 62..62 m, nearest drawn 52.31 m (static 0xB89F#49 0x01000BC3), vmax 0.19 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 62..62 m, nearest drawn 52.31 m (static 0xB89F#49 0x01000BC3), vmax 0.19 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.19 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-drudge-fort.01": "take 0-10 s: AGL 87.71..98.6 m, nearest drawn 68.48 m (scenery-default 0x02000258@35625,30424), vmax 6.53 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 88.96..95.7 m, nearest drawn 68.48 m (scenery-default 0x02000258@35625,30424), vmax 6.53 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.55 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-drudge-fort.02": "take 0-8 s: AGL 0.99..1.3 m, nearest drawn 4.3 m (scenery-default 0x020007A3@35509,30428), vmax 0.16 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1..1.2 m, nearest drawn 4.32 m (scenery-default 0x020007A3@35509,30428), vmax 0.16 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 3.6 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-drudge-fort.03": "take 0-9 s: AGL 62..62 m, nearest drawn 52.31 m (static 0xB89F#49 0x01000BC3), vmax 0.19 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 62..62 m, nearest drawn 52.31 m (static 0xB89F#49 0x01000BC3), vmax 0.19 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.19 m/s (cap 12), max tracking gap 0 m"
+ }
+}

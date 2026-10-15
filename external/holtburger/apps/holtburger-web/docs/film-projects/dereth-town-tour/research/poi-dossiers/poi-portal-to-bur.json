@@ -1,0 +1,200 @@
+{
+ "name": "Portal to Bur",
+ "title": "Portal to Bur",
+ "siteId": "poi-portal-to-bur",
+ "summary": "The Portal to Bur, summoned by Prince Borelean Strathelar in the 2007 live event so players could rescue Asheron from the Falatacot. The kit shows it on a snowy summit (z 404): the portal on a small brick platform, three pedestals with Magical Orbs (north, east, west) and four pitched-roof brick towers (19.4 m) at the cardinal points, the Portal Servitor nearby, steep snow and ice slopes falling away.",
+ "acpedia": {
+  "categories": [
+   "Portal",
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 67.4,
+   "ew": 30.5
+  },
+  "mapWorld": [
+   31788.0,
+   40644.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Portal_to_Bur.txt",
+  "coveredDistM": 3112,
+  "coveredBy": "site:neydisa-castle"
+ },
+ "landmarks": [
+  {
+   "name": "Portal to Bur",
+   "pos": [
+    31787.5,
+    40644.0,
+    405.9
+   ],
+   "heightM": 4,
+   "note": "Portal spawn on platform 0x01000F67 (height estimated)."
+  },
+  {
+   "name": "Pedestals with Magical Orbs",
+   "pos": [
+    31794.0,
+    40644.0,
+    404.0
+   ],
+   "heightM": 1.6,
+   "note": "East; west at (31781,40644), north at (31787.5,40653)."
+  },
+  {
+   "name": "Four towers",
+   "pos": [
+    31788.0,
+    40620.0,
+    404.0
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106 at N/E/S/W, 24 m from the portal."
+  }
+ ],
+ "site": {
+  "id": "poi-portal-to-bur",
+  "name": "Portal to Bur",
+  "gazetteerId": "dereth",
+  "teleport": "@teleloc 0xA5D30026 107.908 121.287 404.005 0 0 0 1",
+  "anchor": [
+   31787.5,
+   40644.0,
+   404.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.42,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31787.5,
+     40644.0,
+     404.0
+    ],
+    "height": 20,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 48,
+    "radiusEnd": 58,
+    "heightStart": 45,
+    "heightEnd": 70,
+    "revolutions": 0.1,
+    "direction": "cw",
+    "bearingDeg": 118,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb a 36 deg clockwise corkscrew round the summit at 48 m to 58 m radius, 45 m to 70 m above the portal platform, staying above the four tower roofs; nothing within 26 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Portal to Bur on its snow peak (z 404): Prince Borelean Strathelar's portal stands on a brick platform ringed by three pedestals with glowing magical orbs, four pitched-roof brick towers guarding it at the cardinal points. The helix rises over the summit from the south-east, the 0.42 late-morning sun in the south-east behind the camera. Verified with poi-kit check.mjs - take 11s: AGL 52.33..92.9 m, nearest 26.46 m (scenery-default 0x020003A7@31835,40618), vmax 6.13 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 2.5-9s: AGL 56.57..90.8 m, nearest 29.51 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 6.11 m/s (cap 12), tracking gap 0.05 m."
+  },
+  {
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31787.5,
+     40644.0,
+     405.9
+    ],
+    "height": 4,
+    "radius": 2
+   },
+   "params": {
+    "azimuthDeg": 32,
+    "azimuthRef": "compass",
+    "elevationDeg": -12,
+    "distance": 11,
+    "thirds": "center",
+    "pushM": 1.0
+   },
+   "standingOrder": "Look up at the Portal to Bur from 2.6 m above the summit 11 m north-east, between the northern and eastern pedestals, creeping 1 m closer; keep 4 m from the orbs, never fade the portal.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Backlit portal: low from the north-east the swirling Bur portal and the orbs' glow stand against the south tower, the late-morning sun in the south-east beyond. Verified with poi-kit check.mjs - take 8s: AGL 2.6..2.8 m, nearest 3.98 m (spawn Magical Orb), vmax 0.2 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.62..2.8 m, nearest 4.03 m, LOS blocked 0/21, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-portal-to-bur.01",
+   "technique": "drone.helix",
+   "rank": 1,
+   "check": "take 11s: AGL 52.33..92.9 m, nearest 26.46 m (scenery-default 0x020003A7@31835,40618), vmax 6.13 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 2.5-9s: AGL 56.57..90.8 m, nearest 29.51 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 6.11 m/s (cap 12), tracking gap 0.05 m"
+  },
+  {
+   "shot": "poi-portal-to-bur.02",
+   "technique": "classic.low-angle",
+   "rank": 2,
+   "check": "take 8s: AGL 2.6..2.8 m, nearest 3.98 m (spawn Magical Orb), vmax 0.2 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.62..2.8 m, nearest 4.03 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 11.5,
+ "techniques": [
+  "drone.helix",
+  "classic.low-angle"
+ ]
+}

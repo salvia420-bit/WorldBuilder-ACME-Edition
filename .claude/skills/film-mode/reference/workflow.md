@@ -33,7 +33,7 @@ JEV decision (≈ $0.000003) to prove the key.
 | `song/` | you + `song analyze` | `song.mp3`, `lyrics.lrc`, `song.json` (SongAnalysis v1) |
 | `stills/<shot>/` | `scout` | `cand-<i>.jpg` + `metrics.json` (candidates, intent, and `warnings`: the page's scout warnings, e.g. an `intent.light` ignored without a usable sun, which `scout` also prints as `warning: scout <shot>: …`) |
 | `takes/` | `shoot` | raw drain (`<shot>.h264`, `.ivf` or `.frames/`), `<shot>.mp4` (ALWAYS the kept take), `<shot>.retake<k>.mp4`, `<shot>.contact.jpg` |
-| `reports/` | `rehearse`, `shoot` | `<shot>.json` (kept take report + verdict; also `issues` — the page's findings `{code, message, t, stages, preset?, vmax?, peakSpeed?, lengthM?, limitedBy?, minDurationSec?, minDurationVerified?, durationHelps?, maxGapM?, endGapM?}` (incl. the CLI's `tracking-gap`; `minDurationVerified` true = dry-flown within 1 m at `minDurationSec`, null = not verified, so a `minDurationSec` is an estimate, false = no duration helps; `maxGapM` on an `overspeed` is the gap DRY-flown at prepare — sampled at 10 Hz, so the run itself can trail further: typically up to ~30 % more, nearly twice as far on a fast fpv dive (0.65 m dry, 1.24 m flown at 60 fps) — and on a `tracking-gap` the gap this run REALLY trailed) —, `validation` `{ok, counts, error?}` and `flight` — the page's flight check `{preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec, …}` or null), `shoot-log.jsonl` (every attempt, failed ones `ok:false`, each with `issues`, plus `stage:"prewarm"` / `"site"` / `"busy"` rows), `<shot>.jev.jsonl` (that shot's broker telemetry only: its rehearsal + attempts), `jev-client.jsonl`, `<shot>.rehearsal.json` (realised table, `issues`, `flight`), `<shot>.pilot.jsonl` (per-tick pilot telemetry), `<shot>.rehearsal.jev.jsonl` |
+| `reports/` | `rehearse`, `shoot` | `<shot>.json` (kept take report + verdict; also `issues` — the page's findings `{code, message, t, stages, preset?, vmax?, peakSpeed?, lengthM?, limitedBy?, minDurationSec?, minDurationVerified?, durationHelps?, maxGapM?, endGapM?}` (incl. the CLI's `tracking-gap`; `minDurationVerified` true = dry-flown within 1 m at `minDurationSec`, null = not verified, so a `minDurationSec` is an estimate, false = no duration helps; `maxGapM` on an `overspeed` is the gap DRY-flown at prepare — sampled at 10 Hz, so the run itself can trail further: typically up to ~30 % more, nearly twice as far on a fast fpv dive (0.65 m dry, 1.24 m flown at 60 fps) — and on a `tracking-gap` the gap this run REALLY trailed) —, `validation` `{ok, counts, error?}` and `flight` — the page's flight check `{preset, vmax, peakSpeed, lengthM, overspeed, minDurationSec, …}` or null; `pageEnv` — the page's look settings read just before recording: `{url (password/account redacted), quality, isStorm, cloudCoverage, cloudWeather, clouds, stormScan, waterSheenFade, filmProps, water: {materials, waterEnvEnabled, iblEnabled}}`, each null when the page cannot say; `prime` `{sent, ready, failed}` when the site was primed), `shoot-log.jsonl` (every attempt, failed ones `ok:false`, each with `issues`, plus `stage:"prewarm"` / `"site"` / `"busy"` rows and `event:"prime"` / `"hop"` rows), `<shot>.jev.jsonl` (that shot's broker telemetry only: its rehearsal + attempts), `jev-client.jsonl`, `<shot>.rehearsal.json` (realised table, `issues`, `flight`), `<shot>.pilot.jsonl` (per-tick pilot telemetry), `<shot>.rehearsal.jev.jsonl` |
 | `edit/` | `assemble`, `contact-sheet` | `final.mp4`, `final.edl` (CMX3600), `final.contact.jpg` |
 
 ## 2. Intake → plan (offline)
@@ -62,8 +62,26 @@ JEV decision (≈ $0.000003) to prove the key.
    → `timeline.json` next to the plan. It prints the shot count, duration, frames, the schedule
    (`holtburg [s010 s030 s080] → glenden [s020 s060 s070] → holtburg-dungeon [s040 s050]`) and an estimate
    (`≈ 4 min 22 s wall-clock: 3 teleport(s) × (12 s + 5 s settle), 8 take(s) / 1684 frames (8 stepped at 8 fps, 0
-   realtime)` — rehearsals, retakes, muxing and boot are not included). Read its warnings (beat-snap changes, gaps,
-   trimmed shots, a transition turned into a cut).
+   realtime)` — rehearsals, retakes, muxing and boot are not included; `site.prime` commands count as teleports:
+   `… 10 teleport(s) (7 of them site.prime) × …`). Read its warnings (beat-snap changes, gaps, trimmed shots, a
+   transition turned into a cut). With `edit.tail` it also prints `music part ends at <s> s (frame N, fade-out F s);
+   silent tail T s incl. the black gap`.
+
+### Appending a silent tail after the music (`edit.tail`)
+
+For footage that must come AFTER the song (an epilogue, a long FPV run) without moving any cut of the music video:
+
+1. Put the extra shots at the END of `shots` (they may use any site; their durations must be `{sec}`, no `start`).
+2. Add `"edit": {"fadeInSec": …, "fadeOutSec": 4, "tail": {"from": "<first extra shot id>", "gapSec": 1.5,
+   "fadeOutSec": 3}}`. `edit.fadeOutSec` now fades the last MUSIC shot (element-local, frame-identical to the old
+   program fade-out there); `gapSec` of black follows; give the first tail shot a `fade` (or `fadewhite`)
+   transition for a fade-in from black (white) — it takes no handles, so the finale's `trim` window stays put; the
+   tail's `fadeOutSec` ends the film.
+3. `plan compile`: the music part's items must be IDENTICAL to the compile without the tail (diff `editIn` /
+   `editOut` / `trim` of every music shot against the previous timeline.json); `timeline.musicEnd` shows where the
+   song stops. No "past the end of the song" warning should appear (it now compares the music part only).
+4. `assemble` cuts the song at `musicEnd`, fades it out there, then pads silence to the end (`apad=whole_dur`), so
+   the whole picture is kept; `--dry-run` shows `atrim=duration=<musicEnd>,…,afade=…,apad=whole_dur=<total>`.
 
 Stop here unless the owner asked for a shooting session.
 
@@ -91,8 +109,15 @@ read its contact sheet. Bad input exits 2 before any API call.
 
 1. `$FILM browser check` — pages, the film page, mute, window position, GPU. Exit 1 = Chrome without
    `--mute-audio` or the film window on screen: fix before anything else.
-2. `FILM_PASSWORD=… $FILM boot --assume-muted` (1920×1080, `quality=high` by default; `--width`/`--height` must
-   be even; `--reuse` adopts an open film tab). Pass the password through `FILM_PASSWORD`, not `--password=…`: a
+2. `FILM_PASSWORD=… $FILM boot --assume-muted` (1920×1080, `quality=ultra` by default — stepped capture is not
+   real-time bound, and ultra adds 2× grass, ice refraction, wet mud, marsh wisps and more particles; `--quality=`
+   overrides; `--width`/`--height` must be even; `--reuse` adopts an open film tab). The boot URL always carries
+   `filmDof=on`, `filmProps=on` (the FPV lens overlay, drawn only for shots with `overlay.props`),
+   `stormScan=retail` (retail's storm rule — the legacy scan reported a storm every day: overcast deck, permanent
+   rain sheen, storm wind, no pollen/fireflies) and `waterSheenFade=40,500` (water ripples/glint out to 500 m);
+   clouds on with fair weather (`cloudWeather=off`) and `cloudCoverage=0.3` unless `--clouds=off` / `--weather=live`
+   (no coverage then) or `--coverage=<0..1>` (always wins). Every take report records what the page really ran with
+   (`pageEnv`: quality, storm, coverage, water uniforms). Pass the password through `FILM_PASSWORD`, not `--password=…`: a
    command-line argument is visible to every local user (`ps`, `/proc/<pid>/cmdline`) while the command runs.
    It opens the film URL, installs the JEV broker, waits for in-world + ready + scene-ready + `liveScene3d` +
    `__film`, mutes the page, then `clean(true)` · `own()` · `world.avatar(false)` · `@cloak on` · `@attackable off`.
@@ -110,6 +135,25 @@ read its contact sheet. Bad input exits 2 before any API call.
    - `$FILM shoot timeline.json --site=<siteId>` (it teleports as the first step of the site even when you are
      already there — another ≈ 10 s — then shoots every take of the site).
 4. Or the whole schedule: `$FILM shoot timeline.json --all`.
+
+### Priming a dungeon site so every creature streams (`sites[].prime`)
+
+ACE sends the client only the creatures standing in cells the hidden player's CURRENT cell can see (its PVS), and
+keeps sending updates for about 25 s after they leave view; the client keeps their rigs. A run that flies 500 m
+through a dungeon from a parked player would show empty halls. So:
+
+1. Check the server property once: `$FILM go '@fetchlong teleport_visibility_fix'` must answer 0 (never change it —
+   ACE stays vanilla). With 1+ a teleport deletes what the player saw.
+2. Pick 5–7 floor points along the route, top to bottom, one per creature cluster, each ≥ 6 m from any portal (a
+   player standing in a portal is sent away), and give the site `"prime": ["@teleloc 0x002B035D 469.8 -130.2 -6",
+   …]` in route order.
+3. Make the site's `teleport` the place the player should STAND during the take (near the end of the run, ≥ 10 m
+   from exit portals), and the run shot's `cell` its start cell (the camera starts there, not at the player).
+4. `$FILM shoot … --site=<id>` sends each prime with its readiness gate (`prime 1/7: @teleloc …` on stderr,
+   `event:"prime"` in `shoot-log.jsonl`), then the site teleport. A refused or not-ready prime only warns (its
+   creatures may be missing — check the rehearsal's contact sheet); the take report's `prime` says how many landed.
+5. `@cloak on` + `@attackable off` (both sent by `boot`) keep the creatures asleep and off the player; never
+   `@cloak creature` (it makes the player attackable again).
 5. End of session: `$FILM status --release` hands the client back (`__film.release()` → `clean(false)` →
    `world.avatar(true)`, then checks follow mode, HUD/input and avatar are restored; exit 1 if not, `FILM_BUSY`
    while a take, prepare, shoot, rehearse or scout runs). `$FILM status --own --clean=on --avatar=off` re-owns the camera with the frame `boot` leaves.
@@ -121,7 +165,8 @@ because the steps read different files: `--song-analysis=<song.json>` goes to pl
 against the cwd, else the project; a missing file exits 2; plain `--song` is refused (exit 2).
 
 What `shoot` does (`tools/film/lib/shoot.mjs`) — per site: (a take still running on the page is aborted first —
-`shoot` never teleports under a running take) → teleport → readiness gate → prewarm (collision, heightmap corridor,
+`shoot` never teleports under a running take) → the site's `prime` commands, each with its readiness gate (only
+warns) → teleport → readiness gate → prewarm (collision, heightmap corridor,
 statics/buildings/EnvCells around the anchor and the subjects) → per shot, a HOP when the shot's camera path is more
 than `--hop` metres (default 40; `--hop=0` = never) from the hidden player: grass is drawn only around the player
 (dense to 48 m) and the server only sends the objects near it (NPCs, Life Stones, portals), so `shoot` moves it
@@ -133,7 +178,8 @@ a `prewarm` note to the site's take reports — expect pop-in there and check th
 or readiness check throws becomes a failure for its shots (stage `site`) and the next site still runs. Per shot and
 attempt: `prepare(take)` → first attempt only, a stepped rehearsal when needed (`--rehearse` always, `--no-rehearse`
 never; default auto = fpv shots, indoor sites, and drone canyon-run, flythrough, terrain-skim, fly-by, chase, lead,
-side-track, pass-over) → `shoot` while draining the WebCodecs recorder → ffmpeg mux to `takes/<shot>.mp4` → take
+side-track, pass-over) → a read-only `pageEnv` snapshot (never fails the take) → `shoot` while draining the WebCodecs
+recorder → ffmpeg mux to `takes/<shot>.mp4` → take
 report → `keepOrRetake` (JEV noul, or the code verdict without a key) → retake while the verdict is not
 keep + `act`, up to `--retakes` (default 1, max 5). The kept attempt becomes `takes/<shot>.mp4` and
 `reports/<shot>.json`. When a take fails inside the page (a drain or disk error, an evaluate timeout) the CLI calls
@@ -196,6 +242,8 @@ after 30 s: the fog thickens during the take) or `stalled`.
 | `prewarm incomplete` warning | Shot anyway; check that site's contact sheets for pop-in, raise `sites[].settleSec` or re-shoot it. |
 | Moving NPC/avatar stutters | The shot needs `capture: "realtime"` (`subject.moving: true`, an actor `moveTo`, or explicit `capture`). |
 | JEV dithers or disagrees with code a lot | Tighten the standing order; rehearse in `shadow` and read `pilot.agreement`; fly `code` if it does not improve. |
+| Empty dungeon halls (no creatures) far from where the player stands | The server streams only the player's visible cells: add `sites[].prime` hops along the route (§3 Priming) and stand the player near the end of the run. |
+| A grey, stormy or sheen-less take | Read `pageEnv` in `reports/<shot>.json`: `isStorm` true, `stormScan` null (an old boot URL: re-`boot`), `cloudCoverage`, `quality`, `water.waterEnvEnabled`. |
 | Dungeon route errors (`FILM_NO_ROUTE_GRAPH`, empty rooms) | Check `route.fromCell`/`toCell` are EnvCells of the site's landblock and `sites[].cell` seeds the viewer cell. |
 
 Retake one shot: `$FILM shoot timeline.json --shot=s040 --retakes=2`. After editing the plan, recompile, then
@@ -206,7 +254,10 @@ re-shoot only the changed shots — `assemble` reads whatever takes exist.
 `$FILM assemble timeline.json --edl` → `edit/final.mp4` (+ `edit/final.edl`). Takes come from `reports/<shot>.json`
 (`file`, `fps`, `frames`) or `takes/<shot>.mp4`; the song from `--song=<audio>`, else `timeline.song.file` resolved
 against the project (missing → no audio, with a warning). `--missing=black` fills absent takes with black
-(preview cuts); `--dry-run` prints the ffmpeg command; `--no-audio`; `--crf=16`; `--out=`. Then
+(preview cuts); `--dry-run` prints the ffmpeg command; `--no-audio`; `--crf=16`; `--out=`. With a silent tail
+(`timeline.musicEnd`) the song is cut, faded and silence-padded at `musicEnd` and the summary reads `… with song) —
+music <s> s, then <t> s silent tail`; the fades around the tail are element-local and the EDL's audio event ends at
+`musicEnd`. Then
 `$FILM contact-sheet edit/final.mp4`, Read it, and report to the owner: the final path, duration, the shot list
 with kept attempts and verdicts, total JEV cost (sum of `pilot.costUsd` over the reports), and anything you would
 reshoot.

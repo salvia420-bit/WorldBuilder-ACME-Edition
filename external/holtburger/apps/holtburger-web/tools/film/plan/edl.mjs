@@ -26,6 +26,15 @@
 // on the cut E: pre = ⌊d/2⌋ frames before E come from item k's handle, post = d − pre frames after E from item
 // k−1's handle. Segment k feeds take frames [handleIn − pre_k, handleIn + edit + post_{k+1}) to the graph; the xfade
 // offset of that dissolve is (E − pre)/F. Σ segment lengths − Σ d = timeline length.
+//
+// Silent tail (compile.mjs edit.tail; timeline.musicEnd {sec, frame, fadeOutSec}): the last music item carries an
+// element-local `fadeOut`, the first tail item an element-local `fadeIn` (from black/white), with a black filler
+// between them (the gap). Each is a frame-based `fade` at the END of that element's own chain (after `fps=F`), so
+// out → black → in survives the concat; chaining a global fade-out with a global fade-in would blacken the whole
+// program (ffmpeg 7.0.2, 2026-10-15). The song is cut at musicEnd (`atrim`), faded there (`afade`), and padded with
+// silence to the program length (`apad=whole_dur`), so `-shortest` keeps the whole picture. The program fades stay
+// global (start and end). The EDL ends the audio event at musicEnd and writes the two fades as dissolves from/to BL.
+// A timeline without musicEnd assembles exactly as before.
 
 import { FilmPlanError } from "../../../scene3d/film/core/errors.js";
 
@@ -118,10 +127,12 @@ function layout(timeline, takes, opts) {
     if (outF <= inF) throw new FilmPlanError(`timeline item ${it.shotId} has no frames`, "TIMELINE_INVALID");
     return { inF, outF, hiF: Math.round((it.handleIn || 0) * fps), hoF: Math.round((it.handleOut || 0) * fps) };
   });
-  // Transition into item i (dissolve family only; first item handled as the program fade-in by compile).
+  // Transition into item i (dissolve family only; first item handled as the program fade-in by compile, the first
+  // silent-tail item by its element-local fadeIn).
   const d = items.map((it, i) => {
     const t = it.transitionIn;
     if (i === 0 || !isObj(t) || t.type === "cut" || !(t.durationSec > 0)) return 0;
+    if (isObj(it.fadeIn)) return 0;
     if (rec[i].inF !== rec[i - 1].outF) return 0;
     if (missingMode === "black" && (isMissing(it) || isMissing(items[i - 1]))) return 0;
     return Math.round(t.durationSec * fps);
@@ -164,6 +175,10 @@ function layout(timeline, takes, opts) {
       if (padFrames) {
         warnings.push({ path: `takes.${it.shotId}`, message: `take ${it.shotId} is ${padFrames} frame(s) short; its last frame is held` });
       }
+      // element-local fades (silent tail only): frames of the edit, clamped to it
+      const fadeF = (f) => (isObj(f) && isNum(f.durationSec) && f.durationSec > 0 ? Math.min(editF, Math.max(1, Math.round(f.durationSec * fps))) : 0);
+      const fadeInF = fadeF(it.fadeIn);
+      const fadeOutF = fadeF(it.fadeOut);
       elements.push({
         kind: "take", item: it, shotId: it.shotId, file: take.file, virtual: isMissing(it), tfps, avail,
         recInF: r.inF, recOutF: r.outF, editF, hiF: r.hiF, dIn: d[i], preIn: pre[i], postIn: post[i], preOut, postOut,
@@ -171,11 +186,17 @@ function layout(timeline, takes, opts) {
         transition: d[i]
           ? { type: it.transitionIn.type, durationSec: d[i] / fps, xfade: it.transitionIn.xfade || defaultXfade(it.transitionIn.type) }
           : { type: "cut", durationSec: 0 },
+        ...(fadeInF ? { fadeInF, fadeInColor: it.fadeIn.color === "white" ? "white" : "black" } : {}),
+        ...(fadeOutF ? { fadeOutF, fadeOutColor: it.fadeOut.color === "white" ? "white" : "black" } : {}),
       });
     }
     cursorF = r.outF;
   });
-  return { fps, W: timeline.width, H: timeline.height, elements, totalF: cursorF, warnings };
+  // The music part's end (a silent tail follows): the frame the song is cut at, and its fade-out in frames.
+  const me = timeline.musicEnd;
+  const musicF = isObj(me) && Number.isInteger(me.frame) && me.frame > 0 && me.frame < cursorF ? me.frame : null;
+  const musicFadeF = musicF !== null && isNum(me.fadeOutSec) && me.fadeOutSec > 0 ? Math.min(musicF, Math.round(me.fadeOutSec * fps)) : 0;
+  return { fps, W: timeline.width, H: timeline.height, elements, totalF: cursorF, musicF, musicFadeF, warnings };
 }
 
 function defaultXfade(type) {
@@ -216,7 +237,9 @@ function programFades(timeline, opts, fps, totalF) {
  * black `color` fillers for gaps, `concat` across cuts re-timed to 1/fps with `settb` so every `xfade` input shares
  * one time base, `xfade` across dissolves/fades with offsets that keep the
  * program exactly `timeline.frames` long, optional program fade-in/out), the audio mapping (`-ss offsetSec -i song`,
- * `atrim` to the program length, `afade` out with the picture) and the `-map` arguments.
+ * `atrim` to the program length, `afade` out with the picture) and the `-map` arguments. With a silent tail
+ * (`timeline.musicEnd`): element-local `fade`s on the last music element and the first tail element, a black
+ * filler for the gap, and `atrim=duration=<musicEnd>,asetpts,afade (music fade-out),apad=whole_dur=<program>`.
  * Throws FilmPlanError: TIMELINE_INVALID, TAKES_MISSING (unless `missing:'black'`), TAKE_TOO_SHORT. A take shorter
  * than its last needed frame is padded by holding its last frame (warning).
  * @param {object} timeline compiled Timeline (compile.mjs)
@@ -224,7 +247,8 @@ function programFades(timeline, opts, fps, totalF) {
  * @param {{fadeInSec?:number, fadeOutSec?:number, audioFile?:string|null, audioOffsetSec?:number,
  *   missing?:'error'|'black'}} [opts]
  * @returns {{segments:AssemblySegment[], audio:{file:string, offsetSec:number}|null, totalSec:number,
- *   totalFrames:number, warnings:{path:string, message:string}[],
+ *   totalFrames:number, musicEnd:{sec:number, frame:number, fadeOutSec:number, tailSec:number}|null,
+ *   warnings:{path:string, message:string}[],
  *   ffmpeg:{inputs:string[], filterComplex:string, map:string[], videoLabel:string, audioLabel:string|null,
  *   inputFiles:{index:number, file:string, kind:'video'|'audio'}[]}}}
  */
@@ -236,11 +260,22 @@ export function buildAssembly(timeline, takes, opts = {}) {
   const inputFiles = [];
   const chains = [];
   const segments = [];
+  // Runs of elements joined by cuts (concat); runs are joined by dissolves (xfade). Computed first: a black filler
+  // whose run meets an xfade needs an explicit `fps=F` — a `color` source after `trim` leaves its concat run with
+  // an unknown frame rate (1/0) that xfade refuses ("First input link main frame rate (30/1) do not match the
+  // corresponding second input link xfade frame rate (1/0)"; ffmpeg 7.0.2, 2026-10-15). Without an xfade the filler
+  // chain is unchanged.
+  const runs = [];
+  elements.forEach((e, j) => {
+    if (j === 0 || e.dIn > 0) runs.push([]);
+    runs[runs.length - 1].push(j);
+  });
+  const fillerFps = runs.length > 1 ? `,fps=${fps}` : "";
   elements.forEach((e, j) => {
     const label = `e${j}`;
     if (e.kind === "black") {
       const frames = e.recOutF - e.recInF;
-      chains.push(`color=c=black:s=${W}x${H}:r=${fps},trim=end_frame=${frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[${label}]`);
+      chains.push(`color=c=black:s=${W}x${H}:r=${fps},trim=end_frame=${frames},setpts=PTS-STARTPTS${fillerFps},setsar=1,format=yuv420p[${label}]`);
       segments.push({
         kind: "black", shotId: e.shotId, file: null, trimIn: 0, trimOut: frames / fps, srcIn: 0, srcOut: frames / fps,
         editIn: e.recInF / fps, editOut: e.recOutF / fps, transition: { type: "cut", durationSec: 0 }, inputIndex: null,
@@ -251,8 +286,12 @@ export function buildAssembly(timeline, takes, opts = {}) {
     inputFiles.push({ index: idx, file: e.file, kind: "video" });
     inputs.push("-i", e.file);
     const pad = e.padFrames ? `,tpad=stop_mode=clone:stop=${e.padFrames}` : "";
+    // Element-local fades (silent tail): frame-based, on this element's own frames at the timeline rate.
+    const lenF = e.srcOutF - e.srcInF;
+    const local = (e.fadeInF ? `,fade=t=in:start_frame=0:nb_frames=${e.fadeInF}:color=${e.fadeInColor}` : "") +
+      (e.fadeOutF ? `,fade=t=out:start_frame=${lenF - e.fadeOutF}:nb_frames=${e.fadeOutF}:color=${e.fadeOutColor}` : "");
     chains.push(`[${idx}:v]trim=start_frame=${e.takeStartFrame}:end_frame=${e.takeEndFrame},setpts=PTS-STARTPTS${pad},` +
-      `fps=${fps},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p[${label}]`);
+      `fps=${fps},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p${local}[${label}]`);
     segments.push({
       kind: "take", shotId: e.shotId, file: e.file,
       trimIn: e.hiF / fps, trimOut: (e.hiF + e.editF) / fps,
@@ -260,6 +299,8 @@ export function buildAssembly(timeline, takes, opts = {}) {
       editIn: e.recInF / fps, editOut: e.recOutF / fps,
       transition: e.transition, inputIndex: idx,
       takeStartFrame: e.takeStartFrame, takeEndFrame: e.takeEndFrame, padFrames: e.padFrames,
+      ...(e.fadeInF ? { fadeIn: { frames: e.fadeInF, color: e.fadeInColor } } : {}),
+      ...(e.fadeOutF ? { fadeOut: { frames: e.fadeOutF, color: e.fadeOutColor } } : {}),
     });
   });
   // Runs of elements joined by cuts → concat; runs joined by dissolves → xfade.
@@ -267,11 +308,6 @@ export function buildAssembly(timeline, takes, opts = {}) {
   // filler), but `concat` always emits 1/1000000 (AV_TIME_BASE) and `xfade` refuses inputs whose time bases
   // differ ("First input link main timebase (1/30) do not match … (1/1000000)"; ffmpeg 7.0.2 smoke, 2026-10-13).
   // So each concat output is re-timed with `settb=1/F` (exact: its pts are multiples of 1/F, already from 0).
-  const runs = [];
-  elements.forEach((e, j) => {
-    if (j === 0 || e.dIn > 0) runs.push([]);
-    runs[runs.length - 1].push(j);
-  });
   const runLabel = runs.map((r, k) => {
     if (r.length === 1) return `e${r[0]}`;
     chains.push(`${r.map((j) => `[e${j}]`).join("")}concat=n=${r.length}:v=1:a=0,settb=1/${fps}[r${k}]`);
@@ -290,19 +326,26 @@ export function buildAssembly(timeline, takes, opts = {}) {
   if (fout.f > 0) post.push(`fade=t=out:start_frame=${totalF - fout.f}:nb_frames=${fout.f}:color=${fout.color}`);
   post.push("format=yuv420p");
   chains.push(`[${acc}]${post.join(",")}[vout]`);
-  // Audio: the song from its offset, trimmed to the program, faded out with the picture.
+  // Audio: the song from its offset, trimmed to the program, faded out with the picture — or, with a silent tail,
+  // trimmed to the music part, faded out at its end and padded with silence to the program length.
   const song = isObj(timeline.song) ? timeline.song : null;
   const audioFile = typeof o.audioFile === "string" && o.audioFile ? o.audioFile : song && typeof song.file === "string" && song.file ? song.file : null;
   let audio = null;
   const map = ["-map", "[vout]"];
+  const { musicF, musicFadeF } = L;
   if (audioFile) {
     const offsetSec = isNum(o.audioOffsetSec) ? o.audioOffsetSec : song && isNum(song.offsetSec) ? song.offsetSec : 0;
     audio = { file: audioFile, offsetSec };
     const ai = inputFiles.length;
     inputFiles.push({ index: ai, file: audioFile, kind: "audio" });
     inputs.push("-ss", fmt(offsetSec), "-i", audioFile);
-    const af = fout.f > 0 ? `,afade=t=out:st=${fmt((totalF - fout.f) / fps)}:d=${fmt(fout.f / fps)}` : "";
-    chains.push(`[${ai}:a]atrim=duration=${fmt(totalF / fps)},asetpts=PTS-STARTPTS${af}[aout]`);
+    if (musicF !== null) {
+      const af = musicFadeF > 0 ? `,afade=t=out:st=${fmt((musicF - musicFadeF) / fps)}:d=${fmt(musicFadeF / fps)}` : "";
+      chains.push(`[${ai}:a]atrim=duration=${fmt(musicF / fps)},asetpts=PTS-STARTPTS${af},apad=whole_dur=${fmt(totalF / fps)}[aout]`);
+    } else {
+      const af = fout.f > 0 ? `,afade=t=out:st=${fmt((totalF - fout.f) / fps)}:d=${fmt(fout.f / fps)}` : "";
+      chains.push(`[${ai}:a]atrim=duration=${fmt(totalF / fps)},asetpts=PTS-STARTPTS${af}[aout]`);
+    }
     map.push("-map", "[aout]");
   }
   return {
@@ -310,6 +353,7 @@ export function buildAssembly(timeline, takes, opts = {}) {
     audio,
     totalSec: totalF / fps,
     totalFrames: totalF,
+    musicEnd: musicF !== null ? { sec: musicF / fps, frame: musicF, fadeOutSec: musicFadeF / fps, tailSec: (totalF - musicF) / fps } : null,
     warnings: L.warnings,
     ffmpeg: { inputs, filterComplex: chains.join(";"), map, videoLabel: "vout", audioLabel: audio ? "aout" : null, inputFiles, fps },
   };
@@ -339,7 +383,9 @@ export function assemblyArgv(assembly, opts) {
  * the take's own frame count from 00:00:00:00 (handles included). Cuts are `C` events; a dissolve/fade is the
  * standard two-line event (outgoing clip zero-length `C`, incoming clip `D nnn`) starting ⌊d/2⌋ frames before the
  * cut; program fade-in/out are dissolves from/to `BL`; gaps are `BL` events. Each event carries
- * `* FROM CLIP NAME:` (and `* TO CLIP NAME:` for transitions). Missing takes are named `<shotId>.mp4`.
+ * `* FROM CLIP NAME:` (and `* TO CLIP NAME:` for transitions). Missing takes are named `<shotId>.mp4`. With a silent
+ * tail (`timeline.musicEnd`) the music part's element-local fade-out is a dissolve to `BL`, the gap a `BL` event,
+ * the tail's fade-in a dissolve from `BL`, and the song's audio event ends at musicEnd.
  * @param {object} timeline compiled Timeline
  * @param {Record<string, {file:string, fps?:number, frames?:number, durationSec?:number}>} [takes]
  * @param {{title?:string, recordStart?:string|number, reel?:'ax'|'shot', audio?:boolean, fadeInSec?:number,
@@ -349,7 +395,7 @@ export function assemblyArgv(assembly, opts) {
 export function toCmx3600(timeline, takes = {}, opts = {}) {
   const o = opts || {};
   const L = layout(timeline, takes, { missing: "virtual" });
-  const { fps, elements, totalF } = L;
+  const { fps, elements, totalF, musicF } = L;
   const tc = (f) => framesToTimecode(f, fps);
   const rec0 = timecodeToFrames(o.recordStart ?? "01:00:00:00", fps);
   // eslint-disable-next-line no-control-regex
@@ -374,6 +420,7 @@ export function toCmx3600(timeline, takes = {}, opts = {}) {
     let re = e.recOutF - (j + 1 < elements.length ? elements[j + 1].preIn || 0 : 0);
     if (j === 0) rs = 0;
     if (j === elements.length - 1 && fout.f > 0) re = Math.min(re, totalF - fout.f);
+    if (e.fadeOutF) re = Math.min(re, e.recOutF - e.fadeOutF); // element-local fade-out: its own BL dissolve
     const ss = e.kind === "take" ? e.srcInF : 0;
     return { rs, re, ss, se: ss + (re - rs) };
   });
@@ -382,9 +429,9 @@ export function toCmx3600(timeline, takes = {}, opts = {}) {
     const s = spans[j];
     ev++;
     const fadeFromBlack = j === 0 && fin.f > 0 && e.kind === "take";
-    if (fadeFromBlack) {
+    if (fadeFromBlack || (e.kind === "take" && e.fadeInF)) {
       lines.push(line(ev, "BL", "V", "C", null, 0, 0, s.rs, s.rs));
-      lines.push(line(ev, reelOf(e), "V", "D", fin.f, s.ss, s.se, s.rs, s.re));
+      lines.push(line(ev, reelOf(e), "V", "D", fadeFromBlack ? fin.f : e.fadeInF, s.ss, s.se, s.rs, s.re));
       lines.push(`* FROM CLIP NAME: BLACK`, `* TO CLIP NAME: ${clipName(e)}`, "");
     } else if (e.dIn > 0 && j > 0) {
       const prev = elements[j - 1];
@@ -395,6 +442,15 @@ export function toCmx3600(timeline, takes = {}, opts = {}) {
     } else {
       lines.push(line(ev, reelOf(e), "V", "C", null, s.ss, s.se, s.rs, s.re));
       lines.push(`* FROM CLIP NAME: ${clipName(e)}`, "");
+    }
+    if (e.kind === "take" && e.fadeOutF) {
+      // the music part's element-local fade-out (a silent tail follows): a dissolve to BL ending on the element's end
+      const start = e.recOutF - e.fadeOutF;
+      const at = srcAt(j, start);
+      ev++;
+      lines.push(line(ev, reelOf(e), "V", "C", null, at, at, start, start));
+      lines.push(line(ev, "BL", "V", "D", e.fadeOutF, 0, e.fadeOutF, start, e.recOutF));
+      lines.push(`* FROM CLIP NAME: ${clipName(e)}`, "* TO CLIP NAME: BLACK", "");
     }
   });
   if (fout.f > 0) {
@@ -409,8 +465,9 @@ export function toCmx3600(timeline, takes = {}, opts = {}) {
   const song = isObj(timeline.song) ? timeline.song : null;
   if (o.audio !== false && song && typeof song.file === "string" && song.file) {
     const off = Math.round((isNum(song.offsetSec) ? song.offsetSec : 0) * fps);
+    const audioF = musicF !== null ? musicF : totalF; // a silent tail has no song under it
     ev++;
-    lines.push(line(ev, "AX", "A", "C", null, off, off + totalF, 0, totalF));
+    lines.push(line(ev, "AX", "A", "C", null, off, off + audioF, 0, audioF));
     lines.push(`* FROM CLIP NAME: ${baseName(song.file)}`, "");
   }
   return lines.join("\n");

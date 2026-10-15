@@ -1,0 +1,205 @@
+{
+ "name": "Relic Town",
+ "title": "Relic Town",
+ "siteId": "poi-relic-town",
+ "summary": "Relic Town is the ash-covered Empyrean ruin on Aerlinthe's inner harbour where the Relic Watchman spawns and Smith Ejan's whispers are heard. The acpedia map point (85.3N 45.5E) is on the empty slope; the ruins lie 250 m north at 86.2N 45.5E (matching acpedia's 'near 86.0N 45.4E' and the gazetteer statue at 86.4N 45.4E): terraces of grey stone towers and halls (z 12-46) with colonnades of grey metal and stone columns, statues, glowing sphere lamps and portalspace rifts atop the hall towers, eruption emitters, descending to the harbour. Landblocks north of y 45312 are missing from the kit; all cameras stay south of them.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 85.3,
+   "ew": 45.5
+  },
+  "mapWorld": [
+   35388.0,
+   44940.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Relic_Town.txt",
+  "coveredDistM": 3494,
+  "coveredBy": "shot:merwart-village.01"
+ },
+ "landmarks": [
+  {
+   "name": "Upper tower",
+   "pos": [
+    35364.0,
+    45204.0,
+    36.0
+   ],
+   "heightM": 10,
+   "note": "0x01001C2D with a statue."
+  },
+  {
+   "name": "Central ruin",
+   "pos": [
+    35412.0,
+    45204.4,
+    26.0
+   ],
+   "heightM": 10,
+   "note": "0x01001C2D."
+  },
+  {
+   "name": "Hall towers with glowing spheres",
+   "pos": [
+    35460.0,
+    45228.0,
+    12.0
+   ],
+   "heightM": 25.2,
+   "note": "0x01001BE9 + 0x02000861, lamps at z 37.3; twin at (35340,45252)."
+  },
+  {
+   "name": "Colonnades",
+   "pos": [
+    35410.0,
+    45198.0,
+    28.0
+   ],
+   "heightM": 5.5,
+   "note": "0x01001C43 / 0x02000862, 89 columns."
+  }
+ ],
+ "site": {
+  "id": "poi-relic-town",
+  "name": "Relic Town",
+  "teleport": "@teleloc 0xB8EB0022 112.0 40.0 21.8 1 0 0 0",
+  "anchor": [
+   35400.0,
+   45230.0,
+   12.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35364.0,
+     45204.0,
+     36.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 78,
+    "azimuthRef": "compass",
+    "distance": 150,
+    "heightM": 12,
+    "driftDeg": 8,
+    "pushPct": 6
+   },
+   "standingOrder": "Hang 48 m above the harbour shore 150 m east of the ruins and drift 8 deg while easing 6 % closer; nothing within 30 m, harbour water beneath.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Relic Town, the ash-covered Empyrean ruin on Aerlinthe's inner harbour: terraces of grey stone towers, halls and colonnades of metal columns climb from the water toward the volcano, glowing sphere lamps on the hall towers. Seen from the harbour with the noon sun from the left. The kit misses the landblocks north of y 45312; the move stays south of them. Verified with poi-kit check.mjs - take 9s: AGL 48..48 m, nearest 32.15 m (scenery-default 0x02000847@35459,45245), vmax 3.88 m/s, LOS blocked 0/37, in frame 100%, water 16%; edit 1.5-7.5s: AGL 48..48 m, nearest 32.15 m, LOS blocked 0/25, in frame 100%, water 0%."
+  },
+  {
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35412.0,
+     45204.4,
+     26.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 225,
+    "azimuthRef": "compass",
+    "elevationDeg": 40,
+    "distance": 60,
+    "thirds": "center",
+    "pushM": 4
+   },
+   "standingOrder": "Look down 40 deg at the central ruin from 60 m south-west, 20 m above the slope, pushing 4 m closer; keep 9 m from the trees on the slope, their leaves may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High angle over the ash town: the stone terraces, statues and gray metal colonnades step down to the harbour beneath the lens, the sea beyond. Noon sun from behind. Verified with poi-kit check.mjs - take 8s: AGL 20.24..20.4 m, nearest 9.05 m (scenery-default 0x0200071F@35392,45164), vmax 0.79 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 20.25..20.4 m, nearest 9.09 m, LOS blocked 0/23, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-relic-town.01",
+   "technique": "classic.establishing",
+   "rank": 2,
+   "check": "take 9s: AGL 48..48 m, nearest 32.15 m (scenery-default 0x02000847@35459,45245), vmax 3.88 m/s, LOS blocked 0/37, in frame 100%, water 16%; edit 1.5-7.5s: AGL 48..48 m, nearest 32.15 m, LOS blocked 0/25, in frame 100%, water 0%"
+  },
+  {
+   "shot": "poi-relic-town.02",
+   "technique": "classic.high-angle",
+   "rank": 3,
+   "check": "take 8s: AGL 20.24..20.4 m, nearest 9.05 m (scenery-default 0x0200071F@35392,45164), vmax 0.79 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 20.25..20.4 m, nearest 9.09 m, LOS blocked 0/23, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 11.5,
+ "techniques": [
+  "classic.establishing",
+  "classic.high-angle"
+ ]
+}

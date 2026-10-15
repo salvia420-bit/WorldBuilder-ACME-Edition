@@ -1,0 +1,172 @@
+{
+ "name": "Festival Stone of Dawnsong",
+ "title": "Festival Stone of Dawnsong",
+ "siteId": "poi-festival-stone-of-dawnsong",
+ "summary": "The Festival Stone at the southern tip of a narrow 120 m sea-cliff ridge by the Southern Landbridge (89.2S 43.8W), flanked by two candle statues with its glow above; the ridge runs north at z 120 above a 68 m shelf, and the southern ocean opens below.",
+ "landmarks": [
+  {
+   "name": "Festival Stone",
+   "pos": [
+    13955.8,
+    3053,
+    120
+   ],
+   "heightM": 3.5,
+   "note": "Anniversary Effect at z 128; statues 0x02000397 at (13951.5,3052.9) and (13960.2,3052.2)."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-dawnsong",
+  "name": "Festival Stone of Dawnsong",
+  "gazetteerId": "dawnsong-festival-stone",
+  "teleport": "@teleloc 0x480F0030 123.2 188.3 120 0.25038 0 0 -0.968148",
+  "anchor": [
+   13955.8,
+   3053,
+   120
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.58,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "candeth-keep",
+ "insertBefore": "qalabar",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -89.9,
+   "ew": -44.3
+  },
+  "coordSrc": "index",
+  "coveredDistM": 5421,
+  "coveredBy": "shot:candeth-keep.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Dawnsong.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-dawnsong.01",
+   "site": "poi-festival-stone-of-dawnsong",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13955.8,
+     3053,
+     120
+    ],
+    "height": 9,
+    "radius": 6
+   },
+   "params": {
+    "radiusStart": 28,
+    "radiusEnd": 50,
+    "heightStart": 4,
+    "heightEnd": 22,
+    "revolutions": 0.14,
+    "direction": "cw",
+    "bearingDeg": 150,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Climb round the south side of the Festival Stone on the cliff tip, 28 to 50 m out over the ocean, sun behind; never over the ridge to its north.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature helix around the Festival Stone at the tip of the 120 m sea cliff: radius 28 -> 50 m, 4 -> 22 m above it, swinging from south-south-east to south over the 68 m shelf and the ocean, the stone, its two candle statues and its glow against the sky, sun behind. Verified (check.mjs, full take flown): take 0-11 s: AGL 49.61..74 m, nearest drawn 24.54 m (static 0x480F#1 0x02000397), vmax 6.45 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 52.6 m); edit 3-9.5 s: AGL 59.11..73.2 m, nearest drawn 29.26 m (static 0x480F#1 0x02000397), vmax 6.45 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 53.3 m); flight cinema peak 6.44 m/s (cap 12), max tracking gap 0.05 m."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-dawnsong.01": "take 0-11 s: AGL 49.61..74 m, nearest drawn 24.54 m (static 0x480F#1 0x02000397), vmax 6.45 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 52.6 m); edit 3-9.5 s: AGL 59.11..73.2 m, nearest drawn 29.26 m (static 0x480F#1 0x02000397), vmax 6.45 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 53.3 m); flight cinema peak 6.44 m/s (cap 12), max tracking gap 0.05 m",
+  "poi-festival-stone-of-dawnsong.02": "take 0-11 s: AGL 6.32..76 m, nearest drawn 6.44 m (static 0x480F#0 0x02000397), vmax 8.83 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 51.7 m); edit 4-10.5 s: AGL 48.08..75.9 m, nearest drawn 23.36 m (static 0x480F#0 0x02000397), vmax 8.83 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 51.7 m); flight cinema peak 8.82 m/s (cap 12), max tracking gap 0.07 m"
+ },
+ "removedShots": [
+  {
+   "id": "poi-festival-stone-of-dawnsong.02",
+   "technique": "drone.dronie",
+   "rank": 2,
+   "by": "critic b4-7 2026-10-15",
+   "reason": "jump cut / duplicate of .01: the helix window ends 51 m south-south-west of the stone on heading 17 deg; the dronie window opens 23 m out on heading 15 deg on the same axis and pulls back through the helix's end point (3 m from it at t 7) to 67 m - the same stone from the same side and height band twice in a row.",
+   "shot": {
+    "id": "poi-festival-stone-of-dawnsong.02",
+    "site": "poi-festival-stone-of-dawnsong",
+    "technique": "drone.dronie",
+    "duration": {
+     "sec": 6.5
+    },
+    "trim": {
+     "takeSec": 11,
+     "inSec": 4.0
+    },
+    "window": {
+     "minSec": 4.5,
+     "idealSec": 6.5,
+     "keep": [
+      3.5,
+      10.8
+     ],
+     "anchor": "end"
+    },
+    "rank": 2,
+    "framing": "WS",
+    "subject": {
+     "kind": "point",
+     "pos": [
+      13955.8,
+      3053,
+      120
+     ],
+     "height": 9,
+     "radius": 2
+    },
+    "params": {
+     "startDistance": 7,
+     "endDistance": 65,
+     "startHeight": 2.5,
+     "endHeight": 24,
+     "bearingDeg": 195,
+     "relativeToSubject": false,
+     "minClearance": 2
+    },
+    "standingOrder": "Pull back south and up from the Festival Stone out over the ocean until the whole 120 m sea cliff and its narrow ridge are revealed; start 7 m from the stone.",
+    "pilot": {
+     "mode": "code"
+    },
+    "bounds": {
+     "minSpeedScale": 1,
+     "maxSpeedScale": 1
+    },
+    "notes": "Dronie from 7 m off the Festival Stone, pulling back south and up (65 m out, 24 m up) over the ocean until the whole narrow cliff ridge and the stone on its tip are revealed; sun behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 6.32..76 m, nearest drawn 6.44 m (static 0x480F#0 0x02000397), vmax 8.83 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 51.7 m); edit 4-10.5 s: AGL 48.08..75.9 m, nearest drawn 23.36 m (static 0x480F#0 0x02000397), vmax 8.83 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 51.7 m); flight cinema peak 8.82 m/s (cap 12), max tracking gap 0.07 m."
+   }
+  }
+ ]
+}

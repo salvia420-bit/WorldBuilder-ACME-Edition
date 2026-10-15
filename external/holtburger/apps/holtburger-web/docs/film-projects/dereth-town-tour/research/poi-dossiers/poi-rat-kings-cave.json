@@ -1,0 +1,109 @@
+{
+ "name": "Rat King's Cave",
+ "title": "Rat King's Cave",
+ "siteId": "poi-rat-kings-cave",
+ "summary": "The rocky mound entrance of the Rat King's Cave under tall forest trees between West Shoushi Outpost and Shoushi.",
+ "landmarks": [
+  {
+   "name": "Rat King's Cave mound",
+   "pos": [
+    41388.0,
+    16572.0,
+    40.0
+   ],
+   "heightM": 5.4,
+   "note": "0x01003D00 rocky entrance."
+  }
+ ],
+ "site": {
+  "id": "poi-rat-kings-cave",
+  "name": "Rat King's Cave",
+  "teleport": "@teleloc 0xD7560019 85.0 23.0 40.6 1 0 0 0",
+  "anchor": [
+   41388.0,
+   16572.0,
+   40.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.77,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry; teleport derived 43 m south-west of the cave mound (ground 40.1, nearest drawn object 6.3 m)."
+ },
+ "insertAfter": "sawato",
+ "insertBefore": "shoushi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -32.9,
+   "ew": 70.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 560,
+  "coveredBy": "shot:shoushi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Rat_King_s_Cave.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-rat-kings-cave.01",
+   "site": "poi-rat-kings-cave",
+   "technique": "classic.push-in",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7.5,
+    "inSec": 1.3
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.8,
+     7.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41388.0,
+     16572.0,
+     40.0
+    ],
+    "height": 5.4,
+    "radius": 5
+   },
+   "params": {
+    "azimuthDeg": 235,
+    "azimuthRef": "compass",
+    "elevationDeg": 6,
+    "thirds": "center",
+    "fromFraming": "WS",
+    "profile": "linear"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Push slowly from 18 m to 8 m toward the rocky mouth of the Rat King's Cave from the south-west at 4 m height; keep 4 m from the tall trees around it.",
+   "notes": "Slow push toward the rocky mound of the Rat King's Cave under tall forest trees; golden west light from the left. Verified (check.mjs, full take flown): take 0-7.5 s: AGL 3.59..4.9 m, nearest drawn 4.06 m (scenery-default 0x020002DB@41384,16553), vmax 2.1 m/s, LOS blocked 0/31, subject in frame 100%; edit 1.3-6.3 s: AGL 3.66..4.9 m, nearest drawn 4.06 m (scenery-default 0x020002DB@41384,16553), vmax 2.1 m/s, LOS blocked 0/20, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-rat-kings-cave.01": "take 0-7.5 s: AGL 3.59..4.9 m, nearest drawn 4.06 m (scenery-default 0x020002DB@41384,16553), vmax 2.1 m/s, LOS blocked 0/31, subject in frame 100%; edit 1.3-6.3 s: AGL 3.66..4.9 m, nearest drawn 4.06 m (scenery-default 0x020002DB@41384,16553), vmax 2.1 m/s, LOS blocked 0/20, subject in frame 100%"
+ }
+}

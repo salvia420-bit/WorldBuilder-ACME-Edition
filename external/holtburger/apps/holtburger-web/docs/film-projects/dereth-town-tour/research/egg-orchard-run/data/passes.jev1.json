@@ -1,0 +1,2055 @@
+{
+ "about": "Egg Orchard creature passes (over / left / right) for the FPV racing line. left/right = the side of the creature the drone flies on, seen in the direction of travel. Produced by tools/pass_plan.mjs -> jev_tasks.mjs planPasses.",
+ "generated": "2026-10-15T13:58:25.790Z",
+ "input": "data/pass_input.json",
+ "keySource": "file:/home/wbterminal/.config/holtburger-film/openrouter.key",
+ "model": "typesafe/jev-1.13",
+ "task": "pass-plan",
+ "source": "jev",
+ "rules": {
+  "sideNeedM": 1.9,
+  "overAboveTopM": 1.2,
+  "overBelowCeilM": 0.4
+ },
+ "passes": [
+  {
+   "id": "slasher-35d-158",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B035D",
+   "s": 45.98,
+   "region": "tunnel",
+   "previous_pass": null,
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.94,
+    "left": 1.97,
+    "right": 1.86
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": 0.17,
+    "right": 0.06
+   },
+   "words": {
+    "over": "blocked",
+    "left": "tight",
+    "right": "tight"
+   },
+   "code": "left",
+   "codeRule": "turn",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.98,
+   "band": "act",
+   "probabilities": {
+    "left": 0.99,
+    "over": 0,
+    "right": 0.01
+   },
+   "meta": {
+    "id": "gen-dec-1792072697-pMbYo4PVrDYrq00ohAeV",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 711,
+    "costUsd": 0.000037212
+   }
+  },
+  {
+   "id": "slasher-354-156",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0354",
+   "s": 58.48,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.94,
+    "left": 4.17,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": 2.37,
+    "right": -1.81
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.76,
+   "band": "confirm",
+   "probabilities": {
+    "left": 0.84,
+    "over": 0.14,
+    "right": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072698-nMZhNO8x4xAtiJ1IVy4Y",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 197,
+    "costUsd": 0.000037086
+   }
+  },
+  {
+   "id": "slasher-350-155",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0350",
+   "s": 75.98,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.94,
+    "left": 1.4,
+    "right": 1.84
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": -0.4,
+    "right": 0.04
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072698-uLcbbvMhMBFeP6DvHWX8",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 176,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "slasher-307-140",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B0307",
+   "s": 96.47,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.94,
+    "left": 1.6,
+    "right": 1.21
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": -0.2,
+    "right": -0.59
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "squeeze",
+   "squeeze": true,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.89,
+   "band": "act",
+   "probabilities": {
+    "left": 0.93,
+    "over": 0.02,
+    "right": 0.05
+   },
+   "meta": {
+    "id": "gen-dec-1792072698-fQcXzhYDE1ExBlPD8DFd",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 210,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "slasher-2f1-136",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02F1",
+   "s": 112.47,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0,
+    "left": 7.36,
+    "right": -0.92
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.8,
+    "left": 5.56,
+    "right": -2.72
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.92,
+   "band": "act",
+   "probabilities": {
+    "left": 0.95,
+    "over": 0.03,
+    "right": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072698-BAWrcFs1oGlJoAicyoEz",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 159,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "slasher-2f2-137",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02F2",
+   "s": 113.47,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.94,
+    "left": 4.64,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": 2.84,
+    "right": -1.81
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.72,
+   "band": "confirm",
+   "probabilities": {
+    "left": 0.81,
+    "over": 0.17,
+    "right": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072698-VdnTWuN28AVNXc7FAFrl",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 202,
+    "costUsd": 0.000037086
+   }
+  },
+  {
+   "id": "slasher-2e2-132",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02E2",
+   "s": 128.96,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.94,
+    "left": -0.01,
+    "right": 2.97
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": -1.81,
+    "right": 1.17
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "comfortable"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072699-G9KnGGSIsQoLwU8rAtwo",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 182,
+    "costUsd": 0.000037128
+   }
+  },
+  {
+   "id": "slasher-2d6-126",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02D6",
+   "s": 151.46,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.94,
+    "left": 1.33,
+    "right": 1.86
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.86,
+    "left": -0.47,
+    "right": 0.06
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "right": 0.97,
+    "over": 0.01,
+    "left": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072699-UICWAPzKvoYkbBN7E42c",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 253,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "slasher-2c9-121",
+   "name": "Olthoi Slasher",
+   "cell": "0x002B02C9",
+   "s": 192.43,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 5.5,
+    "left": 5.42,
+    "right": 3.68
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 3.4,
+    "left": 3.32,
+    "right": 1.58
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.51,
+   "band": "confirm",
+   "probabilities": {
+    "over": 0.67,
+    "left": 0.32,
+    "right": 0.01
+   },
+   "meta": {
+    "id": "gen-dec-1792072699-knfWG1D2PlSFe3bKkrGu",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 166,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "slayer-2a6-117",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B02A6",
+   "s": 227.9,
+   "region": "tunnel",
+   "previous_pass": "over",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 0.66,
+    "left": 3.42,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": 1.62,
+    "right": -1.81
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072699-Yr42jPQjZgnI3Dg2CmSC",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 171,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "slayer-29e-115",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B029E",
+   "s": 250.39,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.05,
+    "left": -0.01,
+    "right": 2.25
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.75,
+    "left": -1.81,
+    "right": 0.45
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072699-1w9SLxVCtd0f8fqF54RD",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 173,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "slayer-24a-89",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B024A",
+   "s": 265.39,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.66,
+    "left": 2.71,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": 0.91,
+    "right": -1.81
+   },
+   "words": {
+    "over": "blocked",
+    "left": "comfortable",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072700-BJrGcbGv08ZAFFtrWi7f",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 164,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "slayer-235-86",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B0235",
+   "s": 282.38,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.66,
+    "left": 3.59,
+    "right": 1.42
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": 1.79,
+    "right": -0.38
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.83,
+   "band": "act",
+   "probabilities": {
+    "left": 0.89,
+    "over": 0.06,
+    "right": 0.05
+   },
+   "meta": {
+    "id": "gen-dec-1792072700-scz1fnjK804oIkXU96n1",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 179,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "slayer-20a-78",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B020A",
+   "s": 305.37,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.66,
+    "left": 1.32,
+    "right": 2
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": -0.48,
+    "right": 0.2
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072700-zvdG95GHc8xK1MKG0SLW",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 196,
+    "costUsd": 0.000036834
+   }
+  },
+  {
+   "id": "slayer-202-77",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B0202",
+   "s": 326.87,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.66,
+    "left": 3.82,
+    "right": 1.72
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": 2.02,
+    "right": -0.08
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072700-WATznAHUWM6UoKR07ysV",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 171,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "slayer-1f1-74",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B01F1",
+   "s": 354.86,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0.66,
+    "left": 1.88,
+    "right": 1.26
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": 0.08,
+    "right": -0.54
+   },
+   "words": {
+    "over": "blocked",
+    "left": "tight",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.91,
+   "band": "act",
+   "probabilities": {
+    "left": 0.94,
+    "over": 0.04,
+    "right": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072700-UsKRdmBvjWVvDlHU7NwI",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 268,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "slayer-1e4-72",
+   "name": "Olthoi Slayer",
+   "cell": "0x002B01E4",
+   "s": 373.85,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0.66,
+    "left": 1.61,
+    "right": 1.61
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.14,
+    "left": -0.19,
+    "right": -0.19
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "squeeze",
+   "squeeze": true,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.41,
+   "band": "escalate",
+   "probabilities": {
+    "left": 0.21,
+    "over": 0.18,
+    "right": 0.61
+   },
+   "meta": {
+    "id": "gen-dec-1792072701-tBvmIEMhb5tpjuMbkKX4",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 219,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "ripper-1de-69",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01DE",
+   "s": 392.84,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0,
+    "left": -0.01,
+    "right": 7.82
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -2.1,
+    "left": -2.11,
+    "right": 5.72
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.94,
+   "band": "act",
+   "probabilities": {
+    "right": 0.96,
+    "over": 0.02,
+    "left": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072701-i1D31HZ8wJDiDhqnoHYw",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 219,
+    "costUsd": 0.000036834
+   }
+  },
+  {
+   "id": "ripper-1de-70",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01DE",
+   "s": 395.34,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 30,
+    "left": 9.88,
+    "right": 1.74
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": 7.78,
+    "right": -0.36
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "over",
+   "codeRule": "roomiest",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.77,
+   "band": "confirm",
+   "probabilities": {
+    "over": 0.85,
+    "left": 0.15,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072701-F4W8oAarLshyesjBqNb9",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 183,
+    "costUsd": 0.000036918
+   }
+  },
+  {
+   "id": "ripper-1d8-67",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01D8",
+   "s": 419.83,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "left",
+   "gaps": {
+    "over": 30,
+    "left": 3.45,
+    "right": 5.25
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": 1.35,
+    "right": 3.15
+   },
+   "words": {
+    "over": "wide open",
+    "left": "comfortable",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "right": 0.97,
+    "over": 0,
+    "left": 0.03
+   },
+   "meta": {
+    "id": "gen-dec-1792072701-hTZT5aTiGti3F0jAwNLR",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 176,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-1a9-56",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A9",
+   "s": 442.82,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 30,
+    "left": 7.31,
+    "right": 1.51
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": 5.21,
+    "right": -0.6
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "over",
+   "codeRule": "roomiest",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.72,
+   "band": "confirm",
+   "probabilities": {
+    "over": 0.81,
+    "left": 0.19,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072701-kxS2dryCd6wpVt5GXiZn",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 156,
+    "costUsd": 0.000036918
+   }
+  },
+  {
+   "id": "ripper-1a9-57",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A9",
+   "s": 442.82,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 30,
+    "left": -0.01,
+    "right": 8.31
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": -2.11,
+    "right": 6.21
+   },
+   "words": {
+    "over": "wide open",
+    "left": "blocked",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-zF4a9yYa4W2Ohbrkj2OD",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 177,
+    "costUsd": 0.000036918
+   }
+  },
+  {
+   "id": "ripper-1aa-58",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01AA",
+   "s": 455.31,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 1.76,
+    "left": 5.31,
+    "right": 3.71
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -0.34,
+    "left": 3.2,
+    "right": 1.61
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "left",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-20rfvbVoEwJKjFxC6X3J",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 183,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-1a5-55",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B01A5",
+   "s": 475.31,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.75,
+    "left": 1.77,
+    "right": 2.19
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": -0.03,
+    "right": 0.39
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-hSivzHh1ZXGfv1V2nzIl",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 171,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-19b-53",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B019B",
+   "s": 488.8,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.75,
+    "left": 3.31,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": 1.51,
+    "right": -1.81
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-JWHpO3LgyuNsiDVyEiDi",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 164,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "ripper-18e-51",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B018E",
+   "s": 504.79,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.75,
+    "left": 3.71,
+    "right": 2.08
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": 1.91,
+    "right": 0.28
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.98,
+   "band": "act",
+   "probabilities": {
+    "right": 0.99,
+    "over": 0,
+    "left": 0.01
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-xexhNdmgkjECIVGEMC0k",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 162,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "ripper-171-46",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0171",
+   "s": 531.78,
+   "region": "tunnel",
+   "previous_pass": "right",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 1.75,
+    "left": 2.41,
+    "right": 1.39
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": 0.61,
+    "right": -0.41
+   },
+   "words": {
+    "over": "blocked",
+    "left": "comfortable",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072702-eLTRKzIA5CLaSdb4gFDH",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 149,
+    "costUsd": 0.000037086
+   }
+  },
+  {
+   "id": "ripper-15e-43",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B015E",
+   "s": 547.77,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 1.75,
+    "left": 0.73,
+    "right": 1.64
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": -1.08,
+    "right": -0.16
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "blocked"
+   },
+   "code": "over",
+   "codeRule": "squeeze",
+   "squeeze": true,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.89,
+   "band": "act",
+   "probabilities": {
+    "over": 0.93,
+    "left": 0.04,
+    "right": 0.03
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-WNxmMa8nr30fneUe1Otg",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 163,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-156-42",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0156",
+   "s": 569.26,
+   "region": "tunnel",
+   "previous_pass": "over",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 1.75,
+    "left": 2.03,
+    "right": 2.04
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": 0.23,
+    "right": 0.24
+   },
+   "words": {
+    "over": "blocked",
+    "left": "tight",
+    "right": "tight"
+   },
+   "code": "left",
+   "codeRule": "roomiest",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.45,
+   "band": "escalate",
+   "probabilities": {
+    "left": 0.63,
+    "over": 0,
+    "right": 0.37
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-c4HGYOsHVjVzZY0UHZtM",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 168,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-153-41",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0153",
+   "s": 589.74,
+   "region": "room",
+   "previous_pass": "left",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 6.04,
+    "left": 4.45,
+    "right": 4.31
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 3.94,
+    "left": 2.35,
+    "right": 2.2
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.79,
+   "band": "confirm",
+   "probabilities": {
+    "over": 0.86,
+    "left": 0,
+    "right": 0.14
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-uzk7Badih8gxhWuIdXoD",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 163,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "ripper-150-39",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0150",
+   "s": 601.24,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 9.55,
+    "left": 5.5,
+    "right": 3.51
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 7.45,
+    "left": 3.4,
+    "right": 1.4
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "comfortable"
+   },
+   "code": "left",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.98,
+   "band": "act",
+   "probabilities": {
+    "left": 0.99,
+    "over": 0,
+    "right": 0.01
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-d31ZqLGaOJNuclcM69Ef",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 170,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "ripper-12f-30",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B012F",
+   "s": 610.72,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 12.17,
+    "left": 5.22,
+    "right": 4.11
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": 10.37,
+    "left": 3.42,
+    "right": 2.31
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.91,
+   "band": "act",
+   "probabilities": {
+    "over": 0.94,
+    "left": 0.02,
+    "right": 0.04
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-VH9bC5DIfPnOQgkCGqV5",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 183,
+    "costUsd": 0.00003717
+   }
+  },
+  {
+   "id": "ripper-121-29",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0121",
+   "s": 643.18,
+   "region": "tunnel",
+   "previous_pass": "over",
+   "next_turn": "left",
+   "gaps": {
+    "over": 0,
+    "left": 9,
+    "right": -0.49
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -1.8,
+    "left": 7.2,
+    "right": -2.29
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072703-L7usyUCKrSm6ET4yK10H",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 170,
+    "costUsd": 0.000036792
+   }
+  },
+  {
+   "id": "larvae-11a-24",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B011A",
+   "s": 651.67,
+   "region": "tunnel",
+   "previous_pass": "left",
+   "next_turn": "left",
+   "gaps": {
+    "over": 6.03,
+    "left": 8.02,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": 4.23,
+    "left": 6.22,
+    "right": -1.81
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "over": 0.97,
+    "left": 0.03,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-7So3yVKM4Fey912H0u94",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 160,
+    "costUsd": 0.000037086
+   }
+  },
+  {
+   "id": "ripper-10b-10",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010B",
+   "s": 675.15,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.76,
+    "left": 3.62,
+    "right": 10.18
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -0.34,
+    "left": 1.52,
+    "right": 8.08
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "turn",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-ZJr1Bs7IMAni6kqZBPB0",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 156,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "larvae-10b-11",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B010B",
+   "s": 675.65,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 30,
+    "left": -0.01,
+    "right": 11.38
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": -2.11,
+    "right": 9.28
+   },
+   "words": {
+    "over": "wide open",
+    "left": "blocked",
+    "right": "wide open"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "over": 1,
+    "left": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-jTYQZIhDf5aJ1n4c3WXK",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 171,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "ripper-10b-9",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010B",
+   "s": 682.14,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 30,
+    "left": 9.55,
+    "right": 11.31
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": 7.45,
+    "right": 9.21
+   },
+   "words": {
+    "over": "wide open",
+    "left": "wide open",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "variety+turn",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "right": 0.97,
+    "over": 0.01,
+    "left": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-geFMVaOagLmqj5XBoC5Z",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 156,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "ripper-10c-13",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B010C",
+   "s": 682.14,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0,
+    "left": -0.01,
+    "right": 11.31
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -2.1,
+    "left": -2.11,
+    "right": 9.21
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "wide open"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "right": 0.97,
+    "over": 0.01,
+    "left": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-GlLutslEInfsEErMrY5h",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 218,
+    "costUsd": 0.000036876
+   }
+  },
+  {
+   "id": "larvae-106-6",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0106",
+   "s": 696.61,
+   "region": "room",
+   "previous_pass": "right",
+   "next_turn": "straight",
+   "gaps": {
+    "over": 30,
+    "left": 3.31,
+    "right": 5.78
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 27.9,
+    "left": 1.21,
+    "right": 3.68
+   },
+   "words": {
+    "over": "wide open",
+    "left": "comfortable",
+    "right": "wide open"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.95,
+   "band": "act",
+   "probabilities": {
+    "over": 0.97,
+    "left": 0.03,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072704-GFQi86XJ6a8DEr3eC762",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 180,
+    "costUsd": 0.000037002
+   }
+  },
+  {
+   "id": "larvae-105-5",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0105",
+   "s": 700.1,
+   "region": "room",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 0,
+    "left": 7.44,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -2.1,
+    "left": 5.34,
+    "right": -2.11
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "left": 1,
+    "over": 0,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072705-3fL666y4e3WizXD5AxL1",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 176,
+    "costUsd": 0.000036834
+   }
+  },
+  {
+   "id": "ripper-105-3",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0105",
+   "s": 701.59,
+   "region": "room",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.76,
+    "left": 5.83,
+    "right": -0.01
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": -0.34,
+    "left": 3.73,
+    "right": -2.11
+   },
+   "words": {
+    "over": "blocked",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "left",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "left",
+   "source": "jev",
+   "confidence": 0.61,
+   "band": "confirm",
+   "probabilities": {
+    "left": 0.74,
+    "over": 0.24,
+    "right": 0.02
+   },
+   "meta": {
+    "id": "gen-dec-1792072705-4JLOxxPGPqvx1iray9eD",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 176,
+    "costUsd": 0.00003696
+   }
+  },
+  {
+   "id": "larvae-105-2",
+   "name": "Olthoi Larvae",
+   "cell": "0x002B0105",
+   "s": 702.59,
+   "region": "room",
+   "previous_pass": "left",
+   "next_turn": "right",
+   "gaps": {
+    "over": 2.87,
+    "left": 5.14,
+    "right": 1.94
+   },
+   "needs": {
+    "over": 2.1,
+    "left": 2.1,
+    "right": 2.1
+   },
+   "margins": {
+    "over": 0.77,
+    "left": 3.03,
+    "right": -0.16
+   },
+   "words": {
+    "over": "comfortable",
+    "left": "wide open",
+    "right": "blocked"
+   },
+   "code": "over",
+   "codeRule": "variety",
+   "squeeze": false,
+   "side": "over",
+   "source": "jev",
+   "confidence": 0.97,
+   "band": "act",
+   "probabilities": {
+    "over": 0.98,
+    "left": 0.02,
+    "right": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072705-47QFIwgiSBOMox0uONiz",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 170,
+    "costUsd": 0.000037044
+   }
+  },
+  {
+   "id": "ripper-101-0",
+   "name": "Olthoi Ripper",
+   "cell": "0x002B0101",
+   "s": 705.58,
+   "region": "tunnel",
+   "previous_pass": "over",
+   "next_turn": "right",
+   "gaps": {
+    "over": 1.75,
+    "left": 1.42,
+    "right": 1.97
+   },
+   "needs": {
+    "over": 1.8,
+    "left": 1.8,
+    "right": 1.8
+   },
+   "margins": {
+    "over": -0.05,
+    "left": -0.38,
+    "right": 0.17
+   },
+   "words": {
+    "over": "blocked",
+    "left": "blocked",
+    "right": "tight"
+   },
+   "code": "right",
+   "codeRule": "only",
+   "squeeze": false,
+   "side": "right",
+   "source": "jev",
+   "confidence": 1,
+   "band": "act",
+   "probabilities": {
+    "right": 1,
+    "over": 0,
+    "left": 0
+   },
+   "meta": {
+    "id": "gen-dec-1792072705-BrG17P29kvvrs54k4fc5",
+    "model": "typesafe/jev-1.13-20260917",
+    "ms": 186,
+    "costUsd": 0.000037002
+   }
+  }
+ ],
+ "counts": {
+  "over": 10,
+  "left": 18,
+  "right": 15
+ },
+ "bySource": {
+  "jev": 43,
+  "code": 0
+ },
+ "usage": {
+  "calls": 43,
+  "costUsd": 0.0015909599999999991
+ },
+ "warnings": [
+  "slasher-307-140 Olthoi Slasher: every option is 'blocked'; 'left' has the most room (squeeze)",
+  "slayer-1e4-72 Olthoi Slayer: every option is 'blocked'; 'right' has the most room (squeeze)",
+  "ripper-15e-43 Olthoi Ripper: every option is 'blocked'; 'over' has the most room (squeeze)"
+ ]
+}

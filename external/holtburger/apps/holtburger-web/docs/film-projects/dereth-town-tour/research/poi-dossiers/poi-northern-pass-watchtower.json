@@ -1,0 +1,181 @@
+{
+ "name": "Northern Pass Watchtower",
+ "title": "Northern Pass Watchtower",
+ "siteId": "poi-northern-pass-watchtower",
+ "summary": "A 31 m five-storey spire watchtower on a nearly inaccessible pinnacle plateau (z 298) in the northern Osteth mountains, 52.0N 3.1E. The plateau is about 60 m across, with pines, a Life Stone 26 m north of the tower and the wooden archway of the Destroyed Portal to Cragstone 44 m north-west. The rock falls 100-150 m on every side, to z 150-200 within 100 m.",
+ "landmarks": [
+  {
+   "name": "Watchtower",
+   "pos": [
+    25212.0,
+    36948.0,
+    298.0
+   ],
+   "heightM": 30.8,
+   "note": "0x01001117 five-storey spire tower, top z 328.75."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    25203.5,
+    36972.4,
+    298.0
+   ],
+   "heightM": 3,
+   "note": "26 m north of the tower."
+  },
+  {
+   "name": "Destroyed Portal to Cragstone",
+   "pos": [
+    25189.8,
+    36985.9,
+    298.0
+   ],
+   "heightM": 3.9,
+   "note": "On a wooden archway 0x0200004F."
+  }
+ ],
+ "site": {
+  "id": "poi-northern-pass-watchtower",
+  "name": "Northern Pass Watchtower",
+  "gazetteerId": "life-stone-at-52-1n-3-1e",
+  "teleport": "@teleloc 0x83C00015 51.4617 108.444 298.005 -0.999453 0 0 0.033064",
+  "anchor": [
+   25212.0,
+   36948.0,
+   298.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer life-stone-at-52-1n-3-1e (the plateau's Life Stone, 26 m north of the tower, z 298); a Life Stone has no collision effect."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 52.0,
+   "ew": 3.1
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5369,
+  "coveredBy": "shot:neydisa-castle.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Northern_Pass_Watchtower.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-northern-pass-watchtower.01",
+   "site": "poi-northern-pass-watchtower",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25212.0,
+     36948.0,
+     298.0
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "params": {
+    "azimuthDeg": 95,
+    "azimuthRef": "compass",
+    "distance": 150,
+    "heightM": 22,
+    "driftDeg": 10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hang 150 m east of the pinnacle over the valley, 22 m above its summit, and drift slowly while easing in on the watchtower on its rock, the morning sun behind the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing view. The camera hangs 150 m east of the pinnacle, 22 m above its summit and 200 m above the valley floor. It drifts 10 deg and eases 8 % closer while the lone tower and the Life Stone glow on top of a rock that falls away on every side. The sun is behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 198.29..212 m, nearest drawn 98.89 m (scenery-default 0x02000258@25261,36974), vmax 4.38 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 199.19..210.4 m, nearest drawn 99.1 m (scenery-default 0x02000258@25261,36974), vmax 4.38 m/s, LOS blocked 0/27, subject in frame 100%."
+  },
+  {
+   "id": "poi-northern-pass-watchtower.02",
+   "site": "poi-northern-pass-watchtower",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.5,
+     11.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25203.5,
+     36972.4,
+     298.0
+    ],
+    "height": 2.5,
+    "radius": 2
+   },
+   "params": {
+    "startDistance": 8,
+    "endDistance": 62,
+    "startHeight": 4,
+    "endHeight": 44,
+    "bearingDeg": 62,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Start 8 m east-north-east of the Life Stone and fly back and up out over the eastern cliff until the tower, the plateau and the 150 m drop all fit; keep 8 m from every crown and shrub.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie reveal. It starts 8 m from the Life Stone, 4 m up, then climbs back over the eastern cliff to 44 m above the plateau and 62 m out. The plateau, the tower and the 130 m drop open beneath, with the morning sun behind the lens. The edit window starts at t 4, once the camera is 24 m above the plateau. Verified (check.mjs, full take flown): take 0-11 s: AGL 4.91..130.5 m, nearest drawn 8.46 m (scenery-default 0x02001063@25205,36970), vmax 9.6 m/s, LOS blocked 0/45, subject in frame 100%; edit 4-10.5 s: AGL 24.13..129.6 m, nearest drawn 19.12 m (scenery-default 0x02000258@25211,36963), vmax 9.6 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 9.58 m/s (cap 12), max tracking gap 0.07 m."
+  }
+ ],
+ "verification": {
+  "poi-northern-pass-watchtower.01": "take 0-10 s: AGL 198.29..212 m, nearest drawn 98.89 m (scenery-default 0x02000258@25261,36974), vmax 4.38 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 199.19..210.4 m, nearest drawn 99.1 m (scenery-default 0x02000258@25261,36974), vmax 4.38 m/s, LOS blocked 0/27, subject in frame 100%",
+  "poi-northern-pass-watchtower.02": "take 0-11 s: AGL 4.91..130.5 m, nearest drawn 8.46 m (scenery-default 0x02001063@25205,36970), vmax 9.6 m/s, LOS blocked 0/45, subject in frame 100%; edit 4-10.5 s: AGL 24.13..129.6 m, nearest drawn 19.12 m (scenery-default 0x02000258@25211,36963), vmax 9.6 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 9.58 m/s (cap 12), max tracking gap 0.07 m"
+ }
+}

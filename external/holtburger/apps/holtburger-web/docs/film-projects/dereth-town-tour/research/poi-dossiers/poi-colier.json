@@ -1,0 +1,269 @@
+{
+ "name": "Colier",
+ "title": "Colier",
+ "siteId": "poi-colier",
+ "summary": "Colier was Baron Colier's Aluvian mining town, now a ghost town overrun by banderlings and drudges with undead miners. The kit shows the ring of Aluvian stone houses, huts and cottages around the looping road (z 118-120, x 33590-33740) under a canopy of giant trees (38-46 m crowns, tops z 155), a well and garbage barrels; west along the road a burnt grove of black dead trees and stumps, the grave-warning Monolith and the Destroyed Portal to Holtburg; the Life Stone stands on the hill north-east (z 171). Landblocks west of x 33408 (0xADxx) are missing from the kit.",
+ "acpedia": {
+  "categories": [
+   "Historical Site",
+   "Northeast POI",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": 56.8,
+   "ew": 38.4
+  },
+  "mapWorld": [
+   33684.0,
+   38100.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Colier.txt",
+  "coveredDistM": 3360,
+  "coveredBy": "path:holtburg.04"
+ },
+ "landmarks": [
+  {
+   "name": "Monolith (grave warning)",
+   "pos": [
+    33505.7,
+    38177.7,
+    110.4
+   ],
+   "heightM": 4,
+   "note": "Weenie spawn (~4 m assumed)."
+  },
+  {
+   "name": "Ghost-town houses",
+   "pos": [
+    33650.0,
+    38090.0,
+    120.0
+   ],
+   "heightM": 12,
+   "note": "0x01000830, 0x01000BC3, 0x01000C1E, 0x0100081C... under giant trees 0x020003EE/ED/EF."
+  },
+  {
+   "name": "Colier Life Stone",
+   "pos": [
+    33735.9,
+    38235.8,
+    171.4
+   ],
+   "heightM": 3.6,
+   "note": "On the hill above the town."
+  },
+  {
+   "name": "Destroyed Portal to Holtburg",
+   "pos": [
+    33502.7,
+    38284.7,
+    106.0
+   ],
+   "heightM": 3.8,
+   "note": "Crystal ruin at the road's end."
+  }
+ ],
+ "site": {
+  "id": "poi-colier",
+  "name": "Colier",
+  "gazetteerId": "colier",
+  "teleport": "@teleloc 0xAEC60027 97.4944 165.113 110.121 1 0 0 0",
+  "anchor": [
+   33600.0,
+   38150.0,
+   115.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.48,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.handheld",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33505.7,
+     38177.7,
+     110.4
+    ],
+    "height": 4,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 205,
+    "azimuthRef": "compass",
+    "elevationDeg": 2,
+    "distance": 9,
+    "thirds": "center",
+    "base": "push-in",
+    "pushM": 2.0,
+    "amplitudeDeg": 0.7,
+    "frequencyHz": 1.1,
+    "posAmplitude": 0.03,
+    "roughness": 0.45
+   },
+   "standingOrder": "Creep 2 m toward the grave-warning Monolith at shoulder height from 9 m south-south-west with a light handheld sway; keep 2.5 m from the burnt stump and fern beside it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Documentary approach to the Monolith with its grave warning at the west end of the dead mining town, on the road out to the destroyed Holtburg portal: black, burnt and twisted stumps around it, the ghost town's giant trees ahead. Seeded handheld shake 0.7 deg, push 2 m. Verified with poi-kit check.mjs - take 8s: AGL 2.31..2.5 m, nearest 2.89 m (static 0xAEC6#0 0x02000254), vmax 0.44 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 2.34..2.5 m, nearest 2.91 m, LOS blocked 0/23, in frame 100%, water 0%."
+  },
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33645.0,
+     38095.0,
+     120.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 70,
+    "rotateDeg": 35,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "standingOrder": "Hover 70 m above the town centre looking straight down and rotate 35 deg; nothing within 35 m, canopy tops 35 m below.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Colier from above: the ruined Aluvian houses of the banderling- and undead-haunted mining town sit in a ring around the looping road under a canopy of giant trees (38-46 m crowns, tops z 155). A slow rotating map view. Verified with poi-kit check.mjs - take 9s: AGL 70..70 m, nearest 35.32 m (static 0xAFC6#19 0x020003EE), vmax 0.15 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-7.5s: AGL 70..70 m, nearest 35.32 m, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 0.15 m/s (cap 12), tracking gap 0 m."
+  },
+  {
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33735.9,
+     38235.8,
+     171.4
+    ],
+    "height": 3.6,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": -18,
+    "distance": 7,
+    "thirds": "center",
+    "pushM": 1.0
+   },
+   "standingOrder": "Look up at Colier's Life Stone from 2.8 m above the hilltop 7 m south-south-west, creeping 1 m closer; keep 2 m from the crystal, nothing else within 20 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Life Stone on the hill above Colier (z 171): the sparkling crystal against open sky, the ghost town 50 m below behind the camera. Noon sun from behind-left lights the sparkles. Life Stone 3.6 m (setup 0x020002EE as measured for Holtburg). Verified with poi-kit check.mjs - take 8s: AGL 2.82..3.1 m, nearest 23.7 m (scenery-default 0x02000258@33754,38212), vmax 0.2 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.84..3.1 m, nearest 23.74 m, LOS blocked 0/21, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-colier.01",
+   "technique": "classic.handheld",
+   "rank": 2,
+   "check": "take 8s: AGL 2.31..2.5 m, nearest 2.89 m (static 0xAEC6#0 0x02000254), vmax 0.44 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-7s: AGL 2.34..2.5 m, nearest 2.91 m, LOS blocked 0/23, in frame 100%, water 0%"
+  },
+  {
+   "shot": "poi-colier.02",
+   "technique": "drone.top-down",
+   "rank": 3,
+   "check": "take 9s: AGL 70..70 m, nearest 35.32 m (static 0xAFC6#19 0x020003EE), vmax 0.15 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 2-7.5s: AGL 70..70 m, nearest 35.32 m, LOS blocked 0/23, in frame 100%, water 0%; flight cinema: peak 0.15 m/s (cap 12), tracking gap 0 m"
+  },
+  {
+   "shot": "poi-colier.03",
+   "technique": "classic.low-angle",
+   "rank": 2,
+   "check": "take 8s: AGL 2.82..3.1 m, nearest 23.7 m (scenery-default 0x02000258@33754,38212), vmax 0.2 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.84..3.1 m, nearest 23.74 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 16.0,
+ "techniques": [
+  "classic.handheld",
+  "drone.top-down",
+  "classic.low-angle"
+ ]
+}

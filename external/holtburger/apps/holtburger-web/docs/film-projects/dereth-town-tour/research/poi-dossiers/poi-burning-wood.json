@@ -1,0 +1,120 @@
+{
+ "name": "Burning Wood",
+ "title": "Burning Wood",
+ "siteId": "poi-burning-wood",
+ "summary": "The south-west valley of the Graveyard (66.5S 44.8W): 26 m dead antler-branched trees, deer skeletons, tombstones, portal pillars and purple candlesticks around a grass-roofed bunker on a burnt volcanic floor (z 4-8); the Corrupted Pyre Oak and Lord Hendrel appear here.",
+ "landmarks": [
+  {
+   "name": "Dead antler trees",
+   "pos": [
+    13700,
+    8530,
+    0
+   ],
+   "heightM": 26,
+   "note": "0x02000AB6 x18."
+  },
+  {
+   "name": "Bunker",
+   "pos": [
+    13716,
+    8532,
+    6
+   ],
+   "heightM": 4,
+   "note": "0x010010FE."
+  }
+ ],
+ "site": {
+  "id": "poi-burning-wood",
+  "name": "Burning Wood",
+  "teleport": "@teleloc 0x472C0023 106.0 70.0 4.50 1 0 0 0",
+  "anchor": [
+   13716,
+   8520,
+   6
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.56,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport in the wood 24 m east of the acpedia point, 6.5 m from the nearest dead tree."
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "routeNote": "Moved from candeth-keep -> qalabar to wai-jhou -> candeth-keep so the three Graveyard-valley POIs (Knathtead Excavation, Burning Wood, Arcanum Lookout, all within 800 m) cut together; insert cost 2.07 km vs 1.90 km for the given slot (teleport hops, so the extra 0.17 km is free on the shoot).",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -66.5,
+   "ew": -44.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1911,
+  "coveredBy": "shot:wai-jhou.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burning_Wood.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-burning-wood.01",
+   "site": "poi-burning-wood",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     13712,
+     8522,
+     6
+    ],
+    "height": 4,
+    "radius": 30
+   },
+   "params": {
+    "heightStart": 32,
+    "heightEnd": 72,
+    "rotateDeg": 25,
+    "headingDeg": 20,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 4
+   },
+   "standingOrder": "Look straight down from 32 m over the Burning Wood and rise to 72 m, turning 25 degrees, as the dead antler trees, bunker and tombstones shrink into a pattern; 10 m above the tallest crown at the start.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "God's-eye rise from 32 m to 72 m over the Burning Wood, turning 25 deg: the dead antler-branched trees, the grass-roofed bunker, tombstones and purple candlesticks shrink into a pattern on the burnt floor. Starts about 10 m above the tallest crown. Verified (check.mjs, full take flown): take 0-9 s: AGL 32..72 m, nearest drawn 14.84 m (static 0x472C#111 0x02000AB6), vmax 6.98 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 17.7 m); edit 2-8 s: AGL 36.68..70.8 m, nearest drawn 18.81 m (static 0x472C#111 0x02000AB6), vmax 6.98 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 17.7 m); flight cinema peak 6.97 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-burning-wood.01": "take 0-9 s: AGL 32..72 m, nearest drawn 14.84 m (static 0x472C#111 0x02000AB6), vmax 6.98 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 17.7 m); edit 2-8 s: AGL 36.68..70.8 m, nearest drawn 18.81 m (static 0x472C#111 0x02000AB6), vmax 6.98 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 17.7 m); flight cinema peak 6.97 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

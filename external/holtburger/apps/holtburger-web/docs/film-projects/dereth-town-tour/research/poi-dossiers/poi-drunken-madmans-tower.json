@@ -1,0 +1,196 @@
+{
+ "name": "Drunken Madman's Tower (Ridge Tower)",
+ "title": "Drunken Madman's Tower",
+ "siteId": "poi-drunken-madmans-tower",
+ "summary": "An Empyrean stone tower on the mountain ridge near Baishi, also known as 'Ridge Tower', home of the Drunken Madman who portals visitors for sake (acpedia). In the kit, a three-storey pitched-roof Empyrean hall (top z 195.4) stands alone in a high alpine saddle at z 176. A candle on a stone pedestal and the Warning Letter are at its door. Snow and ice ridges rise to z 430 to the south and west, and a 36 m pine stands at each corner of the saddle.",
+ "landmarks": [
+  {
+   "name": "Empyrean hall (0x01001106)",
+   "pos": [
+    39108,
+    11748,
+    176
+   ],
+   "heightM": 19.4,
+   "note": "The 'tower'; the tower-of-the-madman gazetteer entry lands on its roof."
+  },
+  {
+   "name": "Candle on stone pedestal",
+   "pos": [
+    39111,
+    11739.2,
+    176
+   ],
+   "heightM": 1.5,
+   "note": "With the Warning Letter."
+  },
+  {
+   "name": "Pine (0x020002D3)",
+   "pos": [
+    39088.6,
+    11738,
+    173.4
+   ],
+   "heightM": 36,
+   "note": "One of two tall pines in the saddle; the shots avoid its line."
+  },
+  {
+   "name": "Snow ridge",
+   "pos": [
+    39108,
+    11640,
+    200
+   ],
+   "heightM": 0,
+   "note": "Snow and ice rising to z 430 south and west."
+  }
+ ],
+ "site": {
+  "id": "poi-drunken-madmans-tower",
+  "name": "Drunken Madman's Tower (Ridge Tower)",
+  "gazetteerId": "ridge-tower",
+  "teleport": "@teleloc 0xCB3D0032 147.556 38.682 175.409 0.92388 0 0 -0.382684",
+  "anchor": [
+   39108,
+   11748,
+   176
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.66,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer ridge-tower (outdoor, at the east foot of the hall; the tower-of-the-madman entry lands on its roof at z 195). Landblocks south of y 11520 (0xCA3B-0xCC3B) are missing from the kit: every camera stays north of y 11600."
+ },
+ "insertAfter": "baishi",
+ "insertBefore": "lin",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -53.1,
+   "ew": 61.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   39108.0,
+   11724.0
+  ],
+  "coveredDistM": 825,
+  "coveredBy": "shot:baishi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Drunken_Madman_s_Tower.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-drunken-madmans-tower.01",
+   "site": "poi-drunken-madmans-tower",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39108,
+     11748,
+     176
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "radius": 95,
+    "heightAGL": 48,
+    "revolutions": 0.09,
+    "direction": "cw",
+    "bearingDeg": 172,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Arc clockwise round the lone Empyrean hall in its high mountain saddle 95 m out and 48 m up, the afternoon sun behind the lens and the snow ridges beyond it; keep 15 m above the slopes.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arc of 32 degrees, 95 m out and 48 m up, from south to south-south-west round the lone Empyrean hall in its alpine saddle. Snowfields and the northern peaks turn behind it. The afternoon sun (0.66) is behind-right of the lens. The arc is placed so the two 36 m pines in the saddle never cross the line of sight. Verified (check.mjs, full take flown): take 0-10 s: AGL 21.17..27.9 m, nearest drawn 8.9 m (scenery-default 0x02000258@39125,11668), vmax 5.37 m/s, LOS blocked 2/41, subject in frame 100%; edit 2-8.5 s: AGL 23.46..27.5 m, nearest drawn 12.49 m (scenery-default 0x02000258@39125,11668), vmax 5.37 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.38 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-drunken-madmans-tower.02",
+   "site": "poi-drunken-madmans-tower",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39108,
+     11748,
+     176
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "offset": 36,
+    "heightAGL": 26,
+    "speed": 5,
+    "side": "left",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Glide east past the madman's hall 36 m off its sunlit south face and 14 m above the alpine grass, holding it in frame as it slides by with the north peaks behind; keep 5 m above every shrub.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Slow eastward fly-by 36 m south of the hall and 18 m above the alpine shrubs. The sunlit south face slides through the frame against the northern mountain wall. Verified (check.mjs, full take flown): take 0-9 s: AGL 18.01..20 m, nearest drawn 7.26 m (scenery-default 0x02000246@39101,11705), vmax 5 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 18.01..20 m, nearest drawn 7.26 m (scenery-default 0x02000246@39101,11705), vmax 5 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-drunken-madmans-tower.01": "take 0-10 s: AGL 21.17..27.9 m, nearest drawn 8.9 m (scenery-default 0x02000258@39125,11668), vmax 5.37 m/s, LOS blocked 2/41, subject in frame 100%; edit 2-8.5 s: AGL 23.46..27.5 m, nearest drawn 12.49 m (scenery-default 0x02000258@39125,11668), vmax 5.37 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.38 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-drunken-madmans-tower.02": "take 0-9 s: AGL 18.01..20 m, nearest drawn 7.26 m (scenery-default 0x02000246@39101,11705), vmax 5 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 18.01..20 m, nearest drawn 7.26 m (scenery-default 0x02000246@39101,11705), vmax 5 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

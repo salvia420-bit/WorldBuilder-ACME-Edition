@@ -1,0 +1,193 @@
+{
+ "name": "Mountain Retreat",
+ "title": "Mountain Retreat",
+ "siteId": "poi-mountain-retreat",
+ "summary": "A castle compound in the style of Neydisa on a snowy shelf (z 200) at 59.7N 4.1W, home to shopkeepers. A 31.5 m red-roofed keep stands in the middle, with a 22 m green-glass spire tower to the west, two 22 m towers north-west and east, a 14 m hall to the north and a 16 m spire tower to the north-east. The courtyard holds the Life Stone, a fountain and the Hilltop portal. Snow pines dot the shelf and mountains rise to the west. The landblocks south of y 38592 are missing from the kit; no camera goes there.",
+ "landmarks": [
+  {
+   "name": "Keep",
+   "pos": [
+    23484.0,
+    38796.0,
+    200.0
+   ],
+   "heightM": 31.5,
+   "note": "0x01000DFF red-roofed castle keep, top z 231.5."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    23467.5,
+    38811.8,
+    200.0
+   ],
+   "heightM": 3,
+   "note": "Courtyard, north-west."
+  },
+  {
+   "name": "Hilltop portal",
+   "pos": [
+    23499.1,
+    38800.4,
+    200.0
+   ],
+   "heightM": 3,
+   "note": "Courtyard, east."
+  },
+  {
+   "name": "Fountain",
+   "pos": [
+    23499.4,
+    38813.9,
+    200.0
+   ],
+   "heightM": 2,
+   "note": "Courtyard, north-east."
+  }
+ ],
+ "site": {
+  "id": "poi-mountain-retreat",
+  "name": "Mountain Retreat",
+  "gazetteerId": "life-stone-at-59-8n-4-2w",
+  "teleport": "@teleloc 0x7ACA000A 43.5416 27.8085 200.005 0.999113 0 0 -0.042109",
+  "anchor": [
+   23484.0,
+   38796.0,
+   200.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer life-stone-at-59-8n-4-2w (the courtyard's Life Stone, z 200, 23 m north-west of the keep); the hilltop-portal-7aca entry lands on the Hilltop portal itself, a portal-collision risk, so it is not used."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 59.7,
+   "ew": -4.1
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 4524,
+  "coveredBy": "shot:stonehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mountain_Retreat.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mountain-retreat.01",
+   "site": "poi-mountain-retreat",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23484.0,
+     38796.0,
+     200.0
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "distance": 32,
+    "heightStart": 2,
+    "heightEnd": 42,
+    "bearingDeg": 175,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "tiltDeg": 0,
+    "minClearance": 1
+   },
+   "standingOrder": "Rise straight up from 2 m to 42 m in the open snow 32 m south of the keep, aimed at it, until the spires, the courtyard towers and the mountains behind are revealed; keep 15 m from the snow pines.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boom rise. The camera starts 2 m above the snow, 32 m south of the keep, and climbs to 42 m, aimed at the keep. The red-roofed keep, then the green-glass spire towers of the courtyard, then the mountains behind come into view in turn. The morning sun lights the east faces from the right. The nearest objects are the stone props on the keep's south face, 22 m away. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.66..43.7 m, nearest drawn 21.88 m (static 0x7ACA#5 0x01000E1A), vmax 6.28 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-9.5 s: AGL 11.9..43.4 m, nearest drawn 22.12 m (static 0x7ACA#5 0x01000E1A), vmax 6.28 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.27 m/s (cap 12), max tracking gap 0.05 m."
+  },
+  {
+   "id": "poi-mountain-retreat.02",
+   "site": "poi-mountain-retreat",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23484.0,
+     38796.0,
+     200.0
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 75,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "standingOrder": "Hover 75 m straight above the keep looking down and rotate 40 degrees: the six towers, the fountain, the Life Stone and the Hilltop portal laid out like a map on the snow.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down. A 40 deg rotation 75 m above the keep, pitched -88 deg so the fountain and portal FX do not spin. Six roofs, the courtyard with its Life Stone, fountain and Hilltop portal, and the snow shelf read like a map. A short rank-3 look. Verified (check.mjs, full take flown): take 0-9 s: AGL 75..75 m, nearest drawn 54.06 m (bldg 0x7ACA#25 0x01000E00 single-story building with spire roof, 9 interior cells), vmax 0.16 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7 s: AGL 75..75 m, nearest drawn 54.12 m (static 0x7ACA#25 0x01000E00), vmax 0.16 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 0.16 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-mountain-retreat.01": "take 0-10 s: AGL 3.66..43.7 m, nearest drawn 21.88 m (static 0x7ACA#5 0x01000E1A), vmax 6.28 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-9.5 s: AGL 11.9..43.4 m, nearest drawn 22.12 m (static 0x7ACA#5 0x01000E1A), vmax 6.28 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 6.27 m/s (cap 12), max tracking gap 0.05 m",
+  "poi-mountain-retreat.02": "take 0-9 s: AGL 75..75 m, nearest drawn 54.06 m (bldg 0x7ACA#25 0x01000E00 single-story building with spire roof, 9 interior cells), vmax 0.16 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7 s: AGL 75..75 m, nearest drawn 54.12 m (static 0x7ACA#25 0x01000E00), vmax 0.16 m/s, LOS blocked 0/23, subject in frame 100%; flight cinema peak 0.16 m/s (cap 12), max tracking gap 0 m"
+ }
+}

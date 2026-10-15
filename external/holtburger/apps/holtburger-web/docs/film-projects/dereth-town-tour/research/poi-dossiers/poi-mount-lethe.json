@@ -1,0 +1,269 @@
+{
+ "name": "Mount Lethe",
+ "title": "Mount Lethe",
+ "siteId": "poi-mount-lethe",
+ "summary": "One of the three mountains where a Hellfire spawns: the Mount Lethe Hellfire appears in the crater at 34.4S 84.9W when the Tenkarrdun Hellfire is killed (Lady Aerfalle Quest). In the kit a lava plateau (z 70) north of the volcano holds the Magma Tubes cave hut and a field of erupting geysers, 11-second firespurts and yellow steam vents. To the south-east the volcano rises to z 148 around a crater floor at z 122, its north-west rim beaded with 92 glowing red lava emitters and orange embers in the bowl.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI",
+   "Geographic Area"
+  ],
+  "map": {
+   "ns": -33.8,
+   "ew": -85.3
+  },
+  "mapWorld": [
+   3996.0,
+   16356.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Lethe.txt",
+  "coveredDistM": 6250,
+  "coveredBy": "shot:ayan-baqur.03"
+ },
+ "landmarks": [
+  {
+   "name": "Crater",
+   "pos": [
+    4096,
+    16215,
+    122
+   ],
+   "heightM": 25,
+   "note": "Rim at z 140-148, with the Erupt Lethe Boss Gen (Hellfire) at (4090,16213,122)."
+  },
+  {
+   "name": "Lava rim glow",
+   "pos": [
+    4048,
+    16238,
+    145
+   ],
+   "heightM": 2,
+   "note": "92 glowing red 0x0200069F emitters on the north-west rim."
+  },
+  {
+   "name": "Geyser field",
+   "pos": [
+    3990,
+    16350,
+    70
+   ],
+   "heightM": 6,
+   "note": "Five geysers, ten 11-sec firespurts, ten yellow steam vents and Erupt Lethe FX gens."
+  },
+  {
+   "name": "Magma Tubes cave hut",
+   "pos": [
+    4014,
+    16337.6,
+    70
+   ],
+   "heightM": 5.4,
+   "note": "0x010011A9, the portal cave to Mount Lethe Magma Tubes."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-lethe",
+  "name": "Mount Lethe",
+  "gazetteerId": "mount-tenkarrdun-1455",
+  "teleport": "@teleloc 0x14550032 163.519 28.263 70.005 -0.922093 0 0 -0.386969",
+  "anchor": [
+   4040,
+   16290,
+   70
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.75,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer mount-tenkarrdun-1455 teleloc (4003.5,16348.3,70) on the geyser plateau. The gazetteer mislabels it Mount Tenkarrdun."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-mount-lethe.01",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4096,
+     16215,
+     122
+    ],
+    "height": 10,
+    "radius": 25
+   },
+   "params": {
+    "radiusStart": 95,
+    "radiusEnd": 52,
+    "heightStart": 70,
+    "heightEnd": 34,
+    "revolutions": 0.11,
+    "direction": "cw",
+    "bearingDeg": 345,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "standingOrder": "Spiral down clockwise over the north rim into Mount Lethe's crater, 95 m to 52 m out and 70 m to 34 m above its floor, the lava glow backlit by the low sun; keep 8 m above the rim.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view: the drone spirals down clockwise over the north rim into Mount Lethe's crater, where the Mount Lethe Hellfire spawns. It moves from 95 m to 52 m out and from 70 m to 34 m above the crater floor (z 122). The glowing red lava beads (92 emitters) on the rim and the orange embers in the bowl are backlit by the low golden sun ahead-right. The southern landblocks (y < 16128) are not in the kit, so the spiral stays north. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 19.04..107.1 m, nearest 20.82 m (spawn Erupt Lethe Gen), vmax 10.9 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 84 m (not drawn by the default bake); edit 4-10.5s: AGL 19.65..88.4 m, nearest 21.15 m (spawn Erupt Lethe Gen), vmax 10.9 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 84 m (not drawn by the default bake); flight cinema: peak 10.88 m/s (cap 12), tracking gap 0.09 m."
+  },
+  {
+   "id": "poi-mount-lethe.02",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3990,
+     16350,
+     70
+    ],
+    "height": 6,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 65,
+    "azimuthRef": "compass",
+    "elevationDeg": -3,
+    "distance": 24,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off low on the steaming plateau east of the firespurts and geysers, looking west into the golden sun as they erupt; nothing moves but the fire and steam.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flames and steam: the lens is locked off 3.2 m above the steaming lava plateau, 24 m east-north-east of the geyser field, and looks west-south-west into the low golden sun. Ten 11-second firespurts, five geysers and the yellow side steam erupt backlit in front of the Magma Tubes cave hut. Nothing moves but the fire. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 3.22..3.2 m, nearest 3.35 m (spawn Geyser), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 89.9 m (not drawn by the default bake); edit 1.5-6.5s: AGL 3.22..3.2 m, nearest 3.35 m (spawn Geyser), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 89.9 m (not drawn by the default bake)."
+  },
+  {
+   "id": "poi-mount-lethe.03",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4096,
+     16215,
+     122
+    ],
+    "height": 10,
+    "radius": 25
+   },
+   "params": {
+    "offset": 62,
+    "heightAGL": 42,
+    "speed": 6,
+    "side": "right",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Glide east 62 m north of the crater centre, 42 m above its floor, the lens swinging across the glowing rim and the lava below with the low sun at our back; hold height.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The drone glides east 36 m along the north side of the crater, 62 m from its centre and 42 m above its floor (44-68 m above the slope). The lens swings from south-south-east to south-south-west across the glowing rim and into the bowl, with the low sun behind the lens. Rank 3. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 30..68.8 m, nearest 14.38 m (scenery-default 0x02000847@4068,16260), vmax 6 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 81.4 m (not drawn by the default bake); edit 2-7.5s: AGL 30..54 m, nearest 14.38 m (scenery-default 0x02000847@4068,16260), vmax 6 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 83.9 m (not drawn by the default bake); flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-mount-lethe.01",
+   "technique": "drone.spiral-descent",
+   "rank": 1,
+   "check": "take 11s: AGL 19.04..107.1 m, nearest 20.82 m (spawn Erupt Lethe Gen), vmax 10.9 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 84 m (not drawn by the default bake); edit 4-10.5s: AGL 19.65..88.4 m, nearest 21.15 m (spawn Erupt Lethe Gen), vmax 10.9 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 84 m (not drawn by the default bake); flight cinema: peak 10.88 m/s (cap 12), tracking gap 0.09 m"
+  },
+  {
+   "shot": "poi-mount-lethe.02",
+   "technique": "classic.static",
+   "rank": 2,
+   "check": "take 8s: AGL 3.22..3.2 m, nearest 3.35 m (spawn Geyser), vmax 0 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 89.9 m (not drawn by the default bake); edit 1.5-6.5s: AGL 3.22..3.2 m, nearest 3.35 m (spawn Geyser), vmax 0 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 89.9 m (not drawn by the default bake)"
+  },
+  {
+   "shot": "poi-mount-lethe.03",
+   "technique": "drone.fly-by",
+   "rank": 3,
+   "check": "take 9s: AGL 30..68.8 m, nearest 14.38 m (scenery-default 0x02000847@4068,16260), vmax 6 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 81.4 m (not drawn by the default bake); edit 2-7.5s: AGL 30..54 m, nearest 14.38 m (scenery-default 0x02000847@4068,16260), vmax 6 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 83.9 m (not drawn by the default bake); flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 17.0,
+ "techniques": [
+  "drone.spiral-descent",
+  "classic.static",
+  "drone.fly-by"
+ ]
+}

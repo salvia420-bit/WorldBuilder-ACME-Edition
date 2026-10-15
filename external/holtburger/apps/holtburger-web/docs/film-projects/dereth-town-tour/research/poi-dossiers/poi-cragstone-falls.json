@@ -1,0 +1,259 @@
+{
+ "name": "Cragstone Falls",
+ "title": "Cragstone Falls",
+ "siteId": "poi-cragstone-falls",
+ "summary": "Waterfalls near Cragstone where the river drops into Victory Bay (Tackle Master and fishing holes since Discoveries). In the kit the river plateau (running water, z 28) spills over a straight lip at x 34948 (14 lip emitters at z 22-24) and falls 22-26 m down a rock face to the shallow sea (z 2), where 24 Waterfall emitters throw spray along a 90 m front (y 31330-31420); a bamboo fishing hut with fish racks and barrels (Tackle Master) stands on the shore 60 m north-east of the falls' foot and the Thistledown bluff rises to the south-west.",
+ "landmarks": [
+  {
+   "name": "Falls curtain",
+   "pos": [
+    34962.0,
+    31375.0,
+    2.0
+   ],
+   "heightM": 24.0,
+   "note": "Lip x 34948 (z 22-28), foot x 34972 (z 2), y 31330-31420."
+  },
+  {
+   "name": "Fishing hut (0x01002DE9)",
+   "pos": [
+    34994.5,
+    31432.6,
+    2.0
+   ],
+   "heightM": 5.3,
+   "note": "Bamboo hut with fish racks, barrels and the Tackle Master."
+  },
+  {
+   "name": "River plateau",
+   "pos": [
+    34900.0,
+    31375.0,
+    28.0
+   ],
+   "heightM": 0.0,
+   "note": "Running water above the lip."
+  },
+  {
+   "name": "Victory Bay",
+   "pos": [
+    35060.0,
+    31375.0,
+    2.0
+   ],
+   "heightM": 0.0,
+   "note": "Shallow still sea below the falls."
+  }
+ ],
+ "site": {
+  "id": "poi-cragstone-falls",
+  "name": "Cragstone Falls",
+  "gazetteerId": "cragstone-waterfall",
+  "teleport": "@teleloc 0xB6A30011 56 1.1 1.9 -0.97437 0 0 -0.224951",
+  "anchor": [
+   34962,
+   31375,
+   2
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.44,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer cragstone-waterfall (shallow sea shelf 80 m south-east of the falls, z 1.9)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 29.0,
+   "ew": 43.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1278,
+  "coveredBy": "shot:cragstone.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Cragstone_Falls.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-cragstone-falls.01",
+   "site": "poi-cragstone-falls",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34962,
+     31375,
+     2
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "params": {
+    "heightAGL": 3.5,
+    "speed": 7,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "lookAhead": 40,
+    "tiltDeg": 3,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     35112,
+     31372,
+     5.5
+    ],
+    [
+     35040,
+     31374,
+     5.5
+    ]
+   ],
+   "standingOrder": "Skim west 3.5 m above Victory Bay straight at the 90 m curtain of Cragstone Falls with the morning sun behind; stop 70 m short of the spray and keep 5 m from the fishing hut and barrels.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature water shot: terrain-skim west 3.5 m above Victory Bay's shallow sea for 72 m straight at the 90 m-wide curtain of Cragstone Falls (lip z 22-28, foot z 2), the white water filling more of the frame as the skim slows to its end 70 m short of the spray; morning-noon sun (0.44) from the SE behind the lens. 100 % over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.5..3.5 m, nearest drawn 59.39 m (static 0xB6A3#29 0x02000ED6), vmax 7.2 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2.5-9 s: AGL 3.5..3.5 m, nearest drawn 64.22 m (scenery-default 0x02000246@35021,31438), vmax 7.2 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 7.22 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-cragstone-falls.02",
+   "site": "poi-cragstone-falls",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34962,
+     31375,
+     2
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "params": {
+    "azimuthDeg": 112,
+    "azimuthRef": "compass",
+    "elevationDeg": 0,
+    "distance": 80,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off 12 m above the bay east-south-east of the falls and let the water curtain pour and spray inside the frame; no movement.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off static 80 m ESE of the falls, 12 m above the bay: the whole 90 m curtain pours and sprays inside the frame (24 Waterfall emitters at the foot, 14 lip emitters at the top), the river plateau above and the Thistledown bluff at frame left. Motion lives in the water. Verified (check.mjs, full take flown): take 0-8 s: AGL 12..12 m, nearest drawn 63.17 m (spawn Waterfall), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%, over water 100%; edit 1-7 s: AGL 12..12 m, nearest drawn 63.17 m (spawn Waterfall), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%."
+  },
+  {
+   "id": "poi-cragstone-falls.03",
+   "site": "poi-cragstone-falls",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     9.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34962,
+     31375,
+     2
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "params": {
+    "azimuthDeg": 80,
+    "azimuthRef": "compass",
+    "elevationDeg": -12,
+    "distance": 48,
+    "thirds": "center",
+    "riseM": 27,
+    "swingDeg": -20,
+    "armM": 8
+   },
+   "standingOrder": "Jib up from just above the spray east of the falls past the white curtain until the river above the lip and the Thistledown bluff come into view; keep 25 m from the falling water.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Crane: jib rises 27 m from 2 m above the spray pool 48 m east of the falls (to z 31, just above the lip level) while the arm swings 20 deg: the camera climbs the face of the white curtain until the river plateau above the lip comes into view (proj.mjs: river surface above the lip unblocked from t~7.5 of the take). Nearest object the waterfall emitter boxes at 27 m. Verified (check.mjs, full take flown): take 0-10 s: AGL 2.02..29 m, nearest drawn 26.92 m (spawn Waterfall), vmax 5.65 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 5.97..29 m, nearest drawn 26.92 m (spawn Waterfall), vmax 5.65 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%."
+  }
+ ],
+ "verification": {
+  "poi-cragstone-falls.01": "take 0-10 s: AGL 3.5..3.5 m, nearest drawn 59.39 m (static 0xB6A3#29 0x02000ED6), vmax 7.2 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2.5-9 s: AGL 3.5..3.5 m, nearest drawn 64.22 m (scenery-default 0x02000246@35021,31438), vmax 7.2 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 7.22 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-cragstone-falls.02": "take 0-8 s: AGL 12..12 m, nearest drawn 63.17 m (spawn Waterfall), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%, over water 100%; edit 1-7 s: AGL 12..12 m, nearest drawn 63.17 m (spawn Waterfall), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%",
+  "poi-cragstone-falls.03": "take 0-10 s: AGL 2.02..29 m, nearest drawn 26.92 m (spawn Waterfall), vmax 5.65 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 5.97..29 m, nearest drawn 26.92 m (spawn Waterfall), vmax 5.65 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%"
+ }
+}

@@ -1,0 +1,190 @@
+{
+ "name": "Hilltop Tower",
+ "title": "Hilltop Tower",
+ "siteId": "poi-hilltop-tower",
+ "summary": "An Empyrean fortress tower south of Holtburg atop a hill, where the Hilltop portals drop; drudges and a runed chest at the top. In the kit it is a 31 m five-storey mossy spire tower (top z 202.8) on the broad summit plateau at z 172 - the highest ground for kilometres - with a drudge campfire, stone seats and a bucket at its south-west foot and a stand of 32 m pines around the summit, open only to the east.",
+ "landmarks": [
+  {
+   "name": "Hilltop spire tower (0x01001117)",
+   "pos": [
+    32796.0,
+    32316.0,
+    172.0
+   ],
+   "heightM": 30.75,
+   "note": "14 x 14 m, top z 202.8."
+  },
+  {
+   "name": "Drudge campfire",
+   "pos": [
+    32792.8,
+    32299.9,
+    172.2
+   ],
+   "heightM": 1.0,
+   "note": "Fire 0x02000485 with stone seats, a bucket and a spider-skull prop, 16 m SSW of the tower."
+  },
+  {
+   "name": "Summit pines",
+   "pos": [
+    32778.0,
+    32305.0,
+    172.0
+   ],
+   "heightM": 32.0,
+   "note": "32 m default-bake trees west and south of the tower (0x020002D3/0x020002DA)."
+  },
+  {
+   "name": "Hilltop drop point",
+   "pos": [
+    32792.4,
+    32338.3,
+    171.3
+   ],
+   "heightM": 0.0,
+   "note": "Gazetteer hilltop teleport."
+  }
+ ],
+ "site": {
+  "id": "poi-hilltop-tower",
+  "name": "Hilltop Tower",
+  "gazetteerId": "hilltop",
+  "teleport": "@teleloc 0xAAA80034 152.4 82.3 171.3 -0.999391 0 0 -0.034899",
+  "anchor": [
+   32796,
+   32316,
+   172
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.47,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer hilltop (the Hilltop portal drop point 23 m north of the tower, z 171.3)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 32.7,
+   "ew": 34.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1877,
+  "coveredBy": "shot:glenden-wood.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Hilltop_Tower.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-hilltop-tower.01",
+   "site": "poi-hilltop-tower",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32796,
+     32316,
+     172
+    ],
+    "height": 30.75,
+    "radius": 7
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 13,
+    "spinDeg": -10
+   },
+   "standingOrder": "Look straight up the sunlit south-east face of the 31 m spire tower from 0.8 m above the summit grass, 6 m off the stone, with a slow counter-roll; nothing closer than 2 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye: lens 0.8 m above the summit grass 13 m SE of the tower axis (6 m off the stone), looking straight up the sunlit south-east face of the 31 m spire tower with a slow -10 deg roll, the spire tip against the noon sky. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.8..0.8 m, nearest drawn 3.62 m (scenery-default 0x02001063@32806,32303), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 3.62 m (scenery-default 0x02001063@32806,32303), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 4.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  },
+  {
+   "id": "poi-hilltop-tower.02",
+   "site": "poi-hilltop-tower",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 7
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7,
+    "keep": [
+     2.5,
+     10.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32796,
+     32316,
+     172
+    ],
+    "height": 30.75,
+    "radius": 7
+   },
+   "params": {
+    "startDistance": 20,
+    "endDistance": 72,
+    "startHeight": 8,
+    "endHeight": 38,
+    "bearingDeg": 82,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Pull back and up east from the Empyrean spire tower to reveal it standing among the tall pines on the highest summit south of Holtburg; keep 5 m from every crown on the way out.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature dronie: pulls back east and up from 20 m to 72 m (height 8 -> 38 m above the summit) from the 31 m Empyrean spire tower on the highest summit south of Holtburg, through the one open lane among the 32 m summit pines, the noon sun (0.47) raking from the left; the tower ends small among the pines with the valleys falling away. Verified (check.mjs, full take flown): take 0-11 s: AGL 8.65..46.8 m, nearest drawn 5.29 m (scenery-default 0x02000246@32818,32309), vmax 8.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 14.57..46 m, nearest drawn 8.45 m (scenery-default 0x02000246@32818,32309), vmax 8.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 8.56 m/s (cap 12), max tracking gap 0.06 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-hilltop-tower.01": "take 0-8 s: AGL 0.8..0.8 m, nearest drawn 3.62 m (scenery-default 0x02001063@32806,32303), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 3.62 m (scenery-default 0x02001063@32806,32303), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 4.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-hilltop-tower.02": "take 0-11 s: AGL 8.65..46.8 m, nearest drawn 5.29 m (scenery-default 0x02000246@32818,32309), vmax 8.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 14.57..46 m, nearest drawn 8.45 m (scenery-default 0x02000246@32818,32309), vmax 8.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 8.56 m/s (cap 12), max tracking gap 0.06 m; opt-in retail-bake tree 0 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

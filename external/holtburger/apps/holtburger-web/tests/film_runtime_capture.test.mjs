@@ -67,6 +67,10 @@
 //      moves within vmax are flagged, the searched minDurationSec really flies (realised
 //      rehearsal), round 2's false 'verified' is gone, no technique is flagged at its default
 //      duration, and the bounded search reports 'unverified' when its work budget runs out;
+//   T4 Egg Orchard FPV run (DESIGN §3): traj.meta.lockWindows pin speedScale to 1 and hold
+//      the pilot residual (eased to 0 over 0.4 s, blended back after), stepped and realtime,
+//      byte-identical without windows; fade() refuses creature / npc / player guids (reported,
+//      reroute fallback); pilot.fade 'never' (real code pilot) fades nothing and reroutes;
 //   E1 the pre-roll AdminEnvirons wait (review contracts-5 / seams-3 / gate-1):
 //      a look.fog change → rehearse / shoot (stepped and realtime) wait on the
 //      LIVE loop until the REAL environ_override.js roll-in (+ one forced retail
@@ -2458,7 +2462,7 @@ check("F3 no drone / fpv technique is flagged at its default duration (the dry f
   for (const def of all) {
     const ctx = def.id === "fpv.fpv-corridor"
       ? { indoor: { route: [[100, 200, 1.6], [120, 200, 1.6], [120, 215, 1.6]], floor: () => 0, ceiling: () => 3.4 }, anchor: [100, 200, 0] }
-      : { ...SLOPE_CTX, aspect: 16 / 9, ...(def.needs && def.needs.path ? { path: valley } : {}) };
+      : { ...SLOPE_CTX, aspect: 16 / 9, ...((def.needs && def.needs.path) || def.id === "fpv.fpv-run" ? { path: valley } : {}) };
     const R = rig();
     const s = R.player.prepare({ spec: { technique: def.id }, ctx, capture: { fps: 30 } });
     assert.ok(s.flight && s.flight.dryFlight, `${def.id}: dry-flown`);
@@ -2788,6 +2792,187 @@ check("T2 a POINT subject's own body (holtburg.02: a 1.2 m subject on a Life Sto
   const b = await shotOn({ pos: [100, 130, 0], radius: 30, height: 12 });
   assert.deepEqual(b.rep.subjectBody, []);
   assert.deepEqual(b.hidden.filter(([, on]) => on).map(([g]) => g).sort(), [LS, NPC].sort());
+});
+
+// ---------------------------------------------------------------------------
+// T4 Egg Orchard FPV run (DESIGN §3): lock windows, the creature fade guard, pilot.fade 'never'
+// ---------------------------------------------------------------------------
+
+/** northDolly with lock windows (trajectory meta). */
+function lockedDolly(D, windows) {
+  return TR.makeTrajectory({ id: "north-lock", technique: "classic.dolly-in", family: "classic", duration: D, positionAt: (t) => [100, 100 + 5 * t, 10], orientAt: { h: 0, p: 0, r: 0 }, meta: windows === undefined ? undefined : { lockWindows: windows } });
+}
+
+check("T4 lockWindows: inside a window speedScale is pinned to 1 and the pilot residual is held then eased to 0 over 0.4 s; after it the residual and speed blend back over 0.4 s (stepped)", async () => {
+  const R = rig({ speed: 0.5, setpoint: { lateral: 0.8, vertical: 0.4 } });
+  const fps = 10;
+  const sum = R.player.prepare({ trajectory: lockedDolly(2.5, [[0.5, 1.2]]), capture: { fps } });
+  assert.equal(sum.lockWindows, 1);
+  const rep = await R.player.shoot({ fps, includeTable: true });
+  const rows = rep.realisedTable.rows;
+  const n = rep.frames;
+  const at = (k) => ({ x: rows[k * TR.TABLE_STRIDE + 1], p: (rows[k * TR.TABLE_STRIDE + 2] - 100) / 5, z: rows[k * TR.TABLE_STRIDE + 3] });
+  let inside = 0;
+  for (let k = 0; k + 1 < n; k += 1) {
+    const a = at(k), b = at(k + 1);
+    const dp = b.p - a.p;
+    if (a.p >= 0.5 - 1e-9 && a.p <= 1.2 + 1e-9 && b.p < 2.5 - 1e-9) {
+      near(dp, 0.1, 1e-9, `frame ${k} inside the window: progress at speed 1`);
+      inside += 1;
+    } else if (a.p < 0.5 - 1e-9) near(dp, 0.05, 1e-9, `frame ${k} before the window: the pilot's 0.5`);
+    else if (a.p > 1.2 + 0.4 + 1e-9 && b.p < 2.5 - 1e-9) near(dp, 0.05, 1e-9, `frame ${k} after the blend: the pilot's 0.5 again`);
+    else if (b.p < 2.5 - 1e-9) assert.ok(dp > 0.05 - 1e-9 && dp < 0.1 + 1e-9, `frame ${k} blending back (${dp})`);
+    assert.ok(Math.abs(b.x - a.x) <= 0.35 && Math.abs(b.z - a.z) <= 0.2, `frame ${k}: no residual jump (${b.x - a.x}, ${b.z - a.z})`);
+  }
+  assert.ok(inside >= 6, `${inside} frames flown inside the window`);
+  for (let k = 0; k < n; k += 1) {
+    const f = at(k);
+    if (f.p < 0.5 - 1e-9) {
+      near(f.x, 100.8, 1e-9, `frame ${k}: the pilot's lateral before the window`);
+      near(f.z, 10.4, 1e-9);
+    } else if (f.p >= 0.9 + 1e-9 && f.p <= 1.2 + 1e-9) {
+      near(f.x, 100, 1e-9, `frame ${k}: eased to the planned line 0.4 s into the window`);
+      near(f.z, 10, 1e-9);
+    } else if (f.p >= 1.6 + 1e-9) {
+      near(f.x, 100.8, 1e-9, `frame ${k}: the pilot's residual again after the blend`);
+    }
+  }
+  const mid = Array.from({ length: n }, (_, k) => at(k)).find((f) => f.p > 0.6 && f.p < 0.85);
+  assert.ok(mid && mid.x > 100.05 && mid.x < 100.8 - 0.05, `held, then easing (${mid && mid.x})`);
+  assert.deepEqual(rep.lockWindows.windows, [[0.5, 1.2]]);
+  assert.equal(rep.lockWindows.entries, 1);
+  assert.equal(rep.lockWindows.lockedFrames, inside, "every frame at p ∈ [0.5, 1.2] is locked");
+});
+
+check("T4 lockWindows in realtime takes: progress inside a window runs at speed 1 whatever the pilot asks; merged / clamped windows; none = byte-identical", async () => {
+  assert.deepEqual(TP.lockWindowsOf(lockedDolly(3, [[1, 2], [0.2, 0.4], [1.8, 2.5], { t0: -1, t1: 0.1 }, [NaN, 1], [2.9, 9]]), 3), [[0, 0.1], [0.2, 0.4], [1, 2.5], [2.9, 3]]);
+  assert.deepEqual(TP.lockWindowsOf(lockedDolly(3, []), 3), []);
+  assert.deepEqual(TP.lockWindowsOf(lockedDolly(3), 3), []);
+  const queue = [];
+  const raf = (cb) => {
+    queue.push(cb);
+    return queue.length;
+  };
+  const R = rig({ raf, speed: 0.5 });
+  R.pilot.tick = (sf, ctx, now) => ({ setpoint: { ...TP.NEUTRAL_SETPOINT, speedScale: 0.5 }, telemetry: { source: "code", consulted: true, newDecision: false, t: now } });
+  R.player.prepare({ trajectory: lockedDolly(2, [[0.5, 1.5]]), capture: { fps: 10, mode: "realtime" } });
+  const pr = R.player.shoot({ fps: 10, includeTable: true });
+  await tick();
+  let ts = 5000;
+  for (let i = 0; queue.length && i < 400; i += 1) {
+    const cb = queue.shift();
+    ts += 50; // 20 Hz display
+    cb(ts);
+    R.hooks.postRender();
+    await tick();
+  }
+  const rep = await pr;
+  const rows = rep.realisedTable.rows;
+  const ps = [];
+  for (let k = 0; k < rep.frames; k += 1) ps.push((rows[k * TR.TABLE_STRIDE + 2] - 100) / 5);
+  let checked = 0;
+  for (let k = 0; k + 1 < ps.length; k += 1) {
+    if (ps[k] >= 0.55 && ps[k + 1] <= 1.45) {
+      near(ps[k + 1] - ps[k], 0.1, 1e-6, `grid ${k}: speed 1 inside the window`);
+      checked += 1;
+    } else if (ps[k + 1] < 0.45) near(ps[k + 1] - ps[k], 0.05, 1e-6, `grid ${k}: speed 0.5 before it`);
+  }
+  assert.ok(checked >= 5, `${checked} grid steps inside the window`);
+  assert.ok(rep.lockWindows.lockedFrames > 0);
+  // No windows: the run is exactly the one without lock code (same realised checksum).
+  const shootOf = async (traj) => {
+    const Q = rig({ speed: 0.7, setpoint: { lateral: 0.5 } });
+    Q.player.prepare({ trajectory: traj, capture: { fps: 10 } });
+    return Q.player.shoot({ fps: 10 });
+  };
+  const a = await shootOf(northDolly(1.5));
+  const b = await shootOf(lockedDolly(1.5, []));
+  assert.equal(a.realisedChecksum, b.realisedChecksum);
+  assert.equal("lockWindows" in a, false);
+  assert.equal("lockWindows" in b, false);
+});
+
+check("T4 fade() never hides a creature, an NPC or a player (world-query kind / player-tier guid): refused, reported, the frame reroutes; other entities still fade", async () => {
+  const CRE = 0x80000a01, NPC = 0x80000a02, PLAYER = 0x50000a03, ITEM = 0x80000a04;
+  const kinds = new Map([[CRE, "creature"], [NPC, "npc"], [ITEM, "item"]]);
+  const looked = [];
+  const wq = {
+    groundZ: () => 0,
+    subject(g) {
+      looked.push(g);
+      return kinds.has(g) ? { guid: g, kind: kinds.get(g), pos: [0, 0, 0], radius: 1, height: 2 } : null;
+    },
+  };
+  const take = async (ids) => {
+    const hidden = [];
+    const R = rig({ setpoint: { fadeIds: ids } });
+    R.live.entityManager = { _filmHiddenGuids: new Set(), setFilmHidden(g, on) { hidden.push([g, on]); return true; } };
+    const player = playerOn(R, { worldQuery: wq });
+    player.prepare({ trajectory: northDolly(1), capture: { fps: 10 } });
+    const rep = await player.shoot({ fps: 10, includeTable: true });
+    return { rep, hidden };
+  };
+  looked.length = 0;
+  const a = await take([CRE, NPC, PLAYER, ITEM]);
+  assert.deepEqual(a.hidden, [[ITEM, true], [ITEM, false]], "only the item is hidden (and restored)");
+  assert.equal(a.rep.faded.entities, 1);
+  assert.equal(a.rep.faded.refused, 3);
+  assert.deepEqual(a.rep.faded.refusedGuids, ["0x80000a01", "0x80000a02", "0x50000a03"]);
+  assert.equal(a.rep.faded.fallbackFrames, 0, "the item fade still handled every frame");
+  assert.ok(!looked.includes(PLAYER), "a player-tier guid needs no lookup");
+  assert.equal(looked.filter((g) => g === CRE).length, 1, "a known kind is looked up once per take");
+  // Only creatures named: nothing is hidden, every frame takes the reroute fallback (never a no-op).
+  const b = await take([CRE]);
+  assert.deepEqual(b.hidden, []);
+  assert.equal(b.rep.faded.fallbackFrames, b.rep.frames);
+  const rows = b.rep.realisedTable.rows;
+  assert.ok(Math.abs(rows[(b.rep.frames - 1) * TR.TABLE_STRIDE + 1] - 100) > 0.5, "the reroute bias moved the camera off the line");
+  // Without a world query kind (unknown guid) the old behaviour stands: it fades.
+  const c = await take([0x80000a77]);
+  assert.deepEqual(c.hidden, [[0x80000a77, true], [0x80000a77, false]]);
+  assert.equal("refused" in c.rep.faded, false, "nothing refused: the report block is unchanged");
+});
+
+check("T4 pilot.fade 'never' (real code pilot): a soft occluder's 'fade' answer hides nothing and reroutes; 'auto' still fades; stats / report say which", async () => {
+  const OCC = 0x80000b01;
+  const subjectDolly = () => TR.makeTrajectory({ id: "subj", technique: "classic.dolly-in", family: "classic", duration: 1, positionAt: (t) => [100, 100 + 5 * t, 2], orientAt: { h: 0, p: 0, r: 0 }, subject: { pos: [100, 130, 0], radius: 0.5, height: 1.8 } });
+  const run = async (fadePolicy) => {
+    const hidden = [];
+    const R = rig();
+    R.live.entityManager = { _filmHiddenGuids: new Set(), setFilmHidden(g, on) { hidden.push([g, on]); return true; } };
+    const sensors = {
+      sense(pose) {
+        const f = emptySensorFrame(pose);
+        f.subject = { visibleFrac: 0, unseenSec: 3, ndc: [0, 0], sizeRatio: 1, occluderKind: "tree", occluderIds: [OCC] };
+        return f;
+      },
+      reset() {},
+    };
+    const pilots = [];
+    const player = TP.createTakePlayer({
+      cameraOwner: R.cam, clock: R.clock, sensors, safety: R.safety, liveScene3d: R.live, window: {},
+      recorder: (ro) => REC.createRecorder({ canvas: fakeCanvas(), ...ro, VideoEncoder: R.E, VideoFrame: R.F }),
+      pilot: (cfg) => {
+        const p = createPilot({ mode: "code", fade: cfg.fade });
+        pilots.push(p);
+        return p;
+      },
+    });
+    player.prepare({ trajectory: subjectDolly(), capture: { fps: 10 }, pilot: { mode: "code", ...(fadePolicy ? { fade: fadePolicy } : {}) } });
+    const rep = await player.shoot({ fps: 10, includeTable: true });
+    return { rep, hidden, pilot: pilots[0] };
+  };
+  const auto = await run(undefined);
+  assert.deepEqual(auto.hidden, [[OCC, true], [OCC, false]], "auto: the tree is faded and restored");
+  assert.equal(auto.rep.pilot.fade, "auto");
+  const never = await run("never");
+  assert.deepEqual(never.hidden, [], "never: nothing is hidden");
+  assert.equal(never.rep.pilot.fade, "never");
+  assert.equal(never.pilot.stats().fade, "never");
+  assert.equal(never.pilot.mapper.config.limits.maxFadeIds, 0);
+  assert.ok(never.pilot.mapper.stats().fadeFallbacks > 0, "the fade answer became a reroute");
+  const rows = never.rep.realisedTable.rows;
+  assert.ok(Math.abs(rows[(never.rep.frames - 1) * TR.TABLE_STRIDE + 1] - 100) > 0.3, "rerouted off the line");
 });
 
 for (const run of pending) await run();

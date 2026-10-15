@@ -1,0 +1,142 @@
+{
+ "name": "Festival Stone of Morningthaw",
+ "title": "Festival Stone of Morningthaw",
+ "siteId": "poi-festival-stone-of-morningthaw",
+ "summary": "The Stone of Morningthaw, a Festival Stone on a grassy plateau (z 108) south-east of Rithwic (acpedia). The acpedia map point (33.3N 53.3E) is 186 m off; the stone stands at 33.58N 54.02E (gazetteer 'morningthaw-festival-stone', matching acpedia's second coordinate 33.6N 54.0E). It is flanked by two 5.5 m ancient stone columns, a fallen ancient block and the Broken Seal of the Elder Spirits; big trees (to 40 m) stand 30-40 m away and the plateau drops to the west. Landblocks 0xC4A8-AA (x > 37632) are missing from the kit; all filming stays west of them.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 33.3,
+   "ew": 53.3
+  },
+  "mapWorld": [
+   37260.0,
+   32460.0
+  ],
+  "coordSrc": "index",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Morningthaw.txt",
+  "coveredDistM": 774,
+  "coveredBy": "shot:arwic.03"
+ },
+ "landmarks": [
+  {
+   "name": "Festival Stone of Morningthaw",
+   "pos": [
+    37423.9,
+    32537.6,
+    108.0
+   ],
+   "heightM": 4,
+   "note": "Weenie spawn (~4 m assumed); Anniversary Effect FX at z 116."
+  },
+  {
+   "name": "Ancient columns",
+   "pos": [
+    37420.9,
+    32536.1,
+    108.0
+   ],
+   "heightM": 5.5,
+   "note": "0x020003C7 west of the stone; the second at (37428.0,32539.0)."
+  },
+  {
+   "name": "Broken Seal of the Elder Spirits",
+   "pos": [
+    37422.7,
+    32540.6,
+    108.0
+   ],
+   "heightM": 3.2,
+   "note": "Static 0x020003CA."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-morningthaw",
+  "name": "Festival Stone of Morningthaw",
+  "gazetteerId": "morningthaw-festival-stone",
+  "teleport": "@teleloc 0xC2A9003C 184.8 80.2 108 -0.930418 0 0 -0.366501",
+  "anchor": [
+   37423.9,
+   32537.6,
+   108.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.6,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37423.9,
+     32537.6,
+     108.0
+    ],
+    "height": 4,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 195,
+    "azimuthRef": "compass",
+    "elevationDeg": 10,
+    "distance": 11,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "ccw"
+   },
+   "standingOrder": "Arc 40 deg counter-clockwise at 11 m around the Festival Stone, 4 m above the plateau, from south-west to south; keep 5 m from the two ancient columns and the Broken Seal, scrub may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Stone of Morningthaw on its plateau (z 108) east of the Rithwic road: the stone is flanked by two 5.5 m ancient columns, a fallen block and the Broken Seal of the Elder Spirits. The arc slides the columns past each other against the sky with the 0.6 sun from the left. The kit is missing landblocks east of x 37632 (0xC4A8-AA); the whole move stays 200 m west of that edge. Verified with poi-kit check.mjs - take 8s: AGL 3.91..3.9 m, nearest 5.65 m (scenery-default 0x020007A3@37430,32531), vmax 1.48 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 3.91..3.9 m, nearest 5.87 m, LOS blocked 0/25, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-festival-stone-of-morningthaw.01",
+   "technique": "classic.arc",
+   "rank": 3,
+   "check": "take 8s: AGL 3.91..3.9 m, nearest 5.65 m (scenery-default 0x020007A3@37430,32531), vmax 1.48 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 3.91..3.9 m, nearest 5.87 m, LOS blocked 0/25, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "classic.arc"
+ ]
+}

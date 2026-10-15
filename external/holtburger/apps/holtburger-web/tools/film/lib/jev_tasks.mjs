@@ -31,7 +31,9 @@
 // FIT_LEVELS, buildSiteFitRequest, scoreSiteForLine, ENERGY_WORDS, TEMPO_WORDS,
 // SECTION_ROLES (re-exported from audio/structure.mjs), SECTION_ROLE_ALIASES, sectionRoleOf,
 // energyWordOf, tempoWordOf, TECHNIQUE_FAMILIES, buildSectionFamilyRequest,
-// codeTechniqueFamily, sectionTechniqueFamily, jevPing.
+// codeTechniqueFamily, sectionTechniqueFamily, jevPing,
+// PASS_SIDES, PASS_ROOM_BANDS, PASS_ROOM_WORDS, PASS_RULES, PASS_INSTRUCTIONS, passRoomWord, passWordsFor,
+// codePass, buildPassRequest, buildPassBatchRequest, normalizePassInput, planPasses, PASS_PLAN_CLI.
 
 import { quoteBand, wordsUpTo } from "../../../scene3d/film/pilot/sense_words.js";
 import { SECTION_ROLES } from "../audio/structure.mjs";
@@ -844,3 +846,397 @@ export async function jevPing(client, opts = {}) {
   const pYes = r.answers.ping.noul;
   return { ok: pYes > 0.5, pYes, ...meta(r) };
 }
+
+// ---------------------------------------------------------------------------
+// planPasses — over / left / right past each creature on an FPV racing line
+// ---------------------------------------------------------------------------
+//
+// WHY (Egg Orchard FPV run, research/egg-orchard-run/DESIGN.md §4): the run flies an offline-verified racing
+// line past ~40 creatures. For each one the drone passes OVER it, or on its LEFT or RIGHT. LEFT/RIGHT name the
+// side of the creature the drone flies on, seen in the direction of travel (passing 'left' keeps the creature on
+// the camera's right). The side is chosen at PLANNING time and baked into the line as a raised-cosine bump, so a
+// take stays deterministic. Code measures the free space beside and above each creature (metres); the gaps
+// become ROOM WORDS — how much space a pass has beyond what it needs — and JEV picks the side, with
+// previous_pass for variety and next_turn as the tie-break. codePass applies the same four rules in the same
+// order, so a run without a key (or with JEV failing) gets the same quality of plan.
+//
+// Needs (DESIGN §4): a side pass needs a gap ≥ 1.9 m between the creature's physics radius and the wall (it
+// includes a 0.3 m claw margin); an over pass needs headroom ≥ 1.2 m above the creature's top + 0.4 m below the
+// ceiling. Callers may pass stricter per-creature needs (e.g. the run's tunnel wall rule of 0.9 m below a
+// ceiling) as `needs`.
+
+/** The pass options, in canonical order (the final tie-break after next_turn). */
+export const PASS_SIDES = Object.freeze(["over", "left", "right"]);
+
+/** Default needs in metres (DESIGN §4). */
+export const PASS_RULES = Object.freeze({ sideNeedM: 1.9, overAboveTopM: 1.2, overBelowCeilM: 0.4 });
+
+/**
+ * Room bands on margin = measured gap − need (m), lowest first. A margin belongs to the first band whose `max`
+ * it is below; a non-finite or missing gap is 'blocked'.
+ */
+export const PASS_ROOM_BANDS = Object.freeze([
+  Object.freeze({ word: "blocked", max: 0, text: "less space than the pass needs" }),
+  Object.freeze({ word: "tight", max: 0.5, text: "0 to 0.5 m more than the pass needs" }),
+  Object.freeze({ word: "comfortable", max: 1.5, text: "0.5 to 1.5 m more than the pass needs" }),
+  Object.freeze({ word: "wide open", max: Infinity, text: "1.5 m or more beyond what the pass needs" }),
+]);
+/** Room words, least room first. */
+export const PASS_ROOM_WORDS = Object.freeze(PASS_ROOM_BANDS.map((b) => b.word));
+
+const PASS_ROOM_SCALE = PASS_ROOM_BANDS.map((b) => `'${b.word}' = ${b.text}`).join("; ");
+
+/** The pass-plan instructions (exported for the words-contract tests). */
+export const PASS_INSTRUCTIONS =
+  "Choose how an FPV drone flies past one creature on its racing line: over it, or on its left or right side " +
+  "(the side of the creature the drone flies on, seen in the direction of travel). The room words say how much " +
+  `space each pass has beyond what it needs (${PASS_ROOM_SCALE}). Apply these rules in order: ` +
+  "1) choose only an option whose room word is not 'blocked'; if every option is 'blocked', choose the one with the most room; " +
+  "2) when more than one option is allowed, do not repeat previous_pass; " +
+  "3) among the options left, choose the one with the roomiest word ('wide open' > 'comfortable' > 'tight'); " +
+  "4) if several are equally roomy, choose the side that matches next_turn (the inside of the next turn), " +
+  "otherwise the option listed first.";
+
+const PASS_CRITERIA = Object.freeze({
+  over:
+    "Fly OVER the creature, above its head. Allowed only when room.over is 'tight', 'comfortable' or 'wide open'; " +
+    "never when room.over is 'blocked' (unless every option is 'blocked' and over has the most room).",
+  left:
+    "Pass on the creature's LEFT: the drone flies to the left of it in the direction of travel and keeps it on the " +
+    "camera's right. Allowed only when room.left is 'tight', 'comfortable' or 'wide open'; never when room.left is " +
+    "'blocked' (unless every option is 'blocked' and left has the most room).",
+  right:
+    "Pass on the creature's RIGHT: the drone flies to the right of it in the direction of travel and keeps it on " +
+    "the camera's left. Allowed only when room.right is 'tight', 'comfortable' or 'wide open'; never when " +
+    "room.right is 'blocked' (unless every option is 'blocked' and right has the most room).",
+});
+
+/**
+ * Margin (m) → room word: < 0 'blocked', < 0.5 'tight', < 1.5 'comfortable', else 'wide open'.
+ * Non-finite → 'blocked'.
+ * @param {number} margin
+ * @returns {string}
+ */
+export function passRoomWord(margin) {
+  const m = Number(margin);
+  if (margin == null || !Number.isFinite(m)) return "blocked";
+  for (const b of PASS_ROOM_BANDS) if (m < b.max) return b.word;
+  return PASS_ROOM_BANDS[PASS_ROOM_BANDS.length - 1].word;
+}
+
+const r2 = (x) => Math.round(x * 100) / 100;
+
+/**
+ * One creature's gaps → needs, margins, words and the phrases the JEV state quotes.
+ * @param {{gaps: {over?: number|null, left?: number|null, right?: number|null}, needs?: {over?: number, left?: number, right?: number}}} creature
+ * @param {{sideNeedM?: number, overAboveTopM?: number, overBelowCeilM?: number}} [rules]
+ * @returns {{needs: Record<string, number>, gaps: Record<string, number|null>, margins: Record<string, number|null>,
+ *   words: Record<string, string>, room: Record<string, string>}}
+ */
+export function passWordsFor(creature, rules = PASS_RULES) {
+  const R = { ...PASS_RULES, ...(isPlainObject(rules) ? rules : {}) };
+  const needs = {
+    over: Number.isFinite(creature?.needs?.over) ? creature.needs.over : R.overAboveTopM + R.overBelowCeilM,
+    left: Number.isFinite(creature?.needs?.left) ? creature.needs.left : R.sideNeedM,
+    right: Number.isFinite(creature?.needs?.right) ? creature.needs.right : R.sideNeedM,
+  };
+  const gaps = {}, margins = {}, words = {}, room = {};
+  for (const side of PASS_SIDES) {
+    const g = creature?.gaps?.[side];
+    const gap = g == null || !Number.isFinite(Number(g)) ? null : Number(g);
+    gaps[side] = gap == null ? null : r2(gap);
+    margins[side] = gap == null ? null : r2(gap - needs[side]);
+    words[side] = passRoomWord(margins[side]);
+    const where = side === "over" ? "headroom above its top" : `gap on its ${side}`;
+    room[side] = gap == null
+      ? `${words[side]} (no ${where} measured)`
+      : `${words[side]} (${trimNum(gap)} m ${where}, the pass needs ${trimNum(needs[side])} m)`;
+  }
+  return { needs, gaps, margins, words, room };
+}
+
+const TURN_WORDS = new Set(["left", "right", "straight"]);
+
+/**
+ * The code rule — the same four steps as PASS_INSTRUCTIONS:
+ *   1) allowed = options whose margin ≥ 0; none allowed → the largest margin (rule 'squeeze');
+ *   2) more than one allowed → drop previous_pass (rule 'variety' when that removed an option);
+ *   3) keep the roomiest word (rank in PASS_ROOM_WORDS);
+ *   4) ties → the next_turn side when it is among them, else canonical order over, left, right.
+ * @param {{margins: Record<string, number|null>, words: Record<string, string>}} w passWordsFor output
+ * @param {string|null} [previous] previous pass ('over'|'left'|'right')
+ * @param {string} [nextTurn] 'left' | 'right' | 'straight'
+ * @returns {{side: string, rule: string, allowed: string[]}}
+ */
+export function codePass(w, previous = null, nextTurn = "straight") {
+  const allowed = PASS_SIDES.filter((s) => w.margins[s] != null && w.margins[s] >= 0);
+  if (allowed.length === 0) {
+    let best = null;
+    for (const s of PASS_SIDES) {
+      const m = w.margins[s] == null ? -Infinity : w.margins[s];
+      if (best == null || m > best.m) best = { s, m };
+    }
+    return { side: best.s, rule: "squeeze", allowed };
+  }
+  let pool = allowed;
+  let rule = allowed.length === 1 ? "only" : "roomiest";
+  if (allowed.length > 1 && previous && allowed.includes(previous)) {
+    pool = allowed.filter((s) => s !== previous);
+    rule = "variety";
+  }
+  const rank = (s) => PASS_ROOM_WORDS.indexOf(w.words[s]);
+  const top = Math.max(...pool.map(rank));
+  const best = pool.filter((s) => rank(s) === top);
+  if (best.length > 1 && (nextTurn === "left" || nextTurn === "right") && best.includes(nextTurn)) {
+    return { side: nextTurn, rule: rule === "variety" ? "variety+turn" : "turn", allowed };
+  }
+  return { side: best[0], rule, allowed };
+}
+
+function creatureState(c, w, previous) {
+  return {
+    creature: { kind: c.name, where: c.region ? String(c.region) : "unknown" },
+    room: { over: w.room.over, left: w.room.left, right: w.room.right },
+    previous_pass: previous ?? "none (first creature)",
+    next_turn: c.nextTurn,
+  };
+}
+
+function passCriteria(order, prefix = "") {
+  const criteria = {};
+  for (const s of order) criteria[s] = prefix ? PASS_CRITERIA[s].replaceAll("room.", `${prefix}.room.`) : PASS_CRITERIA[s];
+  return criteria;
+}
+
+/**
+ * Normalises a pass-plan input. Creatures stay in the given (route) order.
+ * Input: {creatures: [{id?, name, s?, cell?, region?, gaps: {over, left, right}, needs?, nextTurn?|next_turn?}, …],
+ *         rules?, previousPass?|previous_pass?, batch?}
+ * @param {object} input
+ * @returns {{creatures: object[], rules: object, previousPass: string|null, batch: boolean}}
+ * @throws {JevError} 'bad-request' for a malformed input
+ */
+export function normalizePassInput(input = {}) {
+  if (!isPlainObject(input)) throw new JevError("bad-request", "pass-plan input must be an object {creatures: [...]}");
+  const list = input.creatures;
+  if (!Array.isArray(list) || list.length === 0) throw new JevError("bad-request", "creatures must be a non-empty array");
+  const rules = { ...PASS_RULES };
+  if (input.rules != null) {
+    if (!isPlainObject(input.rules)) throw new JevError("bad-request", "rules must be an object");
+    for (const k of Object.keys(PASS_RULES)) {
+      if (input.rules[k] == null) continue;
+      const v = Number(input.rules[k]);
+      if (!Number.isFinite(v) || v < 0) throw new JevError("bad-request", `rules.${k} must be a number ≥ 0`);
+      rules[k] = v;
+    }
+  }
+  const prev = input.previousPass ?? input.previous_pass ?? null;
+  if (prev != null && !PASS_SIDES.includes(prev)) throw new JevError("bad-request", `previousPass must be one of ${PASS_SIDES.join(", ")}`);
+  const seen = new Set();
+  const creatures = list.map((c, i) => {
+    if (!isPlainObject(c)) throw new JevError("bad-request", `creature ${i} must be an object`);
+    if (!nonEmpty(c.name)) throw new JevError("bad-request", `creature ${i} needs a name`);
+    const id = c.id == null ? `c${i + 1}` : String(c.id).trim();
+    if (!id || id === "__proto__" || id.length > 64) throw new JevError("bad-request", `creature ${i} has an invalid id`);
+    if (seen.has(id)) throw new JevError("bad-request", `duplicate creature id '${id}'`);
+    seen.add(id);
+    if (!isPlainObject(c.gaps)) throw new JevError("bad-request", `creature '${id}' needs gaps {over, left, right} in metres`);
+    for (const s of PASS_SIDES) {
+      const g = c.gaps[s];
+      if (g != null && !Number.isFinite(Number(g))) throw new JevError("bad-request", `creature '${id}': gaps.${s} must be a number or null`);
+    }
+    for (const k of Object.keys(c.gaps)) if (!PASS_SIDES.includes(k)) throw new JevError("bad-request", `creature '${id}': unknown gap '${k}'`);
+    if (c.needs != null) {
+      if (!isPlainObject(c.needs)) throw new JevError("bad-request", `creature '${id}': needs must be an object`);
+      for (const [k, v] of Object.entries(c.needs)) {
+        if (!PASS_SIDES.includes(k) || !Number.isFinite(Number(v)) || Number(v) < 0) {
+          throw new JevError("bad-request", `creature '${id}': needs.${k} must be a number ≥ 0 for over/left/right`);
+        }
+      }
+    }
+    const turn = lower(c.nextTurn ?? c.next_turn ?? "straight") || "straight";
+    if (!TURN_WORDS.has(turn)) throw new JevError("bad-request", `creature '${id}': nextTurn must be left, right or straight`);
+    const needs = c.needs ? Object.fromEntries(Object.entries(c.needs).map(([k, v]) => [k, Number(v)])) : undefined;
+    return { ...c, id, name: c.name.trim(), nextTurn: turn, needs };
+  });
+  return { creatures, rules, previousPass: prev, batch: input.batch === true };
+}
+
+/**
+ * Builds one creature's JEV request: state {creature, room, previous_pass, next_turn} and one choice 'pass'.
+ * Option order = the code pick first (the conservative default: JEV has a first-option bias), then the other
+ * sides in canonical order.
+ * @param {object} creature a normalizePassInput creature
+ * @param {string|null} previous
+ * @param {object} [rules]
+ * @returns {{state: object, questions: {pass: object}, order: string[], words: object, code: object}}
+ */
+export function buildPassRequest(creature, previous = null, rules = PASS_RULES) {
+  const w = passWordsFor(creature, rules);
+  const code = codePass(w, previous, creature.nextTurn ?? "straight");
+  const order = [code.side, ...PASS_SIDES.filter((s) => s !== code.side)];
+  return {
+    state: creatureState({ ...creature, nextTurn: creature.nextTurn ?? "straight" }, w, previous),
+    questions: { pass: choiceQ(PASS_INSTRUCTIONS, passCriteria(order)) },
+    order,
+    words: w,
+    code,
+  };
+}
+
+/**
+ * Builds ONE request for every creature: state {creatures: {pass_1: {…}, …}}, one choice per creature. The
+ * previous_pass of each entry is the CODE plan's previous pick (the batch cannot see JEV's own earlier answers).
+ * @param {object[]} creatures normalizePassInput creatures
+ * @param {string|null} previous
+ * @param {object} [rules]
+ * @returns {{state: object, questions: Record<string, object>, items: Array<{qid: string, order: string[], words: object, code: object, previous: string|null}>}}
+ */
+export function buildPassBatchRequest(creatures, previous = null, rules = PASS_RULES) {
+  const state = { creatures: {} };
+  const questions = {};
+  const items = [];
+  let prev = previous;
+  creatures.forEach((c, i) => {
+    const qid = `pass_${i + 1}`;
+    const w = passWordsFor(c, rules);
+    const code = codePass(w, prev, c.nextTurn);
+    const order = [code.side, ...PASS_SIDES.filter((s) => s !== code.side)];
+    state.creatures[qid] = creatureState(c, w, prev);
+    questions[qid] = choiceQ(`${PASS_INSTRUCTIONS} Judge only state.creatures.${qid}.`, passCriteria(order, `state.creatures.${qid}`));
+    items.push({ qid, order, words: w, code, previous: prev });
+    prev = code.side;
+  });
+  return { state, questions, items };
+}
+
+const PASS_FATAL_KINDS = new Set(["config", "auth", "credits", "forbidden"]);
+
+/**
+ * Plans the pass side for every creature, in route order.
+ * - client null → the code rule for every creature (source 'code', band 'confirm').
+ * - sequential (default): one JEV decision per creature; its answer becomes the next creature's previous_pass.
+ * - batch (input.batch or opts.batch): one decision with a question per creature (previous_pass from the code
+ *   chain).
+ * - a JEV failure of kind config/auth/credits/forbidden is thrown (the CLI reports it); any other failure makes
+ *   THAT creature use the code pick (source 'code', jevError) — after `maxJevFailures` (default 3) failures in a
+ *   row the rest of the run uses the code rule without calling JEV.
+ * - guard: a JEV pick whose room is 'blocked' while another option is allowed is replaced by the code pick
+ *   (source 'code', guard note) — a blocked pass would be baked into the line as a collision.
+ * @param {{decide: Function}|null} client
+ * @param {object} input see normalizePassInput
+ * @param {{batch?: boolean, maxJevFailures?: number, thresholds?: object, sessionId?: string, trace?: object, log?: Function}} [opts]
+ * @returns {Promise<{task: 'pass-plan', source: 'jev'|'code'|'mixed', rules: object, passes: object[],
+ *   counts: Record<string, number>, bySource: Record<string, number>, usage: {calls: number, costUsd: number},
+ *   warnings: string[]}>}
+ */
+export async function planPasses(client, input = {}, opts = {}) {
+  const inp = normalizePassInput(input);
+  const rules = inp.rules;
+  const thresholds = { ...BAND_THRESHOLDS, ...opts?.thresholds };
+  const maxFails = Number.isInteger(opts?.maxJevFailures) && opts.maxJevFailures >= 0 ? opts.maxJevFailures : 3;
+  const batch = opts?.batch ?? inp.batch;
+  const passes = [];
+  const warnings = [];
+  const usage = { calls: 0, costUsd: 0 };
+  const base = (c, w, code, previous) => ({
+    id: c.id, name: c.name, cell: c.cell ?? null, s: Number.isFinite(c.s) ? c.s : null, region: c.region ?? null,
+    previous_pass: previous, next_turn: c.nextTurn,
+    gaps: w.gaps, needs: w.needs, margins: w.margins, words: w.words,
+    code: code.side, codeRule: code.rule, squeeze: code.rule === "squeeze",
+  });
+  const fromCode = (c, w, code, previous, extra = {}) => ({ ...base(c, w, code, previous), side: code.side, source: "code", confidence: null, band: "confirm", ...extra });
+  const fromJev = (c, w, code, previous, a, r) => {
+    let side = a.choice;
+    const confidence = a.confidence ?? a.probabilities?.[a.choice] ?? null;
+    const out = { ...base(c, w, code, previous), side, source: "jev", confidence, band: bandOf(confidence, thresholds), probabilities: a.probabilities ?? null, meta: meta(r) };
+    if ((w.margins[side] == null || w.margins[side] < 0) && code.allowed.length > 0) {
+      out.guard = `JEV chose '${side}' with room 'blocked'; the code pick '${code.side}' is used`;
+      out.jevChoice = side;
+      out.side = code.side;
+      out.source = "code";
+      out.band = "escalate";
+      warnings.push(`${c.id} ${c.name}: ${out.guard}`);
+    } else if (code.rule === "squeeze" && side !== code.side) {
+      // Every option is 'blocked': the words cannot tell the sides apart, so JEV's pick is a guess (2026-10-15: at the
+      // Egg Orchard Slayer 0x1E4 it chose the vent side, 0.06 m from the wall). The measured room decides.
+      out.guard = `squeeze: every option is 'blocked', so the measured room decides — the code pick '${code.side}' is used (JEV chose '${side}')`;
+      out.jevChoice = side;
+      out.side = code.side;
+      out.source = "code";
+      out.band = "escalate";
+      warnings.push(`${c.id} ${c.name}: ${out.guard}`);
+    }
+    return out;
+  };
+  const fatal = (e) => !(e instanceof JevError) || PASS_FATAL_KINDS.has(e.kind);
+
+  if (client != null && batch) {
+    const req = buildPassBatchRequest(inp.creatures, inp.previousPass, rules);
+    let r = null;
+    try {
+      r = await decideWith(client, req, opts);
+      usage.calls++;
+      usage.costUsd += r?.usage?.costUsd ?? 0;
+    } catch (e) {
+      if (fatal(e)) throw e;
+      warnings.push(`batch JEV call failed (${e.kind}: ${e.message}); the code rule decides every creature`);
+    }
+    inp.creatures.forEach((c, i) => {
+      const it = req.items[i];
+      passes.push(r ? fromJev(c, it.words, it.code, it.previous, r.answers[it.qid], r) : fromCode(c, it.words, it.code, it.previous, { jevError: "batch call failed" }));
+    });
+    note(opts, "planPasses", r, { mode: "batch", sides: passes.map((p) => p.side) });
+  } else {
+    let previous = inp.previousPass;
+    let fails = 0;
+    for (const c of inp.creatures) {
+      const req = buildPassRequest(c, previous, rules);
+      const { words: w, code } = req;
+      let p;
+      if (client == null || fails >= maxFails) {
+        p = fromCode(c, w, code, previous, client == null ? {} : { jevError: "skipped after repeated JEV failures" });
+      } else {
+        try {
+          const r = await decideWith(client, req, opts);
+          usage.calls++;
+          usage.costUsd += r?.usage?.costUsd ?? 0;
+          fails = 0;
+          p = fromJev(c, w, code, previous, r.answers.pass, r);
+          note(opts, "planPasses", r, { creature: c.id, side: p.side, code: code.side, confidence: p.confidence, band: p.band, thresholds });
+        } catch (e) {
+          if (fatal(e)) throw e;
+          fails++;
+          p = fromCode(c, w, code, previous, { jevError: `${e.kind}: ${clipText(e.message)}` });
+          warnings.push(`${c.id} ${c.name}: JEV failed (${e.kind}); code pick '${code.side}'`);
+          if (fails === maxFails) warnings.push(`${maxFails} JEV failures in a row: the rest of the plan uses the code rule`);
+        }
+      }
+      passes.push(p);
+      previous = p.side;
+    }
+  }
+  for (const p of passes) if (p.squeeze) warnings.push(`${p.id} ${p.name}: every option is 'blocked'; '${p.side}' has the most room (squeeze)`);
+  const counts = Object.fromEntries(PASS_SIDES.map((s) => [s, passes.filter((p) => p.side === s).length]));
+  const bySource = { jev: passes.filter((p) => p.source === "jev").length, code: passes.filter((p) => p.source === "code").length };
+  const source = bySource.jev === 0 ? "code" : bySource.code === 0 ? "jev" : "mixed";
+  return { task: "pass-plan", source, rules, passes, counts, bySource, usage, warnings };
+}
+
+function clipText(s, n = 160) {
+  const t = String(s ?? "");
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+/**
+ * The `film jev task pass-plan` entry for tools/film/film.mjs's JEV_TASKS table:
+ *   import { PASS_PLAN_CLI } from "./lib/jev_tasks.mjs";  JEV_TASKS["pass-plan"] = PASS_PLAN_CLI;
+ * `input` accepts the pass-plan input object or {passInput: {...}}; `text` is the one-line verdict.
+ */
+export const PASS_PLAN_CLI = Object.freeze({
+  run: planPasses,
+  input: (ctx, i) => (isPlainObject(i) && isPlainObject(i.passInput) ? i.passInput : i),
+  text: (r) => `pass-plan: ${r.passes.length} creatures · over ${r.counts.over} · left ${r.counts.left} · right ${r.counts.right} · ` +
+    `${r.source}${r.usage?.calls ? ` · ${r.usage.calls} JEV calls · $${Number(r.usage.costUsd).toFixed(6)}` : ""}` +
+    `${r.warnings?.length ? `\n  warnings: ${r.warnings.join("; ")}` : ""}`,
+});

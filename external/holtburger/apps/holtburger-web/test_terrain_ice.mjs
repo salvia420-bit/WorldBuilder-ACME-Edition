@@ -297,7 +297,7 @@ check("the water scroll UV is still derived AFTER the POM march",
 check("the swell mask (uWaterCodeMask) is still vertex-stage only",
   VERT.includes("uWaterCodeMask") && !FRAG.includes("uniform int uWaterCodeMask;"));
 check("the water sheen block is still present and still fade-banded",
-  /sheenFade = 1\.0 - smoothstep\(30\.0, 160\.0, vViewDepth\)/.test(FRAG));
+  /sheenFade = \(1\.0 - smoothstep\(uWaterSheenFade\.x, uWaterSheenFade\.y, vViewDepth\)\) \* footFade;/.test(FRAG) /* 2026-10-15: the band is ?waterSheenFade (default 30,160, test_terrain_water.mjs) */);
 check("the lattice-locked swell is untouched", /waterSwellLattice/.test(VERT));
 check("the wave-1B sand sparkle block is intact and still last before fragColor",
   iSandSparkle > iIce && iSandSparkle < iFragColor

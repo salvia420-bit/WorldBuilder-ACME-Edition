@@ -1,0 +1,131 @@
+{
+ "name": "Festival Stone of Thistledown",
+ "title": "Festival Stone of Thistledown",
+ "siteId": "poi-festival-stone-of-thistledown",
+ "summary": "'The Stone of Thistledown overlooks Cragstone Falls from the western bank ... Obviously, the Empyrean appreciated the magnificence of the view' (Alatar Locke). In the kit the Festival Stone and its Anniversary glow stand on the bluff (z 44) 100 m south-west of the falls between two 5.5 m ancient columns crowned with fire bowls (flames at z 49.7-49.9) and an exploration marker; the bluff falls north to the river plateau and east to Victory Bay.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Thistledown",
+   "pos": [
+    34940.1,
+    31290.6,
+    44.0
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary glow 8 m above."
+  },
+  {
+   "name": "Fire columns (0x020003C7)",
+   "pos": [
+    34943.1,
+    31290.2,
+    44.0
+   ],
+   "heightM": 5.9,
+   "note": "Two ancient columns at (34943.1,31290.2) and (34938.9,31293.3) with flames 0x02000485 on top."
+  },
+  {
+   "name": "Cragstone Falls",
+   "pos": [
+    34962.0,
+    31375.0,
+    2.0
+   ],
+   "heightM": 24.0,
+   "note": "90 m-wide falls 85 m north-east (separate site poi-cragstone-falls)."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-thistledown",
+  "name": "Festival Stone of Thistledown",
+  "gazetteerId": "thistledown-festival-stone",
+  "teleport": "@teleloc 0xB5A20040 188.3 176.4 44 -0.999048 0 0 -0.043619",
+  "anchor": [
+   34940.1,
+   31290.6,
+   44
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.44,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer thistledown-festival-stone (10 m south of the stone on the bluff, z 44)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 27.7,
+   "ew": 42.9
+  },
+  "coordSrc": "index",
+  "coveredDistM": 1313,
+  "coveredBy": "shot:cragstone.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Thistledown.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-thistledown.01",
+   "site": "poi-festival-stone-of-thistledown",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.0,
+     7.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34940.1,
+     31290.6,
+     44
+    ],
+    "height": 6,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 205,
+    "azimuthRef": "compass",
+    "elevationDeg": 3,
+    "distance": 20,
+    "thirds": "center",
+    "riseM": 9,
+    "keepAim": true
+   },
+   "standingOrder": "Rise 9 m from just above the grass behind the Thistledown stone and its two burning pillars until Cragstone Falls and the bay appear beyond the bluff edge; stay 5 m from the pillars and 3 m from every bush.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pedestal reveal: the lens starts 2 m above the bluff grass 20 m SSW of the Thistledown Festival Stone, its two ancient columns topped with fire bowls (flames at z 49.7-49.9) and the Anniversary glow filling the frame, and rises 9 m while tilting down to hold the stone: Cragstone Falls' lip and the northern half of the falls (proj.mjs: lip clear from t=2, north falls from t=6) and Victory Bay appear over the bluff edge. Sun SE behind-right. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.07..11.1 m, nearest drawn 8.64 m (scenery-default 0x02000246@34937,31261), vmax 1.77 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7.5 s: AGL 2.83..11 m, nearest drawn 8.64 m (scenery-default 0x02000246@34937,31261), vmax 1.77 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-thistledown.01": "take 0-8 s: AGL 2.07..11.1 m, nearest drawn 8.64 m (scenery-default 0x02000246@34937,31261), vmax 1.77 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7.5 s: AGL 2.83..11 m, nearest drawn 8.64 m (scenery-default 0x02000246@34937,31261), vmax 1.77 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

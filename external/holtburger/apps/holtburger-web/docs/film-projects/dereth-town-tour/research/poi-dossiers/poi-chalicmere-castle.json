@@ -1,0 +1,274 @@
+{
+ "name": "Chalicmere Castle",
+ "title": "Chalicmere Castle",
+ "siteId": "poi-chalicmere-castle",
+ "summary": "Chalicmere is the open fortress in the heart of the Direlands described at length in Aerfalle's Letter, where Faladha the Emissary opens a portal to Aerlinthe. In the kit it is a narrow north-south castle on a valley floor (z 34) under a western ridge. A six-story red-roofed keep with a spire (0x01000DFF, 31.5 m) stands among a tapered south tower, a green-glass spire tower and two north spire towers. Pitched-roof halls and walls frame a courtyard of large flowering trees, with a well. Giant wooden mask statues stand outside the west wall, and golem camps surround the castle.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI",
+   "Auberean Location",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -17.0,
+   "ew": -57.4
+  },
+  "mapWorld": [
+   10692.0,
+   20388.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chalicmere_Castle.txt",
+  "coveredDistM": 5582,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Keep",
+   "pos": [
+    10692,
+    20388,
+    34
+   ],
+   "heightM": 31.5,
+   "note": "0x01000DFF, red roof and spire, top z 65.5."
+  },
+  {
+   "name": "North spire towers",
+   "pos": [
+    10704,
+    20456,
+    34
+   ],
+   "heightM": 22,
+   "note": "0x01000E00 x2 (top z 56). The well is at (10710.8,20455.1)."
+  },
+  {
+   "name": "Courtyard trees",
+   "pos": [
+    10705,
+    20448,
+    34
+   ],
+   "heightM": 20.5,
+   "note": "0x020003EA/EB great trees and 0x02000322 flowering trees."
+  },
+  {
+   "name": "Wooden mask statues",
+   "pos": [
+    10683.1,
+    20421.2,
+    34
+   ],
+   "heightM": 8,
+   "note": "0x020003B1 at (10683.1,20421.2) and (10682.7,20354.8)."
+  }
+ ],
+ "site": {
+  "id": "poi-chalicmere-castle",
+  "name": "Chalicmere Castle",
+  "gazetteerId": "chalicmere-castle",
+  "teleport": "@teleloc 0x376A0022 110 33 35 0.707107 0 0 -0.707107",
+  "anchor": [
+   10700,
+   20410,
+   34
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.72,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer chalicmere-castle teleloc (10670,20385,35), outside the west wall."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-chalicmere-castle.01",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10692,
+     20388,
+     34
+    ],
+    "height": 32,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 62,
+    "radiusEnd": 80,
+    "heightStart": 10,
+    "heightEnd": 40,
+    "revolutions": 0.1,
+    "direction": "cw",
+    "bearingDeg": 228,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Corkscrew clockwise up the west side of Chalicmere from 10 m to 40 m, 62 to 80 m out, the low sun behind the lens on the red keep, towers and courtyard trees.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view: the drone corkscrews clockwise up the west side of Chalicmere from bearing 228 to 264, climbing from 10 m to 40 m and widening from 62 m to 80 m. The red-roofed 31 m keep, the tapered south tower, the green-glass spire towers, the walls and the flowering courtyard trees turn in the warm low sun behind the lens. The valley and the eastern hills open beyond. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 7.16..34.1 m, nearest 15.32 m (spawn Diamond Golem Camp Generator), vmax 8.12 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 256.8 m (not drawn by the default bake); edit 3-9.5s: AGL 11.78..33 m, nearest 22.78 m (spawn Diamond Golem Camp Generator), vmax 8.12 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 262.8 m (not drawn by the default bake); flight cinema: peak 8.11 m/s (cap 12), tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-chalicmere-castle.02",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10692,
+     20388,
+     34
+    ],
+    "height": 32,
+    "radius": 8
+   },
+   "params": {
+    "nearDistance": 60,
+    "farDistance": 110,
+    "direction": "out",
+    "heightAGL": 25,
+    "bearingDeg": 268,
+    "relativeToSubject": false,
+    "minFovDeg": 20,
+    "maxFovDeg": 60,
+    "minClearance": 4
+   },
+   "standingOrder": "Fly back west over the valley from 60 m to 110 m while the lens narrows so the keep holds its size and the eastern hills loom up behind it; stay 15 m above ground.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Drone dolly-zoom: the drone flies back west over the valley from 60 m to 110 m at the keep's mid-height while the lens narrows from 56 to 36 deg. The keep holds its size while the castle's towers compress and the eastern hills loom up behind it. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 14.52..21 m, nearest 21.54 m (spawn Diamond Golem Camp Generator), vmax 7.85 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 270.1 m (not drawn by the default bake); edit 2.5-8s: AGL 15.47..19.8 m, nearest 21.54 m (spawn Diamond Golem Camp Generator), vmax 7.85 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 277.3 m (not drawn by the default bake); flight cinema: peak 7.84 m/s (cap 12), tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-chalicmere-castle.03",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10692,
+     20388,
+     34
+    ],
+    "height": 32,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 262,
+    "azimuthRef": "compass",
+    "elevationDeg": -14,
+    "distance": 46,
+    "thirds": "center",
+    "riseM": 5,
+    "keepAim": true
+   },
+   "standingOrder": "Rise 5 m from just above the valley grass 46 m west of Chalicmere, the red-roofed keep and its green-glass towers lit by the low sun behind the lens; keep 10 m from the golem camp.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pedestal: the lens rises 5 m from 2 m above the valley grass, 46 m west of the keep, keeping it framed. The keep's red roof and the towers rise over the west wall in the low west sun. Rank 3. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 2.19..7.2 m, nearest 13.36 m (spawn Diamond Golem Camp Generator), vmax 0.98 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 255.3 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.61..6.8 m, nearest 13.36 m (spawn Diamond Golem Camp Generator), vmax 0.98 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 255.3 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-chalicmere-castle.01",
+   "technique": "drone.helix",
+   "rank": 1,
+   "check": "take 11s: AGL 7.16..34.1 m, nearest 15.32 m (spawn Diamond Golem Camp Generator), vmax 8.12 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 256.8 m (not drawn by the default bake); edit 3-9.5s: AGL 11.78..33 m, nearest 22.78 m (spawn Diamond Golem Camp Generator), vmax 8.12 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 262.8 m (not drawn by the default bake); flight cinema: peak 8.11 m/s (cap 12), tracking gap 0.06 m"
+  },
+  {
+   "shot": "poi-chalicmere-castle.02",
+   "technique": "drone.vertigo-drone",
+   "rank": 2,
+   "check": "take 10s: AGL 14.52..21 m, nearest 21.54 m (spawn Diamond Golem Camp Generator), vmax 7.85 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 270.1 m (not drawn by the default bake); edit 2.5-8s: AGL 15.47..19.8 m, nearest 21.54 m (spawn Diamond Golem Camp Generator), vmax 7.85 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 277.3 m (not drawn by the default bake); flight cinema: peak 7.84 m/s (cap 12), tracking gap 0.06 m"
+  },
+  {
+   "shot": "poi-chalicmere-castle.03",
+   "technique": "classic.pedestal",
+   "rank": 3,
+   "check": "take 8s: AGL 2.19..7.2 m, nearest 13.36 m (spawn Diamond Golem Camp Generator), vmax 0.98 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 255.3 m (not drawn by the default bake); edit 1.5-6.5s: AGL 2.61..6.8 m, nearest 13.36 m (spawn Diamond Golem Camp Generator), vmax 0.98 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 255.3 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 17.0,
+ "techniques": [
+  "drone.helix",
+  "drone.vertigo-drone",
+  "classic.pedestal"
+ ]
+}

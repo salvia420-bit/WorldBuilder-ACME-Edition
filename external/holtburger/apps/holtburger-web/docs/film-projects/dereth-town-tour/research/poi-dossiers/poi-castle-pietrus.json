@@ -1,0 +1,237 @@
+{
+ "name": "Castle Pietrus",
+ "title": "Castle Pietrus",
+ "siteId": "poi-castle-pietrus",
+ "summary": "A large Viamontian castle at 19.4N 49.5W on a narrow ridge (z 140) above the western sea. It is a 200 m long grid of 26 m gold-roofed and spired towers and 13 m wall towers around a villa (a 16 m mansion with Captain Lasallia's quarters) and a red-roofed house, with red lion banners on the towers. The ridge falls 60-130 m to the sea on the west and 50-70 m to the east. The north end (y > 29376) lies in a landblock missing from the kit, so no camera goes there.",
+ "landmarks": [
+  {
+   "name": "Villa",
+   "pos": [
+    12636.0,
+    29268.0,
+    140.0
+   ],
+   "heightM": 16.3,
+   "note": "0x010022CE mansion at the castle's heart."
+  },
+  {
+   "name": "South gate",
+   "pos": [
+    12624.0,
+    29186.0,
+    140.0
+   ],
+   "heightM": 26.3,
+   "note": "Between spire towers 0x01003AAB (12612,29196) and 0x01003AA8 (12636,29196)."
+  },
+  {
+   "name": "West spire tower",
+   "pos": [
+    12612.0,
+    29244.0,
+    140.0
+   ],
+   "heightM": 26.3,
+   "note": "0x01003AB1 over the western cliff."
+  }
+ ],
+ "site": {
+  "id": "poi-castle-pietrus",
+  "name": "Castle Pietrus",
+  "teleport": "@teleloc 0x4197003F 170.0 158.0 147.3 1 0 0 0",
+  "anchor": [
+   12636.0,
+   29268.0,
+   140.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.48,
+   "grade": "neutral"
+  },
+  "notes": "Derived @teleloc on the open saddle 36 m south of the south gate (ground 146.8, nothing within 35 m); the gazetteer's only Castle Pietrus entry is an interior cell (0x4198012E)."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 19.4,
+   "ew": -49.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5049,
+  "coveredBy": "path:danbys-outpost.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Castle_Pietrus.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-castle-pietrus.01",
+   "site": "poi-castle-pietrus",
+   "technique": "classic.steadicam",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     2.0,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12624.0,
+     29186.0,
+     140.0
+    ],
+    "height": 26,
+    "radius": 6,
+    "heading": 3.1416
+   },
+   "params": {
+    "mode": "lead",
+    "distance": 42,
+    "elevationDeg": -4,
+    "glideM": 14,
+    "lag": 1,
+    "feedForward": 1,
+    "turnLag": 1.2,
+    "bobM": 0.012,
+    "stepHz": 1.6,
+    "swayDeg": 0.35
+   },
+   "standingOrder": "Walk the saddle north toward Castle Pietrus's south gate between its two gold-spired towers, gliding 14 m closer 4 m above the grass with the lion banners above; stop 28 m short of the gate.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Steadicam approach. The camera walks the grassy saddle north toward the castle's south gate, between two 26 m gold-spired towers, gliding 14 m closer about 4 m above the grass with a gentle gait. The lion banners crown the towers. The late-morning sun lights the gate from the right. The nearest object is a spire tower at 26 m. Verified (check.mjs, full take flown): take 0-10 s: AGL 2.74..4.9 m, nearest drawn 26.46 m (static 0x4198#27 0x01003AAB), vmax 2.31 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 3.01..4.8 m, nearest drawn 27.28 m (static 0x4198#27 0x01003AAB), vmax 2.31 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-castle-pietrus.02",
+   "site": "poi-castle-pietrus",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12636.0,
+     29268.0,
+     140.0
+    ],
+    "height": 16,
+    "radius": 8
+   },
+   "params": {
+    "nearDistance": 70,
+    "farDistance": 120,
+    "direction": "out",
+    "heightAGL": 30,
+    "minFovDeg": 18,
+    "maxFovDeg": 60,
+    "bearingDeg": 92,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "standingOrder": "Retreat east from 70 m to 120 m over the falling slope while the lens narrows so the villa and its towers hold their size as the western sea swells behind them; nothing near the line.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertigo drone. The camera retreats east over the falling slope from 70 m to 120 m while the lens narrows from 60 deg to 18 deg. The villa and the east towers hold their size while the ridge and the western sea swell behind them. The sun is behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 49.91..89.8 m, nearest drawn 19.39 m (static 0x4298#4 0x01003AAE), vmax 7.85 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 59.41..87.7 m, nearest drawn 23.52 m (static 0x4298#4 0x01003AAE), vmax 7.85 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.84 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-castle-pietrus.03",
+   "site": "poi-castle-pietrus",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.7,
+     7.2
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12612.0,
+     29244.0,
+     140.0
+    ],
+    "height": 26,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 266,
+    "azimuthRef": "compass",
+    "elevationDeg": -30,
+    "distance": 125,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off 50 m below and 108 m west of Castle Pietrus over its seaward slope and let the walled ridge-top fortress stand against the sky above its cliff; nothing moves but the clouds and the sea.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Static. A lock-off 50 m below and 108 m west of the castle's west spire tower, over the seaward slope. The walled ridge-top fortress stands on its cliff against the sky, backlit by the high eastern sun for a silhouette. Verified (check.mjs, full take flown): take 0-8 s: AGL 68.86..68.9 m, nearest drawn 40.2 m (scenery-default 0x02000258@12508,29239), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 68.86..68.9 m, nearest drawn 40.2 m (scenery-default 0x02000258@12508,29239), vmax 0 m/s, LOS blocked 0/22, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-castle-pietrus.01": "take 0-10 s: AGL 2.74..4.9 m, nearest drawn 26.46 m (static 0x4198#27 0x01003AAB), vmax 2.31 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 3.01..4.8 m, nearest drawn 27.28 m (static 0x4198#27 0x01003AAB), vmax 2.31 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-castle-pietrus.02": "take 0-10 s: AGL 49.91..89.8 m, nearest drawn 19.39 m (static 0x4298#4 0x01003AAE), vmax 7.85 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 59.41..87.7 m, nearest drawn 23.52 m (static 0x4298#4 0x01003AAE), vmax 7.85 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.84 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-castle-pietrus.03": "take 0-8 s: AGL 68.86..68.9 m, nearest drawn 40.2 m (scenery-default 0x02000258@12508,29239), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.2-6.7 s: AGL 68.86..68.9 m, nearest drawn 40.2 m (scenery-default 0x02000258@12508,29239), vmax 0 m/s, LOS blocked 0/22, subject in frame 100%"
+ }
+}

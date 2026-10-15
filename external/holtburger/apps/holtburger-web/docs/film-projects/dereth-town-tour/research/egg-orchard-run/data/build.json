@@ -1,0 +1,431 @@
+{
+ "duration": 184.5,
+ "search": [
+  {
+   "D": 180,
+   "overspeed": true
+  },
+  {
+   "D": 240,
+   "overspeed": false
+  },
+  {
+   "D": 210,
+   "overspeed": false
+  },
+  {
+   "D": 195,
+   "overspeed": false
+  },
+  {
+   "D": 187.5,
+   "overspeed": false
+  },
+  {
+   "D": 183.75,
+   "overspeed": true
+  },
+  {
+   "D": 185.625,
+   "overspeed": false
+  },
+  {
+   "D": 184.688,
+   "overspeed": false
+  },
+  {
+   "D": 184.219,
+   "overspeed": true
+  },
+  {
+   "D": 184.453,
+   "overspeed": false
+  },
+  {
+   "D": 184.336,
+   "overspeed": false
+  },
+  {
+   "D": 184.277,
+   "overspeed": true
+  },
+  {
+   "D": 184.307,
+   "overspeed": false
+  },
+  {
+   "D": 184.292,
+   "overspeed": false
+  },
+  {
+   "D": 184.285,
+   "overspeed": false
+  },
+  {
+   "D": 184.281,
+   "overspeed": true
+  },
+  {
+   "D": 184.283,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": true
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  },
+  {
+   "D": 184.284,
+   "overspeed": false
+  }
+ ],
+ "overspeed": false,
+ "lengthM": 755.2987187952854,
+ "peakSpeed": 10.813257636460156,
+ "flownPeakSpeed": 10.736,
+ "tracking": {
+  "maxErrorM": 0.249,
+  "meanErrorM": 0.039,
+  "maxSpeed": 10.731,
+  "maxAccel": 15,
+  "settled": true,
+  "overrunSec": 0
+ },
+ "tricks": [
+  {
+   "type": "float",
+   "s": 4.6,
+   "t0": 3.072,
+   "t1": 5.338,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "float",
+   "s": 199.26,
+   "t0": 42.367,
+   "t1": 43.959,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "dive",
+   "s": 208.17,
+   "t0": 44.069,
+   "t1": 46.246,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "float",
+   "s": 399.55,
+   "t0": 89.114,
+   "t1": 93.801,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "yaw-spin",
+   "s": 420.71,
+   "t0": 99.641,
+   "t1": 101.241,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "dive",
+   "s": 438.36,
+   "t0": 103.036,
+   "t1": 107.453,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "roll",
+   "s": 617.78,
+   "t0": 141.65,
+   "t1": 142.75,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "dive",
+   "s": 639.46,
+   "t0": 146.091,
+   "t1": 147.198,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "float",
+   "s": 660.99,
+   "t0": 150.313,
+   "t1": 152.018,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "dive",
+   "s": 681.69,
+   "t0": 157.01,
+   "t1": 158.606,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "float",
+   "s": 715.82,
+   "t0": 169.087,
+   "t1": 171.756,
+   "skipped": false,
+   "reason": null
+  },
+  {
+   "type": "roll",
+   "s": 749.6,
+   "t0": 181.987,
+   "t1": 182.987,
+   "skipped": false,
+   "reason": null
+  }
+ ],
+ "zones": [
+  {
+   "s0": 0,
+   "s1": 21.1,
+   "speed": 5,
+   "applied": true
+  },
+  {
+   "s0": 21.1,
+   "s1": 91.11,
+   "speed": 8,
+   "applied": true
+  },
+  {
+   "s0": 91.11,
+   "s1": 188.86,
+   "speed": 7.5,
+   "applied": true
+  },
+  {
+   "s0": 188.86,
+   "s1": 203.18,
+   "speed": 5,
+   "applied": true
+  },
+  {
+   "s0": 203.18,
+   "s1": 220.17,
+   "speed": 6,
+   "applied": true
+  },
+  {
+   "s0": 220.17,
+   "s1": 391.82,
+   "speed": 9.5,
+   "applied": true
+  },
+  {
+   "s0": 391.82,
+   "s1": 394.43,
+   "speed": 6.5,
+   "applied": true
+  },
+  {
+   "s0": 394.43,
+   "s1": 411.89,
+   "speed": 1.5,
+   "applied": true
+  },
+  {
+   "s0": 411.89,
+   "s1": 431.75,
+   "speed": 6.5,
+   "applied": true
+  },
+  {
+   "s0": 431.75,
+   "s1": 439.36,
+   "speed": 4.5,
+   "applied": true
+  },
+  {
+   "s0": 439.36,
+   "s1": 452.62,
+   "speed": 12,
+   "applied": true
+  },
+  {
+   "s0": 452.62,
+   "s1": 463.3,
+   "speed": 7.5,
+   "applied": true
+  },
+  {
+   "s0": 463.3,
+   "s1": 604.45,
+   "speed": 9,
+   "applied": true
+  },
+  {
+   "s0": 604.45,
+   "s1": 626.73,
+   "speed": 6.5,
+   "applied": true
+  },
+  {
+   "s0": 626.73,
+   "s1": 706.5,
+   "speed": 6,
+   "applied": true
+  },
+  {
+   "s0": 706.5,
+   "s1": 745.86,
+   "speed": 4,
+   "applied": true
+  },
+  {
+   "s0": 745.86,
+   "s1": 746.93,
+   "speed": 6,
+   "applied": true
+  },
+  {
+   "s0": 746.93,
+   "s1": 755.2987187952854,
+   "speed": 3.5,
+   "applied": true
+  }
+ ],
+ "lockWindows": [
+  [
+   3.071687345170626,
+   5.337834372897881
+  ],
+  [
+   42.36695774335828,
+   43.95860947417369
+  ],
+  [
+   44.06905128844151,
+   46.245726388863254
+  ],
+  [
+   89.11405612176047,
+   93.80059976033598
+  ],
+  [
+   99.64135466786976,
+   101.24135466786976
+  ],
+  [
+   103.0359508660008,
+   107.4530748011492
+  ],
+  [
+   141.6500977899769,
+   142.7500977899769
+  ],
+  [
+   146.09059883495385,
+   147.19847731064957
+  ],
+  [
+   150.31349880535012,
+   152.01813932261828
+  ],
+  [
+   157.0097709795743,
+   158.6062644494817
+  ],
+  [
+   169.08658524405396,
+   171.75565543878855
+  ],
+  [
+   181.98709741703718,
+   182.98709741703718
+  ]
+ ],
+ "validate": {
+  "maxAngularSpeedDeg": 900
+ },
+ "arcLength": {
+  "raw": 754.939,
+  "flown": 755.299
+ },
+ "adjustments": [
+  "dropped dive@15.59: the entry float already ends nose-down into the trench groove",
+  "moved chute float 202.23 → 199.32: land before the chute dive at 208.22",
+  "moved chimney float 398.49 → 399.61: centred on the shaft (line at x 220, s 403.01)",
+  "dropped pit-edge roll@433.95: the chimney-B yaw spin flows straight into the pit nose-over",
+  "chimney zone 397.49-409.49@2.6 → 394.49-411.99@1.5: the float stays inside the shaft"
+ ],
+ "compensation": [
+  {
+   "iter": 0,
+   "maxDevM": 0.361,
+   "meanDevM": 0.028
+  },
+  {
+   "iter": 1,
+   "maxDevM": 0.108,
+   "meanDevM": 0.011
+  },
+  {
+   "iter": 2,
+   "maxDevM": 0.066,
+   "meanDevM": 0.009
+  },
+  {
+   "iter": 3,
+   "maxDevM": 0.067,
+   "meanDevM": 0.007
+  }
+ ]
+}

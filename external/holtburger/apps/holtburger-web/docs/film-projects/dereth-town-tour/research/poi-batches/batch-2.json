@@ -1,0 +1,2016 @@
+{
+ "batch": 2,
+ "quota": 35,
+ "pois": [
+  {
+   "title": "Festival Stone of Snowreap",
+   "name": "Festival Stone of Snowreap",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "The Festival Stones}} === Description === \"The Stone of Snowreap is tucked away in the caldera of the great volcano we call Mount Esper, at 65.3N, 13.3E. Judging by the ruins found at this location, it was once a sizable Empyrean town. I theorize that the Empyrean refined Pyreal in the fiery core of Mount Esper, but of this I have as yet no evidence. \" -- Alatar Locke, The Festival Stones of the E",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Snowreap.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     65.3,
+     13.3
+    ],
+    [
+     65.4,
+     13.7
+    ]
+   ],
+   "map": {
+    "ns": 65.3,
+    "ew": 13.3
+   },
+   "world": [
+    27660.0,
+    40140.0
+   ],
+   "lb": "0x90D1",
+   "coveredDistM": 1347,
+   "coveredBy": "shot:neydisa-castle.04",
+   "nearestSite": "neydisa-castle",
+   "nearestSiteM": 1475,
+   "gazNear": [
+    {
+     "id": "snowreap-festival-stone",
+     "name": "Snowreap Festival Stone",
+     "kind": "poi",
+     "d": 106,
+     "teleport": "@teleloc 0x90D10022 113.9 41.4 277.9 -0.139173 0 0 -0.990268",
+     "pos": [
+      27761.9,
+      40169.4,
+      277.9
+     ]
+    },
+    {
+     "id": "life-stone-near-crater-lake-village-90d0",
+     "name": "Life Stone near Crater Lake Village",
+     "kind": "landmark",
+     "d": 117,
+     "teleport": "@teleloc 0x90D0000C 36.7909 89.1648 282.939 -0.948196 0 0 -0.317685",
+     "pos": [
+      27684.791,
+      40025.165,
+      282.939
+     ]
+    },
+    {
+     "id": "silencias-tower",
+     "name": "Silencia's Tower",
+     "kind": "poi",
+     "d": 118,
+     "teleport": "@teleloc 0x90D00014 58.793 95.805 282.005 1 0 0 0",
+     "pos": [
+      27706.793,
+      40031.805,
+      282.005
+     ]
+    },
+    {
+     "id": "portal-to-town-network-90d0",
+     "name": "Portal to Town Network",
+     "kind": "landmark",
+     "d": 134,
+     "teleport": "@teleloc 0x90D00014 69.1709 82.6791 282.198 0.999955 0 0 0.009455",
+     "pos": [
+      27717.171,
+      40018.679,
+      282.198
+     ]
+    },
+    {
+     "id": "mountain-retreat-cottages-portal",
+     "name": "Mountain Retreat Cottages Portal",
+     "kind": "landmark",
+     "d": 282,
+     "teleport": "@teleloc 0x91D20002 12.259 26.1203 305.29 -0.043685 0 0 0.999045",
+     "pos": [
+      27852.259,
+      40346.12,
+      305.29
+     ]
+    },
+    {
+     "id": "windrune-cottages-portal",
+     "name": "Windrune Cottages Portal",
+     "kind": "landmark",
+     "d": 288,
+     "teleport": "@teleloc 0x91D20002 20.6944 27.0018 308.878 -0.043685 0 0 0.999045",
+     "pos": [
+      27860.694,
+      40347.002,
+      308.878
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-snowreap",
+     "name": "Festival Stone of Snowreap",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 65.30N 13.30E",
+     "pos": null,
+     "map": {
+      "ns": 65.3,
+      "ew": 13.3
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 455,
+   "timeOfDay": 0.38,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-snowreap"
+  },
+  {
+   "title": "Banderling Castle",
+   "name": "Banderling Castle",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A Castle full of lower level Banderlings at 66.2N, 2.3W. This castle also holds 3 chests down in the bunker, one of them being the Camping Mastery Chest. Some lower level Tumeroks guard the chests.<br> During the Who Watches the Virindi? event, an Exploration Marker for the Dereth Exploration Quest was added. <br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Banderling_Castle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     66.2,
+     -2.3
+    ]
+   ],
+   "map": {
+    "ns": 66.2,
+    "ew": -2.3
+   },
+   "world": [
+    23916.0,
+    40356.0
+   ],
+   "lb": "0x7CD2",
+   "coveredDistM": 4460,
+   "coveredBy": "shot:stonehold.04",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 4674,
+   "gazNear": [
+    {
+     "id": "life-stone-at-65-9n-2-6w",
+     "name": "Life Stone at 65.9N 2.6W",
+     "kind": "landmark",
+     "d": 98,
+     "teleport": "@teleloc 0x7CD1000F 38.3906 159.581 165.304 0.643319 0 0 -0.765598",
+     "pos": [
+      23846.391,
+      40287.581,
+      165.304
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "banderling-castle",
+     "name": "Banderling Castle",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 66.20N 2.30W",
+     "pos": null,
+     "map": {
+      "ns": 66.2,
+      "ew": -2.3
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 108,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-banderling-castle"
+  },
+  {
+   "title": "Northern Pass Watchtower",
+   "name": "Northern Pass Watchtower",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === A Watchtower with a LS and a Portal to Cragstone, at 52.0N, 3.1E on an almost inaccessible plateau in Northern Osteth. This is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 13",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Northern_Pass_Watchtower.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     32.9,
+     59.4
+    ],
+    [
+     50.3,
+     -5.3
+    ],
+    [
+     52.0,
+     3.1
+    ]
+   ],
+   "map": {
+    "ns": 52.0,
+    "ew": 3.1
+   },
+   "world": [
+    25212.0,
+    36948.0
+   ],
+   "lb": "0x83C0",
+   "coveredDistM": 5369,
+   "coveredBy": "shot:neydisa-castle.04",
+   "nearestSite": "neydisa-castle",
+   "nearestSiteM": 5485,
+   "gazNear": [
+    {
+     "id": "life-stone-at-52-1n-3-1e",
+     "name": "Life Stone at 52.1N 3.1E",
+     "kind": "landmark",
+     "d": 26,
+     "teleport": "@teleloc 0x83C00015 51.4617 108.444 298.005 -0.999453 0 0 0.033064",
+     "pos": [
+      25203.462,
+      36972.444,
+      298.005
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-cragstone-83c0",
+     "name": "Destroyed Portal to Cragstone",
+     "kind": "landmark",
+     "d": 44,
+     "teleport": "@teleloc 0x83C0000E 37.7753 121.939 298.005 0.966769 0 0 0.255652",
+     "pos": [
+      25189.775,
+      36985.939,
+      298.005
+     ]
+    },
+    {
+     "id": "ianna",
+     "name": "Ianna",
+     "kind": "poi",
+     "d": 567,
+     "teleport": "@teleloc 0x86C00010 41.933 184.121 119.673 -0.70919 0 0 -0.705018",
+     "pos": [
+      25769.933,
+      37048.121,
+      119.673
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "northern-pass-watchtower",
+     "name": "Northern Pass Watchtower",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 32.90N 59.40E",
+     "pos": null,
+     "map": {
+      "ns": 32.9,
+      "ew": 59.4
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 3220,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-northern-pass-watchtower"
+  },
+  {
+   "title": "Mountain Retreat",
+   "name": "Mountain Retreat",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A castle at 59.7N, 4.1W, similar in style to Neydisa, home to several generic shopkeepers. <br> This castle is indicated on the Ingame Map. See Points of Interest Map, no. 10.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mountain_Retreat.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     59.7,
+     -4.1
+    ],
+    [
+     66.3,
+     14.3
+    ],
+    [
+     69.6,
+     -20.2
+    ]
+   ],
+   "map": {
+    "ns": 59.7,
+    "ew": -4.1
+   },
+   "world": [
+    23484.0,
+    38796.0
+   ],
+   "lb": "0x7ACA",
+   "coveredDistM": 4524,
+   "coveredBy": "shot:stonehold.04",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 4735,
+   "gazNear": [
+    {
+     "id": "hilltop-portal-7aca",
+     "name": "Hilltop Portal",
+     "kind": "landmark",
+     "d": 16,
+     "teleport": "@teleloc 0x7ACA0019 75.1481 16.3678 200.005 0 0 0 -1",
+     "pos": [
+      23499.148,
+      38800.368,
+      200.005
+     ]
+    },
+    {
+     "id": "life-stone-at-59-8n-4-2w",
+     "name": "Life Stone at 59.8N 4.2W",
+     "kind": "landmark",
+     "d": 23,
+     "teleport": "@teleloc 0x7ACA000A 43.5416 27.8085 200.005 0.999113 0 0 -0.042109",
+     "pos": [
+      23467.542,
+      38811.809,
+      200.005
+     ]
+    },
+    {
+     "id": "fountain-at-59-8n-4-0w",
+     "name": "Fountain at 59.8N 4.0W",
+     "kind": "landmark",
+     "d": 24,
+     "teleport": "@teleloc 0x7ACA001A 75.388 29.914 200.005 1 0 0 0",
+     "pos": [
+      23499.388,
+      38813.914,
+      200.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "deeper-catacombs-mountain-retreat-ohn",
+     "name": "Deeper Catacombs (Mountain Retreat OHN)",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 574F",
+     "pos": null,
+     "map": {
+      "ns": 48.9,
+      "ew": -12.9
+     }
+    },
+    {
+     "id": "olthoi-horde-nest-mountain-retreat",
+     "name": "Olthoi Horde Nest (Mountain Retreat)",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teledungeon 02FC",
+     "pos": null,
+     "map": {
+      "ns": 48.9,
+      "ew": -12.9
+     }
+    },
+    {
+     "id": "mountain-retreat",
+     "name": "Mountain Retreat",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 59.70N 4.10W",
+     "pos": null,
+     "map": {
+      "ns": 59.7,
+      "ew": -4.1
+     }
+    },
+    {
+     "id": "mountain-retreat-cottages",
+     "name": "Mountain Retreat Cottages",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x7EC80025 108.377 101.577 95.905 -0.518393 0 0 -0.855143",
+     "pos": [
+      24300.377,
+      38501.577,
+      95.905
+     ],
+     "map": {
+      "ns": 58.47,
+      "ew": -0.7
+     }
+    },
+    {
+     "id": "mountain-retreat-cottages-portal",
+     "name": "Mountain Retreat Cottages Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x91D20002 12.259 26.1203 305.29 -0.043685 0 0 0.999045",
+     "pos": [
+      27852.259,
+      40346.12,
+      305.29
+     ],
+     "map": {
+      "ns": 66.16,
+      "ew": 14.1
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 1046,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-mountain-retreat"
+  },
+  {
+   "title": "Tumerok Treehouse",
+   "name": "Tumerok Treehouse",
+   "cats": [
+    "Northeast POI"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Tumerok_Treehouse.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     27.9,
+     29.5
+    ],
+    [
+     43.9,
+     10.8
+    ]
+   ],
+   "map": {
+    "ns": 43.9,
+    "ew": 10.8
+   },
+   "world": [
+    27060.0,
+    35004.0
+   ],
+   "lb": "0x8CB6",
+   "coveredDistM": 5064,
+   "coveredBy": "site:glenden-wood",
+   "nearestSite": "glenden-wood",
+   "nearestSiteM": 5064,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "tumerok-treehouse",
+     "name": "Tumerok Treehouse",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 27.90N 29.50E",
+     "pos": null,
+     "map": {
+      "ns": 27.9,
+      "ew": 29.5
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 6753,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-tumerok-treehouse"
+  },
+  {
+   "title": "Ice Golem Shrine",
+   "name": "Ice Golem Shrine",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === An Empyrean Standing Stone surrounded by 9 Ice Golems at 61.5N, 10.2W near Stonehold <br> This POI, or the nearby 63.0N, 8.1W - Standing Stone is indicated on the Ingame Map. See Points of Interest Map, no. 09",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ice_Golem_Shrine.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     61.5,
+     -10.2
+    ],
+    [
+     63.0,
+     -8.1
+    ]
+   ],
+   "map": {
+    "ns": 61.0,
+    "ew": -10.2
+   },
+   "world": [
+    22020.0,
+    39108.0
+   ],
+   "lb": "0x72CB",
+   "coveredDistM": 3113,
+   "coveredBy": "shot:stonehold.04",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 3317,
+   "gazNear": [
+    {
+     "id": "north-direlands-portal-72cc",
+     "name": "North Direlands Portal",
+     "kind": "landmark",
+     "d": 92,
+     "teleport": "@teleloc 0x72CC002A 132.489 31.7628 374.511 0.997852 0 0 0.065516",
+     "pos": [
+      22020.489,
+      39199.763,
+      374.511
+     ]
+    },
+    {
+     "id": "north-desert-edge-portal-72cc",
+     "name": "North Desert Edge Portal",
+     "kind": "landmark",
+     "d": 152,
+     "teleport": "@teleloc 0x72CC002C 136.157 92.3803 378.608 0.14225 0 0 0.989831",
+     "pos": [
+      22024.157,
+      39260.38,
+      378.608
+     ]
+    },
+    {
+     "id": "entrance-to-the-pyramid-portal-72ca",
+     "name": "Entrance to the pyramid Portal",
+     "kind": "landmark",
+     "d": 202,
+     "teleport": "@teleloc 0x72CA0026 108.012 123.921 95.7902 0.999904 0 0 -0.013826",
+     "pos": [
+      21996.012,
+      38907.921,
+      95.79
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "ice-golem-shrine-75ce",
+     "name": "Ice Golem Shrine",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 63.00N 8.10W",
+     "pos": null,
+     "map": {
+      "ns": 63,
+      "ew": -8.1
+     }
+    },
+    {
+     "id": "ice-golem-shrine-8ada",
+     "name": "Ice Golem Shrine",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 73.10N 8.60E",
+     "pos": null,
+     "map": {
+      "ns": 73.1,
+      "ew": 8.6
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 889,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-ice-golem-shrine"
+  },
+  {
+   "title": "Patriarch's Valley",
+   "name": "Patriarch's Valley",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A tri-node valley in the middle of the North Osteth mountains located at 58.5N, 10.3W. Each node ends with a portal to the above floating Pyramid.<br> A Patriarch's Valley Portal can appear in Eastham in front of the Meeting Hall for brief events for the Summoning T'thuun.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Patriarch_s_Valley.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     58.5,
+     -10.3
+    ]
+   ],
+   "map": {
+    "ns": 58.5,
+    "ew": -10.3
+   },
+   "world": [
+    21996.0,
+    38508.0
+   ],
+   "lb": "0x72C8",
+   "coveredDistM": 3480,
+   "coveredBy": "shot:stonehold.04",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 3672,
+   "gazNear": [
+    {
+     "id": "patriarchs-valley",
+     "name": "Patriarch's Valley",
+     "kind": "poi",
+     "d": 1,
+     "teleport": "@teleloc 0x72C80025 108 107 170.088 1 0 0 0",
+     "pos": [
+      21996,
+      38507,
+      170.088
+     ]
+    },
+    {
+     "id": "entrance-to-the-pyramid-portal-73c8",
+     "name": "Entrance to the pyramid Portal",
+     "kind": "landmark",
+     "d": 187,
+     "teleport": "@teleloc 0x73C80024 102.306 90.3356 95.7902 0.37282 0 0 -0.927904",
+     "pos": [
+      22182.306,
+      38490.336,
+      95.79
+     ]
+    },
+    {
+     "id": "entrance-to-the-pyramid-portal-71c8",
+     "name": "Entrance to the pyramid Portal",
+     "kind": "landmark",
+     "d": 211,
+     "teleport": "@teleloc 0x71C8001C 89.7187 90.5282 95.7902 -0.37503 0 0 -0.927013",
+     "pos": [
+      21785.719,
+      38490.528,
+      95.79
+     ]
+    },
+    {
+     "id": "entrance-to-the-pyramid-portal-72ca",
+     "name": "Entrance to the pyramid Portal",
+     "kind": "landmark",
+     "d": 400,
+     "teleport": "@teleloc 0x72CA0026 108.012 123.921 95.7902 0.999904 0 0 -0.013826",
+     "pos": [
+      21996.012,
+      38907.921,
+      95.79
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "patriarchs-valley",
+     "name": "Patriarch's Valley",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x72C80025 108 107 170.088 1 0 0 0",
+     "pos": [
+      21996,
+      38507,
+      170.088
+     ],
+     "map": {
+      "ns": 58.5,
+      "ew": -10.3
+     }
+    },
+    {
+     "id": "patriarchs-valley-portal",
+     "name": "Patriarch's Valley Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0xCE950034 148 81 19.937 1 0 0 0",
+     "pos": [
+      39700,
+      28689,
+      19.937
+     ],
+     "map": {
+      "ns": 17.59,
+      "ew": 63.47
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 1465,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-patriarchs-valley"
+  },
+  {
+   "title": "Grievver Valley",
+   "name": "Grievver Valley",
+   "cats": [
+    "Northwest POI",
+    "Geographic Area"
+   ],
+   "desc": "=== Description === A huge valley around 75.9N, 19.0W near Stonehold, filled with Grievvers, Grievvers, and guess.. more Grievvers. The valley was updated with a portal to the Grievver Caves during the Castling event. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Grievver_Valley.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     34.9,
+     54.5
+    ],
+    [
+     75.5,
+     -20.6
+    ],
+    [
+     75.9,
+     -19.0
+    ]
+   ],
+   "map": {
+    "ns": 75.9,
+    "ew": -19.0
+   },
+   "world": [
+    19908.0,
+    42684.0
+   ],
+   "lb": "0x67DE",
+   "coveredDistM": 1573,
+   "coveredBy": "shot:stonehold.03",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 1810,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "grievver-valley-67de",
+     "name": "Grievver Valley",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 75.90N 19.00W",
+     "pos": null,
+     "map": {
+      "ns": 75.9,
+      "ew": -19
+     }
+    },
+    {
+     "id": "grievver-valley-c3ab",
+     "name": "Grievver Valley",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 34.90N 54.50E",
+     "pos": null,
+     "map": {
+      "ns": 34.9,
+      "ew": 54.5
+     }
+    }
+   ],
+   "insertAfter": "neydisa-castle",
+   "insertBefore": "stonehold",
+   "insertCostM": 1315,
+   "timeOfDay": 0.36,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-grievver-valley"
+  },
+  {
+   "title": "Festival Stone of Frostfell",
+   "name": "Festival Stone of Frostfell",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "The Festival Stones}} === Description === One of the Festival Stones, located west of Stonehold at 69.4N, 25.0W.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Frostfell.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     69.3,
+     -15.1
+    ],
+    [
+     69.4,
+     -25.0
+    ]
+   ],
+   "map": {
+    "ns": 69.4,
+    "ew": -25.0
+   },
+   "world": [
+    18468.0,
+    41124.0
+   ],
+   "lb": "0x60D6",
+   "coveredDistM": 822,
+   "coveredBy": "shot:stonehold.05",
+   "nearestSite": "stonehold",
+   "nearestSiteM": 829,
+   "gazNear": [
+    {
+     "id": "frostfell-festival-stone",
+     "name": "Frostfell Festival Stone",
+     "kind": "poi",
+     "d": 14,
+     "teleport": "@teleloc 0x60D6000A 28.7 47.9 178 0.241922 0 0 -0.970296",
+     "pos": [
+      18460.7,
+      41135.9,
+      178
+     ]
+    },
+    {
+     "id": "serpent-burial-grounds-portal",
+     "name": "Serpent Burial Grounds Portal",
+     "kind": "landmark",
+     "d": 446,
+     "teleport": "@teleloc 0x5FD30030 139.787 174.304 149.235 0.692605 0 0 0.721317",
+     "pos": [
+      18379.787,
+      40686.304,
+      149.235
+     ]
+    },
+    {
+     "id": "westward-portal",
+     "name": "Westward Portal",
+     "kind": "landmark",
+     "d": 452,
+     "teleport": "@teleloc 0x62D50012 64.7897 42.7109 42.005 -0.461459 0 0 -0.887162",
+     "pos": [
+      18880.79,
+      40938.711,
+      42.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "festival-stone-of-frostfell",
+     "name": "Festival Stone of Frostfell",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 69.40N 25.00W",
+     "pos": null,
+     "map": {
+      "ns": 69.4,
+      "ew": -25
+     }
+    }
+   ],
+   "insertAfter": "stonehold",
+   "insertBefore": "hoshino-fortress",
+   "insertCostM": 35,
+   "timeOfDay": 0.37,
+   "grade": "cool",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-festival-stone-of-frostfell"
+  },
+  {
+   "title": "Hoshino's Fortress",
+   "name": "Hoshino's Fortress",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === === Route === === Creatures ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Hoshino_s_Fortress.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     78.1,
+     -48.2
+    ],
+    [
+     79.9,
+     -42.5
+    ]
+   ],
+   "map": {
+    "ns": 78.1,
+    "ew": -48.2
+   },
+   "world": [
+    12900.0,
+    43212.0
+   ],
+   "lb": "0x43E1",
+   "coveredDistM": 543,
+   "coveredBy": "site:beach-fort",
+   "nearestSite": "beach-fort",
+   "nearestSiteM": 543,
+   "gazNear": [
+    {
+     "id": "beach-fort",
+     "name": "Beach Fort",
+     "kind": "town",
+     "d": 543,
+     "teleport": "@telepoi Beach Fort",
+     "pos": [
+      12697,
+      42708.5,
+      0.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "hoshinos-fortress",
+     "name": "Hoshino's Fortress",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 79.90N 42.50W",
+     "pos": null,
+     "map": {
+      "ns": 79.9,
+      "ew": -42.5
+     }
+    }
+   ],
+   "insertAfter": "beach-fort",
+   "insertBefore": "eastwatch",
+   "insertCostM": 0,
+   "timeOfDay": 0.45,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate (near existing coverage: 543 m from site:beach-fort)",
+   "siteId": "poi-hoshinos-fortress"
+  },
+  {
+   "title": "Corcima Castle",
+   "name": "Corcima Castle",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === === Route === ==== Platinum Ward (100+) ====",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Corcima_Castle.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     83.2,
+     -50.4
+    ]
+   ],
+   "map": {
+    "ns": 83.2,
+    "ew": -50.4
+   },
+   "world": [
+    12372.0,
+    44436.0
+   ],
+   "lb": "0x40E7",
+   "coveredDistM": 1736,
+   "coveredBy": "path:beach-fort.01",
+   "nearestSite": "beach-fort",
+   "nearestSiteM": 1758,
+   "gazNear": [
+    {
+     "id": "corcima-castle-platinum-ward",
+     "name": "Corcima Castle Platinum Ward",
+     "kind": "poi",
+     "d": 196,
+     "teleport": "@teleloc 0x40E80024 96.69 87.17 200 -0.029987 0 0 -0.99955",
+     "pos": [
+      12384.69,
+      44631.17,
+      200
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-zaikhal-40e8",
+     "name": "Destroyed Portal to Zaikhal",
+     "kind": "landmark",
+     "d": 212,
+     "teleport": "@teleloc 0x40E8001D 80 104 199.79 0.999798 0 0 -0.020114",
+     "pos": [
+      12368,
+      44648,
+      199.79
+     ]
+    },
+    {
+     "id": "corcima-castle-copper-ward",
+     "name": "Corcima Castle Copper Ward",
+     "kind": "poi",
+     "d": 240,
+     "teleport": "@teleloc 0x3FE7000B 36.17 71.54 160 0.828964 0 0 -0.559301",
+     "pos": [
+      12132.17,
+      44423.54,
+      160
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-zaikhal-3fe7",
+     "name": "Destroyed Portal to Zaikhal",
+     "kind": "landmark",
+     "d": 240,
+     "teleport": "@teleloc 0x3FE7000B 36.7402 61.6827 160.005 0.703802 0 0 0.710396",
+     "pos": [
+      12132.74,
+      44413.683,
+      160.005
+     ]
+    },
+    {
+     "id": "corcima-castle-gold-ward",
+     "name": "Corcima Castle Gold Ward",
+     "kind": "poi",
+     "d": 243,
+     "teleport": "@teleloc 0x40E6002A 121.81 35.59 160.005 0.979804 0 0 0.19996",
+     "pos": [
+      12409.81,
+      44195.59,
+      160.005
+     ]
+    },
+    {
+     "id": "destroyed-portal-to-zaikhal-40e6",
+     "name": "Destroyed Portal to Zaikhal",
+     "kind": "landmark",
+     "d": 245,
+     "teleport": "@teleloc 0x40E6002A 129.75 35 160.005 -0.010236 0 0 -0.999948",
+     "pos": [
+      12417.75,
+      44195,
+      160.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "corcima-castle-central-ward",
+     "name": "Corcima Castle Central Ward",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x5F460189 39.247 0.038 0 -0.02677 0 0 -0.999642",
+     "pos": [
+      18279.247,
+      13440.038,
+      0
+     ],
+     "map": null
+    },
+    {
+     "id": "corcima-castle",
+     "name": "Corcima Castle",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 83.20N 50.40W",
+     "pos": null,
+     "map": {
+      "ns": 83.2,
+      "ew": -50.4
+     }
+    },
+    {
+     "id": "corcima-castle-copper-ward",
+     "name": "Corcima Castle Copper Ward",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x3FE7000B 36.17 71.54 160 0.828964 0 0 -0.559301",
+     "pos": [
+      12132.17,
+      44423.54,
+      160
+     ],
+     "map": {
+      "ns": 83.15,
+      "ew": -51.4
+     }
+    },
+    {
+     "id": "corcima-castle-gold-ward",
+     "name": "Corcima Castle Gold Ward",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x40E6002A 121.81 35.59 160.005 0.979804 0 0 0.19996",
+     "pos": [
+      12409.81,
+      44195.59,
+      160.005
+     ],
+     "map": {
+      "ns": 82.2,
+      "ew": -50.24
+     }
+    },
+    {
+     "id": "corcima-castle-platinum-ward",
+     "name": "Corcima Castle Platinum Ward",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x40E80024 96.69 87.17 200 -0.029987 0 0 -0.99955",
+     "pos": [
+      12384.69,
+      44631.17,
+      200
+     ],
+     "map": {
+      "ns": 84.01,
+      "ew": -50.35
+     }
+    }
+   ],
+   "insertAfter": "beach-fort",
+   "insertBefore": "eastwatch",
+   "insertCostM": 485,
+   "timeOfDay": 0.46,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-corcima-castle"
+  },
+  {
+   "title": "Count Dardante's Island",
+   "name": "Count Dardante's Island",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === Island stronghold of Count Dardante, this island is located just off the coast of the Isle of Ruin. The island contains a villa type building guarded by various Viamontian Knights. The basement of the villa has a portal to Dardante's Keep and can only be accessed by using Dardante's Keep Key found on the Doorkeeper Knight. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Count_Dardante_s_Island.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": 91.3,
+    "ew": -38.4
+   },
+   "world": [
+    15252.0,
+    46380.0
+   ],
+   "lb": "0x4FF1",
+   "coveredDistM": 1071,
+   "coveredBy": "shot:eastwatch.05",
+   "nearestSite": "eastwatch",
+   "nearestSiteM": 1153,
+   "gazNear": [
+    {
+     "id": "count-dardantes-island",
+     "name": "Count Dardante's Island",
+     "kind": "poi",
+     "d": 65,
+     "teleport": "@teleloc 0x4FF1001A 84.4807 43.2229 84.006 -1 0 0 0",
+     "pos": [
+      15252.481,
+      46315.223,
+      84.006
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "count-dardantes-island",
+     "name": "Count Dardante's Island",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x4FF1001A 84.4807 43.2229 84.006 -1 0 0 0",
+     "pos": [
+      15252.481,
+      46315.223,
+      84.006
+     ],
+     "map": {
+      "ns": 91.03,
+      "ew": -38.4
+     }
+    }
+   ],
+   "insertAfter": "beach-fort",
+   "insertBefore": "eastwatch",
+   "insertCostM": 1910,
+   "timeOfDay": 0.47,
+   "grade": "neutral",
+   "chapter": "ch2",
+   "pre": "candidate",
+   "siteId": "poi-count-dardantes-island"
+  },
+  {
+   "title": "The Shadow Pass",
+   "name": "The Shadow Pass",
+   "cats": [
+    "Northwest POI",
+    "Historical Site"
+   ],
+   "desc": "=== Description === A dark patch just south of Fiun Outpost, between 92.1N, 56.7W and 93.8N, 56.7W on Vanguard Isle. <br> The former battlefield, where the army of Eleonora du Bellenesse fought with the army of Varicci di Corcosi II, lead by Sir Binwas Loc. See Shadow Pass for the story.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Shadow_Pass.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     92.1,
+     -56.7
+    ],
+    [
+     93.8,
+     -56.7
+    ]
+   ],
+   "map": {
+    "ns": 92.1,
+    "ew": -56.7
+   },
+   "world": [
+    10860.0,
+    46572.0
+   ],
+   "lb": "0x38F2",
+   "coveredDistM": 855,
+   "coveredBy": "shot:fiun-outpost.05",
+   "nearestSite": "fiun-outpost",
+   "nearestSiteM": 906,
+   "gazNear": [
+    {
+     "id": "frozen-library-portal",
+     "name": "Frozen Library Portal",
+     "kind": "landmark",
+     "d": 341,
+     "teleport": "@teleloc 0x38F0003F 184.196 160.102 55.2867 -0.928966 0 0 0.370165",
+     "pos": [
+      10936.196,
+      46240.102,
+      55.287
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "the-shadow-pass",
+     "name": "The Shadow Pass",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 92.10N 56.70W",
+     "pos": null,
+     "map": {
+      "ns": 92.1,
+      "ew": -56.7
+     }
+    }
+   ],
+   "insertAfter": "fiun-outpost",
+   "insertBefore": "silyun",
+   "insertCostM": 527,
+   "timeOfDay": 0.71,
+   "grade": "warm",
+   "chapter": "ch3",
+   "pre": "candidate",
+   "siteId": "poi-the-shadow-pass"
+  },
+  {
+   "title": "Karlun's Fort",
+   "name": "Karlun's Fort",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === Located on top of a hill just outside Silyun. There is a portal at 89.0N 67.6W to gain entrance (Restricted to characters 40+). === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Karlun_s_Fort.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     89.0,
+     -67.6
+    ]
+   ],
+   "map": {
+    "ns": 89.0,
+    "ew": -67.6
+   },
+   "world": [
+    8244.0,
+    45828.0
+   ],
+   "lb": "0x2AEE",
+   "coveredDistM": 795,
+   "coveredBy": "shot:silyun.03",
+   "nearestSite": "silyun",
+   "nearestSiteM": 812,
+   "gazNear": [
+    {
+     "id": "karluns-fort-portal",
+     "name": "Karlun's Fort Portal",
+     "kind": "landmark",
+     "d": 3,
+     "teleport": "@teleloc 0x2AEE003E 177.268 132.257 66.005 -0.718974 0 0 0.695037",
+     "pos": [
+      8241.268,
+      45828.257,
+      66.005
+     ]
+    },
+    {
+     "id": "exit-karluns-fort-portal",
+     "name": "Exit Karlun's Fort Portal",
+     "kind": "landmark",
+     "d": 52,
+     "teleport": "@teleloc 0x2AEE002D 136 104 99.937 0.707107 0 0 -0.707107",
+     "pos": [
+      8200,
+      45800,
+      99.937
+     ]
+    },
+    {
+     "id": "hall-of-karlun-portal",
+     "name": "Hall of Karlun Portal",
+     "kind": "landmark",
+     "d": 55,
+     "teleport": "@teleloc 0x2AEE002D 130 110 99.937 1 0 0 0",
+     "pos": [
+      8194,
+      45806,
+      99.937
+     ]
+    },
+    {
+     "id": "exit-karluns-fort",
+     "name": "Exit Karlun's Fort",
+     "kind": "poi",
+     "d": 68,
+     "teleport": "@teleloc 0x2AEE0030 132 180 50.005 -1 0 0 0",
+     "pos": [
+      8196,
+      45876,
+      50.005
+     ]
+    },
+    {
+     "id": "karluns-fort",
+     "name": "Karlun's Fort",
+     "kind": "poi",
+     "d": 82,
+     "teleport": "@teleloc 0x2AEE0024 111.74 87.0811 100.005 -0.906796 0 0 0.42157",
+     "pos": [
+      8175.74,
+      45783.081,
+      100.005
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "exit-karluns-fort",
+     "name": "Exit Karlun's Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x2AEE0030 132 180 50.005 -1 0 0 0",
+     "pos": [
+      8196,
+      45876,
+      50.005
+     ],
+     "map": {
+      "ns": 89.2,
+      "ew": -67.8
+     }
+    },
+    {
+     "id": "karluns-fort",
+     "name": "Karlun's Fort",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x2AEE0024 111.74 87.0811 100.005 -0.906796 0 0 0.42157",
+     "pos": [
+      8175.74,
+      45783.081,
+      100.005
+     ],
+     "map": {
+      "ns": 88.81,
+      "ew": -67.88
+     }
+    },
+    {
+     "id": "exit-karluns-fort-portal",
+     "name": "Exit Karlun's Fort Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x2AEE002D 136 104 99.937 0.707107 0 0 -0.707107",
+     "pos": [
+      8200,
+      45800,
+      99.937
+     ],
+     "map": {
+      "ns": 88.88,
+      "ew": -67.78
+     }
+    },
+    {
+     "id": "karluns-fort-portal",
+     "name": "Karlun's Fort Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x2AEE003E 177.268 132.257 66.005 -0.718974 0 0 0.695037",
+     "pos": [
+      8241.268,
+      45828.257,
+      66.005
+     ],
+     "map": {
+      "ns": 89,
+      "ew": -67.61
+     }
+    }
+   ],
+   "insertAfter": "fiun-outpost",
+   "insertBefore": "silyun",
+   "insertCostM": 0,
+   "timeOfDay": 0.75,
+   "grade": "warm",
+   "chapter": "ch3",
+   "pre": "candidate",
+   "siteId": "poi-karluns-fort"
+  },
+  {
+   "title": "Cataracts of Sabella",
+   "name": "Cataracts of Sabella",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === The Cataracts of Sabella are a series of giant waterfalls, located at 82.7N, 74.7W on Lotila Island. The Cataracs are indicated as a POI on the Ingame Map. See Points of Interest Map, no. 02.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Cataracts_of_Sabella.txt",
+   "coordSrc": "index",
+   "allWikiCoords": [
+    [
+     75.9,
+     -61.3
+    ],
+    [
+     82.7,
+     -74.7
+    ]
+   ],
+   "map": {
+    "ns": 82.7,
+    "ew": -74.7
+   },
+   "world": [
+    6540.0,
+    44316.0
+   ],
+   "lb": "0x22E6",
+   "coveredDistM": 1460,
+   "coveredBy": "shot:silyun.04",
+   "nearestSite": "silyun",
+   "nearestSiteM": 1488,
+   "gazNear": [
+    {
+     "id": "cataracts-of-sabella",
+     "name": "Cataracts of Sabella",
+     "kind": "poi",
+     "d": 187,
+     "teleport": "@teleloc 0x22E60029 132 12 117.005 1 0 0 0",
+     "pos": [
+      6660,
+      44172,
+      117.005
+     ]
+    },
+    {
+     "id": "waterfall-cave-portal",
+     "name": "Waterfall Cave Portal",
+     "kind": "landmark",
+     "d": 355,
+     "teleport": "@teleloc 0x21E8000C 32.9277 83.206 13.937 -0.237526 0 0 -0.971381",
+     "pos": [
+      6368.928,
+      44627.206,
+      13.937
+     ]
+    },
+    {
+     "id": "small-empyrean-vault-portal",
+     "name": "Small Empyrean Vault Portal",
+     "kind": "landmark",
+     "d": 571,
+     "teleport": "@teleloc 0x22E30040 176.226 184.963 79.3506 0.998827 0 0 0.048416",
+     "pos": [
+      6704.226,
+      43768.963,
+      79.351
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "cataracts-of-sabella",
+     "name": "Cataracts of Sabella",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x22E60029 132 12 117.005 1 0 0 0",
+     "pos": [
+      6660,
+      44172,
+      117.005
+     ],
+     "map": {
+      "ns": 82.1,
+      "ew": -74.2
+     }
+    },
+    {
+     "id": "cataracts-of-sabella-portal",
+     "name": "Cataracts of Sabella Portal",
+     "kind": "landmark",
+     "indoor": false,
+     "teleport": "@teleloc 0x32DE0033 146.943 59.9485 39.937 -0.961719 0 0 -0.274037",
+     "pos": [
+      9746.943,
+      42683.949,
+      39.937
+     ],
+     "map": {
+      "ns": 75.9,
+      "ew": -61.34
+     }
+    }
+   ],
+   "insertAfter": "silyun",
+   "insertBefore": "westwatch",
+   "insertCostM": 343,
+   "timeOfDay": 0.61,
+   "grade": "warm",
+   "chapter": "ch3",
+   "pre": "candidate",
+   "siteId": "poi-cataracts-of-sabella"
+  },
+  {
+   "title": "Lotila Lighthouse",
+   "name": "Lotila Lighthouse",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === An unlit Empyrean Lighthouse found on the west coast of Lotila Island. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Lotila_Lighthouse.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     79.2,
+     -76.8
+    ]
+   ],
+   "map": {
+    "ns": 79.2,
+    "ew": -76.8
+   },
+   "world": [
+    6036.0,
+    43476.0
+   ],
+   "lb": "0x1FE2",
+   "coveredDistM": 1744,
+   "coveredBy": "site:westwatch",
+   "nearestSite": "westwatch",
+   "nearestSiteM": 1744,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "lotila-lighthouse",
+     "name": "Lotila Lighthouse",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 79.20N 76.80W",
+     "pos": null,
+     "map": {
+      "ns": 79.2,
+      "ew": -76.8
+     }
+    }
+   ],
+   "insertAfter": "silyun",
+   "insertBefore": "westwatch",
+   "insertCostM": 653,
+   "timeOfDay": 0.54,
+   "grade": "neutral",
+   "chapter": "ch3",
+   "pre": "candidate",
+   "siteId": "poi-lotila-lighthouse"
+  },
+  {
+   "title": "Deru Trees of Marae Lassel",
+   "name": "Deru Trees of Marae Lassel",
+   "cats": [
+    "Northwest POI",
+    "Deity Character",
+    "Lore Database Entry"
+   ],
+   "desc": "=== Description === Also known as the Tall Trees, the Deru Trees of Marae Lassel are Deru Trees found in the northeastern corner of the Marescent Plateau. When in the area of the trees, one can often hear them speaking. The trees are named Skuld, Urd and Verdandi in their own language.<ref name=GuardianDeru>2008/10 Seeds of Corruption - Guardian of the Deru Trees of Marae Lassel</ref> what this la",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Deru_Trees_of_Marae_Lassel.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     51.9,
+     -72.7
+    ]
+   ],
+   "map": {
+    "ns": 51.9,
+    "ew": -72.7
+   },
+   "world": [
+    7020.0,
+    36924.0
+   ],
+   "lb": "0x24C0",
+   "coveredDistM": 2243,
+   "coveredBy": "shot:timaru.01",
+   "nearestSite": "timaru",
+   "nearestSiteM": 2458,
+   "gazNear": [
+    {
+     "id": "ancient-empyrean-grotto-portal",
+     "name": "Ancient Empyrean Grotto Portal",
+     "kind": "landmark",
+     "d": 183,
+     "teleport": "@teleloc 0x24C10002 22.8535 29.498 95.8139 -0.961033 0 0 -0.276435",
+     "pos": [
+      6934.854,
+      37085.498,
+      95.814
+     ]
+    },
+    {
+     "id": "tiny-hive-portal",
+     "name": "Tiny Hive Portal",
+     "kind": "landmark",
+     "d": 481,
+     "teleport": "@teleloc 0x24BD002F 120.711 155.017 127.712 1 0 0 0",
+     "pos": [
+      7032.711,
+      36443.017,
+      127.712
+     ]
+    },
+    {
+     "id": "breached-hive-portal",
+     "name": "Breached Hive Portal",
+     "kind": "landmark",
+     "d": 488,
+     "teleport": "@teleloc 0x24BD0007 6.41872 158.673 198.867 -0.973191 0 0 0.23",
+     "pos": [
+      6918.419,
+      36446.673,
+      198.867
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "deru-trees-of-marae-lassel",
+     "name": "Deru Trees of Marae Lassel",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 51.90N 72.70W",
+     "pos": null,
+     "map": {
+      "ns": 51.9,
+      "ew": -72.7
+     }
+    }
+   ],
+   "insertAfter": "sanamar-royal-hall",
+   "insertBefore": "ahurenga",
+   "insertCostM": 715,
+   "timeOfDay": 0.57,
+   "grade": "warm",
+   "chapter": null,
+   "pre": "candidate",
+   "siteId": "poi-deru-trees-of-marae-lassel"
+  },
+  {
+   "title": "East Fork Dam",
+   "name": "East Fork Dam",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "Empyrean Ruins (Rumor)}} === Description === One of the dams on the Marescent Plateau. Located at 48.3N, 76.6W.<br>",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Fork_Dam.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     48.3,
+     -76.6
+    ]
+   ],
+   "map": {
+    "ns": 48.3,
+    "ew": -76.6
+   },
+   "world": [
+    6084.0,
+    36060.0
+   ],
+   "lb": "0x1FBB",
+   "coveredDistM": 1040,
+   "coveredBy": "shot:timaru.01",
+   "nearestSite": "timaru",
+   "nearestSiteM": 1269,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "east-fork-dam-hive",
+     "name": "East Fork Dam Hive",
+     "kind": "dungeon",
+     "indoor": true,
+     "teleport": "@teleloc 0x027F0234 30 -60 6 -0.707107 0 0 -0.707107",
+     "pos": [
+      414,
+      24324,
+      6
+     ],
+     "map": {
+      "ns": 48.5,
+      "ew": -76.4
+     }
+    },
+    {
+     "id": "east-fork-dam",
+     "name": "East Fork Dam",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 48.30N 76.60W",
+     "pos": null,
+     "map": {
+      "ns": 48.3,
+      "ew": -76.6
+     }
+    },
+    {
+     "id": "east-fork-dam-hive-portal",
+     "name": "East Fork Dam Hive Portal",
+     "kind": "landmark",
+     "indoor": true,
+     "teleport": "@teleloc 0x1FBC0108 178.284 9.94946 82.9232 -0.198111 0 0 -0.98018",
+     "pos": [
+      6130.284,
+      36105.949,
+      82.923
+     ],
+     "map": {
+      "ns": 48.49,
+      "ew": -76.41
+     }
+    }
+   ],
+   "insertAfter": "sanamar-royal-hall",
+   "insertBefore": "ahurenga",
+   "insertCostM": 864,
+   "timeOfDay": 0.56,
+   "grade": "warm",
+   "chapter": null,
+   "pre": "candidate",
+   "siteId": "poi-east-fork-dam"
+  },
+  {
+   "title": "Bachus Flufens' Cottage",
+   "name": "Bachus Flufens' Cottage",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "(Rumor) === Description === The former homestead of Bachus Flufens before she was chased away by Hea Tumeroks. Bachus was carrying out research into rumors of a Tumerok artifact. She has since taken refuge in the nearby town of Redspire where she continues her research.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Bachus_Flufens_Cottage.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     43.6,
+     -85.4
+    ]
+   ],
+   "map": {
+    "ns": 43.6,
+    "ew": -85.4
+   },
+   "world": [
+    3972.0,
+    34932.0
+   ],
+   "lb": "0x14B5",
+   "coveredDistM": 849,
+   "coveredBy": "shot:redspire.04",
+   "nearestSite": "redspire",
+   "nearestSiteM": 893,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "bachus-flufens-cottage",
+     "name": "Bachus Flufens' Cottage",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@tele 43.60N 85.40W",
+     "pos": null,
+     "map": {
+      "ns": 43.6,
+      "ew": -85.4
+     }
+    }
+   ],
+   "insertAfter": "ahurenga",
+   "insertBefore": "timaru",
+   "insertCostM": 131,
+   "timeOfDay": 0.59,
+   "grade": "warm",
+   "chapter": "ch4",
+   "pre": "candidate",
+   "siteId": "poi-bachus-flufens-cottage"
+  },
+  {
+   "title": "Gold Hill Ruins",
+   "name": "Gold Hill Ruins",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A rather large set of ruins on an unclimbable mountain. Sclavus seem to have made this their base. An unlocked Sturdy Steel Chest can be found here.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Gold_Hill_Ruins.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [],
+   "map": {
+    "ns": 21.2,
+    "ew": -12.6
+   },
+   "world": [
+    21444.0,
+    29556.0
+   ],
+   "lb": "0x6F99",
+   "coveredDistM": 3657,
+   "coveredBy": "shot:zaikhal.01",
+   "nearestSite": "zaikhal",
+   "nearestSiteM": 3667,
+   "gazNear": [
+    {
+     "id": "gold-hill-ruins",
+     "name": "Gold Hill Ruins",
+     "kind": "poi",
+     "d": 187,
+     "teleport": "@teleloc 0x6F9A0006 1.4 122.3 204.8 0.34939 0 0 -0.936978",
+     "pos": [
+      21313.4,
+      29690.3,
+      204.8
+     ]
+    }
+   ],
+   "gazName": [
+    {
+     "id": "gold-hill-ruins",
+     "name": "Gold Hill Ruins",
+     "kind": "poi",
+     "indoor": false,
+     "teleport": "@teleloc 0x6F9A0006 1.4 122.3 204.8 0.34939 0 0 -0.936978",
+     "pos": [
+      21313.4,
+      29690.3,
+      204.8
+     ],
+     "map": {
+      "ns": 21.76,
+      "ew": -13.14
+     }
+    }
+   ],
+   "insertAfter": "plateau-village",
+   "insertBefore": "danbys-outpost",
+   "insertCostM": 7014,
+   "timeOfDay": 0.43,
+   "grade": "neutral",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-gold-hill-ruins"
+  },
+  {
+   "title": "21.4N, 24.8W - Undead Village",
+   "name": "Undead Village",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === A few Gharu type houses with quite a few lower undead housing them.<br> This is one of the POIs indicated on the Ingame Map. See Points of Interest Map, no. 24.",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/21_4N_24_8W_Undead_Village.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     21.4,
+     -24.8
+    ]
+   ],
+   "map": {
+    "ns": 21.4,
+    "ew": -24.8
+   },
+   "world": [
+    18516.0,
+    29604.0
+   ],
+   "lb": "0x609A",
+   "coveredDistM": 1043,
+   "coveredBy": "shot:danbys-outpost.01",
+   "nearestSite": "danbys-outpost",
+   "nearestSiteM": 1053,
+   "gazNear": [
+    {
+     "id": "humming-crystal-portal-6099",
+     "name": "Humming Crystal Portal",
+     "kind": "landmark",
+     "d": 215,
+     "teleport": "@teleloc 0x60990001 5.211726 28.242462 0 1 0 0 0",
+     "pos": [
+      18437.212,
+      29404.242,
+      0
+     ]
+    }
+   ],
+   "gazName": [],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 1700,
+   "timeOfDay": 0.36,
+   "grade": "cool",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-undead-village"
+  },
+  {
+   "title": "Castle Pietrus",
+   "name": "Castle Pietrus",
+   "cats": [
+    "Northwest POI"
+   ],
+   "desc": "=== Description === Very large Viamontian castle, inside is a villa with a courtyard like one that can be purchased. Inside the villa on the top floor is Captain Vietre Lasallia who drops a Viamontian Pennant (Pietrus Castle). Down the stairs is a small side room full of books and a chest, one of the books is the Castle Pietrus Log Book. === Route ===",
+   "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Castle_Pietrus.txt",
+   "coordSrc": "mapPoint",
+   "allWikiCoords": [
+    [
+     19.4,
+     -49.5
+    ]
+   ],
+   "map": {
+    "ns": 19.4,
+    "ew": -49.5
+   },
+   "world": [
+    12588.0,
+    29124.0
+   ],
+   "lb": "0x4197",
+   "coveredDistM": 5049,
+   "coveredBy": "path:danbys-outpost.03",
+   "nearestSite": "danbys-outpost",
+   "nearestSiteM": 5084,
+   "gazNear": [],
+   "gazName": [
+    {
+     "id": "castle-pietrus",
+     "name": "Castle Pietrus",
+     "kind": "poi",
+     "indoor": true,
+     "teleport": "@teleloc 0x4198012E 165.336 81.863 135.205 0.999996 0 0 -0.002646",
+     "pos": [
+      12645.336,
+      29265.863,
+      135.205
+     ],
+     "map": {
+      "ns": 19.99,
+      "ew": -49.26
+     }
+    }
+   ],
+   "insertAfter": "danbys-outpost",
+   "insertBefore": "fort-tethana",
+   "insertCostM": 340,
+   "timeOfDay": 0.48,
+   "grade": "neutral",
+   "chapter": "ch5",
+   "pre": "candidate",
+   "siteId": "poi-castle-pietrus"
+  }
+ ]
+}

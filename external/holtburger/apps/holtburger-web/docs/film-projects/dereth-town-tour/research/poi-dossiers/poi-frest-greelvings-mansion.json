@@ -1,0 +1,194 @@
+{
+ "name": "Frest Greelving's Mansion",
+ "title": "Frest Greelving's Mansion",
+ "siteId": "poi-frest-greelvings-mansion",
+ "summary": "Frest Greelving's haunted mansion (Festivus): apparitions, hanging apparitions, skeletons and an Ursuin rug, with Frest's chest upstairs and his dungeon below. In the kit the mansion is a 2 x 2 block of gothic buildings on a bare hilltop (z 80) - three- and four-storey wings, a seven-storey tower and a seven-storey black clock tower (top z 111.1) - with 26 m dead antler trees, cobwebbed deer-skull props, a glowing pumpkin and a fresh zombie head in a bucket; the hill falls 30-50 m on every side.",
+ "landmarks": [
+  {
+   "name": "Clock tower (0x01002286)",
+   "pos": [
+    35028.0,
+    26052.0,
+    80.0
+   ],
+   "heightM": 31.1,
+   "note": "Seven storeys, top z 111.1."
+  },
+  {
+   "name": "Seven-storey tower (0x010022D2)",
+   "pos": [
+    35004.0,
+    26052.0,
+    80.0
+   ],
+   "heightM": 24.2,
+   "note": "Top z 104.2."
+  },
+  {
+   "name": "Mansion wings (0x01002289/0x01002287)",
+   "pos": [
+    35016.0,
+    26028.0,
+    80.0
+   ],
+   "heightM": 17.8,
+   "note": "Three- and four-storey wings, top z 97.8."
+  },
+  {
+   "name": "Dead antler tree (0x02000AB6)",
+   "pos": [
+    35006.4,
+    26003.1,
+    77.1
+   ],
+   "heightM": 26.5,
+   "note": "South of the mansion."
+  }
+ ],
+ "site": {
+  "id": "poi-frest-greelvings-mansion",
+  "name": "Frest Greelving's Mansion",
+  "gazetteerId": "frest-greelvings-mansion",
+  "teleport": "@teleloc 0xB6870005 14.00 98.00 68.33 1 0 0 0",
+  "anchor": [
+   35016,
+   26040,
+   80
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "Gazetteer has only a map @tele for the mansion and a 'Haunted Mansion' teleloc 121 m away at the foot of the hill; derived @teleloc on the open west slope 60 m west of the mansion (ground z 68.5)."
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 6.5,
+   "ew": 43.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2141,
+  "coveredBy": "shot:lytelthorpe.06",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Frest_Greelving_s_Mansion.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-frest-greelvings-mansion.01",
+   "site": "poi-frest-greelvings-mansion",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35024.5,
+     26050.4,
+     80
+    ],
+    "height": 31.1,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 60,
+    "azimuthRef": "compass",
+    "elevationDeg": -31,
+    "distance": 30,
+    "thirds": "center",
+    "pushM": 1.0
+   },
+   "standingOrder": "Look up from the north-east slope at the black clock tower silhouetted against the low western sun; creep 1 m closer and keep 3 m from the dead trees.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle from the north-east slope: lens ~4.4 m above the slope (below the mansion's floor level) 30 m out, looking up 31 deg at the 31 m black clock tower, backlit and silhouetted by the low western sun - the haunted-house look; creeps 1 m closer. Verified (check.mjs, full take flown): take 0-8 s: AGL 4.44..4.5 m, nearest drawn 13.15 m (scenery-default 0x020005C9@35059,26058), vmax 0.2 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.44..4.5 m, nearest drawn 13.18 m (scenery-default 0x020005C9@35059,26058), vmax 0.2 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-frest-greelvings-mansion.02",
+   "site": "poi-frest-greelvings-mansion",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 7
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7,
+    "keep": [
+     2.0,
+     10.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35016,
+     26040,
+     80
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "nearDistance": 40,
+    "farDistance": 90,
+    "direction": "out",
+    "heightAGL": 10,
+    "minFovDeg": 15,
+    "maxFovDeg": 80,
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly straight back west-south-west from the haunted mansion 10 m above its hilltop while zooming in so its clock tower holds its size and the dead-tree hill swells behind it; keep 5 m from every tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature vertigo: flies straight back WSW from 40 m to 90 m, 10 m above the mansion's hilltop, while the fov narrows 60 -> ~29 deg so the haunted mansion and its black clock tower hold their size and the dead-antler hill swells behind them; golden sun (0.74) behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 14.53..32.2 m, nearest drawn 6.44 m (static 0xB687#6 0x02000BAD), vmax 7.14 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 17.23..31.9 m, nearest drawn 8.73 m (static 0xB687#6 0x02000BAD), vmax 7.14 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.13 m/s (cap 12), max tracking gap 0.05 m; opt-in retail-bake tree 3.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-frest-greelvings-mansion.01": "take 0-8 s: AGL 4.44..4.5 m, nearest drawn 13.15 m (scenery-default 0x020005C9@35059,26058), vmax 0.2 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 4.44..4.5 m, nearest drawn 13.18 m (scenery-default 0x020005C9@35059,26058), vmax 0.2 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-frest-greelvings-mansion.02": "take 0-11 s: AGL 14.53..32.2 m, nearest drawn 6.44 m (static 0xB687#6 0x02000BAD), vmax 7.14 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 17.23..31.9 m, nearest drawn 8.73 m (static 0xB687#6 0x02000BAD), vmax 7.14 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.13 m/s (cap 12), max tracking gap 0.05 m; opt-in retail-bake tree 3.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

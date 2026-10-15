@@ -1,0 +1,198 @@
+{
+ "name": "The Old Keep (Lin Lich Tower)",
+ "title": "Old Keep",
+ "siteId": "poi-old-keep",
+ "summary": "The 'Lin Lich Tower': a tower lit with green flames on the side of a mountain north-west of Lin, reached by portal and guarded by obsidian golems, with runed chests at the top (acpedia). In the kit, a five-storey spire tower (top z 370.8) stands on a narrow ledge at z 340. Four green flame props ring its upper floor (z 354-361), chained skeletons and blood lie at its door, and the Lee Side of the Mountain portal stands beside it. The mountain wall rises west to the 520 m summit, and the slope drops 80 m east toward Lin.",
+ "landmarks": [
+  {
+   "name": "Old Keep tower (0x01001117)",
+   "pos": [
+    40932,
+    11892,
+    340
+   ],
+   "heightM": 30.8,
+   "note": "Five storeys, spire roof."
+  },
+  {
+   "name": "Green flames (0x02000897 x4)",
+   "pos": [
+    40932,
+    11892,
+    354.6
+   ],
+   "heightM": 6.0,
+   "note": "Round the upper floor."
+  },
+  {
+   "name": "Lee Side of the Mountain portal",
+   "pos": [
+    40942.1,
+    11882.1,
+    340
+   ],
+   "heightM": 3.0,
+   "note": "Beside the tower."
+  },
+  {
+   "name": "South Osteth summit",
+   "pos": [
+    40764,
+    11916,
+    520
+   ],
+   "heightM": 0,
+   "note": "The mountain wall behind."
+  }
+ ],
+ "site": {
+  "id": "poi-old-keep",
+  "name": "The Old Keep (Lin Lich Tower)",
+  "gazetteerId": "the-old-keep",
+  "teleport": "@teleloc 0xD53E0009 27.146 17.452 342.914 0.118595 0 0 -0.992943",
+  "anchor": [
+   40932,
+   11892,
+   340
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.65,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer the-old-keep (outdoor, on the slope 30 m north-north-west of the tower). Landblocks south of y 11712 (0xD33C-0xD63C) are missing from the kit: every camera stays north of y 11780."
+ },
+ "insertAfter": "baishi",
+ "insertBefore": "lin",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -52.3,
+   "ew": 68.6
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   40932.0,
+   11916.0
+  ],
+  "coveredDistM": 1220,
+  "coveredBy": "site:lin",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Old_Keep.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-old-keep.01",
+   "site": "poi-old-keep",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40932,
+     11892,
+     340
+    ],
+    "height": 30.8,
+    "radius": 7
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 2,
+    "elevationDeg": 5,
+    "distance": 36,
+    "fromDeg": 30,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "Hanging level with the green flames 36 m north of the Old Keep, tilt down from the bright sky past its flaming crown to the whole tower, the afternoon sun beyond it backlighting the flames; the lens does not move.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off tilt from a hover level with the green flames 36 m north of the Old Keep. The frame starts on bright sky with the flaming crown and the spire, then tilts down over the whole tower on its ledge. The afternoon sun (0.65) is south-west, beyond the tower, and backlights the green flames. Verified (check.mjs, full take flown): take 0-8 s: AGL 29.84..29.8 m, nearest drawn 31.01 m (static 0xD53D#16 0x02000897), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 29.84..29.8 m, nearest drawn 31.01 m (static 0xD53D#16 0x02000897), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%."
+  },
+  {
+   "id": "poi-old-keep.02",
+   "site": "poi-old-keep",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     1.5,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40932,
+     11892,
+     340
+    ],
+    "height": 30.8,
+    "radius": 7
+   },
+   "params": {
+    "radiusStart": 32,
+    "radiusEnd": 50,
+    "heightStart": 10,
+    "heightEnd": 40,
+    "revolutions": 0.15,
+    "direction": "cw",
+    "bearingDeg": 118,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Climb clockwise round the green-flamed Old Keep from its east to its south side, 32-50 m out over the drop, finishing above its spire with the mountain wall behind; never closer than 8 m to the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Helix climbing 54 degrees clockwise from east to south of the tower, 32-50 m out over the 80 m drop. The lens rises from 10 m above the door to 40 m, above the green-flamed crown. The mountain wall and the summit snow stand behind the tower, and the drone ends with Lin's valley below. The afternoon sun side-lights the tower from the left. Peak 7.5 m/s. Verified (check.mjs, full take flown): take 0-11 s: AGL 50.76..89.2 m, nearest drawn 18.56 m (spawn The Lee Side of The Mountain), vmax 7.5 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9.5 s: AGL 62.26..88.6 m, nearest drawn 21.36 m (spawn The Lee Side of The Mountain), vmax 7.5 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.48 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-old-keep.01": "take 0-8 s: AGL 29.84..29.8 m, nearest drawn 31.01 m (static 0xD53D#16 0x02000897), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 29.84..29.8 m, nearest drawn 31.01 m (static 0xD53D#16 0x02000897), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%",
+  "poi-old-keep.02": "take 0-11 s: AGL 50.76..89.2 m, nearest drawn 18.56 m (spawn The Lee Side of The Mountain), vmax 7.5 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9.5 s: AGL 62.26..88.6 m, nearest drawn 21.36 m (spawn The Lee Side of The Mountain), vmax 7.5 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.48 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

@@ -1,0 +1,207 @@
+{
+ "name": "Festival Stone of Snowreap",
+ "title": "Festival Stone of Snowreap",
+ "siteId": "poi-festival-stone-of-snowreap",
+ "summary": "One of the Empyrean Festival Stones, in the caldera of Mount Esper (Alatar Locke: 65.3N 13.3E, a former Empyrean town). In the kit the stone (Festival Stone spawn, with the Anniversary Effect glow 8 m above it) stands on the caldera lake's east shore at z 278 between two 5.5 m black ancient columns. To the west the lake boils with Mount Esper's volcano: 13 eruption generators, 5 eruption-FX generators, an eruption plume with volcano heat, and 22 side-steam vents 60-140 m west and north-west. The snowy caldera wall rises east, 50 m within 120 m. Silencia's Tower, a 19 m three-storey hall with a Life Stone and a Town Network portal, stands 120 m south-west.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Snowreap",
+   "pos": [
+    27760.2,
+    40158.8,
+    277.9
+   ],
+   "heightM": 4.5,
+   "note": "Festival Stone spawn (wcid 5393), Anniversary Effect glow at z 285.9 above it; the stone itself is a runtime weenie (height estimated)."
+  },
+  {
+   "name": "Ancient columns",
+   "pos": [
+    27760.3,
+    40158.7,
+    277.9
+   ],
+   "heightM": 5.5,
+   "note": "Two black columns 0x020003C7 at (27756.3,40160.1) and (27764.3,40157.3) flanking the stone."
+  },
+  {
+   "name": "Caldera steam field",
+   "pos": [
+    27700.0,
+    40230.0,
+    278.0
+   ],
+   "heightM": 0,
+   "note": "22 side-steam vents, 13 eruption generators, eruption plume and volcano heat across the lake 60-140 m W/NW."
+  },
+  {
+   "name": "Silencia's Tower",
+   "pos": [
+    27708.0,
+    40044.0,
+    282.0
+   ],
+   "heightM": 19.4,
+   "note": "Three-storey hall 0x01001106 with Life Stone (27684.8,40025.2) and Town Network portal (27717.2,40018.7)."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-snowreap",
+  "name": "Festival Stone of Snowreap",
+  "gazetteerId": "snowreap-festival-stone",
+  "teleport": "@teleloc 0x90D10022 113.9 41.4 277.9 -0.139173 0 0 -0.990268",
+  "anchor": [
+   27760.2,
+   40158.8,
+   277.9
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.38,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer snowreap-festival-stone (10 m north of the stone on the caldera shore, z 277.9)."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 65.3,
+   "ew": 13.3
+  },
+  "coordSrc": "index",
+  "coveredDistM": 1347,
+  "coveredBy": "shot:neydisa-castle.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Snowreap.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-snowreap.01",
+   "site": "poi-festival-stone-of-snowreap",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.0,
+     8.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27760.2,
+     40158.8,
+     277.9
+    ],
+    "height": 4.5,
+    "radius": 5
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": 24,
+    "distance": 17,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "ccw"
+   },
+   "standingOrder": "Arc 40 deg counter-clockwise from south to south-east 17 m from the Festival Stone, 7 m above the slope, ending on the steaming caldera lake behind it; keep 5 m from the two pines.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view. A slow 40 deg arc 17 m from the Festival Stone, 7 m above the caldera slope and looking down 24 deg. It ends with the stone between its two black columns and the boiling, steaming caldera lake filling the background (the steam vents lie 60-140 m beyond it). The morning sun at 0.38 shines from the east, over the camera's left shoulder. The 34 m and 17 m pines east and south-east of the stone are the only obstacles, and the arc keeps 5.9 m from their crown boxes. Verified (check.mjs, full take flown): take 0-9 s: AGL 6.56..7.4 m, nearest drawn 5.91 m (scenery-default 0x02000258@27781,40165), vmax 1.89 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 6.63..7.4 m, nearest drawn 6.46 m (scenery-default 0x02000258@27781,40165), vmax 1.89 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-festival-stone-of-snowreap.02",
+   "site": "poi-festival-stone-of-snowreap",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27760.2,
+     40158.8,
+     277.9
+    ],
+    "height": 4.5,
+    "radius": 5
+   },
+   "params": {
+    "heightAGL": 3,
+    "speed": 8,
+    "headingDeg": 173,
+    "relativeToSubject": false,
+    "lookAhead": 40,
+    "tiltDeg": 0,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     27748,
+     40285,
+     281
+    ],
+    [
+     27758,
+     40205,
+     281
+    ]
+   ],
+   "standingOrder": "Skim south 3 m over the caldera lake past the steam vents on the right toward the Festival Stone; keep 18 m from every vent and stop 45 m short of the stone.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water and steam. A skim 3 m above the caldera lake straight south toward the stone, starting 18-25 m east of the north steam vents (Large, Medium and Small Side Steam plus an eruption generator), so the vents and eruptions pass on the right while the stone and its glow grow ahead. Side light comes from the morning sun on the left. 91-100 % of the run is over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 3..3 m, nearest drawn 18.85 m (spawn Erupt Esper Gen), vmax 8.06 m/s, LOS blocked 0/41, subject in frame 100%, over water 91%; edit 2.5-9 s: AGL 3..3 m, nearest drawn 20.61 m (spawn Dread Idol Camp Generator), vmax 8.06 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 8.08 m/s (cap 12), max tracking gap 0.03 m."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-snowreap.01": "take 0-9 s: AGL 6.56..7.4 m, nearest drawn 5.91 m (scenery-default 0x02000258@27781,40165), vmax 1.89 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 6.63..7.4 m, nearest drawn 6.46 m (scenery-default 0x02000258@27781,40165), vmax 1.89 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-festival-stone-of-snowreap.02": "take 0-10 s: AGL 3..3 m, nearest drawn 18.85 m (spawn Erupt Esper Gen), vmax 8.06 m/s, LOS blocked 0/41, subject in frame 100%, over water 91%; edit 2.5-9 s: AGL 3..3 m, nearest drawn 20.61 m (spawn Dread Idol Camp Generator), vmax 8.06 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 8.08 m/s (cap 12), max tracking gap 0.03 m"
+ }
+}

@@ -1,0 +1,141 @@
+{
+ "name": "South Yanshi Outpost",
+ "title": "South Yanshi Outpost",
+ "siteId": "poi-south-yanshi-outpost",
+ "summary": "A starter outpost south-east of Yanshi under giant canopy trees: a domed Sho house, a 28 m Empyrean tower with a green-lit crown, a Life Stone, the Destroyed Portal to Redspire crystal and Empyrean pillars and statues by a marsh to the east.",
+ "landmarks": [
+  {
+   "name": "Empyrean tower",
+   "pos": [
+    35604.0,
+    20676.0,
+    10.0
+   ],
+   "heightM": 27.9,
+   "note": "0x01002866, green light at z 33.8."
+  },
+  {
+   "name": "Sho dome house",
+   "pos": [
+    35604.0,
+    20724.0,
+    6.0
+   ],
+   "heightM": 10.0,
+   "note": "0x01000BFE."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    35630.0,
+    20718.0,
+    6.0
+   ],
+   "heightM": 3.5,
+   "note": "Under the giant canopy trees."
+  },
+  {
+   "name": "Destroyed Portal to Redspire",
+   "pos": [
+    35676.0,
+    20651.7,
+    6.5
+   ],
+   "heightM": 3.8,
+   "note": "Crystal 0x02000B61."
+  }
+ ],
+ "site": {
+  "id": "poi-south-yanshi-outpost",
+  "name": "South Yanshi Outpost",
+  "gazetteerId": "life-stone-near-yanshi-b96b",
+  "teleport": "@teleloc 0xB96B0028 109.962 173.984 6 0.9998 0 0 -0.019982",
+  "anchor": [
+   35640.0,
+   20710.0,
+   6.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.52,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-yanshi-b96b."
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -15.6,
+   "ew": 46.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1291,
+  "coveredBy": "path:yanshi.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Yanshi_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-south-yanshi-outpost.01",
+   "site": "poi-south-yanshi-outpost",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     7.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35604.0,
+     20676.0,
+     10.0
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 165,
+    "azimuthRef": "compass",
+    "elevationDeg": -18,
+    "distance": 42,
+    "fromDeg": -4,
+    "toDeg": 30,
+    "relative": false
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 4.8 m up 42 m south-south-east of the outpost's Empyrean tower and tilt from its base to its green-lit crown; the lens never moves and nothing is within 10 m.",
+   "notes": "Tilt up the outpost's 28 m Empyrean tower from its base to its green-lit crown, the giant canopy trees of the outpost behind it; south sun behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 4.83..4.8 m, nearest drawn 10.62 m (scenery-default 0x02001063@35622,20627), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 4.83..4.8 m, nearest drawn 10.62 m (scenery-default 0x02001063@35622,20627), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-south-yanshi-outpost.01": "take 0-8 s: AGL 4.83..4.8 m, nearest drawn 10.62 m (scenery-default 0x02001063@35622,20627), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 4.83..4.8 m, nearest drawn 10.62 m (scenery-default 0x02001063@35622,20627), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%"
+ }
+}

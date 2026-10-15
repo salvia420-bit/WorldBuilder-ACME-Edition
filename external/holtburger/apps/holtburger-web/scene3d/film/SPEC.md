@@ -239,7 +239,10 @@ horizonTiltDeg, inFrame}`.
 `rising-reveal`, `tilt-reveal`, `top-down`, `top-down-rise`, `top-down-track`, `pass-over`, `parallax-slide`,
 `terrain-skim`, `canyon-run`, `chase`, `lead`, `side-track`, `boomerang`, `fly-by`, `spiral-descent`, `pano-360`,
 `hyperlapse-orbit`, `vertigo-drone`; and `fpv.*`: `fpv-dive`, `fpv-proximity`, `fpv-gap`, `fpv-flip`,
-`fpv-corridor`.
+`fpv-corridor`, `fpv-run` (2026-10-15, `shots/fpv_tricks.js`: a long FPV run along `ctx.path` / `ctx.indoor.route`
+with `zones` speed caps and spliced tricks — `float` (true free fall), `roll`, `yaw-spin`, `power-loop`, `split-s`,
+`dive`, `dip` — an FPV body-attitude camera, throttle bob / prop-wash wobble; `meta.tricks`, `meta.lockWindows`,
+`meta.validate`, `meta.throttleAt`; registry param type `list` for `zones` / `tricks`; techniques.md has the entry).
 Every technique: honours `duration`; keeps the subject in frame when `needs.subject` (inFront & |ndc| ≤ 1 for ≥95% of
 samples unless it is a reveal); continuous, NaN-free; respects `ctx.groundZ` (+0.7 m) outdoors and
 `ctx.indoor.ceiling/floor` when given; declares sensible `defaultBounds`; documents params in its schema.
@@ -589,13 +592,21 @@ terrain, streamInFlight, pvsSweep, interior, player, settle, settleSec}, waitedM
    item 1's `particleCull`: rendered takes (take_player) and scout stills set `recheckInterval: 1` and restore only the
    previous interval (maxDistance untouched); `particles_query` enumerates `managers: allParticleManagers`.
 6. `scene3d/particles/particle_fx.js`: `setFxTimeSource(fn|null)` used by `particleFxFrame()` when `nowMs` is not
-   finite; uniform `uFxNearFadeMin` floor (`nearFade = max(row, uFxNearFadeMin)`, uniform-only).
+   finite; uniform `uFxNearFadeMin` floor (`nearFade = max(row, uFxNearFadeMin)`, uniform-only). 2026-10-15: it also
+   installs the source in `scene3d/fx_clock.js` (`fxNowMs()`), which the self-clocked GPU FX modules read instead of
+   performance.now() — `vfx/fx_distort_effect.js`, `fx_decal_effect.js`, `fx_decals.js`, `fx_showcase.js`,
+   `fx_lights.js`, `fx_ribbons.js`, `lifestone_fx.js` — so a stepped take animates portal swirls, heat shimmer,
+   decals, light flicker, trails and lifestone breath on the film clock (effects audit; `tests/film_fx_clock.test.mjs`).
+   And `scene3d/loop.js` hands `terrainVfxTick` the film frame stamp (`frameTime.tsSec`) while `film.holdLoop` is set,
+   so grass sway and the ambient fields (fireflies, pollen, leaves) follow the film clock too.
 7. `scene3d/animated_scenery.js`: `setSceneryTimeSource(fn|null)` consulted by `_nowMs()`.
 8. `scene3d/atmosphere_pipeline.js`: `?filmDof=on` builds a `DepthOfFieldEffect` once at construction (legacy list
    after horizonDissolve; split chain before fxGlow/bloom); `window.__dof {target, focusDistance, focusRange,
    bokehScale, enabled}`.
 9. `docs/url-flags.md`: 6-column main-table rows for `filmMode` and `filmDof` (Default `off`, reader `=== "on"`),
    plus blockquoted §0 rows; rows for any new param a film driver emits.
+9b. `scene3d/terrain.js`: `?waterSheenFade=near,far` (default 30,160; `film boot` passes 40,500) — how far the water's
+   ripples and sun glint reach; a far range also fades by the pixel's ground footprint (no aliasing at range).
 10. `harness/run-js-headless.mjs`: TIER5 rows `{tier:5, flag:"filmMode(<topic>)", file:"tests/film_<topic>.test.mjs"}`.
 
 ## 5. Node tooling (`tools/film/`, ESM `.mjs`, Node 20)
@@ -658,7 +669,8 @@ The plan lane's code is the contract; full field reference = `PLAN_FIELDS` + `ex
   inside a bar, counts its bars from the next downbeat, so the pickup joins it and the cut is a downbeat.
 - **Take** = `item.take`, the exact argument of `window.__film.prepare(take)` (the page MUST accept this shape; a
   baked table `{table}` replay is the other accepted form): `{shotId, siteId, technique, family, spec (§2.11
-  ShotSpec, spec.duration = takeDuration INCLUDING handles; spec.bounds = the shot's non-null `bounds` keys, absent
+  ShotSpec, spec.duration = takeDuration INCLUDING handles — for a shot with `trim:{takeSec, inSec}` the take is
+  `takeSec` and the edit is its window from `inSec`, so a shortened shot keeps its move's speed; spec.bounds = the shot's non-null `bounds` keys, absent
   when none), subject (plan subject above — the page resolves it:
   point → static ctx.subject; entity → worldQuery.subject(ref) + subjectAt(t) when moving; player → local player
   + subjectAt(t) when moving (its actor walks, or the take captures realtime; an explicit `moving: false` keeps it
@@ -666,7 +678,7 @@ The plan lane's code is the contract; full field reference = `PLAN_FIELDS` + `ex
   (indoor: planIndoorPath → ctx.indoor.route), standingOrder, goal, pilot:{mode,…}, capture:{mode, fps, width,
   height}, look (merged defaults ← site ← shot; applied by look.js before the take), actor (cue for world.actor),
   cell (seed of the film viewer cell on indoor sites), indoor, anchor (ShotContext.anchor), editOffsetSec
-  (= handleIn), preRollSec (rendered, never recorded), showAvatar}`.
+  (= handleIn; = the trim window's start for a trimmed shot), preRollSec (rendered, never recorded), showAvatar}`.
   **Live subjects.** A moving entity (`moving: true`) or a live player (`moving: true`, or — unless `moving: false` —
   an actor cue that walks or `capture.mode` 'realtime') gets a PURE reference `ctx.subject` / `ctx.subjectAt`: the
   prepare-time pose, extrapolated horizontally by its velocity when that is ≥ 0.3 m/s (else standing). Its live,
@@ -715,6 +727,30 @@ The plan lane's code is the contract; full field reference = `PLAN_FIELDS` + `ex
   The CLI adds its own `tracking-gap` issue (t = `maxGapT`; `maxGapM` = the REALISED gap) when a flown rehearsal or
   take's `flight.tracking` trailed the plan by more than `FLIGHT_GAP_WARN_M` = 2 m, with or without an `overspeed`
   — one warning per run whose gap differs (rehearsal, take, each retake). They never fail or retake a take.
+
+## 5.3 2026-10-15 additions (the Dereth tour v2 and the Egg Orchard FPV run)
+
+- **Plan** (`tools/film/plan/schema.mjs`, `compile.mjs`, `edl.mjs`; reference/plan-format.md): `shot.trim {takeSec,
+  inSec}` (fly the move at takeSec, cut the edit window from inSec — shortening never speeds a move up);
+  `edit.tail {from, gapSec 1.5, fadeOutSec 3}` (shots from `from` on are a silent tail after the music: exact seconds,
+  a black hold, element-local fades, audio `atrim → afade → apad`, `timeline.musicEnd`; no tail ⇒ unchanged output);
+  `site.prime [@admin …]` (`film shoot` walks the hidden player through them before the site teleport — a dungeon's
+  creatures only stream to the client inside the player's PVS); `shot.overlay {props {style, opacity, tint}}`;
+  `shot.pilot.fade 'never' | 'auto'`.
+- **Take player** (`runtime/take_player.js`): `traj.meta.lockWindows` hold and ease the pilot residual and pin
+  speedScale to 1 (tricks are flown as designed); `fade()` never hides a creature / npc / player (report
+  `faded.refused`); `pilot.fade: 'never'` ⇒ mapper `maxFadeIds 0` (the occluderIds cap bug is fixed); the props lens
+  overlay (`runtime/lens_overlay.js`, `?filmProps=on` AND `take.overlay.props`) draws after the composer, right before
+  `recorder.grab`, deterministic from film time and the nominal throttle (report `overlay {on, style, frames}`).
+- **Camera owner**: while the film camera is owned, `getPlayerWorldPosition` returns the film eye (light-pool ranking,
+  the retail viewer light) and is restored on release.
+- **Validation**: `validateTrajectory` honours `traj.meta.validate` limits (loops and rolls exceed the 240 °/s default).
+- **Boot URL** (`tools/film/lib/session.mjs`): `quality=ultra` by default, `filmProps=on`, `cloudCoverage=0.3` with
+  fair weather (`--coverage`), `stormScan=retail` (the legacy scan read a storm every day: grey deck, rain sheen,
+  storm wind, no pollen / fireflies), `waterSheenFade=40,500`; every take report carries `pageEnv` (redacted URL,
+  quality, storm state, the water uniforms) so a take proves which effects were live.
+- **JEV planning task** `film jev task pass-plan` (tools/film/lib/jev_tasks.mjs): over / left / right for each creature
+  near an FPV run's line from measured gaps, with a code-rule fallback; the answers are baked into the racing line.
 
 ## 6. Rules for every implementer
 - Parallel agents may read, edit and run TARGETED single tests only (`node test_x.mjs`). They must NOT run the full

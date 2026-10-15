@@ -1,0 +1,153 @@
+{
+ "name": "Festival Stone of Leafdawning",
+ "title": "Festival Stone of Leafdawning",
+ "siteId": "poi-festival-stone-of-leafdawning",
+ "summary": "One of the Empyrean Festival Stones, hidden in a small grove west of Rithwic (acpedia: 'ringed by Empyrean statues'). The kit shows exactly that on a grassy knoll (z 40): the Festival Stone (with an Anniversary Effect emitter 8 m above it) inside a 5 m ring of eight 2.8 m Empyrean statues, a big spreading canopy tree (35 m crown) on its east side and two smaller grove trees north-west and south-south-west; the Rithwic Festival Grounds (chess boards, octagon pavilions) lie 120 m west, outside this POI.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 10.5,
+   "ew": 54.2
+  },
+  "mapWorld": [
+   37476.0,
+   26988.0
+  ],
+  "coordSrc": "index",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Leafdawning.txt",
+  "coveredDistM": 976,
+  "coveredBy": "shot:rithwic.02"
+ },
+ "landmarks": [
+  {
+   "name": "Festival Stone of Leafdawning",
+   "pos": [
+    37476.0,
+    26988.0,
+    40.0
+   ],
+   "heightM": 4,
+   "note": "Weenie spawn (setup size not in the kit; ~4 m assumed); Anniversary Effect FX at z 48."
+  },
+  {
+   "name": "Ring of eight Empyrean statues",
+   "pos": [
+    37476.0,
+    26988.0,
+    40.0
+   ],
+   "heightM": 2.8,
+   "note": "Statics 0x02000397 at 5 m radius around the stone."
+  },
+  {
+   "name": "Great canopy tree",
+   "pos": [
+    37485.8,
+    26982.2,
+    40.0
+   ],
+   "heightM": 16.2,
+   "note": "Static 0x020002D7, crown box 35.6 m wide over the stone's east side - the camera stays west."
+  },
+  {
+   "name": "Grove trees",
+   "pos": [
+    37468.8,
+    26992.6,
+    40.0
+   ],
+   "heightM": 10.2,
+   "note": "0x0200062B (NW) and 0x0200062C at (37473.8,26979.9) (SSW); the only clean sight line runs between them (bearing 240-246 from the stone)."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-leafdawning",
+  "name": "Festival Stone of Leafdawning",
+  "gazetteerId": "leafdawning-festival-stone",
+  "teleport": "@teleloc 0xC38C000D 28.8 112.6 40 -0.267238 0 0 -0.963631",
+  "anchor": [
+   37476.0,
+   26988.0,
+   40.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.73,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     37476.0,
+     26988.0,
+     40.0
+    ],
+    "height": 4,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 243,
+    "azimuthRef": "compass",
+    "elevationDeg": -2,
+    "distance": 11,
+    "thirds": "center",
+    "riseM": 3.5,
+    "swingDeg": 4,
+    "armM": 5
+   },
+   "standingOrder": "Rise on the jib from 1.6 m to 5 m above the grass 11 m west-south-west of the Festival Stone, threading the gap between the two grove trees; keep 3 m from both trunks, leaves at the frame edge may be faded, never the statues.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Golden-hour crane on the grove-hidden Stone of Leafdawning: the lens starts low between the two grove trees west of the stone and lifts 3.5 m while swinging 4 deg, so the ring of eight Empyrean statues opens up around the stone with the big canopy tree glowing behind it and the warm 0.73 sun behind the camera. The only clear sight line runs between the NW tree (0x0200062B) and the SSW tree (0x0200062C) at bearings ~240-246 from the stone; the big canopy tree 0x020002D7 (35 m crown, box holds the stone) sits east and is treated as the subject's backdrop, so the camera never goes east of the stone. Stone height (4 m) is an estimate (Festival Stone weenie setup not in the kit). Verified with poi-kit check.mjs - take 8s: AGL 1.62..5.1 m, nearest 3.26 m (static 0xC38C#9 0x0200062C), vmax 0.71 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 1.74..5 m, nearest 3.26 m, LOS blocked 0/25, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-festival-stone-of-leafdawning.01",
+   "technique": "classic.crane",
+   "rank": 2,
+   "check": "take 8s: AGL 1.62..5.1 m, nearest 3.26 m (static 0xC38C#9 0x0200062C), vmax 0.71 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1-7s: AGL 1.74..5 m, nearest 3.26 m, LOS blocked 0/25, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 6,
+ "techniques": [
+  "classic.crane"
+ ]
+}

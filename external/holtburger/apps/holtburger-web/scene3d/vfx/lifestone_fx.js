@@ -94,6 +94,7 @@
 
 import * as THREE from "three";
 import { fxTier1Enabled } from "./fx_tier1.js";
+import { fxNowMs } from "../fx_clock.js";
 import { bindEmitterFxLight, releaseFxLight } from "./fx_lights.js";
 import { registerFxGlowExtras } from "../particles_over_clouds.js";
 import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
@@ -482,7 +483,7 @@ let _lastTick = -1;
 const _stats = { swaps: 0, rebuilds: 0, reverts: 0, warmFails: 0 };
 
 function _now() {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : 0;
+  return fxNowMs(); // the film clock during a stepped take (fx_clock.js), else performance.now()
 }
 
 /** Pure: a stable 0..1 seed per guid (no Math.random: the look is the same every visit). */

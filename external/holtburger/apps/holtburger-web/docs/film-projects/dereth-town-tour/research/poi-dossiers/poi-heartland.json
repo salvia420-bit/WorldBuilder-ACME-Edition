@@ -1,0 +1,130 @@
+{
+ "name": "Heartland",
+ "title": "Heartland",
+ "siteId": "poi-heartland",
+ "summary": "The drop point of the Heartland portals at 22.6N 37.2E: a small farmstead with a farmer, a few cows and an empty chest. In the kit: two stone cottages (a two-storey house with chimney and a two-storey hut) with brass lanterns at the doors around a grassy yard in a hollow (z 62), cows and an auroch cow, small trees around.",
+ "landmarks": [
+  {
+   "name": "Farmhouse (0x01000830)",
+   "pos": [
+    33372.0,
+    29892.0,
+    62.0
+   ],
+   "heightM": 9.3,
+   "note": "Two brass lanterns at its doors."
+  },
+  {
+   "name": "Farm hut (0x0100081C)",
+   "pos": [
+    33396.0,
+    29916.0,
+    62.0
+   ],
+   "heightM": 12.0,
+   "note": "Two-storey hut, top z 74."
+  },
+  {
+   "name": "Farmyard / portal drop point",
+   "pos": [
+    33402.1,
+    29886.3,
+    62.0
+   ],
+   "heightM": 0.0,
+   "note": "Gazetteer heartland teleport; cows spawn here."
+  }
+ ],
+ "site": {
+  "id": "poi-heartland",
+  "name": "Heartland",
+  "gazetteerId": "heartland",
+  "teleport": "@teleloc 0xAD9B003E 186.1 126.3 62 0.594823 0 0 -0.803857",
+  "anchor": [
+   33385,
+   29905,
+   62
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer heartland (the Heartland portal drop point in the farmyard, z 62)."
+ },
+ "insertAfter": "glenden-wood",
+ "insertBefore": "cragstone",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 22.6,
+   "ew": 37.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2660,
+  "coveredBy": "shot:cragstone.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Heartland.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-heartland.01",
+   "site": "poi-heartland",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     2.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33385,
+     29905,
+     62
+    ],
+    "height": 12,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 16,
+    "endDistance": 62,
+    "startHeight": 5,
+    "endHeight": 30,
+    "bearingDeg": 162,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Pull back and up south from the Heartland farmyard, its two stone cottages, brass lanterns and grazing cows shrinking into the rolling green hills; keep 6 m above every tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Small-place closer: dronie from 16 m to 62 m south of the Heartland farmyard (5 -> 30 m up): the two stone cottages with their brass lanterns, the cows in the yard and the rolling grassland around shrink into the hills; noon sun behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 5..24.7 m, nearest drawn 11.85 m (spawn Door), vmax 7.48 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9 s: AGL 9.31..23.3 m, nearest drawn 13.5 m (scenery-default 0x02000246@33399,29850), vmax 7.48 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.46 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-heartland.01": "take 0-11 s: AGL 5..24.7 m, nearest drawn 11.85 m (spawn Door), vmax 7.48 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9 s: AGL 9.31..23.3 m, nearest drawn 13.5 m (scenery-default 0x02000246@33399,29850), vmax 7.48 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 7.46 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

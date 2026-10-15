@@ -1,0 +1,215 @@
+{
+ "name": "Vale of Giant Flowers",
+ "title": "Vale of Giant Flowers",
+ "siteId": "poi-vale-of-giant-flowers",
+ "summary": "A valley of giant flowers from another world in the Mid Direlands. Acpedia traces it from 26.0S 75.0W south, then east to the Valley of Death and past the Renegade Fortress. The kit has only six giant flowers at the start point but 86 in the meadow west and south-west of the Renegade Fortress: purple 0x020004C1 blooms 10-26 m tall, among giant grass. The site is anchored in that meadow (about 29.3S 66.4W), 210 m west of the fortress's earth wall, where the flowers are 'found in vast numbers'.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -26.0,
+   "ew": -75.0
+  },
+  "mapWorld": [
+   6468.0,
+   18228.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Vale_of_Giant_Flowers.txt",
+  "coveredDistM": 6629,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Tallest giant flower",
+   "pos": [
+    8627,
+    17365,
+    7
+   ],
+   "heightM": 25.9,
+   "note": "0x020004C1 under the fortress's west wall."
+  },
+  {
+   "name": "Flower meadow",
+   "pos": [
+    8545,
+    17380,
+    1
+   ],
+   "heightM": 15,
+   "note": "54 giant flowers from x 8450 to 8640 and y 17286 to 17461 (landblock 0x2C5A)."
+  }
+ ],
+ "site": {
+  "id": "poi-vale-of-giant-flowers",
+  "name": "Vale of Giant Flowers",
+  "teleport": "@teleloc 0x2C5A0026 97 140 0.5 1 0 0 0",
+  "anchor": [
+   8545,
+   17380,
+   1
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.73,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc in the flower meadow at (8545,17420), ground 0, 8 m from the nearest grass tuft. The gazetteer has only a map @tele at the 26.0S 75.0W start point."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-vale-of-giant-flowers.01",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8627,
+     17365,
+     7
+    ],
+    "height": 26,
+    "radius": 6
+   },
+   "params": {
+    "heightAGL": 30,
+    "speed": 7,
+    "alat": 3,
+    "cornerRadius": 25,
+    "lookAhead": 60,
+    "tiltDeg": -10,
+    "maxBankDeg": 10,
+    "bankGain": 0.8,
+    "minClearance": 20,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     8500,
+     17398,
+     0
+    ],
+    [
+     8535,
+     17390,
+     0
+    ],
+    [
+     8570,
+     17380,
+     0
+    ]
+   ],
+   "standingOrder": "Glide east-south-east 30 m above the vale, just over the giant purple flower heads, toward the tallest bloom under the Renegade Fortress wall; never below 20 m above the meadow.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view of the vale: the drone glides east-south-east 70 m at 7 m/s, 30 m above the meadow and just over the heads of the giant purple flowers (10-26 m tall, 54 in this landblock). It flies toward the tallest bloom under the 90 m earth wall of the Renegade Fortress (subject centred). The late sun is behind the lens. It is placed where acpedia says the flowers grow 'in vast numbers around the outside of the Valley of Death ... past the Renegade Fortress', not at the acpedia start point 26.0S 75.0W, where the kit shows only six flowers. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 28.33..30 m, nearest 12.59 m (scenery-default 0x020004C2@8523,17381), vmax 7.23 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 9 m (not drawn by the default bake); edit 3-9s: AGL 28.5..30 m, nearest 12.59 m (scenery-default 0x020004C2@8523,17381), vmax 7.23 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 9 m (not drawn by the default bake); flight cinema: peak 7.25 m/s (cap 12), tracking gap 0.03 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-vale-of-giant-flowers.01",
+   "technique": "drone.canyon-run",
+   "rank": 1,
+   "check": "take 10s: AGL 28.33..30 m, nearest 12.59 m (scenery-default 0x020004C2@8523,17381), vmax 7.23 m/s, LOS blocked 0/41, in frame 100%, water 0%, retail-bake tree 9 m (not drawn by the default bake); edit 3-9s: AGL 28.5..30 m, nearest 12.59 m (scenery-default 0x020004C2@8523,17381), vmax 7.23 m/s, LOS blocked 0/25, in frame 100%, water 0%, retail-bake tree 9 m (not drawn by the default bake); flight cinema: peak 7.25 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-vale-of-giant-flowers.02",
+   "technique": "classic.low-angle",
+   "rank": 2,
+   "check": "take 8s: AGL 8.34..9.3 m, nearest 9.65 m (scenery-default 0x02000583@8601,17357), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 7 m (not drawn by the default bake); edit 1.5-6.5s: AGL 8.43..9.3 m, nearest 9.72 m (scenery-default 0x02000583@8601,17357), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 7.1 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 11,
+ "techniques": [
+  "drone.canyon-run",
+  "classic.low-angle"
+ ],
+ "criticRemovedShots": [
+  {
+   "id": "poi-vale-of-giant-flowers.02",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8627,
+     17365,
+     7
+    ],
+    "height": 26,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 235,
+    "azimuthRef": "compass",
+    "elevationDeg": -42,
+    "distance": 24,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Look up at the tallest giant flower from 24 m south-west, lens 8 m above the meadow, the sun behind the lens and the fortress wall behind the bloom; creep 1.5 m, keep 5 m from other stems.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle: the lens is 24 m south-west of the tallest giant flower (25.9 m), 8 m above the sloping meadow, and looks up 33 deg at the purple bloom against the sky and the fortress wall behind it, creeping 1.5 m. The sun is behind the lens. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 8.34..9.3 m, nearest 9.65 m (scenery-default 0x02000583@8601,17357), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 7 m (not drawn by the default bake); edit 1.5-6.5s: AGL 8.43..9.3 m, nearest 9.72 m (scenery-default 0x02000583@8601,17357), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 7.1 m (not drawn by the default bake).",
+   "criticReason": "Duplicate technique and place: a classic.low-angle 229 m from and framed against the Renegade Fortress wall, one shot after poi-renegade-fortress.03 (also classic.low-angle at the same fortress); it also repeats the end frame of vale.01's canyon-run (the same tallest bloom under the fortress wall). The vale keeps its rank-1 canyon-run."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.low-angle: Duplicate technique and place: a classic.low-angle 229 m from and framed against the Renegade Fortress wall, one shot after poi-renegade-fortress.03 (also classic.low-angle at the same fortress); it also repeats the end frame of vale.01's canyon-run (the same tallest bloom under the fortress wall). The vale keeps its rank-1 canyon-run."
+ ]
+}

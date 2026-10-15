@@ -1,0 +1,118 @@
+{
+ "name": "Tumerok Fort (51.1S, 82.0W)",
+ "title": "51.1S, 82.0W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-511s-820w",
+ "summary": "The Overlord's Sword Tumerok fort on an 80 m mesa in the West Dires 2.5 km north-west of Ayan Baqur: ten timber halls, gate halls and palisades on the mesa top with two 30.75 m stone spire towers on its north rim at (4812, 12276) and (4836, 12276) (a Sturdy Steel Chest in one); the slopes fall 70 m to the north and west into forest.",
+ "landmarks": [
+  {
+   "name": "Spire towers",
+   "pos": [
+    4824,
+    12276,
+    80
+   ],
+   "heightM": 30.75,
+   "note": "Two 0x01001161, tops z 110.75."
+  },
+  {
+   "name": "Fort halls",
+   "pos": [
+    4824,
+    12216,
+    80
+   ],
+   "heightM": 5,
+   "note": "0x0100115E / 0x01001130 / 0x01001201."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-511s-820w",
+  "name": "Tumerok Fort (51.1S, 82.0W)",
+  "teleport": "@teleloc 0x193F0004 2.0 94.0 80.50 1 0 0 0",
+  "anchor": [
+   4824,
+   12240,
+   80
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.78,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport on the mesa top 55 m south-south-west of the fort centre, 12 m from the nearest hut."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -51.1,
+   "ew": -82.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2513,
+  "coveredBy": "shot:ayan-baqur.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/51_1S_82_0W_Tumerok_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-511s-820w.01",
+   "site": "poi-tumerok-fort-511s-820w",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.5,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     4824,
+     12276,
+     80
+    ],
+    "height": 31,
+    "radius": 22
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 335,
+    "elevationDeg": -22,
+    "distance": 75,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "standingOrder": "Look up the north slope of the mesa at the two Tumerok spire towers on its rim against the golden sky, creeping 2 m closer; keep 4 m above the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle from the north slope of the mesa (camera 9-10 m above the slope, 75 m from the towers) looking up at the two 30.75 m spire towers on the mesa rim against the golden sky (0.78), creeping 2 m closer; the western sun side-lights them from the right. Verified (check.mjs, full take flown): take 0-8 s: AGL 8.73..10 m, nearest drawn 18.8 m (scenery-default 0x020002D3@4785,12353), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 28.2 m); edit 1-7 s: AGL 8.77..9.9 m, nearest drawn 18.87 m (scenery-default 0x020002D3@4785,12353), vmax 0.39 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 28.2 m)."
+  }
+ ],
+ "verification": {
+  "poi-tumerok-fort-511s-820w.01": "take 0-8 s: AGL 8.73..10 m, nearest drawn 18.8 m (scenery-default 0x020002D3@4785,12353), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100% (retail-bake tree 28.2 m); edit 1-7 s: AGL 8.77..9.9 m, nearest drawn 18.87 m (scenery-default 0x020002D3@4785,12353), vmax 0.39 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 28.2 m)"
+ }
+}

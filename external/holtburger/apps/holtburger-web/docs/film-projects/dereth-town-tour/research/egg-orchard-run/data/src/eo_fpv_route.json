@@ -1,0 +1,7293 @@
+{
+ "meta": {
+  "landblock": "0x002B",
+  "dungeon": "Egg Orchard (Mid copy; East 0x0064 / West 0x00C8 mirrors not analysed)",
+  "coords": "world = local + (0, 8256, 0)  [lbX 0 -> +0, lbY 43 -> +43*192]; z identical",
+  "source": "EnvCell/Environment DAT parses (client_cell_1.dat / client_portal.dat, /tmp/claude-1000/eo/parse_all.jsonl), ACE spawns (~/hb-serve/dist/current/spawns/0x002B.spawns.jsonl == WBT describe-landblock), LSD weenies",
+  "path_note": "polyline through door centres at min(0.45*door height, 2.6 m) above the door bottom; floor holes at their centroid; the real racing line will be ~3-5% shorter"
+ },
+ "entry": {
+  "cell": "0x002B0371",
+  "local": [
+   458.535,
+   -172.203,
+   0.005
+  ],
+  "world": [
+   458.535,
+   8083.797,
+   0.005
+  ],
+  "quat_wxyz": [
+   0.933008,
+   0,
+   0,
+   -0.359856
+  ],
+  "heading": "yaw -42.2 deg = facing bearing 42 (NE), straight at the burrow mound 0x376",
+  "teleport": "@teleloc 0x002B0371 458.535 -172.203 0.005 0.933008 0 0 -0.359856"
+ },
+ "exit_portal": {
+  "name": "Surface",
+  "wcid": 30965,
+  "weenieType": 7,
+  "setup": "0x020001B3 (swirl disc 2.82 m wide, 2.71 m tall)",
+  "cell": "0x002B0100",
+  "local": [
+   9.70408,
+   -113.312,
+   -60.063
+  ],
+  "world": [
+   9.704,
+   8142.688,
+   -60.063
+  ],
+  "quat_wxyz": [
+   0.999303,
+   0,
+   0,
+   0.037323
+  ],
+  "facing": "yaw +4.3 deg: disc plane runs E-W, approached heading north up tunnel 0x103",
+  "destination": {
+   "objcell": "0x43F70015",
+   "local": [
+    60.0,
+    108.0,
+    102.005
+   ],
+   "world": [
+    12924.0,
+    47532.0,
+    102.0
+   ],
+   "desc": "Surface (96.2N, 48.1W): Shattered Outlands glacier valley, ~25 m south of the three red Egg Orchard portals (12923.83, 47556.72)"
+  },
+  "cellGeometry": "dead-end stub 5.3 m wide x 3.75 m tall, y 8141-8145 (portal 2.3 m in front of the end wall)"
+ },
+ "other_portal": {
+  "name": "Surface",
+  "wcid": 30965,
+  "cell": "0x002B036F",
+  "world": [
+   450.81,
+   8076.55,
+   -0.06
+  ],
+  "note": "second exit in the SW corner of the ENTRY hall (same destination) - not the goal"
+ },
+ "totals": {
+  "cells": 164,
+  "length_m": 738.9,
+  "z_from": 0.005,
+  "z_to": -60.063,
+  "drop_m": 60.07
+ },
+ "segments": [
+  {
+   "seg": "A",
+   "name": "Entry hall -> burrow trench",
+   "cells": [
+    "0x371",
+    "0x370",
+    "0x376",
+    "0x375"
+   ],
+   "s0": 0.0,
+   "s1": 20.2,
+   "len": 20.2,
+   "z0": 1.6,
+   "z1": 1.4,
+   "minW": 5.1,
+   "minH": 6.1,
+   "turns": [
+    45,
+    -60
+   ],
+   "inway": {},
+   "near": {}
+  },
+  {
+   "seg": "B",
+   "name": "Entry tunnel + ramps to -6 and -12",
+   "cells": [
+    "0x374",
+    "0x373",
+    "0x35f",
+    "0x35d",
+    "0x35e",
+    "0x358",
+    "0x357",
+    "0x354",
+    "0x356",
+    "0x353",
+    "0x351",
+    "0x350",
+    "0x352",
+    "0x34f"
+   ],
+   "s0": 20.2,
+   "s1": 94.5,
+   "len": 74.3,
+   "z0": 1.4,
+   "z1": -10.3,
+   "minW": 3.7,
+   "minH": 3.7,
+   "turns": [
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45
+   ],
+   "inway": {
+    "Olthoi Slasher": 3
+   },
+   "near": {}
+  },
+  {
+   "seg": "C",
+   "name": "-12 serpentine tunnels",
+   "cells": [
+    "0x308",
+    "0x306",
+    "0x307",
+    "0x2ff",
+    "0x2f4",
+    "0x2f2",
+    "0x2f3",
+    "0x2e1",
+    "0x2e4",
+    "0x2e2",
+    "0x2e5",
+    "0x2dd",
+    "0x2d9",
+    "0x2d8",
+    "0x2d6",
+    "0x2d7",
+    "0x2d2",
+    "0x2d0",
+    "0x2cd",
+    "0x2cf",
+    "0x2d1",
+    "0x2c7",
+    "0x2c5",
+    "0x2c6"
+   ],
+   "s0": 94.5,
+   "s1": 195.3,
+   "len": 100.8,
+   "z0": -10.3,
+   "z1": -10.3,
+   "minW": 3.7,
+   "minH": 3.8,
+   "turns": [
+    -45,
+    -45,
+    -45,
+    -45,
+    45,
+    45,
+    45,
+    45,
+    -45,
+    -45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45
+   ],
+   "inway": {
+    "Olthoi Slasher": 4
+   },
+   "near": {
+    "Olthoi Slasher": 2
+   }
+  },
+  {
+   "seg": "D",
+   "name": "Burrow pop-up + Slasher hall (30x30, 9 m tall)",
+   "cells": [
+    "0x2c8",
+    "0x2c9",
+    "0x2c0",
+    "0x2c3"
+   ],
+   "s0": 195.3,
+   "s1": 217.0,
+   "len": 21.6,
+   "z0": -10.3,
+   "z1": -11.8,
+   "minW": 5.2,
+   "minH": 6.1,
+   "turns": [
+    60,
+    -63
+   ],
+   "inway": {},
+   "near": {
+    "Olthoi Slasher": 2
+   }
+  },
+  {
+   "seg": "E",
+   "name": "Floor chute -12 -> -18",
+   "cells": [
+    "0x2c2"
+   ],
+   "s0": 217.0,
+   "s1": 225.3,
+   "len": 8.3,
+   "z0": -12.0,
+   "z1": -16.5,
+   "minW": 4.9,
+   "minH": 3.8,
+   "turns": [],
+   "inway": {},
+   "near": {
+    "Olthoi Slasher": 1
+   }
+  },
+  {
+   "seg": "F",
+   "name": "-18/-24/-30/-36 tunnels, 3 ramps",
+   "cells": [
+    "0x2ad",
+    "0x2a7",
+    "0x2a6",
+    "0x2a9",
+    "0x2ab",
+    "0x2aa",
+    "0x2ac",
+    "0x29b",
+    "0x29a",
+    "0x29d",
+    "0x29f",
+    "0x29e",
+    "0x2a0",
+    "0x28e",
+    "0x24b",
+    "0x24a",
+    "0x24d",
+    "0x24f",
+    "0x24e",
+    "0x250",
+    "0x236",
+    "0x235",
+    "0x237",
+    "0x21c",
+    "0x21a",
+    "0x21d",
+    "0x219",
+    "0x217",
+    "0x218",
+    "0x20a",
+    "0x209",
+    "0x208",
+    "0x206",
+    "0x207",
+    "0x204",
+    "0x202",
+    "0x205",
+    "0x201",
+    "0x1f4",
+    "0x1f3",
+    "0x1f1",
+    "0x1f2",
+    "0x1f0",
+    "0x1e6",
+    "0x1e4",
+    "0x1e5"
+   ],
+   "s0": 225.3,
+   "s1": 402.2,
+   "len": 177.0,
+   "z0": -16.6,
+   "z1": -34.3,
+   "minW": 3.7,
+   "minH": 3.7,
+   "turns": [
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    -45,
+    -45
+   ],
+   "inway": {
+    "Olthoi Slayer": 8
+   },
+   "near": {
+    "Olthoi Slasher": 2,
+    "Olthoi Slayer": 3
+   }
+  },
+  {
+   "seg": "G",
+   "name": "-36 hall + 2 chimneys",
+   "cells": [
+    "0x1e7",
+    "0x1e0",
+    "0x1de",
+    "0x1dd",
+    "0x1dc",
+    "0x1d8"
+   ],
+   "s0": 402.2,
+   "s1": 453.5,
+   "len": 51.3,
+   "z0": -34.3,
+   "z1": -33.4,
+   "minW": 10.0,
+   "minH": 6.0,
+   "turns": [
+    45,
+    45,
+    45,
+    -45,
+    -45
+   ],
+   "inway": {
+    "Olthoi Ripper": 2
+   },
+   "near": {
+    "Olthoi Slayer": 1,
+    "Olthoi Ripper": 2
+   }
+  },
+  {
+   "seg": "H",
+   "name": "THE PIT (18 m drop)",
+   "cells": [
+    "0x1d4",
+    "0x1cc",
+    "0x1c5",
+    "0x1a9"
+   ],
+   "s0": 453.5,
+   "s1": 477.2,
+   "len": 23.7,
+   "z0": -33.6,
+   "z1": -51.3,
+   "minW": 10.0,
+   "minH": 24.0,
+   "turns": [
+    -90
+   ],
+   "inway": {},
+   "near": {
+    "Olthoi Ripper": 2
+   }
+  },
+  {
+   "seg": "I",
+   "name": "-54 lower-half tunnels",
+   "cells": [
+    "0x1aa",
+    "0x1ac",
+    "0x1ab",
+    "0x1ad",
+    "0x1a4",
+    "0x1a5",
+    "0x1a7",
+    "0x1a6",
+    "0x1a8",
+    "0x19e",
+    "0x19b",
+    "0x19d",
+    "0x1a0",
+    "0x19f",
+    "0x1a1",
+    "0x18f",
+    "0x18e",
+    "0x190",
+    "0x180",
+    "0x177",
+    "0x174",
+    "0x175",
+    "0x173",
+    "0x171",
+    "0x172",
+    "0x165",
+    "0x163",
+    "0x167",
+    "0x15e",
+    "0x15d",
+    "0x15b",
+    "0x15c",
+    "0x15a",
+    "0x156",
+    "0x154",
+    "0x155",
+    "0x158",
+    "0x157",
+    "0x159"
+   ],
+   "s0": 477.2,
+   "s1": 623.9,
+   "len": 146.7,
+   "z0": -51.4,
+   "z1": -52.3,
+   "minW": 3.7,
+   "minH": 3.8,
+   "turns": [
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    45,
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -45,
+    -45,
+    -45,
+    -45,
+    45,
+    45
+   ],
+   "inway": {
+    "Olthoi Ripper": 7
+   },
+   "near": {
+    "Olthoi Ripper": 5
+   }
+  },
+  {
+   "seg": "J",
+   "name": "Burrow pop-up + ramp hall -54 -> -60",
+   "cells": [
+    "0x152",
+    "0x153",
+    "0x150"
+   ],
+   "s0": 623.9,
+   "s1": 645.6,
+   "len": 21.7,
+   "z0": -52.3,
+   "z1": -57.3,
+   "minW": 5.2,
+   "minH": 6.1,
+   "turns": [],
+   "inway": {
+    "Olthoi Ripper": 2
+   },
+   "near": {
+    "Olthoi Ripper": 2
+   }
+  },
+  {
+   "seg": "K",
+   "name": "Orchard: burrows -> west egg chamber -> exit portal",
+   "cells": [
+    "0x132",
+    "0x12f",
+    "0x130",
+    "0x12e",
+    "0x12c",
+    "0x12d",
+    "0x123",
+    "0x122",
+    "0x121",
+    "0x11a",
+    "0x11b",
+    "0x111",
+    "0x10a",
+    "0x10b",
+    "0x105",
+    "0x102",
+    "0x101",
+    "0x103",
+    "0x100"
+   ],
+   "s0": 645.6,
+   "s1": 738.9,
+   "len": 93.3,
+   "z0": -57.4,
+   "z1": -58.3,
+   "minW": 3.7,
+   "minH": 3.8,
+   "turns": [
+    45,
+    -45,
+    -45,
+    45,
+    45,
+    -60,
+    -30,
+    -45,
+    45,
+    45,
+    45
+   ],
+   "inway": {
+    "Olthoi Ripper": 4,
+    "Olthoi Larvae": 2
+   },
+   "near": {
+    "Olthoi Larvae": 7,
+    "Olthoi Ripper": 7
+   }
+  }
+ ],
+ "cells": [
+  {
+   "i": 0,
+   "cell": "0x002B0371",
+   "env": "0x027B",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": 0.0,
+   "centreWorld": [
+    460.0,
+    8086.0,
+    0.0
+   ],
+   "s_enter": 0.0
+  },
+  {
+   "i": 1,
+   "cell": "0x002B0370",
+   "env": "0x0297",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": 0.0,
+   "centreWorld": [
+    460.0,
+    8096.0,
+    0.0
+   ],
+   "s_enter": 5.1
+  },
+  {
+   "i": 2,
+   "cell": "0x002B0376",
+   "env": "0x01EE",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -0.0,
+   "centreWorld": [
+    470.0,
+    8096.0,
+    -0.0
+   ],
+   "s_enter": 12.2
+  },
+  {
+   "i": 3,
+   "cell": "0x002B0375",
+   "env": "0x01EE",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -0.0,
+   "centreWorld": [
+    470.0,
+    8098.5,
+    -0.0
+   ],
+   "s_enter": 18.0
+  },
+  {
+   "i": 4,
+   "cell": "0x002B0374",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -0.0,
+   "centreWorld": [
+    470.0,
+    8106.0,
+    -0.0
+   ],
+   "s_enter": 20.2
+  },
+  {
+   "i": 5,
+   "cell": "0x002B0373",
+   "env": "0x012A",
+   "cs": 0,
+   "kind": "ramp tunnel (-6 m over 10 m, 31 deg)",
+   "floorZ": -6.0,
+   "centreWorld": [
+    470.0,
+    8116.0,
+    -6.0
+   ],
+   "s_enter": 30.2
+  },
+  {
+   "i": 6,
+   "cell": "0x002B035F",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    470.0,
+    8121.99,
+    -6.0
+   ],
+   "s_enter": 41.8
+  },
+  {
+   "i": 7,
+   "cell": "0x002B035D",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    469.82,
+    8125.82,
+    -6.0
+   ],
+   "s_enter": 43.8
+  },
+  {
+   "i": 8,
+   "cell": "0x002B035E",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    465.99,
+    8126.0,
+    -6.0
+   ],
+   "s_enter": 48.1
+  },
+  {
+   "i": 9,
+   "cell": "0x002B0358",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -6.0,
+   "centreWorld": [
+    461.17,
+    8127.17,
+    -6.0
+   ],
+   "s_enter": 50.1
+  },
+  {
+   "i": 10,
+   "cell": "0x002B0357",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    460.0,
+    8131.33,
+    -6.0
+   ],
+   "s_enter": 57.2
+  },
+  {
+   "i": 11,
+   "cell": "0x002B0354",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    460.0,
+    8135.17,
+    -6.0
+   ],
+   "s_enter": 57.8
+  },
+  {
+   "i": 12,
+   "cell": "0x002B0356",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    455.33,
+    8136.0,
+    -6.0
+   ],
+   "s_enter": 63.9
+  },
+  {
+   "i": 13,
+   "cell": "0x002B0353",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -6.0,
+   "centreWorld": [
+    450.0,
+    8136.0,
+    -6.0
+   ],
+   "s_enter": 64.6
+  },
+  {
+   "i": 14,
+   "cell": "0x002B0351",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    444.01,
+    8136.0,
+    -6.0
+   ],
+   "s_enter": 74.6
+  },
+  {
+   "i": 15,
+   "cell": "0x002B0350",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    440.18,
+    8136.18,
+    -6.0
+   ],
+   "s_enter": 76.6
+  },
+  {
+   "i": 16,
+   "cell": "0x002B0352",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -6.0,
+   "centreWorld": [
+    440.0,
+    8140.01,
+    -6.0
+   ],
+   "s_enter": 80.9
+  },
+  {
+   "i": 17,
+   "cell": "0x002B034F",
+   "env": "0x012A",
+   "cs": 0,
+   "kind": "ramp tunnel (-6 m over 10 m, 31 deg)",
+   "floorZ": -12.0,
+   "centreWorld": [
+    440.0,
+    8146.0,
+    -12.0
+   ],
+   "s_enter": 82.8
+  },
+  {
+   "i": 18,
+   "cell": "0x002B0308",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    440.0,
+    8151.99,
+    -12.0
+   ],
+   "s_enter": 94.5
+  },
+  {
+   "i": 19,
+   "cell": "0x002B0306",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    439.82,
+    8155.82,
+    -12.0
+   ],
+   "s_enter": 96.5
+  },
+  {
+   "i": 20,
+   "cell": "0x002B0307",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    435.99,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 100.8
+  },
+  {
+   "i": 21,
+   "cell": "0x002B02FF",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -12.0,
+   "centreWorld": [
+    430.0,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 102.7
+  },
+  {
+   "i": 22,
+   "cell": "0x002B02F4",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    424.67,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 112.7
+  },
+  {
+   "i": 23,
+   "cell": "0x002B02F2",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    420.0,
+    8156.83,
+    -12.0
+   ],
+   "s_enter": 113.4
+  },
+  {
+   "i": 24,
+   "cell": "0x002B02F3",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    415.33,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 122.1
+  },
+  {
+   "i": 25,
+   "cell": "0x002B02E1",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -12.0,
+   "centreWorld": [
+    411.17,
+    8154.83,
+    -12.0
+   ],
+   "s_enter": 122.7
+  },
+  {
+   "i": 26,
+   "cell": "0x002B02E4",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    410.0,
+    8150.67,
+    -12.0
+   ],
+   "s_enter": 129.8
+  },
+  {
+   "i": 27,
+   "cell": "0x002B02E2",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    409.17,
+    8146.0,
+    -12.0
+   ],
+   "s_enter": 130.5
+  },
+  {
+   "i": 28,
+   "cell": "0x002B02E5",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    405.33,
+    8146.0,
+    -12.0
+   ],
+   "s_enter": 136.6
+  },
+  {
+   "i": 29,
+   "cell": "0x002B02DD",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -12.0,
+   "centreWorld": [
+    400.0,
+    8146.0,
+    -12.0
+   ],
+   "s_enter": 137.3
+  },
+  {
+   "i": 30,
+   "cell": "0x002B02D9",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -12.0,
+   "centreWorld": [
+    391.17,
+    8147.17,
+    -12.0
+   ],
+   "s_enter": 147.3
+  },
+  {
+   "i": 31,
+   "cell": "0x002B02D8",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    390.0,
+    8151.99,
+    -12.0
+   ],
+   "s_enter": 154.3
+  },
+  {
+   "i": 32,
+   "cell": "0x002B02D6",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    389.82,
+    8155.82,
+    -12.0
+   ],
+   "s_enter": 156.3
+  },
+  {
+   "i": 33,
+   "cell": "0x002B02D7",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    385.99,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 160.6
+  },
+  {
+   "i": 34,
+   "cell": "0x002B02D2",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -12.0,
+   "centreWorld": [
+    380.0,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 162.6
+  },
+  {
+   "i": 35,
+   "cell": "0x002B02D0",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    374.67,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 172.6
+  },
+  {
+   "i": 36,
+   "cell": "0x002B02CD",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    370.83,
+    8156.0,
+    -12.0
+   ],
+   "s_enter": 173.2
+  },
+  {
+   "i": 37,
+   "cell": "0x002B02CF",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    370.0,
+    8151.33,
+    -12.0
+   ],
+   "s_enter": 179.4
+  },
+  {
+   "i": 38,
+   "cell": "0x002B02D1",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -12.0,
+   "centreWorld": [
+    368.83,
+    8147.17,
+    -12.0
+   ],
+   "s_enter": 180.0
+  },
+  {
+   "i": 39,
+   "cell": "0x002B02C7",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    364.01,
+    8146.0,
+    -12.0
+   ],
+   "s_enter": 187.1
+  },
+  {
+   "i": 40,
+   "cell": "0x002B02C5",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    360.18,
+    8145.82,
+    -12.0
+   ],
+   "s_enter": 189.1
+  },
+  {
+   "i": 41,
+   "cell": "0x002B02C6",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -12.0,
+   "centreWorld": [
+    360.0,
+    8141.99,
+    -12.0
+   ],
+   "s_enter": 193.4
+  },
+  {
+   "i": 42,
+   "cell": "0x002B02C8",
+   "env": "0x01EE",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -12.0,
+   "centreWorld": [
+    360.0,
+    8138.5,
+    -12.0
+   ],
+   "s_enter": 195.3
+  },
+  {
+   "i": 43,
+   "cell": "0x002B02C9",
+   "env": "0x01EE",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -12.0,
+   "centreWorld": [
+    360.0,
+    8136.0,
+    -12.0
+   ],
+   "s_enter": 197.5
+  },
+  {
+   "i": 44,
+   "cell": "0x002B02C0",
+   "env": "0x0294",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -12.0,
+   "centreWorld": [
+    350.0,
+    8136.0,
+    -12.0
+   ],
+   "s_enter": 203.3
+  },
+  {
+   "i": 45,
+   "cell": "0x002B02C3",
+   "env": "0x01E7",
+   "cs": 2,
+   "kind": "chute room (floor hole + 33 deg chute)",
+   "floorZ": -12.0,
+   "centreWorld": [
+    350.0,
+    8126.0,
+    -12.0
+   ],
+   "s_enter": 210.4
+  },
+  {
+   "i": 46,
+   "cell": "0x002B02C2",
+   "env": "0x01E7",
+   "cs": 1,
+   "kind": "chute room (floor hole + 33 deg chute)",
+   "floorZ": -18.0,
+   "centreWorld": [
+    349.75,
+    8125.95,
+    -18.0
+   ],
+   "s_enter": 217.0
+  },
+  {
+   "i": 47,
+   "cell": "0x002B02AD",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -18.0,
+   "centreWorld": [
+    340.0,
+    8126.0,
+    -18.0
+   ],
+   "s_enter": 225.3
+  },
+  {
+   "i": 48,
+   "cell": "0x002B02A7",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    334.67,
+    8126.0,
+    -18.0
+   ],
+   "s_enter": 235.3
+  },
+  {
+   "i": 49,
+   "cell": "0x002B02A6",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    330.0,
+    8125.17,
+    -18.0
+   ],
+   "s_enter": 235.9
+  },
+  {
+   "i": 50,
+   "cell": "0x002B02A9",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    330.0,
+    8121.33,
+    -18.0
+   ],
+   "s_enter": 242.1
+  },
+  {
+   "i": 51,
+   "cell": "0x002B02AB",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    330.0,
+    8120.01,
+    -18.0
+   ],
+   "s_enter": 242.7
+  },
+  {
+   "i": 52,
+   "cell": "0x002B02AA",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    329.82,
+    8116.18,
+    -18.0
+   ],
+   "s_enter": 244.7
+  },
+  {
+   "i": 53,
+   "cell": "0x002B02AC",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    325.99,
+    8116.0,
+    -18.0
+   ],
+   "s_enter": 249.0
+  },
+  {
+   "i": 54,
+   "cell": "0x002B029B",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    324.67,
+    8116.0,
+    -18.0
+   ],
+   "s_enter": 250.9
+  },
+  {
+   "i": 55,
+   "cell": "0x002B029A",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    320.0,
+    8115.17,
+    -18.0
+   ],
+   "s_enter": 251.6
+  },
+  {
+   "i": 56,
+   "cell": "0x002B029D",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    320.0,
+    8111.33,
+    -18.0
+   ],
+   "s_enter": 257.7
+  },
+  {
+   "i": 57,
+   "cell": "0x002B029F",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    320.0,
+    8110.01,
+    -18.0
+   ],
+   "s_enter": 258.4
+  },
+  {
+   "i": 58,
+   "cell": "0x002B029E",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    319.82,
+    8106.18,
+    -18.0
+   ],
+   "s_enter": 260.4
+  },
+  {
+   "i": 59,
+   "cell": "0x002B02A0",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -18.0,
+   "centreWorld": [
+    315.99,
+    8106.0,
+    -18.0
+   ],
+   "s_enter": 264.7
+  },
+  {
+   "i": 60,
+   "cell": "0x002B028E",
+   "env": "0x012A",
+   "cs": 0,
+   "kind": "ramp tunnel (-6 m over 10 m, 31 deg)",
+   "floorZ": -24.0,
+   "centreWorld": [
+    310.0,
+    8106.0,
+    -24.0
+   ],
+   "s_enter": 266.6
+  },
+  {
+   "i": 61,
+   "cell": "0x002B024B",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    304.67,
+    8106.0,
+    -24.0
+   ],
+   "s_enter": 278.3
+  },
+  {
+   "i": 62,
+   "cell": "0x002B024A",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    300.0,
+    8105.17,
+    -24.0
+   ],
+   "s_enter": 279.0
+  },
+  {
+   "i": 63,
+   "cell": "0x002B024D",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    300.0,
+    8101.33,
+    -24.0
+   ],
+   "s_enter": 285.1
+  },
+  {
+   "i": 64,
+   "cell": "0x002B024F",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    300.0,
+    8100.01,
+    -24.0
+   ],
+   "s_enter": 285.8
+  },
+  {
+   "i": 65,
+   "cell": "0x002B024E",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    299.82,
+    8096.18,
+    -24.0
+   ],
+   "s_enter": 287.7
+  },
+  {
+   "i": 66,
+   "cell": "0x002B0250",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    295.99,
+    8096.0,
+    -24.0
+   ],
+   "s_enter": 292.0
+  },
+  {
+   "i": 67,
+   "cell": "0x002B0236",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    294.67,
+    8096.0,
+    -24.0
+   ],
+   "s_enter": 294.0
+  },
+  {
+   "i": 68,
+   "cell": "0x002B0235",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    290.0,
+    8095.17,
+    -24.0
+   ],
+   "s_enter": 294.7
+  },
+  {
+   "i": 69,
+   "cell": "0x002B0237",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    285.33,
+    8096.0,
+    -24.0
+   ],
+   "s_enter": 303.3
+  },
+  {
+   "i": 70,
+   "cell": "0x002B021C",
+   "env": "0x0126",
+   "cs": 2,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    284.67,
+    8096.0,
+    -24.0
+   ],
+   "s_enter": 304.0
+  },
+  {
+   "i": 71,
+   "cell": "0x002B021A",
+   "env": "0x0126",
+   "cs": 0,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    280.0,
+    8096.0,
+    -24.0
+   ],
+   "s_enter": 304.7
+  },
+  {
+   "i": 72,
+   "cell": "0x002B021D",
+   "env": "0x0126",
+   "cs": 3,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    280.0,
+    8100.67,
+    -24.0
+   ],
+   "s_enter": 310.8
+  },
+  {
+   "i": 73,
+   "cell": "0x002B0219",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    280.0,
+    8101.99,
+    -24.0
+   ],
+   "s_enter": 311.5
+  },
+  {
+   "i": 74,
+   "cell": "0x002B0217",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    279.82,
+    8105.82,
+    -24.0
+   ],
+   "s_enter": 313.4
+  },
+  {
+   "i": 75,
+   "cell": "0x002B0218",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    275.99,
+    8106.0,
+    -24.0
+   ],
+   "s_enter": 317.7
+  },
+  {
+   "i": 76,
+   "cell": "0x002B020A",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -24.0,
+   "centreWorld": [
+    270.0,
+    8106.0,
+    -24.0
+   ],
+   "s_enter": 319.7
+  },
+  {
+   "i": 77,
+   "cell": "0x002B0209",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -24.0,
+   "centreWorld": [
+    261.17,
+    8107.17,
+    -24.0
+   ],
+   "s_enter": 329.7
+  },
+  {
+   "i": 78,
+   "cell": "0x002B0208",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    260.0,
+    8111.99,
+    -24.0
+   ],
+   "s_enter": 336.8
+  },
+  {
+   "i": 79,
+   "cell": "0x002B0206",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    259.82,
+    8115.82,
+    -24.0
+   ],
+   "s_enter": 338.7
+  },
+  {
+   "i": 80,
+   "cell": "0x002B0207",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    255.99,
+    8116.0,
+    -24.0
+   ],
+   "s_enter": 343.0
+  },
+  {
+   "i": 81,
+   "cell": "0x002B0204",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    254.67,
+    8116.0,
+    -24.0
+   ],
+   "s_enter": 345.0
+  },
+  {
+   "i": 82,
+   "cell": "0x002B0202",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    250.0,
+    8116.83,
+    -24.0
+   ],
+   "s_enter": 345.7
+  },
+  {
+   "i": 83,
+   "cell": "0x002B0205",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -24.0,
+   "centreWorld": [
+    250.0,
+    8120.67,
+    -24.0
+   ],
+   "s_enter": 351.8
+  },
+  {
+   "i": 84,
+   "cell": "0x002B0201",
+   "env": "0x012A",
+   "cs": 0,
+   "kind": "ramp tunnel (-6 m over 10 m, 31 deg)",
+   "floorZ": -30.0,
+   "centreWorld": [
+    250.0,
+    8126.0,
+    -30.0
+   ],
+   "s_enter": 352.4
+  },
+  {
+   "i": 85,
+   "cell": "0x002B01F4",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -30.0,
+   "centreWorld": [
+    250.0,
+    8136.0,
+    -30.0
+   ],
+   "s_enter": 364.1
+  },
+  {
+   "i": 86,
+   "cell": "0x002B01F3",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -30.0,
+   "centreWorld": [
+    250.0,
+    8141.99,
+    -30.0
+   ],
+   "s_enter": 374.1
+  },
+  {
+   "i": 87,
+   "cell": "0x002B01F1",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -30.0,
+   "centreWorld": [
+    249.82,
+    8145.82,
+    -30.0
+   ],
+   "s_enter": 376.1
+  },
+  {
+   "i": 88,
+   "cell": "0x002B01F2",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -30.0,
+   "centreWorld": [
+    245.99,
+    8146.0,
+    -30.0
+   ],
+   "s_enter": 380.4
+  },
+  {
+   "i": 89,
+   "cell": "0x002B01F0",
+   "env": "0x012A",
+   "cs": 0,
+   "kind": "ramp tunnel (-6 m over 10 m, 31 deg)",
+   "floorZ": -36.0,
+   "centreWorld": [
+    240.0,
+    8146.0,
+    -36.0
+   ],
+   "s_enter": 382.3
+  },
+  {
+   "i": 90,
+   "cell": "0x002B01E6",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -36.0,
+   "centreWorld": [
+    234.01,
+    8146.0,
+    -36.0
+   ],
+   "s_enter": 394.0
+  },
+  {
+   "i": 91,
+   "cell": "0x002B01E4",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -36.0,
+   "centreWorld": [
+    230.18,
+    8145.82,
+    -36.0
+   ],
+   "s_enter": 396.0
+  },
+  {
+   "i": 92,
+   "cell": "0x002B01E5",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -36.0,
+   "centreWorld": [
+    230.0,
+    8141.99,
+    -36.0
+   ],
+   "s_enter": 400.3
+  },
+  {
+   "i": 93,
+   "cell": "0x002B01E7",
+   "env": "0x01BB",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    230.0,
+    8136.0,
+    -36.0
+   ],
+   "s_enter": 402.2
+  },
+  {
+   "i": 94,
+   "cell": "0x002B01E0",
+   "env": "0x00BD",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    220.0,
+    8136.0,
+    -36.0
+   ],
+   "s_enter": 409.4
+  },
+  {
+   "i": 95,
+   "cell": "0x002B01DE",
+   "env": "0x0094",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    210.0,
+    8136.0,
+    -36.0
+   ],
+   "s_enter": 419.4
+  },
+  {
+   "i": 96,
+   "cell": "0x002B01DD",
+   "env": "0x00BD",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    210.0,
+    8146.0,
+    -36.0
+   ],
+   "s_enter": 426.4
+  },
+  {
+   "i": 97,
+   "cell": "0x002B01DC",
+   "env": "0x0094",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    210.0,
+    8156.0,
+    -36.0
+   ],
+   "s_enter": 436.4
+  },
+  {
+   "i": 98,
+   "cell": "0x002B01D8",
+   "env": "0x00BD",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -36.0,
+   "centreWorld": [
+    200.0,
+    8156.0,
+    -36.0
+   ],
+   "s_enter": 443.5
+  },
+  {
+   "i": 99,
+   "cell": "0x002B01D4",
+   "env": "0x0050",
+   "cs": 0,
+   "kind": "room with no floor (pit/chimney top)",
+   "floorZ": -36.0,
+   "centreWorld": [
+    190.0,
+    8156.0,
+    -36.0
+   ],
+   "s_enter": 453.5
+  },
+  {
+   "i": 100,
+   "cell": "0x002B01CC",
+   "env": "0x0064",
+   "cs": 0,
+   "kind": "vertical shaft 10x10x6",
+   "floorZ": -42.0,
+   "centreWorld": [
+    190.0,
+    8156.0,
+    -42.0
+   ],
+   "s_enter": 459.1
+  },
+  {
+   "i": 101,
+   "cell": "0x002B01C5",
+   "env": "0x0064",
+   "cs": 0,
+   "kind": "vertical shaft 10x10x6",
+   "floorZ": -48.0,
+   "centreWorld": [
+    190.0,
+    8156.0,
+    -48.0
+   ],
+   "s_enter": 465.1
+  },
+  {
+   "i": 102,
+   "cell": "0x002B01A9",
+   "env": "0x00D8",
+   "cs": 0,
+   "kind": "pit-bottom room",
+   "floorZ": -54.0,
+   "centreWorld": [
+    190.0,
+    8156.0,
+    -54.0
+   ],
+   "s_enter": 471.1
+  },
+  {
+   "i": 103,
+   "cell": "0x002B01AA",
+   "env": "0x01DD",
+   "cs": 0,
+   "kind": "room 10x10",
+   "floorZ": -54.0,
+   "centreWorld": [
+    190.0,
+    8146.0,
+    -54.0
+   ],
+   "s_enter": 477.2
+  },
+  {
+   "i": 104,
+   "cell": "0x002B01AC",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    190.0,
+    8140.01,
+    -54.0
+   ],
+   "s_enter": 487.2
+  },
+  {
+   "i": 105,
+   "cell": "0x002B01AB",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    189.82,
+    8136.18,
+    -54.0
+   ],
+   "s_enter": 489.2
+  },
+  {
+   "i": 106,
+   "cell": "0x002B01AD",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    185.99,
+    8136.0,
+    -54.0
+   ],
+   "s_enter": 493.5
+  },
+  {
+   "i": 107,
+   "cell": "0x002B01A4",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -54.0,
+   "centreWorld": [
+    181.17,
+    8134.83,
+    -54.0
+   ],
+   "s_enter": 495.5
+  },
+  {
+   "i": 108,
+   "cell": "0x002B01A5",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -54.0,
+   "centreWorld": [
+    180.0,
+    8126.0,
+    -54.0
+   ],
+   "s_enter": 502.5
+  },
+  {
+   "i": 109,
+   "cell": "0x002B01A7",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    180.0,
+    8120.01,
+    -54.0
+   ],
+   "s_enter": 512.5
+  },
+  {
+   "i": 110,
+   "cell": "0x002B01A6",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    179.82,
+    8116.18,
+    -54.0
+   ],
+   "s_enter": 514.5
+  },
+  {
+   "i": 111,
+   "cell": "0x002B01A8",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    175.99,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 518.8
+  },
+  {
+   "i": 112,
+   "cell": "0x002B019E",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    174.67,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 520.8
+  },
+  {
+   "i": 113,
+   "cell": "0x002B019B",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    170.83,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 521.4
+  },
+  {
+   "i": 114,
+   "cell": "0x002B019D",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    170.0,
+    8111.33,
+    -54.0
+   ],
+   "s_enter": 527.6
+  },
+  {
+   "i": 115,
+   "cell": "0x002B01A0",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    170.0,
+    8110.01,
+    -54.0
+   ],
+   "s_enter": 528.2
+  },
+  {
+   "i": 116,
+   "cell": "0x002B019F",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    169.82,
+    8106.18,
+    -54.0
+   ],
+   "s_enter": 530.2
+  },
+  {
+   "i": 117,
+   "cell": "0x002B01A1",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    165.99,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 534.5
+  },
+  {
+   "i": 118,
+   "cell": "0x002B018F",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    164.67,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 536.5
+  },
+  {
+   "i": 119,
+   "cell": "0x002B018E",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    160.0,
+    8105.17,
+    -54.0
+   ],
+   "s_enter": 537.1
+  },
+  {
+   "i": 120,
+   "cell": "0x002B0190",
+   "env": "0x0183",
+   "cs": 2,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    155.33,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 545.8
+  },
+  {
+   "i": 121,
+   "cell": "0x002B0180",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -54.0,
+   "centreWorld": [
+    150.0,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 546.5
+  },
+  {
+   "i": 122,
+   "cell": "0x002B0177",
+   "env": "0x0183",
+   "cs": 3,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    144.67,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 556.5
+  },
+  {
+   "i": 123,
+   "cell": "0x002B0174",
+   "env": "0x0183",
+   "cs": 0,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    140.83,
+    8106.0,
+    -54.0
+   ],
+   "s_enter": 557.1
+  },
+  {
+   "i": 124,
+   "cell": "0x002B0175",
+   "env": "0x0183",
+   "cs": 1,
+   "kind": "tunnel T-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    140.0,
+    8110.67,
+    -54.0
+   ],
+   "s_enter": 563.2
+  },
+  {
+   "i": 125,
+   "cell": "0x002B0173",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    140.0,
+    8111.99,
+    -54.0
+   ],
+   "s_enter": 563.9
+  },
+  {
+   "i": 126,
+   "cell": "0x002B0171",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    139.82,
+    8115.82,
+    -54.0
+   ],
+   "s_enter": 565.9
+  },
+  {
+   "i": 127,
+   "cell": "0x002B0172",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    135.99,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 570.2
+  },
+  {
+   "i": 128,
+   "cell": "0x002B0165",
+   "env": "0x0126",
+   "cs": 2,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    134.67,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 572.1
+  },
+  {
+   "i": 129,
+   "cell": "0x002B0163",
+   "env": "0x0126",
+   "cs": 0,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    130.0,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 572.8
+  },
+  {
+   "i": 130,
+   "cell": "0x002B0167",
+   "env": "0x0126",
+   "cs": 4,
+   "kind": "tunnel X-junction piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    125.33,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 581.5
+  },
+  {
+   "i": 131,
+   "cell": "0x002B015E",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -54.0,
+   "centreWorld": [
+    121.17,
+    8117.17,
+    -54.0
+   ],
+   "s_enter": 582.1
+  },
+  {
+   "i": 132,
+   "cell": "0x002B015D",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    120.0,
+    8121.99,
+    -54.0
+   ],
+   "s_enter": 589.2
+  },
+  {
+   "i": 133,
+   "cell": "0x002B015B",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    119.82,
+    8125.82,
+    -54.0
+   ],
+   "s_enter": 591.2
+  },
+  {
+   "i": 134,
+   "cell": "0x002B015C",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    115.99,
+    8126.0,
+    -54.0
+   ],
+   "s_enter": 595.5
+  },
+  {
+   "i": 135,
+   "cell": "0x002B015A",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -54.0,
+   "centreWorld": [
+    110.0,
+    8126.0,
+    -54.0
+   ],
+   "s_enter": 597.4
+  },
+  {
+   "i": 136,
+   "cell": "0x002B0156",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    104.01,
+    8126.0,
+    -54.0
+   ],
+   "s_enter": 607.4
+  },
+  {
+   "i": 137,
+   "cell": "0x002B0154",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    100.18,
+    8125.82,
+    -54.0
+   ],
+   "s_enter": 609.4
+  },
+  {
+   "i": 138,
+   "cell": "0x002B0155",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    100.0,
+    8121.99,
+    -54.0
+   ],
+   "s_enter": 613.7
+  },
+  {
+   "i": 139,
+   "cell": "0x002B0158",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    100.0,
+    8120.01,
+    -54.0
+   ],
+   "s_enter": 615.7
+  },
+  {
+   "i": 140,
+   "cell": "0x002B0157",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    99.82,
+    8116.18,
+    -54.0
+   ],
+   "s_enter": 617.7
+  },
+  {
+   "i": 141,
+   "cell": "0x002B0159",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -54.0,
+   "centreWorld": [
+    95.99,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 621.9
+  },
+  {
+   "i": 142,
+   "cell": "0x002B0152",
+   "env": "0x01EE",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -54.0,
+   "centreWorld": [
+    92.5,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 623.9
+  },
+  {
+   "i": 143,
+   "cell": "0x002B0153",
+   "env": "0x01EE",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -54.0,
+   "centreWorld": [
+    90.0,
+    8116.0,
+    -54.0
+   ],
+   "s_enter": 626.1
+  },
+  {
+   "i": 144,
+   "cell": "0x002B0150",
+   "env": "0x041F",
+   "cs": 0,
+   "kind": "ramp hall (31 deg, -6 m), 12 m tall",
+   "floorZ": -60.0,
+   "centreWorld": [
+    80.0,
+    8116.0,
+    -60.0
+   ],
+   "s_enter": 634.0
+  },
+  {
+   "i": 145,
+   "cell": "0x002B0132",
+   "env": "0x01EE",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    70.0,
+    8116.0,
+    -60.0
+   ],
+   "s_enter": 645.6
+  },
+  {
+   "i": 146,
+   "cell": "0x002B012F",
+   "env": "0x01EC",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    70.0,
+    8126.0,
+    -60.0
+   ],
+   "s_enter": 652.7
+  },
+  {
+   "i": 147,
+   "cell": "0x002B0130",
+   "env": "0x01EC",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    70.0,
+    8128.5,
+    -60.0
+   ],
+   "s_enter": 660.6
+  },
+  {
+   "i": 148,
+   "cell": "0x002B012E",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    70.0,
+    8131.99,
+    -60.0
+   ],
+   "s_enter": 662.8
+  },
+  {
+   "i": 149,
+   "cell": "0x002B012C",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    69.82,
+    8135.82,
+    -60.0
+   ],
+   "s_enter": 664.8
+  },
+  {
+   "i": 150,
+   "cell": "0x002B012D",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    65.99,
+    8136.0,
+    -60.0
+   ],
+   "s_enter": 669.1
+  },
+  {
+   "i": 151,
+   "cell": "0x002B0123",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -60.0,
+   "centreWorld": [
+    61.17,
+    8137.17,
+    -60.0
+   ],
+   "s_enter": 671.0
+  },
+  {
+   "i": 152,
+   "cell": "0x002B0122",
+   "env": "0x01EC",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    60.0,
+    8143.5,
+    -60.0
+   ],
+   "s_enter": 678.1
+  },
+  {
+   "i": 153,
+   "cell": "0x002B0121",
+   "env": "0x01EC",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    60.0,
+    8146.0,
+    -60.0
+   ],
+   "s_enter": 680.3
+  },
+  {
+   "i": 154,
+   "cell": "0x002B011A",
+   "env": "0x01EC",
+   "cs": 0,
+   "kind": "mound room / burrow trench (cs0 = trench under the mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    50.0,
+    8146.0,
+    -60.0
+   ],
+   "s_enter": 686.1
+  },
+  {
+   "i": 155,
+   "cell": "0x002B011B",
+   "env": "0x01EC",
+   "cs": 1,
+   "kind": "mound room / burrow trench (cs1 = room with mound)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    47.5,
+    8146.0,
+    -60.0
+   ],
+   "s_enter": 694.0
+  },
+  {
+   "i": 156,
+   "cell": "0x002B0111",
+   "env": "0x0129",
+   "cs": 0,
+   "kind": "straight tunnel 10 m",
+   "floorZ": -60.0,
+   "centreWorld": [
+    40.0,
+    8146.0,
+    -60.0
+   ],
+   "s_enter": 696.2
+  },
+  {
+   "i": 157,
+   "cell": "0x002B010A",
+   "env": "0x0128",
+   "cs": 0,
+   "kind": "tunnel chamfered corner",
+   "floorZ": -60.0,
+   "centreWorld": [
+    31.17,
+    8144.83,
+    -60.0
+   ],
+   "s_enter": 706.2
+  },
+  {
+   "i": 158,
+   "cell": "0x002B010B",
+   "env": "0x01D3",
+   "cs": 0,
+   "kind": "egg-chamber room 10x10 (12 m tall)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    30.0,
+    8136.0,
+    -60.0
+   ],
+   "s_enter": 713.2
+  },
+  {
+   "i": 159,
+   "cell": "0x002B0105",
+   "env": "0x01D3",
+   "cs": 0,
+   "kind": "egg-chamber room 10x10 (12 m tall)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    20.0,
+    8136.0,
+    -60.0
+   ],
+   "s_enter": 720.4
+  },
+  {
+   "i": 160,
+   "cell": "0x002B0102",
+   "env": "0x0125",
+   "cs": 1,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    14.01,
+    8136.0,
+    -60.0
+   ],
+   "s_enter": 730.4
+  },
+  {
+   "i": 161,
+   "cell": "0x002B0101",
+   "env": "0x0125",
+   "cs": 0,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    10.18,
+    8136.18,
+    -60.0
+   ],
+   "s_enter": 732.4
+  },
+  {
+   "i": 162,
+   "cell": "0x002B0103",
+   "env": "0x0125",
+   "cs": 2,
+   "kind": "tunnel 90deg bend piece",
+   "floorZ": -60.0,
+   "centreWorld": [
+    10.0,
+    8140.01,
+    -60.0
+   ],
+   "s_enter": 736.7
+  },
+  {
+   "i": 163,
+   "cell": "0x002B0100",
+   "env": "0x041C",
+   "cs": 0,
+   "kind": "dead-end stub (exit portal cell)",
+   "floorZ": -60.0,
+   "centreWorld": [
+    10.0,
+    8143.0,
+    -60.0
+   ],
+   "s_enter": 738.6
+  }
+ ],
+ "doors": [
+  {
+   "i": 0,
+   "frm": "0x0371",
+   "to": "0x0370",
+   "at": [
+    460.0,
+    8091.0,
+    3.0
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6,
+   "bottom": 0,
+   "kind": "wall opening",
+   "s": 5.1
+  },
+  {
+   "i": 1,
+   "frm": "0x0370",
+   "to": "0x0376",
+   "at": [
+    465.0,
+    8096.0,
+    3.0
+   ],
+   "normal": [
+    1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6,
+   "bottom": 0,
+   "kind": "wall opening",
+   "s": 12.2
+  },
+  {
+   "i": 2,
+   "frm": "0x0376",
+   "to": "0x0375",
+   "at": [
+    470.0,
+    8098.83,
+    1.7
+   ],
+   "normal": [
+    0.0,
+    0.514,
+    -0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -0.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 18.0
+  },
+  {
+   "i": 3,
+   "frm": "0x0375",
+   "to": "0x0374",
+   "at": [
+    470.0,
+    8101.0,
+    1.7
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.0,
+   "bottom": -0.0,
+   "kind": "wall opening",
+   "s": 20.2
+  },
+  {
+   "i": 4,
+   "frm": "0x0374",
+   "to": "0x0373",
+   "at": [
+    470.0,
+    8111.0,
+    2.24
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -0.0,
+   "kind": "wall opening",
+   "s": 30.2
+  },
+  {
+   "i": 5,
+   "frm": "0x0373",
+   "to": "0x035F",
+   "at": [
+    470.0,
+    8121.0,
+    -3.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 41.8
+  },
+  {
+   "i": 6,
+   "frm": "0x035F",
+   "to": "0x035D",
+   "at": [
+    470.0,
+    8122.98,
+    -3.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 43.8
+  },
+  {
+   "i": 7,
+   "frm": "0x035D",
+   "to": "0x035E",
+   "at": [
+    466.98,
+    8126.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 48.1
+  },
+  {
+   "i": 8,
+   "frm": "0x035E",
+   "to": "0x0358",
+   "at": [
+    465.0,
+    8126.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 50.1
+  },
+  {
+   "i": 9,
+   "frm": "0x0358",
+   "to": "0x0357",
+   "at": [
+    460.0,
+    8131.0,
+    -3.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 57.2
+  },
+  {
+   "i": 10,
+   "frm": "0x0357",
+   "to": "0x0354",
+   "at": [
+    460.0,
+    8131.66,
+    -3.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 57.8
+  },
+  {
+   "i": 11,
+   "frm": "0x0354",
+   "to": "0x0356",
+   "at": [
+    455.67,
+    8136.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 63.9
+  },
+  {
+   "i": 12,
+   "frm": "0x0356",
+   "to": "0x0353",
+   "at": [
+    455.0,
+    8136.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 64.6
+  },
+  {
+   "i": 13,
+   "frm": "0x0353",
+   "to": "0x0351",
+   "at": [
+    445.0,
+    8136.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 74.6
+  },
+  {
+   "i": 14,
+   "frm": "0x0351",
+   "to": "0x0350",
+   "at": [
+    443.02,
+    8136.0,
+    -3.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 76.6
+  },
+  {
+   "i": 15,
+   "frm": "0x0350",
+   "to": "0x0352",
+   "at": [
+    440.0,
+    8139.02,
+    -3.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 80.9
+  },
+  {
+   "i": 16,
+   "frm": "0x0352",
+   "to": "0x034F",
+   "at": [
+    440.0,
+    8141.0,
+    -3.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -6.0,
+   "kind": "wall opening",
+   "s": 82.8
+  },
+  {
+   "i": 17,
+   "frm": "0x034F",
+   "to": "0x0308",
+   "at": [
+    440.0,
+    8151.0,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 94.5
+  },
+  {
+   "i": 18,
+   "frm": "0x0308",
+   "to": "0x0306",
+   "at": [
+    440.0,
+    8152.98,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 96.5
+  },
+  {
+   "i": 19,
+   "frm": "0x0306",
+   "to": "0x0307",
+   "at": [
+    436.98,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 100.8
+  },
+  {
+   "i": 20,
+   "frm": "0x0307",
+   "to": "0x02FF",
+   "at": [
+    435.0,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 102.7
+  },
+  {
+   "i": 21,
+   "frm": "0x02FF",
+   "to": "0x02F4",
+   "at": [
+    425.0,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 112.7
+  },
+  {
+   "i": 22,
+   "frm": "0x02F4",
+   "to": "0x02F2",
+   "at": [
+    424.33,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 113.4
+  },
+  {
+   "i": 23,
+   "frm": "0x02F2",
+   "to": "0x02F3",
+   "at": [
+    415.67,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 122.1
+  },
+  {
+   "i": 24,
+   "frm": "0x02F3",
+   "to": "0x02E1",
+   "at": [
+    415.0,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 122.7
+  },
+  {
+   "i": 25,
+   "frm": "0x02E1",
+   "to": "0x02E4",
+   "at": [
+    410.0,
+    8151.0,
+    -9.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 129.8
+  },
+  {
+   "i": 26,
+   "frm": "0x02E4",
+   "to": "0x02E2",
+   "at": [
+    410.0,
+    8150.34,
+    -9.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 130.5
+  },
+  {
+   "i": 27,
+   "frm": "0x02E2",
+   "to": "0x02E5",
+   "at": [
+    405.66,
+    8146.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 136.6
+  },
+  {
+   "i": 28,
+   "frm": "0x02E5",
+   "to": "0x02DD",
+   "at": [
+    405.0,
+    8146.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 137.3
+  },
+  {
+   "i": 29,
+   "frm": "0x02DD",
+   "to": "0x02D9",
+   "at": [
+    395.0,
+    8146.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 147.3
+  },
+  {
+   "i": 30,
+   "frm": "0x02D9",
+   "to": "0x02D8",
+   "at": [
+    390.0,
+    8151.0,
+    -9.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 154.3
+  },
+  {
+   "i": 31,
+   "frm": "0x02D8",
+   "to": "0x02D6",
+   "at": [
+    390.0,
+    8152.98,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 156.3
+  },
+  {
+   "i": 32,
+   "frm": "0x02D6",
+   "to": "0x02D7",
+   "at": [
+    386.98,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 160.6
+  },
+  {
+   "i": 33,
+   "frm": "0x02D7",
+   "to": "0x02D2",
+   "at": [
+    385.0,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 162.6
+  },
+  {
+   "i": 34,
+   "frm": "0x02D2",
+   "to": "0x02D0",
+   "at": [
+    375.0,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 172.6
+  },
+  {
+   "i": 35,
+   "frm": "0x02D0",
+   "to": "0x02CD",
+   "at": [
+    374.34,
+    8156.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 173.2
+  },
+  {
+   "i": 36,
+   "frm": "0x02CD",
+   "to": "0x02CF",
+   "at": [
+    370.0,
+    8151.66,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 179.4
+  },
+  {
+   "i": 37,
+   "frm": "0x02CF",
+   "to": "0x02D1",
+   "at": [
+    370.0,
+    8151.0,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 180.0
+  },
+  {
+   "i": 38,
+   "frm": "0x02D1",
+   "to": "0x02C7",
+   "at": [
+    365.0,
+    8146.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 187.1
+  },
+  {
+   "i": 39,
+   "frm": "0x02C7",
+   "to": "0x02C5",
+   "at": [
+    363.02,
+    8146.0,
+    -9.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 189.1
+  },
+  {
+   "i": 40,
+   "frm": "0x02C5",
+   "to": "0x02C6",
+   "at": [
+    360.0,
+    8142.98,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 193.4
+  },
+  {
+   "i": 41,
+   "frm": "0x02C6",
+   "to": "0x02C8",
+   "at": [
+    360.0,
+    8141.0,
+    -9.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 195.3
+  },
+  {
+   "i": 42,
+   "frm": "0x02C8",
+   "to": "0x02C9",
+   "at": [
+    360.0,
+    8138.83,
+    -10.3
+   ],
+   "normal": [
+    -0.0,
+    -0.514,
+    0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -12.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 197.5
+  },
+  {
+   "i": 43,
+   "frm": "0x02C9",
+   "to": "0x02C0",
+   "at": [
+    355.0,
+    8136.0,
+    -9.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 203.3
+  },
+  {
+   "i": 44,
+   "frm": "0x02C0",
+   "to": "0x02C3",
+   "at": [
+    350.0,
+    8131.0,
+    -9.0
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -12.0,
+   "kind": "wall opening",
+   "s": 210.4
+  },
+  {
+   "i": 45,
+   "frm": "0x02C3",
+   "to": "0x02C2",
+   "at": [
+    351.86,
+    8125.26,
+    -12.0
+   ],
+   "normal": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "width": 8.67,
+   "height": 0.0,
+   "bottom": -12.0,
+   "kind": "floor/ceiling hole",
+   "s": 217.0
+  },
+  {
+   "i": 46,
+   "frm": "0x02C2",
+   "to": "0x02AD",
+   "at": [
+    345.0,
+    8126.0,
+    -16.27
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.1,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 225.3
+  },
+  {
+   "i": 47,
+   "frm": "0x02AD",
+   "to": "0x02A7",
+   "at": [
+    335.0,
+    8126.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 235.3
+  },
+  {
+   "i": 48,
+   "frm": "0x02A7",
+   "to": "0x02A6",
+   "at": [
+    334.33,
+    8126.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 235.9
+  },
+  {
+   "i": 49,
+   "frm": "0x02A6",
+   "to": "0x02A9",
+   "at": [
+    330.0,
+    8121.66,
+    -15.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 242.1
+  },
+  {
+   "i": 50,
+   "frm": "0x02A9",
+   "to": "0x02AB",
+   "at": [
+    330.0,
+    8121.0,
+    -15.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 242.7
+  },
+  {
+   "i": 51,
+   "frm": "0x02AB",
+   "to": "0x02AA",
+   "at": [
+    330.0,
+    8119.02,
+    -15.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 244.7
+  },
+  {
+   "i": 52,
+   "frm": "0x02AA",
+   "to": "0x02AC",
+   "at": [
+    326.98,
+    8116.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 249.0
+  },
+  {
+   "i": 53,
+   "frm": "0x02AC",
+   "to": "0x029B",
+   "at": [
+    325.0,
+    8116.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 250.9
+  },
+  {
+   "i": 54,
+   "frm": "0x029B",
+   "to": "0x029A",
+   "at": [
+    324.33,
+    8116.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 251.6
+  },
+  {
+   "i": 55,
+   "frm": "0x029A",
+   "to": "0x029D",
+   "at": [
+    320.0,
+    8111.66,
+    -15.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 257.7
+  },
+  {
+   "i": 56,
+   "frm": "0x029D",
+   "to": "0x029F",
+   "at": [
+    320.0,
+    8111.0,
+    -15.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 258.4
+  },
+  {
+   "i": 57,
+   "frm": "0x029F",
+   "to": "0x029E",
+   "at": [
+    320.0,
+    8109.02,
+    -15.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 260.4
+  },
+  {
+   "i": 58,
+   "frm": "0x029E",
+   "to": "0x02A0",
+   "at": [
+    316.98,
+    8106.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 264.7
+  },
+  {
+   "i": 59,
+   "frm": "0x02A0",
+   "to": "0x028E",
+   "at": [
+    315.0,
+    8106.0,
+    -15.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -18.0,
+   "kind": "wall opening",
+   "s": 266.6
+  },
+  {
+   "i": 60,
+   "frm": "0x028E",
+   "to": "0x024B",
+   "at": [
+    305.0,
+    8106.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 278.3
+  },
+  {
+   "i": 61,
+   "frm": "0x024B",
+   "to": "0x024A",
+   "at": [
+    304.33,
+    8106.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 279.0
+  },
+  {
+   "i": 62,
+   "frm": "0x024A",
+   "to": "0x024D",
+   "at": [
+    300.0,
+    8101.66,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 285.1
+  },
+  {
+   "i": 63,
+   "frm": "0x024D",
+   "to": "0x024F",
+   "at": [
+    300.0,
+    8101.0,
+    -21.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 285.8
+  },
+  {
+   "i": 64,
+   "frm": "0x024F",
+   "to": "0x024E",
+   "at": [
+    300.0,
+    8099.02,
+    -21.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 287.7
+  },
+  {
+   "i": 65,
+   "frm": "0x024E",
+   "to": "0x0250",
+   "at": [
+    296.98,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 292.0
+  },
+  {
+   "i": 66,
+   "frm": "0x0250",
+   "to": "0x0236",
+   "at": [
+    295.0,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 294.0
+  },
+  {
+   "i": 67,
+   "frm": "0x0236",
+   "to": "0x0235",
+   "at": [
+    294.33,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 294.7
+  },
+  {
+   "i": 68,
+   "frm": "0x0235",
+   "to": "0x0237",
+   "at": [
+    285.67,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 303.3
+  },
+  {
+   "i": 69,
+   "frm": "0x0237",
+   "to": "0x021C",
+   "at": [
+    285.0,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 304.0
+  },
+  {
+   "i": 70,
+   "frm": "0x021C",
+   "to": "0x021A",
+   "at": [
+    284.33,
+    8096.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 304.7
+  },
+  {
+   "i": 71,
+   "frm": "0x021A",
+   "to": "0x021D",
+   "at": [
+    280.0,
+    8100.34,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 310.8
+  },
+  {
+   "i": 72,
+   "frm": "0x021D",
+   "to": "0x0219",
+   "at": [
+    280.0,
+    8101.0,
+    -21.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 311.5
+  },
+  {
+   "i": 73,
+   "frm": "0x0219",
+   "to": "0x0217",
+   "at": [
+    280.0,
+    8102.98,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 313.4
+  },
+  {
+   "i": 74,
+   "frm": "0x0217",
+   "to": "0x0218",
+   "at": [
+    276.98,
+    8106.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 317.7
+  },
+  {
+   "i": 75,
+   "frm": "0x0218",
+   "to": "0x020A",
+   "at": [
+    275.0,
+    8106.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 319.7
+  },
+  {
+   "i": 76,
+   "frm": "0x020A",
+   "to": "0x0209",
+   "at": [
+    265.0,
+    8106.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 329.7
+  },
+  {
+   "i": 77,
+   "frm": "0x0209",
+   "to": "0x0208",
+   "at": [
+    260.0,
+    8111.0,
+    -21.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 336.8
+  },
+  {
+   "i": 78,
+   "frm": "0x0208",
+   "to": "0x0206",
+   "at": [
+    260.0,
+    8112.98,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 338.7
+  },
+  {
+   "i": 79,
+   "frm": "0x0206",
+   "to": "0x0207",
+   "at": [
+    256.98,
+    8116.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 343.0
+  },
+  {
+   "i": 80,
+   "frm": "0x0207",
+   "to": "0x0204",
+   "at": [
+    255.0,
+    8116.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 345.0
+  },
+  {
+   "i": 81,
+   "frm": "0x0204",
+   "to": "0x0202",
+   "at": [
+    254.34,
+    8116.0,
+    -21.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 345.7
+  },
+  {
+   "i": 82,
+   "frm": "0x0202",
+   "to": "0x0205",
+   "at": [
+    250.0,
+    8120.34,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 351.8
+  },
+  {
+   "i": 83,
+   "frm": "0x0205",
+   "to": "0x0201",
+   "at": [
+    250.0,
+    8121.0,
+    -21.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -24.0,
+   "kind": "wall opening",
+   "s": 352.4
+  },
+  {
+   "i": 84,
+   "frm": "0x0201",
+   "to": "0x01F4",
+   "at": [
+    250.0,
+    8131.0,
+    -27.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -30.0,
+   "kind": "wall opening",
+   "s": 364.1
+  },
+  {
+   "i": 85,
+   "frm": "0x01F4",
+   "to": "0x01F3",
+   "at": [
+    250.0,
+    8141.0,
+    -27.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -30.0,
+   "kind": "wall opening",
+   "s": 374.1
+  },
+  {
+   "i": 86,
+   "frm": "0x01F3",
+   "to": "0x01F1",
+   "at": [
+    250.0,
+    8142.98,
+    -27.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -30.0,
+   "kind": "wall opening",
+   "s": 376.1
+  },
+  {
+   "i": 87,
+   "frm": "0x01F1",
+   "to": "0x01F2",
+   "at": [
+    246.98,
+    8146.0,
+    -27.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -30.0,
+   "kind": "wall opening",
+   "s": 380.4
+  },
+  {
+   "i": 88,
+   "frm": "0x01F2",
+   "to": "0x01F0",
+   "at": [
+    245.0,
+    8146.0,
+    -27.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -30.0,
+   "kind": "wall opening",
+   "s": 382.3
+  },
+  {
+   "i": 89,
+   "frm": "0x01F0",
+   "to": "0x01E6",
+   "at": [
+    235.0,
+    8146.0,
+    -33.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 394.0
+  },
+  {
+   "i": 90,
+   "frm": "0x01E6",
+   "to": "0x01E4",
+   "at": [
+    233.02,
+    8146.0,
+    -33.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 396.0
+  },
+  {
+   "i": 91,
+   "frm": "0x01E4",
+   "to": "0x01E5",
+   "at": [
+    230.0,
+    8142.98,
+    -33.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 400.3
+  },
+  {
+   "i": 92,
+   "frm": "0x01E5",
+   "to": "0x01E7",
+   "at": [
+    230.0,
+    8141.0,
+    -33.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 402.2
+  },
+  {
+   "i": 93,
+   "frm": "0x01E7",
+   "to": "0x01E0",
+   "at": [
+    225.0,
+    8136.0,
+    -33.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 409.4
+  },
+  {
+   "i": 94,
+   "frm": "0x01E0",
+   "to": "0x01DE",
+   "at": [
+    215.0,
+    8136.0,
+    -33.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 419.4
+  },
+  {
+   "i": 95,
+   "frm": "0x01DE",
+   "to": "0x01DD",
+   "at": [
+    210.0,
+    8141.0,
+    -33.0
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 426.4
+  },
+  {
+   "i": 96,
+   "frm": "0x01DD",
+   "to": "0x01DC",
+   "at": [
+    210.0,
+    8151.0,
+    -33.0
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6,
+   "bottom": -36,
+   "kind": "wall opening",
+   "s": 436.4
+  },
+  {
+   "i": 97,
+   "frm": "0x01DC",
+   "to": "0x01D8",
+   "at": [
+    205.0,
+    8156.0,
+    -33.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 443.5
+  },
+  {
+   "i": 98,
+   "frm": "0x01D8",
+   "to": "0x01D4",
+   "at": [
+    195.0,
+    8156.0,
+    -33.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -36.0,
+   "kind": "wall opening",
+   "s": 453.5
+  },
+  {
+   "i": 99,
+   "frm": "0x01D4",
+   "to": "0x01CC",
+   "at": [
+    190.0,
+    8156.0,
+    -36.0
+   ],
+   "normal": [
+    -0.0,
+    -0.0,
+    -1.0
+   ],
+   "width": 14.14,
+   "height": 0.0,
+   "bottom": -36.0,
+   "kind": "floor/ceiling hole",
+   "s": 459.1
+  },
+  {
+   "i": 100,
+   "frm": "0x01CC",
+   "to": "0x01C5",
+   "at": [
+    190.0,
+    8156.0,
+    -42.0
+   ],
+   "normal": [
+    -0.0,
+    -0.0,
+    -1.0
+   ],
+   "width": 14.14,
+   "height": 0,
+   "bottom": -42,
+   "kind": "floor/ceiling hole",
+   "s": 465.1
+  },
+  {
+   "i": 101,
+   "frm": "0x01C5",
+   "to": "0x01A9",
+   "at": [
+    190.0,
+    8156.0,
+    -48.0
+   ],
+   "normal": [
+    -0.0,
+    -0.0,
+    -1.0
+   ],
+   "width": 14.14,
+   "height": 0,
+   "bottom": -48,
+   "kind": "floor/ceiling hole",
+   "s": 471.1
+  },
+  {
+   "i": 102,
+   "frm": "0x01A9",
+   "to": "0x01AA",
+   "at": [
+    190.0,
+    8151.0,
+    -51.0
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 477.2
+  },
+  {
+   "i": 103,
+   "frm": "0x01AA",
+   "to": "0x01AC",
+   "at": [
+    190.0,
+    8141.0,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 487.2
+  },
+  {
+   "i": 104,
+   "frm": "0x01AC",
+   "to": "0x01AB",
+   "at": [
+    190.0,
+    8139.02,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 489.2
+  },
+  {
+   "i": 105,
+   "frm": "0x01AB",
+   "to": "0x01AD",
+   "at": [
+    186.98,
+    8136.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 493.5
+  },
+  {
+   "i": 106,
+   "frm": "0x01AD",
+   "to": "0x01A4",
+   "at": [
+    185.0,
+    8136.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 495.5
+  },
+  {
+   "i": 107,
+   "frm": "0x01A4",
+   "to": "0x01A5",
+   "at": [
+    180.0,
+    8131.0,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 502.5
+  },
+  {
+   "i": 108,
+   "frm": "0x01A5",
+   "to": "0x01A7",
+   "at": [
+    180.0,
+    8121.0,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 512.5
+  },
+  {
+   "i": 109,
+   "frm": "0x01A7",
+   "to": "0x01A6",
+   "at": [
+    180.0,
+    8119.02,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 514.5
+  },
+  {
+   "i": 110,
+   "frm": "0x01A6",
+   "to": "0x01A8",
+   "at": [
+    176.98,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 518.8
+  },
+  {
+   "i": 111,
+   "frm": "0x01A8",
+   "to": "0x019E",
+   "at": [
+    175.0,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 520.8
+  },
+  {
+   "i": 112,
+   "frm": "0x019E",
+   "to": "0x019B",
+   "at": [
+    174.34,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 521.4
+  },
+  {
+   "i": 113,
+   "frm": "0x019B",
+   "to": "0x019D",
+   "at": [
+    170.0,
+    8111.66,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 527.6
+  },
+  {
+   "i": 114,
+   "frm": "0x019D",
+   "to": "0x01A0",
+   "at": [
+    170.0,
+    8111.0,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 528.2
+  },
+  {
+   "i": 115,
+   "frm": "0x01A0",
+   "to": "0x019F",
+   "at": [
+    170.0,
+    8109.02,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 530.2
+  },
+  {
+   "i": 116,
+   "frm": "0x019F",
+   "to": "0x01A1",
+   "at": [
+    166.98,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 534.5
+  },
+  {
+   "i": 117,
+   "frm": "0x01A1",
+   "to": "0x018F",
+   "at": [
+    165.0,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 536.5
+  },
+  {
+   "i": 118,
+   "frm": "0x018F",
+   "to": "0x018E",
+   "at": [
+    164.34,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 537.1
+  },
+  {
+   "i": 119,
+   "frm": "0x018E",
+   "to": "0x0190",
+   "at": [
+    155.66,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 545.8
+  },
+  {
+   "i": 120,
+   "frm": "0x0190",
+   "to": "0x0180",
+   "at": [
+    155.0,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 546.5
+  },
+  {
+   "i": 121,
+   "frm": "0x0180",
+   "to": "0x0177",
+   "at": [
+    145.0,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 556.5
+  },
+  {
+   "i": 122,
+   "frm": "0x0177",
+   "to": "0x0174",
+   "at": [
+    144.34,
+    8106.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 557.1
+  },
+  {
+   "i": 123,
+   "frm": "0x0174",
+   "to": "0x0175",
+   "at": [
+    140.0,
+    8110.34,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 563.2
+  },
+  {
+   "i": 124,
+   "frm": "0x0175",
+   "to": "0x0173",
+   "at": [
+    140.0,
+    8111.0,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 563.9
+  },
+  {
+   "i": 125,
+   "frm": "0x0173",
+   "to": "0x0171",
+   "at": [
+    140.0,
+    8112.98,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 565.9
+  },
+  {
+   "i": 126,
+   "frm": "0x0171",
+   "to": "0x0172",
+   "at": [
+    136.98,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 570.2
+  },
+  {
+   "i": 127,
+   "frm": "0x0172",
+   "to": "0x0165",
+   "at": [
+    135.0,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 572.1
+  },
+  {
+   "i": 128,
+   "frm": "0x0165",
+   "to": "0x0163",
+   "at": [
+    134.34,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 572.8
+  },
+  {
+   "i": 129,
+   "frm": "0x0163",
+   "to": "0x0167",
+   "at": [
+    125.67,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 581.5
+  },
+  {
+   "i": 130,
+   "frm": "0x0167",
+   "to": "0x015E",
+   "at": [
+    125.0,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 582.1
+  },
+  {
+   "i": 131,
+   "frm": "0x015E",
+   "to": "0x015D",
+   "at": [
+    120.0,
+    8121.0,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 589.2
+  },
+  {
+   "i": 132,
+   "frm": "0x015D",
+   "to": "0x015B",
+   "at": [
+    120.0,
+    8122.98,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 591.2
+  },
+  {
+   "i": 133,
+   "frm": "0x015B",
+   "to": "0x015C",
+   "at": [
+    116.98,
+    8126.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 595.5
+  },
+  {
+   "i": 134,
+   "frm": "0x015C",
+   "to": "0x015A",
+   "at": [
+    115.0,
+    8126.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 597.4
+  },
+  {
+   "i": 135,
+   "frm": "0x015A",
+   "to": "0x0156",
+   "at": [
+    105.0,
+    8126.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 607.4
+  },
+  {
+   "i": 136,
+   "frm": "0x0156",
+   "to": "0x0154",
+   "at": [
+    103.02,
+    8126.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 609.4
+  },
+  {
+   "i": 137,
+   "frm": "0x0154",
+   "to": "0x0155",
+   "at": [
+    100.0,
+    8122.98,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 613.7
+  },
+  {
+   "i": 138,
+   "frm": "0x0155",
+   "to": "0x0158",
+   "at": [
+    100.0,
+    8121.0,
+    -51.76
+   ],
+   "normal": [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 615.7
+  },
+  {
+   "i": 139,
+   "frm": "0x0158",
+   "to": "0x0157",
+   "at": [
+    100.0,
+    8119.02,
+    -51.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 617.7
+  },
+  {
+   "i": 140,
+   "frm": "0x0157",
+   "to": "0x0159",
+   "at": [
+    96.98,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 621.9
+  },
+  {
+   "i": 141,
+   "frm": "0x0159",
+   "to": "0x0152",
+   "at": [
+    95.0,
+    8116.0,
+    -51.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 623.9
+  },
+  {
+   "i": 142,
+   "frm": "0x0152",
+   "to": "0x0153",
+   "at": [
+    92.83,
+    8116.0,
+    -52.3
+   ],
+   "normal": [
+    -0.514,
+    0.0,
+    0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -54.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 626.1
+  },
+  {
+   "i": 143,
+   "frm": "0x0153",
+   "to": "0x0150",
+   "at": [
+    85.0,
+    8116.0,
+    -51.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -54.0,
+   "kind": "wall opening",
+   "s": 634.0
+  },
+  {
+   "i": 144,
+   "frm": "0x0150",
+   "to": "0x0132",
+   "at": [
+    75.0,
+    8116.0,
+    -54.6
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 12.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 645.6
+  },
+  {
+   "i": 145,
+   "frm": "0x0132",
+   "to": "0x012F",
+   "at": [
+    70.0,
+    8121.0,
+    -57.0
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 652.7
+  },
+  {
+   "i": 146,
+   "frm": "0x012F",
+   "to": "0x0130",
+   "at": [
+    70.0,
+    8128.83,
+    -58.3
+   ],
+   "normal": [
+    0.0,
+    0.514,
+    -0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -60.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 660.6
+  },
+  {
+   "i": 147,
+   "frm": "0x0130",
+   "to": "0x012E",
+   "at": [
+    70.0,
+    8131.0,
+    -58.3
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 662.8
+  },
+  {
+   "i": 148,
+   "frm": "0x012E",
+   "to": "0x012C",
+   "at": [
+    70.0,
+    8132.98,
+    -57.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 664.8
+  },
+  {
+   "i": 149,
+   "frm": "0x012C",
+   "to": "0x012D",
+   "at": [
+    66.98,
+    8136.0,
+    -57.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 669.1
+  },
+  {
+   "i": 150,
+   "frm": "0x012D",
+   "to": "0x0123",
+   "at": [
+    65.0,
+    8136.0,
+    -57.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 671.0
+  },
+  {
+   "i": 151,
+   "frm": "0x0123",
+   "to": "0x0122",
+   "at": [
+    60.0,
+    8141.0,
+    -57.76
+   ],
+   "normal": [
+    -0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 678.1
+  },
+  {
+   "i": 152,
+   "frm": "0x0122",
+   "to": "0x0121",
+   "at": [
+    60.0,
+    8143.17,
+    -58.3
+   ],
+   "normal": [
+    0.0,
+    0.514,
+    0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -60.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 680.3
+  },
+  {
+   "i": 153,
+   "frm": "0x0121",
+   "to": "0x011A",
+   "at": [
+    55.0,
+    8146.0,
+    -57.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 686.1
+  },
+  {
+   "i": 154,
+   "frm": "0x011A",
+   "to": "0x011B",
+   "at": [
+    47.17,
+    8146.0,
+    -58.3
+   ],
+   "normal": [
+    -0.514,
+    -0.0,
+    -0.857
+   ],
+   "width": 7.31,
+   "height": 3.0,
+   "bottom": -60.0,
+   "kind": "slanted burrow mouth (31 deg) or chute",
+   "s": 694.0
+  },
+  {
+   "i": 155,
+   "frm": "0x011B",
+   "to": "0x0111",
+   "at": [
+    45.0,
+    8146.0,
+    -58.3
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 696.2
+  },
+  {
+   "i": 156,
+   "frm": "0x0111",
+   "to": "0x010A",
+   "at": [
+    35.0,
+    8146.0,
+    -57.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 706.2
+  },
+  {
+   "i": 157,
+   "frm": "0x010A",
+   "to": "0x010B",
+   "at": [
+    30.0,
+    8141.0,
+    -57.76
+   ],
+   "normal": [
+    -0.0,
+    -1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 713.2
+  },
+  {
+   "i": 158,
+   "frm": "0x010B",
+   "to": "0x0105",
+   "at": [
+    25.0,
+    8136.0,
+    -57.0
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 10.0,
+   "height": 6.0,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 720.4
+  },
+  {
+   "i": 159,
+   "frm": "0x0105",
+   "to": "0x0102",
+   "at": [
+    15.0,
+    8136.0,
+    -57.76
+   ],
+   "normal": [
+    -1.0,
+    -0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 730.4
+  },
+  {
+   "i": 160,
+   "frm": "0x0102",
+   "to": "0x0101",
+   "at": [
+    13.02,
+    8136.0,
+    -57.76
+   ],
+   "normal": [
+    -1.0,
+    0.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 732.4
+  },
+  {
+   "i": 161,
+   "frm": "0x0101",
+   "to": "0x0103",
+   "at": [
+    10.0,
+    8139.02,
+    -57.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 736.7
+  },
+  {
+   "i": 162,
+   "frm": "0x0103",
+   "to": "0x0100",
+   "at": [
+    10.0,
+    8141.0,
+    -57.76
+   ],
+   "normal": [
+    0.0,
+    1.0,
+    -0.0
+   ],
+   "width": 5.33,
+   "height": 3.75,
+   "bottom": -60.0,
+   "kind": "wall opening",
+   "s": 738.6
+  }
+ ],
+ "monsters_in_the_way": [
+  {
+   "s": 46.5,
+   "name": "Olthoi Slasher",
+   "cell": "0x35d",
+   "world": [
+    468.44,
+    8125.3,
+    -6.0
+   ],
+   "local": [
+    468.44,
+    -130.7,
+    -6.0
+   ],
+   "dist_to_line": 1.8,
+   "lat": -0.5,
+   "gap_left": 1.6,
+   "gap_right": 1.7,
+   "gap_over": 1.4,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 59.5,
+   "name": "Olthoi Slasher",
+   "cell": "0x354",
+   "world": [
+    460.76,
+    8135.13,
+    -6.0
+   ],
+   "local": [
+    460.76,
+    -120.87,
+    -6.0
+   ],
+   "dist_to_line": 3.4,
+   "lat": -3.0,
+   "gap_left": 3.8,
+   "gap_right": 3.9,
+   "gap_over": 1.4,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 78.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x350",
+   "world": [
+    441.28,
+    8136.51,
+    -6.0
+   ],
+   "local": [
+    441.28,
+    -119.49,
+    -6.0
+   ],
+   "dist_to_line": 1.9,
+   "lat": 0.9,
+   "gap_left": 1.4,
+   "gap_right": 1.9,
+   "gap_over": 1.4,
+   "lanes": [
+    "right"
+   ]
+  },
+  {
+   "s": 101.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x307",
+   "world": [
+    436.82,
+    8155.68,
+    -11.99
+   ],
+   "local": [
+    436.82,
+    -100.32,
+    -11.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.3,
+   "gap_left": 1.4,
+   "gap_right": 1.8,
+   "gap_over": 1.4,
+   "lanes": [
+    "right"
+   ]
+  },
+  {
+   "s": 117.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x2f1",
+   "world": [
+    420.77,
+    8161.61,
+    -11.99
+   ],
+   "local": [
+    420.77,
+    -94.39,
+    -11.99
+   ],
+   "dist_to_line": 5.9,
+   "lat": -5.6,
+   "gap_left": 7.2,
+   "gap_right": 1.7,
+   "gap_over": 1.4,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 118.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x2f2",
+   "world": [
+    419.76,
+    8158.88,
+    -11.99
+   ],
+   "local": [
+    419.76,
+    -97.12,
+    -11.99
+   ],
+   "dist_to_line": 3.3,
+   "lat": -2.9,
+   "gap_left": 4.5,
+   "gap_right": 3.5,
+   "gap_over": 1.4,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 134.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x2e2",
+   "world": [
+    408.73,
+    8146.28,
+    -11.99
+   ],
+   "local": [
+    408.73,
+    -109.72,
+    -11.99
+   ],
+   "dist_to_line": 2.6,
+   "lat": 2.0,
+   "gap_left": 4.4,
+   "gap_right": 2.8,
+   "gap_over": 1.4,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 159.0,
+   "name": "Olthoi Slasher",
+   "cell": "0x2d6",
+   "world": [
+    388.34,
+    8155.14,
+    -11.99
+   ],
+   "local": [
+    388.34,
+    -100.86,
+    -11.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": -0.4,
+   "gap_left": 1.4,
+   "gap_right": 1.9,
+   "gap_over": 1.4,
+   "lanes": [
+    "right"
+   ]
+  },
+  {
+   "s": 200.5,
+   "name": "Olthoi Slasher",
+   "cell": "0x2c9",
+   "world": [
+    359.11,
+    8134.05,
+    -11.99
+   ],
+   "local": [
+    359.11,
+    -121.95,
+    -11.99
+   ],
+   "dist_to_line": 4.3,
+   "lat": 3.7,
+   "gap_left": 4.9,
+   "gap_right": 3.6,
+   "gap_over": 6.7,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 239.5,
+   "name": "Olthoi Slayer",
+   "cell": "0x2a6",
+   "world": [
+    329.86,
+    8125.14,
+    -18.0
+   ],
+   "local": [
+    329.86,
+    -130.86,
+    -18.0
+   ],
+   "dist_to_line": 3.1,
+   "lat": -2.6,
+   "gap_left": 3.3,
+   "gap_right": 3.8,
+   "gap_over": 1.2,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 264.5,
+   "name": "Olthoi Slayer",
+   "cell": "0x29e",
+   "world": [
+    317.0,
+    8105.62,
+    -18.0
+   ],
+   "local": [
+    317.0,
+    -150.38,
+    -18.0
+   ],
+   "dist_to_line": 1.8,
+   "lat": 0.4,
+   "gap_left": 1.0,
+   "gap_right": 2.2,
+   "gap_over": 1.2,
+   "lanes": [
+    "right"
+   ]
+  },
+  {
+   "s": 280.5,
+   "name": "Olthoi Slayer",
+   "cell": "0x24a",
+   "world": [
+    301.92,
+    8106.12,
+    -24.0
+   ],
+   "local": [
+    301.92,
+    -149.88,
+    -24.0
+   ],
+   "dist_to_line": 2.5,
+   "lat": -1.8,
+   "gap_left": 2.7,
+   "gap_right": 2.4,
+   "gap_over": 1.2,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 299.0,
+   "name": "Olthoi Slayer",
+   "cell": "0x235",
+   "world": [
+    289.75,
+    8096.22,
+    -24.0
+   ],
+   "local": [
+    289.75,
+    -159.78,
+    -24.0
+   ],
+   "dist_to_line": 1.7,
+   "lat": -0.2,
+   "gap_left": 6.5,
+   "gap_right": 1.3,
+   "gap_over": 1.2,
+   "lanes": [
+    "left"
+   ]
+  },
+  {
+   "s": 324.5,
+   "name": "Olthoi Slayer",
+   "cell": "0x20a",
+   "world": [
+    270.4,
+    8105.66,
+    -24.0
+   ],
+   "local": [
+    270.4,
+    -150.34,
+    -24.0
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.3,
+   "gap_left": 1.2,
+   "gap_right": 1.9,
+   "gap_over": 1.2,
+   "lanes": [
+    "right"
+   ]
+  },
+  {
+   "s": 348.0,
+   "name": "Olthoi Slayer",
+   "cell": "0x202",
+   "world": [
+    252.18,
+    8116.95,
+    -24.0
+   ],
+   "local": [
+    252.18,
+    -139.05,
+    -24.0
+   ],
+   "dist_to_line": 1.9,
+   "lat": 0.9,
+   "gap_left": 3.9,
+   "gap_right": 1.6,
+   "gap_over": 1.2,
+   "lanes": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 377.0,
+   "name": "Olthoi Slayer",
+   "cell": "0x1f1",
+   "world": [
+    249.79,
+    8144.01,
+    -30.0
+   ],
+   "local": [
+    249.79,
+    -111.99,
+    -30.0
+   ],
+   "dist_to_line": 1.8,
+   "lat": -0.6,
+   "gap_left": 2.2,
+   "gap_right": 1.3,
+   "gap_over": 1.2,
+   "lanes": [
+    "left"
+   ]
+  },
+  {
+   "s": 398.5,
+   "name": "Olthoi Slayer",
+   "cell": "0x1e4",
+   "world": [
+    230.68,
+    8144.8,
+    -35.99
+   ],
+   "local": [
+    230.68,
+    -111.2,
+    -35.99
+   ],
+   "dist_to_line": 1.9,
+   "lat": -0.8,
+   "gap_left": 1.6,
+   "gap_right": 1.4,
+   "gap_over": 1.2,
+   "lanes": [
+    "left"
+   ]
+  },
+  {
+   "s": 419.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x1de",
+   "world": [
+    213.62,
+    8133.19,
+    -35.99
+   ],
+   "local": [
+    213.62,
+    -122.81,
+    -35.99
+   ],
+   "dist_to_line": 4.1,
+   "lat": 3.2,
+   "gap_left": 1.7,
+   "gap_right": 8.0,
+   "gap_over": 4.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 422.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x1de",
+   "world": [
+    214.16,
+    8139.13,
+    -35.99
+   ],
+   "local": [
+    214.16,
+    -116.87,
+    -35.99
+   ],
+   "dist_to_line": 3.1,
+   "lat": -1.6,
+   "gap_left": 10.8,
+   "gap_right": 1.9,
+   "gap_over": 4.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 449.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x1d8",
+   "world": [
+    199.23,
+    8155.11,
+    -35.99
+   ],
+   "local": [
+    199.23,
+    -100.89,
+    -35.99
+   ],
+   "dist_to_line": 2.8,
+   "lat": 0.9,
+   "gap_left": 3.4,
+   "gap_right": 5.2,
+   "gap_over": 4.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 486.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x1aa",
+   "world": [
+    189.24,
+    8142.51,
+    -53.99
+   ],
+   "local": [
+    189.24,
+    -113.49,
+    -53.99
+   ],
+   "dist_to_line": 2.0,
+   "lat": -0.8,
+   "gap_left": 6.6,
+   "gap_right": 5.1,
+   "gap_over": 4.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 507.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x1a5",
+   "world": [
+    180.21,
+    8125.86,
+    -53.99
+   ],
+   "local": [
+    180.21,
+    -130.14,
+    -53.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.2,
+   "gap_left": 1.6,
+   "gap_right": 2.0,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 522.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x19b",
+   "world": [
+    172.64,
+    8116.43,
+    -53.99
+   ],
+   "local": [
+    172.64,
+    -139.57,
+    -53.99
+   ],
+   "dist_to_line": 2.3,
+   "lat": -1.5,
+   "gap_left": 3.4,
+   "gap_right": 6.5,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 540.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x18e",
+   "world": [
+    161.49,
+    8105.89,
+    -53.99
+   ],
+   "local": [
+    161.49,
+    -150.11,
+    -53.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.1,
+   "gap_left": 30,
+   "gap_right": 1.9,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 568.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x171",
+   "world": [
+    139.13,
+    8115.57,
+    -53.99
+   ],
+   "local": [
+    139.13,
+    -140.43,
+    -53.99
+   ],
+   "dist_to_line": 2.1,
+   "lat": -1.2,
+   "gap_left": 2.3,
+   "gap_right": 1.3,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left"
+   ]
+  },
+  {
+   "s": 585.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x15e",
+   "world": [
+    122.71,
+    8117.65,
+    -53.99
+   ],
+   "local": [
+    122.71,
+    -138.35,
+    -53.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.5,
+   "gap_left": 0.6,
+   "gap_right": 1.5,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "right"
+   ]
+  },
+  {
+   "s": 608.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x156",
+   "world": [
+    104.51,
+    8125.99,
+    -53.99
+   ],
+   "local": [
+    104.51,
+    -130.01,
+    -53.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": 0.0,
+   "gap_left": 1.8,
+   "gap_right": 1.8,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 630.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x153",
+   "world": [
+    88.47,
+    8116.14,
+    -53.99
+   ],
+   "local": [
+    88.47,
+    -139.86,
+    -53.99
+   ],
+   "dist_to_line": 2.2,
+   "lat": -0.1,
+   "gap_left": 2.6,
+   "gap_right": 10.7,
+   "gap_over": 7.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 641.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x150",
+   "world": [
+    79.77,
+    8117.02,
+    -57.05
+   ],
+   "local": [
+    79.77,
+    -138.98,
+    -57.05
+   ],
+   "dist_to_line": 2.4,
+   "lat": -1.0,
+   "gap_left": 2.0,
+   "gap_right": 10.0,
+   "gap_over": 10.2,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 652.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x12f",
+   "world": [
+    70.71,
+    8121.02,
+    -59.99
+   ],
+   "local": [
+    70.71,
+    -134.98,
+    -59.99
+   ],
+   "dist_to_line": 2.7,
+   "lat": -0.5,
+   "gap_left": 3.9,
+   "gap_right": 6.8,
+   "gap_over": 12.7,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 691.0,
+   "name": "Olthoi Larvae",
+   "cell": "0x11a",
+   "world": [
+    50.45,
+    8149.99,
+    -59.99
+   ],
+   "local": [
+    50.45,
+    -106.01,
+    -59.99
+   ],
+   "dist_to_line": 4.5,
+   "lat": -4.0,
+   "gap_left": 6.1,
+   "gap_right": 15.8,
+   "gap_over": 8.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 715.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x10b",
+   "world": [
+    30.95,
+    8137.26,
+    -59.99
+   ],
+   "local": [
+    30.95,
+    -118.74,
+    -59.99
+   ],
+   "dist_to_line": 3.8,
+   "lat": 3.3,
+   "gap_left": 5.0,
+   "gap_right": 4.6,
+   "gap_over": 10.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 720.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x10b",
+   "world": [
+    25.84,
+    8132.26,
+    -59.99
+   ],
+   "local": [
+    25.84,
+    -123.74,
+    -59.99
+   ],
+   "dist_to_line": 4.6,
+   "lat": 3.9,
+   "gap_left": 19.2,
+   "gap_right": 8.6,
+   "gap_over": 10.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 723.0,
+   "name": "Olthoi Larvae",
+   "cell": "0x105",
+   "world": [
+    22.44,
+    8134.17,
+    -59.99
+   ],
+   "local": [
+    22.44,
+    -121.83,
+    -59.99
+   ],
+   "dist_to_line": 3.0,
+   "lat": 1.8,
+   "gap_left": 12.6,
+   "gap_right": 6.2,
+   "gap_over": 11.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 723.5,
+   "name": "Olthoi Larvae",
+   "cell": "0x105",
+   "world": [
+    21.89,
+    8139.6,
+    -59.99
+   ],
+   "local": [
+    21.89,
+    -116.39,
+    -59.99
+   ],
+   "dist_to_line": 4.3,
+   "lat": -3.6,
+   "gap_left": 30,
+   "gap_right": 0.8,
+   "gap_over": 11.1,
+   "lanes": [
+    "over",
+    "left"
+   ]
+  },
+  {
+   "s": 727.0,
+   "name": "Olthoi Ripper",
+   "cell": "0x105",
+   "world": [
+    18.75,
+    8138.23,
+    -59.99
+   ],
+   "local": [
+    18.75,
+    -117.77,
+    -59.99
+   ],
+   "dist_to_line": 3.0,
+   "lat": -2.2,
+   "gap_left": 30,
+   "gap_right": 2.1,
+   "gap_over": 10.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 728.5,
+   "name": "Olthoi Larvae",
+   "cell": "0x105",
+   "world": [
+    17.09,
+    8138.64,
+    -59.99
+   ],
+   "local": [
+    17.09,
+    -117.36,
+    -59.99
+   ],
+   "dist_to_line": 3.2,
+   "lat": -2.6,
+   "gap_left": 17.0,
+   "gap_right": 1.7,
+   "gap_over": 11.1,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  },
+  {
+   "s": 732.5,
+   "name": "Olthoi Ripper",
+   "cell": "0x101",
+   "world": [
+    12.9,
+    8136.2,
+    -59.99
+   ],
+   "local": [
+    12.9,
+    -119.8,
+    -59.99
+   ],
+   "dist_to_line": 1.7,
+   "lat": -0.1,
+   "gap_left": 1.7,
+   "gap_right": 1.8,
+   "gap_over": 1.9,
+   "lanes": [
+    "over",
+    "left",
+    "right"
+   ]
+  }
+ ],
+ "pvs_avatar_anchors": {
+  "note": "ACE sends dungeon creatures only for cells in the avatar cell PVS (ObjectMaint.GetVisibleObjects(EnvCell) -> cell.VisibleCells); objects leave after 25 s outside PVS. These 7 route cells together see all 80 creatures within 15 m of the route.",
+  "cells_in_route_order": [
+   "0x002B035D",
+   "0x002B02D2",
+   "0x002B028E",
+   "0x002B020A",
+   "0x002B01D8",
+   "0x002B0163",
+   "0x002B0121"
+  ]
+ },
+ "features": {
+  "burrows_tunnel_entrances_in_the_ground": [
+   {
+    "where": "entry hall NE cell 0x376 (room) / 0x375 (trench)",
+    "s": 18.0,
+    "mound": "x 465-475, y 8091-8101, rises from z 0 to crest z 3.0 against the N wall",
+    "mouth": "slanted 31 deg opening (467.3-472.7, 8096 z0 -> 8101 z3); trench 4.6-5.3 m wide at floor z 0 -> tunnel 0x374 5.33 x 3.75 m (top z 3.75, 0.75 m above the crest)",
+    "use": "DIVE in"
+   },
+   {
+    "where": "-12: tunnel 0x2c6 -> trench 0x2c8 -> room 0x2c9 (NE corner of the 30x30x9 m Slasher hall)",
+    "s": 197.5,
+    "mound": "x 355-365, y 8131-8141, crest z -9.0 against the N wall",
+    "use": "POP UP out of the ground (Slasher 3.7 m to the left at 359.1, 8134.1)"
+   },
+   {
+    "where": "-54: tunnel 0x159 -> trench 0x152 -> room 0x153",
+    "s": 626.1,
+    "mound": "x 85-95, crest z -51 against the E wall",
+    "use": "POP UP (Ripper dead ahead at 88.5, 8116.1)"
+   },
+   {
+    "where": "-60: room 0x12f -> trench 0x130 -> tunnel 0x12e",
+    "s": 660.6,
+    "mound": "x 65-75, y 8121-8131, crest z -57 against the N wall",
+    "use": "DIVE in"
+   },
+   {
+    "where": "-60: tunnel 0x123 -> trench 0x122 -> room 0x121",
+    "s": 680.3,
+    "mound": "x 55-65, y 8141-8151, crest z -57 against the S wall",
+    "use": "POP UP"
+   },
+   {
+    "where": "-60: room 0x11a -> trench 0x11b -> tunnel 0x111",
+    "s": 694.0,
+    "mound": "x 45-55, crest z -57 against the W wall",
+    "use": "DIVE in"
+   }
+  ],
+  "floor_chute": {
+   "cell": "0x002B02C3 (centre of the 30x30 m -12 hall 0x2bd-0x2cb, 9 m tall, ceiling -3) -> chute 0x2C2 -> tunnel 0x2AD",
+   "hole": "irregular quad (348.1,8126.0) (353.8,8128.9) (354.5,8123.0) (351.0,8123.2) at z -12, ~6.4 x 5.9 m, centroid (351.86, 8125.26, -12)",
+   "chute": "floor slopes 33 deg down to the WEST, z -12 at x 354.5 -> z -18 at x 345; roof lip at x 348.1 (z -12) sloping to z -14.9 at x 345; exit = tunnel mouth x 345, y 8123.3-8128.7, z -18..-14.25",
+   "depth_m": 6,
+   "note": "community: \"one spot in egg orchard where you drop through a tunnel in the floor\" (utilitybelt 2023-04-28)"
+  },
+  "pit": {
+   "cells": "0x002B01D4 (no floor, x 185-195, y 8151-8161, z -36..-30, lid 0x1E8 at -30) -> shaft 0x1CC (-42..-36) -> 0x1C5 (-48..-42) -> pit-bottom room 0x1A9 (floor -54)",
+   "size": "10 x 10 m, 18 m drop from the -36 floor, 24 m clear from the lid (-30) to the floor (-54); lid only 3 m above a drone at -33",
+   "entry": "from room 0x1D8 heading west through a 10 x 6 m opening at x 195",
+   "bottom_exits": "S 0x1AA (10 x 6 m) -> tunnel 0x1AC (5.3 x 3.75) heading south; also E 0x1AE, W 0x1A2",
+   "monsters": "Rippers at the bottom (187.1, 8157.8, -54) and (193.9, 8156.9, -54); Ripper in 0x1AA (189.2, 8142.5, -54)",
+   "note": "community name: \"the pit where you jump to the lower half\" (one-way for players)"
+  },
+  "chimneys": [
+   {
+    "over": "0x002B01E0 (-36 hall)",
+    "xy": "x 215-225, y 8131-8141",
+    "cells": "0x1ED (-30..-24), 0x1F6 (-24..-18), 0x26C (-18..-12 room cell of the -18 complex), lid 0x2B0 at -12",
+    "clear_height_m": 24
+   },
+   {
+    "over": "0x002B01DC (-36 hall)",
+    "xy": "x 205-215, y 8151-8161",
+    "cells": "0x1EA, 0x1F5, 0x26B, lid 0x2AF at -12",
+    "clear_height_m": 24
+   }
+  ],
+  "ramp_hall": {
+   "cells": "0x150 (+ twin 0x14F to the north), x 75-85, y 8111-8131 (20 m wide)",
+   "floor": "31 deg ramp from z -54 at x 85 to z -60 at x 75",
+   "ceiling": -45,
+   "next": "0x132 / 0x12F rooms at -60 (ceiling -45)"
+  },
+  "west_egg_chamber": {
+   "cells": "0x105, 0x106, 0x10B, 0x10C (x 15-35, y 8121-8141), floor -60, open above through 0x13A-0x13D to lids at -48 (12 m tall)",
+   "contents": "5 Rippers (+1 in exit corner 0x101), 8 Olthoi Larvae, 12 enchanted olthoi eggs (static 0x02000AE1), toxic hive 0x02000F97 (5.65 x 5.37 x 2.33 m) at (20.02, 8125.95, -59.94) with green fog + 8.7 m halo, green ghost-haze; 4 side alcoves at -54 (6 m up: 0x137/0x136 W, 0x139 N, 0x140/0x147 E, 0x141 E) each with a Ripper standing on the ledge",
+   "exit": "west door x 15 (5.3 x 3.75) -> tunnel 0x102 -> corner 0x101 (Ripper at 12.9, 8136.2) -> north 0x103 -> dead-end 0x100 with the portal"
+  },
+  "obstacles": [
+   {
+    "id": "0x02000AC1",
+    "what": "large organic prop (giant-mushroom/hive-pod family; identity unconfirmed) 7.25 x 7.21 x 4.46 m",
+    "at": [
+     461.4,
+     8095.6,
+     0.1
+    ],
+    "cell": "0x370 entry hall"
+   },
+   {
+    "id": "0x02000AC5",
+    "what": "large organic prop 7.43 x 6.5 x 6.4 m",
+    "at": [
+     468.7,
+     8086.5,
+     0.1
+    ],
+    "cell": "0x377 entry hall"
+   },
+   {
+    "id": "0x02000AC1",
+    "what": "same 4.46 m prop",
+    "at": [
+     350.0,
+     8136.0,
+     -11.9
+    ],
+    "cell": "0x2C0 -12 hall (just N of the chute)"
+   },
+   {
+    "id": "0x0200028F",
+    "what": "free-standing 4-way gas-vent column 2.4 x 3.0 m, floor to ceiling",
+    "at": [
+     130.0,
+     8116.4,
+     -52.1
+    ],
+    "cell": "0x163 X-junction at -54 (route passes 0.5 m from its centre: go round it)"
+   },
+   {
+    "id": "0x02000208",
+    "what": "slim vent column 1.05 x 1.08 m floor to ceiling, 0.9 m off the tunnel centre",
+    "at": [
+     439.1,
+     8151.6,
+     -10.1
+    ],
+    "cell": "0x308"
+   },
+   {
+    "id": "0x02000208",
+    "what": "slim vent column (as above)",
+    "at": [
+     364.4,
+     8145.1,
+     -10.1
+    ],
+    "cell": "0x2C7"
+   },
+   {
+    "id": "wall vents 0x0200028D/0x02000AB3/0x02000205",
+    "what": "~35 wall-mounted gas vents along the route tunnels, mostly in staggered pairs ~6-7 m apart: protrude ~1.0-1.37 m from the wall from floor to ~2.6 m, top flare reaches 0.35 m from the tunnel centreline in the top ~0.6 m (z > floor+3.2); green gas falls from them",
+    "at": null,
+    "cell": "see eo_fpv_route.json doors/cells; list printed in the report"
+   }
+  ]
+ },
+ "speed_plan": [
+  {
+   "seg": "A",
+   "len": 20,
+   "v": "0 -> 7 m/s",
+   "t": 4.0,
+   "move": "hover at the drop facing NE, punch up between/over the two big props (AC1 top 4.46, hall ceiling 9) to ~6.5 m, cut throttle, float-drop over the mound crest (z 3) into the trench at 1.5 m"
+  },
+  {
+   "seg": "B",
+   "len": 74,
+   "v": "8",
+   "t": 9.5,
+   "move": "tunnel 0x374 (vent slalom), nose-down dive on ramp 0x373, -6 tunnels with 3 Slashers (2.33 m tall, 1.4 m headroom -> pass LEFT/RIGHT), second ramp 0x34F to -12"
+  },
+  {
+   "seg": "C",
+   "len": 101,
+   "v": "7-8 (5.5-6 in the 90 deg chamfered corners, 3.65 m wide)",
+   "t": 13.5,
+   "move": "-12 serpentine: 16 heading changes of 45 deg, banked; 4 Slashers in the tunnel (0x307, 0x2D6: right lane only; 0x2F2, 0x2E2: either side); slim vent column in 0x308. Hidden-cut candidate."
+  },
+  {
+   "seg": "D",
+   "len": 22,
+   "v": "4-6",
+   "t": 3.5,
+   "move": "trench 0x2C8 -> POP UP out of the mound into the 30x30x9 m Slasher hall (5 Slashers around), climb to ~-5 (ceiling -3)"
+  },
+  {
+   "seg": "E",
+   "len": 8,
+   "v": "free-fall feel, ~7",
+   "t": 2.0,
+   "move": "cut throttle over the 6.4 x 5.9 m floor hole, nose-down 33 deg along the chute, recover into the -18 tunnel mouth (3.1-3.75 m tall)"
+  },
+  {
+   "seg": "F",
+   "len": 177,
+   "v": "9-10",
+   "t": 19.0,
+   "move": "-18/-24/-30/-36 tunnels with 3 ramp dives; 8 Slayers (2.56 m tall, 1.2 m headroom -> side lanes only, gaps 1.0-2.2 m: 0x29E/0x20A right, 0x235/0x1F1/0x1E4 left). Longest stretch: speed-ramp or hidden cut at a ramp."
+  },
+  {
+   "seg": "G",
+   "len": 51,
+   "v": "6-8 + trick",
+   "t": 9.0,
+   "move": "-36 hall (6 m tall rooms): CHIMNEY A over 0x1E0 - punch straight up ~15 m (lid -12), cut, float, drop back; fly OVER the 2 Rippers in 0x1DE (4.1 m headroom); optional yaw-spin rise in chimney B (0x1DC); over the Ripper in 0x1D8"
+  },
+  {
+   "seg": "H",
+   "len": 24,
+   "v": "gravity ~10-14 at the bottom",
+   "t": 4.0,
+   "move": "THE PIT: roll out over the edge at -33 (lid only 3 m above), split-S / inverted dive 18 m down the 10x10 shaft, pull out at ~-51 over the 2 Rippers, exit south through 0x1AA into tunnel 0x1AC"
+  },
+  {
+   "seg": "I",
+   "len": 147,
+   "v": "8.5-9",
+   "t": 16.5,
+   "move": "-54 lower-half tunnels; 7 Rippers in the corridor (1.86 m tall, 1.9 m headroom -> OVER is possible at 2.8-3.0 m, or sides 1.5-2.0 m); go round the 2.4 x 3.0 m vent column in X-junction 0x163. Hidden-cut candidate."
+  },
+  {
+   "seg": "J",
+   "len": 22,
+   "v": "6-8",
+   "t": 3.5,
+   "move": "POP UP out of trench 0x152 straight over the Ripper in 0x153, swoop down the 31 deg ramp hall 0x150 (20 m wide, ceiling -45) past the Ripper at (79.8, 8117.0, -57)"
+  },
+  {
+   "seg": "K",
+   "len": 93,
+   "v": "6 -> 4 (reveal) -> 3 into the portal",
+   "t": 19.0,
+   "move": "over the Ripper in 0x12F, DIVE into trench 0x130, tunnel, POP UP 0x122->0x121, DIVE 0x11A->0x11B, tunnel 0x111 (vent slalom), chamfered corner 0x10A -> REVEAL the west egg chamber: float up to ~-53 (ceiling -48) over the eggs, larvae and hive, carve round, exit west 0x102, over the Ripper in corner 0x101, turn north and push into the portal swirl at (9.70, 8142.69)"
+  }
+ ],
+ "speed_plan_total_s": 103.5
+}

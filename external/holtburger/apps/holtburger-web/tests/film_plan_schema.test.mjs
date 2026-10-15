@@ -5,7 +5,9 @@
 // tools/film/plan/schema.mjs against the shipped example plan, a minimal plan and one broken plan per error class,
 // asserting that each problem is reported at the exact JSON path (`shots[0].params.radius`) with a useful message,
 // that advice (missing standing order, moving actor captured stepped, beats without a song) is a WARNING, that the
-// injected technique registry is honoured, and that validation is total (never throws on garbage).
+// injected technique registry is honoured, and that validation is total (never throws on garbage). Also edit.tail
+// (silent tail after the music), site.prime (dungeon priming teleports), shot.overlay (lens overlay props),
+// shot.pilot.fade, and registry-validated param types (a technique's `list` params, checked by the registry itself).
 //
 // Run from apps/holtburger-web/: node tests/film_plan_schema.test.mjs
 
@@ -14,14 +16,24 @@ import { readFileSync } from "node:fs";
 import {
   CAPTURE_MODES,
   DRY_ROUTE_LEG_M,
+  EDIT_KEYS,
   FRAMING_NAMES,
   KNOWN_TECHNIQUE_IDS,
   LOOK_DOF_KEYS,
+  OVERLAY_KEYS,
+  OVERLAY_PROP_KEYS,
+  OVERLAY_PROP_STYLES,
+  PILOT_FADE_MODES,
+  PLAN_DEFAULTS,
   PLAN_FIELDS,
+  PLAN_PARAM_TYPES,
+  PRIME_MAX,
   SHOT_BOUND_RULES,
+  TAIL_KEYS,
   PLAN_VERSION,
   STANDING_ORDER_MAX,
   TRANSITION_TYPES,
+  TRIM_KEYS,
   XFADE_FOR,
   assertValidPlan,
   checkStandingOrder,
@@ -31,6 +43,7 @@ import {
   parseStart,
   shotSpec,
   shotUsesSong,
+  tailIndexOf,
   techniqueFamily,
   validatePlan,
 } from "../tools/film/plan/schema.mjs";
@@ -260,13 +273,13 @@ check("shotSpec builds the SPEC §2.11 ShotSpec for a take duration", () => {
   assert.equal(p.shots[0].params.radius, 30, "spec params are a copy");
 });
 
-check("PLAN_FIELDS documents every top-level area; catalogue has 63 unique SPEC §2.12 ids", () => {
+check("PLAN_FIELDS documents every top-level area; catalogue has 64 unique SPEC §2.12 ids", () => {
   const all = PLAN_FIELDS.map((f) => f.path).join(" ");
   for (const k of ["version", "format.fps", "song.offsetSec", "sites[].teleport", "sites[].anchor", "shots[].duration", "shots[].standingOrder", "shots[].transition", "shots[].capture.mode"]) {
     assert.ok(all.includes(k), k);
   }
-  assert.equal(KNOWN_TECHNIQUE_IDS.length, 63);
-  assert.equal(new Set(KNOWN_TECHNIQUE_IDS).size, 63);
+  assert.equal(KNOWN_TECHNIQUE_IDS.length, 64);
+  assert.equal(new Set(KNOWN_TECHNIQUE_IDS).size, 64);
   assert.equal(techniqueFamily("fpv.fpv-flip"), "fpv");
   assert.equal(techniqueFamily("cinema.x"), null);
   assert.deepEqual(FRAMING_NAMES, ["EWS", "WS", "FS", "MWS", "MS", "MCU", "CU", "ECU"]);
@@ -612,6 +625,37 @@ check("shot bounds errors: unknown key (did you mean), out of range per key, not
   assert.equal(validatePlan(onePlan({ technique: "classic.static", bounds: { minSpeedScale: 1 } })).ok, true);
 });
 
+check("shot trim {takeSec, inSec}: accepted, normalized (null default), documented; the dry build flies the take length", () => {
+  assert.ok(PLAN_FIELDS.some((f) => f.path === "shots[].trim"), "documented in PLAN_FIELDS");
+  assert.deepEqual([...TRIM_KEYS], ["takeSec", "inSec"]);
+  const v = validatePlan(onePlan({ technique: "classic.static", trim: { takeSec: 9.5, inSec: 3 } }));
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.equal(v.warnings.find((w) => /trim/.test(w.path)), undefined, "trim is a known shot key");
+  assert.deepEqual(v.plan.shots[0].trim, { takeSec: 9.5, inSec: 3 });
+  assert.equal(validatePlan(onePlan({ technique: "classic.static" })).plan.shots[0].trim, null);
+  // the dry build gets the take length (also for a {beats} shot, which is otherwise not dry-built)
+  const seen = [];
+  const registry = { getTechnique: SHOTS.getTechnique, buildShot: (spec, ctx) => { seen.push(spec.duration); return SHOTS.buildShot(spec, ctx); } };
+  validatePlan(onePlan({ technique: "classic.static", trim: { takeSec: 9.5, inSec: 3 } }), { registry, dryBuild: true });
+  validatePlan(onePlan({ technique: "classic.static", duration: { beats: 8 }, trim: { takeSec: 12, inSec: 0 } }), { registry, dryBuild: true });
+  validatePlan(onePlan({ technique: "classic.static" }), { registry, dryBuild: true });
+  assert.deepEqual(seen, [9.5, 12, 4]);
+});
+
+check("shot trim errors: not an object, unknown key, takeSec range, inSec outside the take, a {sec} edit longer than the take", () => {
+  expectError(onePlan({ technique: "classic.static", trim: 3 }), "shots[0].trim", /trim must be an object \{takeSec, inSec\}/);
+  expectError(onePlan({ technique: "classic.static", trim: { takeSec: 9, inSec: 1, insec: 2 } }), "shots[0].trim.insec", /unknown trim key "insec" \(did you mean "inSec"/);
+  expectError(onePlan({ technique: "classic.static", trim: { inSec: 1 } }), "shots[0].trim.takeSec", /finite number/);
+  expectError(onePlan({ technique: "classic.static", trim: { takeSec: 0, inSec: 0 } }), "shots[0].trim.takeSec", /> 0/);
+  expectError(onePlan({ technique: "classic.static", trim: { takeSec: 601, inSec: 0 } }), "shots[0].trim.takeSec", /≤ 600/);
+  expectError(onePlan({ technique: "classic.static", trim: { takeSec: 9, inSec: -1 } }), "shots[0].trim.inSec", /≥ 0/);
+  expectError(onePlan({ technique: "classic.static", trim: { takeSec: 9, inSec: 9 } }), "shots[0].trim.inSec", /inside the 9 s take/);
+  expectError(onePlan({ technique: "classic.static", duration: { sec: 10 }, trim: { takeSec: 9, inSec: 0 } }), "shots[0].trim", /10 s edit is longer than the 9 s take/);
+  // with a song the beat grid may still snap the edit inside the take: a warning, compile decides
+  expectWarning(onePlan({ technique: "classic.static", duration: { sec: 9.1 }, trim: { takeSec: 9, inSec: 0 } }, { song: { offsetSec: 0 } }), "shots[0].trim", /compile fails unless the beat grid shortens the edit/);
+  assert.equal(validatePlan(onePlan({ technique: "classic.static", duration: { sec: 9 }, trim: { takeSec: 9, inSec: 0 } })).ok, true, "edit = take is fine");
+});
+
 check("look.dof: focusRange must be > 0 (window.__dof setter), others ≥ 0; enabled boolean; target shape; unknown keys warn", () => {
   expectError(onePlan({ technique: "classic.static", look: { dof: { focusRange: 0 } } }), "shots[0].look.dof.focusRange", /dof\.focusRange must be > 0 \(got 0\)/);
   expectError(onePlan({ technique: "classic.static", look: { dof: { focusRange: -2 } } }), "shots[0].look.dof.focusRange");
@@ -701,6 +745,170 @@ check("dry build is skipped for an indoor/outdoor technique mismatch (one error,
   assert.deepEqual(v.errors.map((e) => e.path), ["shots[1].technique"], JSON.stringify(v.errors));
   assert.match(v.errors[0].message, /outdoor technique but site "crypt" is indoors/);
   assert.deepEqual(v.warnings.filter((w) => w.path.startsWith("shots[1]")), [], JSON.stringify(v.warnings));
+});
+
+// ── edit.tail, site.prime, shot.overlay, pilot.fade, registry-validated params ─────────────────────────────
+
+console.log("film_plan_schema: edit.tail, site.prime, shot.overlay, pilot.fade, registry list params");
+
+/** Three outdoor shots s1, s2, s3 on a song; `edit` and per-shot overrides. */
+function tailSchemaPlan(edit, shotOver = {}) {
+  return {
+    version: 1, title: "Tail", song: { offsetSec: 0 }, edit,
+    sites: [{ id: "a", teleport: "@telepoi Holtburg", anchor: [32532, 34567.1, 94] }],
+    shots: ["s1", "s2", "s3"].map((id) => ({ id, site: "a", technique: "classic.static", duration: { sec: 4 }, standingOrder: "Hold still.", ...(shotOver[id] ?? {}) })),
+  };
+}
+
+check("edit.tail: normalized only when given (gapSec 1.5, fadeOutSec 3; a string is the `from` id), idempotent; tailIndexOf; documented", () => {
+  const n = normalizePlan(tailSchemaPlan({ tail: { from: "s2" } }));
+  assert.deepEqual(n.edit, { fadeInSec: 0, fadeOutSec: 0, tail: { from: "s2", gapSec: 1.5, fadeOutSec: 3 } });
+  assert.deepEqual(normalizePlan(tailSchemaPlan({ tail: "s2" })).edit.tail, { from: "s2", gapSec: 1.5, fadeOutSec: 3 });
+  assert.deepEqual(normalizePlan(n), n, "idempotent");
+  assert.deepEqual(normalizePlan(tailSchemaPlan({ fadeOutSec: 4, tail: { from: "s3", gapSec: 0, fadeOutSec: 0 } })).edit.tail, { from: "s3", gapSec: 0, fadeOutSec: 0 });
+  assert.deepEqual(normalizePlan(tailSchemaPlan(undefined)).edit, { fadeInSec: 0, fadeOutSec: 0 }, "no tail key without a tail");
+  assert.deepEqual(PLAN_DEFAULTS.tailGapSec, 1.5);
+  assert.deepEqual(PLAN_DEFAULTS.tailFadeOutSec, 3);
+  const v = validatePlan(tailSchemaPlan({ tail: { from: "s2" } }));
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.deepEqual(v.warnings.filter((w) => w.path.startsWith("edit")), []);
+  assert.equal(tailIndexOf(v.plan), 1);
+  assert.equal(tailIndexOf(normalizePlan(tailSchemaPlan(undefined))), -1);
+  assert.equal(tailIndexOf(normalizePlan(tailSchemaPlan({ tail: { from: "s1" } }))), -1, "the first shot is never a tail");
+  assert.deepEqual(TAIL_KEYS, ["from", "gapSec", "fadeOutSec"]);
+  assert.ok(PLAN_FIELDS.some((f) => f.path === "edit.tail"), "documented in PLAN_FIELDS");
+});
+
+check("edit.tail errors: from unknown (did you mean) / first shot / not a string, gapSec + fadeOutSec in [0, 10], unknown tail key, not an object; tail shots need {sec} and no start; an unknown edit key warns", () => {
+  expectError(tailSchemaPlan({ tail: { from: "s3x" } }), "edit.tail.from", /"s3x" is not a shot id \(did you mean "s3"/);
+  expectError(tailSchemaPlan({ tail: { from: "s1" } }), "edit.tail.from", /is the first shot: the tail is appended AFTER the music part/);
+  expectError(tailSchemaPlan({ tail: { from: 2 } }), "edit.tail.from", /must be the id of the first shot of the silent tail/);
+  expectError(tailSchemaPlan({ tail: { from: "s2", gapSec: 10.5 } }), "edit.tail.gapSec", /≤ 10/);
+  expectError(tailSchemaPlan({ tail: { from: "s2", gapSec: -1 } }), "edit.tail.gapSec", /≥ 0/);
+  expectError(tailSchemaPlan({ tail: { from: "s2", fadeOutSec: 11 } }), "edit.tail.fadeOutSec", /≤ 10/);
+  expectError(tailSchemaPlan({ tail: { from: "s2", fadeOutSecs: 2 } }), "edit.tail.fadeOutSecs", /unknown edit\.tail key "fadeOutSecs" \(did you mean "fadeOutSec"\?\)/);
+  expectError(tailSchemaPlan({ tail: 7 }), "edit.tail", /edit\.tail must be \{from/);
+  // every shot from `from` on: seconds only, no explicit start — music shots keep {bars}/{beats}
+  const v = expectError(tailSchemaPlan({ tail: { from: "s2" } }, { s1: { duration: { bars: 2 } }, s2: { duration: { beats: 8 } }, s3: { duration: { bars: 1 }, start: { sec: 40 } } }), "shots[1].duration", /s2 is in the silent tail \(edit\.tail\.from "s2"\): its duration must be \{sec\}/);
+  assert.deepEqual(paths(v.errors).sort(), ["shots[1].duration", "shots[2].duration", "shots[2].start"]);
+  assert.match(v.errors.find((e) => e.path === "shots[2].start").message, /no explicit start — the tail follows the music part after edit\.tail\.gapSec of black/);
+  // a tail shot's {sec} is used as written, so an edit longer than its trimmed take is an error even with a song
+  expectError(tailSchemaPlan({ tail: { from: "s2" } }, { s2: { duration: { sec: 10 }, trim: { takeSec: 9, inSec: 0 } } }), "shots[1].trim", /10 s edit is longer than the 9 s take/);
+  expectWarning(tailSchemaPlan({ tial: { from: "s2" } }), "edit.tial", /unknown edit key "tial" \(did you mean "tail"\?\)/);
+  assert.deepEqual(EDIT_KEYS, ["fadeInSec", "fadeOutSec", "tail"]);
+});
+
+check("site.prime: ≤ 12 '@…' commands, each checked like the teleport (one line, ≤ 200, a non-teleport verb warns); not a site-key warning; documented", () => {
+  const prime = ["@teleloc 0x002B035D 469.8 -130.2 -6", "@teleloc 0x002B0163 130 -140 -54"];
+  const ok = validatePlan(basePlan((p) => { p.sites[1].prime = prime; }));
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.deepEqual(ok.warnings.filter((w) => w.path.startsWith("sites[1]")), [], JSON.stringify(ok.warnings));
+  assert.deepEqual(ok.plan.sites[1].prime, prime, "passed through unchanged");
+  assert.ok(!("prime" in normalizePlan(basePlan()).sites[1]), "absent stays absent");
+  expectError(basePlan((p) => { p.sites[1].prime = "@teleloc 0x002B035D 1 2 3"; }), "sites[1].prime", /prime must be an array of '@…' admin commands \(≤ 12\)/);
+  expectError(basePlan((p) => { p.sites[1].prime = new Array(PRIME_MAX + 1).fill(prime[0]); }), "sites[1].prime", /prime has 13 commands \(max 12\)/);
+  expectError(basePlan((p) => { p.sites[1].prime = ["teleloc 0x002B035D 1 2 3"]; }), "sites[1].prime[0]", /prime command must start with '@'/);
+  expectError(basePlan((p) => { p.sites[1].prime = [prime[0], "@teleloc 0x002B035D\n1 2 3"]; }), "sites[1].prime[1]", /prime command must be a single line/);
+  expectError(basePlan((p) => { p.sites[1].prime = [`@teleloc ${"9".repeat(200)}`]; }), "sites[1].prime[0]", /prime command is 209 characters \(max 200\)/);
+  expectError(basePlan((p) => { p.sites[1].prime = [""]; }), "sites[1].prime[0]", /prime command must be an ACE admin command string/);
+  expectWarning(basePlan((p) => { p.sites[1].prime = ["@neversaydie on"]; }), "sites[1].prime[0]", /prime command "@neversaydie" is not one of @teleloc/);
+  // the site teleport keeps its own wording
+  expectError(basePlan((p) => { p.sites[0].teleport = "telepoi Holtburg"; }), "sites[0].teleport", /^teleport must start with '@'/);
+  assert.equal(PRIME_MAX, 12);
+  assert.ok(PLAN_FIELDS.some((f) => f.path === "sites[].prime"));
+});
+
+check("shot.overlay {props:{style, opacity?, tint?}} and pilot.fade 'never'|'auto': accepted, passed through, absent stays absent; errors at the exact path; unknown overlay keys warn", () => {
+  const good = onePlan({ technique: "classic.static", overlay: { props: { style: "cinewhoop", opacity: 0.6, tint: "#A0b0C0" } }, pilot: { mode: "jev", fade: "never" } });
+  const v = validatePlan(good);
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.deepEqual(v.warnings.filter((w) => /overlay|pilot/.test(w.path)), []);
+  assert.deepEqual(v.plan.shots[0].overlay, { props: { style: "cinewhoop", opacity: 0.6, tint: "#A0b0C0" } });
+  assert.deepEqual(v.plan.shots[0].pilot, { mode: "jev", fade: "never" });
+  assert.equal(validatePlan(onePlan({ technique: "classic.static", overlay: { props: { style: "freestyle" } }, pilot: { fade: "auto" } })).ok, true);
+  assert.equal(validatePlan(onePlan({ technique: "classic.static", overlay: {} })).ok, true, "no props = no overlay");
+  assert.ok(!("overlay" in normalizePlan(onePlan({ technique: "classic.static" })).shots[0]), "absent stays absent (take.overlay is null)");
+  expectError(onePlan({ technique: "classic.static", overlay: "props" }), "shots[0].overlay", /overlay must be an object \{props: \{style, opacity\?, tint\?\}\}/);
+  expectError(onePlan({ technique: "classic.static", overlay: { props: true } }), "shots[0].overlay.props", /overlay\.props must be \{style: "freestyle"\|"cinewhoop"/);
+  expectError(onePlan({ technique: "classic.static", overlay: { props: { style: "freestile" } } }), "shots[0].overlay.props.style", /must be one of "freestyle", "cinewhoop" \(got "freestile"\) \(did you mean "freestyle"\?\)/);
+  expectError(onePlan({ technique: "classic.static", overlay: { props: {} } }), "shots[0].overlay.props.style", /got undefined/);
+  expectError(onePlan({ technique: "classic.static", overlay: { props: { style: "freestyle", opacity: 1.2 } } }), "shots[0].overlay.props.opacity", /≤ 1/);
+  expectError(onePlan({ technique: "classic.static", overlay: { props: { style: "freestyle", tint: "white" } } }), "shots[0].overlay.props.tint", /"#rrggbb"/);
+  expectWarning(onePlan({ technique: "classic.static", overlay: { props: { style: "freestyle" }, lens: "fisheye" } }), "shots[0].overlay.lens", /unknown overlay key "lens" — the page ignores it/);
+  expectWarning(onePlan({ technique: "classic.static", overlay: { props: { style: "freestyle", blades: 3 } } }), "shots[0].overlay.props.blades", /unknown overlay\.props key "blades"/);
+  expectError(onePlan({ technique: "classic.static", pilot: { fade: "sometimes" } }), "shots[0].pilot.fade", /pilot\.fade must be "never" .* or "auto"/);
+  expectError(onePlan({ technique: "classic.static" }, { defaults: { pilot: { mode: "jev", fade: "nevr" } } }), "shots[0].pilot.fade", /did you mean "never"/);
+  assert.deepEqual([PILOT_FADE_MODES, OVERLAY_PROP_STYLES, OVERLAY_KEYS, OVERLAY_PROP_KEYS], [["never", "auto"], ["freestyle", "cinewhoop"], ["props"], ["style", "opacity", "tint"]]);
+  assert.ok(PLAN_FIELDS.some((f) => f.path === "shots[].overlay"));
+  assert.ok(PLAN_FIELDS.some((f) => f.path === "shots[].pilot" && /fade/.test(f.desc)));
+  // the run: an explicit racing line (shot.path) at an indoor site is allowed, with the fpv technique's needs met
+  const run = basePlan((p) => { delete p.shots[1].route; p.shots[1].path = [[96.7, 47222, 1.5], [110, 47222, 1.5]]; p.shots[1].cell = "0x01F60289"; });
+  const rv = validatePlan(run, { registry: makeRegistry() });
+  assert.equal(rv.ok, true, JSON.stringify(rv.errors));
+});
+
+check("registry params of a type schema.mjs does not check (a technique's `list`) are validated by the registry itself: its BAD_PARAM is an error at the exact path; the probe never builds", () => {
+  const probes = [];
+  const TRICKS = ["float", "roll", "dive"];
+  const listDef = { id: "fpv.fpv-corridor", family: "fpv", params: { speed: { type: "number", default: 6, min: 0.5, max: 25 }, tricks: { type: "list", default: [] }, zones: { type: "list", default: [] } }, needs: { subject: false, path: true, indoor: true } };
+  const base = makeRegistry();
+  const registry = {
+    getTechnique: (id) => (id === "fpv.fpv-corridor" ? listDef : base.getTechnique(id)),
+    buildShot(spec, ctx) {
+      probes.push({ spec, ctx });
+      const t = spec.params.tricks ?? [];
+      const bad = t.findIndex((x) => !TRICKS.includes(x && x.type));
+      if (bad >= 0) throw Object.assign(new Error(`fpv.fpv-corridor: param "tricks" item ${bad}: type must be one of float | roll | dive (got ${JSON.stringify(t[bad] && t[bad].type)})`), { code: "BAD_PARAM", details: { technique: spec.technique, param: "tricks" } });
+      if (spec.params.speed > 20) throw Object.assign(new Error("speed"), { code: "BAD_PARAM", details: { param: "speed" } });
+      throw Object.assign(new Error(`fpv.fpv-corridor: unknown framing ${JSON.stringify(spec.framing)}`), { code: "BAD_SPEC", details: { field: "framing" } });
+    },
+  };
+  const withTricks = (tricks, extra = {}) => basePlan((p) => { p.shots[1].params = { tricks, ...extra }; });
+  // valid list → no error; the probe ran once with the shot's params, duration 1 and a framing that stops the build
+  let v = validatePlan(withTricks([{ type: "float", s: 120 }, { type: "dive", s: 300 }]), { registry });
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.equal(probes.length, 1);
+  assert.deepEqual(probes[0].spec.params, { tricks: [{ type: "float", s: 120 }, { type: "dive", s: 300 }] });
+  assert.deepEqual([probes[0].spec.technique, probes[0].spec.duration, typeof probes[0].spec.framing, probes[0].ctx], ["fpv.fpv-corridor", 1, "string", {}]);
+  // a bad item → error at shots[1].params.tricks with the registry's own message
+  v = expectError(withTricks([{ type: "float", s: 1 }, { type: "loop", s: 2 }]), "shots[1].params.tricks", /tricks \(list\): fpv\.fpv-corridor: param "tricks" item 1: type must be one of float \| roll \| dive \(got "loop"\)/, { registry });
+  assert.equal(v.errors.length, 1);
+  // a BAD_PARAM about a param of a known type is checkParams' job (its own error), never doubled by the probe
+  v = expectError(withTricks([{ type: "roll", s: 5 }], { speed: 30 }), "shots[1].params.speed", /above the maximum 25/, { registry });
+  assert.deepEqual(paths(v.errors), ["shots[1].params.speed"]);
+  // no list param in the shot → no probe
+  const n = probes.length;
+  assert.equal(validatePlan(basePlan(), { registry }).ok, true);
+  assert.equal(probes.length, n);
+  assert.deepEqual(PLAN_PARAM_TYPES, ["number", "string", "boolean", "enum", "vec3"]);
+  // the REAL registry checks params before framing (the order the probe relies on) and stops at the framing check
+  let e1 = null, e2 = null;
+  try { SHOTS.buildShot({ technique: "drone.orbit-poi", duration: 1, params: { radius: -5 }, framing: "\u0000probe" }, {}); } catch (e) { e1 = e; }
+  try { SHOTS.buildShot({ technique: "drone.orbit-poi", duration: 1, params: { radius: 30 }, framing: "\u0000probe" }, {}); } catch (e) { e2 = e; }
+  assert.deepEqual([e1 && e1.code, e1 && e1.details && e1.details.param], ["BAD_PARAM", "radius"]);
+  assert.deepEqual([e2 && e2.code, e2 && e2.details && e2.details.field], ["BAD_SPEC", "framing"], "valid params → stops at the framing check, nothing built");
+  // every param of such a type in the REAL catalogue (e.g. fpv.fpv-run's zones / tricks once registered) is reached:
+  // a value that is not even a list is an error at its exact path (no such param registered yet = nothing to check)
+  let reached = 0;
+  for (const t of SHOTS.listTechniques()) {
+    const def = SHOTS.getTechnique(t.id);
+    for (const [name, ps] of Object.entries(def.params || {})) {
+      if (PLAN_PARAM_TYPES.includes(ps.type)) continue;
+      const indoor = def.needs && def.needs.indoor === true;
+      const plan = {
+        version: 1, title: "real list param",
+        sites: [indoor
+          ? { id: "a", teleport: "@teleloc 0x01F60289 96.7 -10 0", cell: "0x01F60289", anchor: { cell: "0x01F60289", local: [96.7, -10, 0] } }
+          : { id: "a", teleport: "@telepoi Holtburg", anchor: [32532, 34567.1, 94] }],
+        shots: [{ id: "s1", site: "a", technique: t.id, duration: { sec: 8 }, standingOrder: "Fly it.", subject: { kind: "point", pos: [32532, 34567, 95] },
+          path: [[32500, 34567, 95], [32560, 34567, 95]], params: { [name]: "not-a-list" } }],
+      };
+      const pv = validatePlan(plan, { registry: REAL });
+      assert.ok(pv.errors.some((e) => e.path === `shots[0].params.${name}`), `${t.id}.${name} (${ps.type}): ${JSON.stringify(pv.errors)}`);
+      reached++;
+    }
+  }
+  console.log(`    (real registry: ${reached} param(s) of a registry-validated type checked)`);
 });
 
 console.log(`film_plan_schema: ${passed} passed, ${failed} failed`);

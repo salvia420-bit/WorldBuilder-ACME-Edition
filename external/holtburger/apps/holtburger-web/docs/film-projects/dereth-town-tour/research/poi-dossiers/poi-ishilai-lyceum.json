@@ -1,0 +1,209 @@
+{
+ "name": "Ishilai Lyceum",
+ "title": "Ishilai Lyceum",
+ "siteId": "poi-ishilai-lyceum",
+ "summary": "A training academy for Yalaini hieromancers of the Seaborne Empire, on a mountain top on the southern coast, reachable only by the Lyceum Recall Gem (acpedia). In the kit, a walled academy stands on a mountain shelf at z 240: two six-storey red-roofed keeps, green spire towers, halls and a courtyard of Menhir mana fields round a blue crystal. On the summit 75 m above stand a domed octagon hall with a Portalspace Rift and candle sentinels, and a bamboo octagon. The slope falls 240 m west to the sea.",
+ "landmarks": [
+  {
+   "name": "Keep (0x01000DFF)",
+   "pos": [
+    36180,
+    3348,
+    240
+   ],
+   "heightM": 31.5,
+   "note": "Six storeys, red roof."
+  },
+  {
+   "name": "Second keep (0x01000DFF)",
+   "pos": [
+    36156,
+    3372,
+    240
+   ],
+   "heightM": 31.5,
+   "note": ""
+  },
+  {
+   "name": "Courtyard crystal and Menhir fields",
+   "pos": [
+    36156,
+    3348,
+    240
+   ],
+   "heightM": 3.2,
+   "note": "Blue crystal amid mana-field glows."
+  },
+  {
+   "name": "Summit octagon hall (0x01000F49)",
+   "pos": [
+    36276,
+    3348,
+    310
+   ],
+   "heightM": 14.7,
+   "note": "Portalspace Rift, candle sentinels."
+  },
+  {
+   "name": "Bamboo octagon (0x01000801)",
+   "pos": [
+    36252,
+    3396,
+    316
+   ],
+   "heightM": 12.0,
+   "note": ""
+  }
+ ],
+ "site": {
+  "id": "poi-ishilai-lyceum",
+  "name": "Ishilai Lyceum",
+  "teleport": "@teleloc 0xBC110022 104.00 36.00 245.50 1 0 0 0",
+  "anchor": [
+   36170,
+   3348,
+   240
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry for the Lyceum (in retail it is reached only by the Lyceum Recall Gem); derived @teleloc on the open slope 52 m south-south-east of the academy keeps (ground z 245.0, nearest object 27 m)."
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI",
+   "Auberean Location",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -88.0,
+   "ew": 48.9
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   36204.0,
+   3348.0
+  ],
+  "coveredDistM": 1181,
+  "coveredBy": "shot:kara.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ishilai_Lyceum.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ishilai-lyceum.01",
+   "site": "poi-ishilai-lyceum",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 4.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     4.0,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36180,
+     3348,
+     240
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "startPitchDeg": -50,
+    "endPitchDeg": -2,
+    "heightAGL": 22,
+    "distance": 170,
+    "drift": 8,
+    "bearingDeg": 265,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "standingOrder": "Hang over the western sea cliffs looking down at the surf-line slope, then tilt up to reveal the red-roofed keeps of the Ishilai Lyceum on their mountain shelf with the summit halls above; hold level with the shelf, 170 m out over the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Tilt reveal from a hover 170 m west of the academy over the steep sea slope, level with its shelf. The frame starts looking down the rock face and tilts up to the red-roofed keeps and green spires of the Ishilai Lyceum, with the summit halls above. The afternoon sun (0.63) is behind-right. Verified (check.mjs, full take flown): take 0-10 s: AGL 186.09..199.1 m, nearest drawn 94.69 m (scenery-default 0x020007A3@36106,3341), vmax 1.26 m/s, LOS blocked 0/41, subject in frame 59%; edit 4-10 s: AGL 186.09..194.6 m, nearest drawn 94.69 m (scenery-default 0x020007A3@36106,3341), vmax 1.26 m/s, LOS blocked 0/25, subject in frame 96%; flight cinema peak 1.25 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-ishilai-lyceum.02",
+   "site": "poi-ishilai-lyceum",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36156,
+     3348,
+     240
+    ],
+    "height": 30,
+    "radius": 8
+   },
+   "params": {
+    "radius": 95,
+    "heightAGL": 55,
+    "revolutions": 0.08,
+    "timeRate": 60,
+    "direction": "cw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Orbit the Lyceum's courtyard clockwise from south-south-west to south-west 95 m out and 55 m up while the sky clock runs 60x, shadows of the spire towers swinging over the Menhir glow; 15 m above the slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hyperlapse orbit of 29 degrees clockwise, 95 m out and 55 m above the courtyard, from south-south-west to south-west, while the sky clock runs 60x. Clouds race and the spire towers' shadows swing across the Menhir glow. The sun moves only from 0.63 to about 0.71 over the take and stays up. Verified (check.mjs, full take flown): take 0-10 s: AGL 128.58..164.2 m, nearest drawn 63.15 m (static 0xBC11#96 0x01000E00), vmax 4.78 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 129.58..159.9 m, nearest drawn 63.16 m (static 0xBC11#96 0x01000E00), vmax 4.78 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.79 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-ishilai-lyceum.01": "take 0-10 s: AGL 186.09..199.1 m, nearest drawn 94.69 m (scenery-default 0x020007A3@36106,3341), vmax 1.26 m/s, LOS blocked 0/41, subject in frame 59%; edit 4-10 s: AGL 186.09..194.6 m, nearest drawn 94.69 m (scenery-default 0x020007A3@36106,3341), vmax 1.26 m/s, LOS blocked 0/25, subject in frame 96%; flight cinema peak 1.25 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-ishilai-lyceum.02": "take 0-10 s: AGL 128.58..164.2 m, nearest drawn 63.15 m (static 0xBC11#96 0x01000E00), vmax 4.78 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 129.58..159.9 m, nearest drawn 63.16 m (static 0xBC11#96 0x01000E00), vmax 4.78 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.79 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

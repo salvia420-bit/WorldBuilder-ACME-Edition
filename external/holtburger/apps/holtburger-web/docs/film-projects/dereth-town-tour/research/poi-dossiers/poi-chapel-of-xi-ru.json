@@ -1,0 +1,260 @@
+{
+ "name": "Chapel of Xi Ru",
+ "title": "Chapel of Xi Ru",
+ "siteId": "poi-chapel-of-xi-ru",
+ "summary": "A chapel much like the Ithaenc Cathedral on Xi Ru's Island, reached by the Portalling Device, with Xi Ru's Chapel dungeon below (acpedia). In the kit it is a cross-shaped chapel of green-stone towers (tops z 33-54) on an island at sea level, ringed by water channels. Portal swirls sit on its three tapered towers and golden leaf sculptures dot the lawns. Directly behind it a 234 m cliff rises to a plateau lake holding another giant Deru tree (top z 342).",
+ "landmarks": [
+  {
+   "name": "South tower with rooftop portal (0x010034F7)",
+   "pos": [
+    45468,
+    2700.1,
+    0
+   ],
+   "heightM": 48.4,
+   "note": "Xi Ru's Chapel portal at z 39."
+  },
+  {
+   "name": "Central hall (0x010034F8)",
+   "pos": [
+    45468,
+    2724,
+    0
+   ],
+   "heightM": 32.9,
+   "note": ""
+  },
+  {
+   "name": "Six-storey tower (0x010034F9)",
+   "pos": [
+    45468,
+    2748,
+    0
+   ],
+   "heightM": 54.4,
+   "note": ""
+  },
+  {
+   "name": "North tower (0x010034FB)",
+   "pos": [
+    45468,
+    2796,
+    0
+   ],
+   "heightM": 53.7,
+   "note": ""
+  },
+  {
+   "name": "Cliff-top Deru tree (0x01003544 etc.)",
+   "pos": [
+    45432,
+    2904,
+    233
+   ],
+   "heightM": 109,
+   "note": "On the plateau 234 m above."
+  }
+ ],
+ "site": {
+  "id": "poi-chapel-of-xi-ru",
+  "name": "Chapel of Xi Ru",
+  "teleport": "@teleloc 0xEC0D0037 156.00 159.00 0.50 1 0 0 0",
+  "anchor": [
+   45468,
+   2740,
+   0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.58,
+   "grade": "warm"
+  },
+  "notes": "No gazetteer entry for the chapel itself; the exact teleports nearby are portals (Xi Ru's Chapel Portal on the south tower, Roots of the Deru Tree Portal) or the Portalling Device 135 m south, so a derived @teleloc on the open island ground 45 m south of the south tower is used (ground z 0.0, nearest bush 5.6 m). Landblocks south of y 2496 (0xEB0C-0xEE0C) and east of x 45696 (0xEE0D-0xEE0F) are missing from the kit."
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -90.6,
+   "ew": 87.5
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   45468.0,
+   2724.0
+  ],
+  "coveredDistM": 3900,
+  "coveredBy": "shot:freehold.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Chapel_of_Xi_Ru.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-chapel-of-xi-ru.01",
+   "site": "poi-chapel-of-xi-ru",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     45468,
+     2748,
+     0
+    ],
+    "height": 54.4,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 72,
+    "speed": 4,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "maxPitchRateDeg": 45,
+    "smoothTime": 0.5,
+    "minClearance": 15
+   },
+   "standingOrder": "Fly north 72 m up straight over the chapel's cross of towers and their rooftop portal swirls, the gimbal holding the central hall through the vertical as the cliff wall rises ahead; stay 17 m above the highest roof.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over flying north 72 m up across the chapel's cross of green-stone towers and the portal swirls on their roofs. The gimbal holds the central hall through the vertical while the 234 m cliff wall rises ahead. The midday sun (0.58) is behind the lens. The camera stays 18 m above the highest roof. Verified (check.mjs, full take flown): take 0-10 s: AGL 72..72 m, nearest drawn 18.32 m (static 0xEC0E#84 0x010034FA), vmax 4 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 72..72 m, nearest drawn 18.32 m (static 0xEC0E#84 0x010034FA), vmax 4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.01 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-chapel-of-xi-ru.02",
+   "site": "poi-chapel-of-xi-ru",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.4,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     45468,
+     2700.1,
+     0
+    ],
+    "height": 48.4,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 190,
+    "elevationDeg": 0,
+    "distance": 42,
+    "thirds": "center",
+    "riseM": 12,
+    "swingDeg": 18,
+    "armM": 10
+   },
+   "standingOrder": "Jib up 12 m from the island's south lawn toward the chapel's south tower and the portal swirl on its roof, swinging 18 degrees, the sun behind the lens; keep 4 m from the bushes.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Crane from the island's south lawn: a 12 m jib rise with an 18 degree swing toward the chapel's south tower and the portal swirl on its roof. The sun is behind the lens. The nearest bush is 18 m away. Verified (check.mjs, full take flown): take 0-8 s: AGL 24.2..36.2 m, nearest drawn 18.16 m (scenery-default 0x02000E71@45459,2662), vmax 2.6 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 24.6..35.8 m, nearest drawn 18.56 m (scenery-default 0x02000E71@45459,2662), vmax 2.6 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-chapel-of-xi-ru.03",
+   "site": "poi-chapel-of-xi-ru",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     3.0,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     45468,
+     2700.1,
+     0
+    ],
+    "height": 48.4,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 55,
+    "endDistance": 100,
+    "startHeight": 30,
+    "endHeight": 58,
+    "bearingDeg": 192,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Pull back and up south-south-west from the chapel's towers with the sun behind you until Xi Ru's island chapel sits small in its water channels at the foot of the 230 m cliff crowned by the Deru tree; 15 m above every tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie pulling back south-south-west and up from the south tower until Xi Ru's island chapel sits in its water channels at the foot of the 234 m cliff, with the plateau's giant Deru tree crowning it. The sun is behind the lens. This is the site's closing reveal. Peak 7.6 m/s. Verified (check.mjs, full take flown): take 0-11 s: AGL 30..58 m, nearest drawn 26.88 m (scenery-default 0x02000E71@45459,2662), vmax 7.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 36.43..57.9 m, nearest drawn 37.69 m (scenery-default 0x02000E71@45459,2662), vmax 7.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-chapel-of-xi-ru.01": "take 0-10 s: AGL 72..72 m, nearest drawn 18.32 m (static 0xEC0E#84 0x010034FA), vmax 4 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 72..72 m, nearest drawn 18.32 m (static 0xEC0E#84 0x010034FA), vmax 4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.01 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-chapel-of-xi-ru.02": "take 0-8 s: AGL 24.2..36.2 m, nearest drawn 18.16 m (scenery-default 0x02000E71@45459,2662), vmax 2.6 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 24.6..35.8 m, nearest drawn 18.56 m (scenery-default 0x02000E71@45459,2662), vmax 2.6 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-chapel-of-xi-ru.03": "take 0-11 s: AGL 30..58 m, nearest drawn 26.88 m (scenery-default 0x02000E71@45459,2662), vmax 7.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 36.43..57.9 m, nearest drawn 37.69 m (scenery-default 0x02000E71@45459,2662), vmax 7.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

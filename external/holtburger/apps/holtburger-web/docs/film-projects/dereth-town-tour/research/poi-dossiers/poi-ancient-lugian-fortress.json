@@ -1,0 +1,244 @@
+{
+ "name": "Ancient Lugian Fortress",
+ "title": "Ancient Lugian Fortress",
+ "siteId": "poi-ancient-lugian-fortress",
+ "summary": "Mare Tukal, a Linvak Tukal-style Lugian city of 47 stone towers and halls (16-116 m tall) packed into one landblock (x 3456-3636, y 576-756) at the bottom of a sunken sea basin off the south-west corner of Dereth (99.1S 87.1W): the basin floor is shallow still water at z 2, its walls are running water climbing to a sea rim at z 50 lined with lights, and the deep sea falls away beyond. The tallest tower rises 116 m at (3516, 684); a Lugian Life Stone sits on the central tower's terrace at z 51.",
+ "landmarks": [
+  {
+   "name": "Tallest tower",
+   "pos": [
+    3516,
+    684,
+    0
+   ],
+   "heightM": 116.4,
+   "note": "0x01001F29."
+  },
+  {
+   "name": "South-west corner tower",
+   "pos": [
+    3492,
+    588,
+    0
+   ],
+   "heightM": 100.3,
+   "note": "0x01001F24, spire roof."
+  },
+  {
+   "name": "Lugian Life Stone",
+   "pos": [
+    3542.4,
+    663.6,
+    51
+   ],
+   "heightM": 3,
+   "note": "Gazetteer teleport."
+  },
+  {
+   "name": "Sea rim",
+   "pos": [
+    3432,
+    552,
+    50
+   ],
+   "heightM": 0,
+   "note": "Running-water walls from z 2 to 50 around the basin."
+  }
+ ],
+ "site": {
+  "id": "poi-ancient-lugian-fortress",
+  "name": "Ancient Lugian Fortress",
+  "gazetteerId": "lugian-lifestone-1203",
+  "teleport": "@teleloc 0x1203001C 86.3982 87.6325 51 -0.945018 0 0 -0.327018",
+  "anchor": [
+   3552,
+   672,
+   2
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -99.1,
+   "ew": -87.1
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5380,
+  "coveredBy": "path:candeth-keep.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ancient_Lugian_Fortress.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ancient-lugian-fortress.01",
+   "site": "poi-ancient-lugian-fortress",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     3.0,
+     9.6
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3492,
+     588,
+     0
+    ],
+    "height": 100,
+    "radius": 8
+   },
+   "params": {
+    "startPitchDeg": -55,
+    "endPitchDeg": -8,
+    "heightAGL": 85,
+    "distance": 190,
+    "drift": 6,
+    "bearingDeg": 225,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Start looking down at the sea on the rim south-west of the sunken city and tilt up to reveal the Lugian towers rising from the water, sun behind; keep 25 m above the rim.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature water reveal: starts 85 m up over the sea rim south-west of the sunken basin, looking 55 deg down at the water, and tilts up to -8 deg: the waterfall walls of the basin and then the Lugian towers (up to 116 m) rising from the still water fill the frame from t 4-7 (proj.mjs), sun behind. Subject point = the south-west corner tower (lead-in hides it by design until t 4). Verified (check.mjs, full take flown): take 0-10 s: AGL 52.53..53.6 m, nearest drawn 162.93 m (static 0x1203#218 0x01001F03), vmax 0.94 m/s, LOS blocked 0/41, subject in frame 63%, over water 100%; edit 3.5-9.5 s: AGL 52.53..53.3 m, nearest drawn 162.96 m (static 0x1203#218 0x01001F03), vmax 0.94 m/s, LOS blocked 0/25, subject in frame 96%, over water 100%; flight cinema peak 0.94 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-ancient-lugian-fortress.02",
+   "site": "poi-ancient-lugian-fortress",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "fov": 72,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3516,
+     684,
+     0
+    ],
+    "height": 116,
+    "radius": 8
+   },
+   "params": {
+    "radius": 130,
+    "heightAGL": 175,
+    "revolutions": 0.08,
+    "direction": "ccw",
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Orbit a slow arc 130 m out and 175 m above the sunken sea basin around the Lugian city with the sun behind; keep 30 m above the rim.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "High orbit 130 m out and 175 m above the basin (wide 72 deg lens), looking 42 deg down into the sunken city: the tower tops, the shallow inner water, the running-water walls and the sea rim with its lights, 100 % over water; sun behind. Subject point = the 116 m tallest tower. Verified (check.mjs, full take flown): take 0-10 s: AGL 125.27..131.4 m, nearest drawn 89.68 m (bldg 0x1203#231 0x01001F24 15-story hall with spire roof, 2-cell open layout), vmax 6.53 m/s, LOS blocked 5/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 126.46..130.5 m, nearest drawn 93.81 m (static 0x1203#231 0x01001F24), vmax 6.53 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 6.55 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-ancient-lugian-fortress.03",
+   "site": "poi-ancient-lugian-fortress",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.5,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3492,
+     588,
+     0
+    ],
+    "height": 100,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "elevationDeg": 8,
+    "distance": 180,
+    "thirds": "center",
+    "rate": 0.012
+   },
+   "standingOrder": "Lock off south of the sunken Lugian city above the sea rim and let the clouds race over the towers; no movement.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off time-lapse from 180 m south, 51 m above the sea rim: clouds race over the Lugian towers while the light shifts (rate 0.012 game-days/s: about 2.3 h of sky in the take, the sun stays up); sun behind-right. Verified (check.mjs, full take flown): take 0-8 s: AGL 50.97..51 m, nearest drawn 168.62 m (static 0x1203#218 0x01001F03), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%, over water 100%; edit 1-7 s: AGL 50.97..51 m, nearest drawn 168.62 m (static 0x1203#218 0x01001F03), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%."
+  }
+ ],
+ "verification": {
+  "poi-ancient-lugian-fortress.01": "take 0-10 s: AGL 52.53..53.6 m, nearest drawn 162.93 m (static 0x1203#218 0x01001F03), vmax 0.94 m/s, LOS blocked 0/41, subject in frame 63%, over water 100%; edit 3.5-9.5 s: AGL 52.53..53.3 m, nearest drawn 162.96 m (static 0x1203#218 0x01001F03), vmax 0.94 m/s, LOS blocked 0/25, subject in frame 96%, over water 100%; flight cinema peak 0.94 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-ancient-lugian-fortress.02": "take 0-10 s: AGL 125.27..131.4 m, nearest drawn 89.68 m (bldg 0x1203#231 0x01001F24 15-story hall with spire roof, 2-cell open layout), vmax 6.53 m/s, LOS blocked 5/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 126.46..130.5 m, nearest drawn 93.81 m (static 0x1203#231 0x01001F24), vmax 6.53 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 6.55 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-ancient-lugian-fortress.03": "take 0-8 s: AGL 50.97..51 m, nearest drawn 168.62 m (static 0x1203#218 0x01001F03), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%, over water 100%; edit 1-7 s: AGL 50.97..51 m, nearest drawn 168.62 m (static 0x1203#218 0x01001F03), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%"
+ }
+}

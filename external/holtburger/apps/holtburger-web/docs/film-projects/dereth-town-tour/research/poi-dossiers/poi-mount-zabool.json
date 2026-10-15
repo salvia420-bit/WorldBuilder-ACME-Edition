@@ -1,0 +1,130 @@
+{
+ "name": "Mount Zabool",
+ "title": "Mount Zabool",
+ "siteId": "poi-mount-zabool",
+ "summary": "The smallest of the three mesas (about 100 x 115 m at 224 m), reached only through Zabool Tower; its summit carries a Life Stone, the Top of Zabool Tower portal and, at the south end, the portal to Mount Alphus. Its sides drop 110-170 m.",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    28938.6,
+    29498.4,
+    224.0
+   ],
+   "heightM": 3.6,
+   "note": "On the summit plateau."
+  },
+  {
+   "name": "Top of Zabool Tower portal",
+   "pos": [
+    28901.9,
+    29542.1,
+    224.0
+   ],
+   "heightM": 3.5,
+   "note": "Arrival from Zabool Tower."
+  },
+  {
+   "name": "Mount Alphus portal",
+   "pos": [
+    28899.0,
+    29449.2,
+    224.0
+   ],
+   "heightM": 3.5,
+   "note": "South end of the summit."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-zabool",
+  "name": "Mount Zabool",
+  "gazetteerId": "top-of-mt-zabool",
+  "teleport": "@teleloc 0x9699002F 122.9 164.5 224 0.587785 0 0 -0.809017",
+  "anchor": [
+   28938.0,
+   29500.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.6,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer top-of-mt-zabool (summit, 17 m from the centre)."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 21.1,
+   "ew": 18.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2820,
+  "coveredBy": "site:glenden-wood",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Zabool.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mount-zabool.01",
+   "site": "poi-mount-zabool",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28938.6,
+     29498.4,
+     224.0
+    ],
+    "height": 3.6,
+    "radius": 1.5
+   },
+   "params": {
+    "startDistance": 7,
+    "endDistance": 54,
+    "startHeight": 2.5,
+    "endHeight": 26,
+    "bearingDeg": 30,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Start 7 m from the Life Stone on the Zabool summit at 2.5 m height and pull back north-north-east in one line to 54 m out and 26 m up; nothing on the mesa top is within 45 m.",
+   "notes": "Backlit dronie: the Life Stone on Zabool's 224 m summit glows against the low south-west sun (0.60) as the camera pulls back north-north-east and climbs; the small summit plateau shrinks and the plains and Mount Alphus's pillar open behind the stone. Verified (check.mjs, full take flown): take 0-11 s: AGL 2.56..26 m, nearest drawn 52.19 m (spawn Top of Zabool Tower), vmax 7.5 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 6.56..24.9 m, nearest drawn 52.19 m (spawn Top of Zabool Tower), vmax 7.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.49 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-mount-zabool.01": "take 0-11 s: AGL 2.56..26 m, nearest drawn 52.19 m (spawn Top of Zabool Tower), vmax 7.5 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 6.56..24.9 m, nearest drawn 52.19 m (spawn Top of Zabool Tower), vmax 7.5 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.49 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

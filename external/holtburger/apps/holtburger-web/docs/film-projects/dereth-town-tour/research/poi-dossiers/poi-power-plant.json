@@ -1,0 +1,257 @@
+{
+ "name": "Power Plant (Empyrean ruin)",
+ "title": "Power Plant",
+ "siteId": "poi-power-plant",
+ "summary": "A large Empyrean ruin in the Tiofor Woods dubbed 'the Power Plant' by early explorers (AC Explorer's 'Shadow Castle'), home to Shadows. In the kit it is a 72 x 96 m temple complex in a forest clearing (z 64): a central octagon hall with a spire roof (top z 78.7) ringed by twelve moss-green ranges of three to six storeys (tops z 74-89.5), a two-storey hall with a portico of eight stone columns north of the octagon, all surrounded by 20-40 m forest trees and a hill rising 50 m to the south-east.",
+ "landmarks": [
+  {
+   "name": "Octagon spire hall (0x01000F49)",
+   "pos": [
+    26772.0,
+    33732.0,
+    64.0
+   ],
+   "heightM": 14.7,
+   "note": "23 m octagon at the centre of the complex, open layout."
+  },
+  {
+   "name": "Moss-green hall with column portico (0x01000F69)",
+   "pos": [
+    26772.0,
+    33756.0,
+    64.0
+   ],
+   "heightM": 10.0,
+   "note": "Eight 5.5 m stone columns 0x0200040B at its south face."
+  },
+  {
+   "name": "Six-storey corner ranges (0x01001784/0x01001783)",
+   "pos": [
+    26796.0,
+    33708.0,
+    64.0
+   ],
+   "heightM": 25.5,
+   "note": "Pitched-roof corner buildings, top z 89.5."
+  },
+  {
+   "name": "Three-storey side ranges (0x01001781/0x01001782)",
+   "pos": [
+    26800.0,
+    33744.0,
+    64.0
+   ],
+   "heightM": 16.5,
+   "note": "East and west ranges, top z 80.5."
+  },
+  {
+   "name": "South-east hill",
+   "pos": [
+    26880.0,
+    33640.0,
+    110.0
+   ],
+   "heightM": 0.0,
+   "note": "Open hilltop 50 m above the ruin, the tilt-reveal vantage."
+  }
+ ],
+ "site": {
+  "id": "poi-power-plant",
+  "name": "Power Plant (Empyrean ruin)",
+  "gazetteerId": "power-plant",
+  "teleport": "@teleloc 0x8BAF0037 152.00 150.00 64.50 1 0 0 0",
+  "anchor": [
+   26772,
+   33744,
+   64
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.43,
+   "grade": "neutral"
+  },
+  "notes": "No outdoor gazetteer teleport (the gazetteer power-plant entry is a map @tele to the wrong place); derived @teleloc on the open forest-floor clearing 36 m east of the ruin's east range (ground z 64.0, nearest scenery 5.4 m)."
+ },
+ "insertAfter": "holtburg",
+ "insertBefore": "glenden-wood",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 38.6,
+   "ew": 9.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 4568,
+  "coveredBy": "site:glenden-wood",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Power_Plant.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-power-plant.01",
+   "site": "poi-power-plant",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     26772,
+     33744,
+     64
+    ],
+    "height": 25,
+    "radius": 45
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -24,
+    "heightAGL": 90,
+    "distance": 140,
+    "drift": 10,
+    "bearingDeg": 148,
+    "relativeToSubject": false,
+    "minClearance": 12
+   },
+   "standingOrder": "Hang over the Tiofor treetops south-east of the ruin looking straight down at the canopy, then tilt up to reveal the Empyrean temple complex in its clearing; climb rather than touch any crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Opener: hovering 90 m above the ruin's base (~55 m over the forested south-east hill, 40 m clear of the nearest crown) looking almost straight down at the Tiofor Woods canopy, then tilting up from -80 to -24 deg while drifting 10 m: the Empyrean temple complex - octagon spire hall ringed by twelve moss-green four- to six-storey ranges - appears in its clearing at t~4 and settles below frame centre. Sun SE (0.43) behind-left of the lens. A reveal: the subject is out of frame for the first ~4 s by design (edit window starts at 3.5 s). Verified (check.mjs, full take flown): take 0-10 s: AGL 53.38..55.9 m, nearest drawn 40.44 m (scenery-default 0x020002D3@26815,33642), vmax 1.57 m/s, LOS blocked 0/41, subject in frame 59%; edit 3.5-10 s: AGL 54.05..55.9 m, nearest drawn 40.44 m (scenery-default 0x020002D3@26815,33642), vmax 1.57 m/s, LOS blocked 0/27, subject in frame 89%; flight cinema peak 1.57 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-power-plant.02",
+   "site": "poi-power-plant",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     26772,
+     33732,
+     64
+    ],
+    "height": 14.7,
+    "radius": 8
+   },
+   "params": {
+    "distance": 28,
+    "heightStart": 2.5,
+    "heightEnd": 30,
+    "bearingDeg": 32,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "tiltDeg": 0,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up the open lane between the moss-green hall and the east range, facing the octagon spire hall, until the whole temple complex and the forest beyond spread out below; keep 6 m from every wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Boom rise from 2.5 m to 30 m straight up the 21 m-wide open lane between the moss-green two-storey hall and the east range (NNE of the octagon), gimbal level-tracking the octagon spire hall: walls slide down past the lens until the whole temple complex and the forested hills spread out below. Clearance: 8 m to the nearest object (an invisible camp generator box), every wall >= 8 m. Verified (check.mjs, full take flown): take 0-10 s: AGL 2.5..30 m, nearest drawn 8.22 m (spawn Banderling Berserker Camp Generator), vmax 4.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 6.53..29.3 m, nearest drawn 8.76 m (spawn Banderling Berserker Camp Generator), vmax 4.32 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.31 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 5.6 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  },
+  {
+   "id": "poi-power-plant.03",
+   "site": "poi-power-plant",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     26772,
+     33744,
+     64
+    ],
+    "height": 25,
+    "radius": 45
+   },
+   "params": {
+    "radius": 110,
+    "heightAGL": 70,
+    "revolutions": 0.105,
+    "timeRate": 120,
+    "direction": "ccw",
+    "bearingDeg": 125,
+    "relativeToSubject": false,
+    "minClearance": 12
+   },
+   "standingOrder": "Orbit the ruin counter-clockwise 110 m out and 70 m up while the sky clock races and the shadows swing round the octagon spire; stay 12 m above every tree crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hyperlapse orbit: 0.105 turn counter-clockwise from ESE, 110 m out and 70 m above the ruin base (41-67 m above the hill and forest), while the sky clock runs 120x (~0.16 game-day over the take, sun stays up from 0.43 to ~0.59): clouds race and the shadows of the six-storey ranges swing across the courtyard. Verified (check.mjs, full take flown): take 0-10 s: AGL 41.44..67.1 m, nearest drawn 15.13 m (scenery-default 0x02000258@26869,33686), vmax 7.26 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 46.38..64.2 m, nearest drawn 15.13 m (scenery-default 0x02000258@26869,33686), vmax 7.26 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.27 m/s (cap 12), max tracking gap 0.03 m; opt-in retail-bake tree 2.7 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-power-plant.01": "take 0-10 s: AGL 53.38..55.9 m, nearest drawn 40.44 m (scenery-default 0x020002D3@26815,33642), vmax 1.57 m/s, LOS blocked 0/41, subject in frame 59%; edit 3.5-10 s: AGL 54.05..55.9 m, nearest drawn 40.44 m (scenery-default 0x020002D3@26815,33642), vmax 1.57 m/s, LOS blocked 0/27, subject in frame 89%; flight cinema peak 1.57 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-power-plant.02": "take 0-10 s: AGL 2.5..30 m, nearest drawn 8.22 m (spawn Banderling Berserker Camp Generator), vmax 4.32 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 6.53..29.3 m, nearest drawn 8.76 m (spawn Banderling Berserker Camp Generator), vmax 4.32 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.31 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 5.6 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-power-plant.03": "take 0-10 s: AGL 41.44..67.1 m, nearest drawn 15.13 m (scenery-default 0x02000258@26869,33686), vmax 7.26 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 46.38..64.2 m, nearest drawn 15.13 m (scenery-default 0x02000258@26869,33686), vmax 7.26 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.27 m/s (cap 12), max tracking gap 0.03 m; opt-in retail-bake tree 2.7 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

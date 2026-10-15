@@ -1,0 +1,110 @@
+{
+ "name": "Desert Ridge Border",
+ "title": "Desert Ridge Border",
+ "siteId": "poi-desert-ridge-border",
+ "summary": "A single 19 m Empyrean Stone Tower on a low ridge at the edge of the Falamar Hills, open grassland around.",
+ "landmarks": [
+  {
+   "name": "Empyrean Stone Tower",
+   "pos": [
+    34068.0,
+    23148.0,
+    24.0
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106, 16 x 16 m."
+  }
+ ],
+ "site": {
+  "id": "poi-desert-ridge-border",
+  "name": "Desert Ridge Border",
+  "gazetteerId": "desert-ridge-border",
+  "teleport": "@teleloc 0xB178001C 74.9 75.4 22.3 -0.71934 0 0 -0.694659",
+  "anchor": [
+   34068.0,
+   23148.0,
+   24.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.47,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer desert-ridge-border (35 m south-west of the tower)."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -5.6,
+   "ew": 40.0
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1551,
+  "coveredBy": "path:yanshi.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Desert_Ridge_Border.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-desert-ridge-border.01",
+   "site": "poi-desert-ridge-border",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5,
+    "keep": [
+     1.5,
+     7.5
+    ],
+    "anchor": 4.5
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34068.0,
+     23148.0,
+     24.0
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "offset": 22,
+    "heightAGL": 9,
+    "speed": 6,
+    "side": "left",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly east at 6 m/s 22 m south of the Empyrean Stone Tower and 9 m above its base, yawing to keep it centred; stay 14 m from its south wall.",
+   "notes": "The lone 19 m Empyrean Stone Tower on the edge of the Falamar Hills whips past at the closest approach (t 4.5 s, yaw rate about 0.27 rad/s); the south sun lights the face. Verified (check.mjs, full take flown): take 0-9 s: AGL 9.83..11.1 m, nearest drawn 106.66 m (spawn Drudge Lurker Camp Generator), vmax 6 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7 s: AGL 9.83..10.1 m, nearest drawn 107.32 m (spawn Drudge Lurker Camp Generator), vmax 6 m/s, LOS blocked 0/21, subject in frame 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-desert-ridge-border.01": "take 0-9 s: AGL 9.83..11.1 m, nearest drawn 106.66 m (spawn Drudge Lurker Camp Generator), vmax 6 m/s, LOS blocked 0/37, subject in frame 100%; edit 2-7 s: AGL 9.83..10.1 m, nearest drawn 107.32 m (spawn Drudge Lurker Camp Generator), vmax 6 m/s, LOS blocked 0/21, subject in frame 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

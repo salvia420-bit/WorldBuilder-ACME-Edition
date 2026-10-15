@@ -1,0 +1,201 @@
+{
+ "name": "Tumerok Fort (3.1N, 60.5W)",
+ "title": "3.1N, 60.5W - Tumerok Fort",
+ "siteId": "poi-tumerok-fort-31n-605w",
+ "summary": "A Tumerok fort on top of a flat barren-rock mesa (z 250) in the Dires near Fort Tethana (Points of Interest Map no. 27). The kit shows a square of flat-roofed halls with stake palisades, three 31 m spire towers (0x01001161) at its corners and a lone fourth tower (0x01001117) 50 m to the west. The mesa flanks fall to 110-180 m on the west, north and east.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 3.1,
+   "ew": -60.5
+  },
+  "mapWorld": [
+   9948.0,
+   25212.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/3_1N_60_5W_Tumerok_Fort.txt",
+  "coveredDistM": 2697,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "South-east spire tower",
+   "pos": [
+    9972,
+    25188,
+    250
+   ],
+   "heightM": 30.75,
+   "note": "0x01001161. The other spire towers stand at (9924,25236) and (9972,25236)."
+  },
+  {
+   "name": "Lone west tower",
+   "pos": [
+    9876,
+    25188,
+    250
+   ],
+   "heightM": 30.75,
+   "note": "0x01001117, 50 m west of the fort."
+  },
+  {
+   "name": "Fort centre",
+   "pos": [
+    9948,
+    25212,
+    250
+   ],
+   "heightM": 5,
+   "note": "Halls 0x01001124/0x01001130/0x0100115E with stake palisades."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-fort-31n-605w",
+  "name": "Tumerok Fort (3.1N, 60.5W)",
+  "teleport": "@teleloc 0x34830001 11 8 250.5 1 0 0 0",
+  "anchor": [
+   9948,
+   25212,
+   250
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.6,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the mesa at (9995,25160), ground 250, 26 m from the nearest tower."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-fort-31n-605w.01",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9948,
+     25212,
+     250
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "radiusStart": 75,
+    "radiusEnd": 90,
+    "heightStart": 10,
+    "heightEnd": 34,
+    "revolutions": 0.09,
+    "direction": "ccw",
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb in a slow counter-clockwise corkscrew south of the mesa-top fort from 10 m to 34 m above the plateau, 75 to 90 m out, keeping the three spire towers centred; never pass west of the lone tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The fort stands on a flat mesa top (z 250) with three 31 m spire towers and a lone fourth tower to the west. The drone corkscrews counter-clockwise from south-south-west to south, climbing from 10 m to 34 m above the plateau and widening from 75 m to 90 m. The halls, stake palisades and towers turn against the falling flanks of the mesa, and the south-west sun lights the faces turned to the lens. The arc never crosses the line to the lone west tower. Verified with poi-kit check.mjs (full take flown) - take 11s: AGL 10..34 m, nearest 33.7 m (spawn Insidious and Merciless Monouga Camp Generator), vmax 7.81 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 45.7 m (not drawn by the default bake); edit 3-9.5s: AGL 14.14..32.9 m, nearest 42.27 m (spawn Insidious and Merciless Monouga Camp Generator), vmax 7.81 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 46.5 m (not drawn by the default bake); flight cinema: peak 7.8 m/s (cap 12), tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-tumerok-fort-31n-605w.02",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9972,
+     25188,
+     250
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 165,
+    "azimuthRef": "compass",
+    "elevationDeg": -32,
+    "distance": 36,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Look up at the south-east spire tower from 36 m out on the plateau rim, lens 4 m above the rock, creeping 1.5 m closer; keep 10 m from the hall walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle: the lens is 4-5 m above the plateau rim 36 m south-south-east of the south-east spire tower and looks up 30 deg at its moss-streaked stone and spire against open sky, creeping 1.5 m closer. The afternoon sun rakes the tower from the right. Rank 3 detail. Verified with poi-kit check.mjs (full take flown) - take 8s: AGL 4.05..4.8 m, nearest 32.23 m (scenery-default 0x020005C9@9950,25175), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 32.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 4.12..4.8 m, nearest 32.3 m (scenery-default 0x020005C9@9950,25175), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 32.3 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-fort-31n-605w.01",
+   "technique": "drone.helix",
+   "rank": 2,
+   "check": "take 11s: AGL 10..34 m, nearest 33.7 m (spawn Insidious and Merciless Monouga Camp Generator), vmax 7.81 m/s, LOS blocked 0/45, in frame 100%, water 0%, retail-bake tree 45.7 m (not drawn by the default bake); edit 3-9.5s: AGL 14.14..32.9 m, nearest 42.27 m (spawn Insidious and Merciless Monouga Camp Generator), vmax 7.81 m/s, LOS blocked 0/27, in frame 100%, water 0%, retail-bake tree 46.5 m (not drawn by the default bake); flight cinema: peak 7.8 m/s (cap 12), tracking gap 0.06 m"
+  },
+  {
+   "shot": "poi-tumerok-fort-31n-605w.02",
+   "technique": "classic.low-angle",
+   "rank": 3,
+   "check": "take 8s: AGL 4.05..4.8 m, nearest 32.23 m (scenery-default 0x020005C9@9950,25175), vmax 0.29 m/s, LOS blocked 0/33, in frame 100%, water 0%, retail-bake tree 32.2 m (not drawn by the default bake); edit 1.5-6.5s: AGL 4.12..4.8 m, nearest 32.3 m (scenery-default 0x020005C9@9950,25175), vmax 0.29 m/s, LOS blocked 0/21, in frame 100%, water 0%, retail-bake tree 32.3 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 11.5,
+ "techniques": [
+  "drone.helix",
+  "classic.low-angle"
+ ]
+}

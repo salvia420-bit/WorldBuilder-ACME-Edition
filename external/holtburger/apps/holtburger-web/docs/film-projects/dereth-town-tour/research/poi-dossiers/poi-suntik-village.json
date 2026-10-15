@@ -1,0 +1,185 @@
+{
+ "name": "Suntik Village",
+ "title": "Suntik Village",
+ "siteId": "poi-suntik-village",
+ "summary": "An early Gharu'ndim settlement overrun by Monougas before release; the Naqib's messenger never got through (acpedia). In the kit the village sits on the south-east corner of a table mountain (z 224) whose east face drops 100 m to the plain: an ancient stone hall with a red insect relief (0x01000E11, top 234) with a corpse and barrels on its roof, a pitched-roof hall, an octagon tower, a cottage, cacti, a red-flowered tree, a well and a glowing red stone frame. Landblocks 0x8692-0x8694 (230 m east) are missing.",
+ "landmarks": [
+  {
+   "name": "Stone hall with insect relief (0x01000E11)",
+   "pos": [
+    25523.0,
+    28356.5,
+    224.0
+   ],
+   "heightM": 10.0,
+   "note": "Corpse and barrels on the roof."
+  },
+  {
+   "name": "Pitched-roof hall (0x01000E40)",
+   "pos": [
+    25503.7,
+    28355.1,
+    224.0
+   ],
+   "heightM": 8.0,
+   "note": "Village centre."
+  },
+  {
+   "name": "East cliff",
+   "pos": [
+    25545.0,
+    28350.0,
+    175.0
+   ],
+   "heightM": 100.0,
+   "note": "Mesa edge from 224 down to 124."
+  }
+ ],
+ "site": {
+  "id": "poi-suntik-village",
+  "name": "Suntik Village",
+  "teleport": "@teleloc 0x84930028 118.00 176.00 224.50 1 0 0 0",
+  "anchor": [
+   25500.0,
+   28356.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.66,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the mesa top 57 m north-west of the village (ground + 0.5, nothing within 10 m). The gazetteer 'suntik' entry (126 m WNW, same mesa) is an alternative."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northwest POI",
+   "Historical Site",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": 16.2,
+   "ew": 4.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 781,
+  "coveredBy": "shot:zaikhal.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Suntik_Village.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-suntik-village.01",
+   "site": "poi-suntik-village",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.5,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25503.7,
+     28355.1,
+     224.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 75,
+    "radiusEnd": 45,
+    "heightStart": 50,
+    "heightEnd": 22,
+    "revolutions": 0.08,
+    "direction": "cw",
+    "bearingDeg": 195,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "standingOrder": "Spiral down clockwise from 50 m over the south slope of the Suntik mesa to 22 m above its rim, closing from 75 m to 45 m on the ruined village; keep 30 m from every roof, monougas may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arrival at Suntik, the Gharu'ndim village overrun by Monougas: a gentle spiral down from 50 m over the south slope of its 100 m mesa to the rim, the ruined stone hall with the insect relief, the pitched-roof hall and the octagon tower coming close; afternoon sun behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 22..109.7 m, nearest drawn 33.25 m (static 0x8493#19 0x01000EDC), vmax 7.3 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10 s: AGL 22.57..94.6 m, nearest drawn 34.2 m (static 0x8493#19 0x01000EDC), vmax 7.3 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.29 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-suntik-village.02",
+   "site": "poi-suntik-village",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25503.7,
+     28355.1,
+     224.0
+    ],
+    "height": 10,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 25,
+    "endDistance": 75,
+    "startHeight": 8,
+    "endHeight": 36,
+    "bearingDeg": 155,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Pull back and up south-south-east from 25 m to 75 m off the ruined hall, out over the mesa rim until the village sits alone on its 100 m cliff above the plain; keep 12 m from the stone hall, monougas may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie over the mesa rim: from 25 m off the ruined hall the camera pulls back and up 50 m to the south-south-east, out over the 100 m cliff, until the village sits alone on its table mountain above the plain. Verified (check.mjs, full take flown): take 0-11 s: AGL 23.98..108.1 m, nearest drawn 12.26 m (static 0x8493#20 0x01000E11), vmax 8.18 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 35.42..103.3 m, nearest drawn 17.85 m (static 0x8493#20 0x01000E11), vmax 8.18 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.17 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-suntik-village.01": "take 0-11 s: AGL 22..109.7 m, nearest drawn 33.25 m (static 0x8493#19 0x01000EDC), vmax 7.3 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10 s: AGL 22.57..94.6 m, nearest drawn 34.2 m (static 0x8493#19 0x01000EDC), vmax 7.3 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.29 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-suntik-village.02": "take 0-11 s: AGL 23.98..108.1 m, nearest drawn 12.26 m (static 0x8493#20 0x01000E11), vmax 8.18 m/s, LOS blocked 0/45, subject in frame 100%; edit 2.5-9 s: AGL 35.42..103.3 m, nearest drawn 17.85 m (static 0x8493#20 0x01000E11), vmax 8.18 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.17 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

@@ -1,0 +1,292 @@
+{
+ "name": "Inner Sea Port Ruins",
+ "title": "Inner Sea Port Ruins",
+ "siteId": "poi-inner-sea-port-ruins",
+ "summary": "Empyrean ruins of an old Inner Sea port across Yaraq Cove (acpedia): an Empyrean stone tower where drudges live, Empyrean pillars leading into the Inner Sea, and a bunker over the Under Cove Crypt. In the kit: a 19.4 m stone tower hall (0x01001106) at the waterline, a colonnade of 12 ancient black columns (5.5 m) in two rows running 25 m east from it into the sea, the outer pair crowned with green flames, a Broken Seal of the Elder Spirits among them, fish and a water wisp, and 50 m south-east a low bunker ringed by four obelisks. The Festival Stone of Warmtide stands on the hill 100 m north-west.",
+ "landmarks": [
+  {
+   "name": "Empyrean stone tower (0x01001106)",
+   "pos": [
+    23460.0,
+    19356.0,
+    0.0
+   ],
+   "heightM": 19.4,
+   "note": "Pitched-roof hall at the shore, 16 x 16 m."
+  },
+  {
+   "name": "Flame-crowned end columns",
+   "pos": [
+    23504.0,
+    19356.0,
+    -0.9
+   ],
+   "heightM": 5.6,
+   "note": "Columns at y 19352/19360 with Flames spawns at z 4.7."
+  },
+  {
+   "name": "Colonnade (0x020003C7 / 0x020003C8)",
+   "pos": [
+    23491.0,
+    19356.0,
+    -0.5
+   ],
+   "heightM": 5.5,
+   "note": "Two rows of columns x 23479-23504 running into the sea."
+  },
+  {
+   "name": "Bunker (0x010011C0)",
+   "pos": [
+    23484.0,
+    19308.0,
+    0.0
+   ],
+   "heightM": 4.0,
+   "note": "Entrance building of the Under Cove Crypt with four obelisks (not entered)."
+  }
+ ],
+ "site": {
+  "id": "poi-inner-sea-port-ruins",
+  "name": "Inner Sea Port Ruins",
+  "teleport": "@teleloc 0x7A640006 16.00 135.00 0.50 1 0 0 0",
+  "anchor": [
+   23496.0,
+   19356.0,
+   0.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.75,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the dry sand 18 m south-west of the Empyrean stone tower (ground + 0.5, nothing within 12 m, not in water)."
+ },
+ "insertAfter": "yaraq",
+ "insertBefore": "tufa",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -21.3,
+   "ew": -4.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 517,
+  "coveredBy": "shot:yaraq.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Inner_Sea_Port_Ruins.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-inner-sea-port-ruins.01",
+   "site": "poi-inner-sea-port-ruins",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23460.0,
+     19356.0,
+     0.0
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "radius": 46,
+    "heightAGL": 14,
+    "revolutions": 0.1,
+    "timeRate": 30,
+    "direction": "cw",
+    "bearingDeg": 195,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Orbit the Empyrean stone tower on the Inner Sea shore 46 m out and 14 m up through 36 degrees while the sky clock runs and clouds race over the tower and its drowned colonnade; keep 12 m from the bushes, drudges may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hyperlapse orbit of the Empyrean stone tower on the shore: 36 degrees round its south-west side at 46 m while the sky runs 30x (0.75 to about 0.79, the sun stays up), clouds racing over the tower, the colonnade and the sea. Verified (check.mjs, full take flown): take 0-10 s: AGL 12.58..13.3 m, nearest drawn 12.82 m (scenery-default 0x02000247@23422,19338), vmax 2.89 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 12.58..13 m, nearest drawn 15.95 m (scenery-default 0x02000247@23422,19338), vmax 2.89 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 2.9 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.02",
+   "site": "poi-inner-sea-port-ruins",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": 5.0
+   },
+   "rank": 1,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23504.0,
+     19356.0,
+     2.0
+    ],
+    "height": 5.4,
+    "radius": 4.5
+   },
+   "params": {
+    "offset": 22,
+    "heightAGL": 4.5,
+    "speed": 5,
+    "side": "left",
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Glide north 4.5 m over the Inner Sea 22 m east of the drowned colonnade, yawing to hold the two flame-crowned columns against the low sun and the stone tower behind; stay over open water 12 m from the fish, wisps may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flagship water-and-fire shot: a slow pass over the Inner Sea 22 m east of the drowned colonnade, holding the two columns crowned with green flames against the low golden sun (backlit flames), with the stone tower behind; 100 % over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 6.5..6.5 m, nearest drawn 12.48 m (spawn Fish), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 6.5..6.5 m, nearest drawn 12.48 m (spawn Fish), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.03",
+   "site": "poi-inner-sea-port-ruins",
+   "technique": "fpv.fpv-flip",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": 4.0
+   },
+   "rank": 2,
+   "framing": "WS",
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 2.6,
+    "flipAt": 0.5,
+    "speed": 4,
+    "heightAGL": 9,
+    "rise": 2,
+    "tiltDeg": -10,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly west 9 m above the drowned colonnade from the open sea toward the stone tower and barrel-roll once over the flame-topped end columns; stay 2.5 m above the column flames and 12 m from the tower, wisps may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "FPV punctuation: from the open sea the quad flies west 9 m above the colonnade toward the stone tower and barrel-rolls once over the flaming end columns (2.6 s roll on the fpv preset). No subject (forward FPV move). Verified (check.mjs, full take flown): take 0-8 s: AGL 9..11 m, nearest drawn 2.89 m (spawn Flames), vmax 4.67 m/s, over water 88%; edit 1-7 s: AGL 9..11 m, nearest drawn 2.89 m (spawn Flames), vmax 4.67 m/s, over water 100%; flight fpv peak 4.67 m/s (cap 25), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.04",
+   "site": "poi-inner-sea-port-ruins",
+   "technique": "classic.pull-out-reveal",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23504.0,
+     19360.0,
+     2.0
+    ],
+    "height": 5.4,
+    "radius": 0.7
+   },
+   "params": {
+    "azimuthDeg": 120,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "toFraming": "EWS",
+    "rise": true,
+    "endElevationDeg": 18,
+    "profile": "perceptual"
+   },
+   "standingOrder": "Start tight on the flaming column top and pull back east-south-east over the water, rising, until the colonnade, the stone tower and the Warmtide hill fill the frame; keep 3 m from every column, fish and wisps may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pull-out reveal from the flame-topped column: starting close on the flames, the camera retreats east-south-east over the sea and rises until the whole colonnade, the Empyrean tower on the shore and the Warmtide hill fill the frame, the sun low ahead (silhouettes). Verified (check.mjs, full take flown): take 0-11 s: AGL 5.63..19 m, nearest drawn 3.09 m (spawn Linkable Item Scatter Generator), vmax 6.99 m/s, LOS blocked 0/45, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 6.27..17.5 m, nearest drawn 4.09 m (spawn Fish), vmax 6.99 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%."
+  }
+ ],
+ "verification": {
+  "poi-inner-sea-port-ruins.01": "take 0-10 s: AGL 12.58..13.3 m, nearest drawn 12.82 m (scenery-default 0x02000247@23422,19338), vmax 2.89 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 12.58..13 m, nearest drawn 15.95 m (scenery-default 0x02000247@23422,19338), vmax 2.89 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 2.9 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-inner-sea-port-ruins.02": "take 0-10 s: AGL 6.5..6.5 m, nearest drawn 12.48 m (spawn Fish), vmax 5 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 6.5..6.5 m, nearest drawn 12.48 m (spawn Fish), vmax 5 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 5.01 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-inner-sea-port-ruins.03": "take 0-8 s: AGL 9..11 m, nearest drawn 2.89 m (spawn Flames), vmax 4.67 m/s, over water 88%; edit 1-7 s: AGL 9..11 m, nearest drawn 2.89 m (spawn Flames), vmax 4.67 m/s, over water 100%; flight fpv peak 4.67 m/s (cap 25), max tracking gap 0.06 m",
+  "poi-inner-sea-port-ruins.04": "take 0-11 s: AGL 5.63..19 m, nearest drawn 3.09 m (spawn Linkable Item Scatter Generator), vmax 6.99 m/s, LOS blocked 0/45, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 6.27..17.5 m, nearest drawn 4.09 m (spawn Fish), vmax 6.99 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%"
+ }
+}

@@ -1,0 +1,119 @@
+{
+ "name": "The Shadow Pass",
+ "title": "The Shadow Pass",
+ "siteId": "poi-the-shadow-pass",
+ "summary": "The Shadow Pass is a narrow, snow-filled defile at 92.1-93.8N 56.7W, just south of Fiun Outpost. It runs north from a snow plateau (z 100); its floor lies at z 63-65 between walls 25-60 m high and is patched with dark obsidian ground. This is the old battlefield where Eleonora's army met King Varicci's. There are no structures, only Phantom, Poltergeist and Ruschk spawns. The landblocks north of y 46848 are missing from the kit.",
+ "landmarks": [
+  {
+   "name": "Shadow Pass gully",
+   "pos": [
+    10860.0,
+    46740.0,
+    64.0
+   ],
+   "heightM": 30,
+   "note": "Floor z 63-65 between 25-60 m snow walls, dark obsidian patches."
+  },
+  {
+   "name": "Plateau lip",
+   "pos": [
+    10860.0,
+    46592.0,
+    94.0
+   ],
+   "heightM": 0,
+   "note": "Head of the pass."
+  }
+ ],
+ "site": {
+  "id": "poi-the-shadow-pass",
+  "name": "The Shadow Pass",
+  "teleport": "@teleloc 0x38F2001D 88.0 106.0 100.5 1 0 0 0",
+  "anchor": [
+   10860.0,
+   46680.0,
+   64.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.71,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the snow plateau at the pass's southern lip (ground 100, nothing within 50 m); the gazetteer has no outdoor entry here (Frozen Library portal is 341 m away)."
+ },
+ "insertAfter": "fiun-outpost",
+ "insertBefore": "silyun",
+ "acpedia": {
+  "categories": [
+   "Northwest POI",
+   "Historical Site"
+  ],
+  "map": {
+   "ns": 92.1,
+   "ew": -56.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 855,
+  "coveredBy": "shot:fiun-outpost.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Shadow_Pass.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-the-shadow-pass.01",
+   "site": "poi-the-shadow-pass",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.0,
+     8.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10860.0,
+     46740.0,
+     64.0
+    ],
+    "height": 20,
+    "radius": 30
+   },
+   "params": {
+    "azimuthDeg": 180,
+    "azimuthRef": "compass",
+    "elevationDeg": 11,
+    "distance": 150,
+    "thirds": "center",
+    "rate": 0.006
+   },
+   "standingOrder": "Lock off 8 m above the snowy lip at the head of the Shadow Pass and look north down the dark gully of the old battlefield while the clouds race over it; nothing moves but the sky.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Time-lapse. A lock-off 8 m above the snowy lip at the head of the pass looks 150 m north down the dark, obsidian-floored gully of the old battlefield. The sky runs 0.006 day/s, so the afternoon sun moves from 0.71 to 0.76 and stays up while clouds race over the defile. A rank-3 mood shot with nothing in the frame but the pass. Verified (check.mjs, full take flown): take 0-9 s: AGL 8.46..8.5 m, nearest drawn 128.35 m (scenery-default 0x010036AD@10961,46504), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 8.46..8.5 m, nearest drawn 128.35 m (scenery-default 0x010036AD@10961,46504), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-the-shadow-pass.01": "take 0-9 s: AGL 8.46..8.5 m, nearest drawn 128.35 m (scenery-default 0x010036AD@10961,46504), vmax 0 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 8.46..8.5 m, nearest drawn 128.35 m (scenery-default 0x010036AD@10961,46504), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

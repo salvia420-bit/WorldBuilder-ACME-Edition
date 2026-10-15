@@ -82,7 +82,8 @@ export const DEFAULT_MAPPER_RATES = Object.freeze({
  * - returnClearanceM: a return toward the planned path (or a decay toward neutral) only moves
  *   an offset while the sensed clearance on the side it moves toward is at least this.
  * - aspect: frame aspect used for recentring when the SensorFrame carries none.
- * - maxFadeIds: most occluder ids a single setpoint asks to fade.
+ * - maxFadeIds: most occluder ids a single setpoint asks to fade; 0 = never fade (a shot's
+ *   `pilot.fade: 'never'`, film/index.js pilotFactory) — a 'fade' answer then reroutes.
  */
 export const DEFAULT_MAPPER_LIMITS = Object.freeze({
   slowSpeedScale: 0.5,
@@ -203,20 +204,24 @@ export function answerConfidence(a) {
 
 /**
  * Ids of the occluders to fade, from SensorFrame `subject.occluderIds` (array) or
- * `subject.occluderId`: finite numbers or non-empty strings, de-duplicated, capped.
+ * `subject.occluderId`: finite numbers or non-empty strings, de-duplicated, capped
+ * at ⌊max⌋. `max ≤ 0` (a shot with `pilot.fade: 'never'`) returns [] — the cap is
+ * checked BEFORE an id is taken (a 0 cap used to still return the first id).
  * @param {*} sf
  * @param {number} max
  * @returns {Array<number|string>}
  */
 function occluderIds(sf, max) {
+  const cap = Number.isFinite(max) ? Math.floor(max) : 0;
+  if (!(cap > 0)) return [];
   const s = sf && typeof sf === "object" && sf.subject && typeof sf.subject === "object" ? sf.subject : null;
   if (!s) return [];
   const raw = Array.isArray(s.occluderIds) ? s.occluderIds : s.occluderId != null ? [s.occluderId] : [];
   const out = [];
   for (const id of raw) {
+    if (out.length >= cap) break;
     const ok = (typeof id === "number" && Number.isFinite(id)) || (typeof id === "string" && id.length > 0);
     if (ok && !out.includes(id)) out.push(id);
-    if (out.length >= max) break;
   }
   return out;
 }

@@ -1,0 +1,215 @@
+{
+ "decisions": [
+  {
+   "siteId": "poi-south-holtburg-outpost",
+   "name": "South Holtburg Outpost",
+   "decision": "include",
+   "reason": "A real starter outpost (Life Stone, well, shop, cottage, a green-lit Empyrean hall and a 31 m spire tower) in a forest hollow 623 m from Holtburg's filmed hilltop and outside any existing frame. One high establishing shot.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-south-holtburg-outpost.json"
+  },
+  {
+   "siteId": "poi-west-holtburg-outpost",
+   "name": "West Holtburg Outpost",
+   "decision": "include",
+   "reason": "Real outpost, the twin of South Holtburg (shop, lantern hall, Life Stone, Empyrean hall and spire tower on the hill), 695 m from holtburg.02. It gets the opposite, downward east-facing treatment.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-west-holtburg-outpost.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-evensong",
+   "name": "Festival Stone of Evensong",
+   "decision": "include",
+   "reason": "The stone and its glow stand on the River Prosper shore. A 100 m line of temple ruins stands in the river (bamboo, a brick ruin, a gateway of four 10 m wall blocks around a monolithic head rock). Water plus glow, matching acpedia exactly.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-evensong.json"
+  },
+  {
+   "siteId": "poi-access-to-crystal-mines",
+   "name": "Access to Crystal Mines",
+   "decision": "include",
+   "reason": "Only the Holtburg-side access portal is in the kit: a swirl and Tornash on a bare hilltop at z 129. The acpedia floating platforms (70.5N 8.1W, landblock 0x75D7) are missing from the kit and are not filmed. One rank-3 static.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-access-to-crystal-mines.json"
+  },
+  {
+   "siteId": "poi-edelbar",
+   "name": "Edelbar",
+   "decision": "include",
+   "reason": "A ruined Aluvian village. The hilltop Life Stone has an ancient column and a diagonal row of broken Empyrean pillar stubs leading to a candle sentinel, which matches the acpedia statue and pillar row. Abandoned cottages lie below. Landblocks east of x 30912 are missing, so cameras stay west.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-edelbar.json"
+  },
+  {
+   "siteId": "poi-power-plant",
+   "name": "Power Plant",
+   "decision": "include",
+   "reason": "A large Empyrean temple complex in the Tiofor Woods: an octagon spire hall ringed by twelve moss-green ranges of up to six storeys. It is 4.6 km from any covered shot and spectacular.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-power-plant.json"
+  },
+  {
+   "siteId": "poi-hilltop-tower",
+   "name": "Hilltop Tower",
+   "decision": "include",
+   "reason": "A 31 m Empyrean spire tower on the highest summit south of Holtburg, with a drudge campfire and 32 m pines around it; gazetteer drop point 23 m away.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-hilltop-tower.json"
+  },
+  {
+   "siteId": "poi-fort-witshire",
+   "name": "Fort Witshire",
+   "decision": "include",
+   "reason": "A 72 m square fort on a raised plateau: four 31 m corner spire towers, curtain walls, a barricaded east gate and the central cottage-keep. It is 2.4 km from any covered shot.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-fort-witshire.json"
+  },
+  {
+   "siteId": "poi-heartland",
+   "name": "Heartland",
+   "decision": "include",
+   "reason": "The real Heartland portal drop farmstead: two stone cottages with brass lanterns and cows in a grassy hollow. Small, so one rank-3 dronie.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-heartland.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-thistledown",
+   "name": "Festival Stone of Thistledown",
+   "decision": "include",
+   "reason": "The stone stands on the bluff between two ancient columns topped with fire bowls and overlooks Cragstone Falls, as acpedia says. Its pedestal reveals the falls over the bluff edge.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-thistledown.json"
+  },
+  {
+   "siteId": "poi-cragstone-falls",
+   "name": "Cragstone Falls",
+   "decision": "include",
+   "reason": "A 90 m-wide waterfall (14 lip and 24 foot Waterfall emitters) dropping 22-26 m from the river plateau into Victory Bay, with a bamboo fishing hut. It is 1.3 km from cragstone.03. This is the batch's best water feature.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-cragstone-falls.json"
+  },
+  {
+   "siteId": "poi-drudge-fort",
+   "name": "Drudge Fort",
+   "decision": "include",
+   "reason": "A 210 m hilltop fort of concentric timber palisades with four wooden towers, 24 gate torches and bonfires. cragstone.03 is 480 m away but frames the windmill, not the fort.",
+   "shots": 3,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-drudge-fort.json"
+  },
+  {
+   "siteId": "poi-asherons-castle",
+   "name": "Asheron's Castle",
+   "decision": "include",
+   "reason": "The castle on Asheron's Island mountain top (z 374): towers, a red spire and a 90 m minaret above 300 m cliffs. It is not a tour town and eastham.01 faces away from it. Kit landblocks to the west and north are missing, so cameras stay south and east.",
+   "shots": 4,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-asherons-castle.json"
+  },
+  {
+   "siteId": "poi-riverbend-tower",
+   "name": "Riverbend Tower",
+   "decision": "include",
+   "reason": "A 19 m Empyrean stone tower on a terrace above the River Prosper, with the Riverbend drop point and the Renegade Stronghold portal nearby. It is 2.7 km from any covered shot.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-riverbend-tower.json"
+  },
+  {
+   "siteId": "poi-east-rithwic-outpost",
+   "name": "East Rithwic Outpost",
+   "decision": "include",
+   "reason": "A destroyed starter outpost with a Life Stone, a 28 m ruined Empyrean monument tower and cottages. rithwic.05 (470 m away) films a different ruin, the Destroyed Portal to Greenspire.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-rithwic-outpost.json"
+  },
+  {
+   "siteId": "poi-south-rithwic-outpost",
+   "name": "South Rithwic Outpost",
+   "decision": "include",
+   "reason": "A destroyed outpost with a Life Stone, a cottage among oaks and the monument tower on a rise. It is 709 m from rithwic.02 and not framed there. One rank-3 reveal.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-south-rithwic-outpost.json"
+  },
+  {
+   "siteId": "poi-east-lytelthorpe-outpost",
+   "name": "East Lytelthorpe Outpost",
+   "decision": "include",
+   "reason": "A destroyed outpost. The acpedia row of Empyrean pillars toward the Forgotten Temple is real (eight 4.6 m pillars over 350 m), and the Destroyed Portal to Bluespire carries tesla lightning FX. It is 666 m from lytelthorpe.07.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-east-lytelthorpe-outpost.json"
+  },
+  {
+   "siteId": "poi-west-lytelthorpe-outpost",
+   "name": "West Lytelthorpe Outpost",
+   "decision": "include",
+   "reason": "A destroyed outpost on a terrace with the monument tower, an apple orchard, a Life Stone and a small fountain. It is 648 m from lytelthorpe.06.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-west-lytelthorpe-outpost.json"
+  },
+  {
+   "siteId": "poi-festival-stone-of-seedsow",
+   "name": "Festival Stone of Seedsow",
+   "decision": "include",
+   "reason": "The stone stands on a forest knoll inside a cross of mossy candle sentinels with blue flames, as acpedia describes ('in the woods west of Lytelthorpe'). It is small and photogenic, filmed with the batch's rack focus.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-festival-stone-of-seedsow.json"
+  },
+  {
+   "siteId": "poi-frest-greelvings-mansion",
+   "name": "Frest Greelving's Mansion",
+   "decision": "include",
+   "reason": "The surface mansion is real: four gothic buildings including a 31 m black clock tower on a bare hilltop, with dead antler trees and a glowing pumpkin. It is 2.1 km from any covered shot. Only the exterior is filmed.",
+   "shots": 2,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-frest-greelvings-mansion.json"
+  },
+  {
+   "siteId": "poi-rithwic-festival-grounds",
+   "name": "Rithwic Festival Grounds",
+   "decision": "include",
+   "reason": "Real festival grounds: two octagon tents, red pennants, candle-lit running-track arches, a dance canvas and chessboards, 1.1 km from rithwic.02. The Leafdawning stone 163 m east belongs to batch 1 and is avoided as a subject.",
+   "shots": 1,
+   "file": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-rithwic-festival-grounds.json"
+  }
+ ],
+ "totalShots": 38,
+ "validate": "node film.mjs plan validate /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-0.json gives \"valid: 0 error(s), 0 warning(s)\" for 21 sites and 38 shots, dry build included. check.mjs over the full takes: all 38 shots pass acceptance, with 0 failures in the audit script.",
+ "checkFailures": [],
+ "techniqueCounts": {
+  "classic.static": 3,
+  "classic.low-angle": 3,
+  "classic.pedestal": 2,
+  "classic.worms-eye": 2,
+  "classic.rack-focus": 1,
+  "classic.establishing": 1,
+  "classic.high-angle": 1,
+  "classic.pan": 1,
+  "classic.dolly-in": 1,
+  "classic.crane": 1,
+  "classic.arc": 1,
+  "classic.push-in": 1,
+  "classic.reveal-from-occluder": 1,
+  "drone.orbit-poi": 2,
+  "drone.pass-over": 2,
+  "drone.boom-rise": 2,
+  "drone.dronie": 2,
+  "drone.terrain-skim": 2,
+  "drone.top-down": 2,
+  "drone.hyperlapse-orbit": 1,
+  "drone.tilt-reveal": 1,
+  "drone.top-down-rise": 1,
+  "drone.rising-reveal": 1,
+  "drone.helix": 1,
+  "drone.fly-by": 1,
+  "drone.vertigo-drone": 1
+ },
+ "notes": [
+  "Files: 21 dossiers at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-<site>.json and the scratch plan at /mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-0.json. The generator and helpers (q.py, treemap.py, proj.mjs, s/*.py, gen_final.py) are in /tmp/claude-1000/-home-wbterminal/f87d60b8-65a2-447a-9582-b19fdc7eaafc/scratchpad/b0/.",
+  "Shot totals: 38 proposed against a quota of 34 (rank 1: 12, rank 2: 18, rank 3: 8). The ideal edit windows sum to 236.8 s. There are 26 distinct techniques, none used more than 3 times. All 7 assigned techniques are used. There are no facade pans (no classic.truck or drone.parallax-slide). Every shot has pilot code, bounds of 1/1 and trim takes of 7-11 s with windows of 5-7 s.",
+  "Reveal shots with partial frame or LOS in the edit window, by design: power-plant.01 tilt-reveal (subject in frame 89%), asherons-castle.02 rising-reveal (96%), south-rithwic.01 reveal-from-occluder (LOS blocked 4/23 = 17%, lead-in until the reveal at t 4.7). Their window.keep values only let the window slide later.",
+  "Retail scenery bake: the trees checked are the default bake the film client draws. With the opt-in retail bake, a crown comes within 0-3 m in several shots: hilltop-tower.02 dronie, west-lytelthorpe.01, seedsow.01, riverbend.02 and others. Each case is flagged in that shot's notes and verification. Keep the default ?sceneryBake.",
+  "Derived @teleloc teleports (ground + 0.5, at least 5 m from obstacles, not in water) for: Power Plant, Drudge Fort, Frest Greelving's Mansion and Rithwic Festival Grounds (no outdoor gazetteer teleport), and Access to Crystal Mines. The gazetteer teleport for Crystal Mines lands on the portal swirl, so a portal-collision teleport of the hidden player is a risk.",
+  "Unverified items: the Drudge Bonfire, Waterfall, Anniversary Effect and portal FX are spawns or weenies, so their look depends on the runtime. The Evensong 'monolithic head' is taken to be rock 0x020003B2 (6.8 m) between the gateway walls. Edelbar's acpedia 'Empyrean Statue' is taken to be candle sentinel 0x02000397 at the end of the pillar row. The West Lytelthorpe fountain is tiny and buried in ferns and a tree, so its shot frames the monument instead.",
+  "Repetition: East Rithwic, South Rithwic, East Lytelthorpe and West Lytelthorpe all use the same monument tower model (0x01002866). Each gets a different technique and light (pedestal, reveal, skim plus static, push-in). Destroyed Portal to Bluespire is a static, distinct from rithwic.05's orbit of the sister ruin.",
+  "insertAfter/insertBefore are kept as given. Rithwic Festival Grounds sits 1.1 km west of Rithwic but stays between lytelthorpe and bandit-castle because its timeOfDay of 0.73 matches that leg.",
+  "Hyperlapse (power-plant.03) runs the sky at 120x, so the sun goes from 0.43 to about 0.59 and stays up. Every fire or portal nadir top-down uses pitch -88.",
+  "Scratchpad note: the session scratchpad is shared with sibling batch agents. My first helper, written at the scratchpad root as near.py, was later overwritten by another agent's file of the same name, and mine may first have replaced theirs. Everything since lives in the private b0/ subfolder. No repo files, git, browsers or WorldBuilder.Terminal were touched. Only short, single node/python processes were run."
+ ]
+}

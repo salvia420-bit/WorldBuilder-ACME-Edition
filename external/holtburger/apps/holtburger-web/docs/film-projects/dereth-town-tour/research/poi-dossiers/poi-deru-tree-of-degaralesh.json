@@ -1,0 +1,197 @@
+{
+ "name": "Deru Tree of Degar'Alesh",
+ "title": "Deru Tree of Degar'Alesh",
+ "siteId": "poi-deru-tree-of-degaralesh",
+ "summary": "The dead Deru Tree on Degar'Alesh (Freebooter Isle), already killed by the Old One T'thuun when Isparians first reached the island (acpedia). In the kit, four huge grey-orange trunk and crown sections form a 66 x 70 m dead tree that rises 100-109 m (top z 183) from a jungle knoll at z 74. It stands 150 m north of the great temple, with moss-green stone rubble at its roots.",
+ "landmarks": [
+  {
+   "name": "Main trunk (0x0100419A)",
+   "pos": [
+    47508,
+    9660,
+    74
+   ],
+   "heightM": 103.8,
+   "note": ""
+  },
+  {
+   "name": "Column trunk (0x01004197)",
+   "pos": [
+    47532,
+    9660,
+    74
+   ],
+   "heightM": 109.0,
+   "note": "The tallest section, top z 183."
+  },
+  {
+   "name": "North crowns (0x0100419D/0x01004194)",
+   "pos": [
+    47520,
+    9684,
+    74
+   ],
+   "heightM": 104.2,
+   "note": ""
+  },
+  {
+   "name": "Great temple",
+   "pos": [
+    47508,
+    9516,
+    48
+   ],
+   "heightM": 51.3,
+   "note": "150 m south."
+  }
+ ],
+ "site": {
+  "id": "poi-deru-tree-of-degaralesh",
+  "name": "Deru Tree of Degar'Alesh",
+  "teleport": "@teleloc 0xF7320029 121.00 20.00 60.75 1 0 0 0",
+  "anchor": [
+   47520,
+   9672,
+   74
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.38,
+   "grade": "neutral"
+  },
+  "notes": "No gazetteer entry for the tree (the nearest, Olthoi Tunnel, is 290 m south on the temple avenue); derived @teleloc on the open slope 58 m south-south-east of the dead tree trunks (ground z 60.25, nearest object an invisible camp generator 5.4 m)."
+ },
+ "insertAfter": "mayoi",
+ "insertBefore": "kryst",
+ "acpedia": {
+  "categories": [
+   "Southeast POI",
+   "Deity Character",
+   "Lore Database Entry"
+  ],
+  "map": {
+   "ns": -62.0,
+   "ew": 96.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   47508.0,
+   9588.0
+  ],
+  "coveredDistM": 3012,
+  "coveredBy": "shot:freehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Deru_Tree_of_Degar_Alesh.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-deru-tree-of-degaralesh.01",
+   "site": "poi-deru-tree-of-degaralesh",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     1.0,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47520,
+     9668,
+     74
+    ],
+    "height": 105,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 64,
+    "radiusEnd": 72,
+    "heightStart": 35,
+    "heightEnd": 76,
+    "revolutions": 0.08,
+    "direction": "cw",
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "minClearance": 12
+   },
+   "standingOrder": "Climb clockwise round the dead Deru Tree of Degar'Alesh from east to south-east, 64-74 m out, rising from its lower boughs to its crown with the morning sun behind the lens; 12 m above the jungle.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Helix of 29 degrees clockwise, from east to south-east of the dead Deru Tree, 64-72 m out, climbing from its lower boughs (35 m) to its crown (76 m). The scale of the 109 m grey-orange trunks shows against the jungle, with the great temple appearing below. The morning sun (0.38) is behind the lens. Verified (check.mjs, full take flown): take 0-11 s: AGL 28.5..80.3 m, nearest drawn 15.87 m (scenery-default 0x020007DA@47596,9657), vmax 7.71 m/s, LOS blocked 0/45, subject in frame 100%; edit 2-9 s: AGL 31.73..75.8 m, nearest drawn 18.89 m (scenery-default 0x020007DA@47596,9657), vmax 7.71 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.7 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-deru-tree-of-degaralesh.02",
+   "site": "poi-deru-tree-of-degaralesh",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47520,
+     9665,
+     74
+    ],
+    "height": 105,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "heightM": 0.8,
+    "horizontalM": 33,
+    "spinDeg": 10
+   },
+   "standingOrder": "Look straight up the 100 m grey trunks of the dead Deru Tree from the ground 33 m south-south-west of them with a slow 10 degree roll; nothing closer than 3 m to the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye 33 m south-south-west of the trunks, 0.8 m above the ground, looking straight up the 100 m dead tree with a slow 10 degree roll. The morning sun is behind-right. The nearest bush is 5.7 m away. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.8..0.8 m, nearest drawn 5.67 m (scenery-default 0x02000E71@47516,9626), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 5.67 m (scenery-default 0x02000E71@47516,9626), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 1.5 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-deru-tree-of-degaralesh.01": "take 0-11 s: AGL 28.5..80.3 m, nearest drawn 15.87 m (scenery-default 0x020007DA@47596,9657), vmax 7.71 m/s, LOS blocked 0/45, subject in frame 100%; edit 2-9 s: AGL 31.73..75.8 m, nearest drawn 18.89 m (scenery-default 0x020007DA@47596,9657), vmax 7.71 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.7 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-deru-tree-of-degaralesh.02": "take 0-8 s: AGL 0.8..0.8 m, nearest drawn 5.67 m (scenery-default 0x02000E71@47516,9626), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 0.8..0.8 m, nearest drawn 5.67 m (scenery-default 0x02000E71@47516,9626), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 1.5 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

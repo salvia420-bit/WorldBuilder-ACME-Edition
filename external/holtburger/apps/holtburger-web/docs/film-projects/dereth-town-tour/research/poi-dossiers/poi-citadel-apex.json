@@ -1,0 +1,180 @@
+{
+ "name": "Citadel Apex",
+ "title": "Citadel Apex",
+ "siteId": "poi-citadel-apex",
+ "summary": "The Citadel Apex is the main tower of Gaerlan's Citadel that broke off when the citadel crashed and now sits on a peak overlooking Citadel Valley; Martine's mask and robe still lie inside where the Ispar portal once was. In the kit it is a 66 m green-glass sculpture-tower (0x01002B05, 23 m square, base z 345, top 410.8) on a snowy mountain top, the crashed citadel 285 m below to the north-east.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 56.9,
+   "ew": 47.1
+  },
+  "mapWorld": [
+   35772.0,
+   38124.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Citadel_Apex.txt",
+  "coveredDistM": 2341,
+  "coveredBy": "shot:bandit-castle.04"
+ },
+ "landmarks": [
+  {
+   "name": "Apex tower",
+   "pos": [
+    35772.0,
+    38124.0,
+    345.0
+   ],
+   "heightM": 65.8,
+   "note": "0x01002B05, top z 410.8; Martine's Robe and Mask at z 382.7 inside."
+  }
+ ],
+ "site": {
+  "id": "poi-citadel-apex",
+  "name": "Citadel Apex",
+  "gazetteerId": "citadel-apex",
+  "teleport": "@teleloc 0xBAC60015 58.5 109 382.75 0 0 0 -1",
+  "anchor": [
+   35772.0,
+   38124.0,
+   345.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.46,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     11
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35772.0,
+     38124.0,
+     345.0
+    ],
+    "height": 65.8,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 42,
+    "radiusEnd": 52,
+    "heightStart": 28,
+    "heightEnd": 58,
+    "revolutions": 0.13,
+    "direction": "cw",
+    "bearingDeg": 140,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb a 47 deg clockwise corkscrew round Gaerlan's broken tower, radius 42 m to 52 m and 28 m to 58 m above its base, keeping the whole tower in frame; nothing within 40 m, open air over the south slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hero helix on the Citadel Apex: the 66 m green-glass main tower of Gaerlan's Citadel that snapped off and landed on a peak above Citadel Valley. The climb starts below its crown with the mountain falling away and ends above it looking down on the tower, the valley far below. Noon sun high in the south behind the camera. Verified with poi-kit check.mjs - take 11s: AGL 55.01..111.4 m, nearest 40.31 m (spawn Martine's Mask), vmax 7.12 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 2.5-9s: AGL 55.01..102.8 m, nearest 40.74 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 7.1 m/s (cap 12), tracking gap 0.05 m."
+  },
+  {
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35772.0,
+     38124.0,
+     345.0
+    ],
+    "height": 65.8,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 85,
+    "speed": 5,
+    "headingDeg": 20,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "minClearance": 5
+   },
+   "standingOrder": "Fly north-north-east 19 m above the tower top at 5 m/s, gimbal tracking it through straight down with a slow yaw slew; nothing within 19 m of the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Overhead pass: the glass crown of the Apex slides beneath the lens and the gimbal follows it through nadir, revealing the drop to Citadel Valley 285 m below on the far side. Pass height 430 vs tower top 410.8. Verified with poi-kit check.mjs - take 10s: AGL 84..115.1 m, nearest 43.78 m (spawn Martine's Mask), vmax 5 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2-8s: AGL 84..89.4 m, nearest 43.78 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 5.01 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-citadel-apex.01",
+   "technique": "drone.helix",
+   "rank": 1,
+   "check": "take 11s: AGL 55.01..111.4 m, nearest 40.31 m (spawn Martine's Mask), vmax 7.12 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 2.5-9s: AGL 55.01..102.8 m, nearest 40.74 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 7.1 m/s (cap 12), tracking gap 0.05 m"
+  },
+  {
+   "shot": "poi-citadel-apex.02",
+   "technique": "drone.pass-over",
+   "rank": 2,
+   "check": "take 10s: AGL 84..115.1 m, nearest 43.78 m (spawn Martine's Mask), vmax 5 m/s, LOS blocked 0/41, in frame 100%, water 0%; edit 2-8s: AGL 84..89.4 m, nearest 43.78 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 5.01 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 12.5,
+ "techniques": [
+  "drone.helix",
+  "drone.pass-over"
+ ]
+}

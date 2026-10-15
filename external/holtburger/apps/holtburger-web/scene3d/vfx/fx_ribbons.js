@@ -41,6 +41,7 @@
 
 import * as THREE from "three";
 import { fxTier2Enabled } from "./fx_tier2.js";
+import { fxNowMs } from "../fx_clock.js";
 import { registerLateFxSource } from "../particles_over_clouds.js";
 // 2026-10-10: swing trails for every blade (?swingTrails, default "all") and the
 // element read from the item's UiEffects bits first (vfx/weapon_class.js).
@@ -522,7 +523,7 @@ function _calibration(scene3d) {
  * @param {number} [nowMs] test seam
  */
 export function tickFxRibbons(scene3d, nowMs) {
-  const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
   const tSec = now / 1000;
   const on = fxTier2Enabled("fxMotion");
   if (!on) {
@@ -677,7 +678,7 @@ function _rebuild(scene3d, now, tSec) {
 export function fxNoteSwing(inst, nowMs) {
   try {
     if (!inst) return;
-    const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
     inst._fxSwingUntilMs = now + FX_SWING_WINDOW_MS;
   } catch (_) { /* a trail never breaks a swing */ }
 }
@@ -690,7 +691,7 @@ export function fxProjectileElement(guid, nowMs) {
   } catch (_) { /* unknown */ }
   if (FX_IMPACT_ELEMENT_ON) {
     const e = _seenElement.get(guid >>> 0);
-    const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
     if (e && now - e.ms <= FX_ELEMENT_KEEP_MS) return e.element;
   }
   return null;

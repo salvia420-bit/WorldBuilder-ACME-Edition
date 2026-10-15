@@ -1,0 +1,138 @@
+{
+ "about": "Speed caps by arc length along data/racing_line.json for fpv.fpv-run `zones` (m/s). Outside zones the technique `speed` applies.",
+ "line": "data/racing_line.json",
+ "lengthM": 754.94,
+ "zones": [
+  {
+   "s0": 0.0,
+   "s1": 21.09,
+   "speed": 5.0,
+   "segment": "A",
+   "why": "entry hover, float between the mushroom caps, dive into the trench"
+  },
+  {
+   "s0": 21.09,
+   "s1": 91.17,
+   "speed": 8.0,
+   "segment": "B",
+   "why": "segment B: Entry tunnel + ramps to -6 and -12"
+  },
+  {
+   "s0": 91.17,
+   "s1": 188.92,
+   "speed": 7.5,
+   "segment": "C",
+   "why": "segment C: -12 serpentine tunnels"
+  },
+  {
+   "s0": 188.92,
+   "s1": 203.23,
+   "speed": 5.0,
+   "segment": "D",
+   "why": "segment D: Burrow pop-up + Slasher hall (30x30, 9 m tall)"
+  },
+  {
+   "s0": 203.23,
+   "s1": 220.22,
+   "speed": 6.0,
+   "segment": "D",
+   "why": "floor chute: cut throttle over the hole, 33 deg dive"
+  },
+  {
+   "s0": 220.22,
+   "s1": 391.88,
+   "speed": 9.5,
+   "segment": "F",
+   "why": "segment F: -18/-24/-30/-36 tunnels, 3 ramps"
+  },
+  {
+   "s0": 391.88,
+   "s1": 397.49,
+   "speed": 6.5,
+   "segment": "G",
+   "why": "segment G: -36 hall + 2 chimneys"
+  },
+  {
+   "s0": 397.49,
+   "s1": 409.49,
+   "speed": 2.6,
+   "segment": "G",
+   "why": "chimney A punch-float: stay inside the 10 x 10 m shaft while airborne"
+  },
+  {
+   "s0": 409.49,
+   "s1": 431.84,
+   "speed": 6.5,
+   "segment": "G",
+   "why": "segment G: -36 hall + 2 chimneys"
+  },
+  {
+   "s0": 431.84,
+   "s1": 439.45,
+   "speed": 4.5,
+   "segment": "G",
+   "why": "pit edge: roll over the edge"
+  },
+  {
+   "s0": 439.45,
+   "s1": 452.7,
+   "speed": 12.0,
+   "segment": "H",
+   "why": "pit dive (near-ballistic)"
+  },
+  {
+   "s0": 452.7,
+   "s1": 463.38,
+   "speed": 7.5,
+   "segment": "H",
+   "why": "pit pull-out (radius ~5.5 m)"
+  },
+  {
+   "s0": 463.38,
+   "s1": 604.46,
+   "speed": 9.0,
+   "segment": "I",
+   "why": "segment I: -54 lower-half tunnels"
+  },
+  {
+   "s0": 604.46,
+   "s1": 626.78,
+   "speed": 6.5,
+   "segment": "J",
+   "why": "segment J: Burrow pop-up + ramp hall -54 -> -60"
+  },
+  {
+   "s0": 626.78,
+   "s1": 706.31,
+   "speed": 6.0,
+   "segment": "K",
+   "why": "segment K: Orchard: burrows -> west egg chamber -> exit portal"
+  },
+  {
+   "s0": 706.31,
+   "s1": 745.45,
+   "speed": 4.0,
+   "segment": "K",
+   "why": "egg chamber float-up reveal + carve"
+  },
+  {
+   "s0": 745.45,
+   "s1": 746.52,
+   "speed": 6.0,
+   "segment": "K",
+   "why": "segment K: Orchard: burrows -> west egg chamber -> exit portal"
+  },
+  {
+   "s0": 746.52,
+   "s1": 754.94,
+   "speed": 3.5,
+   "segment": "K",
+   "why": "exit corner + portal approach"
+  }
+ ],
+ "estimate": {
+  "durationSec": 117.4,
+  "model": "v = min(zone cap, sqrt(12 / curvature)), |a| <= 9 m/s^2, hover start (0.8 s) and rest end",
+  "meanSpeed": 6.48
+ }
+}

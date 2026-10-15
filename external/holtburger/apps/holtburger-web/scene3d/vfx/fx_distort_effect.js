@@ -27,6 +27,7 @@ import * as THREE from "three";
 import { BlendFunction, Effect, EffectAttribute } from "postprocessing";
 import { FX_DISTORT_MAX, collectFxDistortSources } from "./fx_distort.js";
 import { fxTier1Enabled } from "./fx_tier1.js";
+import { fxNowMs } from "../fx_clock.js";
 
 // Base displacement (uv units at a source's full strength and screen size 1).
 const FX_DISTORT_AMP = 1.0;
@@ -133,7 +134,7 @@ export class FxDistortEffect extends Effect {
 
   update(_renderer, _inputBuffer, _deltaTime) {
     const u = this.uniforms;
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const now = fxNowMs(); // the film clock during a stepped take (fx_clock.js)
     u.get("uFxDistTime").value = (now / 1000) % 1024;
     const cam = this.camera;
     if (cam && Number.isFinite(cam.far)) this.setCameraFar(cam.far);

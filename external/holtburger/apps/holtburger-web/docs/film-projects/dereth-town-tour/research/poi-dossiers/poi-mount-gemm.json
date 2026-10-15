@@ -1,0 +1,129 @@
+{
+ "name": "Mount Gemm",
+ "title": "Mount Gemm",
+ "siteId": "poi-mount-gemm",
+ "summary": "Northernmost of the three Mount Alphus table mountains in this batch, with portals to Mount Bellig and Mount Dalt (acpedia). In the kit: a flat summit (~125 x 150 m) at z 224 rising sheer 110 m above the plain, the North Dalt portal on its south-west corner, the South Bellig portal on the north-east, and an Empyrean hall at its north foot. Landblocks east (0x9391-0x9393) and south-east (0x9191, 0x9291) are missing; the camera works from the south-west.",
+ "landmarks": [
+  {
+   "name": "Summit plateau",
+   "pos": [
+    27945.0,
+    28300.0,
+    224.0
+   ],
+   "heightM": 114.0,
+   "note": "Flat top z 224."
+  },
+  {
+   "name": "North Dalt portal",
+   "pos": [
+    27868.0,
+    28225.2,
+    224.0
+   ],
+   "heightM": 3.0,
+   "note": "South-west corner."
+  },
+  {
+   "name": "Empyrean hall at the north foot",
+   "pos": [
+    27948.0,
+    28524.0,
+    110.0
+   ],
+   "heightM": 19.4,
+   "note": "0x01001106 (not framed)."
+  }
+ ],
+ "site": {
+  "id": "poi-mount-gemm",
+  "name": "Mount Gemm",
+  "gazetteerId": "south-gemm",
+  "teleport": "@teleloc 0x91930009 37.30 13.40 224.50 1 0 0 0",
+  "anchor": [
+   27945.0,
+   28300.0,
+   224.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer south-gemm (summit plateau, south-west corner, 3 m from the North Dalt portal). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0x91930009 31.3 3.4 224 0.866025 0 0 -0.5' because the gazetteer drop was 4.0 m from the North Dalt portal (weenieType Portal). Derived drop 12 m north-east on flat summit ground (224.0, level within 1 m for 12 m around), 15.3 m from the portal, 13.7 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 16.0,
+   "ew": 14.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3042,
+  "coveredBy": "shot:zaikhal.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Mount_Gemm.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-mount-gemm.01",
+   "site": "poi-mount-gemm",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27945.0,
+     28300.0,
+     224.0
+    ],
+    "height": 6.0,
+    "radius": 60
+   },
+   "params": {
+    "azimuthDeg": 225,
+    "azimuthRef": "compass",
+    "distance": 240,
+    "heightM": 26,
+    "driftDeg": 10,
+    "pushPct": 6
+   },
+   "standingOrder": "Hang 240 m south-west of Mount Gemm level with its summit, drifting 10 degrees and easing in as the sheer sunlit pillar rises 110 m out of the plain; nothing within 100 m, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing view of Mount Gemm, the northernmost of the three table mountains of the Mount Alphus range: from 240 m south-west, level with the summit, the sunlit pillar rises sheer 110 m above the plain, drifting 10 degrees. Verified (check.mjs, full take flown): take 0-10 s: AGL 118.11..131 m, nearest drawn 100.72 m (scenery-default 0x020002DB@27747,28119), vmax 6.77 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 118.11..129.7 m, nearest drawn 100.72 m (scenery-default 0x020002DB@27747,28119), vmax 6.77 m/s, LOS blocked 0/27, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-mount-gemm.01": "take 0-10 s: AGL 118.11..131 m, nearest drawn 100.72 m (scenery-default 0x020002DB@27747,28119), vmax 6.77 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 118.11..129.7 m, nearest drawn 100.72 m (scenery-default 0x020002DB@27747,28119), vmax 6.77 m/s, LOS blocked 0/27, subject in frame 100%"
+ }
+}

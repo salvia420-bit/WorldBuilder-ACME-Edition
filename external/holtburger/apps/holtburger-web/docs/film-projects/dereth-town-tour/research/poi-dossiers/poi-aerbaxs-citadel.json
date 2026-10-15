@@ -1,0 +1,242 @@
+{
+ "name": "Aerbax's Citadel",
+ "title": "Aerbax's Citadel (POI)",
+ "siteId": "poi-aerbaxs-citadel",
+ "summary": "Aerbax's floating citadel 125-220 m above the Obsidian Plains (65.0S 63.8W), reached through the Harmonic Transference Field in the South Gate. In the kit the South Gate beam (Aerbax Beam spawn) rises from the plain at (9156, 8868) to a cross of four octagonal platforms at z 126; walkways and ramps lead west and east to two 75 m spire halls at (8940, 8868) and (9372, 8868) (z 160-220) and north along x 8940 / 9372 to the core at (9156, 9084): a 120 m square of halls (z 141-168) around a 60 m central spire hall (z 150-210) with four 65 m red pinnacles at its corners (z 111-186). The plain below is at z 2-15.",
+ "landmarks": [
+  {
+   "name": "Central spire hall",
+   "pos": [
+    9156,
+    9084,
+    150
+   ],
+   "heightM": 60,
+   "note": "0x01003D0A, top z 209.6."
+  },
+  {
+   "name": "Corner pinnacles",
+   "pos": [
+    9156,
+    9084,
+    111
+   ],
+   "heightM": 75,
+   "note": "Four 0x02000A64 at (9102/9210, 9030/9138)."
+  },
+  {
+   "name": "South Gate beam and platform cross",
+   "pos": [
+    9156,
+    8868,
+    12
+   ],
+   "heightM": 114,
+   "note": "Aerbax Beam spawn at z 16.7; platforms 0x010029FF at z 121.8-126."
+  },
+  {
+   "name": "West and east spire halls",
+   "pos": [
+    8940,
+    8868,
+    160
+   ],
+   "heightM": 60,
+   "note": "0x01003D0A at (8940,8868) and (9372,8868), tops z 219.6."
+  }
+ ],
+ "site": {
+  "id": "poi-aerbaxs-citadel",
+  "name": "Aerbax's Citadel",
+  "teleport": "@teleloc 0x2F2E0031 162.0 20.0 11.33 1 0 0 0",
+  "anchor": [
+   9156,
+   9000,
+   4.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.64,
+   "grade": "warm"
+  },
+  "notes": "Derived teleport on the Obsidian Plain 34 m east-south-east of the South Gate beam (the gazetteer South Gate Portal entry lands on the Harmonic Transference Field itself)."
+ },
+ "insertAfter": "ayan-baqur",
+ "insertBefore": "wai-jhou",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -65.0,
+   "ew": -63.8
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3028,
+  "coveredBy": "path:wai-jhou.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Aerbax_s_Citadel_POI.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-aerbaxs-citadel.01",
+   "site": "poi-aerbaxs-citadel",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9156,
+     9084,
+     150
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 190,
+    "distance": 330,
+    "heightM": 48,
+    "driftDeg": 10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hang 200 m above the Obsidian Plain 330 m south of the floating citadel and drift slowly round it with the sun behind; keep 60 m from the corner towers and walkways.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature establishing of the floating citadel from 330 m south (camera z 198 over the Obsidian Plain): the core of halls and the 60 m central spire hall, the four 65 m red pinnacles at its corners, the walkways and ramps of the outer ring at z 126-160 and the plain 190 m below, drifting 10 deg and pushing 8 %; the afternoon sun (0.64, south-west) behind-left. Subject point = the central spire hall. Verified (check.mjs, full take flown): take 0-10 s: AGL 171.96..175.6 m, nearest drawn 96.09 m (static 0x2F2E#42 0x010029F8), vmax 9.63 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 158.4 m); edit 2-8.5 s: AGL 171.96..175.4 m, nearest drawn 98.52 m (static 0x2F2E#42 0x010029F8), vmax 9.63 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 158.4 m)."
+  },
+  {
+   "id": "poi-aerbaxs-citadel.02",
+   "site": "poi-aerbaxs-citadel",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9156,
+     8868,
+     12
+    ],
+    "height": 114,
+    "radius": 3
+   },
+   "params": {
+    "distance": 60,
+    "heightStart": 3,
+    "heightEnd": 40,
+    "keepAim": false,
+    "tiltDeg": 25,
+    "bearingDeg": 210,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Rise straight up 60 m south-south-west of the South Gate beam, gimbal tilted up, until the cross-shaped platform 110 m above drops into frame; stay 40 m below the platforms.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertical boom 60 m south-south-west of the South Gate beam (Aerbax Beam spawn, the Harmonic Transference Field), gimbal tilted +25 deg: rising from 6 m to 40 m above the plain, the beam column stays in frame and the cross-shaped platform 110 m overhead drops into the top of frame from t 6.6 (proj.mjs). The beam's look comes from the ACE spawn at runtime (unverified offline). Verified (check.mjs, full take flown): take 0-11 s: AGL 2..35.8 m, nearest drawn 6.52 m (scenery-default 0x02000C68@9133,8821), vmax 5.28 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 4.7 m); edit 3-9.5 s: AGL 5.22..34.2 m, nearest drawn 6.89 m (scenery-default 0x02000C68@9133,8821), vmax 5.28 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 5.2 m); flight cinema peak 5.4 m/s (cap 12), max tracking gap 0.84 m."
+  },
+  {
+   "id": "poi-aerbaxs-citadel.03",
+   "site": "poi-aerbaxs-citadel",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     10.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9156,
+     9084,
+     150
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 86,
+    "speed": 7,
+    "headingDeg": 30,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "minClearance": 5
+   },
+   "standingOrder": "Cross the citadel's core 26 m above its central spire heading north-north-east at walking pace, gimbal through vertical; keep 20 m above every pinnacle.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over 26 m above the central spire hall (z 236) heading north-north-east at 7 m/s, gimbal tilting down through vertical over the core and the four red pinnacles, the plain 230 m below. Nearest drawn object 55 m (a corner pinnacle). Verified (check.mjs, full take flown): take 0-11 s: AGL 232..234 m, nearest drawn 55.32 m (static 0x2F2F#96 0x02000A64), vmax 7 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 222.4 m); edit 2.5-9 s: AGL 233.48..234 m, nearest drawn 61.57 m (static 0x2F2F#96 0x02000A64), vmax 7 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 225.1 m); flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  }
+ ],
+ "verification": {
+  "poi-aerbaxs-citadel.01": "take 0-10 s: AGL 171.96..175.6 m, nearest drawn 96.09 m (static 0x2F2E#42 0x010029F8), vmax 9.63 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 158.4 m); edit 2-8.5 s: AGL 171.96..175.4 m, nearest drawn 98.52 m (static 0x2F2E#42 0x010029F8), vmax 9.63 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 158.4 m)",
+  "poi-aerbaxs-citadel.02": "take 0-11 s: AGL 2..35.8 m, nearest drawn 6.52 m (scenery-default 0x02000C68@9133,8821), vmax 5.28 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 4.7 m); edit 3-9.5 s: AGL 5.22..34.2 m, nearest drawn 6.89 m (scenery-default 0x02000C68@9133,8821), vmax 5.28 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 5.2 m); flight cinema peak 5.4 m/s (cap 12), max tracking gap 0.84 m",
+  "poi-aerbaxs-citadel.03": "take 0-11 s: AGL 232..234 m, nearest drawn 55.32 m (static 0x2F2F#96 0x02000A64), vmax 7 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 222.4 m); edit 2.5-9 s: AGL 233.48..234 m, nearest drawn 61.57 m (static 0x2F2F#96 0x02000A64), vmax 7 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 225.1 m); flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m"
+ }
+}

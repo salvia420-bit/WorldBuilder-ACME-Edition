@@ -1,0 +1,199 @@
+{
+ "name": "Karlun's Fort",
+ "title": "Karlun's Fort",
+ "siteId": "poi-karluns-fort",
+ "summary": "Karlun's Fort sits on a 100 m rock pinnacle just outside Silyun, at 89.0N 67.6W. Four 26 m gold-spired towers and 12 m walls surround a red-roofed house, a blue-flamed golden lamp, black columns and the Hall of Karlun and exit portals. The rock falls 35 m north to Sir Ginazio and Iian di Alduressa's camp, with columns, an anvil and hammer, a barrel, the Breastplate of Karlun and Karlun's Fort portal at z 66. To the east it falls 100 m to a river.",
+ "landmarks": [
+  {
+   "name": "Fort court",
+   "pos": [
+    8186.0,
+    45792.0,
+    100.0
+   ],
+   "heightM": 26,
+   "note": "Four 0x01003611 spire towers, 0x01003605 walls, house 0x01003906, lamp 0x02001239."
+  },
+  {
+   "name": "Hall of Karlun portal",
+   "pos": [
+    8194.0,
+    45806.0,
+    99.9
+   ],
+   "heightM": 3,
+   "note": "And the Exit portal at (8200,45800)."
+  },
+  {
+   "name": "Base camp",
+   "pos": [
+    8241.3,
+    45828.3,
+    66.0
+   ],
+   "heightM": 4.3,
+   "note": "Karlun's Fort portal, Iian di Alduressa, Sir Ginazio's anvil and gear."
+  },
+  {
+   "name": "East cliff and river",
+   "pos": [
+    8242.0,
+    45778.0,
+    2.5
+   ],
+   "heightM": 100,
+   "note": "Face x 8212-8240, river from x 8270."
+  }
+ ],
+ "site": {
+  "id": "poi-karluns-fort",
+  "name": "Karlun's Fort",
+  "gazetteerId": "exit-karluns-fort",
+  "teleport": "@teleloc 0x2AEE0030 132 180 50.005 -1 0 0 0",
+  "anchor": [
+   8186.0,
+   45792.0,
+   100.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.75,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer exit-karluns-fort (the meadow 85 m north of the fort's rock, z 50)."
+ },
+ "insertAfter": "fiun-outpost",
+ "insertBefore": "silyun",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 89.0,
+   "ew": -67.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 795,
+  "coveredBy": "shot:silyun.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Karlun_s_Fort.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-karluns-fort.01",
+   "site": "poi-karluns-fort",
+   "technique": "fpv.fpv-dive",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.8,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8242.0,
+     45778.0,
+     2.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "heightStart": 114,
+    "bottomAGL": 3,
+    "diveAngleDeg": -82,
+    "approach": 26,
+    "standoff": 3,
+    "exitLength": 20,
+    "pullOutRadius": 9,
+    "speed": 15,
+    "alat": 11,
+    "uptiltDeg": 0,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "standingOrder": "From the east edge of Karlun's Fort fly level east, crest the rock and dive 110 m down past the cliff to the river, pulling out 3 m over the river with the golden sun behind; keep 15 m off the face.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "FPV dive at golden hour. The craft starts at the fort's east edge beside the red-roofed house, flies level east, crests the rock's edge and dives -82 deg, 110 m down past the cliff, then pulls out 3 m above the riverbank and runs out over the river with the golden sun behind. The cliff face stays at least 16 m from the lens horizontally (measured every 0.5 s). The window (t 2-7.5) covers the crest and the dive; the cliff foot leaves the frame in the pull-out. Verified (check.mjs, full take flown): take 0-10 s: AGL 5.5..114.8 m, nearest drawn 12.96 m (static 0x2AEE#30 0x01003906), vmax 18.38 m/s, LOS blocked 0/41, subject in frame 49%, over water 9%; edit 2-7.5 s: AGL 20.3..113.4 m, nearest drawn 23.01 m (spawn Linkable Monster Generator), vmax 18.38 m/s, LOS blocked 0/23, subject in frame 87%; flight fpv peak 18.46 m/s (cap 25), max tracking gap 0.15 m."
+  },
+  {
+   "id": "poi-karluns-fort.02",
+   "site": "poi-karluns-fort",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     2.0,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8204.0,
+     45812.0,
+     100.0
+    ],
+    "height": 26,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 58,
+    "azimuthRef": "compass",
+    "elevationDeg": -47,
+    "distance": 56,
+    "thirds": "center",
+    "riseM": 34,
+    "swingDeg": -10,
+    "armM": 3
+   },
+   "standingOrder": "Jib up from Sir Ginazio's camp at the foot of the rock, past the 35 m cliff, until Karlun's Fort and its gold spires stand against the golden western sky; keep 5 m from the camp's columns and gear.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Crane, backlit. A jib from 6 m above Sir Ginazio's camp at the foot of the rock (camp columns at 5 m) rises 34 m past the 35 m cliff until Karlun's Fort and its gold spires stand against the golden western sky. This is deliberate backlight for the spire silhouettes. Verified (check.mjs, full take flown): take 0-10 s: AGL 6.04..40 m, nearest drawn 5.04 m (static 0x2AEE#28 0x01003628), vmax 7.06 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 8.4..39.1 m, nearest drawn 9.46 m (static 0x2AEE#18 0x02000277 Blue Blanket), vmax 7.06 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-karluns-fort.01": "take 0-10 s: AGL 5.5..114.8 m, nearest drawn 12.96 m (static 0x2AEE#30 0x01003906), vmax 18.38 m/s, LOS blocked 0/41, subject in frame 49%, over water 9%; edit 2-7.5 s: AGL 20.3..113.4 m, nearest drawn 23.01 m (spawn Linkable Monster Generator), vmax 18.38 m/s, LOS blocked 0/23, subject in frame 87%; flight fpv peak 18.46 m/s (cap 25), max tracking gap 0.15 m",
+  "poi-karluns-fort.02": "take 0-10 s: AGL 6.04..40 m, nearest drawn 5.04 m (static 0x2AEE#28 0x01003628), vmax 7.06 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-8.5 s: AGL 8.4..39.1 m, nearest drawn 9.46 m (static 0x2AEE#18 0x02000277 Blue Blanket), vmax 7.06 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

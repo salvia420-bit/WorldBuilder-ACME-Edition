@@ -1,0 +1,149 @@
+{
+ "name": "South Holtburg Outpost",
+ "title": "South Holtburg Outpost",
+ "siteId": "poi-south-holtburg-outpost",
+ "summary": "One of the old Aluvian starter outposts where new arrivals used to appear, 0.6 km south-west of Holtburg; unlike most outposts it was never attacked by Martine (acpedia: Hudriffa the Shopkeeper, a Sentry, Life Stone, LIFESTONES sign, well). In the kit it is a small clearing in a hollow (z 58) ringed by 30-40 m pines: the Life Stone with its sign, a well, a pitched-roof cottage and a two-storey stone shop, and on the rising ground to the south-west a three-storey tapered-roof Empyrean hall lit by four green ethereal lamps (top z 88.9) and a 31 m mossy spire tower with a candelabra (top z 104.8).",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    32469.6,
+    33938.6,
+    58.0
+   ],
+   "heightM": 3.6,
+   "note": "Outpost Life Stone with its LIFESTONES sign 4 m east; gazetteer life-stone-near-holtburg-a9b0."
+  },
+  {
+   "name": "Shop (0x01000830)",
+   "pos": [
+    32484.0,
+    33948.0,
+    58.0
+   ],
+   "heightM": 9.3,
+   "note": "Two-storey stone shop with chimney (Hudriffa), top z 67.3."
+  },
+  {
+   "name": "Tapered-roof Empyrean hall (0x010014C3)",
+   "pos": [
+    32484.0,
+    33900.0,
+    64.0
+   ],
+   "heightM": 24.8,
+   "note": "Three storeys, four green ethereal lamps at z 87.8."
+  },
+  {
+   "name": "Spire tower (0x01001117)",
+   "pos": [
+    32412.0,
+    33900.0,
+    74.0
+   ],
+   "heightM": 30.8,
+   "note": "Five-storey mossy stone tower on the hill, candelabra at its door, top z 104.8."
+  },
+  {
+   "name": "Giant pine (0x020002DB)",
+   "pos": [
+    32511.0,
+    33971.0,
+    59.0
+   ],
+   "heightM": 40.6,
+   "note": "Default-bake tree 57 m NE of the outpost; the establishing camera is placed to keep it off the sight line."
+  }
+ ],
+ "site": {
+  "id": "poi-south-holtburg-outpost",
+  "name": "South Holtburg Outpost",
+  "gazetteerId": "south-holtburg-outpost",
+  "teleport": "@teleloc 0xA9B00007 21.5862 146.569 58.005 -0.824891 0 0 -0.565292",
+  "anchor": [
+   32466,
+   33935,
+   58
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.36,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-holtburg-a9b0 (the outpost's Life Stone, z 58); the gazetteer's own south-holtburg-outpost entry is only a map @tele."
+ },
+ "insertAfter": "holtburg",
+ "insertBefore": "glenden-wood",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 39.5,
+   "ew": 33.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 623,
+  "coveredBy": "site:holtburg",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/South_Holtburg_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-south-holtburg-outpost.01",
+   "site": "poi-south-holtburg-outpost",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32466,
+     33930,
+     58
+    ],
+    "height": 30,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 72,
+    "azimuthRef": "compass",
+    "distance": 95,
+    "heightM": 62,
+    "driftDeg": 9,
+    "pushPct": 8
+   },
+   "standingOrder": "Open wide over the meadows east of the outpost with the morning sun behind the lens: the Life Stone, cottages and well in the hollow and the Empyrean towers on the hill behind; drift slowly, 10 m above every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing over the forest hollow: from 95 m east and 62 m up (z 120, ~50 m above the meadow, ~11 m above the 32 m pine crowns) the lens drifts 9 deg and pushes 8 % toward the old starter outpost - Life Stone, well, the pitched-roof cottage and the shop in the clearing, the green-lit tapered-roof Empyrean hall and the 31 m spire tower on the hill behind - with the low morning sun (0.36) behind the camera lighting the east faces. The outpost is ringed by 30-40 m default-bake trees, so the camera stays high; a 44 m giant pine 57 m NE of the outpost is kept off the sight line. Verified (check.mjs, full take flown): take 0-9 s: AGL 50.37..51.6 m, nearest drawn 22.11 m (scenery-default 0x020002D3@32579,33971), vmax 2.83 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 50.39..51.5 m, nearest drawn 22.19 m (scenery-default 0x020002D3@32579,33971), vmax 2.83 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 2.7 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-south-holtburg-outpost.01": "take 0-9 s: AGL 50.37..51.6 m, nearest drawn 22.11 m (scenery-default 0x020002D3@32579,33971), vmax 2.83 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 50.39..51.5 m, nearest drawn 22.19 m (scenery-default 0x020002D3@32579,33971), vmax 2.83 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 2.7 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

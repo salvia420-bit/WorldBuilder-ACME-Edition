@@ -1,0 +1,172 @@
+{
+ "name": "Festival Stone of Warmtide",
+ "title": "Festival Stone of Warmtide",
+ "siteId": "poi-festival-stone-of-warmtide",
+ "summary": "'The Stone of Warmtide is part of the ruined Inner Sea port across the Yaraq Cove' (Alatar Locke). In the kit the stone and its glow stand on a hilltop (z 50) inside a shrine of four Empyrean monuments (two obelisks, a pillar and a small stone tower, 2.8-5.8 m), overlooking the Inner Sea Port Ruins and the cove 100 m south-east.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Warmtide",
+   "pos": [
+    23388.0,
+    19452.0,
+    50.0
+   ],
+   "heightM": 3.0,
+   "note": "Festival Stone spawn with the Anniversary glow."
+  },
+  {
+   "name": "Obelisks and pillar",
+   "pos": [
+    23388.0,
+    19452.0,
+    50.0
+   ],
+   "heightM": 5.8,
+   "note": "0x02000410/0x02000411/0x02000412/0x02000414 at 7-10 m round the stone."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-warmtide",
+  "name": "Festival Stone of Warmtide",
+  "gazetteerId": "warmtide-festival-stone",
+  "teleport": "@teleloc 0x79650033 152.3 49.3 50 0.983255 0 0 -0.182236",
+  "anchor": [
+   23388.0,
+   19452.0,
+   50.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer warmtide-festival-stone (hilltop, 12 m south-west of the stone)."
+ },
+ "insertAfter": "yaraq",
+ "insertBefore": "tufa",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -20.9,
+   "ew": -4.5
+  },
+  "coordSrc": "index",
+  "coveredDistM": 621,
+  "coveredBy": "shot:yaraq.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Warmtide.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-warmtide.01",
+   "site": "poi-festival-stone-of-warmtide",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23388.0,
+     19452.0,
+     50.0
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "radius": 26,
+    "heightAGL": 16,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 120,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Orbit the glowing Warmtide stone and its four Empyrean obelisks 26 m out and 16 m above the hilltop, the Inner Sea cove and the port ruins wheeling below; keep 15 m from every obelisk, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Orbit of the Festival Stone of Warmtide on its hilltop shrine of four Empyrean obelisks, 50 m above the cove, with the Inner Sea, the drowned colonnade and Yaraq Cove wheeling below in golden light. Verified (check.mjs, full take flown): take 0-10 s: AGL 28.93..31 m, nearest drawn 18.34 m (static 0x7965#1 0x02000411), vmax 1.96 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 28.93..30.9 m, nearest drawn 18.34 m (static 0x7965#1 0x02000411), vmax 1.96 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 1.96 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-festival-stone-of-warmtide.02",
+   "site": "poi-festival-stone-of-warmtide",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23388.0,
+     19452.0,
+     50.0
+    ],
+    "height": 3.0,
+    "radius": 1.2
+   },
+   "params": {
+    "startDistance": 9,
+    "endDistance": 55,
+    "startHeight": 3,
+    "endHeight": 26,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Pull back and up due west from 9 m to 55 m away from the glowing stone in one line until the hilltop shrine and the cove beyond open out; keep 5 m from the obelisks and the small stone tower, creatures may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie from the glowing stone: one straight line back and up to the west reveals the hilltop shrine, the cove and the sea beyond, the low sun behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.75..60.1 m, nearest drawn 5.23 m (static 0x7965#2 0x02000414), vmax 8.08 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 9.86..58.9 m, nearest drawn 10.23 m (static 0x7965#0 0x02000412), vmax 8.08 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.06 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-warmtide.01": "take 0-10 s: AGL 28.93..31 m, nearest drawn 18.34 m (static 0x7965#1 0x02000411), vmax 1.96 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 28.93..30.9 m, nearest drawn 18.34 m (static 0x7965#1 0x02000411), vmax 1.96 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 1.96 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-festival-stone-of-warmtide.02": "take 0-10 s: AGL 3.75..60.1 m, nearest drawn 5.23 m (static 0x7965#2 0x02000414), vmax 8.08 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 9.86..58.9 m, nearest drawn 10.23 m (static 0x7965#0 0x02000412), vmax 8.08 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 8.06 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

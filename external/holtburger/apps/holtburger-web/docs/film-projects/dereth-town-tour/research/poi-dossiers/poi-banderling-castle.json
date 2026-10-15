@@ -1,0 +1,190 @@
+{
+ "name": "Banderling Castle",
+ "title": "Banderling Castle",
+ "siteId": "poi-banderling-castle",
+ "summary": "A small Tumerok-built fort full of Banderlings at 66.2N 2.3W. Its 48 m square courtyard is closed by 24 m stone walls (5 m high, spiked with wooden stakes) on the north, east and south, with a low hall on the west. Two 31 m five-storey spire towers stand at the north-west and south-east corners, and the north-east and south-west corners are open gates. A pitched-roof bunker hall sits in the middle, holding the Camping Mastery chest bunker. In the kit, 21 Banderling Guard and 8 Raider generators fill the fort, pines up to 32 m ring it, and the Life Stone is 98 m south-west.",
+ "landmarks": [
+  {
+   "name": "Courtyard bunker hall",
+   "pos": [
+    23916.0,
+    40356.0,
+    170.0
+   ],
+   "heightM": 5.4,
+   "note": "0x010011A9, the bunker with the Camping Mastery chest."
+  },
+  {
+   "name": "North-west spire tower",
+   "pos": [
+    23892.0,
+    40380.0,
+    170.0
+   ],
+   "heightM": 30.8,
+   "note": "0x01001161, top z 200.75."
+  },
+  {
+   "name": "South-east spire tower",
+   "pos": [
+    23940.0,
+    40332.0,
+    170.0
+   ],
+   "heightM": 30.8,
+   "note": "0x01001161, top z 200.75."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    23846.4,
+    40287.6,
+    165.3
+   ],
+   "heightM": 3,
+   "note": "98 m south-west."
+  }
+ ],
+ "site": {
+  "id": "poi-banderling-castle",
+  "name": "Banderling Castle",
+  "teleport": "@teleloc 0x7CD20032 158.0 36.0 170.5 1 0 0 0",
+  "anchor": [
+   23916.0,
+   40356.0,
+   170.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc on the open east apron 24 m east of the east wall (ground 170, >= 9 m from walls and trees); the only gazetteer entry nearby is the Life Stone 98 m south-west."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 66.2,
+   "ew": -2.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 4460,
+  "coveredBy": "shot:stonehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Banderling_Castle.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-banderling-castle.01",
+   "site": "poi-banderling-castle",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23916.0,
+     40356.0,
+     170.0
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "radius": 55,
+    "heightAGL": 42,
+    "revolutions": 0.14,
+    "direction": "cw",
+    "bearingDeg": 332,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Orbit 50 degrees clockwise from north-north-west to north-north-east 55 m out and 42 m up round the walled fort with its two spire towers; stay 10 m above every pine crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing view. A 50 deg clockwise orbit 55 m out and 42 m above the fort (z 212), 10 m above the tallest crown (z 202). It shows the spiked walls, the two 31 m spire towers and the bunker hall in the courtyard, with the pine ring and the snow ridges beyond. The lead-in passes behind a crown (take LOS 5/41), but the edit window is clear. Verified (check.mjs, full take flown): take 0-10 s: AGL 40.92..44 m, nearest drawn 20.86 m (static 0x7CD2#74 0x01001161), vmax 4.84 m/s, LOS blocked 5/41, subject in frame 100% (opt-in retail-bake tree 0 m); edit 2-8.5 s: AGL 41.59..43.6 m, nearest drawn 23.58 m (scenery-default 0x02000258@23934,40412), vmax 4.84 m/s, LOS blocked 0/27, subject in frame 100% (opt-in retail-bake tree 0 m); flight cinema peak 4.85 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-banderling-castle.02",
+   "site": "poi-banderling-castle",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.2
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.7,
+     7.2
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     23892.0,
+     40380.0,
+     170.0
+    ],
+    "height": 30.8,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 97,
+    "azimuthRef": "compass",
+    "elevationDeg": -18,
+    "distance": 42,
+    "thirds": "center",
+    "pushM": 1.5
+   },
+   "standingOrder": "Hold 3 m up in the open north-east gate gap and look across the courtyard up the sunlit east face of the north-west spire tower, creeping 1.5 m closer; keep 3.5 m from the wall ends.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle. The lens stands 3 m up in the open north-east gate gap, looking across the courtyard and up the north-west tower's 31 m east face to its spire. The morning sun is behind the camera and the north wall's spikes run in at frame right. The nearest obstacle is the north wall end at 3.7 m, on a near-static 0.29 m/s creep. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.73..3.1 m, nearest drawn 3.69 m (static 0x7CD2#76 0x01001124), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100% (opt-in retail-bake tree 0 m); edit 1.2-6.7 s: AGL 2.74..3 m, nearest drawn 3.76 m (static 0x7CD2#76 0x01001124), vmax 0.29 m/s, LOS blocked 0/22, subject in frame 100% (opt-in retail-bake tree 0 m)."
+  }
+ ],
+ "verification": {
+  "poi-banderling-castle.01": "take 0-10 s: AGL 40.92..44 m, nearest drawn 20.86 m (static 0x7CD2#74 0x01001161), vmax 4.84 m/s, LOS blocked 5/41, subject in frame 100% (opt-in retail-bake tree 0 m); edit 2-8.5 s: AGL 41.59..43.6 m, nearest drawn 23.58 m (scenery-default 0x02000258@23934,40412), vmax 4.84 m/s, LOS blocked 0/27, subject in frame 100% (opt-in retail-bake tree 0 m); flight cinema peak 4.85 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-banderling-castle.02": "take 0-8 s: AGL 2.73..3.1 m, nearest drawn 3.69 m (static 0x7CD2#76 0x01001124), vmax 0.29 m/s, LOS blocked 0/33, subject in frame 100% (opt-in retail-bake tree 0 m); edit 1.2-6.7 s: AGL 2.74..3 m, nearest drawn 3.76 m (static 0x7CD2#76 0x01001124), vmax 0.29 m/s, LOS blocked 0/22, subject in frame 100% (opt-in retail-bake tree 0 m)"
+ }
+}

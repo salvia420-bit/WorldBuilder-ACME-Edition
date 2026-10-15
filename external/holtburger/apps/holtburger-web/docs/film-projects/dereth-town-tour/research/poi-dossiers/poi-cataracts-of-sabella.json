@@ -1,0 +1,307 @@
+{
+ "name": "Cataracts of Sabella",
+ "title": "Cataracts of Sabella",
+ "siteId": "poi-cataracts-of-sabella",
+ "summary": "A cascade of giant waterfalls on Lotila Island at 82.7N 74.7W. An upper lake (z 110) spills over a 127 m west curtain and a 130 m north curtain, 30 m down into a middle lake and a north lake (z 80). Those two lakes fall another 30 m north and west into a lower lake (z 50). The kit holds 65 lip spray emitters and 52 foot spray emitters along the four curtains.",
+ "landmarks": [
+  {
+   "name": "Upper west cataract",
+   "pos": [
+    6514.0,
+    44266.0,
+    80.0
+   ],
+   "heightM": 30,
+   "note": "Lip x 6526 z 110, foot x 6502 z 80, y 44202-44329."
+  },
+  {
+   "name": "Upper north cataract",
+   "pos": [
+    6590.0,
+    44357.0,
+    80.0
+   ],
+   "heightM": 30,
+   "note": "Lip y 44329, foot y 44354, x 6526-6655."
+  },
+  {
+   "name": "Lower falls",
+   "pos": [
+    6450.0,
+    44350.0,
+    50.0
+   ],
+   "heightM": 30,
+   "note": "Middle and north lakes (z 80) fall to the lowest lake (z 50) along y ~44340 and x ~6520."
+  }
+ ],
+ "site": {
+  "id": "poi-cataracts-of-sabella",
+  "name": "Cataracts of Sabella",
+  "gazetteerId": "cataracts-of-sabella",
+  "teleport": "@teleloc 0x22E60029 132 12 117.005 1 0 0 0",
+  "anchor": [
+   6526.0,
+   44329.0,
+   80.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.61,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer cataracts-of-sabella (the rocky bank south-east of the upper lake, z 117, 170 m from the falls' corner)."
+ },
+ "insertAfter": "silyun",
+ "insertBefore": "westwatch",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 82.7,
+   "ew": -74.7
+  },
+  "coordSrc": "index",
+  "coveredDistM": 1460,
+  "coveredBy": "shot:silyun.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Cataracts_of_Sabella.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-cataracts-of-sabella.01",
+   "site": "poi-cataracts-of-sabella",
+   "technique": "classic.pan",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6514.0,
+     44266.0,
+     80.0
+    ],
+    "height": 30,
+    "radius": 30
+   },
+   "params": {
+    "azimuthDeg": 270,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 95,
+    "fromDeg": -38,
+    "toDeg": 0,
+    "relative": true,
+    "pitchDeg": 2
+   },
+   "standingOrder": "Hold 22 m above the middle lake 95 m west of the upper cataract and pan slowly right from the lower falls pouring north to the 127 m white curtain of the upper falls, lit by the afternoon sun behind the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view. A locked pan 22 m above the middle lake, 95 m west of the upper cataract. It pans 38 deg right from the lower falls pouring north to the 127 m white curtain of the upper falls, front-lit by the afternoon sun behind the lens. The camera stays 100 % over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 21.63..21.6 m, nearest drawn 46.34 m (scenery-default 0x02001293@6379,44286), vmax 0 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 21.63..21.6 m, nearest drawn 46.34 m (scenery-default 0x02001293@6379,44286), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%."
+  },
+  {
+   "id": "poi-cataracts-of-sabella.02",
+   "site": "poi-cataracts-of-sabella",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6514.0,
+     44266.0,
+     80.0
+    ],
+    "height": 30,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 3,
+    "speed": 7,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "lookAhead": 50,
+    "tiltDeg": 8,
+    "cornerRadius": 10,
+    "alat": 3,
+    "maxBankDeg": 10,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     6402,
+     44268,
+     83
+    ],
+    [
+     6472,
+     44268,
+     83
+    ]
+   ],
+   "standingOrder": "Skim east 3 m over the middle lake straight at the 127 m curtain of the upper cataract with the afternoon sun behind; stop 30 m short of the spray at its foot.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water skim. A 3 m skim east over the middle lake straight at the 127 m upper curtain, with the sun behind. The camera ends 30 m short of the foot spray (emitters at x 6502), 100 % over water. Verified (check.mjs, full take flown): take 0-10 s: AGL 3..3 m, nearest drawn 25.88 m (scenery-default 0x02001293@6379,44286), vmax 7 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 3..3 m, nearest drawn 44.51 m (scenery-default 0x02001293@6379,44286), vmax 7 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-cataracts-of-sabella.03",
+   "site": "poi-cataracts-of-sabella",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6590.0,
+     44357.0,
+     80.0
+    ],
+    "height": 30,
+    "radius": 20
+   },
+   "params": {
+    "heightAGL": 70,
+    "speed": 6,
+    "headingDeg": 345,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "maxPitchRateDeg": 60,
+    "smoothTime": 0.3,
+    "minClearance": 3
+   },
+   "standingOrder": "Cross north-north-west 40 m above the upper lake and over its north cataract, keeping the falling water in frame through vertical as the lake tiers and both curtains unfold below.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over. The camera crosses north-north-west 40 m above the upper lake and over the 130 m north cataract, keeping the falling water in frame through vertical. All three lake tiers and both upper curtains unfold below. Verified (check.mjs, full take flown): take 0-10 s: AGL 40.03..70 m, nearest drawn 111.95 m (scenery-default 0x02001292@6662,44243), vmax 6 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8 s: AGL 54.52..70 m, nearest drawn 122.61 m (scenery-default 0x02001292@6662,44243), vmax 6 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m."
+  },
+  {
+   "id": "poi-cataracts-of-sabella.04",
+   "site": "poi-cataracts-of-sabella",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 4.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     4.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6590.0,
+     44357.0,
+     80.0
+    ],
+    "height": 30,
+    "radius": 30
+   },
+   "params": {
+    "distance": 120,
+    "obstacleDistance": 50,
+    "obstacleHeight": 34,
+    "heightStart": 3,
+    "clearance": 8,
+    "forward": 6,
+    "endPitchDeg": -6,
+    "bearingDeg": 302,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "standingOrder": "Rise from 3 m over the lowest lake past the lip of the lower falls until the north lake and the upper cataract behind it appear; keep 9 m from the spray line.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Rising reveal. The camera starts 3 m above the lowest lake, facing the lower falls 38 m away and 9 m from their foot spray line. It rises 39 m until the north lake and the upper cataract behind them appear. The lip hides the upper falls until t 5 by design (take LOS 19/41), and the edit window from t 4.5 is clear (1/23). Verified (check.mjs, full take flown): take 0-10 s: AGL 3..42 m, nearest drawn 122.48 m (scenery-default 0x0200035F@6368,44382), vmax 6.2 m/s, LOS blocked 19/41, subject in frame 100%, over water 100%; edit 4.5-10 s: AGL 19.45..42 m, nearest drawn 124.89 m (scenery-default 0x0200035F@6368,44382), vmax 6.2 m/s, LOS blocked 1/23, subject in frame 100%, over water 100%; flight cinema peak 6.19 m/s (cap 12), max tracking gap 0.05 m."
+  }
+ ],
+ "verification": {
+  "poi-cataracts-of-sabella.01": "take 0-10 s: AGL 21.63..21.6 m, nearest drawn 46.34 m (scenery-default 0x02001293@6379,44286), vmax 0 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8.5 s: AGL 21.63..21.6 m, nearest drawn 46.34 m (scenery-default 0x02001293@6379,44286), vmax 0 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%",
+  "poi-cataracts-of-sabella.02": "take 0-10 s: AGL 3..3 m, nearest drawn 25.88 m (scenery-default 0x02001293@6379,44286), vmax 7 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 3-9.5 s: AGL 3..3 m, nearest drawn 44.51 m (scenery-default 0x02001293@6379,44286), vmax 7 m/s, LOS blocked 0/27, subject in frame 100%, over water 100%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-cataracts-of-sabella.03": "take 0-10 s: AGL 40.03..70 m, nearest drawn 111.95 m (scenery-default 0x02001292@6662,44243), vmax 6 m/s, LOS blocked 0/41, subject in frame 100%, over water 100%; edit 2-8 s: AGL 54.52..70 m, nearest drawn 122.61 m (scenery-default 0x02001292@6662,44243), vmax 6 m/s, LOS blocked 0/25, subject in frame 100%, over water 100%; flight cinema peak 6.01 m/s (cap 12), max tracking gap 0.02 m",
+  "poi-cataracts-of-sabella.04": "take 0-10 s: AGL 3..42 m, nearest drawn 122.48 m (scenery-default 0x0200035F@6368,44382), vmax 6.2 m/s, LOS blocked 19/41, subject in frame 100%, over water 100%; edit 4.5-10 s: AGL 19.45..42 m, nearest drawn 124.89 m (scenery-default 0x0200035F@6368,44382), vmax 6.2 m/s, LOS blocked 1/23, subject in frame 100%, over water 100%; flight cinema peak 6.19 m/s (cap 12), max tracking gap 0.05 m"
+ }
+}

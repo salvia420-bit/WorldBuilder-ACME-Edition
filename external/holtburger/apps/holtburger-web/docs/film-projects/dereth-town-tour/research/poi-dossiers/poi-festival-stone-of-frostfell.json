@@ -1,0 +1,120 @@
+{
+ "name": "Festival Stone of Frostfell",
+ "title": "Festival Stone of Frostfell",
+ "siteId": "poi-festival-stone-of-frostfell",
+ "summary": "The Festival Stone of Frostfell on a pine ridge (z 178) west of Stonehold, at 69.4N 25.0W. The stone, with its Anniversary glow, is flanked by two 3 m Master's Sentinel candle statues with blue flames. The ridge drops 20-40 m east and west, and a Snowman spawns 120 m north.",
+ "landmarks": [
+  {
+   "name": "Festival Stone of Frostfell",
+   "pos": [
+    18471.0,
+    41120.1,
+    178.0
+   ],
+   "heightM": 4,
+   "note": "Spawn with Anniversary Effect glow above."
+  },
+  {
+   "name": "Master's Sentinel candles",
+   "pos": [
+    18470.3,
+    41119.9,
+    178.0
+   ],
+   "heightM": 3,
+   "note": "0x0200039B at (18470.9,41123.6) and (18469.7,41116.1) with blue lights 0x020005BB."
+  }
+ ],
+ "site": {
+  "id": "poi-festival-stone-of-frostfell",
+  "name": "Festival Stone of Frostfell",
+  "gazetteerId": "frostfell-festival-stone",
+  "teleport": "@teleloc 0x60D6000A 28.7 47.9 178 0.241922 0 0 -0.970296",
+  "anchor": [
+   18471.0,
+   41120.1,
+   178.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Teleport = gazetteer frostfell-festival-stone (on the ridge 14 m west-north-west of the stone, z 178)."
+ },
+ "insertAfter": "stonehold",
+ "insertBefore": "hoshino-fortress",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 69.4,
+   "ew": -25.0
+  },
+  "coordSrc": "index",
+  "coveredDistM": 822,
+  "coveredBy": "shot:stonehold.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Festival_Stone_of_Frostfell.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-festival-stone-of-frostfell.01",
+   "site": "poi-festival-stone-of-frostfell",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     7.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     18471.0,
+     41120.1,
+     178.0
+    ],
+    "height": 4,
+    "radius": 4.5
+   },
+   "params": {
+    "azimuthDeg": 82,
+    "azimuthRef": "compass",
+    "elevationDeg": -2,
+    "distance": 15,
+    "thirds": "center",
+    "riseM": 4,
+    "keepAim": true
+   },
+   "standingOrder": "Rise 4 m on the ridge 15 m east of the Festival Stone, keeping it centred between its two blue-lit candle sentinels, until the Stonehold valley opens behind it; keep 3.5 m from the shrubs.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pedestal. The camera rises 4 m on the ridge 15 m east of the stone, keeping it centred between its two blue-flamed Master's Sentinel candles until the Stonehold valley appears behind. The morning sun is behind the lens. The nearest object is a small plant at 3.6 m on a 0.79 m/s move. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.45..6.5 m, nearest drawn 3.58 m (scenery-default 0x020005C9@18482,41118), vmax 0.79 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 2.79..6.3 m, nearest drawn 3.59 m (scenery-default 0x020005C9@18482,41118), vmax 0.79 m/s, LOS blocked 0/23, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-festival-stone-of-frostfell.01": "take 0-8 s: AGL 2.45..6.5 m, nearest drawn 3.58 m (scenery-default 0x020005C9@18482,41118), vmax 0.79 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 2.79..6.3 m, nearest drawn 3.59 m (scenery-default 0x020005C9@18482,41118), vmax 0.79 m/s, LOS blocked 0/23, subject in frame 100%"
+ }
+}

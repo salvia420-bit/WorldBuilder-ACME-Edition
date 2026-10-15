@@ -1,0 +1,130 @@
+{
+ "name": "Ice Golem Shrine",
+ "title": "Ice Golem Shrine",
+ "siteId": "poi-ice-golem-shrine",
+ "summary": "An Empyrean standing stone (a 3.7 m rock) on a snowy summit (z 382) at 61.5N 10.2W, ringed by nine Ice Golem spawns. The North Direlands Portal stands on a wooden archway 37 m south of the stone and the North Desert Edge portal on another 24 m north. The summit falls 40-60 m on every side.",
+ "landmarks": [
+  {
+   "name": "Empyrean standing stone",
+   "pos": [
+    22015.3,
+    39236.3,
+    381.7
+   ],
+   "heightM": 3.7,
+   "note": "Rock 0x02000374 ringed by nine Ice Golem spawns."
+  },
+  {
+   "name": "North Direlands Portal",
+   "pos": [
+    22020.5,
+    39199.8,
+    374.5
+   ],
+   "heightM": 3.9,
+   "note": "On a wooden archway."
+  },
+  {
+   "name": "North Desert Edge portal",
+   "pos": [
+    22024.2,
+    39260.4,
+    378.6
+   ],
+   "heightM": 3.9,
+   "note": "On a wooden archway."
+  }
+ ],
+ "site": {
+  "id": "poi-ice-golem-shrine",
+  "name": "Ice Golem Shrine",
+  "teleport": "@teleloc 0x72CC0033 152.0 68.0 379.2 1 0 0 0",
+  "anchor": [
+   22015.3,
+   39236.3,
+   381.7
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "Derived @teleloc on the summit snow 25 m east of the standing stone (ground 378.7, 18.7 m from the nearest Ice Golem spawn, nothing else within 20 m); the gazetteer's two entries land on the portal swirls themselves (portal-collision risk)."
+ },
+ "insertAfter": "neydisa-castle",
+ "insertBefore": "stonehold",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 61.0,
+   "ew": -10.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 3113,
+  "coveredBy": "shot:stonehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ice_Golem_Shrine.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ice-golem-shrine.01",
+   "site": "poi-ice-golem-shrine",
+   "technique": "classic.pull-out-reveal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     2.5,
+     9.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     22015.3,
+     39236.3,
+     381.7
+    ],
+    "height": 3.7,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthDeg": 80,
+    "azimuthRef": "compass",
+    "elevationDeg": 10,
+    "toFraming": "EWS",
+    "rise": true,
+    "endElevationDeg": 20,
+    "profile": "perceptual"
+   },
+   "standingOrder": "Pull back east and up from the Empyrean standing stone and its ring of nine Ice Golems until the snowy summit, both portal arches and the Direlands peaks fill the frame; golems may be faded, keep 3 m from them.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pull-out reveal. It starts 11 m east of the Empyrean standing stone, outside the ring of nine Ice Golems (at least 6.7 m from the nearest golem spawn), and pulls back up to 36 m out and 14 m up. The snowy summit, both portal archways with their swirls and the Direlands peaks open around the stone. The morning sun is behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.64..19.4 m, nearest drawn 12.69 m (spawn Linkable Monster Generator), vmax 4.28 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-9 s: AGL 4.62..18.6 m, nearest drawn 15.41 m (spawn Linkable Monster Generator), vmax 4.28 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-ice-golem-shrine.01": "take 0-10 s: AGL 3.64..19.4 m, nearest drawn 12.69 m (spawn Linkable Monster Generator), vmax 4.28 m/s, LOS blocked 0/41, subject in frame 100%; edit 3-9 s: AGL 4.62..18.6 m, nearest drawn 15.41 m (spawn Linkable Monster Generator), vmax 4.28 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

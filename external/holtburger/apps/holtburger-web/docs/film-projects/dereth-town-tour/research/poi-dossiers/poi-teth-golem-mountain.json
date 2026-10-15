@@ -1,0 +1,132 @@
+{
+ "name": "Teth Golem Mountain",
+ "title": "Teth Golem Mountain",
+ "siteId": "poi-teth-golem-mountain",
+ "summary": "A barren-rock mesa south of Fort Tethana whose flat top (z 144) holds a ring of seven rock cave mouths (0x010011A9 huts, the golem caves; acpedia: each cave holds something special) and a wooden archway. The mesa drops to rocky lowlands at z 80-100.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -9.4,
+   "ew": -72.0
+  },
+  "mapWorld": [
+   7188.0,
+   22212.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Teth_Golem_Mountain.txt",
+  "coveredDistM": 2596,
+  "coveredBy": "shot:fort-tethana.02"
+ },
+ "landmarks": [
+  {
+   "name": "Cave mouths",
+   "pos": [
+    7212,
+    22224,
+    144
+   ],
+   "heightM": 5.4,
+   "note": "Seven rock huts from x 7188 to 7236 and y 22188 to 22260."
+  },
+  {
+   "name": "Wooden archway",
+   "pos": [
+    7231.6,
+    22281.2,
+    144
+   ],
+   "heightM": 3.9,
+   "note": "0x0200004F."
+  }
+ ],
+ "site": {
+  "id": "poi-teth-golem-mountain",
+  "name": "Teth Golem Mountain",
+  "teleport": "@teleloc 0x25730027 108 150 151.5 1 0 0 0",
+  "anchor": [
+   7212,
+   22224,
+   144
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the mesa at (7212,22230), ground 151, 19 m from the cave huts."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-teth-golem-mountain.01",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.5,
+     10
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7212,
+     22224,
+     144
+    ],
+    "height": 5,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 32,
+    "speed": 6,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "minClearance": 6
+   },
+   "standingOrder": "Fly east 32 m over the flat mesa top and its ring of rock cave mouths, the gimbal tracking them down through nadir; hold height and speed, at least 18 m above the rock.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over: the drone flies east 60 m at 6 m/s, 32 m above the flat top of the mesa (z 144). The gimbal tracks the ring of seven rock cave mouths (the golem caves) down through nadir and round, then a wooden archway and the drop to the rocky lowlands. The sun is behind the lens. Rank 3. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 18..32 m, nearest 14.8 m (spawn Linkable Monster Generator), vmax 6 m/s, LOS blocked 7/41, in frame 100%, water 0%, retail-bake tree 35.6 m (not drawn by the default bake); edit 2.5-8s: AGL 18..32 m, nearest 14.8 m (spawn Linkable Monster Generator), vmax 6 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 41.2 m (not drawn by the default bake); flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-teth-golem-mountain.01",
+   "technique": "drone.pass-over",
+   "rank": 3,
+   "check": "take 10s: AGL 18..32 m, nearest 14.8 m (spawn Linkable Monster Generator), vmax 6 m/s, LOS blocked 7/41, in frame 100%, water 0%, retail-bake tree 35.6 m (not drawn by the default bake); edit 2.5-8s: AGL 18..32 m, nearest 14.8 m (spawn Linkable Monster Generator), vmax 6 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 41.2 m (not drawn by the default bake); flight cinema: peak 6.01 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5.5,
+ "techniques": [
+  "drone.pass-over"
+ ]
+}

@@ -1,0 +1,189 @@
+{
+ "name": "Nuhmudira's Mansion",
+ "title": "Nuhmudira's Mansion",
+ "siteId": "poi-nuhmudiras-mansion",
+ "summary": "A four-building mansion on a lawn between low hills: a 51 m clock tower, a 44 m main tower and two 38 m wings, with a silver fountain on the south side; the basement leads to Nuhmudira's Dungeon.",
+ "landmarks": [
+  {
+   "name": "Clock tower",
+   "pos": [
+    33104.5,
+    23506.0,
+    20.0
+   ],
+   "heightM": 31.1,
+   "note": "0x01002286, pitched roof, top z 51.1."
+  },
+  {
+   "name": "Main tower",
+   "pos": [
+    33087.0,
+    23506.0,
+    20.0
+   ],
+   "heightM": 24.2,
+   "note": "0x010022D2 7-story, top z 44.2."
+  },
+  {
+   "name": "South wings",
+   "pos": [
+    33096.0,
+    23484.0,
+    20.0
+   ],
+   "heightM": 17.8,
+   "note": "0x01002287 and 0x01002289, top z 37.8."
+  },
+  {
+   "name": "Silver fountain",
+   "pos": [
+    33101.8,
+    23475.9,
+    20.0
+   ],
+   "heightM": 3.0,
+   "note": "0x02000AA3 by the south wing."
+  }
+ ],
+ "site": {
+  "id": "poi-nuhmudiras-mansion",
+  "name": "Nuhmudira's Mansion",
+  "teleport": "@teleloc 0xAC7A0019 72.0 16.0 20.5 1 0 0 0",
+  "anchor": [
+   33096.0,
+   23496.0,
+   20.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.49,
+   "grade": "neutral"
+  },
+  "notes": "No gazetteer entry; teleport derived 56 m south of the mansion on the lawn (ground 20.0, nearest building 32 m)."
+ },
+ "insertAfter": "zaikhal",
+ "insertBefore": "yanshi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -4.0,
+   "ew": 35.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2386,
+  "coveredBy": "path:yanshi.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Nuhmudira_s_Mansion.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-nuhmudiras-mansion.01",
+   "site": "poi-nuhmudiras-mansion",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33096.0,
+     23496.0,
+     20.0
+    ],
+    "height": 40,
+    "radius": 8
+   },
+   "params": {
+    "radius": 78,
+    "heightAGL": 34,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 150,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Orbit Nuhmudira's Mansion clockwise at 78 m radius and 34 m height from south-south-east to south-south-west; never come closer than 55 m to any of its four buildings.",
+   "notes": "Hero orbit of the four-building mansion - the 51 m clock tower, the 44 m main tower and two 38 m wings with dark roofs - on its lawn between low hills; the noon sun (0.49) lights the south faces. The frame/LOS target is the complex centre 40 m up so the towers read over the front wings. Verified (check.mjs, full take flown): take 0-10 s: AGL 31.5..35.5 m, nearest drawn 57.04 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 5.88 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 33.27..34.8 m, nearest drawn 61.41 m (static 0xAC7A#0 0x01000E0E), vmax 5.88 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.89 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-nuhmudiras-mansion.02",
+   "site": "poi-nuhmudiras-mansion",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     6.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     33104.5,
+     23506.0,
+     20.0
+    ],
+    "height": 31.1,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 100,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 16,
+    "spinDeg": 12
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.8 m above the lawn 16 m east of the mansion's clock tower and look steeply up its face to the roof while the sky rolls 12 degrees; keep 7 m from every wall.",
+   "notes": "Wide 75-degree lens looking up the 31 m clock tower from its east foot, pitched roof against the sky; south sun grazes the east face. Verified (check.mjs, full take flown): take 0-7 s: AGL 0.8..0.8 m, nearest drawn 7.31 m (static 0xAC7A#31 0x01002287), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 7.31 m (static 0xAC7A#31 0x01002287), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-nuhmudiras-mansion.01": "take 0-10 s: AGL 31.5..35.5 m, nearest drawn 57.04 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 5.88 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 33.27..34.8 m, nearest drawn 61.41 m (static 0xAC7A#0 0x01000E0E), vmax 5.88 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.89 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-nuhmudiras-mansion.02": "take 0-7 s: AGL 0.8..0.8 m, nearest drawn 7.31 m (static 0xAC7A#31 0x01002287), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 7.31 m (static 0xAC7A#31 0x01002287), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%"
+ }
+}

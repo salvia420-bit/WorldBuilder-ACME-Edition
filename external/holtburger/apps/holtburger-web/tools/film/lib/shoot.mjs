@@ -22,10 +22,19 @@
 // reports/<shot>.rehearsal.json and judgeInput (`issues`, `flight`). They never fail or retake a take (a retake
 // replays the same plan).
 //
-// Per site: settlePage → teleport → readiness gate → world.prewarm, which is BEST-EFFORT (the readiness gate has
-// already passed): an incomplete or failed prewarm only warns, adds a `stage:'prewarm'` row to shoot-log.jsonl and
-// a `prewarm` note to that site's take reports. A site whose teleport/readiness throws records each of its shots
-// as a failure (stage 'site') and the schedule goes on; only usage errors (no __film, no method) abort the run.
+// Per site: settlePage → [prime] → teleport → readiness gate → world.prewarm, which is BEST-EFFORT (the readiness
+// gate has already passed): an incomplete or failed prewarm only warns, adds a `stage:'prewarm'` row to
+// shoot-log.jsonl and a `prewarm` note to that site's take reports. A site whose teleport/readiness throws records
+// each of its shots as a failure (stage 'site') and the schedule goes on; only usage errors (no __film, no method)
+// abort the run.
+//
+// PRIME (`site.prime` → schedule entry `prime: ['@teleloc …', …]`): the server only sends a player the creatures
+// in the cells its current cell can see (ACE PVS), so a dungeon run filmed far from the hidden player shows empty
+// halls. Before the site teleport — after settlePage, so no take runs — each prime command is sent through the same
+// goAndWait path as a teleport (readiness = the entry's settle/timeout + readyTargetsForCommand(cmd)), walking the
+// player along the route so every creature on it streams in; the site teleport then stands the player at the site.
+// Each prints a progress line (stderr), adds an `event:'prime'` row to shoot-log.jsonl and a `prime` note to the
+// site's take reports; a failing or not-ready prime only WARNS (the site still runs). Counted in `primes`.
 //
 // In-site HOPS (`hopM`, `film shoot --hop`, default STAND_HOP_M): grass is drawn around the hidden player
 // (terrain_grass: dense to 48 m) and the server only sends the objects near it (NPCs, Life Stones, portals), so
@@ -45,6 +54,9 @@
 //      prepare again
 //   4. broker.setDecideOptions(DECIDE_OPTIONS[captureMode]) for the take itself (realtime {timeoutMs:1200,
 //      maxRetries:0} | stepped {timeoutMs:4000, maxRetries:2})
+//   4b. pageEnv: a read-only snapshot of the page's look settings (PAGE_ENV_FN: redacted URL, quality preset, storm
+//      state, cloud coverage / weather / stormScan / waterSheenFade / filmProps URL values, terrain water/IBL
+//      uniforms) → `pageEnv` in the take report; a failing snapshot is null and never fails the take
 //   5. __film.shoot({fps, width, height, codec, bitrate, mode: item.captureMode, locked}) WHILE draining
 //      __film.recorder.drain({maxBytes: 8 MiB}) into takes/<stem>.h264 | .ivf | .frames/ (lib/drain.mjs); any
 //      failure in steps 2–5 → __film.abort() + wait for an idle page, then the error goes on
@@ -66,7 +78,7 @@ import { FilmCliError, EXIT, jsonReplacer } from "./args.mjs";
 import { DRAIN_MAX_BYTES, createTakeSink, drainTake } from "./drain.mjs";
 import { muxArgv, runFfmpeg } from "./ffmpeg.mjs";
 import { appendJsonl, writeJsonFile } from "./project.mjs";
-import { filmCall, filmCallWith, goAndWait, readyTargetsForCommand } from "./session.mjs";
+import { evaluateWithTimeout, filmCall, filmCallWith, goAndWait, readyTargetsForCommand } from "./session.mjs";
 import { localFromWorld, telelocCmd } from "../../../scene3d/film/core/units.js";
 
 /** Broker per-call limits by capture mode (SPEC §3.2: the page waits 1.5 s realtime, 15 s stepped). */
@@ -87,6 +99,82 @@ export const PAGE_IDLE_WAIT_MS = 90_000;
  * busy='shoot' but is still in ready() / clean-frame setup) is a no-op on the page and would otherwise be lost.
  */
 export const PAGE_ABORT_MAX = 30;
+
+/**
+ * Runs in the page (self-contained, read-only, never throws): the look settings a take is recorded with, for its
+ * report (`pageEnv`) — so a grey, stormy or sheen-less take can be traced to its boot URL / page state:
+ * `url` (location.href with password / account values replaced by [redacted]), `quality` (window.__quality.preset),
+ * `isStorm` (window.__getWeather().is_storm), the URL values of cloudCoverage / cloudWeather / clouds / stormScan /
+ * waterSheenFade / filmProps (null when absent), and `water` ({materials, waterEnvEnabled, iblEnabled}: whether ANY
+ * of liveScene3d.terrainMaterials has uWaterEnvEnabled / uIblEnabled on; null when unavailable). Unknown → null.
+ */
+export const PAGE_ENV_FN = () => {
+  const w = typeof window !== "undefined" ? window : {};
+  const out = {
+    url: null, quality: null, isStorm: null, cloudCoverage: null, cloudWeather: null, clouds: null, stormScan: null,
+    waterSheenFade: null, filmProps: null, water: null,
+  };
+  let href = "";
+  try {
+    href = w.location && typeof w.location.href === "string" ? w.location.href : "";
+  } catch (_) {
+    href = "";
+  }
+  if (href) {
+    out.url = href.replace(/([?&#](?:password|pass|pw|account)=)[^&#]*/gi, "$1[redacted]");
+    try {
+      const q = new URL(href).searchParams;
+      for (const k of ["cloudCoverage", "cloudWeather", "clouds", "stormScan", "waterSheenFade", "filmProps"]) out[k] = q.has(k) ? q.get(k) : null;
+    } catch (_) {
+      // keep the nulls
+    }
+  }
+  try {
+    const qp = w.__quality;
+    out.quality = qp && typeof qp.preset === "string" ? qp.preset : null;
+  } catch (_) {
+    out.quality = null;
+  }
+  try {
+    const st = typeof w.__getWeather === "function" ? w.__getWeather() : null;
+    out.isStorm = st && typeof st.is_storm === "boolean" ? st.is_storm : null;
+  } catch (_) {
+    out.isStorm = null;
+  }
+  try {
+    const mats = w.liveScene3d && Array.isArray(w.liveScene3d.terrainMaterials) ? w.liveScene3d.terrainMaterials : null;
+    if (mats) {
+      let n = 0, hasWater = false, hasIbl = false, waterOn = false, iblOn = false;
+      for (const m of mats) {
+        const u = m && m.uniforms;
+        if (!u) continue;
+        n++;
+        if (u.uWaterEnvEnabled) {
+          hasWater = true;
+          if (Number(u.uWaterEnvEnabled.value) > 0.5) waterOn = true;
+        }
+        if (u.uIblEnabled) {
+          hasIbl = true;
+          if (Number(u.uIblEnabled.value) > 0.5) iblOn = true;
+        }
+      }
+      out.water = { materials: n, waterEnvEnabled: hasWater ? waterOn : null, iblEnabled: hasIbl ? iblOn : null };
+    }
+  } catch (_) {
+    out.water = null;
+  }
+  return out;
+};
+
+/** PAGE_ENV_FN on the page, or null when the evaluate fails (never throws: a take never fails because of it). */
+async function pageEnvOf(page) {
+  try {
+    const r = await evaluateWithTimeout(page, PAGE_ENV_FN, undefined, { timeoutMs: 15_000, what: "page env" });
+    return r && typeof r === "object" ? r : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Drone techniques that fly low and close to obstacles: rehearsed by default. */
 const OBSTACLE_DRONE_RE = /(canyon-run|flythrough|terrain-skim|fly-by|chase|lead|side-track|pass-over)/;
@@ -605,6 +693,53 @@ async function prewarmSite(page, entry, { io, log, paths, now }) {
   return note;
 }
 
+/**
+ * Send a schedule entry's `prime` commands before its site teleport (see the header): each through goAndWait with
+ * its own readiness targets; a throw (other than a usage error) or a not-ready gate only warns. Returns the site's
+ * report note, or null when the entry has no prime.
+ * @returns {Promise<{sent: number, ready: number, failed: {i: number, cmd: string, error: string}[]}|null>}
+ */
+async function primeSite(page, entry, { io, log, paths, now, sleep }) {
+  const cmds = Array.isArray(entry.prime) ? entry.prime.filter((c) => typeof c === "string" && c.trim()) : [];
+  if (!cmds.length) return null;
+  const note = { sent: 0, ready: 0, failed: [] };
+  for (let i = 0; i < cmds.length; i++) {
+    const cmd = cmds[i].trim();
+    io.info(`   prime ${i + 1}/${cmds.length}: ${cmd}`);
+    let go = null;
+    let error = null;
+    try {
+      note.sent++;
+      go = await goAndWait(page, {
+        teleport: cmd,
+        ready: { ...(entry.ready ?? {}), ...readyTargetsForCommand(cmd) },
+        timeoutSec: entry.ready?.timeoutSec ?? 90,
+        now,
+        sleep,
+        log: (m) => io.info(`   ${m}`),
+      });
+    } catch (e) {
+      if (e instanceof FilmCliError && e.exitCode === EXIT.USAGE) throw e;
+      error = e?.message ?? String(e);
+    }
+    const ok = go?.ok === true;
+    if (ok) {
+      note.ready++;
+      io.info(`   prime ${i + 1} ready in ${(go.elapsedMs / 1000).toFixed(1)} s`);
+    } else {
+      const why = error ? `failed: ${error}` : `not ready after ${Math.round((go?.elapsedMs ?? 0) / 1000)} s`;
+      io.warn(`site ${entry.siteId}: prime ${i + 1}/${cmds.length} (${cmd}) ${why} — going on (creatures near it may be missing)`);
+      note.failed.push({ i, cmd, error: error ?? why });
+    }
+    log(paths.shootLog, {
+      t: new Date(now()).toISOString(), event: "prime", siteId: entry.siteId, i, of: cmds.length, cmd, ok,
+      ...(go ? { elapsedMs: go.elapsedMs } : {}),
+      ...(error ? { error } : !ok ? { error: `not ready after ${Math.round((go?.elapsedMs ?? 0) / 1000)} s` } : {}),
+    });
+  }
+  return note;
+}
+
 /** A shot whose camera path is more than this far (m, horizontal) from the hidden player moves the player first. */
 export const STAND_HOP_M = 40;
 /** A hop lands this far (m) above the ground height the page reports (the server drops the player onto it). */
@@ -776,7 +911,8 @@ async function hopForShot(o) {
  * @param {number} [o.idlePollMs=1000]
  * @param {number} [o.hopM=STAND_HOP_M] in-site hop distance (0 = never move the player inside a site)
  * @param {Function|null} [o.buildShot] scene3d/film/shots buildShot (standPointOf); null = no hops
- * @returns {Promise<{ok: boolean, teleports: number, hops: number, shots: object[], failures: object[]}>} failures:
+ * @returns {Promise<{ok: boolean, teleports: number, hops: number, primes: number, shots: object[], failures: object[]}>}
+ *   `teleports`: site teleports; `primes`: site.prime commands sent before them; failures:
  *   `{shotId, siteId, stage: 'busy'|'site'|'ready'|'plan'|'take'|'verdict', message, issues?}`; shots[]:
  *   `{shotId, siteId, file, frames, kept, verdict, attempts, issues, failedAttempts?, pageIdle?}` (`issues`: the
  *   kept attempt's page issues, see pageIssuesOf)
@@ -793,6 +929,7 @@ export async function shootSchedule(o) {
   const failures = [];
   let teleports = 0;
   let hops = 0;
+  let primes = 0;
   const hopM = Number.isFinite(o.hopM) && o.hopM >= 0 ? o.hopM : STAND_HOP_M;
   const buildShot = typeof o.buildShot === "function" ? o.buildShot : null;
   let playerPos = null;
@@ -827,6 +964,9 @@ export async function shootSchedule(o) {
       continue;
     }
     if (idle.aborted) io.warn(`a take was still running on the page before site ${entry.siteId}: aborted it (idle after ${(idle.waitedMs / 1000).toFixed(1)} s)`);
+    // site.prime: walk the hidden player along the route first (only warns), then the site teleport stands it here
+    const primeNote = await primeSite(page, entry, { io, log, paths, now, sleep });
+    if (primeNote) primes += primeNote.sent;
     let go;
     try {
       teleports++;
@@ -881,7 +1021,7 @@ export async function shootSchedule(o) {
         }
       }
       try {
-        const r = await shootOne({ ...o, fs, now, sleep, codec, retakes, entry, item, wj, log, prewarmNote, hopNote });
+        const r = await shootOne({ ...o, fs, now, sleep, codec, retakes, entry, item, wj, log, prewarmNote, hopNote, primeNote });
         results.push(r);
         if (!r.kept) {
           const retake = r.failedAttempts?.length ? ` (retake ${r.failedAttempts.map((f) => f.attempt).join(", ")} failed: ${r.failedAttempts.at(-1).message})` : "";
@@ -907,7 +1047,7 @@ export async function shootSchedule(o) {
       }
     }
   }
-  return { ok: failures.length === 0, teleports, hops, shots: results, failures };
+  return { ok: failures.length === 0, teleports, hops, primes, shots: results, failures };
 }
 
 async function shootOne(o) {
@@ -973,6 +1113,7 @@ async function shootOne(o) {
     if (take.showAvatar) await filmCall(page, "world.avatar", true);
     let drained;
     let raw;
+    let pageEnv = null;
     try {
       try {
         const prepTake = o.locked && rehearsal?.table ? { ...take, table: rehearsal.table } : take;
@@ -988,6 +1129,8 @@ async function shootOne(o) {
           else await prepare(take);
         }
         o.broker?.setDecideOptions?.(DECIDE_OPTIONS[mode]);
+        // what the take is recorded with (read-only; null when the page cannot say — never fails the take)
+        pageEnv = await pageEnvOf(page);
         const sink = createTakeSink({ dir: paths.takes, name: stem, codec: "auto", fps, width: timeline.width, height: timeline.height, fs });
         const shootOpts = { fps, width: timeline.width, height: timeline.height, codec: o.codec, bitrate: o.bitrate ?? 40_000_000, mode, locked: Boolean(o.locked && rehearsal?.table) };
         const shootPromise = filmCallWith(page, { timeoutMs: evalBudgetMs }, "shoot", shootOpts);
@@ -1059,7 +1202,9 @@ async function shootOne(o) {
       issues: copyIssues(issues),
       validation: validationSummary(firstPrep),
       flight: shotFlight,
+      pageEnv,
       ...(o.prewarmNote ? { prewarm: o.prewarmNote } : {}),
+      ...(o.primeNote ? { prime: o.primeNote } : {}),
       ...(o.hopNote ? { hop: o.hopNote } : {}),
       startedAt,
       ms: now() - t0,

@@ -1,0 +1,183 @@
+{
+ "name": "Riverbend Tower",
+ "title": "Riverbend Tower",
+ "siteId": "poi-riverbend-tower",
+ "summary": "An Empyrean stone tower along the River Prosper where Riverbend portals drop; a Renegade Stronghold portal lies by the river 130 m south-east. In the kit: a 19 m three-storey brick-and-stone tower with a pitched roof (top z 43.4) on a grassy terrace at z 24, a forested slope falling east to the river (z 4) and the stronghold portal at the water's edge.",
+ "landmarks": [
+  {
+   "name": "Riverbend Tower (0x01001106)",
+   "pos": [
+    39636.0,
+    23916.0,
+    24.0
+   ],
+   "heightM": 19.4,
+   "note": "16 x 16 m, open two-cell layout."
+  },
+  {
+   "name": "Renegade Stronghold portal",
+   "pos": [
+    39763.9,
+    23883.2,
+    4.0
+   ],
+   "heightM": 3.5,
+   "note": "By the river, 132 m ESE."
+  },
+  {
+   "name": "River Prosper",
+   "pos": [
+    39760.0,
+    23900.0,
+    4.0
+   ],
+   "heightM": 0.0,
+   "note": "Running water east of the forested slope."
+  }
+ ],
+ "site": {
+  "id": "poi-riverbend-tower",
+  "name": "Riverbend Tower",
+  "gazetteerId": "riverbend",
+  "teleport": "@teleloc 0xCE7C0025 105.4 109.6 24 0.461749 0 0 -0.887011",
+  "anchor": [
+   39636,
+   23916,
+   24
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.63,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer riverbend (Riverbend portal drop point 21 m east of the tower, z 24)."
+ },
+ "insertAfter": "eastham",
+ "insertBefore": "dryreach",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -2.3,
+   "ew": 63.2
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2678,
+  "coveredBy": "shot:dryreach.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Riverbend_Tower.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-riverbend-tower.01",
+   "site": "poi-riverbend-tower",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.0,
+     9.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39636,
+     23916,
+     24
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "distance": 38,
+    "heightStart": 2,
+    "heightEnd": 34,
+    "bearingDeg": 268,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "tiltDeg": 0,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up 38 m west of the Empyrean stone tower with the afternoon sun behind the lens until the River Prosper shows beyond the trees; keep 4 m from every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature boom rise: 38 m due west of the Empyrean stone tower, from 2 m to 34 m straight up (z 26 -> 58, 15 m above the roof ridge at 43.4) with the afternoon sun (0.63) behind the lens: the tower's sunlit west face slides down until its roof clears and the River Prosper valley shows beyond the forested east slope. Verified (check.mjs, full take flown): take 0-10 s: AGL 3.28..35.3 m, nearest drawn 4.32 m (scenery-default 0x020007A4@39603,23919), vmax 5.03 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 7.96..34.5 m, nearest drawn 6.15 m (scenery-default 0x020007A4@39603,23919), vmax 5.03 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.02 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 3.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  },
+  {
+   "id": "poi-riverbend-tower.02",
+   "site": "poi-riverbend-tower",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     0.5,
+     8.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39636,
+     23916,
+     24
+    ],
+    "height": 19.4,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 250,
+    "azimuthRef": "compass",
+    "elevationDeg": 30,
+    "distance": 46,
+    "thirds": "center",
+    "arcDeg": 40,
+    "direction": "ccw"
+   },
+   "standingOrder": "Arc 40 degrees counter-clockwise round the tower from west-south-west to south-west, 46 m out and above the treetops, the afternoon sun behind the lens; keep 6 m above every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arc: 40 deg counter-clockwise from west to south-west round the tower, 46 m out and 30 deg up (z 56.7, 34 m above the ground, >= 21 m clear of every default crown), the tower front-lit by the afternoon sun against the wooded river valley. Verified (check.mjs, full take flown): take 0-9 s: AGL 34.02..34.7 m, nearest drawn 21.23 m (scenery-default 0x020003EB@39604,23888), vmax 4.85 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 34.17..34.7 m, nearest drawn 21.23 m (scenery-default 0x020003EB@39604,23888), vmax 4.85 m/s, LOS blocked 0/27, subject in frame 100%; opt-in retail-bake tree 1.2 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-riverbend-tower.01": "take 0-10 s: AGL 3.28..35.3 m, nearest drawn 4.32 m (scenery-default 0x020007A4@39603,23919), vmax 5.03 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 7.96..34.5 m, nearest drawn 6.15 m (scenery-default 0x020007A4@39603,23919), vmax 5.03 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 5.02 m/s (cap 12), max tracking gap 0.04 m; opt-in retail-bake tree 3.3 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-riverbend-tower.02": "take 0-9 s: AGL 34.02..34.7 m, nearest drawn 21.23 m (scenery-default 0x020003EB@39604,23888), vmax 4.85 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-8 s: AGL 34.17..34.7 m, nearest drawn 21.23 m (scenery-default 0x020003EB@39604,23888), vmax 4.85 m/s, LOS blocked 0/27, subject in frame 100%; opt-in retail-bake tree 1.2 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

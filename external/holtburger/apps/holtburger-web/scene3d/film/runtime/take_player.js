@@ -77,6 +77,10 @@
 // a BatchedMesh instance is re-shown only when no other owner wrote its visibility
 // during the take — its setVisibleAt is watched while held — and its geometry and
 // matrix are unchanged).
+// Creatures, NPCs and players are never faded (their world-query kind, or a player-tier
+// guid): a fade that names one hides nothing for it (so a fade of only creatures takes the
+// reroute fallback) and the report lists them (`faded.refused`). A shot with
+// `pilot.fade: 'never'` fades nothing at all (film/index.js: mapper maxFadeIds 0).
 // A reveal shot's own occluder (`traj.meta.revealOccluder`) is never faded. A fade
 // that hides nothing takes the reroute bias for that frame instead, and the sensors
 // see past what this take faded (`fadedIds`). The safety reflex's lens hides are
@@ -112,10 +116,28 @@
 // look.js keeps the override object when the fog is unchanged, so only a real
 // change ever waits.
 //
+// Lock windows (`traj.meta.lockWindows` = [[t0, t1], …] in trajectory time — an fpv
+// run's tricks): while the progress is inside a window the pilot residual is HELD at
+// the value applied on the frame before the window and eased to 0 over
+// TAKE_DEFAULTS.lockEaseSec (0.4 s of progress), and speedScale is pinned to 1 (a
+// slow_down never stretches a float / roll / loop). After the window the residual
+// blends from its held value back to the live pilot setpoint (speedScale from 1)
+// over the same 0.4 s. The safety reflex still runs. Pure in the progress, so
+// stepped and realtime takes behave alike; takes without windows are untouched.
+//
+// Props lens overlay (`?filmProps=on` — the injected `propsEnabled` — AND the take's
+// `overlay.props`; runtime/lens_overlay.js): on recorded takes the grab listener draws
+// the FPV props over the finished frame (after the composer: no DoF / bloom / grade /
+// fog / tone curve) immediately BEFORE recorder.grab, renderer state restored. Spin
+// and look are pure in the frame's film time t and progress p: phase = f0·t + f1·Θ(p),
+// Θ = ∫ throttle, throttle = `traj.meta.throttleAt(p)` when the shot provides it, else
+// the nominal's thrust |a + g ẑ|/g (tabulated at prepare-run time). The take report
+// carries `overlay: {on, style, …}`.
+//
 // Film mode is DEFAULT OFF (`?filmMode=on`). Page module: every dependency is
 // injected ({cameraOwner, clock, sensors, pilot, safety, recorder, drone,
-// worldQuery, particleCull, log, …}); it never imports a stateful scene3d
-// module. Stepped takes are deterministic (no wall clock in the frame logic).
+// worldQuery, particleCull, lensOverlay, propsEnabled, log, …}); it never imports a
+// stateful scene3d module. Stepped takes are deterministic (no wall clock in the frame logic).
 
 import { FilmError } from "../core/errors.js";
 import { hprFromQuat, unwrapAngle, wrapPi } from "../core/gimbal.js";
@@ -130,6 +152,7 @@ import {
 } from "../shots/trajectory.js";
 import { FADEABLE_STATIC_KINDS, FADEABLE_STATIC_SOURCES, isStaticFadeKey, staticFadeKey } from "../scene/world_query.js";
 import { FILM_CLOCK_MAX_FPS, FILM_CLOCK_MIN_FPS } from "./film_clock.js";
+import { normalizeOverlay } from "./lens_overlay.js";
 
 /** Pre-roll floor: frames rendered at the start pose (never recorded) after the cut into a take. */
 export const TAKE_PREROLL_MIN_FRAMES = 6;
@@ -182,6 +205,15 @@ export const TAKE_DEFAULTS = Object.freeze({
   environSettleMaxMs: 30000,
   /** Poll interval (ms) of that wait (the live loop keeps running between polls). */
   environSettlePollMs: 100,
+  /** Lock windows: seconds (of progress) over which a held pilot residual eases to 0 inside a window, and back after it. */
+  lockEaseSec: 0.4,
+  /** Props overlay: rate (Hz) of the throttle table (and its integral) tabulated over the take's progress. */
+  overlayThrottleHz: 60,
+  /**
+   * Props overlay: the nominal thrust is a second difference over ±this many seconds, then box-averaged
+   * over the same span — exact for constant acceleration, and smooth on a replayed (row-lerped) table.
+   */
+  overlayThrustSpanSec: 0.1,
   /**
    * The wait stops early (reported `stalled`) when the override state has not moved for this long (ms):
    * the fog half is not ticking (the "Disable distance fog" option, a held loop), so waiting longer is useless.
@@ -231,6 +263,12 @@ export const LIVE_SUBJECT = Object.freeze({
    */
   swingRadialYield: 1,
 });
+
+/** World-query entity kinds a fade never hides (creatures, NPCs, players: they ARE the footage). */
+export const NEVER_FADE_KINDS = Object.freeze(["creature", "npc", "player"]);
+
+/** Standard gravity (m/s²) of the props overlay's thrust estimate (flight_model's value). */
+const OVERLAY_G = 9.80665;
 
 /** Technique tags whose camera rides with the subject: re-anchored by translation + travel-heading rotation. */
 export const LIVE_CARRY_TAGS = Object.freeze(["moving-subject", "follow", "body-rig", "subject-is-camera"]);
@@ -330,6 +368,120 @@ export function pathRightVector(traj, p, pose) {
   }
   const hh = pose && Number.isFinite(pose.h) ? pose.h : 0;
   return [Math.cos(hh), -Math.sin(hh), 0];
+}
+
+/** Smoothstep on [0, 1] (clamped). */
+function smooth01(x) {
+  const u = clamp(x, 0, 1);
+  return u * u * (3 - 2 * u);
+}
+
+/**
+ * The lock windows of a trajectory (`meta.lockWindows`: `[[t0, t1], …]` or `[{t0, t1}, …]`,
+ * trajectory seconds): finite, clamped to [0, D], sorted, overlapping / touching windows
+ * merged. [] when there are none.
+ * @param {object} traj
+ * @param {number} D
+ * @returns {Array<[number, number]>}
+ */
+export function lockWindowsOf(traj, D) {
+  const raw = traj && traj.meta && typeof traj.meta === "object" && Array.isArray(traj.meta.lockWindows) ? traj.meta.lockWindows : null;
+  if (!raw || !(D > 0)) return [];
+  const w = [];
+  for (const x of raw) {
+    const a = Array.isArray(x) ? x[0] : x && typeof x === "object" ? x.t0 : undefined;
+    const b = Array.isArray(x) ? x[1] : x && typeof x === "object" ? x.t1 : undefined;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    const t0 = clamp(Math.min(a, b), 0, D), t1 = clamp(Math.max(a, b), 0, D);
+    if (t1 - t0 > 1e-9) w.push([t0, t1]);
+  }
+  w.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const out = [];
+  for (const x of w) {
+    const last = out[out.length - 1];
+    if (last && x[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], x[1]);
+    else out.push([x[0], x[1]]);
+  }
+  return out;
+}
+
+/**
+ * The props overlay's throttle table over a take's progress [0, D] at `hz`: throttle =
+ * `traj.meta.throttleAt(p)` (source 'meta') when it is a function, else the nominal's thrust
+ * |a + g ẑ|/g from second differences of its positions over ±overlayThrustSpanSec, box-averaged
+ * over the same span (source 'nominal': exact for a constant acceleration, smooth on a replayed
+ * table whose rows are lerped); clamped to [0, 4] (a non-finite sample reads 1 = hover).
+ * `cum` = its running integral (trapezoid). Pure.
+ * @returns {{n:number, h:number, D:number, thr:Float64Array, cum:Float64Array, source:string}}
+ */
+export function overlayThrottleTable(traj, D, hz = TAKE_DEFAULTS.overlayThrottleHz) {
+  const meta = traj && traj.meta && typeof traj.meta === "object" ? traj.meta : {};
+  const fn = typeof meta.throttleAt === "function" ? meta.throttleAt : null;
+  const span = D > 0 ? D : 0;
+  const n = Math.max(2, Math.ceil(span * hz - 1e-9) + 1);
+  const h = span / (n - 1);
+  const thr = new Float64Array(n).fill(1);
+  if (fn) {
+    for (let i = 0; i < n; i += 1) {
+      let v = NaN;
+      try {
+        v = Number(fn(i * h));
+      } catch (_) {
+        v = NaN;
+      }
+      thr[i] = Number.isFinite(v) ? clamp(v, 0, 4) : 1;
+    }
+  } else if (h > 0 && traj && typeof traj.sample === "function") {
+    const pos = [];
+    try {
+      for (let i = 0; i < n; i += 1) pos.push(vec3(traj.sample(i * h).pos));
+    } catch (_) {
+      pos.length = 0;
+    }
+    if (n >= 3 && pos.length === n && pos.every(Boolean)) {
+      const k = clamp(Math.round(TAKE_DEFAULTS.overlayThrustSpanSec * hz), 1, Math.floor((n - 1) / 2));
+      const H = k * h;
+      const raw = new Float64Array(n);
+      for (let i = 0; i < n; i += 1) {
+        const j = clamp(i, k, n - 1 - k);
+        const a = [0, 1, 2].map((c) => (pos[j + k][c] - 2 * pos[j][c] + pos[j - k][c]) / (H * H));
+        const v = Math.hypot(a[0], a[1], a[2] + OVERLAY_G) / OVERLAY_G;
+        raw[i] = Number.isFinite(v) ? clamp(v, 0, 4) : 1;
+      }
+      for (let i = 0; i < n; i += 1) {
+        const lo = Math.max(0, i - k), hi = Math.min(n - 1, i + k);
+        let sum = 0;
+        for (let j = lo; j <= hi; j += 1) sum += raw[j];
+        thr[i] = sum / (hi - lo + 1);
+      }
+    }
+  }
+  const cum = new Float64Array(n);
+  for (let i = 1; i < n; i += 1) cum[i] = cum[i - 1] + 0.5 * (thr[i - 1] + thr[i]) * h;
+  return { n, h, D: span, thr, cum, source: fn ? "meta" : "nominal" };
+}
+
+/** Throttle at progress p from an overlayThrottleTable (linear; held at the ends). */
+export function tableThrottle(tb, p) {
+  if (!tb || !(tb.h > 0)) return tb ? tb.thr[0] : 1;
+  const x = clamp(fin(p, 0), 0, tb.D) / tb.h;
+  const i = Math.min(tb.n - 2, Math.floor(x));
+  const f = x - i;
+  return tb.thr[i] + (tb.thr[i + 1] - tb.thr[i]) * f;
+}
+
+/** ∫₀ᵖ throttle from an overlayThrottleTable (exact for its piecewise-linear throttle; extrapolated past D). */
+export function tableTheta(tb, p) {
+  if (!tb) return 0;
+  const pp = fin(p, 0);
+  if (!(tb.h > 0)) return tb.thr[0] * Math.max(0, pp);
+  if (pp <= 0) return 0;
+  if (pp >= tb.D) return tb.cum[tb.n - 1] + tb.thr[tb.n - 1] * (pp - tb.D);
+  const x = pp / tb.h;
+  const i = Math.min(tb.n - 2, Math.floor(x));
+  const f = x - i;
+  const a = tb.thr[i], b = tb.thr[i + 1];
+  return tb.cum[i] + tb.h * (a * f + 0.5 * (b - a) * f * f);
 }
 
 /** True when a setpoint changes nothing. */
@@ -591,7 +743,10 @@ function liveFollowStep(S, T, dt) {
  * `liveScene3d` (frame stamps, pop-in signature, film hides),
  * `particles`, `buildShot` (default the shot registry), `actor` (`(cue) → Promise` for take.actor cues),
  * `particleCull` ({setParticleCullConfig} from particle_manager.js: every rendered take runs with
- * RP6 recheckInterval 1, the previous interval restored after it).
+ * RP6 recheckInterval 1, the previous interval restored after it), `lensOverlay` (a
+ * runtime/lens_overlay.js overlay {configure, draw} or `() → overlay | null`, made on first use)
+ * and `propsEnabled` (boolean or `() → boolean`, the `?filmProps=on` gate; default off): a
+ * recorded take whose `take.overlay.props` names a style draws the FPV props before each grab.
  *
  * - `prepare(take)` → summary `{ok, shotId, technique, family, duration, fps, plannedFrames,
  *   preRollFrames, hasSubject, hasFocus, fromTable, captureMode, pilotMode, bounds,
@@ -599,7 +754,8 @@ function liveFollowStep(S, T, dt) {
  *   (realised/baked table) | trajectory, ctx (ShotContext overrides; ctx.subjectAt must be PURE in t),
  *   liveSubject (`() → subject now`, t-ignoring: a moving entity / walking player), subjectGuid,
  *   pilot:{mode,…}, capture:{mode, fps, width, height}, standingOrder, goal, technique, family, shotId,
- *   cell, indoor, preRollSec, actor, seed}`. With a liveSubject the sensors / pilot / residual
+ *   cell, indoor, preRollSec, actor, seed, overlay ({props:{style, opacity?, tint?}})}`. The summary
+ *   adds `overlay` (the normalised request) and `lockWindows` (count) only when the take has them. With a liveSubject the sensors / pilot / residual
  *   see the live subject and the nominal is re-anchored to it every frame (`liveSubject` in the
  *   summary: `{mode:'carry'|'aim'|'off', rotate, refHeadingDeg}`). Drone / fpv takes carry
  *   `flight: {preset, vmax, amax, peakSpeed, metaPeakSpeed, sampledPeakSpeed, lengthM, overspeed,
@@ -626,7 +782,10 @@ function liveFollowStep(S, T, dt) {
  *   realtime (realtime takes: {wallSec, gridFrames, displayFrames, heldFrames, skippedDisplayFrames,
  *   undrawnDisplayFrames, backpressureFrames, tailFrames}, else null), particleCull, environ
  *   (the pre-roll AdminEnvirons wait: {checked, settled, waitedMs, polls, relit, timedOut, stalled,
- *   aborted, reason, state}), …}>`.
+ *   aborted, reason, state}), overlay ({on, style, frames, throttleSource?, reason?}: the props
+ *   lens overlay), lockWindows ({windows, lockedFrames, entries}, only for a trajectory with
+ *   meta.lockWindows), faded ({entities, particles, statics, fallbackFrames} + {refused,
+ *   refusedGuids} when a creature / npc / player was named), …}>`.
  *   frames are always on the fps grid (timestamps k/fps), so durationSec = frames / fps.
  * - `abort()` → stops a running take at its next frame; `status()`; `currentRecorder()`;
  *   `lastRealisedTable()`; `running` getter.
@@ -653,6 +812,26 @@ export function createTakePlayer(deps = {}) {
   const particleCull = d.particleCull && typeof d.particleCull === "object" && typeof d.particleCull.setParticleCullConfig === "function"
     ? d.particleCull
     : null;
+  /** `?filmProps=on` (injected; default off). */
+  const propsOn = () => {
+    try {
+      return typeof d.propsEnabled === "function" ? d.propsEnabled() === true : d.propsEnabled === true;
+    } catch (_) {
+      return false;
+    }
+  };
+  /** The lens overlay (an instance, or made by the injected factory on first use), else null. */
+  const lensOverlayOf = () => {
+    let o = d.lensOverlay;
+    if (typeof o === "function") {
+      try {
+        o = o();
+      } catch (_) {
+        o = null;
+      }
+    }
+    return o && typeof o === "object" && typeof o.configure === "function" && typeof o.draw === "function" ? o : null;
+  };
   const emit = (entry) => {
     if (typeof d.log !== "function") return;
     try {
@@ -1240,6 +1419,11 @@ export function createTakePlayer(deps = {}) {
       flightPreset: typeof pilotCfg.flightPreset === "string" ? pilotCfg.flightPreset : null,
       nominalChecksum,
       validation,
+      // The FPV props lens overlay the shot asks for (normalised), else null.
+      overlay: normalizeOverlay(take.overlay),
+      // The craft's camera uptilt (fpv params), so the props' plane matches the hard mount.
+      overlayUptiltDeg: uptiltOf(metaSpec, spec, traj),
+      lockWindowCount: fromTable ? 0 : lockWindowsOf(traj, D).length,
     };
     if (sensors && typeof sensors.reset === "function") sensors.reset();
     if (typeof safety.reset === "function") safety.reset();
@@ -1247,6 +1431,15 @@ export function createTakePlayer(deps = {}) {
     lastSummary = summary();
     emit({ message: "prepared", technique: plan.technique, duration: plan.D, fromTable });
     return lastSummary;
+  }
+
+  /** The fpv camera uptilt (deg) of a shot: its params.uptiltDeg (meta spec, else the spec), else meta.uptiltDeg; null. */
+  function uptiltOf(metaSpec, spec, traj) {
+    for (const v of [metaSpec && metaSpec.params ? metaSpec.params.uptiltDeg : undefined, spec && spec.params ? spec.params.uptiltDeg : undefined,
+      traj && traj.meta ? traj.meta.uptiltDeg : undefined]) {
+      if (Number.isFinite(v)) return v;
+    }
+    return null;
   }
 
   function flatLength(rows) {
@@ -1280,6 +1473,8 @@ export function createTakePlayer(deps = {}) {
         ? { mode: plan.liveRig.mode, rotate: plan.liveRig.rotate, refHeadingDeg: (plan.liveRig.refHeading * 180) / Math.PI }
         : plan.liveSubjectFn ? { mode: "off", rotate: false, refHeadingDeg: null } : null,
       flight: plan.flightCheck ? { ...plan.flightCheck } : null,
+      ...(plan.overlay ? { overlay: { ...plan.overlay.props } } : {}),
+      ...(plan.lockWindowCount > 0 ? { lockWindows: plan.lockWindowCount } : {}),
     };
   }
 
@@ -1383,7 +1578,22 @@ export function createTakePlayer(deps = {}) {
       // Flown takes: how far the craft trailed its (re-anchored) nominal — the realised side of the
       // prepare-time flight check (a path faster or tighter than the preset lags behind it).
       flown: null,
+      // Lock windows (traj.meta.lockWindows): null without any (or for locked replays).
+      lock: null,
+      // The residual applied on the previous frame (only tracked with lock windows).
+      lastEff: null,
+      // Creature / npc / player guids a fade was refused for, and the kinds looked up this run.
+      fadeRefused: [],
+      fadeKinds: new Map(),
+      // Props lens overlay: the report block, the live run state, the frame to draw.
+      overlayInfo: { on: false, style: null },
+      overlayRun: null,
+      overlayAt: null,
     };
+    if (!locked) {
+      const windows = lockWindowsOf(traj, D);
+      if (windows.length) R.lock = { windows, idx: -1, entry: null, exit: null, frames: 0, entries: 0 };
+    }
     R.pilot = makePilot(R);
     R.drone = makeDrone(R);
     if (R.drone) R.flown = { frames: 0, maxGapM: 0, maxGapT: null, endGapM: null };
@@ -2154,6 +2364,8 @@ export function createTakePlayer(deps = {}) {
           handled += 1;
           continue;
         }
+        // Creatures, NPCs and players are the footage: never hidden (the frame reroutes instead).
+        if (neverFaded(R, guid)) continue;
         try {
           em.setFilmHidden(guid, true);
           R.fades.entities.push(guid);
@@ -2234,6 +2446,31 @@ export function createTakePlayer(deps = {}) {
       }
     }
     return handled;
+  }
+
+  /**
+   * True (and the guid noted in R.fadeRefused) when a guid's world-query kind is one a fade
+   * never hides (NEVER_FADE_KINDS); a player-tier guid (0x5…) is a player. A known kind is
+   * looked up once per run; an unknown one (not streamed in) again on the next fade.
+   */
+  function neverFaded(R, guid) {
+    let kind = R.fadeKinds.get(guid);
+    if (kind === undefined) {
+      kind = guid >>> 28 === 0x5 ? "player" : null;
+      const wq = d.worldQuery;
+      if (kind === null && wq && typeof wq.subject === "function") {
+        try {
+          const f = wq.subject(guid);
+          if (f && typeof f.kind === "string") kind = f.kind;
+        } catch (_) {
+          kind = null;
+        }
+      }
+      if (kind !== null) R.fadeKinds.set(guid, kind);
+    }
+    if (kind === null || !NEVER_FADE_KINDS.includes(kind)) return false;
+    if (!R.fadeRefused.includes(guid)) R.fadeRefused.push(guid);
+    return true;
   }
 
   function restoreFades(R) {
@@ -2580,6 +2817,9 @@ export function createTakePlayer(deps = {}) {
       }
     }
     if (R.live && R.drone) pose = liveGimbal(R, pose, nominal, p);
+    // The setpoint whose residual / speed this frame applies: the pilot's, or inside / just
+    // after a lock window the held-and-eased one (lockApply; its lateral includes the bias).
+    let spUse = sp;
     if (!R.locked) {
       // Fades first: a fade that hides nothing reroutes this frame instead (never a no-op).
       let spr = sp;
@@ -2588,16 +2828,22 @@ export function createTakePlayer(deps = {}) {
         R.fadeFallbacks += 1;
       }
       updateReroute(R, spr, sf, k === 0 ? 0 : dt);
-      const neutral = isNeutral(sp, R.rerouteBias);
+      let bias = R.rerouteBias;
+      if (R.lock) {
+        const e = lockApply(R, p, sp);
+        spUse = { ...sp, lateral: e.lateral, vertical: e.vertical, distanceScale: e.distanceScale, framing: { dh: e.dh, dp: e.dp, dfovDeg: e.dfovDeg }, speedScale: e.speedScale };
+        bias = 0;
+      }
+      const neutral = isNeutral(spUse, bias);
       if (!neutral) {
         const subj = subjectAt(p);
-        const lateral = fin(sp.lateral, 0) + R.rerouteBias;
+        const lateral = fin(spUse.lateral, 0) + bias;
         const right = lateral === 0 ? [1, 0, 0] : R.live && R.live.carry && R.live.init ? liveRightVector(R, p, pose) : pathRightVector(R.traj, p, pose);
-        pose = applyResidual(pose, sp, {
+        pose = applyResidual(pose, spUse, {
           right,
           subjectCenter: centerOf(subj),
           bounds: plan.bounds,
-          rerouteBias: R.rerouteBias,
+          rerouteBias: bias,
         });
       }
     }
@@ -2618,11 +2864,83 @@ export function createTakePlayer(deps = {}) {
     dofFrame(R, finalPose);
     writePose(R, finalPose);
     R.prevPose = finalPose;
+    if (R.overlayRun) R.overlayAt = { t, p, fov: finalPose.fov };
     if (!R.locked) {
       const maxS = Math.max(1, plan.bounds.maxSpeedScale);
-      R.speedScale = clamp(fin(sp.speedScale, 1), 0, maxS);
+      R.speedScale = clamp(fin(spUse.speedScale, 1), 0, maxS);
     }
     return { pose: finalPose, adjusted };
+  }
+
+  // ---- lock windows (traj.meta.lockWindows) -------------------------------------
+
+  /**
+   * The residual a setpoint applies this frame, clamped as applyResidual clamps it: lateral
+   * (incl. the reroute bias), vertical, distanceScale, framing nudges, and its speedScale.
+   */
+  function residualOf(sp, bias) {
+    const b = plan.bounds;
+    const f = sp && sp.framing && typeof sp.framing === "object" ? sp.framing : {};
+    return {
+      lateral: clamp(fin(sp.lateral, 0) + fin(bias, 0), -b.maxLateral, b.maxLateral),
+      vertical: clamp(fin(sp.vertical, 0), -b.maxSink, b.maxRise),
+      distanceScale: clamp(fin(sp.distanceScale, 1), 1 / b.maxDistanceScale, b.maxDistanceScale),
+      dh: fin(f.dh, 0),
+      dp: fin(f.dp, 0),
+      dfovDeg: fin(f.dfovDeg, 0),
+      speedScale: clamp(fin(sp.speedScale, 1), 0, Math.max(1, b.maxSpeedScale)),
+    };
+  }
+
+  /** A held residual eased by w ∈ [0, 1] (offsets × w, distanceScale toward 1); speedScale pinned to 1. */
+  function easeResidual(r, w) {
+    return {
+      lateral: r.lateral * w, vertical: r.vertical * w, distanceScale: 1 + (r.distanceScale - 1) * w,
+      dh: r.dh * w, dp: r.dp * w, dfovDeg: r.dfovDeg * w, speedScale: 1,
+    };
+  }
+
+  /** Field-wise blend a → b by s ∈ [0, 1]. */
+  function blendResidual(a, b, s) {
+    const out = {};
+    for (const k of Object.keys(b)) out[k] = a[k] + (b[k] - a[k]) * s;
+    return out;
+  }
+
+  /**
+   * The residual of frame progress p under the take's lock windows (see the header): inside a
+   * window the residual applied on the frame before it, eased to 0 over lockEaseSec from the
+   * window start (speedScale 1); for lockEaseSec after a window a blend from the last locked
+   * residual back to the live pilot's. Pure in p and the pilot setpoints. Tracks R.lastEff.
+   */
+  function lockApply(R, p, sp) {
+    const L = R.lock;
+    const ease = TAKE_DEFAULTS.lockEaseSec;
+    const live = residualOf(sp, R.rerouteBias);
+    const idx = L.windows.findIndex((w) => p >= w[0] - 1e-9 && p <= w[1] + 1e-9);
+    let eff;
+    if (idx >= 0) {
+      if (L.idx !== idx) {
+        L.idx = idx;
+        L.entries += 1;
+        L.entry = R.lastEff ? { ...R.lastEff } : live;
+        L.exit = null;
+      }
+      eff = easeResidual(L.entry, 1 - smooth01((p - L.windows[idx][0]) / ease));
+      L.frames += 1;
+    } else {
+      if (L.idx >= 0) {
+        L.exit = { r: R.lastEff ? { ...R.lastEff } : easeResidual(L.entry, 0), at: L.windows[L.idx][1] };
+        L.idx = -1;
+      }
+      if (L.exit && p - L.exit.at < ease) eff = blendResidual(L.exit.r, live, smooth01((p - L.exit.at) / ease));
+      else {
+        L.exit = null;
+        eff = live;
+      }
+    }
+    R.lastEff = eff;
+    return eff;
   }
 
   function noteObstruction(R, sf) {
@@ -2685,14 +3003,81 @@ export function createTakePlayer(deps = {}) {
         // Realtime: this drawn frame is every film-grid point still due (one encode per point).
         const times = commitGrid(R, a.pose, a.upTo);
         if (!times.length) return;
+        overlayDraw(R);
         if (R.recorder.grab(times)) R.grabbed += times.length;
         else R.dropped += times.length;
         return;
       }
+      // The props lens overlay goes on the finished frame right before it is grabbed.
+      overlayDraw(R);
       const ok = R.recorder.grab(a.t);
       if (ok) R.grabbed += 1;
       else R.dropped += 1;
     });
+  }
+
+  // ---- props lens overlay -------------------------------------------------------
+
+  /**
+   * Arm the props overlay for a run (recorded takes only): `?filmProps=on` (propsEnabled), the
+   * take's overlay.props and a lens overlay that configures. Never fails the take: an overlay
+   * that cannot draw is reported off with its reason.
+   */
+  function overlayBegin(R) {
+    const want = plan.overlay;
+    if (!want) {
+      R.overlayInfo = { on: false, style: null };
+      return;
+    }
+    const info = { on: false, style: want.props.style, frames: 0 };
+    R.overlayInfo = info;
+    if (!R.record) {
+      info.reason = "not recorded (the props draw only into recorded frames)";
+      return;
+    }
+    if (!propsOn()) {
+      info.reason = "?filmProps=on is not set";
+      return;
+    }
+    const ov = lensOverlayOf();
+    if (!ov) {
+      info.reason = "no lens overlay (THREE / renderer unavailable)";
+      return;
+    }
+    let c = null;
+    try {
+      c = ov.configure(want, { uptiltDeg: plan.overlayUptiltDeg ?? undefined });
+    } catch (e) {
+      c = { on: false, reason: String(e && e.message ? e.message : e) };
+    }
+    if (!c || c.on !== true) {
+      info.reason = (c && c.reason) || "the lens overlay did not configure";
+      emit({ level: "warn", message: `props overlay off: ${info.reason}` });
+      return;
+    }
+    let table = null;
+    try {
+      table = overlayThrottleTable(R.traj, R.D);
+    } catch (_) {
+      table = null;
+    }
+    R.overlayRun = { ov, table, errors: 0 };
+    info.on = true;
+    info.throttleSource = table ? table.source : "hover";
+  }
+
+  /** Draw the props over the frame about to be grabbed (frame film time t, progress p, its fov). */
+  function overlayDraw(R) {
+    const O = R.overlayRun;
+    const at = R.overlayAt;
+    if (!O || !at) return;
+    try {
+      const r = O.ov.draw({ t: at.t, theta: O.table ? tableTheta(O.table, at.p) : at.t, throttle: O.table ? tableThrottle(O.table, at.p) : 1, fov: at.fov, aspect: plan.aspect });
+      if (r && r.drawn) R.overlayInfo.frames += 1;
+      else O.errors += 1;
+    } catch (_) {
+      O.errors += 1;
+    }
   }
 
   // ---- the realtime film grid -------------------------------------------------
@@ -3184,6 +3569,7 @@ export function createTakePlayer(deps = {}) {
         if (rec.state === "idle" || rec.state === undefined) await rec.start();
         unsubGrab = installGrab(R);
       }
+      overlayBegin(R);
       dofSaved = dofBegin(R);
       cullBegin(R);
       if (mode === "realtime") await runRealtime(R);
@@ -3287,6 +3673,8 @@ export function createTakePlayer(deps = {}) {
         costUsd: ps ? ps.costUsd ?? 0 : 0,
         telemetryRows: R.telemetry.length,
         telemetryDropped: R.telemetryDropped,
+        // The occluder fade policy the pilot flew with ('never' = pilot.fade 'never'), when it reports one.
+        ...(ps && typeof ps.fade === "string" ? { fade: ps.fade } : {}),
       },
       safety: {
         adjustedFrames: R.safetyAdjusted,
@@ -3323,7 +3711,15 @@ export function createTakePlayer(deps = {}) {
       popInEvents: R.popIn,
       reveal: plan.reveal,
       dof: { ...R.dof },
-      faded: { ...fades, fallbackFrames: R.fadeFallbacks },
+      faded: {
+        ...fades,
+        fallbackFrames: R.fadeFallbacks,
+        // Creatures / NPCs / players a fade named: never hidden.
+        ...(R.fadeRefused.length ? { refused: R.fadeRefused.length, refusedGuids: R.fadeRefused.map((g) => `0x${(g >>> 0).toString(16).padStart(8, "0")}`) } : {}),
+      },
+      // The FPV props lens overlay: drawn into `frames` recorded frames, or why not.
+      overlay: overlayReport(R),
+      ...(R.lock ? { lockWindows: { windows: R.lock.windows.map((w) => w.slice()), lockedFrames: R.lock.frames, entries: R.lock.entries } } : {}),
       // The point subject's own body (guids / placement keys): seen as the subject, never faded.
       subjectBody: R.subjectBody.slice(),
       // The prepare-time checks travel with every take report (rehearse, shoot, a failed take's
@@ -3351,6 +3747,13 @@ export function createTakePlayer(deps = {}) {
     if (!plan.flightCheck && !R.flown) return null;
     const out = plan.flightCheck ? plainCopy(plan.flightCheck) : { preset: null, overspeed: null };
     out.tracking = R.flown ? { ...R.flown } : null;
+    return out;
+  }
+
+  function overlayReport(R) {
+    const i = R.overlayInfo || { on: false, style: null };
+    const out = { ...i };
+    if (R.overlayRun && R.overlayRun.errors > 0) out.errors = R.overlayRun.errors;
     return out;
   }
 

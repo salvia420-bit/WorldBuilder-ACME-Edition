@@ -1,0 +1,180 @@
+{
+ "name": "Burun Ruuk Village",
+ "title": "Burun Ruuk Village",
+ "siteId": "poi-burun-ruuk-village",
+ "summary": "The Burun Ruuk village in the Blackmire swamp, centred on the entrance bunker of the Temple of Ixir Zi (blood stains, fallen Burun, spears). Eight stone huts with bronze symbols and eight 19 m carved wooden totems ring it among swamp channels and giant trees.",
+ "landmarks": [
+  {
+   "name": "Temple of Ixir Zi entrance",
+   "pos": [
+    35916.0,
+    19260.0,
+    6.0
+   ],
+   "heightM": 4.4,
+   "note": "Bunker 0x0100110A with blood decals, spears and fallen Burun."
+  },
+  {
+   "name": "Burun totem",
+   "pos": [
+    35937.3,
+    19172.3,
+    5.1
+   ],
+   "heightM": 19.4,
+   "note": "0x02001076, one of eight carved totems."
+  },
+  {
+   "name": "Burun huts",
+   "pos": [
+    36012.0,
+    19164.0,
+    6.0
+   ],
+   "heightM": 8.0,
+   "note": "Eight 0x010031BD huts with bronze symbols in a ring 100-170 m out."
+  }
+ ],
+ "site": {
+  "id": "poi-burun-ruuk-village",
+  "name": "Burun Ruuk Village",
+  "gazetteerId": "blackmire-temple",
+  "teleport": "@teleloc 0xBB64000B 28.00 64.00 6.50 1 0 0 0",
+  "anchor": [
+   35916.0,
+   19260.0,
+   6.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.6,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer blackmire-temple (outdoor @teleloc beside the temple entrance). [critic b4-7 2026-10-15: teleport changed from '@teleloc 0xBB64001B 76.086 49.2145 5.555 -1 0 0 -0.000074' because the gazetteer blackmire-temple drop (z 5.555) lay 0.45 m under the kit ground (6.0) in swamp water 65 m from the village centre. Derived drop 16 m east of the temple entrance on dry ground (6.0), 6.0 m from any drawn object. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -21.7,
+   "ew": 47.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2582,
+  "coveredBy": "shot:yanshi.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Burun_Ruuk_Village.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-burun-ruuk-village.02",
+   "site": "poi-burun-ruuk-village",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     6.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35937.3,
+     19172.3,
+     5.1
+    ],
+    "height": 19.4,
+    "radius": 5
+   },
+   "params": {
+    "azimuthDeg": 240,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 11,
+    "spinDeg": -10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold 0.8 m above the swamp water 11 m south-west of the 19 m Burun totem and look steeply up it while the sky rolls 10 degrees; keep 3.5 m from the reeds.",
+   "notes": "Water-level worm's-eye up a 19 m carved Burun totem with the giant swamp canopy around it; south-west sun behind-left. Verified (check.mjs, full take flown): take 0-7 s: AGL 0.8..0.8 m, nearest drawn 3.77 m (scenery-default 0x020003D3@35934,19163), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%, over water 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 3.77 m (scenery-default 0x020003D3@35934,19163), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%, over water 100%."
+  },
+  {
+   "id": "poi-burun-ruuk-village.01",
+   "site": "poi-burun-ruuk-village",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35916.0,
+     19260.0,
+     6.0
+    ],
+    "height": 4.4,
+    "radius": 8
+   },
+   "params": {
+    "heightStart": 22,
+    "heightEnd": 75,
+    "rotateDeg": 35,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the temple entrance of the Burun Ruuk village and rise from 22 m to 75 m while the image turns 35 degrees; stay 18 m from the giant swamp trees.",
+   "notes": "God's-eye pull-up from the entrance of the Temple of Ixir Zi (blood-stained bunker with fallen Burun, spears and arrows) until the swamp channels, the ring of Burun huts and the 19 m totems sit small among the giant swamp trees. Verified (check.mjs, full take flown): take 0-11 s: AGL 22..75 m, nearest drawn 18.35 m (scenery-default 0x020012FC@35901,19251), vmax 7.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 31.15..72.6 m, nearest drawn 25.99 m (scenery-default 0x020012FC@35901,19251), vmax 7.57 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-burun-ruuk-village.01": "take 0-11 s: AGL 22..75 m, nearest drawn 18.35 m (scenery-default 0x020012FC@35901,19251), vmax 7.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-9.5 s: AGL 31.15..72.6 m, nearest drawn 25.99 m (scenery-default 0x020012FC@35901,19251), vmax 7.57 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-burun-ruuk-village.02": "take 0-7 s: AGL 0.8..0.8 m, nearest drawn 3.77 m (scenery-default 0x020003D3@35934,19163), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%, over water 100%; edit 1-6 s: AGL 0.8..0.8 m, nearest drawn 3.77 m (scenery-default 0x020003D3@35934,19163), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%, over water 100%"
+ }
+}

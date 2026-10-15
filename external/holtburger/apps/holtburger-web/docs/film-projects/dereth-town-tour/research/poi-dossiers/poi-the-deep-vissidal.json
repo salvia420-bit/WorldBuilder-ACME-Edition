@@ -1,0 +1,133 @@
+{
+ "name": "The Deep (Vissidal)",
+ "title": "The Deep (Vissidal)",
+ "siteId": "poi-the-deep-vissidal",
+ "summary": "The Deep (Vissidal) is an amorphous haze on Vissidal that accepts gold trophies (Gold Shallows Shredder, Gold Moarsman...) for experience and the Servant of the Deep title. At its coordinates the kit shows a visible landmark: a round, moss-covered spire structure (model 0x01003D10, 24 m across, 18.4 m tall, open layout) with portalspace-rift lights at its south mouth, on the flat moss plain of Mosswart Marsh, an hourglass-shaped Empyrean sculpture and mossy rocks beside it. The same structure marks The Deep on Dark Isle and Vaeshok's Cave.",
+ "acpedia": {
+  "categories": [
+   "Quest NPC",
+   "Northeast POI",
+   "Object"
+  ],
+  "map": {
+   "ns": 77.8,
+   "ew": 67.1
+  },
+  "mapWorld": [
+   40572.0,
+   43140.0
+  ],
+  "coordSrc": "index",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/The_Deep_Vissidal.txt",
+  "coveredDistM": 1934,
+  "coveredBy": "shot:merwart-village.03"
+ },
+ "landmarks": [
+  {
+   "name": "The Deep's spire",
+   "pos": [
+    40572.0,
+    43140.0,
+    20.0
+   ],
+   "heightM": 18.4,
+   "note": "0x01003D10; rift lights 0x02000680 at (40570.5,43133.6,24)."
+  },
+  {
+   "name": "Hourglass sculpture",
+   "pos": [
+    40597.7,
+    43142.5,
+    20.0
+   ],
+   "heightM": 12.5,
+   "note": "0x020014A3."
+  }
+ ],
+ "site": {
+  "id": "poi-the-deep-vissidal",
+  "name": "The Deep (Vissidal)",
+  "teleport": "@teleloc 0xD3E0001D 88.0 102.0 20.5 1 0 0 0",
+  "anchor": [
+   40572.0,
+   43140.0,
+   20.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.47,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "bandit-castle",
+ "insertBefore": "merwart-village",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [
+  {
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     8
+    ],
+    "anchor": "end"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40570.5,
+     43133.6,
+     20.0
+    ],
+    "height": 8,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 172,
+    "azimuthRef": "compass",
+    "elevationDeg": -6,
+    "distance": 17,
+    "thirds": "center",
+    "riseM": 3.5,
+    "keepAim": true
+   },
+   "standingOrder": "Rise from 2 m to 5.5 m above the moss 17 m south of The Deep's twisted spire, keeping its south mouth and the portalspace rifts centred; keep 7 m from the mossy rock to the west.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The Deep on Vissidal: an amorphous haze that takes gold trophies, housed in a moss-covered, round spire structure (24 m across, 18.4 m) with portalspace-rift lights at its south mouth, an hourglass-shaped Empyrean sculpture beside it on the marsh. A pedestal rise reveals it from just above the moss with the noon sun behind the camera. Structure identified from the kit (model 0x01003D10, same as Dark Isle); exact look not eye-checked. Verified with poi-kit check.mjs - take 8s: AGL 2.22..5.7 m, nearest 7.19 m (static 0xD3E0#11 0x020014A2), vmax 0.69 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.52..5.4 m, nearest 7.19 m, LOS blocked 0/21, in frame 100%, water 0%."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-the-deep-vissidal.01",
+   "technique": "classic.pedestal",
+   "rank": 3,
+   "check": "take 8s: AGL 2.22..5.7 m, nearest 7.19 m (static 0xD3E0#11 0x020014A2), vmax 0.69 m/s, LOS blocked 0/33, in frame 100%, water 0%; edit 1.5-6.5s: AGL 2.52..5.4 m, nearest 7.19 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 5,
+ "techniques": [
+  "classic.pedestal"
+ ]
+}

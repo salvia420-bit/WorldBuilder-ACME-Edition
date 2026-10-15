@@ -1,0 +1,240 @@
+{
+ "name": "Tumerok Tower (15.6N, 49.9W)",
+ "title": "15.6N, 49.9W - Tumerok Tower",
+ "siteId": "poi-tumerok-tower",
+ "summary": "A lone Tumerok-held spire tower on a sandy beach at the foot of a 220 m sea cliff on the Northern Landbridge coast, near Fort Tethana (acpedia: once a lich tower, taken over by Tumeroks, possibly when the Viamontians took the Tumerok fortification on the mountain top). The kit shows a 31 m five-story spire tower (0x01001117) at the waterline with three glowing fire pits and a 20 m rock pillar beside it, shallow sea to the east and south, and the 16.5N 50.5W Tumerok Fortification (spire towers, flag poles and walls) on the cliff top 220 m above to the north-west.",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 15.6,
+   "ew": -49.9
+  },
+  "mapWorld": [
+   12492.0,
+   28212.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/15_6N_49_9W_Tumerok_Tower.txt",
+  "coveredDistM": 5380,
+  "coveredBy": "path:danbys-outpost.03"
+ },
+ "landmarks": [
+  {
+   "name": "Tumerok beach tower",
+   "pos": [
+    12516,
+    28212,
+    0
+   ],
+   "heightM": 30.75,
+   "note": "Five-story spire tower 0x01001117, rotated footprint about 11 m wide, at the waterline."
+  },
+  {
+   "name": "Fire pits",
+   "pos": [
+    12505.6,
+    28215.0,
+    0
+   ],
+   "heightM": 0.4,
+   "note": "Three glowing red stone fire pits 0x02000354 at (12515.3,28202.5), (12505.6,28215.0) and (12499.1,28215.3)."
+  },
+  {
+   "name": "Rock pillar",
+   "pos": [
+    12492.7,
+    28216.6,
+    0
+   ],
+   "heightM": 19.8,
+   "note": "Massive vertical scenery GfxObj 0x01000F9F (7 x 6 m), the occluder of shot .02."
+  },
+  {
+   "name": "Sea cliff with the Tumerok Fortification",
+   "pos": [
+    12372,
+    28340,
+    220
+   ],
+   "heightM": 30.75,
+   "note": "Cliff from z 0 to z 220 within 100 m. Spire towers 0x01001161 (top 250.75), halls and Tumerok flags 0x02001519 on top."
+  },
+  {
+   "name": "Shallow sea",
+   "pos": [
+    12590,
+    28080,
+    0
+   ],
+   "heightM": 0,
+   "note": "WaterShallowSea terrain east and south of the beach."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-tower",
+  "name": "Tumerok Tower (15.6N, 49.9W)",
+  "gazetteerId": "tumerok-tower-4192",
+  "teleport": "@teleloc 0x4092003F 182 148 0.8 1 0 0 0",
+  "anchor": [
+   12516,
+   28212,
+   0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.49,
+   "grade": "neutral"
+  },
+  "notes": "Derived @teleloc on the beach sand at (12470,28180), ground 0.3, 15.7 m from the nearest spawn, not water. The gazetteer has only a map @tele for this POI."
+ },
+ "insertAfter": "danbys-outpost",
+ "insertBefore": "fort-tethana",
+ "insertNote": "Kept the batch's route position (danbys-outpost -> fort-tethana).",
+ "shots": [
+  {
+   "id": "poi-tumerok-tower.01",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     2,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12516,
+     28212,
+     0
+    ],
+    "height": 31,
+    "radius": 6
+   },
+   "params": {
+    "heightAGL": 3,
+    "speed": 8,
+    "headingDeg": 327,
+    "relativeToSubject": false,
+    "lookAhead": 40,
+    "tiltDeg": 11,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     12588,
+     28084,
+     0
+    ],
+    [
+     12544,
+     28152,
+     0
+    ]
+   ],
+   "standingOrder": "Skim north-west 3 m above the shallow sea toward the beach tower with the 220 m cliff rising behind it; stay over open water and stop 65 m short of the tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water: the lens skims 3 m above the shallow sea (100% of samples over WaterShallowSea, z 0) for 80 m north-west at 8 m/s toward the 31 m Tumerok spire tower on the beach. The gimbal is tilted up 11 deg so the 220 m sea cliff behind the tower fills the upper frame (cliff top at ndc y 0.75-0.92) while the tower grows from the centre. The high noon sun is behind the left shoulder and lights the tower's sea face. The path ends 67 m short of the tower. Verified with poi-kit check.mjs (full take flown) - take 10s: AGL 3..3 m, nearest 57.17 m (static 0x4192#3 0x02000354), vmax 8.1 m/s, LOS blocked 0/41, in frame 100%, water 100%, retail-bake tree 88.2 m (not drawn by the default bake); edit 3.5-9.5s: AGL 3..3 m, nearest 61.21 m (static 0x4192#3 0x02000354), vmax 8.1 m/s, LOS blocked 0/25, in frame 100%, water 100%, retail-bake tree 96.8 m (not drawn by the default bake); flight cinema: peak 8.12 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-tumerok-tower.02",
+   "technique": "classic.reveal-from-occluder",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     3,
+     9
+    ],
+    "anchor": 4.5
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12516,
+     28212,
+     0
+    ],
+    "height": 31,
+    "radius": 6
+   },
+   "params": {
+    "azimuthDeg": 281,
+    "azimuthRef": "compass",
+    "elevationDeg": -20,
+    "distance": 32.7,
+    "occluder": [
+     12492.7,
+     28216.6,
+     0
+    ],
+    "occluderRadius": 3.5,
+    "direction": "right",
+    "holdFrac": 0.2,
+    "settleFrac": 0.2,
+    "marginM": 0.5
+   },
+   "standingOrder": "Start hidden behind the 20 m rock pillar at the foot of the cliff, then truck right toward the surf until the Tumerok tower and its fire pits stand clear; keep 3 m from the rock and never fade it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Reveal: the lens starts 3 m west of a 20 m rock pillar (GfxObj 0x01000F9F, 7 x 6 m) at the foot of the cliff, which hides the tower completely. It holds, then trucks 14 m south-south-west toward the surf until the tower and its three glowing fire pits stand clear on the beach. LOS is clear from about t 4 s, inside the edit window. The noon sun from the south side-lights the tower. The pillar is the occluder by design and must not be faded. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 2.91..4.3 m, nearest 3.31 m (static 0x4192#0 0x01000F9F), vmax 4.14 m/s, LOS blocked 16/37, in frame 100%, water 0%, retail-bake tree 17.4 m (not drawn by the default bake); edit 3.5-9s: AGL 2.91..4 m, nearest 3.93 m (static 0x4192#0 0x01000F9F), vmax 4.14 m/s, LOS blocked 2/23, in frame 100%, water 0%, retail-bake tree 20.6 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-tower.01",
+   "technique": "drone.terrain-skim",
+   "rank": 1,
+   "check": "take 10s: AGL 3..3 m, nearest 57.17 m (static 0x4192#3 0x02000354), vmax 8.1 m/s, LOS blocked 0/41, in frame 100%, water 100%, retail-bake tree 88.2 m (not drawn by the default bake); edit 3.5-9.5s: AGL 3..3 m, nearest 61.21 m (static 0x4192#3 0x02000354), vmax 8.1 m/s, LOS blocked 0/25, in frame 100%, water 100%, retail-bake tree 96.8 m (not drawn by the default bake); flight cinema: peak 8.12 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-tumerok-tower.02",
+   "technique": "classic.reveal-from-occluder",
+   "rank": 2,
+   "check": "take 9s: AGL 2.91..4.3 m, nearest 3.31 m (static 0x4192#0 0x01000F9F), vmax 4.14 m/s, LOS blocked 16/37, in frame 100%, water 0%, retail-bake tree 17.4 m (not drawn by the default bake); edit 3.5-9s: AGL 2.91..4 m, nearest 3.93 m (static 0x4192#0 0x01000F9F), vmax 4.14 m/s, LOS blocked 2/23, in frame 100%, water 0%, retail-bake tree 20.6 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 11.5,
+ "techniques": [
+  "drone.terrain-skim",
+  "classic.reveal-from-occluder"
+ ]
+}

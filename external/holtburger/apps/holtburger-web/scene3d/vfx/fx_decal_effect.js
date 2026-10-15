@@ -66,6 +66,7 @@ import * as THREE from "three";
 import { BlendFunction, Effect, EffectAttribute } from "postprocessing";
 import { FX_DECAL_MAX, collectFxDecals } from "./fx_decals.js";
 import { fxTier2Enabled } from "./fx_tier2.js";
+import { fxNowMs } from "../fx_clock.js";
 
 /**
  * `?fxDecalSmooth` — default ON: the smooth box shader (round embers / glints /
@@ -587,7 +588,7 @@ export class FxDecalEffect extends Effect {
     U.uDecalViewRot.value.copy(U.uDecalCamRot.value).transpose();
     const pe = cam.projectionMatrix.elements;
     U.uDecalProj.value.set(pe[0], pe[5], pe[8], pe[9]);
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const now = fxNowMs(); // the film clock during a stepped take (fx_clock.js)
     U.uDecalTime.value = (now / 1000) % 1024;
     const fog = this._fogSource();
     if (fog && fog.isFogExp2) U.uDecalFog.value.set(2, 0, 1, fog.density || 0);

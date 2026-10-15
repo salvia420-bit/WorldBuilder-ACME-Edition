@@ -1,0 +1,181 @@
+{
+ "name": "Tumerok Stronghold",
+ "title": "40.0S, 54.9W - Tumerok Stronghold",
+ "siteId": "poi-tumerok-stronghold",
+ "summary": "A double Tumerok stronghold on a flat grassy shelf of the East Direlands (40.0S 54.9W). North-east: an open fort of three 5-storey stone spire towers (19 m footprints, 30.75 m tall) in an L at (11340, 14916), (11364, 14892) and (11364, 14916), one with the Dryreach portal and one with a locked chest; south-west: a closed walled compound of low timber halls and plank palisades (5 m) at x 11220-11244, y 14844-14892 holding the Tumerok Gladiators. Wooded hills rise to the north-west.",
+ "landmarks": [
+  {
+   "name": "West spire tower",
+   "pos": [
+    11340,
+    14916,
+    2
+   ],
+   "heightM": 30.75,
+   "note": "0x01001161, 5 storeys."
+  },
+  {
+   "name": "Spire towers (NE trio)",
+   "pos": [
+    11356,
+    14908,
+    2
+   ],
+   "heightM": 30.75,
+   "note": "Three towers 24 m apart."
+  },
+  {
+   "name": "Walled compound",
+   "pos": [
+    11232,
+    14868,
+    0
+   ],
+   "heightM": 5,
+   "note": "Halls 0x01001130 / 0x0100115E with palisades."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-stronghold",
+  "name": "Tumerok Stronghold",
+  "gazetteerId": "east-direlands-swamp-3b4d",
+  "teleport": "@teleloc 0x3B4D0037 163.769 144.452 34.91 0.488804 0 0 -0.872394",
+  "anchor": [
+   11320,
+   14890,
+   2.5
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -40.0,
+   "ew": -54.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5109,
+  "coveredBy": "path:wai-jhou.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/40_0S_54_9W_Tumerok_Stronghold.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-tumerok-stronghold.01",
+   "site": "poi-tumerok-stronghold",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     11340,
+     14916,
+     2
+    ],
+    "height": 30.75,
+    "radius": 8
+   },
+   "params": {
+    "offset": 58,
+    "heightAGL": 28,
+    "speed": 8,
+    "side": "right",
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly north 28 m up and 58 m west of the three Tumerok spire towers, the low sun behind the lens, letting them swing through the frame; keep 45 m from the towers and 10 m from the trees.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature: lateral fly-by 28 m up, 58 m west of the three 30.75 m Tumerok spire towers, heading north at 8 m/s; the towers swing through the frame and the walled compound slides by in the foreground-left, the low western sun (0.74) behind the camera lighting their stone faces. Subject point = the west tower (its own prism is the subject body). Verified (check.mjs, full take flown): take 0-10 s: AGL 26.33..30 m, nearest drawn 11.85 m (scenery-default 0x02000258@11298,14926), vmax 8 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 1.2 m); edit 2-8 s: AGL 29.17..30 m, nearest drawn 11.85 m (scenery-default 0x02000258@11298,14926), vmax 8 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 1.2 m); flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-tumerok-stronghold.02",
+   "site": "poi-tumerok-stronghold",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.0,
+     10.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     11356,
+     14908,
+     2
+    ],
+    "height": 31,
+    "radius": 22
+   },
+   "params": {
+    "startDistance": 34,
+    "endDistance": 90,
+    "startHeight": 14,
+    "endHeight": 34,
+    "bearingDeg": 240,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Pull back south-west and up from the three spire towers until the walled fort and the Direlands swamp open around them; start 12 m from the nearest tower wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Closing dronie from 12 m off the nearest tower wall, pulling back south-west and up (34 -> 90 m, 16 -> 36 m high) until the three towers stand over the walled compound and the Direlands swamp around them; sun from the right-behind. Verified (check.mjs, full take flown): take 0-11 s: AGL 13.04..36 m, nearest drawn 14.51 m (static 0x3B4D#16 0x01001161), vmax 8.49 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 19.8 m); edit 3.5-10 s: AGL 18.02..35.6 m, nearest drawn 25 m (scenery-default 0x02000246@11338,14869), vmax 8.49 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 19.8 m); flight cinema peak 8.48 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-tumerok-stronghold.01": "take 0-10 s: AGL 26.33..30 m, nearest drawn 11.85 m (scenery-default 0x02000258@11298,14926), vmax 8 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 1.2 m); edit 2-8 s: AGL 29.17..30 m, nearest drawn 11.85 m (scenery-default 0x02000258@11298,14926), vmax 8 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 1.2 m); flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-tumerok-stronghold.02": "take 0-11 s: AGL 13.04..36 m, nearest drawn 14.51 m (static 0x3B4D#16 0x01001161), vmax 8.49 m/s, LOS blocked 0/45, subject in frame 100% (retail-bake tree 19.8 m); edit 3.5-10 s: AGL 18.02..35.6 m, nearest drawn 25 m (scenery-default 0x02000246@11338,14869), vmax 8.49 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 19.8 m); flight cinema peak 8.48 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

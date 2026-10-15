@@ -192,7 +192,7 @@ check("the fragment stage still tests water through the wider surface mask",
   /uWaterSurfaceCodeMask & \(1 << c\)/.test(FRAG));
 check("the lattice-locked swell is untouched", /waterSwellLattice/.test(VERT));
 check("the water sheen block is still present and still fade-banded",
-  /sheenFade = 1\.0 - smoothstep\(30\.0, 160\.0, vViewDepth\)/.test(FRAG));
+  /sheenFade = \(1\.0 - smoothstep\(uWaterSheenFade\.x, uWaterSheenFade\.y, vViewDepth\)\) \* footFade;/.test(FRAG) /* 2026-10-15: the band is ?waterSheenFade (default 30,160, test_terrain_water.mjs) */);
 check("waterW is still computed from the four corner weights",
   /float waterW = clamp\(/.test(FRAG));
 check("the sparkle never writes cellUv, waterCellUv or waterW",

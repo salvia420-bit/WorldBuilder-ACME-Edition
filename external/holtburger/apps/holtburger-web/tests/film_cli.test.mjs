@@ -6,7 +6,9 @@
 // cut. This suite runs the REAL CLI `main(argv, deps)` and the real lib modules with injected fakes for every
 // subcommand that needs no browser:
 //   A  args parser, numeric/boolean options, FilmCliError exit codes, redactUrl + the secret scrubber
-//   B  buildFilmUrl: the exact boot query string, filmDof=on always, password encoding, missing password → 2
+//   B  buildFilmUrl: the exact boot query string, filmDof=on + filmProps=on always, quality ultra by default, the
+//      effects-audit flags (stormScan=retail always, waterSheenFade=40,500 always, cloudCoverage 0.3 for fair-weather
+//      clouds / --coverage), password encoding, missing password → 2
 //   C  doctor: fake ffmpeg script (encoders/demuxers), fake CDP /json/version, JEV key source + redaction,
 //      --ping through the real JEV client over a fake fetch, unsafe key file, --offline, missing ffmpeg, the
 //      full three-forward tunnel hint (--host / FILM_1070_HOST)
@@ -22,7 +24,8 @@
 //      jev task pick / keep / site-fit / family with an injected fake client, the code verdict without a key,
 //      the JEV-failure fallback and the exit codes
 //   I  assemble: argv equals assemblyArgv(buildAssembly(...)) (the edl.mjs filter string), EDL file,
-//      missing takes → 1 / --missing=black; contact-sheet argv (every-Nth math, frames from the take report);
+//      missing takes → 1 / --missing=black; a silent tail (edit.tail): --dry-run argv with apad=whole_dur and the
+//      element-local fades, totalSec incl. the tail; contact-sheet argv (every-Nth math, frames from the take report);
 //      take mux argv (frames / VP9 re-encodes crop to even dimensions)
 //   J  --help / unknown command / --json envelopes; a final scan that no output or written file holds a secret
 // No browser, no network, no real ffmpeg: ffmpeg is a temp node script that records its argv.
@@ -45,7 +48,7 @@ import {
   redactUrl,
   strArg,
 } from "../tools/film/lib/args.mjs";
-import { buildFilmUrl, readyTargetsForCommand, readyTargetsForSite, lbKeyOfId } from "../tools/film/lib/session.mjs";
+import { DEFAULT_FAIR_COVERAGE, DEFAULT_QUALITY, FILM_EFFECT_FLAGS, buildFilmUrl, readyTargetsForCommand, readyTargetsForSite, lbKeyOfId } from "../tools/film/lib/session.mjs";
 import { contactSheetArgv, everyNth } from "../tools/film/lib/contact_sheet.mjs";
 import { EVEN_CROP_FILTER, muxArgv, parseFfmpegList } from "../tools/film/lib/ffmpeg.mjs";
 import { JEV_ENDPOINT, JevError } from "../tools/film/lib/jev.mjs";
@@ -336,10 +339,10 @@ await check("A4 exitCodeFor maps JevError config/auth → 2, other kinds → 1, 
 
 // ── B: film URL ──────────────────────────────────────────────────────────────────────────────────────────
 
-await check("B1 buildFilmUrl: the exact boot query, filmDof=on always, password URL-encoded", () => {
+await check("B1 buildFilmUrl: the exact boot query, filmDof=on + filmProps=on always, password URL-encoded", () => {
   const url = buildFilmUrl({ base: "http://127.0.0.1:8765/apps/holtburger-web/index.html", account: "phase4demo", password: "pw", quality: "high" });
   assert.equal(url,
-    "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1&account=phase4demo&password=pw&autoSpawn=first&quality=high&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off&clouds=on&cloudWeather=off");
+    "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&filmProps=on&autoLogin=1&account=phase4demo&password=pw&autoSpawn=first&quality=high&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off&clouds=on&cloudWeather=off&cloudCoverage=0.3&stormScan=retail&waterSheenFade=40,500");
   const def = buildFilmUrl({ password: PASSWORD });
   // clouds: on by default (owner 2026-10-14), off on request, anything else is a usage error
   assert.equal(new URL(def).searchParams.get("clouds"), "on");
@@ -356,6 +359,8 @@ await check("B1 buildFilmUrl: the exact boot query, filmDof=on always, password 
   for (const quality of ["low", "mid", "high", "ultra"]) {
     const u = new URL(buildFilmUrl({ password: "x", quality }));
     assert.equal(u.searchParams.get("filmDof"), "on");
+    // the lens overlay (FPV props) is armed on every film page; it draws only for shots with overlay.props
+    assert.equal(u.searchParams.get("filmProps"), "on");
     assert.equal(u.searchParams.get("filmMode"), "on");
     assert.equal(u.searchParams.get("quality"), quality);
   }
@@ -363,6 +368,36 @@ await check("B1 buildFilmUrl: the exact boot query, filmDof=on always, password 
   assert.match(buildFilmUrl({ base: "http://h/i.html?bridge_url=ws://x", password: "x" }), /^http:\/\/h\/i\.html\?bridge_url=ws:\/\/x&nosw=1&agent=1/);
   assert.throws(() => buildFilmUrl({ password: "" }), (e) => e instanceof FilmCliError && e.exitCode === 2 && e.code === "NO_PASSWORD");
   assert.equal(redactUrl(def).includes(encodeURIComponent(PASSWORD)), false);
+});
+
+await check("B2 boot URL effects (audit 2026-10-15): quality ultra by default, stormScan=retail always, waterSheenFade=40,500 always, cloudCoverage 0.3 for fair clouds / explicit --coverage", () => {
+  const P = (o = {}) => new URL(buildFilmUrl({ password: "x", ...o })).searchParams;
+  // ultra by default (stepped capture is not real-time bound); --quality overrides
+  assert.equal(DEFAULT_QUALITY, "ultra");
+  assert.equal(P().get("quality"), "ultra");
+  assert.equal(P({ quality: "mid" }).get("quality"), "mid");
+  // retail's storm rule and the 500 m water sheen ride on EVERY boot (fair, live, clouds off), in that order, last
+  assert.deepEqual(FILM_EFFECT_FLAGS.map((f) => [...f]), [["stormScan", "retail"], ["waterSheenFade", "40,500"]]);
+  for (const o of [{}, { weather: "live" }, { clouds: "off" }, { clouds: "off", weather: "live" }, { coverage: 0.7 }]) {
+    const u = buildFilmUrl({ password: "x", ...o });
+    assert.ok(u.endsWith("&stormScan=retail&waterSheenFade=40,500"), `${JSON.stringify(o)}: ${u}`);
+    assert.equal(new URL(u).searchParams.get("stormScan"), "retail");
+    assert.equal(new URL(u).searchParams.get("waterSheenFade"), "40,500", "the comma stays literal");
+    assert.equal(new URL(u).searchParams.get("filmProps"), "on");
+  }
+  // coverage: 0.3 with fair-weather clouds; none with live weather or no clouds; an explicit value always wins
+  assert.equal(DEFAULT_FAIR_COVERAGE, 0.3);
+  assert.equal(P().get("cloudCoverage"), "0.3");
+  assert.equal(P({ weather: "live" }).has("cloudCoverage"), false);
+  assert.equal(P({ clouds: "off" }).has("cloudCoverage"), false);
+  assert.equal(P({ coverage: 0.55 }).get("cloudCoverage"), "0.55");
+  assert.equal(P({ coverage: 0.8, weather: "live" }).get("cloudCoverage"), "0.8");
+  assert.equal(P({ coverage: 0, clouds: "off" }).get("cloudCoverage"), "0");
+  assert.equal(P({ coverage: "0.4" }).get("cloudCoverage"), "0.4");
+  assert.match(buildFilmUrl({ password: "x" }), /&cloudWeather=off&cloudCoverage=0\.3&stormScan=retail/);
+  for (const bad of [1.5, -0.1, "x", NaN, true]) {
+    assert.throws(() => buildFilmUrl({ password: "x", coverage: bad }), (e) => e instanceof FilmCliError && e.exitCode === 2 && /--coverage must be a number in \[0, 1\]/.test(e.message), String(bad));
+  }
 });
 
 // ── C: doctor ────────────────────────────────────────────────────────────────────────────────────────────
@@ -959,6 +994,15 @@ await check("H5 (r2-cli) page issues: pageIssuesOf reads validation / flight / w
   assert.ok(!JSON.stringify(f.decides.at(-1)).includes("overspeed"), "issue text never goes to JEV");
 });
 
+await check("H6 jev task pass-plan is registered exactly when lib/jev_tasks.mjs exports PASS_PLAN_CLI (agent-D task; a missing export never breaks the CLI)", async () => {
+  const mod = await import("../tools/film/lib/jev_tasks.mjs");
+  const r = await run(["jev", "task", "--input={}"]);
+  assert.equal(r.code, 2, r.err + r.out);
+  const listed = /jev task needs one of pick, keep, site-fit, family(, pass-plan)?/.exec(r.err);
+  assert.ok(listed, r.err);
+  assert.equal(Boolean(listed[1]), Boolean(mod.PASS_PLAN_CLI && typeof mod.PASS_PLAN_CLI.run === "function"));
+});
+
 await check("I1 assemble: ffmpeg argv === assemblyArgv(buildAssembly(...)) (the edl.mjs filter graph), song mapped, EDL written", async () => {
   fs.mkdirSync(path.dirname(SONG_AUDIO), { recursive: true });
   fs.writeFileSync(SONG_AUDIO, "song");
@@ -1006,6 +1050,67 @@ await check("I2 assemble: a missing take → exit 1 (TAKES_MISSING); --missing=b
   assert.ok(!expected.includes("-c:a"));
   assert.match(expected[expected.indexOf("-filter_complex") + 1], /color=c=black/);
   writeTakes();
+});
+
+await check("I2b plan compile + assemble --dry-run with a silent tail (edit.tail): the song is cut + faded at musicEnd and padded (apad=whole_dur), element-local fades, -shortest kept, totalSec includes the tail", async () => {
+  const dir = path.join(TMP, "asm-tail");
+  fs.mkdirSync(dir, { recursive: true });
+  const plan = smallPlan({
+    edit: { fadeOutSec: 1, tail: { from: "t1", gapSec: 1.5, fadeOutSec: 0.5 } },
+    shots: [
+      { id: "s1", site: "holtburg", technique: "classic.static", duration: { sec: 2 }, standingOrder: "Hold still and keep 3 m from walls." },
+      { id: "s2", site: "holtburg", technique: "classic.static", duration: { sec: 2 }, transition: "dissolve", standingOrder: "Hold still again." },
+      { id: "t1", site: "dungeon", technique: "fpv.fpv-corridor", duration: { sec: 3 }, transition: { type: "fade", durationSec: 1 }, route: { fromCell: "0x01F60289", toCell: "0x01F6027A" }, standingOrder: "Fly the corridor, 1 m from walls." },
+      { id: "t2", site: "holtburg", technique: "classic.static", duration: { sec: 2 }, transition: "dissolve", standingOrder: "Hold still at the end." },
+    ],
+  });
+  fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan));
+  let r = await run(["plan", "compile", path.join(dir, "plan.json")], { deps: { registry: REG } });
+  assert.equal(r.code, 0, r.err + r.out);
+  assert.match(r.out, /music part ends at 4\.00 s \(frame 40, fade-out 1 s\); silent tail 6\.50 s incl\. the black gap/);
+  const tl = JSON.parse(fs.readFileSync(path.join(dir, "timeline.json"), "utf8"));
+  assert.deepEqual(tl.musicEnd, { sec: 4, frame: 40, fadeOutSec: 1 });
+  assert.equal(tl.frames, 105, "40 music + 15 black + 30 + 20");
+  const takes = {};
+  for (const it of tl.items) {
+    const file = path.join(dir, "takes", `${it.shotId}.mp4`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "take");
+    fs.mkdirSync(path.join(dir, "reports"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "reports", `${it.shotId}.json`), JSON.stringify({ shotId: it.shotId, file, fps: tl.fps, frames: it.takeFrames, durationSec: it.takeFrames / tl.fps }));
+    takes[it.shotId] = { file, fps: tl.fps, frames: it.takeFrames, durationSec: it.takeFrames / tl.fps };
+  }
+  const song = path.join(dir, "song.mp3");
+  fs.writeFileSync(song, "song");
+  FF.reset();
+  r = await run(["assemble", path.join(dir, "timeline.json"), `--song=${song}`, `--ffmpeg=${FF.file}`, "--dry-run", "--json"]);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(FF.calls().length, 0, "dry run");
+  const res = r.json().result;
+  assert.equal(res.totalSec, 10.5, "the program includes the gap and the tail");
+  assert.equal(res.totalFrames, 105);
+  assert.deepEqual(res.musicEnd, { sec: 4, frame: 40, fadeOutSec: 1, tailSec: 6.5 });
+  const argv = res.argv.slice(1);
+  assert.deepEqual(argv, assemblyArgv(buildAssembly(tl, takes, { audioFile: song, missing: "error" }), { out: path.join(dir, "edit", "final.mp4"), crf: 16 }));
+  const fc = argv[argv.indexOf("-filter_complex") + 1];
+  assert.match(fc, /\[4:a\]atrim=duration=4,asetpts=PTS-STARTPTS,afade=t=out:st=3:d=1,apad=whole_dur=10\.5\[aout\]$/);
+  // element-local: the last music take fades out in its own chain (22 frames fed: 2 dissolve frames + 20 edit), the
+  // first tail take fades in from black in its own chain; the black gap is its own filler (fps'd: the graph xfades)
+  assert.match(fc, /\[1:v\]trim=start_frame=3:end_frame=25,setpts=PTS-STARTPTS,fps=10,scale=64:36:flags=lanczos,setsar=1,format=yuv420p,fade=t=out:start_frame=12:nb_frames=10:color=black\[e1\]/);
+  assert.match(fc, /color=c=black:s=64x36:r=10,trim=end_frame=15,setpts=PTS-STARTPTS,fps=10,setsar=1,format=yuv420p\[e2\]/);
+  assert.match(fc, /\[2:v\]trim=start_frame=0:end_frame=33,setpts=PTS-STARTPTS,fps=10,scale=64:36:flags=lanczos,setsar=1,format=yuv420p,fade=t=in:start_frame=0:nb_frames=10:color=black\[e3\]/);
+  // the program fade-out is the tail's (0.5 s) on the very end; no global fade at the music end
+  assert.match(fc, /fade=t=out:start_frame=100:nb_frames=5:color=black,format=yuv420p\[vout\]/);
+  assert.equal((fc.match(/fade=t=out:start_frame=/g) || []).length, 2, "one element-local, one program fade-out");
+  assert.ok(argv.includes("-shortest"), "the padded audio is as long as the picture, so -shortest cuts nothing");
+  // the same timeline without --song: no audio chain at all
+  r = await run(["assemble", path.join(dir, "timeline.json"), "--no-audio", `--ffmpeg=${FF.file}`, "--dry-run", "--json"]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(!r.json().result.argv.join(" ").includes("apad"));
+  // the human summary names the music part and the silent tail
+  r = await run(["assemble", path.join(dir, "timeline.json"), `--song=${song}`, `--ffmpeg=${FF.file}`]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /with song\) — music 4\.00 s, then 6\.50 s silent tail/);
 });
 
 await check("I3 contact-sheet: N = ⌊frames / tiles⌋; exact -vf; frames from --frames or the take report (no ffprobe)", async () => {

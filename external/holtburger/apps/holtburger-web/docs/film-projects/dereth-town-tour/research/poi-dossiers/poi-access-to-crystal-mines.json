@@ -1,0 +1,135 @@
+{
+ "name": "Access to Crystal Mines (Holtburg portal)",
+ "title": "Access to Crystal Mines",
+ "siteId": "poi-access-to-crystal-mines",
+ "summary": "acpedia's Access to Crystal Mines is six giant platforms suspended in the air west of the Mount Esper crater (70.5N 8.1W), five with portals to the Crystal Mine versions, reached by a portal on the ground near Holtburg at 46.8N 30.5E. The platforms lie in landblock 0x75D7, which is missing from the kit, so only the Holtburg-side access portal is filmed: a portal swirl and the NPC Tornash on a bare grassy hilltop (z 129, the highest ground 1.1 km north-west of Holtburg) with a 36 m pine 26 m west.",
+ "landmarks": [
+  {
+   "name": "Access to Crystal Mines portal",
+   "pos": [
+    31786.2,
+    35698.6,
+    129.2
+   ],
+   "heightM": 3.5,
+   "note": "Portal swirl (gazetteer access-to-crystal-mines-portal-a5b9)."
+  },
+  {
+   "name": "Tornash",
+   "pos": [
+    31794.1,
+    35696.3,
+    128.5
+   ],
+   "heightM": 1.8,
+   "note": "NPC beside the portal."
+  },
+  {
+   "name": "Hilltop pine (0x020002D9)",
+   "pos": [
+    31761.9,
+    35708.6,
+    131.2
+   ],
+   "heightM": 36.0,
+   "note": "Default-bake tree behind the portal."
+  }
+ ],
+ "site": {
+  "id": "poi-access-to-crystal-mines",
+  "name": "Access to Crystal Mines (Holtburg portal)",
+  "gazetteerId": "access-to-crystal-mines-portal-a5b9",
+  "teleport": "@teleloc 0xA5B90027 100.00 165.00 129.92 1 0 0 0",
+  "anchor": [
+   31786.2,
+   35698.6,
+   129.2
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.37,
+   "grade": "cool"
+  },
+  "notes": "The gazetteer teleport for this portal lands ON the portal swirl (risk of the hidden player being portalled away); derived @teleloc 15 m south-south-west of it on open grass instead. The acpedia POI's six floating platforms are at 70.5N 8.1W (landblock 0x75D7, not in the kit) and are NOT filmed; this site is the Holtburg-side access portal at 46.8N 30.5E."
+ },
+ "insertAfter": "holtburg",
+ "insertBefore": "glenden-wood",
+ "acpedia": {
+  "categories": [
+   "Portal",
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 46.8,
+   "ew": 30.5
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1084,
+  "coveredBy": "path:holtburg.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Access_to_Crystal_Mines.txt"
+ },
+ "shots": [],
+ "verification": {
+  "poi-access-to-crystal-mines.01": "take 0-7 s: AGL 3.74..3.7 m, nearest drawn 9.38 m (spawn Linkable Monster Generator ( 3 Min.)), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 3.74..3.7 m, nearest drawn 9.38 m (spawn Linkable Monster Generator ( 3 Min.)), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%"
+ },
+ "criticRemovedShots": [
+  {
+   "id": "poi-access-to-crystal-mines.01",
+   "site": "poi-access-to-crystal-mines",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.4,
+     6.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31786.2,
+     35698.6,
+     129.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 160,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 16,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off south of the Access to Crystal Mines portal on its grassy hilltop and let the swirl turn against the morning sky with the tall pine behind; no movement; Tornash stays beside the portal.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Small-place shot: locked off 16 m south of the Access to Crystal Mines portal on its bare grassy hilltop (z 129, the highest ground NW of Holtburg), the swirl turning against the open morning sky with a 36 m pine behind-left and Tornash beside it. The acpedia POI's floating platforms (70.5N 8.1W) are in landblock 0x75D7, not in the kit, so they are not filmed. Verified (check.mjs, full take flown): take 0-7 s: AGL 3.74..3.7 m, nearest drawn 9.38 m (spawn Linkable Monster Generator ( 3 Min.)), vmax 0 m/s, LOS blocked 0/29, subject in frame 100%; edit 1-6 s: AGL 3.74..3.7 m, nearest drawn 9.38 m (spawn Linkable Monster Generator ( 3 Min.)), vmax 0 m/s, LOS blocked 0/21, subject in frame 100%.",
+   "criticReason": "Wrong feature: acpedia's Access to Crystal Mines is the six floating platforms west of the Mount Esper crater (70.5N 8.1W, landblock 0x75D7, not in the kit); this shot only frames the Holtburg-side route portal swirl and Tornash on a bare hilltop (the acpedia Route entry), a generic 5 s locked-off portal that does not show the POI. Site dropped; re-add only if 0x75D7 is dumped into the kit and the platforms are filmed."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.static: Wrong feature: acpedia's Access to Crystal Mines is the six floating platforms west of the Mount Esper crater (70.5N 8.1W, landblock 0x75D7, not in the kit); this shot only frames the Holtburg-side route portal swirl and Tornash on a bare hilltop (the acpedia Route entry), a generic 5 s locked-off portal that does not show the POI. Site dropped; re-add only if 0x75D7 is dumped into the kit and the platforms are filmed."
+ ]
+}

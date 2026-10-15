@@ -1,0 +1,163 @@
+{
+ "id": "egg-orchard-run",
+ "name": "Egg Orchard - FPV run (drop to the exit portal)",
+ "gazetteerId": "egg-orchard",
+ "teleport": "@teleloc 0x002B0119 50.000 -100.000 -59.995 1 0 0 0",
+ "anchor": {
+  "cell": "0x002B0119",
+  "local": [
+   50.0,
+   -100.0,
+   -59.995
+  ]
+ },
+ "cell": "0x002B0119",
+ "indoor": true,
+ "interiorLb": "0x002B0000",
+ "prime": [
+  "@teleloc 0x002B035D 469.823 -130.177 -5.995 1 0 0 0",
+  "@teleloc 0x002B02D2 380.000 -100.000 -11.995 1 0 0 0",
+  "@teleloc 0x002B024B 304.668 -150.000 -23.995 1 0 0 0",
+  "@teleloc 0x002B020A 268.000 -150.000 -23.995 1 0 0 0",
+  "@teleloc 0x002B01D8 198.000 -102.000 -35.995 1 0 0 0",
+  "@teleloc 0x002B0163 128.000 -142.000 -53.995 1 0 0 0",
+  "@teleloc 0x002B0121 60.000 -110.000 -59.995 1 0 0 0"
+ ],
+ "settleSec": 2,
+ "ready": {
+  "settleSec": 8,
+  "timeoutSec": 120
+ },
+ "look": {
+  "timeOfDay": 0.48,
+  "grade": "cool"
+ },
+ "notes": "Hidden avatar parks at the bottom (cell 0x002B0119, 42.4 m from the nearest Surface portal, 6.6 m off the racing line); prime walks it through research-2's 7 PVS anchors top->bottom so ACE sends the creatures on the route (they see 82 of the 82 creatures within 15 m of the line; the stand cell sees 33 of the 33 after segment J). ACE drops objects ~25 s after they leave the avatar PVS: if the upper levels come up empty in a take, shoot the run in legs or hop during the take.",
+ "validation": {
+  "hops": [
+   {
+    "cell": "0x002B035D",
+    "world": [
+     469.823,
+     8125.823,
+     -5.995
+    ],
+    "cmd": "@teleloc 0x002B035D 469.823 -130.177 -5.995 1 0 0 0",
+    "sees": 4,
+    "seesS": [
+     45.8,
+     96.7
+    ],
+    "floorToLineM": 3.45
+   },
+   {
+    "cell": "0x002B02D2",
+    "world": [
+     380.0,
+     8156.0,
+     -11.995
+    ],
+    "cmd": "@teleloc 0x002B02D2 380.000 -100.000 -11.995 1 0 0 0",
+    "sees": 12,
+    "seesS": [
+     112.5,
+     231.7
+    ],
+    "floorToLineM": 2.29
+   },
+   {
+    "cell": "0x002B024B",
+    "world": [
+     304.668,
+     8106.0,
+     -23.995
+    ],
+    "cmd": "@teleloc 0x002B024B 304.668 -150.000 -23.995 1 0 0 0",
+    "sees": 9,
+    "seesS": [
+     231.7,
+     314.4
+    ],
+    "floorToLineM": 2.18
+   },
+   {
+    "cell": "0x002B020A",
+    "world": [
+     268.0,
+     8106.0,
+     -23.995
+    ],
+    "cmd": "@teleloc 0x002B020A 268.000 -150.000 -23.995 1 0 0 0",
+    "sees": 8,
+    "seesS": [
+     269.7,
+     368.8
+    ],
+    "floorToLineM": 2.19
+   },
+   {
+    "cell": "0x002B01D8",
+    "world": [
+     198.0,
+     8154.0,
+     -35.995
+    ],
+    "cmd": "@teleloc 0x002B01D8 198.000 -102.000 -35.995 1 0 0 0",
+    "sees": 13,
+    "seesS": [
+     388.5,
+     495.7
+    ],
+    "floorToLineM": 4.02
+   },
+   {
+    "cell": "0x002B0163",
+    "world": [
+     128.0,
+     8114.0,
+     -53.995
+    ],
+    "cmd": "@teleloc 0x002B0163 128.000 -142.000 -53.995 1 0 0 0",
+    "sees": 10,
+    "seesS": [
+     509.0,
+     612.0
+    ],
+    "floorToLineM": 3.96
+   },
+   {
+    "cell": "0x002B0121",
+    "world": [
+     60.0,
+     8146.0,
+     -59.995
+    ],
+    "cmd": "@teleloc 0x002B0121 60.000 -110.000 -59.995 1 0 0 0",
+    "sees": 34,
+    "seesS": [
+     591.7,
+     748.2
+    ],
+    "floorToLineM": 2.61
+   }
+  ],
+  "stand": {
+   "cell": "0x002B0119",
+   "world": [
+    50.0,
+    8156.0,
+    -59.995
+   ],
+   "sees": 33,
+   "of": 33,
+   "lineDistM": 6.59,
+   "portalDistM": [
+    42.4,
+    413.0
+   ]
+  },
+  "creaturesNear15m": 82,
+  "coveredByPrime": 82,
+  "notCovered": []
+ }
+}

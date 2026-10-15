@@ -39,6 +39,7 @@
 
 import * as THREE from "three";
 import { fxTier1Enabled } from "./fx_tier1.js";
+import { fxNowMs } from "../fx_clock.js";
 
 // ---------------------------------------------------------------------------
 // Terrain uniforms (shared BY IDENTITY with every terrain material)
@@ -207,7 +208,7 @@ const DEDUPE_FX_M = 1.2;
 const DEDUPE_INTERVAL_MS = 500;
 
 function _now() {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  return fxNowMs(); // the film clock during a stepped take (fx_clock.js), else performance.now()
 }
 
 function _setColor(c, color) {

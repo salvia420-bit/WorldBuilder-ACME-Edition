@@ -1,0 +1,171 @@
+{
+ "name": "East Fork Dam",
+ "title": "East Fork Dam",
+ "siteId": "poi-east-fork-dam",
+ "summary": "One of the dams on the Marescent Plateau, at 48.3N 76.6W. A 96 m ancient stone dam built of four 24 m blocks (crest at z 88-93) holds a reservoir (z 82) above a lower pool (z 54) and the river gorge (z 26). A giant red metal hand, 18 m tall, rises out of the reservoir 70 m east of the dam; it marks the East Fork Dam Hive.",
+ "landmarks": [
+  {
+   "name": "Dam",
+   "pos": [
+    6060.0,
+    36120.0,
+    68.0
+   ],
+   "heightM": 25,
+   "note": "Four 24 m blocks 0x01002385/47/44/82, x 6048-6072, y 36072-36168, crest 88-93."
+  },
+  {
+   "name": "Red hand",
+   "pos": [
+    6132.0,
+    36108.0,
+    82.0
+   ],
+   "heightM": 18,
+   "note": "0x0100266B in the reservoir, the East Fork Dam Hive."
+  }
+ ],
+ "site": {
+  "id": "poi-east-fork-dam",
+  "name": "East Fork Dam",
+  "teleport": "@teleloc 0x1FBC0035 148.0 104.0 88.2 1 0 0 0",
+  "anchor": [
+   6060.0,
+   36120.0,
+   68.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.56,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc on the rocky bank 45 m north of the reservoir (ground 87.7, 8.4 m from the nearest pine, inside landblock 0x1FBC; 0x1FBD to the north is missing from the kit)."
+ },
+ "insertAfter": "sanamar-royal-hall",
+ "insertBefore": "ahurenga",
+ "acpedia": {
+  "categories": [
+   "Northwest POI"
+  ],
+  "map": {
+   "ns": 48.3,
+   "ew": -76.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1040,
+  "coveredBy": "shot:timaru.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Fork_Dam.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-fork-dam.01",
+   "site": "poi-east-fork-dam",
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.0
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6060.0,
+     36120.0,
+     68.0
+    ],
+    "height": 25,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 45,
+    "speed": 7,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "gimbal": "track",
+    "tiltDeg": -30,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly east 20 m above the dam's crest from over the lower pool, tracking the 96 m stone dam down to vertical and holding the top-down view over the reservoir; nothing within 25 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Flyover. The camera flies east at z 113, about 20 m above the dam crest and 59 m above the lower pool, tracking the 96 m ancient stone dam down to vertical. It then holds the top-down view over the still reservoir, 48 % of the edit over water, with the warm sun behind. Verified (check.mjs, full take flown): take 0-11 s: AGL 31..59 m, nearest drawn 25.23 m (static 0x1FBC#8 0x020005C1), vmax 7 m/s, LOS blocked 0/45, subject in frame 73%, over water 69%; edit 2-8.5 s: AGL 31..59 m, nearest drawn 25.23 m (static 0x1FBC#8 0x020005C1), vmax 7 m/s, LOS blocked 0/27, subject in frame 93%, over water 48%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-east-fork-dam.02",
+   "site": "poi-east-fork-dam",
+   "technique": "classic.dolly-in",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6132.0,
+     36108.0,
+     82.0
+    ],
+    "height": 18,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 55,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "thirds": "center",
+    "fromFraming": "WS",
+    "profile": "linear"
+   },
+   "standingOrder": "Dolly slowly in over the reservoir from the north-east toward the giant red metal hand rising out of the water, the dam behind it; stay 15 m above the water and 12 m from the hand.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dolly in. A slow dolly over the reservoir from the north-east, 13-17 m above the water with a 40 deg lens, toward the 18 m red metal hand rising out of it, the dam behind. It ends 12 m from the hand's box. Verified (check.mjs, full take flown): take 0-9 s: AGL 12.96..17.6 m, nearest drawn 8.5 m (scenery-default 0x02000246@6176,36155), vmax 5.83 m/s, LOS blocked 0/37, subject in frame 100%, over water 45%; edit 2-8 s: AGL 13.1..17.1 m, nearest drawn 9.15 m (scenery-default 0x02000240@6157,36136), vmax 5.83 m/s, LOS blocked 0/25, subject in frame 100%, over water 50%."
+  }
+ ],
+ "verification": {
+  "poi-east-fork-dam.01": "take 0-11 s: AGL 31..59 m, nearest drawn 25.23 m (static 0x1FBC#8 0x020005C1), vmax 7 m/s, LOS blocked 0/45, subject in frame 73%, over water 69%; edit 2-8.5 s: AGL 31..59 m, nearest drawn 25.23 m (static 0x1FBC#8 0x020005C1), vmax 7 m/s, LOS blocked 0/27, subject in frame 93%, over water 48%; flight cinema peak 7.02 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-east-fork-dam.02": "take 0-9 s: AGL 12.96..17.6 m, nearest drawn 8.5 m (scenery-default 0x02000246@6176,36155), vmax 5.83 m/s, LOS blocked 0/37, subject in frame 100%, over water 45%; edit 2-8 s: AGL 13.1..17.1 m, nearest drawn 9.15 m (scenery-default 0x02000240@6157,36136), vmax 5.83 m/s, LOS blocked 0/25, subject in frame 100%, over water 50%"
+ }
+}

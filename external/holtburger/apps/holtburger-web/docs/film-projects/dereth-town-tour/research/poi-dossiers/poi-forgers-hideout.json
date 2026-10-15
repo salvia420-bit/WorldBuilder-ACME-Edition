@@ -1,0 +1,235 @@
+{
+ "name": "Forger's Hideout",
+ "title": "Forger's Hideout",
+ "siteId": "poi-forgers-hideout",
+ "summary": "A mansion of four buildings (a 31 m clock tower and 7-, 4- and 3-storey wings, 18-31 m) on the flat 48 m summit of a 200 m obsidian spire at 76.0S 67.1W, reachable only through the KEEP OUT! portal by Bandit Castle (Counterfeit Writ quest); neighbouring spires of the Obsidian Plains stand 200 m to the south and south-east.",
+ "landmarks": [
+  {
+   "name": "Clock tower",
+   "pos": [
+    8364,
+    6228,
+    200
+   ],
+   "heightM": 31.1,
+   "note": "0x01002286."
+  },
+  {
+   "name": "South-west wing",
+   "pos": [
+    8340,
+    6204,
+    200
+   ],
+   "heightM": 17.8,
+   "note": "0x01002289."
+  },
+  {
+   "name": "Obsidian spire",
+   "pos": [
+    8352,
+    6216,
+    0
+   ],
+   "heightM": 200,
+   "note": "Summit z 200 over x 8328-8376, y 6192-6240."
+  }
+ ],
+ "site": {
+  "id": "poi-forgers-hideout",
+  "name": "Forger's Hideout",
+  "gazetteerId": "keep-out",
+  "teleport": "@teleloc 0x2B200024 113.84 89.6186 200.005 -0.464193 0 0 -0.885734",
+  "anchor": [
+   8352,
+   6216,
+   200
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.62,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "wai-jhou",
+ "insertBefore": "candeth-keep",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -76.0,
+   "ew": -67.1
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 2720,
+  "coveredBy": "path:candeth-keep.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Forger_s_Hideout.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-forgers-hideout.01",
+   "site": "poi-forgers-hideout",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2.5,
+     10.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8364,
+     6228,
+     200
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 75,
+    "radiusEnd": 95,
+    "heightStart": 30,
+    "heightEnd": 50,
+    "revolutions": 0.09,
+    "direction": "cw",
+    "bearingDeg": 195,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Climb slowly round the clock-towered mansion on top of the 200 m obsidian spire, 75 to 95 m out, with the sun behind; nothing within 40 m of the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature helix around the mansion on the 200 m obsidian spire: radius 75 -> 95 m, 30 -> 50 m above the summit (z 230-250), 0.09 turn from the south-south-west; the clock tower and the wings stand over the sheer needle with the obsidian plain and the neighbouring spires 200 m below, sun behind. Subject point = the clock tower. Verified (check.mjs, full take flown): take 0-11 s: AGL 175.04..224.7 m, nearest drawn 38.93 m (static 0x2B20#9 0x01002289), vmax 7.99 m/s, LOS blocked 8/45, subject in frame 100% (retail-bake tree 217.1 m); edit 3-9.5 s: AGL 184.08..221.3 m, nearest drawn 41.06 m (static 0x2B20#9 0x01002289), vmax 7.99 m/s, LOS blocked 2/27, subject in frame 100% (retail-bake tree 221.1 m); flight cinema peak 7.98 m/s (cap 12), max tracking gap 0.06 m."
+  },
+  {
+   "id": "poi-forgers-hideout.02",
+   "site": "poi-forgers-hideout",
+   "technique": "classic.zoom",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.0,
+     8.5
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8340,
+     6204,
+     200
+    ],
+    "height": 18,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 215,
+    "elevationDeg": -25,
+    "distance": 300,
+    "thirds": "center",
+    "toFovDeg": 16
+   },
+   "standingOrder": "Locked off on the plain south-west of the spire, zoom slowly from the whole obsidian needle to the mansion on its summit; no camera movement.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off zoom from 300 m south-west (camera hovering 76 m above the plain): fov 60 -> 16 deg, from the whole obsidian needle with its mansion crown to the three-storey wing and the clock tower behind it; front-lit by the afternoon sun. Verified (check.mjs, full take flown): take 0-9 s: AGL 75.59..75.6 m, nearest drawn 43.91 m (scenery-default 0x020002DB@8147,5985), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 20.8 m); edit 1.5-7.5 s: AGL 75.59..75.6 m, nearest drawn 43.91 m (scenery-default 0x020002DB@8147,5985), vmax 0 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 20.8 m)."
+  },
+  {
+   "id": "poi-forgers-hideout.03",
+   "site": "poi-forgers-hideout",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.0,
+    "keep": [
+     1.5,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8364,
+     6228,
+     200
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "offset": 70,
+    "heightAGL": 30,
+    "speed": 8,
+    "side": "right",
+    "headingDeg": 300,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly west-north-west past the spire-top mansion 70 m out and 30 m above the summit, letting it swing through the frame with the plain 200 m below; nothing within 40 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Fly-by 30 m above the summit and 70 m out, heading west-north-west at 8 m/s: the mansion swings through the frame against the sky while the plain lies 200 m below, the neighbouring obsidian spires sliding behind; sun behind-left. Verified (check.mjs, full take flown): take 0-10 s: AGL 156.16..199.3 m, nearest drawn 24.89 m (static 0x2B20#9 0x01002289), vmax 8 m/s, LOS blocked 11/41, subject in frame 100% (retail-bake tree 215.1 m); edit 2-8 s: AGL 156.16..174.2 m, nearest drawn 24.89 m (static 0x2B20#9 0x01002289), vmax 8 m/s, LOS blocked 2/25, subject in frame 100% (retail-bake tree 216.7 m); flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m."
+  }
+ ],
+ "verification": {
+  "poi-forgers-hideout.01": "take 0-11 s: AGL 175.04..224.7 m, nearest drawn 38.93 m (static 0x2B20#9 0x01002289), vmax 7.99 m/s, LOS blocked 8/45, subject in frame 100% (retail-bake tree 217.1 m); edit 3-9.5 s: AGL 184.08..221.3 m, nearest drawn 41.06 m (static 0x2B20#9 0x01002289), vmax 7.99 m/s, LOS blocked 2/27, subject in frame 100% (retail-bake tree 221.1 m); flight cinema peak 7.98 m/s (cap 12), max tracking gap 0.06 m",
+  "poi-forgers-hideout.02": "take 0-9 s: AGL 75.59..75.6 m, nearest drawn 43.91 m (scenery-default 0x020002DB@8147,5985), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 20.8 m); edit 1.5-7.5 s: AGL 75.59..75.6 m, nearest drawn 43.91 m (scenery-default 0x020002DB@8147,5985), vmax 0 m/s, LOS blocked 0/25, subject in frame 100% (retail-bake tree 20.8 m)",
+  "poi-forgers-hideout.03": "take 0-10 s: AGL 156.16..199.3 m, nearest drawn 24.89 m (static 0x2B20#9 0x01002289), vmax 8 m/s, LOS blocked 11/41, subject in frame 100% (retail-bake tree 215.1 m); edit 2-8 s: AGL 156.16..174.2 m, nearest drawn 24.89 m (static 0x2B20#9 0x01002289), vmax 8 m/s, LOS blocked 2/25, subject in frame 100% (retail-bake tree 216.7 m); flight cinema peak 8.02 m/s (cap 12), max tracking gap 0.03 m"
+ }
+}

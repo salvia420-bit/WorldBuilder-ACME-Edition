@@ -1,0 +1,191 @@
+{
+ "name": "North Al-Arqas Outpost",
+ "title": "North Al-Arqas Outpost",
+ "siteId": "poi-north-al-arqas-outpost",
+ "summary": "One of the old starter outposts, destroyed by Martine in The First Strike (acpedia). In the kit: a 28 m four-storey Empyrean tower (0x01002866) with four green ethereal lamps on top, an octagon tower, a cottage, the Life Stone, a burning bonfire and, 76 m south-west on a rise, the crystal cluster of the Destroyed Portal to Bluespire, on yellow desert sand.",
+ "landmarks": [
+  {
+   "name": "Empyrean tower (0x01002866)",
+   "pos": [
+    27827.3,
+    17722.0,
+    30.0
+   ],
+   "heightM": 27.9,
+   "note": "Top 57.9, green ethereal lamps at 53.8."
+  },
+  {
+   "name": "Bonfire",
+   "pos": [
+    27756.2,
+    17723.5,
+    26.0
+   ],
+   "heightM": 2.0,
+   "note": "Bonfire spawn (flames)."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    27780.5,
+    17717.9,
+    25.5
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-al-arqas-905c."
+  },
+  {
+   "name": "Destroyed Portal to Bluespire",
+   "pos": [
+    27739.4,
+    17683.5,
+    34.0
+   ],
+   "heightM": 3.8,
+   "note": "Crystal cluster 0x02000B61 (not framed)."
+  }
+ ],
+ "site": {
+  "id": "poi-north-al-arqas-outpost",
+  "name": "North Al-Arqas Outpost",
+  "gazetteerId": "life-stone-near-al-arqas-905c",
+  "teleport": "@teleloc 0x905C002B 132.495 53.9008 25.5083 0.503973 0 0 -0.863719",
+  "anchor": [
+   27790.0,
+   17715.0,
+   26.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-al-arqas-905c (outpost Life Stone, 10 m from the anchor)."
+ },
+ "insertAfter": "uziz",
+ "insertBefore": "al-arqas",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -28.1,
+   "ew": 13.9
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 739,
+  "coveredBy": "shot:al-arqas.03",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Al_Arqas_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-north-al-arqas-outpost.01",
+   "site": "poi-north-al-arqas-outpost",
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27827.3,
+     17722.0,
+     30.0
+    ],
+    "height": 28,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 250,
+    "azimuthRef": "compass",
+    "elevationDeg": -20,
+    "distance": 34,
+    "fromDeg": -22,
+    "toDeg": 14,
+    "relative": true
+   },
+   "standingOrder": "Stand 34 m west-south-west of the Empyrean tower 5 m above the sand and tilt slowly from its doorway up its stone flanks to the four green ethereal lamps at the top; the camera only turns, keep 9 m from the octagon tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertical tilt up the Empyrean tower of the outpost from its doorway and benches to the four green ethereal lamps on top, a locked position 34 m WSW of the tower with the afternoon sun behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 5.49..5.5 m, nearest drawn 9.85 m (static 0x905C#29 0x01000F06), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 5.49..5.5 m, nearest drawn 9.85 m (static 0x905C#29 0x01000F06), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-north-al-arqas-outpost.02",
+   "site": "poi-north-al-arqas-outpost",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 6.0
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.0,
+    "keep": [
+     0.3,
+     7.7
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     27756.2,
+     17723.5,
+     26.0
+    ],
+    "height": 2.0,
+    "radius": 1.0
+   },
+   "params": {
+    "azimuthDeg": 272,
+    "azimuthRef": "compass",
+    "elevationDeg": 8,
+    "distance": 14,
+    "thirds": "center"
+   },
+   "standingOrder": "Lock off 14 m west of the outpost bonfire with the flames low in frame and the green-lit Empyrean tower rising behind them; keep 1.5 m from the generator post and 3 m from the cottage, chickens may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off flame shot at the ruined North Al-Arqas outpost: the bonfire burns low in frame while the 28 m green-lit Empyrean tower (lamps at z 53.8) rises behind it on a 60 degree lens; the WSW afternoon sun is behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 1..1 m, nearest drawn 1.76 m (spawn Linkable Monster Generator), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1..1 m, nearest drawn 1.76 m (spawn Linkable Monster Generator), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%."
+  }
+ ],
+ "verification": {
+  "poi-north-al-arqas-outpost.01": "take 0-8 s: AGL 5.49..5.5 m, nearest drawn 9.85 m (static 0x905C#29 0x01000F06), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 5.49..5.5 m, nearest drawn 9.85 m (static 0x905C#29 0x01000F06), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-north-al-arqas-outpost.02": "take 0-8 s: AGL 1..1 m, nearest drawn 1.76 m (spawn Linkable Monster Generator), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 1..1 m, nearest drawn 1.76 m (spawn Linkable Monster Generator), vmax 0 m/s, LOS blocked 0/25, subject in frame 100%"
+ }
+}

@@ -1,0 +1,260 @@
+{
+ "name": "Ithaenc Cathedral and Falls",
+ "title": "Ithaenc Cathedral",
+ "siteId": "poi-ithaenc-cathedral",
+ "summary": "The cathedral on Ithaenc Island in the Vesayen Isles, beside the Ithaenc waterfalls, which acpedia calls one of the biggest in Dereth. In the kit, a ruined Gothic complex stands on a cliff-top plateau at z 160 amid flower gardens and Adja's Well: a 54 m church, a 54 m seven-storey south tower, an eight-storey arched hall, a broken six-storey tower and a hexagonal spire (tops z 193-214). Beside it, a sky-pool spills north over a 60 m cliff into a middle pool at z 100, with Waterfall effects at its foot. The middle pool drops a further 100 m to the sea.",
+ "landmarks": [
+  {
+   "name": "Church (0x01001FB3)",
+   "pos": [
+    46884,
+    4644,
+    160
+   ],
+   "heightM": 54.4,
+   "note": ""
+  },
+  {
+   "name": "South tower (0x01001FB7)",
+   "pos": [
+    46884,
+    4621.8,
+    160
+   ],
+   "heightM": 53.7,
+   "note": "Mossy seven-storey hall with a tapered roof."
+  },
+  {
+   "name": "Falls lip",
+   "pos": [
+    46974,
+    4728,
+    160
+   ],
+   "heightM": 0,
+   "note": "Sky-pool edge."
+  },
+  {
+   "name": "Falls foot (Waterfall spawns)",
+   "pos": [
+    46976,
+    4756,
+    100
+   ],
+   "heightM": 60,
+   "note": "Six Waterfall effects along y 4756."
+  },
+  {
+   "name": "Adja's Well",
+   "pos": [
+    46930.4,
+    4651.2,
+    159.9
+   ],
+   "heightM": 1.0,
+   "note": ""
+  }
+ ],
+ "site": {
+  "id": "poi-ithaenc-cathedral",
+  "name": "Ithaenc Cathedral and Falls",
+  "gazetteerId": "cathedral-ruins",
+  "teleport": "@teleloc 0xF4180014 62.00 88.00 160.50 1 0 0 0",
+  "anchor": [
+   46900,
+   4690,
+   160
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.56,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer cathedral-ruins (@teleloc 0xF418000B, outdoor cell, inside the open cathedral ruin at z 191). Landblocks east of x 47040 (0xF5xx) are missing from the kit: every camera stays west of x 47020. [critic b4-7 2026-10-15: teleport changed from '@teleloc 0xF418000B 36 60 191 1 0 0 0' (gazetteer cathedral-ruins: a rounded hand-made entry at z 191 inside the footprint of the 8-storey hall 0x01001FB2 (floor 160, flat roof 192.92, an upper garden level at 169.8), so the hidden player would hang 1.9 m under the roof or fall 21-31 m inside the ruin). Derived ground drop on the cathedral plateau 12 m from the anchor (ground 160.0), 6.2 m from any drawn object, 27 m from the Catacombs of Ithaenc portal (which stands 36 m higher). Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -82.4,
+   "ew": 93.0
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   46788.0,
+   4692.0
+  ],
+  "coveredDistM": 1769,
+  "coveredBy": "shot:freehold.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Ithaenc_Cathedral.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-ithaenc-cathedral.01",
+   "site": "poi-ithaenc-cathedral",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 4.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     4.5,
+     10
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46976,
+     4750,
+     100
+    ],
+    "height": 60,
+    "radius": 8
+   },
+   "params": {
+    "startPitchDeg": -58,
+    "endPitchDeg": 8,
+    "heightAGL": 25,
+    "distance": 66,
+    "drift": 6,
+    "bearingDeg": 5,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Hang 25 m over the middle pool looking down at the churning water, then tilt up the 60 m Ithaenc falls to the cathedral towers on the cliff above; hold position, nothing within 20 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Tilt reveal from a hover 25 m over the middle pool. The frame starts looking down at the churning water and tilts up the 60 m Ithaenc falls, where the Waterfall effects foam at its foot, to the cathedral's towers on the cliff above. The midday sun (0.56) is high to the south, so the spray is backlit. The edit window begins as the falls enter the frame, and the reveal is the defining moment. Verified (check.mjs, full take flown): take 0-10 s: AGL 25..25 m, nearest drawn 24.12 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 0.94 m/s, LOS blocked 0/41, subject in frame 51%, over water 42%; edit 4.5-10 s: AGL 25..25 m, nearest drawn 24.12 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 0.94 m/s, LOS blocked 0/23, subject in frame 91%, over water 76%; flight cinema peak 0.94 m/s (cap 12), max tracking gap 0.01 m."
+  },
+  {
+   "id": "poi-ithaenc-cathedral.02",
+   "site": "poi-ithaenc-cathedral",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.4,
+     7.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46884,
+     4621.8,
+     160
+    ],
+    "height": 53.7,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "elevationDeg": -8,
+    "distance": 45,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "standingOrder": "Look up at the cathedral's mossy seven-storey south tower from the slope below it with the midday sun over your shoulder and a slow 2 m push; nothing between lens and tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Low angle on the cathedral's mossy seven-storey south tower from the rising slope 45 m south, 3 m off the ground, with a slow 2 m push. The midday sun is over the shoulder. Verified (check.mjs, full take flown): take 0-8 s: AGL 3.08..3.1 m, nearest drawn 13.39 m (scenery-default 0x02000E72@46879,4564), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 3.08..3.1 m, nearest drawn 13.43 m (scenery-default 0x02000E72@46879,4564), vmax 0.39 m/s, LOS blocked 0/23, subject in frame 100%."
+  },
+  {
+   "id": "poi-ithaenc-cathedral.03",
+   "site": "poi-ithaenc-cathedral",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46974,
+     4728,
+     160
+    ],
+    "height": 4,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 30,
+    "speed": 4,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45,
+    "maxPitchRateDeg": 45,
+    "smoothTime": 0.5,
+    "minClearance": 15
+   },
+   "standingOrder": "Fly north 30 m above the cathedral's sky-pool and straight over the lip of the Ithaenc falls, the gimbal holding the lip through the vertical as the 60 m drop and the sea open beneath; sun at your back.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over flying north 30 m above the cathedral's sky-pool and straight over the lip of the Ithaenc falls. The gimbal holds the lip through the vertical as the 60 m drop, the middle pool and the 100 m sea cliff open beneath. The sun is behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 30..80 m, nearest drawn 53.32 m (scenery-default 0x020003D3@46945,4667), vmax 4 m/s, LOS blocked 0/41, subject in frame 100%, over water 20%; edit 2-8.5 s: AGL 30..65 m, nearest drawn 59.52 m (scenery-default 0x020003D3@46945,4667), vmax 4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.01 m/s (cap 12), max tracking gap 0.02 m."
+  }
+ ],
+ "verification": {
+  "poi-ithaenc-cathedral.01": "take 0-10 s: AGL 25..25 m, nearest drawn 24.12 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 0.94 m/s, LOS blocked 0/41, subject in frame 51%, over water 42%; edit 4.5-10 s: AGL 25..25 m, nearest drawn 24.12 m (spawn Linkable Monster Generator ( 10 Min.)), vmax 0.94 m/s, LOS blocked 0/23, subject in frame 91%, over water 76%; flight cinema peak 0.94 m/s (cap 12), max tracking gap 0.01 m",
+  "poi-ithaenc-cathedral.02": "take 0-8 s: AGL 3.08..3.1 m, nearest drawn 13.39 m (scenery-default 0x02000E72@46879,4564), vmax 0.39 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-6.5 s: AGL 3.08..3.1 m, nearest drawn 13.43 m (scenery-default 0x02000E72@46879,4564), vmax 0.39 m/s, LOS blocked 0/23, subject in frame 100%",
+  "poi-ithaenc-cathedral.03": "take 0-10 s: AGL 30..80 m, nearest drawn 53.32 m (scenery-default 0x020003D3@46945,4667), vmax 4 m/s, LOS blocked 0/41, subject in frame 100%, over water 20%; edit 2-8.5 s: AGL 30..65 m, nearest drawn 59.52 m (scenery-default 0x020003D3@46945,4667), vmax 4 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 4.01 m/s (cap 12), max tracking gap 0.02 m"
+ }
+}

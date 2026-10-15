@@ -66,17 +66,46 @@ export function tunnelCommand({ host = DEFAULT_1070_HOST, cdp = DEFAULT_CDP } = 
 }
 
 /**
+ * Effect flags every film boot URL carries, appended in this order at the end of the query (the effects audit of
+ * the Egg Orchard run, 2026-10-15). Values are URL-safe and written as-is (the comma stays a comma).
+ *   - stormScan=retail: retail's storm rule. The client's default 'legacy' scan reports a storm EVERY day, which
+ *     gave every take the overcast deck, a permanent rain sheen, storm wind, and gated pollen / fireflies off.
+ *   - waterSheenFade=40,500: water ripples / glint fade out at 500 m instead of 160 m (terrain.js; an older page
+ *     ignores the unknown param).
+ * @type {ReadonlyArray<readonly [string, string]>}
+ */
+export const FILM_EFFECT_FLAGS = Object.freeze([
+  Object.freeze(["stormScan", "retail"]),
+  Object.freeze(["waterSheenFade", "40,500"]),
+]);
+
+/**
+ * Film quality preset by default: `ultra` (owner's look passes; stepped capture is not real-time bound; ultra adds
+ * 2× grass, ice refraction, wet mud, marsh wisps and more particles). `film boot --quality=` overrides.
+ */
+export const DEFAULT_QUALITY = "ultra";
+
+/** `cloudCoverage` a fair-weather boot gets unless `--coverage` says otherwise (0..1). */
+export const DEFAULT_FAIR_COVERAGE = 0.3;
+
+/**
  * The exact film boot URL. Parameter order is fixed; `filmDof=on` is ALWAYS present (owner decision: depth of
- * field ships in v1). The result contains the password — log it only through redactUrl().
- * @param {{base?: string, account?: string, password: string, quality?: string}} o
+ * field ships in v1); `filmProps=on` is ALWAYS present (the lens overlay — FPV propellers — is armed for the
+ * session but only draws for a take whose plan shot has `overlay.props`; scene3d/film flags.js reads it as an exact
+ * `=== "on"` opt-in); `quality` defaults to DEFAULT_QUALITY ('ultra'); clouds/weather as below; `cloudCoverage`:
+ * an explicit `coverage` (0..1) always, else DEFAULT_FAIR_COVERAGE (0.3) when clouds are on with fair weather, else
+ * none; then FILM_EFFECT_FLAGS (stormScan=retail, waterSheenFade=40,500). The result contains the password — log it
+ * only through redactUrl().
+ * @param {{base?: string, account?: string, password: string, quality?: string, clouds?: 'on'|'off',
+ *   weather?: 'fair'|'live', coverage?: number|null}} o
  * @returns {string}
  */
-export function buildFilmUrl({ base = DEFAULT_BASE_URL, account = DEFAULT_ACCOUNT, password, quality = "high", clouds = "on", weather = "fair" } = {}) {
+export function buildFilmUrl({ base = DEFAULT_BASE_URL, account = DEFAULT_ACCOUNT, password, quality = DEFAULT_QUALITY, clouds = "on", weather = "fair", coverage = null } = {}) {
   if (typeof password !== "string" || password.length === 0) {
     throw new FilmCliError("no password: pass --password=… or set FILM_PASSWORD", { exitCode: EXIT.USAGE, code: "NO_PASSWORD" });
   }
   if (typeof account !== "string" || !account) throw new FilmCliError("--account must not be empty", { exitCode: EXIT.USAGE, code: "USAGE" });
-  const q = String(quality || "high");
+  const q = String(quality || DEFAULT_QUALITY);
   // Volumetric clouds (`?clouds=on`, an exact opt-in in the client) are ON for film by default (owner 2026-10-14:
   // "clouds have to be on"); they also give depth of field the split post chain. `clouds: "off"` leaves them out.
   if (clouds !== "on" && clouds !== "off") throw new FilmCliError(`--clouds must be on or off (got ${JSON.stringify(clouds)})`, { exitCode: EXIT.USAGE, code: "USAGE" });
@@ -84,14 +113,24 @@ export function buildFilmUrl({ base = DEFAULT_BASE_URL, account = DEFAULT_ACCOUN
   // 0.5, cumulus + alto deck, fair haze) so a stormy server DayGroup cannot turn every take overcast; `live` follows
   // the server's DayGroup (storm decks and 10x haze when it storms). Only meaningful with clouds on.
   if (weather !== "fair" && weather !== "live") throw new FilmCliError(`--weather must be fair or live (got ${JSON.stringify(weather)})`, { exitCode: EXIT.USAGE, code: "USAGE" });
+  // Cloud coverage (0..1): explicit wins (even with clouds off or live weather); fair-weather clouds default to 0.3.
+  let cov = null;
+  if (coverage !== null && coverage !== undefined) {
+    cov = typeof coverage === "string" && coverage.trim() !== "" ? Number(coverage) : coverage;
+    if (typeof cov !== "number" || !Number.isFinite(cov) || cov < 0 || cov > 1) {
+      throw new FilmCliError(`--coverage must be a number in [0, 1] (got ${JSON.stringify(coverage)})`, { exitCode: EXIT.USAGE, code: "USAGE" });
+    }
+  } else if (clouds === "on" && weather === "fair") cov = DEFAULT_FAIR_COVERAGE;
   const b = String(base || DEFAULT_BASE_URL);
   const query =
-    "nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1" +
+    "nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&filmProps=on&autoLogin=1" +
     `&account=${encodeURIComponent(account)}&password=${encodeURIComponent(password)}&autoSpawn=first` +
     `&quality=${encodeURIComponent(q)}&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off` +
     "&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off" +
     (clouds === "on" ? "&clouds=on" : "") +
-    (clouds === "on" && weather === "fair" ? "&cloudWeather=off" : "");
+    (clouds === "on" && weather === "fair" ? "&cloudWeather=off" : "") +
+    (cov !== null ? `&cloudCoverage=${cov}` : "") +
+    FILM_EFFECT_FLAGS.map(([k, v]) => `&${k}=${v}`).join("");
   const hashAt = b.indexOf("#");
   const head = hashAt >= 0 ? b.slice(0, hashAt) : b;
   const sep = head.includes("?") ? (head.endsWith("?") || head.endsWith("&") ? "" : "&") : "?";

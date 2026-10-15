@@ -89,6 +89,7 @@ import { ffprobeFrameCount, parseFfmpegList, resolveFfmpeg, resolveFfprobe, runF
 import { JevError, createJevClient, redactKey, resolveJevKey, summarizeAnswers, validateQuestions } from "./lib/jev.mjs";
 import { createJevBroker } from "./lib/jev_broker.mjs";
 import { energyWordOf, jevPing, keepOrRetake, pickCandidate, scoreSiteForLine, sectionTechniqueFamily, tempoWordOf } from "./lib/jev_tasks.mjs";
+import * as JEV_TASK_MODULE from "./lib/jev_tasks.mjs";
 import { DEFAULT_PROJECT_ROOT, appendJsonl, initProject, jsonOrFile, projectDirFor, projectPaths, readJsonFile, writeJsonFile } from "./lib/project.mjs";
 import {
   BOOT_SNAPSHOT_FN,
@@ -96,6 +97,8 @@ import {
   DEFAULT_ACCOUNT,
   DEFAULT_BASE_URL,
   DEFAULT_BOOT_TIMEOUT_SEC,
+  DEFAULT_FAIR_COVERAGE,
+  DEFAULT_QUALITY,
   DEFAULT_1070_HOST,
   DEFAULT_CDP,
   FILM_PROBE_FN,
@@ -732,11 +735,12 @@ command("plan compile", "compile plan.json (+ song) into timeline.json",
     const lines = [
       `wrote ${out}`,
       `${t.items.length} shot(s), ${t.duration.toFixed(2)} s, ${t.frames} frames @ ${t.fps} fps, ${t.width}×${t.height}`,
-      `schedule: ${t.schedule.map((e) => `${e.siteId} [${e.shots.join(" ")}]`).join(" → ")}`,
+      ...(t.musicEnd ? [`music part ends at ${t.musicEnd.sec.toFixed(2)} s (frame ${t.musicEnd.frame}, fade-out ${t.musicEnd.fadeOutSec} s); silent tail ${(t.duration - t.musicEnd.sec).toFixed(2)} s incl. the black gap`] : []),
+      `schedule: ${t.schedule.map((e) => `${e.siteId} [${e.shots.join(" ")}]${e.prime ? ` (prime ×${e.prime.length})` : ""}`).join(" → ")}`,
       est.text,
     ];
     if (t.warnings.length) lines.push("warnings:", printIssues(t.warnings));
-    return { code: EXIT.OK, data: { out, duration: t.duration, frames: t.frames, items: t.items.length, schedule: t.schedule.map((e) => ({ siteId: e.siteId, shots: e.shots })), warnings: t.warnings, estimate: est }, text: lines.join("\n") };
+    return { code: EXIT.OK, data: { out, duration: t.duration, frames: t.frames, ...(t.musicEnd ? { musicEnd: t.musicEnd } : {}), items: t.items.length, schedule: t.schedule.map((e) => ({ siteId: e.siteId, shots: e.shots, ...(e.prime ? { prime: e.prime.length } : {}) })), warnings: t.warnings, estimate: est }, text: lines.join("\n") };
   });
 
 command("jev ping", "one tiny JEV decision (proves key, endpoint and parsing)",
@@ -812,9 +816,12 @@ const JEV_TASKS = {
     text: (r) => `family: ${r.choice} (${r.techniques.join(", ")}) · band ${r.band}${r.confidence != null ? ` · confidence ${Number(r.confidence).toFixed(3)}` : ""} · ${r.source}`,
   },
 };
+// `pass-plan` (monster passes over / left / right for a run, lib/jev_tasks.mjs PASS_PLAN_CLI {run, input, text}):
+// registered when the module exports it (a namespace import, so a missing export can never break the CLI).
+if (isObjArg(JEV_TASK_MODULE.PASS_PLAN_CLI) && typeof JEV_TASK_MODULE.PASS_PLAN_CLI.run === "function") JEV_TASKS["pass-plan"] = JEV_TASK_MODULE.PASS_PLAN_CLI;
 
 command("jev task", "one planning-time JEV judgement: pick a candidate, keep/retake, site-fit, technique family",
-  `film jev task <pick|keep|site-fit|family> --input=<file|json> [--code] [--json]
+  `film jev task <pick|keep|site-fit|family|pass-plan> --input=<file|json> [--code] [--json]
                 [--jev-max-usd-per-hour=2] [--jev-max-calls-per-min=600]
   pick      {intent?, candidates:[{id, words}, …]} (best first; the first is the conservative default), or a
             scout stills/<shot>/metrics.json (worded exactly as \`scout --pick\` words it)
@@ -823,6 +830,8 @@ command("jev task", "one planning-time JEV judgement: pick a candidate, keep/ret
             popInEvents, reveal}. Exit 1 when the verdict is RETAKE.
   site-fit  {line, mood?, site} — site = {name, kind?, words?} or a gazetteer id/name ([--gazetteer=<jsonl>])
   family    {role?, energyWord? | energy (0..1), tempoWord? | bpm, lyric?}
+  pass-plan per creature near a run's racing line: pass over / left / right (lib/jev_tasks.mjs; input as documented
+            there, or {passInput: {...}})
   With a JEV key (OPENROUTER_API_KEY or ~/.config/holtburger-film/openrouter.key) the real client decides;
   without one, or with --code, the deterministic code verdict answers (source 'code', free). The code verdict
   always comes back too (result.code) for comparison. A JEV failure other than config/auth falls back to the code
@@ -935,11 +944,15 @@ command("browser check", "attach over CDP and report pages, film page, mute, win
 
 command("boot", "open and log in the film page, then make it a clean, silent, hidden-player camera",
   `film boot [--cdp=${DEFAULT_CDP}] [--base=${DEFAULT_BASE_URL}]
-           [--account=${DEFAULT_ACCOUNT}] [--password=… | env FILM_PASSWORD] [--quality=high] [--clouds=on|off] [--weather=fair|live]
+           [--account=${DEFAULT_ACCOUNT}] [--password=… | env FILM_PASSWORD] [--quality=${DEFAULT_QUALITY}] [--clouds=on|off] [--weather=fair|live]
+           [--coverage=0..1]
            [--width=1920 --height=1080] [--reuse] [--assume-muted] [--boot-timeout=${DEFAULT_BOOT_TIMEOUT_SEC}]
   Attaches (never launches), verifies --mute-audio (Browser.getBrowserCommandLine; 'unverified' needs
-  --assume-muted), opens a new tab in the default context with the exact film URL (filmDof=on always; clouds=on unless
-  --clouds=off; fair-weather clouds via cloudWeather=off unless --weather=live), sets the
+  --assume-muted), opens a new tab in the default context with the exact film URL (filmDof=on and filmProps=on
+  always — the lens overlay draws only for shots with overlay.props; quality=${DEFAULT_QUALITY} unless --quality=…;
+  clouds=on unless --clouds=off; fair-weather clouds via cloudWeather=off unless --weather=live; cloudCoverage=
+  --coverage, else ${DEFAULT_FAIR_COVERAGE} with fair-weather clouds, else none; always stormScan=retail (retail's storm
+  rule — the legacy scan storms every day) and waterSheenFade=40,500 (water glint to 500 m)), sets the
   viewport, installs the JEV broker before navigating, gates on in-world + ready + scene-ready + liveScene3d +
   __film, mutes the page, then clean(true) · own() · world.avatar(false) · @cloak on · @attackable off.
   The film account is single-login: a second film tab is refused (use --reuse), and "Account In Use" means wait
@@ -950,11 +963,12 @@ command("boot", "open and log in the film page, then make it a clean, silent, hi
     const { args, deps, io } = ctx;
     const base = strArg(args, "base", DEFAULT_BASE_URL);
     const account = strArg(args, "account", DEFAULT_ACCOUNT);
-    const quality = strArg(args, "quality", "high");
+    const quality = strArg(args, "quality", DEFAULT_QUALITY);
     const clouds = strArg(args, "clouds", "on");
     if (clouds !== "on" && clouds !== "off") throw usageError(`--clouds must be on or off (got ${JSON.stringify(clouds)})`);
     const weather = strArg(args, "weather", "fair");
     if (weather !== "fair" && weather !== "live") throw usageError(`--weather must be fair or live (got ${JSON.stringify(weather)})`);
+    const coverage = numArg(args, "coverage", null, { min: 0, max: 1 });
     const width = evenSizeArg(args, "width", 1920, 7680);
     const height = evenSizeArg(args, "height", 1080, 4320);
     const reuse = boolArg(args, "reuse");
@@ -983,7 +997,7 @@ command("boot", "open and log in the film page, then make it a clean, silent, hi
         io.info(`reusing the open film page (${alreadyBooted ? "already booted" : `state ${snap.state} — logging in again`})`);
       }
       if (!alreadyBooted && !password) throw new FilmCliError("no password: pass --password=… or set FILM_PASSWORD", { exitCode: EXIT.USAGE, code: "NO_PASSWORD" });
-      const url = alreadyBooted ? null : buildFilmUrl({ base, account, password, quality, clouds, weather });
+      const url = alreadyBooted ? null : buildFilmUrl({ base, account, password, quality, clouds, weather, coverage });
       if (!page) {
         if (!s.context) throw usageError("the browser has no default context to open a tab in");
         page = await s.context.newPage();
@@ -1289,7 +1303,9 @@ command("shoot", "record takes site by site (never across a teleport)",
   `film shoot <timeline.json> (--site=<id> | --shot=<id>[,<id>…] | --all) [--retakes=1] [--codec=avc|vp9|frames]
             [--bitrate=40000000] [--rehearse | --no-rehearse] [--rehearse-fps=8] [--locked] [--vp9-container=mp4|webm]
             [--hop=40] [--project=<dir>] [--ffmpeg=<path>] [--capped]
-  Per site: (abort a leftover page take) → teleport → readiness → prewarm (best-effort: an incomplete prewarm
+  Per site: (abort a leftover page take) → site.prime commands, each with its readiness gate (walk the hidden
+  player through a dungeon so the server streams every creature on the route; a failing prime only warns; event
+  'prime' in shoot-log.jsonl) → teleport → readiness → prewarm (best-effort: an incomplete prewarm
   warns and is noted in shoot-log.jsonl and the site's reports). Grass and the server's nearby objects follow the
   hidden player, so before an outdoor shot whose camera path (built offline) is more than --hop metres from it the
   player is moved there with @teleloc and the readiness gate runs again (never during a take; not for actor /
@@ -1365,7 +1381,7 @@ command("shoot", "record takes site by site (never across a teleport)",
         sleep: deps.sleep,
         io,
       });
-      const text = [`shot ${r.shots.length} take(s) across ${r.teleports} site(s)${r.hops ? ` (${r.hops} in-site hop(s))` : ""}`]
+      const text = [`shot ${r.shots.length} take(s) across ${r.teleports} site(s)${r.primes ? ` (${r.primes} prime teleport(s) before them)` : ""}${r.hops ? ` (${r.hops} in-site hop(s))` : ""}`]
         .concat(r.shots.map((x) => `  ${x.shotId}: ${path.basename(x.file)} · ${x.frames} frames · ${x.kept ? "kept" : "NOT KEPT"} (${x.verdict.band}, ${x.verdict.source}${x.attempts > 1 ? `, ${x.attempts} attempts` : ""}${x.failedAttempts?.length ? `, retake ${x.failedAttempts.map((f) => f.attempt).join("/")} failed` : ""})${x.issues?.length ? ` · page issue(s): ${x.issues.map((i) => (Number.isFinite(i.minDurationSec) ? `${i.code} (min ${i.minDurationSec} s)` : i.code)).join(", ")}` : ""}`))
         .concat(r.failures.map((f) => `  FAILED ${f.shotId} at ${f.stage}: ${f.message}`))
         .join("\n");
@@ -1397,7 +1413,9 @@ command("assemble", "cut the takes into edit/final.mp4 on the song",
   `film assemble <timeline.json> [--song=<audio>] [--no-audio] [--out=edit/final.mp4] [--edl] [--missing=error|black]
                [--crf=16] [--dry-run] [--project=<dir>] [--ffmpeg=<path>] [--capped]
   Takes come from reports/<shot>.json (file, fps, frames) or takes/<shot>.mp4. Song: --song, else
-  timeline.song.file resolved against the project. --edl also writes edit/final.edl (CMX3600).`,
+  timeline.song.file resolved against the project. --edl also writes edit/final.edl (CMX3600). A timeline with a
+  silent tail (plan edit.tail → timeline.musicEnd) cuts and fades the song at musicEnd and pads it with silence to
+  the program length; the fades around the tail are element-local.`,
   async (ctx) => {
     const { args, deps, io } = ctx;
     const tfile = args._[1];
@@ -1430,6 +1448,9 @@ command("assemble", "cut the takes into edit/final.mp4 on the song",
     const argv = assemblyArgv(a, { out, crf: numArg(args, "crf", 16, { min: 0, max: 51 }) });
     const ffmpeg = resolveFfmpeg(strArg(args, "ffmpeg"), deps.env);
     const data = { out, totalSec: a.totalSec, totalFrames: a.totalFrames, segments: a.segments.length, audio: a.audio, warnings: a.warnings, argv: [ffmpeg, ...argv] };
+    // a silent tail (edit.tail): the song is cut (and faded) at musicEnd and padded with silence to the end
+    if (a.musicEnd) data.musicEnd = a.musicEnd;
+    const tailText = a.musicEnd ? ` — music ${a.musicEnd.sec.toFixed(2)} s, then ${a.musicEnd.tailSec.toFixed(2)} s silent tail` : "";
     if (boolArg(args, "edl")) {
       const edl = toCmx3600(tl, takes, { title: timeline.title });
       deps.fs.mkdirSync(path.dirname(paths.finalEdl), { recursive: true });
@@ -1442,7 +1463,7 @@ command("assemble", "cut the takes into edit/final.mp4 on the song",
     }
     deps.fs.mkdirSync(path.dirname(out), { recursive: true });
     await withLock(ctx, "assemble", () => runFfmpeg(ffmpeg, argv, { spawn: deps.spawn, capped: boolArg(args, "capped"), what: "ffmpeg assemble" }));
-    return { code: EXIT.OK, data, text: `wrote ${out} (${a.totalFrames} frames, ${a.totalSec.toFixed(2)} s, ${a.segments.length} segment(s)${a.audio ? ", with song" : ", no audio"})${data.edl ? `\nwrote ${data.edl}` : ""}` };
+    return { code: EXIT.OK, data, text: `wrote ${out} (${a.totalFrames} frames, ${a.totalSec.toFixed(2)} s, ${a.segments.length} segment(s)${a.audio ? ", with song" : ", no audio"})${tailText}${data.edl ? `\nwrote ${data.edl}` : ""}` };
   });
 
 command("contact-sheet", "a grid of evenly spaced frames as one JPEG",
@@ -1490,7 +1511,7 @@ command("contact-sheet", "a grid of evenly spaced frames as one JPEG",
 
 // Options `run` hands to every step. NOT `song`: plan validate/compile read --song as the analysis (song.json) and
 // assemble reads it as the audio, so `run` takes the two as --song-analysis and --song-audio and routes each.
-const RUN_PASSTHROUGH = ["cdp", "ffmpeg", "ffprobe", "gazetteer", "account", "password", "base", "quality", "width", "height",
+const RUN_PASSTHROUGH = ["cdp", "ffmpeg", "ffprobe", "gazetteer", "account", "password", "base", "quality", "clouds", "weather", "coverage", "width", "height",
   "codec", "bitrate", "retakes", "assume-muted", "boot-timeout", "jev-max-usd-per-hour", "jev-max-calls-per-min", "capped",
   "rehearse", "rehearse-fps", "missing", "vp9-container", "audio"];
 
@@ -1515,8 +1536,8 @@ command("run", "the end-to-end recipe for a project",
   Song: --song-analysis goes to plan validate/compile as --song (default: plan.song.analysis relative to the
   project); --song-audio goes to assemble as --song (default: timeline.song.file relative to the project).
   Relative paths resolve against the cwd, else the project. --song itself is refused (ambiguous here).
-  Passed to the steps: --cdp --ffmpeg --ffprobe --gazetteer --account --password --base --quality --width
-  --height --codec --bitrate --retakes --assume-muted --boot-timeout --jev-max-usd-per-hour
+  Passed to the steps: --cdp --ffmpeg --ffprobe --gazetteer --account --password --base --quality --clouds
+  --weather --coverage --width --height --codec --bitrate --retakes --assume-muted --boot-timeout --jev-max-usd-per-hour
   --jev-max-calls-per-min --capped --rehearse/--no-rehearse --rehearse-fps --missing --vp9-container --no-audio.`,
   async (ctx) => {
     const { args, io } = ctx;

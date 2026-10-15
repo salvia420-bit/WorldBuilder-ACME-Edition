@@ -1,0 +1,134 @@
+{
+ "name": "Camp of the Latzimestal",
+ "title": "Camp of the Latzimestal",
+ "siteId": "poi-camp-of-the-latzimestal",
+ "summary": "Three tents near the Ithaenc Cathedral where the Dericost forces (Anadil, Asmolum, Rytheran, Aerfalle, Elleina) gathered before the battle against Bael'Zharon (acpedia). In the kit, three 11.5 m octagonal hide tents (z 144-152) step down a jungle slope 100-170 m south of the cathedral, with an exploration marker and wandering skeletons.",
+ "landmarks": [
+  {
+   "name": "Tent 1 (0x01000F06)",
+   "pos": [
+    46836,
+    4524,
+    152
+   ],
+   "heightM": 4.5,
+   "note": "The top-down-rise subject."
+  },
+  {
+   "name": "Tent 2 (0x01000F06)",
+   "pos": [
+    46812,
+    4500,
+    150
+   ],
+   "heightM": 4.5,
+   "note": ""
+  },
+  {
+   "name": "Tent 3 (0x01000F06)",
+   "pos": [
+    46860,
+    4452,
+    144
+   ],
+   "heightM": 4.5,
+   "note": ""
+  }
+ ],
+ "site": {
+  "id": "poi-camp-of-the-latzimestal",
+  "name": "Camp of the Latzimestal",
+  "gazetteerId": "camp-of-the-latzimestal",
+  "teleport": "@teleloc 0xF4170004 2.00 89.00 150.75 1 0 0 0",
+  "anchor": [
+   46836,
+   4492,
+   149
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.56,
+   "grade": "warm"
+  },
+  "notes": "The gazetteer entry for the camp is only a map @tele; the nearest exact outdoor teleport (cathedral-ruins) is 129 m north inside the cathedral, so a derived @teleloc on the open ground between the three tents is used (ground z 150.25, nearest tent 15.6 m)."
+ },
+ "insertAfter": "freehold",
+ "insertBefore": "kara",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -83.0,
+   "ew": 93.2
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   46836.0,
+   4548.0
+  ],
+  "coveredDistM": 1917,
+  "coveredBy": "shot:freehold.02",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Camp_of_the_Latzimestal.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-camp-of-the-latzimestal.01",
+   "site": "poi-camp-of-the-latzimestal",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     2.5,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46836,
+     4524,
+     152
+    ],
+    "height": 4.5,
+    "radius": 6
+   },
+   "params": {
+    "heightStart": 12,
+    "heightEnd": 58,
+    "rotateDeg": 40,
+    "headingDeg": 340,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "minClearance": 3
+   },
+   "standingOrder": "Look straight down on the first of the three Latzimestal tents and climb vertically 46 m, turning slowly, until the camp's tents lie small in their jungle clearing; nothing above the lens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Top-down rise from 12 m to 58 m over the first of the three Latzimestal hide tents, pitched -88 and turning 40 degrees. The camp shrinks into its jungle clearing on the slope below the cathedral. Peak 6.6 m/s. Verified (check.mjs, full take flown): take 0-11 s: AGL 12..58 m, nearest drawn 18.38 m (spawn Linkable Monster Generator), vmax 6.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 19.94..57.1 m, nearest drawn 23.2 m (spawn Linkable Monster Generator), vmax 6.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 6.56 m/s (cap 12), max tracking gap 0.05 m."
+  }
+ ],
+ "verification": {
+  "poi-camp-of-the-latzimestal.01": "take 0-11 s: AGL 12..58 m, nearest drawn 18.38 m (spawn Linkable Monster Generator), vmax 6.57 m/s, LOS blocked 0/45, subject in frame 100%; edit 3-10 s: AGL 19.94..57.1 m, nearest drawn 23.2 m (spawn Linkable Monster Generator), vmax 6.57 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 6.56 m/s (cap 12), max tracking gap 0.05 m"
+ }
+}

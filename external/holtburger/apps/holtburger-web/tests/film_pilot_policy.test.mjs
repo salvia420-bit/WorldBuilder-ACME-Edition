@@ -24,7 +24,8 @@
 //       each time (criteria are mutually exclusive and exhaustive); and what the occluder_action
 //       instructions promise about soft occluders holds in code: fade for every soft kind, the mapper
 //       fades the sensors' ids (a placed tree / prop key, an entity guid, a particle key) and, with
-//       none (a procedural tree, a big or unsized prop), reroutes by itself;
+//       none (a procedural tree, a big or unsized prop), reroutes by itself; with a never-fade
+//       mapper (pilot.fade 'never', maxFadeIds 0) the same answers fade nothing and reroute;
 //   P4  answers are in the exact Decisions-API shape (validated by questions.js
 //       and by the Node JEV client), hard probabilities, question subsets;
 //   P5  neutralAnswers, answersAgree (thresholded scores / noul), determinism and
@@ -531,6 +532,24 @@ check("soft occluders (r3-small, r4-scenery-fade): what the occluder_action inst
     sp = m.apply(a, { sceneTime: 0, now: 0, sensorFrame: { ...sfFade, subject: { ...sfFade.subject, occluderIds: [] } } });
     assert.deepEqual([sp.fadeIds, sp.reroute, m.stats().fadeFallbacks], [[], true, 1], `${kind}: reroutes by itself`);
   }
+});
+
+check("pilot.fade 'never' (Egg Orchard run): the same soft-occluder 'fade' answers with a never-fade mapper (maxFadeIds 0) name NO id and reroute — even with fadeable ids, even a creature's", () => {
+  for (const [kind, ids] of [["tree", ["placement:a9b40000:object:12"]], ["prop", [0x80000123]], ["smoke", ["fx:0x50000001:2"]], ["prop", [0x80000123, "placement:a9b40000:object:3"]]]) {
+    const sf = frame(SUBJ({ visibleFrac: 0.2, unseenSec: 1, occluderKind: kind, occluderIds: ids }));
+    const st = S.buildPilotState(sf, { standingOrder: "Never fade the olthoi.", technique: "fpv.fpv-run" });
+    const a = P.codePolicy(sf, st);
+    assert.equal(a.occluder_action.choice, "fade");
+    const never = M.createResidualMapper({ limits: { maxFadeIds: 0 } });
+    const sp = never.apply(a, { sceneTime: 0, now: 0, sensorFrame: sf });
+    assert.deepEqual([sp.fadeIds, sp.reroute, never.stats().fadeFallbacks], [[], true, 1], `${kind}: nothing faded, rerouted`);
+    assert.equal(never.config.limits.maxFadeIds, 0);
+    const auto = M.createResidualMapper();
+    assert.deepEqual(auto.apply(a, { sceneTime: 0, now: 0, sensorFrame: sf }).fadeIds, ids, `${kind}: the default mapper still fades`);
+  }
+  // A moving occluder (a creature) is a 'wait' by rule — never a fade.
+  const cre = frame(SUBJ({ visibleFrac: 0.2, unseenSec: 1, occluderKind: "creature", occluderIds: [0x80000a01] }));
+  assert.equal(P.codePolicy(cre, S.buildPilotState(cre, {})).occluder_action.choice, "wait");
 });
 
 console.log("P4 Decisions-API answer shape");

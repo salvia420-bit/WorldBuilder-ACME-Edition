@@ -1,0 +1,210 @@
+{
+ "name": "Sea Coast Rocks (Shallows Pillars)",
+ "title": "Sea Coast Rocks",
+ "siteId": "poi-sea-coast-rocks",
+ "summary": "Sea Coast Rocks are rock formations along the coast east of Arwic; this site films the southernmost, the Shallows Pillars (acpedia: '4 large stone pillars and some submerged rocks', 40.1N 68.2E). The kit has exactly four pillars standing in the surf at the foot of a sea cliff that rises 150 m+ to the west: two intact (19.8 m and 18.9 m) and two broken stumps (10-11 m), with the Shards of the Abyssal Totem scattered in the shallows. Open sea to the east.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 40.1,
+   "ew": 68.2
+  },
+  "mapWorld": [
+   40836.0,
+   34092.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Sea_Coast_Rocks.txt",
+  "coveredDistM": 3156,
+  "coveredBy": "shot:arwic.05"
+ },
+ "landmarks": [
+  {
+   "name": "Tall pillar (beach)",
+   "pos": [
+    40851.2,
+    34084.3,
+    -0.1
+   ],
+   "heightM": 19.8,
+   "note": "0x020006D0."
+  },
+  {
+   "name": "Outer pillar (surf)",
+   "pos": [
+    40892.6,
+    34107.7,
+    -0.9
+   ],
+   "heightM": 18.9,
+   "note": "0x020006D0."
+  },
+  {
+   "name": "Broken pillars",
+   "pos": [
+    40843.5,
+    34070.5,
+    0.0
+   ],
+   "heightM": 10.9,
+   "note": "0x020006D1; the other at (40886.5,34107.0)."
+  },
+  {
+   "name": "Sea cliff",
+   "pos": [
+    40800.0,
+    34085.0,
+    40.0
+   ],
+   "heightM": 150,
+   "note": "Terrain rises from 0 to 188+ within 60 m west of the pillars."
+  }
+ ],
+ "site": {
+  "id": "poi-sea-coast-rocks",
+  "name": "Sea Coast Rocks (Shallows Pillars)",
+  "teleport": "@teleloc 0xD4B10024 114.0 91.0 4.8 1 0 0 0",
+  "anchor": [
+   40860.0,
+   34090.0,
+   0.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.57,
+   "grade": "warm"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40851.2,
+     34084.3,
+     -0.1
+    ],
+    "height": 19.8,
+    "radius": 4
+   },
+   "params": {
+    "distance": 30,
+    "heightAGL": 3,
+    "slide": 16,
+    "panAmount": 0.4,
+    "direction": "right",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Slide 16 m to the right 3 m above the tide line 30 m south-south-east of the tall stone pillar, counter-panning to hold it; nothing within 15 m, never over the cliff.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Shallows Pillars on the coast east of Arwic: four great stone pillars (19.8 m, 18.9 m and two broken stumps) stand in the surf below a 150 m+ sea cliff. A low parallax slide from the beach makes the near pillar sweep across the far pair and the cliff wall, sun from the left. Verified with poi-kit check.mjs - take 9s: AGL 2.9..2.9 m, nearest 15.4 m (static 0xD4B1#3 0x020006D1), vmax 2.79 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 2.9..2.9 m, nearest 15.55 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 2.78 m/s (cap 12), tracking gap 0.03 m."
+  },
+  {
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40892.6,
+     34107.7,
+     -0.9
+    ],
+    "height": 19.8,
+    "radius": 4
+   },
+   "params": {
+    "nearDistance": 14,
+    "farDistance": 55,
+    "direction": "out",
+    "heightAGL": 6,
+    "minFovDeg": 12,
+    "maxFovDeg": 90,
+    "bearingDeg": 75,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Fly out 14 m to 55 m east-north-east over the sea, 5 m above the water, while the lens narrows from 60 to 19 deg to hold the outer pillar's size; open sea only behind the drone, nothing within 14 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dolly-zoom on the outer 18.9 m pillar in the surf: the drone backs out over open water while the lens zooms, so the pillar keeps its size and the cliff behind it swells up the frame. Looking west-south-west toward the afternoon sun, so the pillar reads as a backlit silhouette against the cliff. Verified with poi-kit check.mjs - take 9s: AGL 5.1..5.1 m, nearest 14.56 m (static 0xD4B1#20 0x0200068C Shard of the Abyssal Totem), vmax 7.16 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 2-8s: AGL 5.1..5.1 m, nearest 18.58 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 7.14 m/s (cap 12), tracking gap 0.06 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-sea-coast-rocks.01",
+   "technique": "drone.parallax-slide",
+   "rank": 1,
+   "check": "take 9s: AGL 2.9..2.9 m, nearest 15.4 m (static 0xD4B1#3 0x020006D1), vmax 2.79 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 2.9..2.9 m, nearest 15.55 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 2.78 m/s (cap 12), tracking gap 0.03 m"
+  },
+  {
+   "shot": "poi-sea-coast-rocks.02",
+   "technique": "drone.vertigo-drone",
+   "rank": 2,
+   "check": "take 9s: AGL 5.1..5.1 m, nearest 14.56 m (static 0xD4B1#20 0x0200068C Shard of the Abyssal Totem), vmax 7.16 m/s, LOS blocked 0/37, in frame 100%, water 100%; edit 2-8s: AGL 5.1..5.1 m, nearest 18.58 m, LOS blocked 0/25, in frame 100%, water 100%; flight cinema: peak 7.14 m/s (cap 12), tracking gap 0.06 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 12,
+ "techniques": [
+  "drone.parallax-slide",
+  "drone.vertigo-drone"
+ ]
+}

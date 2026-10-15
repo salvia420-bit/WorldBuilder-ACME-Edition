@@ -1,5 +1,10 @@
 # HANDOFF — "Dereth Town Tour" film (2026-10-14, paused before the main shoot)
 
+> **Superseded plan (2026-10-15):** the live plan is now v2.2 — 546 shots: 270 of the 273 below as trimmed windows of
+> their unchanged takes + 274 new shots at 155 acpedia Major POI sites in the same 57:11.75 music edit, then a silent
+> tail (the Egg Orchard portal shot + a full-dungeon JEV FPV run, 184.5 s). See
+> `docs/HANDOFF-film-dereth-tour-v2-2026-10-15.md`. The resume commands in §4 still apply.
+
 **Status:** research + plan DONE and validated; shooting PAUSED after the first town because a person started using
 the GTX-1070 box. Nothing is running now (shoot driver and idle watcher stopped, the hidden test Chrome on the 1070
 closed, the person's own Chrome never touched). Resume = the commands in §4.

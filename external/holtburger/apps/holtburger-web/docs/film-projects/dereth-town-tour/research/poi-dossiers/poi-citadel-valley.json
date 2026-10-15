@@ -1,0 +1,199 @@
+{
+ "name": "Citadel Valley (crashed Gaerlan's Citadel)",
+ "title": "Citadel Valley",
+ "siteId": "poi-citadel-valley",
+ "summary": "Citadel Valley is the deep, cliff-walled valley (floor z 60, walls to z 250-300) where Gaerlan's Citadel crashed after Gaerlan and Martine's battle, reachable only by quest portal. The kit shows the crashed citadel as a 5 x 5 grid of moss-grown halls and spired towers (z 75-93.5) heaped on shattered rock and crystal at the north end, and at the south end, at the foot of the cliff, a row of five Ziggurat portals (Lightning, Acid, Fire, Frost, Prismatic) - the portals to Asheron's golem ziggurats - with Asheron's Platinum Golem and Ornate Pillars about.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 57.8,
+   "ew": 48.4
+  },
+  "mapWorld": [
+   36084.0,
+   38340.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Citadel_Valley.txt",
+  "coveredDistM": 2083,
+  "coveredBy": "shot:bandit-castle.04"
+ },
+ "landmarks": [
+  {
+   "name": "Crashed citadel (east edge)",
+   "pos": [
+    36012.0,
+    38316.0,
+    60.0
+   ],
+   "heightM": 33.5,
+   "note": "Hall 0x01002B2D; grid x 35904-36024, y 38256-38376, spires to z 93.5."
+  },
+  {
+   "name": "Ziggurat portals",
+   "pos": [
+    35929.6,
+    38167.3,
+    59.9
+   ],
+   "heightM": 4,
+   "note": "Five portal spawns x 35915-35944 (height estimated)."
+  },
+  {
+   "name": "Valley walls",
+   "pos": [
+    35880.0,
+    38250.0,
+    250.0
+   ],
+   "heightM": 190,
+   "note": "Cliffs W, S and E."
+  }
+ ],
+ "site": {
+  "id": "poi-citadel-valley",
+  "name": "Citadel Valley (crashed Gaerlan's Citadel)",
+  "teleport": "@teleloc 0xBBC60018 56.0 189.0 60.5 1 0 0 0",
+  "anchor": [
+   35964.0,
+   38260.0,
+   60.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.45,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "lytelthorpe",
+ "insertBefore": "bandit-castle",
+ "insertNote": "Kept the batch's route position (chapter ch1).",
+ "shots": [
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     2,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 1,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36012.0,
+     38316.0,
+     60.0
+    ],
+    "height": 33.5,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 76,
+    "radiusEnd": 58,
+    "heightStart": 78,
+    "heightEnd": 45,
+    "revolutions": 0.1,
+    "direction": "cw",
+    "bearingDeg": 55,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Spiral down 36 deg clockwise from 78 m to 45 m above the valley floor, radius 76 m to 58 m, east of the crashed citadel; keep 20 m from its towers and the valley wall, scrub may be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arrival in Citadel Valley, the cliff-walled pit where Gaerlan's Citadel crashed: a 5x5 grid of moss-grown halls and spired towers (tops 75-93.5 m) heaped on shattered rock, the unclimbable walls rising 200 m behind. The descent drops into the valley from the east with the noon sun high over the south wall. Verified with poi-kit check.mjs - take 11s: AGL 45..78.6 m, nearest 24.22 m (scenery-default 0x02000847@36106,38332), vmax 8.08 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 3-9.5s: AGL 46.49..72.3 m, nearest 24.22 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 8.07 m/s (cap 12), tracking gap 0.06 m."
+  },
+  {
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35929.6,
+     38167.3,
+     59.9
+    ],
+    "height": 4,
+    "radius": 2
+   },
+   "params": {
+    "offset": 12,
+    "heightAGL": 3.2,
+    "speed": 4.5,
+    "side": "right",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Fly east 3 m above the valley floor at 4.5 m/s, 12 m north of the row of five ziggurat portals, yawing to keep the Fire Ziggurat centred; nothing within 10 m, the portals' swirls may never be faded.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Particle shot: the five elemental Ziggurat portals (Lightning, Acid, Fire, Frost, Prismatic) stand in a row at the foot of the south cliff; flying past on their north side puts the high noon sun behind them, so the five coloured swirls are backlit as they whip through the frame. Verified with poi-kit check.mjs - take 9s: AGL 3.1..3.1 m, nearest 9.97 m (spawn Lightning Ziggurat), vmax 4.5 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 3.1..3.1 m, nearest 9.97 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 4.51 m/s (cap 12), tracking gap 0.02 m."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-citadel-valley.01",
+   "technique": "drone.spiral-descent",
+   "rank": 1,
+   "check": "take 11s: AGL 45..78.6 m, nearest 24.22 m (scenery-default 0x02000847@36106,38332), vmax 8.08 m/s, LOS blocked 0/45, in frame 100%, water 0%; edit 3-9.5s: AGL 46.49..72.3 m, nearest 24.22 m, LOS blocked 0/27, in frame 100%, water 0%; flight cinema: peak 8.07 m/s (cap 12), tracking gap 0.06 m"
+  },
+  {
+   "shot": "poi-citadel-valley.02",
+   "technique": "drone.fly-by",
+   "rank": 1,
+   "check": "take 9s: AGL 3.1..3.1 m, nearest 9.97 m (spawn Lightning Ziggurat), vmax 4.5 m/s, LOS blocked 0/37, in frame 100%, water 0%; edit 1.5-7.5s: AGL 3.1..3.1 m, nearest 9.97 m, LOS blocked 0/25, in frame 100%, water 0%; flight cinema: peak 4.51 m/s (cap 12), tracking gap 0.02 m"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 12.5,
+ "techniques": [
+  "drone.spiral-descent",
+  "drone.fly-by"
+ ]
+}

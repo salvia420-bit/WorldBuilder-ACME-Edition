@@ -1,0 +1,136 @@
+{
+ "name": "Tumerok Towers (1.4S, 86.2W)",
+ "title": "1.4S, 86.2W - Tumerok Towers",
+ "siteId": "poi-tumerok-towers",
+ "summary": "Two Tumerok spire towers (0x01001117, 31 m) side by side on a barren ridge plateau (z 150) in the far west of the Dires, close to the Obsidian Rim Portal (Points of Interest Map no. 31). The ridge falls 30-50 m to the north and west. The Heartland and Old Talisman dungeon portals are 260 m south-east.",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -1.4,
+   "ew": -86.2
+  },
+  "mapWorld": [
+   3780.0,
+   24132.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/1_4S_86_2W_Tumerok_Towers.txt",
+  "coveredDistM": 3461,
+  "coveredBy": "shot:fort-tethana.03"
+ },
+ "landmarks": [
+  {
+   "name": "Tower A",
+   "pos": [
+    3804,
+    24132,
+    150
+   ],
+   "heightM": 30.75,
+   "note": "0x01001117."
+  },
+  {
+   "name": "Tower B",
+   "pos": [
+    3780,
+    24108,
+    150
+   ],
+   "heightM": 30.75,
+   "note": "0x01001117, 34 m south-west of tower A."
+  }
+ ],
+ "site": {
+  "id": "poi-tumerok-towers",
+  "name": "Tumerok Towers (1.4S, 86.2W)",
+  "teleport": "@teleloc 0x137D002F 122 150 138.8 1 0 0 0",
+  "anchor": [
+   3792,
+   24120,
+   150
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Derived @teleloc at (3770,24150), ground 138.3, 31 m from tower A."
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "insertNote": "Kept the batch's route position (fort-tethana -> ayan-baqur).",
+ "shots": [
+  {
+   "id": "poi-tumerok-towers.01",
+   "technique": "classic.two-shot",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     1,
+     9
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     3804,
+     24132,
+     150
+    ],
+    "height": 31,
+    "radius": 7
+   },
+   "params": {
+    "secondary": [
+     3780,
+     24108,
+     150
+    ],
+    "secondaryHeight": 31,
+    "side": "right",
+    "distance": 95,
+    "elevationDeg": 6,
+    "driftDeg": 8
+   },
+   "standingOrder": "Frame the twin Tumerok towers side by side from 95 m north-west, the sun behind the lens, drifting 8 degrees; stay 60 m above the falling slope.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Two-shot: the twin Tumerok spire towers stand on their ridge. The lens is 95 m north-west, 71 m above the falling slope, at the towers' height, and drifts 8 deg with the afternoon sun behind it. Tower A sits left and tower B right of centre (ndc x -0.17 and +0.17), each filling the middle half of the frame height, with the Dires and the Obsidian Rim country beyond. Verified with poi-kit check.mjs (full take flown) - take 9s: AGL 70.97..71.1 m, nearest 76.91 m (scenery-default 0x020005C9@3762,24226), vmax 2.3 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 76.9 m (not drawn by the default bake); edit 2-7.5s: AGL 71..71.1 m, nearest 77.44 m (scenery-default 0x020005C9@3762,24226), vmax 2.3 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 77.5 m (not drawn by the default bake)."
+  }
+ ],
+ "verification": [
+  {
+   "shot": "poi-tumerok-towers.01",
+   "technique": "classic.two-shot",
+   "rank": 2,
+   "check": "take 9s: AGL 70.97..71.1 m, nearest 76.91 m (scenery-default 0x020005C9@3762,24226), vmax 2.3 m/s, LOS blocked 0/37, in frame 100%, water 0%, retail-bake tree 76.9 m (not drawn by the default bake); edit 2-7.5s: AGL 71..71.1 m, nearest 77.44 m (scenery-default 0x020005C9@3762,24226), vmax 2.3 m/s, LOS blocked 0/23, in frame 100%, water 0%, retail-bake tree 77.5 m (not drawn by the default bake)"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-3.json",
+ "totalEditSec": 5.5,
+ "techniques": [
+  "classic.two-shot"
+ ]
+}

@@ -1,0 +1,1240 @@
+{
+ "batch": 0,
+ "windows": [
+  {
+   "id": "holtburg.01",
+   "takeSec": 14.333333,
+   "keep": [
+    2.5,
+    14.333333
+   ],
+   "anchor": "end",
+   "peakSec": 11,
+   "minSec": 7.0,
+   "idealSec": 9.75,
+   "reason": "Film-opening rise up the hall's south wall: climb runs t3-10 (v 1.5-2.5), roofline cleared and LOS to the lower town/River Prosper clear from t11, settling on the reveal at t13-14.3; hero shot so ~0.68x keeps the wall climb plus the full reveal and hold."
+  },
+  {
+   "id": "holtburg.02",
+   "takeSec": 9.125,
+   "keep": [
+    0.0,
+    9.125
+   ],
+   "anchor": "center",
+   "peakSec": 4.5,
+   "minSec": 3.5,
+   "idealSec": 4.5,
+   "reason": "Near-static low-angle on the Life Stone: subject dead centre, LOS clear and 0.7 m AGL in every row t0-9.1 with only a 1 m creep, so any centred stretch carries the idea."
+  },
+  {
+   "id": "holtburg.03",
+   "takeSec": 12.291667,
+   "keep": [
+    2.0,
+    11.2
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.5,
+   "minSec": 4.0,
+   "idealSec": 6.2,
+   "reason": "Facade slide: LOS to the halls clear t2-11 (blocked by S114 only at the ends), slide speed peaks 4.2-4.3 m/s t5-7 with the subject crossing centre at t6 (ndc 0.04), window centred there and drifting toward the forge lanterns."
+  },
+  {
+   "id": "holtburg.04",
+   "takeSec": 11.291667,
+   "keep": [
+    4.0,
+    11.291667
+   ],
+   "anchor": "end",
+   "peakSec": 11,
+   "minSec": 4.5,
+   "idealSec": 5.65,
+   "reason": "River skim at constant 7.1 m/s, 4 m AGL, 100% over water; the hill town grows ahead as range closes 318->268 m, so the later stretch t5.6-11.3 shows Holtburg biggest while staying >=31.5 m from banks/trees."
+  },
+  {
+   "id": "holtburg.05",
+   "takeSec": 17.041667,
+   "keep": [
+    1.5,
+    13.5
+   ],
+   "anchor": 7.0,
+   "peakSec": 7.0,
+   "minSec": 5.0,
+   "idealSec": 8.1,
+   "reason": "Closing 300-deg pano: pan rate peaks ~25-28 deg/s t6-11; window around t7 (h~108) sweeps the eastern spire towers on the morning-sun side through the southern woods (h 22->216), skipping the slow ease-in on the river and the ease-out west."
+  },
+  {
+   "id": "glenden-wood.01",
+   "takeSec": 13,
+   "keep": [
+    1.0,
+    13.0
+   ],
+   "anchor": 7.0,
+   "peakSec": 7.0,
+   "minSec": 4.0,
+   "idealSec": 6.1,
+   "reason": "Establishing drift/push over the forest bowl: subject centred and LOS clear in all rows, drift at full speed (v 2.5-3.0) t4-9, window centred on t7 where the push reads best."
+  },
+  {
+   "id": "glenden-wood.02",
+   "takeSec": 12.916667,
+   "keep": [
+    2.0,
+    12.916667
+   ],
+   "anchor": 8.5,
+   "peakSec": 8.5,
+   "minSec": 4.0,
+   "idealSec": 6.45,
+   "reason": "POV walk-in along the forest road: walking pace 2.2-2.7 m/s t4-10, window centred at t8.5 near the closest approach to the Life Stone and giant tree (nearest bush 2.7 m at t9), dropping the standing start."
+  },
+  {
+   "id": "glenden-wood.03",
+   "takeSec": 10,
+   "keep": [
+    2.5,
+    10
+   ],
+   "anchor": "end",
+   "peakSec": 10,
+   "minSec": 4.0,
+   "idealSec": 5.5,
+   "reason": "Tilt down from the canopy onto the portal swirl: portal enters frame at t4 (ndc y -1.0) and lands centre at t9-10 (ndc -0.03->0), so the window ends on the landing and keeps the canopy-to-portal tilt from p~23."
+  },
+  {
+   "id": "glenden-wood.04",
+   "takeSec": 16.083333,
+   "keep": [
+    3.0,
+    15.5
+   ],
+   "anchor": 9.5,
+   "peakSec": 9.5,
+   "minSec": 5.0,
+   "idealSec": 8.05,
+   "reason": "Helix round the giant tree: orbit+rise fastest t5-13 (v 6.2-8.2, AGL 57->75) where the parallax on the canopy and town bowl reads best; LOS 'blocked' rows are the giant tree itself (the subject), by design."
+  },
+  {
+   "id": "glenden-wood.05",
+   "takeSec": 14.916667,
+   "keep": [
+    3.0,
+    14.5
+   ],
+   "anchor": "end",
+   "peakSec": 12,
+   "minSec": 5.0,
+   "idealSec": 7.05,
+   "reason": "Top-down rise out of the bowl: the town becomes a pattern as AGL climbs 39->79 m t6-13 (v 6.6-6.9 peak t7-8), subject centred, LOS clear; window ends near the high pattern before the final ease-out."
+  },
+  {
+   "id": "cragstone.01",
+   "takeSec": 14.416667,
+   "keep": [
+    4.0,
+    14.416667
+   ],
+   "anchor": "end",
+   "peakSec": 11,
+   "minSec": 5.0,
+   "idealSec": 6.8,
+   "reason": "Tilt-up reveal from the bay: terraces enter frame at t~8.5 (ndc y 1.2->0.88) and settle at t12-14.4 (ndc 0.27->0.11); window ends on the settled reveal and keeps ~2 s of water-down tilt before it."
+  },
+  {
+   "id": "cragstone.02",
+   "takeSec": 9.541667,
+   "keep": [
+    0.0,
+    9.541667
+   ],
+   "anchor": "center",
+   "peakSec": 4.75,
+   "minSec": 3.5,
+   "idealSec": 4.75,
+   "reason": "Over-the-shoulder lock-off from the statue's plinth: portal ndc (0.32,-0.15) and AGL 8.8-8.9 identical in every row t0-9.5 (0.4 m push only; the 'blocked' LOS is the invisible Fireworks Generator spawn box 0.5-0.9 m away), so any centred stretch keeps the composition."
+  },
+  {
+   "id": "cragstone.03",
+   "takeSec": 10.875,
+   "keep": [
+    2.0,
+    10.875
+   ],
+   "anchor": 6.3,
+   "peakSec": 6.3,
+   "minSec": 4.0,
+   "idealSec": 5.45,
+   "reason": "Windmill crane: the jib rises past the sail hub (pitch crosses level ~t6.3) at full speed v 1.8-2.3 t3-9, sails centred and LOS clear throughout; window centred on the crossing, dropping the slow start and settle."
+  },
+  {
+   "id": "cragstone.04",
+   "takeSec": 14.791667,
+   "keep": [
+    1.5,
+    14.791667
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.5,
+   "minSec": 5.0,
+   "idealSec": 7.4,
+   "reason": "Dronie off Thorsten Cragstone: the pull-back peaks at 8.9-9.2 m/s t6-8 as range opens 25->90 m (t3-11) and the roofs/harbour cliff expand into frame; subject centred, LOS clear all rows, 8.8 m min clearance at t1.8 stays inside."
+  },
+  {
+   "id": "cragstone.05",
+   "takeSec": 13,
+   "keep": [
+    0.0,
+    13
+   ],
+   "anchor": "center",
+   "peakSec": 6.5,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Locked-off time-lapse over Victory Harbor: camera static and subject centred with LOS clear in every row, clouds race at a constant rate, so any centred ~6 s stretch shows the sky motion."
+  },
+  {
+   "id": "arwic.01",
+   "takeSec": 14.291667,
+   "keep": [
+    0.0,
+    14.291667
+   ],
+   "anchor": "center",
+   "peakSec": 7.15,
+   "minSec": 4.5,
+   "idealSec": 6.75,
+   "reason": "Top-down map rotation over the walled square: constant 3 deg/s rotation, subject centred, LOS clear and 105 m AGL in every row, so a centred ~7 s stretch (~20 deg of turn) carries the map idea."
+  },
+  {
+   "id": "arwic.02",
+   "takeSec": 12.583333,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.3,
+   "reason": "Wall truck past the gatehouses: subject in frame t2-10 (ndc x 1.01 -> -0.92) and crosses centre at t6 at peak 4.0 m/s, pillars 7.6 m; window centred on the gate passing, dropping the off-frame ease-in/out."
+  },
+  {
+   "id": "arwic.03",
+   "takeSec": 9,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "anchor": 4.5,
+   "peakSec": 4.5,
+   "minSec": 4.5,
+   "idealSec": 5.0,
+   "reason": "Fly-by of the NW corner tower: closest pass 13.4 m at t4-5 with the yaw whip (h 157->203), 10 m/s level, LOS clear; window centred on the whip with ~2.5 s of approach and exit either side."
+  },
+  {
+   "id": "arwic.04",
+   "takeSec": 10.541667,
+   "keep": [
+    0.0,
+    10.541667
+   ],
+   "anchor": "center",
+   "peakSec": 5.5,
+   "minSec": 3.5,
+   "idealSec": 5.25,
+   "reason": "High angle onto the portal and fountain: subject centred, LOS clear and a slow 3 m push (v <=0.45) in every row, so a centred stretch keeps the balanced framing with the push still visible."
+  },
+  {
+   "id": "arwic.05",
+   "takeSec": 16.208333,
+   "keep": [
+    1.5,
+    14.5
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.5,
+   "minSec": 5.0,
+   "idealSec": 7.7,
+   "reason": "Vertigo pull-back: fov narrows fastest 49->28 deg while range opens 52->97 m over t3-10 (v 4-7.3), the tower holding size as the Lost Wish hills swell; LOS clear all rows; window centred t7.5 where the effect reads strongest."
+  },
+  {
+   "id": "eastham.01",
+   "takeSec": 14.75,
+   "keep": [
+    3.0,
+    14.75
+   ],
+   "anchor": 8.5,
+   "peakSec": 8.5,
+   "minSec": 5.0,
+   "idealSec": 7.0,
+   "reason": "Water-opener flyover at 7 m/s, 22 m AGL: the shoreline point passes under the lens at t~7.5 (closest 21.2 m, then 'behind') with the windmill dead ahead growing; window covers the last water, the crossing and the run toward the windmill/roofs."
+  },
+  {
+   "id": "eastham.02",
+   "takeSec": 10,
+   "keep": [
+    0.0,
+    10
+   ],
+   "anchor": "center",
+   "peakSec": 5.0,
+   "minSec": 3.5,
+   "idealSec": 5.0,
+   "reason": "Locked-off static on the windmill, portal and Life Stone: identical framing (subject centred, LOS clear, nothing within 12.4 m) in every row; motion lives inside the frame (sails, portal swirl), so any centred stretch works."
+  },
+  {
+   "id": "eastham.03",
+   "takeSec": 8.25,
+   "keep": [
+    1.0,
+    8.25
+   ],
+   "anchor": 4.1,
+   "peakSec": 3.71,
+   "minSec": 3.5,
+   "idealSec": 4.1,
+   "reason": "Whip-pan: the 178-deg whip fires at t~3.7 (at=0.45 x 8.25; h 81 at t3 -> 259 at t4); window centred just after it keeps ~2 s hold on the windmill against the low sun and ~2 s landed hold on the rooftops (the LOS 'blocker' is the town's own roofs, by design)."
+  },
+  {
+   "id": "eastham.04",
+   "takeSec": 12.75,
+   "keep": [
+    2.0,
+    12.75
+   ],
+   "anchor": 6.7,
+   "peakSec": 6.0,
+   "minSec": 5.0,
+   "idealSec": 6.4,
+   "reason": "Reveal from behind the Banderling plinth: portal hidden by the plinth t0-5 (LOS blocked by design), truck runs t4-9.5 (peak 3.1 m/s t6) and the swirl opens up with LOS clear from t6; window keeps ~1.5 s of hidden hold, the reveal and the settle on the square."
+  },
+  {
+   "id": "eastham.05",
+   "takeSec": 17.166667,
+   "keep": [
+    0.5,
+    17.0
+   ],
+   "anchor": "center",
+   "peakSec": 8.6,
+   "minSec": 5.0,
+   "idealSec": 8.2,
+   "reason": "Hyperlapse orbit over the square: constant 5.5 m/s orbit, subject centred, LOS clear in every row, clouds/light racing at 110x throughout; a centred ~8 s stretch carries the sky motion and light sweep across the roofs (min clearance 23.6 m only at the very end)."
+  },
+  {
+   "id": "dryreach.01",
+   "takeSec": 17.958333,
+   "keep": [
+    3.0,
+    17.958333
+   ],
+   "anchor": 10.5,
+   "peakSec": 10.5,
+   "minSec": 5.0,
+   "idealSec": 8.6,
+   "reason": "Spiral arrival on the fortress: descent+orbit fastest v 8-10 m/s t5-12 as AGL drops 73->50 m and range closes 144->112 m; window centred t10.5 runs into the near approach on the golden spires before the final ease-out; LOS clear all rows."
+  },
+  {
+   "id": "dryreach.02",
+   "takeSec": 12.208333,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.1,
+   "reason": "Palisade slide: subject crosses centre at t6 (ndc 0.03) at peak 4.1 m/s, in frame and LOS clear throughout with the wall 11.3 m off; window centred on the gate passing, dropping the slow ease-in/out."
+  },
+  {
+   "id": "dryreach.03",
+   "takeSec": 12.375,
+   "keep": [
+    2.0,
+    11.5
+   ],
+   "anchor": 7.0,
+   "peakSec": 7.0,
+   "minSec": 4.5,
+   "idealSec": 6.2,
+   "reason": "Pass-over the courtyard: lens reaches vertical over the well at t6-8 (p -88/-90) with the yaw slew h -90 -> +69 t6-9; window centred t7 keeps approach tilt, the nadir rotation and the exit, subject in frame and LOS clear in every row."
+  },
+  {
+   "id": "dryreach.04",
+   "takeSec": 11.541667,
+   "keep": [
+    3.0,
+    11.541667
+   ],
+   "anchor": "end",
+   "peakSec": 7.0,
+   "minSec": 4.5,
+   "idealSec": 6.2,
+   "reason": "Pedestal rise over the north palisade: gate/stakes fill frame and LOS is blocked by design until the lens clears the stakes at t~6.7 (clear from t7), then looks down on the portal as the rise settles t8-11.5; window ends on the settle with ~1.4 s of blocked lead-in."
+  },
+  {
+   "id": "dryreach.05",
+   "takeSec": 9.666667,
+   "keep": [
+    0.5,
+    9.666667
+   ],
+   "anchor": 4.3,
+   "peakSec": 3.5,
+   "minSec": 5.0,
+   "idealSec": 6.25,
+   "reason": "Hero FPV dive: crests the NW spire at t1-2 (p -5 -> -38), dives at p -59 t3-4 past the north face (5.7 m closest at t2.1), pulls out to 3 m AGL t5-6.5 and races north; window centred t4.3 keeps crest, dive, pull-out and ~1 s of the low race (hero, ~0.7x)."
+  },
+  {
+   "id": "oolutangas-refuge.01",
+   "takeSec": 16.875,
+   "keep": [
+    3.0,
+    16.875
+   ],
+   "anchor": 11.0,
+   "peakSec": 9.0,
+   "minSec": 5.0,
+   "idealSec": 8.0,
+   "reason": "Spiral descent onto the portal clearing: corkscrew fastest v 7.8-9 m/s t6-10 as AGL drops 51->36 m, arriving over the clearing looking west to the giant-tree platforms (AGL 23 at t15); subject centred and LOS clear all rows; window centred t11 covers the descent and the arrival."
+  },
+  {
+   "id": "oolutangas-refuge.02",
+   "takeSec": 12.375,
+   "keep": [
+    2.0,
+    12.375
+   ],
+   "anchor": 7.5,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.2,
+   "reason": "Deck-height slide along the treehouse platforms: peak 4.8-5.1 m/s t5-7 with the pair crossing centre at t6 (ndc 0.02); LOS is clear from t8 (earlier rows blocked by the deck's own giant tree), so the window is centred t7.5, biased toward the clear stretch."
+  },
+  {
+   "id": "oolutangas-refuge.03",
+   "takeSec": 9.166667,
+   "keep": [
+    1.0,
+    9.166667
+   ],
+   "anchor": 4.3,
+   "peakSec": 4.125,
+   "minSec": 3.5,
+   "idealSec": 4.6,
+   "reason": "Rack focus flame->portal: the 2.2 s pull is centred at at=0.45 x 9.17 = t4.1 (runs t3.0-5.2); window centred t4.3 keeps ~1 s of soft flame before and ~1.4 s of sharp portal after; frame locked, LOS clear in every row."
+  },
+  {
+   "id": "oolutangas-refuge.04",
+   "takeSec": 10.041667,
+   "keep": [
+    0.0,
+    10.041667
+   ],
+   "anchor": "center",
+   "peakSec": 5.0,
+   "minSec": 3.5,
+   "idealSec": 5.0,
+   "reason": "High angle onto the Grocer's deck: subject centred, LOS clear and a slow 4 m creep (v <=0.63, AGL 21.9->19.9) in every row, so a centred stretch keeps the balanced framing."
+  },
+  {
+   "id": "oolutangas-refuge.05",
+   "takeSec": 14.916667,
+   "keep": [
+    3.0,
+    14.916667
+   ],
+   "anchor": 9.0,
+   "peakSec": 7.0,
+   "minSec": 5.0,
+   "idealSec": 7.05,
+   "reason": "Boom rise from the clearing through deck and canopy level: climb fastest 7.0-7.3 m/s t6-9 (AGL 29->51) as the lens clears the canopy and the jungle plain/western sea open up, horizon dropping to t12; window centred t9 holds the passage and the reveal (LOS 'blocked' rows are the giant tree, by design)."
+  },
+  {
+   "id": "rithwic.01",
+   "takeSec": 12.916667,
+   "keep": [
+    2.5,
+    12.916667
+   ],
+   "anchor": "end",
+   "peakSec": 9.0,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Boom-rise over Lake Blessed: the gorge, arch and both cliff-top halves unfold as the lens climbs at 4.4-5.3 m/s t4-9 (AGL 14->39) and tilts to -18 deg on the span by t12; bridge centred, LOS clear, 100% over water; window ends on the full reveal."
+  },
+  {
+   "id": "rithwic.02",
+   "takeSec": 6.791667,
+   "keep": [
+    0.5,
+    6.791667
+   ],
+   "anchor": 3.2,
+   "peakSec": 3.06,
+   "minSec": 3.5,
+   "idealSec": 3.75,
+   "reason": "Rack focus torch->portal: the 2 s pull is centred at at=0.45 x 6.79 = t3.06 (runs t2.1-4.1); window centred t3.2 keeps ~0.8 s of sharp torch flame before and ~1 s of sharp portal after; locked frame, LOS clear all rows (0.55x because the pull plus holds needs >=3.5 s)."
+  },
+  {
+   "id": "rithwic.03",
+   "takeSec": 16.875,
+   "keep": [
+    1.0,
+    15.5
+   ],
+   "anchor": 7.5,
+   "peakSec": 6.35,
+   "minSec": 7.0,
+   "idealSec": 11.0,
+   "reason": "HERO underpass: gorge approach decelerating 8.6->4.6 m/s t2-6, under the deck at t6.35 (gap, 5.5 m above water), then accelerating and climbing out onto Lake Blessed t10-13 (p -1 -> +7, AGL 6->10); window centred t7.5 keeps approach, the arch and the exit into open sky (hero, 0.65x)."
+  },
+  {
+   "id": "rithwic.04",
+   "takeSec": 10.041667,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "anchor": 5.0,
+   "peakSec": 5.0,
+   "minSec": 4.0,
+   "idealSec": 5.0,
+   "reason": "Broadside slide past the Rithwic bridge: whole span centred (ndc x -0.03..0.03 t4-6), LOS clear all rows, slide fastest 3.3-3.4 m/s t4-6 where the bank tree/gorge parallax reads best; window centred t5."
+  },
+  {
+   "id": "rithwic.05",
+   "takeSec": 10.791667,
+   "keep": [
+    0.0,
+    10.791667
+   ],
+   "anchor": "center",
+   "peakSec": 5.4,
+   "minSec": 4.0,
+   "idealSec": 5.0,
+   "reason": "Slow arc round the lightning-wreathed Greenspire ruin: constant 1.4 m/s arc, ruin locked at ndc (0,-0.12), LOS clear and >=9.8 m clearance in every row, so a centred stretch carries the arcs against the dark pine."
+  },
+  {
+   "id": "lytelthorpe.01",
+   "takeSec": 13.083333,
+   "keep": [
+    1.5,
+    13.083333
+   ],
+   "anchor": "end",
+   "peakSec": 8.5,
+   "minSec": 6.0,
+   "idealSec": 9.0,
+   "reason": "Showcase opener: rise up the bowyer's facade past the door torch (t1.5-7, v 1-2.1), keep hidden by the house until it clears the roofline at t~7.7 (LOS clear from t8) and settles centred with both spires t9-13; window ends on the reveal and keeps ~4 s of the facade rise (hero, 0.73x)."
+  },
+  {
+   "id": "lytelthorpe.02",
+   "takeSec": 13.958333,
+   "keep": [
+    0.0,
+    13.958333
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 5.0,
+   "idealSec": 8.5,
+   "reason": "Showcase orbit of the keep: steady 6.8 m/s ccw arc with the keep centred and LOS clear in every row, 28.6-38 m from every spire; window centred t6 keeps the front-lit WSW-to-SW stretch (sun behind camera) turning into raking side light (hero, 0.61x)."
+  },
+  {
+   "id": "lytelthorpe.03",
+   "takeSec": 12.791667,
+   "keep": [
+    1.0,
+    12.791667
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.0,
+   "minSec": 5.0,
+   "idealSec": 8.0,
+   "reason": "Flagship pass-over: gimbal tracks the keep down through nadir at t6-8 (p -85/-90) and yaw-slews h 20->180 t7-11 as the walls and north spires wheel through frame; window centred t7.5 keeps the approach tilt, the nadir wheel and the look-back (hero, 0.63x), LOS clear all rows."
+  },
+  {
+   "id": "lytelthorpe.04",
+   "takeSec": 11.958333,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.5,
+   "reason": "Truck along the south curtain wall: the gatehouse crosses frame centre at t6 (ndc -0.01) at peak 4.2 m/s and is in frame t3.4-8.6 (ndc 0.85 -> -0.87), LOS clear; window centred on the gate crossing."
+  },
+  {
+   "id": "lytelthorpe.05",
+   "takeSec": 7.333333,
+   "keep": [
+    0.5,
+    7.333333
+   ],
+   "anchor": 3.5,
+   "peakSec": 3.3,
+   "minSec": 3.5,
+   "idealSec": 4.0,
+   "reason": "Rack focus door torch -> keep: the 1.8 s pull is centred at at=0.45 x 7.33 = t3.3 (runs t2.4-4.2); window centred t3.5 keeps ~0.9 s of sharp torch and ~1.3 s of the crisp keep; locked frame, keep at ndc (0.32,0.02), LOS clear all rows (0.55x, floor 3.5 s)."
+  },
+  {
+   "id": "lytelthorpe.06",
+   "takeSec": 6.333333,
+   "keep": [
+    0.0,
+    6.333333
+   ],
+   "anchor": "center",
+   "peakSec": 3.17,
+   "minSec": 3.5,
+   "idealSec": 4.0,
+   "reason": "Locked worm's-eye up the NW spire tower: identical framing (tower centred, LOS clear, 8.7 m clearance) in every row t0-6.3, so any centred stretch keeps the composition; 0.63x because the floor is 3.5 s."
+  },
+  {
+   "id": "lytelthorpe.07",
+   "takeSec": 6.625,
+   "keep": [
+    1.0,
+    6.625
+   ],
+   "anchor": "end",
+   "peakSec": 5.0,
+   "minSec": 3.5,
+   "idealSec": 4.2,
+   "reason": "Perceptual push on the town portal: push runs fastest 1.7-1.8 m/s t2-3 and closes 11.7->6.3 m by t6.6 (WS->FS), subject centred and LOS clear; window ends on the FS arrival so the push reads strongest (0.63x, floor 3.5 s)."
+  },
+  {
+   "id": "lytelthorpe.08",
+   "takeSec": 17.333333,
+   "keep": [
+    1.0,
+    16.5
+   ],
+   "anchor": 8.0,
+   "peakSec": 8.0,
+   "minSec": 6.0,
+   "idealSec": 10.0,
+   "reason": "Showcase closing dronie off the brazier lookout: pull-back runs 5-7.6 m/s t4-12 as range opens 26->81 m and AGL climbs 23->59, the fortress, town and farmland spreading out; window centred t8 keeps the braziers still large at its start and the wide spread at its end (hero, 0.6x), LOS clear all rows."
+  },
+  {
+   "id": "bandit-castle.01",
+   "takeSec": 14.708333,
+   "keep": [
+    1.5,
+    14.0
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.5,
+   "minSec": 4.5,
+   "idealSec": 7.0,
+   "reason": "Establishing arc round the hilltop castle: arc fastest 8-9.1 m/s t5-10 across the 70-100 deg sector where keep, towers and gate are all visible, front-lit with the escarpment behind; LOS 'blocked' rows are the castle's own curtain-wall prism (subject radius 36 m), by design; window centred t7.5."
+  },
+  {
+   "id": "bandit-castle.02",
+   "takeSec": 10.25,
+   "keep": [
+    0.0,
+    10.25
+   ],
+   "anchor": "center",
+   "peakSec": 5.1,
+   "minSec": 4.0,
+   "idealSec": 5.1,
+   "reason": "Nadir hover over the keep: constant 4 deg/s rotation, subject centred, LOS clear and 60 m clearance in every row, so a centred ~5 s stretch (~20 deg of turn) reads as the turning seal."
+  },
+  {
+   "id": "bandit-castle.03",
+   "takeSec": 13.125,
+   "keep": [
+    3.0,
+    13.125
+   ],
+   "anchor": "end",
+   "peakSec": 11.5,
+   "minSec": 4.5,
+   "idealSec": 6.6,
+   "reason": "Vista pan from the lowlands onto the castle: the castle enters frame at t7 (ndc x 1.02) and lands centred t11-13 (ndc 0.12 -> 0); window ends on the landing and keeps ~1 s of the wooded slope sweeping past at 11-12 deg/s (LOS rows hit the castle's own wall prism, by design)."
+  },
+  {
+   "id": "bandit-castle.04",
+   "takeSec": 11.958333,
+   "keep": [
+    2.5,
+    11.958333
+   ],
+   "anchor": "end",
+   "peakSec": 7.0,
+   "minSec": 4.5,
+   "idealSec": 6.5,
+   "reason": "Rising reveal over the battlements: rise peaks 1.7 m/s t5-7 as the lens passes the ~192 m wall top (AGL 6-9, pitch +6 -> -2) and the western lowlands open 90 m below by t9-12; window ends on the settled reveal with ~1 s of wall before the crest (checker LOS/near 0 m = the bailey sits inside the curtain-wall footprint prism, a known kit limit)."
+  },
+  {
+   "id": "bandit-castle.05",
+   "takeSec": 13.041667,
+   "keep": [
+    0.0,
+    13.041667
+   ],
+   "anchor": "center",
+   "peakSec": 6.5,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Locked-off time-lapse up at the castle: static frame, subject centred in every row, clouds race and shadows shorten at a constant 0.012 day/s, so any centred ~6 s stretch shows the sky motion (LOS rows hit the castle's own prism; notes verify a clear sight line)."
+  },
+  {
+   "id": "merwart-village.01",
+   "takeSec": 13.833333,
+   "keep": [
+    4.0,
+    13.833333
+   ],
+   "anchor": "end",
+   "peakSec": 11.0,
+   "minSec": 5.0,
+   "idealSec": 6.5,
+   "reason": "Tilt-up from the shallows: the cliff and lodges enter frame at t~8.8 (ndc y 1.29 -> 0.94 t8-9) and settle t12-13.8 (ndc 0.33 -> 0.23); window ends on the reveal with ~2 s of sea-down tilt first (LOS rows hit lodge A itself, subject radius 10 m, by design)."
+  },
+  {
+   "id": "merwart-village.02",
+   "takeSec": 11.416667,
+   "keep": [
+    0.0,
+    11.416667
+   ],
+   "anchor": "center",
+   "peakSec": 5.7,
+   "minSec": 3.5,
+   "idealSec": 5.7,
+   "reason": "Two-shot of the cone lodges: pair framing constant (ndc -0.34..-0.36) with a slow 10-deg drift (v <=1.8 peak t5-7) in every row, so a centred stretch keeps the balanced pair (LOS rows hit lodge B itself, by design)."
+  },
+  {
+   "id": "merwart-village.03",
+   "takeSec": 10.125,
+   "keep": [
+    2.0,
+    10.125
+   ],
+   "anchor": "end",
+   "peakSec": 8.0,
+   "minSec": 3.5,
+   "idealSec": 5.05,
+   "reason": "Perceptual push on the Life Stone: range closes 9.6 -> 4.7 m t2-10 (v 0.7-0.9 peak t3-5), subject centred, LOS clear; window ends on the FS arrival 4.7 m from the stone where the sparkle column fills the frame."
+  },
+  {
+   "id": "merwart-village.04",
+   "takeSec": 16.333333,
+   "keep": [
+    2.0,
+    16.333333
+   ],
+   "anchor": 10.0,
+   "peakSec": 9.0,
+   "minSec": 5.0,
+   "idealSec": 8.2,
+   "reason": "Helix up lodge A: climb+orbit fastest 7.3-8 m/s t7-11, passing the cone's flank and rising to look down over both lodges and the market (AGL 26->39 t7-13); window centred t10 runs from doorway height to the top view (LOS rows hit the lodge itself, by design)."
+  },
+  {
+   "id": "merwart-village.05",
+   "takeSec": 12.916667,
+   "keep": [
+    1.0,
+    12.916667
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.5,
+   "reason": "Jib rise behind the forge: starts with the coals glowing lower right (AGL ~3, pitch +7), rises past lodge B's doorway at full 1.6-1.7 m/s t5-8 and tilts to look over the market terrace (AGL 12 by t9); window centred t6 keeps forge, doorway and terrace, LOS clear."
+  },
+  {
+   "id": "neydisa-castle.01",
+   "takeSec": 13.833333,
+   "keep": [
+    1.0,
+    13.833333
+   ],
+   "anchor": 7.0,
+   "peakSec": 7.0,
+   "minSec": 4.0,
+   "idealSec": 6.5,
+   "reason": "Wide establishing drift on the spired castle: drift/push at full 4-4.3 m/s t5-8 with the castle centred, LOS clear and 39.7 m clearance in every row; window centred t7 where the drift against the Esper mountains reads best."
+  },
+  {
+   "id": "neydisa-castle.02",
+   "takeSec": 9.958333,
+   "keep": [
+    1.5,
+    9.958333
+   ],
+   "anchor": "end",
+   "peakSec": 5.3,
+   "minSec": 5.0,
+   "idealSec": 7.0,
+   "reason": "Hero FPV gap: carves in banking h -69 -> -90 t3-5, threads the twin spires at t~5.3 (closest 2.6 m at t5, 6.5 m each side) at 10.9 m/s, then races down the road until the castle fills the frame at t10; window ends on the castle and starts at the carve (t0-1.5 skipped: AGL NaN = missing landblock in the kit), hero 0.7x."
+  },
+  {
+   "id": "neydisa-castle.03",
+   "takeSec": 11.75,
+   "keep": [
+    1.5,
+    10.5
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 5.9,
+   "reason": "Truck along the sunlit east wall: subject crosses centre at t6 (ndc -0.04) at peak 4.5 m/s and is in frame t2-10 (ndc 0.99 -> -1.02), LOS clear, 12.9 m off the stones; window centred on the SE tower/keep-spire passing."
+  },
+  {
+   "id": "neydisa-castle.04",
+   "takeSec": 12.25,
+   "keep": [
+    3.0,
+    12.25
+   ],
+   "anchor": "end",
+   "peakSec": 9.0,
+   "minSec": 4.0,
+   "idealSec": 6.1,
+   "reason": "Perceptual push into the menhir ring: push closes 19.9 -> 11 m t4-12 while the blue 'Chemical Reaction' clouds swell over ~10 s, so the later stretch shows the glow biggest; subject centred, LOS clear (2.9 m 'nearest' is a pine's AABB corner, trunk 29 m away)."
+  },
+  {
+   "id": "neydisa-castle.05",
+   "takeSec": 13.583333,
+   "keep": [
+    3.5,
+    13.583333
+   ],
+   "anchor": "end",
+   "peakSec": 10.0,
+   "minSec": 4.5,
+   "idealSec": 6.8,
+   "reason": "Closing top-down rise: climb at 8.7-9 m/s t6-8 decelerating to the 100 m hold at t13.6 while the image turns to 50 deg and the towers/keep spire close around the courtyard and the shelf opens; window ends on the settled high pattern, subject centred, LOS clear."
+  },
+  {
+   "id": "stonehold.01",
+   "takeSec": 14.75,
+   "keep": [
+    1.0,
+    14.75
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.5,
+   "minSec": 4.0,
+   "idealSec": 7.0,
+   "reason": "Establishing drift over the terraced town: drift/push at full 3.6-4.0 m/s t5-10, town centred, LOS clear and >=55 m from every pine in every row; window centred t7.5 where the drift reads best."
+  },
+  {
+   "id": "stonehold.02",
+   "takeSec": 12.041667,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "anchor": 5.6,
+   "peakSec": 5.42,
+   "minSec": 3.5,
+   "idealSec": 6.0,
+   "reason": "Rack focus candelabrum flame -> Tumerok statue column: the 2 s pull is centred at at=0.45 x 12.04 = t5.4 (runs t4.4-6.4); window centred t5.6 keeps ~1.8 s of warm flame before and ~2.2 s of the sharp column after; near-locked frame, LOS clear all rows."
+  },
+  {
+   "id": "stonehold.03",
+   "takeSec": 12.166667,
+   "keep": [
+    1.5,
+    12.166667
+   ],
+   "anchor": 8.0,
+   "peakSec": 8.0,
+   "minSec": 4.0,
+   "idealSec": 6.1,
+   "reason": "Locked tilt up the Rat Tower: tilt runs fastest 3-5 deg/s t3-9 (p 1 -> 25) and the spire reaches the upper third by t10-12 (ndc y -0.29 -> -0.38); window centred t8 sweeps from the lower storeys to the spire against the sky, LOS clear all rows."
+  },
+  {
+   "id": "stonehold.04",
+   "takeSec": 11.875,
+   "keep": [
+    3.0,
+    11.875
+   ],
+   "anchor": "end",
+   "peakSec": 11.0,
+   "minSec": 4.5,
+   "idealSec": 5.95,
+   "reason": "Spiral descent onto the destroyed portal: drops AGL 41 -> 8 m at 5.1-5.9 m/s t5-8 and arrives level with the crackling crystal at t11-11.9 (p -1 -> 0, 11 m off); window ends on the arrival where the arcs read against the shadowed cliff, subject in frame and LOS clear throughout."
+  },
+  {
+   "id": "stonehold.05",
+   "takeSec": 14.75,
+   "keep": [
+    0.5,
+    13.0
+   ],
+   "anchor": 5.0,
+   "peakSec": 5.0,
+   "minSec": 5.0,
+   "idealSec": 7.0,
+   "reason": "Closing 360 over the plateau: pan fastest 31-38 deg/s t4-10; window centred t5 sweeps from the terrace town (south, h 190) through the western lowlands to the Rat Tower (bearing ~31 deg, h~391 at t8.2), skipping the slow start and the eastern tail."
+  },
+  {
+   "id": "hoshino-fortress.01",
+   "takeSec": 18.125,
+   "keep": [
+    3.0,
+    18.125
+   ],
+   "anchor": 11.0,
+   "peakSec": 9.0,
+   "minSec": 5.0,
+   "idealSec": 8.7,
+   "reason": "Opening boom-rise past the village pagoda: climb at 2.9-3.4 m/s t6-12 as the pagoda roofs sink from mid-frame to the bottom edge (ndc y -0.18 -> -1.1) and the fortress walls rise above them; window centred t11 holds the crossover, LOS clear all rows."
+  },
+  {
+   "id": "hoshino-fortress.02",
+   "takeSec": 16.791667,
+   "keep": [
+    1.0,
+    16.791667
+   ],
+   "anchor": 12.0,
+   "peakSec": 12.0,
+   "minSec": 5.0,
+   "idealSec": 8.4,
+   "reason": "Quarter orbit of the floating Hoshino Tower: constant 6.9 m/s at 75 m with the tower centred in every row; window centred t12 favours the later bearings where the fortress walls stand behind it from the north (LOS rows hit the tower's own floating spire part, subject radius 34 m, by design)."
+  },
+  {
+   "id": "hoshino-fortress.03",
+   "takeSec": 17.416667,
+   "keep": [
+    3.0,
+    17.416667
+   ],
+   "anchor": 12.0,
+   "peakSec": 9.0,
+   "minSec": 5.0,
+   "idealSec": 8.7,
+   "reason": "Level flyover north across the fortress: crosses the centre at t~9 (closest 48.6 m, roofs 19 m below at t9) at 10 m/s with the courtyards and pagoda roofs passing below while the floating tower grows at the top of frame; window centred t12 keeps the crossing and the run toward the tower."
+  },
+  {
+   "id": "hoshino-fortress.04",
+   "takeSec": 17.916667,
+   "keep": [
+    0.0,
+    17.916667
+   ],
+   "anchor": "center",
+   "peakSec": 8.96,
+   "minSec": 4.5,
+   "idealSec": 8.55,
+   "reason": "Nadir hover 190 m over the fortress: constant ~2.2 deg/s turn, subject centred, LOS clear and 127 m clearance in every row, so a centred stretch reads as the turning Sho seal."
+  },
+  {
+   "id": "beach-fort.01",
+   "takeSec": 12.125,
+   "keep": [
+    3.0,
+    12.125
+   ],
+   "anchor": "end",
+   "peakSec": 11.5,
+   "minSec": 4.5,
+   "idealSec": 5.65,
+   "reason": "Sea skim at 6.6 m/s, 3 m AGL, 100% over water: the palisade and blockhouses grow ahead as range closes 108 -> 30 m, so the later stretch t6.5-12.1 shows the fort biggest with the waves still rushing under the lens (no subject; nearest obstacle 30.3 m at the end)."
+  },
+  {
+   "id": "beach-fort.02",
+   "takeSec": 12.166667,
+   "keep": [
+    2.0,
+    12.166667
+   ],
+   "anchor": 8.0,
+   "peakSec": 6.0,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Top-down rise over the palisade square: rise fastest 7.3-8.5 m/s t4-8 (AGL 30 -> 63) as the beach, surf and sea open on one side and the pine hill on the other, settling at 80 m by t12; window centred t8 holds the opening-up, subject centred and LOS clear."
+  },
+  {
+   "id": "beach-fort.03",
+   "takeSec": 12.666667,
+   "keep": [
+    0.0,
+    12.666667
+   ],
+   "anchor": "center",
+   "peakSec": 6.33,
+   "minSec": 4.0,
+   "idealSec": 6.33,
+   "reason": "Quarter orbit of the temple-summit shadow portal: constant 4.3 m/s orbit, portal centred, LOS clear and >=17.4 m clearance in every row, so a centred stretch keeps the swirl with the sea and coral beyond."
+  },
+  {
+   "id": "beach-fort.04",
+   "takeSec": 12.166667,
+   "keep": [
+    1.5,
+    12.166667
+   ],
+   "anchor": 7.5,
+   "peakSec": 7.5,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Closing dronie off the fort: pull-back fastest 7.8-9.1 m/s t4-8 as range opens 39 -> 81 m and the coast, surf and temple open up; window centred t7.5 runs into the decelerating wide hold, fort centred and LOS clear all rows."
+  },
+  {
+   "id": "beach-fort.05",
+   "takeSec": 14.541667,
+   "keep": [
+    0.0,
+    14.541667
+   ],
+   "anchor": "center",
+   "peakSec": 7.27,
+   "minSec": 4.5,
+   "idealSec": 6.9,
+   "reason": "Hyperlapse truck over the shallows: constant 1.1 m/s truck, fort centred in every row while clouds and their shadows race at 0.008 day/s, so any centred ~7 s stretch shows the sky motion (LOS rows hit the palisade stakes = the fort itself, by design)."
+  },
+  {
+   "id": "eastwatch.01",
+   "takeSec": 16.833333,
+   "keep": [
+    3.0,
+    16.833333
+   ],
+   "anchor": 11.5,
+   "peakSec": 11.0,
+   "minSec": 5.5,
+   "idealSec": 8.0,
+   "reason": "Rising reveal up the 170 m sea cliff: climb fastest 7.3-8.2 m/s t6-11 with the cliff face filling frame and the outpost hidden by terrain (LOS blocked by design) until it clears the crest at t~11 (LOS clear from t11, ndc y 0.58) and the lighthouses settle at ndc 0.3 by t14-15; window centred t11.5 keeps the climb, the crest and the reveal."
+  },
+  {
+   "id": "eastwatch.02",
+   "takeSec": 8.333333,
+   "keep": [
+    1.0,
+    8.333333
+   ],
+   "anchor": 4.4,
+   "peakSec": 4.17,
+   "minSec": 3.5,
+   "idealSec": 4.2,
+   "reason": "Whip-pan lighthouse to lighthouse: the 110-deg whip fires at at=0.5 x 8.33 = t4.17 (h 314 at t4 -> 424 at t5); window centred t4.4 keeps ~2 s hold on the west lighthouse and ~2 s landed on the east lighthouse over the sea, LOS clear all rows."
+  },
+  {
+   "id": "eastwatch.03",
+   "takeSec": 14.166667,
+   "keep": [
+    0.0,
+    14.166667
+   ],
+   "anchor": "center",
+   "peakSec": 7.5,
+   "minSec": 3.5,
+   "idealSec": 7.1,
+   "reason": "Low angle up the keep past the blue-flame lamps: subject centred, LOS clear and a slow 2 m push (v <=0.22) in every row, so a centred stretch keeps the balanced framing."
+  },
+  {
+   "id": "eastwatch.04",
+   "takeSec": 12.166667,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "anchor": 5.0,
+   "peakSec": 5.0,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "Vertigo pull-back from the east lighthouse: fov narrows fastest 52 -> 21 deg while range opens 16.7 -> 44 m over t2-8 (v 2.6-5.3), the tower holding size as the sea horizon swells; window centred t5 where the effect reads strongest, LOS clear all rows."
+  },
+  {
+   "id": "eastwatch.05",
+   "takeSec": 14.25,
+   "keep": [
+    1.5,
+    14.25
+   ],
+   "anchor": 7.85,
+   "peakSec": 7.0,
+   "minSec": 9.5,
+   "idealSec": 10.65,
+   "reason": "Hero FPV cliff dive: pitch-over at the crest t1.5-3 (p -2 -> -59), steady -61 deg dive t3-11 at 18.2 m/s down the 170 m cliff, pull-out t11.5-13 to 4.3 m above the ice; window t~2.5-13.2 keeps pitch-over, dive and pull-out - it cannot go much shorter without losing the crest or the pull-out (hero, 0.75x)."
+  },
+  {
+   "id": "egg-orchard-portal.01",
+   "takeSec": 10.875,
+   "keep": [
+    2.0,
+    10.875
+   ],
+   "anchor": "end",
+   "peakSec": 8.5,
+   "minSec": 3.5,
+   "idealSec": 5.05,
+   "reason": "Perceptual push up the frozen valley on the three red portals: push closes 44 -> 15 m (peak 5.2 m/s t4), middle portal centred and LOS clear in every row, spikes 5.2 m off; window ends on the near framing (26 -> 15 m) where the swirls, spikes and ash tree read largest."
+  },
+  {
+   "id": "egg-orchard.01",
+   "takeSec": 14.041667,
+   "keep": [
+    0.79,
+    14.041667
+   ],
+   "anchor": "end",
+   "peakSec": 11.0,
+   "minSec": 8.0,
+   "idealSec": 9.9,
+   "reason": "HERO FPV corridor (checker cannot build it: indoor route needs planIndoorPath, so timings are estimated from the Z -60 floor map research/egg-orchard/floor11.png at ~5.4 m/s average): window ending on the burst into the west egg chamber at t14 keeps the egg-room crossing (~t5-8), BOTH back-to-back right-angle turns (north through the vestibule ~t8, west past the second vent ~t9.3), the NW bend and the vent slalom; the first right-angle (~t2) only survives if the edit uses the full keep (hero, 0.75x)."
+  },
+  {
+   "id": "egg-orchard.02",
+   "takeSec": 8.708333,
+   "keep": [
+    1.5,
+    8.708333
+   ],
+   "anchor": "end",
+   "peakSec": 7.0,
+   "minSec": 3.5,
+   "idealSec": 4.0,
+   "reason": "Perceptual push on the toxic hive (indoor: the checker's terrain/LOS columns are meaningless here, notes verify 10.7 -> 4.9 m with eggs in front): push peaks ~1.1 m/s t3 and settles at t8.7; window ends on the closest framing where the throbbing halo fills the frame (0.5x, floor 3.5 s)."
+  },
+  {
+   "id": "fiun-outpost.01",
+   "takeSec": 17.125,
+   "keep": [
+    4.0,
+    17.125
+   ],
+   "anchor": "end",
+   "peakSec": 12.0,
+   "minSec": 5.0,
+   "idealSec": 8.15,
+   "reason": "Tilt-up from the Arctic water: the shore and towers enter frame at t~9.2 (ndc y 1.05 -> 0.79 t9-10) and settle centred t14-17 (ndc 0.09 -> -0.09) with the ice wall behind; window ends on the settled reveal and keeps the last ~1.5 s of water-down tilt; LOS clear all rows."
+  },
+  {
+   "id": "fiun-outpost.02",
+   "takeSec": 12.083333,
+   "keep": [
+    1.5,
+    12.083333
+   ],
+   "anchor": 8.0,
+   "peakSec": 7.0,
+   "minSec": 4.0,
+   "idealSec": 6.05,
+   "reason": "Crane round the trainers' brazier: rise+swing fastest 0.9-1.1 m/s t4-8 (AGL 3.2 -> 6.8, pitch -17 -> -35) turning eye level into a look down into the ring of flames; window centred t8 ends looking down on the glow, subject centred and LOS clear."
+  },
+  {
+   "id": "fiun-outpost.03",
+   "takeSec": 12.375,
+   "keep": [
+    2.0,
+    12.375
+   ],
+   "anchor": 8.5,
+   "peakSec": 7.7,
+   "minSec": 5.0,
+   "idealSec": 6.2,
+   "reason": "Reveal from behind the east Sho tower: tower fills the frame (LOS blocked by design) until the truck (peak 3.4 m/s t6) clears it at t~7.7 (LOS clear from t8), then settles on the Life Stone with the open sea behind t10-12; window centred t8.5 keeps ~2 s of occluded truck, the reveal and the settle."
+  },
+  {
+   "id": "fiun-outpost.04",
+   "takeSec": 10.208333,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "anchor": 5.1,
+   "peakSec": 5.1,
+   "minSec": 4.0,
+   "idealSec": 5.1,
+   "reason": "FPV barrel roll over the ice: the 3 s roll is centred at flipAt=0.5 x 10.21 = t5.1 (runs t3.6-6.6, AGL pop to 8.6 at t5); window centred on it keeps ~1 s of level flight either side at 6 m/s, nothing within 17 m."
+  },
+  {
+   "id": "fiun-outpost.05",
+   "takeSec": 15.083333,
+   "keep": [
+    3.0,
+    15.083333
+   ],
+   "anchor": "end",
+   "peakSec": 14.0,
+   "minSec": 4.5,
+   "idealSec": 7.15,
+   "reason": "Perceptual push into the Portal to Silyun (the transition cut): range closes 14.3 -> 4.9 m t7-15 (v 2.9 -> 0) until the swirl fills the frame; window ends on the filled frame the cut depends on, subject centred and LOS clear in every row."
+  },
+  {
+   "id": "silyun.01",
+   "takeSec": 17.291667,
+   "keep": [
+    2.0,
+    17.291667
+   ],
+   "anchor": 10.0,
+   "peakSec": 9.5,
+   "minSec": 5.0,
+   "idealSec": 8.25,
+   "reason": "Establishing helix round Eleonora's statue: climb+orbit fastest 7.0-7.9 m/s t7-12 (AGL 29 -> 54) as the statue, golden hall roof and then the mesa town among the giant trees open up; window centred t10, statue centred and LOS clear all rows (8.6 m giant-tree pass at t12 inside, designer-verified)."
+  },
+  {
+   "id": "silyun.02",
+   "takeSec": 12.166667,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 4.0,
+   "idealSec": 6.1,
+   "reason": "Great-hall facade slide: balcony crosses centre at t6 (ndc 0.01) at peak 2.8 m/s with the lamps/benches sliding past in the foreground, in frame and LOS clear in every row; window centred on the balcony passing."
+  },
+  {
+   "id": "silyun.03",
+   "takeSec": 11.833333,
+   "keep": [
+    0.0,
+    11.833333
+   ],
+   "anchor": "center",
+   "peakSec": 5.9,
+   "minSec": 3.5,
+   "idealSec": 5.9,
+   "reason": "Locked over-the-shoulder from Eleonora's statue to the Grand Mother on the balcony: framing identical in every row (subject ndc 0.33, 0.3 m push, statue shoulder 4.2 m), so any centred stretch keeps the composition (LOS rows hit the balcony static the subject stands behind, as designed)."
+  },
+  {
+   "id": "silyun.04",
+   "takeSec": 10.208333,
+   "keep": [
+    0.5,
+    10.208333
+   ],
+   "anchor": 6.0,
+   "peakSec": 6.0,
+   "minSec": 3.5,
+   "idealSec": 5.1,
+   "reason": "Handheld push on the smithy forge: slow 1.5 m push (v <=0.25) with operator shake, forge centred in every row; window centred t6 favours the closer half (6.7 -> 5.7 m) (LOS 'blocks' t4-6/t9-10 are the blacksmith NPC, which the runtime fades and is part of the scene)."
+  },
+  {
+   "id": "silyun.05",
+   "takeSec": 15.208333,
+   "keep": [
+    3.0,
+    15.208333
+   ],
+   "anchor": "end",
+   "peakSec": 12.0,
+   "minSec": 4.5,
+   "idealSec": 7.2,
+   "reason": "Closing pull-out-reveal from the blue-flame lamp: pull-back and rise fastest 2.4-3.2 m/s t8-12 (range 12 -> 24 m, pitch -16 -> -23) and settles at EWS 29 m by t15 with statue, hall and town revealed; window ends on the full reveal, lamp centred and LOS clear all rows."
+  }
+ ]
+}

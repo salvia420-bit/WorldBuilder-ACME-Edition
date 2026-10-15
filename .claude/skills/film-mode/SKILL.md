@@ -176,6 +176,15 @@ Session (only when the owner asked for one — reference/1070.md):
 - **Story:** establish → approach → detail → reaction. Keep the 180° rule (stay on one side of the line between two
   subjects across cuts: same `azimuthRef`/`bearingDeg` side). Motivated movement only — the camera moves because
   something moves or is revealed. Vary framing between consecutive shots (WS → MS → CU, not MS → MS).
+- **Shortening a shot never speeds it up:** keep the move's length in `trim: {takeSec, inSec}` and give the shorter
+  edit length in `duration` — the take is flown at `takeSec` (every frame as designed) and the edit is the window from
+  `inSec` (reference/plan-format.md §5). Use it to tighten an edit or fit the music without touching a verified move.
+- **Long FPV runs** (`fpv.fpv-run`, techniques.md): fly an offline-verified racing line (`path`) with speed `zones` and
+  tricks (`float` with true free fall, `roll`, `yaw-spin`, `power-loop`, `split-s`, `dive`, `dip`) in tall spaces only;
+  `overlay: {props: {style: 'freestyle'}}` shows the props at the top of the frame (boot adds `filmProps=on`);
+  `pilot: {mode: 'jev', fade: 'never'}` so monsters are never hidden. A dungeon run needs `site.prime` hops
+  (creatures only stream inside the hidden player's PVS). Something that does not fit the music goes in a silent
+  `edit.tail` after it (plan-format.md).
 - **Drone:** reveal over obstacles (rising-reveal, boom-rise), orbit points of interest at 0.5–1 revolution
   (`revolutions`), pass-over for the 90° gimbal moment, terrain-skim for speed, top-down for pattern and map-like
   graphics. **FPV** for kinetic energy and dungeon corridors (fpv-corridor with an indoor `route`).
@@ -215,7 +224,7 @@ The standing order frames intent; it never overrides the pilot's rules or the sa
 |---|---|
 | `reference/workflow.md` | Running a project end to end: files produced, exit codes, failure handling, review and retakes, the report to the owner. |
 | `reference/plan-format.md` | Writing or fixing `plan.json`: every field, defaults, validation messages, compile rules, a verified example. |
-| `reference/techniques.md` | Choosing a technique for a beat; the full catalog of 63 ids with params (grep `#### \`<id>\``). |
+| `reference/techniques.md` | Choosing a technique for a beat; the full catalog of 64 ids with params (grep `#### \`<id>\``). |
 | `reference/music-video.md` | Song analysis output, lyric → concept → site search, look presets (time of day, fog, grade, DoF). |
 | `reference/pilot.md` | Standing orders, pilot modes jev/code/shadow, telemetry, agreement rate, JEV cost and budget flags. |
 | `reference/1070.md` | An owner-requested shooting session: tunnel, test Chrome launch, boot URL, readiness, the eye-test checklist, cleanup. |

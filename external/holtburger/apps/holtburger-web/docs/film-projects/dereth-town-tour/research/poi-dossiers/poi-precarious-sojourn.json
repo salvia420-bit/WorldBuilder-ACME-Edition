@@ -1,0 +1,269 @@
+{
+ "name": "Precarious Sojourn",
+ "title": "Precarious Sojourn",
+ "siteId": "poi-precarious-sojourn",
+ "summary": "Alatar Locke's aerial retreat (Arcane Pedestal quest), reached only by portal from Al-Jalima: a chain of floating Empyrean octagonal platforms (24 m, 4 m thick), flat plank bridges and 10 m-rise ramps strung 75-160 m above a rugged Sho gorge at 38.1S 60.3W. In the kit the path starts at the drop-point ramp and exit portal (9996, 15313, z 90), runs north along x 9996, east along y 15468, loops round a 130 m rock pinnacle (10120, 15340-15400) and climbs to z 160 at (10260, 15348); fallen platforms lie at z 30-60, the gorge floor is 2-20 m, with crags up to 150 m to the west and south.",
+ "landmarks": [
+  {
+   "name": "Drop-point ramp and exit portal",
+   "pos": [
+    9996.1,
+    15313.2,
+    89.8
+   ],
+   "heightM": 11,
+   "note": "Ramp 0x010029F8 z 79-90; Precarious Sojourn Exit Portal; gazetteer teleport here."
+  },
+  {
+   "name": "Plank bridge (FPV gap)",
+   "pos": [
+    9996,
+    15384,
+    78
+   ],
+   "heightM": 2,
+   "note": "Two flat 24 m bridges x 9994-9998, y 15360-15408, deck z 78-80, between octagons at y 15348 and 15420."
+  },
+  {
+   "name": "Rock pinnacle",
+   "pos": [
+    10120,
+    15370,
+    20
+   ],
+   "heightM": 112,
+   "note": "Terrain spire to z ~132 inside the loop of platforms."
+  },
+  {
+   "name": "Highest platform",
+   "pos": [
+    10260,
+    15348,
+    156
+   ],
+   "heightM": 4,
+   "note": "Octagon 0x010029FF at z 155.8-160."
+  },
+  {
+   "name": "Western crags",
+   "pos": [
+    9820,
+    15460,
+    127
+   ],
+   "heightM": 0,
+   "note": "Camera ridge of shot 01."
+  }
+ ],
+ "site": {
+  "id": "poi-precarious-sojourn",
+  "name": "Precarious Sojourn",
+  "gazetteerId": "precarious-sojourn",
+  "teleport": "@teleloc 0x344F0010 28.00 175.90 18.87 1 0 0 0",
+  "anchor": [
+   10110,
+   15420,
+   81.5
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.74,
+   "grade": "warm"
+  },
+  "notes": "[critic b4-7 2026-10-15: teleport changed from '@teleloc 0x344F0007 11.968 149.905 92 0.969991 0 0 -0.243141' because the gazetteer precarious-sojourn drop on the platform was 4.7 m from the Precarious Sojourn Exit Portal. Derived drop on the gorge floor below the walkways (ground 18.4), 34.6 m from the portal and 15 m from any drawn object; the hidden player sits under the platforms in the same landblock. Cell index = floor(lx/24)*8+floor(ly/24)+1, z = ground + 0.5.]"
+ },
+ "insertAfter": "fort-tethana",
+ "insertBefore": "ayan-baqur",
+ "acpedia": {
+  "categories": [
+   "Southwest POI"
+  ],
+  "map": {
+   "ns": -38.1,
+   "ew": -60.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 5878,
+  "coveredBy": "path:wai-jhou.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Precarious_Sojourn.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-precarious-sojourn.01",
+   "site": "poi-precarious-sojourn",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10110,
+     15440,
+     75
+    ],
+    "height": 85,
+    "radius": 170
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 277,
+    "distance": 290,
+    "heightM": 85,
+    "driftDeg": 10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hang 30 m above the western crags 290 m from the floating walkways and drift slowly round them with the low sun behind the lens; keep 25 m above the rocks.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Signature view. Wide establishing from the western crags (camera z 160, 290 m out, drifting 10 deg and pushing 8 %): the whole chain of floating octagonal platforms, plank bridges and tilted ramps strung 75-160 m above the Sho gorge, winding around the 130 m rock pinnacle, the low western sun (0.74) directly behind the lens lighting every platform face. proj.mjs: the drop-point ramp, the highest platform (10260,15348,160), the east loop (10308,15444) and the pinnacle top all stay inside the frame for the whole take. Verified (check.mjs, full take flown): take 0-10 s: AGL 32.43..75.3 m, nearest drawn 30.34 m (scenery-default 0x02000258@9845,15461), vmax 8.46 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 125.7 m); edit 2-8.5 s: AGL 32.43..71.9 m, nearest drawn 30.34 m (scenery-default 0x02000258@9845,15461), vmax 8.46 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 126.3 m)."
+  },
+  {
+   "id": "poi-precarious-sojourn.02",
+   "site": "poi-precarious-sojourn",
+   "technique": "fpv.fpv-gap",
+   "duration": {
+    "sec": 5.0
+   },
+   "trim": {
+    "takeSec": 7.5,
+    "inSec": 0.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.0,
+    "keep": [
+     0.3,
+     6.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9996,
+     15384,
+     71
+    ],
+    "height": 9,
+    "radius": 4
+   },
+   "params": {
+    "gapPos": [
+     9996,
+     15384,
+     71
+    ],
+    "gapNormal": [
+     1,
+     0,
+     0
+    ],
+    "gapWidth": 20,
+    "gapHeight": 8,
+    "approachAngleDeg": 20,
+    "approachFrom": "right",
+    "approachDistance": 55,
+    "alignDistance": 20,
+    "exitDistance": 25,
+    "speed": 13,
+    "cornerRadius": 12,
+    "alat": 8,
+    "lookAhead": 8,
+    "maxBankDeg": 35,
+    "ends": "cruise"
+   },
+   "standingOrder": "Thread the FPV 7 m beneath the plank bridge between the two floating platforms, heading east toward the rock pinnacle, and exit 25 m beyond; never closer than 6 m to the deck.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "FPV gap: approaches from the south-west at 13 m/s, banks onto the axis and threads 7 m beneath the 4 m plank bridge between the two floating octagons at z 76-80 (the gap is 48 m wide between platforms, 60 m above the gorge floor), exiting toward the rock pinnacle. The window ends as the deck passes overhead (proj: the bridge stays in frame until t 5.2). Ground 55-66 m below the lens the whole way. Verified (check.mjs, full take flown): take 0-7.5 s: AGL 55.02..66.5 m, nearest drawn 6.47 m (static 0x3450#1 0x01002A03), vmax 13.32 m/s, LOS blocked 0/31, subject in frame 68% (retail-bake tree 0.8 m); edit 0.5-5.5 s: AGL 56.14..66.5 m, nearest drawn 6.47 m (static 0x3450#1 0x01002A03), vmax 13.32 m/s, LOS blocked 0/21, subject in frame 90% (retail-bake tree 0.8 m); flight fpv peak 13.38 m/s (cap 25), max tracking gap 0.07 m."
+  },
+  {
+   "id": "poi-precarious-sojourn.03",
+   "site": "poi-precarious-sojourn",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 5.5,
+    "keep": [
+     1.0,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10110,
+     15440,
+     75
+    ],
+    "height": 85,
+    "radius": 170
+   },
+   "params": {
+    "heightAGL": 190,
+    "rotateDeg": 35,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "standingOrder": "Hold straight down 190 m above the floating maze and rotate 35 degrees so the platforms and ramps read as a pattern over the gorge; nothing above the camera.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Graphic top-down 206 m above the gorge (z 265, 105 m above the highest platform), rotating 35 deg: the platforms, ramps and bridges read as a map-like pattern around the rock pinnacle with the valley floor far below. Static position, so no flight risk. Verified (check.mjs, full take flown): take 0-9 s: AGL 206.5..206.5 m, nearest drawn 144.89 m (static 0x3450#73 0x010029F8), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 159.1 m); edit 1.5-7 s: AGL 206.5..206.5 m, nearest drawn 144.89 m (static 0x3450#73 0x010029F8), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 159.1 m); flight cinema peak 0 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-precarious-sojourn.01": "take 0-10 s: AGL 32.43..75.3 m, nearest drawn 30.34 m (scenery-default 0x02000258@9845,15461), vmax 8.46 m/s, LOS blocked 0/41, subject in frame 100% (retail-bake tree 125.7 m); edit 2-8.5 s: AGL 32.43..71.9 m, nearest drawn 30.34 m (scenery-default 0x02000258@9845,15461), vmax 8.46 m/s, LOS blocked 0/27, subject in frame 100% (retail-bake tree 126.3 m)",
+  "poi-precarious-sojourn.02": "take 0-7.5 s: AGL 55.02..66.5 m, nearest drawn 6.47 m (static 0x3450#1 0x01002A03), vmax 13.32 m/s, LOS blocked 0/31, subject in frame 68% (retail-bake tree 0.8 m); edit 0.5-5.5 s: AGL 56.14..66.5 m, nearest drawn 6.47 m (static 0x3450#1 0x01002A03), vmax 13.32 m/s, LOS blocked 0/21, subject in frame 90% (retail-bake tree 0.8 m); flight fpv peak 13.38 m/s (cap 25), max tracking gap 0.07 m",
+  "poi-precarious-sojourn.03": "take 0-9 s: AGL 206.5..206.5 m, nearest drawn 144.89 m (static 0x3450#73 0x010029F8), vmax 0 m/s, LOS blocked 0/37, subject in frame 100% (retail-bake tree 159.1 m); edit 1.5-7 s: AGL 206.5..206.5 m, nearest drawn 144.89 m (static 0x3450#73 0x010029F8), vmax 0 m/s, LOS blocked 0/23, subject in frame 100% (retail-bake tree 159.1 m); flight cinema peak 0 m/s (cap 12), max tracking gap 0 m"
+ }
+}

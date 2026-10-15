@@ -1,0 +1,925 @@
+[
+ {
+  "s": 46.5,
+  "name": "Olthoi Slasher",
+  "cell": "0x35d",
+  "world": [
+   468.44,
+   8125.3,
+   -6.0
+  ],
+  "local": [
+   468.44,
+   -130.7,
+   -6.0
+  ],
+  "dist_to_line": 1.8,
+  "lat": -0.5,
+  "gap_left": 1.6,
+  "gap_right": 1.7,
+  "gap_over": 1.4,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 59.5,
+  "name": "Olthoi Slasher",
+  "cell": "0x354",
+  "world": [
+   460.76,
+   8135.13,
+   -6.0
+  ],
+  "local": [
+   460.76,
+   -120.87,
+   -6.0
+  ],
+  "dist_to_line": 3.4,
+  "lat": -3.0,
+  "gap_left": 3.8,
+  "gap_right": 3.9,
+  "gap_over": 1.4,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 78.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x350",
+  "world": [
+   441.28,
+   8136.51,
+   -6.0
+  ],
+  "local": [
+   441.28,
+   -119.49,
+   -6.0
+  ],
+  "dist_to_line": 1.9,
+  "lat": 0.9,
+  "gap_left": 1.4,
+  "gap_right": 1.9,
+  "gap_over": 1.4,
+  "lanes": [
+   "right"
+  ]
+ },
+ {
+  "s": 101.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x307",
+  "world": [
+   436.82,
+   8155.68,
+   -11.99
+  ],
+  "local": [
+   436.82,
+   -100.32,
+   -11.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.3,
+  "gap_left": 1.4,
+  "gap_right": 1.8,
+  "gap_over": 1.4,
+  "lanes": [
+   "right"
+  ]
+ },
+ {
+  "s": 117.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x2f1",
+  "world": [
+   420.77,
+   8161.61,
+   -11.99
+  ],
+  "local": [
+   420.77,
+   -94.39,
+   -11.99
+  ],
+  "dist_to_line": 5.9,
+  "lat": -5.6,
+  "gap_left": 7.2,
+  "gap_right": 1.7,
+  "gap_over": 1.4,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 118.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x2f2",
+  "world": [
+   419.76,
+   8158.88,
+   -11.99
+  ],
+  "local": [
+   419.76,
+   -97.12,
+   -11.99
+  ],
+  "dist_to_line": 3.3,
+  "lat": -2.9,
+  "gap_left": 4.5,
+  "gap_right": 3.5,
+  "gap_over": 1.4,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 134.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x2e2",
+  "world": [
+   408.73,
+   8146.28,
+   -11.99
+  ],
+  "local": [
+   408.73,
+   -109.72,
+   -11.99
+  ],
+  "dist_to_line": 2.6,
+  "lat": 2.0,
+  "gap_left": 4.4,
+  "gap_right": 2.8,
+  "gap_over": 1.4,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 159.0,
+  "name": "Olthoi Slasher",
+  "cell": "0x2d6",
+  "world": [
+   388.34,
+   8155.14,
+   -11.99
+  ],
+  "local": [
+   388.34,
+   -100.86,
+   -11.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": -0.4,
+  "gap_left": 1.4,
+  "gap_right": 1.9,
+  "gap_over": 1.4,
+  "lanes": [
+   "right"
+  ]
+ },
+ {
+  "s": 200.5,
+  "name": "Olthoi Slasher",
+  "cell": "0x2c9",
+  "world": [
+   359.11,
+   8134.05,
+   -11.99
+  ],
+  "local": [
+   359.11,
+   -121.95,
+   -11.99
+  ],
+  "dist_to_line": 4.3,
+  "lat": 3.7,
+  "gap_left": 4.9,
+  "gap_right": 3.6,
+  "gap_over": 6.7,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 239.5,
+  "name": "Olthoi Slayer",
+  "cell": "0x2a6",
+  "world": [
+   329.86,
+   8125.14,
+   -18.0
+  ],
+  "local": [
+   329.86,
+   -130.86,
+   -18.0
+  ],
+  "dist_to_line": 3.1,
+  "lat": -2.6,
+  "gap_left": 3.3,
+  "gap_right": 3.8,
+  "gap_over": 1.2,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 264.5,
+  "name": "Olthoi Slayer",
+  "cell": "0x29e",
+  "world": [
+   317.0,
+   8105.62,
+   -18.0
+  ],
+  "local": [
+   317.0,
+   -150.38,
+   -18.0
+  ],
+  "dist_to_line": 1.8,
+  "lat": 0.4,
+  "gap_left": 1.0,
+  "gap_right": 2.2,
+  "gap_over": 1.2,
+  "lanes": [
+   "right"
+  ]
+ },
+ {
+  "s": 280.5,
+  "name": "Olthoi Slayer",
+  "cell": "0x24a",
+  "world": [
+   301.92,
+   8106.12,
+   -24.0
+  ],
+  "local": [
+   301.92,
+   -149.88,
+   -24.0
+  ],
+  "dist_to_line": 2.5,
+  "lat": -1.8,
+  "gap_left": 2.7,
+  "gap_right": 2.4,
+  "gap_over": 1.2,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 299.0,
+  "name": "Olthoi Slayer",
+  "cell": "0x235",
+  "world": [
+   289.75,
+   8096.22,
+   -24.0
+  ],
+  "local": [
+   289.75,
+   -159.78,
+   -24.0
+  ],
+  "dist_to_line": 1.7,
+  "lat": -0.2,
+  "gap_left": 6.5,
+  "gap_right": 1.3,
+  "gap_over": 1.2,
+  "lanes": [
+   "left"
+  ]
+ },
+ {
+  "s": 324.5,
+  "name": "Olthoi Slayer",
+  "cell": "0x20a",
+  "world": [
+   270.4,
+   8105.66,
+   -24.0
+  ],
+  "local": [
+   270.4,
+   -150.34,
+   -24.0
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.3,
+  "gap_left": 1.2,
+  "gap_right": 1.9,
+  "gap_over": 1.2,
+  "lanes": [
+   "right"
+  ]
+ },
+ {
+  "s": 348.0,
+  "name": "Olthoi Slayer",
+  "cell": "0x202",
+  "world": [
+   252.18,
+   8116.95,
+   -24.0
+  ],
+  "local": [
+   252.18,
+   -139.05,
+   -24.0
+  ],
+  "dist_to_line": 1.9,
+  "lat": 0.9,
+  "gap_left": 3.9,
+  "gap_right": 1.6,
+  "gap_over": 1.2,
+  "lanes": [
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 377.0,
+  "name": "Olthoi Slayer",
+  "cell": "0x1f1",
+  "world": [
+   249.79,
+   8144.01,
+   -30.0
+  ],
+  "local": [
+   249.79,
+   -111.99,
+   -30.0
+  ],
+  "dist_to_line": 1.8,
+  "lat": -0.6,
+  "gap_left": 2.2,
+  "gap_right": 1.3,
+  "gap_over": 1.2,
+  "lanes": [
+   "left"
+  ]
+ },
+ {
+  "s": 398.5,
+  "name": "Olthoi Slayer",
+  "cell": "0x1e4",
+  "world": [
+   230.68,
+   8144.8,
+   -35.99
+  ],
+  "local": [
+   230.68,
+   -111.2,
+   -35.99
+  ],
+  "dist_to_line": 1.9,
+  "lat": -0.8,
+  "gap_left": 1.6,
+  "gap_right": 1.4,
+  "gap_over": 1.2,
+  "lanes": [
+   "left"
+  ]
+ },
+ {
+  "s": 419.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x1de",
+  "world": [
+   213.62,
+   8133.19,
+   -35.99
+  ],
+  "local": [
+   213.62,
+   -122.81,
+   -35.99
+  ],
+  "dist_to_line": 4.1,
+  "lat": 3.2,
+  "gap_left": 1.7,
+  "gap_right": 8.0,
+  "gap_over": 4.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 422.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x1de",
+  "world": [
+   214.16,
+   8139.13,
+   -35.99
+  ],
+  "local": [
+   214.16,
+   -116.87,
+   -35.99
+  ],
+  "dist_to_line": 3.1,
+  "lat": -1.6,
+  "gap_left": 10.8,
+  "gap_right": 1.9,
+  "gap_over": 4.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 449.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x1d8",
+  "world": [
+   199.23,
+   8155.11,
+   -35.99
+  ],
+  "local": [
+   199.23,
+   -100.89,
+   -35.99
+  ],
+  "dist_to_line": 2.8,
+  "lat": 0.9,
+  "gap_left": 3.4,
+  "gap_right": 5.2,
+  "gap_over": 4.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 486.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x1aa",
+  "world": [
+   189.24,
+   8142.51,
+   -53.99
+  ],
+  "local": [
+   189.24,
+   -113.49,
+   -53.99
+  ],
+  "dist_to_line": 2.0,
+  "lat": -0.8,
+  "gap_left": 6.6,
+  "gap_right": 5.1,
+  "gap_over": 4.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 507.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x1a5",
+  "world": [
+   180.21,
+   8125.86,
+   -53.99
+  ],
+  "local": [
+   180.21,
+   -130.14,
+   -53.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.2,
+  "gap_left": 1.6,
+  "gap_right": 2.0,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 522.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x19b",
+  "world": [
+   172.64,
+   8116.43,
+   -53.99
+  ],
+  "local": [
+   172.64,
+   -139.57,
+   -53.99
+  ],
+  "dist_to_line": 2.3,
+  "lat": -1.5,
+  "gap_left": 3.4,
+  "gap_right": 6.5,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 540.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x18e",
+  "world": [
+   161.49,
+   8105.89,
+   -53.99
+  ],
+  "local": [
+   161.49,
+   -150.11,
+   -53.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.1,
+  "gap_left": 30,
+  "gap_right": 1.9,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 568.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x171",
+  "world": [
+   139.13,
+   8115.57,
+   -53.99
+  ],
+  "local": [
+   139.13,
+   -140.43,
+   -53.99
+  ],
+  "dist_to_line": 2.1,
+  "lat": -1.2,
+  "gap_left": 2.3,
+  "gap_right": 1.3,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left"
+  ]
+ },
+ {
+  "s": 585.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x15e",
+  "world": [
+   122.71,
+   8117.65,
+   -53.99
+  ],
+  "local": [
+   122.71,
+   -138.35,
+   -53.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.5,
+  "gap_left": 0.6,
+  "gap_right": 1.5,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "right"
+  ]
+ },
+ {
+  "s": 608.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x156",
+  "world": [
+   104.51,
+   8125.99,
+   -53.99
+  ],
+  "local": [
+   104.51,
+   -130.01,
+   -53.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": 0.0,
+  "gap_left": 1.8,
+  "gap_right": 1.8,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 630.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x153",
+  "world": [
+   88.47,
+   8116.14,
+   -53.99
+  ],
+  "local": [
+   88.47,
+   -139.86,
+   -53.99
+  ],
+  "dist_to_line": 2.2,
+  "lat": -0.1,
+  "gap_left": 2.6,
+  "gap_right": 10.7,
+  "gap_over": 7.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 641.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x150",
+  "world": [
+   79.77,
+   8117.02,
+   -57.05
+  ],
+  "local": [
+   79.77,
+   -138.98,
+   -57.05
+  ],
+  "dist_to_line": 2.4,
+  "lat": -1.0,
+  "gap_left": 2.0,
+  "gap_right": 10.0,
+  "gap_over": 10.2,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 652.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x12f",
+  "world": [
+   70.71,
+   8121.02,
+   -59.99
+  ],
+  "local": [
+   70.71,
+   -134.98,
+   -59.99
+  ],
+  "dist_to_line": 2.7,
+  "lat": -0.5,
+  "gap_left": 3.9,
+  "gap_right": 6.8,
+  "gap_over": 12.7,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 691.0,
+  "name": "Olthoi Larvae",
+  "cell": "0x11a",
+  "world": [
+   50.45,
+   8149.99,
+   -59.99
+  ],
+  "local": [
+   50.45,
+   -106.01,
+   -59.99
+  ],
+  "dist_to_line": 4.5,
+  "lat": -4.0,
+  "gap_left": 6.1,
+  "gap_right": 15.8,
+  "gap_over": 8.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 715.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x10b",
+  "world": [
+   30.95,
+   8137.26,
+   -59.99
+  ],
+  "local": [
+   30.95,
+   -118.74,
+   -59.99
+  ],
+  "dist_to_line": 3.8,
+  "lat": 3.3,
+  "gap_left": 5.0,
+  "gap_right": 4.6,
+  "gap_over": 10.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 720.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x10b",
+  "world": [
+   25.84,
+   8132.26,
+   -59.99
+  ],
+  "local": [
+   25.84,
+   -123.74,
+   -59.99
+  ],
+  "dist_to_line": 4.6,
+  "lat": 3.9,
+  "gap_left": 19.2,
+  "gap_right": 8.6,
+  "gap_over": 10.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 723.0,
+  "name": "Olthoi Larvae",
+  "cell": "0x105",
+  "world": [
+   22.44,
+   8134.17,
+   -59.99
+  ],
+  "local": [
+   22.44,
+   -121.83,
+   -59.99
+  ],
+  "dist_to_line": 3.0,
+  "lat": 1.8,
+  "gap_left": 12.6,
+  "gap_right": 6.2,
+  "gap_over": 11.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 723.5,
+  "name": "Olthoi Larvae",
+  "cell": "0x105",
+  "world": [
+   21.89,
+   8139.6,
+   -59.99
+  ],
+  "local": [
+   21.89,
+   -116.39,
+   -59.99
+  ],
+  "dist_to_line": 4.3,
+  "lat": -3.6,
+  "gap_left": 30,
+  "gap_right": 0.8,
+  "gap_over": 11.1,
+  "lanes": [
+   "over",
+   "left"
+  ]
+ },
+ {
+  "s": 727.0,
+  "name": "Olthoi Ripper",
+  "cell": "0x105",
+  "world": [
+   18.75,
+   8138.23,
+   -59.99
+  ],
+  "local": [
+   18.75,
+   -117.77,
+   -59.99
+  ],
+  "dist_to_line": 3.0,
+  "lat": -2.2,
+  "gap_left": 30,
+  "gap_right": 2.1,
+  "gap_over": 10.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 728.5,
+  "name": "Olthoi Larvae",
+  "cell": "0x105",
+  "world": [
+   17.09,
+   8138.64,
+   -59.99
+  ],
+  "local": [
+   17.09,
+   -117.36,
+   -59.99
+  ],
+  "dist_to_line": 3.2,
+  "lat": -2.6,
+  "gap_left": 17.0,
+  "gap_right": 1.7,
+  "gap_over": 11.1,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ },
+ {
+  "s": 732.5,
+  "name": "Olthoi Ripper",
+  "cell": "0x101",
+  "world": [
+   12.9,
+   8136.2,
+   -59.99
+  ],
+  "local": [
+   12.9,
+   -119.8,
+   -59.99
+  ],
+  "dist_to_line": 1.7,
+  "lat": -0.1,
+  "gap_left": 1.7,
+  "gap_right": 1.8,
+  "gap_over": 1.9,
+  "lanes": [
+   "over",
+   "left",
+   "right"
+  ]
+ }
+]

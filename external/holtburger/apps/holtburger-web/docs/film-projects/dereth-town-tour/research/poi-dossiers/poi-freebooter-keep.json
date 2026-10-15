@@ -1,0 +1,206 @@
+{
+ "name": "Freebooter Keep",
+ "title": "Freebooter Keep",
+ "siteId": "poi-freebooter-keep",
+ "summary": "A stronghold on Freebooter Isle with the Black Market inside, a society fort with a Crystal Array platform (acpedia). In the kit, a walled castle stands on a sheer mesa top at z 148 above the sea. It has a six-storey red-roofed spire keep (top z 179.5), spire towers, stone wings, golden bamboo gates, society banners and a 25 m tower on the east cliff edge with a glowing purple sphere. A 90 m cliff drops into a ravine on the east, and blue paper lanterns light a stair down the north ridge.",
+ "landmarks": [
+  {
+   "name": "Spire keep (0x01000DFF)",
+   "pos": [
+    47868,
+    9084,
+    148
+   ],
+   "heightM": 31.5,
+   "note": "Red roof, diamond windows."
+  },
+  {
+   "name": "Spire tower (0x01000E00)",
+   "pos": [
+    47844,
+    9036,
+    148
+   ],
+   "heightM": 22.0,
+   "note": ""
+  },
+  {
+   "name": "Cliff-edge tower (0x01001776)",
+   "pos": [
+    47947.9,
+    9062.4,
+    144.1
+   ],
+   "heightM": 24.8,
+   "note": "Glowing purple sphere at z 135.8."
+  },
+  {
+   "name": "Golden bamboo gates (0x02000E56)",
+   "pos": [
+    47868,
+    9126,
+    147.7
+   ],
+   "heightM": 1.5,
+   "note": "North entrance."
+  },
+  {
+   "name": "East cliff",
+   "pos": [
+    47945,
+    9070,
+    99
+   ],
+   "heightM": 0,
+   "note": "90 m drop to a ravine at z 50, the sea beyond."
+  }
+ ],
+ "site": {
+  "id": "poi-freebooter-keep",
+  "name": "Freebooter Keep",
+  "gazetteerId": "freebooter-keep",
+  "teleport": "@teleloc 0xF92F001C 92.00 86.00 148.50 1 0 0 0",
+  "anchor": [
+   47880,
+   9070,
+   148
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.39,
+   "grade": "neutral"
+  },
+  "notes": "Every gazetteer teleport for Freebooter Keep (freebooter-keep and the Black Market entries) is indoor; derived @teleloc on the open mesa top 41 m north-east of the keep's spire, outside the golden bamboo gates (ground z 148.0, nearest object 22 m)."
+ },
+ "insertAfter": "mayoi",
+ "insertBefore": "kryst",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -64.0,
+   "ew": 97.5
+  },
+  "coordSrc": "mapPoint",
+  "world": [
+   47868.0,
+   9108.0
+  ],
+  "coveredDistM": 2708,
+  "coveredBy": "shot:freehold.04",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Freebooter_Keep.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-freebooter-keep.01",
+   "site": "poi-freebooter-keep",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.0
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.0,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47868,
+     9084,
+     148
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "radius": 140,
+    "heightAGL": 30,
+    "revolutions": 0.085,
+    "direction": "cw",
+    "bearingDeg": 92,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Arc clockwise 140 m out over the eastern sea cliffs and 30 m above the mesa top, holding Freebooter Keep's red spire on its sheer rock with the morning sun behind the lens; never below 15 m over the rocks.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Orbit of 31 degrees clockwise, 140 m out over the eastern sea cliffs and 30 m above the mesa top, 80 m and more above the rocks, from east to south-east. Freebooter Keep's red spire and its towers stand on their sheer rock above the sea. The morning sun (0.39) is behind the lens. Verified (check.mjs, full take flown): take 0-10 s: AGL 80.23..95.1 m, nearest drawn 46.42 m (static 0xF92F#194 0x01001776), vmax 7.48 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 80.23..91.3 m, nearest drawn 46.42 m (static 0xF92F#194 0x01001776), vmax 7.48 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.49 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-freebooter-keep.02",
+   "site": "poi-freebooter-keep",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 7.0
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7.0,
+    "keep": [
+     3.0,
+     11
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47868,
+     9084,
+     148
+    ],
+    "height": 31.5,
+    "radius": 8
+   },
+   "params": {
+    "startDistance": 35,
+    "endDistance": 86,
+    "startHeight": 28,
+    "endHeight": 46,
+    "bearingDeg": 130,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Pull back and up south-east from above the keep's courtyard roofs, out over the cliff edge until the fortress sits small on its sea-girt mesa; stay 6 m above every roof and the corner tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Dronie from 28 m above the keep's courtyard roofs, pulling back south-east and up over the 90 m east cliff until the fortress sits on its mesa above the ravine and the sea. The sun is at the lens's back. The flight clears the tapered corner tower by 12 m. Verified (check.mjs, full take flown): take 0-11 s: AGL 28..70 m, nearest drawn 12.02 m (static 0xF92F#184 0x01000E02), vmax 7.72 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 32.13..69.1 m, nearest drawn 12.02 m (static 0xF92F#184 0x01000E02), vmax 7.72 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.71 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-freebooter-keep.01": "take 0-10 s: AGL 80.23..95.1 m, nearest drawn 46.42 m (static 0xF92F#194 0x01001776), vmax 7.48 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8.5 s: AGL 80.23..91.3 m, nearest drawn 46.42 m (static 0xF92F#194 0x01001776), vmax 7.48 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.49 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-freebooter-keep.02": "take 0-11 s: AGL 28..70 m, nearest drawn 12.02 m (static 0xF92F#184 0x01000E02), vmax 7.72 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 32.13..69.1 m, nearest drawn 12.02 m (static 0xF92F#184 0x01000E02), vmax 7.72 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.71 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

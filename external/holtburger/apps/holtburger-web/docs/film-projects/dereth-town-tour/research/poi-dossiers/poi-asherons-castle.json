@@ -1,0 +1,309 @@
+{
+ "name": "Asheron's Castle",
+ "title": "Asheron's Castle",
+ "siteId": "poi-asherons-castle",
+ "summary": "The home of Asheron on Asheron's Island, on top of a huge mountain with a long spiralling path; central to A Time of Chaos and today to the Quiddity Seed quests. In the kit: a 3 x 3 block of castle buildings on the summit plateau (z 374) - four-storey tapered towers, pitched-roof halls, a 31 m red-roofed spire tower (top z 405.5) and a 90 m minaret with a dome (top z 463.7) - around a small courtyard garden with an altar and benches; cliffs drop 300 m to the sea on the south and east. Kit landblocks west (0xD4xx) and north (0xD59B-0xD79B) of the castle are missing.",
+ "landmarks": [
+  {
+   "name": "Minaret (0x01002E81)",
+   "pos": [
+    41052.0,
+    29556.0,
+    374.0
+   ],
+   "heightM": 89.7,
+   "note": "22 m footprint, dome lantern at z 456-464."
+  },
+  {
+   "name": "Red spire tower (0x01000DFF)",
+   "pos": [
+    41076.0,
+    29556.0,
+    374.0
+   ],
+   "heightM": 31.5,
+   "note": "Six storeys with a glowing purple sphere at z 405.5."
+  },
+  {
+   "name": "Tapered towers (0x01000E02)",
+   "pos": [
+    41100.0,
+    29508.0,
+    374.0
+   ],
+   "heightM": 21.7,
+   "note": "Three four-storey towers, tops z 395.7."
+  },
+  {
+   "name": "Courtyard garden",
+   "pos": [
+    41076.0,
+    29532.0,
+    374.0
+   ],
+   "heightM": 11.0,
+   "note": "Trees, altar 0x0200096F and benches; the castle centre."
+  },
+  {
+   "name": "Summit plateau rim",
+   "pos": [
+    41110.0,
+    29532.0,
+    374.0
+   ],
+   "heightM": 0.0,
+   "note": "Grass shoulder falling east to z 330 at x 41160, then cliffs."
+  }
+ ],
+ "site": {
+  "id": "poi-asherons-castle",
+  "name": "Asheron's Castle",
+  "gazetteerId": "asherons-castle",
+  "teleport": "@teleloc 0xD59A0039 177 1.21 373.501 0 0 0 -1",
+  "anchor": [
+   41076,
+   29532,
+   374
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.42,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer asherons-castle (outdoor, north foot of the spire tower, 46 m from the centre). Kit landblocks west (0xD4xx) and north (0xD59B-0xD79B) of the castle are missing: every camera stays south/east of x 40900 / y 29760."
+ },
+ "insertAfter": "arwic",
+ "insertBefore": "eastham",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 21.1,
+   "ew": 69.3
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1212,
+  "coveredBy": "shot:eastham.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Asheron_s_Castle.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-asherons-castle.01",
+   "site": "poi-asherons-castle",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     1.5,
+     9.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 1,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41076,
+     29532,
+     374
+    ],
+    "height": 44,
+    "radius": 40
+   },
+   "params": {
+    "radius": 240,
+    "heightAGL": 30,
+    "revolutions": 0.05,
+    "direction": "cw",
+    "bearingDeg": 118,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "standingOrder": "Arc slowly round the mountain-top castle 150 m out and 48 m above its courtyard with the morning sun behind the lens; hold the minaret and towers centred, never drop below 20 m over the slopes.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing: 0.05 turn clockwise 240 m out from the castle on its mountain top, 30 m above the courtyard (z 404; 184-337 m above the cliffs and slopes), from ESE to SE: the walled castle - towers, halls, the 31 m red spire tower and the 90 m minaret - crowning the huge mountain with Asheron's Island falling away below; morning sun (0.42) behind the lens. Kit landblocks west/north of the castle are missing; this orbit stays south-east. Verified (check.mjs, full take flown): take 0-10 s: AGL 184..337.5 m, nearest drawn 113.5 m (scenery-default 0x0200062B@41193,29441), vmax 7.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 184..327.3 m, nearest drawn 113.5 m (scenery-default 0x0200062B@41193,29441), vmax 7.54 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.03 m."
+  },
+  {
+   "id": "poi-asherons-castle.02",
+   "site": "poi-asherons-castle",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 6.5
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6.5,
+    "keep": [
+     3.5,
+     10.0
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41076,
+     29532,
+     374
+    ],
+    "height": 90,
+    "radius": 40
+   },
+   "params": {
+    "distance": 74,
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "obstacleDistance": 40,
+    "obstacleHeight": 38.5,
+    "heightStart": 12,
+    "clearance": 8,
+    "forward": 8,
+    "endPitchDeg": 12,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise from the grassy east shoulder over the plateau rim until the castle towers and the minaret stand against the sky; stay 8 m above the rim grass.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Rising reveal over the east shoulder: starts 12 m above the grass slope 74 m east of the castle centre (looking up the slope at the plateau rim) and rises 34 m through the lane between two shoulder trees until the whole castle - east hall, towers, red spire and minaret - stands against the sky; subject out of the top of frame for the first ~3 s by design (edit window from 3.5 s). Verified (check.mjs, full take flown): take 0-10 s: AGL 12..42.3 m, nearest drawn 9.08 m (scenery-default 0x02000251@41124,29549), vmax 5.56 m/s, LOS blocked 0/41, subject in frame 63%; edit 3.5-10 s: AGL 20.16..42.3 m, nearest drawn 9.08 m (scenery-default 0x02000251@41124,29549), vmax 5.56 m/s, LOS blocked 0/27, subject in frame 96%; flight cinema peak 5.55 m/s (cap 12), max tracking gap 0.05 m."
+  },
+  {
+   "id": "poi-asherons-castle.03",
+   "site": "poi-asherons-castle",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5.5
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5.5,
+    "keep": [
+     0.5,
+     7.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41052,
+     29556,
+     374
+    ],
+    "height": 90,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 0,
+    "azimuthRef": "compass",
+    "heightM": 0.8,
+    "horizontalM": 16,
+    "spinDeg": 8
+   },
+   "standingOrder": "Look straight up the north face of the 90 m minaret from 0.8 m above the grass, 6 m from its wall, with a slow 8 degree roll; nothing may come closer than 3 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Worm's-eye up the 90 m minaret from its north foot: lens 0.8 m above the plateau grass, 16 m from the axis (6 m off the wall), looking straight up the shaft to the dome with a slow 8 deg roll; the morning sun behind the minaret makes a backlit silhouette with sky glow. Verified (check.mjs, full take flown): take 0-8 s: AGL 0.8..0.8 m, nearest drawn 8.43 m (scenery-default 0x02000240@41050,29585), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.8..0.8 m, nearest drawn 8.43 m (scenery-default 0x02000240@41050,29585), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 2.5 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  },
+  {
+   "id": "poi-asherons-castle.04",
+   "site": "poi-asherons-castle",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 7
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 3.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 7,
+    "keep": [
+     2.5,
+     10.6
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41052,
+     29556,
+     374
+    ],
+    "height": 90,
+    "radius": 8
+   },
+   "params": {
+    "radiusStart": 50,
+    "radiusEnd": 62,
+    "heightStart": 45,
+    "heightEnd": 75,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Climb in a slow clockwise helix round the 90 m minaret from east to south-south-east, 50-64 m out, finishing level with its dome; keep 13 m above every tower roof.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Helix: climbs clockwise round the 90 m minaret from east to south-south-east (0.12 turn, radius 50 -> 62 m, height 45 -> 75 m above the plateau: z 419 -> 449, >= 13 m above every tower roof), the morning sun on its east face; ends level with the upper shaft and dome lantern. Verified (check.mjs, full take flown): take 0-11 s: AGL 45..75 m, nearest drawn 18.92 m (static 0xD599#52 0x01000DFF), vmax 7.61 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 51.89..74.8 m, nearest drawn 25.5 m (static 0xD599#52 0x01000DFF), vmax 7.61 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.6 m/s (cap 12), max tracking gap 0.06 m."
+  }
+ ],
+ "verification": {
+  "poi-asherons-castle.01": "take 0-10 s: AGL 184..337.5 m, nearest drawn 113.5 m (scenery-default 0x0200062B@41193,29441), vmax 7.54 m/s, LOS blocked 0/41, subject in frame 100%; edit 2.5-9 s: AGL 184..327.3 m, nearest drawn 113.5 m (scenery-default 0x0200062B@41193,29441), vmax 7.54 m/s, LOS blocked 0/27, subject in frame 100%; flight cinema peak 7.56 m/s (cap 12), max tracking gap 0.03 m",
+  "poi-asherons-castle.02": "take 0-10 s: AGL 12..42.3 m, nearest drawn 9.08 m (scenery-default 0x02000251@41124,29549), vmax 5.56 m/s, LOS blocked 0/41, subject in frame 63%; edit 3.5-10 s: AGL 20.16..42.3 m, nearest drawn 9.08 m (scenery-default 0x02000251@41124,29549), vmax 5.56 m/s, LOS blocked 0/27, subject in frame 96%; flight cinema peak 5.55 m/s (cap 12), max tracking gap 0.05 m",
+  "poi-asherons-castle.03": "take 0-8 s: AGL 0.8..0.8 m, nearest drawn 8.43 m (scenery-default 0x02000240@41050,29585), vmax 0 m/s, LOS blocked 0/33, subject in frame 100%; edit 1.5-7 s: AGL 0.8..0.8 m, nearest drawn 8.43 m (scenery-default 0x02000240@41050,29585), vmax 0 m/s, LOS blocked 0/23, subject in frame 100%; opt-in retail-bake tree 2.5 m (not drawn by the default bake the film uses - keep ?sceneryBake default)",
+  "poi-asherons-castle.04": "take 0-11 s: AGL 45..75 m, nearest drawn 18.92 m (static 0xD599#52 0x01000DFF), vmax 7.61 m/s, LOS blocked 0/45, subject in frame 100%; edit 3.5-10.5 s: AGL 51.89..74.8 m, nearest drawn 25.5 m (static 0xD599#52 0x01000DFF), vmax 7.61 m/s, LOS blocked 0/29, subject in frame 100%; flight cinema peak 7.6 m/s (cap 12), max tracking gap 0.06 m"
+ }
+}

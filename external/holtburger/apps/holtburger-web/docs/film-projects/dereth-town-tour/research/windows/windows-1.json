@@ -1,0 +1,1149 @@
+{
+ "batch": 1,
+ "windows": [
+  {
+   "id": "westwatch.01",
+   "takeSec": 16.75,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "anchor": 7,
+   "peakSec": 7,
+   "minSec": 5,
+   "idealSec": 8,
+   "reason": "The pass over the outpost: the outpost rises from frame centre (t3 ndc y -0.16) and slides out under the lens at t6.6-7 (ndc -0.89 -> -1.54), then the beach and open sea take the frame (t9-12 subject behind), LOS clear throughout; centred on the slide-under so both the approach to the lighthouse and the sea opening survive."
+  },
+  {
+   "id": "westwatch.02",
+   "takeSec": 12.166667,
+   "keep": [
+    3,
+    12
+   ],
+   "anchor": "center",
+   "peakSec": 7.5,
+   "minSec": 4,
+   "idealSec": 6.1,
+   "reason": "The dutch roll itself: the 0 -> -10 deg roll and 3 m push move fastest t4-t9 (v 0.3-0.4) with the tower dead centre (ndc [0,0]) and LOS clear every row, so the window sits on the mid-to-late stretch where the horizon visibly leans toward its full tilt, dropping the near-static first 3 s."
+  },
+  {
+   "id": "westwatch.03",
+   "takeSec": 12.25,
+   "keep": [
+    4,
+    12.25
+   ],
+   "anchor": 9,
+   "peakSec": 10.5,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "The push closing on the swirling portal ring with the lighthouse behind: the later half (subject 11.8 m -> 6.6 m, t4-t12, ndc [0,0], LOS clear) is where the WS->FS push reads strongest; centred at t9 so the move is still visibly travelling (v 1.0 -> 0.2) and lands on the FS frame."
+  },
+  {
+   "id": "westwatch.04",
+   "takeSec": 15,
+   "keep": [
+    4,
+    14.5
+   ],
+   "anchor": "end",
+   "peakSec": 12,
+   "minSec": 5,
+   "idealSec": 7.1,
+   "reason": "The god's-eye pull-up reveal: from t7 (79 m AGL, v 9.6) to the 129 m hold at t14 the outpost shrinks into the green island and the beach/sea enter the frame edge, subject centred and LOS clear; ends where the original edit ended (t14.2) on the settled tiny-outpost frame."
+  },
+  {
+   "id": "sanamar.01",
+   "takeSec": 15.041667,
+   "keep": [
+    4.5,
+    15.04
+   ],
+   "anchor": 9.5,
+   "peakSec": 7,
+   "minSec": 6,
+   "idealSec": 8.5,
+   "reason": "The rise over the coastal crest: terrain blocks LOS t0-t6 and clears at t7 while pitch swings 16 -> -8 deg (t6-t13) as the walls and gold-roofed towers come up over the edge; window starts ~1.5 s before the crest so the slope reads as the occluder and ends on the -8 deg city vista."
+  },
+  {
+   "id": "sanamar.02",
+   "takeSec": 9.291667,
+   "keep": [
+    1.5,
+    9
+   ],
+   "anchor": 4.6,
+   "peakSec": 4.18,
+   "minSec": 3.5,
+   "idealSec": 4.6,
+   "reason": "Must contain the focus pull (at 0.45 x 9.29 = 4.18 s, pullSec 1.6 -> 3.4-5.0 s; rows show focus 3.4 at t3, 5.3 at t4, 9.1 at t5): window holds ~1 s on the sharp brazier flame, then the pull to the king, then ~2 s on him sharp, LOS clear throughout."
+  },
+  {
+   "id": "sanamar.03",
+   "takeSec": 13,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.5,
+   "minSec": 4.5,
+   "idealSec": 6.1,
+   "reason": "The crane-up off the fountain: between t3 (AGL 3.6, pitch -7) and t10 (AGL 13.8, pitch -42) the jib rises fastest (v 1.3-1.9) and tilts down so the plaza, halls and walls open around the water, fountain centred and LOS clear; the window rides that rise and drops the near-static start and settle."
+  },
+  {
+   "id": "sanamar-royal-hall.01",
+   "takeSec": 12.916667,
+   "keep": [
+    1.5,
+    11.5
+   ],
+   "anchor": "center",
+   "peakSec": 6.5,
+   "minSec": 4.5,
+   "idealSec": 8,
+   "reason": "Hero facade truck (kept at 0.66x): the gate towers and curtain wall slide past fastest (v 3.6-4.3 m/s, t4-t9) while the red-domed spires cross frame centre at t6.5 (ndc x 0.09 -> -0.11); keep is the stretch t1-t11 where LOS is clear, dropping the gate-tower occlusions at t0 and t12+."
+  },
+  {
+   "id": "sanamar-royal-hall.02",
+   "takeSec": 16.083333,
+   "keep": [
+    3,
+    16.08
+   ],
+   "anchor": 10,
+   "peakSec": 10,
+   "minSec": 6,
+   "idealSec": 10.5,
+   "reason": "Hero spiral descent (kept at 0.65x): the fast corkscrew down from AGL 125 to 65 (t4-t15, v 9-11 m/s) is where the spires grow out of the cliff-top palace, subject centred every row (LOS 'blocked' only by the palace's own towers); window sits late so it still arrives on the close view, dropping the slow high hover at the start."
+  },
+  {
+   "id": "sanamar-royal-hall.03",
+   "takeSec": 17.041667,
+   "keep": [
+    1,
+    17.04
+   ],
+   "anchor": "end",
+   "peakSec": 15,
+   "minSec": 6,
+   "idealSec": 11,
+   "reason": "Hero hyperlapse orbit (kept at 0.68x): a constant 6.7 m/s orbit with the palace centred every row and clouds racing throughout, so the window takes the late stretch where the sky clock has the light turning gold and the heading swings to WSW into the low sun over the sea (h 230 -> 247), the climax the shot was tuned for."
+  },
+  {
+   "id": "ahurenga.01",
+   "takeSec": 14.541667,
+   "keep": [
+    3.5,
+    14.54
+   ],
+   "anchor": 10,
+   "peakSec": 10,
+   "minSec": 4.5,
+   "idealSec": 6.9,
+   "reason": "The low skim over open water: full speed 9.9 m/s from t5 to t10 with the reed-ringed village and spire growing ahead (nearest reed 46 -> 31 m), then braking toward the hover; the window centres on the fast run into the braking so it keeps both the energy and the arrival, cutting the slow spool-up."
+  },
+  {
+   "id": "ahurenga.02",
+   "takeSec": 9,
+   "keep": [
+    0.5,
+    9
+   ],
+   "anchor": "center",
+   "peakSec": 4.5,
+   "minSec": 3.5,
+   "idealSec": 4.5,
+   "reason": "A locked worm's-eye on the totems, brazier flames and spire with a slow 12 deg sky spin: every row is identical (subject ndc [0,-0.27], the near totem in front by design), so the centred window keeps the middle of the spin where the sky motion is most visible."
+  },
+  {
+   "id": "ahurenga.03",
+   "takeSec": 15.791667,
+   "keep": [
+    2,
+    14.5
+   ],
+   "anchor": 8,
+   "peakSec": 8,
+   "minSec": 4.5,
+   "idealSec": 7.9,
+   "reason": "The corkscrew climb past the purple energy funnel: the lens climbs through the sigils' height (z ~28-40) at t5-t9 on the fastest stretch of the helix (v 8-11 m/s, t5-t11) with the spire centred every row; centred on that mid-shot moment, dropping the slow spool-up and the settling hover."
+  },
+  {
+   "id": "ahurenga.04",
+   "takeSec": 14.791667,
+   "keep": [
+    0,
+    14.79
+   ],
+   "anchor": "center",
+   "peakSec": 7.4,
+   "minSec": 4,
+   "idealSec": 7,
+   "reason": "Locked-off time-lapse: every row is the same frame (spire on the left third, ndc [-0.32,-0.02], nothing within 36 m) while cloud shadows race across the marsh and sea at 0.008 day/s, so any stretch carries the idea; the centred window keeps the middle of the sky run."
+  },
+  {
+   "id": "timaru.01",
+   "takeSec": 17.208333,
+   "keep": [
+    4.5,
+    16.5
+   ],
+   "anchor": 10.3,
+   "peakSec": 11.5,
+   "minSec": 6,
+   "idealSec": 8.5,
+   "reason": "The rise up the gorge wall: the cliff is the occluder (terrain blocks LOS until t5-t6), the palisade and totems peek over the edge from t6 and the lens clears the plateau with pitch passing 0 at t11, settling toward -8 by t15; the window starts just before the crest and ends on the over-the-top village vista, dropping the slow lift-off from the river."
+  },
+  {
+   "id": "timaru.02",
+   "takeSec": 9.791667,
+   "keep": [
+    0.5,
+    9.79
+   ],
+   "anchor": "center",
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 4.9,
+   "reason": "Nadir over the stone circle and brazier with a constant 75 deg image turn and 6 m drift (v 0.6 every row): the brazier passes dead centre at t5 (ndc [0,0]) with LOS clear throughout, so the window is centred on it."
+  },
+  {
+   "id": "timaru.03",
+   "takeSec": 10.416667,
+   "keep": [
+    1,
+    10
+   ],
+   "anchor": "center",
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5.2,
+   "reason": "Wide establishing hold on the great waterfall: the slow drift-and-push moves most visibly at t3-t7 (v 2.1-2.7) with the cascade centred and LOS clear every row, so the centred window keeps the moving middle and drops the ease-in/ease-out."
+  },
+  {
+   "id": "timaru.04",
+   "takeSec": 7.791667,
+   "keep": [
+    1,
+    7.79
+   ],
+   "anchor": 4.2,
+   "peakSec": 4,
+   "minSec": 4,
+   "idealSec": 4.65,
+   "reason": "Must contain the dive: crest over the falls edge at t1.5-2 (AGL jumps 19 -> 38), the -49..-59 deg plunge t3-t5 through the spray and the pull-out to level 3 m over the pool by t6.5; the window spans crest-dive-pullout and drops only the run-up and the level run-out (kept at 0.6x, the dive cannot be shorter)."
+  },
+  {
+   "id": "timaru.05",
+   "takeSec": 10.083333,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "anchor": 5.5,
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5,
+   "reason": "The vertigo itself: the fov collapses fastest from 54 to 30 deg between t2 and t8 (dolly v 2.5-4.3 m/s) while the Aun head holds its size, centred, LOS clear, so the cliffs swell most visibly there; the window drops the slow first second and the final settle at 28 deg."
+  },
+  {
+   "id": "redspire.01",
+   "takeSec": 15.25,
+   "keep": [
+    5,
+    15.25
+   ],
+   "anchor": 11,
+   "peakSec": 9.5,
+   "minSec": 5,
+   "idealSec": 7.2,
+   "reason": "The tilt-up reveal: the lens is still on the golden waves at t7-8 (pitch -45..-37), the hill and Redspire's tower enter the top of frame at t9 (subject ndc y 1.02) and settle near centre by t13-14 (ndc y 0.18 -> 0.09); the window keeps ~1.5 s of sea texture as lead-in and ends on the front-lit town, LOS clear throughout."
+  },
+  {
+   "id": "redspire.02",
+   "takeSec": 10.666667,
+   "keep": [
+    1,
+    10.5
+   ],
+   "anchor": 6,
+   "peakSec": 5.5,
+   "minSec": 3.5,
+   "idealSec": 5.3,
+   "reason": "The pedestal rise past the banner field: the lens climbs fastest (v 0.8-1.0, AGL 4.2 -> 8.9) between t3 and t8 while tilting from eye level to looking down on the fire ring, banner steady on the left third (ndc x -0.33) and LOS clear; the window sits slightly late so it ends looking down on the ring with the tower behind."
+  },
+  {
+   "id": "redspire.03",
+   "takeSec": 10.25,
+   "keep": [
+    0.5,
+    10
+   ],
+   "anchor": "center",
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5.1,
+   "reason": "A steady 42 deg high angle on the Life Stone and portal swirl with a slow 4 m push: framing is identical every row (ndc [0,0], LOS clear, trees >= 14.9 m), so the centred window keeps the part where the push is actually moving (v 0.5-0.6, t3-t7)."
+  },
+  {
+   "id": "redspire.04",
+   "takeSec": 9.583333,
+   "keep": [
+    0.5,
+    9.5
+   ],
+   "anchor": "center",
+   "peakSec": 4.8,
+   "minSec": 3.5,
+   "idealSec": 4.8,
+   "reason": "Low-angle hold on the shattered Nanto portal crystal and its arcing bolts: framing is balanced and constant every row (ndc [0,-0.16..-0.18], LOS clear, 1.5 m push), so the centred window carries the lightning FX with the push still moving."
+  },
+  {
+   "id": "redspire.05",
+   "takeSec": 15.208333,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.5,
+   "minSec": 4.5,
+   "idealSec": 7.2,
+   "reason": "The panoramic sweep: yaw is fastest (~30 deg/s) between t3 (h 228, golden sea toward the sun) and t11 (h 447 = NE, the front-lit Karab Delta and Marescent cliffs); the window keeps that sweep from the sun-side sea round to the cliffs and drops the slow ease-in/out ends (LOS clear, nothing within 17 m)."
+  },
+  {
+   "id": "bluespire.01",
+   "takeSec": 16.375,
+   "keep": [
+    3,
+    15.5
+   ],
+   "anchor": 9.5,
+   "peakSec": 9,
+   "minSec": 5,
+   "idealSec": 7.8,
+   "reason": "The pass over the Viamontian tower: pitch steepens -52 -> -87 (t5-t8), the gimbal goes through nadir at t9 with the 60 deg/s yaw-slew (h 90 -> 250 by t11) and the tower is held behind (pitch -46..-40, t12-t13) as the delta opens up, subject in frame and LOS clear every row; centred on the overhead moment."
+  },
+  {
+   "id": "bluespire.02",
+   "takeSec": 7.208333,
+   "keep": [
+    1,
+    7.208
+   ],
+   "anchor": 4.3,
+   "peakSec": 4,
+   "minSec": 3.5,
+   "idealSec": 4.3,
+   "reason": "The tilt from the tower's base to its golden roof is the whole idea and moves t1-t6.5 (pitch 8 -> 38, tower ndc y 0.42 -> -0.61, LOS clear); the window keeps that travel and drops only the static first second and the final hold, so it stays at 0.6x (cannot go shorter without losing base or roof)."
+  },
+  {
+   "id": "bluespire.03",
+   "takeSec": 10.875,
+   "keep": [
+    2,
+    10.5
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.5,
+   "minSec": 4,
+   "idealSec": 5.4,
+   "reason": "The 60 deg arc past the north-west door and its blue-flame braziers: the arc is fastest t4-t8 (v 3.5-3.9) and its later half swings the camera toward the door side (h 431 -> 455), hall centred every row (LOS 'blocked' only by the hall itself, the subject); the window sits mid-to-late on that sweep."
+  },
+  {
+   "id": "bluespire.04",
+   "takeSec": 8.791667,
+   "keep": [
+    0.3,
+    8.5
+   ],
+   "anchor": 4,
+   "peakSec": 4,
+   "minSec": 3.5,
+   "idealSec": 4.4,
+   "reason": "Static two-shot of the Life Stone and portal swirl with an 8 deg drift: LOS clear and both in frame every row; the Life Stone drifts slowly toward the left edge (ndc x -0.65 -> -0.72), so the window sits slightly early where the pair is best balanced."
+  },
+  {
+   "id": "bluespire.05",
+   "takeSec": 12.541667,
+   "keep": [
+    2.5,
+    12.3
+   ],
+   "anchor": 8,
+   "peakSec": 9,
+   "minSec": 5,
+   "idealSec": 7,
+   "reason": "The pull-back and rise off the crackling sword crown: the move accelerates from t3 (subject 7.1 m, still close on the FX) to its fastest t8-t10 (v 4.4-4.7, rising 12 -> 17 m AGL) and arrives at the 28 deg WS of tower, Life Stone and town by t11.5 (ndc [0,-0.01]); the window spans close-start to reveal, dropping the near-static first 2.5 s and the settle."
+  },
+  {
+   "id": "greenspire.01",
+   "takeSec": 14.541667,
+   "keep": [
+    4,
+    14.54
+   ],
+   "anchor": 10.5,
+   "peakSec": 11.5,
+   "minSec": 4.5,
+   "idealSec": 6.9,
+   "reason": "The low cruise (8.8 m/s, 2.5 m over the bay) into the beach: the bamboo halls, torches and portal grow ahead and the 78 m Empyrean tower with its floating spires rises out of the top of frame in the last ~3 s; the window takes the late approach that delivers that, dropping the open-water lead-in (nearest obstacle >= 4.3 m throughout)."
+  },
+  {
+   "id": "greenspire.02",
+   "takeSec": 10.666667,
+   "keep": [
+    1,
+    10.666
+   ],
+   "anchor": 6.5,
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 5.3,
+   "reason": "The zoom from the whole coast to the summit Life Stone: magnification is fastest t3-t9 (fov 40 -> 10) with the summit centred (ndc y 0 -> -0.14) and LOS clear on every row; the window starts while the tower is still whole in frame and lands near the fov-9 detail, dropping the static ends."
+  },
+  {
+   "id": "greenspire.03",
+   "takeSec": 13,
+   "keep": [
+    1,
+    12.5
+   ],
+   "anchor": "center",
+   "peakSec": 6.5,
+   "minSec": 4,
+   "idealSec": 6.5,
+   "reason": "A held low angle up into the purple energy funnel under the floating spire with a 4 m push: framing is identical every row (ndc [0,0], LOS 'blocked' only by the spire itself, the subject; nothing nearer than 18 m), so the centred window keeps the moving middle of the push and the particle FX."
+  },
+  {
+   "id": "greenspire.04",
+   "takeSec": 12.5,
+   "keep": [
+    1,
+    12.5
+   ],
+   "anchor": "center",
+   "peakSec": 6.25,
+   "minSec": 4.5,
+   "idealSec": 6.2,
+   "reason": "Linear quarter orbit at constant 9.3 m/s around the tower complex (subject centred every row, the LOS hits are the complex's own spires): every stretch swings the background equally, so the centred window takes the middle of the turn where the camera crosses from the knoll out over the bay (AGL 75 -> 90 at t6-t7)."
+  },
+  {
+   "id": "greenspire.05",
+   "takeSec": 17,
+   "keep": [
+    3,
+    16.5
+   ],
+   "anchor": 10,
+   "peakSec": 9.5,
+   "minSec": 5,
+   "idealSec": 8.1,
+   "reason": "The pass over the summit Life Stone: pitch steepens -48 -> -82 (t5-t8), nadir at t9 with the 45 deg/s yaw-slew (h 196 -> 360 by t13) and the lifestone held behind (pitch -51..-35) as the drone leaves over the southern bay; subject in frame and LOS clear every row, window centred on the overhead moment."
+  },
+  {
+   "id": "plateau-village.01",
+   "takeSec": 16.875,
+   "keep": [
+    4.5,
+    16.875
+   ],
+   "anchor": 12,
+   "peakSec": 10,
+   "minSec": 6,
+   "idealSec": 8,
+   "reason": "The rise up the escarpment: the rock face blocks LOS (terrain) until t9, the lens clears the rim at t10 (pitch 0, LOS now hits the rim houses) and pitches to -13 by t14 over the timber roofs and the long view west; the window starts on the face ~3 s before the rim and ends on the settled plateau vista."
+  },
+  {
+   "id": "plateau-village.02",
+   "takeSec": 11.875,
+   "keep": [
+    1,
+    11
+   ],
+   "anchor": "center",
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 5.9,
+   "reason": "Straight-down pattern shot of the square: the rise (48 -> 62 m) and 35 deg image turn move fastest t3-t9 (v 1.3-1.9) with the square centred and LOS clear every row, so the centred window keeps the visibly turning middle and drops the ease-in/out."
+  },
+  {
+   "id": "plateau-village.03",
+   "takeSec": 14.541667,
+   "keep": [
+    3,
+    14.54
+   ],
+   "anchor": 9.5,
+   "peakSec": 10,
+   "minSec": 4.5,
+   "idealSec": 7.3,
+   "reason": "The dolly down the wedding aisle reads strongest in its second half: the lens passes between the blue-flame torches (nearest 9.6 -> 5.8 m, t7-t13) and closes on the backlit altar and twin pillars (subject 31 -> 19.7 m) at full cruise easing to the stop, centred and LOS clear; the window drops the slow start far from the altar."
+  },
+  {
+   "id": "plateau-village.04",
+   "takeSec": 16.833333,
+   "keep": [
+    2.5,
+    16.83
+   ],
+   "anchor": 10,
+   "peakSec": 8.5,
+   "minSec": 4.5,
+   "idealSec": 8,
+   "reason": "Must contain the gap: the drone slows to 2.8 m/s threading the twin pillars at ~t8.5 (nearest 4.6-4.8 m at t7-t8) and then accelerates out over the cliff edge (AGL 8 -> 20 by t16, open sky ahead); the window holds the approach between the torches, the gap and the exit into the void."
+  },
+  {
+   "id": "danbys-outpost.01",
+   "takeSec": 11.666667,
+   "keep": [
+    1,
+    11
+   ],
+   "anchor": 5.5,
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5.4,
+   "reason": "The vertigo: fov narrows fastest 54 -> 28 deg between t2 and t8 (dolly v 3.6-7.1 m/s) while the NE tower holds its size dead centre and the stockade and ridge swell behind it (LOS 'blocked' only by the tower itself); the window drops the slow ease-in and the final settle at 24 deg."
+  },
+  {
+   "id": "danbys-outpost.02",
+   "takeSec": 12.541667,
+   "keep": [
+    1.5,
+    12
+   ],
+   "anchor": 6.5,
+   "peakSec": 5,
+   "minSec": 4,
+   "idealSec": 6.3,
+   "reason": "The rise over the east wall: LOS is blocked by the wall until t4 and clears at t5 as the courtyard, fire ring, Life Stone and portal appear, then the lens climbs on to look down on them (AGL 7.4 -> 16.3, pitch -11 -> -21, t5-t10); the window keeps ~1.5 s of wall as the occluder, the reveal and the rise, dropping the slow lift-off and the final settle."
+  },
+  {
+   "id": "danbys-outpost.03",
+   "takeSec": 9.875,
+   "keep": [
+    1.5,
+    9.875
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.8,
+   "minSec": 3.5,
+   "idealSec": 4.9,
+   "reason": "The close pass of the north-west spire tower: at full 9.4 m/s along the stockade the FPV comes within 4.8 m of the tower corner at t6.5-t8 (nearest 10.0 -> 4.8 m), then pitches up the slope into the forest edge; the window centres on that tower pass with a run along the wall before it."
+  },
+  {
+   "id": "danbys-outpost.04",
+   "takeSec": 15.541667,
+   "keep": [
+    2,
+    14
+   ],
+   "anchor": 8,
+   "peakSec": 8,
+   "minSec": 5,
+   "idealSec": 7.8,
+   "reason": "The boomerang turnaround: fly in at 9.5 m/s (t4, 84 m out), ease to the zero-velocity stop 62 m from the fort at t8, then retreat climbing at up to 11.5 m/s (t11-t12, z rising) with the stockade centred and LOS clear every row; centred on the turnaround so both scales and the single gesture survive."
+  },
+  {
+   "id": "danbys-outpost.05",
+   "takeSec": 15.5,
+   "keep": [
+    6,
+    15.5
+   ],
+   "anchor": "end",
+   "peakSec": 11.5,
+   "minSec": 4.5,
+   "idealSec": 7.4,
+   "reason": "Hyperlapse orbit at constant 10.3 m/s with clouds racing throughout: the NE tower occludes the courtyard t2-t7, LOS is clear from t8 and the heading swings to WSW-WNW (h 251 -> 303) so the Inner Sea lies behind the stockade; the window takes that clear, sea-backed late stretch."
+  },
+  {
+   "id": "fort-tethana.01",
+   "takeSec": 16.416667,
+   "keep": [
+    4,
+    16.416
+   ],
+   "anchor": 10.5,
+   "peakSec": 9,
+   "minSec": 6,
+   "idealSec": 7.8,
+   "reason": "The rise over the south gate towers: the lens climbs past the 31 m tower tops around t8-t9 as pitch passes 0 and tilts to -8 by t12, opening the courtyard, cottages, eight towers and the mountain behind (subject centred, LOS clear every row); the window keeps ~2 s of the towers as the occluder and ends on the settled -8/-9 deg fort vista."
+  },
+  {
+   "id": "fort-tethana.02",
+   "takeSec": 13.375,
+   "keep": [
+    1,
+    12.5
+   ],
+   "anchor": 6.5,
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 6.7,
+   "reason": "The drone vertigo: fov narrows fastest 46 -> 24 deg between t3 and t9 (v 6.3-9.7 m/s) while the SE tower holds its size (ndc y -0.56 every row, LOS clear) and the east towers and mountain swell behind; the window drops the slow ease-in and the stall at fov 20."
+  },
+  {
+   "id": "fort-tethana.03",
+   "takeSec": 12.583333,
+   "keep": [
+    2,
+    12
+   ],
+   "anchor": 7,
+   "peakSec": 6.5,
+   "minSec": 4,
+   "idealSec": 6.3,
+   "reason": "The fixed-head truck along the west curtain wall: the wall point crosses the whole frame (ndc x -1.1 -> +0.94, t3-t9) at peak speed 5.4-5.7 m/s with the corner towers sliding past and rising out of frame, LOS clear; the window takes that fastest, fullest-facade middle and reaches past the NW tower toward the plain."
+  },
+  {
+   "id": "fort-tethana.04",
+   "takeSec": 10.291667,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "anchor": 5.5,
+   "peakSec": 5.15,
+   "minSec": 4,
+   "idealSec": 5.1,
+   "reason": "Must contain the focus pull (at 0.5 x 10.29 = 5.15 s, pullSec 2 -> 4.15-6.15 s; rows show focus 10.3 at t4, 15.9 at t5, 24.4 at t6): the window holds ~1-1.5 s on the sharp candelabra flames, the pull, and ~2 s on the sharp portal swirl, LOS clear throughout."
+  },
+  {
+   "id": "fort-tethana.05",
+   "takeSec": 17.5,
+   "keep": [
+    5,
+    17.3
+   ],
+   "anchor": 12.5,
+   "peakSec": 14,
+   "minSec": 5,
+   "idealSec": 8.4,
+   "reason": "The expanding reveal: from t8 (statue 19 m away, still the subject) the pull-back accelerates to 10.4 m/s (t13) rising to pitch -40 as the cottage roofs, inner wall, courtyard and finally the whole eight-tower fort fill the frame (t14-t16, subject 68 -> 84 m, centred, LOS clear); the window drops the near-static first 5 s and most of the final settle."
+  },
+  {
+   "id": "ayan-baqur.01",
+   "takeSec": 16.666667,
+   "keep": [
+    4,
+    16.666
+   ],
+   "anchor": "end",
+   "peakSec": 14,
+   "minSec": 5,
+   "idealSec": 7.9,
+   "reason": "A fixed-gimbal travelling vista toward the terraced town: the shore point drops out of frame by t1.5 and passes under the lens at ~t8, after which the forested slope rises beneath (AGL 74 -> 57) and the sunlit domed town grows ahead to its nearest at the take end (LOS clear every row); the window takes that late approach where the town reads largest."
+  },
+  {
+   "id": "ayan-baqur.02",
+   "takeSec": 12.083333,
+   "keep": [
+    1.5,
+    12
+   ],
+   "anchor": 7,
+   "peakSec": 7,
+   "minSec": 4,
+   "idealSec": 6,
+   "reason": "The walking glide toward the fountain under the giant trees: the glide moves at walking pace t3-t10 (v 0.9-1.3, fountain 22.7 -> 14.6 m) with the fountain centred (ndc y -0.08..-0.13) and LOS clear, so the window sits mid-to-late on that approach, dropping the slow start and the stop."
+  },
+  {
+   "id": "ayan-baqur.03",
+   "takeSec": 10.041667,
+   "keep": [
+    1,
+    9.5
+   ],
+   "anchor": 5,
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5,
+   "reason": "The parallax slide past the yellow-brick dome: fastest at t3-t7 (v 3.3-4.1) when the dome crosses frame centre (ndc x 0.24 -> -0.23, centred at t5) and the well slides through the foreground (nearest 4.2 m at t5); LOS hits are the tavern's own parts, so the window is centred on the dome crossing."
+  },
+  {
+   "id": "ayan-baqur.04",
+   "takeSec": 11.25,
+   "keep": [
+    1,
+    10.5
+   ],
+   "anchor": "center",
+   "peakSec": 5.6,
+   "minSec": 4,
+   "idealSec": 5.6,
+   "reason": "The roll from -9 to +9 deg makes the balloon sway: the horizon rolls fastest through level around mid-take while the 4 m push moves most (v 0.4-0.6, t3-t8), balloon centred and LOS clear every row, so the centred window carries the sway and drops the near-static ends."
+  },
+  {
+   "id": "ayan-baqur.05",
+   "takeSec": 14.75,
+   "keep": [
+    1,
+    12
+   ],
+   "anchor": 5.5,
+   "peakSec": 6,
+   "minSec": 4.5,
+   "idealSec": 7,
+   "reason": "The panorama sweep from the giant tree canopies (h 193, t2) through the low sun, sea and dome to the west (h 257-318, t5-t7) and on to the northern hills (h 381, t9) at the fastest yaw rate (~30 deg/s); the window keeps that run of landmarks and drops the slow ease-in/out ends (LOS clear, nothing within 24 m)."
+  },
+  {
+   "id": "wai-jhou.01",
+   "takeSec": 16.083333,
+   "keep": [
+    2,
+    16.08
+   ],
+   "anchor": 10,
+   "peakSec": 10,
+   "minSec": 4.5,
+   "idealSec": 7.6,
+   "reason": "The run down the gorge onto the lake: at constant 9.5 m/s the drone banks with the river (h 169 -> 156, t4-t11) as the banks fall away (nearest 14 -> 62 m by t12) and the lake and pagoda open ahead; the window spans the bank out of the gorge into the lake reveal, dropping the near-bank start."
+  },
+  {
+   "id": "wai-jhou.02",
+   "takeSec": 11.333333,
+   "keep": [
+    1,
+    11
+   ],
+   "anchor": 6.2,
+   "peakSec": 5.8,
+   "minSec": 4,
+   "idealSec": 5.7,
+   "reason": "The fixed-head truck across the pagoda's south face: at peak speed (v 4.2-4.7, t4-t7) the tiers slide through frame centre (ndc x 0.23 -> -0.19, centred at ~t5.8) over the lake foreground (100 % water); LOS hits are the pagoda itself, so the window sits on that crossing, leaning slightly late toward the emerging lantern pier."
+  },
+  {
+   "id": "wai-jhou.03",
+   "takeSec": 10,
+   "keep": [
+    1,
+    9
+   ],
+   "anchor": 4.9,
+   "peakSec": 4.5,
+   "minSec": 4,
+   "idealSec": 5,
+   "reason": "Must contain the focus pull (at 0.45 x 10 = 4.5 s, pullSec 2.2 -> 3.4-5.6 s; rows show focus 11.5 at t3, 16.5 at t4, 35.1 at t5, 39.8 at t6): the window holds ~1 s on the sharp nearest lantern, the rack down the pier, and ~1.5-2 s on the sharp pagoda."
+  },
+  {
+   "id": "wai-jhou.04",
+   "takeSec": 9.375,
+   "keep": [
+    0.5,
+    9.375
+   ],
+   "anchor": "center",
+   "peakSec": 4.7,
+   "minSec": 3.5,
+   "idealSec": 4.7,
+   "reason": "A locked worm's-eye straight up the blue tree's trunk into the canopy with a slow 25 deg spin: every row is identical (subject ndc [0,-0.16], LOS clear, nearest 5.9 m), so the centred window keeps the middle of the spin."
+  },
+  {
+   "id": "wai-jhou.05",
+   "takeSec": 17.958333,
+   "keep": [
+    4,
+    17.958
+   ],
+   "anchor": 12,
+   "peakSec": 13,
+   "minSec": 5,
+   "idealSec": 8.6,
+   "reason": "The expanding pull-back: from t8 (statue 19 m, passing 8 m from the portal) the dolly accelerates to 10.6 m/s (t13-t14) rising to z 20 as the portal, lake, pagoda with its pier and the obsidian spires open around the statue (subject 19 -> 87 m, centred, LOS clear); the window drops the near-static first 4-7 s and the final settle."
+  },
+  {
+   "id": "candeth-keep.01",
+   "takeSec": 14.5,
+   "keep": [
+    1.5,
+    14.5
+   ],
+   "anchor": "center",
+   "peakSec": 7,
+   "minSec": 4.5,
+   "idealSec": 6.9,
+   "reason": "Constant 9.5 m/s run up the moat ravine with the cliff and fortress wall towering on the right: the middle stretch (t4-t10) is where the ravine is tightest (palms 8.7-10.9 m below/beside the line) and the walls slide past fastest relative to frame, so the centred window takes it, dropping the spool-up and the AGL jump at t1-t2."
+  },
+  {
+   "id": "candeth-keep.02",
+   "takeSec": 16.375,
+   "keep": [
+    2,
+    16.375
+   ],
+   "anchor": 10,
+   "peakSec": 10.6,
+   "minSec": 4.5,
+   "idealSec": 8.2,
+   "reason": "A constant 5.3 m/s orbit with the Tumerok tree centred every row (LOS 'blocked' only by its own tree-house platform): the camera passes due west of the tree (bearing ~270) at ~t10.6 with the afternoon sun behind it, front-lighting the tree, portal and walls, so the window is centred on that best-lit stretch."
+  },
+  {
+   "id": "candeth-keep.03",
+   "takeSec": 10.041667,
+   "keep": [
+    1,
+    9
+   ],
+   "anchor": 4.8,
+   "peakSec": 4.52,
+   "minSec": 4.5,
+   "idealSec": 5,
+   "reason": "Must contain the focus pull (at 0.45 x 10.04 = 4.52 s, pullSec 2.5 -> 3.27-5.77 s; rows show focus 12.5 at t3, 21.7 at t4, 49.2 at t5, 59 at t6): the window opens ~1 s on the sharp fountain spray, racks to the great tree and Life Stone and holds ~1.5 s on them (LOS 'blocked' only by the tree itself, the subject)."
+  },
+  {
+   "id": "candeth-keep.04",
+   "takeSec": 9.916667,
+   "keep": [
+    0.5,
+    9.9
+   ],
+   "anchor": "center",
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5,
+   "reason": "Low-angle hold on the gatehouse arch and corner tower with a 2 m push: framing is identical every row (ndc [0,0], LOS 'blocked' only by the gatehouse itself, the subject), so the centred window keeps the part where the push is moving (v 0.3, t3-t7)."
+  },
+  {
+   "id": "candeth-keep.05",
+   "takeSec": 16.333333,
+   "keep": [
+    1,
+    15.6
+   ],
+   "anchor": "center",
+   "peakSec": 8.3,
+   "minSec": 4.5,
+   "idealSec": 7.8,
+   "reason": "Straight-down plan view of the square keep: the rise (210 -> 250 m) and 30 deg image turn move fastest t5-t11 (v 3.1-3.8) with the great tree dead centre and LOS clear every row, so the centred window keeps the visibly turning middle, dropping the ease-in/out."
+  },
+  {
+   "id": "qalabar.01",
+   "takeSec": 13.541667,
+   "keep": [
+    3.5,
+    13.54
+   ],
+   "anchor": 9,
+   "peakSec": 9.5,
+   "minSec": 4.5,
+   "idealSec": 6.4,
+   "reason": "The tilt-up reveal: the lens is on the forest canopy at t4-5 (pitch -66..-60), the domed village enters the top of frame at t6 (ndc y 0.97) and reaches centre at t10, and the horizon with the Linvak foothills rises in from t9 (pitch -29 -> -12); the window keeps ~1 s of canopy and ends on the -14 deg vista."
+  },
+  {
+   "id": "qalabar.02",
+   "takeSec": 13.166667,
+   "keep": [
+    1.5,
+    12
+   ],
+   "anchor": 6.8,
+   "peakSec": 6.6,
+   "minSec": 4.5,
+   "idealSec": 6.6,
+   "reason": "Must contain the boomerang turnaround: in at 8 m/s (t3, 43 m out), the zero-velocity stop 24 m from the church tower at t6.6, then the climbing retreat at up to 10.3 m/s (t10), tower centred and LOS clear every row; centred on the turnaround so the single in-out gesture and both scales survive."
+  },
+  {
+   "id": "qalabar.03",
+   "takeSec": 10.75,
+   "keep": [
+    1.5,
+    10.75
+   ],
+   "anchor": 6.5,
+   "peakSec": 7,
+   "minSec": 4,
+   "idealSec": 5.4,
+   "reason": "The dolly-out reveal: from t3 (statue 10 m, still the full figure) the move accelerates to 7.4 m/s (t7-t8) as the plaza, portal, domes and church tower open up (subject 10 -> 44 m by t9, centred, LOS clear); the window drops the near-static first 3 s and the final settle."
+  },
+  {
+   "id": "qalabar.04",
+   "takeSec": 12.333333,
+   "keep": [
+    1,
+    11.5
+   ],
+   "anchor": 6.2,
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 6.2,
+   "reason": "The parallax slide past the Life Stone: the slide is fastest t4-t8 (v 1.5-1.8) as the stone crosses frame centre (ndc x -0.15 -> +0.13, centred at t6) while the domes drift behind at a different rate, LOS clear every row; the window is centred on that crossing."
+  },
+  {
+   "id": "qalabar.05",
+   "takeSec": 14.541667,
+   "keep": [
+    0.5,
+    14.54
+   ],
+   "anchor": "center",
+   "peakSec": 7.3,
+   "minSec": 4,
+   "idealSec": 6.9,
+   "reason": "Hyperlapse arc at a constant 2.1 m/s with the village centred and LOS clear every row while the sky clock runs (clouds racing over the domes and foothills): every stretch carries the idea equally, so the centred window is used."
+  },
+  {
+   "id": "khayyaban.01",
+   "takeSec": 14.791667,
+   "keep": [
+    1,
+    13
+   ],
+   "anchor": 6.5,
+   "peakSec": 5.5,
+   "minSec": 5,
+   "idealSec": 7,
+   "reason": "The boom up out of the sunken pit: the old well (water frame, bucket) is still in frame at t2-t3 (ndc y -0.26..-0.6) and drops out the bottom at t4, as the lens rises fastest (v 3.8-5.0, AGL 10 -> 39 by t10) past the pit rim and the terraced town, domes and ridge rise into view; the window spans well-to-reveal and drops the slow lift-off and the top settle."
+  },
+  {
+   "id": "khayyaban.02",
+   "takeSec": 11.916667,
+   "keep": [
+    1,
+    11
+   ],
+   "anchor": "center",
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 6,
+   "reason": "The 70 deg arc round the skeleton statue: the sweep is fastest t3-t9 (v 1.6-2.2, h 255 -> 305) with the statue locked centre (ndc [0,-0.13]) and LOS clear while the portal, lanterns, dome and terraces turn behind, so the centred window keeps the moving middle."
+  },
+  {
+   "id": "khayyaban.03",
+   "takeSec": 12.208333,
+   "keep": [
+    1,
+    11.5
+   ],
+   "anchor": 6.5,
+   "peakSec": 6.5,
+   "minSec": 4,
+   "idealSec": 6.1,
+   "reason": "The pedestal rise beside the Life Stone: the lens climbs fastest t4-t9 (v 1.0-1.3, AGL 4.7 -> 10.7, pitch -16 -> -42) holding the stone on the left third (ndc x -0.32..-0.24, LOS clear) as the road and pit open below, so the window rides that rise and drops the slow start and settle."
+  },
+  {
+   "id": "khayyaban.04",
+   "takeSec": 13.125,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "anchor": 7.5,
+   "peakSec": 7,
+   "minSec": 4.5,
+   "idealSec": 6.6,
+   "reason": "The postcard zoom: magnification is fastest t3-t11 (fov 45 -> 22) as the frame closes from the whole terraced town onto the statue, domes and rooftop gardens (subject in frame, LOS clear every row); the window keeps that travel and drops the near-static first and last seconds."
+  },
+  {
+   "id": "khayyaban.05",
+   "takeSec": 11.75,
+   "keep": [
+    1,
+    11
+   ],
+   "anchor": 5.875,
+   "peakSec": 5.875,
+   "minSec": 4.5,
+   "idealSec": 5.5,
+   "reason": "Must contain the barrel roll: flipAt 0.5 x 11.75 = 5.875 s with a 3 s flip -> 4.4-7.4 s (the 3 m pop-up shows at t5-t6, AGL 17.5 -> 18.2); the window gives ~1.3 s of the run toward the Life Stone before the roll and ~1.2 s of level flight after it (LOS clear, nearest >= 11 m in that stretch)."
+  },
+  {
+   "id": "uziz.01",
+   "takeSec": 14.083333,
+   "keep": [
+    1.5,
+    13
+   ],
+   "anchor": 8,
+   "peakSec": 8,
+   "minSec": 4.5,
+   "idealSec": 6.6,
+   "reason": "The low pass up the canal: the subject point on the water slides under the lens at t7 (ndc y -0.4 at t6 -> below frame) while the domed town on its terrace comes abeam on the right at ~t8.5, 100 % over water and LOS clear; the window is centred on that pass-and-abeam moment."
+  },
+  {
+   "id": "uziz.02",
+   "takeSec": 13.583333,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "anchor": 7,
+   "peakSec": 7,
+   "minSec": 4.5,
+   "idealSec": 6.8,
+   "reason": "The fixed-head truck along the east row: at peak speed (v 6.8-7.4, t5-t8) the octagon tower and shops cross frame centre (subject ndc x 0.78 -> -0.53, centred at t7) with the fire bowl in the gap and the west-row domes behind, LOS clear; the window takes that full-facade middle."
+  },
+  {
+   "id": "uziz.03",
+   "takeSec": 11.208333,
+   "keep": [
+    1,
+    11.208
+   ],
+   "anchor": 5.8,
+   "peakSec": 2,
+   "minSec": 6,
+   "idealSec": 7.5,
+   "reason": "Must contain the dive: the tip-over at the pillar's west edge (pitch -10 -> -42 at t1-t2), the -46 deg run down the face at 15.8 m/s (t3-t8) and the start of the pull-out (AGL 12 at t9, pitch -20 at t10); the move from crest to pull-out spans ~9 s, so it is kept at 0.67x, the shortest that still crests and dives (only the summit run-up and the final level-off go)."
+  },
+  {
+   "id": "uziz.04",
+   "takeSec": 10.25,
+   "keep": [
+    0.5,
+    10
+   ],
+   "anchor": "center",
+   "peakSec": 5,
+   "minSec": 3.5,
+   "idealSec": 5.1,
+   "reason": "Static two-shot of the skeleton statue and the portal swirl with a 4 deg drift: framing and LOS are constant every row (statue ndc [0.70..0.73, 0.08], LOS clear, bind stone >= 4.2 m), so the centred window is the most balanced."
+  },
+  {
+   "id": "uziz.05",
+   "takeSec": 15.166667,
+   "keep": [
+    2,
+    15
+   ],
+   "anchor": 9,
+   "peakSec": 9,
+   "minSec": 5,
+   "idealSec": 7.2,
+   "reason": "The dronie's expanding reveal: from t5 (statue 32 m) the pull-back runs at its fastest (v 7.1-8.2, t5-t10) rising to AGL 47 by t12 as the great tree, church tower, domes, canal and ridge open around the centred statue (LOS clear); the window spans that opening and drops the slow close start and the final settle."
+  },
+  {
+   "id": "al-arqas.01",
+   "takeSec": 13.25,
+   "keep": [
+    3.5,
+    13.25
+   ],
+   "anchor": 9.75,
+   "peakSec": 9.5,
+   "minSec": 4.5,
+   "idealSec": 6.2,
+   "reason": "The skim over the dune crest between the church tower (nearest 17.8 m at t6) and the rooftop-garden house (14-15 m at t8-t12) at full 8.2 m/s, cresting at t6-t8 (pitch -13), then easing to the hover on the bowl rim looking down into the oasis; the window spans crest pass to rim view, dropping the spool-up on the open dunes."
+  },
+  {
+   "id": "al-arqas.02",
+   "takeSec": 13.833333,
+   "keep": [
+    2.5,
+    13.83
+   ],
+   "anchor": 9,
+   "peakSec": 10,
+   "minSec": 4.5,
+   "idealSec": 6.9,
+   "reason": "The dolly-in reads strongest in its second half: from t5 (spring 31 m) the lens closes to 18.5 m (t12) as the candle ring, ferns and crystal pool grow to fill the frame (centred, LOS clear every row); the window keeps that closing stretch and drops the slow wide start."
+  },
+  {
+   "id": "al-arqas.03",
+   "takeSec": 12.166667,
+   "keep": [
+    0.5,
+    12.1
+   ],
+   "anchor": 6,
+   "peakSec": 6,
+   "minSec": 4,
+   "idealSec": 6.1,
+   "reason": "Constant 5.1 m/s half orbit with the gromnie statue centred and LOS clear every row: the camera passes due west of the statue at ~t6 with the late-afternoon western sun behind it, front-lighting the statue as the spring, palm and domes wheel behind, so the window is centred there."
+  },
+  {
+   "id": "al-arqas.04",
+   "takeSec": 12.083333,
+   "keep": [
+    2,
+    12
+   ],
+   "anchor": 7,
+   "peakSec": 8,
+   "minSec": 4.5,
+   "idealSec": 6,
+   "reason": "The god's-eye pull-up: the climb is fastest t4-t9 (v 7.2-8.3, AGL 30 -> 68) while the candle ring is still a readable circle at the start and shrinks into the oasis bowl and dunes by the end (centred, LOS clear); the window keeps that shrink and drops the slow lift-off and the top settle."
+  },
+  {
+   "id": "al-arqas.05",
+   "takeSec": 12.666667,
+   "keep": [
+    2,
+    12.666
+   ],
+   "anchor": 8,
+   "peakSec": 8,
+   "minSec": 4,
+   "idealSec": 5.9,
+   "reason": "Locked-off time-lapse: every row is the same frame (oasis centred, LOS clear, nothing within 35.8 m) while clouds race and the sun sinks 48 -> 33 deg; the window sits in the later half where the dune shadows have stretched furthest toward the church tower."
+  },
+  {
+   "id": "yaraq.01",
+   "takeSec": 13.833333,
+   "keep": [
+    1,
+    9.2
+   ],
+   "anchor": 6.5,
+   "peakSec": 7,
+   "minSec": 4.5,
+   "idealSec": 6.5,
+   "reason": "The fly-by: closest approach to the fishing hut at t7 (44.1 m) with the fastest yaw (h 71 -> 111, t5-t9) whipping the hut through centre while the pier end streaks past 4-5 m away (t6-t8); keep ends at t9.2 because the fishing sign blocks LOS from t9.2-t12.5."
+  },
+  {
+   "id": "yaraq.02",
+   "takeSec": 15.375,
+   "keep": [
+    1,
+    14
+   ],
+   "anchor": "center",
+   "peakSec": 7.5,
+   "minSec": 4.5,
+   "idealSec": 7.7,
+   "reason": "The parallax slide past the pools and statue pillar: fastest t5-t10 (v 2.3-2.7) as the pillar crosses frame centre (ndc x -0.28 -> +0.24, centred at ~t7.5) with the pools sliding through the foreground and the domes gliding behind (LOS clear); the window is centred on that crossing and keeps the water in frame."
+  },
+  {
+   "id": "yaraq.03",
+   "takeSec": 12.208333,
+   "keep": [
+    0.5,
+    12
+   ],
+   "anchor": "center",
+   "peakSec": 6,
+   "minSec": 3.5,
+   "idealSec": 6.1,
+   "reason": "Static over-the-shoulder on the Life Stone with the Inner Sea beyond: framing is constant every row (Life Stone on the right third, ndc [0.32,-0.01]; LOS 'blocked' only by the statue's own shoulder emitter, by design), so the centred window is the most balanced."
+  },
+  {
+   "id": "yaraq.04",
+   "takeSec": 12.291667,
+   "keep": [
+    1,
+    11.5
+   ],
+   "anchor": 5.5,
+   "peakSec": 5.5,
+   "minSec": 4,
+   "idealSec": 6.1,
+   "reason": "The vertigo: fov collapses fastest 55 -> 28 deg between t2 and t9 (dolly v 3.1-6.3 m/s) while the spire tower holds its size dead centre and the plains and sky swell behind (LOS clear); the window drops the slow ease-in and the stall at 25 deg."
+  },
+  {
+   "id": "yaraq.05",
+   "takeSec": 10.833333,
+   "keep": [
+    1,
+    10.8
+   ],
+   "anchor": 6,
+   "peakSec": 6,
+   "minSec": 3.5,
+   "idealSec": 5,
+   "reason": "Handheld push on the bonfire (flame hero effect): the flames sit dead centre every row (ndc [0,0], LOS clear) under a constant gentle shake, so the window sits slightly late in the 1 m push where the fire is closest and fills more of the frame."
+  }
+ ]
+}

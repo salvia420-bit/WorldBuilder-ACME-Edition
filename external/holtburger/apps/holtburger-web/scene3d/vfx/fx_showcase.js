@@ -64,6 +64,7 @@ import { fxTier1Enabled } from "./fx_tier1.js";
 import { addFxDecal, releaseFxDecal } from "./fx_decals.js";
 import { fxDistortSwirlNear } from "./fx_distort.js";
 import { fxEmitterLightNear } from "./fx_lights.js";
+import { fxNowMs } from "../fx_clock.js";
 import { registerLateFxSource, registerFxGlowExtras } from "../particles_over_clouds.js";
 import {
   lifestoneFxEnabled,
@@ -560,7 +561,7 @@ export function fxColumnEnvelope(ageSec) {
 export function fireFxShowcaseCue(look, rootWorld, nowMs) {
   if (look !== "levelUp" || !rootWorld || !fxTier2Enabled("fxShowcase")) return false;
   if (!Number.isFinite(rootWorld.x) || !Number.isFinite(rootWorld.y) || !Number.isFinite(rootWorld.z)) return false;
-  const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
   while (_bursts.length >= 4) _bursts.shift();
   _bursts.push({ t0: now, pos: new THREE.Vector3(rootWorld.x, rootWorld.y, rootWorld.z), color: LEVELUP_GOLD.slice(), seed: Math.random() });
   return true;
@@ -571,7 +572,7 @@ export function fireFxShowcaseCue(look, rootWorld, nowMs) {
  * write every live piece into the instanced billboard.
  */
 export function tickFxShowcase(scene3d, nowMs) {
-  const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
   const on = fxTier2Enabled("fxShowcase");
   if (!on) {
     if (_pieces.size) { for (const p of _pieces.values()) if (p.ring) releaseFxDecal(p.ring); _pieces.clear(); }

@@ -1,0 +1,131 @@
+{
+ "name": "West Shoushi Outpost",
+ "title": "West Shoushi Outpost",
+ "siteId": "poi-west-shoushi-outpost",
+ "summary": "The still-working starter outpost west of Shoushi on a small ridge: a 25 m tower with green crown lights, a 31 m stone tower, the outpost house of Nen Gou, a Life Stone and a well.",
+ "landmarks": [
+  {
+   "name": "Hilltop tower",
+   "pos": [
+    41196.0,
+    16404.0,
+    52.0
+   ],
+   "heightM": 24.8,
+   "note": "0x010014C3 with green crown lights."
+  },
+  {
+   "name": "Stone tower",
+   "pos": [
+    41148.0,
+    16356.0,
+    52.0
+   ],
+   "heightM": 30.8,
+   "note": "0x01001117."
+  },
+  {
+   "name": "Outpost house and Life Stone",
+   "pos": [
+    41241.0,
+    16410.0,
+    44.0
+   ],
+   "heightM": 10.0,
+   "note": "0x01000C87, Life Stone, well, Nen Gou the Shopkeeper."
+  }
+ ],
+ "site": {
+  "id": "poi-west-shoushi-outpost",
+  "name": "West Shoushi Outpost",
+  "gazetteerId": "life-stone-near-shoushi-d655",
+  "teleport": "@teleloc 0xD6550034 151.276 81.7088 44.005 -0.125403 0 0 0.992106",
+  "anchor": [
+   41210.0,
+   16400.0,
+   48.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.77,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-shoushi-d655."
+ },
+ "insertAfter": "sawato",
+ "insertBefore": "shoushi",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -33.6,
+   "ew": 69.7
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 745,
+  "coveredBy": "site:shoushi",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/West_Shoushi_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-west-shoushi-outpost.01",
+   "site": "poi-west-shoushi-outpost",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 11,
+    "inSec": 4.4
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     3.2,
+     10.8
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41196.0,
+     16404.0,
+     52.0
+    ],
+    "height": 24.8,
+    "radius": 8
+   },
+   "params": {
+    "startPitchDeg": -50,
+    "endPitchDeg": -4,
+    "heightAGL": 18,
+    "distance": 105,
+    "drift": 6,
+    "bearingDeg": 82,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover 18 m above the hilltop level 105 m east of West Shoushi Outpost and tilt up from the slope to its two towers against the low western sun, drifting 6 m; nothing is within 18 m.",
+   "notes": "Silhouette reveal: from the slope east of the outpost the tilt rises past the Life Stone and house to the hilltop tower and the 31 m stone tower dark against the low golden western sun; the subject is below frame for the first part of the take by design (tilt reveal), in frame 96% of the window. Verified (check.mjs, full take flown): take 0-11 s: AGL 30.53..32.4 m, nearest drawn 18.02 m (scenery-default 0x02000258@41312,16425), vmax 0.86 m/s, LOS blocked 0/45, subject in frame 58%; edit 4.4-10.4 s: AGL 30.55..31.8 m, nearest drawn 18.78 m (scenery-default 0x02000258@41312,16425), vmax 0.86 m/s, LOS blocked 0/24, subject in frame 96%; flight cinema peak 0.86 m/s (cap 12), max tracking gap 0.01 m."
+  }
+ ],
+ "verification": {
+  "poi-west-shoushi-outpost.01": "take 0-11 s: AGL 30.53..32.4 m, nearest drawn 18.02 m (scenery-default 0x02000258@41312,16425), vmax 0.86 m/s, LOS blocked 0/45, subject in frame 58%; edit 4.4-10.4 s: AGL 30.55..31.8 m, nearest drawn 18.78 m (scenery-default 0x02000258@41312,16425), vmax 0.86 m/s, LOS blocked 0/24, subject in frame 96%; flight cinema peak 0.86 m/s (cap 12), max tracking gap 0.01 m"
+ }
+}

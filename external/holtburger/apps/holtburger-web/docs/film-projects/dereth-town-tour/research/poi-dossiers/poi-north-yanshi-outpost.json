@@ -1,0 +1,192 @@
+{
+ "name": "North Yanshi Outpost",
+ "title": "North Yanshi Outpost",
+ "siteId": "poi-north-yanshi-outpost",
+ "summary": "A starter outpost on a small hilltop north-east of Yanshi: the spire-roofed outpost house with a lantern, a 28 m Empyrean tower with green crown lights, Life Stones with their sign and a stone hall with pillars. At the hill's western foot (240 m) a ring of fifteen settlement portals stands in the grass.",
+ "landmarks": [
+  {
+   "name": "Empyrean tower",
+   "pos": [
+    35676.0,
+    22116.0,
+    40.0
+   ],
+   "heightM": 27.9,
+   "note": "0x01002866, green crown lights at z 63.8."
+  },
+  {
+   "name": "Outpost house",
+   "pos": [
+    35652.0,
+    22092.0,
+    40.0
+   ],
+   "heightM": 10.5,
+   "note": "0x01000DDA spire roof with a lantern on top."
+  },
+  {
+   "name": "Life Stones",
+   "pos": [
+    35671.3,
+    22096.0,
+    40.0
+   ],
+   "heightM": 3.5,
+   "note": "Two Life Stones and the LIFESTONES SIGN."
+  },
+  {
+   "name": "Settlement portal ring",
+   "pos": [
+    35433.0,
+    21995.0,
+    18.0
+   ],
+   "heightM": 3.5,
+   "note": "Fifteen settlement portals in a 50 m ring at the hill's western foot."
+  }
+ ],
+ "site": {
+  "id": "poi-north-yanshi-outpost",
+  "name": "North Yanshi Outpost",
+  "gazetteerId": "life-stone-near-yanshi-b973",
+  "teleport": "@teleloc 0xB9730031 151.326 15.9557 40.005 0.389077 0 0 -0.921205",
+  "anchor": [
+   35660.0,
+   22095.0,
+   40.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.5,
+   "grade": "neutral"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-yanshi-b973 (outpost Life Stone on the hilltop); shot .02 frames the settlement-portal ring 240 m west at the hill's foot."
+ },
+ "insertAfter": "yanshi",
+ "insertBefore": "sawato",
+ "acpedia": {
+  "categories": [
+   "Southeast POI"
+  ],
+  "map": {
+   "ns": -9.9,
+   "ew": 46.6
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 1116,
+  "coveredBy": "shot:yanshi.01",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/North_Yanshi_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-north-yanshi-outpost.01",
+   "site": "poi-north-yanshi-outpost",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 9,
+    "inSec": 1.5
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     8.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "EWS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35664.0,
+     22100.0,
+     40.0
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 215,
+    "azimuthRef": "compass",
+    "distance": 115,
+    "heightM": 22,
+    "driftDeg": 12,
+    "pushPct": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang 115 m south-west of the North Yanshi Outpost hill, 22 m above its top, and drift 12 degrees clockwise while closing 8 percent; stay 20 m above the trees.",
+   "notes": "Wide establishing view of the starter outpost on its hilltop: the 28 m Empyrean tower with green crown lights, the spire-roofed outpost house with its lantern and the Life Stones; noon sun from behind-left. Verified (check.mjs, full take flown): take 0-9 s: AGL 25.97..28 m, nearest drawn 20.54 m (scenery-default 0x02000246@35580,22029), vmax 4.35 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 26.21..28 m, nearest drawn 21.41 m (scenery-default 0x02000246@35580,22029), vmax 4.35 m/s, LOS blocked 0/25, subject in frame 100%."
+  },
+  {
+   "id": "poi-north-yanshi-outpost.02",
+   "site": "poi-north-yanshi-outpost",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 10,
+    "inSec": 2
+   },
+   "window": {
+    "minSec": 4.5,
+    "idealSec": 6,
+    "keep": [
+     1,
+     9.5
+    ],
+    "anchor": "center"
+   },
+   "rank": 2,
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35433.0,
+     21995.0,
+     18.0
+    ],
+    "height": 3.5,
+    "radius": 6
+   },
+   "params": {
+    "heightAGL": 62,
+    "rotateDeg": -45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang 62 m straight above the ring of fifteen settlement portals at the foot of the outpost hill and turn the image 45 degrees counter-clockwise; nothing is within 55 m.",
+   "notes": "Map-like nadir over the ring of fifteen settlement portals at the western foot of the outpost hill (pitch -88 so the swirls do not spin at exact nadir) - a ring of portal particles 50 m across. Verified (check.mjs, full take flown): take 0-10 s: AGL 62..62 m, nearest drawn 55.02 m (scenery-default 0x020007A3@35435,21987), vmax 0.17 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 62..62 m, nearest drawn 55.02 m (scenery-default 0x020007A3@35435,21987), vmax 0.17 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.17 m/s (cap 12), max tracking gap 0 m."
+  }
+ ],
+ "verification": {
+  "poi-north-yanshi-outpost.01": "take 0-9 s: AGL 25.97..28 m, nearest drawn 20.54 m (scenery-default 0x02000246@35580,22029), vmax 4.35 m/s, LOS blocked 0/37, subject in frame 100%; edit 1.5-7.5 s: AGL 26.21..28 m, nearest drawn 21.41 m (scenery-default 0x02000246@35580,22029), vmax 4.35 m/s, LOS blocked 0/25, subject in frame 100%",
+  "poi-north-yanshi-outpost.02": "take 0-10 s: AGL 62..62 m, nearest drawn 55.02 m (scenery-default 0x020007A3@35435,21987), vmax 0.17 m/s, LOS blocked 0/41, subject in frame 100%; edit 2-8 s: AGL 62..62 m, nearest drawn 55.02 m (scenery-default 0x020007A3@35435,21987), vmax 0.17 m/s, LOS blocked 0/25, subject in frame 100%; flight cinema peak 0.17 m/s (cap 12), max tracking gap 0 m"
+ }
+}

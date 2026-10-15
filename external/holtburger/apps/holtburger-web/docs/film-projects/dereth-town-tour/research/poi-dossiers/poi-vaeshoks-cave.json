@@ -1,0 +1,144 @@
+{
+ "name": "Vaeshok's Cave (surface shrine)",
+ "title": "Vaeshok's Cave",
+ "siteId": "poi-vaeshoks-cave",
+ "summary": "Vaeshok's Cave on Dark Isle holds Sclavus Acolytes of T'thuun and the Ruschk Vaeshok; the cave itself is a dungeon. At the map point the kit shows its surface shrine on an obsidian hilltop (z 104): the same mossy round spire structure (0x01003D10, 18.4 m) with the red-purple Black Spear Ice Totem (7.9 m) inside, two skeleton figures on spear pedestals and golden scraps around it, Black Coral and coral golems on the slopes. Only the exterior is filmed.",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 86.9,
+   "ew": 59.7
+  },
+  "mapWorld": [
+   38796.0,
+   45324.0
+  ],
+  "coordSrc": "mapPoint",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/Vaeshok_s_Cave.txt",
+  "coveredDistM": 1610,
+  "coveredBy": "shot:merwart-village.03"
+ },
+ "landmarks": [
+  {
+   "name": "Shrine spire",
+   "pos": [
+    38796.0,
+    45324.0,
+    104.0
+   ],
+   "heightM": 18.4,
+   "note": "0x01003D10."
+  },
+  {
+   "name": "Black Spear Ice Totem",
+   "pos": [
+    38791.9,
+    45326.9,
+    106.0
+   ],
+   "heightM": 7.9,
+   "note": "0x020015E5, inside the spire's ring."
+  },
+  {
+   "name": "Skeleton figures on pedestals",
+   "pos": [
+    38806.4,
+    45334.4,
+    104.0
+   ],
+   "heightM": 2.8,
+   "note": "0x020014FA and 0x020014C5."
+  }
+ ],
+ "site": {
+  "id": "poi-vaeshoks-cave",
+  "name": "Vaeshok's Cave (surface shrine)",
+  "teleport": "@teleloc 0xCAEB0008 16.0 170.0 96.3 1 0 0 0",
+  "anchor": [
+   38796.0,
+   45324.0,
+   104.0
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.48,
+   "grade": "neutral"
+  }
+ },
+ "insertAfter": "merwart-village",
+ "insertBefore": "neydisa-castle",
+ "insertNote": "Kept the batch's route position (chapter ch2).",
+ "shots": [],
+ "verification": [
+  {
+   "shot": "poi-vaeshoks-cave.01",
+   "technique": "classic.worms-eye",
+   "rank": 3,
+   "check": "take 7s: AGL 0.75..0.8 m, nearest 7.99 m (static 0xCAEC#7 0x020003CC), vmax 0 m/s, LOS blocked 0/29, in frame 100%, water 0%; edit 1-6s: AGL 0.75..0.8 m, nearest 7.99 m, LOS blocked 0/21, in frame 100%, water 0%"
+  }
+ ],
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-scratch/batch-1.json",
+ "totalEditSec": 5,
+ "techniques": [
+  "classic.worms-eye"
+ ],
+ "criticRemovedShots": [
+  {
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 5
+   },
+   "trim": {
+    "takeSec": 7,
+    "inSec": 1
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 5,
+    "keep": [
+     0.5,
+     7
+    ],
+    "anchor": "center"
+   },
+   "rank": 3,
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38796.0,
+     45324.0,
+     104.0
+    ],
+    "height": 18.4,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 175,
+    "azimuthRef": "compass",
+    "heightM": 0.75,
+    "horizontalM": 18,
+    "spinDeg": 8
+   },
+   "standingOrder": "Hold the lens 0.75 m above the obsidian ground 18 m south of the shrine spire and look steeply up at it with a slight 8 deg roll; nothing within 8 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vaeshok's Cave on Dark Isle: on the hilltop above the cave stands the same mossy round spire with the red-purple Black Spear Ice Totem inside and skeleton figures on spear pedestals; the worm's-eye makes it loom against the sky. Exterior only (the cave itself is a dungeon). Verified with poi-kit check.mjs - take 7s: AGL 0.75..0.8 m, nearest 7.99 m (static 0xCAEC#7 0x020003CC), vmax 0 m/s, LOS blocked 0/29, in frame 100%, water 0%; edit 1-6s: AGL 0.75..0.8 m, nearest 7.99 m, LOS blocked 0/21, in frame 100%, water 0%.",
+   "criticReason": "Duplicate view: the subject is the same mossy round spire model 0x01003D10 that poi-the-deep-dark-isle.01 orbits in the very next shot (edit 686.9 s then 692.1 s) and that poi-the-deep-vissidal.01 shows 37 s earlier; the cave itself (a dungeon) is not visible. Rank 3."
+  }
+ ],
+ "criticNotes": [
+  "critic b0-3 (2026-10-15): removed classic.worms-eye: Duplicate view: the subject is the same mossy round spire model 0x01003D10 that poi-the-deep-dark-isle.01 orbits in the very next shot (edit 686.9 s then 692.1 s) and that poi-the-deep-vissidal.01 shows 37 s earlier; the cave itself (a dungeon) is not visible. Rank 3."
+ ]
+}

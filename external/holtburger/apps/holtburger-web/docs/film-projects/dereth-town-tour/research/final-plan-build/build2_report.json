@@ -1,0 +1,7986 @@
+{
+ "out": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/final-plan-build/plan-v2.json",
+ "shots": 546,
+ "v1Shots": 270,
+ "newShots": 274,
+ "sites": 212,
+ "newSites": 155,
+ "units": 210,
+ "lambda": 1.0057,
+ "sumEdit": 3431.8333,
+ "song": 3431.8267,
+ "v1EditSec": 1769.7,
+ "newEditSec": 1662.2,
+ "meanLen": {
+  "v1": 6.55,
+  "new": 6.07
+ },
+ "minLen": 3.542,
+ "maxLen": 11.875,
+ "panPct": 3.75,
+ "energyScore": {
+  "pass1": 1329.0,
+  "final": 1352.2,
+  "estimatedGain": 67.7
+ },
+ "windowsOutsideKeep": [],
+ "anchors": {
+  "539.809": "poi-obsidian-span.01",
+  "1454.451": "plateau-village.01",
+  "2380.579": "samsur.01",
+  "2729.089": "poi-burun-fortress.01"
+ },
+ "tail": {
+  "portal": "egg-orchard-portal.01",
+  "run": "egg-orchard.run",
+  "runSec": 184.5
+ },
+ "excludedSites": [
+  {
+   "site": "poi-festival-stone-of-morningthaw",
+   "shots": 1,
+   "why": "third Festival Stone within 44 s of the Egmont coda (rank-3 arc)"
+  },
+  {
+   "site": "poi-mount-dalt",
+   "shots": 2,
+   "why": "six look-alike 224 m Alphus-range mesas back to back; the Syliph pano already frames Dalt's summit and its only shot circles a runtime-only portal swirl"
+  },
+  {
+   "site": "poi-mount-gemm",
+   "shots": 1,
+   "why": "same mesa run; the Syliph pano frames Gemm"
+  },
+  {
+   "site": "poi-south-yanshi-outpost",
+   "shots": 1,
+   "why": "same 28 m Empyrean outpost tower as North Yanshi 26 s earlier"
+  },
+  {
+   "site": "poi-tumerok-fort-511s-820w",
+   "shots": 1,
+   "why": "back-to-back twin of Tumerok Fort 45.2S"
+  },
+  {
+   "site": "poi-tumerok-outpost-19n-567w",
+   "shots": 1,
+   "why": "Tumerok-kit run (five kit sites within 50 s)"
+  },
+  {
+   "site": "poi-tumerok-outpost-90n-657w",
+   "shots": 1,
+   "why": "13 Tumerok-kit sites in the funeral march; a 3.58 s rack-focus whose pull began inside its dissolve"
+  },
+  {
+   "site": "poi-west-al-arqas-outpost",
+   "shots": 1,
+   "why": "same 28 m Empyrean outpost tower as North Al-Arqas 38 s earlier"
+  }
+ ],
+ "droppedForQuota": [
+  "poi-burun-fortress #4 fpv.fpv-proximity (rank 3)",
+  "poi-empyrean-ruins #3 drone.top-down (rank 3)",
+  "poi-drudge-fort #2 classic.low-angle (rank 3)",
+  "poi-precarious-sojourn #3 drone.top-down (rank 3)",
+  "poi-colier #2 drone.top-down (rank 3)",
+  "poi-humming-crystal #3 classic.worms-eye (rank 3)",
+  "poi-castle-of-baron-nuvillus #3 classic.arc (rank 3)",
+  "poi-chalicmere-castle #3 classic.pedestal (rank 3)",
+  "poi-tumerok-fort-97s-633w #3 classic.push-in (rank 3)",
+  "poi-tumerok-fort-123n-737w #3 classic.crane (rank 3)",
+  "poi-ancient-lugian-fortress #3 classic.time-lapse (rank 3)"
+ ],
+ "problems": [
+  "unit poi-castle-of-baron-nuvillus: minSec relaxed by 1.0 s to fit",
+  "unit poi-ithaenc-cathedral: minSec relaxed by 0.5 s to fit"
+ ],
+ "reorders": [
+  "swapped poi-hilltop-tower after poi-heartland (technique repeat across a cut)",
+  "swapped poi-festival-stone-of-dawnsong after poi-assassins-roost (technique repeat across a cut)",
+  "swapped poi-chapel-of-xi-ru after poi-high-mountain-valley (technique repeat across a cut)",
+  "poi-ancient-town: ['drone.spiral-descent', 'classic.truck'] -> ['classic.truck', 'drone.spiral-descent'] (technique repeat across a cut)",
+  "poi-ancient-town: ['drone.spiral-descent', 'classic.truck'] -> ['classic.truck', 'drone.spiral-descent'] (technique repeat across a cut)"
+ ],
+ "energyReorders": [
+  "energy: poi-festival-stone-of-evensong ['drone.pass-over', 'classic.pan'] -> ['classic.pan', 'drone.pass-over'] (+4.75)",
+  "energy: poi-fort-witshire ['drone.pass-over', 'classic.low-angle', 'drone.fly-by'] -> ['drone.fly-by', 'classic.low-angle', 'drone.pass-over'] (+0.27)",
+  "energy: poi-asherons-castle ['drone.orbit-poi', 'drone.rising-reveal', 'classic.worms-eye', 'drone.helix'] -> ['drone.orbit-poi', 'drone.rising-reveal', 'drone.helix', 'classic.worms-eye'] (+1.11)",
+  "energy: poi-temple-of-ncthail ['drone.terrain-skim', 'drone.orbit-poi', 'drone.top-down'] -> ['drone.terrain-skim', 'drone.top-down', 'drone.orbit-poi'] (+0.31)",
+  "energy: poi-shimena-keep ['classic.pan', 'drone.terrain-skim', 'drone.helix'] -> ['drone.terrain-skim', 'classic.pan', 'drone.helix'] (+0.22)",
+  "energy: poi-banderling-castle ['drone.orbit-poi', 'classic.low-angle'] -> ['classic.low-angle', 'drone.orbit-poi'] (+1.42)",
+  "energy: poi-corcima-castle ['drone.tilt-reveal', 'drone.pass-over', 'drone.fly-by', 'drone.spiral-descent'] -> ['drone.tilt-reveal', 'drone.fly-by', 'drone.spiral-descent', 'drone.pass-over'] (+0.79)",
+  "energy: poi-cataracts-of-sabella ['classic.pan', 'drone.terrain-skim', 'drone.pass-over', 'drone.rising-reveal'] -> ['drone.terrain-skim', 'drone.rising-reveal', 'drone.pass-over', 'classic.pan'] (+2.52)",
+  "energy: poi-lotila-lighthouse ['classic.tilt', 'drone.hyperlapse-orbit'] -> ['drone.hyperlapse-orbit', 'classic.tilt'] (+0.33)",
+  "energy: poi-gold-hill-ruins ['drone.helix', 'classic.birds-eye'] -> ['classic.birds-eye', 'drone.helix'] (+0.21)",
+  "energy: poi-tumerok-fort-31n-605w ['drone.helix', 'classic.low-angle'] -> ['classic.low-angle', 'drone.helix'] (+0.67)",
+  "energy: poi-shadow-march ['classic.roll', 'drone.orbit-poi', 'classic.worms-eye'] -> ['classic.roll', 'classic.worms-eye', 'drone.orbit-poi'] (+0.23)",
+  "energy: poi-mount-lethe ['drone.spiral-descent', 'classic.static', 'drone.fly-by'] -> ['classic.static', 'drone.spiral-descent', 'drone.fly-by'] (+0.25)",
+  "energy: poi-festival-stone-of-darktide ['classic.push-in', 'drone.terrain-skim'] -> ['drone.terrain-skim', 'classic.push-in'] (+0.19)",
+  "energy: poi-planetarium ['drone.orbit-poi', 'classic.low-angle'] -> ['classic.low-angle', 'drone.orbit-poi'] (+0.86)",
+  "energy: poi-caulcano ['classic.establishing', 'classic.low-angle', 'drone.spiral-descent'] -> ['classic.establishing', 'drone.spiral-descent', 'classic.low-angle'] (+0.70)",
+  "energy: poi-aias-tower ['drone.tilt-reveal', 'classic.worms-eye', 'drone.fly-by', 'drone.helix'] -> ['drone.tilt-reveal', 'drone.fly-by', 'drone.helix', 'classic.worms-eye'] (+0.84)",
+  "energy: poi-festival-stone-of-verdantine ['classic.arc', 'drone.vertigo-drone'] -> ['drone.vertigo-drone', 'classic.arc'] (+0.61)",
+  "energy: poi-nuhmudiras-mansion ['drone.orbit-poi', 'classic.worms-eye'] -> ['classic.worms-eye', 'drone.orbit-poi'] (+0.61)",
+  "energy: poi-festival-stone-of-foredawn ['drone.canyon-run', 'classic.low-angle', 'classic.dolly-zoom'] -> ['drone.canyon-run', 'classic.dolly-zoom', 'classic.low-angle'] (+1.39)",
+  "energy: poi-old-keep ['classic.tilt', 'drone.helix'] -> ['drone.helix', 'classic.tilt'] (+0.54)",
+  "energy: poi-deru-tree-of-degaralesh ['drone.helix', 'classic.worms-eye'] -> ['classic.worms-eye', 'drone.helix'] (+0.60)",
+  "energy: poi-ruins-of-degaralesh ['drone.top-down', 'drone.terrain-skim'] -> ['drone.terrain-skim', 'drone.top-down'] (+0.71)",
+  "energy: poi-ancient-town ['classic.truck', 'drone.spiral-descent'] -> ['drone.spiral-descent', 'classic.truck'] (+0.19)",
+  "energy: gap after holtburg order ['poi-festival-stone-of-evensong', 'poi-south-holtburg-outpost', 'poi-edelbar', 'poi-power-plant'] -> ['poi-power-plant', 'poi-south-holtburg-outpost', 'poi-edelbar', 'poi-festival-stone-of-evensong'] (+2.55)",
+  "energy: gap after glenden-wood order ['poi-heartland', 'poi-hilltop-tower', 'poi-fort-witshire', 'poi-festival-stone-of-thistledown', 'poi-cragstone-falls', 'poi-drudge-fort'] -> ['poi-festival-stone-of-thistledown', 'poi-cragstone-falls', 'poi-fort-witshire', 'poi-heartland', 'poi-hilltop-tower', 'poi-drudge-fort'] (+2.08)",
+  "energy: gap after lytelthorpe order ['poi-festival-stone-of-seedsow', 'poi-west-lytelthorpe-outpost', 'poi-frest-greelvings-mansion', 'poi-rithwic-festival-grounds', 'poi-festival-stone-of-leafdawning', 'poi-chapel-blackspire', 'poi-obsidian-span', 'poi-pet-shop', 'poi-sea-coast-rocks', 'poi-paradox-touched-valley-tent', 'poi-citadel-apex', 'poi-colier', 'poi-citadel-valley'] -> ['poi-citadel-apex', 'poi-frest-greelvings-mansion', 'poi-citadel-valley', 'poi-colier', 'poi-festival-stone-of-seedsow', 'poi-chapel-blackspire', 'poi-obsidian-span', 'poi-pet-shop', 'poi-festival-stone-of-leafdawning', 'poi-paradox-touched-valley-tent', 'poi-rithwic-festival-grounds', 'poi-west-lytelthorpe-outpost', 'poi-sea-coast-rocks'] (+15.30)",
+  "energy: gap after merwart-village order ['poi-the-deep-dark-isle', 'poi-temple-of-ncthail', 'poi-shimena-keep', 'poi-tenkarrdun', 'poi-relic-town', 'poi-aurlanaas-aerie', 'poi-portal-to-bur', 'poi-northwatch-castle', 'poi-aun-settlement'] -> ['poi-the-deep-dark-isle', 'poi-temple-of-ncthail', 'poi-shimena-keep', 'poi-aun-settlement', 'poi-relic-town', 'poi-tenkarrdun', 'poi-portal-to-bur', 'poi-northwatch-castle', 'poi-aurlanaas-aerie'] (+1.04)",
+  "energy: gap after neydisa-castle order ['poi-festival-stone-of-snowreap', 'poi-tumerok-treehouse', 'poi-northern-pass-watchtower', 'poi-banderling-castle', 'poi-mountain-retreat', 'poi-ice-golem-shrine', 'poi-patriarchs-valley', 'poi-grievver-valley'] -> ['poi-tumerok-treehouse', 'poi-banderling-castle', 'poi-ice-golem-shrine', 'poi-festival-stone-of-snowreap', 'poi-mountain-retreat', 'poi-northern-pass-watchtower', 'poi-patriarchs-valley', 'poi-grievver-valley'] (+1.59)",
+  "energy: gap after beach-fort order ['poi-corcima-castle', 'poi-count-dardantes-island'] -> ['poi-count-dardantes-island', 'poi-corcima-castle'] (+1.04)",
+  "energy: gap after sanamar-royal-hall order ['poi-deru-trees-of-marae-lassel', 'poi-east-fork-dam'] -> ['poi-east-fork-dam', 'poi-deru-trees-of-marae-lassel'] (+1.06)",
+  "energy: gap after danbys-outpost order ['poi-undead-village', 'poi-castle-pietrus', 'poi-tumerok-tower', 'poi-tumerok-fort-31n-605w', 'poi-shadow-march', 'poi-tumerok-fort-103n-688w', 'poi-tumerok-fort-123n-737w'] -> ['poi-undead-village', 'poi-tumerok-tower', 'poi-castle-pietrus', 'poi-tumerok-fort-31n-605w', 'poi-shadow-march', 'poi-tumerok-fort-103n-688w', 'poi-tumerok-fort-123n-737w'] (+0.41)",
+  "energy: gap after fort-tethana order ['poi-slaughterhouse', 'poi-floating-spire', 'poi-festival-stone-of-gloaming', 'poi-tumerok-towers', 'poi-humming-crystal', 'poi-tumerok-fort-97s-633w', 'poi-teth-golem-mountain', 'poi-chalicmere-castle', 'poi-walled-portals', 'poi-renegade-fortress', 'poi-vale-of-giant-flowers', 'poi-kivik-lirs-temple', 'poi-precarious-sojourn', 'poi-tumerok-stronghold', 'poi-mount-lethe', 'poi-tumerok-fort-452s-832w', 'poi-festival-stone-of-darktide'] -> ['poi-renegade-fortress', 'poi-teth-golem-mountain', 'poi-walled-portals', 'poi-precarious-sojourn', 'poi-humming-crystal', 'poi-tumerok-fort-97s-633w', 'poi-slaughterhouse', 'poi-vale-of-giant-flowers', 'poi-festival-stone-of-gloaming', 'poi-floating-spire', 'poi-tumerok-towers', 'poi-kivik-lirs-temple', 'poi-chalicmere-castle', 'poi-tumerok-stronghold', 'poi-mount-lethe', 'poi-tumerok-fort-452s-832w', 'poi-festival-stone-of-darktide'] (+5.02)",
+  "energy: gap after wai-jhou order ['poi-knathtead-excavation', 'poi-arcanum-lookout', 'poi-small-hill-base', 'poi-burning-wood', 'poi-forgers-hideout', 'poi-planetarium', 'poi-caulcano', 'poi-ancient-lugian-fortress'] -> ['poi-small-hill-base', 'poi-caulcano', 'poi-knathtead-excavation', 'poi-burning-wood', 'poi-forgers-hideout', 'poi-planetarium', 'poi-arcanum-lookout', 'poi-ancient-lugian-fortress'] (+1.65)",
+  "energy: gap after candeth-keep order ['poi-tombs-of-the-sand-kings', 'poi-abandoned-observatory', 'poi-the-pit-of-heretics', 'poi-assassins-roost', 'poi-festival-stone-of-dawnsong'] -> ['poi-the-pit-of-heretics', 'poi-abandoned-observatory', 'poi-tombs-of-the-sand-kings', 'poi-assassins-roost', 'poi-festival-stone-of-dawnsong'] (+0.95)",
+  "energy: gap after zaikhal order ['poi-wilderness-fort', 'poi-suntik-village', 'poi-four-towers', 'poi-mount-syliph', 'poi-mount-bellig', 'poi-mount-zabool', 'poi-mount-alphus', 'poi-east-samsur-outpost', 'poi-leikothas-crypt', 'poi-nuhmudiras-mansion', 'poi-desert-ridge-border', 'poi-empyrean-ruins'] -> ['poi-suntik-village', 'poi-leikothas-crypt', 'poi-four-towers', 'poi-desert-ridge-border', 'poi-mount-bellig', 'poi-mount-zabool', 'poi-mount-alphus', 'poi-empyrean-ruins', 'poi-east-samsur-outpost', 'poi-nuhmudiras-mansion', 'poi-mount-syliph', 'poi-wilderness-fort'] (+5.00)",
+  "energy: gap after yanshi order ['poi-north-yanshi-outpost', 'poi-old-yanshi', 'poi-folthid-estate', 'poi-burun-ruuk-village', 'poi-imuth-maer-doquin', 'poi-burun-fortress'] -> ['poi-burun-ruuk-village', 'poi-old-yanshi', 'poi-folthid-estate', 'poi-north-yanshi-outpost', 'poi-imuth-maer-doquin', 'poi-burun-fortress'] (+0.96)",
+  "energy: gap after tou-tou order ['poi-castle-of-baron-nuvillus', 'poi-advocate-ruins', 'poi-fort-aimaru', 'poi-north-nanto-outpost', 'poi-battlefield-of-ayn-tayan'] -> ['poi-fort-aimaru', 'poi-castle-of-baron-nuvillus', 'poi-battlefield-of-ayn-tayan', 'poi-north-nanto-outpost', 'poi-advocate-ruins'] (+5.64)",
+  "energy: gap after mayoi order ['poi-deru-tree-of-degaralesh', 'poi-ruins-of-degaralesh', 'poi-freebooter-keep'] -> ['poi-freebooter-keep', 'poi-ruins-of-degaralesh', 'poi-deru-tree-of-degaralesh'] (+0.39)",
+  "energy: gap after freehold order ['poi-ithaenc-cathedral', 'poi-camp-of-the-latzimestal', 'poi-high-mountain-valley', 'poi-chapel-of-xi-ru', 'poi-festival-stone-of-coldeve', 'poi-ishilai-lyceum'] -> ['poi-chapel-of-xi-ru', 'poi-camp-of-the-latzimestal', 'poi-high-mountain-valley', 'poi-ithaenc-cathedral', 'poi-festival-stone-of-coldeve', 'poi-ishilai-lyceum'] (+2.62)"
+ ],
+ "techniques": [
+  [
+   "drone.orbit-poi",
+   23
+  ],
+  [
+   "classic.low-angle",
+   22
+  ],
+  [
+   "drone.helix",
+   21
+  ],
+  [
+   "drone.dronie",
+   21
+  ],
+  [
+   "drone.top-down",
+   20
+  ],
+  [
+   "drone.terrain-skim",
+   19
+  ],
+  [
+   "drone.boom-rise",
+   18
+  ],
+  [
+   "drone.pass-over",
+   18
+  ],
+  [
+   "classic.establishing",
+   16
+  ],
+  [
+   "drone.fly-by",
+   16
+  ],
+  [
+   "drone.rising-reveal",
+   15
+  ],
+  [
+   "classic.worms-eye",
+   15
+  ],
+  [
+   "drone.spiral-descent",
+   15
+  ],
+  [
+   "drone.tilt-reveal",
+   13
+  ],
+  [
+   "drone.top-down-rise",
+   13
+  ],
+  [
+   "drone.vertigo-drone",
+   13
+  ],
+  [
+   "classic.pedestal",
+   12
+  ],
+  [
+   "classic.arc",
+   12
+  ],
+  [
+   "classic.rack-focus",
+   12
+  ],
+  [
+   "classic.truck",
+   11
+  ],
+  [
+   "drone.pano-360",
+   10
+  ],
+  [
+   "classic.crane",
+   10
+  ],
+  [
+   "drone.flyover",
+   10
+  ],
+  [
+   "classic.push-in",
+   10
+  ],
+  [
+   "drone.canyon-run",
+   10
+  ],
+  [
+   "drone.parallax-slide",
+   9
+  ],
+  [
+   "drone.hyperlapse-orbit",
+   9
+  ],
+  [
+   "classic.tilt",
+   9
+  ],
+  [
+   "classic.time-lapse",
+   9
+  ],
+  [
+   "classic.dolly-in",
+   8
+  ],
+  [
+   "classic.static",
+   8
+  ],
+  [
+   "classic.high-angle",
+   7
+  ],
+  [
+   "classic.two-shot",
+   7
+  ],
+  [
+   "classic.birds-eye",
+   7
+  ],
+  [
+   "classic.pan",
+   6
+  ],
+  [
+   "classic.over-the-shoulder",
+   6
+  ],
+  [
+   "fpv.fpv-dive",
+   6
+  ],
+  [
+   "drone.boomerang",
+   6
+  ],
+  [
+   "classic.pov",
+   5
+  ],
+  [
+   "classic.whip-pan",
+   5
+  ],
+  [
+   "classic.reveal-from-occluder",
+   5
+  ],
+  [
+   "classic.handheld",
+   5
+  ],
+  [
+   "classic.pull-out-reveal",
+   5
+  ],
+  [
+   "classic.orbit",
+   5
+  ],
+  [
+   "classic.hyperlapse",
+   5
+  ],
+  [
+   "fpv.fpv-flip",
+   5
+  ],
+  [
+   "classic.dolly-zoom",
+   5
+  ],
+  [
+   "classic.zoom",
+   5
+  ],
+  [
+   "fpv.fpv-gap",
+   4
+  ],
+  [
+   "classic.roll",
+   4
+  ],
+  [
+   "fpv.fpv-proximity",
+   4
+  ],
+  [
+   "classic.steadicam",
+   4
+  ],
+  [
+   "classic.dolly-out",
+   4
+  ],
+  [
+   "drone.flythrough",
+   3
+  ],
+  [
+   "fpv.fpv-run",
+   1
+  ]
+ ],
+ "alloc": [
+  {
+   "id": "holtburg.01",
+   "kind": "v1",
+   "in": 0,
+   "len": 9.458,
+   "inSec": 4.875,
+   "T": 14.333,
+   "keep": [
+    2.5,
+    14.33
+   ],
+   "min": 7.0,
+   "ideal": 9.75
+  },
+  {
+   "id": "holtburg.02",
+   "kind": "v1",
+   "in": 9.474,
+   "len": 4.875,
+   "inSec": 2.125,
+   "T": 9.125,
+   "keep": [
+    0.0,
+    9.12
+   ],
+   "min": 3.5,
+   "ideal": 4.5
+  },
+  {
+   "id": "holtburg.03",
+   "kind": "v1",
+   "in": 14.354,
+   "len": 6.25,
+   "inSec": 3.375,
+   "T": 12.292,
+   "keep": [
+    2.0,
+    11.2
+   ],
+   "min": 4.0,
+   "ideal": 6.2
+  },
+  {
+   "id": "holtburg.04",
+   "kind": "v1",
+   "in": 20.573,
+   "len": 5.875,
+   "inSec": 5.416667,
+   "T": 11.292,
+   "keep": [
+    4.0,
+    11.29
+   ],
+   "min": 4.5,
+   "ideal": 5.65
+  },
+  {
+   "id": "holtburg.05",
+   "kind": "v1",
+   "in": 26.455,
+   "len": 7.625,
+   "inSec": 3.166667,
+   "T": 17.042,
+   "keep": [
+    1.5,
+    13.5
+   ],
+   "min": 5.0,
+   "ideal": 8.1
+  },
+  {
+   "id": "poi-power-plant.01",
+   "kind": "poi",
+   "in": 34.082,
+   "len": 6.0,
+   "inSec": 4.0,
+   "T": 10.0,
+   "keep": [
+    3.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-power-plant.02",
+   "kind": "poi",
+   "in": 40.079,
+   "len": 5.583,
+   "inSec": 4.125,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-power-plant.03",
+   "kind": "poi",
+   "in": 45.676,
+   "len": 5.917,
+   "inSec": 2.291667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-south-holtburg-outpost.01",
+   "kind": "poi",
+   "in": 51.591,
+   "len": 6.625,
+   "inSec": 1.166667,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-edelbar.01",
+   "kind": "poi",
+   "in": 58.189,
+   "len": 5.958,
+   "inSec": 2.75,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-edelbar.02",
+   "kind": "poi",
+   "in": 64.164,
+   "len": 6.125,
+   "inSec": 3.083333,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-evensong.01",
+   "kind": "poi",
+   "in": 70.282,
+   "len": 6.417,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-evensong.02",
+   "kind": "poi",
+   "in": 76.72,
+   "len": 6.5,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "glenden-wood.01",
+   "kind": "v1",
+   "in": 83.213,
+   "len": 6.417,
+   "inSec": 3.791667,
+   "T": 13,
+   "keep": [
+    1.0,
+    13
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "glenden-wood.02",
+   "kind": "v1",
+   "in": 89.607,
+   "len": 6.375,
+   "inSec": 5.333333,
+   "T": 12.917,
+   "keep": [
+    2.0,
+    12.92
+   ],
+   "min": 4.0,
+   "ideal": 6.45
+  },
+  {
+   "id": "glenden-wood.03",
+   "kind": "v1",
+   "in": 95.995,
+   "len": 5.667,
+   "inSec": 4.333333,
+   "T": 10,
+   "keep": [
+    2.5,
+    10
+   ],
+   "min": 4.0,
+   "ideal": 5.5
+  },
+  {
+   "id": "glenden-wood.04",
+   "kind": "v1",
+   "in": 101.656,
+   "len": 8.0,
+   "inSec": 5.5,
+   "T": 16.083,
+   "keep": [
+    3.0,
+    15.5
+   ],
+   "min": 5.0,
+   "ideal": 8.05
+  },
+  {
+   "id": "glenden-wood.05",
+   "kind": "v1",
+   "in": 109.677,
+   "len": 7.042,
+   "inSec": 7.083333,
+   "T": 14.917,
+   "keep": [
+    3.0,
+    14.5
+   ],
+   "min": 5.0,
+   "ideal": 7.05
+  },
+  {
+   "id": "poi-festival-stone-of-thistledown.01",
+   "kind": "poi",
+   "in": 116.727,
+   "len": 5.083,
+   "inSec": 2.125,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-cragstone-falls.01",
+   "kind": "poi",
+   "in": 121.795,
+   "len": 7.292,
+   "inSec": 2.416667,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-cragstone-falls.02",
+   "kind": "poi",
+   "in": 129.103,
+   "len": 6.458,
+   "inSec": 0.791667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-cragstone-falls.03",
+   "kind": "poi",
+   "in": 135.543,
+   "len": 6.708,
+   "inSec": 2.5,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    9.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-fort-witshire.01",
+   "kind": "poi",
+   "in": 142.237,
+   "len": 5.167,
+   "inSec": 2.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-fort-witshire.02",
+   "kind": "poi",
+   "in": 147.399,
+   "len": 6.375,
+   "inSec": 0.833333,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-fort-witshire.03",
+   "kind": "poi",
+   "in": 153.777,
+   "len": 7.625,
+   "inSec": 1.666667,
+   "T": 11.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-heartland.01",
+   "kind": "poi",
+   "in": 161.425,
+   "len": 4.958,
+   "inSec": 5.041667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-hilltop-tower.01",
+   "kind": "poi",
+   "in": 166.394,
+   "len": 6.167,
+   "inSec": 0.875,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-hilltop-tower.02",
+   "kind": "poi",
+   "in": 172.548,
+   "len": 6.958,
+   "inSec": 3.25,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.7
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-drudge-fort.01",
+   "kind": "poi",
+   "in": 179.508,
+   "len": 5.125,
+   "inSec": 3.0,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-drudge-fort.02",
+   "kind": "poi",
+   "in": 184.608,
+   "len": 5.042,
+   "inSec": 2.0,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "cragstone.01",
+   "kind": "v1",
+   "in": 189.658,
+   "len": 6.25,
+   "inSec": 8.166667,
+   "T": 14.417,
+   "keep": [
+    4.0,
+    14.42
+   ],
+   "min": 5.0,
+   "ideal": 6.8
+  },
+  {
+   "id": "cragstone.02",
+   "kind": "v1",
+   "in": 195.912,
+   "len": 4.625,
+   "inSec": 2.458333,
+   "T": 9.542,
+   "keep": [
+    0.0,
+    9.54
+   ],
+   "min": 3.5,
+   "ideal": 4.75
+  },
+  {
+   "id": "cragstone.03",
+   "kind": "v1",
+   "in": 200.551,
+   "len": 5.25,
+   "inSec": 3.666667,
+   "T": 10.875,
+   "keep": [
+    2.0,
+    10.88
+   ],
+   "min": 4.0,
+   "ideal": 5.45
+  },
+  {
+   "id": "cragstone.04",
+   "kind": "v1",
+   "in": 205.78,
+   "len": 7.083,
+   "inSec": 3.958333,
+   "T": 14.792,
+   "keep": [
+    1.5,
+    14.79
+   ],
+   "min": 5.0,
+   "ideal": 7.4
+  },
+  {
+   "id": "cragstone.05",
+   "kind": "v1",
+   "in": 212.881,
+   "len": 5.417,
+   "inSec": 3.791667,
+   "T": 13,
+   "keep": [
+    0.0,
+    13
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "arwic.01",
+   "kind": "v1",
+   "in": 218.291,
+   "len": 6.458,
+   "inSec": 3.916667,
+   "T": 14.292,
+   "keep": [
+    0.0,
+    14.29
+   ],
+   "min": 4.5,
+   "ideal": 6.75
+  },
+  {
+   "id": "arwic.02",
+   "kind": "v1",
+   "in": 224.749,
+   "len": 5.917,
+   "inSec": 3.041667,
+   "T": 12.583,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 6.3
+  },
+  {
+   "id": "arwic.03",
+   "kind": "v1",
+   "in": 230.647,
+   "len": 4.625,
+   "inSec": 2.166667,
+   "T": 9,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "arwic.04",
+   "kind": "v1",
+   "in": 235.311,
+   "len": 4.958,
+   "inSec": 2.791667,
+   "T": 10.542,
+   "keep": [
+    0.0,
+    10.54
+   ],
+   "min": 3.5,
+   "ideal": 5.25
+  },
+  {
+   "id": "arwic.05",
+   "kind": "v1",
+   "in": 240.256,
+   "len": 7.292,
+   "inSec": 3.833333,
+   "T": 16.208,
+   "keep": [
+    1.5,
+    14.5
+   ],
+   "min": 5.0,
+   "ideal": 7.7
+  },
+  {
+   "id": "poi-asherons-castle.01",
+   "kind": "poi",
+   "in": 247.552,
+   "len": 7.958,
+   "inSec": 1.583333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-asherons-castle.02",
+   "kind": "poi",
+   "in": 255.494,
+   "len": 6.375,
+   "inSec": 3.625,
+   "T": 10.0,
+   "keep": [
+    3.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-asherons-castle.03",
+   "kind": "poi",
+   "in": 261.894,
+   "len": 7.75,
+   "inSec": 2.666667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.6
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-asherons-castle.04",
+   "kind": "poi",
+   "in": 269.611,
+   "len": 5.542,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "eastham.01",
+   "kind": "v1",
+   "in": 275.156,
+   "len": 6.042,
+   "inSec": 5.5,
+   "T": 14.75,
+   "keep": [
+    3.0,
+    14.75
+   ],
+   "min": 5.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "eastham.02",
+   "kind": "v1",
+   "in": 281.194,
+   "len": 4.417,
+   "inSec": 2.791667,
+   "T": 10,
+   "keep": [
+    0.0,
+    10
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "eastham.03",
+   "kind": "v1",
+   "in": 285.629,
+   "len": 3.583,
+   "inSec": 2.291667,
+   "T": 8.25,
+   "keep": [
+    1.0,
+    8.25
+   ],
+   "min": 3.5,
+   "ideal": 4.1
+  },
+  {
+   "id": "eastham.04",
+   "kind": "v1",
+   "in": 289.211,
+   "len": 5.292,
+   "inSec": 4.041667,
+   "T": 12.75,
+   "keep": [
+    2.0,
+    12.75
+   ],
+   "min": 5.0,
+   "ideal": 6.4
+  },
+  {
+   "id": "eastham.05",
+   "kind": "v1",
+   "in": 294.489,
+   "len": 8.0,
+   "inSec": 4.75,
+   "T": 17.167,
+   "keep": [
+    0.5,
+    17.0
+   ],
+   "min": 5.0,
+   "ideal": 8.2
+  },
+  {
+   "id": "poi-riverbend-tower.01",
+   "kind": "poi",
+   "in": 302.488,
+   "len": 7.583,
+   "inSec": 2.125,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-riverbend-tower.02",
+   "kind": "poi",
+   "in": 310.071,
+   "len": 6.708,
+   "inSec": 1.208333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.6
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "dryreach.01",
+   "kind": "v1",
+   "in": 316.808,
+   "len": 8.458,
+   "inSec": 6.25,
+   "T": 17.958,
+   "keep": [
+    3.0,
+    17.96
+   ],
+   "min": 5.0,
+   "ideal": 8.6
+  },
+  {
+   "id": "dryreach.02",
+   "kind": "v1",
+   "in": 325.243,
+   "len": 6.0,
+   "inSec": 3.0,
+   "T": 12.208,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "dryreach.03",
+   "kind": "v1",
+   "in": 331.253,
+   "len": 5.667,
+   "inSec": 4.166667,
+   "T": 12.375,
+   "keep": [
+    2.0,
+    11.5
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "dryreach.04",
+   "kind": "v1",
+   "in": 336.929,
+   "len": 6.042,
+   "inSec": 5.5,
+   "T": 11.542,
+   "keep": [
+    3.0,
+    11.54
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "dryreach.05",
+   "kind": "v1",
+   "in": 342.977,
+   "len": 6.0,
+   "inSec": 1.291667,
+   "T": 9.667,
+   "keep": [
+    0.5,
+    9.67
+   ],
+   "min": 5.0,
+   "ideal": 6.25
+  },
+  {
+   "id": "oolutangas-refuge.01",
+   "kind": "v1",
+   "in": 348.957,
+   "len": 8.042,
+   "inSec": 7.0,
+   "T": 16.875,
+   "keep": [
+    3.0,
+    16.88
+   ],
+   "min": 5.0,
+   "ideal": 8.0
+  },
+  {
+   "id": "oolutangas-refuge.02",
+   "kind": "v1",
+   "in": 357.013,
+   "len": 6.125,
+   "inSec": 4.416667,
+   "T": 12.375,
+   "keep": [
+    2.0,
+    12.38
+   ],
+   "min": 4.0,
+   "ideal": 6.2
+  },
+  {
+   "id": "oolutangas-refuge.03",
+   "kind": "v1",
+   "in": 363.137,
+   "len": 4.542,
+   "inSec": 2.041667,
+   "T": 9.167,
+   "keep": [
+    1.0,
+    9.17
+   ],
+   "min": 3.5,
+   "ideal": 4.6
+  },
+  {
+   "id": "oolutangas-refuge.04",
+   "kind": "v1",
+   "in": 367.67,
+   "len": 4.875,
+   "inSec": 2.583333,
+   "T": 10.042,
+   "keep": [
+    0.0,
+    10.04
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "oolutangas-refuge.05",
+   "kind": "v1",
+   "in": 372.526,
+   "len": 7.042,
+   "inSec": 5.5,
+   "T": 14.917,
+   "keep": [
+    3.0,
+    14.92
+   ],
+   "min": 5.0,
+   "ideal": 7.05
+  },
+  {
+   "id": "poi-east-rithwic-outpost.01",
+   "kind": "poi",
+   "in": 379.6,
+   "len": 4.875,
+   "inSec": 2.333333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "rithwic.01",
+   "kind": "v1",
+   "in": 384.476,
+   "len": 6.583,
+   "inSec": 6.333333,
+   "T": 12.917,
+   "keep": [
+    2.5,
+    12.92
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "rithwic.02",
+   "kind": "v1",
+   "in": 391.047,
+   "len": 4.667,
+   "inSec": 0.875,
+   "T": 6.792,
+   "keep": [
+    0.5,
+    6.79
+   ],
+   "min": 3.5,
+   "ideal": 3.75
+  },
+  {
+   "id": "rithwic.03",
+   "kind": "v1",
+   "in": 395.69,
+   "len": 10.917,
+   "inSec": 2.041667,
+   "T": 16.875,
+   "keep": [
+    1.0,
+    15.5
+   ],
+   "min": 7.0,
+   "ideal": 11.0
+  },
+  {
+   "id": "rithwic.04",
+   "kind": "v1",
+   "in": 406.644,
+   "len": 5.208,
+   "inSec": 2.416667,
+   "T": 10.042,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.0,
+   "ideal": 5.0
+  },
+  {
+   "id": "rithwic.05",
+   "kind": "v1",
+   "in": 411.852,
+   "len": 5.25,
+   "inSec": 2.791667,
+   "T": 10.792,
+   "keep": [
+    0.0,
+    10.79
+   ],
+   "min": 4.0,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-south-rithwic-outpost.01",
+   "kind": "poi",
+   "in": 417.08,
+   "len": 4.792,
+   "inSec": 4.208333,
+   "T": 10.0,
+   "keep": [
+    4.2,
+    9.7
+   ],
+   "min": 3.5,
+   "ideal": 5.01
+  },
+  {
+   "id": "poi-east-lytelthorpe-outpost.01",
+   "kind": "poi",
+   "in": 421.864,
+   "len": 7.0,
+   "inSec": 2.208333,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "lytelthorpe.01",
+   "kind": "v1",
+   "in": 428.896,
+   "len": 8.417,
+   "inSec": 4.666667,
+   "T": 13.083,
+   "keep": [
+    1.5,
+    13.08
+   ],
+   "min": 6.0,
+   "ideal": 9.0
+  },
+  {
+   "id": "lytelthorpe.02",
+   "kind": "v1",
+   "in": 437.278,
+   "len": 8.083,
+   "inSec": 1.958333,
+   "T": 13.958,
+   "keep": [
+    0.0,
+    13.96
+   ],
+   "min": 5.0,
+   "ideal": 8.5
+  },
+  {
+   "id": "lytelthorpe.03",
+   "kind": "v1",
+   "in": 445.378,
+   "len": 7.875,
+   "inSec": 3.583333,
+   "T": 12.792,
+   "keep": [
+    1.0,
+    12.79
+   ],
+   "min": 5.0,
+   "ideal": 8.0
+  },
+  {
+   "id": "lytelthorpe.04",
+   "kind": "v1",
+   "in": 453.253,
+   "len": 6.333,
+   "inSec": 2.833333,
+   "T": 11.958,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "min": 4.0,
+   "ideal": 6.5
+  },
+  {
+   "id": "lytelthorpe.05",
+   "kind": "v1",
+   "in": 459.569,
+   "len": 3.583,
+   "inSec": 1.708333,
+   "T": 7.333,
+   "keep": [
+    0.5,
+    7.33
+   ],
+   "min": 3.5,
+   "ideal": 4.0
+  },
+  {
+   "id": "lytelthorpe.06",
+   "kind": "v1",
+   "in": 463.147,
+   "len": 3.917,
+   "inSec": 1.208333,
+   "T": 6.333,
+   "keep": [
+    0.0,
+    6.33
+   ],
+   "min": 3.5,
+   "ideal": 4.0
+  },
+  {
+   "id": "lytelthorpe.07",
+   "kind": "v1",
+   "in": 467.096,
+   "len": 3.917,
+   "inSec": 2.708333,
+   "T": 6.625,
+   "keep": [
+    1.0,
+    6.62
+   ],
+   "min": 3.5,
+   "ideal": 4.2
+  },
+  {
+   "id": "lytelthorpe.08",
+   "kind": "v1",
+   "in": 471.015,
+   "len": 9.667,
+   "inSec": 3.166667,
+   "T": 17.333,
+   "keep": [
+    1.0,
+    16.5
+   ],
+   "min": 6.0,
+   "ideal": 10.0
+  },
+  {
+   "id": "poi-citadel-apex.01",
+   "kind": "poi",
+   "in": 480.649,
+   "len": 6.792,
+   "inSec": 2.833333,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-citadel-apex.02",
+   "kind": "poi",
+   "in": 487.448,
+   "len": 5.958,
+   "inSec": 2.5,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-frest-greelvings-mansion.01",
+   "kind": "poi",
+   "in": 493.401,
+   "len": 5.458,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-frest-greelvings-mansion.02",
+   "kind": "poi",
+   "in": 498.87,
+   "len": 6.167,
+   "inSec": 3.208333,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.6
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-citadel-valley.01",
+   "kind": "poi",
+   "in": 505.034,
+   "len": 6.958,
+   "inSec": 4.041667,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-citadel-valley.02",
+   "kind": "poi",
+   "in": 511.994,
+   "len": 6.083,
+   "inSec": 1.708333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-colier.01",
+   "kind": "poi",
+   "in": 518.084,
+   "len": 5.292,
+   "inSec": 2.708333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-colier.02",
+   "kind": "poi",
+   "in": 523.37,
+   "len": 4.542,
+   "inSec": 2.0,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-festival-stone-of-seedsow.01",
+   "kind": "poi",
+   "in": 527.929,
+   "len": 6.0,
+   "inSec": 1.0,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-chapel-blackspire.01",
+   "kind": "poi",
+   "in": 533.901,
+   "len": 5.875,
+   "inSec": 1.333333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-obsidian-span.01",
+   "kind": "poi",
+   "in": 539.809,
+   "len": 5.958,
+   "inSec": 1.75,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-obsidian-span.02",
+   "kind": "poi",
+   "in": 545.761,
+   "len": 6.083,
+   "inSec": 2.916667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-obsidian-span.03",
+   "kind": "poi",
+   "in": 551.844,
+   "len": 6.25,
+   "inSec": 1.958333,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-pet-shop.01",
+   "kind": "poi",
+   "in": 558.093,
+   "len": 5.042,
+   "inSec": 1.75,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-festival-stone-of-leafdawning.01",
+   "kind": "poi",
+   "in": 563.122,
+   "len": 4.875,
+   "inSec": 2.333333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-paradox-touched-valley-tent.01",
+   "kind": "poi",
+   "in": 567.995,
+   "len": 6.667,
+   "inSec": 2.541667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-rithwic-festival-grounds.01",
+   "kind": "poi",
+   "in": 574.647,
+   "len": 5.0,
+   "inSec": 2.0,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-west-lytelthorpe-outpost.01",
+   "kind": "poi",
+   "in": 579.668,
+   "len": 6.708,
+   "inSec": 1.5,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-sea-coast-rocks.01",
+   "kind": "poi",
+   "in": 586.38,
+   "len": 8.083,
+   "inSec": 0.791667,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-sea-coast-rocks.02",
+   "kind": "poi",
+   "in": 594.476,
+   "len": 7.167,
+   "inSec": 1.041667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "bandit-castle.01",
+   "kind": "v1",
+   "in": 601.61,
+   "len": 6.917,
+   "inSec": 4.041667,
+   "T": 14.708,
+   "keep": [
+    1.5,
+    14.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "bandit-castle.02",
+   "kind": "v1",
+   "in": 608.525,
+   "len": 4.917,
+   "inSec": 2.666667,
+   "T": 10.25,
+   "keep": [
+    0.0,
+    10.25
+   ],
+   "min": 4.0,
+   "ideal": 5.1
+  },
+  {
+   "id": "bandit-castle.03",
+   "kind": "v1",
+   "in": 613.471,
+   "len": 6.375,
+   "inSec": 6.75,
+   "T": 13.125,
+   "keep": [
+    3.0,
+    13.12
+   ],
+   "min": 4.5,
+   "ideal": 6.6
+  },
+  {
+   "id": "bandit-castle.04",
+   "kind": "v1",
+   "in": 619.85,
+   "len": 6.542,
+   "inSec": 5.416667,
+   "T": 11.958,
+   "keep": [
+    2.5,
+    11.96
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "bandit-castle.05",
+   "kind": "v1",
+   "in": 626.363,
+   "len": 6.167,
+   "inSec": 3.458333,
+   "T": 13.042,
+   "keep": [
+    0.0,
+    13.04
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "poi-the-deep-vissidal.01",
+   "kind": "poi",
+   "in": 632.547,
+   "len": 5.208,
+   "inSec": 2.0,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "merwart-village.01",
+   "kind": "v1",
+   "in": 637.737,
+   "len": 6.875,
+   "inSec": 6.958333,
+   "T": 13.833,
+   "keep": [
+    4.0,
+    13.83
+   ],
+   "min": 5.0,
+   "ideal": 6.5
+  },
+  {
+   "id": "merwart-village.02",
+   "kind": "v1",
+   "in": 644.608,
+   "len": 6.25,
+   "inSec": 2.583333,
+   "T": 11.417,
+   "keep": [
+    0.0,
+    11.42
+   ],
+   "min": 3.5,
+   "ideal": 5.7
+  },
+  {
+   "id": "merwart-village.03",
+   "kind": "v1",
+   "in": 650.892,
+   "len": 6.042,
+   "inSec": 4.083333,
+   "T": 10.125,
+   "keep": [
+    2.0,
+    10.12
+   ],
+   "min": 3.5,
+   "ideal": 5.05
+  },
+  {
+   "id": "merwart-village.04",
+   "kind": "v1",
+   "in": 656.913,
+   "len": 9.208,
+   "inSec": 5.416667,
+   "T": 16.333,
+   "keep": [
+    2.0,
+    16.33
+   ],
+   "min": 5.0,
+   "ideal": 8.2
+  },
+  {
+   "id": "merwart-village.05",
+   "kind": "v1",
+   "in": 666.111,
+   "len": 7.083,
+   "inSec": 2.458333,
+   "T": 12.917,
+   "keep": [
+    1.0,
+    12.92
+   ],
+   "min": 4.0,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-the-deep-dark-isle.01",
+   "kind": "poi",
+   "in": 673.194,
+   "len": 6.75,
+   "inSec": 2.125,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-temple-of-ncthail.01",
+   "kind": "poi",
+   "in": 679.955,
+   "len": 5.208,
+   "inSec": 3.791667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-temple-of-ncthail.02",
+   "kind": "poi",
+   "in": 685.15,
+   "len": 4.75,
+   "inSec": 2.625,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-temple-of-ncthail.03",
+   "kind": "poi",
+   "in": 689.917,
+   "len": 5.583,
+   "inSec": 2.708333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-shimena-keep.01",
+   "kind": "poi",
+   "in": 695.506,
+   "len": 5.167,
+   "inSec": 3.833333,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-shimena-keep.02",
+   "kind": "poi",
+   "in": 700.653,
+   "len": 5.375,
+   "inSec": 2.625,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-shimena-keep.03",
+   "kind": "poi",
+   "in": 706.023,
+   "len": 5.417,
+   "inSec": 3.541667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-aun-settlement.01",
+   "kind": "poi",
+   "in": 711.459,
+   "len": 5.792,
+   "inSec": 1.333333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-aun-settlement.02",
+   "kind": "poi",
+   "in": 717.234,
+   "len": 6.5,
+   "inSec": 0.708333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-relic-town.01",
+   "kind": "poi",
+   "in": 723.754,
+   "len": 6.5,
+   "inSec": 1.5,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-relic-town.02",
+   "kind": "poi",
+   "in": 730.259,
+   "len": 5.667,
+   "inSec": 1.416667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tenkarrdun.01",
+   "kind": "poi",
+   "in": 735.936,
+   "len": 7.833,
+   "inSec": 4.166667,
+   "T": 12.0,
+   "keep": [
+    2.0,
+    12.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-tenkarrdun.02",
+   "kind": "poi",
+   "in": 743.735,
+   "len": 6.042,
+   "inSec": 1.166667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-portal-to-bur.01",
+   "kind": "poi",
+   "in": 749.797,
+   "len": 6.333,
+   "inSec": 3.083333,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-portal-to-bur.02",
+   "kind": "poi",
+   "in": 756.135,
+   "len": 4.458,
+   "inSec": 2.0,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-northwatch-castle.01",
+   "kind": "poi",
+   "in": 760.578,
+   "len": 6.458,
+   "inSec": 1.5,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-northwatch-castle.02",
+   "kind": "poi",
+   "in": 767.061,
+   "len": 5.542,
+   "inSec": 2.25,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-aurlanaas-aerie.01",
+   "kind": "poi",
+   "in": 772.598,
+   "len": 6.25,
+   "inSec": 2.375,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-aurlanaas-aerie.02",
+   "kind": "poi",
+   "in": 778.827,
+   "len": 6.0,
+   "inSec": 2.0,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "neydisa-castle.01",
+   "kind": "v1",
+   "in": 784.833,
+   "len": 6.833,
+   "inSec": 3.583333,
+   "T": 13.833,
+   "keep": [
+    1.0,
+    13.83
+   ],
+   "min": 4.0,
+   "ideal": 6.5
+  },
+  {
+   "id": "neydisa-castle.02",
+   "kind": "v1",
+   "in": 791.687,
+   "len": 6.958,
+   "inSec": 3.0,
+   "T": 9.958,
+   "keep": [
+    1.5,
+    9.96
+   ],
+   "min": 5.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "neydisa-castle.03",
+   "kind": "v1",
+   "in": 798.627,
+   "len": 5.708,
+   "inSec": 3.166667,
+   "T": 11.75,
+   "keep": [
+    1.5,
+    10.5
+   ],
+   "min": 4.0,
+   "ideal": 5.9
+  },
+  {
+   "id": "neydisa-castle.04",
+   "kind": "v1",
+   "in": 804.321,
+   "len": 6.292,
+   "inSec": 5.958333,
+   "T": 12.25,
+   "keep": [
+    3.0,
+    12.25
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "neydisa-castle.05",
+   "kind": "v1",
+   "in": 810.621,
+   "len": 6.917,
+   "inSec": 5.875,
+   "T": 13.583,
+   "keep": [
+    3.5,
+    13.58
+   ],
+   "min": 4.5,
+   "ideal": 6.8
+  },
+  {
+   "id": "poi-tumerok-treehouse.01",
+   "kind": "poi",
+   "in": 817.54,
+   "len": 5.167,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-banderling-castle.01",
+   "kind": "poi",
+   "in": 822.713,
+   "len": 5.292,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.7,
+    7.2
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-banderling-castle.02",
+   "kind": "poi",
+   "in": 828.0,
+   "len": 6.958,
+   "inSec": 1.75,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-ice-golem-shrine.01",
+   "kind": "poi",
+   "in": 834.949,
+   "len": 5.125,
+   "inSec": 4.083333,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-snowreap.01",
+   "kind": "poi",
+   "in": 840.079,
+   "len": 6.917,
+   "inSec": 1.041667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-snowreap.02",
+   "kind": "poi",
+   "in": 847.006,
+   "len": 6.833,
+   "inSec": 2.375,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mountain-retreat.01",
+   "kind": "poi",
+   "in": 853.821,
+   "len": 6.5,
+   "inSec": 3.5,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mountain-retreat.02",
+   "kind": "poi",
+   "in": 860.333,
+   "len": 5.708,
+   "inSec": 1.416667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-northern-pass-watchtower.01",
+   "kind": "poi",
+   "in": 866.035,
+   "len": 6.375,
+   "inSec": 2.083333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-northern-pass-watchtower.02",
+   "kind": "poi",
+   "in": 872.43,
+   "len": 6.208,
+   "inSec": 4.0,
+   "T": 11.0,
+   "keep": [
+    3.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-patriarchs-valley.01",
+   "kind": "poi",
+   "in": 878.607,
+   "len": 5.458,
+   "inSec": 4.041667,
+   "T": 11.0,
+   "keep": [
+    3.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-grievver-valley.01",
+   "kind": "poi",
+   "in": 884.095,
+   "len": 5.417,
+   "inSec": 3.583333,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "stonehold.01",
+   "kind": "v1",
+   "in": 889.491,
+   "len": 8.167,
+   "inSec": 3.416667,
+   "T": 14.75,
+   "keep": [
+    1.0,
+    14.75
+   ],
+   "min": 4.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "stonehold.02",
+   "kind": "v1",
+   "in": 897.667,
+   "len": 6.542,
+   "inSec": 2.333333,
+   "T": 12.042,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "stonehold.03",
+   "kind": "v1",
+   "in": 904.208,
+   "len": 7.083,
+   "inSec": 4.458333,
+   "T": 12.167,
+   "keep": [
+    1.5,
+    12.17
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "stonehold.04",
+   "kind": "v1",
+   "in": 911.296,
+   "len": 6.708,
+   "inSec": 5.166667,
+   "T": 11.875,
+   "keep": [
+    3.0,
+    11.88
+   ],
+   "min": 4.5,
+   "ideal": 5.95
+  },
+  {
+   "id": "stonehold.05",
+   "kind": "v1",
+   "in": 917.985,
+   "len": 7.833,
+   "inSec": 1.083333,
+   "T": 14.75,
+   "keep": [
+    0.5,
+    13.0
+   ],
+   "min": 5.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-festival-stone-of-frostfell.01",
+   "kind": "poi",
+   "in": 925.82,
+   "len": 5.208,
+   "inSec": 2.0,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "hoshino-fortress.01",
+   "kind": "v1",
+   "in": 931.027,
+   "len": 8.792,
+   "inSec": 6.583333,
+   "T": 18.125,
+   "keep": [
+    3.0,
+    18.12
+   ],
+   "min": 5.0,
+   "ideal": 8.7
+  },
+  {
+   "id": "hoshino-fortress.02",
+   "kind": "v1",
+   "in": 939.821,
+   "len": 9.042,
+   "inSec": 7.5,
+   "T": 16.792,
+   "keep": [
+    1.0,
+    16.79
+   ],
+   "min": 5.0,
+   "ideal": 8.4
+  },
+  {
+   "id": "hoshino-fortress.03",
+   "kind": "v1",
+   "in": 948.869,
+   "len": 9.5,
+   "inSec": 7.25,
+   "T": 17.417,
+   "keep": [
+    3.0,
+    17.42
+   ],
+   "min": 5.0,
+   "ideal": 8.7
+  },
+  {
+   "id": "hoshino-fortress.04",
+   "kind": "v1",
+   "in": 958.357,
+   "len": 8.958,
+   "inSec": 4.5,
+   "T": 17.917,
+   "keep": [
+    0.0,
+    17.92
+   ],
+   "min": 4.5,
+   "ideal": 8.55
+  },
+  {
+   "id": "beach-fort.01",
+   "kind": "v1",
+   "in": 967.343,
+   "len": 5.667,
+   "inSec": 6.458333,
+   "T": 12.125,
+   "keep": [
+    3.0,
+    12.12
+   ],
+   "min": 4.5,
+   "ideal": 5.65
+  },
+  {
+   "id": "beach-fort.02",
+   "kind": "v1",
+   "in": 973.009,
+   "len": 6.125,
+   "inSec": 4.916667,
+   "T": 12.167,
+   "keep": [
+    2.0,
+    12.17
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "beach-fort.03",
+   "kind": "v1",
+   "in": 979.125,
+   "len": 6.292,
+   "inSec": 3.208333,
+   "T": 12.667,
+   "keep": [
+    0.0,
+    12.67
+   ],
+   "min": 4.0,
+   "ideal": 6.33
+  },
+  {
+   "id": "beach-fort.04",
+   "kind": "v1",
+   "in": 985.429,
+   "len": 6.583,
+   "inSec": 4.208333,
+   "T": 12.167,
+   "keep": [
+    1.5,
+    12.17
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "beach-fort.05",
+   "kind": "v1",
+   "in": 991.994,
+   "len": 7.0,
+   "inSec": 3.791667,
+   "T": 14.542,
+   "keep": [
+    0.0,
+    14.54
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "poi-count-dardantes-island.01",
+   "kind": "poi",
+   "in": 999.02,
+   "len": 7.0,
+   "inSec": 2.5,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-count-dardantes-island.02",
+   "kind": "poi",
+   "in": 1005.981,
+   "len": 6.833,
+   "inSec": 3.166667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-corcima-castle.01",
+   "kind": "poi",
+   "in": 1012.837,
+   "len": 5.25,
+   "inSec": 3.75,
+   "T": 9.0,
+   "keep": [
+    3.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-corcima-castle.02",
+   "kind": "poi",
+   "in": 1018.076,
+   "len": 5.625,
+   "inSec": 1.916667,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-corcima-castle.03",
+   "kind": "poi",
+   "in": 1023.698,
+   "len": 6.583,
+   "inSec": 3.416667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-corcima-castle.04",
+   "kind": "poi",
+   "in": 1030.295,
+   "len": 6.833,
+   "inSec": 2.333333,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "eastwatch.01",
+   "kind": "v1",
+   "in": 1037.119,
+   "len": 8.542,
+   "inSec": 7.25,
+   "T": 16.833,
+   "keep": [
+    3.0,
+    16.83
+   ],
+   "min": 5.5,
+   "ideal": 8.0
+  },
+  {
+   "id": "eastwatch.02",
+   "kind": "v1",
+   "in": 1045.665,
+   "len": 4.917,
+   "inSec": 1.958333,
+   "T": 8.333,
+   "keep": [
+    1.0,
+    8.33
+   ],
+   "min": 3.5,
+   "ideal": 4.2
+  },
+  {
+   "id": "eastwatch.03",
+   "kind": "v1",
+   "in": 1050.564,
+   "len": 7.458,
+   "inSec": 3.375,
+   "T": 14.167,
+   "keep": [
+    0.0,
+    14.17
+   ],
+   "min": 3.5,
+   "ideal": 7.1
+  },
+  {
+   "id": "eastwatch.04",
+   "kind": "v1",
+   "in": 1058.031,
+   "len": 6.417,
+   "inSec": 1.791667,
+   "T": 12.167,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "eastwatch.05",
+   "kind": "v1",
+   "in": 1064.448,
+   "len": 11.208,
+   "inSec": 2.25,
+   "T": 14.25,
+   "keep": [
+    1.5,
+    14.25
+   ],
+   "min": 9.5,
+   "ideal": 10.65
+  },
+  {
+   "id": "poi-the-shadow-pass.01",
+   "kind": "poi",
+   "in": 1075.671,
+   "len": 5.167,
+   "inSec": 1.916667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "fiun-outpost.01",
+   "kind": "v1",
+   "in": 1080.843,
+   "len": 8.5,
+   "inSec": 8.625,
+   "T": 17.125,
+   "keep": [
+    4.0,
+    17.12
+   ],
+   "min": 5.0,
+   "ideal": 8.15
+  },
+  {
+   "id": "fiun-outpost.02",
+   "kind": "v1",
+   "in": 1089.335,
+   "len": 6.042,
+   "inSec": 4.958333,
+   "T": 12.083,
+   "keep": [
+    1.5,
+    12.08
+   ],
+   "min": 4.0,
+   "ideal": 6.05
+  },
+  {
+   "id": "fiun-outpost.03",
+   "kind": "v1",
+   "in": 1095.355,
+   "len": 5.917,
+   "inSec": 5.541667,
+   "T": 12.375,
+   "keep": [
+    2.0,
+    12.38
+   ],
+   "min": 5.0,
+   "ideal": 6.2
+  },
+  {
+   "id": "fiun-outpost.04",
+   "kind": "v1",
+   "in": 1101.299,
+   "len": 5.125,
+   "inSec": 2.541667,
+   "T": 10.208,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.0,
+   "ideal": 5.1
+  },
+  {
+   "id": "fiun-outpost.05",
+   "kind": "v1",
+   "in": 1106.406,
+   "len": 6.875,
+   "inSec": 7.416667,
+   "T": 15.083,
+   "keep": [
+    3.0,
+    15.08
+   ],
+   "min": 4.5,
+   "ideal": 7.15
+  },
+  {
+   "id": "silyun.01",
+   "kind": "v1",
+   "in": 1113.287,
+   "len": 8.708,
+   "inSec": 5.666667,
+   "T": 17.292,
+   "keep": [
+    2.0,
+    17.29
+   ],
+   "min": 5.0,
+   "ideal": 8.25
+  },
+  {
+   "id": "silyun.02",
+   "kind": "v1",
+   "in": 1122.014,
+   "len": 6.542,
+   "inSec": 2.75,
+   "T": 12.167,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "silyun.03",
+   "kind": "v1",
+   "in": 1128.56,
+   "len": 6.417,
+   "inSec": 2.708333,
+   "T": 11.833,
+   "keep": [
+    0.0,
+    11.83
+   ],
+   "min": 3.5,
+   "ideal": 5.9
+  },
+  {
+   "id": "silyun.04",
+   "kind": "v1",
+   "in": 1134.968,
+   "len": 5.292,
+   "inSec": 3.333333,
+   "T": 10.208,
+   "keep": [
+    0.5,
+    10.21
+   ],
+   "min": 3.5,
+   "ideal": 5.1
+  },
+  {
+   "id": "silyun.05",
+   "kind": "v1",
+   "in": 1140.239,
+   "len": 7.792,
+   "inSec": 6.625,
+   "T": 15.208,
+   "keep": [
+    3.0,
+    15.21
+   ],
+   "min": 4.5,
+   "ideal": 7.2
+  },
+  {
+   "id": "poi-karluns-fort.01",
+   "kind": "poi",
+   "in": 1148.048,
+   "len": 5.167,
+   "inSec": 2.125,
+   "T": 10.0,
+   "keep": [
+    1.8,
+    7.6
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-karluns-fort.02",
+   "kind": "poi",
+   "in": 1153.226,
+   "len": 5.375,
+   "inSec": 3.625,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-cataracts-of-sabella.01",
+   "kind": "poi",
+   "in": 1158.583,
+   "len": 7.125,
+   "inSec": 2.875,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-cataracts-of-sabella.02",
+   "kind": "poi",
+   "in": 1165.715,
+   "len": 5.25,
+   "inSec": 4.75,
+   "T": 10.0,
+   "keep": [
+    4.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-cataracts-of-sabella.03",
+   "kind": "poi",
+   "in": 1170.947,
+   "len": 6.208,
+   "inSec": 1.916667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-cataracts-of-sabella.04",
+   "kind": "poi",
+   "in": 1177.182,
+   "len": 6.25,
+   "inSec": 2.75,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-lotila-lighthouse.01",
+   "kind": "poi",
+   "in": 1183.419,
+   "len": 6.292,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-lotila-lighthouse.02",
+   "kind": "poi",
+   "in": 1189.7,
+   "len": 6.292,
+   "inSec": 1.708333,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "westwatch.01",
+   "kind": "v1",
+   "in": 1195.997,
+   "len": 8.042,
+   "inSec": 3.0,
+   "T": 16.75,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "min": 5.0,
+   "ideal": 8.0
+  },
+  {
+   "id": "westwatch.02",
+   "kind": "v1",
+   "in": 1204.048,
+   "len": 6.458,
+   "inSec": 4.291667,
+   "T": 12.167,
+   "keep": [
+    3.0,
+    12.0
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "westwatch.03",
+   "kind": "v1",
+   "in": 1210.513,
+   "len": 6.083,
+   "inSec": 5.958333,
+   "T": 12.25,
+   "keep": [
+    4.0,
+    12.25
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "westwatch.04",
+   "kind": "v1",
+   "in": 1216.563,
+   "len": 7.458,
+   "inSec": 6.75,
+   "T": 15,
+   "keep": [
+    4.0,
+    14.5
+   ],
+   "min": 5.0,
+   "ideal": 7.1
+  },
+  {
+   "id": "sanamar.01",
+   "kind": "v1",
+   "in": 1224.04,
+   "len": 8.708,
+   "inSec": 5.166667,
+   "T": 15.042,
+   "keep": [
+    4.5,
+    15.04
+   ],
+   "min": 6.0,
+   "ideal": 8.5
+  },
+  {
+   "id": "sanamar.02",
+   "kind": "v1",
+   "in": 1232.747,
+   "len": 4.458,
+   "inSec": 2.375,
+   "T": 9.292,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 4.6
+  },
+  {
+   "id": "sanamar.03",
+   "kind": "v1",
+   "in": 1237.228,
+   "len": 6.417,
+   "inSec": 3.291667,
+   "T": 13,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "sanamar-royal-hall.01",
+   "kind": "v1",
+   "in": 1243.614,
+   "len": 8.0,
+   "inSec": 2.5,
+   "T": 12.917,
+   "keep": [
+    1.5,
+    11.5
+   ],
+   "min": 4.5,
+   "ideal": 8.0
+  },
+  {
+   "id": "sanamar-royal-hall.02",
+   "kind": "v1",
+   "in": 1251.639,
+   "len": 10.583,
+   "inSec": 4.708333,
+   "T": 16.083,
+   "keep": [
+    3.0,
+    16.08
+   ],
+   "min": 6.0,
+   "ideal": 10.5
+  },
+  {
+   "id": "sanamar-royal-hall.03",
+   "kind": "v1",
+   "in": 1262.2,
+   "len": 10.833,
+   "inSec": 5.416667,
+   "T": 17.042,
+   "keep": [
+    1.0,
+    17.04
+   ],
+   "min": 6.0,
+   "ideal": 11.0
+  },
+  {
+   "id": "poi-east-fork-dam.01",
+   "kind": "poi",
+   "in": 1273.057,
+   "len": 7.375,
+   "inSec": 1.583333,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-east-fork-dam.02",
+   "kind": "poi",
+   "in": 1280.421,
+   "len": 6.5,
+   "inSec": 1.708333,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-deru-trees-of-marae-lassel.01",
+   "kind": "poi",
+   "in": 1286.898,
+   "len": 5.708,
+   "inSec": 1.666667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-deru-trees-of-marae-lassel.02",
+   "kind": "poi",
+   "in": 1292.629,
+   "len": 6.542,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "ahurenga.01",
+   "kind": "v1",
+   "in": 1299.165,
+   "len": 6.875,
+   "inSec": 6.583333,
+   "T": 14.542,
+   "keep": [
+    3.5,
+    14.54
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "ahurenga.02",
+   "kind": "v1",
+   "in": 1306.039,
+   "len": 3.625,
+   "inSec": 2.916667,
+   "T": 9,
+   "keep": [
+    0.5,
+    9
+   ],
+   "min": 3.5,
+   "ideal": 4.5
+  },
+  {
+   "id": "ahurenga.03",
+   "kind": "v1",
+   "in": 1309.652,
+   "len": 7.458,
+   "inSec": 4.291667,
+   "T": 15.792,
+   "keep": [
+    2.0,
+    14.5
+   ],
+   "min": 4.5,
+   "ideal": 7.9
+  },
+  {
+   "id": "ahurenga.04",
+   "kind": "v1",
+   "in": 1317.118,
+   "len": 6.542,
+   "inSec": 4.125,
+   "T": 14.792,
+   "keep": [
+    0.0,
+    14.79
+   ],
+   "min": 4.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-bachus-flufens-cottage.01",
+   "kind": "poi",
+   "in": 1323.66,
+   "len": 5.292,
+   "inSec": 1.583333,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "timaru.01",
+   "kind": "v1",
+   "in": 1328.945,
+   "len": 9.125,
+   "inSec": 5.75,
+   "T": 17.208,
+   "keep": [
+    4.5,
+    16.5
+   ],
+   "min": 6.0,
+   "ideal": 8.5
+  },
+  {
+   "id": "timaru.02",
+   "kind": "v1",
+   "in": 1338.099,
+   "len": 5.667,
+   "inSec": 2.291667,
+   "T": 9.792,
+   "keep": [
+    0.5,
+    9.79
+   ],
+   "min": 3.5,
+   "ideal": 4.9
+  },
+  {
+   "id": "timaru.03",
+   "kind": "v1",
+   "in": 1343.771,
+   "len": 6.167,
+   "inSec": 2.416667,
+   "T": 10.417,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 3.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "timaru.04",
+   "kind": "v1",
+   "in": 1349.932,
+   "len": 5.292,
+   "inSec": 1.541667,
+   "T": 7.792,
+   "keep": [
+    1.0,
+    7.79
+   ],
+   "min": 4.0,
+   "ideal": 4.65
+  },
+  {
+   "id": "timaru.05",
+   "kind": "v1",
+   "in": 1355.189,
+   "len": 5.25,
+   "inSec": 2.875,
+   "T": 10.083,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "redspire.01",
+   "kind": "v1",
+   "in": 1360.457,
+   "len": 7.583,
+   "inSec": 7.208333,
+   "T": 15.25,
+   "keep": [
+    5.0,
+    15.25
+   ],
+   "min": 5.0,
+   "ideal": 7.2
+  },
+  {
+   "id": "redspire.02",
+   "kind": "v1",
+   "in": 1368.03,
+   "len": 5.5,
+   "inSec": 3.25,
+   "T": 10.667,
+   "keep": [
+    1.0,
+    10.5
+   ],
+   "min": 3.5,
+   "ideal": 5.3
+  },
+  {
+   "id": "redspire.03",
+   "kind": "v1",
+   "in": 1373.551,
+   "len": 5.542,
+   "inSec": 2.5,
+   "T": 10.25,
+   "keep": [
+    0.5,
+    10.0
+   ],
+   "min": 3.5,
+   "ideal": 5.1
+  },
+  {
+   "id": "redspire.04",
+   "kind": "v1",
+   "in": 1379.103,
+   "len": 5.167,
+   "inSec": 2.416667,
+   "T": 9.583,
+   "keep": [
+    0.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 4.8
+  },
+  {
+   "id": "redspire.05",
+   "kind": "v1",
+   "in": 1384.26,
+   "len": 7.5,
+   "inSec": 2.75,
+   "T": 15.208,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "min": 4.5,
+   "ideal": 7.2
+  },
+  {
+   "id": "bluespire.01",
+   "kind": "v1",
+   "in": 1391.734,
+   "len": 8.042,
+   "inSec": 5.5,
+   "T": 16.375,
+   "keep": [
+    3.0,
+    15.5
+   ],
+   "min": 5.0,
+   "ideal": 7.8
+  },
+  {
+   "id": "bluespire.02",
+   "kind": "v1",
+   "in": 1399.786,
+   "len": 4.375,
+   "inSec": 2.125,
+   "T": 7.208,
+   "keep": [
+    1.0,
+    7.21
+   ],
+   "min": 3.5,
+   "ideal": 4.3
+  },
+  {
+   "id": "bluespire.03",
+   "kind": "v1",
+   "in": 1404.184,
+   "len": 5.583,
+   "inSec": 3.708333,
+   "T": 10.875,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 4.0,
+   "ideal": 5.4
+  },
+  {
+   "id": "bluespire.04",
+   "kind": "v1",
+   "in": 1409.756,
+   "len": 4.292,
+   "inSec": 1.833333,
+   "T": 8.792,
+   "keep": [
+    0.3,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 4.4
+  },
+  {
+   "id": "bluespire.05",
+   "kind": "v1",
+   "in": 1414.029,
+   "len": 7.042,
+   "inSec": 4.458333,
+   "T": 12.542,
+   "keep": [
+    2.5,
+    12.3
+   ],
+   "min": 5.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "greenspire.01",
+   "kind": "v1",
+   "in": 1421.087,
+   "len": 7.042,
+   "inSec": 7.0,
+   "T": 14.542,
+   "keep": [
+    4.0,
+    14.54
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "greenspire.02",
+   "kind": "v1",
+   "in": 1428.141,
+   "len": 5.167,
+   "inSec": 3.916667,
+   "T": 10.667,
+   "keep": [
+    1.0,
+    10.67
+   ],
+   "min": 4.0,
+   "ideal": 5.3
+  },
+  {
+   "id": "greenspire.03",
+   "kind": "v1",
+   "in": 1433.29,
+   "len": 6.625,
+   "inSec": 3.416667,
+   "T": 13,
+   "keep": [
+    1.0,
+    12.5
+   ],
+   "min": 4.0,
+   "ideal": 6.5
+  },
+  {
+   "id": "greenspire.04",
+   "kind": "v1",
+   "in": 1439.916,
+   "len": 6.375,
+   "inSec": 3.583333,
+   "T": 12.5,
+   "keep": [
+    1.0,
+    12.5
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "greenspire.05",
+   "kind": "v1",
+   "in": 1446.294,
+   "len": 8.167,
+   "inSec": 5.916667,
+   "T": 17,
+   "keep": [
+    3.0,
+    16.5
+   ],
+   "min": 5.0,
+   "ideal": 8.1
+  },
+  {
+   "id": "plateau-village.01",
+   "kind": "v1",
+   "in": 1454.451,
+   "len": 8.625,
+   "inSec": 7.666667,
+   "T": 16.875,
+   "keep": [
+    4.5,
+    16.88
+   ],
+   "min": 6.0,
+   "ideal": 8.0
+  },
+  {
+   "id": "plateau-village.02",
+   "kind": "v1",
+   "in": 1463.084,
+   "len": 6.167,
+   "inSec": 2.916667,
+   "T": 11.875,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 5.9
+  },
+  {
+   "id": "plateau-village.03",
+   "kind": "v1",
+   "in": 1469.231,
+   "len": 7.917,
+   "inSec": 5.541667,
+   "T": 14.542,
+   "keep": [
+    3.0,
+    14.54
+   ],
+   "min": 4.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "plateau-village.04",
+   "kind": "v1",
+   "in": 1477.172,
+   "len": 8.625,
+   "inSec": 5.666667,
+   "T": 16.833,
+   "keep": [
+    2.5,
+    16.83
+   ],
+   "min": 4.5,
+   "ideal": 8.0
+  },
+  {
+   "id": "poi-gold-hill-ruins.01",
+   "kind": "poi",
+   "in": 1485.774,
+   "len": 5.458,
+   "inSec": 1.5,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-gold-hill-ruins.02",
+   "kind": "poi",
+   "in": 1491.255,
+   "len": 6.75,
+   "inSec": 3.25,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "danbys-outpost.01",
+   "kind": "v1",
+   "in": 1497.981,
+   "len": 4.75,
+   "inSec": 3.125,
+   "T": 11.667,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 3.5,
+   "ideal": 5.4
+  },
+  {
+   "id": "danbys-outpost.02",
+   "kind": "v1",
+   "in": 1502.749,
+   "len": 5.833,
+   "inSec": 3.583333,
+   "T": 12.542,
+   "keep": [
+    1.5,
+    12.0
+   ],
+   "min": 4.0,
+   "ideal": 6.3
+  },
+  {
+   "id": "danbys-outpost.03",
+   "kind": "v1",
+   "in": 1508.579,
+   "len": 4.792,
+   "inSec": 4.083333,
+   "T": 9.875,
+   "keep": [
+    1.5,
+    9.88
+   ],
+   "min": 3.5,
+   "ideal": 4.9
+  },
+  {
+   "id": "danbys-outpost.04",
+   "kind": "v1",
+   "in": 1513.386,
+   "len": 7.458,
+   "inSec": 4.291667,
+   "T": 15.542,
+   "keep": [
+    2.0,
+    14.0
+   ],
+   "min": 5.0,
+   "ideal": 7.8
+  },
+  {
+   "id": "danbys-outpost.05",
+   "kind": "v1",
+   "in": 1520.84,
+   "len": 6.917,
+   "inSec": 7.791667,
+   "T": 15.5,
+   "keep": [
+    6.0,
+    15.5
+   ],
+   "min": 4.5,
+   "ideal": 7.4
+  },
+  {
+   "id": "poi-undead-village.01",
+   "kind": "poi",
+   "in": 1527.76,
+   "len": 5.292,
+   "inSec": 3.708333,
+   "T": 10.0,
+   "keep": [
+    2.5,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tumerok-tower.01",
+   "kind": "poi",
+   "in": 1533.028,
+   "len": 5.667,
+   "inSec": 4.333333,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-tumerok-tower.02",
+   "kind": "poi",
+   "in": 1538.694,
+   "len": 4.792,
+   "inSec": 3.0,
+   "T": 9.0,
+   "keep": [
+    3.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 5.21
+  },
+  {
+   "id": "poi-castle-pietrus.01",
+   "kind": "poi",
+   "in": 1543.5,
+   "len": 5.958,
+   "inSec": 3.041667,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-castle-pietrus.02",
+   "kind": "poi",
+   "in": 1549.46,
+   "len": 6.125,
+   "inSec": 1.916667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-castle-pietrus.03",
+   "kind": "poi",
+   "in": 1555.572,
+   "len": 5.292,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.7,
+    7.2
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tumerok-fort-31n-605w.01",
+   "kind": "poi",
+   "in": 1560.859,
+   "len": 5.208,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-tumerok-fort-31n-605w.02",
+   "kind": "poi",
+   "in": 1566.07,
+   "len": 7.0,
+   "inSec": 2.75,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-shadow-march.01",
+   "kind": "poi",
+   "in": 1573.069,
+   "len": 5.625,
+   "inSec": 2.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-shadow-march.02",
+   "kind": "poi",
+   "in": 1578.701,
+   "len": 5.125,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-shadow-march.03",
+   "kind": "poi",
+   "in": 1583.837,
+   "len": 6.625,
+   "inSec": 2.166667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-tumerok-fort-103n-688w.01",
+   "kind": "poi",
+   "in": 1590.439,
+   "len": 5.083,
+   "inSec": 4.125,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-tumerok-fort-123n-737w.01",
+   "kind": "poi",
+   "in": 1595.559,
+   "len": 5.25,
+   "inSec": 5.916667,
+   "T": 12.0,
+   "keep": [
+    5.9,
+    12.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-tumerok-fort-123n-737w.02",
+   "kind": "poi",
+   "in": 1600.791,
+   "len": 5.333,
+   "inSec": 2.833333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "fort-tethana.01",
+   "kind": "v1",
+   "in": 1606.124,
+   "len": 8.333,
+   "inSec": 6.333333,
+   "T": 16.417,
+   "keep": [
+    4.0,
+    16.42
+   ],
+   "min": 6.0,
+   "ideal": 7.8
+  },
+  {
+   "id": "fort-tethana.02",
+   "kind": "v1",
+   "in": 1614.465,
+   "len": 7.292,
+   "inSec": 2.833333,
+   "T": 13.375,
+   "keep": [
+    1.0,
+    12.5
+   ],
+   "min": 4.0,
+   "ideal": 6.7
+  },
+  {
+   "id": "fort-tethana.03",
+   "kind": "v1",
+   "in": 1621.73,
+   "len": 6.5,
+   "inSec": 3.75,
+   "T": 12.583,
+   "keep": [
+    2.0,
+    12.0
+   ],
+   "min": 4.0,
+   "ideal": 6.3
+  },
+  {
+   "id": "fort-tethana.04",
+   "kind": "v1",
+   "in": 1628.253,
+   "len": 5.375,
+   "inSec": 2.833333,
+   "T": 10.292,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.0,
+   "ideal": 5.1
+  },
+  {
+   "id": "fort-tethana.05",
+   "kind": "v1",
+   "in": 1633.62,
+   "len": 8.708,
+   "inSec": 8.0,
+   "T": 17.5,
+   "keep": [
+    5.0,
+    17.3
+   ],
+   "min": 5.0,
+   "ideal": 8.4
+  },
+  {
+   "id": "poi-renegade-fortress.01",
+   "kind": "poi",
+   "in": 1642.346,
+   "len": 4.542,
+   "inSec": 2.0,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-renegade-fortress.02",
+   "kind": "poi",
+   "in": 1646.884,
+   "len": 5.375,
+   "inSec": 4.625,
+   "T": 10.0,
+   "keep": [
+    3.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-renegade-fortress.03",
+   "kind": "poi",
+   "in": 1652.262,
+   "len": 5.292,
+   "inSec": 2.333333,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-teth-golem-mountain.01",
+   "kind": "poi",
+   "in": 1657.533,
+   "len": 7.125,
+   "inSec": 2.083333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-walled-portals.01",
+   "kind": "poi",
+   "in": 1664.66,
+   "len": 5.083,
+   "inSec": 3.125,
+   "T": 9.0,
+   "keep": [
+    3.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.21
+  },
+  {
+   "id": "poi-precarious-sojourn.01",
+   "kind": "poi",
+   "in": 1669.768,
+   "len": 5.792,
+   "inSec": 2.583333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-precarious-sojourn.02",
+   "kind": "poi",
+   "in": 1675.525,
+   "len": 4.625,
+   "inSec": 1.375,
+   "T": 7.5,
+   "keep": [
+    0.3,
+    6.0
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-humming-crystal.01",
+   "kind": "poi",
+   "in": 1680.149,
+   "len": 6.958,
+   "inSec": 2.5,
+   "T": 11.0,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-humming-crystal.02",
+   "kind": "poi",
+   "in": 1687.116,
+   "len": 6.875,
+   "inSec": 3.333333,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-tumerok-fort-97s-633w.01",
+   "kind": "poi",
+   "in": 1693.997,
+   "len": 5.208,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-tumerok-fort-97s-633w.02",
+   "kind": "poi",
+   "in": 1699.193,
+   "len": 6.917,
+   "inSec": 2.041667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-slaughterhouse.01",
+   "kind": "poi",
+   "in": 1706.131,
+   "len": 4.917,
+   "inSec": 5.291667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-vale-of-giant-flowers.01",
+   "kind": "poi",
+   "in": 1711.032,
+   "len": 5.042,
+   "inSec": 3.25,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-gloaming.01",
+   "kind": "poi",
+   "in": 1716.071,
+   "len": 5.167,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-floating-spire.01",
+   "kind": "poi",
+   "in": 1721.249,
+   "len": 6.958,
+   "inSec": 1.25,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tumerok-towers.01",
+   "kind": "poi",
+   "in": 1728.214,
+   "len": 3.625,
+   "inSec": 3.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-kivik-lirs-temple.01",
+   "kind": "poi",
+   "in": 1731.837,
+   "len": 5.292,
+   "inSec": 4.916667,
+   "T": 11.0,
+   "keep": [
+    3.5,
+    10.8
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-chalicmere-castle.01",
+   "kind": "poi",
+   "in": 1737.108,
+   "len": 6.708,
+   "inSec": 2.916667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-chalicmere-castle.02",
+   "kind": "poi",
+   "in": 1743.842,
+   "len": 5.875,
+   "inSec": 2.833333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tumerok-stronghold.01",
+   "kind": "poi",
+   "in": 1749.693,
+   "len": 6.125,
+   "inSec": 1.916667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-tumerok-stronghold.02",
+   "kind": "poi",
+   "in": 1755.823,
+   "len": 6.167,
+   "inSec": 4.041667,
+   "T": 11.0,
+   "keep": [
+    3.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mount-lethe.01",
+   "kind": "poi",
+   "in": 1761.997,
+   "len": 5.208,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-mount-lethe.02",
+   "kind": "poi",
+   "in": 1767.224,
+   "len": 6.417,
+   "inSec": 4.583333,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mount-lethe.03",
+   "kind": "poi",
+   "in": 1773.634,
+   "len": 5.667,
+   "inSec": 2.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tumerok-fort-452s-832w.01",
+   "kind": "poi",
+   "in": 1779.275,
+   "len": 5.125,
+   "inSec": 4.083333,
+   "T": 10.0,
+   "keep": [
+    3.0,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-darktide.01",
+   "kind": "poi",
+   "in": 1784.43,
+   "len": 6.25,
+   "inSec": 3.375,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-darktide.02",
+   "kind": "poi",
+   "in": 1790.653,
+   "len": 6.125,
+   "inSec": 2.083333,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "ayan-baqur.01",
+   "kind": "v1",
+   "in": 1796.803,
+   "len": 7.875,
+   "inSec": 8.791667,
+   "T": 16.667,
+   "keep": [
+    4.0,
+    16.67
+   ],
+   "min": 5.0,
+   "ideal": 7.9
+  },
+  {
+   "id": "ayan-baqur.02",
+   "kind": "v1",
+   "in": 1804.655,
+   "len": 5.292,
+   "inSec": 4.333333,
+   "T": 12.083,
+   "keep": [
+    1.5,
+    12.0
+   ],
+   "min": 4.0,
+   "ideal": 6.0
+  },
+  {
+   "id": "ayan-baqur.03",
+   "kind": "v1",
+   "in": 1809.958,
+   "len": 5.0,
+   "inSec": 2.5,
+   "T": 10.042,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "ayan-baqur.04",
+   "kind": "v1",
+   "in": 1814.941,
+   "len": 5.417,
+   "inSec": 3.041667,
+   "T": 11.25,
+   "keep": [
+    1.0,
+    10.5
+   ],
+   "min": 4.0,
+   "ideal": 5.6
+  },
+  {
+   "id": "ayan-baqur.05",
+   "kind": "v1",
+   "in": 1820.375,
+   "len": 6.583,
+   "inSec": 2.208333,
+   "T": 14.75,
+   "keep": [
+    1.0,
+    12.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-aerbaxs-citadel.01",
+   "kind": "poi",
+   "in": 1826.946,
+   "len": 7.375,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-aerbaxs-citadel.02",
+   "kind": "poi",
+   "in": 1834.322,
+   "len": 7.417,
+   "inSec": 3.083333,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-aerbaxs-citadel.03",
+   "kind": "poi",
+   "in": 1841.734,
+   "len": 7.75,
+   "inSec": 2.125,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-necropolis.01",
+   "kind": "poi",
+   "in": 1849.493,
+   "len": 3.542,
+   "inSec": 3.0,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "wai-jhou.01",
+   "kind": "v1",
+   "in": 1853.045,
+   "len": 7.875,
+   "inSec": 6.083333,
+   "T": 16.083,
+   "keep": [
+    2.0,
+    16.08
+   ],
+   "min": 4.5,
+   "ideal": 7.6
+  },
+  {
+   "id": "wai-jhou.02",
+   "kind": "v1",
+   "in": 1860.917,
+   "len": 5.875,
+   "inSec": 3.25,
+   "T": 11.333,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 5.7
+  },
+  {
+   "id": "wai-jhou.03",
+   "kind": "v1",
+   "in": 1866.804,
+   "len": 5.167,
+   "inSec": 2.333333,
+   "T": 10,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.0,
+   "ideal": 5.0
+  },
+  {
+   "id": "wai-jhou.04",
+   "kind": "v1",
+   "in": 1871.941,
+   "len": 4.75,
+   "inSec": 2.583333,
+   "T": 9.375,
+   "keep": [
+    0.5,
+    9.38
+   ],
+   "min": 3.5,
+   "ideal": 4.7
+  },
+  {
+   "id": "wai-jhou.05",
+   "kind": "v1",
+   "in": 1876.706,
+   "len": 9.0,
+   "inSec": 7.5,
+   "T": 17.958,
+   "keep": [
+    4.0,
+    17.96
+   ],
+   "min": 5.0,
+   "ideal": 8.6
+  },
+  {
+   "id": "poi-small-hill-base.01",
+   "kind": "poi",
+   "in": 1885.689,
+   "len": 5.208,
+   "inSec": 3.0,
+   "T": 9.0,
+   "keep": [
+    2.0,
+    8.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-caulcano.01",
+   "kind": "poi",
+   "in": 1890.899,
+   "len": 6.583,
+   "inSec": 2.208333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-caulcano.02",
+   "kind": "poi",
+   "in": 1897.518,
+   "len": 6.833,
+   "inSec": 3.666667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-caulcano.03",
+   "kind": "poi",
+   "in": 1904.327,
+   "len": 5.5,
+   "inSec": 1.25,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-knathtead-excavation.01",
+   "kind": "poi",
+   "in": 1909.819,
+   "len": 5.042,
+   "inSec": 4.541667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-burning-wood.01",
+   "kind": "poi",
+   "in": 1914.864,
+   "len": 6.667,
+   "inSec": 1.541667,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-forgers-hideout.01",
+   "kind": "poi",
+   "in": 1921.523,
+   "len": 7.0,
+   "inSec": 3.0,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-forgers-hideout.02",
+   "kind": "poi",
+   "in": 1928.549,
+   "len": 6.333,
+   "inSec": 2.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-forgers-hideout.03",
+   "kind": "poi",
+   "in": 1934.871,
+   "len": 6.667,
+   "inSec": 1.666667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-planetarium.01",
+   "kind": "poi",
+   "in": 1941.559,
+   "len": 6.333,
+   "inSec": 0.833333,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-planetarium.02",
+   "kind": "poi",
+   "in": 1947.87,
+   "len": 7.042,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-arcanum-lookout.01",
+   "kind": "poi",
+   "in": 1954.934,
+   "len": 5.083,
+   "inSec": 4.125,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-ancient-lugian-fortress.01",
+   "kind": "poi",
+   "in": 1960.02,
+   "len": 5.417,
+   "inSec": 4.166667,
+   "T": 10.0,
+   "keep": [
+    3.0,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-ancient-lugian-fortress.02",
+   "kind": "poi",
+   "in": 1965.398,
+   "len": 6.167,
+   "inSec": 2.416667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "candeth-keep.01",
+   "kind": "v1",
+   "in": 1971.602,
+   "len": 6.792,
+   "inSec": 4.583333,
+   "T": 14.5,
+   "keep": [
+    1.5,
+    14.5
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "candeth-keep.02",
+   "kind": "v1",
+   "in": 1978.387,
+   "len": 8.292,
+   "inSec": 5.833333,
+   "T": 16.375,
+   "keep": [
+    2.0,
+    16.38
+   ],
+   "min": 4.5,
+   "ideal": 8.2
+  },
+  {
+   "id": "candeth-keep.03",
+   "kind": "v1",
+   "in": 1986.653,
+   "len": 4.75,
+   "inSec": 2.416667,
+   "T": 10.042,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "candeth-keep.04",
+   "kind": "v1",
+   "in": 1991.397,
+   "len": 5.0,
+   "inSec": 2.708333,
+   "T": 9.917,
+   "keep": [
+    0.5,
+    9.9
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "candeth-keep.05",
+   "kind": "v1",
+   "in": 1996.428,
+   "len": 7.875,
+   "inSec": 4.375,
+   "T": 16.333,
+   "keep": [
+    1.0,
+    15.6
+   ],
+   "min": 4.5,
+   "ideal": 7.8
+  },
+  {
+   "id": "poi-the-pit-of-heretics.01",
+   "kind": "poi",
+   "in": 2004.283,
+   "len": 6.333,
+   "inSec": 2.333333,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-the-pit-of-heretics.02",
+   "kind": "poi",
+   "in": 2010.639,
+   "len": 5.917,
+   "inSec": 2.541667,
+   "T": 11.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-the-pit-of-heretics.03",
+   "kind": "poi",
+   "in": 2016.536,
+   "len": 5.5,
+   "inSec": 1.25,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-abandoned-observatory.01",
+   "kind": "poi",
+   "in": 2022.025,
+   "len": 5.167,
+   "inSec": 1.416667,
+   "T": 8.0,
+   "keep": [
+    0.5,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-tombs-of-the-sand-kings.01",
+   "kind": "poi",
+   "in": 2027.191,
+   "len": 5.167,
+   "inSec": 2.166667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-assassins-roost.01",
+   "kind": "poi",
+   "in": 2032.396,
+   "len": 6.25,
+   "inSec": 4.25,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-assassins-roost.02",
+   "kind": "poi",
+   "in": 2038.615,
+   "len": 6.0,
+   "inSec": 2.5,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-dawnsong.01",
+   "kind": "poi",
+   "in": 2044.637,
+   "len": 6.875,
+   "inSec": 3.083333,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "qalabar.01",
+   "kind": "v1",
+   "in": 2051.512,
+   "len": 6.167,
+   "inSec": 5.916667,
+   "T": 13.542,
+   "keep": [
+    3.5,
+    13.54
+   ],
+   "min": 4.5,
+   "ideal": 6.4
+  },
+  {
+   "id": "qalabar.02",
+   "kind": "v1",
+   "in": 2057.683,
+   "len": 6.542,
+   "inSec": 3.541667,
+   "T": 13.167,
+   "keep": [
+    1.5,
+    12.0
+   ],
+   "min": 4.5,
+   "ideal": 6.6
+  },
+  {
+   "id": "qalabar.03",
+   "kind": "v1",
+   "in": 2064.207,
+   "len": 5.042,
+   "inSec": 4.0,
+   "T": 10.75,
+   "keep": [
+    1.5,
+    10.75
+   ],
+   "min": 4.0,
+   "ideal": 5.4
+  },
+  {
+   "id": "qalabar.04",
+   "kind": "v1",
+   "in": 2069.246,
+   "len": 5.875,
+   "inSec": 3.25,
+   "T": 12.333,
+   "keep": [
+    1.0,
+    11.5
+   ],
+   "min": 4.0,
+   "ideal": 6.2
+  },
+  {
+   "id": "qalabar.05",
+   "kind": "v1",
+   "in": 2075.144,
+   "len": 6.583,
+   "inSec": 4.208333,
+   "T": 14.542,
+   "keep": [
+    0.5,
+    14.54
+   ],
+   "min": 4.0,
+   "ideal": 6.9
+  },
+  {
+   "id": "poi-festival-stone-of-wintersebb.01",
+   "kind": "poi",
+   "in": 2081.72,
+   "len": 5.0,
+   "inSec": 1.5,
+   "T": 8.0,
+   "keep": [
+    0.3,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-qalabar-festival-grounds.01",
+   "kind": "poi",
+   "in": 2086.703,
+   "len": 6.708,
+   "inSec": 1.666667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "khayyaban.01",
+   "kind": "v1",
+   "in": 2093.425,
+   "len": 7.208,
+   "inSec": 2.916667,
+   "T": 14.792,
+   "keep": [
+    1.0,
+    13.0
+   ],
+   "min": 5.0,
+   "ideal": 7.0
+  },
+  {
+   "id": "khayyaban.02",
+   "kind": "v1",
+   "in": 2100.64,
+   "len": 6.417,
+   "inSec": 2.791667,
+   "T": 11.917,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 4.0,
+   "ideal": 6.0
+  },
+  {
+   "id": "khayyaban.03",
+   "kind": "v1",
+   "in": 2107.043,
+   "len": 6.667,
+   "inSec": 3.166667,
+   "T": 12.208,
+   "keep": [
+    1.0,
+    11.5
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "khayyaban.04",
+   "kind": "v1",
+   "in": 2113.724,
+   "len": 6.75,
+   "inSec": 4.125,
+   "T": 13.125,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "min": 4.5,
+   "ideal": 6.6
+  },
+  {
+   "id": "khayyaban.05",
+   "kind": "v1",
+   "in": 2120.466,
+   "len": 5.708,
+   "inSec": 3.0,
+   "T": 11.75,
+   "keep": [
+    1.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-aias-tower.01",
+   "kind": "poi",
+   "in": 2126.158,
+   "len": 5.583,
+   "inSec": 5.166667,
+   "T": 11.0,
+   "keep": [
+    4.5,
+    10.75
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-aias-tower.02",
+   "kind": "poi",
+   "in": 2131.731,
+   "len": 5.292,
+   "inSec": 2.333333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-aias-tower.03",
+   "kind": "poi",
+   "in": 2137.048,
+   "len": 6.208,
+   "inSec": 2.666667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-aias-tower.04",
+   "kind": "poi",
+   "in": 2143.239,
+   "len": 5.5,
+   "inSec": 1.25,
+   "T": 8.0,
+   "keep": [
+    0.3,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-harvestgain.01",
+   "kind": "poi",
+   "in": 2148.757,
+   "len": 5.25,
+   "inSec": 2.958333,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "uziz.01",
+   "kind": "v1",
+   "in": 2153.996,
+   "len": 6.75,
+   "inSec": 4.625,
+   "T": 14.083,
+   "keep": [
+    1.5,
+    13.0
+   ],
+   "min": 4.5,
+   "ideal": 6.6
+  },
+  {
+   "id": "uziz.02",
+   "kind": "v1",
+   "in": 2160.764,
+   "len": 7.333,
+   "inSec": 3.333333,
+   "T": 13.583,
+   "keep": [
+    1.5,
+    12.5
+   ],
+   "min": 4.5,
+   "ideal": 6.8
+  },
+  {
+   "id": "uziz.03",
+   "kind": "v1",
+   "in": 2168.094,
+   "len": 7.833,
+   "inSec": 1.875,
+   "T": 11.208,
+   "keep": [
+    1.0,
+    11.21
+   ],
+   "min": 6.0,
+   "ideal": 7.5
+  },
+  {
+   "id": "uziz.04",
+   "kind": "v1",
+   "in": 2175.923,
+   "len": 5.417,
+   "inSec": 2.541667,
+   "T": 10.25,
+   "keep": [
+    0.5,
+    10.0
+   ],
+   "min": 3.5,
+   "ideal": 5.1
+  },
+  {
+   "id": "uziz.05",
+   "kind": "v1",
+   "in": 2181.353,
+   "len": 7.542,
+   "inSec": 5.208333,
+   "T": 15.167,
+   "keep": [
+    2.0,
+    15.0
+   ],
+   "min": 5.0,
+   "ideal": 7.2
+  },
+  {
+   "id": "poi-festival-stone-of-solclaim.01",
+   "kind": "poi",
+   "in": 2188.876,
+   "len": 7.0,
+   "inSec": 1.75,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-north-al-arqas-outpost.01",
+   "kind": "poi",
+   "in": 2195.863,
+   "len": 5.083,
+   "inSec": 1.458333,
+   "T": 8.0,
+   "keep": [
+    0.3,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "al-arqas.01",
+   "kind": "v1",
+   "in": 2200.952,
+   "len": 7.042,
+   "inSec": 6.208333,
+   "T": 13.25,
+   "keep": [
+    3.5,
+    13.25
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "al-arqas.02",
+   "kind": "v1",
+   "in": 2207.989,
+   "len": 7.75,
+   "inSec": 5.125,
+   "T": 13.833,
+   "keep": [
+    2.5,
+    13.83
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "al-arqas.03",
+   "kind": "v1",
+   "in": 2215.767,
+   "len": 6.667,
+   "inSec": 2.666667,
+   "T": 12.167,
+   "keep": [
+    0.5,
+    12.1
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "al-arqas.04",
+   "kind": "v1",
+   "in": 2222.431,
+   "len": 6.458,
+   "inSec": 3.75,
+   "T": 12.083,
+   "keep": [
+    2.0,
+    12.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "al-arqas.05",
+   "kind": "v1",
+   "in": 2228.863,
+   "len": 6.333,
+   "inSec": 4.833333,
+   "T": 12.667,
+   "keep": [
+    2.0,
+    12.67
+   ],
+   "min": 4.0,
+   "ideal": 5.9
+  },
+  {
+   "id": "poi-the-sleepless-sentinels.01",
+   "kind": "poi",
+   "in": 2235.199,
+   "len": 5.792,
+   "inSec": 1.583333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-the-sleepless-sentinels.02",
+   "kind": "poi",
+   "in": 2240.981,
+   "len": 5.542,
+   "inSec": 1.208333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-the-sleepless-sentinels.03",
+   "kind": "poi",
+   "in": 2246.555,
+   "len": 6.208,
+   "inSec": 2.0,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-east-yaraq-outpost.01",
+   "kind": "poi",
+   "in": 2252.754,
+   "len": 5.333,
+   "inSec": 2.875,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "yaraq.01",
+   "kind": "v1",
+   "in": 2258.071,
+   "len": 7.042,
+   "inSec": 2.166667,
+   "T": 13.833,
+   "keep": [
+    1.0,
+    9.2
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "yaraq.02",
+   "kind": "v1",
+   "in": 2265.107,
+   "len": 7.792,
+   "inSec": 3.583333,
+   "T": 15.375,
+   "keep": [
+    1.0,
+    14.0
+   ],
+   "min": 4.5,
+   "ideal": 7.7
+  },
+  {
+   "id": "yaraq.03",
+   "kind": "v1",
+   "in": 2272.922,
+   "len": 6.542,
+   "inSec": 3.0,
+   "T": 12.208,
+   "keep": [
+    0.5,
+    12.0
+   ],
+   "min": 3.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "yaraq.04",
+   "kind": "v1",
+   "in": 2279.44,
+   "len": 6.5,
+   "inSec": 2.25,
+   "T": 12.292,
+   "keep": [
+    1.0,
+    11.5
+   ],
+   "min": 4.0,
+   "ideal": 6.1
+  },
+  {
+   "id": "yaraq.05",
+   "kind": "v1",
+   "in": 2285.955,
+   "len": 5.333,
+   "inSec": 3.333333,
+   "T": 10.833,
+   "keep": [
+    1.0,
+    10.8
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-festival-stone-of-warmtide.01",
+   "kind": "poi",
+   "in": 2291.299,
+   "len": 7.083,
+   "inSec": 1.708333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-warmtide.02",
+   "kind": "poi",
+   "in": 2298.38,
+   "len": 6.875,
+   "inSec": 2.166667,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.7
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.01",
+   "kind": "poi",
+   "in": 2305.231,
+   "len": 5.875,
+   "inSec": 2.333333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.02",
+   "kind": "poi",
+   "in": 2311.105,
+   "len": 5.958,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.03",
+   "kind": "poi",
+   "in": 2317.075,
+   "len": 5.167,
+   "inSec": 1.416667,
+   "T": 8.0,
+   "keep": [
+    0.3,
+    7.7
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-inner-sea-port-ruins.04",
+   "kind": "poi",
+   "in": 2322.251,
+   "len": 5.667,
+   "inSec": 3.416667,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-north-yaraq-outpost.01",
+   "kind": "poi",
+   "in": 2327.906,
+   "len": 5.333,
+   "inSec": 3.666667,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "tufa.01",
+   "kind": "v1",
+   "in": 2333.257,
+   "len": 6.875,
+   "inSec": 7.5,
+   "T": 14.375,
+   "keep": [
+    2.5,
+    14.38
+   ],
+   "min": 4.5,
+   "ideal": 6.8
+  },
+  {
+   "id": "tufa.02",
+   "kind": "v1",
+   "in": 2340.133,
+   "len": 6.417,
+   "inSec": 4.291667,
+   "T": 12.542,
+   "keep": [
+    1.5,
+    12.54
+   ],
+   "min": 3.5,
+   "ideal": 6.3
+  },
+  {
+   "id": "tufa.03",
+   "kind": "v1",
+   "in": 2346.562,
+   "len": 5.833,
+   "inSec": 5.541667,
+   "T": 11.375,
+   "keep": [
+    3.0,
+    11.38
+   ],
+   "min": 3.5,
+   "ideal": 5.7
+  },
+  {
+   "id": "tufa.04",
+   "kind": "v1",
+   "in": 2352.367,
+   "len": 8.708,
+   "inSec": 8.375,
+   "T": 17.083,
+   "keep": [
+    4.0,
+    17.08
+   ],
+   "min": 4.5,
+   "ideal": 8.5
+  },
+  {
+   "id": "tufa.05",
+   "kind": "v1",
+   "in": 2361.083,
+   "len": 5.667,
+   "inSec": 2.958333,
+   "T": 11.167,
+   "keep": [
+    0.5,
+    10.75
+   ],
+   "min": 4.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "poi-festival-stone-of-verdantine.01",
+   "kind": "poi",
+   "in": 2366.74,
+   "len": 6.875,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-verdantine.02",
+   "kind": "poi",
+   "in": 2373.637,
+   "len": 6.958,
+   "inSec": 1.125,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "samsur.01",
+   "kind": "v1",
+   "in": 2380.579,
+   "len": 8.625,
+   "inSec": 7.791667,
+   "T": 16.417,
+   "keep": [
+    4.0,
+    16.42
+   ],
+   "min": 4.5,
+   "ideal": 7.8
+  },
+  {
+   "id": "samsur.02",
+   "kind": "v1",
+   "in": 2389.197,
+   "len": 4.917,
+   "inSec": 2.25,
+   "T": 9.417,
+   "keep": [
+    0.0,
+    9.42
+   ],
+   "min": 3.5,
+   "ideal": 4.7
+  },
+  {
+   "id": "samsur.03",
+   "kind": "v1",
+   "in": 2394.117,
+   "len": 4.25,
+   "inSec": 2.083333,
+   "T": 8.458,
+   "keep": [
+    1.0,
+    8.46
+   ],
+   "min": 3.5,
+   "ideal": 4.2
+  },
+  {
+   "id": "samsur.04",
+   "kind": "v1",
+   "in": 2398.378,
+   "len": 7.458,
+   "inSec": 5.291667,
+   "T": 13.875,
+   "keep": [
+    3.0,
+    13.88
+   ],
+   "min": 3.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "samsur.05",
+   "kind": "v1",
+   "in": 2405.852,
+   "len": 6.917,
+   "inSec": 3.125,
+   "T": 13.208,
+   "keep": [
+    2.0,
+    13.21
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "poi-northwest-samsur-outpost.01",
+   "kind": "poi",
+   "in": 2412.765,
+   "len": 5.208,
+   "inSec": 1.416667,
+   "T": 8.0,
+   "keep": [
+    0.3,
+    7.7
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "al-jalima.01",
+   "kind": "v1",
+   "in": 2417.941,
+   "len": 8.208,
+   "inSec": 7.458333,
+   "T": 15.667,
+   "keep": [
+    5.0,
+    15.67
+   ],
+   "min": 4.5,
+   "ideal": 7.4
+  },
+  {
+   "id": "al-jalima.02",
+   "kind": "v1",
+   "in": 2426.149,
+   "len": 6.208,
+   "inSec": 4.666667,
+   "T": 10.875,
+   "keep": [
+    2.5,
+    10.88
+   ],
+   "min": 3.5,
+   "ideal": 5.4
+  },
+  {
+   "id": "al-jalima.03",
+   "kind": "v1",
+   "in": 2432.36,
+   "len": 6.833,
+   "inSec": 2.583333,
+   "T": 11.833,
+   "keep": [
+    1.5,
+    11.83
+   ],
+   "min": 4.5,
+   "ideal": 5.9
+  },
+  {
+   "id": "al-jalima.04",
+   "kind": "v1",
+   "in": 2439.21,
+   "len": 6.5,
+   "inSec": 2.541667,
+   "T": 11.167,
+   "keep": [
+    0.5,
+    11.17
+   ],
+   "min": 3.5,
+   "ideal": 5.6
+  },
+  {
+   "id": "al-jalima.05",
+   "kind": "v1",
+   "in": 2445.689,
+   "len": 6.958,
+   "inSec": 5.958333,
+   "T": 13.708,
+   "keep": [
+    3.0,
+    13.71
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-banderling-fort.01",
+   "kind": "poi",
+   "in": 2452.677,
+   "len": 7.042,
+   "inSec": 1.083333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-banderling-fort.02",
+   "kind": "poi",
+   "in": 2459.715,
+   "len": 7.25,
+   "inSec": 1.375,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "zaikhal.01",
+   "kind": "v1",
+   "in": 2466.962,
+   "len": 7.958,
+   "inSec": 6.5,
+   "T": 15.292,
+   "keep": [
+    4.0,
+    15.29
+   ],
+   "min": 4.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "zaikhal.02",
+   "kind": "v1",
+   "in": 2474.917,
+   "len": 6.375,
+   "inSec": 3.333333,
+   "T": 11.208,
+   "keep": [
+    1.5,
+    11.21
+   ],
+   "min": 3.5,
+   "ideal": 5.6
+  },
+  {
+   "id": "zaikhal.03",
+   "kind": "v1",
+   "in": 2481.273,
+   "len": 6.917,
+   "inSec": 2.833333,
+   "T": 12.583,
+   "keep": [
+    0.0,
+    12.58
+   ],
+   "min": 3.5,
+   "ideal": 6.3
+  },
+  {
+   "id": "zaikhal.04",
+   "kind": "v1",
+   "in": 2488.206,
+   "len": 6.125,
+   "inSec": 2.916667,
+   "T": 11.5,
+   "keep": [
+    1.0,
+    11.5
+   ],
+   "min": 4.5,
+   "ideal": 5.8
+  },
+  {
+   "id": "zaikhal.05",
+   "kind": "v1",
+   "in": 2494.334,
+   "len": 7.958,
+   "inSec": 6.625,
+   "T": 15.375,
+   "keep": [
+    0.0,
+    14.58
+   ],
+   "min": 3.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "poi-suntik-village.01",
+   "kind": "poi",
+   "in": 2502.274,
+   "len": 6.792,
+   "inSec": 3.708333,
+   "T": 11.0,
+   "keep": [
+    3.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-suntik-village.02",
+   "kind": "poi",
+   "in": 2509.079,
+   "len": 7.083,
+   "inSec": 2.208333,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-leikothas-crypt.01",
+   "kind": "poi",
+   "in": 2516.161,
+   "len": 6.833,
+   "inSec": 1.333333,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-four-towers.01",
+   "kind": "poi",
+   "in": 2522.986,
+   "len": 7.0,
+   "inSec": 1.083333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-four-towers.02",
+   "kind": "poi",
+   "in": 2529.994,
+   "len": 7.042,
+   "inSec": 1.5,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-four-towers.03",
+   "kind": "poi",
+   "in": 2537.039,
+   "len": 7.25,
+   "inSec": 1.625,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-desert-ridge-border.01",
+   "kind": "poi",
+   "in": 2544.303,
+   "len": 4.875,
+   "inSec": 2.083333,
+   "T": 9.0,
+   "keep": [
+    1.5,
+    7.5
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-mount-bellig.01",
+   "kind": "poi",
+   "in": 2549.169,
+   "len": 6.917,
+   "inSec": 2.291667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mount-zabool.01",
+   "kind": "poi",
+   "in": 2556.099,
+   "len": 8.208,
+   "inSec": 2.0,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mount-alphus.01",
+   "kind": "poi",
+   "in": 2564.273,
+   "len": 5.708,
+   "inSec": 1.333333,
+   "T": 8.0,
+   "keep": [
+    0.8,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-mount-alphus.02",
+   "kind": "poi",
+   "in": 2569.985,
+   "len": 6.458,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-empyrean-ruins.01",
+   "kind": "poi",
+   "in": 2576.442,
+   "len": 7.167,
+   "inSec": 1.5,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.2
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-empyrean-ruins.02",
+   "kind": "poi",
+   "in": 2583.608,
+   "len": 6.292,
+   "inSec": 0.833333,
+   "T": 8.0,
+   "keep": [
+    0.8,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-east-samsur-outpost.01",
+   "kind": "poi",
+   "in": 2589.926,
+   "len": 6.75,
+   "inSec": 2.125,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-east-samsur-outpost.02",
+   "kind": "poi",
+   "in": 2596.688,
+   "len": 4.917,
+   "inSec": 1.791667,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-nuhmudiras-mansion.01",
+   "kind": "poi",
+   "in": 2601.566,
+   "len": 5.042,
+   "inSec": 0.958333,
+   "T": 7.0,
+   "keep": [
+    0.5,
+    6.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-nuhmudiras-mansion.02",
+   "kind": "poi",
+   "in": 2606.628,
+   "len": 6.833,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-mount-syliph.01",
+   "kind": "poi",
+   "in": 2613.476,
+   "len": 6.833,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-wilderness-fort.01",
+   "kind": "poi",
+   "in": 2620.296,
+   "len": 5.75,
+   "inSec": 5.0,
+   "T": 11.0,
+   "keep": [
+    4.5,
+    10.75
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-wilderness-fort.02",
+   "kind": "poi",
+   "in": 2626.061,
+   "len": 6.792,
+   "inSec": 1.208333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.7
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "yanshi.01",
+   "kind": "v1",
+   "in": 2632.813,
+   "len": 6.792,
+   "inSec": 3.083333,
+   "T": 13,
+   "keep": [
+    0.0,
+    13
+   ],
+   "min": 4.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "yanshi.02",
+   "kind": "v1",
+   "in": 2639.612,
+   "len": 5.542,
+   "inSec": 2.25,
+   "T": 8.25,
+   "keep": [
+    1.5,
+    8.25
+   ],
+   "min": 4.5,
+   "ideal": 4.9
+  },
+  {
+   "id": "yanshi.03",
+   "kind": "v1",
+   "in": 2645.176,
+   "len": 7.958,
+   "inSec": 5.5,
+   "T": 13.958,
+   "keep": [
+    2.0,
+    13.96
+   ],
+   "min": 3.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "yanshi.04",
+   "kind": "v1",
+   "in": 2653.142,
+   "len": 8.667,
+   "inSec": 5.916667,
+   "T": 14.583,
+   "keep": [
+    1.5,
+    14.58
+   ],
+   "min": 4.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "yanshi.05",
+   "kind": "v1",
+   "in": 2661.807,
+   "len": 8.542,
+   "inSec": 3.25,
+   "T": 15.875,
+   "keep": [
+    0.0,
+    15.08
+   ],
+   "min": 3.5,
+   "ideal": 7.5
+  },
+  {
+   "id": "poi-burun-ruuk-village.01",
+   "kind": "poi",
+   "in": 2670.341,
+   "len": 5.208,
+   "inSec": 0.916667,
+   "T": 7.0,
+   "keep": [
+    0.5,
+    6.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-burun-ruuk-village.02",
+   "kind": "poi",
+   "in": 2675.561,
+   "len": 7.0,
+   "inSec": 2.75,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-old-yanshi.01",
+   "kind": "poi",
+   "in": 2682.532,
+   "len": 7.5,
+   "inSec": 1.0,
+   "T": 11.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-old-yanshi.02",
+   "kind": "poi",
+   "in": 2690.062,
+   "len": 6.25,
+   "inSec": 0.958333,
+   "T": 8.0,
+   "keep": [
+    0.8,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-folthid-estate.01",
+   "kind": "poi",
+   "in": 2696.278,
+   "len": 6.708,
+   "inSec": 1.416667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-north-yanshi-outpost.01",
+   "kind": "poi",
+   "in": 2703.012,
+   "len": 6.917,
+   "inSec": 1.291667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-north-yanshi-outpost.02",
+   "kind": "poi",
+   "in": 2709.91,
+   "len": 7.0,
+   "inSec": 1.75,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-imuth-maer-doquin.01",
+   "kind": "poi",
+   "in": 2716.921,
+   "len": 6.708,
+   "inSec": 2.416667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-imuth-maer-doquin.02",
+   "kind": "poi",
+   "in": 2723.616,
+   "len": 5.458,
+   "inSec": 3.041667,
+   "T": 9.0,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-burun-fortress.01",
+   "kind": "poi",
+   "in": 2729.089,
+   "len": 6.208,
+   "inSec": 2.166667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-burun-fortress.02",
+   "kind": "poi",
+   "in": 2735.287,
+   "len": 6.667,
+   "inSec": 3.833333,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-burun-fortress.03",
+   "kind": "poi",
+   "in": 2741.952,
+   "len": 5.292,
+   "inSec": 1.541667,
+   "T": 8.0,
+   "keep": [
+    0.8,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "sawato.01",
+   "kind": "v1",
+   "in": 2747.242,
+   "len": 6.542,
+   "inSec": 8.25,
+   "T": 14.792,
+   "keep": [
+    3.0,
+    14.79
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "sawato.02",
+   "kind": "v1",
+   "in": 2753.789,
+   "len": 5.5,
+   "inSec": 6.583333,
+   "T": 12.083,
+   "keep": [
+    2.0,
+    12.08
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "sawato.03",
+   "kind": "v1",
+   "in": 2759.297,
+   "len": 4.708,
+   "inSec": 2.833333,
+   "T": 10.375,
+   "keep": [
+    0.0,
+    10.38
+   ],
+   "min": 3.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "sawato.04",
+   "kind": "v1",
+   "in": 2764.01,
+   "len": 5.833,
+   "inSec": 5.583333,
+   "T": 11.917,
+   "keep": [
+    2.5,
+    11.92
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "sawato.05",
+   "kind": "v1",
+   "in": 2769.824,
+   "len": 6.792,
+   "inSec": 3.583333,
+   "T": 14.833,
+   "keep": [
+    1.0,
+    14.04
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-fycheck-outpost.01",
+   "kind": "poi",
+   "in": 2776.616,
+   "len": 7.333,
+   "inSec": 1.583333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-fycheck-outpost.02",
+   "kind": "poi",
+   "in": 2783.942,
+   "len": 7.042,
+   "inSec": 2.25,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-fycheck-ruins.01",
+   "kind": "poi",
+   "in": 2791.014,
+   "len": 5.917,
+   "inSec": 2.791667,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-fycheck-ruins.02",
+   "kind": "poi",
+   "in": 2796.928,
+   "len": 4.5,
+   "inSec": 1.25,
+   "T": 7.0,
+   "keep": [
+    0.5,
+    6.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-sho-roadside.01",
+   "kind": "poi",
+   "in": 2801.435,
+   "len": 5.292,
+   "inSec": 1.666667,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-west-shoushi-outpost.01",
+   "kind": "poi",
+   "in": 2806.724,
+   "len": 5.083,
+   "inSec": 5.125,
+   "T": 11.0,
+   "keep": [
+    3.2,
+    10.8
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-rat-kings-cave.01",
+   "kind": "poi",
+   "in": 2811.773,
+   "len": 5.5,
+   "inSec": 1.208333,
+   "T": 7.5,
+   "keep": [
+    0.8,
+    7.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "shoushi.01",
+   "kind": "v1",
+   "in": 2817.281,
+   "len": 6.375,
+   "inSec": 8.958333,
+   "T": 15.333,
+   "keep": [
+    2.5,
+    15.33
+   ],
+   "min": 3.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "shoushi.02",
+   "kind": "v1",
+   "in": 2823.663,
+   "len": 4.583,
+   "inSec": 1.291667,
+   "T": 6.917,
+   "keep": [
+    0.8,
+    6.92
+   ],
+   "min": 4.5,
+   "ideal": 4.5
+  },
+  {
+   "id": "shoushi.03",
+   "kind": "v1",
+   "in": 2828.269,
+   "len": 6.5,
+   "inSec": 3.75,
+   "T": 13.792,
+   "keep": [
+    2.0,
+    12.0
+   ],
+   "min": 3.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "shoushi.04",
+   "kind": "v1",
+   "in": 2834.74,
+   "len": 6.833,
+   "inSec": 3.958333,
+   "T": 14.75,
+   "keep": [
+    0.0,
+    14.75
+   ],
+   "min": 3.5,
+   "ideal": 7.4
+  },
+  {
+   "id": "shoushi.05",
+   "kind": "v1",
+   "in": 2841.594,
+   "len": 5.958,
+   "inSec": 4.833333,
+   "T": 11.583,
+   "keep": [
+    2.5,
+    11.58
+   ],
+   "min": 4.0,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-festival-stone-of-foredawn.01",
+   "kind": "poi",
+   "in": 2847.536,
+   "len": 6.25,
+   "inSec": 2.583333,
+   "T": 11.0,
+   "keep": [
+    1.2,
+    10.2
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-foredawn.02",
+   "kind": "poi",
+   "in": 2853.772,
+   "len": 5.667,
+   "inSec": 1.375,
+   "T": 8.0,
+   "keep": [
+    0.8,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-festival-stone-of-foredawn.03",
+   "kind": "poi",
+   "in": 2859.47,
+   "len": 4.625,
+   "inSec": 1.583333,
+   "T": 7.5,
+   "keep": [
+    0.8,
+    7.0
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-southeast-shoushi-outpost.01",
+   "kind": "poi",
+   "in": 2864.067,
+   "len": 7.0,
+   "inSec": 2.208333,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "hebian-to.01",
+   "kind": "v1",
+   "in": 2871.073,
+   "len": 7.0,
+   "inSec": 7.708333,
+   "T": 14.708,
+   "keep": [
+    3.0,
+    14.71
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "hebian-to.02",
+   "kind": "v1",
+   "in": 2878.091,
+   "len": 6.042,
+   "inSec": 3.166667,
+   "T": 12.458,
+   "keep": [
+    2.0,
+    11.0
+   ],
+   "min": 3.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "hebian-to.03",
+   "kind": "v1",
+   "in": 2884.108,
+   "len": 4.792,
+   "inSec": 2.791667,
+   "T": 10.375,
+   "keep": [
+    0.0,
+    10.38
+   ],
+   "min": 3.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "hebian-to.04",
+   "kind": "v1",
+   "in": 2888.931,
+   "len": 5.167,
+   "inSec": 4.916667,
+   "T": 11.292,
+   "keep": [
+    1.5,
+    11.29
+   ],
+   "min": 3.5,
+   "ideal": 5.6
+  },
+  {
+   "id": "hebian-to.05",
+   "kind": "v1",
+   "in": 2894.073,
+   "len": 6.292,
+   "inSec": 7.208333,
+   "T": 14.292,
+   "keep": [
+    0.0,
+    13.5
+   ],
+   "min": 4.5,
+   "ideal": 6.75
+  },
+  {
+   "id": "tou-tou.01",
+   "kind": "v1",
+   "in": 2900.387,
+   "len": 6.792,
+   "inSec": 4.75,
+   "T": 15.292,
+   "keep": [
+    1.0,
+    15.29
+   ],
+   "min": 4.0,
+   "ideal": 7.25
+  },
+  {
+   "id": "tou-tou.02",
+   "kind": "v1",
+   "in": 2907.18,
+   "len": 5.167,
+   "inSec": 3.125,
+   "T": 11.375,
+   "keep": [
+    1.5,
+    10.0
+   ],
+   "min": 4.0,
+   "ideal": 5.7
+  },
+  {
+   "id": "tou-tou.03",
+   "kind": "v1",
+   "in": 2912.34,
+   "len": 5.458,
+   "inSec": 2.083333,
+   "T": 11.292,
+   "keep": [
+    1.0,
+    8.5
+   ],
+   "min": 3.5,
+   "ideal": 5.65
+  },
+  {
+   "id": "tou-tou.04",
+   "kind": "v1",
+   "in": 2917.796,
+   "len": 7.292,
+   "inSec": 5.833333,
+   "T": 16.083,
+   "keep": [
+    3.0,
+    16.08
+   ],
+   "min": 4.5,
+   "ideal": 8.0
+  },
+  {
+   "id": "tou-tou.05",
+   "kind": "v1",
+   "in": 2925.082,
+   "len": 4.458,
+   "inSec": 3.958333,
+   "T": 10.208,
+   "keep": [
+    2.0,
+    10.21
+   ],
+   "min": 3.5,
+   "ideal": 4.7
+  },
+  {
+   "id": "poi-fort-aimaru.01",
+   "kind": "poi",
+   "in": 2929.541,
+   "len": 7.583,
+   "inSec": 1.458333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-fort-aimaru.02",
+   "kind": "poi",
+   "in": 2937.125,
+   "len": 7.167,
+   "inSec": 2.0,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-castle-of-baron-nuvillus.01",
+   "kind": "poi",
+   "in": 2944.29,
+   "len": 3.917,
+   "inSec": 5.083333,
+   "T": 9.0,
+   "keep": [
+    4.0,
+    9.0
+   ],
+   "min": 4.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "poi-castle-of-baron-nuvillus.02",
+   "kind": "poi",
+   "in": 2948.221,
+   "len": 6.708,
+   "inSec": 0.5,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-battlefield-of-ayn-tayan.01",
+   "kind": "poi",
+   "in": 2954.897,
+   "len": 6.167,
+   "inSec": 1.458333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.6
+   ],
+   "min": 3.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-battlefield-of-ayn-tayan.02",
+   "kind": "poi",
+   "in": 2961.071,
+   "len": 5.292,
+   "inSec": 1.291667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-north-nanto-outpost.01",
+   "kind": "poi",
+   "in": 2966.394,
+   "len": 5.333,
+   "inSec": 1.833333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-advocate-ruins.01",
+   "kind": "poi",
+   "in": 2971.722,
+   "len": 6.75,
+   "inSec": 1.875,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-advocate-ruins.02",
+   "kind": "poi",
+   "in": 2978.45,
+   "len": 6.417,
+   "inSec": 0.791667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "baishi.01",
+   "kind": "v1",
+   "in": 2984.873,
+   "len": 7.833,
+   "inSec": 8.375,
+   "T": 16.208,
+   "keep": [
+    3.0,
+    16.21
+   ],
+   "min": 4.5,
+   "ideal": 7.7
+  },
+  {
+   "id": "baishi.02",
+   "kind": "v1",
+   "in": 2992.701,
+   "len": 6.417,
+   "inSec": 2.916667,
+   "T": 12.25,
+   "keep": [
+    0.0,
+    12.25
+   ],
+   "min": 3.5,
+   "ideal": 6.1
+  },
+  {
+   "id": "baishi.03",
+   "kind": "v1",
+   "in": 2999.113,
+   "len": 5.75,
+   "inSec": 2.583333,
+   "T": 10.958,
+   "keep": [
+    0.0,
+    10.96
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "baishi.04",
+   "kind": "v1",
+   "in": 3004.866,
+   "len": 5.792,
+   "inSec": 3.083333,
+   "T": 11.5,
+   "keep": [
+    0.0,
+    11.5
+   ],
+   "min": 4.5,
+   "ideal": 5.75
+  },
+  {
+   "id": "baishi.05",
+   "kind": "v1",
+   "in": 3010.66,
+   "len": 7.667,
+   "inSec": 6.666667,
+   "T": 16.125,
+   "keep": [
+    3.0,
+    16.12
+   ],
+   "min": 4.5,
+   "ideal": 7.7
+  },
+  {
+   "id": "poi-drunken-madmans-tower.01",
+   "kind": "poi",
+   "in": 3018.313,
+   "len": 5.75,
+   "inSec": 2.875,
+   "T": 10.0,
+   "keep": [
+    2.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-drunken-madmans-tower.02",
+   "kind": "poi",
+   "in": 3024.072,
+   "len": 4.875,
+   "inSec": 2.083333,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.5
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-south-osteth-peak.01",
+   "kind": "poi",
+   "in": 3028.95,
+   "len": 8.458,
+   "inSec": 1.25,
+   "T": 11.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-old-keep.01",
+   "kind": "poi",
+   "in": 3037.425,
+   "len": 6.333,
+   "inSec": 2.833333,
+   "T": 11.0,
+   "keep": [
+    1.5,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-old-keep.02",
+   "kind": "poi",
+   "in": 3043.741,
+   "len": 4.458,
+   "inSec": 2.75,
+   "T": 8.0,
+   "keep": [
+    1.0,
+    8.0
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "lin.01",
+   "kind": "v1",
+   "in": 3048.227,
+   "len": 6.125,
+   "inSec": 5.916667,
+   "T": 14.708,
+   "keep": [
+    3.0,
+    14.71
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "lin.02",
+   "kind": "v1",
+   "in": 3054.354,
+   "len": 5.083,
+   "inSec": 2.958333,
+   "T": 11.042,
+   "keep": [
+    0.0,
+    11.04
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "lin.03",
+   "kind": "v1",
+   "in": 3059.415,
+   "len": 3.708,
+   "inSec": 5.208333,
+   "T": 8.917,
+   "keep": [
+    2.0,
+    8.92
+   ],
+   "min": 3.5,
+   "ideal": 4.5
+  },
+  {
+   "id": "lin.04",
+   "kind": "v1",
+   "in": 3063.123,
+   "len": 5.75,
+   "inSec": 3.541667,
+   "T": 12.708,
+   "keep": [
+    1.5,
+    12.71
+   ],
+   "min": 4.5,
+   "ideal": 6.35
+  },
+  {
+   "id": "lin.05",
+   "kind": "v1",
+   "in": 3068.876,
+   "len": 6.208,
+   "inSec": 7.416667,
+   "T": 14.875,
+   "keep": [
+    3.0,
+    14.88
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-festival-stone-of-morntide.01",
+   "kind": "poi",
+   "in": 3075.07,
+   "len": 5.333,
+   "inSec": 0.916667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "nanto.01",
+   "kind": "v1",
+   "in": 3080.427,
+   "len": 6.167,
+   "inSec": 1.416667,
+   "T": 11.125,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.75,
+   "ideal": 5.6
+  },
+  {
+   "id": "nanto.02",
+   "kind": "v1",
+   "in": 3086.59,
+   "len": 6.792,
+   "inSec": 3.083333,
+   "T": 12.458,
+   "keep": [
+    2.0,
+    12.46
+   ],
+   "min": 4.5,
+   "ideal": 6.2
+  },
+  {
+   "id": "nanto.03",
+   "kind": "v1",
+   "in": 3093.392,
+   "len": 5.792,
+   "inSec": 2.916667,
+   "T": 11.083,
+   "keep": [
+    0.5,
+    11.08
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "nanto.04",
+   "kind": "v1",
+   "in": 3099.148,
+   "len": 5.917,
+   "inSec": 2.25,
+   "T": 11.25,
+   "keep": [
+    1.0,
+    11.25
+   ],
+   "min": 4.5,
+   "ideal": 5.6
+  },
+  {
+   "id": "nanto.05",
+   "kind": "v1",
+   "in": 3105.077,
+   "len": 7.958,
+   "inSec": 6.583333,
+   "T": 15.333,
+   "keep": [
+    0.0,
+    14.54
+   ],
+   "min": 3.5,
+   "ideal": 7.3
+  },
+  {
+   "id": "poi-east-nanto-outpost.01",
+   "kind": "poi",
+   "in": 3113.037,
+   "len": 5.25,
+   "inSec": 0.791667,
+   "T": 7.0,
+   "keep": [
+    0.4,
+    6.5
+   ],
+   "min": 3.5,
+   "ideal": 5.0
+  },
+  {
+   "id": "mayoi.01",
+   "kind": "v1",
+   "in": 3118.279,
+   "len": 6.792,
+   "inSec": 5.083333,
+   "T": 16.542,
+   "keep": [
+    1.0,
+    16.54
+   ],
+   "min": 4.0,
+   "ideal": 7.9
+  },
+  {
+   "id": "mayoi.02",
+   "kind": "v1",
+   "in": 3125.081,
+   "len": 5.625,
+   "inSec": 7.291667,
+   "T": 12.917,
+   "keep": [
+    3.0,
+    12.92
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "mayoi.03",
+   "kind": "v1",
+   "in": 3130.695,
+   "len": 4.75,
+   "inSec": 4.125,
+   "T": 10.875,
+   "keep": [
+    1.5,
+    10.88
+   ],
+   "min": 3.5,
+   "ideal": 5.4
+  },
+  {
+   "id": "mayoi.04",
+   "kind": "v1",
+   "in": 3135.445,
+   "len": 3.917,
+   "inSec": 2.25,
+   "T": 9.292,
+   "keep": [
+    0.5,
+    9.29
+   ],
+   "min": 3.5,
+   "ideal": 4.65
+  },
+  {
+   "id": "mayoi.05",
+   "kind": "v1",
+   "in": 3139.393,
+   "len": 6.375,
+   "inSec": 5.833333,
+   "T": 15.125,
+   "keep": [
+    1.0,
+    15.12
+   ],
+   "min": 4.0,
+   "ideal": 7.15
+  },
+  {
+   "id": "poi-freebooter-keep.01",
+   "kind": "poi",
+   "in": 3145.77,
+   "len": 7.083,
+   "inSec": 1.708333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-freebooter-keep.02",
+   "kind": "poi",
+   "in": 3152.817,
+   "len": 6.958,
+   "inSec": 3.25,
+   "T": 11.0,
+   "keep": [
+    3.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-ruins-of-degaralesh.01",
+   "kind": "poi",
+   "in": 3159.771,
+   "len": 6.875,
+   "inSec": 2.125,
+   "T": 10.0,
+   "keep": [
+    1.5,
+    9.6
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-ruins-of-degaralesh.02",
+   "kind": "poi",
+   "in": 3166.668,
+   "len": 6.875,
+   "inSec": 1.125,
+   "T": 9.0,
+   "keep": [
+    0.5,
+    8.6
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-deru-tree-of-degaralesh.01",
+   "kind": "poi",
+   "in": 3173.541,
+   "len": 5.875,
+   "inSec": 1.0,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-deru-tree-of-degaralesh.02",
+   "kind": "poi",
+   "in": 3179.416,
+   "len": 7.292,
+   "inSec": 1.833333,
+   "T": 11.0,
+   "keep": [
+    1.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "kryst.01",
+   "kind": "v1",
+   "in": 3186.708,
+   "len": 6.042,
+   "inSec": 5.5,
+   "T": 13.625,
+   "keep": [
+    2.0,
+    13.62
+   ],
+   "min": 3.5,
+   "ideal": 6.4
+  },
+  {
+   "id": "kryst.02",
+   "kind": "v1",
+   "in": 3192.767,
+   "len": 4.792,
+   "inSec": 2.375,
+   "T": 9.583,
+   "keep": [
+    0.0,
+    9.58
+   ],
+   "min": 3.5,
+   "ideal": 4.8
+  },
+  {
+   "id": "kryst.03",
+   "kind": "v1",
+   "in": 3197.527,
+   "len": 5.125,
+   "inSec": 2.583333,
+   "T": 10.292,
+   "keep": [
+    0.0,
+    10.29
+   ],
+   "min": 3.5,
+   "ideal": 5.15
+  },
+  {
+   "id": "kryst.04",
+   "kind": "v1",
+   "in": 3202.686,
+   "len": 6.75,
+   "inSec": 7.291667,
+   "T": 14.042,
+   "keep": [
+    3.0,
+    14.04
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "kryst.05",
+   "kind": "v1",
+   "in": 3209.42,
+   "len": 6.833,
+   "inSec": 6.208333,
+   "T": 14.542,
+   "keep": [
+    5.5,
+    13.75
+   ],
+   "min": 4.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "freehold.01",
+   "kind": "v1",
+   "in": 3216.267,
+   "len": 4.708,
+   "inSec": 1.541667,
+   "T": 15.167,
+   "keep": [
+    0.8,
+    7.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "freehold.02",
+   "kind": "v1",
+   "in": 3220.956,
+   "len": 4.833,
+   "inSec": 3.083333,
+   "T": 10.458,
+   "keep": [
+    1.0,
+    10.46
+   ],
+   "min": 4.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "freehold.03",
+   "kind": "v1",
+   "in": 3225.808,
+   "len": 7.833,
+   "inSec": 4.583333,
+   "T": 16.958,
+   "keep": [
+    2.0,
+    16.96
+   ],
+   "min": 4.5,
+   "ideal": 8.5
+  },
+  {
+   "id": "freehold.04",
+   "kind": "v1",
+   "in": 3233.605,
+   "len": 4.333,
+   "inSec": 3.041667,
+   "T": 10.458,
+   "keep": [
+    1.0,
+    10.46
+   ],
+   "min": 3.5,
+   "ideal": 5.2
+  },
+  {
+   "id": "freehold.05",
+   "kind": "v1",
+   "in": 3237.953,
+   "len": 4.833,
+   "inSec": 5.083333,
+   "T": 12.083,
+   "keep": [
+    2.0,
+    12.08
+   ],
+   "min": 3.5,
+   "ideal": 5.65
+  },
+  {
+   "id": "poi-chapel-of-xi-ru.01",
+   "kind": "poi",
+   "in": 3242.791,
+   "len": 8.375,
+   "inSec": 1.083333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-chapel-of-xi-ru.02",
+   "kind": "poi",
+   "in": 3251.173,
+   "len": 6.875,
+   "inSec": 0.583333,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-chapel-of-xi-ru.03",
+   "kind": "poi",
+   "in": 3258.061,
+   "len": 6.75,
+   "inSec": 3.458333,
+   "T": 11.0,
+   "keep": [
+    3.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-camp-of-the-latzimestal.01",
+   "kind": "poi",
+   "in": 3264.795,
+   "len": 5.292,
+   "inSec": 4.916667,
+   "T": 11.0,
+   "keep": [
+    2.5,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-high-mountain-valley.01",
+   "kind": "poi",
+   "in": 3270.089,
+   "len": 5.417,
+   "inSec": 4.791667,
+   "T": 11.0,
+   "keep": [
+    3.0,
+    11.0
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "poi-ithaenc-cathedral.01",
+   "kind": "poi",
+   "in": 3275.492,
+   "len": 4.208,
+   "inSec": 5.791667,
+   "T": 10.0,
+   "keep": [
+    4.5,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-ithaenc-cathedral.02",
+   "kind": "poi",
+   "in": 3279.691,
+   "len": 6.458,
+   "inSec": 0.708333,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.5
+   ],
+   "min": 3.5,
+   "ideal": 5.5
+  },
+  {
+   "id": "poi-ithaenc-cathedral.03",
+   "kind": "poi",
+   "in": 3286.181,
+   "len": 7.708,
+   "inSec": 1.416667,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "poi-festival-stone-of-coldeve.01",
+   "kind": "poi",
+   "in": 3293.861,
+   "len": 5.0,
+   "inSec": 1.5,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-ishilai-lyceum.01",
+   "kind": "poi",
+   "in": 3298.871,
+   "len": 5.167,
+   "inSec": 4.833333,
+   "T": 10.0,
+   "keep": [
+    4.0,
+    10.0
+   ],
+   "min": 4.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-ishilai-lyceum.02",
+   "kind": "poi",
+   "in": 3304.059,
+   "len": 6.875,
+   "inSec": 1.833333,
+   "T": 10.0,
+   "keep": [
+    1.0,
+    9.5
+   ],
+   "min": 4.5,
+   "ideal": 6.5
+  },
+  {
+   "id": "kara.01",
+   "kind": "v1",
+   "in": 3310.903,
+   "len": 8.167,
+   "inSec": 8.208333,
+   "T": 16.375,
+   "keep": [
+    4.0,
+    16.38
+   ],
+   "min": 4.5,
+   "ideal": 7.8
+  },
+  {
+   "id": "kara.02",
+   "kind": "v1",
+   "in": 3319.09,
+   "len": 5.75,
+   "inSec": 5.416667,
+   "T": 11.167,
+   "keep": [
+    2.0,
+    11.17
+   ],
+   "min": 3.5,
+   "ideal": 5.6
+  },
+  {
+   "id": "kara.03",
+   "kind": "v1",
+   "in": 3324.842,
+   "len": 7.083,
+   "inSec": 3.458333,
+   "T": 13.5,
+   "keep": [
+    2.0,
+    12.0
+   ],
+   "min": 3.5,
+   "ideal": 6.75
+  },
+  {
+   "id": "kara.04",
+   "kind": "v1",
+   "in": 3331.918,
+   "len": 5.958,
+   "inSec": 2.583333,
+   "T": 11.125,
+   "keep": [
+    0.0,
+    11.12
+   ],
+   "min": 4.5,
+   "ideal": 5.55
+  },
+  {
+   "id": "kara.05",
+   "kind": "v1",
+   "in": 3337.873,
+   "len": 7.917,
+   "inSec": 7.541667,
+   "T": 16.375,
+   "keep": [
+    3.0,
+    16.38
+   ],
+   "min": 4.5,
+   "ideal": 7.8
+  },
+  {
+   "id": "poi-ancient-town.01",
+   "kind": "poi",
+   "in": 3345.81,
+   "len": 6.5,
+   "inSec": 0.791667,
+   "T": 8.0,
+   "keep": [
+    0.4,
+    7.6
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "poi-ancient-town.02",
+   "kind": "poi",
+   "in": 3352.311,
+   "len": 6.833,
+   "inSec": 3.375,
+   "T": 11.0,
+   "keep": [
+    2.0,
+    10.5
+   ],
+   "min": 4.5,
+   "ideal": 7.0
+  },
+  {
+   "id": "frost-haven.01",
+   "kind": "v1",
+   "in": 3359.138,
+   "len": 7.0,
+   "inSec": 4.5,
+   "T": 15.833,
+   "keep": [
+    2.0,
+    15.83
+   ],
+   "min": 4.5,
+   "ideal": 7.5
+  },
+  {
+   "id": "frost-haven.02",
+   "kind": "v1",
+   "in": 3366.127,
+   "len": 6.125,
+   "inSec": 6.708333,
+   "T": 12.833,
+   "keep": [
+    2.0,
+    12.83
+   ],
+   "min": 4.5,
+   "ideal": 6.4
+  },
+  {
+   "id": "frost-haven.03",
+   "kind": "v1",
+   "in": 3372.257,
+   "len": 5.5,
+   "inSec": 4.75,
+   "T": 11.375,
+   "keep": [
+    2.0,
+    11.38
+   ],
+   "min": 3.5,
+   "ideal": 5.7
+  },
+  {
+   "id": "frost-haven.04",
+   "kind": "v1",
+   "in": 3377.755,
+   "len": 5.167,
+   "inSec": 2.791667,
+   "T": 10.75,
+   "keep": [
+    0.0,
+    10.75
+   ],
+   "min": 3.5,
+   "ideal": 5.4
+  },
+  {
+   "id": "frost-haven.05",
+   "kind": "v1",
+   "in": 3382.896,
+   "len": 5.708,
+   "inSec": 6.375,
+   "T": 12.875,
+   "keep": [
+    0.0,
+    12.08
+   ],
+   "min": 3.5,
+   "ideal": 6.0
+  },
+  {
+   "id": "linvak-tukal.01",
+   "kind": "v1",
+   "in": 3388.619,
+   "len": 9.625,
+   "inSec": 6.208333,
+   "T": 15.833,
+   "keep": [
+    3.0,
+    15.83
+   ],
+   "min": 5.0,
+   "ideal": 9.8
+  },
+  {
+   "id": "linvak-tukal.02",
+   "kind": "v1",
+   "in": 3398.264,
+   "len": 8.083,
+   "inSec": 4.041667,
+   "T": 12.75,
+   "keep": [
+    1.5,
+    12.75
+   ],
+   "min": 4.5,
+   "ideal": 8.3
+  },
+  {
+   "id": "linvak-tukal.03",
+   "kind": "v1",
+   "in": 3406.344,
+   "len": 6.5,
+   "inSec": 2.083333,
+   "T": 10.667,
+   "keep": [
+    0.0,
+    10.67
+   ],
+   "min": 3.5,
+   "ideal": 6.9
+  },
+  {
+   "id": "linvak-tukal.04",
+   "kind": "v1",
+   "in": 3412.846,
+   "len": 7.125,
+   "inSec": 1.625,
+   "T": 11.042,
+   "keep": [
+    0.5,
+    11.04
+   ],
+   "min": 4.5,
+   "ideal": 7.2
+  },
+  {
+   "id": "linvak-tukal.05",
+   "kind": "v1",
+   "in": 3419.971,
+   "len": 11.875,
+   "inSec": 4.25,
+   "T": 16.125,
+   "keep": [
+    2.0,
+    16.12
+   ],
+   "min": 8.0,
+   "ideal": 12.09
+  }
+ ]
+}

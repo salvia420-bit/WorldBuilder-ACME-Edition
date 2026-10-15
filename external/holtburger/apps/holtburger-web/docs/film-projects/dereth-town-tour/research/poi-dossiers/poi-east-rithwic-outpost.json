@@ -1,0 +1,130 @@
+{
+ "name": "East Rithwic Outpost",
+ "title": "East Rithwic Outpost",
+ "siteId": "poi-east-rithwic-outpost",
+ "summary": "One of the old starter outposts, destroyed by Martine in The First Strike; Hydeatha the Shopkeeper and Mindorla remain with cows and chickens. In the kit: the Life Stone on open lawn (z 24) beside a golden plinth, a 28 m ruined Empyrean monument tower with a tapered roof and four green lamps (top z 51.9), and two cottages with a rabbit hutch to the south. Not the ruin filmed in rithwic.05 (that is the Destroyed Portal to Greenspire, 470 m north-west).",
+ "landmarks": [
+  {
+   "name": "Life Stone",
+   "pos": [
+    39202.3,
+    26956.6,
+    24.0
+   ],
+   "heightM": 3.6,
+   "note": "Gazetteer life-stone-near-rithwic-cc8c."
+  },
+  {
+   "name": "Monument tower (0x01002866)",
+   "pos": [
+    39228.0,
+    26964.0,
+    24.0
+   ],
+   "heightM": 27.9,
+   "note": "Ruined Empyrean monument, green lamps at z 47.8."
+  },
+  {
+   "name": "Cottages",
+   "pos": [
+    39209.3,
+    26919.6,
+    26.0
+   ],
+   "heightM": 12.0,
+   "note": "Brick house 0x01000827 and hut 0x0100081C."
+  }
+ ],
+ "site": {
+  "id": "poi-east-rithwic-outpost",
+  "name": "East Rithwic Outpost",
+  "gazetteerId": "east-rithwic-outpost",
+  "teleport": "@teleloc 0xCC8C000C 34.3448 76.644 24.005 -0.999474 0 0 0.032436",
+  "anchor": [
+   39212,
+   26950,
+   24
+  ],
+  "settleSec": 2,
+  "ready": {
+   "settleSec": 8,
+   "timeoutSec": 120
+  },
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  },
+  "notes": "Teleport = gazetteer life-stone-near-rithwic-cc8c (the outpost's Life Stone, z 24); the gazetteer's own east-rithwic-outpost entry is only a map @tele."
+ },
+ "insertAfter": "oolutangas-refuge",
+ "insertBefore": "rithwic",
+ "acpedia": {
+  "categories": [
+   "Northeast POI"
+  ],
+  "map": {
+   "ns": 10.4,
+   "ew": 61.4
+  },
+  "coordSrc": "mapPoint",
+  "coveredDistM": 470,
+  "coveredBy": "shot:rithwic.05",
+  "wiki": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/poi-wiki/East_Rithwic_Outpost.txt"
+ },
+ "shots": [
+  {
+   "id": "poi-east-rithwic-outpost.01",
+   "site": "poi-east-rithwic-outpost",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 6
+   },
+   "trim": {
+    "takeSec": 8,
+    "inSec": 1.0
+   },
+   "window": {
+    "minSec": 3.5,
+    "idealSec": 6,
+    "keep": [
+     0.5,
+     7.7
+    ],
+    "anchor": "end"
+   },
+   "rank": 2,
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39228,
+     26964,
+     24
+    ],
+    "height": 27.9,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 255,
+    "azimuthRef": "compass",
+    "elevationDeg": -15,
+    "distance": 46,
+    "thirds": "center",
+    "riseM": 7,
+    "keepAim": true
+   },
+   "standingOrder": "Rise 7 m from just above the grass behind the outpost's sparkling Life Stone until the ruined Empyrean monument tower stands clear in the warm afternoon light; keep 3 m from the stone and the golden plinth.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pedestal: rises 7 m from 2.6 m above the grass 46 m WSW of the ruined Empyrean monument tower, keeping it centred; the outpost's Life Stone sparkles in the lower foreground (proj.mjs NDC y -0.49 -> -0.94) and sinks out of frame as the 28 m monument rises clear in the warm afternoon light (0.70) behind the lens. Verified (check.mjs, full take flown): take 0-8 s: AGL 2.62..9.6 m, nearest drawn 10.27 m (spawn Rithwic Outpost), vmax 1.37 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 2.89..9.4 m, nearest drawn 10.27 m (spawn Rithwic Outpost), vmax 1.37 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 4 m (not drawn by the default bake the film uses - keep ?sceneryBake default)."
+  }
+ ],
+ "verification": {
+  "poi-east-rithwic-outpost.01": "take 0-8 s: AGL 2.62..9.6 m, nearest drawn 10.27 m (spawn Rithwic Outpost), vmax 1.37 m/s, LOS blocked 0/33, subject in frame 100%; edit 1-7 s: AGL 2.89..9.4 m, nearest drawn 10.27 m (spawn Rithwic Outpost), vmax 1.37 m/s, LOS blocked 0/25, subject in frame 100%; opt-in retail-bake tree 4 m (not drawn by the default bake the film uses - keep ?sceneryBake default)"
+ }
+}

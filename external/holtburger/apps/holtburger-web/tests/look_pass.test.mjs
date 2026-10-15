@@ -650,7 +650,7 @@ console.log("\n-- L18 grass keeps up with a running player ---------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds", "farHarmonize", "paintLight", "layerHaze"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds", "farHarmonize", "paintLight", "layerHaze", "waterSheenFade"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }
