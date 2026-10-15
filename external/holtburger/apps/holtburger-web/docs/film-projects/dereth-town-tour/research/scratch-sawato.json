@@ -1,0 +1,219 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Sawato scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "sawato",
+   "name": "Sawato",
+   "gazetteerId": "sawato",
+   "teleport": "@telepoi Sawato",
+   "anchor": [
+    38700,
+    17582,
+    12
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.8,
+    "grade": "warm"
+   },
+   "lbKeys": [
+    "0xC95B0000",
+    "0xC85B0000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "sawato",
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38556,
+     17585,
+     6
+    ],
+    "height": 2,
+    "radius": 4
+   },
+   "params": {
+    "heightAGL": 50,
+    "speed": 8,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -24,
+    "minClearance": 10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly level east at 56 m over the swamp pools toward the hidden village; stay 10 m above the tallest cypress crowns."
+  },
+  {
+   "id": "s020",
+   "site": "sawato",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38705,
+     17582,
+     12
+    ],
+    "height": 8,
+    "radius": 40
+   },
+   "params": {
+    "heightStart": 48,
+    "heightEnd": 130,
+    "rotateDeg": -30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the village square from 48 m and rise to 130 m until the clearing sits small in the swamp; nothing near the lens."
+  },
+  {
+   "id": "s030",
+   "site": "sawato",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38700,
+     17582,
+     12
+    ],
+    "height": 10.5,
+    "radius": 3.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 10,
+    "distance": 30,
+    "elevationDeg": -6,
+    "thirds": "center"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Locked off at eye height in the north plaza with the glowing lantern post in front of the Sclavus statue; nothing moves near the lens."
+  },
+  {
+   "id": "s040",
+   "site": "sawato",
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38723.2,
+     17603.3,
+     12
+    ],
+    "height": 10,
+    "radius": 9
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 265,
+    "distance": 24,
+    "elevationDeg": -8,
+    "riseM": 16,
+    "swingDeg": -25,
+    "armM": 10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise on the jib from street level beside the lantern post until the arched Sho house's green roof and the swamp beyond are revealed; 3 m from the lantern."
+  },
+  {
+   "id": "s050",
+   "site": "sawato",
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38700,
+     17582,
+     12
+    ],
+    "height": 10,
+    "radius": 5
+   },
+   "params": {
+    "heightAGL": 46,
+    "yawDeg": 360,
+    "direction": "cw",
+    "startHeadingDeg": 90,
+    "relativeToSubject": false,
+    "tiltDeg": -10,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover 46 m above the square and turn a full circle over the sea of cypress crowns; the lens never moves."
+  }
+ ]
+}

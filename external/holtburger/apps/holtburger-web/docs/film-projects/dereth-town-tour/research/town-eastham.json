@@ -1,0 +1,311 @@
+{
+ "name": "Eastham",
+ "slug": "eastham",
+ "summary": "Eastham is a coastal Aluvian town on the road from Arwic to Rithwic and the closest human settlement to Asheron's Island, reached through a permanent portal by the windmill; the Aluvian master smith crafts Celdon armour here and a master mask-crafter lives in town. The town is a cluster of Aluvian halls around a square (z 20) with a well, the Banderling statue on its plinth, the Town Network portal and the Patriarch's Valley portal; 230 m east a stone windmill with east-facing turning sails stands on the meadow with the Life Stone and Asheron's Island portal at its foot, and beyond it the land falls to a wide grey-sand beach and the shallow sea.",
+ "landmarks": [
+  {
+   "name": "Windmill",
+   "pos": [
+    39900.0,
+    28764.0,
+    20.0
+   ],
+   "heightM": 20.7,
+   "note": "Octagon tower top 33.8; 18 m sails on the east face (blade box z 22.8-40.7)."
+  },
+  {
+   "name": "Asheron's Island portal",
+   "pos": [
+    39905.5,
+    28755.2,
+    19.9
+   ],
+   "heightM": 2.8,
+   "note": "Swirl at the windmill's foot."
+  },
+  {
+   "name": "Life Stone (windmill)",
+   "pos": [
+    39890.9,
+    28742.1,
+    20.0
+   ],
+   "heightM": 3.6,
+   "note": "South-west of the windmill."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    39675.8,
+    28722.8,
+    20.2
+   ],
+   "heightM": 3.5,
+   "note": "North side of the square."
+  },
+  {
+   "name": "Patriarch's Valley portal",
+   "pos": [
+    39700.0,
+    28689.0,
+    19.9
+   ],
+   "heightM": 2.8,
+   "note": "East side of the square."
+  },
+  {
+   "name": "Nullified Statue of a Banderling",
+   "pos": [
+    39667.9,
+    28692.2,
+    26.8
+   ],
+   "heightM": 1.5,
+   "note": "On a 6.8 m plinth (S110) in the square, Fireworks Generator."
+  },
+  {
+   "name": "Well",
+   "pos": [
+    39680.2,
+    28674.1,
+    20.0
+   ],
+   "heightM": 2.7,
+   "note": "Square."
+  },
+  {
+   "name": "The Leaping Stallion inn S105",
+   "pos": [
+    39635.1,
+    28716.1,
+    20.0
+   ],
+   "heightM": 10.2,
+   "note": "Brick hall west of the square."
+  },
+  {
+   "name": "Beach and shallow sea",
+   "pos": [
+    40060.0,
+    28910.0,
+    0.0
+   ],
+   "heightM": 0.0,
+   "note": "Grey sand (type 11) and WaterShallowSea (type 18) north-east of the windmill."
+  }
+ ],
+ "site": {
+  "id": "eastham",
+  "name": "Eastham",
+  "gazetteerId": "eastham",
+  "teleport": "@telepoi Eastham",
+  "anchor": [
+   39703.053,
+   28528.61,
+   17.417
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.3,
+   "grade": "cool"
+  }
+ },
+ "shots": [
+  {
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40060,
+     28910,
+     0
+    ],
+    "height": 2,
+    "radius": 20
+   },
+   "params": {
+    "heightAGL": 22,
+    "speed": 7,
+    "headingDeg": 225,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -9,
+    "minClearance": 15
+   },
+   "standingOrder": "Fly in level from the shallow sea toward the Eastham shore with the windmill dead ahead and the town beyond; hold 20 m above the water.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water opener: level 22 m above the shallow sea NE of town, flying 98 m SW toward the coast with the windmill dead ahead (NDC 0.04,0.34) and Eastham's roofs beyond; morning sun behind the camera lights the shore. All over water/beach (terrain types WaterShallowSea and SandGrey), nothing within 28 m."
+  },
+  {
+   "technique": "classic.static",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39902,
+     28764,
+     20
+    ],
+    "height": 21,
+    "radius": 9
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": -16,
+    "distance": 52,
+    "thirds": "center"
+   },
+   "standingOrder": "Hold a locked-off frame on the windmill with its sails turning, the Life Stone and Asheron's Island portal glowing at its foot; do not move.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Locked-off static (motion lives inside the frame): the windmill's east-facing sails turn against the morning sky, Asheron's Island portal swirls at its foot (NDC -0.05,-0.33) and the Life Stone sparkles at left (NDC -0.76,-0.33). Camera 52 m SSE at 1.8 m above the meadow. Clearance 12.4 m (default bake) and 6.5 m (opt-in retail bake); query-radius 4 m = 0."
+  },
+  {
+   "technique": "classic.whip-pan",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39635,
+     28716,
+     20
+    ],
+    "height": 10,
+    "radius": 12
+   },
+   "params": {
+    "azimuthDeg": 79.4,
+    "azimuthRef": "compass",
+    "elevationDeg": -1.2,
+    "distance": 158,
+    "angleDeg": 178,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "standingOrder": "Hold on the windmill from the shore road, then whip right across the meadow onto the rooftops of Eastham and hold; stay on the road, do not move the camera.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Whip-pan: from the shore road (2.3 m up) the frame holds the windmill silhouetted against the low eastern sun, then whips 178 deg right in 0.3 s at 45 % onto the sunlit rooftops of Eastham 158 m west and holds. No obstacle within 22 m."
+  },
+  {
+   "technique": "classic.reveal-from-occluder",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39675.8,
+     28722.8,
+     20.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 196,
+    "azimuthRef": "compass",
+    "elevationDeg": 2,
+    "distance": 44,
+    "occluder": [
+     39667,
+     28692,
+     20
+    ],
+    "occluderRadius": 4.4,
+    "direction": "right",
+    "holdFrac": 0.25,
+    "settleFrac": 0.25,
+    "marginM": 1.0
+   },
+   "standingOrder": "Hold behind the Banderling statue's plinth with the Town Network portal hidden, then truck right until its blue swirl and the square open up beyond; stay 5 m from the plinth.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Reveal: starts 12 m behind the Banderling statue's 6.8 m plinth with the Town Network portal 44 m beyond completely hidden (25/53 samples blocked by design), holds, then trucks 12 m right until the blue swirl, the well and the square open up. Clearance: 3.5 m from the well (2.7 m-tall setup), 5 m from the nearest NPC, >= 6.8 m from the plinth; vmax 3.1 m/s."
+  },
+  {
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39672,
+     28700,
+     20
+    ],
+    "height": 12,
+    "radius": 50
+   },
+   "params": {
+    "radius": 68,
+    "heightAGL": 34,
+    "revolutions": 0.22,
+    "timeRate": 110,
+    "direction": "ccw",
+    "bearingDeg": 120,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Orbit slowly high around the Eastham square while the clouds race and the morning light swings across the roofs; keep 15 m above every roof and tree.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hyperlapse closer: 0.22 turn counter-clockwise around the town square at radius 68 m, 34 m up (>= 21 m above every roof), while the sky clock runs 110x (0.23 game-day: sun 0.30 -> 0.53, always up) so clouds race and the light swings across the roofs. vmax 5.9 m/s."
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 4x4 landblocks (0xCD93 0xCD94 0xCD95 0xCD96 0xCE93 0xCE94 0xCE95 0xCE96 0xCF93 0xCF94 0xCF95 0xCF96 0xD093 0xD094 0xD095 0xD096); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 drone.flyover: WBT get-height under 5-8 sampled camera points, min AGL 22 m; offline build min clearance 28.47 m (spawn:Mosswart Zealot), opt-in retail bake 67.69 m; vmax 7.0 m/s; subject LOS blocked 0/57 samples; s020 classic.static: WBT get-height under 5-8 sampled camera points, min AGL 1.77 m; offline build min clearance 12.44 m (scenery:0x0200062C), opt-in retail bake 6.5 m; vmax 0.0 m/s; subject LOS blocked 41/41 samples (by design: reveal/foreground); s030 classic.whip-pan: WBT get-height under 5-8 sampled camera points, min AGL 2.27 m; offline build min clearance 22.32 m (scenery:0x02001063), opt-in retail bake 9.84 m; vmax 0.0 m/s; subject LOS blocked 33/33 samples (by design: reveal/foreground); s040 classic.reveal-from-occluder: WBT get-height under 5-8 sampled camera points, min AGL 3.49 m; offline build min clearance 3.49 m (spawn:Well), opt-in retail bake 7.41 m; vmax 3.06 m/s; subject LOS blocked 25/53 samples (by design: reveal/foreground); s050 drone.hyperlapse-orbit: WBT get-height under 5-8 sampled camera points, min AGL 34 m; offline build min clearance 23.61 m (static:0x01000A2B#108), opt-in retail bake 27.15 m; vmax 5.87 m/s; subject LOS blocked 0/65 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-eastham.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-eastham.json",
+ "totalSec": 61,
+ "techniques": [
+  "drone.flyover",
+  "classic.static",
+  "classic.whip-pan",
+  "classic.reveal-from-occluder",
+  "drone.hyperlapse-orbit"
+ ]
+}

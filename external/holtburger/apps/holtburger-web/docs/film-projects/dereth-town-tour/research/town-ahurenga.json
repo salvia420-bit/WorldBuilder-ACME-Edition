@@ -1,0 +1,276 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Westwatch/Sanamar/Ahurenga/Timaru/Redspire/Bluespire",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-ahurenga.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.50 (sun east, 68 deg), grade neutral: high noon over the swamp; the time-lapse runs to 0.61 (sun near zenith)",
+ "towns": [
+  {
+   "name": "Ahurenga",
+   "summary": "Ahurenga (47.0N 90.3W) is the capital of the Hea Tumeroks of Marae Lassel, led by Hea Arantah, a xuta that abandoned Aun tradition to serve the Virindi ('Atual Arutoa') and had their bodies altered toward human form. It is a small reed-ringed island village in the coastal swamp of the Northern Ahurenga Plains, barely 2 m above the sea, with 10-14 m swamp ferns everywhere and open sea to the north-west. At its heart stands a broken four-storey stone spire (the acpedia 'broken Advocate Spire') crowned by a purple Virindi energy funnel and blue light halos, its south stair lit by two torches; around it are Hea huts and an octagonal tower, three carved totem poles around a smouldering brazier, a campfire ring with big flame and blue-flame braziers, an open hall by the water and the Town Network portal. There is no Life Stone. (The telepoi lands in the water 270 m south-east of the village; all shots are within 2 landblocks.)",
+   "landmarks": [
+    {
+     "name": "Hea stone spire (0x01001777) with purple energy funnel (0x02000591) and blue halos (0x020005BA/BB)",
+     "pos": [
+      2796,
+      35796,
+      2
+     ],
+     "heightM": 27.88,
+     "note": "funnel at (2799.1,35799.8,27)"
+    },
+    {
+     "name": "Spire stair torches (0x02000AB9 x2)",
+     "pos": [
+      2794,
+      35784.3,
+      2
+     ],
+     "heightM": 3.0,
+     "note": "(2796.2,35784.2) and (2791.8,35784.5)"
+    },
+    {
+     "name": "Totem poles x3 with smouldering brazier (0x02000A45, 0x020005AE)",
+     "pos": [
+      2841.8,
+      35768.7,
+      1.2
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Campfire ring with big brazier flame (0x02000AA0) and blue-flame brazier (0x020009A3)",
+     "pos": [
+      2776,
+      35810,
+      1.8
+     ],
+     "heightM": 3.5,
+     "note": "blue brazier at (2767.9,35801.5)"
+    },
+    {
+     "name": "Octagon tower (0x01000F06)",
+     "pos": [
+      2775.9,
+      35776.4,
+      2
+     ],
+     "heightM": 4.5
+    },
+    {
+     "name": "Hea hut (0x01000EDC)",
+     "pos": [
+      2816,
+      35775.8,
+      2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Open hall by the water (0x01002237)",
+     "pos": [
+      2843.9,
+      35723.8,
+      0
+     ],
+     "heightM": 4.1
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      2806.5,
+      35764.6,
+      2.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Open sea north-west of the village",
+     "pos": [
+      2720,
+      35950,
+      0
+     ],
+     "note": "clear of reeds for y > 35880"
+    }
+   ],
+   "site": {
+    "id": "ahurenga",
+    "name": "Ahurenga",
+    "gazetteerId": "ahurenga",
+    "teleport": "@telepoi Ahurenga",
+    "anchor": [
+     2800.0,
+     35780.0,
+     2.0
+    ],
+    "settleSec": 2,
+    "lbKeys": [
+     "0x0EBA",
+     "0x0FB9"
+    ],
+    "look": {
+     "timeOfDay": 0.5,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.terrain-skim",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "path": [
+      [
+       2700,
+       35992,
+       0
+      ],
+      [
+       2722,
+       35950,
+       0
+      ],
+      [
+       2746,
+       35905,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 3,
+      "speed": 8,
+      "headingDeg": 152,
+      "relativeToSubject": false,
+      "lookAhead": 30,
+      "tiltDeg": -2,
+      "cornerRadius": 20,
+      "alat": 2,
+      "maxBankDeg": 8,
+      "ends": "rest"
+     },
+     "standingOrder": "Skim 3 m over the open sea toward the reed-ringed village of Ahurenga and its stone spire, slowing to a hover before the first reeds.",
+     "notes": "WATER (drone.terrain-skim). 3 m over the open sea north-west of the village along a 98 m path heading SSE, easing to rest before the first reeds; the reed-ringed swamp island with its stone spire grows ahead, noon sun high in the east glittering on the water. 100 % over sea (z 0), nearest reed 30 m. Verified offline (real registry build + WBT terrain): start (2700.0,35992.0,3.0) end (2746.0,35905.0,3.0), min AGL 3.0 m, nearest static/building/tree 30.1 m (0x020003F7@2720,35887), peak 10.4 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "drone.helix",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       2796,
+       35796,
+       2
+      ],
+      "height": 30,
+      "radius": 15
+     },
+     "params": {
+      "radiusStart": 27,
+      "radiusEnd": 40,
+      "heightStart": 22,
+      "heightEnd": 48,
+      "revolutions": 0.5,
+      "direction": "cw",
+      "bearingDeg": 230,
+      "relativeToSubject": false,
+      "minClearance": 4
+     },
+     "standingOrder": "Corkscrew up around the Hea stone spire and the purple energy funnel crowning it, widening from 27 to 40 m and staying above the 14 m ferns.",
+     "notes": "PARTICLE FX (drone.helix). Corkscrew around the four-storey Hea stone spire (0x01001777, 27.9 m) crowned by the purple energy funnel (0x02000591, 11.6 m tendril sigils) and two blue light halos (0x020005BA/BB) at z 27-28: radius 27 -> 40 m, z 24 -> 50, half a turn clockwise from SW to NE, always above the 14 m swamp ferns; the sigils rise past the lens at mid-shot. Verified offline (real registry build + WBT terrain): start (2775.3,35778.6,24.0) end (2826.6,35821.7,50.0), min AGL 22.0 m, nearest static/building/tree 6.6 m (0x0EBA#35 0x02000A67), peak 10.9 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.worms-eye",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "MS",
+     "fov": 75,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       2841.8,
+       35768.7,
+       1.2
+      ],
+      "height": 2.6,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 125,
+      "heightM": 0.7,
+      "horizontalM": 4.6,
+      "spinDeg": 12
+     },
+     "standingOrder": "Lie at the foot of the Hea totem poles beside the smouldering brazier and look up past the flames to the totems and the spire against the sky.",
+     "notes": "FLAME (classic.worms-eye). Lens 0.7 m above the mud 4.6 m SE of the three Hea totem poles with the smouldering brazier (0x020005AE ring of flames) between them; looking up 23 deg on a 75 deg lens with a slow 12 deg sky spin: carved totems, flames and the stone spire 50 m beyond against the noon sky and clouds. Verified offline (real registry build + WBT terrain): start (2845.6,35766.1,1.6) end (2845.6,35766.1,1.6), min AGL 0.7 m, nearest static/building/tree 2.2 m (0x0EBA#68 0x02000A45), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.time-lapse",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       2796,
+       35796,
+       2
+      ],
+      "height": 30,
+      "radius": 15
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 135,
+      "elevationDeg": 18,
+      "distance": 95,
+      "thirds": "left",
+      "rate": 0.008
+     },
+     "standingOrder": "Hold high south-east of the village over the marsh while the sky clock runs and clouds race over the spire and the open sea beyond.",
+     "notes": "CLOSING (classic.time-lapse). Static 46 m above the marsh 95 m SE of the spire (spire on the left third) while the sky clock runs 0.008 day/s (0.50 -> 0.61, sun near zenith): cloud shadows race across the reed island, the swamp channels and the open sea beyond. Verified offline (real registry build + WBT terrain): start (2859.9,35732.1,46.4) end (2859.9,35732.1,46.4), min AGL 46.4 m, nearest static/building/tree 36.0 m (0x0EBA#55 0x02000A38), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    }
+   ],
+   "verification": "ONE WBT session per pass, run sequentially (4 sessions + a sky-curve probe): describe-landblock (with includeFootprints) + list-objects + get-terrain-data for every landblock listed, get-object-detail for all 219 model ids found (bounds -> obstacle boxes), get-height at every sampled camera position, region-day-night-curve for the sun (heading 90 until 0.59, then 270; elevation per time). Offline checker: each shot built with the real technique registry (scene3d/film/shots) against a triangle-split terrain from the WBT heightmaps, sampled at 24 fps against static OBB->AABBs, structure footprints, both scenery bakes (dist scenery + scenery-retail) and outdoor spawns. Landblocks 0x0DB8-0x10BB (4x4 around the real village landblock 0x0EBA; the gazetteer cell 0x0FB9 is the water landing point). Swamp scenery measured from both bakes (ferns 0x02000A38 to 14.3 m, reeds to 5.4 m); helix kept >= 22 m (8 m over the ferns), 6.6 m from the nearest tree crown; terrain-skim 100 % over open water, 30 m from the first reeds; worms-eye lens 2.2 m from the nearest totem. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-ahurenga.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

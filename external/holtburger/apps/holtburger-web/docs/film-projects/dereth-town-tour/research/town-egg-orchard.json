@@ -1,0 +1,539 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "roster": {
+  "name": "Eastwatch",
+  "gazetteerId": "eastwatch",
+  "tier": "standard",
+  "deepDive": "Egg Orchard FPV corridor (owner exception 2026-10-14)"
+ },
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/town-egg-orchard.plan.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "towns": [
+  {
+   "name": "Eastwatch",
+   "summary": "Eastwatch (90.3N 43.1W) is the Viamontian knights' garrison on the eastern shore of the Isle of Ruin, the easternmost and most dangerous of the Halaetan Isles, an outpost of Sanamar reached by portals near Sanamar and west of Ayan Baqur. Its Town Network sign tells of the ancient ruins that gave the isle its name and of knights who hesitate to enter the frozen Shattered Out-Lands to the north; acpedia adds that many citizens hand out hunter kill tasks and that beer-making ingredients are sold here. In the world data it is a tiny outpost of five stone buildings on a flat ice-and-clay mesa at z 170 whose east and north sides fall sheer about 170 m to the sea (deep water from x 14300): two identical four-storey Grand Master Scrivener towers with tapered gold-trimmed roofs (top z 196.35), the east one standing right on the cliff edge; a two-storey tapered-roof barracks (Claire Artmad's hunting task upstairs); a stone trading hall with a smoking chimney; and a shop house (Archmage, Blacksmith, Healer, Shopkeeper). Five marble lanterns burn with blue flames, and the small west plaza holds the Life Stone, the swirling purple Portal to Town Network and the Destroyed Portal to Sanamar. A moarsman fort lies on the beach below. 1.8 km north-west, past the razorback ridge in a glacier valley of the Shattered Outlands, three red portals lead into the Egg Orchard (its own sub-site below).",
+   "landmarks": [
+    {
+     "name": "East Grand Master Scrivener tower (0x010036EA, Creature/Life scriveners)",
+     "pos": [
+      14172,
+      46116,
+      170
+     ],
+     "heightM": 26.35,
+     "note": "four-storey stone tower, tapered gold roof, top z 196.35, footprint x 14166.5-14177.5 y 46110.5-46121.4; stands at the east cliff edge (sea level below at x 14208)"
+    },
+    {
+     "name": "West Grand Master Scrivener tower (0x010036EA, War/Item scriveners)",
+     "pos": [
+      14076,
+      46140,
+      170
+     ],
+     "heightM": 26.35,
+     "note": "twin of the east tower, footprint x 14070.5-14081.5 y 46134.5-46145.4"
+    },
+    {
+     "name": "Barracks / two-storey tapered-roof hall (0x010036E3)",
+     "pos": [
+      14124,
+      46116,
+      170
+     ],
+     "heightM": 25.25,
+     "note": "top z 195.25; Claire Artmad (upper floor, z 185.2), Marcello, Orfeo Orlando, Xun Yu; two blue-flame lanterns at its north door (14122/14126, 46122)"
+    },
+    {
+     "name": "Trading hall (0x01003646)",
+     "pos": [
+      14148,
+      46140,
+      170
+     ],
+     "heightM": 7.4,
+     "note": "flat roof z 177.4; chimney smoke 0x0200043B at (14145.1,46140.4,177.7); barrels and stones by the west door"
+    },
+    {
+     "name": "Shop house (0x01003623)",
+     "pos": [
+      14124,
+      46164,
+      170
+     ],
+     "heightM": 5.75,
+     "note": "Archmage, Blacksmith, Healer, Shopkeeper inside; blue-flame lantern at its south door (14126,46159)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      14092.93,
+      46157.13,
+      170
+     ],
+     "heightM": 3,
+     "note": "west plaza (acpedia 90.4N 43.2W, centre of town)"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      14103.53,
+      46154.79,
+      170.2
+     ],
+     "heightM": 3.5,
+     "note": "purple swirl (setup 0x020001B3, 7 m disc) on the glowing blue stone base 0x020019E3"
+    },
+    {
+     "name": "Destroyed Portal to Sanamar",
+     "pos": [
+      14099.05,
+      46135.38,
+      169.79
+     ],
+     "heightM": 3.1,
+     "note": "setup 0x020019E4"
+    },
+    {
+     "name": "Blue-flame marble lanterns (0x02001239 x5)",
+     "pos": [
+      14124,
+      46144,
+      170
+     ],
+     "heightM": 3.4,
+     "note": "blue flame tongue + 1.45 m blue glow; others at (14145,46135) (14126,46159) (14126,46122) (14122,46122)"
+    },
+    {
+     "name": "East ice cliff and the sea",
+     "pos": [
+      14196,
+      46140,
+      85
+     ],
+     "heightM": 170,
+     "note": "plateau z 170 drops to z 0 within 24 m at x 14184-14208 and at y 46250-46272 on the north side; shallow sea x 14232-14280, deep sea beyond (water share of the 3x3 = 33%)"
+    },
+    {
+     "name": "Egg Orchard portals (glacier valley, sub-site 'egg-orchard-portal')",
+     "pos": [
+      12923.83,
+      47556.72,
+      100.14
+     ],
+     "heightM": 5,
+     "note": "three red portals (setup 0x020005D5): West 12910.98,47553.81 / Egg Orchard 12923.83,47556.72 / East 12940.19,47553.42, 1.82 km NW of town"
+    }
+   ],
+   "site": {
+    "id": "eastwatch",
+    "name": "Eastwatch",
+    "gazetteerId": "eastwatch",
+    "teleport": "@telepoi Eastwatch",
+    "anchor": [
+     14110,
+     46150,
+     170
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.42,
+     "grade": "cool"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.orbit-poi",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14128,
+       46140,
+       170
+      ],
+      "height": 26,
+      "radius": 40
+     },
+     "params": {
+      "radius": 100,
+      "heightAGL": 28,
+      "revolutions": 0.18,
+      "direction": "ccw",
+      "bearingDeg": 215,
+      "relativeToSubject": false,
+      "minClearance": 20
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Orbit the clifftop outpost at a steady 100 m radius and 28 m above its plateau, sweeping from the landward south-west out over the frozen shore and the sea; keep both towers in frame and stay 50 m clear of every roof.",
+     "notes": "Establishing + water: the camera starts SW over the island (ground 139) looking NE across the outpost to the open sea horizon, and swings ccw to SSE where it hangs 198 m above the sea and frozen shore, the town perched on its 170 m ice cliff. WBT get-height every 1 s: AGL 58.8-198 m; camera z 198 = 1.65 m above the tower tips (196.35) but never closer than 50 m horizontally to any structure; vmax 8.1 m/s."
+    },
+    {
+     "technique": "drone.orbit-poi",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14098.2,
+       46156,
+       170
+      ],
+      "height": 4,
+      "radius": 6
+     },
+     "params": {
+      "radius": 12,
+      "heightAGL": 3,
+      "revolutions": 0.3,
+      "direction": "cw",
+      "bearingDeg": 60,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Circle low and slow around the Life Stone and the swirling town portal at 12 m and 3 m up; keep both in frame and stay 6 m from each.",
+     "notes": "Magic FX: purple Portal to Town Network swirl (setup 0x020001B3 on the glowing blue stone base 0x020019E3 at 14103.53,46154.79) and the Life Stone (14092.93,46157.13) orbited from NE round to SSE, front-lit by the morning sun with the west Scrivener tower behind. Orbit centre is the midpoint, so the camera stays 6.6 m+ from both. WBT: ground 170 everywhere (AGL 3.0), query-radius 6 m around every 1 s sample = 0 statics; nearest structures 20 m; vmax 1.9 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj): describe-landblock + list-objects + get-heightmap + get-terrain-data for the 3x3 around 0x49F0 (72-74, 239-241): 5 structures all in 0x49F0, roof tops 175.75-196.35, plateau z 170 (vertices 170 for x 14064-14184, y 46104-46248), sea (types WaterShallowSea/WaterDeepSea, z 0) east of x 14208. ew-010: dry-built with the real drone.orbit-poi code on a groundZ from those heightmaps, then WBT get-height at every 1 s sample: AGL 58.8 m (over ground 139) to 198 m (over the sea); 50 m+ from every structure; vmax 8.1 m/s. ew-020: get-height at every 1 s sample = 170 (AGL 3.0); query-radius 6 m around each sample = 0 statics; query-radius 20 m around the orbit centre finds only the portal base (5.5 m); Life Stone/portal 6.6 m+ from the camera, nearest building corner 20 m. Spawns (Life Stone, portals, NPCs) are ACE world-DB positions from describe-landblock."
+  },
+  {
+   "name": "Egg Orchard Portal (Eastwatch sub-site)",
+   "summary": "The outdoor gateway to the Egg Orchard, part of the Eastwatch chapter: three red portal swirls side by side (West, the original Mid, and East mirrors) on the flat floor (z 100) of a glacier valley in the Shattered Outlands, 1.82 km north-west of Eastwatch past the razorback ridge (acpedia route: run west from Eastwatch to the pass at 93N 47W, then round the north mountain to 96.2N 48.1W). Blue-ice and clay walls rise 100-240 m on both sides. Around the portals stand alien Olthoi props: two 7.8 m spikes, giant orange-eyed mushrooms (6.4 m) and a mushroom tree (7.4 m) that erupts grey ash, glowing blue-green mucor, an abyssal-totem shard and an ore deposit, all on a low rock shelf. A Viamontian camp of lords and inquisitors (blue crystals 0x020010A7) lies 70 m north. Place this shot right before the Egg Orchard dungeon site.",
+   "landmarks": [
+    {
+     "name": "Egg Orchard portal (Mid, wcid 30964)",
+     "pos": [
+      12923.83,
+      47556.72,
+      100.14
+     ],
+     "heightM": 5,
+     "note": "red swirl setup 0x020005D5 (7 m disc), faces north-south"
+    },
+    {
+     "name": "Egg Orchard West portal (wcid 31928)",
+     "pos": [
+      12910.98,
+      47553.81,
+      99.94
+     ],
+     "heightM": 5,
+     "note": "faces east-west"
+    },
+    {
+     "name": "Egg Orchard East portal (wcid 31926)",
+     "pos": [
+      12940.19,
+      47553.42,
+      99.94
+     ],
+     "heightM": 5,
+     "note": "faces east-west"
+    },
+    {
+     "name": "Olthoi spikes (0x02000AC0 x2)",
+     "pos": [
+      12916.83,
+      47546.59,
+      100
+     ],
+     "heightM": 7.8,
+     "note": "second spike at (12930.01,47553,102.13); they flank the mid portal seen from the south"
+    },
+    {
+     "name": "Mushroom tree (0x02000AC4)",
+     "pos": [
+      12939.77,
+      47564.12,
+      100
+     ],
+     "heightM": 7.4,
+     "note": "grey ash/dust eruption FX"
+    },
+    {
+     "name": "Giant mushroom (0x02000AC6)",
+     "pos": [
+      12907.98,
+      47551.13,
+      100
+     ],
+     "heightM": 6.4
+    },
+    {
+     "name": "Glowing mucor (0x0200114B x3)",
+     "pos": [
+      12920.28,
+      47547.16,
+      100.03
+     ],
+     "heightM": 1.27,
+     "note": "blue-green jellyfish glow; also (12930.42,47560.8) (12916.35,47565.41)"
+    }
+   ],
+   "site": {
+    "id": "egg-orchard-portal",
+    "name": "Egg Orchard portals (Shattered Outlands glacier valley)",
+    "gazetteerId": "egg-orchard-portal",
+    "teleport": "@teleloc 0x43F70015 60 106 102.5 1 0 0 0",
+    "anchor": [
+     12924,
+     47530,
+     102.2
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.42,
+     "grade": "cool"
+    }
+   },
+   "shots": [
+    {
+     "technique": "classic.push-in",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "fov": 45,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12923.83,
+       47556.72,
+       100.14
+      ],
+      "height": 5,
+      "radius": 3.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "elevationDeg": 9,
+      "fromFraming": "EWS",
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Push slowly up the frozen valley floor toward the three red Egg Orchard portals; keep the middle portal centred and stay 3 m above the ice.",
+     "notes": "Effect shot before the dungeon: three red portal swirls (setup 0x020005D5, 7 m discs) - West 12910.98,47553.81 / Mid 12923.83,47556.72 / East 12940.19,47553.42 - between giant spikes (0x02000AC0, 7.8 m), glowing mucor and a mushroom tree that erupts grey ash (0x02000AC4), blue-ice walls rising 100-180 m behind. Push 48 m -> 15 m along x 12923.83 from the south, sun behind the camera. WBT get-height: AGL 2.6-5.2 m; query-radius 6 m around every sample = 0 statics; the spikes flank the line of sight 3.8 m and 4.4 m off it; camera stops 4.2 m short of the low rock shelf 0x02000F7D and 2.8 m above it."
+    }
+   ],
+   "verification": "WBT: describe-landblock/list-objects/get-heightmap for the 3x3 around 0x43F7 (66-68, 246-248); portal spawns from the ACE world DB (describe-landblock spawns); get-object-detail for every prop (portal 0x020005D5 2.8 x 2.8 m, spikes 7.8 m, rock shelf 0x02000F7D 22.6 x 21.5 x 2.2 m). Dry-built classic.push-in with the real registry on the WBT heightmap, then WBT get-height at every 1 s sample: AGL 2.6 m (start, ground 107.6) to 5.2 m; query-radius 6 m around each sample = 0 statics; query-radius 40 m around the portals lists all 13 props used above. Teleport deliberately NOT the gazetteer's (which lands on the mid portal, and ACE portals fire on collision: Portal.OnCollideObject -> OnActivate): @teleloc 0x43F70015 60 106 102.5 lands 27 m south on open ice, ground 102.2 (cell index 2*8+4+1 = 0x15, same scheme as the gazetteer's 0x43F70016)."
+  },
+  {
+   "name": "Egg Orchard",
+   "summary": "The Egg Orchard is a Throne of Destiny dungeon (level 140+, ACmaps 002B) entered from the three red portals in the Shattered Outlands near Eastwatch; it exists as three mirrors (Mid 0x002B, East 0x0064, West 0x00C8) and is the hunting ground of the Olthoi Ripper hunter quest, where Tanada Nanjou Shou-jen ninjas spawn in pairs after Rippers die. The Mid copy (LB 0x002B) has 639 EnvCells on 12 levels from +6 down to -60 m. You arrive in a two-storey 30 x 30 x 12 m hall with blue-green glass jellyfish lamps. Winding cave tunnels lead down from there: 5.3 m wide and 3.75 m high with bevelled walls, 45-degree bends and T-junctions. Wall vents along them spill heavy green gas under green lights. The bottom level (-60) is the orchard itself, a ring of four 20 m chambers (west, north, south and an egg-less east junction) joined by short tunnels. Twenty-eight enchanted olthoi eggs sit on the floors in a green ghost-haze that fills every chamber. In the west chamber stands a toxic hive pod (5.6 x 5.4 x 2.3 m) wrapped in green fog and a throbbing 8.7 m green halo.",
+   "landmarks": [
+    {
+     "name": "Entry hall (cell 0x002B0371, teleport drop)",
+     "pos": [
+      458.54,
+      8083.8,
+      0
+     ],
+     "heightM": 12,
+     "note": "3 x 3 cells of 10 m, two storeys (z 0 and 6); glass jellyfish lights 0x0200113E"
+    },
+    {
+     "name": "Toxic hive (0x02000F97) in the west egg chamber",
+     "pos": [
+      20.02,
+      8125.95,
+      -59.94
+     ],
+     "heightM": 2.33,
+     "note": "cell 0x002B0106; green fog 0x3200075F + gas + throbbing 8.7 m green halo 0x32000761; three eggs at (23.81,8127.74) (21.42,8128.86) (23.34,8129.74)"
+    },
+    {
+     "name": "West egg chamber (cells 0x105/0x106/0x10B/0x10C)",
+     "pos": [
+      25,
+      8131,
+      -60
+     ],
+     "heightM": 12,
+     "note": "20 x 20 m, open above into the -54 level; 12 eggs + hive"
+    },
+    {
+     "name": "North egg chamber (cells 0x10F-0x121)",
+     "pos": [
+      50,
+      8156,
+      -60
+     ],
+     "heightM": 6,
+     "note": "largest chamber, 11 eggs, ghost-haze"
+    },
+    {
+     "name": "South egg chamber (cells 0x115/0x117/0x11C/0x11F)",
+     "pos": [
+      45,
+      8091,
+      -60
+     ],
+     "heightM": 6,
+     "note": "5 eggs"
+    },
+    {
+     "name": "Vent tunnel (cell 0x002B010D)",
+     "pos": [
+      30,
+      8116,
+      -60
+     ],
+     "heightM": 3.75,
+     "note": "two staggered toxic vents 0x0200028D at (32.3,8118.64) and (27.7,8113.36), green light + sinking green gas; leads into the west chamber"
+    },
+    {
+     "name": "FPV start tunnel (cell 0x002B0134)",
+     "pos": [
+      70,
+      8110,
+      -60
+     ],
+     "heightM": 3.75,
+     "note": "south of the east junction chamber; vent at (72.0,8107.94)"
+    }
+   ],
+   "site": {
+    "id": "egg-orchard",
+    "name": "Egg Orchard",
+    "gazetteerId": "egg-orchard",
+    "indoor": true,
+    "cell": "0x002B0371",
+    "teleport": "@teleloc 0x002B0371 458.535 -172.203 0.005 0.933008 0 0 -0.359856",
+    "anchor": {
+     "cell": "0x002B0371",
+     "local": [
+      458.535,
+      -172.203,
+      0.005
+     ]
+    },
+    "settleSec": 2,
+    "ready": {
+     "settleSec": 4,
+     "timeoutSec": 120
+    },
+    "look": {
+     "grade": "cool"
+    }
+   },
+   "shots": [
+    {
+     "technique": "fpv.fpv-corridor",
+     "duration": {
+      "sec": 13
+     },
+     "route": {
+      "fromCell": "0x002B0134",
+      "toCell": "0x002B010C"
+     },
+     "cell": "0x002B0134",
+     "params": {
+      "cornerRadius": 3.5,
+      "speed": 6,
+      "amax": 6,
+      "alat": 12,
+      "lookAhead": 4.5,
+      "heightOffset": -0.1,
+      "bankGain": 1.5,
+      "maxBankDeg": 35,
+      "ends": "cruise"
+     },
+     "pilot": {
+      "mode": "jev"
+     },
+     "bounds": {
+      "maxLateral": 0.3,
+      "maxRise": 0.2,
+      "maxSink": 0.2,
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Thread the toxic-vent tunnels of the lowest level at speed, banking through every bend, then burst into the egg chamber; keep 1 m from walls and vent spouts; green gas may be faded.",
+     "notes": "HERO. Floor Z -60 (bottom level), 16 cells, 75.5 m: corridor south -> right-angle west past a green gas vent -> 45-degree bend SW -> T-junction south -> bend west -> across the north edge of the south egg room (eggs 3-4 m to the left) -> right-angle north through its doorway vestibule -> right-angle west past a second vent -> bend NW -> straight north between two staggered vents -> into the west egg chamber (hive glowing 10 m to the left, eggs right). Verified offline with the page's own planIndoorPath + fpv-corridor build on a graph rebuilt from the EnvCell/Environment DAT records: peak 5.9 m/s, min 2.2 m/s, no overspeed, bank up to 32 deg, camera 1.4-3.2 m above the floor; wall clearance min 1.01 m (45-degree bends), median 1.8 m; vent clearance 1.0-1.35 m at camera height (top flares 1.8 m); eggs 1.8 m+; hive never closer than 7 m."
+    },
+    {
+     "technique": "classic.push-in",
+     "duration": {
+      "sec": 8
+     },
+     "framing": "FS",
+     "fov": 50,
+     "cell": "0x002B010C",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       20.02,
+       8125.95,
+       -59.94
+      ],
+      "height": 4,
+      "radius": 2.9
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 75,
+      "elevationDeg": 10,
+      "fromFraming": "WS",
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Push slowly in on the glowing toxic hive at the heart of the egg chamber over the cluster of olthoi eggs; stay 1.5 m from the hive and the eggs; green fog may be faded.",
+     "notes": "Effect shot: the toxic hive (0x02000F97, 5.6 x 5.4 x 2.3 m, green fog + throbbing 8.7 m green halo) in cell 0x002B0106 with three enchanted olthoi eggs (0x02000AE1) just in front, in green ghost-haze (0x02000693). Camera 10.7 m -> 4.9 m from the hive centre (1.75 m from its edge at the end), z -56.1 -> -57.1 (3-4 m above the floor of the 12 m tall chamber), starting in cell 0x002B010C."
+    }
+   ],
+   "verification": "WBT on lbX 0 lbY 43: get-dungeon-info (639 cells, single connected component, 12 Z bands +6..-60), describe-floor and render-dungeon for all 12 floors (PNGs in research/egg-orchard/floor0-11.png). Then chorizite-parse-dat-record for all 639 EnvCells (client_cell_1.dat) and their 50 Environment records (client_portal.dat), which gave cell orientations, mesh boxes and portal polygons. From these I rebuilt the client's indoor graph: pos = rotated bbox centre at the floor; doors = portal polygon centroid, normal, height and bottom. I ran the page's own planIndoorPath and the real fpv.fpv-corridor build on that graph in node. Route 0x002B0134 -> 0x002B010C: 16 cells, all on z -60, 75.5 m, six right-angle heading changes (S->W, W->S, S->W, W->N, N->W, W->N; three of them through 45-degree bend pieces). Alternatives: the north way round the ring costs 1.165x and the south-arm detour more, so the router/camera choice is robust; the 0x132/0x131 starts were rejected because their alternatives were only 1.01x/1.07x. Flown at 13 s: no overspeed, 2.2-5.9 m/s, bank up to 32 deg, 1.4-3.2 m above the floor. Wall clearance (point-triangle vs all non-portal polygons of the route cells and neighbours): min 1.01 m in the 3.8 m wide 45-degree bends, p10 1.1 m, median 1.8 m. Vent cylinders and lips 1.0-1.35 m, top flares 1.8 m, eggs 1.8 m+, hive 7 m+. A small dip to 1.4 m above the floor at the 0x116 doorway vestibule (sloped portal). Hive push-in: dry-built with the registry; 2.9 m+ from all walls, floor and ceiling of cells 0x102-0x13D; 2.1 m+ from the eggs, 1.75 m from the hive's bounding box at the end. Object identities and sizes come from get-object-detail and the particle-fx-catalog (hive 0x02000F97, ghost-haze 0x02000693, vents 0x0200028D with 0x320001AB gas) and Setup/GfxObj parses of the vent mesh."
+  }
+ ],
+ "editOrder": [
+  "Eastwatch: ew-010 orbit (sea) -> ew-020 Life Stone/portal orbit",
+  "Egg Orchard Portal: eop-010 push-in on the three red portals",
+  "Egg Orchard: eo-010 FPV corridor (JEV hero) -> eo-020 push-in on the toxic hive (or reverse the last two to open the dungeon on the hive)"
+ ],
+ "renders": [
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor0.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor1.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor2.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor3.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor4.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor5.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor6.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor7.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor8.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor9.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor10.png",
+  "/mnt/wbterminal2/film-projects/dereth-town-tour/research/egg-orchard/floor11.png"
+ ]
+}

@@ -1,0 +1,345 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Candeth Keep/Qalaba'r/Khayyaban/Uziz/Al-Arqas/Yaraq",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-yaraq.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.80 (golden, sun west ~33 deg), grade warm: golden hour over the Inner Sea; the west-facing plaza facades glow, the sea glitters behind the over-the-shoulder shot",
+ "towns": [
+  {
+   "name": "Yaraq",
+   "summary": "Yaraq (21.6S 1.7W) is one of the four starter towns: desert-dwelling Gharu'ndim led by the wizard Raqur al-Hayra crossed the A'mun Desert to this cove on the east shore of the Inner Sea, where Raqur thrust his staff into the ground and brought forth fresh water; he died in a duel with a Mu-miyah archmage before the town was finished. Yaraq stands on a grassy terrace (z 10-12) above a sandy beach: a long plaza with two pools, the nullified drudge statue on its pillar, the Life Stone and a crystal cluster at the Destroyed Portal to Greenspire, faced by an east row of yellow-green domes, rooftop-garden houses and a stained-glass church tower, and the Town Network portal beyond. On the beach a bamboo fishing hut has a pier into the sea; to the south a fountain stands under a great tree beside an orchard; north-east rises a lone five-storey spire tower, east is Arshid's Den of Iniquity with blue lantern poles, and further east a bonfire burns at an octagon watchtower.",
+   "landmarks": [
+    {
+     "name": "Inner Sea cove",
+     "pos": [
+      23860,
+      19200,
+      0
+     ],
+     "note": "water for x <= 23904, beach x 23904-23960, terrace edge x 24000"
+    },
+    {
+     "name": "Bamboo fishing hut (0x01002DE9) and pier",
+     "pos": [
+      23947.7,
+      19184.1,
+      0
+     ],
+     "heightM": 5.3,
+     "note": "pier x 23900-23922 at y 19184; Fishing Holes in the water around it"
+    },
+    {
+     "name": "Plaza pools",
+     "pos": [
+      24060.7,
+      19254.8,
+      12.05
+     ],
+     "heightM": 1.0,
+     "note": "second pool (24060.7,19302.4)"
+    },
+    {
+     "name": "Nullified Statue of a Drudge on its pillar (0x01002A1B)",
+     "pos": [
+      24059.9,
+      19283.6,
+      18.8
+     ],
+     "heightM": 3.0,
+     "note": "pillar base z 12"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      24037.7,
+      19305.8,
+      12.0
+     ],
+     "heightM": 3.0
+    },
+    {
+     "name": "Crystal cluster at the Destroyed Portal to Greenspire (0x02000B61)",
+     "pos": [
+      24035.2,
+      19261.7,
+      12.0
+     ],
+     "heightM": 3.8
+    },
+    {
+     "name": "East row: dome (0x01000E3B), rooftop gardens (0x01000E11), church tower (0x010025E3)",
+     "pos": [
+      24085.5,
+      19284.0,
+      12
+     ],
+     "heightM": 14.1,
+     "note": "rooftop gardens (24084.2,19260.5) (24084.5,19333.5); church (24089.7,19237.3)"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      24103.0,
+      19306.8,
+      12.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Fountain under the great tree (0x020003EA)",
+     "pos": [
+      24037.0,
+      19088.1,
+      12.0
+     ],
+     "heightM": 3.0,
+     "note": "tree top z 28.6"
+    },
+    {
+     "name": "Lone five-storey spire tower (0x01001117)",
+     "pos": [
+      24276,
+      19476,
+      14
+     ],
+     "heightM": 30.8
+    },
+    {
+     "name": "Bonfire at the octagon watchtower (0x01000F06)",
+     "pos": [
+      24370.8,
+      19069.4,
+      14.0
+     ],
+     "heightM": 1.5
+    },
+    {
+     "name": "Arshid's Den of Iniquity dome with blue lantern poles (0x02000707)",
+     "pos": [
+      24300,
+      19308,
+      12
+     ],
+     "heightM": 14.1
+    }
+   ],
+   "site": {
+    "id": "yaraq",
+    "name": "Yaraq",
+    "gazetteerId": "yaraq",
+    "teleport": "@telepoi Yaraq",
+    "anchor": [
+     24031.9,
+     19304.6,
+     11.9
+    ],
+    "settleSec": 2,
+    "lbKeys": [
+     "0x7D64",
+     "0x7C64",
+     "0x7C63",
+     "0x7D63",
+     "0x7E64",
+     "0x7E65",
+     "0x7E63"
+    ],
+    "look": {
+     "timeOfDay": 0.8,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.fly-by",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       23947.7,
+       19184.1,
+       0
+      ],
+      "height": 5.3,
+      "radius": 4
+     },
+     "params": {
+      "offset": 44,
+      "heightAGL": 5,
+      "speed": 8,
+      "side": "right",
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "framing": "FS",
+     "standingOrder": "Fly north low over the Inner Sea past the bamboo fishing hut and its pier, yawing to hold the hut as the town glows on the terrace behind.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER (drone.fly-by). 104 m straight north 5 m over the Inner Sea, 44 m off the bamboo fishing hut, crossing the end of its pier while the camera yaws to hold the hut: fishing ripples below, the town on its terrace behind, the golden-hour sun behind the camera. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (23903.7,19132.1,5.0) end (23903.7,19236.1,5.0), min AGL 5.0 m, nearest static/building/tree/spawn 2.2 m (spawn:Fishing Hole), nearest building 41.0 m, retail-bake trees 39.3 m, peak 8.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 5.0 m)."
+    },
+    {
+     "technique": "drone.parallax-slide",
+     "duration": {
+      "sec": 15
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24059.8,
+       19283.7,
+       12
+      ],
+      "height": 10,
+      "radius": 3
+     },
+     "params": {
+      "distance": 16,
+      "heightAGL": 3,
+      "slide": 26,
+      "panAmount": 0.3,
+      "direction": "left",
+      "bearingDeg": 270,
+      "relativeToSubject": false,
+      "minClearance": 1.5
+     },
+     "framing": "WS",
+     "standingOrder": "Slide along the plaza of Yaraq past the pools and the statue pillar, the golden domes and rooftop gardens gliding behind them.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ARCHITECTURE PARALLAX (drone.parallax-slide). Slides 26 m north 3 m above the plaza, 16 m west of the statue pillar, counter-panning 30 %: the two pools and the statue pillar slide past in the foreground while the domes and rooftop gardens of the east row glide slower behind, front-lit gold by the low west sun. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (24043.8,19270.7,15.0) end (24043.8,19296.7,15.0), min AGL 3.0 m, nearest static/building/tree/spawn 5.5 m (spawn:Ghaziyah), nearest building 12.9 m, retail-bake trees 63.5 m, peak 2.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 3.0 m)."
+    },
+    {
+     "technique": "classic.over-the-shoulder",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24037.7,
+       19305.8,
+       12
+      ],
+      "height": 3,
+      "radius": 1.2
+     },
+     "params": {
+      "secondary": [
+       24059.9,
+       19283.6,
+       18.8
+      ],
+      "secondaryHeight": 3,
+      "shoulder": "right",
+      "shoulderM": 1.0,
+      "backM": 3.6,
+      "raiseM": 0.3,
+      "composeThirds": true,
+      "autoFov": false,
+      "pushM": 0.4
+     },
+     "framing": "WS",
+     "fov": 35,
+     "standingOrder": "Look over the shoulder of the drudge statue on its pillar toward the glowing Life Stone and the golden Inner Sea beyond.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC + SEA (classic.over-the-shoulder). From 3.6 m behind the shoulder of the nullified drudge statue on its 7 m pillar (35 deg lens) looking WNW: the statue's shoulder fills the left, the glowing Life Stone sits on the right third and the Inner Sea glitters beyond under the low golden sun (backlight). Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (24063.2,19281.8,21.6) end (24062.9,19282.0,21.5), min AGL 9.5 m, nearest static/building/tree/spawn 1.3 m (spawn:Anniversary Effect), nearest building 2.7 m, retail-bake trees 45.4 m, peak 0.1 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 9.5 m)."
+    },
+    {
+     "technique": "classic.dolly-zoom",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24276,
+       19476,
+       14
+      ],
+      "height": 31,
+      "radius": 7
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 240,
+      "elevationDeg": 0,
+      "toFovDeg": 25
+     },
+     "framing": "FS",
+     "fov": 60,
+     "standingOrder": "Dolly back from the lone five-storey spire tower north-east of Yaraq while zooming in, the plains and sky swelling behind it.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "TOWER (classic.dolly-zoom). Vertigo on the lone five-storey spire tower (0x01001117, 31 m) north-east of town: the camera dollies back from 31 to 80 m WSW while the lens narrows 60 -> 25 deg, the tower holds its size and the plains and sky swell behind it; front-lit by the golden sun. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (24249.3,19460.6,29.5) end (24206.4,19435.8,29.5), min AGL 13.5 m, nearest static/building/tree/spawn 9.3 m (scenery:0x020004C7), nearest building 21.5 m, retail-bake trees 9.2 m, peak 6.5 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 13.5 m)."
+    },
+    {
+     "technique": "classic.handheld",
+     "duration": {
+      "sec": 10
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24370.8,
+       19069.4,
+       14
+      ],
+      "height": 1.5,
+      "radius": 1
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 0,
+      "elevationDeg": 12,
+      "distance": 7,
+      "thirds": "center",
+      "base": "push-in",
+      "pushM": 1,
+      "amplitudeDeg": 0.5,
+      "frequencyHz": 1.0,
+      "posAmplitude": 0.03,
+      "roughness": 0.4
+     },
+     "framing": "WS",
+     "fov": 50,
+     "standingOrder": "Stand handheld by the crackling bonfire at the octagon watchtower east of Yaraq, its flames leaping against the warm stone.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FLAME (classic.handheld). Handheld push-in 7 m north of the bonfire at the octagon watchtower east of Yaraq, 2 m up and looking down 12 deg: flickering flames in the centre, the warm stone tower behind, gentle organic shake. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (24370.8,19076.2,16.2) end (24370.8,19075.3,16.0), min AGL 2.0 m, nearest static/building/tree/spawn 3.6 m (building:0x01000F06#48), nearest building 3.6 m, retail-bake trees 11.3 m, peak 0.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 2.0 m)."
+    }
+   ],
+   "verification": "describe-landblock (includeFootprints) + list-objects + get-terrain-data for the landblocks 0x7B63, 0x7B64, 0x7B65, 0x7C63, 0x7C64, 0x7C65, 0x7D63, 0x7D64, 0x7D65, 0x7E63, 0x7E64, 0x7E65; get-object-detail for every model (162 ids, bounds -> rotated AABBs); chorizite-parse-dat-record Setup for the effect props (default scripts / lights); get-height at 53 camera samples (start/end/quarters and every 1/8 of each move) - all within 0.01 m of the checker terrain; clearance against WBT statics/buildings, both scenery bakes (dist/scenery and dist/scenery-retail) and the dist spawn weenies. Per shot: s010 drone.fly-by: minAGL 5.0 (WBT 5.0), clearance 2.2 m (spawn:Fishing Hole), retail trees 39.3 m, peak 8.0 m/s; s020 drone.parallax-slide: minAGL 3.0 (WBT 3.0), clearance 5.5 m (spawn:Ghaziyah), retail trees 63.5 m, peak 2.7 m/s; s030 classic.over-the-shoulder: minAGL 9.5 (WBT 9.5), clearance 1.3 m (spawn:Anniversary Effect), retail trees 45.4 m, peak 0.1 m/s; s040 classic.dolly-zoom: minAGL 13.5 (WBT 13.5), clearance 9.3 m (scenery:0x020004C7), retail trees 9.2 m, peak 6.5 m/s; s050 classic.handheld: minAGL 2.0 (WBT 2.0), clearance 3.6 m (building:0x01000F06#48), retail trees 11.3 m, peak 0.2 m/s. plan validate (dry build): valid: 0 error(s), 0 warning(s)"
+  }
+ ]
+}

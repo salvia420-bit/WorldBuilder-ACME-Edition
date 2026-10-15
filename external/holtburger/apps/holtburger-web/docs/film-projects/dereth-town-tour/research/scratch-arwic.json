@@ -1,0 +1,222 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Arwic scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "arwic",
+   "name": "Arwic",
+   "gazetteerId": "arwic",
+   "teleport": "@telepoi Arwic",
+   "anchor": [
+    38062.805,
+    32452.219,
+    42.005
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.7,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38088,
+     32508,
+     42
+    ],
+    "height": 31,
+    "radius": 65
+   },
+   "params": {
+    "heightAGL": 105,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "standingOrder": "Hang straight above the walled square of Arwic and rotate slowly so its walls, towers and courtyards turn like a map; hold height 30 m above the central tower.",
+   "site": "arwic",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010"
+  },
+  {
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38035,
+     32520,
+     42
+    ],
+    "height": 8,
+    "radius": 12
+   },
+   "params": {
+    "azimuthDeg": 270,
+    "azimuthRef": "compass",
+    "elevationDeg": -8,
+    "distance": 13,
+    "thirds": "center",
+    "travelM": 32,
+    "direction": "right",
+    "keepAim": false
+   },
+   "standingOrder": "Truck south along the sunlit west wall of Arwic past the gate and its spired gatehouses, 13 m off the stone and 2.5 m up; nothing may come between lens and wall.",
+   "site": "arwic",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020"
+  },
+  {
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38028,
+     32556,
+     42
+    ],
+    "height": 19.6,
+    "radius": 4
+   },
+   "params": {
+    "offset": 12,
+    "heightAGL": 13,
+    "speed": 10,
+    "side": "right",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly fast and level east along the north side of the walls, whipping past the north-west corner tower 12 m off its stones; climb rather than swerve if anything comes within 6 m.",
+   "site": "arwic",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030"
+  },
+  {
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38095.5,
+     32501,
+     42.2
+    ],
+    "height": 8,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 352,
+    "azimuthRef": "compass",
+    "elevationDeg": 34,
+    "distance": 24,
+    "thirds": "center",
+    "pushM": 3
+   },
+   "standingOrder": "Look down the plaza from above the Life Stone onto the swirling Town Network portal and the silver fountain beside the central tower, easing 3 m closer; stay 5 m above the roofs.",
+   "site": "arwic",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040"
+  },
+  {
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38108.5,
+     32504.5,
+     42
+    ],
+    "height": 31,
+    "radius": 6
+   },
+   "params": {
+    "nearDistance": 45,
+    "farDistance": 120,
+    "direction": "out",
+    "heightAGL": 26,
+    "minFovDeg": 18,
+    "maxFovDeg": 90,
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Fly straight back from the central tower over the south wall while zooming in so the tower holds its size and the hills swell behind it; stay 12 m above the walls.",
+   "site": "arwic",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050"
+  }
+ ]
+}

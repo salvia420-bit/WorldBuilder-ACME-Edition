@@ -1,0 +1,226 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Cragstone scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "cragstone",
+   "name": "Cragstone",
+   "gazetteerId": "cragstone",
+   "teleport": "@telepoi Cragstone",
+   "anchor": [
+    36073.358,
+    30696.251,
+    54.005
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.42,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36240,
+     30630,
+     40
+    ],
+    "height": 30,
+    "radius": 120
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -5,
+    "heightAGL": 20,
+    "distance": 235,
+    "drift": 10,
+    "bearingDeg": 76,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "standingOrder": "Start looking straight down at the sunlit bay, then tilt up while drifting in to reveal Cragstone's terraces climbing to the windmill; hold 55 m above the water.",
+   "site": "cragstone",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010"
+  },
+  {
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35964,
+     30584,
+     72
+    ],
+    "height": 19,
+    "radius": 9
+   },
+   "params": {
+    "azimuthDeg": 185,
+    "azimuthRef": "compass",
+    "elevationDeg": -22,
+    "distance": 24,
+    "thirds": "center",
+    "riseM": 14,
+    "swingDeg": -30,
+    "armM": 12
+   },
+   "standingOrder": "Jib up from the grass in front of the windmill, rising past its turning sails while the arm swings left; stay 14 m from the sails.",
+   "site": "cragstone",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020"
+  },
+  {
+   "technique": "classic.over-the-shoulder",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "MS",
+   "fov": 42,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36274.4,
+     30606.8,
+     32.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "secondary": [
+     36277.7,
+     30629.7,
+     38.8
+    ],
+    "secondaryHeight": 2.2,
+    "shoulder": "right",
+    "shoulderM": 0.9,
+    "backM": 2.0,
+    "raiseM": 0.3,
+    "composeThirds": true,
+    "autoFov": false,
+    "pushM": 0.4
+   },
+   "standingOrder": "Look over Thorsten Cragstone's bronze shoulder from his plinth down at the swirling Town Network portal in the square; stay 1 m off the statue.",
+   "site": "cragstone",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030"
+  },
+  {
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36300,
+     30850,
+     0
+    ],
+    "height": 12,
+    "radius": 60
+   },
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": 12,
+    "distance": 130,
+    "thirds": "center",
+    "rate": 0.01
+   },
+   "standingOrder": "Lock off on the cliff top above Victory Harbor and let the clouds race across the bay while the sun climbs; do not move.",
+   "site": "cragstone",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040"
+  },
+  {
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36277.5,
+     30629.8,
+     32
+    ],
+    "height": 10.3,
+    "radius": 4
+   },
+   "params": {
+    "startDistance": 12,
+    "endDistance": 92,
+    "startHeight": 17,
+    "endHeight": 52,
+    "bearingDeg": 10,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Pull back and up from the statue of Thorsten Cragstone over the rooftops to the harbour cliff in one smooth line; stay 6 m above every roof.",
+   "site": "cragstone",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050"
+  }
+ ]
+}

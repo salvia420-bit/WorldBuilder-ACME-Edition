@@ -1,0 +1,225 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Danby's Outpost scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "danbys-outpost",
+   "name": "Danby's Outpost",
+   "gazetteerId": "danbys-outpost",
+   "teleport": "@telepoi Outpost",
+   "anchor": [
+    17580,
+    30087,
+    14
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.33,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "danbys-outpost",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     17580,
+     30087,
+     14
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "radius": 85,
+    "heightAGL": 62,
+    "revolutions": 0.3,
+    "timeRate": 80,
+    "direction": "cw",
+    "bearingDeg": 15,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Orbit the stockade slowly clockwise at radius 85 m and z 76 while the sky speeds up; keep 20 m from every tree top.",
+   "notes": "ESTABLISHING + WATER + TIME (drone.hyperlapse-orbit). 0.3 revolution clockwise (bearing 15 to 123) at radius 85 m, z 76, looking down 29 deg at the square stockade while the sky clock runs 80x: 15 s x 80 = 1200 sky-s = 0.16 day, so the sun climbs from morning 0.33 to about noon 0.49 (never near the horizon) and the clouds race; the two spire-roofed towers, the courtyard, the 74 m forest giants and the Inner Sea behind the fort. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (17602.0, 30169.1, 76.0) end (17651.3, 30040.7, 76.0), min AGL 40.9 m, nearest static/building/default-bake tree 22.4 m (scenery:0x02000258), nearest building 53.3 m, retail-bake scenery 16.2 m, peak 10.7 m/s; WBT get-height on 9 camera points, min AGL 41.4 m."
+  },
+  {
+   "id": "s020",
+   "site": "danbys-outpost",
+   "technique": "classic.dolly-zoom",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "FS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     17601.5,
+     30105.5,
+     14
+    ],
+    "height": 31,
+    "radius": 9.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 125,
+    "elevationDeg": 5,
+    "toFovDeg": 24
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Dolly straight back from the north-east tower while zooming in so the tower keeps its size; nothing is within 15 m of the lens.",
+   "notes": "LANDMARK (classic.dolly-zoom). The 31 m north-east spire tower seen from the ESE with the camera 11-19 m above the slope: dollies out from 31 m to 84 m while the fov narrows 60 to 24 deg, so the tower keeps its size while the north-west tower, the stockade and the forested ridge behind it swell (the vertigo effect). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (17626.7, 30087.9, 32.2) end (17669.9, 30057.6, 36.8), min AGL 10.6 m, nearest static/building/default-bake tree 17.7 m (building:0x01001161#134), nearest building 17.7 m, retail-bake scenery 18.5 m, peak 7.6 m/s; WBT get-height on 7 camera points, min AGL 10.6 m."
+  },
+  {
+   "id": "s030",
+   "site": "danbys-outpost",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     17575.7,
+     30088.7,
+     14
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 90,
+    "elevationDeg": 4,
+    "distance": 46,
+    "riseM": 16,
+    "keepAim": true
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise slowly straight up from behind the east wall to look down on the campfire in the courtyard; stay at least 12 m from the tower.",
+   "notes": "FX: FIRE + LIFESTONE + PORTAL (classic.pedestal). Starts 2 m above the slope just outside the 5 m east wall (the courtyard hidden), rises 16 m keeping aim: the courtyard appears over the wall with the stone fire ring (0x02000354, red glow, flame light, crackle) in the centre beside Gunther Danby the cook, the Life Stone sparkle on the right and the Town Network portal swirl on the left, the west wall and the sea beyond. Morning light, cool grade. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (17621.6, 30088.7, 18.7) end (17621.6, 30088.7, 34.7), min AGL 1.9 m, nearest static/building/default-bake tree 12.9 m (building:0x01001161#134), nearest building 12.9 m, retail-bake scenery 17.4 m, peak 1.9 m/s; WBT get-height on 1 camera points, min AGL 1.9 m."
+  },
+  {
+   "id": "s040",
+   "site": "danbys-outpost",
+   "technique": "fpv.fpv-proximity",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "path": [
+    [
+     17554.2,
+     30035,
+     14
+    ],
+    [
+     17554.2,
+     30128,
+     14
+    ]
+   ],
+   "params": {
+    "offset": 10,
+    "side": "right",
+    "heightAGL": 4,
+    "speed": 9.5,
+    "lookAhead": 10,
+    "leanDeg": 6,
+    "maxBankDeg": 20,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim north 10 m outside the west wall and 4 m above the grass, past the north-west tower; never closer than 4 m to the tower.",
+   "notes": "KINETIC FPV (fpv.fpv-proximity; not a facade pan: a fast skim of the stockade). FPV flies north 93 m along the outer west face of the stockade, 10 m off the wall and 4 m above the grass, leaning toward it, past the north-west spire tower (4.8 m from its corner) and up the slope into the forest edge; 9.5 m/s on the fpv preset. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (17544.2, 30035.0, 17.5) end (17544.2, 30128.0, 23.3), min AGL 4.0 m, nearest static/building/default-bake tree 4.8 m (building:0x01001161#135), nearest building 4.8 m, retail-bake scenery 10.0 m, peak 11.2 m/s; WBT get-height on 6 camera points, min AGL 4.0 m."
+  },
+  {
+   "id": "s050",
+   "site": "danbys-outpost",
+   "technique": "drone.boomerang",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     17580,
+     30087,
+     14
+    ],
+    "height": 31,
+    "radius": 30
+   },
+   "params": {
+    "far": 105,
+    "near": 60,
+    "heightStart": 44,
+    "heightNear": 30,
+    "rise": 22,
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly in toward the fort from over the shore, stop 60 m out above the trees, then back away climbing; keep 10 m above every tree top.",
+   "notes": "CLOSING (drone.boomerang). From 105 m SSW over the shore the drone flies in to 60 m (z 44, above the 37 m oak in front of the gate), stops, then retreats climbing to z 80: the stockade seen twice at two scales with the Inner Sea shoreline below; peak 11.3 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (17544.1, 29988.3, 58.0) end (17544.1, 29988.3, 80.0), min AGL 33.6 m, nearest static/building/default-bake tree 11.8 m (scenery:0x020002DA), nearest building 37.3 m, retail-bake scenery 11.9 m, peak 11.3 m/s; WBT get-height on 5 camera points, min AGL 33.6 m."
+  }
+ ]
+}

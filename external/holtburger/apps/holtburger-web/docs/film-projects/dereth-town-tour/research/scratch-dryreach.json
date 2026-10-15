@@ -1,0 +1,228 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Dryreach scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "dryreach",
+   "name": "Dryreach",
+   "gazetteerId": "dryreach",
+   "teleport": "@telepoi Dryreach",
+   "anchor": [
+    41988,
+    22524,
+    18.005
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.82,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 17
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42000,
+     22536,
+     18
+    ],
+    "height": 31,
+    "radius": 70
+   },
+   "params": {
+    "radiusStart": 140,
+    "radiusEnd": 96,
+    "heightStart": 80,
+    "heightEnd": 40,
+    "revolutions": 0.13,
+    "direction": "ccw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Descend in a wide slow spiral over the plain toward the walled fortress of Dryreach with its four spired towers in the golden light; stay 10 m above the spire tips.",
+   "site": "dryreach",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010"
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "MWS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41964,
+     22524,
+     18
+    ],
+    "height": 9,
+    "radius": 14
+   },
+   "params": {
+    "distance": 13,
+    "heightAGL": 2.5,
+    "slide": 32,
+    "panAmount": 0.12,
+    "direction": "right",
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Glide south along the sunlit west palisade of Dryreach past its gate and spiked stakes, 13 m off the wall and 2.5 m up; nothing may come between lens and wall.",
+   "site": "dryreach",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020"
+  },
+  {
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41989,
+     22526,
+     18
+    ],
+    "height": 4,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 30,
+    "speed": 6,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 10
+   },
+   "standingOrder": "Pass straight over the Dryreach courtyard from east to west 30 m up, keeping the well in frame through vertical as the golden light rakes the walls; stay 12 m above every roof and spire.",
+   "site": "dryreach",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030"
+  },
+  {
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41981.2,
+     22572.2,
+     18.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 5,
+    "azimuthRef": "compass",
+    "elevationDeg": 0.5,
+    "distance": 40,
+    "thirds": "center",
+    "riseM": 12,
+    "keepAim": true
+   },
+   "standingOrder": "Rise straight up outside the north gate until the lens clears the palisade stakes and looks down on the blue Town Network portal in the courtyard; stay 12 m from the wall.",
+   "site": "dryreach",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040"
+  },
+  {
+   "technique": "fpv.fpv-dive",
+   "duration": {
+    "sec": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41969,
+     22602,
+     18
+    ],
+    "height": 30.8,
+    "radius": 2
+   },
+   "params": {
+    "heightStart": 37,
+    "bottomAGL": 3,
+    "diveAngleDeg": -78,
+    "approach": 16,
+    "standoff": 5,
+    "exitLength": 40,
+    "pullOutRadius": 9,
+    "speed": 13,
+    "alat": 11,
+    "uptiltDeg": 20,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "jev"
+   },
+   "standingOrder": "Cross the north-west spire 6 m above its tip, then dive straight down its north face 5 m off the stone and pull out low over the plain heading north; never closer than 3 m to the tower or trees.",
+   "site": "dryreach",
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050"
+  }
+ ]
+}

@@ -1,0 +1,249 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Westwatch/Sanamar/Ahurenga/Timaru/Redspire/Bluespire",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-sanamar.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.42 (sun east, 51 deg), grade neutral: bright late morning on the walled city; the rack focus is backlit so the brazier flames glow",
+ "towns": [
+  {
+   "name": "Sanamar",
+   "summary": "Sanamar (72.1N 60.9W) is the capital of New Viamont, founded by King Varicci II where his army saw a great red bull silhouetted on a southern coastal cliff - the omen of the royal house of Corcosi - and the fourth starter town of Throne of Destiny. It stands on a flat rocky plateau at z 52 above the south-eastern shore: two walled compounds of grey Viamontian stone with gold-roofed four-storey corner towers, spire towers and archway gates. The western compound holds a plaza with a four-spout fountain ringed by golden blue-flame lamps, flowerbeds, two gold-roofed halls and the Town Network portal, plus a forge with a bonfire; the eastern compound holds the statue of King Varicci II (five times life size) between four column braziers, market stalls and the Red Bull of Sanamar. The Life Stone is outside the north gate, beside a second fountain, the three portals destroyed in the Shifting Gears event and the Monster Fights arena; the Royal Hall rises on its own 80 m sea cliff 570 m to the south-west (separate entry).",
+   "landmarks": [
+    {
+     "name": "Statue of King Varicci II (scale 5)",
+     "pos": [
+      9851.4,
+      41723.5,
+      52
+     ],
+     "heightM": 9.0,
+     "note": "ringed by four column braziers 0x02000624 at (9846.7,41719.5,56.3) (9856.3,41719.7,56.3) (9846.6,41727.8,56.3) (9856.3,41727.5,56.3)"
+    },
+    {
+     "name": "Four-spout fountain with four blue-flame lamps (0x0200123A)",
+     "pos": [
+      9736.2,
+      41770.1,
+      52
+     ],
+     "heightM": 4.0,
+     "note": "lamps at (9727.1,41761.1) (9744.8,41761.1) (9726.8,41778.5) (9744.9,41778.0)"
+    },
+    {
+     "name": "Gold-roofed Viamontian halls (0x01003624 x2)",
+     "pos": [
+      9744,
+      41796,
+      52
+     ],
+     "heightM": 17.97,
+     "note": "(9732,41796) and (9755.9,41796.2)"
+    },
+    {
+     "name": "West compound corner towers (0x01003AAE, gold roofs)",
+     "pos": [
+      9708,
+      41820,
+      52
+     ],
+     "heightM": 26.35,
+     "note": "also (9708,41676) (9780,41820); spire towers 0x01003B03 at (9780,41676) (9780,41748); walls x 9708-9780, y 41676-41820"
+    },
+    {
+     "name": "East compound gates (0x01003AA5 archway towers)",
+     "pos": [
+      9852,
+      41748,
+      52
+     ],
+     "heightM": 23.49,
+     "note": "north gate; south gate (9852,41676); west gate (9780,41724)"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      9755.6,
+      41747.6,
+      52.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Forge bonfire by the temple hall (0x01003904)",
+     "pos": [
+      9755.9,
+      41689.9,
+      53.0
+     ]
+    },
+    {
+     "name": "Red Bull of Sanamar",
+     "pos": [
+      9881.6,
+      41730.8,
+      52
+     ]
+    },
+    {
+     "name": "Life Stone (outside the north gate)",
+     "pos": [
+      9804.2,
+      41844,
+      52
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Second fountain and destroyed portals (Holtburg, Yaraq, Shoushi)",
+     "pos": [
+      9899.1,
+      41819.7,
+      52
+     ],
+     "heightM": 4.0
+    }
+   ],
+   "site": {
+    "id": "sanamar",
+    "name": "Sanamar",
+    "gazetteerId": "sanamar",
+    "teleport": "@telepoi Sanamar",
+    "anchor": [
+     9805.0,
+     41745.0,
+     52.0
+    ],
+    "settleSec": 2,
+    "lbKeys": [
+     "0x32D9",
+     "0x33D9"
+    ],
+    "look": {
+     "timeOfDay": 0.42,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.rising-reveal",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       9810,
+       41735,
+       52
+      ],
+      "height": 26,
+      "radius": 70
+     },
+     "params": {
+      "distance": 200,
+      "obstacleDistance": 90,
+      "obstacleHeight": 78,
+      "heightStart": 4,
+      "clearance": 12,
+      "forward": 20,
+      "endPitchDeg": -8,
+      "bearingDeg": 138,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "standingOrder": "Rise from 4 m over the beach south-east of Sanamar up the coastal slope until the walled city and its gold-roofed towers appear over the edge.",
+     "notes": "ESTABLISHING (drone.rising-reveal). Starts 4 m over the sand of the south-east shore below the city, facing up the coastal slope (the 'southern coastal cliff' where Varicci II saw the red bull omen); rises 86 m in 14 s while easing 20 m forward until the curtain walls, the gold-roofed corner towers and spire towers of Sanamar appear over the crest; ends 180 m out at z 90 pitched -8. Morning sun from the east side-lights the south-east walls. Verified offline (real registry build + WBT terrain): start (9943.8,41586.4,4.0) end (9930.4,41601.2,90.0), min AGL 4.0 m, nearest static/building/tree 6.9 m (0x02001292@9949,41582), peak 9.9 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.rack-focus",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "MS",
+     "fov": 40,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       9851.4,
+       41723.5,
+       52
+      ],
+      "height": 9,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 215,
+      "elevationDeg": -16,
+      "distance": 9.4,
+      "thirds": "right",
+      "fromTarget": "metres",
+      "fromM": 3.4,
+      "toTarget": "subject",
+      "at": 0.45,
+      "pullSec": 1.6,
+      "driftM": 0.6
+     },
+     "standingOrder": "Hold at brazier height south-west of the King's statue, focused on the brazier flame in the foreground, then pull focus to King Varicci II.",
+     "notes": "FLAME + LANDMARK (classic.rack-focus). Camera at brazier height (z 57.5) 9.4 m SSW of the five-times-scale statue of King Varicci II (DefaultScale 5, ~9 m), the south-west column brazier (0x02000624: two flame puffs + warm halo, on a 4.3 m marble column) 3.4 m away in the left foreground and in focus; at 45 % the focus pulls over 1.6 s to the king on the right third, the flame melting into bokeh. Real DoF with ?clouds=on. Verified offline (real registry build + WBT terrain): start (9846.2,41716.1,57.5) end (9846.5,41716.6,57.7), min AGL 5.5 m, nearest static/building/tree 2.5 m (0x33D9#112 0x01003628), peak 0.1 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.crane",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       9736.2,
+       41770.1,
+       52
+      ],
+      "height": 4.5,
+      "radius": 5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 165,
+      "elevationDeg": 2,
+      "distance": 14,
+      "thirds": "center",
+      "riseM": 12,
+      "swingDeg": -30,
+      "armM": 4
+     },
+     "standingOrder": "Start low south of the four-spout fountain between the blue-flame lamps and crane up and around to reveal the plaza, the gold-roofed halls and the city walls.",
+     "notes": "WATER + FLAME (classic.crane). Starts 2.7 m above the paving 14 m SSE of the four-spout fountain (0x0200123A, bubbly water arcs) ringed by four golden blue-flame lamps; cranes up 12 m and swings 30 deg while tilting down to -41 deg so the plaza, flowerbeds, the two gold-roofed Viamontian halls (18 m) and the west curtain wall with its corner towers open up around the water. Verified offline (real registry build + WBT terrain): start (9739.8,41756.6,54.7) end (9738.9,41756.1,66.7), min AGL 2.7 m, nearest static/building/tree 4.2 m (0x32D9#74 0x01003708), peak 2.1 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    }
+   ],
+   "verification": "ONE WBT session per pass, run sequentially (4 sessions + a sky-curve probe): describe-landblock (with includeFootprints) + list-objects + get-terrain-data for every landblock listed, get-object-detail for all 219 model ids found (bounds -> obstacle boxes), get-height at every sampled camera position, region-day-night-curve for the sun (heading 90 until 0.59, then 270; elevation per time). Offline checker: each shot built with the real technique registry (scene3d/film/shots) against a triangle-split terrain from the WBT heightmaps, sampled at 24 fps against static OBB->AABBs, structure footprints, both scenery bakes (dist scenery + scenery-retail) and outdoor spawns. Landblocks 0x30D5-0x34DA (5x6 block covering the town, the ridge and the Royal Hall). Rising-reveal starts 4 m over the beach (ground 0) 6.9 m from the nearest plant, ends z 90; rack-focus camera 5.5 m above the plaza, 2.5 m from the brazier column; crane starts 2.7 m AGL, 4.2 m from the nearest tower. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-sanamar.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

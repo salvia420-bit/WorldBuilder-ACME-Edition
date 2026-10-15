@@ -1,0 +1,304 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Rithwic scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "rithwic",
+   "name": "Rithwic",
+   "gazetteerId": "rithwic",
+   "teleport": "@telepoi Rithwic",
+   "anchor": [
+    38616.0,
+    27060.0,
+    26.0
+   ],
+   "look": {
+    "timeOfDay": 0.72,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "rw-lake-boom",
+   "site": "rithwic",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "params": {
+    "distance": 110,
+    "heightStart": 4,
+    "heightEnd": 48,
+    "bearingDeg": 357,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 2
+   },
+   "framing": "EWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up from just above Lake Blessed while keeping the bridge in the river neck centred; stay over open water, 4 m above the surface at the start."
+  },
+  {
+   "id": "rw-square-facades",
+   "site": "rithwic",
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38474.7,
+     26991.0,
+     22.0
+    ],
+    "height": 6.0,
+    "radius": 7
+   },
+   "params": {
+    "distance": 7.2,
+    "heightAGL": 2.0,
+    "slide": 24,
+    "panAmount": 0.1,
+    "direction": "right",
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "framing": "MWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Glide south along the sunlit west facades of the Gilded Tome and the fletcher at walking pace, 7 m off the wall and 2 m up; nothing may cross between lens and wall."
+  },
+  {
+   "id": "rw-portal-rackfocus",
+   "site": "rithwic",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 7
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38452.27,
+     27000.75,
+     22.3
+    ],
+    "height": 2.83,
+    "radius": 1.41,
+    "heading": 1.3125
+   },
+   "params": {
+    "azimuthDeg": -8,
+    "azimuthRef": "front",
+    "elevationDeg": 0,
+    "distance": 18,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 4.0,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.0,
+    "driftM": 0.5
+   },
+   "fov": 40,
+   "framing": "MS",
+   "look": {
+    "dof": {
+     "focusRange": 2.5,
+     "bokehScale": 3
+    }
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold low on the town square with the street torch flame sharp at frame right, then pull focus to the purple Town Network portal swirl; stay 4 m from the torch."
+  },
+  {
+   "id": "rw-bridge-slide",
+   "site": "rithwic",
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "params": {
+    "distance": 72,
+    "heightAGL": 11,
+    "slide": 22,
+    "panAmount": 0.3,
+    "direction": "left",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "framing": "WS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Slide slowly across the river pool south of the bridge, 11 m above the water, keeping the whole span between the cliffs in frame; stay 5 m above the bank trees."
+  },
+  {
+   "id": "rw-under-bridge",
+   "site": "rithwic",
+   "technique": "drone.flythrough",
+   "duration": {
+    "sec": 17
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "height": 11,
+    "radius": 22
+   },
+   "path": [
+    [
+     38620.5,
+     27015.0,
+     9.0
+    ],
+    [
+     38619.5,
+     27038.0,
+     9.5
+    ],
+    [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    [
+     38617.5,
+     27092.0,
+     10.5
+    ],
+    [
+     38616.0,
+     27148.0,
+     21.0
+    ]
+   ],
+   "params": {
+    "gapPos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "gapNormal": [
+     0,
+     1,
+     0
+    ],
+    "gapWidth": 42,
+    "gapHeight": 10.5,
+    "speed": 11,
+    "gapSpeed": 0.45,
+    "cornerRadius": 20,
+    "lookAhead": 12,
+    "tiltDeg": -4,
+    "ends": "cruise"
+   },
+   "framing": "WS",
+   "pilot": {
+    "mode": "jev"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim north up the river 5 m above the water, slow under the bridge arch on the centre line, then climb out over Lake Blessed; never closer than 1 m to deck, water or banks."
+  },
+  {
+   "id": "rw-ruin-lightning",
+   "site": "rithwic",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38767.55,
+     27137.84,
+     22.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "radius": 14,
+    "heightAGL": 4.5,
+    "revolutions": 0.17,
+    "direction": "ccw",
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "framing": "MWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Arc slowly around the ruined Greenspire portal with its lightning arcs centred, 14 m out and 4.5 m up; keep 6 m from the arcs and 4 m from the pines."
+  }
+ ]
+}

@@ -1,0 +1,293 @@
+{
+ "name": "Glenden Wood",
+ "slug": "glenden-wood",
+ "summary": "Glenden Wood is an Aluvian town nestled in the Tiofor Woods west of Cragstone, invaded by King Varicci's New Viamont army in 16 PY and still under a wary siege. In the world it is a clearing in a forest bowl (z 50) ringed by 25-35 m pines and broadleaf trees and dominated by a single giant tree 58 m tall beside the Life Stone; mossy stone cottages, a brick hall on a raised mound with a Viamontian siege tent and glowing lanterns, a well, the Banderling statue on its plinth and the Town Network portal fill the clearing, and forest roads climb out west and north. Noon light falls straight into the bowl; foliage pollen and leaves drift in every shot.",
+ "landmarks": [
+  {
+   "name": "Giant tree of Glenden Wood",
+   "pos": [
+    30931.3,
+    31601.6,
+    50.0
+   ],
+   "heightM": 58.6,
+   "note": "Placed tree 0x020003A1, crown 23x23 m, top z 108.6 - the town's signature."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    30917.4,
+    31589.3,
+    50.0
+   ],
+   "heightM": 3.6,
+   "note": "Under the giant tree and pines at the clearing's west edge."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    31058.4,
+    31606.8,
+    50.2
+   ],
+   "heightM": 3.5,
+   "note": "East side of the clearing, open lawn to its east."
+  },
+  {
+   "name": "Nullified Statue of a Banderling",
+   "pos": [
+    31062.4,
+    31640.1,
+    56.8
+   ],
+   "heightM": 1.5,
+   "note": "On a 6.8 m plinth north of the portal, Fireworks Generator."
+  },
+  {
+   "name": "Viamontian siege tent",
+   "pos": [
+    30996.1,
+    31572.0,
+    56.0
+   ],
+   "heightM": 3.9,
+   "note": "Blue/red tent on the mound under two broad trees, glowing lanterns 0x02000705 at its door (30994-30998,31578)."
+  },
+  {
+   "name": "Brick hall on the mound S113",
+   "pos": [
+    30996.1,
+    31525.1,
+    66.0
+   ],
+   "heightM": 10.2,
+   "note": "Two-story brick hall with candelabras."
+  },
+  {
+   "name": "Well",
+   "pos": [
+    30964.1,
+    31612.4,
+    50.0
+   ],
+   "heightM": 2.7,
+   "note": "Centre of the clearing."
+  },
+  {
+   "name": "West hamlet Life Stone and well",
+   "pos": [
+    30692.2,
+    31651.1,
+    84.4
+   ],
+   "heightM": 3.6,
+   "note": "Second Life Stone on the western hill with three cottages."
+  }
+ ],
+ "site": {
+  "id": "glenden-wood",
+  "name": "Glenden Wood",
+  "gazetteerId": "glenden-wood",
+  "teleport": "@telepoi Glenden Wood",
+  "anchor": [
+   30816.302,
+   31607.847,
+   59.955
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.5,
+   "grade": "neutral"
+  }
+ },
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30995,
+     31615,
+     50
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "params": {
+    "azimuthDeg": 10,
+    "azimuthRef": "compass",
+    "distance": 150,
+    "heightM": 55,
+    "driftDeg": -8,
+    "pushPct": 10
+   },
+   "standingOrder": "Drift slowly in over the northern road and look down into the forest bowl of Glenden Wood; stay 8 m above every tree top.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Establishing: from 46 m above the north road (z 105) the camera drifts 8 deg and pushes 10 % toward the town, looking down into the forest bowl of Glenden Wood (z 50) ringed by 25-60 m trees, the giant tree and the cottages in the clearing. Noon light from high east. Clearance: 24.6 m to the nearest crown, >= 18 m above every tree top in view; line of sight to the town centre clear in all samples."
+  },
+  {
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 13
+   },
+   "fov": 70,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30866,
+     31603.5,
+     50
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 1.45
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 4,
+    "lookYawDeg": 0,
+    "advanceM": 22,
+    "bobM": 0.03,
+    "stepHz": 1.8,
+    "turnLag": 0.35
+   },
+   "standingOrder": "Walk east along the forest road into Glenden Wood at an easy pace with the Life Stone and the giant trees ahead; keep to the road, 4 m from every trunk.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "POV walk-in: eye height 1.66 m on the west forest road (z 50, flat), walking 22 m east at an easy pace with a light step bob; the Life Stone sparkles right of centre (NDC x 0.33->0.60) and the giant tree's canopy fills the upper frame (NDC y 0.5->0.8); foliage pollen/leaves catch the noon light. Clearance: passes 2.7 m from a 2.3 m bush and >= 4.6 m from every trunk; query-radius 4 m = 0 statics."
+  },
+  {
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31058.4,
+     31606.8,
+     50.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 85,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 14,
+    "fromDeg": 42,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "Start on the forest canopy above the cottages and tilt down slowly onto the blue swirl of the Town Network portal; hold position 10 m from the portal.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Particle detail: locked position 14 m east of the Town Network portal (open lawn, sun behind), tilting from 42 deg above the portal (the canopy of a 33 m tree and the cottage roofs against the sky) down onto the blue swirl. Clearance: 3.2 m from a signpost that stays out of frame (60 deg off-axis), no other static within 4 m. Note: the opt-in retail scenery bake would place a pine at this spot; the default bake (what renders) is clear."
+  },
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30931.3,
+     31601.6,
+     50
+    ],
+    "height": 58,
+    "radius": 12
+   },
+   "params": {
+    "radiusStart": 36,
+    "radiusEnd": 50,
+    "heightStart": 50,
+    "heightEnd": 82,
+    "revolutions": 0.28,
+    "direction": "cw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Spiral slowly up and around the giant tree of Glenden Wood with the town bowl behind it; stay 8 m above every tree top and 20 m from the giant crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hero aerial: helix 0.28 turn clockwise around the 58 m giant tree from SW to N, radius 36->50 m, rising z 100->132, the town clearing beside it. Clearance: >= 14 m above the default-bake pine tops (<= 86), 19.7 m to the nearest crown, 30+ m from the giant crown; vmax 8.3 m/s."
+  },
+  {
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30990,
+     31615,
+     50
+    ],
+    "height": 6,
+    "radius": 40
+   },
+   "params": {
+    "heightStart": 16,
+    "heightEnd": 82,
+    "rotateDeg": 60,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 6
+   },
+   "standingOrder": "Look straight down on the town square and rise vertically out of the forest bowl while turning slowly; stay 15 m from every crown.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Closing top-down: straight down on the town square at noon (short shadows), rising 16->82 m above it while turning 60 deg; roofs, wells, the siege tent and canopy rings become a pattern. Clearance: 17 m horizontally from the nearest crown (top 83) at the lowest point; vmax 7.4 m/s."
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 3x3 landblocks (0x9FA3 0x9FA4 0x9FA5 0xA0A3 0xA0A4 0xA0A5 0xA1A3 0xA1A4 0xA1A5); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 classic.establishing: WBT get-height under 5-8 sampled camera points, min AGL 46.29 m; offline build min clearance 24.6 m (scenery:0x020002D8), opt-in retail bake 13.37 m; vmax 3.26 m/s; subject LOS blocked 0/49 samples; s020 classic.pov: WBT get-height under 5-8 sampled camera points, min AGL 1.65 m; offline build min clearance 2.68 m (scenery:0x020005C9), opt-in retail bake 4.36 m; vmax 2.66 m/s; subject LOS blocked 0/53 samples; s030 classic.tilt: WBT get-height under 5-8 sampled camera points, min AGL 2.93 m; offline build min clearance 3.22 m (static:0x020006EE#104), opt-in retail bake 0.45 m; vmax 0.0 m/s; subject LOS blocked 0/41 samples; s040 drone.helix: WBT get-height under 5-8 sampled camera points, min AGL 50 m; offline build min clearance 19.71 m (scenery:0x020002DA), opt-in retail bake 0.0 m; vmax 8.25 m/s; subject LOS blocked 0/65 samples; s050 drone.top-down-rise: WBT get-height under 5-8 sampled camera points, min AGL 16 m; offline build min clearance 17.02 m (scenery:0x020002D9), opt-in retail bake 0.0 m; vmax 7.4 m/s; subject LOS blocked 0/57 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-glenden-wood.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-glenden-wood.json",
+ "totalSec": 65,
+ "techniques": [
+  "classic.establishing",
+  "classic.pov",
+  "classic.tilt",
+  "drone.helix",
+  "drone.top-down-rise"
+ ]
+}

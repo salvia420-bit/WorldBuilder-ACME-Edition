@@ -1,0 +1,2659 @@
+{
+ "scale": 1.0129358618654074,
+ "rawTotal": 3388,
+ "sumSec": 3431.8267,
+ "units": 55,
+ "shots": 273,
+ "sites": 57,
+ "reorders": [
+  "cragstone: lapse moved last (drone.tilt-reveal > classic.crane > classic.over-the-shoulder > drone.dronie > classic.time-lapse)",
+  "beach-fort: lapse moved last (drone.terrain-skim > drone.top-down-rise > drone.orbit-poi > drone.dronie > classic.hyperlapse)",
+  "danbys-outpost: lapse moved last (classic.dolly-zoom > classic.pedestal > fpv.fpv-proximity > drone.boomerang > drone.hyperlapse-orbit)",
+  "al-arqas: lapse moved last (drone.terrain-skim > classic.dolly-in > classic.orbit > drone.top-down-rise > classic.time-lapse)",
+  "kryst: lapse moved last (classic.steadicam > classic.over-the-shoulder > classic.static > drone.dronie > drone.hyperlapse-orbit)",
+  "frost-haven: lapse moved last (drone.pano-360 > classic.dolly-in > classic.two-shot > drone.top-down-rise > classic.time-lapse)"
+ ],
+ "permutations": [
+  {
+   "town": "Cragstone",
+   "gain": 0.04,
+   "from": [
+    "drone.tilt-reveal",
+    "classic.crane",
+    "classic.over-the-shoulder",
+    "drone.dronie",
+    "classic.time-lapse"
+   ],
+   "to": [
+    "drone.tilt-reveal",
+    "classic.over-the-shoulder",
+    "classic.crane",
+    "drone.dronie",
+    "classic.time-lapse"
+   ]
+  },
+  {
+   "town": "Oolutanga's Refuge",
+   "gain": 0.041,
+   "from": [
+    "drone.spiral-descent",
+    "classic.rack-focus",
+    "drone.parallax-slide",
+    "classic.high-angle",
+    "drone.boom-rise"
+   ],
+   "to": [
+    "drone.spiral-descent",
+    "drone.parallax-slide",
+    "classic.rack-focus",
+    "classic.high-angle",
+    "drone.boom-rise"
+   ]
+  },
+  {
+   "town": "Rithwic",
+   "gain": 0.054,
+   "from": [
+    "drone.boom-rise",
+    "classic.rack-focus",
+    "drone.parallax-slide",
+    "drone.flythrough",
+    "drone.orbit-poi"
+   ],
+   "to": [
+    "drone.boom-rise",
+    "classic.rack-focus",
+    "drone.flythrough",
+    "drone.parallax-slide",
+    "drone.orbit-poi"
+   ]
+  },
+  {
+   "town": "Lytelthorpe",
+   "gain": 0.09,
+   "from": [
+    "drone.rising-reveal",
+    "drone.orbit-poi",
+    "classic.truck",
+    "classic.worms-eye",
+    "drone.pass-over",
+    "classic.push-in",
+    "classic.rack-focus",
+    "drone.dronie"
+   ],
+   "to": [
+    "drone.rising-reveal",
+    "drone.orbit-poi",
+    "drone.pass-over",
+    "classic.truck",
+    "classic.rack-focus",
+    "classic.worms-eye",
+    "classic.push-in",
+    "drone.dronie"
+   ]
+  },
+  {
+   "town": "Bandit Castle",
+   "gain": 0.032,
+   "from": [
+    "classic.arc",
+    "drone.top-down",
+    "drone.rising-reveal",
+    "classic.pan",
+    "classic.time-lapse"
+   ],
+   "to": [
+    "classic.arc",
+    "drone.top-down",
+    "classic.pan",
+    "drone.rising-reveal",
+    "classic.time-lapse"
+   ]
+  },
+  {
+   "town": "Hoshino Fortress",
+   "gain": 0.047,
+   "from": [
+    "drone.boom-rise",
+    "drone.flyover",
+    "classic.orbit",
+    "drone.top-down"
+   ],
+   "to": [
+    "drone.boom-rise",
+    "classic.orbit",
+    "drone.flyover",
+    "drone.top-down"
+   ]
+  },
+  {
+   "town": "Ahurenga",
+   "gain": 0.031,
+   "from": [
+    "drone.terrain-skim",
+    "drone.helix",
+    "classic.worms-eye",
+    "classic.time-lapse"
+   ],
+   "to": [
+    "drone.terrain-skim",
+    "classic.worms-eye",
+    "drone.helix",
+    "classic.time-lapse"
+   ]
+  },
+  {
+   "town": "Fort Tethana",
+   "gain": 0.032,
+   "from": [
+    "drone.rising-reveal",
+    "classic.truck",
+    "classic.rack-focus",
+    "drone.vertigo-drone",
+    "classic.pull-out-reveal"
+   ],
+   "to": [
+    "drone.rising-reveal",
+    "drone.vertigo-drone",
+    "classic.truck",
+    "classic.rack-focus",
+    "classic.pull-out-reveal"
+   ]
+  },
+  {
+   "town": "Qalaba'r",
+   "gain": 0.039,
+   "from": [
+    "drone.tilt-reveal",
+    "classic.dolly-out",
+    "drone.parallax-slide",
+    "drone.boomerang",
+    "classic.hyperlapse"
+   ],
+   "to": [
+    "drone.tilt-reveal",
+    "drone.boomerang",
+    "classic.dolly-out",
+    "drone.parallax-slide",
+    "classic.hyperlapse"
+   ]
+  },
+  {
+   "town": "Frost Haven",
+   "gain": 0.091,
+   "from": [
+    "drone.pano-360",
+    "classic.dolly-in",
+    "classic.two-shot",
+    "drone.top-down-rise",
+    "classic.time-lapse"
+   ],
+   "to": [
+    "drone.pano-360",
+    "drone.top-down-rise",
+    "classic.dolly-in",
+    "classic.two-shot",
+    "classic.time-lapse"
+   ]
+  }
+ ],
+ "alloc": [
+  {
+   "id": "holtburg.01",
+   "tech": "drone.rising-reveal",
+   "sec": 14.3539,
+   "in": 0.0,
+   "out": 14.354,
+   "edit": 14.333,
+   "snap": "beat"
+  },
+  {
+   "id": "holtburg.02",
+   "tech": "classic.low-angle",
+   "sec": 9.0866,
+   "in": 14.354,
+   "out": 23.441,
+   "edit": 9.125,
+   "snap": "beat"
+  },
+  {
+   "id": "holtburg.03",
+   "tech": "drone.parallax-slide",
+   "sec": 12.3111,
+   "in": 23.441,
+   "out": 35.752,
+   "edit": 12.292,
+   "snap": "beat"
+  },
+  {
+   "id": "holtburg.04",
+   "tech": "drone.terrain-skim",
+   "sec": 11.292,
+   "in": 35.752,
+   "out": 47.044,
+   "edit": 11.292,
+   "snap": "beat"
+  },
+  {
+   "id": "holtburg.05",
+   "tech": "drone.pano-360",
+   "sec": 16.2485,
+   "in": 47.044,
+   "out": 63.292,
+   "edit": 16.25,
+   "snap": "beat"
+  },
+  {
+   "id": "glenden-wood.01",
+   "tech": "classic.establishing",
+   "sec": 12.2179,
+   "in": 63.292,
+   "out": 75.51,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "glenden-wood.02",
+   "tech": "classic.pov",
+   "sec": 12.8929,
+   "in": 75.51,
+   "out": 88.403,
+   "edit": 12.917,
+   "snap": "beat"
+  },
+  {
+   "id": "glenden-wood.03",
+   "tech": "classic.tilt",
+   "sec": 10.0083,
+   "in": 88.403,
+   "out": 98.411,
+   "edit": 10.0,
+   "snap": "beat"
+  },
+  {
+   "id": "glenden-wood.04",
+   "tech": "drone.helix",
+   "sec": 16.093,
+   "in": 98.411,
+   "out": 114.504,
+   "edit": 16.083,
+   "snap": "beat"
+  },
+  {
+   "id": "glenden-wood.05",
+   "tech": "drone.top-down-rise",
+   "sec": 14.1111,
+   "in": 114.504,
+   "out": 128.615,
+   "edit": 14.125,
+   "snap": "beat"
+  },
+  {
+   "id": "cragstone.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 13.6212,
+   "in": 128.615,
+   "out": 142.237,
+   "edit": 13.625,
+   "snap": "section"
+  },
+  {
+   "id": "cragstone.02",
+   "tech": "classic.over-the-shoulder",
+   "sec": 9.5525,
+   "in": 142.237,
+   "out": 151.789,
+   "edit": 9.542,
+   "snap": "beat"
+  },
+  {
+   "id": "cragstone.03",
+   "tech": "classic.crane",
+   "sec": 10.8668,
+   "in": 151.789,
+   "out": 162.656,
+   "edit": 10.875,
+   "snap": "beat"
+  },
+  {
+   "id": "cragstone.04",
+   "tech": "drone.dronie",
+   "sec": 14.8143,
+   "in": 162.656,
+   "out": 177.47,
+   "edit": 14.792,
+   "snap": "beat"
+  },
+  {
+   "id": "cragstone.05",
+   "tech": "classic.time-lapse",
+   "sec": 12.1882,
+   "in": 177.47,
+   "out": 189.658,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "arwic.01",
+   "tech": "drone.top-down",
+   "sec": 13.4931,
+   "in": 189.658,
+   "out": 203.151,
+   "edit": 13.5,
+   "snap": "section"
+  },
+  {
+   "id": "arwic.02",
+   "tech": "classic.truck",
+   "sec": 12.5854,
+   "in": 203.151,
+   "out": 215.737,
+   "edit": 12.583,
+   "snap": "beat"
+  },
+  {
+   "id": "arwic.03",
+   "tech": "drone.fly-by",
+   "sec": 9.0125,
+   "in": 215.737,
+   "out": 224.749,
+   "edit": 9.0,
+   "snap": "section"
+  },
+  {
+   "id": "arwic.04",
+   "tech": "classic.high-angle",
+   "sec": 10.5617,
+   "in": 224.749,
+   "out": 235.311,
+   "edit": 10.542,
+   "snap": "beat"
+  },
+  {
+   "id": "arwic.05",
+   "tech": "drone.vertigo-drone",
+   "sec": 15.4004,
+   "in": 235.311,
+   "out": 250.711,
+   "edit": 15.417,
+   "snap": "beat"
+  },
+  {
+   "id": "eastham.01",
+   "tech": "drone.flyover",
+   "sec": 13.9447,
+   "in": 250.711,
+   "out": 264.656,
+   "edit": 13.958,
+   "snap": "beat"
+  },
+  {
+   "id": "eastham.02",
+   "tech": "classic.static",
+   "sec": 10.0127,
+   "in": 264.656,
+   "out": 274.669,
+   "edit": 10.0,
+   "snap": "beat"
+  },
+  {
+   "id": "eastham.03",
+   "tech": "classic.whip-pan",
+   "sec": 8.2431,
+   "in": 274.669,
+   "out": 282.912,
+   "edit": 8.25,
+   "snap": "beat"
+  },
+  {
+   "id": "eastham.04",
+   "tech": "classic.reveal-from-occluder",
+   "sec": 12.7362,
+   "in": 282.912,
+   "out": 295.648,
+   "edit": 12.75,
+   "snap": "section"
+  },
+  {
+   "id": "eastham.05",
+   "tech": "drone.hyperlapse-orbit",
+   "sec": 16.3953,
+   "in": 295.648,
+   "out": 312.043,
+   "edit": 16.375,
+   "snap": "beat"
+  },
+  {
+   "id": "dryreach.01",
+   "tech": "drone.spiral-descent",
+   "sec": 17.1762,
+   "in": 312.043,
+   "out": 329.22,
+   "edit": 17.167,
+   "snap": "beat"
+  },
+  {
+   "id": "dryreach.02",
+   "tech": "drone.parallax-slide",
+   "sec": 12.1955,
+   "in": 329.22,
+   "out": 341.415,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "dryreach.03",
+   "tech": "drone.pass-over",
+   "sec": 12.3628,
+   "in": 341.415,
+   "out": 353.778,
+   "edit": 12.375,
+   "snap": "beat"
+  },
+  {
+   "id": "dryreach.04",
+   "tech": "classic.pedestal",
+   "sec": 11.5649,
+   "in": 353.778,
+   "out": 365.343,
+   "edit": 11.542,
+   "snap": "section"
+  },
+  {
+   "id": "dryreach.05",
+   "tech": "fpv.fpv-dive",
+   "sec": 8.8468,
+   "in": 365.343,
+   "out": 374.19,
+   "edit": 8.875,
+   "snap": "section"
+  },
+  {
+   "id": "oolutangas-refuge.01",
+   "tech": "drone.spiral-descent",
+   "sec": 16.0954,
+   "in": 374.19,
+   "out": 390.285,
+   "edit": 16.083,
+   "snap": "beat"
+  },
+  {
+   "id": "oolutangas-refuge.02",
+   "tech": "drone.parallax-slide",
+   "sec": 12.3728,
+   "in": 390.285,
+   "out": 402.658,
+   "edit": 12.375,
+   "snap": "beat"
+  },
+  {
+   "id": "oolutangas-refuge.03",
+   "tech": "classic.rack-focus",
+   "sec": 9.1945,
+   "in": 402.658,
+   "out": 411.852,
+   "edit": 9.167,
+   "snap": "section"
+  },
+  {
+   "id": "oolutangas-refuge.04",
+   "tech": "classic.high-angle",
+   "sec": 10.0115,
+   "in": 411.852,
+   "out": 421.864,
+   "edit": 10.042,
+   "snap": "section"
+  },
+  {
+   "id": "oolutangas-refuge.05",
+   "tech": "drone.boom-rise",
+   "sec": 14.1175,
+   "in": 421.864,
+   "out": 435.981,
+   "edit": 14.125,
+   "snap": "beat"
+  },
+  {
+   "id": "rithwic.01",
+   "tech": "drone.boom-rise",
+   "sec": 12.129,
+   "in": 435.981,
+   "out": 448.11,
+   "edit": 12.125,
+   "snap": "beat"
+  },
+  {
+   "id": "rithwic.02",
+   "tech": "classic.rack-focus",
+   "sec": 6.8003,
+   "in": 448.11,
+   "out": 454.911,
+   "edit": 6.792,
+   "snap": "beat"
+  },
+  {
+   "id": "rithwic.03",
+   "tech": "drone.flythrough",
+   "sec": 16.8973,
+   "in": 454.911,
+   "out": 471.808,
+   "edit": 16.875,
+   "snap": "beat"
+  },
+  {
+   "id": "rithwic.04",
+   "tech": "drone.parallax-slide",
+   "sec": 10.0186,
+   "in": 471.808,
+   "out": 481.827,
+   "edit": 10.042,
+   "snap": "beat"
+  },
+  {
+   "id": "rithwic.05",
+   "tech": "drone.orbit-poi",
+   "sec": 10.0186,
+   "in": 481.827,
+   "out": 491.845,
+   "edit": 10.0,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.01",
+   "tech": "drone.rising-reveal",
+   "sec": 12.2833,
+   "in": 491.845,
+   "out": 504.128,
+   "edit": 12.292,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.02",
+   "tech": "drone.orbit-poi",
+   "sec": 13.9552,
+   "in": 504.128,
+   "out": 518.084,
+   "edit": 13.958,
+   "snap": "section"
+  },
+  {
+   "id": "lytelthorpe.03",
+   "tech": "drone.pass-over",
+   "sec": 12.7781,
+   "in": 518.084,
+   "out": 530.862,
+   "edit": 12.792,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.04",
+   "tech": "classic.truck",
+   "sec": 11.986,
+   "in": 530.862,
+   "out": 542.848,
+   "edit": 11.958,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.05",
+   "tech": "classic.rack-focus",
+   "sec": 7.3058,
+   "in": 542.848,
+   "out": 550.154,
+   "edit": 7.333,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.06",
+   "tech": "classic.worms-eye",
+   "sec": 6.3368,
+   "in": 550.154,
+   "out": 556.49,
+   "edit": 6.333,
+   "snap": "beat"
+  },
+  {
+   "id": "lytelthorpe.07",
+   "tech": "classic.push-in",
+   "sec": 6.6315,
+   "in": 556.49,
+   "out": 563.122,
+   "edit": 6.625,
+   "snap": "section"
+  },
+  {
+   "id": "lytelthorpe.08",
+   "tech": "drone.dronie",
+   "sec": 16.5466,
+   "in": 563.122,
+   "out": 579.668,
+   "edit": 16.542,
+   "snap": "section"
+  },
+  {
+   "id": "bandit-castle.01",
+   "tech": "classic.arc",
+   "sec": 13.9033,
+   "in": 579.668,
+   "out": 593.572,
+   "edit": 13.917,
+   "snap": "beat"
+  },
+  {
+   "id": "bandit-castle.02",
+   "tech": "drone.top-down",
+   "sec": 10.2622,
+   "in": 593.572,
+   "out": 603.834,
+   "edit": 10.25,
+   "snap": "beat"
+  },
+  {
+   "id": "bandit-castle.03",
+   "tech": "classic.pan",
+   "sec": 13.1217,
+   "in": 603.834,
+   "out": 616.956,
+   "edit": 13.125,
+   "snap": "section"
+  },
+  {
+   "id": "bandit-castle.04",
+   "tech": "drone.rising-reveal",
+   "sec": 11.9696,
+   "in": 616.956,
+   "out": 628.925,
+   "edit": 11.958,
+   "snap": "beat"
+  },
+  {
+   "id": "bandit-castle.05",
+   "tech": "classic.time-lapse",
+   "sec": 12.2473,
+   "in": 628.925,
+   "out": 641.173,
+   "edit": 12.25,
+   "snap": "beat"
+  },
+  {
+   "id": "merwart-village.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 13.0319,
+   "in": 641.173,
+   "out": 654.204,
+   "edit": 13.042,
+   "snap": "beat"
+  },
+  {
+   "id": "merwart-village.02",
+   "tech": "classic.two-shot",
+   "sec": 11.4243,
+   "in": 654.204,
+   "out": 665.629,
+   "edit": 11.417,
+   "snap": "beat"
+  },
+  {
+   "id": "merwart-village.03",
+   "tech": "classic.push-in",
+   "sec": 10.138,
+   "in": 665.629,
+   "out": 675.767,
+   "edit": 10.125,
+   "snap": "beat"
+  },
+  {
+   "id": "merwart-village.04",
+   "tech": "drone.helix",
+   "sec": 16.3144,
+   "in": 675.767,
+   "out": 692.081,
+   "edit": 16.333,
+   "snap": "section"
+  },
+  {
+   "id": "merwart-village.05",
+   "tech": "classic.crane",
+   "sec": 12.1337,
+   "in": 692.081,
+   "out": 704.215,
+   "edit": 12.125,
+   "snap": "beat"
+  },
+  {
+   "id": "neydisa-castle.01",
+   "tech": "classic.establishing",
+   "sec": 13.0189,
+   "in": 704.215,
+   "out": 717.234,
+   "edit": 13.042,
+   "snap": "beat"
+  },
+  {
+   "id": "neydisa-castle.02",
+   "tech": "fpv.fpv-gap",
+   "sec": 9.9942,
+   "in": 717.234,
+   "out": 727.228,
+   "edit": 9.958,
+   "snap": "section"
+  },
+  {
+   "id": "neydisa-castle.03",
+   "tech": "classic.truck",
+   "sec": 11.7472,
+   "in": 727.228,
+   "out": 738.975,
+   "edit": 11.75,
+   "snap": "beat"
+  },
+  {
+   "id": "neydisa-castle.04",
+   "tech": "classic.push-in",
+   "sec": 12.219,
+   "in": 738.975,
+   "out": 751.194,
+   "edit": 12.25,
+   "snap": "beat"
+  },
+  {
+   "id": "neydisa-castle.05",
+   "tech": "drone.top-down-rise",
+   "sec": 12.8266,
+   "in": 751.194,
+   "out": 764.021,
+   "edit": 12.792,
+   "snap": "beat"
+  },
+  {
+   "id": "stonehold.01",
+   "tech": "classic.establishing",
+   "sec": 13.9462,
+   "in": 764.021,
+   "out": 777.967,
+   "edit": 13.958,
+   "snap": "beat"
+  },
+  {
+   "id": "stonehold.02",
+   "tech": "classic.rack-focus",
+   "sec": 12.0195,
+   "in": 777.967,
+   "out": 789.986,
+   "edit": 12.042,
+   "snap": "beat"
+  },
+  {
+   "id": "stonehold.03",
+   "tech": "classic.tilt",
+   "sec": 12.1756,
+   "in": 789.986,
+   "out": 802.162,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "stonehold.04",
+   "tech": "drone.spiral-descent",
+   "sec": 11.8847,
+   "in": 802.162,
+   "out": 814.047,
+   "edit": 11.875,
+   "snap": "beat"
+  },
+  {
+   "id": "stonehold.05",
+   "tech": "drone.pano-360",
+   "sec": 13.9537,
+   "in": 814.047,
+   "out": 828.0,
+   "edit": 13.958,
+   "snap": "section"
+  },
+  {
+   "id": "hoshino-fortress.01",
+   "tech": "drone.boom-rise",
+   "sec": 17.3529,
+   "in": 828.0,
+   "out": 845.353,
+   "edit": 17.333,
+   "snap": "beat"
+  },
+  {
+   "id": "hoshino-fortress.02",
+   "tech": "classic.orbit",
+   "sec": 16.7847,
+   "in": 845.353,
+   "out": 862.138,
+   "edit": 16.792,
+   "snap": "beat"
+  },
+  {
+   "id": "hoshino-fortress.03",
+   "tech": "drone.flyover",
+   "sec": 17.3979,
+   "in": 862.138,
+   "out": 879.536,
+   "edit": 17.417,
+   "snap": "beat"
+  },
+  {
+   "id": "hoshino-fortress.04",
+   "tech": "drone.top-down",
+   "sec": 17.1291,
+   "in": 879.536,
+   "out": 896.665,
+   "edit": 17.125,
+   "snap": "section"
+  },
+  {
+   "id": "beach-fort.01",
+   "tech": "drone.terrain-skim",
+   "sec": 11.3554,
+   "in": 896.665,
+   "out": 908.02,
+   "edit": 11.333,
+   "snap": "section"
+  },
+  {
+   "id": "beach-fort.02",
+   "tech": "drone.top-down-rise",
+   "sec": 12.1383,
+   "in": 908.02,
+   "out": 920.159,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "beach-fort.03",
+   "tech": "drone.orbit-poi",
+   "sec": 12.6798,
+   "in": 920.159,
+   "out": 932.838,
+   "edit": 12.667,
+   "snap": "section"
+  },
+  {
+   "id": "beach-fort.04",
+   "tech": "drone.dronie",
+   "sec": 12.1421,
+   "in": 932.838,
+   "out": 944.981,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "beach-fort.05",
+   "tech": "classic.hyperlapse",
+   "sec": 13.7752,
+   "in": 944.981,
+   "out": 958.756,
+   "edit": 13.75,
+   "snap": "beat"
+  },
+  {
+   "id": "eastwatch.01",
+   "tech": "drone.rising-reveal",
+   "sec": 16.0449,
+   "in": 958.756,
+   "out": 974.801,
+   "edit": 16.042,
+   "snap": "beat"
+  },
+  {
+   "id": "eastwatch.02",
+   "tech": "classic.whip-pan",
+   "sec": 8.3438,
+   "in": 974.801,
+   "out": 983.144,
+   "edit": 8.333,
+   "snap": "beat"
+  },
+  {
+   "id": "eastwatch.03",
+   "tech": "classic.low-angle",
+   "sec": 14.1288,
+   "in": 983.144,
+   "out": 997.273,
+   "edit": 14.167,
+   "snap": "beat"
+  },
+  {
+   "id": "eastwatch.04",
+   "tech": "drone.vertigo-drone",
+   "sec": 12.1713,
+   "in": 997.273,
+   "out": 1009.445,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "eastwatch.05",
+   "tech": "fpv.fpv-dive",
+   "sec": 14.2535,
+   "in": 1009.445,
+   "out": 1023.698,
+   "edit": 14.25,
+   "snap": "beat"
+  },
+  {
+   "id": "egg-orchard-portal.01",
+   "tech": "classic.push-in",
+   "sec": 10.0824,
+   "in": 1023.698,
+   "out": 1033.781,
+   "edit": 10.083,
+   "snap": "beat"
+  },
+  {
+   "id": "egg-orchard.01",
+   "tech": "fpv.fpv-corridor",
+   "sec": 13.2568,
+   "in": 1033.781,
+   "out": 1047.037,
+   "edit": 13.25,
+   "snap": "beat"
+  },
+  {
+   "id": "egg-orchard.02",
+   "tech": "classic.push-in",
+   "sec": 7.9417,
+   "in": 1047.037,
+   "out": 1054.979,
+   "edit": 7.917,
+   "snap": "beat"
+  },
+  {
+   "id": "fiun-outpost.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 16.2968,
+   "in": 1054.979,
+   "out": 1071.276,
+   "edit": 16.333,
+   "snap": "beat"
+  },
+  {
+   "id": "fiun-outpost.02",
+   "tech": "classic.crane",
+   "sec": 12.1059,
+   "in": 1071.276,
+   "out": 1083.382,
+   "edit": 12.083,
+   "snap": "beat"
+  },
+  {
+   "id": "fiun-outpost.03",
+   "tech": "classic.reveal-from-occluder",
+   "sec": 12.368,
+   "in": 1083.382,
+   "out": 1095.75,
+   "edit": 12.375,
+   "snap": "beat"
+  },
+  {
+   "id": "fiun-outpost.04",
+   "tech": "fpv.fpv-flip",
+   "sec": 10.2084,
+   "in": 1095.75,
+   "out": 1105.958,
+   "edit": 10.208,
+   "snap": "beat"
+  },
+  {
+   "id": "fiun-outpost.05",
+   "tech": "classic.push-in",
+   "sec": 14.2977,
+   "in": 1105.958,
+   "out": 1120.256,
+   "edit": 14.292,
+   "snap": "beat"
+  },
+  {
+   "id": "silyun.01",
+   "tech": "drone.helix",
+   "sec": 16.4835,
+   "in": 1120.256,
+   "out": 1136.739,
+   "edit": 16.5,
+   "snap": "beat"
+  },
+  {
+   "id": "silyun.02",
+   "tech": "drone.parallax-slide",
+   "sec": 12.1906,
+   "in": 1136.739,
+   "out": 1148.93,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "silyun.03",
+   "tech": "classic.over-the-shoulder",
+   "sec": 11.8373,
+   "in": 1148.93,
+   "out": 1160.767,
+   "edit": 11.833,
+   "snap": "beat"
+  },
+  {
+   "id": "silyun.04",
+   "tech": "classic.handheld",
+   "sec": 10.18,
+   "in": 1160.767,
+   "out": 1170.947,
+   "edit": 10.208,
+   "snap": "beat"
+  },
+  {
+   "id": "silyun.05",
+   "tech": "classic.pull-out-reveal",
+   "sec": 14.4125,
+   "in": 1170.947,
+   "out": 1185.36,
+   "edit": 14.417,
+   "snap": "beat"
+  },
+  {
+   "id": "westwatch.01",
+   "tech": "drone.flyover",
+   "sec": 15.9943,
+   "in": 1185.36,
+   "out": 1201.354,
+   "edit": 15.958,
+   "snap": "section"
+  },
+  {
+   "id": "westwatch.02",
+   "tech": "classic.roll",
+   "sec": 12.1659,
+   "in": 1201.354,
+   "out": 1213.52,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "westwatch.03",
+   "tech": "classic.push-in",
+   "sec": 12.2478,
+   "in": 1213.52,
+   "out": 1225.768,
+   "edit": 12.25,
+   "snap": "beat"
+  },
+  {
+   "id": "westwatch.04",
+   "tech": "drone.top-down-rise",
+   "sec": 14.2011,
+   "in": 1225.768,
+   "out": 1239.969,
+   "edit": 14.208,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar.01",
+   "tech": "drone.rising-reveal",
+   "sec": 14.2373,
+   "in": 1239.969,
+   "out": 1254.206,
+   "edit": 14.25,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar.02",
+   "tech": "classic.rack-focus",
+   "sec": 9.3104,
+   "in": 1254.206,
+   "out": 1263.516,
+   "edit": 9.292,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar.03",
+   "tech": "classic.crane",
+   "sec": 12.1762,
+   "in": 1263.516,
+   "out": 1275.693,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar-royal-hall.01",
+   "tech": "classic.truck",
+   "sec": 12.159,
+   "in": 1275.693,
+   "out": 1287.852,
+   "edit": 12.125,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar-royal-hall.02",
+   "tech": "drone.spiral-descent",
+   "sec": 16.0452,
+   "in": 1287.852,
+   "out": 1303.897,
+   "edit": 16.083,
+   "snap": "beat"
+  },
+  {
+   "id": "sanamar-royal-hall.03",
+   "tech": "drone.hyperlapse-orbit",
+   "sec": 16.2783,
+   "in": 1303.897,
+   "out": 1320.175,
+   "edit": 16.25,
+   "snap": "beat"
+  },
+  {
+   "id": "ahurenga.01",
+   "tech": "drone.terrain-skim",
+   "sec": 13.7283,
+   "in": 1320.175,
+   "out": 1333.903,
+   "edit": 13.75,
+   "snap": "beat"
+  },
+  {
+   "id": "ahurenga.02",
+   "tech": "classic.worms-eye",
+   "sec": 8.9992,
+   "in": 1333.903,
+   "out": 1342.903,
+   "edit": 9.0,
+   "snap": "beat"
+  },
+  {
+   "id": "ahurenga.03",
+   "tech": "drone.helix",
+   "sec": 15.7937,
+   "in": 1342.903,
+   "out": 1358.696,
+   "edit": 15.792,
+   "snap": "beat"
+  },
+  {
+   "id": "ahurenga.04",
+   "tech": "classic.time-lapse",
+   "sec": 14.0066,
+   "in": 1358.696,
+   "out": 1372.703,
+   "edit": 14.0,
+   "snap": "beat"
+  },
+  {
+   "id": "timaru.01",
+   "tech": "drone.rising-reveal",
+   "sec": 16.4363,
+   "in": 1372.703,
+   "out": 1389.139,
+   "edit": 16.417,
+   "snap": "beat"
+  },
+  {
+   "id": "timaru.02",
+   "tech": "drone.top-down",
+   "sec": 9.7805,
+   "in": 1389.139,
+   "out": 1398.92,
+   "edit": 9.792,
+   "snap": "beat"
+  },
+  {
+   "id": "timaru.03",
+   "tech": "classic.establishing",
+   "sec": 10.4165,
+   "in": 1398.92,
+   "out": 1409.336,
+   "edit": 10.417,
+   "snap": "beat"
+  },
+  {
+   "id": "timaru.04",
+   "tech": "fpv.fpv-dive",
+   "sec": 7.7966,
+   "in": 1409.336,
+   "out": 1417.133,
+   "edit": 7.792,
+   "snap": "beat"
+  },
+  {
+   "id": "timaru.05",
+   "tech": "classic.dolly-zoom",
+   "sec": 9.3035,
+   "in": 1417.133,
+   "out": 1426.436,
+   "edit": 9.292,
+   "snap": "beat"
+  },
+  {
+   "id": "redspire.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 14.4314,
+   "in": 1426.436,
+   "out": 1440.868,
+   "edit": 14.458,
+   "snap": "beat"
+  },
+  {
+   "id": "redspire.02",
+   "tech": "classic.pedestal",
+   "sec": 10.658,
+   "in": 1440.868,
+   "out": 1451.526,
+   "edit": 10.667,
+   "snap": "beat"
+  },
+  {
+   "id": "redspire.03",
+   "tech": "classic.high-angle",
+   "sec": 10.2864,
+   "in": 1451.526,
+   "out": 1461.812,
+   "edit": 10.25,
+   "snap": "beat"
+  },
+  {
+   "id": "redspire.04",
+   "tech": "classic.low-angle",
+   "sec": 9.5434,
+   "in": 1461.812,
+   "out": 1471.356,
+   "edit": 9.583,
+   "snap": "beat"
+  },
+  {
+   "id": "redspire.05",
+   "tech": "drone.pano-360",
+   "sec": 14.4189,
+   "in": 1471.356,
+   "out": 1485.774,
+   "edit": 14.417,
+   "snap": "section"
+  },
+  {
+   "id": "bluespire.01",
+   "tech": "drone.pass-over",
+   "sec": 15.5839,
+   "in": 1485.774,
+   "out": 1501.358,
+   "edit": 15.583,
+   "snap": "beat"
+  },
+  {
+   "id": "bluespire.02",
+   "tech": "classic.tilt",
+   "sec": 7.2201,
+   "in": 1501.358,
+   "out": 1508.579,
+   "edit": 7.208,
+   "snap": "section"
+  },
+  {
+   "id": "bluespire.03",
+   "tech": "classic.arc",
+   "sec": 10.8975,
+   "in": 1508.579,
+   "out": 1519.476,
+   "edit": 10.875,
+   "snap": "beat"
+  },
+  {
+   "id": "bluespire.04",
+   "tech": "classic.two-shot",
+   "sec": 8.7577,
+   "in": 1519.476,
+   "out": 1528.234,
+   "edit": 8.792,
+   "snap": "beat"
+  },
+  {
+   "id": "bluespire.05",
+   "tech": "classic.pull-out-reveal",
+   "sec": 11.7826,
+   "in": 1528.234,
+   "out": 1540.016,
+   "edit": 11.75,
+   "snap": "section"
+  },
+  {
+   "id": "greenspire.01",
+   "tech": "drone.terrain-skim",
+   "sec": 13.7476,
+   "in": 1540.016,
+   "out": 1553.764,
+   "edit": 13.75,
+   "snap": "beat"
+  },
+  {
+   "id": "greenspire.02",
+   "tech": "classic.zoom",
+   "sec": 10.6349,
+   "in": 1553.764,
+   "out": 1564.399,
+   "edit": 10.667,
+   "snap": "beat"
+  },
+  {
+   "id": "greenspire.03",
+   "tech": "classic.low-angle",
+   "sec": 13.0273,
+   "in": 1564.399,
+   "out": 1577.426,
+   "edit": 13.0,
+   "snap": "beat"
+  },
+  {
+   "id": "greenspire.04",
+   "tech": "classic.orbit",
+   "sec": 12.5051,
+   "in": 1577.426,
+   "out": 1589.931,
+   "edit": 12.5,
+   "snap": "beat"
+  },
+  {
+   "id": "greenspire.05",
+   "tech": "drone.pass-over",
+   "sec": 16.1924,
+   "in": 1589.931,
+   "out": 1606.124,
+   "edit": 16.208,
+   "snap": "section"
+  },
+  {
+   "id": "plateau-village.01",
+   "tech": "drone.rising-reveal",
+   "sec": 16.0689,
+   "in": 1606.124,
+   "out": 1622.193,
+   "edit": 16.083,
+   "snap": "beat"
+  },
+  {
+   "id": "plateau-village.02",
+   "tech": "classic.birds-eye",
+   "sec": 11.9012,
+   "in": 1622.193,
+   "out": 1634.094,
+   "edit": 11.875,
+   "snap": "beat"
+  },
+  {
+   "id": "plateau-village.03",
+   "tech": "classic.dolly-in",
+   "sec": 14.5204,
+   "in": 1634.094,
+   "out": 1648.614,
+   "edit": 14.542,
+   "snap": "beat"
+  },
+  {
+   "id": "plateau-village.04",
+   "tech": "drone.flythrough",
+   "sec": 16.046,
+   "in": 1648.614,
+   "out": 1664.66,
+   "edit": 16.042,
+   "snap": "section"
+  },
+  {
+   "id": "danbys-outpost.01",
+   "tech": "classic.dolly-zoom",
+   "sec": 10.8651,
+   "in": 1664.66,
+   "out": 1675.525,
+   "edit": 10.875,
+   "snap": "beat"
+  },
+  {
+   "id": "danbys-outpost.02",
+   "tech": "classic.pedestal",
+   "sec": 12.5423,
+   "in": 1675.525,
+   "out": 1688.068,
+   "edit": 12.542,
+   "snap": "beat"
+  },
+  {
+   "id": "danbys-outpost.03",
+   "tech": "fpv.fpv-proximity",
+   "sec": 9.8911,
+   "in": 1688.068,
+   "out": 1697.959,
+   "edit": 9.875,
+   "snap": "beat"
+  },
+  {
+   "id": "danbys-outpost.04",
+   "tech": "drone.boomerang",
+   "sec": 15.5347,
+   "in": 1697.959,
+   "out": 1713.493,
+   "edit": 15.542,
+   "snap": "beat"
+  },
+  {
+   "id": "danbys-outpost.05",
+   "tech": "drone.hyperlapse-orbit",
+   "sec": 14.7204,
+   "in": 1713.493,
+   "out": 1728.214,
+   "edit": 14.708,
+   "snap": "section"
+  },
+  {
+   "id": "fort-tethana.01",
+   "tech": "drone.rising-reveal",
+   "sec": 15.6281,
+   "in": 1728.214,
+   "out": 1743.842,
+   "edit": 15.625,
+   "snap": "beat"
+  },
+  {
+   "id": "fort-tethana.02",
+   "tech": "drone.vertigo-drone",
+   "sec": 13.3747,
+   "in": 1743.842,
+   "out": 1757.216,
+   "edit": 13.375,
+   "snap": "beat"
+  },
+  {
+   "id": "fort-tethana.03",
+   "tech": "classic.truck",
+   "sec": 12.595,
+   "in": 1757.216,
+   "out": 1769.812,
+   "edit": 12.583,
+   "snap": "beat"
+  },
+  {
+   "id": "fort-tethana.04",
+   "tech": "classic.rack-focus",
+   "sec": 10.2767,
+   "in": 1769.812,
+   "out": 1780.088,
+   "edit": 10.292,
+   "snap": "beat"
+  },
+  {
+   "id": "fort-tethana.05",
+   "tech": "classic.pull-out-reveal",
+   "sec": 16.7153,
+   "in": 1780.088,
+   "out": 1796.803,
+   "edit": 16.708,
+   "snap": "section"
+  },
+  {
+   "id": "ayan-baqur.01",
+   "tech": "drone.flyover",
+   "sec": 15.8538,
+   "in": 1796.803,
+   "out": 1812.657,
+   "edit": 15.875,
+   "snap": "beat"
+  },
+  {
+   "id": "ayan-baqur.02",
+   "tech": "classic.steadicam",
+   "sec": 12.1061,
+   "in": 1812.657,
+   "out": 1824.763,
+   "edit": 12.083,
+   "snap": "beat"
+  },
+  {
+   "id": "ayan-baqur.03",
+   "tech": "drone.parallax-slide",
+   "sec": 10.031,
+   "in": 1824.763,
+   "out": 1834.794,
+   "edit": 10.042,
+   "snap": "beat"
+  },
+  {
+   "id": "ayan-baqur.04",
+   "tech": "classic.roll",
+   "sec": 11.2306,
+   "in": 1834.794,
+   "out": 1846.025,
+   "edit": 11.25,
+   "snap": "beat"
+  },
+  {
+   "id": "ayan-baqur.05",
+   "tech": "drone.pano-360",
+   "sec": 13.9728,
+   "in": 1846.025,
+   "out": 1859.998,
+   "edit": 13.958,
+   "snap": "beat"
+  },
+  {
+   "id": "wai-jhou.01",
+   "tech": "drone.canyon-run",
+   "sec": 15.3059,
+   "in": 1859.998,
+   "out": 1875.304,
+   "edit": 15.292,
+   "snap": "section"
+  },
+  {
+   "id": "wai-jhou.02",
+   "tech": "classic.truck",
+   "sec": 11.3408,
+   "in": 1875.304,
+   "out": 1886.645,
+   "edit": 11.333,
+   "snap": "beat"
+  },
+  {
+   "id": "wai-jhou.03",
+   "tech": "classic.rack-focus",
+   "sec": 9.9905,
+   "in": 1886.645,
+   "out": 1896.635,
+   "edit": 10.0,
+   "snap": "beat"
+  },
+  {
+   "id": "wai-jhou.04",
+   "tech": "classic.worms-eye",
+   "sec": 9.3651,
+   "in": 1896.635,
+   "out": 1906.0,
+   "edit": 9.375,
+   "snap": "beat"
+  },
+  {
+   "id": "wai-jhou.05",
+   "tech": "classic.dolly-out",
+   "sec": 17.1851,
+   "in": 1906.0,
+   "out": 1923.185,
+   "edit": 17.167,
+   "snap": "beat"
+  },
+  {
+   "id": "candeth-keep.01",
+   "tech": "drone.canyon-run",
+   "sec": 13.7026,
+   "in": 1923.185,
+   "out": 1936.888,
+   "edit": 13.708,
+   "snap": "beat"
+  },
+  {
+   "id": "candeth-keep.02",
+   "tech": "drone.orbit-poi",
+   "sec": 16.3729,
+   "in": 1936.888,
+   "out": 1953.261,
+   "edit": 16.375,
+   "snap": "beat"
+  },
+  {
+   "id": "candeth-keep.03",
+   "tech": "classic.rack-focus",
+   "sec": 10.05,
+   "in": 1953.261,
+   "out": 1963.311,
+   "edit": 10.042,
+   "snap": "section"
+  },
+  {
+   "id": "candeth-keep.04",
+   "tech": "classic.low-angle",
+   "sec": 9.8778,
+   "in": 1963.311,
+   "out": 1973.188,
+   "edit": 9.917,
+   "snap": "beat"
+  },
+  {
+   "id": "candeth-keep.05",
+   "tech": "classic.birds-eye",
+   "sec": 15.5815,
+   "in": 1973.188,
+   "out": 1988.77,
+   "edit": 15.542,
+   "snap": "section"
+  },
+  {
+   "id": "qalabar.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 12.7454,
+   "in": 1988.77,
+   "out": 2001.515,
+   "edit": 12.75,
+   "snap": "beat"
+  },
+  {
+   "id": "qalabar.02",
+   "tech": "drone.boomerang",
+   "sec": 13.1672,
+   "in": 2001.515,
+   "out": 2014.683,
+   "edit": 13.167,
+   "snap": "beat"
+  },
+  {
+   "id": "qalabar.03",
+   "tech": "classic.dolly-out",
+   "sec": 10.7476,
+   "in": 2014.683,
+   "out": 2025.43,
+   "edit": 10.75,
+   "snap": "beat"
+  },
+  {
+   "id": "qalabar.04",
+   "tech": "drone.parallax-slide",
+   "sec": 12.3055,
+   "in": 2025.43,
+   "out": 2037.736,
+   "edit": 12.333,
+   "snap": "section"
+  },
+  {
+   "id": "qalabar.05",
+   "tech": "classic.hyperlapse",
+   "sec": 13.7762,
+   "in": 2037.736,
+   "out": 2051.512,
+   "edit": 13.75,
+   "snap": "beat"
+  },
+  {
+   "id": "khayyaban.01",
+   "tech": "drone.boom-rise",
+   "sec": 13.9779,
+   "in": 2051.512,
+   "out": 2065.49,
+   "edit": 14.0,
+   "snap": "beat"
+  },
+  {
+   "id": "khayyaban.02",
+   "tech": "classic.arc",
+   "sec": 11.9299,
+   "in": 2065.49,
+   "out": 2077.42,
+   "edit": 11.917,
+   "snap": "beat"
+  },
+  {
+   "id": "khayyaban.03",
+   "tech": "classic.pedestal",
+   "sec": 12.2137,
+   "in": 2077.42,
+   "out": 2089.633,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "khayyaban.04",
+   "tech": "classic.zoom",
+   "sec": 13.1232,
+   "in": 2089.633,
+   "out": 2102.757,
+   "edit": 13.125,
+   "snap": "beat"
+  },
+  {
+   "id": "khayyaban.05",
+   "tech": "fpv.fpv-flip",
+   "sec": 10.9675,
+   "in": 2102.757,
+   "out": 2113.724,
+   "edit": 10.958,
+   "snap": "section"
+  },
+  {
+   "id": "uziz.01",
+   "tech": "drone.flyover",
+   "sec": 13.2718,
+   "in": 2113.724,
+   "out": 2126.996,
+   "edit": 13.292,
+   "snap": "beat"
+  },
+  {
+   "id": "uziz.02",
+   "tech": "classic.truck",
+   "sec": 13.6006,
+   "in": 2126.996,
+   "out": 2140.597,
+   "edit": 13.583,
+   "snap": "beat"
+  },
+  {
+   "id": "uziz.03",
+   "tech": "fpv.fpv-dive",
+   "sec": 11.2014,
+   "in": 2140.597,
+   "out": 2151.798,
+   "edit": 11.208,
+   "snap": "beat"
+  },
+  {
+   "id": "uziz.04",
+   "tech": "classic.two-shot",
+   "sec": 10.2541,
+   "in": 2151.798,
+   "out": 2162.052,
+   "edit": 10.25,
+   "snap": "beat"
+  },
+  {
+   "id": "uziz.05",
+   "tech": "drone.dronie",
+   "sec": 14.3565,
+   "in": 2162.052,
+   "out": 2176.409,
+   "edit": 14.375,
+   "snap": "beat"
+  },
+  {
+   "id": "al-arqas.01",
+   "tech": "drone.terrain-skim",
+   "sec": 12.467,
+   "in": 2176.409,
+   "out": 2188.876,
+   "edit": 12.458,
+   "snap": "section"
+  },
+  {
+   "id": "al-arqas.02",
+   "tech": "classic.dolly-in",
+   "sec": 13.8423,
+   "in": 2188.876,
+   "out": 2202.718,
+   "edit": 13.833,
+   "snap": "section"
+  },
+  {
+   "id": "al-arqas.03",
+   "tech": "classic.orbit",
+   "sec": 12.1408,
+   "in": 2202.718,
+   "out": 2214.859,
+   "edit": 12.167,
+   "snap": "beat"
+  },
+  {
+   "id": "al-arqas.04",
+   "tech": "drone.top-down-rise",
+   "sec": 12.1019,
+   "in": 2214.859,
+   "out": 2226.961,
+   "edit": 12.083,
+   "snap": "beat"
+  },
+  {
+   "id": "al-arqas.05",
+   "tech": "classic.time-lapse",
+   "sec": 11.8691,
+   "in": 2226.961,
+   "out": 2238.83,
+   "edit": 11.875,
+   "snap": "section"
+  },
+  {
+   "id": "yaraq.01",
+   "tech": "drone.fly-by",
+   "sec": 13.025,
+   "in": 2238.83,
+   "out": 2251.855,
+   "edit": 13.042,
+   "snap": "beat"
+  },
+  {
+   "id": "yaraq.02",
+   "tech": "drone.parallax-slide",
+   "sec": 15.3995,
+   "in": 2251.855,
+   "out": 2267.254,
+   "edit": 15.375,
+   "snap": "beat"
+  },
+  {
+   "id": "yaraq.03",
+   "tech": "classic.over-the-shoulder",
+   "sec": 12.186,
+   "in": 2267.254,
+   "out": 2279.44,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "yaraq.04",
+   "tech": "classic.dolly-zoom",
+   "sec": 12.323,
+   "in": 2279.44,
+   "out": 2291.763,
+   "edit": 12.292,
+   "snap": "beat"
+  },
+  {
+   "id": "yaraq.05",
+   "tech": "classic.handheld",
+   "sec": 10.0078,
+   "in": 2291.763,
+   "out": 2301.771,
+   "edit": 10.042,
+   "snap": "beat"
+  },
+  {
+   "id": "tufa.01",
+   "tech": "classic.birds-eye",
+   "sec": 13.5861,
+   "in": 2301.771,
+   "out": 2315.357,
+   "edit": 13.583,
+   "snap": "beat"
+  },
+  {
+   "id": "tufa.02",
+   "tech": "classic.pan",
+   "sec": 12.5487,
+   "in": 2315.357,
+   "out": 2327.906,
+   "edit": 12.542,
+   "snap": "beat"
+  },
+  {
+   "id": "tufa.03",
+   "tech": "classic.zoom",
+   "sec": 11.385,
+   "in": 2327.906,
+   "out": 2339.291,
+   "edit": 11.375,
+   "snap": "beat"
+  },
+  {
+   "id": "tufa.04",
+   "tech": "drone.helix",
+   "sec": 17.095,
+   "in": 2339.291,
+   "out": 2356.386,
+   "edit": 17.083,
+   "snap": "beat"
+  },
+  {
+   "id": "tufa.05",
+   "tech": "drone.fly-by",
+   "sec": 10.3546,
+   "in": 2356.386,
+   "out": 2366.74,
+   "edit": 10.375,
+   "snap": "section"
+  },
+  {
+   "id": "samsur.01",
+   "tech": "drone.canyon-run",
+   "sec": 15.6187,
+   "in": 2366.74,
+   "out": 2382.359,
+   "edit": 15.625,
+   "snap": "beat"
+  },
+  {
+   "id": "samsur.02",
+   "tech": "classic.worms-eye",
+   "sec": 9.4319,
+   "in": 2382.359,
+   "out": 2391.791,
+   "edit": 9.417,
+   "snap": "beat"
+  },
+  {
+   "id": "samsur.03",
+   "tech": "classic.whip-pan",
+   "sec": 8.4558,
+   "in": 2391.791,
+   "out": 2400.247,
+   "edit": 8.458,
+   "snap": "section"
+  },
+  {
+   "id": "samsur.04",
+   "tech": "classic.dolly-in",
+   "sec": 13.8855,
+   "in": 2400.247,
+   "out": 2414.132,
+   "edit": 13.875,
+   "snap": "beat"
+  },
+  {
+   "id": "samsur.05",
+   "tech": "fpv.fpv-flip",
+   "sec": 12.3995,
+   "in": 2414.132,
+   "out": 2426.532,
+   "edit": 12.417,
+   "snap": "beat"
+  },
+  {
+   "id": "al-jalima.01",
+   "tech": "drone.terrain-skim",
+   "sec": 14.9006,
+   "in": 2426.532,
+   "out": 2441.432,
+   "edit": 14.875,
+   "snap": "beat"
+  },
+  {
+   "id": "al-jalima.02",
+   "tech": "classic.dolly-out",
+   "sec": 10.8547,
+   "in": 2441.432,
+   "out": 2452.287,
+   "edit": 10.875,
+   "snap": "beat"
+  },
+  {
+   "id": "al-jalima.03",
+   "tech": "drone.boomerang",
+   "sec": 11.855,
+   "in": 2452.287,
+   "out": 2464.142,
+   "edit": 11.833,
+   "snap": "beat"
+  },
+  {
+   "id": "al-jalima.04",
+   "tech": "classic.arc",
+   "sec": 11.1516,
+   "in": 2464.142,
+   "out": 2475.294,
+   "edit": 11.167,
+   "snap": "beat"
+  },
+  {
+   "id": "al-jalima.05",
+   "tech": "drone.dronie",
+   "sec": 12.9125,
+   "in": 2475.294,
+   "out": 2488.206,
+   "edit": 12.917,
+   "snap": "section"
+  },
+  {
+   "id": "zaikhal.01",
+   "tech": "drone.tilt-reveal",
+   "sec": 14.5103,
+   "in": 2488.206,
+   "out": 2502.716,
+   "edit": 14.5,
+   "snap": "beat"
+  },
+  {
+   "id": "zaikhal.02",
+   "tech": "classic.pov",
+   "sec": 11.2077,
+   "in": 2502.716,
+   "out": 2513.924,
+   "edit": 11.208,
+   "snap": "beat"
+  },
+  {
+   "id": "zaikhal.03",
+   "tech": "classic.two-shot",
+   "sec": 12.5747,
+   "in": 2513.924,
+   "out": 2526.499,
+   "edit": 12.583,
+   "snap": "beat"
+  },
+  {
+   "id": "zaikhal.04",
+   "tech": "drone.vertigo-drone",
+   "sec": 11.5112,
+   "in": 2526.499,
+   "out": 2538.01,
+   "edit": 11.5,
+   "snap": "beat"
+  },
+  {
+   "id": "zaikhal.05",
+   "tech": "classic.time-lapse",
+   "sec": 14.5828,
+   "in": 2538.01,
+   "out": 2552.593,
+   "edit": 14.583,
+   "snap": "beat"
+  },
+  {
+   "id": "yanshi.01",
+   "tech": "drone.top-down",
+   "sec": 12.1878,
+   "in": 2552.593,
+   "out": 2564.781,
+   "edit": 12.208,
+   "snap": "beat"
+  },
+  {
+   "id": "yanshi.02",
+   "tech": "fpv.fpv-gap",
+   "sec": 8.269,
+   "in": 2564.781,
+   "out": 2573.05,
+   "edit": 8.25,
+   "snap": "section"
+  },
+  {
+   "id": "yanshi.03",
+   "tech": "classic.steadicam",
+   "sec": 13.9352,
+   "in": 2573.05,
+   "out": 2586.985,
+   "edit": 13.958,
+   "snap": "beat"
+  },
+  {
+   "id": "yanshi.04",
+   "tech": "fpv.fpv-proximity",
+   "sec": 14.5814,
+   "in": 2586.985,
+   "out": 2601.566,
+   "edit": 14.583,
+   "snap": "beat"
+  },
+  {
+   "id": "yanshi.05",
+   "tech": "classic.hyperlapse",
+   "sec": 15.1137,
+   "in": 2601.566,
+   "out": 2616.68,
+   "edit": 15.083,
+   "snap": "beat"
+  },
+  {
+   "id": "sawato.01",
+   "tech": "drone.flyover",
+   "sec": 13.9784,
+   "in": 2616.68,
+   "out": 2630.658,
+   "edit": 14.0,
+   "snap": "beat"
+  },
+  {
+   "id": "sawato.02",
+   "tech": "drone.top-down-rise",
+   "sec": 12.0787,
+   "in": 2630.658,
+   "out": 2642.737,
+   "edit": 12.083,
+   "snap": "beat"
+  },
+  {
+   "id": "sawato.03",
+   "tech": "classic.static",
+   "sec": 10.4051,
+   "in": 2642.737,
+   "out": 2653.142,
+   "edit": 10.375,
+   "snap": "beat"
+  },
+  {
+   "id": "sawato.04",
+   "tech": "classic.crane",
+   "sec": 11.905,
+   "in": 2653.142,
+   "out": 2665.047,
+   "edit": 11.917,
+   "snap": "beat"
+  },
+  {
+   "id": "sawato.05",
+   "tech": "drone.pano-360",
+   "sec": 14.0456,
+   "in": 2665.047,
+   "out": 2679.093,
+   "edit": 14.042,
+   "snap": "section"
+  },
+  {
+   "id": "shoushi.01",
+   "tech": "classic.pan",
+   "sec": 14.5429,
+   "in": 2679.093,
+   "out": 2693.636,
+   "edit": 14.542,
+   "snap": "beat"
+  },
+  {
+   "id": "shoushi.02",
+   "tech": "fpv.fpv-gap",
+   "sec": 6.8935,
+   "in": 2693.636,
+   "out": 2700.529,
+   "edit": 6.917,
+   "snap": "beat"
+  },
+  {
+   "id": "shoushi.03",
+   "tech": "classic.truck",
+   "sec": 13.8139,
+   "in": 2700.529,
+   "out": 2714.343,
+   "edit": 13.792,
+   "snap": "beat"
+  },
+  {
+   "id": "shoushi.04",
+   "tech": "classic.handheld",
+   "sec": 12.3932,
+   "in": 2714.343,
+   "out": 2726.736,
+   "edit": 12.417,
+   "snap": "beat"
+  },
+  {
+   "id": "shoushi.05",
+   "tech": "classic.tilt",
+   "sec": 13.1488,
+   "in": 2726.736,
+   "out": 2739.885,
+   "edit": 13.125,
+   "snap": "beat"
+  },
+  {
+   "id": "hebian-to.01",
+   "tech": "drone.flyover",
+   "sec": 13.904,
+   "in": 2739.885,
+   "out": 2753.789,
+   "edit": 13.917,
+   "snap": "beat"
+  },
+  {
+   "id": "hebian-to.02",
+   "tech": "classic.truck",
+   "sec": 12.4782,
+   "in": 2753.789,
+   "out": 2766.267,
+   "edit": 12.458,
+   "snap": "beat"
+  },
+  {
+   "id": "hebian-to.03",
+   "tech": "classic.over-the-shoulder",
+   "sec": 10.3486,
+   "in": 2766.267,
+   "out": 2776.616,
+   "edit": 10.375,
+   "snap": "section"
+  },
+  {
+   "id": "hebian-to.04",
+   "tech": "classic.zoom",
+   "sec": 11.3084,
+   "in": 2776.616,
+   "out": 2787.924,
+   "edit": 11.292,
+   "snap": "beat"
+  },
+  {
+   "id": "hebian-to.05",
+   "tech": "drone.hyperlapse-orbit",
+   "sec": 13.5111,
+   "in": 2787.924,
+   "out": 2801.435,
+   "edit": 13.5,
+   "snap": "section"
+  },
+  {
+   "id": "tou-tou.01",
+   "tech": "classic.establishing",
+   "sec": 14.4639,
+   "in": 2801.435,
+   "out": 2815.899,
+   "edit": 14.5,
+   "snap": "beat"
+  },
+  {
+   "id": "tou-tou.02",
+   "tech": "classic.rack-focus",
+   "sec": 11.4106,
+   "in": 2815.899,
+   "out": 2827.31,
+   "edit": 11.375,
+   "snap": "beat"
+  },
+  {
+   "id": "tou-tou.03",
+   "tech": "classic.pov",
+   "sec": 11.26,
+   "in": 2827.31,
+   "out": 2838.57,
+   "edit": 11.292,
+   "snap": "beat"
+  },
+  {
+   "id": "tou-tou.04",
+   "tech": "drone.spiral-descent",
+   "sec": 16.1014,
+   "in": 2838.57,
+   "out": 2854.671,
+   "edit": 16.083,
+   "snap": "beat"
+  },
+  {
+   "id": "tou-tou.05",
+   "tech": "classic.whip-pan",
+   "sec": 9.3959,
+   "in": 2854.671,
+   "out": 2864.067,
+   "edit": 9.417,
+   "snap": "beat"
+  },
+  {
+   "id": "baishi.01",
+   "tech": "drone.pano-360",
+   "sec": 15.4395,
+   "in": 2864.067,
+   "out": 2879.507,
+   "edit": 15.417,
+   "snap": "beat"
+  },
+  {
+   "id": "baishi.02",
+   "tech": "classic.two-shot",
+   "sec": 12.2369,
+   "in": 2879.507,
+   "out": 2891.744,
+   "edit": 12.25,
+   "snap": "beat"
+  },
+  {
+   "id": "baishi.03",
+   "tech": "classic.worms-eye",
+   "sec": 10.9808,
+   "in": 2891.744,
+   "out": 2902.724,
+   "edit": 10.958,
+   "snap": "beat"
+  },
+  {
+   "id": "baishi.04",
+   "tech": "drone.top-down",
+   "sec": 11.4912,
+   "in": 2902.724,
+   "out": 2914.215,
+   "edit": 11.5,
+   "snap": "beat"
+  },
+  {
+   "id": "baishi.05",
+   "tech": "drone.dronie",
+   "sec": 15.3255,
+   "in": 2914.215,
+   "out": 2929.541,
+   "edit": 15.333,
+   "snap": "section"
+  },
+  {
+   "id": "lin.01",
+   "tech": "drone.canyon-run",
+   "sec": 13.9106,
+   "in": 2929.541,
+   "out": 2943.452,
+   "edit": 13.917,
+   "snap": "beat"
+  },
+  {
+   "id": "lin.02",
+   "tech": "classic.static",
+   "sec": 11.032,
+   "in": 2943.452,
+   "out": 2954.484,
+   "edit": 11.042,
+   "snap": "beat"
+  },
+  {
+   "id": "lin.03",
+   "tech": "classic.pedestal",
+   "sec": 8.9399,
+   "in": 2954.484,
+   "out": 2963.423,
+   "edit": 8.917,
+   "snap": "beat"
+  },
+  {
+   "id": "lin.04",
+   "tech": "drone.boomerang",
+   "sec": 12.6809,
+   "in": 2963.423,
+   "out": 2976.104,
+   "edit": 12.708,
+   "snap": "beat"
+  },
+  {
+   "id": "lin.05",
+   "tech": "drone.boom-rise",
+   "sec": 14.096,
+   "in": 2976.104,
+   "out": 2990.2,
+   "edit": 14.083,
+   "snap": "section"
+  },
+  {
+   "id": "nanto.01",
+   "tech": "fpv.fpv-dive",
+   "sec": 10.3424,
+   "in": 2990.2,
+   "out": 3000.543,
+   "edit": 10.333,
+   "snap": "beat"
+  },
+  {
+   "id": "nanto.02",
+   "tech": "classic.reveal-from-occluder",
+   "sec": 12.4722,
+   "in": 3000.543,
+   "out": 3013.015,
+   "edit": 12.458,
+   "snap": "beat"
+  },
+  {
+   "id": "nanto.03",
+   "tech": "drone.fly-by",
+   "sec": 11.0566,
+   "in": 3013.015,
+   "out": 3024.072,
+   "edit": 11.083,
+   "snap": "beat"
+  },
+  {
+   "id": "nanto.04",
+   "tech": "drone.vertigo-drone",
+   "sec": 11.2686,
+   "in": 3024.072,
+   "out": 3035.34,
+   "edit": 11.25,
+   "snap": "beat"
+  },
+  {
+   "id": "nanto.05",
+   "tech": "classic.hyperlapse",
+   "sec": 14.5544,
+   "in": 3035.34,
+   "out": 3049.895,
+   "edit": 14.542,
+   "snap": "beat"
+  },
+  {
+   "id": "mayoi.01",
+   "tech": "classic.establishing",
+   "sec": 15.7241,
+   "in": 3049.895,
+   "out": 3065.619,
+   "edit": 15.75,
+   "snap": "section"
+  },
+  {
+   "id": "mayoi.02",
+   "tech": "drone.flyover",
+   "sec": 12.9177,
+   "in": 3065.619,
+   "out": 3078.536,
+   "edit": 12.917,
+   "snap": "beat"
+  },
+  {
+   "id": "mayoi.03",
+   "tech": "classic.pov",
+   "sec": 10.8696,
+   "in": 3078.536,
+   "out": 3089.406,
+   "edit": 10.875,
+   "snap": "beat"
+  },
+  {
+   "id": "mayoi.04",
+   "tech": "classic.dolly-zoom",
+   "sec": 9.2837,
+   "in": 3089.406,
+   "out": 3098.69,
+   "edit": 9.292,
+   "snap": "beat"
+  },
+  {
+   "id": "mayoi.05",
+   "tech": "classic.birds-eye",
+   "sec": 14.3472,
+   "in": 3098.69,
+   "out": 3113.037,
+   "edit": 14.333,
+   "snap": "section"
+  },
+  {
+   "id": "kryst.01",
+   "tech": "classic.steadicam",
+   "sec": 12.8566,
+   "in": 3113.037,
+   "out": 3125.894,
+   "edit": 12.833,
+   "snap": "beat"
+  },
+  {
+   "id": "kryst.02",
+   "tech": "classic.over-the-shoulder",
+   "sec": 9.5511,
+   "in": 3125.894,
+   "out": 3135.445,
+   "edit": 9.583,
+   "snap": "beat"
+  },
+  {
+   "id": "kryst.03",
+   "tech": "classic.static",
+   "sec": 10.3252,
+   "in": 3135.445,
+   "out": 3145.77,
+   "edit": 10.292,
+   "snap": "section"
+  },
+  {
+   "id": "kryst.04",
+   "tech": "drone.dronie",
+   "sec": 14.0016,
+   "in": 3145.77,
+   "out": 3159.771,
+   "edit": 14.042,
+   "snap": "section"
+  },
+  {
+   "id": "kryst.05",
+   "tech": "drone.hyperlapse-orbit",
+   "sec": 13.7693,
+   "in": 3159.771,
+   "out": 3173.541,
+   "edit": 13.75,
+   "snap": "section"
+  },
+  {
+   "id": "freehold.01",
+   "tech": "drone.orbit-poi",
+   "sec": 14.3778,
+   "in": 3173.541,
+   "out": 3187.919,
+   "edit": 14.375,
+   "snap": "beat"
+  },
+  {
+   "id": "freehold.02",
+   "tech": "fpv.fpv-flip",
+   "sec": 10.4769,
+   "in": 3187.919,
+   "out": 3198.395,
+   "edit": 10.458,
+   "snap": "beat"
+  },
+  {
+   "id": "freehold.03",
+   "tech": "drone.boomerang",
+   "sec": 16.9396,
+   "in": 3198.395,
+   "out": 3215.335,
+   "edit": 16.958,
+   "snap": "beat"
+  },
+  {
+   "id": "freehold.04",
+   "tech": "classic.handheld",
+   "sec": 10.4727,
+   "in": 3215.335,
+   "out": 3225.808,
+   "edit": 10.458,
+   "snap": "beat"
+  },
+  {
+   "id": "freehold.05",
+   "tech": "classic.roll",
+   "sec": 11.2877,
+   "in": 3225.808,
+   "out": 3237.095,
+   "edit": 11.292,
+   "snap": "beat"
+  },
+  {
+   "id": "kara.01",
+   "tech": "drone.boom-rise",
+   "sec": 15.5526,
+   "in": 3237.095,
+   "out": 3252.648,
+   "edit": 15.583,
+   "snap": "beat"
+  },
+  {
+   "id": "kara.02",
+   "tech": "classic.pedestal",
+   "sec": 11.1876,
+   "in": 3252.648,
+   "out": 3263.836,
+   "edit": 11.167,
+   "snap": "beat"
+  },
+  {
+   "id": "kara.03",
+   "tech": "classic.truck",
+   "sec": 13.4935,
+   "in": 3263.836,
+   "out": 3277.329,
+   "edit": 13.5,
+   "snap": "beat"
+  },
+  {
+   "id": "kara.04",
+   "tech": "drone.top-down",
+   "sec": 11.1288,
+   "in": 3277.329,
+   "out": 3288.458,
+   "edit": 11.125,
+   "snap": "beat"
+  },
+  {
+   "id": "kara.05",
+   "tech": "drone.spiral-descent",
+   "sec": 15.6012,
+   "in": 3288.458,
+   "out": 3304.059,
+   "edit": 15.583,
+   "snap": "section"
+  },
+  {
+   "id": "frost-haven.01",
+   "tech": "drone.pano-360",
+   "sec": 15.0305,
+   "in": 3304.059,
+   "out": 3319.09,
+   "edit": 15.042,
+   "snap": "beat"
+  },
+  {
+   "id": "frost-haven.02",
+   "tech": "drone.top-down-rise",
+   "sec": 12.8283,
+   "in": 3319.09,
+   "out": 3331.918,
+   "edit": 12.833,
+   "snap": "section"
+  },
+  {
+   "id": "frost-haven.03",
+   "tech": "classic.dolly-in",
+   "sec": 11.3843,
+   "in": 3331.918,
+   "out": 3343.302,
+   "edit": 11.375,
+   "snap": "beat"
+  },
+  {
+   "id": "frost-haven.04",
+   "tech": "classic.two-shot",
+   "sec": 10.757,
+   "in": 3343.302,
+   "out": 3354.059,
+   "edit": 10.75,
+   "snap": "beat"
+  },
+  {
+   "id": "frost-haven.05",
+   "tech": "classic.time-lapse",
+   "sec": 12.068,
+   "in": 3354.059,
+   "out": 3366.127,
+   "edit": 12.083,
+   "snap": "beat"
+  },
+  {
+   "id": "linvak-tukal.01",
+   "tech": "drone.boom-rise",
+   "sec": 15.0465,
+   "in": 3366.127,
+   "out": 3381.174,
+   "edit": 15.042,
+   "snap": "beat"
+  },
+  {
+   "id": "linvak-tukal.02",
+   "tech": "fpv.fpv-proximity",
+   "sec": 12.7361,
+   "in": 3381.174,
+   "out": 3393.91,
+   "edit": 12.75,
+   "snap": "section"
+  },
+  {
+   "id": "linvak-tukal.03",
+   "tech": "classic.high-angle",
+   "sec": 10.6684,
+   "in": 3393.91,
+   "out": 3404.578,
+   "edit": 10.667,
+   "snap": "section"
+  },
+  {
+   "id": "linvak-tukal.04",
+   "tech": "drone.vertigo-drone",
+   "sec": 11.0386,
+   "in": 3404.578,
+   "out": 3415.617,
+   "edit": 11.042,
+   "snap": "beat"
+  },
+  {
+   "id": "linvak-tukal.05",
+   "tech": "drone.dronie",
+   "sec": 16.2099,
+   "in": 3415.617,
+   "out": 3431.756,
+   "edit": 16.125,
+   "snap": "beat"
+  }
+ ]
+}

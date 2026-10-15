@@ -71,18 +71,27 @@ export function tunnelCommand({ host = DEFAULT_1070_HOST, cdp = DEFAULT_CDP } = 
  * @param {{base?: string, account?: string, password: string, quality?: string}} o
  * @returns {string}
  */
-export function buildFilmUrl({ base = DEFAULT_BASE_URL, account = DEFAULT_ACCOUNT, password, quality = "high" } = {}) {
+export function buildFilmUrl({ base = DEFAULT_BASE_URL, account = DEFAULT_ACCOUNT, password, quality = "high", clouds = "on", weather = "fair" } = {}) {
   if (typeof password !== "string" || password.length === 0) {
     throw new FilmCliError("no password: pass --password=… or set FILM_PASSWORD", { exitCode: EXIT.USAGE, code: "NO_PASSWORD" });
   }
   if (typeof account !== "string" || !account) throw new FilmCliError("--account must not be empty", { exitCode: EXIT.USAGE, code: "USAGE" });
   const q = String(quality || "high");
+  // Volumetric clouds (`?clouds=on`, an exact opt-in in the client) are ON for film by default (owner 2026-10-14:
+  // "clouds have to be on"); they also give depth of field the split post chain. `clouds: "off"` leaves them out.
+  if (clouds !== "on" && clouds !== "off") throw new FilmCliError(`--clouds must be on or off (got ${JSON.stringify(clouds)})`, { exitCode: EXIT.USAGE, code: "USAGE" });
+  // Weather (owner 2026-10-14: "sun out"): `fair` freezes the fair-weather cloud look (`?cloudWeather=off` — coverage
+  // 0.5, cumulus + alto deck, fair haze) so a stormy server DayGroup cannot turn every take overcast; `live` follows
+  // the server's DayGroup (storm decks and 10x haze when it storms). Only meaningful with clouds on.
+  if (weather !== "fair" && weather !== "live") throw new FilmCliError(`--weather must be fair or live (got ${JSON.stringify(weather)})`, { exitCode: EXIT.USAGE, code: "USAGE" });
   const b = String(base || DEFAULT_BASE_URL);
   const query =
     "nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1" +
     `&account=${encodeURIComponent(account)}&password=${encodeURIComponent(password)}&autoSpawn=first` +
     `&quality=${encodeURIComponent(q)}&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off` +
-    "&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off";
+    "&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off" +
+    (clouds === "on" ? "&clouds=on" : "") +
+    (clouds === "on" && weather === "fair" ? "&cloudWeather=off" : "");
   const hashAt = b.indexOf("#");
   const head = hashAt >= 0 ? b.slice(0, hashAt) : b;
   const sep = head.includes("?") ? (head.endsWith("?") || head.endsWith("&") ? "" : "&") : "?";

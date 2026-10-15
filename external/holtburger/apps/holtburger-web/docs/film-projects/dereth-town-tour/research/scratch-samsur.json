@@ -1,0 +1,239 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Samsur scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "samsur",
+   "name": "Samsur",
+   "gazetteerId": "samsur",
+   "teleport": "@telepoi Samsur",
+   "anchor": [
+    29130,
+    23770,
+    0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.34,
+    "grade": "cool"
+   },
+   "lbKeys": [
+    "0x977B0000",
+    "0x977A0000",
+    "0x967B0000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "samsur",
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "path": [
+    [
+     29000,
+     23590,
+     0
+    ],
+    [
+     29016,
+     23652,
+     0
+    ],
+    [
+     29036,
+     23700,
+     0
+    ],
+    [
+     29052,
+     23726,
+     0
+    ]
+   ],
+   "params": {
+    "heightAGL": 19,
+    "speed": 11,
+    "alat": 3,
+    "cornerRadius": 25,
+    "lookAhead": 30,
+    "tiltDeg": -6,
+    "maxBankDeg": 12,
+    "minClearance": 3,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly the road up the gorge between the mesas at 19 m and arrive over the town; stay 4 m above every palm and the church tower."
+  },
+  {
+   "id": "s020",
+   "site": "samsur",
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     28956,
+     23724,
+     20
+    ],
+    "height": 24.8,
+    "radius": 9.4
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 150,
+    "heightM": 0.9,
+    "horizontalM": 16,
+    "spinDeg": 18
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Lens at knee height 5 m from the tower wall looking up at the beacon; let the sky turn slowly."
+  },
+  {
+   "id": "s030",
+   "site": "samsur",
+   "technique": "classic.whip-pan",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29099.5,
+     23772.5,
+     0
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 238,
+    "distance": 86,
+    "elevationDeg": -3,
+    "angleDeg": 150,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold on the Advocate Tower, whip right onto the domed tavern and hold; the lens never moves."
+  },
+  {
+   "id": "s040",
+   "site": "samsur",
+   "technique": "classic.dolly-in",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29165.2,
+     23790,
+     0
+    ],
+    "height": 10,
+    "radius": 4
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": 50,
+    "fromFraming": "WS",
+    "profile": "perceptual"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Ease down the east street toward the Fountain of Musansayn and its blue flames; stay 5 m above the flat roofs."
+  },
+  {
+   "id": "s050",
+   "site": "samsur",
+   "technique": "fpv.fpv-flip",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29118,
+     23640,
+     20
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3.2,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 7,
+    "rise": 2,
+    "tiltDeg": -4,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Cruise north over the bare mesa at 7 m, barrel-roll once and level out facing the town; nothing within 10 m."
+  }
+ ]
+}

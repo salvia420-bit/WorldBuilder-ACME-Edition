@@ -1,0 +1,243 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Uziz scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "uziz",
+   "name": "Uziz",
+   "gazetteerId": "uziz",
+   "teleport": "@telepoi Uziz",
+   "anchor": [
+    31286.9,
+    18519.9,
+    20.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0xA260",
+    "0xA25F",
+    "0xA360",
+    "0xA35F",
+    "0xA15F"
+   ],
+   "look": {
+    "timeOfDay": 0.5,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 13
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31176,
+     18330,
+     12
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "params": {
+    "heightAGL": 5,
+    "speed": 9,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -10,
+    "minClearance": 3
+   },
+   "framing": "WS",
+   "standingOrder": "Fly low up the Empyrean canal west of Uziz, the water sliding below and the domed town on its terrace to the right.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010",
+   "site": "uziz",
+   "notes": "WATER (drone.flyover). Straight 117 m pass north up the Empyrean canal west of Uziz, 5 m above the water (100 % of the path over water), gimbal tilted -10 deg along the canal: the water slides below while the domed town stands on its terrace to the right and the west bank on the left; noon light. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (31176.0,18271.5,17.0) end (31176.0,18388.5,17.0), min AGL 5.0 m, nearest static/building/tree/spawn 10.9 m (scenery:0x020004B1), nearest building 48.6 m, retail-bake trees 10.8 m, peak 9.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 5.0 m)."
+  },
+  {
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 13
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31260,
+     18345,
+     20
+    ],
+    "height": 7,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 90,
+    "elevationDeg": 9,
+    "distance": 20,
+    "thirds": "center",
+    "travelM": 64,
+    "direction": "right",
+    "keepAim": false
+   },
+   "framing": "FS",
+   "fov": 50,
+   "standingOrder": "Truck slowly north along the east row of Uziz, the shops, octagon tower and fire bowl sliding past with the green domes behind.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020",
+   "site": "uziz",
+   "notes": "FACADE PAN (classic.truck). Fixed-head truck 64 m north along the east row of the street from the open ground 12 m off the walls, 2.7-3.1 m above the slope (z 26.6): the octagon tower, the shops and the fire bowl (0x02000354) in the gap slide past with the big green domes of the west row behind; the noon sun lights the east faces. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (31279.8,18313.0,26.6) end (31279.8,18377.0,26.6), min AGL 2.8 m, nearest static/building/tree/spawn 11.9 m (building:0x01000EFC#75), nearest building 11.9 m, retail-bake trees 5.0 m, peak 7.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 2.8 m)."
+  },
+  {
+   "technique": "fpv.fpv-dive",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31369,
+     18476,
+     20
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "params": {
+    "heightStart": 110,
+    "bottomAGL": 4,
+    "diveAngleDeg": -62,
+    "approach": 20,
+    "standoff": 3,
+    "exitLength": 3,
+    "pullOutRadius": 12,
+    "speed": 13,
+    "alat": 8,
+    "uptiltDeg": 20,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "framing": "WS",
+   "fov": 75,
+   "standingOrder": "Cross the flat top of the rock pillar east of Uziz, crest its west edge and dive down the sheer face toward the town below.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030",
+   "site": "uziz",
+   "notes": "FPV DIVE (fpv.fpv-dive). Crosses the 24 m flat top of the rock pillar east of Uziz (z 126) 5 m above it, crests the west edge and dives down the 106 m face at -62 deg (about 22-28 m off the rock), pulling out 4 m above the town terrace with the street, the domes and the great tree ahead. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (31389.0,18476.0,131.0) end (31306.6,18476.0,24.0), min AGL 3.3 m, nearest static/building/tree/spawn 6.9 m (scenery:0x020004B1), nearest building 12.0 m, retail-bake trees 7.3 m, peak 16.2 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 3.8 m)."
+  },
+  {
+   "technique": "classic.two-shot",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31266.3,
+     18439.3,
+     20
+    ],
+    "height": 7.5,
+    "radius": 3
+   },
+   "params": {
+    "secondary": [
+     31233.7,
+     18433.4,
+     20
+    ],
+    "secondaryHeight": 3.5,
+    "side": "left",
+    "distance": 0,
+    "elevationDeg": 10,
+    "driftDeg": -4
+   },
+   "framing": "WS",
+   "fov": 65,
+   "standingOrder": "Frame the nullified skeleton statue on its pillar and the glowing Town Network portal together at the civic heart of Uziz.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040",
+   "site": "uziz",
+   "notes": "PARTICLES (classic.two-shot). Wide 65 deg two-shot from the street south of the civic heart, 6 m up: the nullified skeleton statue on its pillar and the glowing Town Network portal (swirl) framed together with the church tower and the great tree, a slow 4 deg drift. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (31252.9,18416.2,26.3) end (31254.3,18416.5,26.3), min AGL 6.3 m, nearest static/building/tree/spawn 4.2 m (spawn:Bind Stone), nearest building 10.1 m, retail-bake trees 21.8 m, peak 0.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 6.3 m)."
+  },
+  {
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 14
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31266.3,
+     18439.3,
+     20
+    ],
+    "height": 7.5,
+    "radius": 3
+   },
+   "params": {
+    "startDistance": 12,
+    "endDistance": 80,
+    "startHeight": 9,
+    "endHeight": 50,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "framing": "FS",
+   "standingOrder": "Pull back and up from the skeleton statue, revealing the domes, the canal and the Yushad Ridge around Uziz.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050",
+   "site": "uziz",
+   "notes": "CLOSING (drone.dronie). Pulls back and up due south from 12 m to 80 m and from z 29 to 70, keeping the skeleton statue centred: the great tree, the church tower, the domes and the canal open up with the Yushad Ridge behind. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (31266.3,18427.3,29.0) end (31266.3,18359.3,70.0), min AGL 9.0 m, nearest static/building/tree/spawn 8.1 m (building:0x01002A1B#20), nearest building 8.1 m, retail-bake trees 7.1 m, peak 8.9 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 9.0 m)."
+  }
+ ],
+ "notes": "time 0.50 (noon, sun east ~68 deg), grade neutral: high sun on the canal and the east faces of the street"
+}

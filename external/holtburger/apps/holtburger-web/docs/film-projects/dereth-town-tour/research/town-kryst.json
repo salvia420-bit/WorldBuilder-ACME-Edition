@@ -1,0 +1,293 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Mayoi/Kryst/Freehold/Kara/Frost Haven/Linvak Tukal (lk6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-kryst.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "0.45 / neutral: sun due east at 58 deg (WBT region-day-night-curve); the steadicam, over-the-shoulder and dronie look west/south-west so the life stone, portal and huts are front-lit; the hyperlapse runs the sky to ~0.63 (sun still 83 deg up).",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Kryst",
+   "summary": "Kryst (74.6S 84.5E) is the jungle-island refuge founded by escaped Isparian slaves under Zenzaburou Hensu and Vanten the Archmage, built on Jojiism and the Code of Pwyll after they fled the Olthoi through a collapsing portal; they named the archipelago the Vesayen Isles after Vesayen Hylin, who did not make it through (Town Network sign). Since the Prodigal Sons event a Royal Guard detachment patrols its beach. In the DAT the village is a strip of domed, arch-fronted huts (The Wildsong Inn, The Olthoi's Eye and two more, 0x01000BFE) on a sandy beach at sea level along the north shore of a jungle island (LBs 0xE822/0xE922), with the Life Stone at the waterline, the Town Network portal on its glowing pad, a Nullified Statue of a Sclavus on a 6.8 m pedestal ringed by guardsmen, and The Magi's Refuge (candelabra-lit) and The Whipping Vine up on the jungle hill (z 18-26) behind; open sea to the north.",
+   "landmarks": [
+    {
+     "name": "Life Stone on the beach",
+     "pos": [
+      44698.9,
+      6665.3,
+      0
+     ],
+     "heightM": 3.6,
+     "note": "at the sand/water edge west of the huts"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      44725.7,
+      6632.4,
+      0.2
+     ],
+     "heightM": 3.5,
+     "note": "glowing blue stone pad 0x020019E3; retail scenery bake drops a big tree on it (default bake clear)"
+    },
+    {
+     "name": "Nullified Statue of a Sclavus + Royal Guard",
+     "pos": [
+      44765.4,
+      6643.6,
+      0
+     ],
+     "heightM": 9.4,
+     "note": "pedestal 0x01002A1B top z 6.8, statue on top; Aluvian spearmen, Sho swordsmen and Gharu'ndim war mages stand around it"
+    },
+    {
+     "name": "Domed beach huts (The Wildsong Inn, The Olthoi's Eye)",
+     "pos": [
+      44748,
+      6612,
+      0
+     ],
+     "heightM": 10,
+     "note": "0x01000BFE at (44700,6636), (44748,6612), (44820,6612), (44868,6588)"
+    },
+    {
+     "name": "The Magi's Refuge",
+     "pos": [
+      44628,
+      6588,
+      22
+     ],
+     "heightM": 10,
+     "note": "on the jungle hill; candelabras 0x020005D8 (light + flame) at (44642.3,6591.5) and (44642.4,6585.5), z 22"
+    },
+    {
+     "name": "The Whipping Vine",
+     "pos": [
+      44796,
+      6564,
+      18
+     ],
+     "heightM": 10,
+     "note": "domed hall on the hill (top z 28)"
+    },
+    {
+     "name": "Kryst bay",
+     "pos": [
+      44760,
+      6720,
+      0
+     ],
+     "heightM": 0,
+     "note": "WaterShallowSea from y~6668 along the village"
+    }
+   ],
+   "site": {
+    "id": "kryst",
+    "name": "Kryst",
+    "gazetteerId": "kryst",
+    "teleport": "@telepoi Kryst",
+    "anchor": [
+     44745,
+     6640,
+     0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.45,
+     "grade": "neutral"
+    },
+    "lbKeys": [
+     "0xE8220000",
+     "0xE9220000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.hyperlapse-orbit",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44770,
+       6628,
+       0
+      ],
+      "height": 10,
+      "radius": 70
+     },
+     "params": {
+      "radius": 115,
+      "heightAGL": 30,
+      "revolutions": 0.12,
+      "timeRate": 100,
+      "direction": "cw",
+      "bearingDeg": 332,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "standingOrder": "Drift slowly round the bay side of the beach village 30 m up while the clouds race over the jungle; stay over the water and the sand.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING + WATER (drone.hyperlapse-orbit). 30 m over the bay, 115 m out, a slow 43 deg arc round the beach village while the sky runs 100x (0.45 -> 0.63, sun stays high): clouds race over the jungle hill, the sea fills the foreground. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44716.0, 6729.5, 30) end (44800.2, 6739.0, 30); min AGL 30 m (WBT get-height on 9 camera points: min AGL 30 m, ground 0-0); nearest static/building/default-bake scenery/spawn 70.17 m (spawn:Life Stone), nearest building 88.44 m, retail-bake scenery 71.73 m; peak 6.19 m/s; 100% of samples over water."
+    },
+    {
+     "technique": "classic.steadicam",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44698.9,
+       6665.3,
+       0
+      ],
+      "height": 3.6,
+      "radius": 1.5,
+      "heading": 1.5708
+     },
+     "params": {
+      "mode": "lead",
+      "distance": 22,
+      "elevationDeg": 6,
+      "glideM": 9,
+      "lag": 1.2,
+      "bobM": 0.015,
+      "stepHz": 1.6,
+      "swayDeg": 0.4
+     },
+     "standingOrder": "Walk west along the waterline toward the glowing life stone with the surf on the right; keep 2 m from the stone and never step into the huts.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC + WATER (classic.steadicam, assigned). A floating walk west along the waterline toward the glowing beach Life Stone (22 -> 13 m) with the surf on the right and the domed Wildsong Inn on the left; gait bob and sway on. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44720.8, 6665.3, 5.0) end (44711.7, 6665.3, 4.0); min AGL 4.03 m (WBT get-height on 9 camera points: min AGL 4.03 m, ground 0-0); nearest static/building/default-bake scenery/spawn 11.58 m (spawn:Life Stone), nearest building 21.76 m, retail-bake scenery 22.19 m; peak 1.14 m/s."
+    },
+    {
+     "technique": "classic.over-the-shoulder",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "MS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44725.7,
+       6632.4,
+       0.2
+      ],
+      "height": 3.6,
+      "radius": 1.6
+     },
+     "params": {
+      "secondary": [
+       44765.4,
+       6643.6,
+       6.8
+      ],
+      "secondaryHeight": 2.6,
+      "shoulder": "left",
+      "shoulderM": 0.8,
+      "backM": 2.8,
+      "raiseM": 0.4,
+      "composeThirds": true,
+      "autoFov": true,
+      "pushM": 0.4
+     },
+     "standingOrder": "Look over the stone sclavus's shoulder down at the town portal and the guards on the sand; keep 0.8 m off the statue.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.over-the-shoulder, assigned). Over the stone Sclavus's shoulder 9 m up on its pedestal, a long lens looks down at the town portal swirl with the guards on the sand between; camera 2.8 m behind the statue's centre. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44768.3, 6643.6, 9.3) end (44767.9, 6643.5, 9.3); min AGL 9.28 m (WBT get-height on 9 camera points: min AGL 9.28 m, ground 0-0); nearest static/building/default-bake scenery/spawn 1.35 m (spawn:Nullified Statue of a Sclavus), nearest building 2.48 m, retail-bake scenery 11.13 m; peak 0.06 m/s."
+    },
+    {
+     "technique": "classic.static",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44752,
+       6628,
+       0
+      ],
+      "height": 10,
+      "radius": 40
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 5,
+      "elevationDeg": 2,
+      "distance": 72
+     },
+     "standingOrder": "Lock off from the shallows 7 m above the water on the beach, the domed huts and the jungle hill; nothing moves but the sea and the sky.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER (classic.static). Locked off 7.5 m above the shallows 72 m out: beach, domed huts, guards and the jungle hill, nothing moving but the sea and the clouds. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44758.3, 6699.7, 7.5) end (44758.3, 6699.7, 7.5); min AGL 7.51 m (WBT get-height on 9 camera points: min AGL 7.51 m, ground 0-0); nearest static/building/default-bake scenery/spawn 52.98 m (building:0x01002A1B#4), nearest building 52.98 m, retail-bake scenery 55.12 m; peak 0 m/s; 100% of samples over water."
+    },
+    {
+     "technique": "drone.dronie",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44765.4,
+       6643.6,
+       0
+      ],
+      "height": 9.3,
+      "radius": 3
+     },
+     "params": {
+      "startDistance": 9,
+      "endDistance": 85,
+      "startHeight": 7,
+      "endHeight": 45,
+      "bearingDeg": 12,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "standingOrder": "Pull back and up from the sclavus statue and its guards over the sand and out across the bay in one line until the jungle island fills the frame; 5 m from the statue at the start.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.dronie). From 9 m off the statue and its guards, pull back NNE and up to 85 m / 45 m over the bay until the jungle island fills the frame - the hand-off to Freehold. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (44767.3, 6652.4, 7) end (44783.1, 6726.7, 45); min AGL 7 m (WBT get-height on 9 camera points: min AGL 7 m, ground 0-0); nearest static/building/default-bake scenery/spawn 5.63 m (building:0x01002A1B#4), nearest building 5.63 m, retail-bake scenery 13.07 m; peak 9.53 m/s; 79% of samples over water."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session at a time, >=3.8 GB free): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xE721, 0xE722, 0xE723, 0xE821, 0xE822, 0xE823, 0xE921, 0xE922, 0xE923; get-object-detail on every placed model (bounds -> rotated AABBs) and chorizite-parse-dat-record Setup on every placed Setup (default PhysicsScript + lights) to find the FX props, cross-checked with object-tags.json (utf-8-sig) and particle-fx-catalog.json; served dist scenery (default ace-compat bake AND the opt-in retail bake) and ACE outdoor spawns added as obstacle boxes; every shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain (AC split-triangle interpolation) and sampled at 4 Hz for AGL, box clearance, line of sight, subject framing and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) agreed with the offline terrain within 0.005 m; region-day-night-curve: t 0.452 -> sun heading 90 deg, pitch 57.6 deg. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-kryst.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.hyperlapse-orbit 14s: start [44716.0, 6729.5, 30] end [44800.2, 6739.0, 30], WBT minAGL 30 m, clearance 70.17 m (spawn:Life Stone), bldg 88.44 m, retail 71.73 m, vmax 6.19 m/s | s020 classic.steadicam 13s: start [44720.8, 6665.3, 5.0] end [44711.7, 6665.3, 4.0], WBT minAGL 4.03 m, clearance 11.58 m (spawn:Life Stone), bldg 21.76 m, retail 22.19 m, vmax 1.14 m/s | s030 classic.over-the-shoulder 10s: start [44768.3, 6643.6, 9.3] end [44767.9, 6643.5, 9.3], WBT minAGL 9.28 m, clearance 1.35 m (spawn:Nullified Statue of a Sclavus), bldg 2.48 m, retail 11.13 m, vmax 0.06 m/s | s040 classic.static 11s: start [44758.3, 6699.7, 7.5] end [44758.3, 6699.7, 7.5], WBT minAGL 7.51 m, clearance 52.98 m (building:0x01002A1B#4), bldg 52.98 m, retail 55.12 m, vmax 0 m/s | s050 drone.dronie 14s: start [44767.3, 6652.4, 7] end [44783.1, 6726.7, 45], WBT minAGL 7 m, clearance 5.63 m (building:0x01002A1B#4), bldg 5.63 m, retail 13.07 m, vmax 9.53 m/s"
+  }
+ ]
+}

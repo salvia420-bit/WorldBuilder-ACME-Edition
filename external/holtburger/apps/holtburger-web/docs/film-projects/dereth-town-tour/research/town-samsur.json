@@ -1,0 +1,363 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-samsur.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "morning 0.34 / cool: low eastern light rakes the gorge walls and the tower's east face; crisp blue-flame lamps in the shaded fountain square",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Samsur",
+   "summary": "Samsur (2.8S 19.4E) was the first permanent town of the Gharu'ndim, built under Musansayn - the minor noble who led his people after Elysa and Thorsten freed them from the Olthoi and who made peace with the Aluvians - on the Yushad Ridge; it lies at the heart of the Gharu'ndim lands with roads north, south and into the A'mun Desert. A former Nexus starter town, it keeps the Victory Residential Halls, settlement portals and the nearby Mnemosyne collectors. In the DAT the town sits on a flat valley floor at z 0 entered from the south through a road gorge between 20 m sandstone mesas. Four sandstone Gharu'ndim halls (0x01000E11/0x01000E40) cluster around a tiny chamfered-corner square holding the Fountain of Musansayn ringed by blue-flame lamps; west of it stand the domed three-storey tavern, the glass-windowed church tower, the Nullified Statue of a Gromnie, the Town Network portal and the Life Stone, the meeting-hall tower to the east. On the west mesa above the gorge rises the 25 m Samsur Advocate Tower (0x010014C3) crowned by four orange beacon glows (0x0200069D).",
+   "landmarks": [
+    {
+     "name": "Fountain of Musansayn",
+     "pos": [
+      29165.2,
+      23790,
+      0
+     ],
+     "heightM": 2,
+     "note": "in a ~20 m chamfered square between four halls (tops 8-10); blue-flame lamps 0x02000719 at (29147.8,23779.9),(29169.8,23780.4),(29157.3,23796.5),(29124.7,23790.3)"
+    },
+    {
+     "name": "Samsur Advocate Tower",
+     "pos": [
+      28956,
+      23724,
+      20
+     ],
+     "heightM": 24.85,
+     "note": "0x010014C3 on the west mesa, footprint 18.8 m square, top 44.85; four orange beacon glows 0x0200069D at z 43.75"
+    },
+    {
+     "name": "Domed tavern",
+     "pos": [
+      29099.5,
+      23772.5,
+      0
+     ],
+     "heightM": 14.1,
+     "note": "0x01000E3B"
+    },
+    {
+     "name": "Glass-windowed church tower",
+     "pos": [
+      29078.2,
+      23729.7,
+      0
+     ],
+     "heightM": 12.7,
+     "note": "0x010025E3"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      29101.5,
+      23744.2,
+      0
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      29132.4,
+      23765.3,
+      0.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Nullified Statue of a Gromnie",
+     "pos": [
+      29116.9,
+      23790,
+      6.8
+     ],
+     "heightM": 3,
+     "note": "on pedestal 0x01002A1B (top 6.8)"
+    },
+    {
+     "name": "Victory Residential Halls portal",
+     "pos": [
+      29047.9,
+      23697.1,
+      0
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Road gorge between the mesas",
+     "pos": [
+      29020,
+      23650,
+      0
+     ],
+     "heightM": 20,
+     "note": "floor z 0, mesa walls z 20; palms 8-15 m on the floor"
+    }
+   ],
+   "site": {
+    "id": "samsur",
+    "name": "Samsur",
+    "gazetteerId": "samsur",
+    "teleport": "@telepoi Samsur",
+    "anchor": [
+     29130,
+     23770,
+     0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.34,
+     "grade": "cool"
+    },
+    "lbKeys": [
+     "0x977B0000",
+     "0x977A0000",
+     "0x967B0000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.canyon-run",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "WS",
+     "path": [
+      [
+       29000,
+       23590,
+       0
+      ],
+      [
+       29016,
+       23652,
+       0
+      ],
+      [
+       29036,
+       23700,
+       0
+      ],
+      [
+       29052,
+       23726,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 19,
+      "speed": 11,
+      "alat": 3,
+      "cornerRadius": 25,
+      "lookAhead": 30,
+      "tiltDeg": -6,
+      "maxBankDeg": 12,
+      "minClearance": 3,
+      "ends": "cruise"
+     },
+     "standingOrder": "Fly the road up the gorge between the mesas at 19 m and arrive over the town; stay 4 m above every palm and the church tower.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING / ARRIVAL (drone.canyon-run). Fly the road up the gorge between the sandstone mesas at 19 m, banking gently through two bends, and arrive over the valley floor with the domed tavern and the church tower of Samsur ahead; morning light rakes the mesa walls. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29000, 23590, 19) end (29052, 23726, 19), min AGL 19 m (WBT get-height on 9 camera points: min AGL 19 m, ground 0-0), nearest static/building/default-bake scenery 14.25 m (scenery:0x020004B1), nearest building 14.58 m, retail-bake scenery 11.11 m, peak 9.15 m/s."
+    },
+    {
+     "technique": "classic.worms-eye",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "MS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       28956,
+       23724,
+       20
+      ],
+      "height": 24.8,
+      "radius": 9.4
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 150,
+      "heightM": 0.9,
+      "horizontalM": 16,
+      "spinDeg": 18
+     },
+     "standingOrder": "Lens at knee height 5 m from the tower wall looking up at the beacon; let the sky turn slowly.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK + GLOW (classic.worms-eye). Lens 0.9 m above the mesa, 16 m SSE of the Advocate Tower's centre (4.5 m off its wall), looking up 53 deg at the 25 m tower and its four orange beacon glows against the morning sky; the sky rolls 18 deg over 10 s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (28964, 23710.1, 20.9) end (28964, 23710.1, 20.9), min AGL 0.9 m (WBT get-height on 9 camera points: min AGL 0.9 m, ground 20-20), nearest static/building/default-bake scenery 4.5 m (building:0x010014C3#7), nearest building 4.5 m, retail-bake scenery 13.47 m, peak 0 m/s."
+    },
+    {
+     "technique": "classic.whip-pan",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       29099.5,
+       23772.5,
+       0
+      ],
+      "height": 14,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 238,
+      "distance": 86,
+      "elevationDeg": -3,
+      "angleDeg": 150,
+      "direction": "right",
+      "whipSec": 0.3,
+      "at": 0.45,
+      "land": "subject"
+     },
+     "standingOrder": "Hold on the Advocate Tower, whip right onto the domed tavern and hold; the lens never moves.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "TRANSITION BETWEEN TWO LANDMARKS (classic.whip-pan). From the gorge mouth (2.5 m up) hold on the Advocate Tower on its mesa to the west, then whip 150 deg right in 0.3 s onto the domed tavern; cut on the blur if needed. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29026.7, 23727.0, 2.5) end (29026.7, 23727.0, 2.5), min AGL 2.5 m (WBT get-height on 9 camera points: min AGL 2.5 m, ground 0-0), nearest static/building/default-bake scenery 13.92 m (scenery:0x020004BC), nearest building 38.48 m, retail-bake scenery 8.25 m, peak 0 m/s."
+    },
+    {
+     "technique": "classic.dolly-in",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       29165.2,
+       23790,
+       0
+      ],
+      "height": 10,
+      "radius": 4
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 95,
+      "elevationDeg": 50,
+      "fromFraming": "WS",
+      "profile": "perceptual"
+     },
+     "standingOrder": "Ease down the east street toward the Fountain of Musansayn and its blue flames; stay 5 m above the flat roofs.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + FLAME (classic.dolly-in). From 27 m east of and above the fountain square, ease down a 50 deg line to 10 m: the Fountain of Musansayn and its ring of blue-flame lamps in the tiny chamfered square between four sandstone halls. Ends 5.6 m above the nearest flat roof (top 8). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29182.4, 23788.5, 25.5) end (29170.3, 23789.5, 13.6), min AGL 13.62 m (WBT get-height on 9 camera points: min AGL 13.62 m, ground 0-0), nearest static/building/default-bake scenery 5.62 m (building:0x01000E40#67), nearest building 5.62 m, retail-bake scenery 25.43 m, peak 2.14 m/s."
+    },
+    {
+     "technique": "fpv.fpv-flip",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       29118,
+       23640,
+       20
+      ],
+      "height": 2,
+      "radius": 1
+     },
+     "params": {
+      "axis": "roll",
+      "direction": "positive",
+      "turns": 1,
+      "flipDuration": 3.2,
+      "flipAt": 0.5,
+      "speed": 6,
+      "heightAGL": 7,
+      "rise": 2,
+      "tiltDeg": -4,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "standingOrder": "Cruise north over the bare mesa at 7 m, barrel-roll once and level out facing the town; nothing within 10 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (fpv.fpv-flip). Cruise north at 6 m/s 7 m above the bare mesa top, barrel-roll once (3.2 s) and level out facing the town in the valley beyond. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (29118, 23601, 27) end (29118, 23679, 27), min AGL 7 m (WBT get-height on 9 camera points: min AGL 7 m, ground 18-20), nearest static/building/default-bake scenery 12.67 m (spawn:Desert Rabbit), nearest building 55.86 m, retail-bake scenery 5.9 m, peak 6.3 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0x967A, 0x967B, 0x967C, 0x977A, 0x977B, 0x977C, 0x987A, 0x987B, 0x987C; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-samsur.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.canyon-run: start [29000, 23590, 19] end [29052, 23726, 19], WBT minAGL 19 m, clearance 14.25 m (scenery:0x020004B1), bldg 14.58 m, retail 11.11 m, vmax 9.15 m/s | s020 classic.worms-eye: start [28964, 23710.1, 20.9] end [28964, 23710.1, 20.9], WBT minAGL 0.9 m, clearance 4.5 m (building:0x010014C3#7), bldg 4.5 m, retail 13.47 m, vmax 0 m/s | s030 classic.whip-pan: start [29026.7, 23727.0, 2.5] end [29026.7, 23727.0, 2.5], WBT minAGL 2.5 m, clearance 13.92 m (scenery:0x020004BC), bldg 38.48 m, retail 8.25 m, vmax 0 m/s | s040 classic.dolly-in: start [29182.4, 23788.5, 25.5] end [29170.3, 23789.5, 13.6], WBT minAGL 13.62 m, clearance 5.62 m (building:0x01000E40#67), bldg 5.62 m, retail 25.43 m, vmax 2.14 m/s | s050 fpv.fpv-flip: start [29118, 23601, 27] end [29118, 23679, 27], WBT minAGL 7 m, clearance 12.67 m (spawn:Desert Rabbit), bldg 55.86 m, retail 5.9 m, vmax 6.3 m/s",
+   "alternates": [
+    {
+     "technique": "classic.handheld",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "MS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       29101.5,
+       23744.2,
+       0
+      ],
+      "height": 4,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 185,
+      "distance": 9,
+      "elevationDeg": -4,
+      "thirds": "center",
+      "base": "push-in",
+      "pushM": 1.5,
+      "amplitudeDeg": 0.5,
+      "frequencyHz": 1.1,
+      "posAmplitude": 0.025,
+      "roughness": 0.45
+     },
+     "standingOrder": "Handheld at chest height drifting a step toward the glowing Life Stone with the domed tavern behind it; stay 7 m off the stone.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ALTERNATE - MAGIC (classic.handheld, 11 s): handheld push-in at chest height toward the glowing Life Stone with the domed tavern behind it; camera 9 m south of the stone, 2.4-3.1 m up, nearest building 12.6 m, peak 0.25 m/s. Validated in a 6-shot version of the scratch plan (0 errors); dropped to keep 5 shots."
+    }
+   ]
+  }
+ ]
+}

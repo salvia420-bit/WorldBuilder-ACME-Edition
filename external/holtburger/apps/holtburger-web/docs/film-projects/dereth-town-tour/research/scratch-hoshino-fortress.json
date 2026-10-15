@@ -1,0 +1,188 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Hoshino Fortress scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "hoshino-fortress",
+   "name": "Hoshino Fortress",
+   "gazetteerId": "hoshinos-fortress",
+   "teleport": "@teleloc 0x4AE1002D 132 100 66.4 1 0 0 0",
+   "anchor": [
+    14340.0,
+    43300.0,
+    66.4
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.42,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14316,
+     43236,
+     58
+    ],
+    "height": 31,
+    "radius": 8
+   },
+   "params": {
+    "distance": 40,
+    "heightStart": 3,
+    "heightEnd": 42,
+    "bearingDeg": 190,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 10,
+    "minClearance": 2
+   },
+   "id": "s010",
+   "site": "hoshino-fortress",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up 40 m south of the village pagoda from 3 m to 42 m with the gimbal held 10 degrees up, so the pagoda roof sinks and the fortress walls rise above it; keep 6 m from the pine behind.",
+   "notes": "OPENING REVEAL (drone.boom-rise, keepAim off). From 3 m over the Hoshino Town lane 40 m SSW of the octagonal pagoda, the camera rises 39 m in 16 s with a fixed +10 deg tilt toward NNE: first the three tiered pagoda roofs fill the frame, then they sink to the bottom edge while the 31 m walls, gate houses and 60 m pagoda towers of the fortress appear on the plateau 100-170 m above (terrain LOS: walls visible above z 176-190 from this column). Ground 57.7 (WBT). Verified offline (real registry build + WBT terrain): start (14309.1,43196.6,61.0) end (14309.1,43196.6,100.0), min AGL 3.3 m, nearest static/building/tree 6.0 m (0x020002DA@14296,43189), peak 3.8 m/s."
+  },
+  {
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14360,
+     43420,
+     172
+    ],
+    "height": 63,
+    "radius": 150
+   },
+   "params": {
+    "heightAGL": 80,
+    "speed": 10,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -25,
+    "minClearance": 10
+   },
+   "id": "s020",
+   "site": "hoshino-fortress",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly level due north at 10 m/s, 80 m above the plateau, over the courtyards toward the floating tower; climb rather than descend if any roof comes within 15 m.",
+   "notes": "AERIAL TRAVEL (drone.flyover, gimbal -25). Level line at z 252 from above the south slope (y 43340, 157 m AGL) across the fortress centre (80 m above the plateau) to y 43500: the courtyards, gates and pagoda roofs pass below while the floating Hoshino Tower in its blue haze grows at the top of the frame. Closest roof: pagoda tower 0x02001B75 top 234.7, 17 m below (19 m 3-D). Verified offline (real registry build + WBT terrain): start (14360.0,43340.0,252.0) end (14360.0,43500.0,252.0), min AGL 80.0 m, nearest static/building/tree 19.0 m (0x4AE2#1 0x02001B75), peak 10.0 m/s."
+  },
+  {
+   "technique": "classic.orbit",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14279.6,
+     43706.7,
+     172
+    ],
+    "height": 30,
+    "radius": 34
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 70,
+    "elevationDeg": 8,
+    "distance": 75,
+    "thirds": "center",
+    "revolutions": 0.25,
+    "direction": "ccw"
+   },
+   "id": "s030",
+   "site": "hoshino-fortress",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Circle the floating tower a quarter turn counter-clockwise from east to north at 75 m and level with its middle; keep 35 m from the floating blue spires.",
+   "notes": "SPECTRAL FX + LANDMARK (classic.orbit, assigned). Quarter orbit at 75 m around the hovering Hoshino Tower, camera at z 197 (116-154 m above the slope), from bearing 70 to 340: the four-storey Sho hall floats in 21 swelling blue spectral-fog clouds, its two floating cathedral spires either side, the ground 100 m below and the fortress walls behind it from the north. Starts at 70 deg so the east spire never blocks the view (blocked at 90 deg). Verified offline (real registry build + WBT terrain): start (14349.4,43732.1,197.4) end (14254.2,43776.5,197.4), min AGL 116.4 m, nearest static/building/tree 35.2 m (0x4AE3#1 0x01004BCC), peak 7.3 m/s."
+  },
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14365,
+     43515,
+     172
+    ],
+    "height": 63,
+    "radius": 150
+   },
+   "params": {
+    "heightAGL": 190,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "id": "s040",
+   "site": "hoshino-fortress",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang straight above the fortress centre at 190 m and let the courtyard grid turn 40 degrees beneath; no translation.",
+   "notes": "PATTERN / TRANSITION (drone.top-down, assigned). Nadir hover at z 362 over the fortress centre (190 m above the plateau, 127 m above the gate house roof) turning 40 deg: the walled courtyards, gates and pagoda roofs read as a Sho seal, the floating tower at the top edge - the acpedia 'bird's eye showing the courtyards' view. Frame ~330 x 185 m. Verified offline (real registry build + WBT terrain): start (14365.0,43515.0,362.0) end (14365.0,43515.0,362.0), min AGL 190.0 m, nearest static/building/tree 127.1 m (0x4AE2#5 0x02001B78), peak 0.0 m/s."
+  }
+ ],
+ "notes": "time 0.42 (sun east, 51 deg), grade neutral: crisp late-morning light on the tiered roofs; the spectral fog reads best against the shadowed north faces"
+}

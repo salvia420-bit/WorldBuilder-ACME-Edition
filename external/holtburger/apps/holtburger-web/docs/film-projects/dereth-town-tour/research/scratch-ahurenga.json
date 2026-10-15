@@ -1,0 +1,201 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Ahurenga scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "ahurenga",
+   "name": "Ahurenga",
+   "gazetteerId": "ahurenga",
+   "teleport": "@telepoi Ahurenga",
+   "anchor": [
+    2800.0,
+    35780.0,
+    2.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x0EBA",
+    "0x0FB9"
+   ],
+   "look": {
+    "timeOfDay": 0.5,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "path": [
+    [
+     2700,
+     35992,
+     0
+    ],
+    [
+     2722,
+     35950,
+     0
+    ],
+    [
+     2746,
+     35905,
+     0
+    ]
+   ],
+   "params": {
+    "heightAGL": 3,
+    "speed": 8,
+    "headingDeg": 152,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": -2,
+    "cornerRadius": 20,
+    "alat": 2,
+    "maxBankDeg": 8,
+    "ends": "rest"
+   },
+   "standingOrder": "Skim 3 m over the open sea toward the reed-ringed village of Ahurenga and its stone spire, slowing to a hover before the first reeds.",
+   "notes": "WATER (drone.terrain-skim). 3 m over the open sea north-west of the village along a 98 m path heading SSE, easing to rest before the first reeds; the reed-ringed swamp island with its stone spire grows ahead, noon sun high in the east glittering on the water. 100 % over sea (z 0), nearest reed 30 m. Verified offline (real registry build + WBT terrain): start (2700.0,35992.0,3.0) end (2746.0,35905.0,3.0), min AGL 3.0 m, nearest static/building/tree 30.1 m (0x020003F7@2720,35887), peak 10.4 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "ahurenga",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     2796,
+     35796,
+     2
+    ],
+    "height": 30,
+    "radius": 15
+   },
+   "params": {
+    "radiusStart": 27,
+    "radiusEnd": 40,
+    "heightStart": 22,
+    "heightEnd": 48,
+    "revolutions": 0.5,
+    "direction": "cw",
+    "bearingDeg": 230,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Corkscrew up around the Hea stone spire and the purple energy funnel crowning it, widening from 27 to 40 m and staying above the 14 m ferns.",
+   "notes": "PARTICLE FX (drone.helix). Corkscrew around the four-storey Hea stone spire (0x01001777, 27.9 m) crowned by the purple energy funnel (0x02000591, 11.6 m tendril sigils) and two blue light halos (0x020005BA/BB) at z 27-28: radius 27 -> 40 m, z 24 -> 50, half a turn clockwise from SW to NE, always above the 14 m swamp ferns; the sigils rise past the lens at mid-shot. Verified offline (real registry build + WBT terrain): start (2775.3,35778.6,24.0) end (2826.6,35821.7,50.0), min AGL 22.0 m, nearest static/building/tree 6.6 m (0x0EBA#35 0x02000A67), peak 10.9 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "ahurenga",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.worms-eye",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "MS",
+   "fov": 75,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     2841.8,
+     35768.7,
+     1.2
+    ],
+    "height": 2.6,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 125,
+    "heightM": 0.7,
+    "horizontalM": 4.6,
+    "spinDeg": 12
+   },
+   "standingOrder": "Lie at the foot of the Hea totem poles beside the smouldering brazier and look up past the flames to the totems and the spire against the sky.",
+   "notes": "FLAME (classic.worms-eye). Lens 0.7 m above the mud 4.6 m SE of the three Hea totem poles with the smouldering brazier (0x020005AE ring of flames) between them; looking up 23 deg on a 75 deg lens with a slow 12 deg sky spin: carved totems, flames and the stone spire 50 m beyond against the noon sky and clouds. Verified offline (real registry build + WBT terrain): start (2845.6,35766.1,1.6) end (2845.6,35766.1,1.6), min AGL 0.7 m, nearest static/building/tree 2.2 m (0x0EBA#68 0x02000A45), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "ahurenga",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     2796,
+     35796,
+     2
+    ],
+    "height": 30,
+    "radius": 15
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 135,
+    "elevationDeg": 18,
+    "distance": 95,
+    "thirds": "left",
+    "rate": 0.008
+   },
+   "standingOrder": "Hold high south-east of the village over the marsh while the sky clock runs and clouds race over the spire and the open sea beyond.",
+   "notes": "CLOSING (classic.time-lapse). Static 46 m above the marsh 95 m SE of the spire (spire on the left third) while the sky clock runs 0.008 day/s (0.50 -> 0.61, sun near zenith): cloud shadows race across the reed island, the swamp channels and the open sea beyond. Verified offline (real registry build + WBT terrain): start (2859.9,35732.1,46.4) end (2859.9,35732.1,46.4), min AGL 46.4 m, nearest static/building/tree 36.0 m (0x0EBA#55 0x02000A38), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s040",
+   "site": "ahurenga",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.50 (sun east, 68 deg), grade neutral: high noon over the swamp; the time-lapse runs to 0.61 (sun near zenith)"
+}

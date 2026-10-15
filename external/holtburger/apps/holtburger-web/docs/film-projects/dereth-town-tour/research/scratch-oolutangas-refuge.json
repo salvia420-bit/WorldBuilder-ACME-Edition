@@ -1,0 +1,235 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Oolutanga's Refuge scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "oolutangas-refuge",
+   "name": "Oolutanga's Refuge",
+   "gazetteerId": "oolutangas-refuge",
+   "teleport": "@telepoi Refuge",
+   "anchor": [
+    47372.0,
+    25012.0,
+    58.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.36,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "oolutangas-refuge",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47377.3,
+     25023.4,
+     58.0
+    ],
+    "height": 14,
+    "radius": 6
+   },
+   "params": {
+    "radiusStart": 75,
+    "radiusEnd": 32,
+    "heightStart": 60,
+    "heightEnd": 22,
+    "revolutions": 0.22,
+    "direction": "ccw",
+    "bearingDeg": 175,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Spiral down from high over the jungle mesa onto the portal clearing; stay 5 m above every roof, deck and canopy; foliage may be faded, never a trunk.",
+   "notes": "ESTABLISHING. Opens 60 m above the jungle south of the mesa looking north over the ring of tusker stilt halls and treehouse decks, then corkscrews counter-clockwise (0.22 rev) down to 22 m over the clearing, ending east of the swirling Town Network portal looking west across the rope walkways to the giant-tree platforms and the lowland jungle beyond; morning sun from the east lights every deck. Verified offline (real technique code, WBT terrain, 0.05 s samples): camera z 118 -> 80, AGL 60.6 -> 22.0 (WBT get-height start 57.35 / end 58.0), >= 12.1 m from every static (rope bridge 0x02000E58 at the end), >= 17 m from default-bake trees; the retail-bake-only jungle tree 0x020007D9 (top 75) would sit 5.1 m below the last frame. Roof tops 72.1 -> camera 7.9 m above them at the end. vmax 9.5 m/s (cinema preset)."
+  },
+  {
+   "id": "s020",
+   "site": "oolutangas-refuge",
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "MS",
+   "fov": 38,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47377.3,
+     25023.4,
+     58.0
+    ],
+    "height": 5,
+    "radius": 3.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 150.1,
+    "distance": 43.0,
+    "elevationDeg": -3.5,
+    "fromTarget": "metres",
+    "fromM": 3.4,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.2,
+    "driftM": 0.4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "look": {
+    "dof": {
+     "focusRange": 3,
+     "bokehScale": 2
+    }
+   },
+   "standingOrder": "Hold low beside the tiki torch with its flame soft at frame right, then pull focus across the clearing to the swirling portal; keep 3 m from the torch and 4 m from the stilt house.",
+   "notes": "FX: FLAME + PORTAL. Locked low beside the tiki torch 0x02000AB9 at (47397.6, 24989.3) whose flame (0x020005B3 flame-tongue + firelight, catalog 0x32000640/0x32000829) burns soft and out of focus 3.4 m away at upper frame right; at 45% the focus pulls 43 m across the clearing to the purple Town Network swirl on its glowing blue stone base (47377.3, 25023.4), the green-roofed stilt hall and treehouse decks behind it, front-lit by the morning sun behind the camera. Verified: camera (47398.7, 24986.2, 59.9), ground 57.89 (WBT), AGL 2.0; nearest static the flame emitter 2.7 m (the torch pole 3.4 m), the nearest bamboo stilt of stilt hall H3 5.3 m east; default-bake trees >= 10.3 m and none on the sight line; with the opt-in retail bake a 30 m jungle tree (0x020007D4) would stand in front of the portal. DoF look: focusRange 3, bokeh 2."
+  },
+  {
+   "id": "s030",
+   "site": "oolutangas-refuge",
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     25005.0,
+     63.45
+    ],
+    "height": 6,
+    "radius": 12
+   },
+   "params": {
+    "distance": 29,
+    "heightAGL": 2.5,
+    "slide": 40,
+    "panAmount": 0.3,
+    "direction": "right",
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Slide north at deck height along the two treehouse platforms and their rope walkway, 17 m off the deck edge; stop before the walkway to the stilt house; never closer than 4 m to a bridge or tree.",
+   "notes": "FACADE PAN (1 of 2 in this batch): Tumerok/tusker treehouse architecture. Slides 40 m north at deck height (z 66, 2.5 m above the decks) along x 47345, 17 m off the deck edges of the Jeweler's and Grocer's treehouse platforms (24 m square decks around giant trees, z 63.45) and the rope walkway between them, a 30% counter-pan holding the pair while the near jungle trees and the clearing slide past; sun behind the camera. Stops at y 25025, 16 m short of the walkway from the Grocer's deck to the stilt hall (z 62.5-67.6). Verified: AGL 14.4 -> 9.7 over falling ground (WBT 51.58 -> 56.25), >= 7.0 m from every static (the 6 m tree 0x020007BF top 63.9, 2 m below the lens), >= 25 m from default and retail scenery. vmax 5.2 m/s."
+  },
+  {
+   "id": "s040",
+   "site": "oolutangas-refuge",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     25048.0,
+     63.45
+    ],
+    "height": 3,
+    "radius": 8
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 125,
+    "elevationDeg": 32,
+    "distance": 26,
+    "pushM": 4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look down on the Grocer's treehouse deck from the south-east and creep in; stay 6 m above the rope walkway and 5 m from the canopy.",
+   "notes": "LANDMARK DETAIL. High angle (32 deg) from the south-east onto the Grocer's treehouse deck (47316, 25048, 63.45): market tables of apples, fruit and fish, barrels, the rope walkway leaving east, the giant tree's canopy through the deck; a 4 m creep-in. Verified: camera (47334.1, 25035.4, 78.7) -> (47331.3, 25037.3, 76.6), AGL 21.9 -> 19.9, 9.7 m from the tree canopy 0x020007D4, 11 m above and 6 m south of the rope bridge, scenery >= 36 m."
+  },
+  {
+   "id": "s050",
+   "site": "oolutangas-refuge",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47316.0,
+     24996.0,
+     52.0
+    ],
+    "height": 12,
+    "radius": 12
+   },
+   "params": {
+    "distance": 32,
+    "heightStart": 6,
+    "heightEnd": 76,
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 0,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up from the clearing floor past the treehouse deck and canopy into the open sky, horizon dropping, lowland jungle and sea revealed to the west; climb only, never drift toward the platform.",
+   "notes": "CLOSING / TRANSITION. Boom straight up 70 m from the clearing floor (x 47348) with a level gimbal looking west: starts below the level of the Jeweler's treehouse deck, looking at its underside and the giant trunk, rises through deck and canopy level and keeps climbing until the jungle plain 45 m below the mesa and the distant western sea fill the frame (horizon dropping), front-lit by the morning sun. Verified: z 58 -> 128 (ground 53.0 WBT, AGL 5 -> 75), nearest static the 6 m tree 0x020007BF 8.3 m (top 61, passed by 3 s), the platform deck edge 20 m; scenery >= 25 m. vmax 7.9 m/s."
+  }
+ ]
+}

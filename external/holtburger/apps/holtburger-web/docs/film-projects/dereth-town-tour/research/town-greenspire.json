@@ -1,0 +1,308 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Greenspire/Plateau Village/Danby's Outpost/Fort Tethana/Ayan Baqur/Wai Jhou",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-greenspire.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "late morning 0.45 (sun high in the south-east), neutral grade: the sea sparkles, the summit and the floating spires read against open sky and clouds",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Greenspire",
+   "summary": "Greenspire (42.9N 66.9W, east coast of Marae Lassel) is one of the three human 'spire towns' settled after Candeth Martine opened the way to Marae Lassel in 12 PY, built around the remnant of a great Empyrean lighthouse; Viamontian forces took it in Thistledown 16 PY and it remains under New Viamont's control. Its signature is the 78 m stone tower on a z 28 knoll (helical rampway, shops of Brother Samir, Greygor Stillwise and Misha in its floating annexes) with three floating Advocate spires joined to it by bridges at z 60-114, each with a purple energy funnel (ritual tendril emitter + ethereal glow) underneath; the Life Stone and an Exploration Marker stand outdoors on the summit at z 99. Below, by the beach, two Sho-style bamboo halls, five blue-flame torches, a glowing obelisk with emitters and the Town Network portal; a gold-roofed lighthouse turret (26 m) stands on the road to the north-west; sea on the east and south (34 % water in the 3x3), the Unstable Portal at the tower's foot and the Destroyed Portal to Yaraq (crystal cluster, purple lights) on the south-west shore.",
+   "landmarks": [
+    {
+     "name": "Greenspire Tower (Empyrean lighthouse remnant, 0x010011F3)",
+     "pos": [
+      8412,
+      34764,
+      28
+     ],
+     "heightM": 78,
+     "note": "box x 8398-8426 y 34750-34778, top z 106; on a z 28 knoll"
+    },
+    {
+     "name": "Life Stone + Exploration Marker on the summit (outdoor)",
+     "pos": [
+      8411.7,
+      34761.4,
+      99
+     ],
+     "heightM": 3.6,
+     "note": "sparkle column; summit platform z 99"
+    },
+    {
+     "name": "West floating Advocate spire (0x01001776)",
+     "pos": [
+      8389,
+      34764,
+      60.1
+     ],
+     "heightM": 35.2,
+     "note": "box z 60.1-95.3; purple ritual funnel 0x02000591 + glow 0x0200069A at z 64"
+    },
+    {
+     "name": "North floating Advocate spire",
+     "pos": [
+      8412,
+      34785,
+      65.2
+     ],
+     "heightM": 35.2,
+     "note": "box z 65.2-100.4; funnel at z 68.9"
+    },
+    {
+     "name": "East floating Advocate spire",
+     "pos": [
+      8435.9,
+      34764,
+      78.8
+     ],
+     "heightM": 35.2,
+     "note": "box z 78.8-114.0 (highest point of the town); funnel at z 82.8"
+    },
+    {
+     "name": "Gold-roofed lighthouse turret (0x010036EA)",
+     "pos": [
+      8364,
+      34836,
+      0
+     ],
+     "heightM": 26.4
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      8469.1,
+      34815.2,
+      0.2
+     ],
+     "heightM": 3.5,
+     "note": "between two bamboo halls (top z 10); blue-flame torches 0x020009A3 x5 around"
+    },
+    {
+     "name": "Glowing obelisk with emitters (0x02000ABD)",
+     "pos": [
+      8445.4,
+      34835,
+      0
+     ],
+     "heightM": 8.9
+    },
+    {
+     "name": "Unstable Portal",
+     "pos": [
+      8374.6,
+      34743,
+      0
+     ],
+     "heightM": 3
+    },
+    {
+     "name": "Destroyed Portal to Yaraq (crystal cluster + purple lights)",
+     "pos": [
+      8270.1,
+      34670.6,
+      0.5
+     ],
+     "heightM": 3.8
+    }
+   ],
+   "site": {
+    "id": "greenspire",
+    "name": "Greenspire",
+    "gazetteerId": "greenspire",
+    "teleport": "@telepoi Greenspire",
+    "anchor": [
+     8430,
+     34795,
+     11.3
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.45,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.terrain-skim",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "EWS",
+     "path": [
+      [
+       8628,
+       34808,
+       0
+      ],
+      [
+       8500,
+       34808,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 2.5,
+      "speed": 10,
+      "lookAhead": 30,
+      "tiltDeg": 12,
+      "ends": "cruise"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Skim straight west 2.5 m above the sea toward the beach and the tower; hold the height over the water and stop 17 m short of the bamboo hall.",
+     "notes": "ESTABLISHING + WATER (drone.terrain-skim). Starts over deep water 200 m east of the beach and skims west at 2.5 m along y 34808 to the beach below the Town Network portal: the bay glitters below, the bamboo halls with their blue-flame torches and the swirling portal grow ahead, and the 78 m Empyrean tower with its three floating Advocate spires rises out of the top of the frame (tiltDeg +12 keeps the spires in view until the last 3 s). Sea terrain types 18/20 under the camera for 92 % of the move; the only thing close is a shallow-water plant clump. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8628.0, 34808.0, 2.5) end (8500.0, 34808.0, 2.5), min AGL 2.5 m, nearest static/building/default-bake tree 4.3 m (scenery:0x020003D3), nearest building 17.5 m, retail-bake scenery 2.6 m, peak 9.8 m/s, 92% of samples over water; WBT get-height on 8 camera points, min AGL 2.5 m."
+    },
+    {
+     "technique": "classic.zoom",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "fov": 55,
+     "ease": "sineInOut",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       8411.7,
+       34761.4,
+       99
+      ],
+      "height": 7,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 150,
+      "elevationDeg": -25,
+      "distance": 190,
+      "toFovDeg": 9
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hold position hovering over the bay and only zoom from the whole tower down to the summit Life Stone; nothing is within 85 m of the lens.",
+     "notes": "LANDMARK DETAIL (classic.zoom). Locked camera hovering 22 m over the bay 190 m SSE of the summit: opens at fov 55 on the whole coast (the tower on its knoll, the three floating spires, the beach, the portal huts) and zooms evenly to fov 9 on the summit platform at z 99 where the Life Stone glows between the floating spires and the bridges. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8497.8, 34612.3, 22.2) end (8497.8, 34612.3, 22.2), min AGL 22.2 m, nearest static/building/default-bake tree 85.2 m (scenery:0x020003D3), nearest building 155.4 m, retail-bake scenery 85.6 m, peak 0.0 m/s, 100% of samples over water; WBT get-height on 1 camera points, min AGL 22.2 m."
+    },
+    {
+     "technique": "classic.low-angle",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "FS",
+     "fov": 60,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       8389,
+       34764,
+       60
+      ],
+      "height": 24,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 225,
+      "elevationDeg": -45,
+      "distance": 40,
+      "pushM": 4
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hover below and south-west of the west floating spire looking up at its purple energy funnel; keep at least 15 m from the spire and the tower.",
+     "notes": "FX: MAGIC PARTICLES (classic.low-angle). Camera hovers at z 44-47 (44 m above the knoll, 22 m from the spire's bounding box), looking up 45 deg at the underside of the western floating Advocate spire (bottom z 60): the purple ritual energy funnel (0x02000591 tendril sigils condensing as they rise) with the purple ethereal glow 0x0200069A and the blue emitter 0x020005BA at its base, the main tower and its summit behind it, open sky and clouds above; 4 m slow push. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8369.0, 34744.0, 43.7) end (8371.0, 34746.0, 46.5), min AGL 43.7 m, nearest static/building/default-bake tree 18.2 m (building:0x01001776#36), nearest building 18.2 m, retail-bake scenery 36.1 m, peak 0.5 m/s; WBT get-height on 7 camera points, min AGL 43.7 m."
+    },
+    {
+     "technique": "classic.orbit",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "FS",
+     "fov": 62,
+     "ease": "linear",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       8412,
+       34766,
+       40
+      ],
+      "height": 74,
+      "radius": 30
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 250,
+      "elevationDeg": 10,
+      "distance": 75,
+      "revolutions": 0.25,
+      "direction": "cw"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Orbit the tower complex a quarter turn clockwise at 75 m and z 90; keep at least 35 m from the floating spires and the tower.",
+     "notes": "LANDMARK (classic.orbit). Quarter orbit from bearing 250 to 340 at 75 m from the tower axis, camera at z 90 (above every roof and tree, below the 114 m spire tops so the spires and the summit stand against the sky); the background swings from the southern bay to the open sea east, the gold-roofed lighthouse passes below on the right; constant 9.7 m/s, ease linear. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8342.6, 34740.7, 90.0) end (8386.7, 34835.4, 90.0), min AGL 74.5 m, nearest static/building/default-bake tree 39.5 m (building:0x01001776#36), nearest building 39.5 m, retail-bake scenery 80.3 m, peak 9.7 m/s; WBT get-height on 7 camera points, min AGL 75.1 m."
+    },
+    {
+     "technique": "drone.pass-over",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       8411.7,
+       34761.4,
+       99
+      ],
+      "height": 4,
+      "radius": 3
+     },
+     "params": {
+      "heightAGL": 25,
+      "speed": 6,
+      "headingDeg": 180,
+      "relativeToSubject": false,
+      "nadirMode": "yaw-slew",
+      "maxYawRateDeg": 45
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Fly straight south over the summit Life Stone at z 124 with the gimbal tracking it through vertical; climb rather than swerve if anything comes within 10 m.",
+     "notes": "CLOSING (drone.pass-over). Flies N to S at z 124 (24 m above the north spire, 10 m above the highest spire top 114 at 15 m sideways) straight over the summit Life Stone: the gimbal tracks the lifestone's sparkle column down through vertical (yaw-slew at 45 deg/s) and up again behind as the drone leaves over the southern bay. JEV-hero candidate if the budget allows. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8411.7, 34806.4, 124.0) end (8411.7, 34716.4, 124.0), min AGL 96.0 m, nearest static/building/default-bake tree 17.9 m (building:0x01001776#38), nearest building 17.9 m, retail-bake scenery 113.1 m, peak 6.0 m/s; WBT get-height on 9 camera points, min AGL 96 m."
+    }
+   ],
+   "verification": "One WBT session per pass (RetailSmoke.wbproj): describe-landblock (includeFootprints) + list-objects + get-terrain-data on the 9 LBs 0x2AB4-0x2CB6 (3x3 around 0x2BB5), get-object-detail on every placed model, get-height on 32 sampled camera points (start, end and every 2 s; WBT and the offline AC split-triangle interpolation agree within 0.1 m). Sea cells are terrain types 18/20 at z 0. Each shot was built with the real technique registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware groundZ and sampled at 4 Hz for AGL, distance to every static/building/spawn bounding box and to the default (ace-compat) and retail scenery bakes from the served dist, peak speed and subject framing; numbers are in each shot's notes. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-greenspire.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s), exit 0 (dry build included)."
+  }
+ ]
+}

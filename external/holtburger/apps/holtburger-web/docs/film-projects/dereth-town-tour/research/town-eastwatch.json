@@ -1,0 +1,330 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Stonehold/Hoshino/Beach Fort/Eastwatch/Fiun/Silyun",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-eastwatch.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.48 (sun east, 63 deg), grade neutral: high bright sun on the ice, the east cliff front-lit from the sea",
+ "towns": [
+  {
+   "name": "Eastwatch",
+   "summary": "Eastwatch (90.3N 43.1W) is the garrison outpost of Viamontian knights on the eastern shore of the Isle of Ruin, the most dangerous of the Halaetan Isles (the frozen Shattered Out-Lands lie at its northern head): an outpost of Sanamar full of kill-task givers, beer-brewing ingredients and four Grand Master scriveners. It stands on an ice-and-clay plateau at z 170 whose eastern face is a near-vertical 170 m sea cliff dropping to an ice shelf and the sea, with 25-34 m ice spires on the shore, the Coral Caves entrance offshore and the Undead Temple at the northern cliff foot. Two four-storey stone lighthouse towers with golden tapered roofs (26 m) flank a stone keep-tower with a golden roof (25 m) and a stone house with a smoking chimney; five golden lamps burn with blue flames around a wooden mirror shrine, the Life Stone, the Town Network portal and the destroyed portal to Sanamar.",
+   "landmarks": [
+    {
+     "name": "East lighthouse tower (0x010036EA)",
+     "pos": [
+      14172.0,
+      46116.0,
+      170.0
+     ],
+     "heightM": 26.35,
+     "note": "at the cliff edge; top 196.35"
+    },
+    {
+     "name": "West lighthouse tower (0x010036EA)",
+     "pos": [
+      14076.0,
+      46140.0,
+      170.0
+     ],
+     "heightM": 26.35,
+     "note": "top 196.35"
+    },
+    {
+     "name": "Keep-tower with golden roof (0x010036E3)",
+     "pos": [
+      14124.0,
+      46116.0,
+      170.0
+     ],
+     "heightM": 25.25,
+     "note": "north door at y 46123 flanked by two blue-flame lamps"
+    },
+    {
+     "name": "Golden blue-flame lamps (0x02001239 x5)",
+     "pos": [
+      14122.0,
+      46122.0,
+      170.0
+     ],
+     "heightM": 3.4,
+     "note": "others (14126,46122) (14124,46144) (14145,46135) (14126,46159)"
+    },
+    {
+     "name": "Wooden mirror shrine (0x01003917/3614/3623)",
+     "pos": [
+      14124.0,
+      46164.0,
+      170.0
+     ],
+     "heightM": 5.8
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      14092.9,
+      46157.1,
+      170.0
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      14103.5,
+      46154.8,
+      170.2
+     ],
+     "heightM": 2.9
+    },
+    {
+     "name": "East sea cliff crest",
+     "pos": [
+      14183.0,
+      46143.0,
+      170.0
+     ],
+     "heightM": 170.0,
+     "note": "82 deg face, foot at x 14208, ice shelf then sea from x ~14220"
+    },
+    {
+     "name": "Shore ice spires (0x010036E6)",
+     "pos": [
+      14241.7,
+      46117.2,
+      0.0
+     ],
+     "heightM": 34.1,
+     "note": "more at (14266.8,46185.8) (14265.8,46093.2); ice rocks 8-13 m"
+    },
+    {
+     "name": "Undead Temple portal (cliff foot)",
+     "pos": [
+      14102.4,
+      46280.4,
+      6.0
+     ],
+     "heightM": 2.9
+    }
+   ],
+   "site": {
+    "id": "eastwatch",
+    "name": "Eastwatch",
+    "gazetteerId": "eastwatch",
+    "teleport": "@telepoi Eastwatch",
+    "anchor": [
+     14124.0,
+     46140.0,
+     170.0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.48,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.rising-reveal",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14124,
+       46140,
+       170
+      ],
+      "height": 26,
+      "radius": 60
+     },
+     "params": {
+      "distance": 140,
+      "obstacleDistance": 80,
+      "obstacleHeight": 170,
+      "heightStart": 100,
+      "clearance": 14,
+      "forward": 25,
+      "endPitchDeg": -8,
+      "bearingDeg": 95,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "id": "s010",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Rise from 100 m to 184 m over the sea 55-80 m off the east cliff while easing 25 m toward it, until the plateau edge drops away and the outpost appears; stay 50 m from the cliff face.",
+     "notes": "ESTABLISHING REVEAL (drone.rising-reveal). Starts over open sea 140 m east of the outpost, 100 m up, facing the sunlit 170 m ice-and-rock sea cliff 80 m ahead; rises 84 m in 16 s while drifting 25 m forward and pitching from -11 to -8 deg until it clears the crest at x 14183: the lighthouse towers, keep and plateau of Eastwatch appear over the edge with the frozen Isle of Ruin behind. 100 % over water (ground 0); ends 62 m from the east lighthouse. Verified offline (real registry build + WBT terrain): start (14263.5,46127.8,100.0) end (14238.6,46130.0,184.0), min AGL 100.0 m, nearest static/building/tree 61.7 m (0x49F0#20 0x010036EA), peak 8.6 m/s."
+    },
+    {
+     "technique": "classic.whip-pan",
+     "duration": {
+      "sec": 8
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14172,
+       46116,
+       170
+      ],
+      "height": 26.35,
+      "radius": 6
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 244.4,
+      "elevationDeg": -12.19,
+      "distance": 54.5,
+      "angleDeg": 110.0,
+      "direction": "right",
+      "whipSec": 0.3,
+      "at": 0.5,
+      "land": "subject"
+     },
+     "id": "s020",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Stand locked 2 m above the snow south of the keep, hold on the west lighthouse, then whip right to land on the east lighthouse.",
+     "notes": "GRAMMAR (classic.whip-pan between the two lighthouses). Camera at (14124,46093,171.7), 1.7 m above the plateau south of the keep: holds on the west lighthouse (bearing 316), whips 110 deg right in 0.3 s at mid-shot and lands on the east lighthouse at the cliff edge (bearing 66) with the sea beyond. Both lines of sight pass clear of the keep (16 m away). Verified offline (real registry build + WBT terrain): start (14124.0,46093.0,171.7) end (14124.0,46093.0,171.7), min AGL 1.7 m, nearest static/building/tree 16.0 m (0x49F0#17 0x010036E3), peak 0.0 m/s."
+    },
+    {
+     "technique": "classic.low-angle",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14124,
+       46123,
+       170
+      ],
+      "height": 16,
+      "radius": 2
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 0,
+      "elevationDeg": -22.5,
+      "distance": 16.2,
+      "thirds": "center",
+      "pushM": 2
+     },
+     "id": "s030",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Push 2 m toward the keep's north door from 15 m out at eye height, looking up past the two blue-flame lamps to the golden roof; stay 3 m from the signpost and lamps.",
+     "notes": "BLUE FLAME FX + LANDMARK (classic.low-angle). Camera 1.8 m above the plaza 15 m north of the keep-tower, pitched up 23 deg: the two golden lamps with tall blue flame tongues flank the door in the shaded north face (sun on the far side), the stone tower climbs to its golden tapered roof against the sky; slow 2 m push. Nearest lamp 6 m behind the camera. Verified offline (real registry build + WBT terrain): start (14124.0,46138.0,171.8) end (14124.0,46136.1,172.6), min AGL 1.8 m, nearest static/building/tree 3.5 m (Eastwatch Outpost), peak 0.2 m/s."
+    },
+    {
+     "technique": "drone.vertigo-drone",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 60,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14172,
+       46116,
+       170
+      ],
+      "height": 26.35,
+      "radius": 6
+     },
+     "params": {
+      "nearDistance": 14,
+      "farDistance": 55,
+      "direction": "out",
+      "heightAGL": 13,
+      "minFovDeg": 10,
+      "maxFovDeg": 80,
+      "bearingDeg": 240,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "id": "s040",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Fly back 14 to 55 m from the east lighthouse along bearing 240 at 13 m height while zooming in so the tower keeps its size and the sea horizon swells behind it.",
+     "notes": "VERTIGO (drone.vertigo-drone on a tower). Camera at z 183 (mid-tower, 13 m above the plateau) retreats WSW from 14 to 55 m while the fov narrows 60 -> 17 deg: the lighthouse holds its size while the sea, the ice spires and the horizon behind it loom and compress. Path passes 20 m south of the keep; ground 168-170. Verified offline (real registry build + WBT terrain): start (14159.9,46109.0,183.0) end (14124.4,46088.5,183.0), min AGL 13.0 m, nearest static/building/tree 6.8 m (0x49F0#20 0x010036EA), peak 5.4 m/s."
+    },
+    {
+     "technique": "fpv.fpv-dive",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "fov": 75,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       14208,
+       46143,
+       0
+      ],
+      "height": 2,
+      "radius": 1
+     },
+     "params": {
+      "heightStart": 176,
+      "bottomAGL": 4,
+      "diveAngleDeg": -80,
+      "approach": 35,
+      "standoff": 3,
+      "exitLength": 30,
+      "pullOutRadius": 12,
+      "speed": 20,
+      "alat": 11,
+      "uptiltDeg": 20,
+      "headingDeg": 90,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "id": "s050",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Run east 7 m over the plateau, crest the cliff edge and dive the 170 m sea cliff at -80 degrees, pulling out 4 m above the ice between the rocks; FPV speed, keep 7 m from the ice rocks.",
+     "notes": "SPECTACLE (fpv.fpv-dive, FPV preset, peak 18.7 m/s). Level approach at z 177 (7 m above the plateau), crest at x 14211, near-vertical dive down the sea cliff (dive line 28 m off the face) and pull-out into level flight 4 m above the ice shelf and sea, threading between the 8.6 m and 12.2 m ice rocks (7.5 m clear) toward open water. JEV-eligible hero candidate. Verified offline (real registry build + WBT terrain): start (14173.0,46143.0,177.0) end (14271.3,46143.0,4.0), min AGL 4.0 m, nearest static/building/tree 7.5 m (0x010036E8@14259,46164), peak 18.7 m/s."
+    }
+   ],
+   "verification": "WBT: describe-landblock 3x3 around 0x49F0 (72-74 x 239-241), includeFootprints on 0x49F0, list-objects 0x49F0/0x4AF0/0x49EF + 5x5 ring (0x4AF2/0x4BF2 ice), get-terrain-data, get-bulk-heightmap 71-75 x 238-242, get-object-detail (0x010036EA lighthouse 26.35 m, 0x010036E3 keep 25.25 m, 0x02001239 lamp 3.38 m). Cliff profile along y 46130/46150: 170.0 at x 14180, 162.9 @14185, 127.5 @14190, 92.1 @14195, 56.7 @14200, 21.3 @14205, 0 from 14210 (ice shelf, water from ~14220). Ice spires/rocks on the shore listed from the scenery bake; the dive line was moved to y 46143 to thread the 16 m gap between them (7.5 m clear). Particle catalog: 0x02001239 = blue-flame torch prop (blue flame tongue + 1.45 m glow). Whip LOS: both lighthouses visible from (14124,46093). WBT get-height at t=0, 1/4, 1/2, 3/4, end and min-AGL of every shot: s010 get-height 0.0..0.0 (AGL 100.0..184.0); s020 get-height 170.0..170.0 (AGL 1.7..1.7); s030 get-height 170.0..170.0 (AGL 1.8..2.6); s040 get-height 168.2..170.0 (AGL 13.0..14.8); s050 get-height 0.0..170.0 (AGL 4.0..158.1). Plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-eastwatch.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (exit 0, offline dry build included). Method: WorldBuilder.Terminal (RetailSmoke project) in 7 sequential batched sessions (one at a time, free memory checked first); every shot was built with the real film technique registry (scene3d/film/shots, the same buildShot the page runs) against a ctx whose groundZ is the AC triangle-split terrain from WBT heightmaps (re-implementation matched WBT get-height to 0.01 m on all 174 probes) and sampled at 24 fps against static objects (list-objects + get-object-detail bounds, rotated), building footprint prisms (describe-landblock includeFootprints), both baked scenery sets (~/hb-serve/dist/current/scenery and scenery-retail AABBs) and ACE spawns (Life Stones, portals, statues with ACE-DB setup bounds); line of sight camera->subject checked every 6th frame. Sun from region-day-night-curve: heading 90 (east) until ~0.6, 270 after; elevation 38 deg @0.36, 51 @0.42, 55 @0.44, 63 @0.48, 90 @0.60, 60 @0.70, 43 @0.76.",
+   "totalSec": 64
+  }
+ ]
+}

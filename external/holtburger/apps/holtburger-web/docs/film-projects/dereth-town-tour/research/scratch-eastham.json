@@ -1,0 +1,228 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Eastham scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "eastham",
+   "name": "Eastham",
+   "gazetteerId": "eastham",
+   "teleport": "@telepoi Eastham",
+   "anchor": [
+    39703.053,
+    28528.61,
+    17.417
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.3,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     40060,
+     28910,
+     0
+    ],
+    "height": 2,
+    "radius": 20
+   },
+   "params": {
+    "heightAGL": 22,
+    "speed": 7,
+    "headingDeg": 225,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -9,
+    "minClearance": 15
+   },
+   "standingOrder": "Fly in level from the shallow sea toward the Eastham shore with the windmill dead ahead and the town beyond; hold 20 m above the water.",
+   "site": "eastham",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010"
+  },
+  {
+   "technique": "classic.static",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39902,
+     28764,
+     20
+    ],
+    "height": 21,
+    "radius": 9
+   },
+   "params": {
+    "azimuthDeg": 150,
+    "azimuthRef": "compass",
+    "elevationDeg": -16,
+    "distance": 52,
+    "thirds": "center"
+   },
+   "standingOrder": "Hold a locked-off frame on the windmill with its sails turning, the Life Stone and Asheron's Island portal glowing at its foot; do not move.",
+   "site": "eastham",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020"
+  },
+  {
+   "technique": "classic.whip-pan",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39635,
+     28716,
+     20
+    ],
+    "height": 10,
+    "radius": 12
+   },
+   "params": {
+    "azimuthDeg": 79.4,
+    "azimuthRef": "compass",
+    "elevationDeg": -1.2,
+    "distance": 158,
+    "angleDeg": 178,
+    "direction": "right",
+    "whipSec": 0.3,
+    "at": 0.45,
+    "land": "subject"
+   },
+   "standingOrder": "Hold on the windmill from the shore road, then whip right across the meadow onto the rooftops of Eastham and hold; stay on the road, do not move the camera.",
+   "site": "eastham",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030"
+  },
+  {
+   "technique": "classic.reveal-from-occluder",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39675.8,
+     28722.8,
+     20.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 196,
+    "azimuthRef": "compass",
+    "elevationDeg": 2,
+    "distance": 44,
+    "occluder": [
+     39667,
+     28692,
+     20
+    ],
+    "occluderRadius": 4.4,
+    "direction": "right",
+    "holdFrac": 0.25,
+    "settleFrac": 0.25,
+    "marginM": 1.0
+   },
+   "standingOrder": "Hold behind the Banderling statue's plinth with the Town Network portal hidden, then truck right until its blue swirl and the square open up beyond; stay 5 m from the plinth.",
+   "site": "eastham",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040"
+  },
+  {
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     39672,
+     28700,
+     20
+    ],
+    "height": 12,
+    "radius": 50
+   },
+   "params": {
+    "radius": 68,
+    "heightAGL": 34,
+    "revolutions": 0.22,
+    "timeRate": 110,
+    "direction": "ccw",
+    "bearingDeg": 120,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Orbit slowly high around the Eastham square while the clouds race and the morning light swings across the roofs; keep 15 m above every roof and tree.",
+   "site": "eastham",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050"
+  }
+ ]
+}

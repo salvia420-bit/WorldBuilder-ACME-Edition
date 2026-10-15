@@ -935,10 +935,11 @@ command("browser check", "attach over CDP and report pages, film page, mute, win
 
 command("boot", "open and log in the film page, then make it a clean, silent, hidden-player camera",
   `film boot [--cdp=${DEFAULT_CDP}] [--base=${DEFAULT_BASE_URL}]
-           [--account=${DEFAULT_ACCOUNT}] [--password=… | env FILM_PASSWORD] [--quality=high]
+           [--account=${DEFAULT_ACCOUNT}] [--password=… | env FILM_PASSWORD] [--quality=high] [--clouds=on|off] [--weather=fair|live]
            [--width=1920 --height=1080] [--reuse] [--assume-muted] [--boot-timeout=${DEFAULT_BOOT_TIMEOUT_SEC}]
   Attaches (never launches), verifies --mute-audio (Browser.getBrowserCommandLine; 'unverified' needs
-  --assume-muted), opens a new tab in the default context with the exact film URL (filmDof=on always), sets the
+  --assume-muted), opens a new tab in the default context with the exact film URL (filmDof=on always; clouds=on unless
+  --clouds=off; fair-weather clouds via cloudWeather=off unless --weather=live), sets the
   viewport, installs the JEV broker before navigating, gates on in-world + ready + scene-ready + liveScene3d +
   __film, mutes the page, then clean(true) · own() · world.avatar(false) · @cloak on · @attackable off.
   The film account is single-login: a second film tab is refused (use --reuse), and "Account In Use" means wait
@@ -950,6 +951,10 @@ command("boot", "open and log in the film page, then make it a clean, silent, hi
     const base = strArg(args, "base", DEFAULT_BASE_URL);
     const account = strArg(args, "account", DEFAULT_ACCOUNT);
     const quality = strArg(args, "quality", "high");
+    const clouds = strArg(args, "clouds", "on");
+    if (clouds !== "on" && clouds !== "off") throw usageError(`--clouds must be on or off (got ${JSON.stringify(clouds)})`);
+    const weather = strArg(args, "weather", "fair");
+    if (weather !== "fair" && weather !== "live") throw usageError(`--weather must be fair or live (got ${JSON.stringify(weather)})`);
     const width = evenSizeArg(args, "width", 1920, 7680);
     const height = evenSizeArg(args, "height", 1080, 4320);
     const reuse = boolArg(args, "reuse");
@@ -978,7 +983,7 @@ command("boot", "open and log in the film page, then make it a clean, silent, hi
         io.info(`reusing the open film page (${alreadyBooted ? "already booted" : `state ${snap.state} — logging in again`})`);
       }
       if (!alreadyBooted && !password) throw new FilmCliError("no password: pass --password=… or set FILM_PASSWORD", { exitCode: EXIT.USAGE, code: "NO_PASSWORD" });
-      const url = alreadyBooted ? null : buildFilmUrl({ base, account, password, quality });
+      const url = alreadyBooted ? null : buildFilmUrl({ base, account, password, quality, clouds, weather });
       if (!page) {
         if (!s.context) throw usageError("the browser has no default context to open a tab in");
         page = await s.context.newPage();

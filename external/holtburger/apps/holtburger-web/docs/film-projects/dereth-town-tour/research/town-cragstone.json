@@ -1,0 +1,319 @@
+{
+ "name": "Cragstone",
+ "slug": "cragstone",
+ "summary": "Cragstone is the capital of the Aluvians, named for Thorsten Cragstone, the second-oldest human settlement on Dereth; it survived three Shadow Spires in 11 PY and is home to the Eldrytch Web and an Arcanum mana forge behind the Hildar House. The town climbs in terraces up an east-facing hillside above Victory Harbor: the lower square (z 32) holds the Statue of Thorsten Cragstone on a 6.8 m plinth, the Town Network portal and the Life Stone among mossy Aluvian halls; Thorsten's Rest inn sits on the z 54 terrace, the Hildar House on the z 70 terrace, and windmills with turning sails stand on the western plateau; a ridge of houses at z 40 drops to the sea on the east and a cliff falls to the harbour on the north.",
+ "landmarks": [
+  {
+   "name": "Statue of Thorsten Cragstone",
+   "pos": [
+    36277.7,
+    30629.7,
+    38.8
+   ],
+   "heightM": 1.8,
+   "note": "Human-setup statue (0x02000001, 1.82 m unscaled) on a 6.8 m plinth (S76) in the lower square; Fireworks Generator."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    36274.4,
+    30606.8,
+    32.2
+   ],
+   "heightM": 3.5,
+   "note": "Swirl 23 m south of the statue."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    36243.8,
+    30604.0,
+    32.0
+   ],
+   "heightM": 3.6,
+   "note": "West side of the lower square."
+  },
+  {
+   "name": "Windmill (west plateau)",
+   "pos": [
+    35964.0,
+    30588.0,
+    70.0
+   ],
+   "heightM": 20.7,
+   "note": "Octagon tower top 83.8, sails 18 m disc on its south face (blade box z 72.8-90.7)."
+  },
+  {
+   "name": "Second windmill",
+   "pos": [
+    36108.0,
+    30444.0,
+    70.0
+   ],
+   "heightM": 20.7,
+   "note": "South-west of town."
+  },
+  {
+   "name": "Thorsten's Rest inn S73",
+   "pos": [
+    36180.5,
+    30636.5,
+    54.0
+   ],
+   "heightM": 10.2,
+   "note": "Brick hall on the z 54 terrace."
+  },
+  {
+   "name": "Hildar House S69",
+   "pos": [
+    36112.2,
+    30635.5,
+    70.0
+   ],
+   "heightM": 12.0,
+   "note": "Upper terrace; the mana forge behind it."
+  },
+  {
+   "name": "Victory Harbor",
+   "pos": [
+    36250.0,
+    30850.0,
+    0.0
+   ],
+   "heightM": 0.0,
+   "note": "Shallow sea north of the cliff (z 0-2) and east of the ridge (x>36456)."
+  },
+  {
+   "name": "Isle of Tears Portal",
+   "pos": [
+    36441.2,
+    30524.0,
+    2.0
+   ],
+   "heightM": 2.8,
+   "note": "On the south-east shore."
+  },
+  {
+   "name": "Sanctum Residential Halls Portal",
+   "pos": [
+    36160.6,
+    30583.2,
+    54.0
+   ],
+   "heightM": 2.8,
+   "note": "Housing portal on the z 54 terrace."
+  }
+ ],
+ "site": {
+  "id": "cragstone",
+  "name": "Cragstone",
+  "gazetteerId": "cragstone",
+  "teleport": "@telepoi Cragstone",
+  "anchor": [
+   36073.358,
+   30696.251,
+   54.005
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.42,
+   "grade": "neutral"
+  }
+ },
+ "shots": [
+  {
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36240,
+     30630,
+     40
+    ],
+    "height": 30,
+    "radius": 120
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -5,
+    "heightAGL": 20,
+    "distance": 235,
+    "drift": 10,
+    "bearingDeg": 76,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "standingOrder": "Start looking straight down at the sunlit bay, then tilt up while drifting in to reveal Cragstone's terraces climbing to the windmill; hold 55 m above the water.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Water opener: starts 58 m above Victory Bay (shallow sea, z 2) looking almost straight down at the water (-80 deg), then tilts up to -5 deg while drifting 10 m in, revealing the sunlit terraces of Cragstone climbing from the shore ridge to the windmill on the skyline (morning sun behind the camera). Nothing within 60 m."
+  },
+  {
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35964,
+     30584,
+     72
+    ],
+    "height": 19,
+    "radius": 9
+   },
+   "params": {
+    "azimuthDeg": 185,
+    "azimuthRef": "compass",
+    "elevationDeg": -22,
+    "distance": 24,
+    "thirds": "center",
+    "riseM": 14,
+    "swingDeg": -30,
+    "armM": 12
+   },
+   "standingOrder": "Jib up from the grass in front of the windmill, rising past its turning sails while the arm swings left; stay 14 m from the sails.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Windmill crane: jib rises 14 m from 5 m above the plateau in front of the windmill (24 m south of its turning sails) to above the hub while the arm swings 30 deg; sails stay centred. Side light from the east. Clearance: 19.8 m from the sail disc (blade box), terrain z 67.5-68.7 under the arc."
+  },
+  {
+   "technique": "classic.over-the-shoulder",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "MS",
+   "fov": 42,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36274.4,
+     30606.8,
+     32.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "secondary": [
+     36277.7,
+     30629.7,
+     38.8
+    ],
+    "secondaryHeight": 2.2,
+    "shoulder": "right",
+    "shoulderM": 0.9,
+    "backM": 2.0,
+    "raiseM": 0.3,
+    "composeThirds": true,
+    "autoFov": false,
+    "pushM": 0.4
+   },
+   "standingOrder": "Look over Thorsten Cragstone's bronze shoulder from his plinth down at the swirling Town Network portal in the square; stay 1 m off the statue.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Landmark: over the bronze shoulder of the Statue of Thorsten Cragstone on his 6.8 m plinth, looking down onto the swirling Town Network portal in the square 26 m away (portal NDC 0.32,-0.15; statue head NDC -0.24,0.20). Camera 2.1 m behind and 0.9 m right of the statue's base centre, 2.1 m above the plinth top (human setup 0x02000001 is 1.82 m; robust to a scaled statue). query-radius 4 m hits only the plinth (by design)."
+  },
+  {
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36300,
+     30850,
+     0
+    ],
+    "height": 12,
+    "radius": 60
+   },
+   "params": {
+    "azimuthDeg": 200,
+    "azimuthRef": "compass",
+    "elevationDeg": 12,
+    "distance": 130,
+    "thirds": "center",
+    "rate": 0.01
+   },
+   "standingOrder": "Lock off on the cliff top above Victory Harbor and let the clouds race across the bay while the sun climbs; do not move.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Time-lapse: locked off 10 m above the harbour cliff looking NNE over Victory Harbor; rate 0.01 game-days per film second (sun climbs from 0.42 to 0.54, always up) so the clouds race over the bay. Nearest scenery 11.5 m."
+  },
+  {
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36277.5,
+     30629.8,
+     32
+    ],
+    "height": 10.3,
+    "radius": 4
+   },
+   "params": {
+    "startDistance": 12,
+    "endDistance": 92,
+    "startHeight": 17,
+    "endHeight": 52,
+    "bearingDeg": 10,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "standingOrder": "Pull back and up from the statue of Thorsten Cragstone over the rooftops to the harbour cliff in one smooth line; stay 6 m above every roof.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Closing dronie: pulls back and up from the statue (start 12 m, z 49) to 92 m away (z 84) toward the harbour cliff, over the cottage roofs (S74 top 42.2: >= 6.8 m above, 8.8 m min distance). vmax 9.1 m/s."
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 4x3 landblocks (0xBA9E 0xBA9F 0xBAA0 0xBB9E 0xBB9F 0xBBA0 0xBC9E 0xBC9F 0xBCA0 0xBD9E 0xBD9F 0xBDA0); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 drone.tilt-reveal: WBT get-height under 5-8 sampled camera points, min AGL 58 m; offline build min clearance 64.33 m (spawn:Aluvian Newbie Shore Mix Generator), opt-in retail bake 62.33 m; vmax 1.21 m/s; subject LOS blocked 0/53 samples; s020 classic.crane: WBT get-height under 5-8 sampled camera points, min AGL 5.02 m; offline build min clearance 19.78 m (static:0x020003E5#0), opt-in retail bake 25.37 m; vmax 2.31 m/s; subject LOS blocked 0/45 samples; s030 classic.over-the-shoulder: WBT get-height under 5-8 sampled camera points, min AGL 8.82 m; offline build min clearance 0.51 m (spawn:Anniversary Effect), opt-in retail bake 12.29 m; vmax 0.06 m/s; subject LOS blocked 41/41 samples (by design: reveal/foreground) [nearest box = the statue's own effect-generator spawn under the over-the-shoulder lens, by design]; s040 classic.time-lapse: WBT get-height under 5-8 sampled camera points, min AGL 9.79 m; offline build min clearance 11.49 m (scenery:0x02001063), opt-in retail bake 23.61 m; vmax 0.0 m/s; subject LOS blocked 0/49 samples; s050 drone.dronie: WBT get-height under 5-8 sampled camera points, min AGL 17 m; offline build min clearance 8.76 m (static:0x01000C1E#74), opt-in retail bake 8.41 m; vmax 9.14 m/s; subject LOS blocked 0/61 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-cragstone.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-cragstone.json",
+ "totalSec": 61,
+ "techniques": [
+  "drone.tilt-reveal",
+  "classic.crane",
+  "classic.over-the-shoulder",
+  "classic.time-lapse",
+  "drone.dronie"
+ ]
+}

@@ -1,0 +1,289 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Refuge/Bandit/Merwart/Neydisa",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-merwart-village.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.50 (noon, sun ~68 deg) grade neutral: high sun on the sea, the slime terraces and the cones",
+ "towns": [
+  {
+   "name": "Merwart Village",
+   "summary": "Merwart Village (79.9N 59.0E) is the only settlement on Vissidal - 'Summer Palace' in the Falatacot tongue - the island raised from the sea floor during Under Cover of Night; it lies a short run north of the drop. Its people are Merwarts, a friendly, primitive offshoot of the Mosswarts with an excellent sense of direction in the dark, 'raised out of squalor' by Angry Grandfather, a human shaman of Ayan Baqur; Merwart Urglurg speaks surprisingly fine Aluvian. Shops: Barkeep Guzglurg, Blacksmith Bulidurg, Shopkeeper Hulmurg, Archmage Moldurg (who sells Vissidal Island portal gems) and Healer Hargurg; Merwart Pelagurg trades Remoran Fists. In the world data the village is two giant conical lodges (0x01003D13: 16 m wide, 34 m tall tapering cones with a porch door) on terraces of a slime-covered plateau: lodge A on the upper terrace (z 24, door to the south) and lodge B on the lower market terrace (z 14, door to the west, housing the Archmage and Healer). The market terrace is open-air: tables and a beer keg at the bar, stalls, the blacksmith's outdoor forge with glowing coals and a second forge with bucket and anvil by lodge B. The Life Stone stands on the plateau to the north-east (z 26). North, the plateau ends in 20 m slime cliffs over a sandy beach and the shallow sea (Deep Mukkir Nest portal at the shore); south lie grey sand flats at z 4.",
+   "landmarks": [
+    {
+     "name": "Giant cone lodge A (upper terrace)",
+     "pos": [
+      38652.0,
+      43692.0,
+      24.0
+     ],
+     "heightM": 33.6,
+     "note": "0x01003D13, tip z 57.6, door faces south"
+    },
+    {
+     "name": "Giant cone lodge B (market terrace; Archmage, Healer)",
+     "pos": [
+      38676.0,
+      43644.0,
+      14.0
+     ],
+     "heightM": 33.6,
+     "note": "rotated -90, door faces west onto the market, tip z 47.6"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      38725.8,
+      43715.4,
+      26.0
+     ],
+     "heightM": 2.6,
+     "note": "on the slime plateau north-east of the lodges"
+    },
+    {
+     "name": "Blacksmith Bulidurg's outdoor forge (0x02000354 glowing coals)",
+     "pos": [
+      38651.1,
+      43638.9,
+      14.0
+     ],
+     "heightM": 0.4,
+     "note": "light + fire PhysicsScript; second forge with bucket and anvil at (38660,43652)"
+    },
+    {
+     "name": "Bar (Barkeep Guzglurg) with candelabra and beer keg",
+     "pos": [
+      38622.0,
+      43637.0,
+      14.0
+     ],
+     "heightM": 2.2,
+     "note": "candelabra flame 0x020005D8 at (38621.3,43635.8)"
+    },
+    {
+     "name": "Slime cliffs, beach and shallow sea",
+     "pos": [
+      38620.0,
+      43870.0,
+      0.0
+     ],
+     "heightM": 20.0,
+     "note": "WaterShallowSea from y ~43870; deep sea further north-west"
+    }
+   ],
+   "site": {
+    "id": "merwart-village",
+    "name": "Merwart Village",
+    "gazetteerId": "merwart-village",
+    "teleport": "@teleloc 0xC9E3002E 127.8 125.4 26.1 1 0 0 0",
+    "anchor": [
+     38680.0,
+     43680.0,
+     24.0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.5,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "id": "s010",
+     "technique": "drone.tilt-reveal",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38652.0,
+       43692.0,
+       24.0
+      ],
+      "height": 34,
+      "radius": 10
+     },
+     "params": {
+      "startPitchDeg": -82,
+      "endPitchDeg": -5,
+      "heightAGL": 8,
+      "distance": 215,
+      "drift": 18,
+      "bearingDeg": 350,
+      "relativeToSubject": false,
+      "minClearance": 4
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hover over the sea looking down at the shallows, then tilt up to reveal the slime cliff and the two giant Merwart lodges beyond; stay 10 m above the water and the cliff top.",
+     "notes": "WATER ESTABLISHING. Hovers 32 m over the shallow sea north of Vissidal (WBT terrain type 18 WaterShallowSea, z 0 under the whole move) looking straight down at the water, drifts 18 m south while tilting up to -5 deg to reveal the beach, the 20 m slime-covered cliff and the two giant cone lodges of Merwart Village 200 m beyond (lodge tips z 57.6 / 47.6). Noon sun. Verified: AGL 32 throughout, nearest scenery 21.6 m (a low retail shore plant), the cliff top (z 18-26) stays 6+ m below the lens; line of sight to lodge A clear. vmax 2.2 m/s.",
+     "draftId": "m010"
+    },
+    {
+     "id": "s020",
+     "technique": "classic.two-shot",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38676.0,
+       43644.0,
+       14.0
+      ],
+      "height": 34,
+      "radius": 10
+     },
+     "params": {
+      "secondary": [
+       38652.0,
+       43692.0,
+       24.0
+      ],
+      "secondaryHeight": 34,
+      "side": "right",
+      "distance": 0,
+      "elevationDeg": 6,
+      "driftDeg": 10
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Frame the two giant cone lodges side by side from the sunlit east and drift slowly round them; keep 4 m from every rock and plant.",
+     "notes": "LANDMARK TWO-SHOT. The two giant Merwart cone lodges (0x01003D13, 16 m wide x 34 m tall) framed as a pair from the sunlit east-north-east: lodge B on the lower market terrace (38676, 43644, z 14) and lodge A on the upper terrace (38652, 43692, z 24), the slime cliffs and sea horizon beyond; a 10 deg drift. Camera z 43.7 (AGL 17.7 -> 21.6) on the plateau by the Life Stone. Verified: >= 14.5 m from all scenery, 60+ m from both lodges, LOS clear.",
+     "draftId": "m020"
+    },
+    {
+     "id": "s030",
+     "technique": "classic.push-in",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "FS",
+     "fov": 40,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38725.8,
+       43715.4,
+       26.0
+      ],
+      "height": 3,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 120,
+      "elevationDeg": 8,
+      "fromFraming": "WS",
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Push slowly in on the sparkling Life Stone with the open plateau and the sea horizon behind it; stop 4 m short of the stone and the shore rocks.",
+     "notes": "FX: LIFE STONE. Perceptual push-in (WS -> FS, fov 40) from the east-south-east on the Merwart Life Stone (38725.8, 43715.4, z 26) - its sparkle column against the open slime plateau and the sea horizon to the north-west, noon sun. Verified: camera (38734.6, 43710.3, 28.9) -> (38729.9, 43713.1, 28.2), ground 26.0 (WBT), AGL 2.2-2.9, ends 4.6 m from the stone, 4.9 m from the 3 m shore rock 0x020014AF; no statics within 30 m.",
+     "draftId": "m030"
+    },
+    {
+     "id": "s040",
+     "technique": "drone.helix",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38652.0,
+       43692.0,
+       24.0
+      ],
+      "height": 34,
+      "radius": 10
+     },
+     "params": {
+      "radiusStart": 24,
+      "radiusEnd": 34,
+      "heightStart": 6,
+      "heightEnd": 44,
+      "revolutions": 0.4,
+      "direction": "ccw",
+      "bearingDeg": 215,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Corkscrew up around the tall cone lodge from its doorway to above its tip; keep 8 m from the lodge wall and 5 m above its peak at the top.",
+     "notes": "HERO DRONE MOVE. Helix around lodge A (38652, 43692, z 24): starts 24 m south-south-west at z 30 looking up at its south doorway, climbs counter-clockwise 0.4 rev past the market terrace and lodge B while the radius opens to 34 m, finishing 10 m above the lodge's 34 m tip (z 68) east-north-east of it, looking down over both lodges, the market and the sand flats. Verified against the lodge mesh: >= 11.6 m from the lodge surface, >= 11.8 m from scenery, AGL 9.2 -> 42.3, vmax 8.2 m/s.",
+     "draftId": "m040"
+    },
+    {
+     "id": "s050",
+     "technique": "classic.crane",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38664.0,
+       43644.0,
+       14.0
+      ],
+      "height": 12,
+      "radius": 8
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 260,
+      "elevationDeg": -9,
+      "distance": 24,
+      "riseM": 12,
+      "swingDeg": -20,
+      "armM": 8,
+      "thirds": "center"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Rise on the jib from behind the glowing smithy forge up past the doorway of the near cone lodge to look over the market terrace; keep 4 m from the stalls and barrels.",
+     "notes": "FX: FORGE + CLOSER. Jib rise from 2.2 m above the open-air market (38640.7, 43639.9) behind Blacksmith Bulidurg's outdoor forge - glowing coals 0x02000354 with firelight and a fire script, 10.4 m ahead at frame lower right - up 12 m past the dark doorway of lodge B (aim at its west door) to look over the market terrace; sun overhead. Verified: AGL 2.2 -> 14, nearest static the barrel stack 5.2 m north, stalls/doors 7+ m, scenery 4.8 m (retail) / 7.3 m (default); forge in frame at the start (15 deg right, 17 deg below centre).",
+     "draftId": "m050"
+    }
+   ],
+   "verification": "WorldBuilder.Terminal 1.2.0 + RetailSmoke.wbproj, 7 sessions run one at a time with >= 4.5 GB available: describe-landblock + list-objects + get-terrain-data on the 3x3 around the town LB, get-terrain-data on the 5x5/7x7 ring for water, get-object-detail on all 113 static models (bounds), obj-export of the main buildings (meshes rasterised at 1 m for exact clearance), render-preview top-downs, chorizite-parse-dat-record on the FX Setups (lights + default PhysicsScripts), region-day-night-curve (sun heading 90 deg all morning, 270 after 0.6; elevation 0.36->38, 0.40->47, 0.50->68 deg), and get-height at every sampled start/quarter/mid/end/min-AGL camera point (107 probes; my AC triangle-split re-implementation matches WBT to <= 0.005 m). Every shot was built offline with the real technique registry (scene3d/film/shots buildShot via tools/film/plan/schema.mjs shotSpec) against that terrain and sampled every 0.05 s; each sample was checked against rotated static OBBs, the building meshes, the film's default scenery bake (~/hb-serve/dist/current/scenery AABBs) and, for information, the opt-in retail bake, plus line of sight to the subject. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-merwart-village.json passes film.mjs plan validate (dry build included): 0 errors, 0 warnings. Per shot (draft id -> plan id: min AGL | nearest static/mesh | nearest default-bake scenery | nearest retail-bake scenery): s010=m010 drone.tilt-reveal minAGL 32.0@t0 | static none within 60 m | defScn 32.7@t13 0x020014B7@(38632,43879,top3) | retScn 21.6@t13 0x020014A3@(38607,43878,top12) ; s020=m020 classic.two-shot minAGL 17.7@t0 | static 83.4@t11 0x02000267@(38677,43638) | defScn 18.3@t0 0x020014AE@(38720,43713,top27) | retScn 14.5@t6.25 0x020014B4@(38733,43702,top29) ; s030=m030 classic.push-in minAGL 2.2@t10 | static none within 60 m | defScn 4.9@t10 0x020014AF@(38731,43722,top29) | retScn 4.9@t10 0x020014AF@(38731,43722,top29) ; s040=m040 drone.helix minAGL 9.2@t0 | static 11.6@t1.75 merwart@(38647,43680,z29-31) | defScn 11.8@t1.95 0x020014B2@(38646,43664,top21) | retScn 13.2@t0 0x020014B2@(38636,43688,top30) ; s050=m050 classic.crane minAGL 2.2@t0 | static 5.2@t1.9 0x020000a5@(38641,43646) | defScn 7.3@t3.6 0x020014B0@(38646,43648,top15) | retScn 4.8@t0 0x020014AF@(38631,43648,top19)"
+  }
+ ]
+}

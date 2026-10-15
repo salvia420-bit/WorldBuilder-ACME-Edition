@@ -1,0 +1,304 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-al-jalima.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "afternoon 0.60 / warm: the sun swings into the south-west, lighting the hillside run and rim-lighting the dome; blue flame and life-stone glow read against warm sandstone",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Al-Jalima",
+   "summary": "Al-Jalima (7.4N 4.8E), a short ride from Zaikhal, was founded during the Gharu'ndim expansion 'in an unfortunate spot amongst the crypts of the Dericostian Undead': each autumn festival the undead rise and hold the town until winter (Undead Attack on Al-Jalima). It is home to the Gharu'ndim master smith Jibril ibn Rashid (Greater Shadowhunter Amuli), the mask maker Janda Sulifiya and a spice merchant. In the DAT it is a compact town on a flat at z 86 in a bowl of bare sedimentary hills (slopes to 150-200 m in the west, a 154 m mesa east), the north-south road along its east edge. Around a central green stand the domed three-storey tavern, two sandstone halls, a glass-windowed church tower, the Nullified Statue of a Skeleton on its pedestal, the Town Network portal, the Life Stone and a well; between the halls a fountain ringed by yellow flowers and a blue-flame lamp; tents and the meeting-hall tower to the north; destroyed portals to Tou-Tou and Khayyaban glow blue at the edges.",
+   "landmarks": [
+    {
+     "name": "Fountain",
+     "pos": [
+      25576.5,
+      26210.9,
+      86
+     ],
+     "heightM": 2,
+     "note": "ringed by yellow flowers 0x020003F8 (1.3 m) and a small tree; blue-flame lamp 0x02000719 at (25573.45,26213.07)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      25600.7,
+      26216.4,
+      86
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Well",
+     "pos": [
+      25592.25,
+      26232,
+      86
+     ],
+     "heightM": 2
+    },
+    {
+     "name": "Nullified Statue of a Skeleton",
+     "pos": [
+      25615.4,
+      26240.7,
+      86
+     ],
+     "heightM": 10.3,
+     "note": "pedestal 0x01002A1B top 92.8, statue to ~96.3"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      25627.6,
+      26253.6,
+      86.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Domed tavern",
+     "pos": [
+      25596,
+      26268,
+      86
+     ],
+     "heightM": 14.1,
+     "note": "0x01000E3B top 100.1"
+    },
+    {
+     "name": "Glass-windowed church tower",
+     "pos": [
+      25541.2,
+      26213.6,
+      86
+     ],
+     "heightM": 12.7,
+     "note": "0x010025E3 top 98.7"
+    },
+    {
+     "name": "Meeting-hall tower",
+     "pos": [
+      25645.7,
+      26316,
+      86
+     ],
+     "heightM": 10
+    },
+    {
+     "name": "Destroyed portals (Tou-Tou, Khayyaban)",
+     "pos": [
+      25549.9,
+      26169.3,
+      86
+     ],
+     "heightM": 3,
+     "note": "blue glow 0x020005BB; second at (25683.2,26268.4)"
+    }
+   ],
+   "site": {
+    "id": "al-jalima",
+    "name": "Al-Jalima",
+    "gazetteerId": "al-jalima",
+    "teleport": "@telepoi Al-Jalima",
+    "anchor": [
+     25600,
+     26230,
+     86
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.6,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0x85880000",
+     "0x85870000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.terrain-skim",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "WS",
+     "path": [
+      [
+       25574,
+       26046,
+       0
+      ],
+      [
+       25640,
+       26180,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 3,
+      "speed": 10,
+      "lookAhead": 30,
+      "tiltDeg": -2,
+      "cornerRadius": 10,
+      "alat": 3,
+      "maxBankDeg": 10,
+      "ends": "cruise"
+     },
+     "standingOrder": "Skim the bare hillside 3 m up and run down into the town bowl; nothing stands within 40 m of the line.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ARRIVAL (drone.terrain-skim). Skim 3 m over the bare south-west hillside and run 33 m down into the bowl at 10 m/s, the dome and church tower of Al-Jalima rising ahead; no static, building or tree within 50 m of the line (only a wandering chicken spawn). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25574, 26046, 129.3) end (25640, 26180, 96.1), min AGL 3 m (WBT get-height on 9 camera points: min AGL 3.0 m, ground 92.67-126.33), nearest static/building/default-bake scenery 2.68 m (spawn:Chicken), nearest building 53.09 m, retail-bake scenery 136.94 m, peak 10.81 m/s."
+    },
+    {
+     "technique": "classic.dolly-out",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25575.5,
+       26211.8,
+       86
+      ],
+      "height": 4,
+      "radius": 2.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 70,
+      "elevationDeg": 22,
+      "toFraming": "EWS",
+      "profile": "perceptual"
+     },
+     "standingOrder": "Back away from the fountain and its blue flame along the lens axis, rising gently; keep 3 m above the Life Stone.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + FLAME (classic.dolly-out). Start 5 m from the flower-ringed fountain and its blue flame and back away ENE along the lens axis, rising at 22 deg, to 34 m: the Life Stone, the well, the church tower and the hills open up around the little plaza. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25579.8, 26213.4, 89.8) end (25605.4, 26222.7, 100.8), min AGL 3.85 m (WBT get-height on 9 camera points: min AGL 3.85 m, ground 86-86), nearest static/building/default-bake scenery 2.49 m (spawn:Fountain), nearest building 9.86 m, retail-bake scenery 178.3 m, peak 5.15 m/s."
+    },
+    {
+     "technique": "drone.boomerang",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25615.4,
+       26240.7,
+       86
+      ],
+      "height": 10.3,
+      "radius": 4
+     },
+     "params": {
+      "far": 36,
+      "near": 15,
+      "heightStart": 9,
+      "heightNear": 7,
+      "rise": 12,
+      "bearingDeg": 140,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "standingOrder": "Fly in toward the skeleton statue and the town portal, then swing back out and up; never closer than 10 m to the pedestal.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC (drone.boomerang). Fly in from the south-east toward the skeleton statue on its pedestal with the Town Network portal swirling behind it to 15 m, then swing back out and up 12 m. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25638.5, 26213.1, 95) end (25638.5, 26213.1, 107), min AGL 5.85 m (WBT get-height on 9 camera points: min AGL 5.85 m, ground 86.46-89.15), nearest static/building/default-bake scenery 9.16 m (building:0x01002A1B#72), nearest building 9.16 m, retail-bake scenery 208.97 m, peak 6.59 m/s."
+    },
+    {
+     "technique": "classic.arc",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25596,
+       26268,
+       86
+      ],
+      "height": 14,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 5,
+      "elevationDeg": 10,
+      "distance": 32,
+      "arcDeg": 70,
+      "direction": "cw"
+     },
+     "standingOrder": "Arc slowly round the north side of the domed tavern at 32 m; keep 6 m from the tent and the meeting-hall tower.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.arc). A 70 deg clockwise arc at 32 m around the north side of the domed tavern, 9-13 m above the ground: the yellow-brick dome rim-lit by the afternoon sun, the church tower and statue sliding behind it. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25580.2, 26295.3, 98.6) end (25616.3, 26292.1, 98.6), min AGL 8.11 m (WBT get-height on 9 camera points: min AGL 8.11 m, ground 86-90.45), nearest static/building/default-bake scenery 8.06 m (building:0x01000EFC#70), nearest building 8.06 m, retail-bake scenery 147.31 m, peak 5.49 m/s."
+    },
+    {
+     "technique": "drone.dronie",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "MS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25600.7,
+       26216.4,
+       86
+      ],
+      "height": 3.6,
+      "radius": 1.5
+     },
+     "params": {
+      "startDistance": 6,
+      "endDistance": 75,
+      "startHeight": 3,
+      "endHeight": 42,
+      "bearingDeg": 150,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "standingOrder": "Pull back and up from the Life Stone in one line to the south-east until the bowl and its hills fill the frame; 3 m from the stone at the start.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.dronie). Pull back and up from the glowing Life Stone (6 -> 75 m out, 3 -> 42 m up) to the south-east until the whole town and its bowl of hills fill the frame. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25603.7, 26211.2, 89) end (25638.2, 26151.5, 128), min AGL 3 m (WBT get-height on 9 camera points: min AGL 3 m, ground 86-96.71), nearest static/building/default-bake scenery 4.37 m (spawn:Life Stone), nearest building 22.09 m, retail-bake scenery 199.23 m, peak 9.57 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0x8487, 0x8488, 0x8489, 0x8587, 0x8588, 0x8589, 0x8687, 0x8688, 0x8689; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-al-jalima.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.terrain-skim: start [25574, 26046, 129.3] end [25640, 26180, 96.1], WBT minAGL 3.0 m, clearance 2.68 m (spawn:Chicken), bldg 53.09 m, retail 136.94 m, vmax 10.81 m/s | s020 classic.dolly-out: start [25579.8, 26213.4, 89.8] end [25605.4, 26222.7, 100.8], WBT minAGL 3.85 m, clearance 2.49 m (spawn:Fountain), bldg 9.86 m, retail 178.3 m, vmax 5.15 m/s | s030 drone.boomerang: start [25638.5, 26213.1, 95] end [25638.5, 26213.1, 107], WBT minAGL 5.85 m, clearance 9.16 m (building:0x01002A1B#72), bldg 9.16 m, retail 208.97 m, vmax 6.59 m/s | s040 classic.arc: start [25580.2, 26295.3, 98.6] end [25616.3, 26292.1, 98.6], WBT minAGL 8.11 m, clearance 8.06 m (building:0x01000EFC#70), bldg 8.06 m, retail 147.31 m, vmax 5.49 m/s | s050 drone.dronie: start [25603.7, 26211.2, 89] end [25638.2, 26151.5, 128], WBT minAGL 3 m, clearance 4.37 m (spawn:Life Stone), bldg 22.09 m, retail 199.23 m, vmax 9.57 m/s"
+  }
+ ]
+}

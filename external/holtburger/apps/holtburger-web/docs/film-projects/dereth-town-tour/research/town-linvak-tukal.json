@@ -1,0 +1,317 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Mayoi/Kryst/Freehold/Kara/Frost Haven/Linvak Tukal (lk6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-linvak-tukal.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "golden 0.82 / warm: sun in the west at 25 deg (WBT region-day-night-curve) - every move but the high-angle looks east or north-east so the stone walls glow gold; finale of the batch (and the film).",
+ "runtimeSec": 65,
+ "towns": [
+  {
+   "name": "Linvak Tukal",
+   "summary": "Linvak Tukal (77.8S 28.0E), 'Great Tukal', is the capital of the Lugians at peace with the Isparians - 'a mighty Lugian super-fortress' whose construction only Lugian strength made possible, under constant siege by the Gotrok Lugians (Town Network sign, acpedia); Lord Kresovus rules from the top of the central ramp, Kifandal the Imbuer keeps the Mage Tower, and the approach from the north climbs through the Linvak Tukal Entryway. In the DAT it crowns a snowy mountain summit at z 560 (LB 0xA21E): a 168 x 168 m block of 49 stone halls and towers, 16-116 m tall, walled on all four sides with recessed gates south and north, the great spire reaching z 676 and the Mage Tower and blade-crest hall 660; inside, lit stone braziers flank the central ramp up to Kresovus' quarters and the Town Network portal stands on a terrace at z 590. Outside, the slopes fall steeply to 450-530 m, dotted with Gotrok raider camps.",
+   "landmarks": [
+    {
+     "name": "Fortress walls and halls (49 structures)",
+     "pos": [
+      31188,
+      5844,
+      560
+     ],
+     "heightM": 116,
+     "note": "footprint x 31104-31272, y 5760-5928; walls 16-51 m, towers to z 676"
+    },
+    {
+     "name": "Great spire (0x01001F29)",
+     "pos": [
+      31164,
+      5868,
+      560
+     ],
+     "heightM": 116.4,
+     "note": "tallest tower, top z 676.4"
+    },
+    {
+     "name": "Mage Tower (0x01001F24) and blade-crest hall (0x01001F25)",
+     "pos": [
+      31140,
+      5784,
+      560
+     ],
+     "heightM": 100.3,
+     "note": "SW corner, tops z 660.3; light sources 0x02000496 at (31141.9,5790.9,660.3)"
+    },
+    {
+     "name": "Central ramp braziers (0x02000626/27/28)",
+     "pos": [
+      31198,
+      5844,
+      590
+     ],
+     "heightM": 2.2,
+     "note": "lit stone braziers (light + DAT flame) at z 570, 590 and 611 along the ramp"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      31215.7,
+      5844.1,
+      590.2
+     ],
+     "heightM": 3.5,
+     "note": "on the ramp terrace (outdoor cell 0xA21E0024)"
+    },
+    {
+     "name": "Lord Kresovus' quarters",
+     "pos": [
+      31193.2,
+      5846,
+      611
+     ],
+     "heightM": 0,
+     "note": "top of the central ramp"
+    },
+    {
+     "name": "South gate recess (0x01001F22)",
+     "pos": [
+      31188,
+      5774,
+      560
+     ],
+     "heightM": 19,
+     "note": "the south wall steps back 14 m between x 31176-31200"
+    },
+    {
+     "name": "Linvak Tukal Entryway portal",
+     "pos": [
+      31182.5,
+      6063.1,
+      388.2
+     ],
+     "heightM": 3.5,
+     "note": "170 m below the north wall"
+    },
+    {
+     "name": "Gotrok raider camps",
+     "pos": [
+      31141,
+      5720,
+      532
+     ],
+     "heightM": 0,
+     "note": "Obeloth/Lithos/Extas/Tiatus raiders around the walls (creatures, keep away)"
+    }
+   ],
+   "site": {
+    "id": "linvak-tukal",
+    "name": "Linvak Tukal",
+    "gazetteerId": "linvak-tukal",
+    "teleport": "@telepoi Linvak Tukal",
+    "anchor": [
+     31188,
+     5844,
+     560
+    ],
+    "settleSec": 3,
+    "look": {
+     "timeOfDay": 0.82,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0xA21E0000",
+     "0xA11E0000",
+     "0xA21D0000",
+     "0xA21F0000",
+     "0xA31E0000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.boom-rise",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       31188,
+       5844,
+       560
+      ],
+      "height": 116,
+      "radius": 84
+     },
+     "params": {
+      "distance": 175,
+      "heightStart": 2,
+      "heightEnd": 110,
+      "bearingDeg": 315,
+      "relativeToSubject": false,
+      "keepAim": true,
+      "minClearance": 8
+     },
+     "standingOrder": "Rise straight up north-west of the fortress from below its battlements until the Lugian towers and the snowfields beyond stand in golden light; 30 m from the slope.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.boom-rise, assigned). 175 m north-west of the fortress, rise straight up from wall-base level (z 562, 43 m above the slope) to z 670, keepAim: the battlements give way to the towers and the great spire, the snowfields beyond, all in low golden side-light. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31064.3, 5967.7, 562) end (31064.3, 5967.7, 670); min AGL 43.12 m (WBT get-height on 9 camera points: min AGL 43.12 m, ground 518.9-518.9); nearest static/building/default-bake scenery/spawn 10.62 m (scenery:0x020003A7), nearest building 56.21 m, retail-bake scenery 53.4 m; peak 11.3 m/s."
+    },
+    {
+     "technique": "fpv.fpv-proximity",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "path": [
+      [
+       31082,
+       5760,
+       0
+      ],
+      [
+       31248,
+       5760,
+       0
+      ]
+     ],
+     "params": {
+      "offset": 10,
+      "side": "left",
+      "heightAGL": 12,
+      "speed": 12,
+      "cornerRadius": 5,
+      "alat": 6,
+      "lookAhead": 14,
+      "leanDeg": 6,
+      "maxBankDeg": 20,
+      "ends": "cruise"
+     },
+     "standingOrder": "Skim east along the south wall of the fortress 10 m off the stone and 12 m above the slope, past the south gate; never closer than 6 m to the wall or the rocks.",
+     "pilot": {
+      "mode": "jev"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FACADE / FORTRESS WALL (fpv.fpv-proximity, JEV hero). FPV skims east along the south wall 10 m off the stone and 12 m above the steep slope (z ~560, level with the wall base) past the recessed south gate, the wall filling the left of frame; Linvak's only pan. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31082, 5750, 560.3) end (31248, 5750, 560.3); min AGL 12 m (WBT get-height on 9 camera points: min AGL 12.0 m, ground 534.3-548.3); nearest static/building/default-bake scenery/spawn 8.95 m (scenery:0x020003A4), nearest building 10 m, retail-bake scenery 8.96 m; peak 13.83 m/s."
+    },
+    {
+     "technique": "classic.high-angle",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       31200,
+       5844,
+       570
+      ],
+      "height": 30,
+      "radius": 20
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 95,
+      "elevationDeg": 55,
+      "distance": 95,
+      "thirds": "center",
+      "pushM": 6
+     },
+     "standingOrder": "Look steeply down from high over the east rooftops into the brazier-lit central ramp and the town portal terrace; stay 15 m above every roof.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FLAME + MAGIC (classic.high-angle). From z ~660 (66+ m above the east rooftops, 30 m from the nearest tower) looking steeply down (55 deg) into the brazier-lit central ramp: the Town Network portal terrace, the braziers at z 570/590/611 and Kresovus' quarters all near frame centre, easing in 6 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31254.3, 5839.2, 662.8) end (31250.8, 5839.6, 657.9); min AGL 97.9 m (WBT get-height on 9 camera points: min AGL 97.9 m, ground 560-560); nearest static/building/default-bake scenery/spawn 30.4 m (building:0x01001F18#49), nearest building 30.4 m, retail-bake scenery 107.17 m; peak 0.86 m/s."
+    },
+    {
+     "technique": "drone.vertigo-drone",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       31140,
+       5784,
+       560
+      ],
+      "height": 100,
+      "radius": 14
+     },
+     "params": {
+      "nearDistance": 80,
+      "farDistance": 150,
+      "direction": "out",
+      "heightAGL": 72,
+      "minFovDeg": 12,
+      "maxFovDeg": 70,
+      "bearingDeg": 225,
+      "relativeToSubject": false,
+      "minClearance": 15
+     },
+     "standingOrder": "Fly back south-west from the mage tower while zooming in so the tower holds its size and the fortress swells behind it; keep 40 m above the slope.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (drone.vertigo-drone). South-west of the Mage Tower at z 632, fly back 80 -> 150 m while the fov narrows 60 -> 35: the tower holds its size and the fortress swells behind it. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31083.4, 5727.4, 632) end (31033.9, 5677.9, 632); min AGL 104.28 m (WBT get-height on 9 camera points: min AGL 104.28 m, ground 465.3-527.7); nearest static/building/default-bake scenery/spawn 53.86 m (building:0x01001F03#21), nearest building 53.86 m, retail-bake scenery 88.82 m; peak 9.99 m/s."
+    },
+    {
+     "technique": "drone.dronie",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "WS",
+     "fov": 66,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       31170,
+       5860,
+       600
+      ],
+      "height": 76,
+      "radius": 30
+     },
+     "params": {
+      "startDistance": 45,
+      "endDistance": 152,
+      "startHeight": 75,
+      "endHeight": 110,
+      "bearingDeg": 255,
+      "relativeToSubject": false,
+      "minClearance": 20
+     },
+     "standingOrder": "Pull back west and up from the crown of the great towers until the whole Lugian super-fortress glows on its snowy summit in the evening sun; 20 m clear of every tower.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FINALE (drone.dronie). From 45 m off the crown of the great towers, pull back west-south-west and up to 152 m / z 670 (fov 66) until the whole Lugian super-fortress glows gold on its snowy summit - the end. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (31126.5, 5848.4, 675) end (31023.2, 5820.7, 710); min AGL 115 m (WBT get-height on 9 camera points: min AGL 115 m, ground 499.4-560); nearest static/building/default-bake scenery/spawn 23.81 m (building:0x01001F29#38), nearest building 23.81 m, retail-bake scenery 121.41 m; peak 11.05 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session at a time, >=3.8 GB free): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xA11D, 0xA11E, 0xA11F, 0xA21D, 0xA21E, 0xA21F, 0xA31D, 0xA31E, 0xA31F; get-object-detail on every placed model (bounds -> rotated AABBs) and chorizite-parse-dat-record Setup on every placed Setup (default PhysicsScript + lights) to find the FX props, cross-checked with object-tags.json (utf-8-sig) and particle-fx-catalog.json; served dist scenery (default ace-compat bake AND the opt-in retail bake) and ACE outdoor spawns added as obstacle boxes; every shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain (AC split-triangle interpolation) and sampled at 4 Hz for AGL, box clearance, line of sight, subject framing and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) agreed with the offline terrain within 0.005 m; region-day-night-curve: t 0.822 -> sun heading 270 deg, pitch 25.4 deg. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-linvak-tukal.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.boom-rise 15s: start [31064.3, 5967.7, 562] end [31064.3, 5967.7, 670], WBT minAGL 43.12 m, clearance 10.62 m (scenery:0x020003A7), bldg 56.21 m, retail 53.4 m, vmax 11.3 m/s | s020 fpv.fpv-proximity 12s: start [31082, 5750, 560.3] end [31248, 5750, 560.3], WBT minAGL 12.0 m, clearance 8.95 m (scenery:0x020003A4), bldg 10 m, retail 8.96 m, vmax 13.83 m/s | s030 classic.high-angle 11s: start [31254.3, 5839.2, 662.8] end [31250.8, 5839.6, 657.9], WBT minAGL 97.9 m, clearance 30.4 m (building:0x01001F18#49), bldg 30.4 m, retail 107.17 m, vmax 0.86 m/s | s040 drone.vertigo-drone 11s: start [31083.4, 5727.4, 632] end [31033.9, 5677.9, 632], WBT minAGL 104.28 m, clearance 53.86 m (building:0x01001F03#21), bldg 53.86 m, retail 88.82 m, vmax 9.99 m/s | s050 drone.dronie 16s: start [31126.5, 5848.4, 675] end [31023.2, 5820.7, 710], WBT minAGL 115 m, clearance 23.81 m (building:0x01001F29#38), bldg 23.81 m, retail 121.41 m, vmax 11.05 m/s"
+  }
+ ]
+}

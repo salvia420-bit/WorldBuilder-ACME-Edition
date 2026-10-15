@@ -1,0 +1,310 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-zaikhal.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "afternoon 0.68 / warm, the closing time-lapse runs the sky to ~0.82 golden: the capital is the Gharu'ndim chapter's climax in warm light",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Zaikhal",
+   "summary": "Zaikhal (13.7N 0.6E) is the capital of the Gharu'ndim, set among the hills at the northern edge of their realm - country like the Taban mountains of Gharu'n on Ispar. It was the original headquarters of the Arcanum and is still a centre of study: the great Gharu'ndim library (with the translator of Dericostian runes and the scholar of the Virindi language), the Radiant Blood society stronghold and one of the three Arcanum Mana Forges at the south end of town. In the DAT the town sits on a broad plateau at z 124 above wooded valleys to the north (64-90) and east (72-90). A row of sandstone halls and the domed tavern line a plaza with a pool flanked by blue-flame lamps, two wells, the Nullified Statue of a Zharalim, the Life Stone and the Town Network portal under great shade trees; the domed library crowns the western hill (z 144). South on the open plateau two red-and-gold Radiant Blood banners frame the Stronghold and Gauntlet portals among red-eyed guardian figures; 300 m east stands the Gold Legion Keep, a four-storey Viamontian tower with a gold roof and Viamontian knights at its foot.",
+   "landmarks": [
+    {
+     "name": "Domed tavern",
+     "pos": [
+      24636,
+      27732,
+      124
+     ],
+     "heightM": 14.1,
+     "note": "0x01000E3B top 138.1"
+    },
+    {
+     "name": "Pool with blue-flame lamps",
+     "pos": [
+      24628.7,
+      27747.2,
+      124
+     ],
+     "heightM": 1.5,
+     "note": "lamps 0x02000719 at (24617.5,27738.6) and (24630.7,27749.1)"
+    },
+    {
+     "name": "Nullified Statue of a Zharalim",
+     "pos": [
+      24604.3,
+      27762.5,
+      124
+     ],
+     "heightM": 10,
+     "note": "pedestal top 130.8"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      24613.5,
+      27731.6,
+      124.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      24592.3,
+      27788.2,
+      124
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Zaikhal library (dome on the west hill)",
+     "pos": [
+      24491.5,
+      27803,
+      144
+     ],
+     "heightM": 14.1,
+     "note": "top 158.1"
+    },
+    {
+     "name": "Radiant Blood Stronghold + Gauntlet portals",
+     "pos": [
+      24631.75,
+      27535.95,
+      124
+     ],
+     "heightM": 4,
+     "note": "Gauntlet at (24642.7,27542.5); banners 0x020017EB (24627-24637, 27534) top 130.6; guardian figures 0x02001055"
+    },
+    {
+     "name": "Gold Legion Keep (Viamontian tower)",
+     "pos": [
+      24948,
+      27804,
+      124
+     ],
+     "heightM": 26.35,
+     "note": "0x010036EA, 11 m square, gold roof, top 150.35; Viamontian knights at its foot"
+    },
+    {
+     "name": "Advocate and Sentinel statues",
+     "pos": [
+      24780,
+      27924,
+      126
+     ],
+     "heightM": 7,
+     "note": "in a dense grove NE; not filmed"
+    }
+   ],
+   "site": {
+    "id": "zaikhal",
+    "name": "Zaikhal",
+    "gazetteerId": "zaikhal",
+    "teleport": "@telepoi Zaikhal",
+    "anchor": [
+     24630,
+     27740,
+     124
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.68,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0x80900000",
+     "0x808F0000",
+     "0x81900000",
+     "0x7F900000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.tilt-reveal",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24630,
+       27760,
+       124
+      ],
+      "height": 14,
+      "radius": 40
+     },
+     "params": {
+      "startPitchDeg": -78,
+      "endPitchDeg": -10,
+      "heightAGL": 46,
+      "distance": 150,
+      "drift": 8,
+      "bearingDeg": 180,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "standingOrder": "Hover 46 m above the southern plateau, tilt up from the ground to the capital and the northern hills while easing forward; 8 m above every tree.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.tilt-reveal). Hover 46 m above the southern plateau, 150 m south of the plaza, and tilt from -78 to -10 deg while easing 8 m forward: from the grass up to the capital - domes, sandstone halls and shade trees - with the library hill and the northern hills behind; the sun behind-left. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24630, 27610, 170) end (24630, 27618, 170), min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 124-124), nearest static/building/default-bake scenery 37.99 m (scenery:0x02000246), nearest building 47.12 m, retail-bake scenery 15.46 m, peak 0.9 m/s."
+    },
+    {
+     "technique": "classic.pov",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "MS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24653,
+       27713.8,
+       123.67
+      ],
+      "height": 1.8,
+      "radius": 0.5,
+      "heading": 4.8
+     },
+     "params": {
+      "eyeFrac": 0.92,
+      "pitchDeg": 2,
+      "advanceM": 7,
+      "bobM": 0.025,
+      "stepHz": 1.7
+     },
+     "standingOrder": "Walk west into the plaza at eye height past the domed hall toward the town portal; stay 7 m off the hall wall.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "STREET (classic.pov). Eye-level walk 7 m west into the plaza along the domed tavern's south side toward the Town Network portal: the dome on the right, the blue-flame lamps and the portal swirl ahead, a gentle walking bob. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24652.7, 27713.8, 125.3) end (24645.7, 27714.4, 125.3), min AGL 1.32 m (WBT get-height on 9 camera points: min AGL 1.32 m, ground 123.22-124), nearest static/building/default-bake scenery 7.56 m (building:0x01000E3B#104), nearest building 7.56 m, retail-bake scenery 8.83 m, peak 1 m/s."
+    },
+    {
+     "technique": "classic.two-shot",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24631.75,
+       27535.95,
+       124
+      ],
+      "height": 4,
+      "radius": 2
+     },
+     "params": {
+      "secondary": [
+       24642.69,
+       27542.47,
+       124
+      ],
+      "secondaryHeight": 4,
+      "elevationDeg": 6,
+      "side": "auto",
+      "driftDeg": 8
+     },
+     "standingOrder": "Frame both Radiant Blood portals with the red-and-gold banners and drift slowly; keep 6 m from the guardian figures.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC (classic.two-shot). The two Radiant Blood society portals - Stronghold and Gauntlet - framed together with the red-and-gold banners and red-eyed guardian figures, a slow 8 deg drift; camera 3 m up, 11 m away. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24631.6, 27547.3, 127.0) end (24632.8, 27548.0, 127.0), min AGL 3.04 m (WBT get-height on 9 camera points: min AGL 3.04 m, ground 124-124), nearest static/building/default-bake scenery 8.04 m (spawn:Ayesha of the Radiant Blood), nearest building 37.37 m, retail-bake scenery 24.06 m, peak 0.18 m/s."
+    },
+    {
+     "technique": "drone.vertigo-drone",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24948,
+       27804,
+       124
+      ],
+      "height": 26.3,
+      "radius": 6
+     },
+     "params": {
+      "nearDistance": 24,
+      "farDistance": 70,
+      "direction": "out",
+      "heightAGL": 8,
+      "minFovDeg": 18,
+      "maxFovDeg": 70,
+      "bearingDeg": 270,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "standingOrder": "Back away west from the Gold Legion Keep while zooming in so the tower holds its size and the valley behind it swells; 10 m from the trees.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK - VIAMONTIAN TOWER (drone.vertigo-drone). Back away west from the Gold Legion Keep 24 -> 70 m at 8 m height while the fov narrows 60 -> 23 deg: the gold-roofed tower holds its size while the eastern valley and hills swell behind it. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24924, 27804, 132) end (24878, 27804, 132), min AGL 8 m (WBT get-height on 9 camera points: min AGL 8 m, ground 111.17-124), nearest static/building/default-bake scenery 14.93 m (spawn:Viamontian Counselor), nearest building 18.52 m, retail-bake scenery 12.54 m, peak 6.56 m/s."
+    },
+    {
+     "technique": "classic.time-lapse",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       24636,
+       27732,
+       124
+      ],
+      "height": 14,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 245,
+      "distance": 118,
+      "elevationDeg": 19,
+      "thirds": "center",
+      "rate": 0.01
+     },
+     "standingOrder": "Locked off high over the western slope while the clouds race over the capital; nothing within 15 m of the lens.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (classic.time-lapse). Locked high to the WSW (45 m above the plateau, 118 m from the dome) over the capital while the sky clock runs 0.01 day/s (0.68 -> 0.82): clouds race over the domes and the shadows stretch into golden light. Last shot of the town so the clock jump is hidden by the cut. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (24534.9, 27684.8, 169.4) end (24534.9, 27684.8, 169.4), min AGL 45.42 m (WBT get-height on 9 camera points: min AGL 45.42 m, ground 124-124), nearest static/building/default-bake scenery 29.62 m (scenery:0x02000258), nearest building 53.63 m, retail-bake scenery 13.42 m, peak 0 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0x7F8F, 0x7F90, 0x7F91, 0x808F, 0x8090, 0x8091, 0x818F, 0x8190, 0x8191; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-zaikhal.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.tilt-reveal: start [24630, 27610, 170] end [24630, 27618, 170], WBT minAGL 46 m, clearance 37.99 m (scenery:0x02000246), bldg 47.12 m, retail 15.46 m, vmax 0.9 m/s | s020 classic.pov: start [24652.7, 27713.8, 125.3] end [24645.7, 27714.4, 125.3], WBT minAGL 1.32 m, clearance 7.56 m (building:0x01000E3B#104), bldg 7.56 m, retail 8.83 m, vmax 1 m/s | s030 classic.two-shot: start [24631.6, 27547.3, 127.0] end [24632.8, 27548.0, 127.0], WBT minAGL 3.04 m, clearance 8.04 m (spawn:Ayesha of the Radiant Blood), bldg 37.37 m, retail 24.06 m, vmax 0.18 m/s | s040 drone.vertigo-drone: start [24924, 27804, 132] end [24878, 27804, 132], WBT minAGL 8 m, clearance 14.93 m (spawn:Viamontian Counselor), bldg 18.52 m, retail 12.54 m, vmax 6.56 m/s | s050 classic.time-lapse: start [24534.9, 27684.8, 169.4] end [24534.9, 27684.8, 169.4], WBT minAGL 45.42 m, clearance 29.62 m (scenery:0x02000258), bldg 53.63 m, retail 13.42 m, vmax 0 m/s"
+  }
+ ]
+}

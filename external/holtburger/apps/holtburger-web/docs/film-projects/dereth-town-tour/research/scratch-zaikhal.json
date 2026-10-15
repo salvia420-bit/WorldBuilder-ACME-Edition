@@ -1,0 +1,226 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Zaikhal scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "zaikhal",
+   "name": "Zaikhal",
+   "gazetteerId": "zaikhal",
+   "teleport": "@telepoi Zaikhal",
+   "anchor": [
+    24630,
+    27740,
+    124
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.68,
+    "grade": "warm"
+   },
+   "lbKeys": [
+    "0x80900000",
+    "0x808F0000",
+    "0x81900000",
+    "0x7F900000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "zaikhal",
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24630,
+     27760,
+     124
+    ],
+    "height": 14,
+    "radius": 40
+   },
+   "params": {
+    "startPitchDeg": -78,
+    "endPitchDeg": -10,
+    "heightAGL": 46,
+    "distance": 150,
+    "drift": 8,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover 46 m above the southern plateau, tilt up from the ground to the capital and the northern hills while easing forward; 8 m above every tree."
+  },
+  {
+   "id": "s020",
+   "site": "zaikhal",
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24653,
+     27713.8,
+     123.67
+    ],
+    "height": 1.8,
+    "radius": 0.5,
+    "heading": 4.8
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 2,
+    "advanceM": 7,
+    "bobM": 0.025,
+    "stepHz": 1.7
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Walk west into the plaza at eye height past the domed hall toward the town portal; stay 7 m off the hall wall."
+  },
+  {
+   "id": "s030",
+   "site": "zaikhal",
+   "technique": "classic.two-shot",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24631.75,
+     27535.95,
+     124
+    ],
+    "height": 4,
+    "radius": 2
+   },
+   "params": {
+    "secondary": [
+     24642.69,
+     27542.47,
+     124
+    ],
+    "secondaryHeight": 4,
+    "elevationDeg": 6,
+    "side": "auto",
+    "driftDeg": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Frame both Radiant Blood portals with the red-and-gold banners and drift slowly; keep 6 m from the guardian figures."
+  },
+  {
+   "id": "s040",
+   "site": "zaikhal",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24948,
+     27804,
+     124
+    ],
+    "height": 26.3,
+    "radius": 6
+   },
+   "params": {
+    "nearDistance": 24,
+    "farDistance": 70,
+    "direction": "out",
+    "heightAGL": 8,
+    "minFovDeg": 18,
+    "maxFovDeg": 70,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Back away west from the Gold Legion Keep while zooming in so the tower holds its size and the valley behind it swells; 10 m from the trees."
+  },
+  {
+   "id": "s050",
+   "site": "zaikhal",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     24636,
+     27732,
+     124
+    ],
+    "height": 14,
+    "radius": 10
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 245,
+    "distance": 118,
+    "elevationDeg": 19,
+    "thirds": "center",
+    "rate": 0.01
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Locked off high over the western slope while the clouds race over the capital; nothing within 15 m of the lens."
+  }
+ ]
+}

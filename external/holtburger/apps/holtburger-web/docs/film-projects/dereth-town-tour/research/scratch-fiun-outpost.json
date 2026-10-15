@@ -1,0 +1,240 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Fiun Outpost scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "fiun-outpost",
+   "name": "Fiun Outpost",
+   "gazetteerId": "fiun-outpost",
+   "teleport": "@telepoi Fiun",
+   "anchor": [
+    10843.0,
+    47478.0,
+    -0.095
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.7,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10836,
+     47440,
+     2
+    ],
+    "height": 12,
+    "radius": 30
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -6,
+    "heightAGL": 22,
+    "distance": 110,
+    "drift": 10,
+    "bearingDeg": 10,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "id": "s010",
+   "site": "fiun-outpost",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover 22 m above the sea 110 m north of the outpost and tilt from straight down on the water up to the towers and the ice wall; barely drift.",
+   "notes": "ESTABLISHING + WATER (drone.tilt-reveal). Over open sea (100 % water, z 24) 110 m NNE of the outpost: starts looking -80 deg down into the dark Arctic water and floe, then tilts up to -6 deg revealing the frozen shore, the Life Stone sparkling at the ice edge, the two Sho towers with chimney smoke and the 100 m ice wall behind, drifting 10 m toward it. Nearest scenery 41 m. Verified offline (real registry build + WBT terrain): start (10855.1,47548.3,24.0) end (10853.4,47538.5,24.0), min AGL 24.0 m, nearest static/building/tree 40.7 m (0x010036E7@10854,47489), peak 1.0 m/s."
+  },
+  {
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10766.5,
+     47438.9,
+     2.0
+    ],
+    "height": 1.2,
+    "radius": 0.6
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 20,
+    "elevationDeg": 6,
+    "distance": 9,
+    "thirds": "center",
+    "riseM": 7,
+    "swingDeg": 35,
+    "armM": 6
+   },
+   "id": "s020",
+   "site": "fiun-outpost",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Crane up from 1.5 m to 8.5 m while swinging 35 degrees round the trainers' brazier, ending looking down into the ring of Fiun; stay 4 m outside the ring.",
+   "notes": "FLAME FX (classic.crane). Starts 9 m NNE of the smouldering brazier at eye height with the ring of flames and the six Fiun augmentation trainers around it, the ice wall behind; the arm rises 7 m and swings 35 deg, ending above the ring looking down on the fire glow on snow. 8 m from the snow rock. Verified offline (real registry build + WBT terrain): start (10769.6,47447.3,3.5) end (10767.2,47449.1,10.5), min AGL 1.5 m, nearest static/building/tree 8.0 m (0x38F7#6 0x010036AE), peak 1.1 m/s."
+  },
+  {
+   "technique": "classic.reveal-from-occluder",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10835.6,
+     47475.8,
+     -0.1
+    ],
+    "height": 2.6,
+    "radius": 1
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 148,
+    "elevationDeg": 6,
+    "distance": 62,
+    "occluder": [
+     10860,
+     47436,
+     2.1
+    ],
+    "occluderRadius": 9.5,
+    "direction": "right",
+    "holdFrac": 0.2,
+    "settleFrac": 0.2,
+    "marginM": 0.5
+   },
+   "id": "s030",
+   "site": "fiun-outpost",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Start hidden behind the east tower 15 m beyond it, then truck 15 m to the right until the Life Stone and open sea appear; keep 6 m from the tower.",
+   "notes": "PARTICLE FX + WATER (classic.reveal-from-occluder). Camera 62 m SSE of the Life Stone at z 7.7 (4.4-5.7 m above the ice) with the east Sho tower filling the frame; it holds, then trucks ~15 m to the right until the Life Stone's sparkle column stands clear on the sea ice with the open sea behind (line of sight clear from t ~5 s). Verified offline (real registry build + WBT terrain): start (10867.8,47423.2,7.7) end (10881.5,47431.6,7.7), min AGL 4.4 m, nearest static/building/tree 6.2 m (0x38F7#13 0x01003905), peak 3.5 m/s."
+  },
+  {
+   "technique": "fpv.fpv-flip",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "fov": 80,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10915,
+     47455,
+     1
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 7,
+    "rise": 2,
+    "tiltDeg": -8,
+    "headingDeg": 95,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "id": "s040",
+   "site": "fiun-outpost",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly east at 6 m/s 7 m above the open ice and roll one full turn at mid-shot; nothing within 15 m.",
+   "notes": "FPV FLOURISH (fpv.fpv-flip over open ground). 60 m pass along y ~47455 from x 10885 to 10945, 6.4-8.6 m above the frozen flats, one 3 s barrel roll at mid-shot: ice crystals, the sea on the left and the Silyun portal hut ahead spin through the frame. Nearest object 17 m. Verified offline (real registry build + WBT terrain): start (10885.1,47457.6,8.0) end (10944.9,47452.4,8.0), min AGL 6.4 m, nearest static/building/tree 17.4 m (0x38F7#4 0x010036AD), peak 6.4 m/s."
+  },
+  {
+   "technique": "classic.push-in",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "FS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     10977.7,
+     47418.9,
+     1.94
+    ],
+    "height": 3.5,
+    "radius": 1.6
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 300,
+    "elevationDeg": 4,
+    "thirds": "center",
+    "fromFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "id": "s050",
+   "site": "fiun-outpost",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Push from 34 m in to 5 m from the Portal to Silyun at eye height, keeping the swirl centred; never closer than 4 m.",
+   "notes": "PORTAL FX / TRANSITION (classic.push-in, perceptual). From WNW of the portal (bearing 300) the camera glides from 34 m to 4.8 m at 2-4 m height until the swirling portal fills the frame - the cut to Silyun, its destination. Suggest a dissolve or fadewhite into the next town. Verified offline (real registry build + WBT terrain): start (10948.5,47435.8,6.0) end (10973.5,47421.3,4.0), min AGL 2.0 m, nearest static/building/tree 3.0 m (Portal to Silyun), peak 4.0 m/s."
+  }
+ ],
+ "notes": "time 0.70 (sun west, 60 deg), grade warm: afternoon light warms the ice and timber, frost and breath fog in the cold air"
+}

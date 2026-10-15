@@ -1,0 +1,299 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Westwatch/Sanamar/Ahurenga/Timaru/Redspire/Bluespire",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-redspire.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.78 (sun west, 38 deg), grade warm: golden hour over the south-west sea, the town front-lit from the sea side",
+ "towns": [
+  {
+   "name": "Redspire",
+   "summary": "Redspire (40.7N 83.1W) is one of the three human 'spire towns' settled on the south-western coast of Marae Lassel after Candeth Martine opened the way in 12 PY, captured by Varicci II's Viamontians 'under cover of night' in 16 PY and still under New Viamont's control. It crowns a green hill (z 44-46) above sea cliffs and the south-western sea: hide-roofed huts, a spire-roofed hall, a meeting hall and a gold-roofed Viamontian stone tower, with a captured-keep banner field where a ring of fire orbits a gold-and-blue Viamontian banner, the Life Stone at the town centre, the Town Network portal and the destroyed portal to Sanamar. Down the western slope the shattered Portal to Nanto, a dark crystal, still crackles with lightning; the Northern Ahurenga Plains portal and the Tumerok caves lie nearby.",
+   "landmarks": [
+    {
+     "name": "Viamontian stone tower (0x010036E3, gold roof)",
+     "pos": [
+      4548,
+      34260,
+      44
+     ],
+     "heightM": 25.25
+    },
+    {
+     "name": "Captured keep banner field with orbiting fire ring (0x02000ABE, 0x02000B22)",
+     "pos": [
+      4546.3,
+      34211.9,
+      44
+     ],
+     "heightM": 8.9
+    },
+    {
+     "name": "Spire-roofed hall (0x01002297)",
+     "pos": [
+      4473.8,
+      34260.6,
+      46
+     ],
+     "heightM": 10.5
+    },
+    {
+     "name": "Hide-roofed huts (0x01002294 x4)",
+     "pos": [
+      4518.4,
+      34254.2,
+      44
+     ],
+     "heightM": 3.5,
+     "note": "also (4526.2,34214.3) (4569.1,34214.9) (4453.9,34279.7)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      4517.4,
+      34229.3,
+      44
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      4493.6,
+      34234.7,
+      45.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Destroyed Portal to Sanamar",
+     "pos": [
+      4531.9,
+      34262.9,
+      43.8
+     ]
+    },
+    {
+     "name": "Shattered Portal to Nanto with lightning arcs (0x02000B61, 0x02000B6F, 0x020007C5)",
+     "pos": [
+      4378.5,
+      34186.8,
+      26
+     ],
+     "heightM": 3.8
+    },
+    {
+     "name": "Sea and sea cliffs",
+     "pos": [
+      4420,
+      34050,
+      0
+     ],
+     "note": "sea south of y ~34080 for x < 4700"
+    }
+   ],
+   "site": {
+    "id": "redspire",
+    "name": "Redspire",
+    "gazetteerId": "redspire",
+    "teleport": "@telepoi Redspire",
+    "anchor": [
+     4530.0,
+     34235.0,
+     44.0
+    ],
+    "settleSec": 2,
+    "lbKeys": [
+     "0x17B2",
+     "0x16B2"
+    ],
+    "look": {
+     "timeOfDay": 0.78,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.tilt-reveal",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       4530,
+       34240,
+       0
+      ],
+      "height": 100,
+      "radius": 60
+     },
+     "params": {
+      "startPitchDeg": -80,
+      "endPitchDeg": 0,
+      "heightAGL": 45,
+      "distance": 190,
+      "drift": 12,
+      "bearingDeg": 215,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "standingOrder": "Hover over the golden sea south-west of Redspire looking straight down at the waves, then tilt up while drifting in to reveal the hilltop town and its Viamontian tower.",
+     "notes": "ESTABLISHING + WATER (drone.tilt-reveal). Hovers 45 m over the sea 190 m SW of the hilltop town, starting at -80 deg on the golden-lit waves, then tilts up to level while drifting 12 m in: the sea cliffs, the green hill and Redspire with its gold-roofed Viamontian tower appear; the low golden sun (west, 38 deg) behind-left front-lights the town. Verified offline (real registry build + WBT terrain): start (4421.0,34084.4,45.0) end (4427.9,34094.2,45.0), min AGL 45.0 m, nearest static/building/tree 32.9 m (0x02000A38@4424,34070), peak 1.3 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.pedestal",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "FS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       4546.3,
+       34211.9,
+       44
+      ],
+      "height": 9,
+      "radius": 2
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 190,
+      "elevationDeg": -8,
+      "distance": 11,
+      "thirds": "left",
+      "riseM": 7,
+      "keepAim": true
+     },
+     "standingOrder": "Rise slowly in front of the captured Viamontian banner field while the ring of fire orbits its base, the golden-roofed tower behind.",
+     "notes": "FLAME (classic.pedestal). 11 m south of the captured Viamontian banner field (0x02000ABE, 8.9 m gold-and-blue banner) where a ring of fire puffs orbits (0x02000B22): rise from 3 m to 10 m keeping aim, the banner on the left third and the 25 m stone tower 48 m behind; golden side light from the west. Verified offline (real registry build + WBT terrain): start (4544.4,34201.2,47.0) end (4544.4,34201.2,54.0), min AGL 3.0 m, nearest static/building/tree 5.3 m (0x02001065@4549,34211), peak 1.1 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.high-angle",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       4506,
+       34232,
+       44
+      ],
+      "height": 4,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 120,
+      "elevationDeg": 42,
+      "distance": 30,
+      "thirds": "center",
+      "pushM": 4
+     },
+     "standingOrder": "Look down 42 degrees from above the huts at the glowing Life Stone and the Town Network portal side by side, pushing in gently.",
+     "notes": "PARTICLE FX (classic.high-angle, assigned). Camera 22 m up to the south-east looking down 42 deg at the glowing Life Stone and the Town Network portal swirl side by side among the hide-roofed huts, slow 4 m push; long golden shadows. Verified offline (real registry build + WBT terrain): start (4525.3,34220.9,66.1) end (4522.7,34222.3,63.4), min AGL 19.4 m, nearest static/building/tree 14.8 m (0x02000246@4528,34226), peak 0.6 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "classic.low-angle",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "MWS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       4378.5,
+       34186.8,
+       26
+      ],
+      "height": 4,
+      "radius": 2
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 300,
+      "elevationDeg": -16,
+      "distance": 12,
+      "thirds": "center",
+      "pushM": 1.5
+     },
+     "standingOrder": "Crouch below the shattered Portal to Nanto and look up as lightning arcs crackle around its crystal against the golden sky.",
+     "notes": "LIGHTNING FX (classic.low-angle). Lens 0.7 m above the slope 10 m WNW of the shattered Portal to Nanto (crystal 0x02000B61) where crackling arc clusters (0x02000B6F) and arc fountains (0x020007C5) spit bolts; looking up 11-13 deg with a 1.5 m push, the golden sun behind the camera lighting the crystal against the hill and Redspire above. Camera stays ~6 m outside the 4.3 m bolt reach. Verified offline (real registry build + WBT terrain): start (4368.5,34192.6,26.7) end (4369.8,34191.8,26.7), min AGL 0.7 m, nearest static/building/tree 5.9 m (0x16B2#0 0x02000B61), peak 0.3 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    },
+    {
+     "technique": "drone.pano-360",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       4530,
+       34245,
+       44
+      ],
+      "height": 25,
+      "radius": 40
+     },
+     "params": {
+      "heightAGL": 36,
+      "yawDeg": 300,
+      "direction": "cw",
+      "startHeadingDeg": 200,
+      "relativeToSubject": false,
+      "tiltDeg": -6,
+      "minClearance": 8
+     },
+     "standingOrder": "Hover 36 m above the hilltop town and turn slowly through 300 degrees from the golden sea across the Karab Delta to the Marescent cliffs.",
+     "notes": "CLOSING (drone.pano-360). Hover 36 m above the town (z 80, 11 m above the tower roof) and turn 300 deg clockwise from the golden sea (SSW) across the coast, the Karab Delta marsh and the Marescent plateau cliffs to the north-east and back toward the sun. Verified offline (real registry build + WBT terrain): start (4530.0,34245.0,80.0) end (4530.0,34245.0,80.0), min AGL 36.0 m, nearest static/building/tree 17.3 m (0x17B2#42 0x010036E3), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     }
+    }
+   ],
+   "verification": "ONE WBT session per pass, run sequentially (4 sessions + a sky-curve probe): describe-landblock (with includeFootprints) + list-objects + get-terrain-data for every landblock listed, get-object-detail for all 219 model ids found (bounds -> obstacle boxes), get-height at every sampled camera position, region-day-night-curve for the sun (heading 90 until 0.59, then 270; elevation per time). Offline checker: each shot built with the real technique registry (scene3d/film/shots) against a triangle-split terrain from the WBT heightmaps, sampled at 24 fps against static OBB->AABBs, structure footprints, both scenery bakes (dist scenery + scenery-retail) and outdoor spawns. Landblocks 0x16B1-0x18B3 (3x3 around 0x17B2). Tilt-reveal hovers 45 m over 69 % water, 32.9 m from the nearest scenery; pedestal 3 -> 10 m AGL, 5.3 m from the nearest bush; high-angle 19-22 m up, 14.8 m from the nearest tree; low-angle lens 0.7 m AGL, 5.9 m from the crystal bounds; pano 36 m above town, 17.3 m from the tower. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-redspire.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

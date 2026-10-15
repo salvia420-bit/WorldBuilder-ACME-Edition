@@ -1,0 +1,245 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Silyun scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "silyun",
+   "name": "Silyun",
+   "gazetteerId": "silyun",
+   "teleport": "@telepoi Silyun",
+   "anchor": [
+    7545.7,
+    45413.2,
+    80.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.76,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7545.7,
+     45413.2,
+     80.1
+    ],
+    "height": 8.9,
+    "radius": 2
+   },
+   "params": {
+    "radiusStart": 14,
+    "radiusEnd": 30,
+    "heightStart": 9,
+    "heightEnd": 66,
+    "revolutions": 0.45,
+    "direction": "ccw",
+    "bearingDeg": 170,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "id": "s010",
+   "site": "silyun",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Climb in a widening helix from 9 m to 66 m around the statue, radius 14 to 30 m, half a turn counter-clockwise; stay within 30 m of the statue until above z 130 (the giant-tree tops) and 8 m from every tree.",
+   "notes": "ESTABLISHING (drone.helix around the plaza). Starts 14 m south of the 9 m Statue of Eleonora at 9 m height, corkscrews counter-clockwise past the east side and up to 66 m above the plaza, 30 m north over the great hall: the statue, flower bed, blue-flame lamps, golden hall roof and finally the whole mesa town among its giant trees. Radius kept under 28 m until above the tree tops (z 128); closest giant tree 8.6 m (box) at t 11 s. Verified offline (real registry build + WBT terrain): start (7548.1,45399.4,89.1) end (7549.9,45442.9,146.1), min AGL 9.1 m, nearest static/building/tree 8.6 m (0x27EC#92 0x0200129A), peak 8.6 m/s."
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7550,
+     45436,
+     80
+    ],
+    "height": 18,
+    "radius": 10
+   },
+   "params": {
+    "distance": 12,
+    "heightAGL": 2.5,
+    "slide": 22,
+    "panAmount": 0.4,
+    "direction": "right",
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "id": "s020",
+   "site": "silyun",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Slide 22 m east 12 m in front of the great hall at 2.5 m height, panning partly to hold the balcony; nothing within 3 m of the lens.",
+   "notes": "FACADE PAN (drone.parallax-slide; Viamontian great hall). Camera line along y 45424 from x 7539 to 7561, 2.5 m above the plaza and 12 m from the hall's south face, pitched up 22 deg: columns, the golden roof, the balcony with braziers, paper lanterns and purple stag banners slide past with the lamps and benches in the foreground (parallax); late sun rakes across from the west. Nearest object 3.7 m (flower tuft). Verified offline (real registry build + WBT terrain): start (7539.0,45424.0,82.5) end (7561.0,45424.0,82.5), min AGL 2.5 m, nearest static/building/tree 3.7 m (0x02001293@7566,45428), peak 2.9 m/s."
+  },
+  {
+   "technique": "classic.over-the-shoulder",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7551.2,
+     45438.1,
+     84
+    ],
+    "height": 2,
+    "radius": 0.6
+   },
+   "params": {
+    "secondary": [
+     7545.7,
+     45413.2,
+     80.1
+    ],
+    "secondaryHeight": 8.9,
+    "shoulder": "right",
+    "shoulderM": 2.0,
+    "backM": 3.0,
+    "raiseM": 0,
+    "composeThirds": true,
+    "autoFov": true,
+    "pushM": 0.3
+   },
+   "look": {
+    "dof": {
+     "focusDistance": 26,
+     "focusRange": 10,
+     "bokehScale": 1.5
+    }
+   },
+   "id": "s030",
+   "site": "silyun",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold behind the statue's right shoulder 7 m up and look past it to the Grand Mother on the balcony; never closer than 1 m to the statue.",
+   "notes": "BRAZIER FX + NARRATIVE (classic.over-the-shoulder, statue as the secondary). Camera 3 m behind and 2 m right of the 9 m statue at its shoulder height (z 87.4), telephoto (auto fov ~33 deg) on the hall balcony 26 m away: the Grand Mother between the two brazier flames and paper lanterns, the stone shoulder of Eleonora soft in the foreground (look.dof focus 26 m, range 10). Verified offline (real registry build + WBT terrain): start (7547.0,45409.8,87.4) end (7547.0,45410.1,87.4), min AGL 7.4 m, nearest static/building/tree 1.1 m (Statue of Eleonora du Bellenesse), peak 0.0 m/s."
+  },
+  {
+   "technique": "classic.handheld",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7542.2,
+     45377.4,
+     80
+    ],
+    "height": 2.5,
+    "radius": 1
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 40,
+    "elevationDeg": 6,
+    "distance": 7,
+    "thirds": "center",
+    "base": "push-in",
+    "pushM": 1.5,
+    "amplitudeDeg": 0.5,
+    "frequencyHz": 1.0,
+    "posAmplitude": 0.02,
+    "roughness": 0.4
+   },
+   "id": "s040",
+   "site": "silyun",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Handheld push 1.5 m toward the open forge from 7 m north-east at eye height; stay 5 m from the flames and clear of the porch columns.",
+   "notes": "FORGE FX (classic.handheld). Documentary push-in on the smithy porch from bearing 40: forge fire glowing in the shaded NE porch between the stone columns, anvil, bellows, hanging chains and the blacksmith; gentle 0.5 deg / 1 Hz operator shake. Verified offline (real registry build + WBT terrain): start (7546.7,45382.7,82.0) end (7545.7,45381.6,81.8), min AGL 1.8 m, nearest static/building/tree 1.3 m (0x27EC#158 0x01003904), peak 0.3 m/s."
+  },
+  {
+   "technique": "classic.pull-out-reveal",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     7552.9,
+     45415.7,
+     80
+    ],
+    "height": 3.4,
+    "radius": 0.6
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "elevationDeg": 5,
+    "toFraming": "EWS",
+    "rise": true,
+    "endElevationDeg": 25,
+    "profile": "perceptual"
+   },
+   "id": "s050",
+   "site": "silyun",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Pull back from the blue-flame lamp and rise to 25 degrees over the plaza, revealing statue, hall and town; keep 2.5 m from the flower beds and benches.",
+   "notes": "CLOSING (classic.pull-out-reveal). Starts 4 m from the golden lamp's blue flame tongue at eye height (bearing 200) and pulls out and up to EWS 29 m away at 25 deg elevation (z 94): the lamp shrinks to a blue spark beside the statue of Eleonora, with the great hall and the town behind in warm late light. Verified offline (real registry build + WBT terrain): start (7551.5,45411.8,82.1) end (7543.9,45390.9,94.0), min AGL 2.1 m, nearest static/building/tree 2.8 m (0x27EC#81 0x02001294), peak 3.5 m/s."
+  }
+ ],
+ "notes": "time 0.76 (sun west, 43 deg), grade warm: late-afternoon light on the golden roof and the statue; the forge and balcony braziers glow in the shaded east faces"
+}

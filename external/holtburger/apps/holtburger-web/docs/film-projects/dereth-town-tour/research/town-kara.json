@@ -1,0 +1,322 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Mayoi/Kryst/Freehold/Kara/Frost Haven/Linvak Tukal (lk6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-kara.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "afternoon 0.64 / warm: sun in the west at 80 deg (WBT region-day-night-curve), so the lake boom-rise looks east at a top-lit town with the sun behind the drone; warm grade on green roofs.",
+ "runtimeSec": 65,
+ "towns": [
+  {
+   "name": "Kara",
+   "summary": "Kara (83.3S 47.1E) is the Jojiist town 'hidden deep in the Linvak Mountain Range', sitting 'proud on the hillside overlooking a calm lake'; most founders went home or died before lifestones, so the four who remain call it Kara, Sho for 'Empty', yet freely offer their homes to travellers, and the master smith of the Sho works Koujia armour by the lake (Town Network sign). It hosts an Exploration Society outpost, Archmage Kiko, the Grand Master Scriveners and the Colossus Foundry entrance. In the DAT the town is a walled terrace at z 132 (LB 0xBA17) 82 m above a lake (z 50, x<35610) at the foot of a steep wooded slope: a three-storey octagonal pagoda (top 163), an octagon hall, spire and gabled Sho houses and a gate frame a tiny plaza holding the Nullified Statue of a Shadow, the Town Network portal, the Life Stone and a glowing forge hearth, with lantern posts at the gate; a church and spire house sit on a lower terrace to the north and the settlement-portal cluster lies 250 m east.",
+   "landmarks": [
+    {
+     "name": "Kara pagoda (three-storey octagon 0x01000D15)",
+     "pos": [
+      35748,
+      4500,
+      132
+     ],
+     "heightM": 31,
+     "note": "west edge of the terrace above the lake; top z 163"
+    },
+    {
+     "name": "Nullified Statue of a Shadow on its pedestal",
+     "pos": [
+      35778.4,
+      4482.2,
+      132
+     ],
+     "heightM": 10,
+     "note": "pedestal top z 138.8, statue on top; centre of the plaza"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      35761.3,
+      4478.2,
+      132.2
+     ],
+     "heightM": 3.5,
+     "note": "glowing blue stone pad 0x020019E3"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      35746,
+      4469.3,
+      132
+     ],
+     "heightM": 3.6,
+     "note": "plaza, below the pagoda"
+    },
+    {
+     "name": "Forge hearth (glowing red frame 0x02000354)",
+     "pos": [
+      35777,
+      4503.9,
+      132
+     ],
+     "heightM": 0.4,
+     "note": "light + DAT script; by the north wall"
+    },
+    {
+     "name": "Gate lanterns 0x0200071A",
+     "pos": [
+      35801.6,
+      4476,
+      132
+     ],
+     "heightM": 1.4,
+     "note": "pair at (35801.6,4473.5)/(4478.5); more at (35773,4469.6),(35764.7,4501.4),(35744.2,4452.2)"
+    },
+    {
+     "name": "Lake below Kara",
+     "pos": [
+      35570,
+      4470,
+      50
+     ],
+     "heightM": 0,
+     "note": "water vertices z 50 from x~35520 to ~35610, y 4380-4560"
+    },
+    {
+     "name": "Sho houses on the south front",
+     "pos": [
+      35784,
+      4452,
+      132
+     ],
+     "heightM": 12.5,
+     "note": "spire house 0x01000C87 (35772,4452) top 142, gabled hall 0x01000D36 (35796,4452) top 144.5"
+    },
+    {
+     "name": "Sho Roadside portal + sign",
+     "pos": [
+      35779.2,
+      4422.7,
+      133.4
+     ],
+     "heightM": 3.5,
+     "note": "south of town"
+    },
+    {
+     "name": "Mad Cow event prop (April 2003)",
+     "pos": [
+      35762.5,
+      4482.5,
+      172.8
+     ],
+     "heightM": 2,
+     "note": "floats over the plaza if ACE spawns it; the top-down keeps it >60 deg off-axis"
+    }
+   ],
+   "site": {
+    "id": "kara",
+    "name": "Kara",
+    "gazetteerId": "kara",
+    "teleport": "@telepoi Kara",
+    "anchor": [
+     35770,
+     4480,
+     132
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.64,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0xBA170000",
+     "0xB9170000",
+     "0xBA160000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.boom-rise",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       35748,
+       4500,
+       50
+      ],
+      "height": 113,
+      "radius": 12
+     },
+     "params": {
+      "distance": 168,
+      "heightStart": 3,
+      "heightEnd": 100,
+      "bearingDeg": 270,
+      "relativeToSubject": false,
+      "keepAim": false,
+      "tiltDeg": 5,
+      "minClearance": 2
+     },
+     "standingOrder": "Lift straight up from 3 m above the calm lake until Kara and its pagoda rise over the brow of the hill; nothing but water under the drone.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING + WATER (drone.boom-rise, assigned). Lift straight up from 3 m above the calm lake (168 m west of the pagoda) to 100 m, level gimbal tilted +5: the wooded slope slides down the frame until Kara and its pagoda crown the hill on the lower third with open sky above. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35580, 4500, 53) end (35580, 4500, 150); min AGL 3 m (WBT get-height on 9 camera points: min AGL 3 m, ground 50-50); nearest static/building/default-bake scenery/spawn 12.62 m (scenery:0x020003D2), nearest building 156 m, retail-bake scenery 12.62 m; peak 10.15 m/s; 100% of samples over water."
+    },
+    {
+     "technique": "classic.pedestal",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       35778.4,
+       4482.2,
+       132
+      ],
+      "height": 10,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 135,
+      "elevationDeg": -12,
+      "distance": 15,
+      "thirds": "center",
+      "riseM": 9,
+      "keepAim": true
+     },
+     "standingOrder": "Rise slowly from eye level inside the gate, holding the shadow statue, the town portal and the forge glow below the pagoda; 4 m from every wall.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC + FLAME (classic.pedestal, assigned). From inside the gate, rise from eye level 1.9 -> 10.9 m holding the shadow statue: the glowing forge hearth right of it, the town portal swirl left, a lantern in the left foreground and the pagoda roofs behind until the camera tops the plaza (life stone just off the left edge). Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35788.8, 4471.8, 133.9) end (35788.8, 4471.8, 142.9); min AGL 1.88 m (WBT get-height on 9 camera points: min AGL 1.88 m, ground 132-132); nearest static/building/default-bake scenery/spawn 5.47 m (scenery:0x020007A3), nearest building 8.53 m, retail-bake scenery 28.7 m; peak 1.28 m/s."
+    },
+    {
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       35784,
+       4452,
+       132
+      ],
+      "height": 12,
+      "radius": 12
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "elevationDeg": -4.6,
+      "distance": 21,
+      "thirds": "center",
+      "travelM": 46,
+      "direction": "right",
+      "keepAim": false
+     },
+     "standingOrder": "Slide east along the Sho house fronts 10 m off the walls at head height, the pagoda roof peeping over them; nothing between the lens and the facades.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FACADE PAN (classic.truck, keepAim off). Slide 46 m east along the Sho house fronts on the south side, 10-12 m off the walls at 2.3-4.9 m above the path, the pagoda finial over their roofs; the town's only pan. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35761, 4431.1, 136.3) end (35807, 4431.1, 136.3); min AGL 2.25 m (WBT get-height on 9 camera points: min AGL 2.25 m, ground 131.4-134.1); nearest static/building/default-bake scenery/spawn 4.51 m (spawn:Sign), nearest building 9.93 m, retail-bake scenery 14.34 m; peak 5.55 m/s."
+    },
+    {
+     "technique": "drone.top-down",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       35772,
+       4484,
+       132
+      ],
+      "height": 10,
+      "radius": 30
+     },
+     "params": {
+      "heightAGL": 46,
+      "rotateDeg": 70,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "drift": 0,
+      "minClearance": 10
+     },
+     "standingOrder": "Look straight down on the little plaza, its statue, portal, life stone and forge glow, turning slowly; 14 m above the pagoda finial.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "TOP-DOWN (drone.top-down). 46 m straight above the little plaza turning 70 deg: statue, portal pad, life stone, forge glow and the pagoda's octagonal roof as a pattern. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35772, 4484, 178) end (35772, 4484, 178); min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 132-132); nearest static/building/default-bake scenery/spawn 8.52 m (spawn:Mad Cow), nearest building 19.62 m, retail-bake scenery 51.94 m; peak 0 m/s."
+    },
+    {
+     "technique": "drone.spiral-descent",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       35748,
+       4500,
+       132
+      ],
+      "height": 31,
+      "radius": 12
+     },
+     "params": {
+      "radiusStart": 46,
+      "radiusEnd": 30,
+      "heightStart": 56,
+      "heightEnd": 27,
+      "revolutions": 0.38,
+      "direction": "ccw",
+      "bearingDeg": 300,
+      "relativeToSubject": false,
+      "minClearance": 8
+     },
+     "standingOrder": "Spiral down around the pagoda from high over the western slope, ending level with its upper eaves; 15 m from the roof edges and 10 m above the trees.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.spiral-descent). Spiral down around the pagoda from 56 to 27 m above the plaza (radius 46 -> 30), starting high over the wooded western slope above the lake and ending level with its upper eaves. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (35708.2, 4523, 188) end (35756.7, 4471.3, 159); min AGL 27 m (WBT get-height on 9 camera points: min AGL 27 m, ground 90.5-132); nearest static/building/default-bake scenery/spawn 16.72 m (building:0x01000D15#67), nearest building 16.72 m, retail-bake scenery 25.45 m; peak 10.28 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session at a time, >=3.8 GB free): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xB916, 0xB917, 0xB918, 0xBA16, 0xBA17, 0xBA18, 0xBB16, 0xBB17, 0xBB18; get-object-detail on every placed model (bounds -> rotated AABBs) and chorizite-parse-dat-record Setup on every placed Setup (default PhysicsScript + lights) to find the FX props, cross-checked with object-tags.json (utf-8-sig) and particle-fx-catalog.json; served dist scenery (default ace-compat bake AND the opt-in retail bake) and ACE outdoor spawns added as obstacle boxes; every shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain (AC split-triangle interpolation) and sampled at 4 Hz for AGL, box clearance, line of sight, subject framing and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) agreed with the offline terrain within 0.005 m; region-day-night-curve: t 0.642 -> sun heading 270 deg, pitch 80.4 deg. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-kara.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.boom-rise 15s: start [35580, 4500, 53] end [35580, 4500, 150], WBT minAGL 3 m, clearance 12.62 m (scenery:0x020003D2), bldg 156 m, retail 12.62 m, vmax 10.15 m/s | s020 classic.pedestal 11s: start [35788.8, 4471.8, 133.9] end [35788.8, 4471.8, 142.9], WBT minAGL 1.88 m, clearance 5.47 m (scenery:0x020007A3), bldg 8.53 m, retail 28.7 m, vmax 1.28 m/s | s030 classic.truck 13s: start [35761, 4431.1, 136.3] end [35807, 4431.1, 136.3], WBT minAGL 2.25 m, clearance 4.51 m (spawn:Sign), bldg 9.93 m, retail 14.34 m, vmax 5.55 m/s | s040 drone.top-down 11s: start [35772, 4484, 178] end [35772, 4484, 178], WBT minAGL 46 m, clearance 8.52 m (spawn:Mad Cow), bldg 19.62 m, retail 51.94 m, vmax 0 m/s | s050 drone.spiral-descent 15s: start [35708.2, 4523, 188] end [35756.7, 4471.3, 159], WBT minAGL 27 m, clearance 16.72 m (building:0x01000D15#67), bldg 16.72 m, retail 25.45 m, vmax 10.28 m/s"
+  }
+ ]
+}

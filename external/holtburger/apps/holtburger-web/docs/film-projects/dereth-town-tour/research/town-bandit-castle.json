@@ -1,0 +1,316 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Refuge/Bandit/Merwart/Neydisa",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-bandit-castle.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.40 (sun due east, ~47 deg) grade cool: crisp late-morning frontier light; the east faces of castle and gatehouse are front-lit",
+ "towns": [
+  {
+   "name": "Bandit Castle",
+   "summary": "Bandit Castle (66.4N 49.9E) crowns a hill in the north-east of Osteth just outside the mountains that wall in the Olthoi North. A faction expelled from Cragstone first held it; a quarrel split them and Neydisa's followers left west for Foster's Fort, and the castle is now the den of MacDugal's bandits (MacDugal, Gwillim the Apprentice, Jourgensson, Shanrek the Forger, Kiriel Shadowborn, Melia Thorn the Archmage, Barkeep Gorth, Provisioner Murdo, Shi Ki-Yong the Armorer). The 'KEEP OUT!' portal north of the walls leads to the Forger's Hideout and the keep holds the Bandit Castle Prison. In the world data it is a concentric stone castle on a hilltop at z 186: an octagonal curtain wall about 66 m across (4-6 m high) with round wall towers to the north, south and west and turrets on the diagonals, an octagonal four-storey keep 24 m wide in the middle (roof z 198), radial walls dividing the bailey into quadrants and a twin-block gatehouse on the east (z 198) facing the road. The Life Stone stands in the north-west quadrant, the Town Network portal in the south, a blacksmith's forge with bellows in the north-west corner building, candelabra flames in the bailey. The west side falls ~90 m down an escarpment to wooded lowlands; the east is a high rocky plateau (z 170-184); 20-37 m pines ring the hill.",
+   "landmarks": [
+    {
+     "name": "Octagonal keep (0x01000801)",
+     "pos": [
+      36444.0,
+      40404.0,
+      186.0
+     ],
+     "heightM": 12.0,
+     "note": "24 m wide, roof z 198; the Bandit Castle Prison portal is inside"
+    },
+    {
+     "name": "Curtain wall ring with N/S/W round towers",
+     "pos": [
+      36444.0,
+      40404.0,
+      186.0
+     ],
+     "heightM": 8.0,
+     "note": "radius ~33 m; towers at (36444,40437), (36444,40371), (36410,40404) top ~194-196"
+    },
+    {
+     "name": "East gatehouse (0x01000804)",
+     "pos": [
+      36474.0,
+      40404.0,
+      186.0
+     ],
+     "heightM": 12.0,
+     "note": "twin blocks x 36456-36482, roof z 198, gate passage between them"
+    },
+    {
+     "name": "Life Stone (north-west bailey quadrant)",
+     "pos": [
+      36418.5,
+      40412.5,
+      186.0
+     ],
+     "heightM": 2.6,
+     "note": "sparkle column; acpedia 'in Courtyard'"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      36452.8,
+      40378.8,
+      186.2
+     ],
+     "heightM": 3.5,
+     "note": "south quadrant, glowing blue base 0x020019E3"
+    },
+    {
+     "name": "Candelabra flames (0x020005D8)",
+     "pos": [
+      36426.4,
+      40425.8,
+      186.0
+     ],
+     "heightM": 2.2,
+     "note": "others at (36426.6,40382.7) and (36460.4,40406.0); warm 1.45 m glow"
+    },
+    {
+     "name": "Blacksmith forge (0x02000354) and bellows",
+     "pos": [
+      36420.8,
+      40426.1,
+      186.0
+     ],
+     "heightM": 0.4,
+     "note": "inside the north-west corner building"
+    },
+    {
+     "name": "KEEP OUT! portal (to Forger's Hideout)",
+     "pos": [
+      36442.7,
+      40449.7,
+      183.5
+     ],
+     "heightM": 3.0,
+     "note": "outside the north tower among tall pines"
+    },
+    {
+     "name": "Western escarpment and lowlands",
+     "pos": [
+      36300.0,
+      40404.0,
+      120.0
+     ],
+     "heightM": 90.0,
+     "note": "z 186 at the wall to z ~100 at x 36250"
+    }
+   ],
+   "site": {
+    "id": "bandit-castle",
+    "name": "Bandit Castle",
+    "gazetteerId": "bandit-castle",
+    "teleport": "@teleloc 0xBDD2002C 130.512 92.5485 186.005 -0.746387 0 0 -0.665512",
+    "anchor": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.4,
+     "grade": "cool"
+    }
+   },
+   "shots": [
+    {
+     "id": "s010",
+     "technique": "classic.arc",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "fov": 45,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       36444.0,
+       40404.0,
+       186.0
+      ],
+      "height": 12,
+      "radius": 36
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 84,
+      "elevationDeg": 15,
+      "distance": 158,
+      "arcDeg": 32,
+      "direction": "ccw"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Sweep a slow 32-degree arc 158 m out from east-south-east to east-north-east of the hilltop castle, the western lowlands falling away behind it; stay 9 m above every pine top.",
+     "notes": "ESTABLISHING. A 32-degree counter-clockwise arc 158 m out and 15 deg up (z 232.9) from east-south-east to east-north-east of the castle: the octagonal curtain wall with its round towers, the four-storey keep and the east gatehouse crowning the hill at z 186, front-lit by the late-morning sun, with the western escarpment falling ~90 m to the lowlands behind it. Sector chosen by a line-of-sight sweep: 34-37 m pines ring the hill and block most low views; from 70-100 deg all five probe points (keep, N/S/W towers, gate) are visible. Verified: AGL 54-61, 9.8 m above/beside the tallest pine 0x02000258 (top 223) at t 6.5, no static within 60 m. vmax 9.6 m/s.",
+     "draftId": "b010"
+    },
+    {
+     "id": "s020",
+     "technique": "drone.top-down",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       36444.0,
+       40404.0,
+       186.0
+      ],
+      "height": 12,
+      "radius": 36
+     },
+     "params": {
+      "heightAGL": 72,
+      "rotateDeg": 40,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "drift": 0,
+      "minClearance": 10
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hang straight above the keep and let the octagonal curtain wall turn slowly beneath; hold 60 m above the keep roof.",
+     "notes": "PATTERN / TOP-DOWN. Nadir hover 72 m above the keep (z 258) while the image turns 40 deg: the castle's concentric geometry (octagonal keep inside the octagonal curtain wall, four round towers, radial walls dividing the bailey into quadrants, the east gatehouse) reads like a seal, surrounded by the dark pines. Verified: 60 m above the keep roof (z 198), 55-60 m from the nearest tree tops; no motion except rotation.",
+     "draftId": "b020"
+    },
+    {
+     "id": "s030",
+     "technique": "drone.rising-reveal",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       36250.0,
+       40416.0,
+       100.0
+      ],
+      "height": 10,
+      "radius": 20
+     },
+     "params": {
+      "distance": 180,
+      "obstacleDistance": 14,
+      "obstacleHeight": 8,
+      "heightStart": 1.6,
+      "clearance": 6,
+      "forward": 4,
+      "endPitchDeg": -9,
+      "bearingDeg": 90,
+      "relativeToSubject": false,
+      "minClearance": 1
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Start low in the north-west courtyard looking past the sparkling Life Stone at the curtain wall, then rise over the battlements to reveal the sunlit western lowlands; keep 5 m from the Life Stone and the walls.",
+     "notes": "FX + REVEAL. Starts 1.6 m above the north-west bailey quadrant (36430, 40416) looking west at the curtain wall with the sparkling Life Stone (36418.5, 40412.5) left of centre 12 m ahead, then rises 12.4 m while easing 4 m forward and pitching from +10 to -9 deg until it clears the battlements (wall top ~192) and the sunlit western lowlands open 90 m below. Morning sun behind the camera. Verified against the castle's exported meshes (1 m raster): start 5.7 m from the keep's north-west face, the quadrant's radial wall 7+ m east, the curtain wall >= 8 m ahead at all times, Life Stone >= 8.3 m; ground 186.0 (WBT), AGL 1.6 -> 14.0; nearest scenery 18.9 m. vmax 1.6 m/s.",
+     "draftId": "b030"
+    },
+    {
+     "id": "s040",
+     "technique": "classic.pan",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       36444.0,
+       40404.0,
+       186.0
+      ],
+      "height": 12,
+      "radius": 36
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "elevationDeg": 24,
+      "distance": 90,
+      "fromDeg": -100,
+      "toDeg": 0,
+      "relative": true
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hover still 90 m south of the keep and pan right from the sunlit western lowlands across the wooded slope onto the castle; no translation, keep 25 m above the pines.",
+     "notes": "VISTA PAN. Fixed drone position 90 m south of the keep and 24 deg up (z 228.6, AGL 70.8): pans 100 deg clockwise from the western lowlands below the escarpment (heading 260, sun behind) across the wooded southern slope onto the castle (heading 0), ending with the gatehouse and keep side-lit from the east. Position chosen by the same LOS sweep (all probe points visible from 180 deg at 90 m / 24 deg). Verified: 26.9 m from the nearest pine top (0x02000258 top 211), 66.8 m from any static.",
+     "draftId": "b040"
+    },
+    {
+     "id": "s050",
+     "technique": "classic.time-lapse",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 45,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       36444.0,
+       40404.0,
+       186.0
+      ],
+      "height": 12,
+      "radius": 36
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 235,
+      "elevationDeg": 2,
+      "distance": 220,
+      "thirds": "center",
+      "rate": 0.012
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Lock off high over the south-western lowland looking at the castle crowning its escarpment while the clouds race and the shadows shorten; keep the frame still.",
+     "notes": "TIME-LAPSE CLOSER. Locked off 220 m south-west of the castle, 2 deg above it (z 199.7, AGL 106 over the lowland) looking north-east up at the hilltop castle on its escarpment against the sky while the sky clock runs at 0.012 day/s: 0.40 -> 0.544 over 12 s (sun 47 -> 75 deg, never sets), clouds race and the pine shadows on the slope shorten. Verified: nearest scenery 32 m (retail) / 65 m (default), clear line of sight to the keep and all towers.",
+     "draftId": "b050"
+    }
+   ],
+   "verification": "WorldBuilder.Terminal 1.2.0 + RetailSmoke.wbproj, 7 sessions run one at a time with >= 4.5 GB available: describe-landblock + list-objects + get-terrain-data on the 3x3 around the town LB, get-terrain-data on the 5x5/7x7 ring for water, get-object-detail on all 113 static models (bounds), obj-export of the main buildings (meshes rasterised at 1 m for exact clearance), render-preview top-downs, chorizite-parse-dat-record on the FX Setups (lights + default PhysicsScripts), region-day-night-curve (sun heading 90 deg all morning, 270 after 0.6; elevation 0.36->38, 0.40->47, 0.50->68 deg), and get-height at every sampled start/quarter/mid/end/min-AGL camera point (107 probes; my AC triangle-split re-implementation matches WBT to <= 0.005 m). Every shot was built offline with the real technique registry (scene3d/film/shots buildShot via tools/film/plan/schema.mjs shotSpec) against that terrain and sampled every 0.05 s; each sample was checked against rotated static OBBs, the building meshes, the film's default scenery bake (~/hb-serve/dist/current/scenery AABBs) and, for information, the opt-in retail bake, plus line of sight to the subject. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-bandit-castle.json passes film.mjs plan validate (dry build included): 0 errors, 0 warnings. Per shot (draft id -> plan id: min AGL | nearest static/mesh | nearest default-bake scenery | nearest retail-bake scenery): s010=b010 classic.arc minAGL 54.3@t9.2 | static none within 60 m | defScn 9.8@t6.5 0x02000258@(36594,40431,top223) | retScn 31.2@t7.65 0x020002D3@(36621,40435,top208) ; s020=b020 drone.top-down minAGL 72.0@t0 | static 60.0@t0 bandit@(36443,40403,z198-198) | defScn 60.4@t0 0x02000258@(36467,40446,top210) | retScn 55.1@t0 0x020002DA@(36485,40384,top217) ; s030=b030 drone.rising-reveal minAGL 1.6@t0 | static 5.7@t0 bandit@(36434,40411,z186-198) | defScn 18.9@t6.35 0x020005C9@(36410,40426,top188) | retScn 23.8@t13 0x02000258@(36417,40447,top206) ; s040=b040 classic.pan minAGL 70.8@t0 | static 66.8@t0 0x020019e3@(36453,40379) | defScn 26.9@t0 0x02000258@(36463,40349,top211) | retScn 26.9@t0 0x02000258@(36463,40349,top211) ; s050=b050 classic.time-lapse minAGL 106.2@t0 | static none within 60 m | defScn 64.9@t0 0x020002D3@(36299,40307,top146) | retScn 32.0@t0 0x02000258@(36299,40254,top173)"
+  }
+ ]
+}

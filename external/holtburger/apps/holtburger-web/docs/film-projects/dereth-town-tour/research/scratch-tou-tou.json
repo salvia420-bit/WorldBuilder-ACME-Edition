@@ -1,0 +1,248 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Tou-Tou scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "tou-tou",
+   "name": "Tou-Tou (ruined village)",
+   "gazetteerId": "tou-tou",
+   "teleport": "@teleloc 0xF75C000D 30 105 20.1 1 0 0 0",
+   "anchor": [
+    47454.0,
+    17769.0,
+    20.0
+   ],
+   "settleSec": 4,
+   "lbKeys": [
+    "0xF75C",
+    "0xF65C",
+    "0xF65B",
+    "0xF75D",
+    "0xF85D",
+    "0xF85E",
+    "0xF75B",
+    "0xF55A"
+   ],
+   "look": {
+    "timeOfDay": 0.78,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 14
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47465.0,
+     17730.0,
+     20.0
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 212,
+    "distance": 125,
+    "heightM": 34,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "framing": "EWS",
+   "fov": 50,
+   "standingOrder": "Hang high and slow over the scorched peninsula, drifting toward the burning ruins of Tou-Tou with the Empyrean lighthouse on the hill beyond.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010",
+   "site": "tou-tou",
+   "notes": "ESTABLISHING (classic.establishing). Hanging 34 m above the scorched peninsula 125 m south-west of the ruins, drifting 12 deg and pushing 10 %: the burnt-out village with its pillars of fire, black shadow smoke and dead trees, and the 78 m Empyrean lighthouse on its hill beyond with its crystal beacon near the top of frame; low western sun raking in from the left. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47410.2,17617.7,54.0) end (47395.7,17641.3,54.0), min AGL 31.9 m, nearest static/building/spawn box 16.6 m (scenery:0x020002D7), nearest building 24.9 m, trees by crown profile 16.6 m (default bake) / 16.6 m (opt-in retail bake), peak 3.1 m/s; WBT get-height at 9 samples matched the checker terrain to 0.003 m (min WBT AGL 31.86 m)."
+  },
+  {
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47478.76,
+     17715.6,
+     20.0
+    ],
+    "height": 9,
+    "radius": 4
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 249.33,
+    "distance": 40.91,
+    "elevationDeg": -4.06,
+    "thirds": "right",
+    "fromTarget": "metres",
+    "fromM": 6.5,
+    "toTarget": "subject",
+    "at": 0.5,
+    "pullSec": 2.5
+   },
+   "framing": "FS",
+   "fov": 40,
+   "look": {
+    "dof": {
+     "focusRange": 3,
+     "bokehScale": 2.5
+    }
+   },
+   "standingOrder": "Lock off low beside a pillar of fire, flames sharp in the foreground, then pull focus to the nullified Banderling statue on its pedestal amid the ruins.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020",
+   "site": "tou-tou",
+   "notes": "FLAME (classic.rack-focus). Locked low (1.6 m) 6.5 m from a Pillar of Fire: flames sharp in the foreground left of centre, then focus pulls (2.5 s, centred mid-shot) 41 m to the nullified Banderling statue on its pedestal on the right third, the lighthouse far behind on the upper left; DoF look focusRange 3, bokehScale 2.5. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47440.6,17701.2,21.6) end (47440.6,17701.2,21.6), min AGL 1.6 m, nearest static/building/spawn box 4.2 m (static:0x020005C9#33), nearest building 27.8 m, trees by crown profile 65.4 m (default bake) / 66.0 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.60 m)."
+  },
+  {
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47536.0,
+     17745.0,
+     20.0
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 4.712389
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": -3,
+    "lookYawDeg": 0,
+    "advanceM": 18,
+    "bobM": 0.025,
+    "stepHz": 1.7
+   },
+   "fov": 70,
+   "standingOrder": "Walk slowly west down the ruined street of Tou-Tou past a pillar of fire, smoke and burnt halls ahead, as a lone survivor would.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030",
+   "site": "tou-tou",
+   "notes": "FLAME + SHADOW (classic.pov). A survivor's-eye walk 18 m west down the ruined street (1.65 m eye height, gentle step bob), a Pillar of Fire burning 10 m to the left, black shadow's-breath smoke drifting, the glowing metallic roof of a ruined hall ahead; walking into the low western sun backlights the flames and smoke. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47535.8,17745.0,21.7) end (47517.8,17745.0,21.7), min AGL 1.6 m, nearest static/building/spawn box 4.4 m (static:0x02000397#71), nearest building 22.5 m, trees by crown profile 29.4 m (default bake) / 29.4 m (opt-in retail bake), peak 2.6 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.65 m)."
+  },
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 16
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47748.0,
+     18132.0,
+     100.0
+    ],
+    "height": 60,
+    "radius": 14
+   },
+   "params": {
+    "radiusStart": 55,
+    "radiusEnd": 34,
+    "heightStart": 68,
+    "heightEnd": 14,
+    "revolutions": 0.35,
+    "direction": "cw",
+    "bearingDeg": 215,
+    "relativeToSubject": false,
+    "minClearance": 6
+   },
+   "framing": "WS",
+   "standingOrder": "Spiral down around the Empyrean lighthouse from above its glowing crystal beacon, the sea and the peninsula wheeling behind.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040",
+   "site": "tou-tou",
+   "notes": "LANDMARK + MAGIC (drone.spiral-descent). A 0.35-turn clockwise spiral from 20 m above the lighthouse's crystal beacon (z 168) down to z 114, radius 55 to 34 m: the Empyrean lighthouse with its glowing crystal and the light emitters spiralling up its shaft, the sea and the Tou peninsula wheeling behind; the view tilts from -35 to +25 deg to keep the beacon in frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47716.4,18087.0,168.0) end (47736.9,18164.2,114.0), min AGL 54.1 m, nearest static/building/spawn box 17.5 m (building:0x010011F3#23), nearest building 17.5 m, trees by crown profile 123.3 m (default bake) / 123.1 m (opt-in retail bake), peak 11.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 54.08 m)."
+  },
+  {
+   "technique": "classic.whip-pan",
+   "duration": {
+    "sec": 9
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     47465.0,
+     17730.0,
+     20.0
+    ],
+    "height": 10,
+    "radius": 45
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 36.2,
+    "distance": 163.0,
+    "elevationDeg": 9.07,
+    "angleDeg": 178,
+    "direction": "left",
+    "whipSec": 0.3,
+    "at": 0.55,
+    "land": "subject"
+   },
+   "framing": "EWS",
+   "fov": 60,
+   "standingOrder": "Hold on the Empyrean lighthouse from the hillside, then whip left onto the burning ruins of Tou-Tou with the Shadow Spire rising beyond.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050",
+   "site": "tou-tou",
+   "notes": "TRANSITION / CLOSING (classic.whip-pan). From 6 m above the hillside road north-east of the ruins, hold on the lighthouse and its beacon, then whip 178 deg left in 0.3 s onto the burning ruins of Tou-Tou with the tip of the 180 m Shadow Spire rising beyond them. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (47560.1,17859.9,50.7) end (47560.1,17859.9,50.7), min AGL 6.0 m, nearest static/building/spawn box 17.7 m (building:0x01002A5F#0), nearest building 17.7 m, trees by crown profile 62.4 m (default bake) / 55.7 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.001 m (min WBT AGL 6.04 m)."
+  }
+ ],
+ "notes": "time 0.78 (sun due west, ~39 deg), warm"
+}

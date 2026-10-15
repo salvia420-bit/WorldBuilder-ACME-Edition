@@ -1,0 +1,216 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Mayoi scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "mayoi",
+   "name": "Mayoi",
+   "gazetteerId": "mayoi",
+   "teleport": "@telepoi Mayoi",
+   "anchor": [
+    44200,
+    9690,
+    28
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.33,
+    "grade": "neutral"
+   },
+   "lbKeys": [
+    "0xE6320000",
+    "0xE5320000",
+    "0xE7320000",
+    "0xE7330000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "mayoi",
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44205,
+     9690,
+     28
+    ],
+    "height": 31,
+    "radius": 80
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "distance": 160,
+    "heightM": 60,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold the whole terrace town, Zhen's Tower and the bay beyond in one wide frame while drifting slowly east; stay 15 m above the southern hilltops."
+  },
+  {
+   "id": "s020",
+   "site": "mayoi",
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44425,
+     9835,
+     0
+    ],
+    "height": 2,
+    "radius": 5
+   },
+   "params": {
+    "heightAGL": 6,
+    "speed": 5.5,
+    "headingDeg": 238,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": 3,
+    "minClearance": 4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim 6 m above the calm bay toward the beach, Zhen's Tower rising on the bluff ahead; never lower than 4 m over the water and stop short of the palms."
+  },
+  {
+   "id": "s030",
+   "site": "mayoi",
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44170,
+     9663,
+     25.6
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 3.14159
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 2,
+    "lookYawDeg": 0,
+    "advanceM": 6,
+    "bobM": 0.02,
+    "stepHz": 1.6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Walk slowly up out of the hollow toward the glowing town portal between the two Sho halls; nothing within 2 m of the lens."
+  },
+  {
+   "id": "s040",
+   "site": "mayoi",
+   "technique": "classic.dolly-zoom",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44268,
+     9732,
+     28
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": -6,
+    "toFovDeg": 24
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Back away east from Zhen's Tower over the bluff while zooming in so the pagoda holds its size and the western hills tower up behind it; stay 15 m above the slope."
+  },
+  {
+   "id": "s050",
+   "site": "mayoi",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44195,
+     9625,
+     28
+    ],
+    "height": 10,
+    "radius": 30
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 52,
+    "rotateDeg": 50,
+    "riseM": 12
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the southern street, the life stone and the town portal while turning slowly and rising; keep 10 m above every tree top."
+  }
+ ]
+}

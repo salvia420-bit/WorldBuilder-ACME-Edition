@@ -1,0 +1,347 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Shoushi/Hebian-to/Tou-Tou/Baishi/Lin/Nanto (ch7 The Sho Lands)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-shoushi.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.76 (sun due west, ~45 deg), warm: low western sun rakes the Yaosai walls",
+ "totalSec": 59,
+ "towns": [
+  {
+   "name": "Shoushi",
+   "summary": "Shoushi ('small place') is the Sho starter town south of the Blackmire, raised from the torn-down walls of the warlord Ijiku Tambai's fortress Yaosai once the Mosswart raiders were pushed back; it has outgrown its mocking name as the waypoint between Hebian-To and the western Sho holdings, and is home to the Sho casino (Gan-Zo's Den of Iniquity). On flat ground at z 20 the town is a grid of low 2.5 m wall segments and roofed gates - the old Yaosai walls - enclosing green-roofed Sho halls, dome houses and the Spire of Serenity, a 31 m octagon pagoda. At its heart a small walled court with roofed north and south gates holds the Life Stone, a fountain, a well and a flowering tree, with the Town Network portal just outside; a nullified drudge statue on its pedestal and the Three Swords Hall face the plaza ring around it, flame lanterns line every lane, and a five-storey spire tower rises north of the walls.",
+   "landmarks": [
+    {
+     "name": "Spire of Serenity (three-storey octagon pagoda 0x01000D15)",
+     "pos": [
+      41940.0,
+      16476.0,
+      20.0
+     ],
+     "heightM": 31,
+     "note": "roof z 51; door faces the plaza (south)"
+    },
+    {
+     "name": "Walled court of the Life Stone (roofed gates 0x01000E65 N/S, 2.5 m walls)",
+     "pos": [
+      41940.0,
+      16428.0,
+      20.0
+     ],
+     "heightM": 5.9,
+     "note": "24 x 24 m; gates at y 16416 and 16440, openings 5 m wide x 3.5 m"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      41944.8,
+      16423.1,
+      20.0
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Fountain",
+     "pos": [
+      41945.5,
+      16432.7,
+      20.0
+     ]
+    },
+    {
+     "name": "Well",
+     "pos": [
+      41934.1,
+      16421.5,
+      20.0
+     ]
+    },
+    {
+     "name": "Portal to Town Network (0x020019E3)",
+     "pos": [
+      41922.2,
+      16412.3,
+      20.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Nullified Statue of a Drudge on its pedestal (0x01002A1B)",
+     "pos": [
+      41961.7,
+      16449.2,
+      26.8
+     ],
+     "heightM": 3,
+     "note": "pedestal z 20-26.8"
+    },
+    {
+     "name": "Three Swords Hall (two-storey hall 0x01000D36)",
+     "pos": [
+      41989.0,
+      16428.0,
+      20.0
+     ],
+     "heightM": 12.5,
+     "note": "west face x 41978 on the plaza"
+    },
+    {
+     "name": "West gate of the Yaosai wall (0x01000E65)",
+     "pos": [
+      41836.0,
+      16428.0,
+      20.0
+     ],
+     "heightM": 5.9,
+     "note": "opening y 16425.5-16430.5, z 20-23.5"
+    },
+    {
+     "name": "Five-storey spire tower (0x01001117) with candelabra",
+     "pos": [
+      42084.0,
+      16644.0,
+      20.0
+     ],
+     "heightM": 30.8,
+     "note": "candelabra 0x020005D8 at z 35.2"
+    },
+    {
+     "name": "Flame lanterns (0x0200071A, light + flame script) x15 around the plaza",
+     "pos": [
+      41945.3,
+      16428.5,
+      20.0
+     ],
+     "heightM": 1.4
+    },
+    {
+     "name": "Gan-Zo's Den of Iniquity (casino) with glowing lanterns 0x02000705",
+     "pos": [
+      42133.0,
+      16260.0,
+      20.0
+     ]
+    }
+   ],
+   "site": {
+    "id": "shoushi",
+    "name": "Shoushi",
+    "gazetteerId": "shoushi",
+    "teleport": "@telepoi Shoushi",
+    "anchor": [
+     41940.0,
+     16445.0,
+     20.0
+    ],
+    "settleSec": 3,
+    "lbKeys": [
+     "0xDA55",
+     "0xD955",
+     "0xDA56",
+     "0xDA54",
+     "0xDB55"
+    ],
+    "look": {
+     "timeOfDay": 0.76,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "classic.pan",
+     "duration": {
+      "sec": 14
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       41940.0,
+       16476.0,
+       20.0
+      ],
+      "height": 31,
+      "radius": 12
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 261,
+      "distance": 230,
+      "elevationDeg": 8.2,
+      "fromDeg": -38,
+      "toDeg": 4,
+      "relative": true
+     },
+     "framing": "EWS",
+     "fov": 42,
+     "standingOrder": "Hold high on the western hill and pan slowly right across the walled courtyards of Shoushi until the green pagoda settles in frame.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (classic.pan). From 12 m above the wooded hill 230 m west of town (z 68), a slow 42 deg pan right: from the five-storey spire tower and the northern halls across the grid of low Yaosai walls and green-roofed compounds, landing on the octagon pagoda (Spire of Serenity) just left of centre; the low western sun is behind the camera, so walls and roofs are front-lit with long shadows. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41715.2,16440.4,68.3) end (41715.2,16440.4,68.3), min AGL 12.0 m, nearest static/building/spawn box 6.3 m (scenery:0x020002D8), nearest building 127.5 m, trees by crown profile 6.3 m (default bake) / 6.6 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 9 samples matched the checker terrain to 0.002 m (min WBT AGL 12.04 m)."
+    },
+    {
+     "technique": "fpv.fpv-gap",
+     "duration": {
+      "sec": 7
+     },
+     "params": {
+      "gapPos": [
+       41836.0,
+       16428.0,
+       21.6
+      ],
+      "gapNormal": [
+       1,
+       0,
+       0
+      ],
+      "gapWidth": 5,
+      "gapHeight": 3.5,
+      "approachAngleDeg": 20,
+      "approachFrom": "right",
+      "approachDistance": 18,
+      "alignDistance": 10,
+      "exitDistance": 30,
+      "cornerRadius": 10,
+      "speed": 11,
+      "alat": 8,
+      "lookAhead": 6,
+      "maxBankDeg": 30,
+      "relativeToSubject": false,
+      "ends": "cruise"
+     },
+     "framing": "WS",
+     "standingOrder": "Bank in low over the western field and shoot straight through the roofed west gate of the old Yaosai wall into the town.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FPV GAP (fpv.fpv-gap). A low banked approach over the western field from the south-west, aligned 10 m out, then straight through the roofed west gate of the old Yaosai wall 1.6 m above the ground and 30 m on into town between the dome hall and the two-storey hall; sun behind the camera. Gate opening parsed from GfxObj 0x01000E65: 5 m wide (posts at +/-2.5 m) x 3.5 m high, so the line clears each post by 2.5 m and the lintel by 1.9 m (the 0.5 m 'minClr' below is the wall's whole-length AABB). Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41809.1,16421.8,21.6) end (41866.0,16428.0,21.6), min AGL 1.6 m, nearest static/building/spawn box 0.5 m (building:0x01000E65#4), nearest building 0.5 m, trees by crown profile 22.2 m (default bake) / 10.0 m (opt-in retail bake), peak 8.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.60 m)."
+    },
+    {
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       41978.0,
+       16422.0,
+       20.0
+      ],
+      "height": 7,
+      "radius": 11
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 270,
+      "distance": 12,
+      "elevationDeg": -6,
+      "thirds": "center",
+      "travelM": 32,
+      "direction": "right",
+      "keepAim": false
+     },
+     "framing": "FS",
+     "fov": 52,
+     "standingOrder": "Truck slowly south along the green-roofed Three Swords Hall on the plaza, lanterns sliding past in the foreground, the low western sun on its face.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FACADE PAN (classic.truck). Fixed-head truck 32 m south along the green-roofed two-storey Three Swords Hall on the east side of the plaza, 12 m off its west face at 2.2 m height; street lanterns (flame flicker) slide through the bottom of frame and the low western sun lights the facade straight on. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41966.1,16438.0,22.2) end (41966.1,16406.0,22.2), min AGL 2.2 m, nearest static/building/spawn box 3.9 m (spawn:Collector), nearest building 5.8 m, trees by crown profile 43.4 m (default bake) / 43.4 m (opt-in retail bake), peak 3.9 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 2.25 m)."
+    },
+    {
+     "technique": "classic.handheld",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       41944.8,
+       16423.1,
+       20.0
+      ],
+      "height": 2.6,
+      "radius": 1.2
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 20.6,
+      "distance": 16.2,
+      "elevationDeg": -2.3,
+      "thirds": "center",
+      "base": "push-in",
+      "pushM": 1.5,
+      "amplitudeDeg": 0.5,
+      "frequencyHz": 0.9,
+      "posAmplitude": 0.025,
+      "roughness": 0.35
+     },
+     "framing": "MS",
+     "fov": 50,
+     "standingOrder": "Stand quietly in the corner of the walled court and drift toward the fountain and the Life Stone with a gentle handheld breath.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + MAGIC + FLAME (classic.handheld). Standing quietly in the north-east corner of the walled court at eye height, a gentle handheld push of 1.5 m toward the Life Stone (sparkle column), the fountain spraying in the right foreground, a lantern flickering between them and the flowering court tree and the well beside; the south gate roof and the hall beyond close the frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41950.5,16438.2,21.7) end (41950.0,16436.8,21.8), min AGL 1.7 m, nearest static/building/spawn box 1.5 m (building:0x01000E61#132), nearest building 1.5 m, trees by crown profile 57.9 m (default bake) / 57.9 m (opt-in retail bake), peak 0.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 1.69 m)."
+    },
+    {
+     "technique": "classic.tilt",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       41940.0,
+       16476.0,
+       20.0
+      ],
+      "height": 31,
+      "radius": 12
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "distance": 26,
+      "elevationDeg": -30,
+      "fromDeg": -24,
+      "toDeg": 18,
+      "relative": true
+     },
+     "framing": "FS",
+     "fov": 60,
+     "standingOrder": "From the plaza tilt slowly up the green octagon pagoda, the Spire of Serenity, from its doors to its spire against the sky.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK / CLOSING (classic.tilt). From the plaza 26 m south of the 31 m octagon pagoda (Spire of Serenity, roof z 51), a slow tilt from its doors (+6 deg) up to its spire against the sky (+48 deg); warm side light from the west. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (41940.0,16453.5,22.5) end (41940.0,16453.5,22.5), min AGL 2.5 m, nearest static/building/spawn box 5.7 m (static:0x0200071A#110), nearest building 10.5 m, trees by crown profile 65.7 m (default bake) / 65.7 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 2.50 m)."
+    }
+   ],
+   "verification": "WBT (RetailSmoke project, 10 short sessions run strictly one at a time): describe-landblock (includeFootprints) + list-objects + get-terrain-data for 0xD954, 0xD955, 0xD956, 0xDA54, 0xDA55, 0xDA56, 0xDB54, 0xDB55, 0xDB56; get-object-detail for every model on them (185 ids -> rotated AABBs); chorizite-parse-dat-record for the FX setups (lanterns/torches/candles/pillars of fire/waterfall emitters: lights + default scripts), the gate GfxObj 0x01000E65 (opening) and the tree setups 0x020002DB/D9/D3/0x02000258/0x02000322 (crown radius by height); region-day-night-curve (sun due west after 0.61: 0.64 ~80 deg, 0.70 ~63, 0.74 ~50, 0.78 ~39, 0.80 ~32); get-height at 57 camera samples (start/end/quarters/every 1/8), all within 0.006 m of the checker terrain. Clearance against WBT statics/buildings, dist spawn weenies and both scenery bakes (default dist/scenery and opt-in dist/scenery-retail, trees by crown profile). Per shot: s010 classic.pan 14s: min AGL 12.0 m (WBT), boxes 6.3 m (scenery:0x020002D8), building 127.5 m, trees 6.3/6.6 m (default/retail), peak 0.0 m/s; s020 fpv.fpv-gap 7s: min AGL 1.6 m (WBT), boxes 0.5 m (building:0x01000E65#4), building 0.5 m, trees 22.2/10.0 m (default/retail), peak 8.3 m/s; s030 classic.truck 13s: min AGL 2.2 m (WBT), boxes 3.9 m (spawn:Collector), building 5.8 m, trees 43.4/43.4 m (default/retail), peak 3.9 m/s; s040 classic.handheld 12s: min AGL 1.7 m (WBT), boxes 1.5 m (building:0x01000E61#132), building 1.5 m, trees 57.9/57.9 m (default/retail), peak 0.2 m/s; s050 classic.tilt 13s: min AGL 2.5 m (WBT), boxes 5.7 m (static:0x0200071A#110), building 10.5 m, trees 65.7/65.7 m (default/retail), peak 0.0 m/s. Total 59 s. plan validate (dry build): valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

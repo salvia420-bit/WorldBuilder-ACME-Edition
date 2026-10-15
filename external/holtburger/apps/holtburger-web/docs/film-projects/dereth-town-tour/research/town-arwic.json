@@ -1,0 +1,295 @@
+{
+ "name": "Arwic",
+ "slug": "arwic",
+ "summary": "Arwic lies between the hills south of the Lost Wish Mountains; once a mining and trading village, it was destroyed by Shadow Spires in the Fourth Sending of Darkness and rebuilt as a fortified city ringed by sturdy stone walls, with Aun Laokhe (translator of Burun writings) at the top of its central tower. In the world it is a compact 120 x 86 m walled square on flat grassland (z 42): four three-story corner towers (top 61.6), spire-roofed gatehouses on the west and south gates, an inner cross-wall, a four-story central tower with a tapered roof (top 72.9), a narrow plaza with the Town Network portal, a silver fountain and the Life Stone, and ruined pillar avenues of 10 m stone posts leading in from the west and the south.",
+ "landmarks": [
+  {
+   "name": "Central tower S94 (Aun Laokhe)",
+   "pos": [
+    38108.5,
+    32504.5,
+    42.0
+   ],
+   "heightM": 30.9,
+   "note": "Four-story tapered-roof tower, top z 72.9."
+  },
+  {
+   "name": "Corner towers",
+   "pos": [
+    38028.0,
+    32556.0,
+    42.0
+   ],
+   "heightM": 19.6,
+   "note": "Four at (38028|38148, 32460|32556), top 61.6."
+  },
+  {
+   "name": "West gate and spired gatehouses S76/S77",
+   "pos": [
+    38035.0,
+    32520.0,
+    42.0
+   ],
+   "heightM": 15.1,
+   "note": "Spire roofs top 57.1; ruined pillar avenue on its axis."
+  },
+  {
+   "name": "Silver fountain",
+   "pos": [
+    38097.3,
+    32495.1,
+    42.0
+   ],
+   "heightM": 3.0,
+   "note": "Water fountain (setup 0x02000AA3) at the foot of the central tower."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    38094.3,
+    32506.2,
+    42.2
+   ],
+   "heightM": 3.5,
+   "note": "In the plaza."
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    38096.5,
+    32529.6,
+    42.0
+   ],
+   "heightM": 3.6,
+   "note": "North end of the plaza."
+  },
+  {
+   "name": "Western pillar avenue",
+   "pos": [
+    37970.0,
+    32520.0,
+    42.0
+   ],
+   "heightM": 12.5,
+   "note": "Two rows of 10 m stone posts with metal lintels (y 32514/32526)."
+  },
+  {
+   "name": "Southern pillar avenue",
+   "pos": [
+    38064.0,
+    32400.0,
+    42.0
+   ],
+   "heightM": 12.5,
+   "note": "Rows at x 38058/38070, y 32308-32436."
+  }
+ ],
+ "site": {
+  "id": "arwic",
+  "name": "Arwic",
+  "gazetteerId": "arwic",
+  "teleport": "@telepoi Arwic",
+  "anchor": [
+   38062.805,
+   32452.219,
+   42.005
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.7,
+   "grade": "warm"
+  }
+ },
+ "shots": [
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38088,
+     32508,
+     42
+    ],
+    "height": 31,
+    "radius": 65
+   },
+   "params": {
+    "heightAGL": 105,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 20
+   },
+   "standingOrder": "Hang straight above the walled square of Arwic and rotate slowly so its walls, towers and courtyards turn like a map; hold height 30 m above the central tower.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Map shot: hangs 105 m above the walled square (z 147, 74 m above the central tower) looking straight down and rotating 45 deg; the 120 x 86 m wall ring, four corner towers, two spired gates, the inner cross-wall and the plaza fit the frame (corner towers at NDC +/-0.7). Late-afternoon sun from the west adds long tower shadows."
+  },
+  {
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38035,
+     32520,
+     42
+    ],
+    "height": 8,
+    "radius": 12
+   },
+   "params": {
+    "azimuthDeg": 270,
+    "azimuthRef": "compass",
+    "elevationDeg": -8,
+    "distance": 13,
+    "thirds": "center",
+    "travelM": 32,
+    "direction": "right",
+    "keepAim": false
+   },
+   "standingOrder": "Truck south along the sunlit west wall of Arwic past the gate and its spired gatehouses, 13 m off the stone and 2.5 m up; nothing may come between lens and wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The town's facade pan (fortress walls): trucks 32 m south along the sunlit west wall at 2.2 m above the grass, 11-13 m off the stone, past the spired gatehouses and through the axis of the ruined pillar avenue (pillars 7.6 m from the lens). Sun at the camera's back fully lights the wall. Clearance: nearest pillar 7.6 m, wall 11 m, query-radius 4 m = 0 statics; vmax 4.2 m/s."
+  },
+  {
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38028,
+     32556,
+     42
+    ],
+    "height": 19.6,
+    "radius": 4
+   },
+   "params": {
+    "offset": 12,
+    "heightAGL": 13,
+    "speed": 10,
+    "side": "right",
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Fly fast and level east along the north side of the walls, whipping past the north-west corner tower 12 m off its stones; climb rather than swerve if anything comes within 6 m.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Energetic fly-by: 10 m/s level pass east along the outside of the north wall, 13 m above the grass, whipping past the NW corner tower at 12 m offset (peak yaw ~0.8 rad/s). Clearance: 17 m to the tower box, nothing else within 28 m."
+  },
+  {
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38095.5,
+     32501,
+     42.2
+    ],
+    "height": 8,
+    "radius": 8
+   },
+   "params": {
+    "azimuthDeg": 352,
+    "azimuthRef": "compass",
+    "elevationDeg": 34,
+    "distance": 24,
+    "thirds": "center",
+    "pushM": 3
+   },
+   "standingOrder": "Look down the plaza from above the Life Stone onto the swirling Town Network portal and the silver fountain beside the central tower, easing 3 m closer; stay 5 m above the roofs.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Particle + water detail: high angle (34 deg) from above the Life Stone looking down the plaza onto the swirling Town Network portal (NDC 0.03,-0.5) with the silver fountain just beyond it (NDC -0.04,0.09) and the central tower's foot at left, easing 3 m closer. Camera 16-18 m above the plaza, 9 m from the nearest roof edge (S68 top 54.5)."
+  },
+  {
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38108.5,
+     32504.5,
+     42
+    ],
+    "height": 31,
+    "radius": 6
+   },
+   "params": {
+    "nearDistance": 45,
+    "farDistance": 120,
+    "direction": "out",
+    "heightAGL": 26,
+    "minFovDeg": 18,
+    "maxFovDeg": 90,
+    "bearingDeg": 205,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Fly straight back from the central tower over the south wall while zooming in so the tower holds its size and the hills swell behind it; stay 12 m above the walls.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Vertigo closer: flies straight back from the central tower (Aun Laokhe's tower, top 72.9) 45->120 m SSW at 26 m above the plain while zooming 55->23 deg so the tower holds its size and the Lost Wish hills swell behind it. Clearance: 11 m above the south gatehouse spire (top 57.1), 14 m above the southern pillar avenue; vmax 7.9 m/s."
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 3x3 landblocks (0xC5A8 0xC5A9 0xC5AA 0xC6A8 0xC6A9 0xC6AA 0xC7A8 0xC7A9 0xC7AA); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 drone.top-down: WBT get-height under 5-8 sampled camera points, min AGL 105 m; offline build min clearance 43.17 m (spawn:April 2003 Raining Mad Cows Gen), opt-in retail bake 126.25 m; vmax 0.0 m/s; subject LOS blocked 0/53 samples; s020 classic.truck: WBT get-height under 5-8 sampled camera points, min AGL 2.19 m; offline build min clearance 7.63 m (static:0x0200024B#39), opt-in retail bake 94.27 m; vmax 4.19 m/s; subject LOS blocked 0/49 samples; s030 drone.fly-by: WBT get-height under 5-8 sampled camera points, min AGL 13 m; offline build min clearance 17.0 m (static:0x01002D1B#90), opt-in retail bake 81.94 m; vmax 10.0 m/s; subject LOS blocked 0/33 samples; s040 classic.high-angle: WBT get-height under 5-8 sampled camera points, min AGL 15.94 m; offline build min clearance 9.02 m (static:0x0100082E#68), opt-in retail bake 70.04 m; vmax 0.43 m/s; subject LOS blocked 0/45 samples; s050 drone.vertigo-drone: WBT get-height under 5-8 sampled camera points, min AGL 26 m; offline build min clearance 11.09 m (static:0x01002D24#81), opt-in retail bake 17.21 m; vmax 7.85 m/s; subject LOS blocked 0/61 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-arwic.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-arwic.json",
+ "totalSec": 59,
+ "techniques": [
+  "drone.top-down",
+  "classic.truck",
+  "drone.fly-by",
+  "classic.high-angle",
+  "drone.vertigo-drone"
+ ]
+}

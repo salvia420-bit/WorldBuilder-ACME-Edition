@@ -1,0 +1,304 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-tufa.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "noon 0.50 / neutral: the high sun lights the floor of a 40 m-deep crater, the falls' sheets and the mist glitter, desert glare without hard horizon light",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Tufa",
+   "summary": "Tufa (13.9S 5.0E, on the A'mun Desert edge just NE of Yaraq) is a Gharu'ndim desert-oasis town that never recovered from the dark night of 11 PY (Fourth Sending of Darkness / Twilight's Gleaming), when Shadow Spires obliterated it - their true target was the Menhir Ring the town had unknowingly been built on. Unlike Arwic it was never rebuilt: the townsfolk live in tents around and inside the crater, some cursing the Shadows, others hoping to rebuild; the Undead Hunters who trade for mnemosynes are based here. In the DAT the crater is a ~100 m bowl whose floor lies at z 0, 20-44 m below the sand rim. On its south wall the Tufa Crater Falls drop 28 m (WaterRunning terrain from z 28 to the floor) out of four retail particle waterfall spouts (0x0200085A, 11 m water sheets) into a mist curtain (0x020003C5); a stream crosses the floor past the broken Tufa Menhir Ring (Menhir Ring Nineteen, four mana fields), the crater Life Stone and a lone tent shop (The Bursting Quiver) lit by a blue-flame lamp. Two ruined two-storey houses with blue-flame lamps stand on the west rim; the surviving 'town' is a small palm oasis 200 m SE with tents, wells, the Nullified Statue of a Skeleton on its pedestal and the Town Network portal. (Culture: Gharu'ndim, not Sho.)",
+   "landmarks": [
+    {
+     "name": "Tufa crater (floor)",
+     "pos": [
+      25752,
+      21118,
+      0
+     ],
+     "heightM": 44,
+     "note": "~100 m bowl, floor z 0, rim z 20-44 (WBT heightmap 0x866D/0x866E)"
+    },
+    {
+     "name": "Tufa Crater Falls",
+     "pos": [
+      25740,
+      21086,
+      2
+     ],
+     "heightM": 26,
+     "note": "WaterRunning cells x 25728-25752, z 28 -> 0 between y 21072 and 21096; 4 spout emitters 0x0200085A at z 25.9 (x 25724-25757, y ~21075); mist curtain 0x020003C5 at the foot (y ~21099)"
+    },
+    {
+     "name": "Tufa Menhir Ring (Menhir Ring Nineteen)",
+     "pos": [
+      25737.6,
+      21116.9,
+      -0.4
+     ],
+     "heightM": 3.3,
+     "note": "broken ring at the foot of the falls, 4 Menhir Mana Fields; stones 0x020008FE/0x02000374 up to 3.25 m"
+    },
+    {
+     "name": "Life Stone (crater)",
+     "pos": [
+      25758.9,
+      21114.2,
+      -0.1
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "The Bursting Quiver tent + blue-flame lamp",
+     "pos": [
+      25782.6,
+      21108,
+      0
+     ],
+     "heightM": 4.5,
+     "note": "tent 0x01000EFC; blue-flame lamp 0x02000719 at (25777.3, 21114.25)"
+    },
+    {
+     "name": "Ruined rim houses with blue-flame lamps",
+     "pos": [
+      25666.4,
+      21106.7,
+      14
+     ],
+     "heightM": 10,
+     "note": "0x01000F69 top 24.05 and 0x01000E40 (25668,21132) top 22; lamps at (25671,21108,16),(25668,21112,16),(25677,21123,14)"
+    },
+    {
+     "name": "Nullified Statue of a Skeleton on pedestal",
+     "pos": [
+      25854.2,
+      20894.7,
+      10
+     ],
+     "heightM": 10.3,
+     "note": "pedestal 0x01002A1B top 16.8, statue to ~20.3"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      25867.2,
+      20898.1,
+      10.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Oasis palms",
+     "pos": [
+      25895,
+      20900,
+      10
+     ],
+     "heightM": 16,
+     "note": "0x020002D7 (25878-25912, 20882-20917) top 26.2; 0x02000246 palms top 17.2"
+    }
+   ],
+   "site": {
+    "id": "tufa",
+    "name": "Tufa",
+    "gazetteerId": "tufa",
+    "teleport": "@telepoi Tufa",
+    "anchor": [
+     25752,
+     21122,
+     0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.5,
+     "grade": "neutral"
+    },
+    "lbKeys": [
+     "0x866D0000",
+     "0x866C0000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "classic.birds-eye",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25752,
+       21118,
+       0
+      ],
+      "height": 4,
+      "radius": 30
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "heightM": 72,
+      "riseM": 40,
+      "rotateDeg": 40
+     },
+     "standingOrder": "Look straight down on the crater and rise slowly while the image turns; nothing is within 30 m of the lens.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING / DISTINCTIVE TOP-DOWN (classic.birds-eye). Straight down on the crater (south up) from 72 m, rising to 112 m while the image turns 40 deg: the dark bowl in the yellow sand, the menhir stones, the Life Stone, the stream and the white water sheets of the falls at the top of frame, the tent and its blue flame; the desert rim and palms enter as it rises. Exact nadir: if particle billboards spin at nadir, substitute drone.top-down with pitchDeg -88 (same position). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25752, 21118, 72) end (25752, 21118, 112), min AGL 72 m (WBT get-height on 9 camera points: min AGL 72 m, ground 0-0), nearest static/building/default-bake scenery 55.43 m (scenery:0x020004B1), nearest building 71.92 m, retail-bake scenery 69.01 m, peak 4.83 m/s."
+    },
+    {
+     "technique": "classic.pan",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25740,
+       21090,
+       8
+      ],
+      "height": 20,
+      "radius": 20
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 0,
+      "distance": 98,
+      "elevationDeg": 1.2,
+      "fromDeg": 50,
+      "toDeg": -30,
+      "relative": true,
+      "pitchDeg": -9
+     },
+     "standingOrder": "Hold position 2 m above the north rim and pan slowly left from the ruined rim houses across the falls to the crater tent; the lens never moves.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CONTEXT (classic.pan). Locked 2 m above the north rim (z 20.1) and 98 m from the falls, the head pans left 80 deg from the two ruined rim houses with their blue flames in the west, across the waterfall, to the crater tent: the whole ruined crater in one breath. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25740, 21188.0, 20.1) end (25740, 21188.0, 20.1), min AGL 2.06 m (WBT get-height on 9 camera points: min AGL 2.06 m, ground 17.99-17.99), nearest static/building/default-bake scenery 43.73 m (scenery:0x020004B2), nearest building 79.21 m, retail-bake scenery 18.09 m, peak 0 m/s."
+    },
+    {
+     "technique": "classic.zoom",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25740,
+       21086,
+       2
+      ],
+      "height": 26,
+      "radius": 16
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 8,
+      "distance": 52,
+      "elevationDeg": -14,
+      "toFraming": "MS"
+     },
+     "standingOrder": "Locked off on the crater floor; only the lens zooms into the falling sheets; stay 20 m clear of the spray.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER DETAIL (classic.zoom). Locked on the crater floor 2.4 m up, 52 m north of the falls; the lens zooms from 60 to 14 deg up the cascade to the four spouts throwing their water sheets, the menhir stones in the foreground at the start, mist at the foot. Camera 50 m clear of the spray. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25747.0, 21136.0, 2.4) end (25747.0, 21136.0, 2.4), min AGL 2.42 m (WBT get-height on 9 camera points: min AGL 2.42 m, ground 0-0), nearest static/building/default-bake scenery 8.98 m (scenery:0x020004B2), nearest building 34.92 m, retail-bake scenery 10.79 m, peak 0 m/s."
+    },
+    {
+     "technique": "drone.helix",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25737.6,
+       21116.9,
+       -0.4
+      ],
+      "height": 3,
+      "radius": 5
+     },
+     "params": {
+      "radiusStart": 14,
+      "radiusEnd": 34,
+      "heightStart": 3,
+      "heightEnd": 46,
+      "revolutions": 0.42,
+      "direction": "cw",
+      "bearingDeg": 290,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "standingOrder": "Corkscrew up and out of the crater around the menhir ring, keeping the stones centred and the falls behind them.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + MAGIC HERO (drone.helix). Corkscrew from 3 m above the stream beside the broken menhir ring (radius 14) up and out of the crater to 46 m (radius 34), 0.42 turn clockwise from WNW to ESE: the stones stay centred with the falls behind, the Life Stone and the blue-flame tent slide under, and the climb lifts over the rim to reveal the desert, the oasis and the tents. JEV-eligible hero move if a slot is free; code pilot is safe. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25724.4, 21121.7, 3.1) end (25771.2, 21122.1, 45.6), min AGL 3.09 m (WBT get-height on 9 camera points: min AGL 3.09 m, ground 0-10.21), nearest static/building/default-bake scenery 3.79 m (static:0x020008FE#16), nearest building 39.94 m, retail-bake scenery 6.42 m, peak 8.03 m/s, 32% of samples over water."
+    },
+    {
+     "technique": "drone.fly-by",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       25854.2,
+       20894.7,
+       10
+      ],
+      "height": 7,
+      "radius": 3
+     },
+     "params": {
+      "offset": 18,
+      "heightAGL": 6,
+      "speed": 4,
+      "side": "right",
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "standingOrder": "Glide past the statue and the town portal at 6 m; keep 6 m from the tents.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING / MAGIC (drone.fly-by). Glide north at 4 m/s 18 m west of the Nullified Statue of a Skeleton, 4 m above the sand: the statue on its pedestal slides past with the Town Network portal swirling behind it under the oasis palms. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (25836.2, 20874.7, 16) end (25836.2, 20914.7, 16), min AGL 3.15 m (WBT get-height on 9 camera points: min AGL 3.15 m, ground 11.97-12.85), nearest static/building/default-bake scenery 7.33 m (scenery:0x020004B1), nearest building 12.78 m, retail-bake scenery 7.06 m, peak 4 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 12 LBs 0x856C, 0x856D, 0x856E, 0x866C, 0x866D, 0x866E, 0x876C, 0x876D, 0x876E, 0x886C, 0x886D, 0x886E; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-tufa.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 classic.birds-eye: start [25752, 21118, 72] end [25752, 21118, 112], WBT minAGL 72 m, clearance 55.43 m (scenery:0x020004B1), bldg 71.92 m, retail 69.01 m, vmax 4.83 m/s | s020 classic.pan: start [25740, 21188.0, 20.1] end [25740, 21188.0, 20.1], WBT minAGL 2.06 m, clearance 43.73 m (scenery:0x020004B2), bldg 79.21 m, retail 18.09 m, vmax 0 m/s | s030 classic.zoom: start [25747.0, 21136.0, 2.4] end [25747.0, 21136.0, 2.4], WBT minAGL 2.42 m, clearance 8.98 m (scenery:0x020004B2), bldg 34.92 m, retail 10.79 m, vmax 0 m/s | s040 drone.helix: start [25724.4, 21121.7, 3.1] end [25771.2, 21122.1, 45.6], WBT minAGL 3.09 m, clearance 3.79 m (static:0x020008FE#16), bldg 39.94 m, retail 6.42 m, vmax 8.03 m/s | s050 drone.fly-by: start [25836.2, 20874.7, 16] end [25836.2, 20914.7, 16], WBT minAGL 3.15 m, clearance 7.33 m (scenery:0x020004B1), bldg 12.78 m, retail 7.06 m, vmax 4 m/s"
+  }
+ ]
+}

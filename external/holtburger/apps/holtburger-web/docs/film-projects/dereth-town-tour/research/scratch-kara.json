@@ -1,0 +1,226 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Kara scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "kara",
+   "name": "Kara",
+   "gazetteerId": "kara",
+   "teleport": "@telepoi Kara",
+   "anchor": [
+    35770,
+    4480,
+    132
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.64,
+    "grade": "warm"
+   },
+   "lbKeys": [
+    "0xBA170000",
+    "0xB9170000",
+    "0xBA160000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "kara",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35748,
+     4500,
+     50
+    ],
+    "height": 113,
+    "radius": 12
+   },
+   "params": {
+    "distance": 168,
+    "heightStart": 3,
+    "heightEnd": 100,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": 5,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Lift straight up from 3 m above the calm lake until Kara and its pagoda rise over the brow of the hill; nothing but water under the drone."
+  },
+  {
+   "id": "s020",
+   "site": "kara",
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35778.4,
+     4482.2,
+     132
+    ],
+    "height": 10,
+    "radius": 3
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 135,
+    "elevationDeg": -12,
+    "distance": 15,
+    "thirds": "center",
+    "riseM": 9,
+    "keepAim": true
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise slowly from eye level inside the gate, holding the shadow statue, the town portal and the forge glow below the pagoda; 4 m from every wall."
+  },
+  {
+   "id": "s030",
+   "site": "kara",
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35784,
+     4452,
+     132
+    ],
+    "height": 12,
+    "radius": 12
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": -4.6,
+    "distance": 21,
+    "thirds": "center",
+    "travelM": 46,
+    "direction": "right",
+    "keepAim": false
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Slide east along the Sho house fronts 10 m off the walls at head height, the pagoda roof peeping over them; nothing between the lens and the facades."
+  },
+  {
+   "id": "s040",
+   "site": "kara",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35772,
+     4484,
+     132
+    ],
+    "height": 10,
+    "radius": 30
+   },
+   "params": {
+    "heightAGL": 46,
+    "rotateDeg": 70,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the little plaza, its statue, portal, life stone and forge glow, turning slowly; 14 m above the pagoda finial."
+  },
+  {
+   "id": "s050",
+   "site": "kara",
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     35748,
+     4500,
+     132
+    ],
+    "height": 31,
+    "radius": 12
+   },
+   "params": {
+    "radiusStart": 46,
+    "radiusEnd": 30,
+    "heightStart": 56,
+    "heightEnd": 27,
+    "revolutions": 0.38,
+    "direction": "ccw",
+    "bearingDeg": 300,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Spiral down around the pagoda from high over the western slope, ending level with its upper eaves; 15 m from the roof edges and 10 m above the trees."
+  }
+ ]
+}

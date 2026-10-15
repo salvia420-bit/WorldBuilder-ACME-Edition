@@ -1,0 +1,239 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Timaru scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "timaru",
+   "name": "Timaru",
+   "gazetteerId": "timaru",
+   "teleport": "@telepoi Timaru",
+   "anchor": [
+    5700.0,
+    34850.0,
+    69.2
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x1DB6",
+    "0x1EB6",
+    "0x1DB4",
+    "0x1EB3"
+   ],
+   "look": {
+    "timeOfDay": 0.7,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5748,
+     35076,
+     120
+    ],
+    "height": 24,
+    "radius": 45
+   },
+   "params": {
+    "distance": 225,
+    "obstacleDistance": 100,
+    "obstacleHeight": 98,
+    "heightStart": 6,
+    "clearance": 22,
+    "forward": 20,
+    "endPitchDeg": -8,
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Rise from 6 m over the river in the western gorge up the sunlit cliff until the palisaded Aun village of Timaru appears on its plateau.",
+   "notes": "ESTABLISHING + WATER (drone.rising-reveal). Starts 6 m over the river in the western gorge (z 26), facing the gorge wall; rises 114 m in 16 s and eases 20 m east until the palisade, the gate tower and the 24 m Aun totem frames of Timaru appear on their 120 m plateau above the 90 m Marescent plateau; ends at z 146 pitched -8. Afternoon sun (west, 63 deg) behind the camera lights cliff and palisade. Verified offline (real registry build + WBT terrain): start (5523.0,35076.0,32.0) end (5543.0,35076.0,146.0), min AGL 6.0 m, nearest static/building/tree 23.8 m (0x02000A37@5538,35057), peak 11.4 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "timaru",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5716.3,
+     35075.8,
+     120
+    ],
+    "height": 3.7,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 30,
+    "rotateDeg": 75,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 6,
+    "driftHeadingDeg": 90,
+    "minClearance": 8
+   },
+   "standingOrder": "Look straight down 30 m over the Aun stone circle with its smouldering brazier while the image turns slowly and drifts toward the great hut.",
+   "notes": "FLAME (drone.top-down). Nadir 30 m above the Aun stone circle (eight standing stones) with the smouldering brazier at its centre, rotating 75 deg and drifting 6 m east toward the great hut whose chimney smoke (0x02000B33) leans in the wind; torches ring the clearing, the octagonal palisade frames the edges. Verified offline (real registry build + WBT terrain): start (5713.3,35075.8,150.0) end (5719.3,35075.8,150.0), min AGL 30.0 m, nearest static/building/tree 16.7 m (0x1DB6#96 0x010021D9), peak 0.6 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "timaru",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "EWS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5600,
+     34596,
+     0
+    ],
+    "height": 40,
+    "radius": 60
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 185,
+    "distance": 95,
+    "heightM": 22,
+    "driftDeg": -10,
+    "pushPct": 8
+   },
+   "standingOrder": "Hold wide south of the great waterfall below Timaru with a slow drift and push, the weir bridge and falling sheets of water filling the frame.",
+   "notes": "WATER (classic.establishing). Wide static with a slow 10 deg drift and 8 % push, 95 m south of the great waterfall and 22 m above the lower pool: the 120 m wide cascade with its stone piers and weir bridge, eight spout sheets (0x0200085A) plunging 26 m into the mist curtain (0x020003C5); afternoon sun from the right rakes across the spray. Verified offline (real registry build + WBT terrain): start (5583.5,34502.4,22.0) end (5600.0,34508.6,22.0), min AGL 22.0 m, nearest static/building/tree 15.5 m (0x02000240@5575,34498), peak 2.8 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "timaru",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "fpv.fpv-dive",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "WS",
+   "fov": 80,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5600,
+     34584,
+     0
+    ],
+    "height": 2,
+    "radius": 1
+   },
+   "params": {
+    "heightStart": 46,
+    "bottomAGL": 3,
+    "diveAngleDeg": -78,
+    "approach": 40,
+    "standoff": 3,
+    "exitLength": 30,
+    "pullOutRadius": 10,
+    "speed": 16,
+    "alat": 11,
+    "uptiltDeg": 20,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Race south along the river above the weir bridge, crest the falls and dive through the spray to pull out 3 m over the pool below.",
+   "pilot": {
+    "mode": "code",
+    "flightPreset": "fpv"
+   },
+   "notes": "SPECTACLE + WATER (fpv.fpv-dive, FPV preset; JEV-eligible). Level run at z 47 along the river, 6.6 m over the weir deck (top 40.4), crest the falls and dive at -78 deg through the falling water and mist, pulling out 3 m over the lower pool and racing 30 m south. Peak 15.7 m/s. Verified offline (real registry build + WBT terrain): start (5600.0,34624.0,47.0) end (5600.0,34541.9,3.0), min AGL 3.0 m, nearest static/building/tree 6.3 m (0x1DB4#17 0x01000B53), peak 15.7 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+   "id": "s040",
+   "site": "timaru",
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.dolly-zoom",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "FS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     5844,
+     34548,
+     2
+    ],
+    "height": 21,
+    "radius": 9
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 200,
+    "elevationDeg": 4,
+    "toFovDeg": 28
+   },
+   "standingOrder": "Dolly back from the great Aun head statue with its red glowing eyes and torch-lit mouth while zooming in so it holds size and the cliffs swell behind it.",
+   "notes": "LANDMARK + FLAME (classic.dolly-zoom). The giant Aun head statue at the cliff foot (0x010026FC, 21 m; it houses the Marescent Plateau Portal) with red glowing eyes (0x020006A0) and torches flanking its mouth: camera 12 m up SSW dollies back 27 m while zooming 60 -> 28 deg, the head holding its size as the plateau cliffs behind swell - vertigo. Verified offline (real registry build + WBT terrain): start (5836.9,34528.4,14.0) end (5827.5,34502.6,15.9), min AGL 10.3 m, nearest static/building/tree 13.3 m (0x1EB3#4 0x010026FC), peak 4.8 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s050",
+   "site": "timaru",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.70 (sun west, 63 deg), grade warm: afternoon light from behind the gorge camera onto the cliff, side light on the south-facing waterfall"
+}

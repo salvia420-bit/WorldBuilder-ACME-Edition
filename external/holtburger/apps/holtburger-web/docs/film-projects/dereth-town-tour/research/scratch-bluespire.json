@@ -1,0 +1,235 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Bluespire scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "bluespire",
+   "name": "Bluespire",
+   "gazetteerId": "bluespire",
+   "teleport": "@telepoi Bluespire",
+   "anchor": [
+    6400.0,
+    33900.0,
+    0.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x21B0",
+    "0x21B1"
+   ],
+   "look": {
+    "timeOfDay": 0.34,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6390.8,
+     33928.8,
+     0
+    ],
+    "height": 25.25,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 45,
+    "speed": 8,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 10
+   },
+   "standingOrder": "Fly east at 45 m straight over the Viamontian tower toward the glittering morning sea, keeping the tower in frame down through the vertical and out behind.",
+   "notes": "ESTABLISHING (drone.pass-over). Flies east at 45 m (13 m over the tallest delta trees) straight over the gold-roofed Viamontian tower 'in the middle of town' at 8 m/s toward the glittering morning sea; the gimbal tracks the tower down through nadir with a gentle 60 deg/s yaw-slew and keeps it framed behind as the delta and coast open up. Verified offline (real registry build + WBT terrain): start (6326.8,33928.8,45.0) end (6454.8,33928.8,45.0), min AGL 45.0 m, nearest static/building/tree 19.8 m (0x21B0#59 0x010036E3), peak 8.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "bluespire",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 8
+   },
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6390.8,
+     33928.8,
+     0
+    ],
+    "height": 25.25,
+    "radius": 7
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 190,
+    "elevationDeg": -20,
+    "distance": 30,
+    "fromDeg": -14,
+    "toDeg": 20,
+    "relative": true
+   },
+   "standingOrder": "Stand low south of the Viamontian tower behind the glowing Life Stone and tilt slowly up from its base to the golden roof against the morning sky.",
+   "notes": "LANDMARK (classic.tilt). Lens 2.4 m above the mud 30 m south of the Viamontian tower with the glowing Life Stone 8 m ahead in the lower frame; tilts 34 deg up from the tower's base past its window slits to the golden tapered roof against the cool morning sky. Verified offline (real registry build + WBT terrain): start (6385.9,33901.0,2.4) end (6385.9,33901.0,2.4), min AGL 2.4 m, nearest static/building/tree 4.0 m (0x02000A38@6381,33893), peak 0.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "bluespire",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6467.8,
+     33877,
+     2
+    ],
+    "height": 6,
+    "radius": 11
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 255,
+    "elevationDeg": 3,
+    "distance": 26,
+    "thirds": "center",
+    "arcDeg": 60,
+    "direction": "cw"
+   },
+   "standingOrder": "Arc slowly at head height around the octagonal Aun hall past the blue-flame braziers flanking its north-west door.",
+   "notes": "FLAME (classic.arc). 6 m above the reeds, 26 m from the octagonal Aun hall (0x0100229B), arcing 60 deg clockwise from W to NNW past its north-west door flanked by big blue-flame braziers (0x020009A3, blue tongues 0.78 m); the low morning sun behind the hall rims the roof and the blue flames glow on the shadow side. Verified offline (real registry build + WBT terrain): start (6449.4,33858.6,6.4) end (6442.7,33883.7,6.4), min AGL 5.3 m, nearest static/building/tree 2.9 m (0x020003D3@6440,33869), peak 3.9 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "bluespire",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.two-shot",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6386.6,
+     33908.9,
+     0
+    ],
+    "height": 3.6,
+    "radius": 1.5
+   },
+   "params": {
+    "secondary": [
+     6370.7,
+     33910.2,
+     0.2
+    ],
+    "secondaryHeight": 3.5,
+    "partnerM": 16,
+    "side": "right",
+    "distance": 0,
+    "elevationDeg": 6,
+    "driftDeg": 8
+   },
+   "standingOrder": "Frame the glowing Life Stone and the swirling Town Network portal together beneath the Viamontian tower, drifting gently.",
+   "notes": "PARTICLE FX (classic.two-shot). The Life Stone and the Town Network portal swirl, 16 m apart, framed together from the north at 3.9 m with a slow 8 deg drift; the spire-roofed hall and the delta trees behind, side light from the east. Verified offline (real registry build + WBT terrain): start (6378.8,33920.7,3.9) end (6380.3,33920.6,3.9), min AGL 3.9 m, nearest static/building/tree 3.6 m (0x21B0#59 0x010036E3), peak 0.3 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s040",
+   "site": "bluespire",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.pull-out-reveal",
+   "duration": {
+    "sec": 12
+   },
+   "fov": 35,
+   "framing": "MCU",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6372.7,
+     33923.4,
+     0
+    ],
+    "height": 8.9,
+    "radius": 2
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 285,
+    "elevationDeg": 3,
+    "toFraming": "WS",
+    "rise": true,
+    "endElevationDeg": 28,
+    "profile": "perceptual"
+   },
+   "standingOrder": "Start close on the crackling Viamontian magic crowning the great blue sword and pull back and up to reveal the tower, the Life Stone and the delta town.",
+   "notes": "MAGIC FX + CLOSING (classic.pull-out-reveal). Starts at MCU on the crown of the 8.9 m Viamontian banner-sword (0x02000ABC) wrapped in its energy props (0x02000997: gas, lightning, tendril/orb cluster) and pulls back and up 27 m to a 28 deg WS, revealing the tower, Life Stone, portal and the delta town; backlit by the morning sun. Verified offline (real registry build + WBT terrain): start (6368.2,33924.6,8.3) end (6342.6,33931.5,21.0), min AGL 8.2 m, nearest static/building/tree 2.5 m (0x21B0#10 0x02000ABC), peak 4.9 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+   "id": "s050",
+   "site": "bluespire",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.34 (sun east, 34 deg), grade cool: low morning sun over the eastern sea, blue braziers glowing in the shadows"
+}

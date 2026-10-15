@@ -1,0 +1,158 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Sanamar Royal Hall scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "sanamar-royal-hall",
+   "name": "Sanamar Royal Hall",
+   "gazetteerId": "sanamar-palace",
+   "teleport": "@teleloc 0x31D7001B 72 50 80.1 1 0 0 0",
+   "anchor": [
+    9480.0,
+    41250.0,
+    80.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x31D6",
+    "0x31D7"
+   ],
+   "look": {
+    "timeOfDay": 0.66,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "classic.truck",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 65,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9480,
+     41292,
+     80
+    ],
+    "height": 19,
+    "radius": 12
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "elevationDeg": -20,
+    "distance": 19.2,
+    "thirds": "center",
+    "travelM": 36,
+    "direction": "right",
+    "keepAim": false
+   },
+   "standingOrder": "Truck slowly sideways along the north wall of the Royal Hall at head height, 12 m off the gate towers, with the great spires rising behind.",
+   "notes": "FACADE PAN (classic.truck; the single Sanamar pan, distinctive Viamontian keep). Camera 2.9 m above the plateau and 11.9 m off the north gate towers (0x01003AA5 archway towers, 23.5 m) trucking 36 m west at <= 4.7 m/s with a fixed 20 deg up-tilt on a 65 deg lens: the gate, the three-storey curtain wall and the four-storey corner tower slide past while the red-domed 84 m spires of the Royal Hall rise behind them. Flat ground z 80, open lawn, nothing within 9.6 m of the camera line. Verified offline (real registry build + WBT terrain): start (9498.0,41310.0,82.9) end (9462.0,41310.0,82.9), min AGL 2.9 m, nearest static/building/tree 9.6 m (0x02001293@9494,41321), peak 4.7 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "sanamar-royal-hall",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9480,
+     41232,
+     80
+    ],
+    "height": 84,
+    "radius": 30
+   },
+   "params": {
+    "radiusStart": 100,
+    "radiusEnd": 60,
+    "heightStart": 122,
+    "heightEnd": 64,
+    "revolutions": 0.18,
+    "direction": "ccw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Spiral down from high over the sea cliffs toward the red-domed spires of the Royal Hall, staying outside a 55 m radius and above 140 m.",
+   "notes": "HERO (drone.spiral-descent; JEV-eligible). Starts 202 m up over the southern sea cliffs, spiralling 65 deg counter-clockwise while closing from 100 to 60 m radius and descending to z 144: the four red-domed 21/22-storey spires (top 163.6) and the two 12-storey towers (134.6) grow out of the cliff-top palace with the sea on three sides. Ends 9.4 m above the 12-storey roofs and 20.8 m from the nearest tower bounds. Verified offline (real registry build + WBT terrain): start (9445.8,41138.0,202.0) end (9522.3,41189.4,144.0), min AGL 64.0 m, nearest static/building/tree 20.8 m (0x31D6#1 0x01003911), peak 11.4 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "sanamar-royal-hall",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9480,
+     41232,
+     80
+    ],
+    "height": 84,
+    "radius": 70
+   },
+   "params": {
+    "radius": 140,
+    "heightAGL": 95,
+    "revolutions": 0.13,
+    "timeRate": 80,
+    "direction": "cw",
+    "bearingDeg": 20,
+    "relativeToSubject": false,
+    "minClearance": 10
+   },
+   "standingOrder": "Orbit the Royal Hall slowly at 180 m while the sky clock races toward golden hour and the clouds stream over the sea.",
+   "notes": "CLIMAX (drone.hyperlapse-orbit, assigned). Orbit radius 140 m at z 175 (11 m above the spire tops) clockwise 47 deg from NNE while the sky clock runs 80x (16 s = 1280 sky-s = 0.17 day): the sun sinks from 75 deg to ~23 deg in the west (0.66 -> 0.83, always up), clouds stream over the sea and the light turns gold across the palace; ends looking WSW into the golden sun over the sea. Verified offline (real registry build + WBT terrain): start (9527.9,41363.6,175.0) end (9608.7,41287.2,175.0), min AGL 95.0 m, nearest static/building/tree 72.0 m (0x32D7#1 0x010036E3), peak 7.1 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "sanamar-royal-hall",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.66 (sun west, 75 deg), grade warm; the hyperlapse runs the clock to ~0.83 (sun ~23 deg west, still up) for a golden climax over the sea"
+}

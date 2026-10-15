@@ -1,0 +1,220 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Tufa scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "tufa",
+   "name": "Tufa",
+   "gazetteerId": "tufa",
+   "teleport": "@telepoi Tufa",
+   "anchor": [
+    25752,
+    21122,
+    0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.5,
+    "grade": "neutral"
+   },
+   "lbKeys": [
+    "0x866D0000",
+    "0x866C0000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "tufa",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25752,
+     21118,
+     0
+    ],
+    "height": 4,
+    "radius": 30
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "heightM": 72,
+    "riseM": 40,
+    "rotateDeg": 40
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the crater and rise slowly while the image turns; nothing is within 30 m of the lens."
+  },
+  {
+   "id": "s020",
+   "site": "tufa",
+   "technique": "classic.pan",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25740,
+     21090,
+     8
+    ],
+    "height": 20,
+    "radius": 20
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "distance": 98,
+    "elevationDeg": 1.2,
+    "fromDeg": 50,
+    "toDeg": -30,
+    "relative": true,
+    "pitchDeg": -9
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold position 2 m above the north rim and pan slowly left from the ruined rim houses across the falls to the crater tent; the lens never moves."
+  },
+  {
+   "id": "s030",
+   "site": "tufa",
+   "technique": "classic.zoom",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25740,
+     21086,
+     2
+    ],
+    "height": 26,
+    "radius": 16
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 8,
+    "distance": 52,
+    "elevationDeg": -14,
+    "toFraming": "MS"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Locked off on the crater floor; only the lens zooms into the falling sheets; stay 20 m clear of the spray."
+  },
+  {
+   "id": "s040",
+   "site": "tufa",
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25737.6,
+     21116.9,
+     -0.4
+    ],
+    "height": 3,
+    "radius": 5
+   },
+   "params": {
+    "radiusStart": 14,
+    "radiusEnd": 34,
+    "heightStart": 3,
+    "heightEnd": 46,
+    "revolutions": 0.42,
+    "direction": "cw",
+    "bearingDeg": 290,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Corkscrew up and out of the crater around the menhir ring, keeping the stones centred and the falls behind them."
+  },
+  {
+   "id": "s050",
+   "site": "tufa",
+   "technique": "drone.fly-by",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     25854.2,
+     20894.7,
+     10
+    ],
+    "height": 7,
+    "radius": 3
+   },
+   "params": {
+    "offset": 18,
+    "heightAGL": 6,
+    "speed": 4,
+    "side": "right",
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Glide past the statue and the town portal at 6 m; keep 6 m from the tents."
+  }
+ ]
+}

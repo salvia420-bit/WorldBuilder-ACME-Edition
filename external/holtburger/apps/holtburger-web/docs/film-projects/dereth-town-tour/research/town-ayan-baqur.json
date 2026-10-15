@@ -1,0 +1,307 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Greenspire/Plateau Village/Danby's Outpost/Fort Tethana/Ayan Baqur/Wai Jhou",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-ayan-baqur.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "golden 0.80 (sun low in the west over the sea, still well above the horizon), warm grade: the town's west faces and dome glow gold, the torches and blue flames read in the long shadows",
+ "runtimeSec": 63,
+ "towns": [
+  {
+   "name": "Ayan Baqur",
+   "summary": "Ayan Baqur (60.0S 88.0W) is the isolated principal Gharu'ndim city on the far western shore of the Direlands, founded in Heroes' Respite: overrun by the Virindi, raided by Direlands monsters and the White Rabbit, camped by a Coral Golem Viceroy, and today a questing centre and the home of Ulgrim the Unpleasant (The Smoking Axe tavern). The town sits on a z 42 terrace between two hills: sandstone Gharu'ndim halls, a domed three-storey tavern, a glass-windowed church tower, tents, two wells and, in the open plaza, the town fountain ringed by a low fence and four glowing torches under two giant 39 m trees; the Town Network portal stands north of the fountain and the Colossus Foundry statue portal below the Nullified Statue of a Virindi. On the south hill (z 66) the Drudge Aviator's balloon with three blue-flame torches; on the north hill (z 72) the Life Stone, the casino VIP portals and the Carenzi Race Track with red flags; a forested slope runs 150 m down to the sea in the west.",
+   "landmarks": [
+    {
+     "name": "Domed tavern (The Smoking Axe, 0x01000E3B)",
+     "pos": [
+      3348,
+      10140,
+      42
+     ],
+     "heightM": 14.1,
+     "note": "box x 3338-3358 y 10130-10150, top z 56.1; west face x 3338"
+    },
+    {
+     "name": "Fountain with four glowing torches (0x01001A6E)",
+     "pos": [
+      3372,
+      10092,
+      42
+     ],
+     "heightM": 1.5,
+     "note": "torches at (3369/3375, 10089/10095)"
+    },
+    {
+     "name": "Giant trees over the plaza (0x020003EE)",
+     "pos": [
+      3349,
+      10087,
+      42
+     ],
+     "heightM": 35.4,
+     "note": "second trunk (3387.6,10092.4); trunk +/-2.4 m, canopy from z 57.5 to 77.4"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      3369.8,
+      10117.5,
+      42.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Glass-windowed church tower (0x010025E3)",
+     "pos": [
+      3400.3,
+      10119.3,
+      42
+     ],
+     "heightM": 12.7
+    },
+    {
+     "name": "Gharu'ndim halls (0x01000E11)",
+     "pos": [
+      3396,
+      10068,
+      42
+     ],
+     "heightM": 10,
+     "note": "second at (3300,10092)"
+    },
+    {
+     "name": "Nullified Statue of a Virindi (Colossus Foundry portal below)",
+     "pos": [
+      3353.5,
+      10071.4,
+      48.9
+     ],
+     "heightM": 5
+    },
+    {
+     "name": "Drudge Aviator's balloon (0x02000A56) with blue-flame torches",
+     "pos": [
+      3344.6,
+      9900.5,
+      66
+     ],
+     "heightM": 23.8
+    },
+    {
+     "name": "Life Stone near Ayan Baqur",
+     "pos": [
+      3258.5,
+      10306,
+      72
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Sea west of the town",
+     "pos": [
+      3080,
+      10135,
+      0
+     ],
+     "heightM": 0
+    }
+   ],
+   "site": {
+    "id": "ayan-baqur",
+    "name": "Ayan Baqur",
+    "gazetteerId": "ayan-baqur",
+    "teleport": "@telepoi Ayan Baqur",
+    "anchor": [
+     3360,
+     10090,
+     42
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.8,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.flyover",
+     "duration": {
+      "sec": 16
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       3140,
+       10135,
+       0
+      ],
+      "height": 4,
+      "radius": 4
+     },
+     "params": {
+      "heightAGL": 74,
+      "speed": 10,
+      "headingDeg": 90,
+      "relativeToSubject": false,
+      "gimbal": "fixed",
+      "tiltDeg": -16,
+      "minClearance": 15
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Fly level east at z 74 from over the sea toward the town on its terrace; keep 20 m above the trees on the slope.",
+     "notes": "ESTABLISHING + WATER (drone.flyover). Level pass at z 74 eastward from the open sea west of the coast (WBT height 0 at the start), over the shoreline and the forested slope, gimbal tilted -16: the town on its z 42 terrace ahead, lit by the low golden western sun behind the camera: the domed tavern, the glass-windowed tower, the Gharu'ndim halls and the two giant trees over the fountain plaza; 10 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (3060.0, 10135.0, 74.0) end (3220.0, 10135.0, 74.0), min AGL 59.3 m, nearest static/building/default-bake tree 49.3 m (scenery:0x0200035F), nearest building 78.5 m, retail-bake scenery 24.1 m, peak 10.0 m/s, 23% of samples over water; WBT get-height on 9 camera points, min AGL 59.3 m."
+    },
+    {
+     "technique": "classic.steadicam",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "MWS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       3372,
+       10092,
+       42
+      ],
+      "height": 4,
+      "radius": 4,
+      "heading": 3.14159
+     },
+     "params": {
+      "mode": "lead",
+      "distance": 24,
+      "elevationDeg": 0,
+      "glideM": 10
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Glide slowly north at walking pace toward the fountain; keep 10 m from the giant tree trunks and stay below their canopies.",
+     "notes": "FX: FOUNTAIN + TORCHES (classic.steadicam). Walking-height glide (3 m above the plaza) 10 m north toward the town fountain ringed by its wooden fence and four glowing torches, under the high canopies of the two giant trees (WBT Setup 0x020003EE: trunk +/-2.4 m, canopy parts start 15.5 m above the base, so the lens is 12 m below them and 12.5 m from the trunks), the Town Network portal glowing behind the fountain; gentle gait bob. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (3372.0, 10068.0, 45.0) end (3372.0, 10078.2, 45.0), min AGL 3.0 m, nearest static/building/default-bake tree 9.9 m (static:0x020003B5#31), nearest building 13.0 m, retail-bake scenery 57.1 m, peak 1.4 m/s; WBT get-height on 7 camera points, min AGL 3.0 m."
+    },
+    {
+     "technique": "drone.parallax-slide",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       3348,
+       10140,
+       42
+      ],
+      "height": 14,
+      "radius": 10
+     },
+     "params": {
+      "distance": 19.5,
+      "heightAGL": 3,
+      "slide": 26,
+      "panAmount": 0.35,
+      "direction": "right",
+      "bearingDeg": 270,
+      "relativeToSubject": false,
+      "minClearance": 1.5
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Slide south along the domed tavern 10 m off its west wall at 3 m height; keep 4 m from the torch post and the tent.",
+     "notes": "FACADE PAN: GHARU'NDIM DOME (drone.parallax-slide). Slides 26 m south along the west face of the domed three-storey tavern (The Smoking Axe, Ulgrim's haunt), 9.5-10 m off the wall and 3 m high, counter-panning 35 % to hold the dome: the yellow-brick dome and arched doorways slide past, the well enters at the right edge in the foreground and a giant tree canopy rises behind for parallax; golden light on the west face. 4 m/s peak. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (3328.5, 10153.0, 45.0) end (3328.5, 10127.0, 45.0), min AGL 3.0 m, nearest static/building/default-bake tree 4.2 m (static:0x01001A6E#45), nearest building 5.2 m, retail-bake scenery 57.7 m, peak 4.1 m/s; WBT get-height on 6 camera points, min AGL 3 m."
+    },
+    {
+     "technique": "classic.roll",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       3344.6,
+       9900.5,
+       66
+      ],
+      "height": 24,
+      "radius": 6
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 35,
+      "elevationDeg": -12,
+      "distance": 34,
+      "fromDeg": -9,
+      "toDeg": 9,
+      "pushM": 4
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hold on the balloon looking up and roll the horizon slowly from left to right while pushing 4 m closer; keep 14 m from the platform.",
+     "notes": "LANDMARK + FX (classic.roll). The Drudge Aviator's balloon on the south hill (0x02000A56, z 66-90) with its three blue-flame torches, seen from the north-east 30 m away looking up 12 deg: the horizon rolls from -9 to +9 deg over the shot with a 4 m push, so the balloon seems to sway against the golden western sky. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (3363.7, 9927.7, 70.9) end (3361.4, 9924.5, 71.8), min AGL 6.7 m, nearest static/building/default-bake tree 14.0 m (building:0x0100221E#6), nearest building 14.0 m, retail-bake scenery 41.5 m, peak 0.6 m/s; WBT get-height on 7 camera points, min AGL 6.8 m."
+    },
+    {
+     "technique": "drone.pano-360",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       3372,
+       10128,
+       42
+      ],
+      "height": 10,
+      "radius": 10
+     },
+     "params": {
+      "heightAGL": 52,
+      "yawDeg": 300,
+      "direction": "cw",
+      "startHeadingDeg": 180,
+      "relativeToSubject": false,
+      "tiltDeg": -14,
+      "minClearance": 10
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hover 52 m above the plaza and turn slowly clockwise through a near-full panorama; hold position.",
+     "notes": "CLOSING (drone.pano-360). Hovers at z 94 above the plaza north of the giant trees (25 m from their canopies, 40 m from the dome) and yaws 300 deg clockwise from south, tilted -14: the giant tree canopies, the dome and halls, the hills north and south, the sea and the low sun to the west. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (3372.0, 10128.0, 94.0) end (3372.0, 10128.0, 94.0), min AGL 52.0 m, nearest static/building/default-bake tree 24.6 m (static:0x020003EE#22), nearest building 40.5 m, retail-bake scenery 78.8 m, peak 0.0 m/s; WBT get-height on 1 camera points, min AGL 52 m."
+    }
+   ],
+   "verification": "One WBT session per pass (RetailSmoke.wbproj): describe-landblock (includeFootprints) + list-objects + get-terrain-data on the 9 LBs 0x1033-0x1235 (3x3 around 0x1134), get-object-detail on every placed model, get-height on 30 sampled camera points (start, end and every 2 s; WBT and the offline AC split-triangle interpolation agree within 0.1 m). The two giant plaza trees (Setup 0x020003EE) were split with chorizite-parse-dat-record + get-object-detail on their parts: trunk +/-2.4 m to 34 m, canopy parts from 15.5 m above the base; clearance was computed against trunk and canopy separately. Each shot was built with the real technique registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware groundZ and sampled at 4 Hz for AGL, distance to every static/building/spawn bounding box and to the default (ace-compat) and retail scenery bakes from the served dist, peak speed and subject framing; numbers are in each shot's notes. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-ayan-baqur.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s), exit 0 (dry build included)."
+  }
+ ]
+}

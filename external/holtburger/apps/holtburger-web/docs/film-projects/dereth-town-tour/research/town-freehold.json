@@ -1,0 +1,308 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Mayoi/Kryst/Freehold/Kara/Frost Haven/Linvak Tukal (lk6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-freehold.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "0.55 / neutral: high sun from the east (81 deg, WBT region-day-night-curve) - bright tropical noon on the sea; the chapel roll looks up from the west cliff foot so the tower is top-lit against the sky.",
+ "runtimeSec": 61,
+ "towns": [
+  {
+   "name": "Freehold",
+   "summary": "MacNiall's Freehold (74.2S 92.3E) is the breakaway settlement of the Aluvian MacNiall 'the Unruled', whose band of escaped slaves lived for a time in Kryst before rejecting its 'outdated moral codes' and trekking deeper into the Vesayen Isles to settle a small, safe island (Town Network sign) - a bandit haven with MacNiall, his lieutenant Onda Nakoza, Jesren the Jolly Barkeep and the archmage Kaza Nijina. In the DAT the whole island (LBs 0xF222/0xF322) is a jungle plateau 18 m above narrow beaches with open sea on every side; on top stand a blue-stone chapel tower on the west cliff edge, MacNiall's hall, a spire hall, two smaller halls, the Nullified Statue of a Sclavus on its pedestal, the Life Stone and the Town Network portal pad, with seven lantern posts.",
+   "landmarks": [
+    {
+     "name": "Blue-stone chapel tower (0x0100222F)",
+     "pos": [
+      46572,
+      6612,
+      18
+     ],
+     "heightM": 11.6,
+     "note": "on the west cliff edge; ground drops to ~10 m just west"
+    },
+    {
+     "name": "Nullified Statue of a Sclavus on its pedestal",
+     "pos": [
+      46622.8,
+      6666.2,
+      18
+     ],
+     "heightM": 9.5,
+     "note": "pedestal top z 24.8; centre of the plaza"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      46593.2,
+      6718.4,
+      18.2
+     ],
+     "heightM": 3.5,
+     "note": "glowing blue stone pad 0x020019E3; lantern posts at (46595.2,6682.8) and (46615.7,6727.5)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      46598.3,
+      6622.1,
+      18
+     ],
+     "heightM": 3.6,
+     "note": "south of the plaza"
+    },
+    {
+     "name": "MacNiall's hall (0x01000D36)",
+     "pos": [
+      46620,
+      6708,
+      18
+     ],
+     "heightM": 12.5,
+     "note": "MacNiall the Unruled stands at (46607.7,6703.4)"
+    },
+    {
+     "name": "Spire hall (0x01002226)",
+     "pos": [
+      46617.4,
+      6758.8,
+      18
+     ],
+     "heightM": 17,
+     "note": "tallest roof, z 35"
+    },
+    {
+     "name": "Kaza Nijina's house (0x01000D67)",
+     "pos": [
+      46668,
+      6588,
+      18
+     ],
+     "heightM": 10.1,
+     "note": "lantern posts 0x0200071A at (46666,6578),(46670,6578),(46667,6612)"
+    },
+    {
+     "name": "Open sea around the island",
+     "pos": [
+      46790,
+      6670,
+      0
+     ],
+     "heightM": 0,
+     "note": "WaterShallow/DeepSea beyond x~46740 east, y~6500 south, x~46484 west"
+    }
+   ],
+   "site": {
+    "id": "freehold",
+    "name": "MacNiall's Freehold",
+    "gazetteerId": "freehold",
+    "teleport": "@teleloc 0xF2220035 152 116 18.1 1 0 0 0",
+    "anchor": [
+     46610,
+     6660,
+     18
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.55,
+     "grade": "neutral"
+    },
+    "lbKeys": [
+     "0xF2220000",
+     "0xF2230000",
+     "0xF3220000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.orbit-poi",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       46615,
+       6665,
+       18
+      ],
+      "height": 17,
+      "radius": 90
+     },
+     "params": {
+      "radius": 175,
+      "heightAGL": 22,
+      "revolutions": 0.12,
+      "direction": "cw",
+      "bearingDeg": 55,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "standingOrder": "Circle slowly over the sea east of the island 40 m up, holding the whole hilltop freehold in frame; stay over the water.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING + WATER (drone.orbit-poi). A slow 43 deg arc 175 m out over the eastern sea at 40 m, holding the whole hilltop freehold - halls, chapel, jungle crowns - over a foreground of open water. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46758.3, 6765.4, 40) end (46788.2, 6640.0, 40); min AGL 40 m (WBT get-height on 9 camera points: min AGL 40 m, ground 0-0); nearest static/building/default-bake scenery/spawn 37.91 m (spawn:Cursed Wisp), nearest building 117.06 m, retail-bake scenery 53.12 m; peak 9.42 m/s; 100% of samples over water."
+    },
+    {
+     "technique": "fpv.fpv-flip",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       46612,
+       6452,
+       0
+      ],
+      "height": 2,
+      "radius": 5
+     },
+     "params": {
+      "axis": "roll",
+      "direction": "positive",
+      "turns": 1,
+      "flipDuration": 3,
+      "flipAt": 0.5,
+      "speed": 6,
+      "heightAGL": 6,
+      "rise": 3,
+      "tiltDeg": 2,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "standingOrder": "Race north 6 m over the open sea toward MacNiall's island and barrel-roll once mid-shot; nothing but water within 40 m.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + TRICK (fpv.fpv-flip, assigned). FPV racing north 6 m over the open sea toward MacNiall's island with a 3 s barrel roll mid-shot (pop-up 3 m); 100% of samples over water, nothing within 20 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46612, 6422, 6) end (46612, 6482, 6); min AGL 6 m (WBT get-height on 9 camera points: min AGL 6 m, ground 0-0); nearest static/building/default-bake scenery/spawn 20.77 m (spawn:Foul Moarsman), nearest building 107.19 m, retail-bake scenery 46.5 m; peak 6.71 m/s; 100% of samples over water."
+    },
+    {
+     "technique": "drone.boomerang",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       46622.8,
+       6666.2,
+       18
+      ],
+      "height": 9.5,
+      "radius": 3
+     },
+     "params": {
+      "far": 80,
+      "near": 28,
+      "heightStart": 30,
+      "heightNear": 22,
+      "rise": 16,
+      "bearingDeg": 305,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "standingOrder": "Sweep in over the west beach toward the sclavus statue in the plaza, stop 28 m out above the rooftops and swing back out climbing; 8 m above every tree crown.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (drone.boomerang, assigned). From over the west beach the drone sweeps in above the rooftops to 28 m from the sclavus statue in the plaza, stops, and swings back out climbing 16 m; stays 22 m above ground, 17 m from the nearest roof. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46557.3, 6712.1, 48) end (46557.3, 6712.1, 64); min AGL 22 m (WBT get-height on 9 camera points: min AGL 22 m, ground 0-18); nearest static/building/default-bake scenery/spawn 17.15 m (building:0x01000D14#37), nearest building 17.15 m, retail-bake scenery 22.8 m; peak 11.23 m/s."
+    },
+    {
+     "technique": "classic.handheld",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       46593.2,
+       6718.4,
+       18.2
+      ],
+      "height": 3.6,
+      "radius": 1.6
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 215,
+      "elevationDeg": 4,
+      "distance": 14,
+      "base": "push-in",
+      "pushM": 2,
+      "amplitudeDeg": 0.5,
+      "frequencyHz": 0.9,
+      "posAmplitude": 0.02,
+      "roughness": 0.45
+     },
+     "standingOrder": "Creep handheld toward the swirling town portal past the lantern posts; keep 2 m from the portal stone and the lanterns.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC + FLAME (classic.handheld). A handheld creep from the south-west (push-in 2 m, light seeded shake) toward the swirling town portal on its glowing blue pad, a burning lantern post just right of it and the spire hall rising behind (ndc 0.37 and -0.05). Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46585.2, 6707.0, 21.0) end (46586.3, 6708.6, 20.8); min AGL 2.84 m (WBT get-height on 9 camera points: min AGL 2.84 m, ground 18-18); nearest static/building/default-bake scenery/spawn 6.54 m (static:0x020019E3#26), nearest building 22.36 m, retail-bake scenery 13.91 m; peak 0.33 m/s."
+    },
+    {
+     "technique": "classic.roll",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       46572,
+       6612,
+       18
+      ],
+      "height": 11.6,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 290,
+      "elevationDeg": -22,
+      "distance": 26,
+      "thirds": "center",
+      "fromDeg": 0,
+      "toDeg": 10,
+      "pushM": 2
+     },
+     "standingOrder": "From the foot of the west cliff look up at the blue-stone chapel tower on the plateau edge and slowly lean the horizon while easing in; 6 m from the trees.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (classic.roll). From the foot of the west cliff (ground ~10 m), look up at the blue-stone chapel tower standing on the plateau edge against the sky and slowly lean the horizon 0 -> 10 deg while easing in 2 m. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (46549.3, 6620.2, 14.1) end (46551.1, 6619.6, 14.8); min AGL 3.49 m (WBT get-height on 9 camera points: min AGL 3.49 m, ground 10.0-11.3); nearest static/building/default-bake scenery/spawn 14.38 m (scenery:0x02000E71), nearest building 16.76 m, retail-bake scenery 7.87 m; peak 0.29 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session at a time, >=3.8 GB free): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xF121, 0xF122, 0xF123, 0xF221, 0xF222, 0xF223, 0xF321, 0xF322, 0xF323; get-object-detail on every placed model (bounds -> rotated AABBs) and chorizite-parse-dat-record Setup on every placed Setup (default PhysicsScript + lights) to find the FX props, cross-checked with object-tags.json (utf-8-sig) and particle-fx-catalog.json; served dist scenery (default ace-compat bake AND the opt-in retail bake) and ACE outdoor spawns added as obstacle boxes; every shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain (AC split-triangle interpolation) and sampled at 4 Hz for AGL, box clearance, line of sight, subject framing and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) agreed with the offline terrain within 0.005 m; region-day-night-curve: t 0.552 -> sun heading 90 deg, pitch 80.9 deg. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-freehold.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.orbit-poi 14s: start [46758.3, 6765.4, 40] end [46788.2, 6640.0, 40], WBT minAGL 40 m, clearance 37.91 m (spawn:Cursed Wisp), bldg 117.06 m, retail 53.12 m, vmax 9.42 m/s | s020 fpv.fpv-flip 10s: start [46612, 6422, 6] end [46612, 6482, 6], WBT minAGL 6 m, clearance 20.77 m (spawn:Foul Moarsman), bldg 107.19 m, retail 46.5 m, vmax 6.71 m/s | s030 drone.boomerang 16s: start [46557.3, 6712.1, 48] end [46557.3, 6712.1, 64], WBT minAGL 22 m, clearance 17.15 m (building:0x01000D14#37), bldg 17.15 m, retail 22.8 m, vmax 11.23 m/s | s040 classic.handheld 10s: start [46585.2, 6707.0, 21.0] end [46586.3, 6708.6, 20.8], WBT minAGL 2.84 m, clearance 6.54 m (static:0x020019E3#26), bldg 22.36 m, retail 13.91 m, vmax 0.33 m/s | s050 classic.roll 11s: start [46549.3, 6620.2, 14.1] end [46551.1, 6619.6, 14.8], WBT minAGL 3.49 m, clearance 14.38 m (scenery:0x02000E71), bldg 16.76 m, retail 7.87 m, vmax 0.29 m/s"
+  }
+ ]
+}

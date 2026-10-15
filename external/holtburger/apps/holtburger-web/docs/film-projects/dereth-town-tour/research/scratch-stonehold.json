@@ -1,0 +1,237 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Stonehold scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "stonehold",
+   "name": "Stonehold",
+   "gazetteerId": "stonehold",
+   "teleport": "@telepoi Stonehold",
+   "anchor": [
+    19285.0,
+    40985.0,
+    78.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.36,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19285,
+     40985,
+     78
+    ],
+    "height": 40,
+    "radius": 60
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 75,
+    "distance": 170,
+    "heightM": 80,
+    "driftDeg": 12,
+    "pushPct": 10
+   },
+   "id": "s010",
+   "site": "stonehold",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Drift slowly 12 degrees around the terraced town from 170 m out and 80 m up over the eastern hillside, the ridge and western lowlands in frame; stay 50 m above every pine.",
+   "notes": "ESTABLISHING (classic.establishing, assigned). Camera hangs over the eastern hillside 170 m ENE of the plaza at z 158 (66-79 m AGL) and drifts from bearing 69 to 81 while pushing 10 % in, looking WSW down on the whole terrace town with the morning sun behind it: stone houses, the column plaza, the chapel, then the land falling away to the wooded western lowlands and the pine plateau with the Rat Tower on the right. Subject height 40 lifts the aim so the frame keeps ~6 deg of sky with clouds at the top. Line-of-sight sweep: from bearings 65-85 at this height all six probe points (plaza, four roofs, column) are clear of trees; at 45 m height every bearing was blocked by 30 m pines. Verified offline (real registry build + WBT terrain): start (19443.7,41045.9,158.0) end (19436.1,41008.9,158.0), min AGL 66.4 m, nearest static/building/tree 55.2 m (0x02000246@19426,41101), peak 4.3 m/s."
+  },
+  {
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19283.8,
+     40979.3,
+     78
+    ],
+    "height": 9.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 138,
+    "elevationDeg": -13,
+    "distance": 13,
+    "thirds": "left",
+    "fromTarget": "metres",
+    "fromM": 3.3,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.0,
+    "driftM": 1.0
+   },
+   "look": {
+    "dof": {
+     "focusRange": 2,
+     "bokehScale": 2
+    }
+   },
+   "id": "s020",
+   "site": "stonehold",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold at eye height 3 m behind the burning candelabrum and pull focus from its flames to the Tumerok statue on the plaza column; never closer than 2 m to the candelabrum.",
+   "notes": "FLAME FX + LANDMARK (classic.rack-focus, real DoF). Camera 1.8 m above the plaza, 13 m south-east of the column (bearing 138), with the candelabrum at (19291.2,40973.0) 3.3 m ahead and ~10 deg right of centre; the statue column sits on the left third. Focus starts on the flame (3.3 m) with the column soft, then pulls (2 s, centred at 45 %) to the column/statue - warm flicker in the foreground, morning-lit stone behind. dof focusRange 2, bokeh 2. Verified offline (real registry build + WBT terrain): start (19292.3,40969.9,79.8) end (19291.6,40970.6,80.1), min AGL 1.8 m, nearest static/building/tree 2.1 m (0x64D5#24 0x020005D8), peak 0.1 m/s."
+  },
+  {
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19332,
+     41220,
+     158
+    ],
+    "height": 30.75,
+    "radius": 7
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": -18.8,
+    "distance": 42.25,
+    "fromDeg": -4,
+    "toDeg": 30,
+    "relative": false
+   },
+   "id": "s030",
+   "site": "stonehold",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Stay locked 40 m south of the Rat Tower at 2 m above the plateau and tilt from its door up to the spire roof against the sky; do not translate.",
+   "notes": "LANDMARK (classic.tilt, assigned). Fixed camera on the pine plateau 40 m due south of the five-storey Rat Tower; absolute tilt from -4 deg (door, mossy base, plateau grass) to +30 deg so the spire roof (188.75) rises into the upper third with sky and clouds above - the tower's height revealed. Sun from the east side-lights the south face. Camera ground 157.7 (WBT). Verified offline (real registry build + WBT terrain): start (19332.0,41180.0,159.8) end (19332.0,41180.0,159.8), min AGL 2.1 m, nearest static/building/tree 6.2 m (0x02000246@19334,41171), peak 0.0 m/s."
+  },
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19492.3,
+     40924.9,
+     102.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "radiusStart": 34,
+    "radiusEnd": 11,
+    "heightStart": 24,
+    "heightEnd": 3,
+    "revolutions": 0.21,
+    "direction": "ccw",
+    "bearingDeg": 290,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "id": "s040",
+   "site": "stonehold",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Spiral down from 48 m over the western drop to 8 m off the cliff ledge, ending level with the crackling crystal of the destroyed portal; keep 5 m from the pine beside it.",
+   "notes": "LIGHTNING FX (drone.spiral-descent). Starts 34 m west of the Destroyed Ahurenga Portal, 24 m above its ledge (48 m over the ravine floor) and spirals 75 deg counter-clockwise down to 11 m south-west of it at ledge height (105.5, 8 m above the slope), ending level on the crystal with its arc cluster and arc fountain spitting blue-white bolts against the shadowed cliff (morning sun behind the cliff = arcs read strongly). The 16 m pine 5 m east of the portal stays behind the subject. Ravine ground 76-97. Verified offline (real registry build + WBT terrain): start (19460.4,40936.5,126.5) end (19486.1,40915.8,105.5), min AGL 8.0 m, nearest static/building/tree 5.3 m (0x020004BE@19497,40927), peak 5.8 m/s."
+  },
+  {
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     19290,
+     41150,
+     150
+    ],
+    "height": 4,
+    "radius": 4
+   },
+   "params": {
+    "heightAGL": 50,
+    "yawDeg": 360,
+    "direction": "cw",
+    "startHeadingDeg": 180,
+    "relativeToSubject": false,
+    "tiltDeg": -12,
+    "minClearance": 8
+   },
+   "id": "s050",
+   "site": "stonehold",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover 50 m above the pine plateau north of town and turn one slow full circle, tilted 12 degrees down over the town, the Rat Tower and the western valley; no translation.",
+   "notes": "CLOSING VISTA (drone.pano-360, assigned, on the hilltop). Hover at z 200 over the plateau edge (ground 149.3) between town and tower, starting south (the terrace town 80 m below), turning clockwise through the western lowlands, the Rat Tower and the pine plateau to the eastern mountains and back - a 360 of Stonehold's setting under morning cloud. Pines stay 24 m away. Verified offline (real registry build + WBT terrain): start (19290.0,41150.0,200.0) end (19290.0,41150.0,200.0), min AGL 50.7 m, nearest static/building/tree 23.9 m (0x020002D3@19302,41132), peak 0.0 m/s."
+  }
+ ],
+ "notes": "time 0.36 (sun due east, 38 deg): low morning light rakes the terrace town; grade cool for the mountain air"
+}

@@ -1,0 +1,281 @@
+{
+ "name": "Dryreach",
+ "slug": "dryreach",
+ "summary": "Dryreach is an Aluvian frontier fortress forever besieged by Hea Tumeroks, who use it as a training ground; its gates are kept locked and the surrounding zone spawns tougher creatures than the rest of Middle Osteth. In the world it is an 84 x 132 m walled rectangle on a flat green plain (z 18): four five-story stone towers with tall spire roofs (top 48.8) at the corners, low stone curtain walls topped with sharpened wooden stakes, a gatehouse in each side, and inside a courtyard with a central well, the Town Network portal and a handful of Aluvian cottages; Tumerok camps and stake palisades dot the plain to the north-east.",
+ "landmarks": [
+  {
+   "name": "Spire towers (four corners)",
+   "pos": [
+    41967.0,
+    22593.0,
+    18.0
+   ],
+   "heightM": 30.8,
+   "note": "S310/S311/S314/S319 at (41967|42033, 22479|22593); spire tips z 48.8."
+  },
+  {
+   "name": "West gatehouse and palisade",
+   "pos": [
+    41964.0,
+    22524.0,
+    18.0
+   ],
+   "heightM": 5.0,
+   "note": "Wall top 23 with wooden stakes to 25; gatehouses on all four sides."
+  },
+  {
+   "name": "Courtyard well",
+   "pos": [
+    41988.9,
+    22525.2,
+    18.0
+   ],
+   "heightM": 2.7,
+   "note": "Centre of the fort."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    41981.2,
+    22572.2,
+    18.2
+   ],
+   "heightM": 3.5,
+   "note": "North-west courtyard, 22 m inside the north gate."
+  },
+  {
+   "name": "Inner cottages S322-S326",
+   "pos": [
+    42000.0,
+    22540.0,
+    18.0
+   ],
+   "heightM": 12.5,
+   "note": "Aluvian houses, tops 27.7-30.5, with lanterns."
+  },
+  {
+   "name": "Tumerok camp palisade",
+   "pos": [
+    42204.0,
+    22740.0,
+    16.0
+   ],
+   "heightM": 5.0,
+   "note": "Stake palisade NE of the fort."
+  }
+ ],
+ "site": {
+  "id": "dryreach",
+  "name": "Dryreach",
+  "gazetteerId": "dryreach",
+  "teleport": "@telepoi Dryreach",
+  "anchor": [
+   41988,
+   22524,
+   18.005
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.82,
+   "grade": "warm"
+  }
+ },
+ "shots": [
+  {
+   "technique": "drone.spiral-descent",
+   "duration": {
+    "sec": 17
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     42000,
+     22536,
+     18
+    ],
+    "height": 31,
+    "radius": 70
+   },
+   "params": {
+    "radiusStart": 140,
+    "radiusEnd": 96,
+    "heightStart": 80,
+    "heightEnd": 40,
+    "revolutions": 0.13,
+    "direction": "ccw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "standingOrder": "Descend in a wide slow spiral over the plain toward the walled fortress of Dryreach with its four spired towers in the golden light; stay 10 m above the spire tips.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Arrival: wide counter-clockwise spiral descent from 80 m to 40 m above the plain (radius 140->96 m) toward the fortress, its four 31 m spire towers and spiked palisade glowing in the low golden sun from behind the camera. Clearance: 31 m to the nearest tower, >= 9 m above the spire tips at the end; vmax 10.6 m/s."
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "MWS",
+   "fov": 62,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41964,
+     22524,
+     18
+    ],
+    "height": 9,
+    "radius": 14
+   },
+   "params": {
+    "distance": 13,
+    "heightAGL": 2.5,
+    "slide": 32,
+    "panAmount": 0.12,
+    "direction": "right",
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Glide south along the sunlit west palisade of Dryreach past its gate and spiked stakes, 13 m off the wall and 2.5 m up; nothing may come between lens and wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "The town's facade pan (fortress wall): glides 32 m south along the west palisade and gatehouse, 13 m off the stone and 2.5 m above the flat plain, the golden western sun at the camera's back lighting the wall, its wooden stakes and the gate. Clearance: 11.3 m to the wall, query-radius 4 m = 0, nearest tree 19 m; vmax 4.2 m/s."
+  },
+  {
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41989,
+     22526,
+     18
+    ],
+    "height": 4,
+    "radius": 8
+   },
+   "params": {
+    "heightAGL": 30,
+    "speed": 6,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 60,
+    "smoothTime": 0.4,
+    "minClearance": 10
+   },
+   "standingOrder": "Pass straight over the Dryreach courtyard from east to west 30 m up, keeping the well in frame through vertical as the golden light rakes the walls; stay 12 m above every roof and spire.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Pass-over: straight east-to-west pass 30 m above the courtyard (z 48), the gimbal yaw-slewing through vertical over the well with the cottages, portal and spired corners rotating beneath. Clearance 19.8 m to the nearest roof, tower tips 48.8 never closer than 30 m horizontally; 6 m/s."
+  },
+  {
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41981.2,
+     22572.2,
+     18.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 5,
+    "azimuthRef": "compass",
+    "elevationDeg": 0.5,
+    "distance": 40,
+    "thirds": "center",
+    "riseM": 12,
+    "keepAim": true
+   },
+   "standingOrder": "Rise straight up outside the north gate until the lens clears the palisade stakes and looks down on the blue Town Network portal in the courtyard; stay 12 m from the wall.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Particle reveal: pedestal rises 12 m outside the north gate (40 m from the portal): first the gate and stakes fill the frame, then the lens clears the palisade (top ~25) and looks down on the blue Town Network portal in the NW courtyard (blocked 27/49 samples by design, clear from t~6.7). Clearance: 11.7 m to the nearest bush, 12.5 m to the NW tower; vmax 1.6 m/s."
+  },
+  {
+   "technique": "fpv.fpv-dive",
+   "duration": {
+    "sec": 8
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     41969,
+     22602,
+     18
+    ],
+    "height": 30.8,
+    "radius": 2
+   },
+   "params": {
+    "heightStart": 37,
+    "bottomAGL": 3,
+    "diveAngleDeg": -78,
+    "approach": 16,
+    "standoff": 5,
+    "exitLength": 40,
+    "pullOutRadius": 9,
+    "speed": 13,
+    "alat": 11,
+    "uptiltDeg": 20,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "jev"
+   },
+   "standingOrder": "Cross the north-west spire 6 m above its tip, then dive straight down its north face 5 m off the stone and pull out low over the plain heading north; never closer than 3 m to the tower or trees.",
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "notes": "Hero FPV dive (JEV): crosses the NW spire tower level at z 56 (7 m above its tip), crests and dives at -78 deg down the north face 5 m off the stone, pulls out 3 m above the plain and races 40 m north. Clearance: >= 4.6 m from the tower box at the closest, trees >= 19 m; fpv preset, vmax 11.7 m/s (cap 25)."
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 3x3 landblocks (0xD974 0xD975 0xD976 0xDA74 0xDA75 0xDA76 0xDB74 0xDB75 0xDB76); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 drone.spiral-descent: WBT get-height under 5-8 sampled camera points, min AGL 40 m; offline build min clearance 31.25 m (static:0x01001161#311), opt-in retail bake 36.46 m; vmax 10.56 m/s; subject LOS blocked 0/69 samples; s020 drone.parallax-slide: WBT get-height under 5-8 sampled camera points, min AGL 2.5 m; offline build min clearance 11.25 m (static:0x01001124#307), opt-in retail bake 19.71 m; vmax 4.19 m/s; subject LOS blocked 0/49 samples; s030 drone.pass-over: WBT get-height under 5-8 sampled camera points, min AGL 30 m; offline build min clearance 19.75 m (static:0x01000C17#324), opt-in retail bake 34.46 m; vmax 6.0 m/s; subject LOS blocked 0/49 samples; s040 classic.pedestal: WBT get-height under 5-8 sampled camera points, min AGL 2.3 m; offline build min clearance 11.74 m (scenery:0x0200035F), opt-in retail bake 26.34 m; vmax 1.57 m/s; subject LOS blocked 27/49 samples (by design: reveal/foreground); s050 fpv.fpv-dive: WBT get-height under 5-8 sampled camera points, min AGL 3 m; offline build min clearance 4.57 m (static:0x01001161#310), opt-in retail bake 19.57 m; vmax 11.7 m/s; subject LOS blocked 0/33 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-dryreach.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-dryreach.json",
+ "totalSec": 61,
+ "techniques": [
+  "drone.spiral-descent",
+  "drone.parallax-slide",
+  "drone.pass-over",
+  "classic.pedestal",
+  "fpv.fpv-dive"
+ ]
+}

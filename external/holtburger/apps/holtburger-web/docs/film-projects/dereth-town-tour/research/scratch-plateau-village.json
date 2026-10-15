@@ -1,0 +1,185 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Plateau Village scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "plateau-village",
+   "name": "Plateau Village",
+   "gazetteerId": "plateau-village",
+   "teleport": "@telepoi Plateau",
+   "anchor": [
+    14050,
+    35085,
+    240
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.66,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "plateau-village",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14050,
+     35085,
+     240
+    ],
+    "height": 12,
+    "radius": 40
+   },
+   "params": {
+    "distance": 125,
+    "bearingDeg": 0,
+    "relativeToSubject": false,
+    "obstacleDistance": 55,
+    "obstacleHeight": 66,
+    "heightStart": 4,
+    "clearance": 24,
+    "forward": 30,
+    "endPitchDeg": -14,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise up the escarpment face from the ravine floor until 23 m above the plateau rim while easing south toward the village; stay 40 m from the cliff top and trees.",
+   "notes": "ESTABLISHING (drone.rising-reveal). Starts 4 m above the floor of the ravine that cuts north of the village (z 177), facing the 65 m escarpment; rises 86 m while drifting 30 m south until 23 m above the plateau rim, pitching from the rock face to the horizon: the rim houses, the timber roofs of the village, the plateau edge and the long view west appear (the square itself stays behind the first row of houses; s020 shows it). Peak 8.9 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (14050.0, 35210.0, 177.0) end (14050.0, 35180.0, 263.0), min AGL 4.0 m, nearest static/building/default-bake tree 45.3 m (scenery:0x02001063), nearest building 73.3 m, retail-bake scenery 38.3 m, peak 8.9 m/s; WBT get-height on 9 camera points, min AGL 4 m."
+  },
+  {
+   "id": "s020",
+   "site": "plateau-village",
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14048,
+     35080,
+     240
+    ],
+    "height": 20,
+    "radius": 30
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 48,
+    "riseM": 14,
+    "rotateDeg": 35
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the village square from 48 m rising to 62 m while the image turns slowly clockwise.",
+   "notes": "LANDMARK / PATTERN (classic.birds-eye). Straight down over the village square at 48 to 62 m (z 288-302), image turning 35 deg: the Town Network portal swirl, the Nullified Statue of a Skeleton on its column plinth (an Anniversary Effect emitter sits on it), the four candelabras and the brown timber roofs of the Aluvian houses on the green plateau. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (14048.0, 35080.0, 288.0) end (14048.0, 35080.0, 302.0), min AGL 48.0 m, nearest static/building/default-bake tree 21.1 m (spawn:April 2003 Raining Mad Cows Gen), nearest building 38.2 m, retail-bake scenery 31.9 m, peak 1.8 m/s; WBT get-height on 1 camera points, min AGL 48 m."
+  },
+  {
+   "id": "s030",
+   "site": "plateau-village",
+   "technique": "classic.dolly-in",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "FS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     14069,
+     35424.1,
+     240
+    ],
+    "height": 15.5,
+    "radius": 9
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 90,
+    "elevationDeg": -8,
+    "fromFraming": "WS",
+    "profile": "linear"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Dolly slowly west along the wedding aisle at eye level toward the altar and the twin pillars; keep at least 5 m from every torch and tree.",
+   "notes": "FX: FLAMES + LANTERNS (classic.dolly-in). On the plateau's northern promontory (the Plateau Wedding site) the camera dollies 22 m west down the aisle at eye level (z 242 to 245): ten blue-flame torches (0x02000719) line the benches on both sides, two orange-leaved lantern trees each hung with 15 glowing brass lanterns frame the shot, ahead the altar with two standing flame lanterns and flowers and the twin 15.5 m stone pillars capped with green and blue glows, sky and the void beyond. Afternoon sun from the west backlights the altar. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (14110.1, 35424.1, 242.0) end (14087.9, 35424.1, 245.1), min AGL 2.0 m, nearest static/building/default-bake tree 5.7 m (static:0x02000719#34), nearest building 26.2 m, retail-bake scenery 8.7 m, peak 2.4 m/s; WBT get-height on 9 camera points, min AGL 2.0 m."
+  },
+  {
+   "id": "s040",
+   "site": "plateau-village",
+   "technique": "drone.flythrough",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     14067.7,
+     35424.1,
+     248
+    ],
+    "gapNormal": [
+     -1,
+     0,
+     0
+    ],
+    "gapWidth": 12,
+    "gapHeight": 15,
+    "speed": 4,
+    "gapSpeed": 0.6,
+    "lookAhead": 12,
+    "tiltDeg": -6,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly level west through the 12 m gap between the twin pillars at 8 m height and on out over the cliff; never descend below z 247 over the altar.",
+   "notes": "CLOSING / HERO (drone.flythrough). From over the benches the drone flies west at z 248 between the twin wedding pillars (gap 12.2 m, pillars to z 255.6, 6.1 m clearance each side), 4.5 m above the altar lanterns and the officiant, and straight out over the 150 m drop off the plateau into open sky and cloud; cruise 4 m/s slowing to 2.4 m/s at the gap. JEV-hero candidate (a gap move). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (14099.7, 35424.1, 248.0) end (14035.7, 35424.1, 248.0), min AGL 8.0 m, nearest static/building/default-bake tree 4.5 m (spawn:Grand Sentinel Tretia), nearest building 26.5 m, retail-bake scenery 8.7 m, peak 4.7 m/s; WBT get-height on 9 camera points, min AGL 8 m."
+  }
+ ]
+}

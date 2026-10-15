@@ -1,0 +1,300 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Mayoi/Kryst/Freehold/Kara/Frost Haven/Linvak Tukal (lk6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-frost-haven.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "0.72 / warm: sun in the west at 56 deg (WBT region-day-night-curve): warm light on blue-white snow, the two-shot looks west so the snowmen's breath fog is backlit; the time-lapse only runs to ~0.79 (sun 35 deg).",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Frost Haven",
+   "summary": "Frost Haven (68.4S 25.4E) is the Snowman village in the Linvak Mountain Range next to Mount Ingot (acpedia 'Frost Haven', added in Waking From the Abyss, updated in Cold Tracks): home of the Mayor, Chef Pleist, Elijah, Emma, Numb, Nip, Sam, David and Robert, the start of the Snowman Village and Blind Snowman quests, and the target of the seasonal Assault on Frost Haven. In the DAT it sits in a small snow bowl at z 290 (LB 0x9F29) with ice and snow ridges rising to 320-360 on every side and Mount Ingot's white flank climbing past 500 m to the north: five dark glass-roofed snow huts ring a central clearing, six glowing lanterns stand between them, snow-laden blue-lit trees, a bed of glowing blue flowers by Robert, blue ice crystals scattered on the slopes and a teal glowing stone; the valley opens to the west.",
+   "landmarks": [
+    {
+     "name": "Snow huts (0x01001370 x5)",
+     "pos": [
+      30566,
+      8006,
+      290
+     ],
+     "heightM": 7.2,
+     "note": "ring at (30587.6,7980.8),(30564.7,7980.8),(30541.4,8003.1),(30543.3,8024.9),(30585.1,8025.0)"
+    },
+    {
+     "name": "Glowing lanterns 0x02000705",
+     "pos": [
+      30586.6,
+      8009.3,
+      290
+     ],
+     "heightM": 3.6,
+     "note": "six, light + DAT flame script, ~20 m from the centre"
+    },
+    {
+     "name": "Glowing blue flower bed (0x02000E8F x16 + leaves)",
+     "pos": [
+      30594.8,
+      8001.5,
+      290
+     ],
+     "heightM": 1.3,
+     "note": "beside Robert the snowman"
+    },
+    {
+     "name": "Snowmen Numb and Nip",
+     "pos": [
+      30564.3,
+      8006,
+      290
+     ],
+     "heightM": 2,
+     "note": "Numb (30563.9,8004.3), Nip (30564.6,8007.8); Sam (30564.7,8018), David (30557.3,7991.3), Robert (30591.8,7995.3)"
+    },
+    {
+     "name": "Blue ice crystals 0x02000441",
+     "pos": [
+      30610,
+      8019.7,
+      301.3
+     ],
+     "heightM": 2,
+     "note": "eleven on the slopes around the bowl"
+    },
+    {
+     "name": "Teal glowing stone 0x02000FF7",
+     "pos": [
+      30573.8,
+      8036.9,
+      290
+     ],
+     "heightM": 0.6,
+     "note": "north edge, by the Assault-on-Frost-Haven generators"
+    },
+    {
+     "name": "Mount Ingot",
+     "pos": [
+      30672,
+      8252,
+      505
+     ],
+     "heightM": 0,
+     "note": "snow flank rising to ~510 m north of the village; Mount Ingot portal at (30600,8208,400)"
+    },
+    {
+     "name": "East ridge viewpoint",
+     "pos": [
+      30720,
+      7990,
+      353
+     ],
+     "heightM": 0,
+     "note": "ridge crest 150 m east, 63 m above the village"
+    }
+   ],
+   "site": {
+    "id": "frost-haven",
+    "name": "Frost Haven",
+    "gazetteerId": "frost-haven",
+    "teleport": "@teleloc 0x9F29000E 36 131 290.1 1 0 0 0",
+    "anchor": [
+     30566,
+     8006,
+     290
+    ],
+    "settleSec": 3,
+    "look": {
+     "timeOfDay": 0.72,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0x9F290000",
+     "0x9F2A0000",
+     "0xA0290000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.pano-360",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       30720,
+       7990,
+       352
+      ],
+      "height": 2,
+      "radius": 2
+     },
+     "params": {
+      "heightAGL": 9,
+      "yawDeg": 170,
+      "direction": "cw",
+      "startHeadingDeg": 225,
+      "relativeToSubject": false,
+      "tiltDeg": -7,
+      "minClearance": 4
+     },
+     "standingOrder": "Hover over the snowy east ridge and turn slowly from the valley past the snowman village in its bowl to the white flank of Mount Ingot; stay 7 m above the snow.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.pano-360). Hovering 7.5 m over the snowy east ridge, a slow 170 deg turn from the western valley past the snowman village in its bowl to Mount Ingot's white flank. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30720, 7990, 361) end (30720, 7990, 361); min AGL 7.5 m (WBT get-height on 9 camera points: min AGL 7.5 m, ground 353.5-353.5); nearest static/building/default-bake scenery/spawn 12.53 m (scenery:0x020012FB), nearest building 140.59 m, retail-bake scenery 12.19 m; peak 0 m/s."
+    },
+    {
+     "technique": "classic.dolly-in",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       30593.3,
+       7998.5,
+       290
+      ],
+      "height": 2.2,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 280,
+      "elevationDeg": 4,
+      "thirds": "center",
+      "fromFraming": "EWS",
+      "profile": "perceptual"
+     },
+     "standingOrder": "Dolly in on Robert the snowman beside the bed of glowing blue flowers and the lantern; stop 3 m short and keep clear of the snow-laden trees.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FLAME + GLOW (classic.dolly-in). Dolly in from the west (19 -> 6 m, eye level) on Robert the snowman and the bed of glowing blue flowers, a burning lantern passing the left of frame; frost wash and breath fog on show. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30574.8, 8001.8, 292.4) end (30587.5, 7999.5, 291.5); min AGL 1.51 m (WBT get-height on 9 camera points: min AGL 1.51 m, ground 290-290); nearest static/building/default-bake scenery/spawn 4.26 m (static:0x010030AC#33), nearest building 8.92 m, retail-bake scenery 0.45 m; peak 2.03 m/s."
+    },
+    {
+     "technique": "classic.two-shot",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       30563.9,
+       8004.26,
+       290
+      ],
+      "height": 2.0,
+      "radius": 0.8
+     },
+     "params": {
+      "secondary": [
+       30564.64,
+       8007.79,
+       290
+      ],
+      "secondaryHeight": 2.0,
+      "side": "auto",
+      "distance": 7,
+      "elevationDeg": 6,
+      "driftDeg": 8
+     },
+     "standingOrder": "Frame the snowmen Numb and Nip together in the middle of the village, drifting a few degrees; 3 m from both.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CHARACTER (classic.two-shot). Numb and Nip together in the middle of the clearing, a gentle 8 deg drift, 7 m off; backlit by the western sun. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30571.2, 8005.1, 292.2) end (30571.0, 8004.1, 292.2); min AGL 2.22 m (WBT get-height on 9 camera points: min AGL 2.22 m, ground 290-290); nearest static/building/default-bake scenery/spawn 5.53 m (spawn:Nip), nearest building 8.2 m, retail-bake scenery 14.19 m; peak 0.14 m/s."
+    },
+    {
+     "technique": "classic.time-lapse",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "EWS",
+     "fov": 66,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       30610,
+       8130,
+       310
+      ],
+      "height": 50,
+      "radius": 120
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 195,
+      "elevationDeg": 12,
+      "distance": 280,
+      "thirds": "center",
+      "rate": 0.006
+     },
+     "standingOrder": "Lock off south of the village looking north over its roofs to Mount Ingot while the clouds race and the light warms; nothing moves near the lens.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "SKY (classic.time-lapse, rate 0.006 game-days/s). Locked off 38 m above the south ridge looking north: the village at the lower third (ndc y -0.65) and Mount Ingot's summit at the top (0.80) while clouds race and the light warms from 0.72 to ~0.79. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30539.1, 7865.4, 393.2) end (30539.1, 7865.4, 393.2); min AGL 37.86 m (WBT get-height on 9 camera points: min AGL 37.87 m, ground 355.4-355.4); nearest static/building/default-bake scenery/spawn 49.06 m (static:0x02000441#64), nearest building 145.92 m, retail-bake scenery 84.95 m; peak 0 m/s."
+    },
+    {
+     "technique": "drone.top-down-rise",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       30566,
+       8006,
+       290
+      ],
+      "height": 7,
+      "radius": 30
+     },
+     "params": {
+      "heightStart": 18,
+      "heightEnd": 95,
+      "rotateDeg": 45,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "minClearance": 6
+     },
+     "standingOrder": "Look straight down on the ring of snow huts and lanterns and rise until the whole snow bowl shows; start 7 m above the tallest snow tree.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.top-down-rise). Straight down on the ring of snow huts and lanterns, rising 18 -> 95 m and turning 45 deg until the whole snow bowl shows. Verified offline (real technique registry build against WBT terrain, 4 Hz samples): start (30566, 8006, 308) end (30566, 8006, 385); min AGL 18 m (WBT get-height on 9 camera points: min AGL 18 m, ground 290-290); nearest static/building/default-bake scenery/spawn 14.51 m (spawn:Nip), nearest building 14.75 m, retail-bake scenery 19.35 m; peak 9.3 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session at a time, >=3.8 GB free): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0x9E28, 0x9E29, 0x9E2A, 0x9F28, 0x9F29, 0x9F2A, 0xA028, 0xA029, 0xA02A; get-object-detail on every placed model (bounds -> rotated AABBs) and chorizite-parse-dat-record Setup on every placed Setup (default PhysicsScript + lights) to find the FX props, cross-checked with object-tags.json (utf-8-sig) and particle-fx-catalog.json; served dist scenery (default ace-compat bake AND the opt-in retail bake) and ACE outdoor spawns added as obstacle boxes; every shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain (AC split-triangle interpolation) and sampled at 4 Hz for AGL, box clearance, line of sight, subject framing and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) agreed with the offline terrain within 0.005 m; region-day-night-curve: t 0.722 -> sun heading 270 deg, pitch 55.9 deg. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-frost-haven.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.pano-360 15s: start [30720, 7990, 361] end [30720, 7990, 361], WBT minAGL 7.5 m, clearance 12.53 m (scenery:0x020012FB), bldg 140.59 m, retail 12.19 m, vmax 0 m/s | s020 classic.dolly-in 11s: start [30574.8, 8001.8, 292.4] end [30587.5, 7999.5, 291.5], WBT minAGL 1.51 m, clearance 4.26 m (static:0x010030AC#33), bldg 8.92 m, retail 0.45 m, vmax 2.03 m/s | s030 classic.two-shot 11s: start [30571.2, 8005.1, 292.2] end [30571.0, 8004.1, 292.2], WBT minAGL 2.22 m, clearance 5.53 m (spawn:Nip), bldg 8.2 m, retail 14.19 m, vmax 0.14 m/s | s040 classic.time-lapse 12s: start [30539.1, 7865.4, 393.2] end [30539.1, 7865.4, 393.2], WBT minAGL 37.87 m, clearance 49.06 m (static:0x02000441#64), bldg 145.92 m, retail 84.95 m, vmax 0 m/s | s050 drone.top-down-rise 13s: start [30566, 8006, 308] end [30566, 8006, 385], WBT minAGL 18 m, clearance 14.51 m (spawn:Nip), bldg 14.75 m, retail 19.35 m, vmax 9.3 m/s"
+  }
+ ]
+}

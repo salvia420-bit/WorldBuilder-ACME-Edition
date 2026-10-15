@@ -1,0 +1,163 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Sanamar scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "sanamar",
+   "name": "Sanamar",
+   "gazetteerId": "sanamar",
+   "teleport": "@telepoi Sanamar",
+   "anchor": [
+    9805.0,
+    41745.0,
+    52.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x32D9",
+    "0x33D9"
+   ],
+   "look": {
+    "timeOfDay": 0.42,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9810,
+     41735,
+     52
+    ],
+    "height": 26,
+    "radius": 70
+   },
+   "params": {
+    "distance": 200,
+    "obstacleDistance": 90,
+    "obstacleHeight": 78,
+    "heightStart": 4,
+    "clearance": 12,
+    "forward": 20,
+    "endPitchDeg": -8,
+    "bearingDeg": 138,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "standingOrder": "Rise from 4 m over the beach south-east of Sanamar up the coastal slope until the walled city and its gold-roofed towers appear over the edge.",
+   "notes": "ESTABLISHING (drone.rising-reveal). Starts 4 m over the sand of the south-east shore below the city, facing up the coastal slope (the 'southern coastal cliff' where Varicci II saw the red bull omen); rises 86 m in 14 s while easing 20 m forward until the curtain walls, the gold-roofed corner towers and spire towers of Sanamar appear over the crest; ends 180 m out at z 90 pitched -8. Morning sun from the east side-lights the south-east walls. Verified offline (real registry build + WBT terrain): start (9943.8,41586.4,4.0) end (9930.4,41601.2,90.0), min AGL 4.0 m, nearest static/building/tree 6.9 m (0x02001292@9949,41582), peak 9.9 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "sanamar",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "MS",
+   "fov": 40,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9851.4,
+     41723.5,
+     52
+    ],
+    "height": 9,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 215,
+    "elevationDeg": -16,
+    "distance": 9.4,
+    "thirds": "right",
+    "fromTarget": "metres",
+    "fromM": 3.4,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 1.6,
+    "driftM": 0.6
+   },
+   "standingOrder": "Hold at brazier height south-west of the King's statue, focused on the brazier flame in the foreground, then pull focus to King Varicci II.",
+   "notes": "FLAME + LANDMARK (classic.rack-focus). Camera at brazier height (z 57.5) 9.4 m SSW of the five-times-scale statue of King Varicci II (DefaultScale 5, ~9 m), the south-west column brazier (0x02000624: two flame puffs + warm halo, on a 4.3 m marble column) 3.4 m away in the left foreground and in focus; at 45 % the focus pulls over 1.6 s to the king on the right third, the flame melting into bokeh. Real DoF with ?clouds=on. Verified offline (real registry build + WBT terrain): start (9846.2,41716.1,57.5) end (9846.5,41716.6,57.7), min AGL 5.5 m, nearest static/building/tree 2.5 m (0x33D9#112 0x01003628), peak 0.1 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "sanamar",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.crane",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     9736.2,
+     41770.1,
+     52
+    ],
+    "height": 4.5,
+    "radius": 5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 165,
+    "elevationDeg": 2,
+    "distance": 14,
+    "thirds": "center",
+    "riseM": 12,
+    "swingDeg": -30,
+    "armM": 4
+   },
+   "standingOrder": "Start low south of the four-spout fountain between the blue-flame lamps and crane up and around to reveal the plaza, the gold-roofed halls and the city walls.",
+   "notes": "WATER + FLAME (classic.crane). Starts 2.7 m above the paving 14 m SSE of the four-spout fountain (0x0200123A, bubbly water arcs) ringed by four golden blue-flame lamps; cranes up 12 m and swings 30 deg while tilting down to -41 deg so the plaza, flowerbeds, the two gold-roofed Viamontian halls (18 m) and the west curtain wall with its corner towers open up around the water. Verified offline (real registry build + WBT terrain): start (9739.8,41756.6,54.7) end (9738.9,41756.1,66.7), min AGL 2.7 m, nearest static/building/tree 4.2 m (0x32D9#74 0x01003708), peak 2.1 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "sanamar",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.42 (sun east, 51 deg), grade neutral: bright late morning on the walled city; the rack focus is backlit so the brazier flames glow"
+}

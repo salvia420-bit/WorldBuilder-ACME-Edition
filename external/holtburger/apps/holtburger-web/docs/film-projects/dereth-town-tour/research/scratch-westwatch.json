@@ -1,0 +1,188 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Westwatch scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "westwatch",
+   "name": "Westwatch",
+   "gazetteerId": "westwatch",
+   "teleport": "@telepoi Westwatch",
+   "anchor": [
+    6852.0,
+    41935.0,
+    2.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.38,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.flyover",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6845,
+     41925,
+     2
+    ],
+    "height": 26,
+    "radius": 40
+   },
+   "params": {
+    "heightAGL": 36,
+    "speed": 9,
+    "headingDeg": 205,
+    "relativeToSubject": false,
+    "gimbal": "fixed",
+    "tiltDeg": -20,
+    "minClearance": 8
+   },
+   "standingOrder": "Fly level 36 m up from the meadow south-south-west over the outpost and out across the beach to the open sea, gimbal fixed at -20 degrees.",
+   "notes": "ESTABLISHING (drone.flyover, assigned). Level pass 36 m above the outpost base (z 38, ~10 m over the 28.4 m golden lighthouse roof) flying SSW from the hill meadow over the Viamontian hall, the lighthouse and the Life Stone and out over the sand to the shallow sea; gimbal fixed at -20 so the outpost slides under the lens while the Halaetan sea and horizon fill the top of frame; the low morning sun (east, 43 deg) is behind-left, front-lighting the facades and putting a cool glint on the water. Verified offline (real registry build + WBT terrain): start (6875.4,41990.3,38.0) end (6814.6,41859.7,38.0), min AGL 32.0 m, nearest static/building/tree 19.1 m (0x23DA#24 0x01003624), peak 9.0 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s010",
+   "site": "westwatch",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.roll",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6876,
+     41916,
+     2
+    ],
+    "height": 26.35,
+    "radius": 6
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 282,
+    "elevationDeg": -14,
+    "distance": 34,
+    "fromDeg": 0,
+    "toDeg": -10,
+    "pushM": 3,
+    "thirds": "center"
+   },
+   "standingOrder": "Hold low west of the lighthouse looking up past the two blue-flame lamps at its door while the horizon slowly rolls ten degrees.",
+   "notes": "LANDMARK + FLAME (classic.roll, assigned). Camera 5 m above the meadow 33 m WNW of the four-storey lighthouse watch tower, looking up 14 deg past the two golden blue-flame lamps (0x02001239, blue flame tongue + glow) at its west door to the golden tapered roof; the horizon rolls 0 -> -10 deg with a 3 m push: the lonely western lookout leaning into the sea wind. Morning sun behind the tower rims the stone and lets the blue flames glow in its shade. Verified offline (real registry build + WBT terrain): start (6843.7,41922.9,6.9) end (6846.6,41922.3,7.7), min AGL 5.1 m, nearest static/building/tree 3.9 m (Clemenza), peak 0.4 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s020",
+   "site": "westwatch",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.push-in",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 35,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6869.8,
+     41934.9,
+     2.0
+    ],
+    "height": 3.6,
+    "radius": 4.0
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 350,
+    "elevationDeg": 6,
+    "fromFraming": "WS",
+    "profile": "perceptual",
+    "thirds": "center"
+   },
+   "standingOrder": "Push slowly from the north toward the swirling Town Network portal ring with the golden-roofed lighthouse rising behind it.",
+   "notes": "PARTICLE FX (classic.push-in, assigned). Perceptual push from WS to FS on the Town Network portal ring and its blue swirl (0x020019E3) from the north at 3-5 m, 35 deg lens; the golden-roofed lighthouse rises 19 m behind the portal, the morning sun side-lights the ring from the left. Ends 6.4 m from the portal centre (2.5 m from its bounds). Verified offline (real registry build + WBT terrain): start (6867.3,41948.9,5.3) end (6868.7,41941.3,4.5), min AGL 2.5 m, nearest static/building/tree 2.5 m (0x23DA#3 0x020019E3), peak 1.1 m/s; WBT get-height at 6 path samples matched the checker terrain to 0.00 m.",
+   "id": "s030",
+   "site": "westwatch",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     6852,
+     41930,
+     2
+    ],
+    "height": 26,
+    "radius": 40
+   },
+   "params": {
+    "heightStart": 38,
+    "heightEnd": 130,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 8
+   },
+   "standingOrder": "Look straight down on the outpost and climb from 38 m to 130 m while the image turns 40 degrees, until the shore and sea frame the tiny outpost.",
+   "notes": "CLOSING (drone.top-down-rise, assigned). Nadir view from 38 m over the outpost climbing to 130 m while the image turns 40 deg: hall roof, lighthouse cap, blue lamps and Life Stone shrink into the green island with the beach and the sea entering at the frame edge. Verified offline (real registry build + WBT terrain): start (6852.0,41930.0,40.0) end (6852.0,41930.0,132.0), min AGL 38.0 m, nearest static/building/tree 23.5 m (0x23DA#24 0x01003624), peak 10.3 m/s; WBT get-height at 5 path samples matched the checker terrain to 0.00 m.",
+   "id": "s040",
+   "site": "westwatch",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "notes": "time 0.38 (sun east, 43 deg), grade cool: crisp morning on the western lookout; facades facing the sea are side-lit, the lighthouse is rim-lit"
+}

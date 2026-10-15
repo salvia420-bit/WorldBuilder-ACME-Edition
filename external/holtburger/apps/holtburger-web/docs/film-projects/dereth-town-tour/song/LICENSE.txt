@@ -1,0 +1,126 @@
+DERETH TOWN TOUR - SOUNDTRACK LICENSE RECORD
+============================================
+
+File:      /mnt/wbterminal2/film-projects/dereth-town-tour/song/music.mp3
+Format:    MP3, 320 kbps CBR, 44.1 kHz, stereo (made from the original 48 kHz / 24-bit FLAC files)
+Duration:  3431.86 s  (57:11.86), measured with ffprobe on the final file
+Assembled: 2026-10-14
+
+WORK
+----
+Ludwig van Beethoven (1770-1827)
+  1. Egmont Overture, Op. 84 (1810)                     - concert-opening overture
+  2. Symphony No. 3 in E-flat major, Op. 55 "Eroica" (1803-04), four movements
+
+Both are purely instrumental. There are no sung lyrics.
+
+PERFORMER
+---------
+Czech National Symphony Orchestra, credited as "Musopen Symphony". Recorded in Prague
+for the Musopen Kickstarter Project in 2012.
+
+LICENSES
+--------
+Composition:  PUBLIC DOMAIN worldwide. The composer died in 1827. The Commons template is
+              {{PD-old-auto-expired|deathyear=1827}}.
+Recording:    PUBLIC DOMAIN. Musopen paid for these recordings through its 2010 Kickstarter
+              campaign and released them to the public domain. The Commons template is
+              {{PD-author|Musopen}}, and the Internet Archive marks the files with the
+              Public Domain Mark 1.0 (http://creativecommons.org/publicdomain/mark/1.0/).
+No attribution is legally required. The credit line below is given as a courtesy.
+
+TRACK MAP (start times in music.mp3; these are also written as ID3 CHAP chapters)
+-------------------------------------------------------------------------------
+  #  start (s)   start      length    movement
+  1     0.000    00:00.00   9:01.90   Egmont Overture, Op. 84
+  2   541.897    09:01.90  15:11.48   Symphony No. 3 "Eroica" - I. Allegro con brio
+  3  1453.377    24:13.38  15:26.14   Symphony No. 3 "Eroica" - II. Marcia funebre. Adagio assai
+  4  2379.517    39:39.52   5:49.34   Symphony No. 3 "Eroica" - III. Scherzo. Allegro vivace
+  5  2728.857    45:28.86  11:42.97   Symphony No. 3 "Eroica" - IV. Finale. Allegro molto
+     3431.86     57:11.86             end
+
+Gaps between movements in the final file, measured with silencedetect at -50 dB:
+1.72 s, 1.57 s, 1.49 s and 0.76 s. No silence anywhere in the file is longer than 2 s.
+
+EDITS
+-----
+- 1.0 s of silence was added after the Egmont Overture, so the gap before the symphony is 1.7 s.
+- The tail of Eroica I was trimmed by 0.07 s, with a 0.4 s fade over room tone.
+- The tail of Eroica II was trimmed from 3.37 s of silence to 1.0 s, with a 0.6 s fade over room tone.
+- The tail of Eroica IV was trimmed from 2.67 s of silence to 1.0 s, with a 0.8 s fade over room tone.
+- No leading silence was longer than 1 s, so the starts were not trimmed.
+- The audio was resampled from 48 kHz to 44.1 kHz with soxr at precision 28 and encoded with
+  libmp3lame at 320k. The level was not normalised. The peak is -0.8 dBFS and the mean is
+  -22.7 dB, so the orchestra's dynamics are kept.
+
+SOURCE FILES
+------------
+The downloaded originals are in song/src/. Each one is byte-identical to the size listed on Commons.
+
+00_egmont_overture_op84.flac        (94,777,164 bytes, 9:00.90)
+  page: https://commons.wikimedia.org/wiki/File:Beethoven_-_Egmont_Overture,_Op._84_(Musopen_Symphony).flac
+  file: https://upload.wikimedia.org/wikipedia/commons/8/85/Beethoven_-_Egmont_Overture%2C_Op._84_%28Musopen_Symphony%29.flac
+  musopen: https://musopen.org/music/13441
+
+01_eroica_I_allegro_con_brio.flac   (159,115,806 bytes, 15:11.55)
+  page: https://commons.wikimedia.org/wiki/File:Beethoven_-_Symphony_No._3_in_E_flat_major,_Op._55_%27Eroica%27_-_I._Allegro_con_brio_(Musopen_Symphony).flac
+  file: https://upload.wikimedia.org/wikipedia/commons/9/99/Beethoven_-_Symphony_No._3_in_E_flat_major%2C_Op._55_%27Eroica%27_-_I._Allegro_con_brio_%28Musopen_Symphony%29.flac
+
+02_eroica_II_marcia_funebre.flac    (150,441,484 bytes, 15:28.51)
+  page: https://commons.wikimedia.org/wiki/File:Beethoven_-_Symphony_No._3_in_E_flat_major,_Op._55_%27Eroica%27_-_II._Marcia_funebre._Adagio_assai_(Musopen_Symphony).flac
+  file: https://upload.wikimedia.org/wikipedia/commons/c/cd/Beethoven_-_Symphony_No._3_in_E_flat_major%2C_Op._55_%27Eroica%27_-_II._Marcia_funebre._Adagio_assai_%28Musopen_Symphony%29.flac
+
+03_eroica_III_scherzo.flac          (56,950,797 bytes, 5:49.34)
+  page: https://commons.wikimedia.org/wiki/File:Beethoven_-_Symphony_No._3_in_E_flat_major,_Op._55_%27Eroica%27_-_III._Scherzo._Allegro_vivace_(Musopen_Symphony).flac
+  file: https://upload.wikimedia.org/wikipedia/commons/8/8a/Beethoven_-_Symphony_No._3_in_E_flat_major%2C_Op._55_%27Eroica%27_-_III._Scherzo._Allegro_vivace_%28Musopen_Symphony%29.flac
+
+04_eroica_IV_finale.flac            (121,351,486 bytes, 11:44.64)
+  page: https://commons.wikimedia.org/wiki/File:Beethoven_-_Symphony_No._3_in_E_flat_major,_Op._55_%27Eroica%27_-_IV._Finale._Allegro_molto_(Musopen_Symphony).flac
+  file: https://upload.wikimedia.org/wikipedia/commons/f/fc/Beethoven_-_Symphony_No._3_in_E_flat_major%2C_Op._55_%27Eroica%27_-_IV._Finale._Allegro_molto_%28Musopen_Symphony%29.flac
+  musopen (symphony): https://musopen.org/music/1562
+
+Collection pages:
+  https://commons.wikimedia.org/wiki/Category:Musopen_Kickstarter_Project
+  https://archive.org/details/MusopenCollectionAsFlac   (Public Domain Mark 1.0; "This project raised money to
+      purchase and release music to the public domain")
+
+The license on every one of the five Commons file pages was checked in the raw wikitext on 2026-10-14:
+  recording={{PD-author|[https://musopen.org/ Musopen]}}
+  musical composition={{PD-old-auto-expired|deathyear=1827}}
+  Artists: Czech National Symphony Orchestra (as Musopen Symphony)
+
+CREDIT LINE
+-----------
+Music: Ludwig van Beethoven - Egmont Overture, Op. 84 and Symphony No. 3 "Eroica", Op. 55.
+Performed by the Czech National Symphony Orchestra (Musopen Symphony), courtesy of Musopen (musopen.org).
+Public domain.
+
+WHY THIS RECORDING
+------------------
+- The Musopen Kickstarter set has the best documented public-domain release of any complete
+  orchestral recording found. Its files are lossless 24-bit and it is a professional orchestra.
+- The Eroica alone runs 48.2 min, which is under the 50-70 min target. The Egmont Overture is
+  from the same sessions, orchestra and composer, so it was added as a concert-style opener,
+  bringing the total to 57.2 min.
+- These candidates were rejected:
+  - Bruckner 7 by the Munich HSO: the recording is CC BY-SA 4.0.
+  - Mahler 5 by the Peabody SO: 70.9 min, and it was uploaded to archive.org by a third party,
+    so its provenance is unclear.
+  - Mahler 7 by Utah/Abravanel and Scheherazade by Monteux 1942: both are labelled "CC0", but they
+    are commercial label recordings, so the claim is doubtful.
+  - Omega13a MuseScore renders: CC BY.
+  - The Goldberg Variations by Shelley Katz (Musopen, public domain): 76 min, which is too long.
+
+RE-VERIFICATION (2026-10-14, later the same day)
+------------------------------------------------
+The Commons API was checked again. Every source file in src/ matches the SHA-1 that Commons lists:
+  6aa548250b71167f24f67ad3c67dc7784505df28  00_egmont_overture_op84.flac
+  5b09b709198ce8ae9ce15f7649abd2bf810b0063  01_eroica_I_allegro_con_brio.flac
+  e8bcbc56a4d293a4dc4271f3a5e4c5dffd9a78c7  02_eroica_II_marcia_funebre.flac
+  cbfa1d27770cebd07bd3c19b125f6deec5d9599e  03_eroica_III_scherzo.flac
+  d2620473c7b67466ec0fd11426102255a5bc59d6  04_eroica_IV_finale.flac
+The license fields have not changed: recording={{PD-author|Musopen}}, composition={{PD-old-auto-expired|deathyear=1827}}.
+No single orchestral work in Category:Musopen_Kickstarter_Project runs 50-70 min. The longest are Eroica at
+48.2 min, Tchaikovsky 6 at 46.0 and Brahms 1 at 45.6. The only longer item is the Goldberg Variations, which is
+solo piano and runs 76.1 min. So Egmont followed by the Eroica stays the choice.
+The final file is MP3, 320 kbps, 44,100 Hz, stereo, 3431.86 s long. The longest silence in it is 1.72 s, and the 5 ID3 chapters are present.

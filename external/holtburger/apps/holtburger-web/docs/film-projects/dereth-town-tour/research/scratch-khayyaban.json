@@ -1,0 +1,239 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Khayyaban scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "khayyaban",
+   "name": "Khayyaban",
+   "gazetteerId": "khayyaban",
+   "teleport": "@telepoi Khayyaban",
+   "anchor": [
+    30618.0,
+    13080.6,
+    31.9
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x9E43",
+    "0x9E44",
+    "0x9F44",
+    "0x9D43",
+    "0x9F43"
+   ],
+   "look": {
+    "timeOfDay": 0.42,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 14
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30467.5,
+     13023.2,
+     20
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "distance": 12,
+    "heightStart": 2.5,
+    "heightEnd": 50,
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "keepAim": false,
+    "tiltDeg": -6,
+    "minClearance": 1.5
+   },
+   "framing": "WS",
+   "standingOrder": "Start low beside the old well in the sunken pit east of Khayyaban and rise straight up past its rim to reveal the terraced town and the ridge.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010",
+   "site": "khayyaban",
+   "notes": "WATER / REVEAL (drone.boom-rise). Starts 2.5 m above the floor of the sunken pit east of the town, 12 m from the old well (water frame, bucket, the Destroyed Lin Portal beside it) and a palm, then rises straight up 47 m with a fixed -6 deg tilt: the pit rim drops away and the terraced town, the skeleton statue, the domes, the rooftop gardens and the ridge rise into view, front-lit by the late-morning sun behind. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (30479.3,13021.1,22.5) end (30479.3,13021.1,70.0), min AGL 2.5 m, nearest static/building/tree/spawn 5.8 m (scenery:0x020004B1), nearest building 61.7 m, retail-bake trees 6.2 m, peak 5.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 2.5 m)."
+  },
+  {
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30398.1,
+     13044.7,
+     52.9
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 100,
+    "elevationDeg": 6,
+    "distance": 14,
+    "thirds": "center",
+    "arcDeg": 70,
+    "direction": "cw"
+   },
+   "framing": "MWS",
+   "fov": 50,
+   "standingOrder": "Sweep slowly around the nullified skeleton statue on its pillar, the Town Network portal and the terraced domes turning behind it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020",
+   "site": "khayyaban",
+   "notes": "LANDMARK (classic.arc). 70 deg arc (bearing 65 -> 135) 14 m from the nullified skeleton statue on its pillar at z 57: the statue holds in the centre while the Town Network portal ring, the tavern lanterns, the dome and the terraces climbing to the ridge turn behind it. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (30410.7,13050.6,57.0) end (30408.0,13034.9,57.0), min AGL 11.0 m, nearest static/building/tree/spawn 9.6 m (building:0x01002A1B#50), nearest building 9.6 m, retail-bake trees 24.9 m, peak 2.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.01 m (min WBT AGL 11.0 m)."
+  },
+  {
+   "technique": "classic.pedestal",
+   "duration": {
+    "sec": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30442.1,
+     13091.0,
+     34.9
+    ],
+    "height": 3,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 250,
+    "elevationDeg": 3,
+    "distance": 10,
+    "thirds": "left",
+    "riseM": 10,
+    "keepAim": true
+   },
+   "framing": "FS",
+   "fov": 55,
+   "standingOrder": "Rise slowly beside the Life Stone of Khayyaban with the fire bowl glowing beyond it, the road and the sunken pit opening up below.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030",
+   "site": "khayyaban",
+   "notes": "FIRE + MAGIC (classic.pedestal). From 10 m WSW of the Life Stone, rising 10 m while holding it: the stone's glow in the left third with the fire bowl (0x02000354, flame + warm light) flickering 11 m beyond it against the shop wall; backlit by the morning sun so the flames and the stone glow, the road and the pit open below as the camera rises. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (30432.7,13087.6,36.9) end (30432.7,13087.6,46.9), min AGL 2.3 m, nearest static/building/tree/spawn 3.1 m (scenery:0x020004B2), nearest building 27.6 m, retail-bake trees 10.9 m, peak 1.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 2.3 m)."
+  },
+  {
+   "technique": "classic.zoom",
+   "duration": {
+    "sec": 13
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30400,
+     13060,
+     46
+    ],
+    "height": 30,
+    "radius": 60
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 120,
+    "elevationDeg": 19,
+    "distance": 160,
+    "thirds": "center",
+    "toFovDeg": 21
+   },
+   "framing": "EWS",
+   "fov": 50,
+   "standingOrder": "From a locked camera on the eastern mesa, zoom slowly from the whole terraced town of Khayyaban into its statue, domes and rooftop gardens.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040",
+   "site": "khayyaban",
+   "notes": "POSTCARD (classic.zoom). Locked camera on the eastern mesa top (12 m above it, 160 m from the town) zooming from fov 50 to 21: from the whole terraced town under the ridge into the statue, the domes and the rooftop gardens; front-lit by the sun behind the camera. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (30531.0,12984.4,113.1) end (30531.0,12984.4,113.1), min AGL 11.8 m, nearest static/building/tree/spawn 71.3 m (scenery:0x020004B1), nearest building 131.5 m, retail-bake trees 92.3 m, peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 11.8 m)."
+  },
+  {
+   "technique": "fpv.fpv-flip",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30527,
+     13085,
+     31
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3,
+    "flipAt": 0.5,
+    "speed": 7,
+    "heightAGL": 15,
+    "rise": 3,
+    "tiltDeg": -8,
+    "headingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "framing": "WS",
+   "fov": 75,
+   "standingOrder": "Race west along the road toward Khayyaban and throw one barrel roll over the open ground before the Life Stone and the terraces.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050",
+   "site": "khayyaban",
+   "notes": "CLOSING (fpv.fpv-flip). Races west 77 m along the road at z 46 (10-17 m above the ground, above every palm) toward the Life Stone and the terraces and throws one barrel roll (3 s) mid-shot over the open ground. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (30565.5,13085.0,46.0) end (30488.5,13085.0,46.0), min AGL 10.7 m, nearest static/building/tree/spawn 7.8 m (scenery:0x02000BBF), nearest building 10.9 m, retail-bake trees 9.1 m, peak 7.6 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 10.7 m)."
+  }
+ ],
+ "notes": "time 0.42 (sun east, ~51 deg), grade neutral: bright late morning; the east-facing terraces, the statue and the domes are front-lit from the road"
+}

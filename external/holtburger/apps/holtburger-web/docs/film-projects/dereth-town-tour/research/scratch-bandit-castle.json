@@ -1,0 +1,226 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Bandit Castle scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "bandit-castle",
+   "name": "Bandit Castle",
+   "gazetteerId": "bandit-castle",
+   "teleport": "@teleloc 0xBDD2002C 130.512 92.5485 186.005 -0.746387 0 0 -0.665512",
+   "anchor": [
+    36444.0,
+    40404.0,
+    186.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.4,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "bandit-castle",
+   "technique": "classic.arc",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 84,
+    "elevationDeg": 15,
+    "distance": 158,
+    "arcDeg": 32,
+    "direction": "ccw"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Sweep a slow 32-degree arc 158 m out from east-south-east to east-north-east of the hilltop castle, the western lowlands falling away behind it; stay 9 m above every pine top.",
+   "notes": "ESTABLISHING. A 32-degree counter-clockwise arc 158 m out and 15 deg up (z 232.9) from east-south-east to east-north-east of the castle: the octagonal curtain wall with its round towers, the four-storey keep and the east gatehouse crowning the hill at z 186, front-lit by the late-morning sun, with the western escarpment falling ~90 m to the lowlands behind it. Sector chosen by a line-of-sight sweep: 34-37 m pines ring the hill and block most low views; from 70-100 deg all five probe points (keep, N/S/W towers, gate) are visible. Verified: AGL 54-61, 9.8 m above/beside the tallest pine 0x02000258 (top 223) at t 6.5, no static within 60 m. vmax 9.6 m/s."
+  },
+  {
+   "id": "s020",
+   "site": "bandit-castle",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "params": {
+    "heightAGL": 72,
+    "rotateDeg": 40,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "drift": 0,
+    "minClearance": 10
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang straight above the keep and let the octagonal curtain wall turn slowly beneath; hold 60 m above the keep roof.",
+   "notes": "PATTERN / TOP-DOWN. Nadir hover 72 m above the keep (z 258) while the image turns 40 deg: the castle's concentric geometry (octagonal keep inside the octagonal curtain wall, four round towers, radial walls dividing the bailey into quadrants, the east gatehouse) reads like a seal, surrounded by the dark pines. Verified: 60 m above the keep roof (z 198), 55-60 m from the nearest tree tops; no motion except rotation."
+  },
+  {
+   "id": "s030",
+   "site": "bandit-castle",
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36250.0,
+     40416.0,
+     100.0
+    ],
+    "height": 10,
+    "radius": 20
+   },
+   "params": {
+    "distance": 180,
+    "obstacleDistance": 14,
+    "obstacleHeight": 8,
+    "heightStart": 1.6,
+    "clearance": 6,
+    "forward": 4,
+    "endPitchDeg": -9,
+    "bearingDeg": 90,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Start low in the north-west courtyard looking past the sparkling Life Stone at the curtain wall, then rise over the battlements to reveal the sunlit western lowlands; keep 5 m from the Life Stone and the walls.",
+   "notes": "FX + REVEAL. Starts 1.6 m above the north-west bailey quadrant (36430, 40416) looking west at the curtain wall with the sparkling Life Stone (36418.5, 40412.5) left of centre 12 m ahead, then rises 12.4 m while easing 4 m forward and pitching from +10 to -9 deg until it clears the battlements (wall top ~192) and the sunlit western lowlands open 90 m below. Morning sun behind the camera. Verified against the castle's exported meshes (1 m raster): start 5.7 m from the keep's north-west face, the quadrant's radial wall 7+ m east, the curtain wall >= 8 m ahead at all times, Life Stone >= 8.3 m; ground 186.0 (WBT), AGL 1.6 -> 14.0; nearest scenery 18.9 m. vmax 1.6 m/s."
+  },
+  {
+   "id": "s040",
+   "site": "bandit-castle",
+   "technique": "classic.pan",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 180,
+    "elevationDeg": 24,
+    "distance": 90,
+    "fromDeg": -100,
+    "toDeg": 0,
+    "relative": true
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover still 90 m south of the keep and pan right from the sunlit western lowlands across the wooded slope onto the castle; no translation, keep 25 m above the pines.",
+   "notes": "VISTA PAN. Fixed drone position 90 m south of the keep and 24 deg up (z 228.6, AGL 70.8): pans 100 deg clockwise from the western lowlands below the escarpment (heading 260, sun behind) across the wooded southern slope onto the castle (heading 0), ending with the gatehouse and keep side-lit from the east. Position chosen by the same LOS sweep (all probe points visible from 180 deg at 90 m / 24 deg). Verified: 26.9 m from the nearest pine top (0x02000258 top 211), 66.8 m from any static."
+  },
+  {
+   "id": "s050",
+   "site": "bandit-castle",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "fov": 45,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     36444.0,
+     40404.0,
+     186.0
+    ],
+    "height": 12,
+    "radius": 36
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 235,
+    "elevationDeg": 2,
+    "distance": 220,
+    "thirds": "center",
+    "rate": 0.012
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Lock off high over the south-western lowland looking at the castle crowning its escarpment while the clouds race and the shadows shorten; keep the frame still.",
+   "notes": "TIME-LAPSE CLOSER. Locked off 220 m south-west of the castle, 2 deg above it (z 199.7, AGL 106 over the lowland) looking north-east up at the hilltop castle on its escarpment against the sky while the sky clock runs at 0.012 day/s: 0.40 -> 0.544 over 12 s (sun 47 -> 75 deg, never sets), clouds race and the pine shadows on the slope shorten. Verified: nearest scenery 32 m (retail) / 65 m (default), clear line of sight to the keep and all towers."
+  }
+ ]
+}

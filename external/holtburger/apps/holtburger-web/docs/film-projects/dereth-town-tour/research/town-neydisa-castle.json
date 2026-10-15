@@ -1,0 +1,310 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Refuge/Bandit/Merwart/Neydisa",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-neydisa-castle.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.38 (sun due east, ~42 deg) grade cool: clear mountain morning; the east wall, the road and the twin spires are front-lit",
+ "towns": [
+  {
+   "name": "Neydisa Castle",
+   "summary": "Neydisa Castle (69.6N 17.6E) stands in the northern Esper Mountains as an outpost of civilisation and a staging point for the north (Mount Esper's crater rim is a run to the west). Its Town Network sign tells that it was Foster's Fort, an abandoned Empyrean structure where Foster hid from the Olthoi for years after glimpsing its spires; later an Aluvian faction that had left Cragstone and quarrelled at Bandit Castle followed a woman named Neydisa here, and she 'saw a grand palace in what looked otherwise like a ruined husk'. Its residents 'keep to ourselves ... we seek to live in peace and simplicity'. In the world data it is a compact spired castle (about 60 x 63 m) on a grassy shelf at z 100: a six-storey keep with a spire (z 131.5) on the south side, a 22 m spire tower at the south-west, a four-storey tapered tower at the north-west, a spired tower at the south-east, a pitched-roof hall along the north and 6 m curtain walls east and west, red banners waving on three towers. The inner courtyard holds the Town Network portal, the Life Stone in its north-east corner, two trees, ferns, candelabra flames and a well nook by the keep. Empyrean spires (30.75 m) stand in the landscape: a twin pair flanking the road 260 m east like a gate, and a third on the hill 260 m west beside the Menhir Ring, eight standing stones around a billowing blue 'Chemical Reaction' glow.",
+   "landmarks": [
+    {
+     "name": "Keep with spire (0x01000DFF)",
+     "pos": [
+      28692.0,
+      41148.0,
+      100.0
+     ],
+     "heightM": 31.5,
+     "note": "south side of the castle, footprint x 28680-28704 y 41138-41159"
+    },
+    {
+     "name": "South-west spire tower (0x01000E00)",
+     "pos": [
+      28668.0,
+      41148.0,
+      100.0
+     ],
+     "heightM": 22.0,
+     "note": "red banner at z 124"
+    },
+    {
+     "name": "North-west tapered tower (0x01000E02)",
+     "pos": [
+      28668.0,
+      41196.0,
+      100.0
+     ],
+     "heightM": 21.7,
+     "note": "red banner"
+    },
+    {
+     "name": "South-east spired tower (0x01000E04) and east curtain wall",
+     "pos": [
+      28716.0,
+      41160.0,
+      100.0
+     ],
+     "heightM": 15.9,
+     "note": "wall x 28713-28719, 6 m, faces the road and the morning sun; red banner at z 118"
+    },
+    {
+     "name": "Courtyard Town Network portal",
+     "pos": [
+      28681.9,
+      41163.0,
+      100.2
+     ],
+     "heightM": 3.5,
+     "note": "glowing blue base 0x020019E3"
+    },
+    {
+     "name": "Life Stone (courtyard north-east corner)",
+     "pos": [
+      28706.2,
+      41187.0,
+      100.0
+     ],
+     "heightM": 2.6,
+     "note": "candelabra flame beside it at (28710.5,41189.7)"
+    },
+    {
+     "name": "Twin Empyrean spires flanking the east road",
+     "pos": [
+      28956.0,
+      41160.0,
+      88.0
+     ],
+     "heightM": 30.75,
+     "note": "0x01001117 at y 41148 and 41172, bodies +-5.5 m, 13 m gap over the road"
+    },
+    {
+     "name": "Menhir Ring with blue Chemical Reaction glow",
+     "pos": [
+      28446.2,
+      41233.6,
+      129.9
+     ],
+     "heightM": 8.0,
+     "note": "8 menhirs 3.5 m tall at r ~5 m; emitter 0x0200067B swells to 8 m; west spire at (28428,41196,132)"
+    }
+   ],
+   "site": {
+    "id": "neydisa-castle",
+    "name": "Neydisa Castle",
+    "gazetteerId": "neydisa-castle",
+    "teleport": "@telepoi Neydisa",
+    "anchor": [
+     28720.0,
+     41165.0,
+     100.0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.38,
+     "grade": "cool"
+    }
+   },
+   "shots": [
+    {
+     "id": "s010",
+     "technique": "classic.establishing",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "EWS",
+     "fov": 48,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       28692.0,
+       41170.0,
+       100.0
+      ],
+      "height": 30,
+      "radius": 35
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 45,
+      "distance": 170,
+      "heightM": 48,
+      "driftDeg": 12,
+      "pushPct": 10
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hang wide and high north-east of the spired castle and drift slowly, the Esper mountains behind; stay 15 m above every treetop.",
+     "notes": "ESTABLISHING. Wide, high and slow from the north-east (170 m out, 48 m up, z 148): the compact Empyrean castle on its grassy shelf - keep spire (z 131.5), spired corner towers, red banners - drifting 12 deg with a 10% push, the Esper mountains rising beyond to the south-west, morning sun from behind-left. Verified: AGL 60.5-65.4, nearest default scenery 39.7 m, retail 7.3 m (a 13 m pine top), no statics.",
+     "draftId": "n010"
+    },
+    {
+     "id": "s020",
+     "technique": "fpv.fpv-gap",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "params": {
+      "gapPos": [
+       28956.0,
+       41160.0,
+       94.0
+      ],
+      "gapNormal": [
+       -1,
+       0,
+       0
+      ],
+      "gapWidth": 10,
+      "gapHeight": 8,
+      "heightAGL": 6,
+      "approachAngleDeg": 22,
+      "approachFrom": "left",
+      "approachDistance": 45,
+      "alignDistance": 14,
+      "exitDistance": 50,
+      "cornerRadius": 14,
+      "speed": 11,
+      "alat": 8,
+      "lookAhead": 8,
+      "maxBankDeg": 35,
+      "ends": "cruise"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Carve in from the south-east and thread the gap between the twin Empyrean spires along the road, then race on toward the castle; keep 5 m from both towers and 3 m above the road.",
+     "notes": "HERO FPV (JEV candidate if the budget allows; code is safe). Carves in from the south-east and threads the gap between the twin 30.75 m Empyrean spires that flank the road 260 m east of the castle (gate at 28956, 41160, z 94), then flies straight on along the road toward Neydisa Castle, which fills the end of the frame. Spire bodies are +-5.5 m (eave +-7 at 18 m, above the lens), so the 13 m gap leaves 6.5 m each side at the crossing (mesh-verified at t 5.5). Verified: AGL 9.6 -> 2.8 (WBT ground 84.36 -> 91.17), scenery >= 14.7 m, vmax 10.9 m/s (fpv preset).",
+     "draftId": "n020"
+    },
+    {
+     "id": "s030",
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       28716.0,
+       41170.0,
+       100.0
+      ],
+      "height": 8,
+      "radius": 25
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 90,
+      "elevationDeg": -6,
+      "distance": 16,
+      "travelM": 34,
+      "direction": "right",
+      "keepAim": false,
+      "thirds": "center"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Truck north along the sunlit east wall at walking pace, 12 m off the stones and 2 m up; nothing between lens and wall.",
+     "notes": "FACADE PAN (2 of 2 in this batch): Empyrean castle wall. Pure lateral truck 34 m north along x 28731.9, 12 m off the sunlit east curtain wall, lens 2.3 m above the lawn and tilted 6 deg up: the spired south-east tower, the 6 m wall and its north-east corner slide past while the keep's spire and the red banners rise behind; morning sun straight onto the wall. Lawn between wall and the eastern grove verified empty: no static or scenery within 12.1 m of the camera line (default scenery 18.8 m, retail 13.7 m), ground 100.0 -> 99.5 (WBT). vmax 4.5 m/s.",
+     "draftId": "n030"
+    },
+    {
+     "id": "s040",
+     "technique": "classic.push-in",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "FS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       28446.2,
+       41233.6,
+       129.9
+      ],
+      "height": 10,
+      "radius": 6
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 30,
+      "elevationDeg": 10,
+      "fromFraming": "WS",
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Push slowly toward the menhir ring and its rising blue glow with the pine grove behind; stay 5 m outside the stones.",
+     "notes": "FX: MENHIR RING. 250 m west of the castle on the spire hill, a ring of eight 3.5 m menhirs encircles the 'Chemical Reaction' emitter 0x0200067B (catalog 0x320003E9: 26 blue glow clouds swarming up and swelling to 8 m over 10 s). Slow push from 24 m to 13 m out of the north-north-east, 10 deg down, into the blue mist with the pine grove behind. Verified: AGL 10.9 -> 7.7 (WBT 128.16 -> 129.08), ends 5.1 m from the nearest menhir; default scenery 2.9 m from the AABB corner of a scale-2.8 pine whose trunk is 29 m away (crown radius ~22 m); this spot assumes the default scenery bake - with ?sceneryBake=retail the ring sits inside a dense grove.",
+     "draftId": "n040"
+    },
+    {
+     "id": "s050",
+     "technique": "drone.top-down-rise",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       28694.0,
+       41172.0,
+       100.0
+      ],
+      "height": 2,
+      "radius": 20
+     },
+     "params": {
+      "heightStart": 22,
+      "heightEnd": 100,
+      "rotateDeg": 50,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "minClearance": 5
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Look straight down into the courtyard and climb away, the Life Stone and portal shrinking as the spired castle and its towers turn below; keep 10 m above the keep spire.",
+     "notes": "CLOSING TOP-DOWN RISE. Nadir view 22 m above the courtyard (z 122) - the Town Network swirl, the Life Stone's sparkle in the north-east corner, the two courtyard trees, candelabra flames - climbing to z 200 while the image turns 50 deg, so the spired towers, keep spire and curtain walls close around the courtyard and the shelf opens up. Verified: camera column x 28694 y 41172 is 19 m north of the keep spire tip (z 131.5) and 11.9 m from the courtyard tree tops; AGL 22 -> 100; vmax 9.4 m/s.",
+     "draftId": "n050"
+    }
+   ],
+   "verification": "WorldBuilder.Terminal 1.2.0 + RetailSmoke.wbproj, 7 sessions run one at a time with >= 4.5 GB available: describe-landblock + list-objects + get-terrain-data on the 3x3 around the town LB, get-terrain-data on the 5x5/7x7 ring for water, get-object-detail on all 113 static models (bounds), obj-export of the main buildings (meshes rasterised at 1 m for exact clearance), render-preview top-downs, chorizite-parse-dat-record on the FX Setups (lights + default PhysicsScripts), region-day-night-curve (sun heading 90 deg all morning, 270 after 0.6; elevation 0.36->38, 0.40->47, 0.50->68 deg), and get-height at every sampled start/quarter/mid/end/min-AGL camera point (107 probes; my AC triangle-split re-implementation matches WBT to <= 0.005 m). Every shot was built offline with the real technique registry (scene3d/film/shots buildShot via tools/film/plan/schema.mjs shotSpec) against that terrain and sampled every 0.05 s; each sample was checked against rotated static OBBs, the building meshes, the film's default scenery bake (~/hb-serve/dist/current/scenery AABBs) and, for information, the opt-in retail bake, plus line of sight to the subject. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-neydisa-castle.json passes film.mjs plan validate (dry build included): 0 errors, 0 warnings. Per shot (draft id -> plan id: min AGL | nearest static/mesh | nearest default-bake scenery | nearest retail-bake scenery): s010=n010 classic.establishing minAGL 60.5@t0 | static none within 60 m | defScn 39.7@t2.65 0x02000258@(28796,41291,top108) | retScn 7.3@t6.05 0x02000258@(28810,41266,top141) ; s020=n020 fpv.fpv-gap minAGL 2.8@t10 | static 6.0@t4.85 neydisa_spires@(28961,41153,z88-108) | defScn 17.9@t0.25 0x02000258@(29023,41168,top104) | retScn 14.7@t2.3 0x020002DB@(29001,41173,top126) ; s030=n030 classic.truck minAGL 2.3@t0 | static 12.1@t5.35 neydisa@(28719,41167,z105-106) | defScn 18.8@t0 0x02000258@(28719,41123,top130) | retScn 13.7@t0 0x02000258@(28779,41125,top191) ; s040=n040 classic.push-in minAGL 7.7@t12 | static 5.1@t12 0x02000374@(28451,41238) | defScn 2.9@t12 0x02000258@(28427,41259,top190) | retScn 0.0@t0 0x02000258@(28458,41235,top198) ; s050=n050 drone.top-down-rise minAGL 22.0@t0 | static 11.9@t0 0x0200062c@(28688,41171) | defScn 40.3@t0 0x02000258@(28719,41123,top130) | retScn 40.3@t0 0x02000258@(28719,41123,top130)"
+  }
+ ]
+}

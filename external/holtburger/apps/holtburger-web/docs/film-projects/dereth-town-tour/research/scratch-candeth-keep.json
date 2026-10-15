@@ -1,0 +1,244 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Candeth Keep scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "candeth-keep",
+   "name": "Candeth Keep",
+   "gazetteerId": "candeth-keep",
+   "teleport": "@teleloc 0x2B120029 120.642 1.549 48.1 0.087156 0 0 -0.996195",
+   "anchor": [
+    8376.6,
+    3457.5,
+    48.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x2B12",
+    "0x2B11",
+    "0x2A12",
+    "0x2A11",
+    "0x2C11"
+   ],
+   "look": {
+    "timeOfDay": 0.66,
+    "grade": "warm"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.canyon-run",
+   "duration": {
+    "sec": 13
+   },
+   "params": {
+    "heightAGL": 22,
+    "speed": 11,
+    "alat": 2,
+    "cornerRadius": 40,
+    "lookAhead": 40,
+    "tiltDeg": 2,
+    "maxBankDeg": 10,
+    "bankGain": 1,
+    "minClearance": 4,
+    "ends": "cruise"
+   },
+   "path": [
+    [
+     8223,
+     3374,
+     14
+    ],
+    [
+     8223,
+     3440,
+     14
+    ],
+    [
+     8219,
+     3512,
+     14
+    ]
+   ],
+   "framing": "EWS",
+   "standingOrder": "Fly north up the moat ravine west of Candeth Keep above the palm tops, the sheer cliff and the fortress wall towering on the right.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010",
+   "site": "candeth-keep",
+   "notes": "ESTABLISHING (drone.canyon-run). 140 m north up the moat ravine that rings the Candeth mesa, at z 36 (20-24 m over the floor, above the palm tops) with the 34 m sedimentary cliff and the fortress wall and corner towers (to z 67.6) towering on the right, lit by the afternoon sun from the west; palms slide below, the outer rim on the left. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (8223.0,3374.0,36.0) end (8219.0,3512.0,36.0), min AGL 15.9 m, nearest static/building/tree/spawn 8.7 m (scenery:0x020004B1), nearest building 35.4 m, retail-bake trees 7.3 m, peak 10.6 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 15.9 m)."
+  },
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 16
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8340,
+     3468,
+     48
+    ],
+    "height": 39.5,
+    "radius": 9
+   },
+   "params": {
+    "radius": 46,
+    "heightAGL": 30,
+    "revolutions": 0.3,
+    "direction": "cw",
+    "bearingDeg": 200,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "framing": "WS",
+   "standingOrder": "Orbit the great Tumerok tree at the heart of Candeth Keep high above the roofs, the walls, towers and moat ravine wheeling behind it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020",
+   "site": "candeth-keep",
+   "notes": "LANDMARK HERO (drone.orbit-poi). Quarter-plus orbit (0.3 rev, cw, bearing 200->308) at 46 m radius and z 78 (30 m above the plateau) around the great Tumerok tree (0x02000F8E, 39.5 m, top z 87.5) and its tree-house platform (z 73): below it the Tree Portal, the Life Stone, the glowing blue column-trees and the fountains; the walls, towers and the moat ravine wheel behind, front-lit from the west. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (8324.3,3424.8,78.0) end (8303.8,3496.3,78.0), min AGL 30.0 m, nearest static/building/tree/spawn 17.4 m (building:0x01002F25#43), nearest building 17.4 m, retail-bake trees 85.3 m, peak 5.4 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 30.0 m)."
+  },
+  {
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8340,
+     3468,
+     48
+    ],
+    "height": 24,
+    "radius": 9
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 72,
+    "elevationDeg": -9,
+    "distance": 60,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 12.5,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.5,
+    "driftM": 1.5
+   },
+   "framing": "WS",
+   "fov": 55,
+   "standingOrder": "Hold low east of the courtyard fountain, focus on its spray, then pull focus to the great tree and the glowing Life Stone beyond.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030",
+   "site": "candeth-keep",
+   "notes": "WATER + MAGIC (classic.rack-focus). Camera 2.6 m above the courtyard 60 m east of the great tree on the tree-fountain axis: the courtyard fountain spray is in focus 12.5 m ahead (bottom centre), then focus pulls (at 45 %, 2.5 s) to the great tree, the Life Stone and the glowing blue column-trees beyond; high sun backlights the spray. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (8396.4,3486.3,50.6) end (8395.0,3485.8,50.9), min AGL 2.6 m, nearest static/building/tree/spawn 9.3 m (spawn:Fountain), nearest building 10.8 m, retail-bake trees 67.6 m, peak 0.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 2.6 m)."
+  },
+  {
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 9
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8436,
+     3372,
+     48
+    ],
+    "height": 15,
+    "radius": 12
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 135,
+    "elevationDeg": -12,
+    "distance": 26,
+    "thirds": "center",
+    "pushM": 2
+   },
+   "framing": "WS",
+   "fov": 55,
+   "standingOrder": "Look up from the land bridge at the stone gatehouse of Candeth Keep, its arch and towers rising against the sky.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040",
+   "site": "candeth-keep",
+   "notes": "ARCHITECTURE DETAIL (classic.low-angle). From the SE land bridge (the only way in, 2 m above it) looking up 12 deg at the stone gatehouse (0x01002EEF, top z 63) with its portcullis arch and the flanking corner tower, with a slow 2 m push; the high west sun rims the battlements. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (8454.0,3354.0,50.1) end (8452.6,3355.4,50.5), min AGL 2.1 m, nearest static/building/tree/spawn 7.0 m (building:0x01002EEF#99), nearest building 7.0 m, retail-bake trees 40.2 m, peak 0.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 2.1 m)."
+  },
+  {
+   "technique": "classic.birds-eye",
+   "duration": {
+    "sec": 15
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8352,
+     3456,
+     48
+    ],
+    "height": 40,
+    "radius": 96
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 0,
+    "heightM": 210,
+    "riseM": 40,
+    "rotateDeg": 30
+   },
+   "framing": "WS",
+   "fov": 60,
+   "standingOrder": "Look straight down on the square fortress, its great tree at the centre and the moat ravine around it, slowly turning and rising.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050",
+   "site": "candeth-keep",
+   "notes": "CLOSING (classic.birds-eye). Straight down from 210 m rising to 250 m over the centre of the square keep, image slowly turning 30 deg: the 192 m square of walls and halls, the great tree's canopy dead centre and the dark moat ravine ringing the mesa read as a perfect plan. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (8352.0,3456.0,258.0) end (8352.0,3456.0,298.0), min AGL 210.0 m, nearest static/building/tree/spawn 170.6 m (static:0x02000F8E#41), nearest building 185.0 m, retail-bake trees 258.6 m, peak 4.2 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 210.0 m)."
+  }
+ ],
+ "notes": "time 0.66 (sun west, ~75 deg), grade warm: high afternoon light; the west faces of the keep and its cliff are lit for the moat run"
+}

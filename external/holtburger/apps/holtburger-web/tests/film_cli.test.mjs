@@ -339,8 +339,17 @@ await check("A4 exitCodeFor maps JevError config/auth → 2, other kinds → 1, 
 await check("B1 buildFilmUrl: the exact boot query, filmDof=on always, password URL-encoded", () => {
   const url = buildFilmUrl({ base: "http://127.0.0.1:8765/apps/holtburger-web/index.html", account: "phase4demo", password: "pw", quality: "high" });
   assert.equal(url,
-    "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1&account=phase4demo&password=pw&autoSpawn=first&quality=high&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off");
+    "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&agent=1&hud=none&plugins=none&filmMode=on&filmDof=on&autoLogin=1&account=phase4demo&password=pw&autoSpawn=first&quality=high&renderScale=1&adaptiveRes=off&radialFog=on&objRadius=off&fogRingCap=off&punchSidedness=on&particleClock=sim&frameBudget=off&maxTickDist=400&dynLod=off&clouds=on&cloudWeather=off");
   const def = buildFilmUrl({ password: PASSWORD });
+  // clouds: on by default (owner 2026-10-14), off on request, anything else is a usage error
+  assert.equal(new URL(def).searchParams.get("clouds"), "on");
+  assert.equal(new URL(buildFilmUrl({ password: "x", clouds: "off" })).searchParams.has("clouds"), false);
+  assert.throws(() => buildFilmUrl({ password: "x", clouds: "yes" }), (e) => e instanceof FilmCliError && e.exitCode === 2);
+  // weather: fair (cloudWeather=off) by default with clouds on; live drops it; no clouds → no weather param
+  assert.equal(new URL(def).searchParams.get("cloudWeather"), "off");
+  assert.equal(new URL(buildFilmUrl({ password: "x", weather: "live" })).searchParams.has("cloudWeather"), false);
+  assert.equal(new URL(buildFilmUrl({ password: "x", clouds: "off" })).searchParams.has("cloudWeather"), false);
+  assert.throws(() => buildFilmUrl({ password: "x", weather: "sunny" }), (e) => e instanceof FilmCliError && e.exitCode === 2);
   assert.ok(def.startsWith("http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&agent=1&"), def);
   assert.match(def, /&account=phase4demo&/);
   assert.equal(new URL(def).searchParams.get("password"), PASSWORD);

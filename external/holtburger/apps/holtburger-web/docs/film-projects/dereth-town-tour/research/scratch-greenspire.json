@@ -1,0 +1,221 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Greenspire scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "greenspire",
+   "name": "Greenspire",
+   "gazetteerId": "greenspire",
+   "teleport": "@telepoi Greenspire",
+   "anchor": [
+    8430,
+    34795,
+    11.3
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.45,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "greenspire",
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "EWS",
+   "path": [
+    [
+     8628,
+     34808,
+     0
+    ],
+    [
+     8500,
+     34808,
+     0
+    ]
+   ],
+   "params": {
+    "heightAGL": 2.5,
+    "speed": 10,
+    "lookAhead": 30,
+    "tiltDeg": 12,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim straight west 2.5 m above the sea toward the beach and the tower; hold the height over the water and stop 17 m short of the bamboo hall.",
+   "notes": "ESTABLISHING + WATER (drone.terrain-skim). Starts over deep water 200 m east of the beach and skims west at 2.5 m along y 34808 to the beach below the Town Network portal: the bay glitters below, the bamboo halls with their blue-flame torches and the swirling portal grow ahead, and the 78 m Empyrean tower with its three floating Advocate spires rises out of the top of the frame (tiltDeg +12 keeps the spires in view until the last 3 s). Sea terrain types 18/20 under the camera for 92 % of the move; the only thing close is a shallow-water plant clump. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8628.0, 34808.0, 2.5) end (8500.0, 34808.0, 2.5), min AGL 2.5 m, nearest static/building/default-bake tree 4.3 m (scenery:0x020003D3), nearest building 17.5 m, retail-bake scenery 2.6 m, peak 9.8 m/s, 92% of samples over water; WBT get-height on 8 camera points, min AGL 2.5 m."
+  },
+  {
+   "id": "s020",
+   "site": "greenspire",
+   "technique": "classic.zoom",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "fov": 55,
+   "ease": "sineInOut",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8411.7,
+     34761.4,
+     99
+    ],
+    "height": 7,
+    "radius": 3
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 150,
+    "elevationDeg": -25,
+    "distance": 190,
+    "toFovDeg": 9
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold position hovering over the bay and only zoom from the whole tower down to the summit Life Stone; nothing is within 85 m of the lens.",
+   "notes": "LANDMARK DETAIL (classic.zoom). Locked camera hovering 22 m over the bay 190 m SSE of the summit: opens at fov 55 on the whole coast (the tower on its knoll, the three floating spires, the beach, the portal huts) and zooms evenly to fov 9 on the summit platform at z 99 where the Life Stone glows between the floating spires and the bridges. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8497.8, 34612.3, 22.2) end (8497.8, 34612.3, 22.2), min AGL 22.2 m, nearest static/building/default-bake tree 85.2 m (scenery:0x020003D3), nearest building 155.4 m, retail-bake scenery 85.6 m, peak 0.0 m/s, 100% of samples over water; WBT get-height on 1 camera points, min AGL 22.2 m."
+  },
+  {
+   "id": "s030",
+   "site": "greenspire",
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 60,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8389,
+     34764,
+     60
+    ],
+    "height": 24,
+    "radius": 10
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 225,
+    "elevationDeg": -45,
+    "distance": 40,
+    "pushM": 4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover below and south-west of the west floating spire looking up at its purple energy funnel; keep at least 15 m from the spire and the tower.",
+   "notes": "FX: MAGIC PARTICLES (classic.low-angle). Camera hovers at z 44-47 (44 m above the knoll, 22 m from the spire's bounding box), looking up 45 deg at the underside of the western floating Advocate spire (bottom z 60): the purple ritual energy funnel (0x02000591 tendril sigils condensing as they rise) with the purple ethereal glow 0x0200069A and the blue emitter 0x020005BA at its base, the main tower and its summit behind it, open sky and clouds above; 4 m slow push. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8369.0, 34744.0, 43.7) end (8371.0, 34746.0, 46.5), min AGL 43.7 m, nearest static/building/default-bake tree 18.2 m (building:0x01001776#36), nearest building 18.2 m, retail-bake scenery 36.1 m, peak 0.5 m/s; WBT get-height on 7 camera points, min AGL 43.7 m."
+  },
+  {
+   "id": "s040",
+   "site": "greenspire",
+   "technique": "classic.orbit",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "FS",
+   "fov": 62,
+   "ease": "linear",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8412,
+     34766,
+     40
+    ],
+    "height": 74,
+    "radius": 30
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 250,
+    "elevationDeg": 10,
+    "distance": 75,
+    "revolutions": 0.25,
+    "direction": "cw"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Orbit the tower complex a quarter turn clockwise at 75 m and z 90; keep at least 35 m from the floating spires and the tower.",
+   "notes": "LANDMARK (classic.orbit). Quarter orbit from bearing 250 to 340 at 75 m from the tower axis, camera at z 90 (above every roof and tree, below the 114 m spire tops so the spires and the summit stand against the sky); the background swings from the southern bay to the open sea east, the gold-roofed lighthouse passes below on the right; constant 9.7 m/s, ease linear. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8342.6, 34740.7, 90.0) end (8386.7, 34835.4, 90.0), min AGL 74.5 m, nearest static/building/default-bake tree 39.5 m (building:0x01001776#36), nearest building 39.5 m, retail-bake scenery 80.3 m, peak 9.7 m/s; WBT get-height on 7 camera points, min AGL 75.1 m."
+  },
+  {
+   "id": "s050",
+   "site": "greenspire",
+   "technique": "drone.pass-over",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     8411.7,
+     34761.4,
+     99
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "heightAGL": 25,
+    "speed": 6,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "nadirMode": "yaw-slew",
+    "maxYawRateDeg": 45
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly straight south over the summit Life Stone at z 124 with the gimbal tracking it through vertical; climb rather than swerve if anything comes within 10 m.",
+   "notes": "CLOSING (drone.pass-over). Flies N to S at z 124 (24 m above the north spire, 10 m above the highest spire top 114 at 15 m sideways) straight over the summit Life Stone: the gimbal tracks the lifestone's sparkle column down through vertical (yaw-slew at 45 deg/s) and up again behind as the drone leaves over the southern bay. JEV-hero candidate if the budget allows. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (8411.7, 34806.4, 124.0) end (8411.7, 34716.4, 124.0), min AGL 96.0 m, nearest static/building/default-bake tree 17.9 m (building:0x01001776#38), nearest building 17.9 m, retail-bake scenery 113.1 m, peak 6.0 m/s; WBT get-height on 9 camera points, min AGL 96 m."
+  }
+ ]
+}

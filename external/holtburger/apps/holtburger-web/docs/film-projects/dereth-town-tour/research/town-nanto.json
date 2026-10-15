@@ -1,0 +1,328 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Shoushi/Hebian-to/Tou-Tou/Baishi/Lin/Nanto (ch7 The Sho Lands)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-nanto.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.74 (sun due west, ~50 deg), warm; the hyperlapse runs the sky to about 0.80 (sun ~32 deg)",
+ "totalSec": 58,
+ "towns": [
+  {
+   "name": "Nanto",
+   "summary": "Nanto, one of the nine original starter towns, flourished on the old southern border of the Sho realm and has settled into a slower life on the road between Hebian-To and the frontier; it is famous for its beautiful waterfalls. The town climbs a hillside in terraces (z 86-118) of green-roofed halls with a nullified reedshark statue, the Town Network portal and two octagon towers, one on the hilltop beside the Life Stone. To the west lie the Blue Ghost Falls, where the wizard Kushina Naidu slew a Gigas Lugian warlord: an upper cascade down a staircase of cliffs (z 178 to 120) into a pool beside a bamboo fishing hut ringed by four torches, and a second cascade into a lower pool (z 70) by Farmer Ar'Oyd's farm.",
+   "landmarks": [
+    {
+     "name": "Blue Ghost Falls - upper cascade and pool",
+     "pos": [
+      43825.0,
+      11878.0,
+      120.0
+     ],
+     "heightM": 58,
+     "note": "pool z 120 at x 43800-43848, y 11832-11880; Waterfall spawns (43813-43836,11875); spray emitters 0x020003E4/0x020003C5/0x020006AF at z 119-136"
+    },
+    {
+     "name": "Blue Ghost Falls - lower cascade and pool",
+     "pos": [
+      43848.5,
+      11756.0,
+      70.0
+     ],
+     "heightM": 24,
+     "note": "pool z 70 at x 43824-43920, y 11712-11760; emitters to z 92.6"
+    },
+    {
+     "name": "Bamboo fishing hut (0x01002DE9) with 4 torches 0x02000AB9 and a hanging lantern",
+     "pos": [
+      43861.0,
+      11851.0,
+      120.0
+     ],
+     "heightM": 5.3
+    },
+    {
+     "name": "Hilltop octagon tower (0x01000D15)",
+     "pos": [
+      44052.0,
+      11915.0,
+      118.0
+     ],
+     "heightM": 31,
+     "note": "top z 149"
+    },
+    {
+     "name": "Life Stone (hilltop)",
+     "pos": [
+      44058.8,
+      11945.3,
+      118.0
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Lower octagon tower (0x01000D15)",
+     "pos": [
+      44292.0,
+      11820.0,
+      94.0
+     ],
+     "heightM": 31,
+     "note": "top z 125"
+    },
+    {
+     "name": "Nullified Statue of a Reedshark",
+     "pos": [
+      44175.8,
+      11873.2,
+      102.8
+     ],
+     "heightM": 3
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      44213.2,
+      11825.0,
+      86.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Farmer Ar'Oyd's hut (0x0100081C)",
+     "pos": [
+      43834.0,
+      11720.0,
+      70.0
+     ],
+     "heightM": 12
+    }
+   ],
+   "site": {
+    "id": "nanto",
+    "name": "Nanto",
+    "gazetteerId": "nanto",
+    "teleport": "@telepoi Nanto",
+    "anchor": [
+     44100.0,
+     11860.0,
+     96.0
+    ],
+    "settleSec": 4,
+    "lbKeys": [
+     "0xE63D",
+     "0xE53D",
+     "0xE53E",
+     "0xE43D",
+     "0xE43E",
+     "0xE63E",
+     "0xE63C",
+     "0xE53C"
+    ],
+    "look": {
+     "timeOfDay": 0.74,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "fpv.fpv-dive",
+     "duration": {
+      "sec": 10
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       43825.0,
+       11878.0,
+       120.0
+      ],
+      "height": 2,
+      "radius": 2
+     },
+     "params": {
+      "heightStart": 34,
+      "bottomAGL": 3,
+      "diveAngleDeg": -72,
+      "approach": 16,
+      "standoff": 5,
+      "exitLength": 36,
+      "pullOutRadius": 10,
+      "speed": 12,
+      "alat": 8,
+      "uptiltDeg": 18,
+      "headingDeg": 180,
+      "relativeToSubject": false,
+      "minClearance": 2.5
+     },
+     "framing": "WS",
+     "standingOrder": "Crest the cascades of Blue Ghost Falls and dive straight down the falling water into the upper pool, pulling out low over the water past the torch-lit fishing hut.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER (fpv.fpv-dive). Hard-mounted FPV: a 16 m level run 17 m above the upper cascades of Blue Ghost Falls, crest over the pool's edge and a -72 deg dive down the falling water (5 m standoff, spray emitters alongside) to 3 m above the upper pool, then a pull-out south low over the water past the torch-lit bamboo fishing hut. The 0.7 m 'minClr' is a Fishing Hole marker on the water surface 3 m below the lens. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43825.0,11894.0,155.0) end (43825.0,11826.9,123.5), min AGL 2.6 m, nearest static/building/spawn box 0.7 m (spawn:Fishing Hole), nearest building 32.3 m, trees by crown profile 6.6 m (default bake) / 0.0 m (opt-in retail bake), peak 8.6 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 2.60 m)."
+    },
+    {
+     "technique": "classic.reveal-from-occluder",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       43825.0,
+       11882.0,
+       120.0
+      ],
+      "height": 28,
+      "radius": 12
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 135.3,
+      "distance": 61.0,
+      "elevationDeg": -10.2,
+      "occluder": [
+       43860.0,
+       11850.0,
+       120.0
+      ],
+      "occluderRadius": 4,
+      "direction": "left",
+      "holdFrac": 0.25,
+      "settleFrac": 0.25,
+      "marginM": 1.5
+     },
+     "framing": "WS",
+     "fov": 55,
+     "standingOrder": "Start hidden behind the bamboo fishing hut with its four burning torches, then slide sideways until Blue Ghost Falls pours into its pool beyond the flames.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FLAME + WATER (classic.reveal-from-occluder). Starting 3 m up behind the bamboo fishing hut with two of its four torches burning in the foreground, the camera holds, then trucks 25 m left until Blue Ghost Falls appears pouring down its staircase of cliffs into the pool, the torches sliding off to the right; the western sun backlights the spray. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43869.3,11841.5,123.2) end (43852.9,11823.5,123.2), min AGL 1.8 m, nearest static/building/spawn box 2.9 m (scenery:0x02000240), nearest building 7.5 m, trees by crown profile 2.8 m (default bake) / 3.1 m (opt-in retail bake), peak 6.4 m/s; WBT get-height at 9 samples matched the checker terrain to 0.003 m (min WBT AGL 1.78 m)."
+    },
+    {
+     "technique": "drone.fly-by",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       43848.5,
+       11760.0,
+       70.0
+      ],
+      "height": 24,
+      "radius": 6
+     },
+     "params": {
+      "offset": 22,
+      "heightAGL": 5,
+      "speed": 6,
+      "side": "right",
+      "headingDeg": 270,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "framing": "WS",
+     "standingOrder": "Fly low and slow west over the lower pool, five metres above the water, yawing to hold the lower cascade of Blue Ghost Falls as it slides past.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER (drone.fly-by). A slow 66 m pass west 5 m above the lower pool (69 % of the path over water), yawing to hold the lower cascade 22 m to the right as it slides past, Farmer Ar'Oyd's hut on the far bank; flying into the afternoon sun for glitter on the water. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (43881.5,11738.0,75.0) end (43815.5,11738.0,75.7), min AGL 3.0 m, nearest static/building/spawn box 1.7 m (spawn:Harmless Sho Generator), nearest building 10.1 m, trees by crown profile 10.8 m (default bake) / 10.8 m (opt-in retail bake), peak 6.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.003 m (min WBT AGL 3.02 m)."
+    },
+    {
+     "technique": "drone.vertigo-drone",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44052.0,
+       11915.0,
+       118.0
+      ],
+      "height": 31,
+      "radius": 10
+     },
+     "params": {
+      "nearDistance": 22,
+      "farDistance": 54,
+      "direction": "out",
+      "heightAGL": 3,
+      "minFovDeg": 18,
+      "maxFovDeg": 80,
+      "bearingDeg": 272,
+      "relativeToSubject": false,
+      "minClearance": 2
+     },
+     "framing": "FS",
+     "fov": 78,
+     "standingOrder": "Back away west along the hilltop road while the lens narrows so the octagon tower above the Life Stone holds its size and the eastern hills swell behind it.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK + MAGIC (drone.vertigo-drone). 2-3 m above the hilltop road, the drone backs west from 22 to 54 m while the lens narrows from 78 to 40 deg: the three-storey octagon tower holds its size while the eastern hills swell behind it and the Life Stone glows in the lower left; front-lit by the sun behind the camera. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44030.0,11915.8,121.9) end (43998.0,11916.9,124.6), min AGL 2.0 m, nearest static/building/spawn box 5.4 m (static:0x0200071A#9), nearest building 9.8 m, trees by crown profile 13.1 m (default bake) / 13.1 m (opt-in retail bake), peak 4.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.005 m (min WBT AGL 2.00 m)."
+    },
+    {
+     "technique": "classic.hyperlapse",
+     "duration": {
+      "sec": 14
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44170.0,
+       11865.0,
+       96.0
+      ],
+      "height": 20,
+      "radius": 60
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 185,
+      "distance": 185,
+      "elevationDeg": 15,
+      "thirds": "center",
+      "move": "arc",
+      "moveM": 26,
+      "direction": "right",
+      "rate": 0.004
+     },
+     "framing": "EWS",
+     "fov": 56,
+     "standingOrder": "Arc slowly high above the south slope while the sky clock runs, clouds racing over the terraced hillside town of Nanto and its two octagon towers.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (classic.hyperlapse). A 26 m arc high over the south slope (80 m above the ground, 185 m from town) while the sky clock runs at 0.004 day/s (0.74 to 0.80, sun 50 to about 32 deg): clouds race over the terraced hillside of Nanto, its two octagon towers framing the terraces. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44167.4,11686.3,153.9) end (44141.5,11688.6,153.9), min AGL 79.8 m, nearest static/building/spawn box 73.1 m (scenery:0x02000246), nearest building 121.6 m, trees by crown profile 73.1 m (default bake) / 72.8 m (opt-in retail bake), peak 1.9 m/s; WBT get-height at 9 samples matched the checker terrain to 0.005 m (min WBT AGL 79.83 m)."
+    }
+   ],
+   "verification": "WBT (RetailSmoke project, 10 short sessions run strictly one at a time): describe-landblock (includeFootprints) + list-objects + get-terrain-data for 0xE43C, 0xE43D, 0xE43E, 0xE53C, 0xE53D, 0xE53E, 0xE63C, 0xE63D, 0xE63E, 0xE73C, 0xE73D, 0xE73E, 0xE33C, 0xE33D, 0xE33E; get-object-detail for every model on them (185 ids -> rotated AABBs); chorizite-parse-dat-record for the FX setups (lanterns/torches/candles/pillars of fire/waterfall emitters: lights + default scripts), the gate GfxObj 0x01000E65 (opening) and the tree setups 0x020002DB/D9/D3/0x02000258/0x02000322 (crown radius by height); region-day-night-curve (sun due west after 0.61: 0.64 ~80 deg, 0.70 ~63, 0.74 ~50, 0.78 ~39, 0.80 ~32); get-height at 53 camera samples (start/end/quarters/every 1/8), all within 0.006 m of the checker terrain. Clearance against WBT statics/buildings, dist spawn weenies and both scenery bakes (default dist/scenery and opt-in dist/scenery-retail, trees by crown profile). Per shot: s010 fpv.fpv-dive 10s: min AGL 2.6 m (WBT), boxes 0.7 m (spawn:Fishing Hole), building 32.3 m, trees 6.6/0.0 m (default/retail), peak 8.6 m/s; s020 classic.reveal-from-occluder 12s: min AGL 1.8 m (WBT), boxes 2.9 m (scenery:0x02000240), building 7.5 m, trees 2.8/3.1 m (default/retail), peak 6.4 m/s; s030 drone.fly-by 11s: min AGL 3.0 m (WBT), boxes 1.7 m (spawn:Harmless Sho Generator), building 10.1 m, trees 10.8/10.8 m (default/retail), peak 6.1 m/s; s040 drone.vertigo-drone 11s: min AGL 2.0 m (WBT), boxes 5.4 m (static:0x0200071A#9), building 9.8 m, trees 13.1/13.1 m (default/retail), peak 4.7 m/s; s050 classic.hyperlapse 14s: min AGL 79.8 m (WBT), boxes 73.1 m (scenery:0x02000246), building 121.6 m, trees 73.1/72.8 m (default/retail), peak 1.9 m/s. Total 58 s. plan validate (dry build): valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

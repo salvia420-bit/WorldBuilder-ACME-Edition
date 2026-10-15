@@ -1,0 +1,333 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Greenspire/Plateau Village/Danby's Outpost/Fort Tethana/Ayan Baqur/Wai Jhou",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-wai-jhou.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "just past noon 0.55 (sun high, so the deep valley floor and the lake are lit between the black ridges), neutral grade",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Wai Jhou",
+   "summary": "Wai Jhou (62.0S 51.4W) is a Sho town on the ridge of the Obsidian Plains near Small Black Hill, deep in the Direlands; its balconied buildings were a classic perch for young archers and mages in early Asheron's Call, and today it is known for the Shadow Hunters and Town Founder quest NPCs and its Colossus Foundry statue portal to Fort Tethana. The town lies at z 0 in a valley of black obsidian: a river runs south down a gorge between a scree slope and two 200 m obsidian spires and opens into a lake where a three-storey octagonal Sho pagoda (top z 31, purple, green and blue glows on its crown) stands in the water, joined to the shore by a stone pier lined with six flame lanterns; on the shore a two-storey Sho hall with standing lanterns beside a 40 m blue-leaved tree, the Nullified Statue of a Shadow on its plinth, the Town Network portal, and to the south a low shrine with blue-flame torches and a spire-roofed house among dense trees.",
+   "landmarks": [
+    {
+     "name": "Octagonal Sho pagoda in the lake (0x01002E64)",
+     "pos": [
+      12106.3,
+      9611.3,
+      0
+     ],
+     "heightM": 31,
+     "note": "box x 12093.3-12119.3 y 9598.3-9624.3; crown glows at z 28"
+    },
+    {
+     "name": "Lantern pier (flame lanterns 0x0200071A x6)",
+     "pos": [
+      12126.4,
+      9613,
+      0.9
+     ],
+     "heightM": 1.4,
+     "note": "x 12115-12137, y 9611-9615"
+    },
+    {
+     "name": "Sho hall (0x01000E01)",
+     "pos": [
+      12156,
+      9636,
+      0
+     ],
+     "heightM": 15.1,
+     "note": "standing flame lanterns at (12147.2,9632.7) and (12164.9,9631.8)"
+    },
+    {
+     "name": "Blue-leaved giant tree (0x020002DB)",
+     "pos": [
+      12173.9,
+      9636.7,
+      0
+     ],
+     "heightM": 40.6,
+     "note": "trunk +/-1.5 m, canopy from 6.4 m"
+    },
+    {
+     "name": "Nullified Statue of a Shadow on its plinth",
+     "pos": [
+      12138.2,
+      9590.2,
+      6.8
+     ],
+     "heightM": 4,
+     "note": "plinth 0x01002A1B; Anniversary Effect emitter"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      12155.6,
+      9573.4,
+      0.1
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Shrine with blue-flame torches (0x01000EFC)",
+     "pos": [
+      12132,
+      9516,
+      0
+     ],
+     "heightM": 4.5,
+     "note": "torches at (12121.9,9522) (12142,9522.1)"
+    },
+    {
+     "name": "Obsidian spire (200 m)",
+     "pos": [
+      12130,
+      9770,
+      0
+     ],
+     "heightM": 200,
+     "note": "terrain x 12104-12160, y 9750-9790; a second at y 9930-9960"
+    },
+    {
+     "name": "River gorge north of town",
+     "pos": [
+      12046,
+      9815,
+      0
+     ],
+     "heightM": 0
+    },
+    {
+     "name": "Life Stone near Wai Jhou",
+     "pos": [
+      12098,
+      9403.7,
+      0
+     ],
+     "heightM": 3.6
+    }
+   ],
+   "site": {
+    "id": "wai-jhou",
+    "name": "Wai Jhou",
+    "gazetteerId": "wai-jhou",
+    "teleport": "@teleloc 0x3F310007 23 149.6 -0.1 0.979925 0 0 -0.199368",
+    "anchor": [
+     12135,
+     9600,
+     0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.55,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.canyon-run",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "EWS",
+     "path": [
+      [
+       12046,
+       9815,
+       0
+      ],
+      [
+       12049,
+       9765,
+       0
+      ],
+      [
+       12064,
+       9712,
+       0
+      ],
+      [
+       12084,
+       9668,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 9,
+      "speed": 10,
+      "alat": 3,
+      "cornerRadius": 25,
+      "lookAhead": 30,
+      "tiltDeg": 2,
+      "maxBankDeg": 12,
+      "minClearance": 6,
+      "ends": "cruise"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Follow the river south down the gorge 9 m above the water and out onto the lake; keep 8 m from trees and rock.",
+     "notes": "ESTABLISHING + WATER (drone.canyon-run). 9 m above the river in the gorge between the western scree slope and two 200 m black obsidian spires, banking gently south-east with the river onto the lake where the octagonal pagoda rises ahead; 100 % of the samples over water (terrain type 17 WaterStandingFresh); 10.2 m/s. Note: the retail scenery bake (not the default) puts a blue tree 4.7 m from the line. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (12046.0, 9815.0, 9.0) end (12084.0, 9668.0, 9.0), min AGL 9.0 m, nearest static/building/default-bake tree 8.6 m (scenery:0x020003D2), nearest building 44.7 m, retail-bake scenery 4.7 m, peak 10.2 m/s, 100% of samples over water; WBT get-height on 9 camera points, min AGL 9 m."
+    },
+    {
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 11
+     },
+     "framing": "FS",
+     "fov": 70,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12106.3,
+       9611.3,
+       0
+      ],
+      "height": 22,
+      "radius": 13
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "elevationDeg": -17.7,
+      "distance": 26.2,
+      "travelM": 34,
+      "direction": "right",
+      "keepAim": false
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Truck slowly east 3 m above the lake, 12 m from the pagoda's south face, with the head fixed; never lower than 2.5 m over the water.",
+     "notes": "FACADE PAN: SHO PAGODA + WATER (classic.truck). 34 m eastward truck 3 m above the lake, 12 m off the south face of the three-storey octagonal pagoda (top z 31, purple/green/blue magic glows on its crown), head fixed and tilted up 18 deg: the tiers slide past with the water in the foreground, ending with the lantern pier and the statue plinth emerging; 4.9 m/s peak. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (12089.3, 9586.3, 3.0) end (12123.3, 9586.3, 3.0), min AGL 3.0 m, nearest static/building/default-bake tree 5.8 m (scenery:0x020003D2), nearest building 10.4 m, retail-bake scenery 5.8 m, peak 4.8 m/s, 100% of samples over water; WBT get-height on 7 camera points, min AGL 3.0 m."
+    },
+    {
+     "technique": "classic.rack-focus",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "MS",
+     "fov": 54,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12106.3,
+       9611.3,
+       0
+      ],
+      "height": 9,
+      "radius": 13
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 84,
+      "elevationDeg": -8,
+      "distance": 40.8,
+      "fromTarget": "metres",
+      "fromM": 11.5,
+      "toTarget": "subject",
+      "at": 0.45,
+      "pullSec": 2.2,
+      "driftM": 1.5
+     },
+     "look": {
+      "dof": {
+       "focusRange": 3,
+       "bokehScale": 3
+      }
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hold still at eye level at the shore end of the lantern pier and pull focus from the nearest lantern to the pagoda; keep 8 m from the hall.",
+     "notes": "FX: FLAMES (classic.rack-focus, real DoF). Eye level (2.4 m) on the shore at the end of the stone pier: the pier's six flame lanterns (0x0200071A, orange firelight) recede toward the pagoda; focus starts on the nearest lantern 11.5 m away and racks over 2.2 s to the pagoda 40 m away; the Sho hall and an NPC sit at the frame edges, nothing crosses the axis. focusRange 3, bokehScale 3. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (12146.5, 9615.5, 2.4) end (12145.0, 9615.4, 2.6), min AGL 2.4 m, nearest static/building/default-bake tree 8.2 m (static:0x02000F22#30), nearest building 8.5 m, retail-bake scenery 9.7 m, peak 0.2 m/s; WBT get-height on 6 camera points, min AGL 2.4 m."
+    },
+    {
+     "technique": "classic.worms-eye",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "MS",
+     "fov": 75,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12173.85,
+       9636.68,
+       0
+      ],
+      "height": 40.6,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 0,
+      "heightM": 1.0,
+      "horizontalM": 5.5,
+      "spinDeg": 25
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hold the lens 1 m above the ground under the blue tree looking straight up the trunk; keep 3.5 m from the trunk.",
+     "notes": "LANDMARK (classic.worms-eye). Lens 1 m above flat ground under the 40 m blue-leaved tree beside the Sho hall (WBT Setup 0x020002DB: trunk +/-1.5 m, canopy from 6.4 m up), 5.5 m north of the trunk, looking straight up the trunk into the blue canopy and the sky while the image slowly spins 25 deg; the hall's eaves at the frame edge. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (12173.9, 9642.2, 1.1) end (12173.9, 9642.2, 1.1), min AGL 1.0 m, nearest static/building/default-bake tree 3.9 m (static:0x020002DB#17), nearest building 5.8 m, retail-bake scenery 19.2 m, peak 0.0 m/s; WBT get-height on 1 camera points, min AGL 1.1 m."
+    },
+    {
+     "technique": "classic.dolly-out",
+     "duration": {
+      "sec": 17
+     },
+     "framing": "MS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12138.17,
+       9590.21,
+       0
+      ],
+      "height": 11,
+      "radius": 4.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 130,
+      "elevationDeg": 10,
+      "toFraming": "EWS",
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Dolly straight back south-east from the statue, rising gently to 22 m; keep 8 m from the portal and the trees.",
+     "notes": "CLOSING (classic.dolly-out). Starts on the Nullified Statue of a Shadow on its plinth (Anniversary Effect emitter) and dollies out south-east to 94 m and z 22: the statue, the Town Network portal, the lake with the pagoda and its lantern pier, and the black obsidian spires and ridges ringing the valley; perceptual profile, peak 11.3 m/s, passes 8 m from the portal. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (12142.6, 9586.5, 10.9) end (12209.4, 9530.5, 21.9), min AGL 10.6 m, nearest static/building/default-bake tree 4.0 m (spawn:Anniversary Effect), nearest building 4.1 m, retail-bake scenery 10.2 m, peak 11.3 m/s, 16% of samples over water; WBT get-height on 10 camera points, min AGL 10.6 m."
+    }
+   ],
+   "verification": "One WBT session per pass (RetailSmoke.wbproj): describe-landblock (includeFootprints) + list-objects + get-terrain-data on the 9 LBs 0x3E31-0x4033 (3x3 around 0x3F32), get-object-detail on every placed model, get-height on 33 sampled camera points (start, end and every 2 s; WBT and the offline AC split-triangle interpolation agree within 0.1 m). The 40 m blue tree (Setup 0x020002DB) was split the same way: trunk +/-1.5 m, canopy from 6.4 m. Lake/river cells are terrain type 17 (WaterStandingFresh) at z 0. Each shot was built with the real technique registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware groundZ and sampled at 4 Hz for AGL, distance to every static/building/spawn bounding box and to the default (ace-compat) and retail scenery bakes from the served dist, peak speed and subject framing; numbers are in each shot's notes. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-wai-jhou.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s), exit 0 (dry build included)."
+  }
+ ]
+}

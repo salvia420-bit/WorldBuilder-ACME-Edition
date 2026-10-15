@@ -1,0 +1,321 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Candeth Keep/Qalaba'r/Khayyaban/Uziz/Al-Arqas/Yaraq",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-al-arqas.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.74 (sun west, ~48 deg), grade warm: late-afternoon desert light; long dune shadows, the candle ring glowing in the sunken oasis; the time-lapse runs to ~0.80 (sun still ~33 deg)",
+ "towns": [
+  {
+   "name": "Al-Arqas",
+   "summary": "Al-Arqas (31.2S 13.7E, 'The Haven') is an oasis in the trackless A'mun Desert, founded shortly before 10 PY when Gharu'ndim desert-walkers found a hidden spring in the southern dunes; once an arrival point for new Isparians, it is now quiet and sparsely populated. The town lies in a sunken bowl at sea level (z 0) ringed by golden dunes 20-40 m high: at its centre the spring, a dark crystal pool ringed by lit candles, ferns and a palm, with the Life Stone beside it; around it the nullified gromnie statue on its pedestal, the Town Network portal, an octagon tower, a yellow-green dome and flat rooftop-garden houses (House of Treasure, House of Peace, Armaments of Truth, the Tavern at Al-Arqas, where candelabra burn), while a stained-glass church tower and another rooftop-garden house stand on the southern dune crest.",
+   "landmarks": [
+    {
+     "name": "The spring: crystal pool (0x020003CB, particle script) ringed by 5 lit candles (0x02000397) and 19 ferns",
+     "pos": [
+      27744,
+      16968,
+      0
+     ],
+     "heightM": 2.8,
+     "note": "ring radius 10-16 m; glowing green plant 0x01000A6F at (27751.2,16961.1); palm (27729,16975) 13.5 m"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      27726.5,
+      16952.3,
+      -0.1
+     ],
+     "heightM": 3.0
+    },
+    {
+     "name": "Nullified Statue of a Gromnie on its pedestal (0x01002A1B)",
+     "pos": [
+      27762.5,
+      16986.5,
+      6.8
+     ],
+     "heightM": 3.0,
+     "note": "pedestal base z 0"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      27804.0,
+      16988.1,
+      0.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Stained-glass church tower on the south dune (0x010025E3)",
+     "pos": [
+      27711.2,
+      16881.1,
+      28
+     ],
+     "heightM": 12.7
+    },
+    {
+     "name": "Rooftop-garden house on the dune crest (0x01000E11)",
+     "pos": [
+      27756.0,
+      16908.0,
+      34
+     ],
+     "heightM": 13.2
+    },
+    {
+     "name": "Domed hall (0x01000E3B)",
+     "pos": [
+      27828.0,
+      17028.0,
+      0
+     ],
+     "heightM": 14.1
+    },
+    {
+     "name": "Candelabra (0x020005D8: flame script + light)",
+     "pos": [
+      27751.5,
+      17020.4,
+      9.6
+     ],
+     "heightM": 2.1,
+     "note": "second at the tavern (27848.9,17005.6,3.6)"
+    },
+    {
+     "name": "Octagon tower (0x01000F06)",
+     "pos": [
+      27775.6,
+      16961.9,
+      0.1
+     ],
+     "heightM": 4.5
+    },
+    {
+     "name": "Oasis bowl floor",
+     "pos": [
+      27768,
+      16992,
+      0
+     ],
+     "note": "z 0 for x 27672-27864, y 16944-17040; dunes 20-40 around"
+    }
+   ],
+   "site": {
+    "id": "al-arqas",
+    "name": "Al-Arqas",
+    "gazetteerId": "al-arqas",
+    "teleport": "@telepoi Al-Arqas",
+    "anchor": [
+     27639.9,
+     16956.2,
+     9.3
+    ],
+    "settleSec": 3,
+    "lbKeys": [
+     "0x9058",
+     "0x8F58",
+     "0x9057",
+     "0x9158",
+     "0x9059"
+    ],
+    "look": {
+     "timeOfDay": 0.74,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.terrain-skim",
+     "duration": {
+      "sec": 13
+     },
+     "params": {
+      "heightAGL": 3,
+      "speed": 7,
+      "lookAhead": 30,
+      "tiltDeg": -9,
+      "cornerRadius": 10,
+      "alat": 2,
+      "maxBankDeg": 8,
+      "ends": "rest"
+     },
+     "path": [
+      [
+       27731,
+       16846,
+       29.83
+      ],
+      [
+       27733,
+       16890,
+       29.75
+      ],
+      [
+       27735,
+       16922,
+       27.67
+      ]
+     ],
+     "framing": "WS",
+     "standingOrder": "Skim low over the golden dunes, pass between the tower and the rooftop garden on the crest and drop into the hidden oasis bowl of Al-Arqas.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.terrain-skim). Skims 3 m over the golden dunes 76 m north, passing between the church tower and the rooftop-garden house on the crest, and eases to a hover on the rim of the sunken oasis bowl looking down into it (tilt -9): the spring, the palms, the domes and the dunes beyond; late-afternoon side light from the west. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (27731.0,16846.0,33.0) end (27735.0,16922.0,32.4), min AGL 3.0 m, nearest static/building/tree/spawn 13.8 m (building:0x01000E11#96), nearest building 13.8 m, retail-bake trees 52.2 m, peak 8.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 3.0 m)."
+    },
+    {
+     "technique": "classic.dolly-in",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       27744,
+       16968,
+       0
+      ],
+      "height": 13,
+      "radius": 8
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 150,
+      "elevationDeg": 18,
+      "thirds": "center",
+      "fromFraming": "WS",
+      "profile": "perceptual"
+     },
+     "framing": "FS",
+     "fov": 45,
+     "standingOrder": "Dolly slowly in toward the spring of Al-Arqas, its ring of lit candles and ferns around the crystal pool beneath the palm.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + FLAME + CRYSTAL (classic.dolly-in). Perceptual dolly from 39 m to 18 m toward the spring at the centre of the bowl along bearing 150, looking down 18 deg: the ring of lit candles (0x02000397) and ferns around the crystal pool (0x020003CB, particle script) beneath the palm grows to fill the frame; warm side light from the west. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (27762.7,16935.7,18.6) end (27752.6,16953.1,12.1), min AGL 6.8 m, nearest static/building/tree/spawn 11.4 m (static:0x02000253#49), nearest building 16.2 m, retail-bake trees 26.5 m, peak 2.7 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 6.9 m)."
+    },
+    {
+     "technique": "classic.orbit",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       27762.5,
+       16986.5,
+       6.8
+      ],
+      "height": 3,
+      "radius": 1.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "elevationDeg": 12,
+      "distance": 20,
+      "thirds": "center",
+      "revolutions": 0.5,
+      "direction": "cw"
+     },
+     "framing": "WS",
+     "fov": 50,
+     "standingOrder": "Circle half way round the nullified gromnie statue on its pedestal, the oasis, the domes and the dunes wheeling behind it.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.orbit). Half orbit (S -> W -> N, cw) 20 m from the nullified gromnie statue on its pedestal at z 12.5: the spring and its candle ring, the palm, the domes and the dunes wheel behind it. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (27762.5,16966.9,12.5) end (27762.5,17006.1,12.5), min AGL 8.9 m, nearest static/building/tree/spawn 7.0 m (spawn:House of Peace), nearest building 9.3 m, retail-bake trees 11.6 m, peak 5.1 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 8.9 m)."
+    },
+    {
+     "technique": "classic.time-lapse",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       27750,
+       16975,
+       0
+      ],
+      "height": 20,
+      "radius": 60
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 345,
+      "elevationDeg": 18,
+      "distance": 120,
+      "thirds": "center",
+      "rate": 0.005
+     },
+     "framing": "EWS",
+     "fov": 55,
+     "standingOrder": "Hold high on the north dune over the sunken oasis while the sky clock runs, shadows stretching across the sand and clouds racing by.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "SKY (classic.time-lapse). Locked high on the north dune 120 m from the oasis, 34 m above the sand, looking SSE while the sky clock runs (0.005 day/s: 0.74 -> 0.80, sun 48 -> 33 deg, never below): clouds race over the bowl and shadows stretch across the dunes toward the church tower on the far crest. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (27720.5,17085.2,47.1) end (27720.5,17085.2,47.1), min AGL 34.0 m, nearest static/building/tree/spawn 35.8 m (static:0x02000451#0), nearest building 63.1 m, retail-bake trees 54.0 m, peak 0.0 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 34.0 m)."
+    },
+    {
+     "technique": "drone.top-down-rise",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       27744,
+       16968,
+       0
+      ],
+      "height": 6,
+      "radius": 8
+     },
+     "params": {
+      "heightStart": 14,
+      "heightEnd": 78,
+      "rotateDeg": 60,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "minClearance": 3
+     },
+     "framing": "WS",
+     "standingOrder": "Look straight down on the ring of candles and ferns around the spring and climb, the oasis shrinking into the dunes of the A'mun.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.top-down-rise). Straight down on the ring of candles and ferns around the spring, climbing from 14 m to 78 m while the image turns 60 deg: the perfect circle shrinks into the oasis bowl and the dunes of the A'mun. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (27744.0,16968.0,14.0) end (27744.0,16968.0,78.0), min AGL 14.0 m, nearest static/building/tree/spawn 12.0 m (scenery:0x020004B1), nearest building 22.4 m, retail-bake trees 11.7 m, peak 8.4 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 14.0 m)."
+    }
+   ],
+   "verification": "describe-landblock (includeFootprints) + list-objects + get-terrain-data for the landblocks 0x8E57, 0x8E58, 0x8E59, 0x8F57, 0x8F58, 0x8F59, 0x9057, 0x9058, 0x9059, 0x9157, 0x9158, 0x9159; get-object-detail for every model (162 ids, bounds -> rotated AABBs); chorizite-parse-dat-record Setup for the effect props (default scripts / lights); get-height at 53 camera samples (start/end/quarters and every 1/8 of each move) - all within 0.01 m of the checker terrain; clearance against WBT statics/buildings, both scenery bakes (dist/scenery and dist/scenery-retail) and the dist spawn weenies. Per shot: s010 drone.terrain-skim: minAGL 3.0 (WBT 3.0), clearance 13.8 m (building:0x01000E11#96), retail trees 52.2 m, peak 8.7 m/s; s020 classic.dolly-in: minAGL 6.8 (WBT 6.9), clearance 11.4 m (static:0x02000253#49), retail trees 26.5 m, peak 2.7 m/s; s030 classic.orbit: minAGL 8.9 (WBT 8.9), clearance 7.0 m (spawn:House of Peace), retail trees 11.6 m, peak 5.1 m/s; s040 classic.time-lapse: minAGL 34.0 (WBT 34.0), clearance 35.8 m (static:0x02000451#0), retail trees 54.0 m, peak 0.0 m/s; s050 drone.top-down-rise: minAGL 14.0 (WBT 14.0), clearance 12.0 m (scenery:0x020004B1), retail trees 11.7 m, peak 8.4 m/s. plan validate (dry build): valid: 0 error(s), 0 warning(s)"
+  }
+ ]
+}

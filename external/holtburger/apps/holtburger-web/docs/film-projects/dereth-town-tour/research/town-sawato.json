@@ -1,0 +1,302 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-sawato.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "golden 0.80 / warm: low sun over the swamp canopy, the street-lantern glows and green roofs warm in the clearing",
+ "runtimeSec": 62,
+ "towns": [
+  {
+   "name": "Sawato",
+   "summary": "Sawato is a Sho village hidden in a clearing of the Blackmire Swamp. After the warlord Ijiku Tambai's fortress Yaosai (now Shoushi) pushed the Mosswarts back into the swamp, bold settlers founded Sawato on the new frontier, and its road finally joined long-isolated Yanshi to the Sho lands. For years it was one of the most inaccessible towns in Dereth (only the meeting-hall portal); it is home to Tsua Kagemata the Sho mask maker and to the Sawato Bandit extortion quest. In the DAT the village is a ~120 m packed-dirt clearing at z 12 ringed by a sea of swamp cypress (canopy 25-44 m) and still pools (WaterStandingFresh at z 6). Sho houses with green tiled roofs - octagon halls, spire-roofed houses, a green-roofed hall with a dome and archways, a mossy stone church and the meeting hall - surround a square with the Nullified Statue of a Sclavus on its pedestal ringed by three small trees, the Life Stone, the Town Network portal, the Jojii Shrine, a well, and street lanterns whose warm glow halos (0x020005B2) light the square.",
+   "landmarks": [
+    {
+     "name": "Nullified Statue of a Sclavus",
+     "pos": [
+      38700,
+      17582,
+      12
+     ],
+     "heightM": 10,
+     "note": "pedestal 0x01002A1B top 18.8; three small trees 0x020002F3 around it"
+    },
+    {
+     "name": "Street lanterns with warm glow",
+     "pos": [
+      38700.3,
+      17597.5,
+      12
+     ],
+     "heightM": 1.4,
+     "note": "0x0200071A + 0x020005B2 halo; others at (38695.3,17573.9),(38729.1,17579.9),(38671.3,17608.7),(38741.1,17603.5),(38705.6,17621.6)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      38703.5,
+      17559.5,
+      12
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      38722.5,
+      17573.9,
+      12.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Green-roofed Sho hall with dome and archways",
+     "pos": [
+      38723.2,
+      17603.3,
+      12
+     ],
+     "heightM": 10,
+     "note": "0x01000BFE top 22"
+    },
+    {
+     "name": "Octagon halls",
+     "pos": [
+      38677.7,
+      17557.8,
+      12
+     ],
+     "heightM": 12.2,
+     "note": "0x01000D6B top 24.15; second at (38772,17652)"
+    },
+    {
+     "name": "Mossy stone church",
+     "pos": [
+      38648.3,
+      17553.3,
+      12
+     ],
+     "heightM": 13.6,
+     "note": "0x01002228 top 25.6"
+    },
+    {
+     "name": "Jojii Shrine",
+     "pos": [
+      38671.6,
+      17584.5,
+      12
+     ],
+     "heightM": 2
+    },
+    {
+     "name": "Swamp pools (west)",
+     "pos": [
+      38470,
+      17580,
+      6
+     ],
+     "heightM": 0,
+     "note": "WaterStandingFresh vertices x 38400-38520, y 17496-17640; cypress crowns 0x020003EE up to z 40-44"
+    }
+   ],
+   "site": {
+    "id": "sawato",
+    "name": "Sawato",
+    "gazetteerId": "sawato",
+    "teleport": "@telepoi Sawato",
+    "anchor": [
+     38700,
+     17582,
+     12
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.8,
+     "grade": "warm"
+    },
+    "lbKeys": [
+     "0xC95B0000",
+     "0xC85B0000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.flyover",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38556,
+       17585,
+       6
+      ],
+      "height": 2,
+      "radius": 4
+     },
+     "params": {
+      "heightAGL": 50,
+      "speed": 8,
+      "headingDeg": 90,
+      "relativeToSubject": false,
+      "gimbal": "fixed",
+      "tiltDeg": -24,
+      "minClearance": 10
+     },
+     "standingOrder": "Fly level east at 56 m over the swamp pools toward the hidden village; stay 10 m above the tallest cypress crowns.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING + WATER (drone.flyover). Level east at 56 m over the western swamp pools between the cypress crowns (28% of the pass over standing water), gimbal -24 deg, toward the clearing; the golden sun behind the camera lights the green roofs ahead. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38500, 17585, 56) end (38612, 17585, 56), min AGL 50 m (WBT get-height on 9 camera points: min AGL 50 m, ground 6-6), nearest static/building/default-bake scenery 24.6 m (scenery:0x020003EE), nearest building 48.85 m, retail-bake scenery 15.27 m, peak 8 m/s, 28% of samples over water."
+    },
+    {
+     "technique": "drone.top-down-rise",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38705,
+       17582,
+       12
+      ],
+      "height": 8,
+      "radius": 40
+     },
+     "params": {
+      "heightStart": 48,
+      "heightEnd": 130,
+      "rotateDeg": -30,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -88,
+      "minClearance": 5
+     },
+     "standingOrder": "Look straight down on the village square from 48 m and rise to 130 m until the clearing sits small in the swamp; nothing near the lens.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "GRAPHIC REVEAL (drone.top-down-rise). Straight down (pitch -88) on the village square from 48 m, rising to 130 m and turning -30 deg: the square, the statue and the green Sho roofs shrink into a clearing in the endless swamp canopy. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38705, 17580.5, 60) end (38707.2, 17578.2, 142), min AGL 48 m (WBT get-height on 9 camera points: min AGL 48 m, ground 12-12), nearest static/building/default-bake scenery 37.93 m (spawn:Nullified Statue of a Sclavus), nearest building 41.05 m, retail-bake scenery 37.76 m, peak 10.73 m/s."
+    },
+    {
+     "technique": "classic.static",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38700,
+       17582,
+       12
+      ],
+      "height": 10.5,
+      "radius": 3.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 10,
+      "distance": 30,
+      "elevationDeg": -6,
+      "thirds": "center"
+     },
+     "standingOrder": "Locked off at eye height in the north plaza with the glowing lantern post in front of the Sclavus statue; nothing moves near the lens.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FLAME / GLOW (classic.static). Locked off at eye height (2 m) in the north plaza: a street lantern and its warm glow halo in the foreground, the Sclavus statue on its pedestal among three small trees behind, the life stone beyond. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38705.2, 17611.4, 14.1) end (38705.2, 17611.4, 14.1), min AGL 2.11 m (WBT get-height on 9 camera points: min AGL 2.11 m, ground 12-12), nearest static/building/default-bake scenery 6.07 m (spawn:Mosswart Cynic), nearest building 8.54 m, retail-bake scenery 11.6 m, peak 0 m/s."
+    },
+    {
+     "technique": "classic.crane",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38723.2,
+       17603.3,
+       12
+      ],
+      "height": 10,
+      "radius": 9
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 265,
+      "distance": 24,
+      "elevationDeg": -8,
+      "riseM": 16,
+      "swingDeg": -25,
+      "armM": 10
+     },
+     "standingOrder": "Rise on the jib from street level beside the lantern post until the arched Sho house's green roof and the swamp beyond are revealed; 3 m from the lantern.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.crane). Jib rising 1.7 -> 17.7 m beside a lantern post as the arm swings 25 deg, aimed at the green-roofed Sho hall with its dome and archways: the roof and the swamp beyond are revealed. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38699.5, 17601.2, 13.7) end (38698.7, 17603.7, 29.7), min AGL 1.66 m (WBT get-height on 9 camera points: min AGL 1.66 m, ground 12-12), nearest static/building/default-bake scenery 3.54 m (static:0x0200071A#79), nearest building 10.61 m, retail-bake scenery 19.25 m, peak 2.49 m/s."
+    },
+    {
+     "technique": "drone.pano-360",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       38700,
+       17582,
+       12
+      ],
+      "height": 10,
+      "radius": 5
+     },
+     "params": {
+      "heightAGL": 46,
+      "yawDeg": 360,
+      "direction": "cw",
+      "startHeadingDeg": 90,
+      "relativeToSubject": false,
+      "tiltDeg": -10,
+      "minClearance": 3
+     },
+     "standingOrder": "Hover 46 m above the square and turn a full circle over the sea of cypress crowns; the lens never moves.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.pano-360). 46 m above the square, a full slow turn over the sea of cypress crowns in golden light; above every tree in both scenery bakes. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (38700, 17582, 58) end (38700, 17582, 58), min AGL 46 m (WBT get-height on 9 camera points: min AGL 46 m, ground 12-12), nearest static/building/default-bake scenery 35.7 m (spawn:Nullified Statue of a Sclavus), nearest building 38.7 m, retail-bake scenery 40.87 m, peak 0 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xC85A, 0xC85B, 0xC85C, 0xC95A, 0xC95B, 0xC95C, 0xCA5A, 0xCA5B, 0xCA5C; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-sawato.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.flyover: start [38500, 17585, 56] end [38612, 17585, 56], WBT minAGL 50 m, clearance 24.6 m (scenery:0x020003EE), bldg 48.85 m, retail 15.27 m, vmax 8 m/s | s020 drone.top-down-rise: start [38705, 17580.5, 60] end [38707.2, 17578.2, 142], WBT minAGL 48 m, clearance 37.93 m (spawn:Nullified Statue of a Sclavus), bldg 41.05 m, retail 37.76 m, vmax 10.73 m/s | s030 classic.static: start [38705.2, 17611.4, 14.1] end [38705.2, 17611.4, 14.1], WBT minAGL 2.11 m, clearance 6.07 m (spawn:Mosswart Cynic), bldg 8.54 m, retail 11.6 m, vmax 0 m/s | s040 classic.crane: start [38699.5, 17601.2, 13.7] end [38698.7, 17603.7, 29.7], WBT minAGL 1.66 m, clearance 3.54 m (static:0x0200071A#79), bldg 10.61 m, retail 19.25 m, vmax 2.49 m/s | s050 drone.pano-360: start [38700, 17582, 58] end [38700, 17582, 58], WBT minAGL 46 m, clearance 35.7 m (spawn:Nullified Statue of a Sclavus), bldg 38.7 m, retail 40.87 m, vmax 0 m/s"
+  }
+ ]
+}

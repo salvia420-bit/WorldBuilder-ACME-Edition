@@ -1,0 +1,236 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Qalaba'r scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "qalabar",
+   "name": "Qalaba'r",
+   "gazetteerId": "qalabar",
+   "teleport": "@telepoi Qalabar",
+   "anchor": [
+    29160.4,
+    6552.6,
+    102.0
+   ],
+   "settleSec": 2,
+   "lbKeys": [
+    "0x9722",
+    "0x9721",
+    "0x9822",
+    "0x9723",
+    "0x9622"
+   ],
+   "look": {
+    "timeOfDay": 0.36,
+    "grade": "cool"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.tilt-reveal",
+   "duration": {
+    "sec": 13
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29085,
+     6625,
+     102
+    ],
+    "height": 14,
+    "radius": 40
+   },
+   "params": {
+    "startPitchDeg": -80,
+    "endPitchDeg": -12,
+    "heightAGL": 60,
+    "distance": 130,
+    "drift": 10,
+    "bearingDeg": 40,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "framing": "EWS",
+   "standingOrder": "Hover high north-east of Qalaba'r looking down at the forest floor, then tilt up to reveal the domed village, its giant trees and the mountains.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010",
+   "site": "qalabar",
+   "notes": "ESTABLISHING (drone.tilt-reveal). Hover 80 m above the forest floor 130 m north-east of the village, looking straight down at the canopy, then tilt up to -12 deg: the domed village on its plateau, the forest giants (0x02000258, up to 70 m tall) and the Linvak foothills to the south-west rise into frame, front-lit by the morning sun behind the camera. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (29168.6,6724.6,162.0) end (29162.1,6716.9,162.0), min AGL 79.7 m, nearest static/building/tree/spawn 58.6 m (scenery:0x020002D3), nearest building 99.3 m, retail-bake trees 55.4 m, peak 1.2 m/s; WBT get-height at 13 samples matched the checker terrain to 0.00 m (min WBT AGL 79.7 m)."
+  },
+  {
+   "technique": "classic.dolly-out",
+   "duration": {
+    "sec": 11
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29082.3,
+     6643.8,
+     108.8
+    ],
+    "height": 3.5,
+    "radius": 1.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 50,
+    "elevationDeg": 8,
+    "thirds": "center",
+    "toFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "framing": "FS",
+   "fov": 32,
+   "standingOrder": "Start close on the nullified golem statue atop its pillar and dolly back to reveal the plaza, the domes and the church tower around it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020",
+   "site": "qalabar",
+   "notes": "LANDMARK (classic.dolly-out). Starts 7 m from the nullified golem statue standing on its 7 m stone pedestal (32 deg lens, full figure) and dollies back 42 m along bearing 50 to an extreme wide: the plaza, the Town Network portal, the yellow-green domes and the stained-glass church tower open up around it, front-lit by the morning sun. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (29087.6,6648.3,111.5) end (29119.3,6674.9,117.3), min AGL 9.5 m, nearest static/building/tree/spawn 2.8 m (building:0x01002A1B#90), nearest building 2.8 m, retail-bake trees 7.3 m, peak 7.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 9.5 m)."
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29138,
+     6593.8,
+     102
+    ],
+    "height": 3,
+    "radius": 1.5
+   },
+   "params": {
+    "distance": 14,
+    "heightAGL": 2.2,
+    "slide": 14,
+    "panAmount": 0.4,
+    "direction": "left",
+    "bearingDeg": 210,
+    "relativeToSubject": false,
+    "minClearance": 1.2
+   },
+   "framing": "FS",
+   "standingOrder": "Slide sideways past the glowing Life Stone at the edge of Qalaba'r, the rooftop gardens and domes drifting behind it.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030",
+   "site": "qalabar",
+   "notes": "MAGIC (drone.parallax-slide). Slides 14 m sideways 2.2 m above the ground 14 m SSW of the Life Stone (blue glow, particles), counter-panning 40 %: the stone holds in frame while the rooftop-garden houses and the domes slide behind it at a different rate; side-lit by the morning sun. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (29137.1,6578.2,104.2) end (29124.9,6585.2,104.2), min AGL 2.2 m, nearest static/building/tree/spawn 5.1 m (spawn:Small Creepy Statue), nearest building 14.4 m, retail-bake trees 7.7 m, peak 1.8 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 2.2 m)."
+  },
+  {
+   "technique": "drone.boomerang",
+   "duration": {
+    "sec": 13
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29075.5,
+     6660.2,
+     102
+    ],
+    "height": 12.7,
+    "radius": 7
+   },
+   "params": {
+    "far": 56,
+    "near": 22,
+    "heightStart": 22,
+    "heightNear": 15,
+    "rise": 20,
+    "bearingDeg": 60,
+    "relativeToSubject": false,
+    "minClearance": 4
+   },
+   "framing": "FS",
+   "standingOrder": "Glide in toward the stained-glass church tower of Qalaba'r, pause before it, then pull back out and climb above the rooftops.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040",
+   "site": "qalabar",
+   "notes": "ARCHITECTURE (drone.boomerang). Flies in from 56 m ENE at z 124 toward the stained-glass church tower (0x010025E3, top z 114.7), eases to a stop 22 m from it at z 117, then retreats climbing to z 144 over the rooftops - one continuous gesture, front-lit. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (29124.0,6688.2,124.0) end (29124.0,6688.2,144.0), min AGL 15.0 m, nearest static/building/tree/spawn 14.0 m (building:0x010025E3#89), nearest building 14.0 m, retail-bake trees 5.8 m, peak 10.5 m/s; WBT get-height at 13 samples matched the checker terrain to 0.01 m (min WBT AGL 15.0 m)."
+  },
+  {
+   "technique": "classic.hyperlapse",
+   "duration": {
+    "sec": 14
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     29070,
+     6620,
+     102
+    ],
+    "height": 14,
+    "radius": 40
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 10,
+    "elevationDeg": 14,
+    "distance": 150,
+    "thirds": "center",
+    "move": "arc",
+    "moveM": 30,
+    "direction": "right",
+    "rate": 0.01
+   },
+   "framing": "EWS",
+   "fov": 55,
+   "standingOrder": "Arc slowly high north of Qalaba'r while the sky clock runs, clouds racing over the village, its forest giants and the Linvak foothills.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050",
+   "site": "qalabar",
+   "notes": "CLOSING (classic.hyperlapse). 150 m north of the village and 43-55 m above the ground, a slow 30 m arc while the sky clock runs (0.01 day/s: 0.36 -> 0.50, sun 38 -> 68 deg): clouds race over the domes, the forest giants and the Linvak foothills behind. Verified offline (real technique-registry build on WBT terrain, 4 Hz): start (29080.4,6765.2,145.3) end (29109.9,6760.0,145.3), min AGL 48.8 m, nearest static/building/tree/spawn 40.7 m (scenery:0x020002D3), nearest building 53.4 m, retail-bake trees 14.9 m, peak 2.1 m/s; WBT get-height at 9 samples matched the checker terrain to 0.00 m (min WBT AGL 48.7 m)."
+  }
+ ],
+ "notes": "time 0.36 (sun east, ~38 deg), grade cool: crisp mountain morning; the east faces of the domes and the statue are front-lit, the Linvak foothills to the south-west catch the low sun"
+}

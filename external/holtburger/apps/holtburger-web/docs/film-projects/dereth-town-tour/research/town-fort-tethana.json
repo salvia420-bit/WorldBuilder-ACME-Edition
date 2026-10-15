@@ -1,0 +1,353 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Greenspire/Plateau Village/Danby's Outpost/Fort Tethana/Ayan Baqur/Wai Jhou",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-fort-tethana.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "late afternoon 0.68 (sun in the west-south-west, about 35 deg up), warm grade: golden stone, long tower shadows across the courtyard, candelabra flames visible in the shade, the mountain lit behind",
+ "runtimeSec": 66,
+ "towns": [
+  {
+   "name": "Fort Tethana",
+   "summary": "Fort Tethana (1.5N 71.8W, northern Direlands) is an Aluvian fortress that once thrived as a trading and social hub fed by high vendor prices and the Dires hunting grounds; after 'Fair Trade' emptied it, a renegade alliance of Lugians and Tumeroks laid siege, and Commander Jared Kurth, refused help by Queen Elysa Strathelar, was driven mad by Count Dardante. The fort (LB 0x2581, whose LandBlockInfo WBT cannot load, so it was read from client_cell_1.dat: 27 buildings, 310 statics) stands on a flat z 220 shelf: a 134 x 129 m walled enclosure with 31 m stone towers at the four corners and a pair flanking the south gate, the main gate on the east wall (opened by the sentry's lever), two mossy outer towers to the east, an inner dividing wall, cottages and a brick hall, the Nullified Statue of a Grievver on a plinth, a well and five candelabras around the Town Network portal. The shelf falls away south and east toward the Life Stone; behind, the mountain wall rises to z 480.",
+   "landmarks": [
+    {
+     "name": "South gate towers (0x01001161 x2)",
+     "pos": [
+      7200,
+      24782.5,
+      220
+     ],
+     "heightM": 30.8,
+     "note": "boxes x 7181-7219 y 24773-24792"
+    },
+    {
+     "name": "South-west corner tower",
+     "pos": [
+      7166.5,
+      24806.5,
+      220
+     ],
+     "heightM": 30.8
+    },
+    {
+     "name": "North-west corner tower",
+     "pos": [
+      7166.5,
+      24873.5,
+      220
+     ],
+     "heightM": 30.8
+    },
+    {
+     "name": "South-east corner tower",
+     "pos": [
+      7281.5,
+      24806.5,
+      220
+     ],
+     "heightM": 30.8
+    },
+    {
+     "name": "North-east corner tower",
+     "pos": [
+      7281.5,
+      24873.5,
+      220
+     ],
+     "heightM": 30.8
+    },
+    {
+     "name": "Mossy outer towers (0x01001117)",
+     "pos": [
+      7308,
+      24804,
+      220
+     ],
+     "heightM": 30.8,
+     "note": "second at (7332,24828)"
+    },
+    {
+     "name": "West curtain wall (0x01001124)",
+     "pos": [
+      7164,
+      24840,
+      220
+     ],
+     "heightM": 5,
+     "note": "outer face x 7162.2"
+    },
+    {
+     "name": "East main gate + sentry lever",
+     "pos": [
+      7284,
+      24852,
+      220
+     ],
+     "heightM": 5
+    },
+    {
+     "name": "Nullified Statue of a Grievver on its plinth (0x01002A1B)",
+     "pos": [
+      7188.1,
+      24851.8,
+      226.8
+     ],
+     "heightM": 7,
+     "note": "Anniversary Effect emitter on it"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      7242.9,
+      24840.7,
+      220.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Candelabra (0x020005D8, flame light)",
+     "pos": [
+      7241.9,
+      24856.4,
+      220
+     ],
+     "heightM": 2.1,
+     "note": "others at (7210,24836.7) (7252.5,24824.5) (7266.7,24836.9) (7283.8,24854.8)"
+    },
+    {
+     "name": "Well",
+     "pos": [
+      7275.2,
+      24870.4,
+      220
+     ],
+     "heightM": 1.5
+    },
+    {
+     "name": "Life Stone near Fort Tethana",
+     "pos": [
+      7506.8,
+      24713.7,
+      144
+     ],
+     "heightM": 3.6,
+     "note": "down the hill south-east"
+    }
+   ],
+   "site": {
+    "id": "fort-tethana",
+    "name": "Fort Tethana",
+    "gazetteerId": "fort-tethana",
+    "teleport": "@telepoi Fort Tethana",
+    "anchor": [
+     7230,
+     24840,
+     220
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.68,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.rising-reveal",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       7224,
+       24840,
+       220
+      ],
+      "height": 31,
+      "radius": 65
+     },
+     "params": {
+      "distance": 165,
+      "bearingDeg": 215,
+      "relativeToSubject": false,
+      "obstacleDistance": 50,
+      "obstacleHeight": 16,
+      "heightStart": 3,
+      "clearance": 40,
+      "forward": 30,
+      "endPitchDeg": -9,
+      "minClearance": 3
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Rise from the ground south-west of the fort over the south gate towers to reveal the courtyard and the mountain behind; keep 35 m from the towers.",
+     "notes": "ESTABLISHING (drone.rising-reveal). Starts 3 m above the shelf 165 m SW of the fort centre looking at the twin 31 m south gate towers, rises to z 276 drifting 30 m toward the fort: the gate towers block the view, then the camera clears them and the whole walled fort appears (six corner/gate towers, two mossy outer towers, cottages and the brick hall) with the Direlands mountain rising to z 480 behind. Peak 6.4 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (7129.4, 24704.8, 223.2) end (7146.6, 24729.4, 276.0), min AGL 3.2 m, nearest static/building/default-bake tree 37.8 m (spawn:High Direlands Mountain Generator), nearest building 61.0 m, retail-bake scenery 65.3 m, peak 6.4 m/s; WBT get-height on 9 camera points, min AGL 3.2 m."
+    },
+    {
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "FS",
+     "fov": 62,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       7164,
+       24860,
+       220
+      ],
+      "height": 12,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 270,
+      "elevationDeg": -8,
+      "distance": 14.3,
+      "travelM": 46,
+      "direction": "left",
+      "keepAim": false
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Truck slowly north 12 m outside the west curtain wall at 4 m height with the head fixed on the wall; keep 7 m from the towers.",
+     "notes": "FACADE PAN: FORTRESS WALLS (classic.truck). Fixed-head lateral move 46 m north at x 7149.8, 12.4 m off the west curtain wall and 7.2 m off the protruding south-west and north-west tower faces, 4 m above the ground: the curtain wall and the two 31 m Aluvian corner towers slide past (towers rise out of frame), ending beyond the north-west tower with the plain and the mountain flank revealed. 6 m/s peak, a 2 m scree rock stays 7 m away. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (7149.8, 24837.0, 224.0) end (7149.8, 24883.0, 224.0), min AGL 4.0 m, nearest static/building/default-bake tree 7.2 m (building:0x01001161#325), nearest building 7.2 m, retail-bake scenery 58.0 m, peak 6.0 m/s; WBT get-height on 7 camera points, min AGL 4.0 m."
+    },
+    {
+     "technique": "classic.rack-focus",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "MS",
+     "fov": 42,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       7242.93,
+       24840.69,
+       220
+      ],
+      "height": 4,
+      "radius": 2
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 5.8,
+      "elevationDeg": -3,
+      "distance": 25.5,
+      "fromTarget": "metres",
+      "fromM": 10.3,
+      "toTarget": "subject",
+      "at": 0.5,
+      "pullSec": 2.0,
+      "driftM": 1.5
+     },
+     "look": {
+      "dof": {
+       "focusRange": 2.5,
+       "bokehScale": 3
+      }
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Hold still at eye level and let the focus pull from the candelabra flames to the portal; keep 4 m from the town sign.",
+     "notes": "FX: FLAME + PORTAL (classic.rack-focus, real DoF). Locked at eye level (2.3 m) in the inner courtyard: a candelabra's flames sit right of centre 10 m away and in focus, the swirling Town Network portal soft behind; focus racks over 2 s around mid-shot to the portal 25 m away and the candelabra melts into bokeh. focusRange 2.5, bokehScale 3. Late-afternoon warm light. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (7245.5, 24866.0, 222.3) end (7245.4, 24864.5, 222.3), min AGL 2.3 m, nearest static/building/default-bake tree 4.3 m (spawn:Fort Tethana ), nearest building 7.6 m, retail-bake scenery 132.7 m, peak 0.2 m/s; WBT get-height on 6 camera points, min AGL 2.3 m."
+    },
+    {
+     "technique": "drone.vertigo-drone",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "MS",
+     "fov": 55,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       7281.5,
+       24806.5,
+       220
+      ],
+      "height": 31,
+      "radius": 9.5
+     },
+     "params": {
+      "nearDistance": 42,
+      "farDistance": 125,
+      "direction": "out",
+      "heightAGL": 30,
+      "bearingDeg": 168,
+      "relativeToSubject": false,
+      "minFovDeg": 10,
+      "minClearance": 6
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Fly straight back south from the south-east tower while zooming in so it holds its size; keep 30 m from all towers.",
+     "notes": "LANDMARK (drone.vertigo-drone). From 42 m south of the south-east corner tower at z 250 the drone flies back to 125 m over the falling shelf (ground drops from 209 to 172) while the fov narrows 55 to 20 deg: the tower keeps its size and the fort's east towers and the mountain flank behind swell; peak 10 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (7290.2, 24765.4, 250.0) end (7307.5, 24684.2, 250.0), min AGL 41.1 m, nearest static/building/default-bake tree 31.6 m (building:0x01001161#310), nearest building 31.6 m, retail-bake scenery 86.2 m, peak 10.0 m/s; WBT get-height on 8 camera points, min AGL 41.1 m."
+    },
+    {
+     "technique": "classic.pull-out-reveal",
+     "duration": {
+      "sec": 16
+     },
+     "framing": "MS",
+     "fov": 35,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       7188.06,
+       24851.78,
+       226.8
+      ],
+      "height": 7,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 184,
+      "elevationDeg": 20,
+      "toFraming": "EWS",
+      "rise": true,
+      "endElevationDeg": 42,
+      "profile": "perceptual"
+     },
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Pull straight back and up from the statue over the south gate until the whole fort is in frame; stay 8 m above every roof.",
+     "notes": "CLOSING (classic.pull-out-reveal). Starts close on the Nullified Statue of a Grievver on its plinth in the west courtyard (an Anniversary Effect emitter sits on it), pulls back south and up (elevation 20 to 42 deg, perceptual profile) to z 290 above the south gate: the cottage roofs, the inner wall, the courtyard, the portal and finally the whole fort with its eight towers. Passes 8 m above the cottage roof and 19 m from the gate towers; peak 11.4 m/s. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (7187.7, 24846.6, 235.0) end (7183.5, 24786.0, 289.7), min AGL 15.0 m, nearest static/building/default-bake tree 5.8 m (spawn:Anniversary Effect), nearest building 7.9 m, retail-bake scenery 89.2 m, peak 11.3 m/s; WBT get-height on 9 camera points, min AGL 15 m."
+    }
+   ],
+   "verification": "One WBT session per pass (RetailSmoke.wbproj): describe-landblock (includeFootprints) + list-objects + get-terrain-data on the 9 LBs 0x2480-0x2682 (3x3 around 0x2581), get-object-detail on every placed model, get-height on 39 sampled camera points (start, end and every 2 s; WBT and the offline AC split-triangle interpolation agree within 0.1 m). LB 0x2480/0x2481/0x2482/0x2581/0x2681 cannot be loaded by WBT describe-landblock/list-objects (\"Could not load landblock\"); their LandBlockInfo (27+5 buildings, 373 statics) was parsed with chorizite-parse-dat-record from ~/ac_base_dats/client_cell_1.dat (ids 0x....FFFE) and every model was sized with get-object-detail; get-terrain-data/get-height work there. Each shot was built with the real technique registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware groundZ and sampled at 4 Hz for AGL, distance to every static/building/spawn bounding box and to the default (ace-compat) and retail scenery bakes from the served dist, peak speed and subject framing; numbers are in each shot's notes. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-fort-tethana.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s), exit 0 (dry build included)."
+  }
+ ]
+}

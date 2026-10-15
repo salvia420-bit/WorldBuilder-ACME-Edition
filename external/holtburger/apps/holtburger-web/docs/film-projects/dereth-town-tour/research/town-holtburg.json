@@ -1,0 +1,335 @@
+{
+ "name": "Holtburg",
+ "slug": "holtburg",
+ "summary": "Holtburg is one of the first Aluvian villages (founded 2 PY by settlers from Cragstone logging the Tiofor Wood) and the classic Aluvian starter town. It stands on a hill overlooking the River Prosper: the drop point and Life Stone sit on a flat hilltop square (z 94) ringed by stone-and-timber halls, a brick meeting hall, a pitched-roof tower house and a mossy stone tower with ancient columns and candelabras; a lower terrace (z 66) north of it holds a row of Aluvian halls with brass lanterns and the crafting forges, the well and the Nullified Drudge statue on its plinth, and below that the wide River Prosper (z 28) with a bamboo fishing hut. The Town Network portal sits on the western slope and two spire-roofed towers with torches rise on the hills to the south-east.",
+ "landmarks": [
+  {
+   "name": "Life Stone (hilltop drop point)",
+   "pos": [
+    32529.3,
+    34571.8,
+    94.0
+   ],
+   "heightM": 3.6,
+   "note": "Sparkling crystal on the hilltop square; setup 0x020002EE 3.0x2.8x3.6 m; Alcott the greeter stands 3 m NE."
+  },
+  {
+   "name": "Hilltop brick hall S121",
+   "pos": [
+    32555.5,
+    34596.0,
+    94.0
+   ],
+   "heightM": 10.2,
+   "note": "Two-story brick hall on the north edge of the hilltop (top z 104.2); obstacle for the rising reveal."
+  },
+  {
+   "name": "Tower house S123",
+   "pos": [
+    32609.9,
+    34567.5,
+    94.0
+   ],
+   "heightM": 12.7,
+   "note": "Three-story pitched-roof tower house, the tallest hilltop roof (top z 106.7)."
+  },
+  {
+   "name": "Mossy stone tower S125 with ancient columns",
+   "pos": [
+    32606.2,
+    34597.7,
+    94.0
+   ],
+   "heightM": 10.0,
+   "note": "Columns 0x020003C7 and candelabras (flames) at its door."
+  },
+  {
+   "name": "Lower-terrace Aluvian halls S118/S114/S117",
+   "pos": [
+    32532.1,
+    34691.5,
+    66.0
+   ],
+   "heightM": 10.2,
+   "note": "Timber-and-stone fronts on the lower road; brass lanterns, Fletching/Salvaging/Alchemy forges along them."
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    32462.4,
+    34615.6,
+    78.2
+   ],
+   "heightM": 3.5,
+   "note": "Blue swirl on the western slope (static ring 0x020019E3 6x6x3.5 m)."
+  },
+  {
+   "name": "Destroyed Portal to Redspire",
+   "pos": [
+    32475.3,
+    34697.5,
+    66.5
+   ],
+   "heightM": 3.8,
+   "note": "Multicoloured crystal ruin on the lower terrace."
+  },
+  {
+   "name": "Nullified Statue of a Drudge",
+   "pos": [
+    32513.3,
+    34716.8,
+    72.8
+   ],
+   "heightM": 1.5,
+   "note": "Small statue on a 6.8 m plinth by the well, with a Fireworks Generator."
+  },
+  {
+   "name": "Well",
+   "pos": [
+    32538.1,
+    34717.8,
+    66.0
+   ],
+   "heightM": 2.7,
+   "note": "Lower-terrace well."
+  },
+  {
+   "name": "River Prosper",
+   "pos": [
+    32556.0,
+    34885.0,
+    28.0
+   ],
+   "heightM": 0.0,
+   "note": "Running water (terrain type 16) from y~34820 north, z 28; fishing holes and a bamboo fishing hut at (32642,34785)."
+  },
+  {
+   "name": "SE spire tower and keep (AAB3)",
+   "pos": [
+    32748.0,
+    34428.0,
+    112.0
+   ],
+   "heightM": 30.8,
+   "note": "5-story spire tower (top 142.8) and a tapered-roof keep (32676,34452, top 140.8) with wall torches; visible in the pano."
+  }
+ ],
+ "site": {
+  "id": "holtburg",
+  "name": "Holtburg",
+  "gazetteerId": "holtburg",
+  "teleport": "@telepoi Holtburg",
+  "anchor": [
+   32532,
+   34567.1,
+   94
+  ],
+  "settleSec": 2,
+  "look": {
+   "timeOfDay": 0.33,
+   "grade": "neutral"
+  }
+ },
+ "shots": [
+  {
+   "technique": "drone.rising-reveal",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32556,
+     34840,
+     28
+    ],
+    "height": 10,
+    "radius": 60
+   },
+   "params": {
+    "distance": 268,
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "obstacleDistance": 13,
+    "obstacleHeight": 10.5,
+    "heightStart": 1.8,
+    "clearance": 12,
+    "forward": 10,
+    "endPitchDeg": -9,
+    "minClearance": 1.5
+   },
+   "standingOrder": "Rise straight up the south wall of the hilltop hall and over its roof to reveal the lower town and the River Prosper below; stay 6 m off the wall and 5 m above the roof.",
+   "notes": "Film-opening rise: lens starts 1.9 m above the hilltop grass beside the Life Stone, staring up the 10 m south wall of the brick hilltop hall (S121, top z 104.2), climbs 20.6 m straight up the face and over the roofline while pitching from +15 to -9 deg, revealing the lower-town rooftops and the River Prosper 270 m north (subject hidden for the first ~9.75 s by design, clear from t=10). Morning sun from the east side-lights the hall. Clearance: wall 13 m ahead at the start, 12.4 m at the end, end z 116.5 = 12.3 m above the roof; nearest prop a candelabra 4.5 m; vmax 2.6 m/s. JEV candidate if the film's hero budget allows.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "classic.low-angle",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32529.3,
+     34571.8,
+     94
+    ],
+    "height": 3.2,
+    "radius": 1.2
+   },
+   "params": {
+    "azimuthDeg": 120,
+    "azimuthRef": "compass",
+    "elevationDeg": -25,
+    "distance": 5.5,
+    "thirds": "center",
+    "pushM": 1.0
+   },
+   "standingOrder": "Look up at the Holtburg Life Stone from just above the grass with the morning sky behind it; creep 1 m closer and keep 2 m from the crystal.",
+   "notes": "Life Stone detail: lens 0.7 m above the hilltop grass ESE of the crystal (bearing 120, sun behind the camera), looking up at the 3.6 m sparkling stone against the morning sky and creeping 1 m closer. Alcott the greeter stands 3 m NE of the stone, off-axis. Clearance: 4 m from the stone centre (>= 2.2 m from its 3 m-wide setup bounds), no static within 4 m (WBT query-radius 0 hits).",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32532,
+     34688,
+     66
+    ],
+    "height": 10,
+    "radius": 12
+   },
+   "params": {
+    "distance": 13,
+    "heightAGL": 5.5,
+    "slide": 34,
+    "panAmount": 0.15,
+    "direction": "right",
+    "bearingDeg": 180,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "standingOrder": "Glide east along the timbered fronts of the lower-town halls at walking pace, 9 m off the walls and 3 m up, past the forges and lanterns; nothing may cross between lens and wall.",
+   "notes": "The town's one facade pan (Aluvian timber-and-stone halls): glides 34 m east along the south fronts of S118, S114 and S117 on the lower terrace, 7.5-9 m off the walls and 2.6-3.8 m above the sloping street, ending on the brass lanterns and the Fletching Forge glow. Morning sun rakes the facades from the right. Clearance: nearest wall 7.5 m, no static/scenery within 4 m of the line (query-radius 0 hits), vmax 4.5 m/s.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32556,
+     34596,
+     94
+    ],
+    "height": 12,
+    "radius": 30
+   },
+   "path": [
+    [
+     32556,
+     34935,
+     32
+    ],
+    [
+     32556,
+     34855,
+     32
+    ]
+   ],
+   "params": {
+    "heightAGL": 4,
+    "speed": 7,
+    "headingDeg": 180,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": 6,
+    "ends": "cruise"
+   },
+   "standingOrder": "Skim south 4 m above the River Prosper toward Holtburg on its hill; stay over open water and 30 m from the banks.",
+   "notes": "Water: skims south 4 m above the running water of the River Prosper (terrain type WaterRunning, z 28) for 80 m with Holtburg's lower terrace and hilltop roofs rising ahead (the roofs peek over the terrace edge, the town on its hill as in the lore). Path given explicitly (32556,34935)->(32556,34855); whole path over water, banks and trees >= 31.5 m away; vmax 7.3 m/s.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  },
+  {
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     32566,
+     34586,
+     94
+    ],
+    "height": 12,
+    "radius": 40
+   },
+   "params": {
+    "heightAGL": 30,
+    "yawDeg": 300,
+    "direction": "cw",
+    "startHeadingDeg": 0,
+    "relativeToSubject": false,
+    "tiltDeg": -12,
+    "minClearance": 5
+   },
+   "standingOrder": "Hover 30 m above the hilltop square and turn slowly clockwise from the river round over the Tiofor woods and the eastern towers; hold height, no drift.",
+   "notes": "Closing panorama: hovers 30 m above the hilltop square (z 124, 17 m above the tallest hilltop roof 106.7) and turns 300 deg clockwise from the river north through the eastern spire towers, the southern woods and back west; clouds on. Clearance 19.8 m to the nearest roof; no translation.",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   }
+  }
+ ],
+ "verification": "One WBT session per batch (RetailSmoke project): describe-landblock(includeFootprints)+list-objects+get-terrain-data for 3x3 landblocks (0xA8B3 0xA8B4 0xA8B5 0xA9B3 0xA9B4 0xA9B5 0xAAB3 0xAAB4 0xAAB5); get-object-detail bounds for every static model and the weenie setups (Life Stone 0x020002EE 3.0x2.8x3.6, Town Network swirl 0x020001B3, statues 0x02000001/0x02000031/0x020007DD, well 0x02000180, Asheron's Island portal 0x020006F4, fountain 0x02000AA3). Obstacles = statics as rotated model AABBs + the default procedural-scenery bake (~/hb-serve/dist/current/scenery) + outdoor weenie spawns as 2.4x3.5 m boxes; every shot built offline with the real registry (scene3d/film/shots buildShot + plan schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz for AGL, nearest obstacle, speed, subject line of sight and NDC framing of the effect subjects. A final WBT session re-checked get-height at all 167 camera sample points of the batch (model vs WBT max diff 0.005 m) and query-radius 4 m at every street-level camera (77 checks, only hit = the Cragstone statue plinth under the over-the-shoulder lens, by design). Per shot: s010 drone.rising-reveal: WBT get-height under 5-8 sampled camera points, min AGL 1.92 m; offline build min clearance 4.53 m (static:0x020005D8#95), opt-in retail bake 48.6 m; vmax 2.58 m/s; subject LOS blocked 40/57 samples (by design: reveal/foreground); s020 classic.low-angle: WBT get-height under 5-8 sampled camera points, min AGL 0.7 m; offline build min clearance 2.45 m (spawn:Life Stone), opt-in retail bake 55.17 m; vmax 0.16 m/s; subject LOS blocked 0/37 samples [nearest box = the Life Stone subject itself, >= 2.2 m from its setup bounds]; s030 drone.parallax-slide: WBT get-height under 5-8 sampled camera points, min AGL 2.62 m; offline build min clearance 7.54 m (static:0x01000C1E#114), opt-in retail bake 120.57 m; vmax 4.45 m/s; subject LOS blocked 0/49 samples; s040 drone.terrain-skim: WBT get-height under 5-8 sampled camera points, min AGL 4 m; offline build min clearance 31.51 m (scenery:0x02000246), opt-in retail bake 31.49 m; vmax 7.27 m/s; subject LOS blocked 45/45 samples (by design: reveal/foreground); s050 drone.pano-360: WBT get-height under 5-8 sampled camera points, min AGL 30 m; offline build min clearance 19.75 m (static:0x01000C17#121), opt-in retail bake 59.68 m; vmax 0.0 m/s; subject LOS blocked 0/65 samples. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-holtburg.json validated with film.mjs plan validate: 0 errors, 0 warnings.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-holtburg.json",
+ "totalSec": 62,
+ "techniques": [
+  "drone.rising-reveal",
+  "classic.low-angle",
+  "drone.parallax-slide",
+  "drone.terrain-skim",
+  "drone.pano-360"
+ ]
+}

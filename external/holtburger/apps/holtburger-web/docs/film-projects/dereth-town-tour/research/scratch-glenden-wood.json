@@ -1,0 +1,220 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Glenden Wood scratch",
+ "kind": "music-video",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "glenden-wood",
+   "name": "Glenden Wood",
+   "gazetteerId": "glenden-wood",
+   "teleport": "@telepoi Glenden Wood",
+   "anchor": [
+    30816.302,
+    31607.847,
+    59.955
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.5,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "classic.establishing",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30995,
+     31615,
+     50
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "params": {
+    "azimuthDeg": 10,
+    "azimuthRef": "compass",
+    "distance": 150,
+    "heightM": 55,
+    "driftDeg": -8,
+    "pushPct": 10
+   },
+   "standingOrder": "Drift slowly in over the northern road and look down into the forest bowl of Glenden Wood; stay 8 m above every tree top.",
+   "site": "glenden-wood",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s010"
+  },
+  {
+   "technique": "classic.pov",
+   "duration": {
+    "sec": 13
+   },
+   "fov": 70,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30866,
+     31603.5,
+     50
+    ],
+    "height": 1.8,
+    "radius": 0.4,
+    "heading": 1.45
+   },
+   "params": {
+    "eyeFrac": 0.92,
+    "pitchDeg": 4,
+    "lookYawDeg": 0,
+    "advanceM": 22,
+    "bobM": 0.03,
+    "stepHz": 1.8,
+    "turnLag": 0.35
+   },
+   "standingOrder": "Walk east along the forest road into Glenden Wood at an easy pace with the Life Stone and the giant trees ahead; keep to the road, 4 m from every trunk.",
+   "site": "glenden-wood",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s020"
+  },
+  {
+   "technique": "classic.tilt",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "FS",
+   "fov": 55,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31058.4,
+     31606.8,
+     50.2
+    ],
+    "height": 3.5,
+    "radius": 3
+   },
+   "params": {
+    "azimuthDeg": 85,
+    "azimuthRef": "compass",
+    "elevationDeg": 4,
+    "distance": 14,
+    "fromDeg": 42,
+    "toDeg": 0,
+    "relative": true
+   },
+   "standingOrder": "Start on the forest canopy above the cottages and tilt down slowly onto the blue swirl of the Town Network portal; hold position 10 m from the portal.",
+   "site": "glenden-wood",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s030"
+  },
+  {
+   "technique": "drone.helix",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30931.3,
+     31601.6,
+     50
+    ],
+    "height": 58,
+    "radius": 12
+   },
+   "params": {
+    "radiusStart": 36,
+    "radiusEnd": 50,
+    "heightStart": 50,
+    "heightEnd": 82,
+    "revolutions": 0.28,
+    "direction": "cw",
+    "bearingDeg": 235,
+    "relativeToSubject": false,
+    "minClearance": 8
+   },
+   "standingOrder": "Spiral slowly up and around the giant tree of Glenden Wood with the town bowl behind it; stay 8 m above every tree top and 20 m from the giant crown.",
+   "site": "glenden-wood",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s040"
+  },
+  {
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30990,
+     31615,
+     50
+    ],
+    "height": 6,
+    "radius": 40
+   },
+   "params": {
+    "heightStart": 16,
+    "heightEnd": 82,
+    "rotateDeg": 60,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 6
+   },
+   "standingOrder": "Look straight down on the town square and rise vertically out of the forest bowl while turning slowly; stay 15 m from every crown.",
+   "site": "glenden-wood",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "id": "s050"
+  }
+ ]
+}

@@ -1,0 +1,755 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "town": "Rithwic",
+ "tier": "hero",
+ "summary": "Rithwic is an Aluvian town founded in 7 PY at a ford of the River Prosper, just downstream of Lake Blessed. It was once a starter town and an arrival point for settlers from Ispar, until Martine destroyed its two arrival outposts near the end of 12 PY. It sits on a major crossroads, with roads to Lytelthorpe (SW), Cragstone (N), Eastham (NE) and Dryreach (S). On the map the town is two flat cliff-top plateaus at z 22 on either side of a narrow, 48 m wide gorge where the Prosper (water z 4) squeezes out of Lake Blessed. A four-piece stone arch bridge crosses the gorge 15-27 m above the water, with lit torch posts at both ends. The main town on the west bank has a market square with the Town Network portal in a glowing stone ring, the purple portal down to Martine's Retreat, a well and a mosswart statue on a column. Around the square stand the Gilded Tome, the fletcher, the jeweler, the scriveners, Luthin's smithy and the Royal Firkin tavern, with smoking chimneys. The Tackle Master's fish stall sits on the cliff edge. East Rithwic (the Skull and Flagons, Archmage Nulsymber, Tenxien's Garments) faces it across the bridge. North of East Rithwic, on a bluff above the lake, the Life Stone stands beside the ruined arrival portals to Shoushi and Greenspire, which still crackle with lightning. Lake Blessed opens wide to the north.",
+ "landmarks": [
+  {
+   "name": "Rithwic bridge over the River Prosper (deck crown)",
+   "pos": [
+    38616.0,
+    27060.0,
+    25.95
+   ],
+   "heightM": 22.95,
+   "note": "4 stone GfxObjs on y 27060: abutment 0x01000D72 x38568-38592, deck 0x01000D6F x38592-38616, deck 0x01000D70 x38616-38640, abutment 0x01000D71 x38640-38664; 10 m wide; soffit 15.95-18.95; water below z 4.0; clear arch ~48 m wide x ~12-15 m high"
+  },
+  {
+   "name": "River Prosper gorge (water)",
+   "pos": [
+    38616.0,
+    27090.0,
+    4.0
+   ],
+   "note": "narrow river x 38592-38640 between 18 m cliffs (town plateaus z 22) from y ~27012 to ~27140; WaterRunning texture centred on x 38616"
+  },
+  {
+   "name": "Lake Blessed (open water)",
+   "pos": [
+    38560.0,
+    27240.0,
+    4.0
+   ],
+   "note": "opens north of y ~27144, x 38400-38664; fishing dock at 38595-38602, 27149-27155"
+  },
+  {
+   "name": "Portal to Town Network",
+   "pos": [
+    38452.27,
+    27000.75,
+    22.3
+   ],
+   "heightM": 3.5,
+   "note": "purple 7 m vortex (emitters 0x320002CD/0x320002D6) in a glowing stone frame 0x020019E3; disc faces heading 75 deg (ENE)"
+  },
+  {
+   "name": "Martine's Retreat portal",
+   "pos": [
+    38451.73,
+    27016.13,
+    21.94
+   ],
+   "heightM": 2.8,
+   "note": "purple portal facing north (heading 5 deg) down to the underground town (shoot from outside only)"
+  },
+  {
+   "name": "Town square well",
+   "pos": [
+    38452.08,
+    27019.56,
+    22.0
+   ]
+  },
+  {
+   "name": "Nullified Statue of a Mosswart on its column",
+   "pos": [
+    38453.42,
+    26984.68,
+    28.82
+   ],
+   "heightM": 6.8,
+   "note": "column 0x01002A1B top z 28.8 + Anniversary Effect at z 29"
+  },
+  {
+   "name": "Street torches (flame tongue + warm glow, 0x020005D8)",
+   "pos": [
+    38464.9,
+    27007.38,
+    22.0
+   ],
+   "heightM": 2.15,
+   "note": "others: bridge heads (38562.14, 27055/27065) and (38669.76, 27055/27065); main street (38431.36,27064.49) (38479.74,27065.47) (38513.41,27065.29) (38700.77,27065.80); (38479.31,26970.70) (38437.89,26968.06) (38416.29,27011.79) (38502.85,26894.93)"
+  },
+  {
+   "name": "Chimney smoke plumes (0x0200043B)",
+   "pos": [
+    38542.1,
+    27060.49,
+    31.89
+   ],
+   "note": "smithy roof; also (38672.24,27045.57,30.01) East Rithwic tailor, (38488.07,27050.63,30.01), (38480.44,27006.79,34.49), (38480.58,26985.18,31.29), (38469.9,26940.38,31.89), (38425.78,26958.36,30.01)"
+  },
+  {
+   "name": "Luthin the Smith's smithy (Smithy sign)",
+   "pos": [
+    38532.38,
+    27060.46,
+    22.0
+   ],
+   "heightM": 10.25,
+   "note": "0x01000C1E footprint x38520-38544, y27051-27070.5, roof top z 32.25"
+  },
+  {
+   "name": "Gilded Tome and fletcher shop fronts (west faces)",
+   "pos": [
+    38474.7,
+    26995.0,
+    22.0
+   ],
+   "heightM": 12.5,
+   "note": "0x0100082E y27006-27019.6 and 0x01000830 y26984-26998.4 on x 38474.7, facing the square (lit in the afternoon)"
+  },
+  {
+   "name": "The Royal Firkin tavern",
+   "pos": [
+    38411.78,
+    27035.62,
+    22.0
+   ],
+   "heightM": 10.25
+  },
+  {
+   "name": "Life Stone",
+   "pos": [
+    38726.19,
+    27164.28,
+    22.0
+   ],
+   "heightM": 3.6,
+   "note": "east plateau above the lake"
+  },
+  {
+   "name": "Destroyed Portal to Greenspire (lightning ruin)",
+   "pos": [
+    38767.55,
+    27137.84,
+    22.5
+   ],
+   "heightM": 4.3,
+   "note": "crystal ruin 0x02000B61 + standing tesla arcs 0x02000B6F at z 25.6 + arc fountains 0x020007C5"
+  },
+  {
+   "name": "Destroyed Portal to Shoushi",
+   "pos": [
+    38689.6,
+    27118.1,
+    22.0
+   ]
+  },
+  {
+   "name": "East Rithwic: Skull and Flagons tavern, jeweler (Archmage Nulsymber), Tenxien's Garments",
+   "pos": [
+    38704.0,
+    27055.0,
+    22.0
+   ],
+   "heightM": 12.0,
+   "note": "0x01000C17 (38724.46,27059.52), 0x01000827 (38704,27055), 0x01000BC3 (38672.74,27038.84)"
+  },
+  {
+   "name": "Tackle Master's fish stall + fishing dock",
+   "pos": [
+    38561.0,
+    27030.4,
+    22.0
+   ],
+   "note": "stall 0x01002DE9 on the west cliff edge; dock on the lake shore at 38595-38602, 27149-27155, z 4.03"
+  },
+  {
+   "name": "Rithwic Bind Stone / Meeting Hall",
+   "pos": [
+    38446.28,
+    27082.58,
+    22.0
+   ]
+  }
+ ],
+ "site": {
+  "id": "rithwic",
+  "name": "Rithwic",
+  "gazetteerId": "rithwic",
+  "teleport": "@telepoi Rithwic",
+  "anchor": [
+   38616.0,
+   27060.0,
+   26.0
+  ],
+  "look": {
+   "timeOfDay": 0.72,
+   "grade": "warm"
+  }
+ },
+ "siteNotes": "Anchor = bridge deck centre (inside the 96 m prewarm of the @telepoi landing at 38705.7, 27070.3). Suggested readiness lbKeys if the synthesizer allows: 0xC88C, 0xC98C, 0xC98D (square, bridge, lake/ruin). Time 0.72 (warm afternoon, sun due west ~56 deg up; deliberately a notch earlier than Lytelthorpe's 0.79 golden so the two hero towns differ while flowing afternoon -> golden) lights the west-facing shop fronts on the square, the east cliff of the gorge, and the lake behind the bridge; the morning sun (heading 90) would leave the square facades in shade.",
+ "shotsSuggestedEditOrder": [
+  "rw-lake-boom",
+  "rw-square-facades",
+  "rw-portal-rackfocus",
+  "rw-ruin-lightning",
+  "rw-bridge-slide",
+  "rw-under-bridge"
+ ],
+ "shotPriority": {
+  "must": [
+   "rw-under-bridge",
+   "rw-bridge-slide",
+   "rw-square-facades",
+   "rw-portal-rackfocus"
+  ],
+  "optional": [
+   "rw-lake-boom",
+   "rw-ruin-lightning"
+  ]
+ },
+ "shots": [
+  {
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 12
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "params": {
+    "distance": 110,
+    "heightStart": 4,
+    "heightEnd": 48,
+    "bearingDeg": 357,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 2
+   },
+   "framing": "EWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up from just above Lake Blessed while keeping the bridge in the river neck centred; stay over open water, 4 m above the surface at the start.",
+   "notes": "[rw-lake-boom | establishing, optional] Opener over Lake Blessed: the drone hangs 4 m above the open lake 110 m north of the bridge (38610.2, 27169.8) and rises straight up from z 8 to z 52 while the gimbal tilts from +4 to -18 deg on the span, so the narrow River Prosper gorge, the stone arch and both cliff-top halves of Rithwic (chimney smoke on the smithy and East Rithwic roofs, torch posts at both bridge heads) unfold below; afternoon sun rakes in from the right (west) and lights the east cliff and Archmage's quarter. Clearance verified: WBT get-height 4.0 (water) under the camera, nearest object a fishing-hole spawn 11.3 m away, nothing overhead; the tallest roofs (z 34.7) are >100 m away."
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38474.7,
+     26991.0,
+     22.0
+    ],
+    "height": 6.0,
+    "radius": 7
+   },
+   "params": {
+    "distance": 7.2,
+    "heightAGL": 2.0,
+    "slide": 24,
+    "panAmount": 0.1,
+    "direction": "right",
+    "bearingDeg": 270,
+    "relativeToSubject": false,
+    "minClearance": 1
+   },
+   "framing": "MWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Glide south along the sunlit west facades of the Gilded Tome and the fletcher at walking pace, 7 m off the wall and 2 m up; nothing may cross between lens and wall.",
+   "notes": "[rw-square-facades | facade pan] Street-level truck along the shop fronts on the east side of the town square: camera line x 38467.5 from y 27003 to 26979 (24 m in 10 s, 2.4 m/s) at z 24 = 2.0 m above the flat square (WBT get-height 22.0 at every sample), 7.2 m off the west walls (x 38474.7) of the Gilded Tome (0x0100082E) and Trothyd the fletcher's shop (0x01000830, Fletcher sign at 38474.6, 26988.7), ending on the lane and timber house 0x01000827 with a street-torch flame (38479.3, 26970.7) at frame right; the afternoon sun (due west, ~56 deg up at t 0.72) is behind the camera and lights these west-facing stone fronts. Clearance verified: no building footprint within 7.1 m of the line, nearest obstacle the square torch post 4.8 m behind the start (outside its 8.7 m warm halo), no tree within 10 m in the shipped scenery bake (retail-bake tree 4.1 m at the end)."
+  },
+  {
+   "technique": "classic.rack-focus",
+   "duration": {
+    "sec": 7
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38452.27,
+     27000.75,
+     22.3
+    ],
+    "height": 2.83,
+    "radius": 1.41,
+    "heading": 1.3125
+   },
+   "params": {
+    "azimuthDeg": -8,
+    "azimuthRef": "front",
+    "elevationDeg": 0,
+    "distance": 18,
+    "thirds": "center",
+    "fromTarget": "metres",
+    "fromM": 4.0,
+    "toTarget": "subject",
+    "at": 0.45,
+    "pullSec": 2.0,
+    "driftM": 0.5
+   },
+   "fov": 40,
+   "framing": "MS",
+   "look": {
+    "dof": {
+     "focusRange": 2.5,
+     "bokehScale": 3
+    }
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hold low on the town square with the street torch flame sharp at frame right, then pull focus to the purple Town Network portal swirl; stay 4 m from the torch.",
+   "notes": "[rw-portal-rackfocus | flame + portal FX] Locked low frame on the town square: camera (38468.9, 27007.7, z 24.85, 2.85 m AGL) 18 m ENE of the Portal to Town Network, almost face-on to its purple 7 m vortex (swirl disc faces heading 75 deg, camera at 67 deg) inside its glowing stone ring (0x020019E3); the square's street torch (0x020005D8, flame tongue at 38464.9, 27007.4, z 24.15) burns 4.0 m from the lens at frame right (~18 deg right, 10 deg low) in sharp focus, then focus pulls (at 45%, 2 s) to the portal, with the statue column and Collector behind in warm backlight. Clearance verified: torch post 3.3 m, flame 4.0 m, camera outside the 8.7 m faint-glow halo, LOS to the portal clear (only its own frame), WBT ground 22.0."
+  },
+  {
+   "technique": "drone.parallax-slide",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38616.0,
+     27060.0,
+     4.0
+    ],
+    "height": 23,
+    "radius": 24
+   },
+   "params": {
+    "distance": 72,
+    "heightAGL": 11,
+    "slide": 22,
+    "panAmount": 0.3,
+    "direction": "left",
+    "bearingDeg": 160,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "framing": "WS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Slide slowly across the river pool south of the bridge, 11 m above the water, keeping the whole span between the cliffs in frame; stay 5 m above the bank trees.",
+   "notes": "[rw-bridge-slide | companion of the hero] Broadside of the Rithwic bridge from over the river pool SSE of it: 11 m above the water (z 15) the drone slides 22 m west at 72 m from the span with a 30% counter-pan, so the whole crossing (four stone pieces, 96 m incl. abutments, deck soffit 16-19 m, parapet 27 m) spans the 18 m deep gorge between the two cliff-top halves of town; torch posts burn at both bridge heads, chimney smoke drifts over the smithy, a big bankside tree frames the left edge and Lake Blessed glints through the arch. Side light from the west. Clearance verified: water under the camera all the way (WBT get-height 4.0), nearest object a 9 m bank tree 5.9 m away (camera above its crown), LOS to the span >= 5.4 m clear."
+  },
+  {
+   "technique": "drone.flythrough",
+   "duration": {
+    "sec": 17
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "height": 11,
+    "radius": 22
+   },
+   "path": [
+    [
+     38620.5,
+     27015.0,
+     9.0
+    ],
+    [
+     38619.5,
+     27038.0,
+     9.5
+    ],
+    [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    [
+     38617.5,
+     27092.0,
+     10.5
+    ],
+    [
+     38616.0,
+     27148.0,
+     21.0
+    ]
+   ],
+   "params": {
+    "gapPos": [
+     38618.5,
+     27060.0,
+     9.5
+    ],
+    "gapNormal": [
+     0,
+     1,
+     0
+    ],
+    "gapWidth": 42,
+    "gapHeight": 10.5,
+    "speed": 11,
+    "gapSpeed": 0.45,
+    "cornerRadius": 20,
+    "lookAhead": 12,
+    "tiltDeg": -4,
+    "ends": "cruise"
+   },
+   "framing": "WS",
+   "pilot": {
+    "mode": "jev"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim north up the river 5 m above the water, slow under the bridge arch on the centre line, then climb out over Lake Blessed; never closer than 1 m to deck, water or banks.",
+   "notes": "[rw-under-bridge | HERO, JEV] The drone skims north up the River Prosper gorge 5 m above the water at 10 m/s, starting 45 m south of the bridge between the two 18 m cliffs, eases to 4.6 m/s as it threads the centre of the arch (gap at t 6.35 s), then accelerates and climbs from z 10.5 to z 21 as the gorge opens onto Lake Blessed; tilt -4 keeps the water rushing below on the approach and lifts the horizon into open sky and clouds on the exit. Bridge geometry (obj-export of the four GfxObjs, LandBlockInfo buildings without cells): deck 0x01000D6F/0x01000D70 at x 38592-38640, y 27055-27065 (10 m wide), soffit 15.95 m at the abutment joints rising to 18.95 m at the crown x 38616, walkway 24.95-25.95, parapet top 26.95; abutments 0x01000D72/0x01000D71 with sloping soffits down to z 10.55 where they meet the banks at x 38583.2 / 38648.8 (WBT get-height 10.6 there); water z 4.0 from x 38592 to 38640 (WBT, terrain WaterRunning/mud). Verified on the dry-built trajectory: under the deck the camera is 9.1 m below the soffit and 5.5 m above the water, 22 m from the nearest abutment; nearest scenery 5.9 m (bank tree at the south mouth), fishing-hole spawns >= 3.2 m below; peak speed 10.2 m/s (cinema cap 12), no overspeed."
+  },
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 10
+   },
+   "subject": {
+    "kind": "point",
+    "pos": [
+     38767.55,
+     27137.84,
+     22.5
+    ],
+    "height": 4,
+    "radius": 3
+   },
+   "params": {
+    "radius": 14,
+    "heightAGL": 4.5,
+    "revolutions": 0.17,
+    "direction": "ccw",
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "framing": "MWS",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Arc slowly around the ruined Greenspire portal with its lightning arcs centred, 14 m out and 4.5 m up; keep 6 m from the arcs and 4 m from the pines.",
+   "notes": "[rw-ruin-lightning | lightning/particle FX, optional] East Rithwic's ruined arrival point beside the Life Stone: the shattered Destroyed Portal to Greenspire (crystal ruin 0x02000B61, 6 m wide) wreathed in a standing tesla cluster (3x setup 0x02000B6F, emitter 0x32000648, bolts 0.2-4.3 m crackling at z 25.6) plus arc fountains at its base (0x020007C5). Slow ccw arc at 14 m radius and z 27 (5 m AGL) from bearing 250 to 190 deg, looking ENE then N so the dark giant pine behind (0x02000258) makes the white-blue arcs pop while the sun lights the crystals from behind the camera. Clearance verified: flat plateau z 22 (WBT), >= 9.8 m from any shipped-bake scenery, >= 9 m from the arc tips; with ?sceneryBake=retail a 3.8 m bush comes within 1.9 m, so keep the default bake (or raise heightAGL to 6)."
+  }
+ ],
+ "dryBuiltCameras": {
+  "rw-lake-boom": {
+   "start": [
+    38610.243,
+    27169.849,
+    8
+   ],
+   "startHPdeg": [
+    177,
+    3.9
+   ],
+   "end": [
+    38610.243,
+    27169.849,
+    52
+   ],
+   "endHPdeg": [
+    177,
+    -18.36
+   ]
+  },
+  "rw-square-facades": {
+   "start": [
+    38467.5,
+    27003,
+    24
+   ],
+   "startHPdeg": [
+    95.89999999999998,
+    10.04
+   ],
+   "end": [
+    38467.5,
+    26979,
+    24
+   ],
+   "endHPdeg": [
+    84.10000000000002,
+    10.04
+   ]
+  },
+  "rw-portal-rackfocus": {
+   "start": [
+    38468.864,
+    27007.725,
+    24.847
+   ],
+   "startHPdeg": [
+    247.2,
+    0
+   ],
+   "end": [
+    38468.403,
+    27007.531,
+    24.847
+   ],
+   "endHPdeg": [
+    247.2,
+    0
+   ]
+  },
+  "rw-bridge-slide": {
+   "start": [
+    38650.962,
+    26996.104,
+    15
+   ],
+   "startHPdeg": [
+    337.39,
+    0.39
+   ],
+   "end": [
+    38630.289,
+    26988.58,
+    15
+   ],
+   "endHPdeg": [
+    342.61,
+    0.39
+   ]
+  },
+  "rw-under-bridge": {
+   "start": [
+    38620.5,
+    27015,
+    9
+   ],
+   "startHPdeg": [
+    357.51,
+    -2.76
+   ],
+   "end": [
+    38616,
+    27148,
+    21
+   ],
+   "endHPdeg": [
+    358.47,
+    6.62
+   ]
+  },
+  "rw-ruin-lightning": {
+   "start": [
+    38754.394,
+    27133.052,
+    27
+   ],
+   "startHPdeg": [
+    70,
+    -6.18
+   ],
+   "end": [
+    38765.408,
+    27124.005,
+    27
+   ],
+   "endHPdeg": [
+    8.800000000000011,
+    -6.18
+   ]
+  }
+ },
+ "bridgeGeometry": {
+  "pieces": {
+   "0x01000D72": {
+    "origin": [
+     38580,
+     27060,
+     17.75
+    ],
+    "role": "west abutment",
+    "profileXZ": [
+     [
+      38568,
+      21.95
+     ],
+     [
+      38568,
+      22.95
+     ],
+     [
+      38592,
+      25.95
+     ],
+     [
+      38592,
+      15.95
+     ],
+     [
+      38583.2,
+      10.55
+     ]
+    ]
+   },
+   "0x01000D6F": {
+    "origin": [
+     38604,
+     27060,
+     20.95
+    ],
+    "role": "west deck",
+    "profileXZ": [
+     [
+      38592,
+      25.95
+     ],
+     [
+      38616,
+      26.95
+     ],
+     [
+      38616,
+      18.95
+     ],
+     [
+      38592,
+      15.95
+     ]
+    ]
+   },
+   "0x01000D70": {
+    "origin": [
+     38628,
+     27060,
+     20.95
+    ],
+    "role": "east deck",
+    "profileXZ": [
+     [
+      38616,
+      26.95
+     ],
+     [
+      38640,
+      25.95
+     ],
+     [
+      38640,
+      15.95
+     ],
+     [
+      38616,
+      18.95
+     ]
+    ]
+   },
+   "0x01000D71": {
+    "origin": [
+     38652,
+     27060,
+     17.75
+    ],
+    "role": "east abutment",
+    "profileXZ": [
+     [
+      38640,
+      15.95
+     ],
+     [
+      38640,
+      25.95
+     ],
+     [
+      38664,
+      22.95
+     ],
+     [
+      38664,
+      21.95
+     ],
+     [
+      38648.8,
+      10.55
+     ]
+    ]
+   }
+  },
+  "deckWidthY": [
+   27055,
+   27065
+  ],
+  "soffitCrown": [
+   38616,
+   18.95
+  ],
+  "soffitAtJoints": 15.95,
+  "walkway": [
+   24.95,
+   25.95
+  ],
+  "parapetTop": 26.95,
+  "waterZ": 4.0,
+  "waterX": [
+   38592,
+   38640
+  ],
+  "riverDirection": "N-S (Lake Blessed to the north, river continues SE)",
+  "clearOpeningAtY27060": "x 38583-38649 (66 m at the bank line), height 14.95 at the crown, >= 11.95 m over x 38592-38640",
+  "gap": {
+   "pos": [
+    38618.5,
+    27060,
+    9.5
+   ],
+   "normal": [
+    0,
+    1,
+    0
+   ],
+   "width": 42,
+   "height": 10.5,
+   "box": "x 38597.5-38639.5, z 4.25-14.75 (soffit >= 15.6, water 4.0)"
+  }
+ },
+ "verification": "WorldBuilder.Terminal 1.2.0 + RetailSmoke.wbproj (6 sessions, one at a time, >= 3.8 GB free): describe-landblock + list-objects on the 3x3 (lbX 200-202, lbY 139-141); get-terrain-data + get-heightmap on 0xC88C/0xC98C/0xC98D/0xC98B; get-bulk-heightmap 199-202 x 138-142 (all 1353 vertices). The AC triangle split was re-implemented and matches WBT get-height to 1e-12 at 74 probe points: every sampled camera position of every shot, plus the bank/abutment junctions (10.6) and the water under the deck (4.0). get-object-detail and obj-export ran on the four bridge GfxObjs; their meshes give the exact soffit, walkway and parapet heights quoted in the hero notes. chorizite-parse-dat-record on LandBlockInfo 0xC98CFFFE/0xC88CFFFE shows the bridge pieces are cell-less buildings, so there is no hidden EnvCell geometry under the deck. get-object-detail on all 58 static models gave their bounds. query-radius at the gap (30 m), the south mouth and north neck (20 m), the facade line (12 m), the rack-focus camera (8 m), the ruin orbit (10 m), the boom spot (15 m) and the slide line (15 m). region-day-night-curve shows the sun heading 90 deg in the morning and 270 deg in the afternoon, at about 56 deg elevation at t 0.72. Spawn positions and orientations come from describe-landblock spawns and the LSD spawnMap for C88C; the portal quaternions give the ENE-facing Town Network swirl and the N-facing Martine's portal. Particle FX were decoded from client_portal.dat Setups and PhysicsScripts with tools/particle-fx/datcat.py, read-only, and matched to particle-fx-catalog.json. Each shot was dry-built with the real technique code (scene3d/film/shots buildShot) against the real terrain groundZ and sampled every 0.05 s. Each sample was checked against terrain, building OBBs, statics, outdoor spawns, both baked scenery sets (~/hb-serve/dist/current/scenery and scenery-retail AABBs) and the exact bridge profiles, and the line of sight to the subject was checked too. Results with the shipped bake: under-bridge 9.1 m below the soffit, 5.5 m above the water and 22 m from the abutments; nearest obstacle per shot: boom 11.3 m, facades 4.8 m, rack-focus 3.3 m from the torch post, bridge slide 5.9 m, hero 3.2 m (a fishing-hole spawn below), ruin orbit 9.8 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/rithwic-scratch-plan.json passes film.mjs plan validate with 0 errors and 0 warnings, including the dry build.",
+ "scratchPlan": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/rithwic-scratch-plan.json"
+}

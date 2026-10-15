@@ -1,0 +1,323 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Shoushi/Hebian-to/Tou-Tou/Baishi/Lin/Nanto (ch7 The Sho Lands)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-hebian-to.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.70 (sun due west, ~63 deg), warm",
+ "totalSec": 63,
+ "towns": [
+  {
+   "name": "Hebian-to",
+   "summary": "Hebian-To, the first Sho settlement and capital of the Sho lands, stands on a 32 m bluff at the mouth of the River Prosper, where the river (running water along y 15200-15240) turns north into a shallow bay. Its plaza is ringed by green-roofed halls, dome houses and octagon pavilions and crowned by the West Wind Tower, a 31 m octagon pagoda, with the Town Network portal, a Life Stone, a well and the nullified statue of Ben Ten on its pedestal, all lined with flame lanterns. Down on the river terrace to the west stands the Sho Library, where Fanzen San translates the Falatacot texts, with its own Life Stone; the Celestial Hand keeps its stronghold, hung with glowing golden banners, at the south-east edge, and the Advocate and Sentinel statues stand on the hill beyond.",
+   "landmarks": [
+    {
+     "name": "West Wind Tower (octagon pagoda 0x01000D15)",
+     "pos": [
+      44436.0,
+      15132.0,
+      32.0
+     ],
+     "heightM": 31,
+     "note": "roof z 63, door on the south face"
+    },
+    {
+     "name": "Nullified Statue of Ben Ten on its pedestal (0x01002A1B)",
+     "pos": [
+      44408.0,
+      15015.8,
+      38.8
+     ],
+     "heightM": 2.6,
+     "note": "pedestal z 32-38.8"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      44420.3,
+      15068.2,
+      32.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Life Stone (plaza)",
+     "pos": [
+      44423.8,
+      15100.1,
+      32.0
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Well",
+     "pos": [
+      44461.8,
+      15111.5,
+      32.0
+     ]
+    },
+    {
+     "name": "Sho Library (two-storey hall 0x01000E01) and its Life Stone",
+     "pos": [
+      44052.0,
+      15060.0,
+      12.0
+     ],
+     "heightM": 15,
+     "note": "Life Stone at (44052.0,15084.3,12)"
+    },
+    {
+     "name": "Mouth of the River Prosper and the bay",
+     "pos": [
+      44150.0,
+      15330.0,
+      0.0
+     ],
+     "note": "river turns north at x 44064-44208 into shallow sea east of x 44256; bluff edge y ~15168 (z 30)"
+    },
+    {
+     "name": "Celestial Hand stronghold (0x01000F67) with glowing golden banners 0x020017E9 and candles",
+     "pos": [
+      44532.0,
+      14940.0,
+      32.0
+     ]
+    },
+    {
+     "name": "Advocate and Sentinel statues",
+     "pos": [
+      44748.0,
+      14796.0,
+      38.9
+     ]
+    },
+    {
+     "name": "Flame lanterns (0x0200071A) x20 around the plaza",
+     "pos": [
+      44439.1,
+      15114.3,
+      32.0
+     ],
+     "heightM": 1.4
+    }
+   ],
+   "site": {
+    "id": "hebian-to",
+    "name": "Hebian-to",
+    "gazetteerId": "hebian-to",
+    "teleport": "@telepoi Hebian-to",
+    "anchor": [
+     44420.0,
+     15080.0,
+     32.0
+    ],
+    "settleSec": 3,
+    "lbKeys": [
+     "0xE74E",
+     "0xE64E",
+     "0xE74F",
+     "0xE750",
+     "0xE54E",
+     "0xE64F",
+     "0xE74D"
+    ],
+    "look": {
+     "timeOfDay": 0.7,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.flyover",
+     "duration": {
+      "sec": 14
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44436.0,
+       15362.0,
+       0.0
+      ],
+      "height": 1,
+      "radius": 1
+     },
+     "params": {
+      "heightAGL": 9,
+      "speed": 7,
+      "headingDeg": 180,
+      "relativeToSubject": false,
+      "gimbal": "fixed",
+      "tiltDeg": -1,
+      "minClearance": 3
+     },
+     "framing": "WS",
+     "fov": 55,
+     "standingOrder": "Fly low and level over the glittering bay toward the bluff of Hebian-to, the green pagoda rising over the cliff ahead.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER / ESTABLISHING (drone.flyover). Straight, level 98 m pass due south 9 m above the shallow bay at the mouth of the River Prosper (100 % of the path over water), gimbal near level: the shoreline, the green bluff and the roofs of the Sho capital with the 31 m West Wind Tower pagoda rising over the cliff edge grow ahead; the afternoon sun from the right glitters on the water. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44436.0,15411.0,9.0) end (44436.0,15313.0,9.0), min AGL 9.0 m, nearest static/building/spawn box 25.2 m (spawn:Green Phyntos Wasp), nearest building 170.4 m, trees by crown profile 42.9 m (default bake) / 42.9 m (opt-in retail bake), peak 7.0 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 9.00 m)."
+    },
+    {
+     "technique": "classic.truck",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44436.0,
+       15124.0,
+       32.0
+      ],
+      "height": 14,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 180,
+      "distance": 20,
+      "elevationDeg": -11,
+      "thirds": "center",
+      "travelM": 44,
+      "direction": "right",
+      "keepAim": false
+     },
+     "framing": "FS",
+     "fov": 52,
+     "standingOrder": "Truck slowly east along the north side of the plaza, lanterns sliding past in front of the great green octagon pagoda and its doors.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FACADE PAN (classic.truck). Fixed-head truck 44 m east along the south face of the West Wind Tower, the great green octagon pagoda on the north side of the plaza, 20 m off its face at 3.2 m height and tilted up 11 deg: street lanterns slide through the foreground while the pagoda's doors and lower tiers cross the frame. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44414.0,15104.4,35.2) end (44458.0,15104.4,35.2), min AGL 3.2 m, nearest static/building/spawn box 3.0 m (spawn:Life Stone), nearest building 15.8 m, trees by crown profile 5.3 m (default bake) / 3.8 m (opt-in retail bake), peak 5.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 3.18 m)."
+    },
+    {
+     "technique": "classic.over-the-shoulder",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44420.3,
+       15068.2,
+       32.0
+      ],
+      "height": 3.5,
+      "radius": 3
+     },
+     "params": {
+      "secondary": [
+       44408.0,
+       15015.8,
+       38.8
+      ],
+      "secondaryHeight": 2.6,
+      "shoulder": "right",
+      "shoulderM": 0.7,
+      "backM": 1.6,
+      "raiseM": 0.1,
+      "composeThirds": true,
+      "autoFov": false,
+      "pushM": 0.5
+     },
+     "framing": "FS",
+     "fov": 36,
+     "standingOrder": "Look over the shoulder of the statue of Ben Ten across the plaza to the swirling town portal, the Life Stone and the pagoda beyond.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC (classic.over-the-shoulder). From 1.6 m behind the right shoulder of the nullified statue of Ben Ten on its 6.8 m pedestal (camera z 41, 36 deg lens): the statue's shoulder fills the lower left while the swirling Town Network portal sits on the right third with the Life Stone sparkle and the pagoda stacked beyond it across the plaza; slow 0.5 m push. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44408.3,15014.1,41.0) end (44408.4,15014.6,41.0), min AGL 9.0 m, nearest static/building/spawn box 0.0 m (spawn:Anniversary Effect), nearest building 2.2 m, trees by crown profile 21.4 m (default bake) / 21.4 m (opt-in retail bake), peak 0.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 8.97 m)."
+    },
+    {
+     "technique": "classic.zoom",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44052.0,
+       15060.0,
+       12.0
+      ],
+      "height": 15,
+      "radius": 12
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 70,
+      "distance": 311,
+      "elevationDeg": 3.4,
+      "thirds": "left",
+      "toFovDeg": 9
+     },
+     "framing": "EWS",
+     "fov": 55,
+     "standingOrder": "From the bluff edge hold on the river mouth and the bay, then zoom slowly down onto the Sho Library and its Life Stone by the River Prosper.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "WATER + LANDMARK (classic.zoom). Locked on the north-west lip of the bluff 9 m above the grass (z 38): wide on the mouth of the River Prosper and the bay, then a slow zoom from 55 to 9 deg onto the two-storey Sho Library (home of Fanzen San, translator of the Falatacot texts) and its Life Stone on the river terrace 311 m away. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44343.7,15166.2,37.9) end (44343.7,15166.2,37.9), min AGL 9.3 m, nearest static/building/spawn box 25.6 m (static:0x0200071A#110), nearest building 46.7 m, trees by crown profile 32.7 m (default bake) / 29.0 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.002 m (min WBT AGL 9.32 m)."
+    },
+    {
+     "technique": "drone.hyperlapse-orbit",
+     "duration": {
+      "sec": 14
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       44436.0,
+       15090.0,
+       32.0
+      ],
+      "height": 20,
+      "radius": 40
+     },
+     "params": {
+      "radius": 80,
+      "heightAGL": 40,
+      "revolutions": 0.27,
+      "timeRate": 25,
+      "direction": "cw",
+      "bearingDeg": 200,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "framing": "WS",
+     "standingOrder": "Circle the Sho capital high and slow while clouds race over the pagoda, the plaza and the river mouth.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.hyperlapse-orbit). A 0.27-revolution clockwise orbit 85 m from the plaza at z 72 (40 m above the town, 9 m above the pagoda's roof) from south-south-west round to west-north-west while the sky runs 25x: clouds race over the pagoda, the green roofs and the river mouth; the sun stays high (0.70 to about 0.75). Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (44408.6,15014.8,72.0) end (44364.8,15126.6,72.0), min AGL 40.0 m, nearest static/building/spawn box 24.9 m (building:0x01000E01#141), nearest building 24.9 m, trees by crown profile 29.9 m (default bake) / 32.8 m (opt-in retail bake), peak 9.7 m/s; WBT get-height at 9 samples matched the checker terrain to 0.004 m (min WBT AGL 40.00 m)."
+    }
+   ],
+   "verification": "WBT (RetailSmoke project, 10 short sessions run strictly one at a time): describe-landblock (includeFootprints) + list-objects + get-terrain-data for 0xE54D, 0xE54E, 0xE54F, 0xE64D, 0xE64E, 0xE64F, 0xE74D, 0xE74E, 0xE74F, 0xE84D, 0xE84E, 0xE84F, 0xE94D, 0xE94E, 0xE44E, 0xE44F, 0xE450, 0xE550, 0xE650, 0xE750, 0xE850; get-object-detail for every model on them (185 ids -> rotated AABBs); chorizite-parse-dat-record for the FX setups (lanterns/torches/candles/pillars of fire/waterfall emitters: lights + default scripts), the gate GfxObj 0x01000E65 (opening) and the tree setups 0x020002DB/D9/D3/0x02000258/0x02000322 (crown radius by height); region-day-night-curve (sun due west after 0.61: 0.64 ~80 deg, 0.70 ~63, 0.74 ~50, 0.78 ~39, 0.80 ~32); get-height at 57 camera samples (start/end/quarters/every 1/8), all within 0.006 m of the checker terrain. Clearance against WBT statics/buildings, dist spawn weenies and both scenery bakes (default dist/scenery and opt-in dist/scenery-retail, trees by crown profile). Per shot: s010 drone.flyover 14s: min AGL 9.0 m (WBT), boxes 25.2 m (spawn:Green Phyntos Wasp), building 170.4 m, trees 42.9/42.9 m (default/retail), peak 7.0 m/s; s020 classic.truck 13s: min AGL 3.2 m (WBT), boxes 3.0 m (spawn:Life Stone), building 15.8 m, trees 5.3/3.8 m (default/retail), peak 5.3 m/s; s030 classic.over-the-shoulder 11s: min AGL 9.0 m (WBT), boxes 0.0 m (spawn:Anniversary Effect), building 2.2 m, trees 21.4/21.4 m (default/retail), peak 0.1 m/s; s040 classic.zoom 11s: min AGL 9.3 m (WBT), boxes 25.6 m (static:0x0200071A#110), building 46.7 m, trees 32.7/29.0 m (default/retail), peak 0.0 m/s; s050 drone.hyperlapse-orbit 14s: min AGL 40.0 m (WBT), boxes 24.9 m (building:0x01000E01#141), building 24.9 m, trees 29.9/32.8 m (default/retail), peak 9.7 m/s. Total 63 s. plan validate (dry build): valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

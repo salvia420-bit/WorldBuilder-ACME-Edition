@@ -1,0 +1,231 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Linvak Tukal scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "linvak-tukal",
+   "name": "Linvak Tukal",
+   "gazetteerId": "linvak-tukal",
+   "teleport": "@telepoi Linvak Tukal",
+   "anchor": [
+    31188,
+    5844,
+    560
+   ],
+   "settleSec": 3,
+   "look": {
+    "timeOfDay": 0.82,
+    "grade": "warm"
+   },
+   "lbKeys": [
+    "0xA21E0000",
+    "0xA11E0000",
+    "0xA21D0000",
+    "0xA21F0000",
+    "0xA31E0000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "linvak-tukal",
+   "technique": "drone.boom-rise",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31188,
+     5844,
+     560
+    ],
+    "height": 116,
+    "radius": 84
+   },
+   "params": {
+    "distance": 175,
+    "heightStart": 2,
+    "heightEnd": 110,
+    "bearingDeg": 315,
+    "relativeToSubject": false,
+    "keepAim": true,
+    "minClearance": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up north-west of the fortress from below its battlements until the Lugian towers and the snowfields beyond stand in golden light; 30 m from the slope."
+  },
+  {
+   "id": "s020",
+   "site": "linvak-tukal",
+   "technique": "fpv.fpv-proximity",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "path": [
+    [
+     31082,
+     5760,
+     0
+    ],
+    [
+     31248,
+     5760,
+     0
+    ]
+   ],
+   "params": {
+    "offset": 10,
+    "side": "left",
+    "heightAGL": 12,
+    "speed": 12,
+    "cornerRadius": 5,
+    "alat": 6,
+    "lookAhead": 14,
+    "leanDeg": 6,
+    "maxBankDeg": 20,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "jev"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim east along the south wall of the fortress 10 m off the stone and 12 m above the slope, past the south gate; never closer than 6 m to the wall or the rocks."
+  },
+  {
+   "id": "s030",
+   "site": "linvak-tukal",
+   "technique": "classic.high-angle",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31200,
+     5844,
+     570
+    ],
+    "height": 30,
+    "radius": 20
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 95,
+    "elevationDeg": 55,
+    "distance": 95,
+    "thirds": "center",
+    "pushM": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look steeply down from high over the east rooftops into the brazier-lit central ramp and the town portal terrace; stay 15 m above every roof."
+  },
+  {
+   "id": "s040",
+   "site": "linvak-tukal",
+   "technique": "drone.vertigo-drone",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31140,
+     5784,
+     560
+    ],
+    "height": 100,
+    "radius": 14
+   },
+   "params": {
+    "nearDistance": 80,
+    "farDistance": 150,
+    "direction": "out",
+    "heightAGL": 72,
+    "minFovDeg": 12,
+    "maxFovDeg": 70,
+    "bearingDeg": 225,
+    "relativeToSubject": false,
+    "minClearance": 15
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly back south-west from the mage tower while zooming in so the tower holds its size and the fortress swells behind it; keep 40 m above the slope."
+  },
+  {
+   "id": "s050",
+   "site": "linvak-tukal",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "WS",
+   "fov": 66,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     31170,
+     5860,
+     600
+    ],
+    "height": 76,
+    "radius": 30
+   },
+   "params": {
+    "startDistance": 45,
+    "endDistance": 152,
+    "startHeight": 75,
+    "endHeight": 110,
+    "bearingDeg": 255,
+    "relativeToSubject": false,
+    "minClearance": 20
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Pull back west and up from the crown of the great towers until the whole Lugian super-fortress glows on its snowy summit in the evening sun; 20 m clear of every tower."
+  }
+ ]
+}

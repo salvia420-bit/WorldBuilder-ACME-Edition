@@ -1,0 +1,306 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Shoushi/Hebian-to/Tou-Tou/Baishi/Lin/Nanto (ch7 The Sho Lands)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-baishi.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.67 (sun due west, ~72 deg), warm: high afternoon sun into the forest clearing",
+ "totalSec": 64,
+ "towns": [
+  {
+   "name": "Baishi",
+   "summary": "Baishi ('white rock') was founded by Sho settlers who followed the Snowflake Range south-west of Shoushi to the foot of the Linvak mountains and built in a wooded dale ringed by snow-capped peaks; it is home to the Sho spice merchant and the Derethian Combat Arena. The town of green-roofed halls, a church and dome houses (z 54) sits in a clearing among 30-50 m giant pines, with the Town Network portal, a Life Stone, a well, green-glowing lanterns and a nullified golem statue on its pedestal in the square. The Seven Stars Tower, a 31 m octagon, stands in a small glade to the south, and a ring of twelve settlement portals hides in the pine forest to the east.",
+   "landmarks": [
+    {
+     "name": "Seven Stars Tower (octagon 0x01000D15)",
+     "pos": [
+      39467.3,
+      12466.4,
+      54.0
+     ],
+     "heightM": 31,
+     "note": "top z 85; glade to its north"
+    },
+    {
+     "name": "Nullified Statue of a Golem on its pedestal",
+     "pos": [
+      39470.0,
+      12589.5,
+      60.8
+     ],
+     "heightM": 3.5,
+     "note": "pedestal 0x01002A1B z 54-60.8"
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      39468.3,
+      12605.1,
+      54.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      39443.6,
+      12564.1,
+      54.0
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Well",
+     "pos": [
+      39473.8,
+      12614.0,
+      54.0
+     ]
+    },
+    {
+     "name": "Green-glowing lanterns (0x0200071A flame + 0x020005B2 green luminous emitter) x8",
+     "pos": [
+      39498.4,
+      12605.7,
+      54.0
+     ]
+    },
+    {
+     "name": "Giant pines (0x020002DB to 44 m, 0x020002D9, 0x020002D3)",
+     "pos": [
+      39413.2,
+      12583.4,
+      54.0
+     ],
+     "heightM": 41,
+     "note": "conifers: crowns 7 m radius from 3 m up; they ring the clearing"
+    },
+    {
+     "name": "Ring of 12 settlement portals (in the forest; not filmed)",
+     "pos": [
+      39691.9,
+      12429.3,
+      62.0
+     ],
+     "note": "pines stand through the ring"
+    },
+    {
+     "name": "Church (0x01002228)",
+     "pos": [
+      39493.0,
+      12538.0,
+      54.0
+     ],
+     "heightM": 13.6
+    }
+   ],
+   "site": {
+    "id": "baishi",
+    "name": "Baishi",
+    "gazetteerId": "baishi",
+    "teleport": "@telepoi Baishi",
+    "anchor": [
+     39466.0,
+     12584.0,
+     54.0
+    ],
+    "settleSec": 3,
+    "lbKeys": [
+     "0xCD41",
+     "0xCE41",
+     "0xCD40",
+     "0xCC41",
+     "0xCD42"
+    ],
+    "look": {
+     "timeOfDay": 0.67,
+     "grade": "warm"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.pano-360",
+     "duration": {
+      "sec": 15
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       39468.0,
+       12600.0,
+       54.0
+      ],
+      "height": 2,
+      "radius": 2
+     },
+     "params": {
+      "heightAGL": 75,
+      "yawDeg": 360,
+      "direction": "cw",
+      "startHeadingDeg": 200,
+      "relativeToSubject": false,
+      "tiltDeg": -14,
+      "minClearance": 8
+     },
+     "framing": "EWS",
+     "fov": 55,
+     "standingOrder": "Hover high above Baishi and turn one slow full circle over the sea of giant pines, the green roofs of the dale and the snow-capped peaks around it.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.pano-360). Hovering 75 m above the square (z 129, 30+ m above every pine crown) and turning one slow full circle tilted -14 deg: the green roofs of Baishi in their clearing, the Seven Stars Tower poking through a sea of 30-50 m giant pines, and the snow-capped ranges ringing the dale. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39468.0,12600.0,129.0) end (39468.0,12600.0,129.0), min AGL 75.0 m, nearest static/building/spawn box 23.8 m (spawn:April 2003 Raining Mad Cows Gen), nearest building 61.0 m, trees by crown profile 58.0 m (default bake) / 47.4 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 75.00 m)."
+    },
+    {
+     "technique": "classic.two-shot",
+     "duration": {
+      "sec": 12
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       39470.0,
+       12589.5,
+       60.8
+      ],
+      "height": 3.5,
+      "radius": 1.5
+     },
+     "params": {
+      "secondary": [
+       39468.3,
+       12605.1,
+       54.0
+      ],
+      "secondaryHeight": 3.5,
+      "side": "right",
+      "driftDeg": 10
+     },
+     "framing": "MWS",
+     "fov": 50,
+     "standingOrder": "Frame the nullified golem on its pedestal and the glowing town portal together in the square, drifting gently around the pair.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC (classic.two-shot). A two-shot from the east side of the square, 7 m up: the nullified golem on its pedestal on the left and the swirling Town Network portal on the right, drifting 10 deg around the pair, green-roofed halls behind, high afternoon sun. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39482.5,12600.0,61.2) end (39482.8,12597.6,61.2), min AGL 7.2 m, nearest static/building/spawn box 4.3 m (building:0x01000DDA#109), nearest building 4.3 m, trees by crown profile 31.0 m (default bake) / 0.0 m (opt-in retail bake), peak 0.3 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 7.20 m)."
+    },
+    {
+     "technique": "classic.worms-eye",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       39467.3,
+       12466.4,
+       54.0
+      ],
+      "height": 31,
+      "radius": 10
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 0,
+      "heightM": 0.75,
+      "horizontalM": 17.5,
+      "spinDeg": 25
+     },
+     "framing": "FS",
+     "fov": 75,
+     "standingOrder": "From the grass of the little glade look steeply up the Seven Stars Tower, the pine crowns and the sky slowly turning around its spire.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.worms-eye). Lens 0.75 m above the grass of the little glade north of the Seven Stars Tower, 17.5 m from its foot, looking steeply up (+40 deg) at the three-storey 31 m octagon while the pine crowns and the sky roll 25 deg around its spire. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39467.3,12483.9,54.8) end (39467.3,12483.9,54.8), min AGL 0.8 m, nearest static/building/spawn box 1.5 m (scenery:0x02000258), nearest building 2.4 m, trees by crown profile 20.5 m (default bake) / 2.9 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 0.75 m)."
+    },
+    {
+     "technique": "drone.top-down",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       39478.0,
+       12600.0,
+       54.0
+      ],
+      "height": 2,
+      "radius": 20
+     },
+     "params": {
+      "heightAGL": 62,
+      "rotateDeg": -35,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "drift": 14,
+      "driftHeadingDeg": 0,
+      "minClearance": 8
+     },
+     "framing": "WS",
+     "fov": 55,
+     "standingOrder": "Look straight down on the square of Baishi and drift slowly north, the golem, the portal, the well and the green roofs passing below the pine crowns.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "PATTERN (drone.top-down). Straight down from 62 m over the square, drifting 14 m north while the image turns 35 deg: the golem on its pedestal, the town portal ring, the well, the green roofs and the dark crowns of the giant pines as a living map. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39478.0,12593.0,116.0) end (39478.0,12607.0,116.0), min AGL 62.0 m, nearest static/building/spawn box 37.5 m (spawn:April 2003 Raining Mad Cows Gen), nearest building 51.5 m, trees by crown profile 52.5 m (default bake) / 31.4 m (opt-in retail bake), peak 1.3 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 62.00 m)."
+    },
+    {
+     "technique": "drone.dronie",
+     "duration": {
+      "sec": 15
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       39470.0,
+       12589.5,
+       54.0
+      ],
+      "height": 10.3,
+      "radius": 3
+     },
+     "params": {
+      "startDistance": 8,
+      "endDistance": 100,
+      "startHeight": 14,
+      "endHeight": 66,
+      "bearingDeg": 15,
+      "relativeToSubject": false,
+      "minClearance": 6
+     },
+     "framing": "FS",
+     "standingOrder": "Pull back and up from the golem statue over the north roofs, Baishi shrinking into its dale of giant pines.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.dronie). From 8 m off and 14 m above the golem statue, one straight pull back and up toward the north-north-east to 100 m out and 66 m up over the north roofs: Baishi shrinks into its clearing in the dale of giant pines. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (39472.1,12597.2,68.0) end (39495.9,12686.1,120.0), min AGL 14.0 m, nearest static/building/spawn box 7.0 m (spawn:Anniversary Effect), nearest building 7.6 m, trees by crown profile 27.8 m (default bake) / 10.5 m (opt-in retail bake), peak 11.1 m/s; WBT get-height at 13 samples matched the checker terrain to 0.005 m (min WBT AGL 14.00 m)."
+    }
+   ],
+   "verification": "WBT (RetailSmoke project, 10 short sessions run strictly one at a time): describe-landblock (includeFootprints) + list-objects + get-terrain-data for 0xCC40, 0xCC41, 0xCC42, 0xCD40, 0xCD41, 0xCD42, 0xCE40, 0xCE41, 0xCE42; get-object-detail for every model on them (185 ids -> rotated AABBs); chorizite-parse-dat-record for the FX setups (lanterns/torches/candles/pillars of fire/waterfall emitters: lights + default scripts), the gate GfxObj 0x01000E65 (opening) and the tree setups 0x020002DB/D9/D3/0x02000258/0x02000322 (crown radius by height); region-day-night-curve (sun due west after 0.61: 0.64 ~80 deg, 0.70 ~63, 0.74 ~50, 0.78 ~39, 0.80 ~32); get-height at 61 camera samples (start/end/quarters/every 1/8), all within 0.006 m of the checker terrain. Clearance against WBT statics/buildings, dist spawn weenies and both scenery bakes (default dist/scenery and opt-in dist/scenery-retail, trees by crown profile). Per shot: s010 drone.pano-360 15s: min AGL 75.0 m (WBT), boxes 23.8 m (spawn:April 2003 Raining Mad Cows Gen), building 61.0 m, trees 58.0/47.4 m (default/retail), peak 0.0 m/s; s020 classic.two-shot 12s: min AGL 7.2 m (WBT), boxes 4.3 m (building:0x01000DDA#109), building 4.3 m, trees 31.0/0.0 m (default/retail), peak 0.3 m/s; s030 classic.worms-eye 11s: min AGL 0.8 m (WBT), boxes 1.5 m (scenery:0x02000258), building 2.4 m, trees 20.5/2.9 m (default/retail), peak 0.0 m/s; s040 drone.top-down 11s: min AGL 62.0 m (WBT), boxes 37.5 m (spawn:April 2003 Raining Mad Cows Gen), building 51.5 m, trees 52.5/31.4 m (default/retail), peak 1.3 m/s; s050 drone.dronie 15s: min AGL 14.0 m (WBT), boxes 7.0 m (spawn:Anniversary Effect), building 7.6 m, trees 27.8/10.5 m (default/retail), peak 11.1 m/s. Total 64 s. plan validate (dry build): valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

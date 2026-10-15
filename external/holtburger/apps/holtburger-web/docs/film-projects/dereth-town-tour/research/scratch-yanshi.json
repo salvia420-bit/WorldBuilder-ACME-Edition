@@ -1,0 +1,240 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Yanshi scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "yanshi",
+   "name": "Yanshi",
+   "gazetteerId": "yanshi",
+   "teleport": "@telepoi Yanshi",
+   "anchor": [
+    34656,
+    21588,
+    42
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.44,
+    "grade": "neutral"
+   },
+   "lbKeys": [
+    "0xB4700000",
+    "0xB46F0000",
+    "0xB36F0000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "yanshi",
+   "technique": "drone.top-down",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34656,
+     21588,
+     42
+    ],
+    "height": 20,
+    "radius": 60
+   },
+   "params": {
+    "heightAGL": 112,
+    "rotateDeg": 22,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "pitchDeg": -88,
+    "drift": 0,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hang 112 m straight above the walled town and let the square of walls and the pagoda turn slowly; nothing is near."
+  },
+  {
+   "id": "s020",
+   "site": "yanshi",
+   "technique": "fpv.fpv-gap",
+   "duration": {
+    "sec": 9
+   },
+   "framing": "WS",
+   "params": {
+    "gapPos": [
+     34656,
+     21524.5,
+     46
+    ],
+    "gapNormal": [
+     0,
+     1,
+     0
+    ],
+    "gapWidth": 30,
+    "gapHeight": 14,
+    "heightAGL": 4,
+    "approachAngleDeg": 20,
+    "approachFrom": "left",
+    "approachDistance": 40,
+    "alignDistance": 12,
+    "exitDistance": 30,
+    "cornerRadius": 12,
+    "speed": 12,
+    "alat": 8,
+    "lookAhead": 8,
+    "maxBankDeg": 30,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Bank in from the memorial road and shoot through the middle of the south gate between the two towers into the town; 12 m from each tower."
+  },
+  {
+   "id": "s030",
+   "site": "yanshi",
+   "technique": "classic.steadicam",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34470.5,
+     21399,
+     20
+    ],
+    "height": 8.3,
+    "radius": 6,
+    "heading": 3.14159
+   },
+   "params": {
+    "mode": "lead",
+    "distance": 30,
+    "elevationDeg": -9,
+    "glideM": 12,
+    "lag": 1,
+    "bobM": 0.012,
+    "stepHz": 1.6,
+    "swayDeg": 0.35
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Glide up the wedding aisle at walking height toward the arch and its two sparkling crystal fountains; keep 5 m from the lantern posts."
+  },
+  {
+   "id": "s040",
+   "site": "yanshi",
+   "technique": "fpv.fpv-proximity",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "path": [
+    [
+     34602.4,
+     21508,
+     42
+    ],
+    [
+     34602.4,
+     21668,
+     42
+    ]
+   ],
+   "params": {
+    "offset": 5,
+    "side": "right",
+    "heightAGL": 4,
+    "speed": 12,
+    "cornerRadius": 5,
+    "alat": 8,
+    "lookAhead": 10,
+    "leanDeg": 6,
+    "maxBankDeg": 25,
+    "ends": "cruise"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Race north along the outside of the west wall 5 m off the stone at 4 m height; 3 m clear of the corner towers."
+  },
+  {
+   "id": "s050",
+   "site": "yanshi",
+   "technique": "classic.hyperlapse",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     34644,
+     21612,
+     48
+    ],
+    "height": 31,
+    "radius": 8.5
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 165,
+    "elevationDeg": -28,
+    "distance": 32,
+    "thirds": "center",
+    "move": "truck",
+    "moveM": 30,
+    "direction": "right",
+    "rate": 0.012
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Truck slowly east past the pagoda's south face with its lanterns while the clouds race; keep 10 m off its platform."
+  }
+ ]
+}

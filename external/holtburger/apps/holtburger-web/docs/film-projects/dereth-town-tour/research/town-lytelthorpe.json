@@ -1,0 +1,494 @@
+{
+  "name": "Lytelthorpe",
+  "cell": "0xC0800007",
+  "teleport": "@telepoi Lytelthorpe",
+  "summary": "Lytelthorpe (1.1N 51.7E, Aluvian Heartlands) is one of the nine original Aluvian starter towns, founded in 10 PY in the shadow of an abandoned Empyrean fortress: Banderlings led by the human warmonger Wardiel the Mighty held it until a band of warriors and wizards slew Wardiel and claimed the keep, now restored as Lytelthorpe Keep and held by Lord Aleval, whom the ACE spawn data places on the keep's top lookout (acpedia: 'overlooking the town at 0.9N 51.1E is a small keep, often used as a meeting place'). In the world data the fortress is a 60 x 56 m square enclosure on a flattened grass plateau at z 54, about 20 m above the town: a central keep tower and two north corner towers (identical 30.75 m towers with an open top lookout at +15.2 m under a broad pyramid spire roof, tips at z 84.75), 5 m stone curtain walls with wooden hoardings, two low south bastions and a south-facing gatehouse flanked inside by two burning torches, and three trees in the courtyard. The town spreads down the slope to the south-east: a broad east-west main street of stone-and-timber shops (bowyer/tailor, magic shop, provisions, the Roasted Shreth tavern, jeweller), a small square with the swirling Portal to Town Network and a well, Sitrath's Smithy, an open colonnaded Meeting Hall with candelabra, the Life Stone, Bind Stone and the Haven Residential Halls portal, all ringed by rolling farmland (the Lost Distillery lies beneath the hills to the south). No water: the effects here are fire (gate torches, shop door torches, the keep-top braziers) and magic (town portal swirl, Life Stone).",
+  "landmarks": [
+    {
+      "name": "Lytelthorpe Keep (central tower, 0x01001117)",
+      "pos": [
+        36732,
+        24708,
+        54
+      ],
+      "heightM": 30.75,
+      "note": "11 m stone tower, top lookout floor z 69.2 with parapet to 70 and pyramid eave at 72 (+-7 m), spire tip z 84.75; Lord Aleval and four tall fire braziers (0x0200034C -> fire plume 0x320001AF + dark smoke 0x320001B0) on the lookout"
+    },
+    {
+      "name": "NW spire tower (0x01001161)",
+      "pos": [
+        36708,
+        24732,
+        54
+      ],
+      "heightM": 30.75,
+      "note": "corner tower, west face sun-lit in the afternoon; worm's-eye subject"
+    },
+    {
+      "name": "NE spire tower (0x01001161)",
+      "pos": [
+        36756,
+        24732,
+        54
+      ],
+      "heightM": 30.75,
+      "note": "corner tower, wooden floor planks (0x01000E2A) at its z 69.2 lookout"
+    },
+    {
+      "name": "Gatehouse and main gate (0x01001130, door wcid 568)",
+      "pos": [
+        36732,
+        24686,
+        54
+      ],
+      "heightM": 5,
+      "note": "south face y 24682.25; gate door at (36732,24690.5); Guard Chandler Hammett outside"
+    },
+    {
+      "name": "Gate torches (0x020005D8 x2)",
+      "pos": [
+        36732,
+        24691.7,
+        54
+      ],
+      "heightM": 2.1,
+      "note": "flame tongue + 1.45 m warm glow (0x32000829) at x 36729 and 36735 just inside the gate"
+    },
+    {
+      "name": "Curtain walls and south bastions (0x01001124 / 0x0100115E)",
+      "pos": [
+        36732,
+        24710,
+        54
+      ],
+      "heightM": 5,
+      "note": "enclosure x 36702.5-36761.5, y 24682.25-24737.5, wall tops z 59 with wooden hoardings"
+    },
+    {
+      "name": "Portal to Town Network",
+      "pos": [
+        36811.2,
+        24646.7,
+        34.2
+      ],
+      "heightM": 3.5,
+      "note": "swirling town portal in the small square; base static 0x020019E3 glowing blue stone"
+    },
+    {
+      "name": "Well",
+      "pos": [
+        36812.2,
+        24654.1,
+        34
+      ],
+      "heightM": 2,
+      "note": "acpedia 'a Well in the middle of town' (0.8N 51.4E)"
+    },
+    {
+      "name": "Life Stone",
+      "pos": [
+        36816.6,
+        24602.9,
+        34.0
+      ],
+      "heightM": 3,
+      "note": "in town, south of the square between buildings"
+    },
+    {
+      "name": "Bind Stone",
+      "pos": [
+        36863.9,
+        24665.5,
+        34.0
+      ],
+      "heightM": 2
+    },
+    {
+      "name": "Meeting Hall (open colonnade 0x01000F69)",
+      "pos": [
+        36852,
+        24660,
+        34
+      ],
+      "heightM": 10,
+      "note": "columns and candelabra (0x020005D8) around a platform at z 36; the Meeting Hall portal inside is an indoor cell (not used)"
+    },
+    {
+      "name": "Haven Residential Halls Portal",
+      "pos": [
+        36854.1,
+        24618.7,
+        35.2
+      ],
+      "heightM": 3.5
+    },
+    {
+      "name": "Nullified Statue of a Mosswart",
+      "pos": [
+        36797,
+        24618.7,
+        41
+      ],
+      "heightM": 3,
+      "note": "on a stone column/plinth (0x01002A1B) in the main street, candelabra beside it"
+    },
+    {
+      "name": "Bowyer and tailor house (Lone Tree Bows / Dafrida the Tailor) door torch",
+      "pos": [
+        36755.9,
+        24629.9,
+        40
+      ],
+      "heightM": 2.1,
+      "note": "0x020005D8 flame at the door of house 0x0100082E (top z 52.5)"
+    },
+    {
+      "name": "The Magic of Iiwah shop door torch",
+      "pos": [
+        36714.4,
+        24629.5,
+        44
+      ],
+      "heightM": 2.1,
+      "note": "0x020005D8 flame at the SE corner of house 0x01000827 (top z 56)"
+    },
+    {
+      "name": "Sitrath's Smithy",
+      "pos": [
+        36828,
+        24660,
+        34
+      ],
+      "heightM": 10.25
+    }
+  ],
+  "site": {
+    "id": "lytelthorpe",
+    "name": "Lytelthorpe and Lytelthorpe Keep",
+    "gazetteerId": "lytelthorpe",
+    "teleport": "@telepoi Lytelthorpe",
+    "anchor": [
+      36760,
+      24670,
+      52.8
+    ],
+    "settleSec": 2,
+    "look": {
+      "timeOfDay": 0.79,
+      "grade": "warm"
+    }
+  },
+  "shots": [
+    {
+      "technique": "drone.rising-reveal",
+      "duration": {
+        "sec": 12
+      },
+      "framing": "EWS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36732,
+          24708,
+          54
+        ],
+        "height": 30.75,
+        "radius": 8
+      },
+      "params": {
+        "distance": 88.5,
+        "bearingDeg": 164.9,
+        "relativeToSubject": false,
+        "obstacleDistance": 7.8,
+        "obstacleHeight": 13.3,
+        "heightStart": 1.8,
+        "clearance": 6,
+        "forward": 2,
+        "endPitchDeg": 4
+      },
+      "pilot": {
+        "mode": "jev"
+      },
+      "bounds": {
+        "maxLateral": 1,
+        "maxSink": 0.5,
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Rise straight up the face of the bowyer's house past its burning door torch and over the roofline to reveal Lytelthorpe Keep on its hill; stay 6 m off the facade and 5 m above the roof.",
+      "notes": "[lyt-010] Opener. Starts at eye level in the main street facing the Bowyer/Tailor house (0x0100082E, top z 52.5) whose door torch (0x020005D8, flame + warm glow 0x32000829) burns lower-right of frame (ndc 0.44,-0.92), rises 17.5 m past the facade and over the roofline; the keep is hidden by the house for the first ~6.5 s (LOS blocked 26/49 samples) and is revealed centred with both spire towers against the clouds. Verified: start (36755.1,24622.6,41.3) ground 39.5 (WBT get-height 39.57); facade 6.3-7.8 m away during the rise, end 6.3 m above the roof plane and 8.4 m off the face; nearest scenery 4.3 m (shrub 0x020002F2 top 42.7) and 4.4 m (tree 0x02000246 crown 36-45, behind camera); query-radius 6 m = 0 statics; vmax 2.3 m/s."
+    },
+    {
+      "technique": "drone.orbit-poi",
+      "duration": {
+        "sec": 14
+      },
+      "framing": "WS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36732,
+          24708,
+          54
+        ],
+        "height": 30.75,
+        "radius": 8
+      },
+      "params": {
+        "radius": 52,
+        "heightAGL": 36,
+        "revolutions": 0.29,
+        "direction": "ccw",
+        "bearingDeg": 262,
+        "relativeToSubject": false,
+        "minClearance": 6
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Orbit the keep at a steady 52 m radius, 36 m above the courtyard; keep the keep and both spire towers in frame and stay outside the tower spires.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-020] Grand aerial: 0.29-rev counter-clockwise orbit from WSW (sun behind the camera, keep front-lit) round to SSE (raking side light), 52 m radius, z 90 = 5.2 m above the keep/tower spire tips (z 84.75) and 31 m above the curtain walls; whole square fortress, its three pyramid-roofed towers, the wooded courtyard and the town below. Verified: AGL 36.5-44 over terrain 45.8-53.3; nearest object 28.6 m (NW tower AABB); no scenery within 32 m; vmax 6.8 m/s."
+    },
+    {
+      "technique": "classic.truck",
+      "duration": {
+        "sec": 12
+      },
+      "framing": "FS",
+      "fov": 58,
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36727,
+          24682.25,
+          54
+        ],
+        "height": 9,
+        "radius": 1
+      },
+      "params": {
+        "azimuthRef": "compass",
+        "azimuthDeg": 180,
+        "elevationDeg": -12,
+        "distance": 9.5,
+        "travelM": 32,
+        "direction": "right",
+        "keepAim": false
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Truck east along the south curtain wall and gatehouse 9 m off the stones and 2.5 m high with the head locked north; never drift toward the wall or the low shrub at the east end.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-030] Building-side pan: classic truck parallel to the south curtain wall and gatehouse (0x01001130, gate door wcid 568, guard Chandler Hammett) on the open plateau apron, head locked north, gate crossing frame centre at mid-move; keep tip and NW spire stay in the upper frame (ndc y 0.91 / 0.43), low western sun rakes the wall. Verified: line y 24673.0 (9.3 m off the gatehouse face 24682.25, 9.3 m off the SW/SE bastions), x 36711->36743, z 56.5 = 2.5 m AGL on flat ground z 54.0 (WBT); nearest obstacle a 0.8 m shrub 0x020007A2 4.35 m away (below lens), bush 0x020002F2 5.8 m at the east end; query-radius 6 m = 0 statics; LOS to wall clear; vmax 4.2 m/s."
+    },
+    {
+      "technique": "classic.worms-eye",
+      "duration": {
+        "sec": 6
+      },
+      "framing": "FS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36708,
+          24732,
+          54
+        ],
+        "height": 30.75,
+        "radius": 6
+      },
+      "params": {
+        "azimuthRef": "compass",
+        "azimuthDeg": 240,
+        "heightM": 1.0,
+        "horizontalM": 13,
+        "spinDeg": 0
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Hold low at the foot of the north-west spire tower looking steeply up its sunlit face into the clouds; keep 6 m from the stones.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-040] Low-angle detail: lens 1 m off the grass 13 m WSW of the NW spire tower (0x01001161, 30.75 m, pyramid spire tip z 84.75), looking up 48 deg at its sun-lit west face with the spire in the upper third (ndc y 0.44) and clouds behind. Verified: camera (36696.7,24725.5,55.0), ground 54.0; tower wall polygon 5.8-6.1 m away (conservative AABB 4.3 m); default-scenery nearest 6.8 m (a retail-bake-only 1 m shrub sits 2.9 m behind the camera and is not rendered in the film's default scenery bake); query-radius 6 m = 0 statics."
+    },
+    {
+      "technique": "drone.pass-over",
+      "duration": {
+        "sec": 12
+      },
+      "framing": "WS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36732,
+          24708,
+          54
+        ],
+        "height": 30.75,
+        "radius": 8
+      },
+      "params": {
+        "heightAGL": 38,
+        "speed": 5,
+        "headingDeg": 0,
+        "relativeToSubject": false,
+        "nadirMode": "yaw-slew",
+        "maxYawRateDeg": 45,
+        "minClearance": 6
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Cross the fortress northward 38 m above the courtyard with the gimbal tracking straight down past the keep's spire roof; climb rather than swerve if any spire comes within 6 m.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-050] Flagship crossing: level northward pass at z 92 (38 m above the courtyard), gimbal tracks the keep down through nadir (yaw-slew <=45 deg/s) and back up behind - curtain walls, courtyard trees, the gate and the two north spire towers wheel through frame. Verified: 7.25 m above the keep spire tip (84.75) at closest, NW/NE spires >= 14 m away horizontally, AGL 38 over flat plateau z 54; path y 24678->24738 at x 36732; vmax 5 m/s."
+    },
+    {
+      "technique": "classic.push-in",
+      "duration": {
+        "sec": 7
+      },
+      "framing": "FS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36811.2,
+          24646.7,
+          34.2
+        ],
+        "height": 4,
+        "radius": 1.3
+      },
+      "params": {
+        "azimuthRef": "compass",
+        "azimuthDeg": 255,
+        "elevationDeg": 6,
+        "fromFraming": "WS",
+        "profile": "perceptual"
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Slow push toward the swirling Town Network portal in the square by the well; stop at least 3 m from the portal and never cross the well.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-070] Particle effect (magic): slow perceptual push from WS (13.7 m) to FS (6.3 m) on the swirling Portal to Town Network in the open square, the well on the left edge, Sitrath's Smithy behind; western sun behind the camera. Verified: line from (36798.0,24643.2,37.6) to (36805.1,24645.1,36.9), 2.9-3.6 m AGL over z 34.0 (WBT); Healer house 0x01000BC3 >= 5.0 m, tree 0x02000240 >= 6.5 m, portal >= 4.9 m (6.3 m to centre), well 11.6 m; LOS clear; vmax 1.7 m/s."
+    },
+    {
+      "technique": "classic.rack-focus",
+      "duration": {
+        "sec": 7
+      },
+      "framing": "WS",
+      "fov": 50,
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36732,
+          24708,
+          54
+        ],
+        "height": 30.75,
+        "radius": 8
+      },
+      "params": {
+        "azimuthRef": "compass",
+        "azimuthDeg": 189.5,
+        "elevationDeg": -15.4,
+        "distance": 88.4,
+        "fromTarget": "metres",
+        "fromM": 6.6,
+        "toTarget": "subject",
+        "at": 0.45,
+        "pullSec": 1.8,
+        "thirds": "right"
+      },
+      "look": {
+        "dof": {
+          "focusRange": 10,
+          "bokehScale": 2.5
+        }
+      },
+      "bounds": {
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Hold still beside the magic shop with its door torch burning sharp in the lower left, then pull focus up the hill to the keep; nothing may cross between the lens and the torch.",
+      "pilot": {
+        "mode": "code"
+      },
+      "notes": "[lyt-080] Particle effect (fire) + rack focus: locked off beside the Magic of Iiwah shop, its door torch (0x020005D8 flame + glow) sharp in the lower left (ndc -0.63,-0.63, 6.6 m), focus pulls at 45% to Lytelthorpe Keep on the hill 88 m away (right third, ndc 0.31). Verified: camera (36717.9,24623.9,45.9), ground 44.0 (WBT), 1.9 m AGL; house 0x01000827 5.3 m; LOS to keep clears the gatehouse and slope (0/29 samples blocked); query-radius 6 m = 0 statics; dof focusRange 10 keeps the whole keep crisp after the pull."
+    },
+    {
+      "technique": "drone.dronie",
+      "duration": {
+        "sec": 16
+      },
+      "framing": "WS",
+      "subject": {
+        "kind": "point",
+        "pos": [
+          36732,
+          24708,
+          69.2
+        ],
+        "height": 3,
+        "radius": 7
+      },
+      "params": {
+        "startDistance": 16,
+        "endDistance": 90,
+        "startHeight": 2.5,
+        "endHeight": 42,
+        "bearingDeg": 205,
+        "relativeToSubject": false,
+        "minClearance": 6
+      },
+      "bounds": {
+        "maxLateral": 1.5,
+        "minSpeedScale": 1,
+        "maxSpeedScale": 1
+      },
+      "standingOrder": "Start level with the keep's open lookout under its spire roof where the braziers burn, then pull back and up in one straight line to the south-south-west until the fortress, town and farmland open up; stay 7 m clear of the keep.",
+      "pilot": {
+        "mode": "jev"
+      },
+      "notes": "[lyt-060] Closing dronie: starts level with the keep's open top lookout (floor z 69.2, parapet 70, pyramid eave 72) where Lord Aleval stands among four tall fire braziers (0x0200034C, fire plume 0x320001AF + smoke), both brazier flames near frame centre (ndc +-0.3), then pulls back and up 16 s to the SSW until the whole fortress, the town and the farmland spread out. Verified: start (36725.2,24693.5,71.7) is 7.5 m from the keep's eave AABB, 12.7 m above the gatehouse/bastion tops (59); end (36694.0,24626.4,111.2) 69 m AGL; nearest object 7.5 m at t=0 then > 11 m; vmax 8.2 m/s (cinema preset 12)."
+    }
+  ],
+  "verification": "WBT (RetailSmoke project, one session per batch): describe-landblock(includeFootprints)+list-objects+get-terrain-data for the 4x3 block lbX 190-193 x lbY 127-129 (fortress and town are in 0xBF80; 0xC080 holds only the telepoi arrival and road); get-object-detail bounds for all 40 static models; obj-export of keep/tower/gatehouse GfxObjs (tower profile: body +-5.5 m to 9 m, lookout floor 15.2, parapet 16, eave +-7 m at 18, spire tip 30.75); region-day-night-curve (sun due west, ~35 deg up at 0.79). Obstacles = 229 statics (rotated model AABBs) + baked procedural scenery AABBs from ~/hb-serve/dist/current/scenery (the film's default bake) and scenery-retail (checked too, conservative) + 62 outdoor weenie spawns as 2.4 m x 3.5 m boxes. Every shot was built offline with the real technique registry (scene3d/film/shots buildShot + schema shotSpec) against a terrain-aware ctx.groundZ (AC split-triangle interpolation of the WBT vertex heights) and sampled at 4 Hz: AGL, nearest obstacle, subject line of sight, speed. My terrain model matched WBT get-height at all 57 sampled camera points within 0.06 m. query-radius 6 m around every street-level camera returned 0 statics. Frame checks (NDC projection) confirm the effect subjects are in frame: lyt-010 torch (0.44,-0.92) at t=0, lyt-080 torch (-0.63,-0.63) and keep (0.31,0.37), lyt-060 braziers (+-0.3,0), lyt-070 portal centred. Results: lyt-010 min clearance 4.3 m (shrub) / facade 6.3 m, keep hidden then revealed (26/49 samples blocked by the house, by design); lyt-020 28.6 m, z 90 = 5.2 m over spire tips; lyt-030 4.35 m (0.8 m shrub below lens), 9.3 m off the wall, 2.5 m AGL; lyt-040 6.8 m default scenery / 5.8 m tower wall; lyt-050 7.25 m over the keep spire; lyt-070 4.9 m (portal), 5.0 m (healer house); lyt-080 5.3 m; lyt-060 7.5 m at start then >11 m. Max speed 8.2 m/s (dronie). Scratch plan validated with film.mjs plan validate: 0 errors, 0 warnings.",
+  "editOrder": [
+    "lyt-010",
+    "lyt-020",
+    "lyt-030",
+    "lyt-040",
+    "lyt-050",
+    "lyt-070",
+    "lyt-080",
+    "lyt-060"
+  ],
+  "notes": [
+    "Edit order as listed (ref ids lyt-010..lyt-080 are only for cross-reference; the synthesizer assigns ids). Total 86 s; trim lyt-020/lyt-060 first if the music needs it.",
+    "JEV on lyt-010 (rising reveal 6 m off a facade and over its roof) and lyt-060 (dronie starting 7.5 m from the keep's eave); everything else code.",
+    "Fallback outdoor teleport closer to the fortress (same landblock as all subjects): @teleloc 0xBF80001C 88 94 53.0 1 0 0 0 (ground 52.83 at the anchor). The gazetteer telepoi lands at (36875.7,24731.6), 140 m east.",
+    "Scenery: the film boots without ?sceneryBake=retail, so the default 'scenery' bake is what renders; all clearances were also checked against the retail bake.",
+    "Scratch plan: /mnt/wbterminal2/film-projects/dereth-town-tour/research/town-lytelthorpe.plan.json"
+  ],
+  "validated": true
+}

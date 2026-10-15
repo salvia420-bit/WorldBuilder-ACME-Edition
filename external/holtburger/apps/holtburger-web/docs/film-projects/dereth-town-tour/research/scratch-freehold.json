@@ -1,0 +1,232 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Freehold scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "freehold",
+   "name": "MacNiall's Freehold",
+   "gazetteerId": "freehold",
+   "teleport": "@teleloc 0xF2220035 152 116 18.1 1 0 0 0",
+   "anchor": [
+    46610,
+    6660,
+    18
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.55,
+    "grade": "neutral"
+   },
+   "lbKeys": [
+    "0xF2220000",
+    "0xF2230000",
+    "0xF3220000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "freehold",
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46615,
+     6665,
+     18
+    ],
+    "height": 17,
+    "radius": 90
+   },
+   "params": {
+    "radius": 175,
+    "heightAGL": 22,
+    "revolutions": 0.12,
+    "direction": "cw",
+    "bearingDeg": 55,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Circle slowly over the sea east of the island 40 m up, holding the whole hilltop freehold in frame; stay over the water."
+  },
+  {
+   "id": "s020",
+   "site": "freehold",
+   "technique": "fpv.fpv-flip",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46612,
+     6452,
+     0
+    ],
+    "height": 2,
+    "radius": 5
+   },
+   "params": {
+    "axis": "roll",
+    "direction": "positive",
+    "turns": 1,
+    "flipDuration": 3,
+    "flipAt": 0.5,
+    "speed": 6,
+    "heightAGL": 6,
+    "rise": 3,
+    "tiltDeg": 2,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Race north 6 m over the open sea toward MacNiall's island and barrel-roll once mid-shot; nothing but water within 40 m."
+  },
+  {
+   "id": "s030",
+   "site": "freehold",
+   "technique": "drone.boomerang",
+   "duration": {
+    "sec": 16
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46622.8,
+     6666.2,
+     18
+    ],
+    "height": 9.5,
+    "radius": 3
+   },
+   "params": {
+    "far": 80,
+    "near": 28,
+    "heightStart": 30,
+    "heightNear": 22,
+    "rise": 16,
+    "bearingDeg": 305,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Sweep in over the west beach toward the sclavus statue in the plaza, stop 28 m out above the rooftops and swing back out climbing; 8 m above every tree crown."
+  },
+  {
+   "id": "s040",
+   "site": "freehold",
+   "technique": "classic.handheld",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46593.2,
+     6718.4,
+     18.2
+    ],
+    "height": 3.6,
+    "radius": 1.6
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 215,
+    "elevationDeg": 4,
+    "distance": 14,
+    "base": "push-in",
+    "pushM": 2,
+    "amplitudeDeg": 0.5,
+    "frequencyHz": 0.9,
+    "posAmplitude": 0.02,
+    "roughness": 0.45
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Creep handheld toward the swirling town portal past the lantern posts; keep 2 m from the portal stone and the lanterns."
+  },
+  {
+   "id": "s050",
+   "site": "freehold",
+   "technique": "classic.roll",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     46572,
+     6612,
+     18
+    ],
+    "height": 11.6,
+    "radius": 10
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 290,
+    "elevationDeg": -22,
+    "distance": 26,
+    "thirds": "center",
+    "fromDeg": 0,
+    "toDeg": 10,
+    "pushM": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "From the foot of the west cliff look up at the blue-stone chapel tower on the plateau edge and slowly lean the horizon while easing in; 6 m from the trees."
+  }
+ ]
+}

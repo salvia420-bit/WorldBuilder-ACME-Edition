@@ -1,0 +1,227 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Kryst scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "kryst",
+   "name": "Kryst",
+   "gazetteerId": "kryst",
+   "teleport": "@telepoi Kryst",
+   "anchor": [
+    44745,
+    6640,
+    0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.45,
+    "grade": "neutral"
+   },
+   "lbKeys": [
+    "0xE8220000",
+    "0xE9220000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "kryst",
+   "technique": "drone.hyperlapse-orbit",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44770,
+     6628,
+     0
+    ],
+    "height": 10,
+    "radius": 70
+   },
+   "params": {
+    "radius": 115,
+    "heightAGL": 30,
+    "revolutions": 0.12,
+    "timeRate": 100,
+    "direction": "cw",
+    "bearingDeg": 332,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Drift slowly round the bay side of the beach village 30 m up while the clouds race over the jungle; stay over the water and the sand."
+  },
+  {
+   "id": "s020",
+   "site": "kryst",
+   "technique": "classic.steadicam",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44698.9,
+     6665.3,
+     0
+    ],
+    "height": 3.6,
+    "radius": 1.5,
+    "heading": 1.5708
+   },
+   "params": {
+    "mode": "lead",
+    "distance": 22,
+    "elevationDeg": 6,
+    "glideM": 9,
+    "lag": 1.2,
+    "bobM": 0.015,
+    "stepHz": 1.6,
+    "swayDeg": 0.4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Walk west along the waterline toward the glowing life stone with the surf on the right; keep 2 m from the stone and never step into the huts."
+  },
+  {
+   "id": "s030",
+   "site": "kryst",
+   "technique": "classic.over-the-shoulder",
+   "duration": {
+    "sec": 10
+   },
+   "framing": "MS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44725.7,
+     6632.4,
+     0.2
+    ],
+    "height": 3.6,
+    "radius": 1.6
+   },
+   "params": {
+    "secondary": [
+     44765.4,
+     6643.6,
+     6.8
+    ],
+    "secondaryHeight": 2.6,
+    "shoulder": "left",
+    "shoulderM": 0.8,
+    "backM": 2.8,
+    "raiseM": 0.4,
+    "composeThirds": true,
+    "autoFov": true,
+    "pushM": 0.4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look over the stone sclavus's shoulder down at the town portal and the guards on the sand; keep 0.8 m off the statue."
+  },
+  {
+   "id": "s040",
+   "site": "kryst",
+   "technique": "classic.static",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44752,
+     6628,
+     0
+    ],
+    "height": 10,
+    "radius": 40
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 5,
+    "elevationDeg": 2,
+    "distance": 72
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Lock off from the shallows 7 m above the water on the beach, the domed huts and the jungle hill; nothing moves but the sea and the sky."
+  },
+  {
+   "id": "s050",
+   "site": "kryst",
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "FS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     44765.4,
+     6643.6,
+     0
+    ],
+    "height": 9.3,
+    "radius": 3
+   },
+   "params": {
+    "startDistance": 9,
+    "endDistance": 85,
+    "startHeight": 7,
+    "endHeight": 45,
+    "bearingDeg": 12,
+    "relativeToSubject": false,
+    "minClearance": 2
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Pull back and up from the sclavus statue and its guards over the sand and out across the bay in one line until the jungle island fills the frame; 5 m from the statue at the start."
+  }
+ ]
+}

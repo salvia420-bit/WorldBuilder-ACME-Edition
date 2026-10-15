@@ -1,0 +1,366 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Tufa/Samsur/Al-Jalima/Zaikhal/Yanshi/Sawato (sg6)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-yanshi.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "late morning 0.44 / neutral; the closing hyperlapse runs the sky to ~0.62 while trucking past the pagoda",
+ "runtimeSec": 63,
+ "towns": [
+  {
+   "name": "Yanshi",
+   "summary": "Yanshi, 'Town of the Boulder', is the Sho town on the plains NW of the Blackmire Swamp, settled by Sho who left Hebian-To for a great lone rock in a field; the legendary Ben Ten defended it against the Tumeroks. In 13 PY Gaerlan's failed attempt to summon the Harbinger destroyed the old town above his chamber (Old Yanshi ruins and the Sacred Stone lie 1 km east); in 16 PY Yanshi was rebuilt as a walled town on a hill to the west near the Leafcull festival grounds, with a memorial to Antius Blackmoor; in 21 PY Prince Borelean Strathelar and Hoshino Kei were wed in the meadow outside its walls. In the DAT: a square walled town (107 x 131 m, 7 m brick walls, 19.6 m corner and gate towers) on a z 42 hill; a 34 m-wide south gate between two towers faces the road and the Antius Blackmoor Memorial (a 3x-scale human statue on a 6.8 m pedestal). Inside: a 31 m octagonal pagoda on a raised platform with two lanterns at its door, Sho houses, the Shrine to Xao Wu, the Life Stone and the Town Network portal. Below the SE corner a font among four blossoming trees with a lantern; west in the meadow the wedding site - an aisle carpet between stone benches and topiary to a red-and-white wedding arch flanked by two sparkling crystal fountains, tulip beds and blue and red tents.",
+   "landmarks": [
+    {
+     "name": "Pagoda",
+     "pos": [
+      34644,
+      21612,
+      48
+     ],
+     "heightM": 31,
+     "note": "0x01002E64 octagon on a z 48 platform, top 79; door lanterns 0x02000705 at (34642,21601,48) and (34646,21601,48)"
+    },
+    {
+     "name": "South gate towers",
+     "pos": [
+      34656,
+      21524.5,
+      42
+     ],
+     "heightM": 19.6,
+     "note": "0x01002D1B at x 34632-34639 and 34673-34680 (y 21521-21528), top 61.6; 34 m open gap between them"
+    },
+    {
+     "name": "Town walls",
+     "pos": [
+      34656,
+      21588,
+      42
+     ],
+     "heightM": 7.2,
+     "note": "0x01002CDE, x 34602.4-34709.6, y 21522.4-21653.6, top 49.2; corner towers top 61.6"
+    },
+    {
+     "name": "Antius Blackmoor Memorial",
+     "pos": [
+      34620,
+      21492,
+      48.8
+     ],
+     "heightM": 5.4,
+     "note": "weenie 32397, human setup at DefaultScale 3 on pedestal 0x01002A1B (top 48.8)"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      34643.2,
+      21562.9,
+      42
+     ],
+     "heightM": 3.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      34687.4,
+      21555.7,
+      42.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Shrine to Xao Wu",
+     "pos": [
+      34684.5,
+      21536,
+      42
+     ],
+     "heightM": 2
+    },
+    {
+     "name": "Font among blossoming trees",
+     "pos": [
+      34716.5,
+      21467,
+      22
+     ],
+     "heightM": 2,
+     "note": "lantern 0x02000705 at (34715,21468.2); four flowering trees 0x02000322 around it; meeting-hall tower beside"
+    },
+    {
+     "name": "Wedding arch + crystal fountains",
+     "pos": [
+      34470.5,
+      21399,
+      20
+     ],
+     "heightM": 8.3,
+     "note": "arch 0x02001961; crystal fountains 0x02000AA3 (sparkle emitter) at (34464,21398.5) and (34476.8,21398.5); aisle carpet x 34470.5 from y 21375"
+    }
+   ],
+   "site": {
+    "id": "yanshi",
+    "name": "Yanshi",
+    "gazetteerId": "yanshi",
+    "teleport": "@telepoi Yanshi",
+    "anchor": [
+     34656,
+     21588,
+     42
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.44,
+     "grade": "neutral"
+    },
+    "lbKeys": [
+     "0xB4700000",
+     "0xB46F0000",
+     "0xB36F0000"
+    ]
+   },
+   "shots": [
+    {
+     "technique": "drone.top-down",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "EWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       34656,
+       21588,
+       42
+      ],
+      "height": 20,
+      "radius": 60
+     },
+     "params": {
+      "heightAGL": 112,
+      "rotateDeg": 22,
+      "headingDeg": 90,
+      "relativeToSubject": false,
+      "pitchDeg": -88,
+      "drift": 0,
+      "minClearance": 3
+     },
+     "standingOrder": "Hang 112 m straight above the walled town and let the square of walls and the pagoda turn slowly; nothing is near.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING (drone.top-down). 112 m above the walled town (gimbal -88 deg so the lanterns, portal and life stone below never spin), image east-up turning 22 deg: the square of brick walls, the gate towers, the pagoda and the Sho roofs as a map. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34652.4, 21588, 154) end (34652.7, 21589.3, 154), min AGL 108.67 m (WBT get-height on 9 camera points: min AGL 108.67 m, ground 45-45.33), nearest static/building/default-bake scenery 75.75 m (building:0x01002E64#95), nearest building 75.75 m, retail-bake scenery 238.87 m, peak 0.11 m/s."
+    },
+    {
+     "technique": "fpv.fpv-gap",
+     "duration": {
+      "sec": 9
+     },
+     "framing": "WS",
+     "params": {
+      "gapPos": [
+       34656,
+       21524.5,
+       46
+      ],
+      "gapNormal": [
+       0,
+       1,
+       0
+      ],
+      "gapWidth": 30,
+      "gapHeight": 14,
+      "heightAGL": 4,
+      "approachAngleDeg": 20,
+      "approachFrom": "left",
+      "approachDistance": 40,
+      "alignDistance": 12,
+      "exitDistance": 30,
+      "cornerRadius": 12,
+      "speed": 12,
+      "alat": 8,
+      "lookAhead": 8,
+      "maxBankDeg": 30,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "ends": "cruise"
+     },
+     "standingOrder": "Bank in from the memorial road and shoot through the middle of the south gate between the two towers into the town; 12 m from each tower.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "HERO FPV THROUGH THE GATE (fpv.fpv-gap). Bank in from the memorial road (the giant Antius Blackmoor statue passes 25 m to the left), align, and shoot through the middle of the 34 m south gate between the two 19.6 m towers into the town toward the Life Stone; 17 m from each tower at 4 m height. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34642.3, 21474.9, 46) end (34656, 21554.5, 46), min AGL 4 m (WBT get-height on 9 camera points: min AGL 4 m, ground 39.51-42), nearest static/building/default-bake scenery 12.91 m (static:0x02000180#34), nearest building 17 m, retail-bake scenery 212.83 m, peak 9.1 m/s."
+    },
+    {
+     "technique": "classic.steadicam",
+     "duration": {
+      "sec": 13
+     },
+     "framing": "MWS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       34470.5,
+       21399,
+       20
+      ],
+      "height": 8.3,
+      "radius": 6,
+      "heading": 3.14159
+     },
+     "params": {
+      "mode": "lead",
+      "distance": 30,
+      "elevationDeg": -9,
+      "glideM": 12,
+      "lag": 1,
+      "bobM": 0.012,
+      "stepHz": 1.6,
+      "swayDeg": 0.35
+     },
+     "standingOrder": "Glide up the wedding aisle at walking height toward the arch and its two sparkling crystal fountains; keep 5 m from the lantern posts.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "PARTICLES / WEDDING SITE (classic.steadicam). A floaty walk up the wedding-aisle carpet between the stone benches and topiary toward the red-and-white wedding arch and its two sparkling crystal fountains where Prince Borelean and Hoshino Kei were wed; lens 1.5-3.4 m up above the 8 cm aisle carpet, benches 0.57 m tall 2.2 m to either side. Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34470.5, 21369.4, 21.5) end (34470.5, 21381.4, 23.4), min AGL 1.5 m (WBT get-height on 9 camera points: min AGL 1.5 m, ground 20-20), nearest static/building/default-bake scenery 2.22 m (static:0x010043DE#61), nearest building 19.37 m, retail-bake scenery 414.72 m, peak 1.5 m/s."
+    },
+    {
+     "technique": "fpv.fpv-proximity",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "path": [
+      [
+       34602.4,
+       21508,
+       42
+      ],
+      [
+       34602.4,
+       21668,
+       42
+      ]
+     ],
+     "params": {
+      "offset": 5,
+      "side": "right",
+      "heightAGL": 4,
+      "speed": 12,
+      "cornerRadius": 5,
+      "alat": 8,
+      "lookAhead": 10,
+      "leanDeg": 6,
+      "maxBankDeg": 25,
+      "ends": "cruise"
+     },
+     "standingOrder": "Race north along the outside of the west wall 5 m off the stone at 4 m height; 3 m clear of the corner towers.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FPV WALL HUG (fpv.fpv-proximity). Race north 160 m along the outside of the west town wall, 5 m off the brick at 4 m height, past both corner towers (>= 3.6 m). Fast FPV wall run (not a classic facade pan). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34597.4, 21508, 46) end (34597.4, 21668, 46), min AGL 4 m (WBT get-height on 9 camera points: min AGL 4 m, ground 42-42), nearest static/building/default-bake scenery 3.6 m (building:0x01002D1B#122), nearest building 3.6 m, retail-bake scenery 263.89 m, peak 11.43 m/s."
+    },
+    {
+     "technique": "classic.hyperlapse",
+     "duration": {
+      "sec": 15
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       34644,
+       21612,
+       48
+      ],
+      "height": 31,
+      "radius": 8.5
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 165,
+      "elevationDeg": -28,
+      "distance": 32,
+      "thirds": "center",
+      "move": "truck",
+      "moveM": 30,
+      "direction": "right",
+      "rate": 0.012
+     },
+     "standingOrder": "Truck slowly east past the pagoda's south face with its lanterns while the clouds race; keep 10 m off its platform.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "FACADE PAN - SHO PAGODA + CLOSING (classic.hyperlapse, move truck). Truck 30 m east past the pagoda's south face, 4-6 m above the ground and 30 m out, looking up at the octagonal tiers and the door lanterns while the sky clock runs 0.012 day/s (0.44 -> 0.62): clouds race over the roof. Last shot of the town (clock jump hidden by the cut). Verified offline (real registry build + WBT terrain, 4 Hz samples): start (34636.8, 21580.8, 48.5) end (34665.8, 21588.6, 48.5), min AGL 4.01 m (WBT get-height on 9 camera points: min AGL 4.04 m, ground 42.7-44.44), nearest static/building/default-bake scenery 7.23 m (building:0x01000D14#120), nearest building 7.23 m, retail-bake scenery 199.56 m, peak 2 m/s."
+    }
+   ],
+   "verification": "WBT (RetailSmoke.wbproj, one session per batch, free mem >= 3.8 GB): describe-landblock (includeFootprints) + list-objects + get-terrain-data on 9 LBs 0xB36E, 0xB36F, 0xB370, 0xB46E, 0xB46F, 0xB470, 0xB56E, 0xB56F, 0xB570; get-object-detail on every model in them (bounds -> rotated AABBs for buildings/statics); chorizite-parse-dat-record Setup on every placed Setup (defaultScript/lights) + PhysicsScript, cross-checked with data/particle-fx-catalog.json and object-tags.json (utf-8-sig) to locate FX; dist scenery (default + retail bakes) and ACE spawns (outdoor) added as obstacle boxes; each shot built with the real technique registry (scene3d/film/shots buildShot) against the WBT terrain and sampled at 4 Hz for AGL, box clearance, LOS and speed; final WBT get-height on 9 camera points per shot (start/end + 7 between) matched the split-triangle terrain within 0.01 m. Scratch plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-yanshi.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (dry build included). s010 drone.top-down: start [34652.4, 21588, 154] end [34652.7, 21589.3, 154], WBT minAGL 108.67 m, clearance 75.75 m (building:0x01002E64#95), bldg 75.75 m, retail 238.87 m, vmax 0.11 m/s | s020 fpv.fpv-gap: start [34642.3, 21474.9, 46] end [34656, 21554.5, 46], WBT minAGL 4 m, clearance 12.91 m (static:0x02000180#34), bldg 17 m, retail 212.83 m, vmax 9.1 m/s | s030 classic.steadicam: start [34470.5, 21369.4, 21.5] end [34470.5, 21381.4, 23.4], WBT minAGL 1.5 m, clearance 2.22 m (static:0x010043DE#61), bldg 19.37 m, retail 414.72 m, vmax 1.5 m/s | s040 fpv.fpv-proximity: start [34597.4, 21508, 46] end [34597.4, 21668, 46], WBT minAGL 4 m, clearance 3.6 m (building:0x01002D1B#122), bldg 3.6 m, retail 263.89 m, vmax 11.43 m/s | s050 classic.hyperlapse: start [34636.8, 21580.8, 48.5] end [34665.8, 21588.6, 48.5], WBT minAGL 4.04 m, clearance 7.23 m (building:0x01000D14#120), bldg 7.23 m, retail 199.56 m, vmax 2 m/s",
+   "alternates": [
+    {
+     "technique": "classic.over-the-shoulder",
+     "duration": {
+      "sec": 10
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       34656,
+       21524,
+       42
+      ],
+      "height": 19.6,
+      "radius": 18
+     },
+     "params": {
+      "secondary": [
+       34620,
+       21492,
+       48.8
+      ],
+      "secondaryHeight": 5.4,
+      "shoulder": "right",
+      "shoulderM": 1.3,
+      "backM": 2.6,
+      "raiseM": 0.2,
+      "composeThirds": true,
+      "autoFov": true,
+      "pushM": 0.4
+     },
+     "standingOrder": "Look past the shoulder of the giant Antius Blackmoor statue at the twin gate towers and creep in a hand's breadth; stay 1.5 m off the statue.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ALTERNATE - LANDMARK (classic.over-the-shoulder, 10 s): over the right shoulder of the 3x-scale Antius Blackmoor statue at its head height (z 53.4, 2.9 m from its centre, 4.6 m above the pedestal top), looking 50 m NNE at the twin gate towers with a 0.4 m push. Validated in a 6-shot version of the scratch plan (0 errors); dropped to keep 5 shots."
+    }
+   ]
+  }
+ ]
+}

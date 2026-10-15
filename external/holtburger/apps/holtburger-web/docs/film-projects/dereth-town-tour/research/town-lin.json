@@ -1,0 +1,303 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Shoushi/Hebian-to/Tou-Tou/Baishi/Lin/Nanto (ch7 The Sho Lands)",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-lin.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.64 (sun due west, ~80 deg), neutral: high sun reaching the gorge floor",
+ "totalSec": 61,
+ "towns": [
+  {
+   "name": "Lin",
+   "summary": "Lin was founded after Mayoi as an early-warning post against Lugian raiders, hidden in a forested valley in the shadow of the Linvak range, and became a tranquil resting place and staging point for expeditions into the mountains. Its heart lies at the bottom of a narrow gorge (floor z 0) between pine-clad cliffs 26-48 m high: the Life Stone, the Town Network portal and a nullified skeleton statue stand on the valley floor among green-roofed halls and a great broad tree, terraces climb the west side, and on the eastern rim an octagon tower with candles on its west face overlooks the gorge, which bends east up to the Tree of Healing on its plateau.",
+   "landmarks": [
+    {
+     "name": "The gorge of Lin",
+     "pos": [
+      42030.0,
+      11380.0,
+      0.0
+     ],
+     "note": "floor z 0 at x 42000-42070, y 11280-11496, bending east to z 20 at x 42216; west cliff to 48 m, east cliff 26-30 m"
+    },
+    {
+     "name": "Life Stone",
+     "pos": [
+      42012.5,
+      11385.1,
+      0.0
+     ],
+     "heightM": 2.6
+    },
+    {
+     "name": "Portal to Town Network",
+     "pos": [
+      42037.6,
+      11380.8,
+      0.2
+     ],
+     "heightM": 3.5
+    },
+    {
+     "name": "Nullified Statue of a Skeleton on its pedestal",
+     "pos": [
+      42035.3,
+      11394.0,
+      6.8
+     ],
+     "heightM": 2.5,
+     "note": "pedestal 0x01002A1B z 0-6.8"
+    },
+    {
+     "name": "Octagon tower on the eastern rim (0x01000D15) with candles 0x020005D9",
+     "pos": [
+      42108.0,
+      11412.0,
+      26.0
+     ],
+     "heightM": 31,
+     "note": "top z 57; candles at (42099.7,11410.5,31) and (42099.8,11413.6,31)"
+    },
+    {
+     "name": "Great broad tree on the gorge floor (0x02000258)",
+     "pos": [
+      42033.0,
+      11413.0,
+      0.0
+     ],
+     "heightM": 32
+    },
+    {
+     "name": "The Tree of Healing (healer) and well",
+     "pos": [
+      42228.7,
+      11466.7,
+      20.0
+     ]
+    },
+    {
+     "name": "Victory Residential Halls Portal",
+     "pos": [
+      42044.9,
+      11425.0,
+      1.7
+     ]
+    }
+   ],
+   "site": {
+    "id": "lin",
+    "name": "Lin",
+    "gazetteerId": "lin",
+    "teleport": "@telepoi Lin",
+    "anchor": [
+     42030.0,
+     11385.0,
+     0.0
+    ],
+    "settleSec": 3,
+    "lbKeys": [
+     "0xDA3B",
+     "0xDB3B",
+     "0xDA3A",
+     "0xDB3A",
+     "0xDC3C"
+    ],
+    "look": {
+     "timeOfDay": 0.64,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.canyon-run",
+     "duration": {
+      "sec": 14
+     },
+     "path": [
+      [
+       42029.0,
+       11280.0,
+       0.0
+      ],
+      [
+       42040.0,
+       11335.0,
+       0.0
+      ],
+      [
+       42036.0,
+       11386.0,
+       0.0
+      ]
+     ],
+     "params": {
+      "heightAGL": 20,
+      "speed": 8,
+      "alat": 3,
+      "cornerRadius": 25,
+      "lookAhead": 28,
+      "tiltDeg": -14,
+      "maxBankDeg": 10,
+      "bankGain": 0.8,
+      "minClearance": 6,
+      "ends": "cruise"
+     },
+     "framing": "EWS",
+     "standingOrder": "Glide north up the forested gorge of Lin between its cliffs, the Life Stone, the portal and the skeleton statue appearing on the valley floor ahead.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "ESTABLISHING + GORGE (drone.canyon-run). A 107 m glide north up Lin's forested gorge 20 m above the valley floor (the cliffs rise 26-48 m and the pine-clad rims higher on both sides), looking 28 m ahead and 14 deg down with a gentle bank through one bend: the valley-floor halls, the Life Stone, the town portal and the skeleton statue come up ahead under the high sun. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42029.0,11280.0,20.0) end (42036.0,11386.0,20.0), min AGL 20.0 m, nearest static/building/spawn box 5.4 m (scenery:0x02000258), nearest building 9.9 m, trees by crown profile 6.8 m (default bake) / 0.0 m (opt-in retail bake), peak 7.7 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 20.00 m)."
+    },
+    {
+     "technique": "classic.static",
+     "duration": {
+      "sec": 11
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       42037.6,
+       11380.8,
+       0.0
+      ],
+      "height": 3.5,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 242.4,
+      "distance": 36.2,
+      "elevationDeg": 0,
+      "thirds": "right"
+     },
+     "framing": "WS",
+     "fov": 55,
+     "standingOrder": "Hold still at the bottom of the gorge: the Life Stone glowing on the left, the swirling portal and the skeleton statue on the right, cliffs and pines rising behind.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "MAGIC (classic.static). A locked eye-level frame on the gorge floor: the Life Stone glowing on the left, the skeleton statue on its pedestal in the middle and the swirling Town Network portal on the right third, with the pine-clad cliffs rising behind. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42005.5,11364.0,1.8) end (42005.5,11364.0,1.8), min AGL 1.8 m, nearest static/building/spawn box 7.6 m (scenery:0x02000258), nearest building 22.0 m, trees by crown profile 9.8 m (default bake) / 2.3 m (opt-in retail bake), peak 0.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.75 m)."
+    },
+    {
+     "technique": "classic.pedestal",
+     "duration": {
+      "sec": 9
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       42035.3,
+       11394.0,
+       0.0
+      ],
+      "height": 9,
+      "radius": 3
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 265,
+      "distance": 12,
+      "elevationDeg": -15,
+      "thirds": "center",
+      "riseM": 8,
+      "keepAim": true
+     },
+     "framing": "FS",
+     "fov": 50,
+     "standingOrder": "Rise slowly up the pedestal in front of the nullified skeleton statue until it stands against the forested cliff.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK (classic.pedestal). 12 m west of the nullified skeleton statue the camera rises 8 m (1.4 to 9.4 m) up its 6.8 m pedestal until the skeleton stands level with the lens against the eastern cliff and the forest; the high western sun behind the camera lights it. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42023.8,11393.0,1.4) end (42023.8,11393.0,9.4), min AGL 1.4 m, nearest static/building/spawn box 7.5 m (building:0x01000D67#66), nearest building 7.5 m, trees by crown profile 10.6 m (default bake) / 5.8 m (opt-in retail bake), peak 1.4 m/s; WBT get-height at 13 samples matched the checker terrain to 0.000 m (min WBT AGL 1.39 m)."
+    },
+    {
+     "technique": "drone.boomerang",
+     "duration": {
+      "sec": 13
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       42108.0,
+       11412.0,
+       26.0
+      ],
+      "height": 31,
+      "radius": 10
+     },
+     "params": {
+      "far": 62,
+      "near": 28,
+      "heightStart": 16,
+      "heightNear": 13,
+      "rise": 12,
+      "bearingDeg": 270,
+      "relativeToSubject": false,
+      "minClearance": 6
+     },
+     "framing": "FS",
+     "standingOrder": "Fly in over the gorge toward the octagon tower on the eastern rim, pause before its candle-lit west face, then drift back out climbing.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "LANDMARK + FLAME (drone.boomerang). Flies in level over the gorge from 62 m west (z 42) toward the three-storey octagon tower on the eastern rim, eases to a stop 28 m from its candle-lit west face, then drifts back out climbing 12 m: one continuous gesture across the gorge. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42046.0,11412.0,42.0) end (42046.0,11412.0,54.0), min AGL 29.3 m, nearest static/building/spawn box 9.8 m (scenery:0x02000258), nearest building 16.0 m, trees by crown profile 16.2 m (default bake) / 0.0 m (opt-in retail bake), peak 9.0 m/s; WBT get-height at 13 samples matched the checker terrain to 0.006 m (min WBT AGL 29.33 m)."
+    },
+    {
+     "technique": "drone.boom-rise",
+     "duration": {
+      "sec": 14
+     },
+     "subject": {
+      "kind": "point",
+      "pos": [
+       42035.3,
+       11394.0,
+       0.0
+      ],
+      "height": 9,
+      "radius": 2
+     },
+     "params": {
+      "heightStart": 2.5,
+      "heightEnd": 58,
+      "bearingDeg": 230,
+      "relativeToSubject": false,
+      "keepAim": false,
+      "tiltDeg": -6,
+      "minClearance": 2
+     },
+     "framing": "WS",
+     "standingOrder": "Rise straight up beside the skeleton statue from the floor of the gorge until the whole forested valley of Lin and its octagon tower open below.",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "notes": "CLOSING (drone.boom-rise). From 2.5 m above the gorge floor beside the skeleton statue, a straight vertical rise to 58 m with the camera held toward the north-east: the statue, the great broad tree and the halls drop away as the forested valley, the octagon tower on the rim and the hills beyond open up. Verified offline (real technique-registry build on WBT terrain with the site's sun, 4 Hz): start (42027.6,11387.6,2.6) end (42027.6,11387.6,58.0), min AGL 2.6 m, nearest static/building/spawn box 4.7 m (building:0x01002A1B#69), nearest building 4.7 m, trees by crown profile 12.5 m (default bake) / 1.5 m (opt-in retail bake), peak 6.2 m/s; WBT get-height at 9 samples matched the checker terrain to 0.000 m (min WBT AGL 2.56 m)."
+    }
+   ],
+   "verification": "WBT (RetailSmoke project, 10 short sessions run strictly one at a time): describe-landblock (includeFootprints) + list-objects + get-terrain-data for 0xDA3A, 0xDA3B, 0xDA3C, 0xDB3A, 0xDB3B, 0xDB3C, 0xDC3A, 0xDC3B, 0xDC3C, 0xDA39, 0xDB39; get-object-detail for every model on them (185 ids -> rotated AABBs); chorizite-parse-dat-record for the FX setups (lanterns/torches/candles/pillars of fire/waterfall emitters: lights + default scripts), the gate GfxObj 0x01000E65 (opening) and the tree setups 0x020002DB/D9/D3/0x02000258/0x02000322 (crown radius by height); region-day-night-curve (sun due west after 0.61: 0.64 ~80 deg, 0.70 ~63, 0.74 ~50, 0.78 ~39, 0.80 ~32); get-height at 57 camera samples (start/end/quarters/every 1/8), all within 0.006 m of the checker terrain. Clearance against WBT statics/buildings, dist spawn weenies and both scenery bakes (default dist/scenery and opt-in dist/scenery-retail, trees by crown profile). Per shot: s010 drone.canyon-run 14s: min AGL 20.0 m (WBT), boxes 5.4 m (scenery:0x02000258), building 9.9 m, trees 6.8/0.0 m (default/retail), peak 7.7 m/s; s020 classic.static 11s: min AGL 1.8 m (WBT), boxes 7.6 m (scenery:0x02000258), building 22.0 m, trees 9.8/2.3 m (default/retail), peak 0.0 m/s; s030 classic.pedestal 9s: min AGL 1.4 m (WBT), boxes 7.5 m (building:0x01000D67#66), building 7.5 m, trees 10.6/5.8 m (default/retail), peak 1.4 m/s; s040 drone.boomerang 13s: min AGL 29.3 m (WBT), boxes 9.8 m (scenery:0x02000258), building 16.0 m, trees 16.2/0.0 m (default/retail), peak 9.0 m/s; s050 drone.boom-rise 14s: min AGL 2.6 m (WBT), boxes 4.7 m (building:0x01002A1B#69), building 4.7 m, trees 12.5/1.5 m (default/retail), peak 6.2 m/s. Total 61 s. plan validate (dry build): valid: 0 error(s), 0 warning(s) (exit 0)."
+  }
+ ]
+}

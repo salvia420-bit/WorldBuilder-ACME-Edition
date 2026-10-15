@@ -1,0 +1,224 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Frost Haven scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "frost-haven",
+   "name": "Frost Haven",
+   "gazetteerId": "frost-haven",
+   "teleport": "@teleloc 0x9F29000E 36 131 290.1 1 0 0 0",
+   "anchor": [
+    30566,
+    8006,
+    290
+   ],
+   "settleSec": 3,
+   "look": {
+    "timeOfDay": 0.72,
+    "grade": "warm"
+   },
+   "lbKeys": [
+    "0x9F290000",
+    "0x9F2A0000",
+    "0xA0290000"
+   ]
+  }
+ ],
+ "shots": [
+  {
+   "id": "s010",
+   "site": "frost-haven",
+   "technique": "drone.pano-360",
+   "duration": {
+    "sec": 15
+   },
+   "framing": "EWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30720,
+     7990,
+     352
+    ],
+    "height": 2,
+    "radius": 2
+   },
+   "params": {
+    "heightAGL": 9,
+    "yawDeg": 170,
+    "direction": "cw",
+    "startHeadingDeg": 225,
+    "relativeToSubject": false,
+    "tiltDeg": -7,
+    "minClearance": 4
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Hover over the snowy east ridge and turn slowly from the valley past the snowman village in its bowl to the white flank of Mount Ingot; stay 7 m above the snow."
+  },
+  {
+   "id": "s020",
+   "site": "frost-haven",
+   "technique": "classic.dolly-in",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30593.3,
+     7998.5,
+     290
+    ],
+    "height": 2.2,
+    "radius": 3
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 280,
+    "elevationDeg": 4,
+    "thirds": "center",
+    "fromFraming": "EWS",
+    "profile": "perceptual"
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Dolly in on Robert the snowman beside the bed of glowing blue flowers and the lantern; stop 3 m short and keep clear of the snow-laden trees."
+  },
+  {
+   "id": "s030",
+   "site": "frost-haven",
+   "technique": "classic.two-shot",
+   "duration": {
+    "sec": 11
+   },
+   "framing": "MWS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30563.9,
+     8004.26,
+     290
+    ],
+    "height": 2.0,
+    "radius": 0.8
+   },
+   "params": {
+    "secondary": [
+     30564.64,
+     8007.79,
+     290
+    ],
+    "secondaryHeight": 2.0,
+    "side": "auto",
+    "distance": 7,
+    "elevationDeg": 6,
+    "driftDeg": 8
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Frame the snowmen Numb and Nip together in the middle of the village, drifting a few degrees; 3 m from both."
+  },
+  {
+   "id": "s040",
+   "site": "frost-haven",
+   "technique": "classic.time-lapse",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "EWS",
+   "fov": 66,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30610,
+     8130,
+     310
+    ],
+    "height": 50,
+    "radius": 120
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 195,
+    "elevationDeg": 12,
+    "distance": 280,
+    "thirds": "center",
+    "rate": 0.006
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Lock off south of the village looking north over its roofs to Mount Ingot while the clouds race and the light warms; nothing moves near the lens."
+  },
+  {
+   "id": "s050",
+   "site": "frost-haven",
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 13
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     30566,
+     8006,
+     290
+    ],
+    "height": 7,
+    "radius": 30
+   },
+   "params": {
+    "heightStart": 18,
+    "heightEnd": 95,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 6
+   },
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Look straight down on the ring of snow huts and lanterns and rise until the whole snow bowl shows; start 7 m above the tallest snow tree."
+  }
+ ]
+}

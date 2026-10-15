@@ -1,0 +1,229 @@
+{
+ "version": 1,
+ "title": "Dereth Town Tour - Beach Fort scratch",
+ "kind": "reel",
+ "format": {
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "capture": "stepped"
+ },
+ "defaults": {
+  "transition": "cut",
+  "pilot": {
+   "mode": "code"
+  }
+ },
+ "sites": [
+  {
+   "id": "beach-fort",
+   "name": "Beach Fort",
+   "gazetteerId": "beach-fort",
+   "teleport": "@telepoi Beach Fort",
+   "anchor": [
+    12697.0,
+    42708.5,
+    0.0
+   ],
+   "settleSec": 2,
+   "look": {
+    "timeOfDay": 0.44,
+    "grade": "neutral"
+   }
+  }
+ ],
+ "shots": [
+  {
+   "technique": "drone.terrain-skim",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "path": [
+    [
+     12572,
+     42712,
+     0
+    ],
+    [
+     12652,
+     42712,
+     0
+    ]
+   ],
+   "params": {
+    "heightAGL": 3,
+    "speed": 7,
+    "headingDeg": 90,
+    "relativeToSubject": false,
+    "lookAhead": 30,
+    "tiltDeg": 0,
+    "ends": "cruise",
+    "maxBankDeg": 0
+   },
+   "id": "s010",
+   "site": "beach-fort",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Skim east 3 m above the sea at 6.7 m/s straight at the palisade and settle 30 m short of it; never lower than 2.5 m over the water.",
+   "notes": "WATER (drone.terrain-skim). An 80 m straight path along y 42712 from x 12572 to 12652, 3 m above the sea (100 % over water, WBT ground 0), looking 30 m ahead: waves and sun glitter rush under the lens while the stake palisade and its blockhouses grow on the beach ahead with the pine hill behind. Ends 30 m from the west wall. Verified offline (real registry build + WBT terrain): start (12572.0,42712.0,3.0) end (12652.0,42712.0,3.0), min AGL 3.0 m, nearest static/building/tree 30.2 m (0x42DE#104 0x01001124), peak 6.7 m/s."
+  },
+  {
+   "technique": "drone.top-down-rise",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "params": {
+    "heightStart": 14,
+    "heightEnd": 80,
+    "rotateDeg": 45,
+    "headingDeg": 0,
+    "relativeToSubject": false,
+    "pitchDeg": -90,
+    "minClearance": 5
+   },
+   "id": "s020",
+   "site": "beach-fort",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Rise straight up from 14 m to 80 m above the fort centre looking straight down while the frame turns 45 degrees.",
+   "notes": "PATTERN (drone.top-down-rise). Nadir over the palisade centre: the stake rectangle, blockhouses and the two stone houses as a graphic square, then rising to 80 m the beach, the surf line and the open sea open up on one side and the pine hill on the other. Starts 7 m above the tallest stake (8.8 m 3-D). Verified offline (real registry build + WBT terrain): start (12696.0,42708.0,14.0) end (12696.0,42708.0,80.0), min AGL 14.0 m, nearest static/building/tree 8.8 m (0x42DE#80 0x01001127), peak 8.6 m/s."
+  },
+  {
+   "technique": "classic.hyperlapse",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "fov": 50,
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "params": {
+    "azimuthRef": "compass",
+    "azimuthDeg": 248,
+    "elevationDeg": 7,
+    "distance": 72,
+    "thirds": "center",
+    "move": "truck",
+    "moveM": 16,
+    "direction": "right",
+    "rate": 0.008
+   },
+   "id": "s030",
+   "site": "beach-fort",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Truck 16 m to the right 12 m above the shallows looking ENE at the fort while the sky clock races; hold height and keep the fort centred.",
+   "notes": "HYPERLAPSE + WATER (classic.hyperlapse, assigned). Camera 72 m WSW of the fort over the shallow sea (z 12.3, 100 % over water), trucking 16 m right in 14 s while sky time runs 0.008 day/s (0.44 -> 0.55, sun 55 -> 80 deg, never sets): clouds and their shadows race over the palisade and the pine hill, the beach and surf in the foreground. Verified offline (real registry build + WBT terrain): start (12626.7,42688.6,12.3) end (12632.7,42673.8,12.3), min AGL 12.3 m, nearest static/building/tree 46.2 m (0x02000258@12675,42631), peak 1.1 m/s."
+  },
+  {
+   "technique": "drone.orbit-poi",
+   "duration": {
+    "sec": 14
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12516.3,
+     42492,
+     21.5
+    ],
+    "height": 3,
+    "radius": 3
+   },
+   "params": {
+    "radius": 35,
+    "heightAGL": 10,
+    "revolutions": 0.25,
+    "direction": "ccw",
+    "bearingDeg": 100,
+    "relativeToSubject": false,
+    "minClearance": 5
+   },
+   "id": "s040",
+   "site": "beach-fort",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Orbit the temple summit portal a quarter turn counter-clockwise at 35 m radius and 10 m above it; stay 4 m above the temple top and 15 m from the pines.",
+   "notes": "PORTAL FX (drone.orbit-poi). Quarter orbit at z 31.5 (4 m above the temple's highest point, 35 m out) around the shadow portal and red glyph on the Moarsman Temple summit, from ESE to SSW over the sea (41 % over water): the black swirl with its red rim, the Quiddity Rift above it, the green crystal path and red pillar portal at the foot, coral, and the coast running north to Beach Fort. Verified offline (real registry build + WBT terrain): start (12550.8,42485.9,31.5) end (12522.4,42526.5,31.5), min AGL 31.5 m, nearest static/building/tree 17.4 m (0x020002D3@12572,42488), peak 3.9 m/s."
+  },
+  {
+   "technique": "drone.dronie",
+   "duration": {
+    "sec": 12
+   },
+   "framing": "WS",
+   "subject": {
+    "kind": "point",
+    "pos": [
+     12696,
+     42708,
+     0
+    ],
+    "height": 7,
+    "radius": 26
+   },
+   "params": {
+    "startDistance": 20,
+    "endDistance": 84,
+    "startHeight": 12,
+    "endHeight": 42,
+    "bearingDeg": 250,
+    "relativeToSubject": false,
+    "minClearance": 3
+   },
+   "id": "s050",
+   "site": "beach-fort",
+   "pilot": {
+    "mode": "code"
+   },
+   "bounds": {
+    "minSpeedScale": 1,
+    "maxSpeedScale": 1
+   },
+   "standingOrder": "Fly back and up from just outside the west wall to 84 m out over the sea and 42 m high, keeping the fort centred; never closer than 5 m to the stakes.",
+   "notes": "CLOSING (drone.dronie). Starts 20 m WSW of the fort centre, 12 m up (5 m above the stake tips), and pulls back along bearing 250 over the beach and out over the sea to 84 m / 42 m: the little fort shrinks against the pine hill while the coast, the surf and the temple to the south-west open up. Verified offline (real registry build + WBT terrain): start (12677.2,42701.2,12.0) end (12617.1,42679.3,42.0), min AGL 12.0 m, nearest static/building/tree 8.2 m (0x42DE#62 0x01001127), peak 9.3 m/s."
+  }
+ ],
+ "notes": "time 0.44 (sun east, 55 deg), grade neutral; the hyperlapse runs the clock to 0.55 (sun 80 deg) - the sun never drops"
+}

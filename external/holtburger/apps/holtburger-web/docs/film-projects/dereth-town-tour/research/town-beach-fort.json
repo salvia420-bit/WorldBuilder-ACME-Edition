@@ -1,0 +1,294 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "agent": "research batch Stonehold/Hoshino/Beach Fort/Eastwatch/Fiun/Silyun",
+ "planFile": "/mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-beach-fort.json",
+ "planValidate": "valid: 0 error(s), 0 warning(s)",
+ "planValidateExit": 0,
+ "lookNote": "time 0.44 (sun east, 55 deg), grade neutral; the hyperlapse runs the clock to 0.55 (sun 80 deg) - the sun never drops",
+ "towns": [
+  {
+   "name": "Beach Fort",
+   "summary": "Beach Fort (76.0N 49.1W) is a small walled outpost on the western shore of Northern Osteth: a 24 x 48 m palisade of pointed timber stakes with corner blockhouses on a flat grassy beach at sea level, the open sea to the west and a pine-covered hill behind. Inside, two stone houses; the archmage, healer, weaponsmith and peddler stand on the walls; Feruza ibn Salaq refines Chorizite and trades Pyreal Bars for Ring and Wall spells, Guard Al'Zira sends players against the Moarsmen, who stormed the fort in the Shattered Lines event. 290 m south-west down the coast stands the Moarsman Temple of the Blighted Desolation: a 27 m stepped temple with a black shadow portal and a red glyph on its summit, a red pillar portal and Quiddity Rifts at its foot, a path of 40 glowing green crystals, glowing crystal pyramids and coral.",
+   "landmarks": [
+    {
+     "name": "Palisade fort (centre)",
+     "pos": [
+      12696.0,
+      42708.0,
+      0.0
+     ],
+     "heightM": 7.0,
+     "note": "stakes 0x01001126/27/28 at z 5-7, corner blockhouses 0x0100115E at (12684/12708, 42684/42732)"
+    },
+    {
+     "name": "Inner stone houses (0x01001124, 0x01001130)",
+     "pos": [
+      12696.0,
+      42708.0,
+      0.0
+     ],
+     "heightM": 5.0,
+     "note": "at (12684,42708) and (12708,42708)"
+    },
+    {
+     "name": "Moarsman Temple (0x01003369)",
+     "pos": [
+      12516.0,
+      42492.0,
+      0.0
+     ],
+     "heightM": 27.3,
+     "note": "stepped temple on the shore"
+    },
+    {
+     "name": "Temple summit shadow portal + red glyph (0x02001582, 0x02001698)",
+     "pos": [
+      12516.3,
+      42492.0,
+      21.5
+     ],
+     "heightM": 3.0,
+     "note": "black swirl with red rim; Quiddity Rift 0x02000C10 above at 27.5"
+    },
+    {
+     "name": "Red pillar portal 'Blighted Desolation Moarsman Tunnels'",
+     "pos": [
+      12560.0,
+      42492.0,
+      0.0
+     ],
+     "heightM": 4.0,
+     "note": "red rising funnel swirl; Quiddity Rifts at (12560,42489/42495,4)"
+    },
+    {
+     "name": "Glowing green crystal path (0x020017E8 x40)",
+     "pos": [
+      12558.0,
+      42501.0,
+      0.0
+     ],
+     "heightM": 0.5,
+     "note": "runs north from the temple foot; glowing crystal pyramids 0x020017EC"
+    },
+    {
+     "name": "Western shore / open sea",
+     "pos": [
+      12600.0,
+      42708.0,
+      0.0
+     ],
+     "heightM": 0.0,
+     "note": "deep and shallow sea west of x 12660"
+    }
+   ],
+   "site": {
+    "id": "beach-fort",
+    "name": "Beach Fort",
+    "gazetteerId": "beach-fort",
+    "teleport": "@telepoi Beach Fort",
+    "anchor": [
+     12697.0,
+     42708.5,
+     0.0
+    ],
+    "settleSec": 2,
+    "look": {
+     "timeOfDay": 0.44,
+     "grade": "neutral"
+    }
+   },
+   "shots": [
+    {
+     "technique": "drone.terrain-skim",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "path": [
+      [
+       12572,
+       42712,
+       0
+      ],
+      [
+       12652,
+       42712,
+       0
+      ]
+     ],
+     "params": {
+      "heightAGL": 3,
+      "speed": 7,
+      "headingDeg": 90,
+      "relativeToSubject": false,
+      "lookAhead": 30,
+      "tiltDeg": 0,
+      "ends": "cruise",
+      "maxBankDeg": 0
+     },
+     "id": "s010",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Skim east 3 m above the sea at 6.7 m/s straight at the palisade and settle 30 m short of it; never lower than 2.5 m over the water.",
+     "notes": "WATER (drone.terrain-skim). An 80 m straight path along y 42712 from x 12572 to 12652, 3 m above the sea (100 % over water, WBT ground 0), looking 30 m ahead: waves and sun glitter rush under the lens while the stake palisade and its blockhouses grow on the beach ahead with the pine hill behind. Ends 30 m from the west wall. Verified offline (real registry build + WBT terrain): start (12572.0,42712.0,3.0) end (12652.0,42712.0,3.0), min AGL 3.0 m, nearest static/building/tree 30.2 m (0x42DE#104 0x01001124), peak 6.7 m/s."
+    },
+    {
+     "technique": "drone.top-down-rise",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12696,
+       42708,
+       0
+      ],
+      "height": 7,
+      "radius": 26
+     },
+     "params": {
+      "heightStart": 14,
+      "heightEnd": 80,
+      "rotateDeg": 45,
+      "headingDeg": 0,
+      "relativeToSubject": false,
+      "pitchDeg": -90,
+      "minClearance": 5
+     },
+     "id": "s020",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Rise straight up from 14 m to 80 m above the fort centre looking straight down while the frame turns 45 degrees.",
+     "notes": "PATTERN (drone.top-down-rise). Nadir over the palisade centre: the stake rectangle, blockhouses and the two stone houses as a graphic square, then rising to 80 m the beach, the surf line and the open sea open up on one side and the pine hill on the other. Starts 7 m above the tallest stake (8.8 m 3-D). Verified offline (real registry build + WBT terrain): start (12696.0,42708.0,14.0) end (12696.0,42708.0,80.0), min AGL 14.0 m, nearest static/building/tree 8.8 m (0x42DE#80 0x01001127), peak 8.6 m/s."
+    },
+    {
+     "technique": "classic.hyperlapse",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "fov": 50,
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12696,
+       42708,
+       0
+      ],
+      "height": 7,
+      "radius": 26
+     },
+     "params": {
+      "azimuthRef": "compass",
+      "azimuthDeg": 248,
+      "elevationDeg": 7,
+      "distance": 72,
+      "thirds": "center",
+      "move": "truck",
+      "moveM": 16,
+      "direction": "right",
+      "rate": 0.008
+     },
+     "id": "s030",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Truck 16 m to the right 12 m above the shallows looking ENE at the fort while the sky clock races; hold height and keep the fort centred.",
+     "notes": "HYPERLAPSE + WATER (classic.hyperlapse, assigned). Camera 72 m WSW of the fort over the shallow sea (z 12.3, 100 % over water), trucking 16 m right in 14 s while sky time runs 0.008 day/s (0.44 -> 0.55, sun 55 -> 80 deg, never sets): clouds and their shadows race over the palisade and the pine hill, the beach and surf in the foreground. Verified offline (real registry build + WBT terrain): start (12626.7,42688.6,12.3) end (12632.7,42673.8,12.3), min AGL 12.3 m, nearest static/building/tree 46.2 m (0x02000258@12675,42631), peak 1.1 m/s."
+    },
+    {
+     "technique": "drone.orbit-poi",
+     "duration": {
+      "sec": 14
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12516.3,
+       42492,
+       21.5
+      ],
+      "height": 3,
+      "radius": 3
+     },
+     "params": {
+      "radius": 35,
+      "heightAGL": 10,
+      "revolutions": 0.25,
+      "direction": "ccw",
+      "bearingDeg": 100,
+      "relativeToSubject": false,
+      "minClearance": 5
+     },
+     "id": "s040",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Orbit the temple summit portal a quarter turn counter-clockwise at 35 m radius and 10 m above it; stay 4 m above the temple top and 15 m from the pines.",
+     "notes": "PORTAL FX (drone.orbit-poi). Quarter orbit at z 31.5 (4 m above the temple's highest point, 35 m out) around the shadow portal and red glyph on the Moarsman Temple summit, from ESE to SSW over the sea (41 % over water): the black swirl with its red rim, the Quiddity Rift above it, the green crystal path and red pillar portal at the foot, coral, and the coast running north to Beach Fort. Verified offline (real registry build + WBT terrain): start (12550.8,42485.9,31.5) end (12522.4,42526.5,31.5), min AGL 31.5 m, nearest static/building/tree 17.4 m (0x020002D3@12572,42488), peak 3.9 m/s."
+    },
+    {
+     "technique": "drone.dronie",
+     "duration": {
+      "sec": 12
+     },
+     "framing": "WS",
+     "subject": {
+      "kind": "point",
+      "pos": [
+       12696,
+       42708,
+       0
+      ],
+      "height": 7,
+      "radius": 26
+     },
+     "params": {
+      "startDistance": 20,
+      "endDistance": 84,
+      "startHeight": 12,
+      "endHeight": 42,
+      "bearingDeg": 250,
+      "relativeToSubject": false,
+      "minClearance": 3
+     },
+     "id": "s050",
+     "pilot": {
+      "mode": "code"
+     },
+     "bounds": {
+      "minSpeedScale": 1,
+      "maxSpeedScale": 1
+     },
+     "standingOrder": "Fly back and up from just outside the west wall to 84 m out over the sea and 42 m high, keeping the fort centred; never closer than 5 m to the stakes.",
+     "notes": "CLOSING (drone.dronie). Starts 20 m WSW of the fort centre, 12 m up (5 m above the stake tips), and pulls back along bearing 250 over the beach and out over the sea to 84 m / 42 m: the little fort shrinks against the pine hill while the coast, the surf and the temple to the south-west open up. Verified offline (real registry build + WBT terrain): start (12677.2,42701.2,12.0) end (12617.1,42679.3,42.0), min AGL 12.0 m, nearest static/building/tree 8.2 m (0x42DE#62 0x01001127), peak 9.3 m/s."
+    }
+   ],
+   "verification": "WBT: describe-landblock 3x3 around 0x42DE (65-67 x 221-223), includeFootprints on 0x42DE/0x41DD, list-objects 0x42DE/0x41DD/0x42DD/0x41DE + 5x5 ring, get-terrain-data (water types: WaterShallowSea/WaterDeepSea west of x 12660), get-bulk-heightmap 64-68 x 220-224, get-object-detail (0x0100115E blockhouse 5 m, 0x01001127 stake 2 m, 0x01003369 temple 27.3 m). Particle catalog: 0x02001582 = shadow portal (black swirl, red rim), 0x02001698 = red pillar-portal funnel swirl. s010 path endpoint ground 0 / 100 % water; temple orbit 4 m above the temple top. WBT get-height at t=0, 1/4, 1/2, 3/4, end and min-AGL of every shot: s010 get-height 0.0..0.0 (AGL 3.0..3.0); s020 get-height 0.0..0.0 (AGL 14.0..80.0); s030 get-height 0.0..0.0 (AGL 12.3..12.3); s040 get-height 0.0..0.0 (AGL 31.5..31.5); s050 get-height 0.0..0.0 (AGL 12.0..42.0). Plan /mnt/wbterminal2/film-projects/dereth-town-tour/research/scratch-beach-fort.json: film.mjs plan validate -> valid: 0 error(s), 0 warning(s) (exit 0, offline dry build included). Method: WorldBuilder.Terminal (RetailSmoke project) in 7 sequential batched sessions (one at a time, free memory checked first); every shot was built with the real film technique registry (scene3d/film/shots, the same buildShot the page runs) against a ctx whose groundZ is the AC triangle-split terrain from WBT heightmaps (re-implementation matched WBT get-height to 0.01 m on all 174 probes) and sampled at 24 fps against static objects (list-objects + get-object-detail bounds, rotated), building footprint prisms (describe-landblock includeFootprints), both baked scenery sets (~/hb-serve/dist/current/scenery and scenery-retail AABBs) and ACE spawns (Life Stones, portals, statues with ACE-DB setup bounds); line of sight camera->subject checked every 6th frame. Sun from region-day-night-curve: heading 90 (east) until ~0.6, 270 after; elevation 38 deg @0.36, 51 @0.42, 55 @0.44, 63 @0.48, 90 @0.60, 60 @0.70, 43 @0.76.",
+   "totalSec": 64
+  }
+ ]
+}

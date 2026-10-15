@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "title": "Dereth Town Tour - Eastwatch and Egg Orchard scratch",
+  "kind": "music-video",
+  "format": { "width": 1920, "height": 1080, "fps": 24, "capture": "stepped" },
+  "defaults": { "transition": "cut", "pilot": { "mode": "code" } },
+  "sites": [
+    {
+      "id": "eastwatch",
+      "name": "Eastwatch",
+      "gazetteerId": "eastwatch",
+      "teleport": "@telepoi Eastwatch",
+      "anchor": [14110, 46150, 170],
+      "settleSec": 2,
+      "look": { "timeOfDay": 0.42, "grade": "cool" }
+    },
+    {
+      "id": "egg-orchard-portal",
+      "name": "Egg Orchard portals (Shattered Outlands glacier valley)",
+      "gazetteerId": "egg-orchard-portal",
+      "teleport": "@teleloc 0x43F70015 60 106 102.5 1 0 0 0",
+      "anchor": [12924, 47530, 102.2],
+      "settleSec": 2,
+      "look": { "timeOfDay": 0.42, "grade": "cool" }
+    },
+    {
+      "id": "egg-orchard",
+      "name": "Egg Orchard",
+      "gazetteerId": "egg-orchard",
+      "indoor": true,
+      "cell": "0x002B0371",
+      "teleport": "@teleloc 0x002B0371 458.535 -172.203 0.005 0.933008 0 0 -0.359856",
+      "anchor": { "cell": "0x002B0371", "local": [458.535, -172.203, 0.005] },
+      "settleSec": 2,
+      "ready": { "settleSec": 4, "timeoutSec": 120 },
+      "look": { "grade": "cool" }
+    }
+  ],
+  "shots": [
+    {
+      "id": "ew-010",
+      "site": "eastwatch",
+      "technique": "drone.orbit-poi",
+      "duration": { "sec": 14 },
+      "framing": "EWS",
+      "subject": { "kind": "point", "pos": [14128, 46140, 170], "height": 26, "radius": 40 },
+      "params": { "radius": 100, "heightAGL": 28, "revolutions": 0.18, "direction": "ccw", "bearingDeg": 215, "relativeToSubject": false, "minClearance": 20 },
+      "pilot": { "mode": "code" },
+      "bounds": { "minSpeedScale": 1, "maxSpeedScale": 1 },
+      "standingOrder": "Orbit the clifftop outpost at a steady 100 m radius and 28 m above its plateau, sweeping from the landward south-west out over the frozen shore and the sea; keep both towers in frame and stay 50 m clear of every roof.",
+      "notes": "Establishing + water: the camera starts SW over the island (ground 139) looking NE across the outpost to the open sea horizon, and swings ccw to SSE where it hangs 198 m above the sea and frozen shore, the town perched on its 170 m ice cliff. WBT get-height every 1 s: AGL 58.8-198 m; camera z 198 = 1.65 m above the tower tips (196.35) but never closer than 50 m horizontally to any structure; vmax 8.1 m/s."
+    },
+    {
+      "id": "ew-020",
+      "site": "eastwatch",
+      "technique": "drone.orbit-poi",
+      "duration": { "sec": 12 },
+      "framing": "WS",
+      "subject": { "kind": "point", "pos": [14098.2, 46156, 170], "height": 4, "radius": 6 },
+      "params": { "radius": 12, "heightAGL": 3, "revolutions": 0.3, "direction": "cw", "bearingDeg": 60, "relativeToSubject": false, "minClearance": 2 },
+      "pilot": { "mode": "code" },
+      "bounds": { "minSpeedScale": 1, "maxSpeedScale": 1 },
+      "standingOrder": "Circle low and slow around the Life Stone and the swirling town portal at 12 m and 3 m up; keep both in frame and stay 6 m from each.",
+      "notes": "Magic FX: purple Portal to Town Network swirl (setup 0x020001B3 on the glowing blue stone base 0x020019E3 at 14103.53,46154.79) and the Life Stone (14092.93,46157.13) orbited from NE round to SSE, front-lit by the morning sun with the west Scrivener tower behind. Orbit centre is the midpoint, so the camera stays 6.6 m+ from both. WBT: ground 170 everywhere (AGL 3.0), query-radius 6 m around every 1 s sample = 0 statics; nearest structures 20 m; vmax 1.9 m/s."
+    },
+    {
+      "id": "eop-010",
+      "site": "egg-orchard-portal",
+      "technique": "classic.push-in",
+      "duration": { "sec": 10 },
+      "framing": "WS",
+      "fov": 45,
+      "subject": { "kind": "point", "pos": [12923.83, 47556.72, 100.14], "height": 5, "radius": 3.5 },
+      "params": { "azimuthRef": "compass", "azimuthDeg": 180, "elevationDeg": 9, "fromFraming": "EWS", "profile": "perceptual" },
+      "pilot": { "mode": "code" },
+      "bounds": { "minSpeedScale": 1, "maxSpeedScale": 1 },
+      "standingOrder": "Push slowly up the frozen valley floor toward the three red Egg Orchard portals; keep the middle portal centred and stay 3 m above the ice.",
+      "notes": "Effect shot before the dungeon: three red portal swirls (setup 0x020005D5, 7 m discs) - West 12910.98,47553.81 / Mid 12923.83,47556.72 / East 12940.19,47553.42 - between giant spikes (0x02000AC0, 7.8 m), glowing mucor and a mushroom tree that erupts grey ash (0x02000AC4), blue-ice walls rising 100-180 m behind. Push 48 m -> 15 m along x 12923.83 from the south, sun behind the camera. WBT get-height: AGL 2.6-5.2 m; query-radius 6 m around every sample = 0 statics; the spikes flank the line of sight 3.8 m and 4.4 m off it; camera stops 4.2 m short of the low rock shelf 0x02000F7D and 2.8 m above it."
+    },
+    {
+      "id": "eo-010",
+      "site": "egg-orchard",
+      "technique": "fpv.fpv-corridor",
+      "duration": { "sec": 13 },
+      "route": { "fromCell": "0x002B0134", "toCell": "0x002B010C" },
+      "cell": "0x002B0134",
+      "params": { "cornerRadius": 3.5, "speed": 6, "amax": 6, "alat": 12, "lookAhead": 4.5, "heightOffset": -0.1, "bankGain": 1.5, "maxBankDeg": 35, "ends": "cruise" },
+      "pilot": { "mode": "jev" },
+      "bounds": { "maxLateral": 0.3, "maxRise": 0.2, "maxSink": 0.2, "minSpeedScale": 1, "maxSpeedScale": 1 },
+      "standingOrder": "Thread the toxic-vent tunnels of the lowest level at speed, banking through every bend, then burst into the egg chamber; keep 1 m from walls and vent spouts; green gas may be faded.",
+      "notes": "HERO. Floor Z -60 (bottom level), 16 cells, 75.5 m: corridor south -> right-angle west past a green gas vent -> 45-degree bend SW -> T-junction south -> bend west -> across the north edge of the south egg room (eggs 3-4 m to the left) -> right-angle north through its doorway vestibule -> right-angle west past a second vent -> bend NW -> straight north between two staggered vents -> into the west egg chamber (hive glowing 10 m to the left, eggs right). Verified offline with the page's own planIndoorPath + fpv-corridor build on a graph rebuilt from the EnvCell/Environment DAT records: peak 5.9 m/s, min 2.2 m/s, no overspeed, bank up to 32 deg, camera 1.4-3.2 m above the floor; wall clearance min 1.01 m (45-degree bends), median 1.8 m; vent clearance 1.0-1.35 m at camera height (top flares 1.8 m); eggs 1.8 m+; hive never closer than 7 m."
+    },
+    {
+      "id": "eo-020",
+      "site": "egg-orchard",
+      "technique": "classic.push-in",
+      "duration": { "sec": 8 },
+      "framing": "FS",
+      "fov": 50,
+      "cell": "0x002B010C",
+      "subject": { "kind": "point", "pos": [20.02, 8125.95, -59.94], "height": 4, "radius": 2.9 },
+      "params": { "azimuthRef": "compass", "azimuthDeg": 75, "elevationDeg": 10, "fromFraming": "WS", "profile": "perceptual" },
+      "pilot": { "mode": "code" },
+      "bounds": { "minSpeedScale": 1, "maxSpeedScale": 1 },
+      "standingOrder": "Push slowly in on the glowing toxic hive at the heart of the egg chamber over the cluster of olthoi eggs; stay 1.5 m from the hive and the eggs; green fog may be faded.",
+      "notes": "Effect shot: the toxic hive (0x02000F97, 5.6 x 5.4 x 2.3 m, green fog + throbbing 8.7 m green halo) in cell 0x002B0106 with three enchanted olthoi eggs (0x02000AE1) just in front, in green ghost-haze (0x02000693). Camera 10.7 m -> 4.9 m from the hive centre (1.75 m from its edge at the end), z -56.1 -> -57.1 (3-4 m above the floor of the 12 m tall chamber), starting in cell 0x002B010C."
+    }
+  ]
+}

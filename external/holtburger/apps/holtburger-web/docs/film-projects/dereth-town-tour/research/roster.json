@@ -1,0 +1,4610 @@
+{
+ "version": 1,
+ "project": "dereth-town-tour",
+ "generated": "2026-10-14",
+ "method": "Started from the 61 kind=='town' gazetteer entries. Excluded the brief's underground/indoor list and resolved doubtful entries from the newest acpedia revision. Cross-checked acpedia's 'Towns' page and Category:Town for missing surface towns. Verified every site in WorldBuilder.Terminal: describe-landblock on the 3x3 around each town (534 LBs), get-height on every gazetteer teleloc, and clearance checks (query-radius 14 m) on new telelocs. FX positions are ACE world-DB outdoor spawns (cell < 0x100) from describe-landblock.",
+ "sources": [
+  "/mnt/wbterminal2/film-projects/_gazetteer/film_gazetteer.jsonl",
+  "acpedia 2021-06 dump (Towns, Category:Town and per-town pages, newest revision)",
+  "WorldBuilder.Terminal 1.2.0 + RetailSmoke.wbproj",
+  "~/ac_base_dats/client_cell_1.dat (chorizite-parse-dat-record for Fort Tethana)"
+ ],
+ "counts": {
+  "gazetteerTowns": 61,
+  "included": 54,
+  "excluded": 9,
+  "hero": 5,
+  "core": 14,
+  "standard": 28,
+  "optional": 7
+ },
+ "tiers": {
+  "hero": "multiple shots; JEV-eligible hero moves (Rithwic under-bridge, Lytelthorpe showcase, Holtburg opening, Sanamar Royal Hall, Linvak Tukal finale)",
+  "core": "2-4 shots incl. a facade pan where streetPanCandidate",
+  "standard": "1-2 shots",
+  "optional": "1 shot or cut if the recording is short"
+ },
+ "chapters": [
+  {
+   "id": "ch1",
+   "title": "Aluvian Heartlands",
+   "suggestedTimeOfDay": 0.32,
+   "light": "morning: low warm sun raking across Holtburg's hill, river glints; build to the Rithwic bridge + Lytelthorpe keep double climax",
+   "towns": [
+    "Holtburg",
+    "Glenden Wood",
+    "Cragstone",
+    "Arwic",
+    "Eastham",
+    "Dryreach",
+    "Oolutanga's Refuge",
+    "Rithwic",
+    "Lytelthorpe"
+   ]
+  },
+  {
+   "id": "ch2",
+   "title": "The Northern Frontier",
+   "suggestedTimeOfDay": 0.4,
+   "light": "late morning: crisp high-latitude light on castles and mountain towns",
+   "towns": [
+    "Bandit Castle",
+    "Merwart Village",
+    "Neydisa Castle",
+    "Stonehold",
+    "Hoshino Fortress",
+    "Beach Fort"
+   ]
+  },
+  {
+   "id": "ch3",
+   "title": "New Viamont & the Halaetan Isles",
+   "suggestedTimeOfDay": 0.46,
+   "light": "late morning to midday: bright sun on ice, surf and the Royal Hall",
+   "towns": [
+    "Eastwatch",
+    "Fiun Outpost",
+    "Silyun",
+    "Westwatch",
+    "Sanamar"
+   ]
+  },
+  {
+   "id": "ch4",
+   "title": "Marae Lassel",
+   "suggestedTimeOfDay": 0.5,
+   "light": "noon: swamps, spires and the Greenspire lighthouse under a high sun",
+   "towns": [
+    "Ahurenga",
+    "Timaru",
+    "Redspire",
+    "Bluespire",
+    "Greenspire"
+   ]
+  },
+  {
+   "id": "ch5",
+   "title": "West into the Dires",
+   "suggestedTimeOfDay": 0.57,
+   "light": "early afternoon: harsher light over plateaus, forts and the Obsidian Plains",
+   "towns": [
+    "Plateau Village",
+    "Danby's Outpost",
+    "Fort Tethana",
+    "Ayan Baqur",
+    "Wai Jhou",
+    "Candeth Keep"
+   ]
+  },
+  {
+   "id": "ch6",
+   "title": "The Gharu'ndim Realm",
+   "suggestedTimeOfDay": 0.63,
+   "light": "afternoon desert heat: oases, coves, domes; bonfire and fountain at Yaraq",
+   "towns": [
+    "Qalaba'r",
+    "Khayyaban",
+    "Uziz",
+    "Al-Arqas",
+    "Yaraq",
+    "Tufa",
+    "Samsur",
+    "Al-Jalima",
+    "Zaikhal"
+   ]
+  },
+  {
+   "id": "ch7",
+   "title": "The Sho Lands",
+   "suggestedTimeOfDay": 0.72,
+   "light": "late afternoon: long shadows across pagodas, rivers, bays and the shadow-ruined Tou-Tou lighthouse",
+   "towns": [
+    "Yanshi",
+    "Sawato",
+    "Shoushi",
+    "Hebian-to",
+    "Tou-Tou",
+    "Baishi",
+    "Lin",
+    "Nanto",
+    "Mayoi"
+   ]
+  },
+  {
+   "id": "ch8",
+   "title": "Southern Isles & the Linvak Mountains",
+   "suggestedTimeOfDay": 0.8,
+   "light": "golden hour into a sunset finale (keep the sun above the horizon, about 0.80 to 0.84) on the snow fortress of Linvak Tukal",
+   "towns": [
+    "Kryst",
+    "Freehold",
+    "Kara",
+    "Frost Haven",
+    "Linvak Tukal"
+   ]
+  }
+ ],
+ "lookNotes": {
+  "clouds": "film CLI boots with ?clouds=on by default (tools/film/lib/session.mjs buildFilmUrl, owner 2026-10-14 'clouds have to be on'); never pass --clouds=off",
+  "timeOfDay": "plan look.timeOfDay 0..1 (presets dawn 0.21, morning 0.33, noon 0.5, golden 0.82, dusk 0.89). The owner wants the sun out, so keep values in about 0.27..0.84, avoid night/dusk, and check sun elevation on the first still of each chapter. The chapters step morning, late morning, noon, afternoon, late afternoon, golden: one sunlit 'day' across Dereth",
+  "waterFlamesParticles": "per-town visualHooks/fxSpawns list positions. Best flames: Sanamar bonfire, Yaraq bonfire (with fountain), the Tou-Tou Outpost flames cluster, forges at Zaikhal/Hebian-to/Baishi. Best water: Rithwic river and bridge, Holtburg river, Hebian-to river mouth, Mayoi bay, Kara lake, Yaraq cove, Greenspire/Ahurenga/Beach Fort/Eastwatch/Freehold/Kryst coasts. Fountains: Candeth Keep (3), Shoushi, Al-Jalima, Samsur, Ayan Baqur, Yaraq. Particle FX: every lifestone (sparkle column), Town Network and Tree/Ground portals (swirl), Plateau Village's 30 lanterns, Greenspire and Tou-Tou lighthouses"
+ },
+ "fieldNotes": {
+  "core.droneMinZOverCore": "max structure topZ anywhere in the 3x3 LBs + 5 m. Conservative: a hilltop tower can dominate it (Holtburg), so per-shot clearance still needs list-objects/query-radius at the actual camera line",
+  "core.waterShare3x3": "share of terrain vertices typed as water (sea/river/standing/slime) in the dominant-terrain lists of the 3x3; a coarse hint only",
+  "fxSpawns": "[worldX, worldY, z, weenieName] of outdoor ACE spawns (cell < 0x100): bonfire/flames/forge, fountain, lifestone, well. World metres: wx = lbX*192 + localX",
+  "streetPanCandidate": ">= 12 structures and >= 2 road LBs in the 3x3; still verify a 4 m clear corridor per shot",
+  "teleport.best": "telepoi = ACE POI drop (usually the Town Network portal drop); telelocs marked derived were built here from get-height + 14 m query-radius clearance"
+ },
+ "tourOrder": [
+  "Holtburg",
+  "Glenden Wood",
+  "Cragstone",
+  "Arwic",
+  "Eastham",
+  "Dryreach",
+  "Oolutanga's Refuge",
+  "Rithwic",
+  "Lytelthorpe",
+  "Bandit Castle",
+  "Merwart Village",
+  "Neydisa Castle",
+  "Stonehold",
+  "Hoshino Fortress",
+  "Beach Fort",
+  "Eastwatch",
+  "Fiun Outpost",
+  "Silyun",
+  "Westwatch",
+  "Sanamar",
+  "Ahurenga",
+  "Timaru",
+  "Redspire",
+  "Bluespire",
+  "Greenspire",
+  "Plateau Village",
+  "Danby's Outpost",
+  "Fort Tethana",
+  "Ayan Baqur",
+  "Wai Jhou",
+  "Candeth Keep",
+  "Qalaba'r",
+  "Khayyaban",
+  "Uziz",
+  "Al-Arqas",
+  "Yaraq",
+  "Tufa",
+  "Samsur",
+  "Al-Jalima",
+  "Zaikhal",
+  "Yanshi",
+  "Sawato",
+  "Shoushi",
+  "Hebian-to",
+  "Tou-Tou",
+  "Baishi",
+  "Lin",
+  "Nanto",
+  "Mayoi",
+  "Kryst",
+  "Freehold",
+  "Kara",
+  "Frost Haven",
+  "Linvak Tukal"
+ ],
+ "towns": [
+  {
+   "order": 1,
+   "name": "Holtburg",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "hero",
+   "gazetteerId": "holtburg",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xA9B40019",
+   "gazetteerCell": "0xA9B40019",
+   "map": {
+    "ns": 42.31,
+    "ew": 33.81
+   },
+   "teleport": {
+    "best": "@telepoi Holtburg",
+    "alt": null,
+    "gazetteerBest": "@telepoi Holtburg"
+   },
+   "why": "acpedia: one of the first Aluvian villages (2 PY), on a hill over the River Prosper; the classic starter town and the opening of the film",
+   "visualHooks": "River Prosper below the hill (water about 17% of the 3x3); spire-roofed 5-story tower on the hilltop (top z 142.8); lifestone sparkle at 32529,34572 z94; well. Lead, not yet checked: the Eternal Flame memorial brazier at 40.4N 34.5E (LB 0xAAB1, beside the Holtburg Redoubt), a candidate flames insert",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      32529.3,
+      34571.8,
+      94,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      32538.1,
+      34717.8,
+      66,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 3,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xA9B4",
+    "structures3x3": 16,
+    "structuresPerLb": {
+     "0xA9B3": 1,
+     "0xA9B4": 12,
+     "0xAAB3": 2,
+     "0xAAB5": 1
+    },
+    "centroidWorld": [
+     32583.6,
+     34623.2
+    ],
+    "centroidMap": {
+     "ns": 42.31,
+     "ew": 33.81
+    },
+    "maxRoofTopZ3x3": 142.75,
+    "droneMinZOverCore": 147.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 32748,
+     "y": 34428,
+     "floorZ": 112,
+     "topZ": 142.75
+    },
+    "terrainZRange3x3": [
+     28,
+     116
+    ],
+    "waterShare3x3": 0.166,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 2,
+   "name": "Glenden Wood",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "standard",
+   "gazetteerId": "glenden-wood",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xA0A40025",
+   "gazetteerCell": "0xA0A40025",
+   "map": {
+    "ns": 29.76,
+    "ew": 26.97
+   },
+   "teleport": {
+    "best": "@telepoi Glenden Wood",
+    "alt": null,
+    "gazetteerBest": "@telepoi Glenden Wood"
+   },
+   "why": "acpedia: Aluvian town nestled in the Tiofor Woods west of Cragstone, invaded by New Viamont in 16 PY; forest-town look",
+   "visualHooks": "forest canopy around the town, two lifestones (30692,31651 z84 and 30917,31589 z50), two wells, 2 lanterns",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      30692.2,
+      31651.1,
+      84.4,
+      "Life Stone"
+     ],
+     [
+      30917.4,
+      31589.3,
+      50.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      30680.9,
+      31636.3,
+      85.7,
+      "Well"
+     ],
+     [
+      30964.1,
+      31612.4,
+      50,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Atrium Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 2,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xA1A4",
+    "structures3x3": 14,
+    "structuresPerLb": {
+     "0x9FA4": 3,
+     "0xA1A3": 1,
+     "0xA1A4": 10
+    },
+    "centroidWorld": [
+     30940.9,
+     31609.9
+    ],
+    "centroidMap": {
+     "ns": 29.76,
+     "ew": 26.97
+    },
+    "maxRoofTopZ3x3": 96.25,
+    "droneMinZOverCore": 101.2,
+    "tallest": {
+     "type": "two-story building with 17 interior cells",
+     "x": 31065.6,
+     "y": 31576.3,
+     "floorZ": 50.16,
+     "topZ": 62.17
+    },
+    "terrainZRange3x3": [
+     50,
+     162
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 3,
+   "name": "Cragstone",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "core",
+   "gazetteerId": "cragstone",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xBB9F0040",
+   "gazetteerCell": "0xBB9F0040",
+   "map": {
+    "ns": 25.48,
+    "ew": 48.37
+   },
+   "teleport": {
+    "best": "@telepoi Cragstone",
+    "alt": null,
+    "gazetteerBest": "@telepoi Cragstone"
+   },
+   "why": "acpedia: capital city of the Aluvians, named for Thorsten Cragstone; second-oldest human settlement on Dereth",
+   "visualHooks": "capital streets with lanterns (4) and the Nullified Statue of Thorsten Cragstone; small water share (6%); lifestone at 36244,30604 z32; good facade pans",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      36243.8,
+      30604.0,
+      32.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 3,
+   "portals": [
+    "Sanctum Residential Halls Portal",
+    "Portal to Town Network",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 4,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xBC9F",
+    "structures3x3": 19,
+    "structuresPerLb": {
+     "0xBA9E": 2,
+     "0xBA9F": 1,
+     "0xBAA0": 1,
+     "0xBB9F": 4,
+     "0xBC9E": 2,
+     "0xBC9F": 9
+    },
+    "centroidWorld": [
+     36076.7,
+     30582.2
+    ],
+    "centroidMap": {
+     "ns": 25.48,
+     "ew": 48.37
+    },
+    "maxRoofTopZ3x3": 88.74,
+    "droneMinZOverCore": 93.7,
+    "tallest": {
+     "type": "three-story octagon tower with tapered roof, 3 interior cells",
+     "x": 35964,
+     "y": 30588,
+     "floorZ": 70,
+     "topZ": 83.75
+    },
+    "terrainZRange3x3": [
+     0,
+     70
+    ],
+    "waterShare3x3": 0.063,
+    "roadLandblocks": 7
+   },
+   "subSites": null
+  },
+  {
+   "order": 4,
+   "name": "Arwic",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "core",
+   "gazetteerId": "arwic",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xC6A90009",
+   "gazetteerCell": "0xC6A90009",
+   "map": {
+    "ns": 33.44,
+    "ew": 56.66
+   },
+   "teleport": {
+    "best": "@telepoi Arwic",
+    "alt": null,
+    "gazetteerBest": "@telepoi Arwic"
+   },
+   "why": "acpedia: once a mining and trade hub, destroyed by Shadow Spires and rebuilt as a walled, fortified city with a central tower",
+   "visualHooks": "34 structures in the 3x3, the densest Aluvian core: stone walls and a central tower, ideal for truck or parallax moves along walls; lifestone at 38097,32530 z42",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      38096.5,
+      32529.6,
+      42.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Arwic Mines Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xC6A9",
+    "structures3x3": 34,
+    "structuresPerLb": {
+     "0xC5A8": 2,
+     "0xC5A9": 1,
+     "0xC6A8": 1,
+     "0xC6A9": 30
+    },
+    "centroidWorld": [
+     38067.0,
+     32494.5
+    ],
+    "centroidMap": {
+     "ns": 33.44,
+     "ew": 56.66
+    },
+    "maxRoofTopZ3x3": 72.9,
+    "droneMinZOverCore": 77.9,
+    "tallest": {
+     "type": "four-story building with tapered roof",
+     "x": 38100,
+     "y": 32508,
+     "floorZ": 42,
+     "topZ": 72.9
+    },
+    "terrainZRange3x3": [
+     22,
+     112
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 4
+   },
+   "subSites": null
+  },
+  {
+   "order": 5,
+   "name": "Eastham",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "standard",
+   "gazetteerId": "eastham",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xCE940035",
+   "gazetteerCell": "0xCE940035",
+   "map": {
+    "ns": 17.51,
+    "ew": 63.39
+   },
+   "teleport": {
+    "best": "@telepoi Eastham",
+    "alt": null,
+    "gazetteerBest": "@telepoi Eastham"
+   },
+   "why": "acpedia: coastal Aluvian town on the Arwic to Rithwic road, closest settlement to Asheron's Island (windmill portal)",
+   "visualHooks": "coastal light, windmill, 5 lanterns, lifestone at 39891,28742 z20, well. Asheron's Island lies offshore as a possible background",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      39890.9,
+      28742.1,
+      20,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      39680.2,
+      28674.1,
+      20,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Simple Tower Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 5,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xCE95",
+    "structures3x3": 17,
+    "structuresPerLb": {
+     "0xCE94": 3,
+     "0xCE95": 12,
+     "0xCF95": 2
+    },
+    "centroidWorld": [
+     39680.9,
+     28669.6
+    ],
+    "centroidMap": {
+     "ns": 17.51,
+     "ew": 63.39
+    },
+    "maxRoofTopZ3x3": 38.74,
+    "droneMinZOverCore": 43.7,
+    "tallest": {
+     "type": "three-story octagon tower with tapered roof, 3 interior cells",
+     "x": 39900,
+     "y": 28764,
+     "floorZ": 20,
+     "topZ": 33.75
+    },
+    "terrainZRange3x3": [
+     6,
+     38
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 6,
+   "name": "Dryreach",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "standard",
+   "gazetteerId": "dryreach",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands (southern frontier)",
+   "cell": "0xDA75002B",
+   "gazetteerCell": "0xDA75002B",
+   "map": {
+    "ns": -8.03,
+    "ew": 73.12
+   },
+   "teleport": {
+    "best": "@telepoi Dryreach",
+    "alt": null,
+    "gazetteerBest": "@telepoi Dryreach"
+   },
+   "why": "acpedia: a frontier fortress forever besieged by Hea Tumeroks, who use it as a training ground",
+   "visualHooks": "27 structures, a fortress town with walls; 2 lanterns; well. The Tusker Temple at 10.5S 65.6E nearby is the canonical portal to Oolutanga's Refuge, the next stop",
+   "fxSpawns": {
+    "well": [
+     [
+      41988.9,
+      22525.2,
+      18,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 2,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xDA75",
+    "structures3x3": 27,
+    "structuresPerLb": {
+     "0xDA74": 1,
+     "0xDA75": 21,
+     "0xDA76": 1,
+     "0xDB74": 2,
+     "0xDB76": 2
+    },
+    "centroidWorld": [
+     42017.4,
+     22540.9
+    ],
+    "centroidMap": {
+     "ns": -8.03,
+     "ew": 73.12
+    },
+    "maxRoofTopZ3x3": 48.75,
+    "droneMinZOverCore": 53.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 41964,
+     "y": 22596,
+     "floorZ": 18,
+     "topZ": 48.75
+    },
+    "terrainZRange3x3": [
+     14,
+     58
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 2
+   },
+   "subSites": null
+  },
+  {
+   "order": 7,
+   "name": "Oolutanga's Refuge",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "standard",
+   "gazetteerId": "oolutangas-refuge",
+   "culture": "Tusker / Tumerok",
+   "region": "Aphus Lassel (tropical isle; the gazetteer's 'Aluvian Heartlands' is wrong)",
+   "cell": "0xF6820033",
+   "gazetteerCell": "0xF6820033",
+   "map": {
+    "ns": 2.27,
+    "ew": 95.43
+   },
+   "teleport": {
+    "best": "@telepoi Refuge",
+    "alt": null,
+    "gazetteerBest": "@telepoi Refuge"
+   },
+   "why": "acpedia: the only town on the tropical island of Aphus Lassel, built on platforms; ruled by the tusker Oolutanga; a tropical interlude",
+   "visualHooks": "platform town in jungle, roofs to z 72; sea around the island",
+   "fxSpawns": {},
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xF682",
+    "structures3x3": 6,
+    "structuresPerLb": {
+     "0xF681": 1,
+     "0xF682": 5
+    },
+    "centroidWorld": [
+     47372.0,
+     25012.0
+    ],
+    "centroidMap": {
+     "ns": 2.27,
+     "ew": 95.43
+    },
+    "maxRoofTopZ3x3": 72.1,
+    "droneMinZOverCore": 77.1,
+    "tallest": {
+     "type": "single-story building with pitched roof, 11 interior cells",
+     "x": 47412,
+     "y": 25044,
+     "floorZ": 62,
+     "topZ": 72.1
+    },
+    "terrainZRange3x3": [
+     12,
+     198
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 4
+   },
+   "subSites": null
+  },
+  {
+   "order": 8,
+   "name": "Rithwic",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "hero",
+   "gazetteerId": "rithwic",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xC98C0028",
+   "gazetteerCell": "0xC98C0028",
+   "map": {
+    "ns": 10.61,
+    "ew": 58.6
+   },
+   "teleport": {
+    "best": "@telepoi Rithwic",
+    "alt": null,
+    "gazetteerBest": "@telepoi Rithwic"
+   },
+   "why": "acpedia: settled 7 PY at a ford of the River Prosper at the south end of Lake Blessed; the Prosper Span bridge joins Rithwic and East Rithwic. Hero shot: a drone flying under the bridge",
+   "visualHooks": "PROSPER SPAN (verified): 4 bridge GfxObjs on the line y=27060. Piers 0x01000D72 at x38580 and 0x01000D71 at x38652, origin z 17.75; deck segments 0x01000D6F at x38604 and 0x01000D70 at x38628, origin z 20.95, bounds z -5..+6, so the underside is about z 16 and the top about z 27; deck width y 27055..27065. River channel x 38592..38640 at terrain/water z 4 (checked at y 27000..27120 along x 38616); banks rise to z 22 at x<=38568 and x>=38664. The under-deck gap is about 48 m wide by about 12 m tall. Fly the drone N-S along x 38612..38620 at z 8..10, which keeps about 4 m above the water and about 6 m below the deck. The river is the water shot; lifestone at 38726,27164 z22; 3 lanterns",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      38726.2,
+      27164.3,
+      22,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      38452.1,
+      27019.6,
+      22,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 3,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xC88C",
+    "structures3x3": 21,
+    "structuresPerLb": {
+     "0xC88B": 1,
+     "0xC88C": 13,
+     "0xC88D": 1,
+     "0xC98C": 6
+    },
+    "centroidWorld": [
+     38532.8,
+     27013.2
+    ],
+    "centroidMap": {
+     "ns": 10.61,
+     "ew": 58.6
+    },
+    "maxRoofTopZ3x3": 34.7,
+    "droneMinZOverCore": 39.7,
+    "tallest": {
+     "type": "three-story building with pitched roof, 7 interior cells",
+     "x": 38484.3,
+     "y": 26860.7,
+     "floorZ": 22,
+     "topZ": 34.7
+    },
+    "terrainZRange3x3": [
+     4,
+     38
+    ],
+    "waterShare3x3": 0.122,
+    "roadLandblocks": 7
+   },
+   "subSites": null
+  },
+  {
+   "order": 9,
+   "name": "Lytelthorpe",
+   "chapter": "ch1",
+   "chapterTitle": "Aluvian Heartlands",
+   "tier": "hero",
+   "gazetteerId": "lytelthorpe",
+   "culture": "Aluvian",
+   "region": "Aluvian Heartlands",
+   "cell": "0xC0800007",
+   "gazetteerCell": "0xC0800007",
+   "map": {
+    "ns": 0.75,
+    "ew": 51.31
+   },
+   "teleport": {
+    "best": "@telepoi Lytelthorpe",
+    "alt": null,
+    "gazetteerBest": "@telepoi Lytelthorpe"
+   },
+   "why": "acpedia: an abandoned Empyrean fortress cleared of Banderlings (10 PY) and restored as Lytelthorpe Keep, now Lord Aleval's, overlooking the town at 0.9N 51.1E. Fortress showcase with several shots",
+   "visualHooks": "KEEP (verified, LB 0xBF80): a 24 m grid of keep blocks at x 36708..36756, y 24684..24732, base z 54. Three 5-story spire-roof towers (0x01001161 at 36756,24732 and 36708,24732; 0x01001117 at 36732,24708) top out at z 84.75, so drones go to z >= 90. Town below to the SE at z 32..44 (x 36708..36852, y 24588..24660). Keep centre 36732,24708 is map 1.0N 51.1E. Lifestone at 36817,24603 z34; 2 wells",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      36816.6,
+      24602.9,
+      34.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      36812.2,
+      24654.1,
+      34,
+      "Well"
+     ],
+     [
+      37082.0,
+      24481.9,
+      26,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Haven Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.32,
+   "core": {
+    "coreLb": "0xBF80",
+    "structures3x3": 21,
+    "structuresPerLb": {
+     "0xBF80": 19,
+     "0xC07F": 1,
+     "0xC17F": 1
+    },
+    "centroidWorld": [
+     36781.9,
+     24648.4
+    ],
+    "centroidMap": {
+     "ns": 0.75,
+     "ew": 51.31
+    },
+    "maxRoofTopZ3x3": 84.75,
+    "droneMinZOverCore": 89.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 36756,
+     "y": 24732,
+     "floorZ": 54,
+     "topZ": 84.75
+    },
+    "terrainZRange3x3": [
+     22,
+     64
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 10,
+   "name": "Bandit Castle",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "core",
+   "gazetteerId": "bandit-castle",
+   "culture": "Aluvian (independent bandits)",
+   "region": "Aluvian Frontier, edge of Olthoi North",
+   "cell": "0xBDD2002C",
+   "gazetteerCell": "0xBDD00006",
+   "map": {
+    "ns": 66.4,
+    "ew": 49.9
+   },
+   "teleport": {
+    "best": "@teleloc 0xBDD2002C 130.512 92.5485 186.005 -0.746387 0 0 -0.665512",
+    "alt": "@telepoi Bandit Castle (drops at the foot of the hill, 0xBDD0, about 1.5 map units south)",
+    "gazetteerBest": "@telepoi Bandit Castle"
+   },
+   "why": "acpedia: hilltop castle NE of Osteth held by MacDugal's bandits, exiles from Cragstone; dramatic silhouette",
+   "visualHooks": "castle on a hilltop at z 186 (roofs to z 198, LB 0xBDD2); lifestone at the castle gate (36419,40413 z186); wide valley views",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      36229.0,
+      40172.3,
+      102.3,
+      "Life Stone"
+     ],
+     [
+      36418.5,
+      40412.6,
+      186.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0xBDD2",
+    "structures3x3": 9,
+    "structuresPerLb": {
+     "0xBDD2": 9
+    },
+    "centroidWorld": [
+     36444.7,
+     40404.0
+    ],
+    "centroidMap": {
+     "ns": 66.4,
+     "ew": 49.9
+    },
+    "maxRoofTopZ3x3": 198,
+    "droneMinZOverCore": 203,
+    "tallest": {
+     "type": "single-story building with 15 interior cells",
+     "x": 36474,
+     "y": 40404,
+     "floorZ": 186,
+     "topZ": 198
+    },
+    "terrainZRange3x3": [
+     44,
+     186
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 7
+   },
+   "subSites": null
+  },
+  {
+   "order": 11,
+   "name": "Merwart Village",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "optional",
+   "gazetteerId": "merwart-village",
+   "culture": "Merwart (Mosswart-kin)",
+   "region": "Vissidal (island raised from the sea)",
+   "cell": "0xC9E3002E",
+   "gazetteerCell": "0xC9E30025",
+   "map": {
+    "ns": 80.0,
+    "ew": 59.15
+   },
+   "teleport": {
+    "best": "@teleloc 0xC9E3002E 127.8 125.4 26.1 1 0 0 0",
+    "alt": "@tele 80.05N 59.25E",
+    "gazetteerBest": "@tele 80.05N 59.25E"
+   },
+   "why": "acpedia: a Merwart village on Vissidal, the island raised from the sea in Under Cover of Night; real shops and quest givers; exotic shoreline",
+   "visualHooks": "sea and slime shore (water 43%); lifestone at 38726,43715 z26. Teleloc derived by this study: terrain z 26, no object within 14 m",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      38725.8,
+      43715.4,
+      26,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0xC9E3",
+    "structures3x3": 2,
+    "structuresPerLb": {
+     "0xC9E3": 2
+    },
+    "centroidWorld": [
+     38664.0,
+     43668.0
+    ],
+    "centroidMap": {
+     "ns": 80.0,
+     "ew": 59.15
+    },
+    "maxRoofTopZ3x3": 57.62,
+    "droneMinZOverCore": 62.6,
+    "tallest": {
+     "type": "5-story building with pitched roof, 5 interior cells",
+     "x": 38652,
+     "y": 43692,
+     "floorZ": 24,
+     "topZ": 57.62
+    },
+    "terrainZRange3x3": [
+     0,
+     34
+    ],
+    "waterShare3x3": 0.432,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 12,
+   "name": "Neydisa Castle",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "core",
+   "gazetteerId": "neydisa-castle",
+   "culture": "Aluvian (independent)",
+   "region": "Esper Mountains (north)",
+   "cell": "0x95D60033",
+   "gazetteerCell": "0x95D60033",
+   "map": {
+    "ns": 69.62,
+    "ew": 17.79
+   },
+   "teleport": {
+    "best": "@telepoi Neydisa",
+    "alt": null,
+    "gazetteerBest": "@telepoi Neydisa"
+   },
+   "why": "acpedia: Foster's Fort, an abandoned Empyrean spired castle claimed by Neydisa's faction; an outpost of civilization in the northern Esper mountains",
+   "visualHooks": "spired Empyrean towers (6-story spire, top z 131.5; max roof z 162.8) on a z 100 shelf; lifestone and well at the gate (28706,41187 z100)",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      28706.2,
+      41187.0,
+      100,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      28676.2,
+      41154.8,
+      100,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0x95D6",
+    "structures3x3": 12,
+    "structuresPerLb": {
+     "0x94D6": 1,
+     "0x95D6": 8,
+     "0x96D6": 3
+    },
+    "centroidWorld": [
+     28738.0,
+     41176.0
+    ],
+    "centroidMap": {
+     "ns": 69.62,
+     "ew": 17.79
+    },
+    "maxRoofTopZ3x3": 162.75,
+    "droneMinZOverCore": 167.8,
+    "tallest": {
+     "type": "6-story building with spire roof, 19 interior cells",
+     "x": 28692,
+     "y": 41148,
+     "floorZ": 100,
+     "topZ": 131.48
+    },
+    "terrainZRange3x3": [
+     76,
+     262
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 2
+   },
+   "subSites": null
+  },
+  {
+   "order": 13,
+   "name": "Stonehold",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "standard",
+   "gazetteerId": "stonehold",
+   "culture": "Aluvian",
+   "region": "Aluvian Frontier (western Esper range)",
+   "cell": "0x64D5000B",
+   "gazetteerCell": "0x64D5000B",
+   "map": {
+    "ns": 68.9,
+    "ew": -21.57
+   },
+   "teleport": {
+    "best": "@telepoi Stonehold",
+    "alt": null,
+    "gazetteerBest": "@telepoi Stonehold"
+   },
+   "why": "acpedia: town in the westernmost reaches of the Esper mountains; hunters and the road to Knorr",
+   "visualHooks": "mountain town (terrain z 18..170, roofs to z 189); two lifestones; 2 lanterns",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      19229.2,
+      40995.8,
+      78,
+      "Life Stone"
+     ],
+     [
+      19417.4,
+      40899.4,
+      73.8,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 2,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0x64D5",
+    "structures3x3": 10,
+    "structuresPerLb": {
+     "0x64D5": 9,
+     "0x64D6": 1
+    },
+    "centroidWorld": [
+     19290.7,
+     41003.9
+    ],
+    "centroidMap": {
+     "ns": 68.9,
+     "ew": -21.57
+    },
+    "maxRoofTopZ3x3": 188.75,
+    "droneMinZOverCore": 193.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 19332,
+     "y": 41220,
+     "floorZ": 158,
+     "topZ": 188.75
+    },
+    "terrainZRange3x3": [
+     18,
+     170
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 14,
+   "name": "Hoshino Fortress",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "optional",
+   "gazetteerId": "hoshinos-fortress",
+   "culture": "Sho (spectral)",
+   "region": "Northern Osteth (NW)",
+   "cell": "0x4AE1002D",
+   "gazetteerCell": "0x4AE30013",
+   "map": {
+    "ns": 79.42,
+    "ew": -42.14
+   },
+   "teleport": {
+    "best": "@teleloc 0x4AE1002D 132 100 66.4 1 0 0 0",
+    "alt": "@tele 79.90N 42.50W",
+    "gazetteerBest": "@tele 79.90N 42.50W"
+   },
+   "why": "acpedia 'Hoshino Fortress (area)': a huge Sho fortress on a plateau (base z 172, blocks to z 235) ringed by a pagoda and 3 'Hoshino Towns'. A real surface fortress worth one or two drone shots. It is a tier-8 undead hunting ground, so spectral ghosts may enter frame. Replaces the standalone Hoshino Town 2/3 entries",
+   "visualHooks": "fortress grid x 14148..14509, y 43404..43836, base z 172, top z 235.6; Hoshino Town 2 village below to the south. The teleloc lands on open ground south of the fortress at 14340,43300 (terrain z 66.3, nothing within 14 m), derived by this study",
+   "fxSpawns": {},
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0x4AE2",
+    "structures3x3": 50,
+    "structuresPerLb": {
+     "0x49E4": 1,
+     "0x4AE2": 18,
+     "0x4AE3": 12,
+     "0x4BE2": 18,
+     "0x4BE3": 1
+    },
+    "centroidWorld": [
+     14353.9,
+     43529.3
+    ],
+    "centroidMap": {
+     "ns": 79.42,
+     "ew": -42.14
+    },
+    "maxRoofTopZ3x3": 235.59,
+    "droneMinZOverCore": 240.6,
+    "tallest": {
+     "type": "two-story building",
+     "x": 14340,
+     "y": 43536,
+     "floorZ": 172,
+     "topZ": 235.59
+    },
+    "terrainZRange3x3": [
+     10,
+     172
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 15,
+   "name": "Beach Fort",
+   "chapter": "ch2",
+   "chapterTitle": "The Northern Frontier",
+   "tier": "standard",
+   "gazetteerId": "beach-fort",
+   "culture": "Aluvian (independent)",
+   "region": "Northern Osteth west coast",
+   "cell": "0x42DE000C",
+   "gazetteerCell": "0x42DE000C",
+   "map": {
+    "ns": 75.77,
+    "ew": -49.23
+   },
+   "teleport": {
+    "best": "@telepoi Beach Fort",
+    "alt": null,
+    "gazetteerBest": "@telepoi Beach Fort"
+   },
+   "why": "acpedia: a small walled outpost on the western shore of Northern Osteth; Moarsman temple down the coast",
+   "visualHooks": "walled fort on the shore (water 32%): waves and beach",
+   "fxSpawns": {},
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.4,
+   "core": {
+    "coreLb": "0x42DE",
+    "structures3x3": 8,
+    "structuresPerLb": {
+     "0x41DD": 2,
+     "0x42DE": 6
+    },
+    "centroidWorld": [
+     12654.0,
+     42654.0
+    ],
+    "centroidMap": {
+     "ns": 75.77,
+     "ew": -49.23
+    },
+    "maxRoofTopZ3x3": 27.32,
+    "droneMinZOverCore": 32.3,
+    "tallest": {
+     "type": "four-story building with tapered roof, 26 interior cells",
+     "x": 12516.0,
+     "y": 42492.0,
+     "floorZ": 0,
+     "topZ": 27.32
+    },
+    "terrainZRange3x3": [
+     0,
+     50
+    ],
+    "waterShare3x3": 0.316,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 16,
+   "name": "Eastwatch",
+   "chapter": "ch3",
+   "chapterTitle": "New Viamont & the Halaetan Isles",
+   "tier": "standard",
+   "gazetteerId": "eastwatch",
+   "culture": "Viamontian",
+   "region": "Halaetan Isles (Isle of Ruin)",
+   "cell": "0x49F00013",
+   "gazetteerCell": "0x49F00013",
+   "map": {
+    "ns": 90.28,
+    "ew": -43.08
+   },
+   "teleport": {
+    "best": "@telepoi Eastwatch",
+    "alt": null,
+    "gazetteerBest": "@telepoi Eastwatch"
+   },
+   "why": "acpedia: Viamontian knights' garrison outpost on the frozen Isle of Ruin, among ancient ruins",
+   "visualHooks": "ice and glacier on cliffs (terrain z 0..170, roofs to z 196); sea (water 33%); lifestone at 14093,46157 z170",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      14092.9,
+      46157.1,
+      170,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.46,
+   "core": {
+    "coreLb": "0x49F0",
+    "structures3x3": 5,
+    "structuresPerLb": {
+     "0x49F0": 5
+    },
+    "centroidWorld": [
+     14128.8,
+     46135.2
+    ],
+    "centroidMap": {
+     "ns": 90.28,
+     "ew": -43.08
+    },
+    "maxRoofTopZ3x3": 196.35,
+    "droneMinZOverCore": 201.3,
+    "tallest": {
+     "type": "four-story tower with tapered roof, hollow interior",
+     "x": 14172,
+     "y": 46116,
+     "floorZ": 170,
+     "topZ": 196.35
+    },
+    "terrainZRange3x3": [
+     0,
+     170
+    ],
+    "waterShare3x3": 0.331,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 17,
+   "name": "Fiun Outpost",
+   "chapter": "ch3",
+   "chapterTitle": "New Viamont & the Halaetan Isles",
+   "tier": "optional",
+   "gazetteerId": "fiun-outpost",
+   "culture": "Fiun",
+   "region": "Halaetan Isles (Vanguard Isle)",
+   "cell": "0x38F7001B",
+   "gazetteerCell": "0x38F7001B",
+   "map": {
+    "ns": 95.67,
+    "ew": -56.63
+   },
+   "teleport": {
+    "best": "@telepoi Fiun",
+    "alt": null,
+    "gazetteerBest": "@telepoi Fiun"
+   },
+   "why": "acpedia: the last settlement of the Fiun, the magic-users who created the Eater, on icy Vanguard Isle (95.9N 56.8W)",
+   "visualHooks": "frozen coast, sea ice and open water (water 59%); lifestone; portal to Silyun (swirling portal FX)",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      10835.6,
+      47475.8,
+      -0.1,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Portal to Town Network",
+    "Portal to Silyun"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.46,
+   "core": {
+    "coreLb": "0x38F7",
+    "structures3x3": 3,
+    "structuresPerLb": {
+     "0x38F7": 2,
+     "0x39F6": 1
+    },
+    "centroidWorld": [
+     10876.0,
+     47429.0
+    ],
+    "centroidMap": {
+     "ns": 95.67,
+     "ew": -56.63
+    },
+    "maxRoofTopZ3x3": 13.2,
+    "droneMinZOverCore": 18.2,
+    "tallest": {
+     "type": "three-story tower with tapered roof, 3 interior cells",
+     "x": 10860,
+     "y": 47436,
+     "floorZ": 2.1,
+     "topZ": 13.2
+    },
+    "terrainZRange3x3": [
+     0,
+     108
+    ],
+    "waterShare3x3": 0.587,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 18,
+   "name": "Silyun",
+   "chapter": "ch3",
+   "chapterTitle": "New Viamont & the Halaetan Isles",
+   "tier": "standard",
+   "gazetteerId": "silyun",
+   "culture": "Viamontian (Bellenesse rebels)",
+   "region": "Halaetan Isles (Traitor's Island)",
+   "cell": "0x26EC003D",
+   "gazetteerCell": "0x26EC003D",
+   "map": {
+    "ns": 87.19,
+    "ew": -70.46
+   },
+   "teleport": {
+    "best": "@telepoi Silyun",
+    "alt": null,
+    "gazetteerBest": "@telepoi Silyun"
+   },
+   "why": "acpedia: Viamontian rebel town of the Duke of Bellenesse's faction (Whispering Blade, the Grand Mother) on Traitor's Island",
+   "visualHooks": "11 structures, roofs to z 98; lifestone at 7479,45421 z80",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      7479.0,
+      45420.8,
+      80,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.46,
+   "core": {
+    "coreLb": "0x27EC",
+    "structures3x3": 11,
+    "structuresPerLb": {
+     "0x26EC": 1,
+     "0x27EB": 1,
+     "0x27EC": 9
+    },
+    "centroidWorld": [
+     7557.1,
+     45393.0
+    ],
+    "centroidMap": {
+     "ns": 87.19,
+     "ew": -70.46
+    },
+    "maxRoofTopZ3x3": 97.97,
+    "droneMinZOverCore": 103.0,
+    "tallest": {
+     "type": "two-story building with pitched roof, 19 interior cells",
+     "x": 7548,
+     "y": 45444,
+     "floorZ": 80,
+     "topZ": 97.97
+    },
+    "terrainZRange3x3": [
+     0,
+     80
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 19,
+   "name": "Westwatch",
+   "chapter": "ch3",
+   "chapterTitle": "New Viamont & the Halaetan Isles",
+   "tier": "optional",
+   "gazetteerId": "westwatch",
+   "culture": "Viamontian",
+   "region": "Halaetan Isles (Lotila Island)",
+   "cell": "0x23DA002C",
+   "gazetteerCell": "0x23DA002C",
+   "map": {
+    "ns": 72.8,
+    "ew": -73.47
+   },
+   "teleport": {
+    "best": "@telepoi Westwatch",
+    "alt": null,
+    "gazetteerBest": "@telepoi Westwatch"
+   },
+   "why": "acpedia: watch outpost on Lotila Island, named for the murdered Countess Marena du Lotila",
+   "visualHooks": "beach and surf (water 33%); a Lotila Empyrean lighthouse stands on the west coast at 79.2N 76.8W for an optional insert",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      6856.0,
+      41937.5,
+      2,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.46,
+   "core": {
+    "coreLb": "0x23DA",
+    "structures3x3": 3,
+    "structuresPerLb": {
+     "0x23DA": 3
+    },
+    "centroidWorld": [
+     6836.1,
+     41939.8
+    ],
+    "centroidMap": {
+     "ns": 72.8,
+     "ew": -73.47
+    },
+    "maxRoofTopZ3x3": 28.35,
+    "droneMinZOverCore": 33.4,
+    "tallest": {
+     "type": "four-story tower with tapered roof, hollow interior",
+     "x": 6876,
+     "y": 41916,
+     "floorZ": 2,
+     "topZ": 28.35
+    },
+    "terrainZRange3x3": [
+     0,
+     34
+    ],
+    "waterShare3x3": 0.328,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 20,
+   "name": "Sanamar",
+   "chapter": "ch3",
+   "chapterTitle": "New Viamont & the Halaetan Isles",
+   "tier": "hero",
+   "gazetteerId": "sanamar",
+   "culture": "Viamontian",
+   "region": "Viamontian Lands (New Viamont)",
+   "cell": "0x33D90015",
+   "gazetteerCell": "0x33D90015",
+   "map": {
+    "ns": 71.92,
+    "ew": -61.17
+   },
+   "teleport": {
+    "best": "@telepoi Sanamar",
+    "alt": "Royal Hall forecourt: @teleloc 0x31D7001B 72 50 80.1 1 0 0 0",
+    "gazetteerBest": "@telepoi Sanamar"
+   },
+   "why": "acpedia: Viamontian capital founded where King Varicci II saw the red bull omen on a coastal cliff. Overlooking it is the Royal Hall (the gazetteer's 'Sanamar Palace'), a giant palace, which is the chapter climax",
+   "visualHooks": "BONFIRE at 9756,41690 z53 for flames; lifestone at 9804,41844 z52; 6 lanterns; 40 structures (good facade pans). ROYAL HALL (LB 0x31D6/0x31D7, about 450 m south of town): a palace grid x 9420..9540, y 41172..41292 on a z 80 clifftop, with four 21/22-story halls (0x0100390D/0E/12/13) topping out at z 163.6, so drones go to z >= 170. Coast below (water 39%)",
+   "fxSpawns": {
+    "bonfire": [
+     [
+      9755.9,
+      41689.9,
+      53.0,
+      "Bonfire"
+     ]
+    ],
+    "lifestone": [
+     [
+      9804.2,
+      41843.9,
+      52,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 4,
+   "portals": [
+    "Portal to Town Network",
+    "Yaraq Casino VIP Portal",
+    "Shoushi Casino VIP Portal",
+    "Holtburg Casino VIP Portal"
+   ],
+   "lanternStatics": 6,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.46,
+   "core": {
+    "coreLb": "0x32D9",
+    "structures3x3": 40,
+    "structuresPerLb": {
+     "0x32D9": 24,
+     "0x33D8": 1,
+     "0x33D9": 15
+    },
+    "centroidWorld": [
+     9787.7,
+     41728.5
+    ],
+    "centroidMap": {
+     "ns": 71.92,
+     "ew": -61.17
+    },
+    "maxRoofTopZ3x3": 83.25,
+    "droneMinZOverCore": 88.2,
+    "tallest": {
+     "type": "four-story building with tapered roof",
+     "x": 9780,
+     "y": 41820,
+     "floorZ": 52,
+     "topZ": 78.35
+    },
+    "terrainZRange3x3": [
+     0,
+     76
+    ],
+    "waterShare3x3": 0.071,
+    "roadLandblocks": 6
+   },
+   "subSites": [
+    {
+     "name": "Royal Hall (palace of King Varicci II)",
+     "teleport": "@teleloc 0x31D7001B 72 50 80.1 1 0 0 0",
+     "coreLb": "0x31D6",
+     "structures3x3": 32,
+     "centroidWorld": [
+      9489.6,
+      41237.4
+     ],
+     "centroidMap": [
+      69.87,
+      -62.41
+     ],
+     "maxRoofTopZ": 163.63,
+     "droneMinZ": 168.6,
+     "terrainZRange3x3": [
+      0,
+      80
+     ],
+     "waterShare3x3": 0.391
+    }
+   ]
+  },
+  {
+   "order": 21,
+   "name": "Ahurenga",
+   "chapter": "ch4",
+   "chapterTitle": "Marae Lassel",
+   "tier": "standard",
+   "gazetteerId": "ahurenga",
+   "culture": "Tumerok (Hea)",
+   "region": "Marae Lassel (the gazetteer's 'Northern Gharu'ndim' is wrong)",
+   "cell": "0x0FB90009",
+   "gazetteerCell": "0x0FB90009",
+   "map": {
+    "ns": 47.08,
+    "ew": -90.25
+   },
+   "teleport": {
+    "best": "@telepoi Ahurenga",
+    "alt": null,
+    "gazetteerBest": "@telepoi Ahurenga"
+   },
+   "why": "acpedia: capital of the Hea Tumeroks, who serve the Virindi; coastal swamp town",
+   "visualHooks": "swamp coast: sea, shallows and marsh (water 55%); core LB 0x0EBA at 47.1N 90.3W",
+   "fxSpawns": {},
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.5,
+   "core": {
+    "coreLb": "0x0EBA",
+    "structures3x3": 4,
+    "structuresPerLb": {
+     "0x0EBA": 4
+    },
+    "centroidWorld": [
+     2808.0,
+     35768.0
+    ],
+    "centroidMap": {
+     "ns": 47.08,
+     "ew": -90.25
+    },
+    "maxRoofTopZ3x3": 29.88,
+    "droneMinZOverCore": 34.9,
+    "tallest": {
+     "type": "four-story building with tapered roof, 7 interior cells",
+     "x": 2796,
+     "y": 35796,
+     "floorZ": 2,
+     "topZ": 29.88
+    },
+    "terrainZRange3x3": [
+     0,
+     20
+    ],
+    "waterShare3x3": 0.546,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 22,
+   "name": "Timaru",
+   "chapter": "ch4",
+   "chapterTitle": "Marae Lassel",
+   "tier": "core",
+   "gazetteerId": "timaru",
+   "culture": "Tumerok (Aun)",
+   "region": "Marae Lassel (the gazetteer's 'Northern Gharu'ndim' is wrong)",
+   "cell": "0x1DB60016",
+   "gazetteerCell": "0x1DB60016",
+   "map": {
+    "ns": 44.2,
+    "ew": -78.0
+   },
+   "teleport": {
+    "best": "@telepoi Timaru",
+    "alt": null,
+    "gazetteerBest": "@telepoi Timaru"
+   },
+   "why": "acpedia: capital of the Aun Tumeroks on the Marescent Plateau, atop a smaller plateau guarded by Aun Firanauri the Gate Keeper",
+   "visualHooks": "plateau-top capital (roofs to z 137, terrain z 26..120); moss/damp terrain and water (16%)",
+   "fxSpawns": {},
+   "portalCount": 2,
+   "portals": [
+    "Portal to Town Network",
+    "Base of the Timaru Plateau Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.5,
+   "core": {
+    "coreLb": "0x1DB6",
+    "structures3x3": 17,
+    "structuresPerLb": {
+     "0x1DB6": 10,
+     "0x1EB6": 7
+    },
+    "centroidWorld": [
+     5748.0,
+     35076.0
+    ],
+    "centroidMap": {
+     "ns": 44.2,
+     "ew": -78.0
+    },
+    "maxRoofTopZ3x3": 137.4,
+    "droneMinZOverCore": 142.4,
+    "tallest": {
+     "type": "two-story tower with tapered roof, 2 interior cells",
+     "x": 5700,
+     "y": 35076,
+     "floorZ": 120,
+     "topZ": 137.4
+    },
+    "terrainZRange3x3": [
+     26,
+     120
+    ],
+    "waterShare3x3": 0.159,
+    "roadLandblocks": 2
+   },
+   "subSites": null
+  },
+  {
+   "order": 23,
+   "name": "Redspire",
+   "chapter": "ch4",
+   "chapterTitle": "Marae Lassel",
+   "tier": "standard",
+   "gazetteerId": "redspire",
+   "culture": "Mixed (human settlers)",
+   "region": "Marae Lassel SW coast",
+   "cell": "0x17B2002A",
+   "gazetteerCell": "0x17B2002A",
+   "map": {
+    "ns": 40.74,
+    "ew": -83.12
+   },
+   "teleport": {
+    "best": "@telepoi Redspire",
+    "alt": null,
+    "gazetteerBest": "@telepoi Redspire"
+   },
+   "why": "acpedia: a human settlement on the southwestern coast of Marae Lassel, founded after Candeth Martine opened the way in 12 PY",
+   "visualHooks": "red spire on the coast; lifestone at 4517,34229 z44",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      4517.4,
+      34229.3,
+      44.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Northern Ahurenga Plains Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.5,
+   "core": {
+    "coreLb": "0x17B2",
+    "structures3x3": 7,
+    "structuresPerLb": {
+     "0x17B2": 7
+    },
+    "centroidWorld": [
+     4519.5,
+     34245.8
+    ],
+    "centroidMap": {
+     "ns": 40.74,
+     "ew": -83.12
+    },
+    "maxRoofTopZ3x3": 69.25,
+    "droneMinZOverCore": 74.2,
+    "tallest": {
+     "type": "two-story building with tapered roof, 4 interior cells",
+     "x": 4548,
+     "y": 34260,
+     "floorZ": 44,
+     "topZ": 69.25
+    },
+    "terrainZRange3x3": [
+     0,
+     46
+    ],
+    "waterShare3x3": 0.1,
+    "roadLandblocks": 2
+   },
+   "subSites": null
+  },
+  {
+   "order": 24,
+   "name": "Bluespire",
+   "chapter": "ch4",
+   "chapterTitle": "Marae Lassel",
+   "tier": "standard",
+   "gazetteerId": "bluespire",
+   "culture": "Mixed (human settlers)",
+   "region": "Marae Lassel (Karab Delta marsh)",
+   "cell": "0x21B00017",
+   "gazetteerCell": "0x21B00017",
+   "map": {
+    "ns": 39.32,
+    "ew": -75.31
+   },
+   "teleport": {
+    "best": "@telepoi Bluespire",
+    "alt": null,
+    "gazetteerBest": "@telepoi Bluespire"
+   },
+   "why": "acpedia: settlement in the marshlands of the Karab Delta on Marae Lassel",
+   "visualHooks": "delta marsh with water (26%); lifestone at 6387,33909 z0",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      6386.6,
+      33908.9,
+      0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Portal to Town Network",
+    "Northern Manumet Plains Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.5,
+   "core": {
+    "coreLb": "0x21B0",
+    "structures3x3": 9,
+    "structuresPerLb": {
+     "0x21B0": 8,
+     "0x21B1": 1
+    },
+    "centroidWorld": [
+     6394.0,
+     33904.6
+    ],
+    "centroidMap": {
+     "ns": 39.32,
+     "ew": -75.31
+    },
+    "maxRoofTopZ3x3": 25.25,
+    "droneMinZOverCore": 30.2,
+    "tallest": {
+     "type": "two-story building with tapered roof, 4 interior cells",
+     "x": 6390.8,
+     "y": 33928.8,
+     "floorZ": 0,
+     "topZ": 25.25
+    },
+    "terrainZRange3x3": [
+     0,
+     26
+    ],
+    "waterShare3x3": 0.262,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 25,
+   "name": "Greenspire",
+   "chapter": "ch4",
+   "chapterTitle": "Marae Lassel",
+   "tier": "core",
+   "gazetteerId": "greenspire",
+   "culture": "Mixed (human settlers)",
+   "region": "Marae Lassel",
+   "cell": "0x2BB5003C",
+   "gazetteerCell": "0x2BB5003C",
+   "map": {
+    "ns": 43.01,
+    "ew": -66.86
+   },
+   "teleport": {
+    "best": "@telepoi Greenspire",
+    "alt": null,
+    "gazetteerBest": "@telepoi Greenspire"
+   },
+   "why": "acpedia: town built around the remnants of a great Empyrean lighthouse with floating Advocate spires; chapter climax",
+   "visualHooks": "EMPYREAN LIGHTHOUSE (roof z 114) on the shore (water 34%); floating spires; lifestone at 8412,34761 z99",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      8411.7,
+      34761.4,
+      99,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Unstable Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.5,
+   "core": {
+    "coreLb": "0x2BB5",
+    "structures3x3": 7,
+    "structuresPerLb": {
+     "0x2BB5": 5,
+     "0x2CB5": 2
+    },
+    "centroidWorld": [
+     8422.3,
+     34791.0
+    ],
+    "centroidMap": {
+     "ns": 43.01,
+     "ew": -66.86
+    },
+    "maxRoofTopZ3x3": 114,
+    "droneMinZOverCore": 119,
+    "tallest": {
+     "type": "14-story hall with pitched roof, 2-cell open layout",
+     "x": 8412,
+     "y": 34764,
+     "floorZ": 28,
+     "topZ": 106
+    },
+    "terrainZRange3x3": [
+     0,
+     28
+    ],
+    "waterShare3x3": 0.34,
+    "roadLandblocks": 3
+   },
+   "subSites": null
+  },
+  {
+   "order": 26,
+   "name": "Plateau Village",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "standard",
+   "gazetteerId": "plateau-village",
+   "culture": "Aluvian (acpedia lists it in the Aluvian Realm)",
+   "region": "NW Osteth plateau",
+   "cell": "0x49B70021",
+   "gazetteerCell": "0x49B70021",
+   "map": {
+    "ns": 44.36,
+    "ew": -43.37
+   },
+   "teleport": {
+    "best": "@telepoi Plateau",
+    "alt": null,
+    "gazetteerBest": "@telepoi Plateau"
+   },
+   "why": "acpedia: remote settlement on a large plateau in NW Osteth; the spice merchant and the planar mage to Frore",
+   "visualHooks": "village on a z 240 plateau edge with long views; 30 LANTERNS (the most of any town); lifestone at 14076,35013 z240",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      14075.6,
+      35012.8,
+      239.7,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 25,
+   "portals": [
+    "Oriel Residential Halls Portal",
+    "Portal to Town Network",
+    "Adams' Beach Portal",
+    "Lithaenean Cottages Portal",
+    "Plateau Hollow Settlement Portal",
+    "Settlement Portals"
+   ],
+   "lanternStatics": 30,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x49B6",
+    "structures3x3": 8,
+    "structuresPerLb": {
+     "0x49B6": 7,
+     "0x49B8": 1
+    },
+    "centroidWorld": [
+     14059.2,
+     35115.4
+    ],
+    "centroidMap": {
+     "ns": 44.36,
+     "ew": -43.37
+    },
+    "maxRoofTopZ3x3": 252.48,
+    "droneMinZOverCore": 257.5,
+    "tallest": {
+     "type": "three-story building with 9 interior cells",
+     "x": 14028.0,
+     "y": 35054.6,
+     "floorZ": 240,
+     "topZ": 252.48
+    },
+    "terrainZRange3x3": [
+     80,
+     240
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 27,
+   "name": "Danby's Outpost",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "standard",
+   "gazetteerId": "danbys-outpost",
+   "culture": "Aluvian",
+   "region": "Inner Sea north coast (gateway to the Dires)",
+   "cell": "0x5A9C0004",
+   "gazetteerCell": "0x5A9C0004",
+   "map": {
+    "ns": 23.22,
+    "ew": -29.07
+   },
+   "teleport": {
+    "best": "@telepoi Outpost",
+    "alt": null,
+    "gazetteerBest": "@telepoi Outpost"
+   },
+   "why": "acpedia: small fortified stopover founded 12 PY by Gunther and Greta Danby, a welcome stop on the way to the Dires",
+   "visualHooks": "fortified outpost by the Inner Sea (water 27%); lifestone at 17591,30104 z14",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      17591.0,
+      30103.6,
+      14.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Desert March Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x5B9C",
+    "structures3x3": 10,
+    "structuresPerLb": {
+     "0x599B": 2,
+     "0x5B9C": 8
+    },
+    "centroidWorld": [
+     17491.2,
+     30040.8
+    ],
+    "centroidMap": {
+     "ns": 23.22,
+     "ew": -29.07
+    },
+    "maxRoofTopZ3x3": 44.75,
+    "droneMinZOverCore": 49.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 17604,
+     "y": 30108,
+     "floorZ": 14,
+     "topZ": 44.75
+    },
+    "terrainZRange3x3": [
+     0,
+     40
+    ],
+    "waterShare3x3": 0.265,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 28,
+   "name": "Fort Tethana",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "standard",
+   "gazetteerId": "fort-tethana",
+   "culture": "Aluvian",
+   "region": "North Direlands",
+   "cell": "0x2681001D",
+   "gazetteerCell": "0x2681001D",
+   "map": {
+    "ns": 1.55,
+    "ew": -71.85
+   },
+   "teleport": {
+    "best": "@telepoi Fort Tethana",
+    "alt": "@teleloc 0x25810034 156 84 220.1 1 0 0 0 (fort courtyard; terrain z 220 checked, clearance NOT checked)",
+    "gazetteerBest": "@telepoi Fort Tethana"
+   },
+   "why": "acpedia: fortified Aluvian outpost in the northern Direlands (1.5N 71.8W), plagued by renegades; once a thriving trade hub",
+   "visualHooks": "fort on a z 220 plateau. Its LandBlockInfo was read directly from client_cell_1.dat because WBT cannot load the landblock: 27 buildings on a 24 m grid at local x 60..180, y 12..132, z 220, plus 310 statics up to z 230. World centre about 7224,24840. WBT describe-landblock/list-objects/query-radius FAIL for LBs 0x2481/0x2581/0x2681 ('Could not load landblock'); get-height still works. Use chorizite-parse-dat-record or an in-client scout for clearance",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      7506.8,
+      24713.7,
+      144.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x2581",
+    "structures3x3": 27,
+    "structuresPerLb": {},
+    "centroidWorld": [
+     7224,
+     24840
+    ],
+    "centroidMap": {
+     "ns": 1.55,
+     "ew": -71.85
+    },
+    "maxRoofTopZ3x3": null,
+    "droneMinZOverCore": null,
+    "tallest": null,
+    "terrainZRange3x3": [
+     66,
+     480
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0,
+    "note": "from client_cell_1.dat LandBlockInfo (WBT cannot load this LB); building base z 220, static objects up to z 229.9; building heights unknown, so scout before any low drone pass"
+   },
+   "subSites": null
+  },
+  {
+   "order": 29,
+   "name": "Ayan Baqur",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "core",
+   "gazetteerId": "ayan-baqur",
+   "culture": "Gharu'ndim",
+   "region": "West Direlands coast",
+   "cell": "0x1133001F",
+   "gazetteerCell": "0x1133001F",
+   "map": {
+    "ns": -59.95,
+    "ew": -88.0
+   },
+   "teleport": {
+    "best": "@telepoi Ayan Baqur",
+    "alt": null,
+    "gazetteerBest": "@telepoi Ayan Baqur"
+   },
+   "why": "acpedia: isolated principal city on the far western Direlands shore, founded in Heroes' Respite; Ulgrim the Unpleasant's home",
+   "visualHooks": "FOUNTAIN at 3372,10092 z42 and two wells; sea coast (water 9%); roofs to z 70",
+   "fxSpawns": {
+    "fountain": [
+     [
+      3372,
+      10092,
+      42.0,
+      "Fountain"
+     ]
+    ],
+    "well": [
+     [
+      3363.0,
+      10055.0,
+      42.0,
+      "Well"
+     ],
+     [
+      3342.7,
+      10120.6,
+      42.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x1134",
+    "structures3x3": 12,
+    "structuresPerLb": {
+     "0x1133": 1,
+     "0x1134": 11
+    },
+    "centroidWorld": [
+     3346.8,
+     10080.5
+    ],
+    "centroidMap": {
+     "ns": -59.95,
+     "ew": -88.0
+    },
+    "maxRoofTopZ3x3": 70.06,
+    "droneMinZOverCore": 75.1,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 3348,
+     "y": 10140,
+     "floorZ": 42,
+     "topZ": 56.08
+    },
+    "terrainZRange3x3": [
+     0,
+     66
+    ],
+    "waterShare3x3": 0.086,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 30,
+   "name": "Wai Jhou",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "standard",
+   "gazetteerId": "wai-jhou",
+   "culture": "Sho",
+   "region": "Direlands, Obsidian Plains (the gazetteer's 'Sho Wilderness' is wrong)",
+   "cell": "0x3F310007",
+   "gazetteerCell": "0x3F310007",
+   "map": {
+    "ns": -62.1,
+    "ew": -51.2
+   },
+   "teleport": {
+    "best": "@teleloc 0x3F310007 23 149.6 -0.1 0.979925 0 0 -0.199368",
+    "alt": null,
+    "gazetteerBest": "@teleloc 0x3F310007 23 149.6 -0.1 0.979925 0 0 -0.199368"
+   },
+   "why": "acpedia: Sho town on the ridge of the Obsidian Plains near Small Black Hill; multi-floor balconied buildings",
+   "visualHooks": "black obsidian and volcanic ridge terrain (z 0..248) with ponds; tall Sho buildings (roof z 167); lifestone at 12098,9404 z0",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      12098.0,
+      9403.7,
+      -0.1,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x3F31",
+    "structures3x3": 6,
+    "structuresPerLb": {
+     "0x3F31": 3,
+     "0x3F32": 2,
+     "0x4031": 1
+    },
+    "centroidWorld": [
+     12180.8,
+     9564.6
+    ],
+    "centroidMap": {
+     "ns": -62.1,
+     "ew": -51.2
+    },
+    "maxRoofTopZ3x3": 167.4,
+    "droneMinZOverCore": 172.4,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 21 interior cells",
+     "x": 12106.3,
+     "y": 9611.3,
+     "floorZ": 0,
+     "topZ": 31
+    },
+    "terrainZRange3x3": [
+     0,
+     248
+    ],
+    "waterShare3x3": 0.047,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 31,
+   "name": "Candeth Keep",
+   "chapter": "ch5",
+   "chapterTitle": "West into the Dires",
+   "tier": "core",
+   "gazetteerId": "candeth-keep",
+   "culture": "Mixed (Isparian / Tumerok / Lugian)",
+   "region": "South Direlands",
+   "cell": "0x2B120029",
+   "gazetteerCell": "0x2B120029",
+   "map": {
+    "ns": -87.57,
+    "ew": -67.14
+   },
+   "teleport": {
+    "best": "@teleloc 0x2B120029 120.642 1.549 48.1 0.087156 0 0 -0.996195",
+    "alt": "@tele 87.50S 67.10W",
+    "gazetteerBest": "@teleloc 0x2B120029 120.642 1.549 10.112 0.087156 0 0 -0.996195"
+   },
+   "why": "acpedia: heavily fortified town showing Isparian, Tumerok and Lugian cooperation (On Bended Knee); Tree Portal at its centre",
+   "visualHooks": "THREE FOUNTAINS (8394,3412; 8331,3418; 8385,3481; all z48), lifestone at 8365,3466 z48, Tree Portal and Ground Portal FX; 38 structures inside walls (good facade pans). Gazetteer teleloc z fixed: the gazetteer gave 10.112 but the terrain there is z 48",
+   "fxSpawns": {
+    "fountain": [
+     [
+      8394.3,
+      3411.6,
+      48.0,
+      "Fountain"
+     ],
+     [
+      8330.6,
+      3417.8,
+      48.0,
+      "Fountain"
+     ],
+     [
+      8385.3,
+      3480.8,
+      48.0,
+      "Fountain"
+     ]
+    ],
+    "lifestone": [
+     [
+      8365.4,
+      3465.5,
+      48.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      8316.3,
+      3491.3,
+      48.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 3,
+   "portals": [
+    "Portal to Town Network",
+    "Tree Portal",
+    "Ground Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.57,
+   "core": {
+    "coreLb": "0x2B11",
+    "structures3x3": 38,
+    "structuresPerLb": {
+     "0x2B11": 20,
+     "0x2B12": 18
+    },
+    "centroidWorld": [
+     8354.3,
+     3452.3
+    ],
+    "centroidMap": {
+     "ns": -87.57,
+     "ew": -67.14
+    },
+    "maxRoofTopZ3x3": 73.04,
+    "droneMinZOverCore": 78.0,
+    "tallest": {
+     "type": "three-story tower with tapered roof, hollow interior",
+     "x": 8412,
+     "y": 3365.1,
+     "floorZ": 48,
+     "topZ": 67.6
+    },
+    "terrainZRange3x3": [
+     8,
+     70
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 3
+   },
+   "subSites": null
+  },
+  {
+   "order": 32,
+   "name": "Qalaba'r",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "qalabar",
+   "culture": "Gharu'ndim",
+   "region": "Gharu'ndim south (edge of the Linvak Mountains)",
+   "cell": "0x9722003A",
+   "gazetteerCell": "0x9722003A",
+   "map": {
+    "ns": -74.25,
+    "ew": 19.18
+   },
+   "teleport": {
+    "best": "@telepoi Qalabar",
+    "alt": null,
+    "gazetteerBest": "@telepoi Qalabar"
+   },
+   "why": "acpedia: the southernmost Gharu'ndim village beyond the Yushad Ridge, staging ground against the Gotrok Lugians. Reached across the Southern Landbridge from Candeth Keep",
+   "visualHooks": "hills z 74..180, roofs to z 116; three lifestones; well",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      28811.6,
+      6881.1,
+      95.4,
+      "Life Stone"
+     ],
+     [
+      29138.0,
+      6593.8,
+      102,
+      "Life Stone"
+     ],
+     [
+      29338.7,
+      6897.8,
+      80.9,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      29098.9,
+      6603.4,
+      102.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 4,
+   "portals": [
+    "Hebian-to Portal",
+    "Portal to Silyun",
+    "Atrium Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x9722",
+    "structures3x3": 10,
+    "structuresPerLb": {
+     "0x9722": 9,
+     "0x9723": 1
+    },
+    "centroidWorld": [
+     29071.6,
+     6648.9
+    ],
+    "centroidMap": {
+     "ns": -74.25,
+     "ew": 19.18
+    },
+    "maxRoofTopZ3x3": 116.08,
+    "droneMinZOverCore": 121.1,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 29100.9,
+     "y": 6635.4,
+     "floorZ": 102,
+     "topZ": 116.08
+    },
+    "terrainZRange3x3": [
+     74,
+     180
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 33,
+   "name": "Khayyaban",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "khayyaban",
+   "culture": "Gharu'ndim",
+   "region": "Yushad Ridge (south end)",
+   "cell": "0x9F440012",
+   "gazetteerCell": "0x9F440012",
+   "map": {
+    "ns": -47.53,
+    "ew": 24.68
+   },
+   "teleport": {
+    "best": "@telepoi Khayyaban",
+    "alt": null,
+    "gazetteerBest": "@telepoi Khayyaban"
+   },
+   "why": "acpedia: quiet Gharu'ndim town at the southern end of the Yushad Ridge, built to link Qalaba'r to the realm",
+   "visualHooks": "ridge town, roofs to z 88; two lifestones; 2 lanterns. The gazetteer teleloc z (31.9) sits 4.7 m under the terrain (36.6): use telepoi",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      30442.1,
+      13091.0,
+      34.9,
+      "Life Stone"
+     ],
+     [
+      30820.0,
+      13110.1,
+      56.7,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 3,
+   "portals": [
+    "Victory Residential Halls Portal",
+    "Portal to Town Network",
+    "Oriel Residential Halls Portal"
+   ],
+   "lanternStatics": 2,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x9E43",
+    "structures3x3": 10,
+    "structuresPerLb": {
+     "0x9E43": 5,
+     "0x9E44": 5
+    },
+    "centroidWorld": [
+     30391.3,
+     13061.1
+    ],
+    "centroidMap": {
+     "ns": -47.53,
+     "ew": 24.68
+    },
+    "maxRoofTopZ3x3": 88,
+    "droneMinZOverCore": 93,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 30372,
+     "y": 13068,
+     "floorZ": 46,
+     "topZ": 60.08
+    },
+    "terrainZRange3x3": [
+     20,
+     122
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 8
+   },
+   "subSites": null
+  },
+  {
+   "order": 34,
+   "name": "Uziz",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "uziz",
+   "culture": "Gharu'ndim",
+   "region": "Yushad Ridge (heart)",
+   "cell": "0xA260003C",
+   "gazetteerCell": "0xA260003C",
+   "map": {
+    "ns": -25.32,
+    "ew": 28.29
+   },
+   "teleport": {
+    "best": "@telepoi Uziz",
+    "alt": null,
+    "gazetteerBest": "@telepoi Uziz"
+   },
+   "why": "acpedia: settled around a calm, clear pool of fresh water believed to be an Empyrean reservoir",
+   "visualHooks": "the Empyrean pool (small water share, 1%); two lifestones",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      31052.8,
+      18674.9,
+      132.0,
+      "Life Stone"
+     ],
+     [
+      31239.0,
+      18486.9,
+      20,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Haven Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0xA25F",
+    "structures3x3": 13,
+    "structuresPerLb": {
+     "0xA25F": 9,
+     "0xA260": 3,
+     "0xA360": 1
+    },
+    "centroidWorld": [
+     31256.4,
+     18391.6
+    ],
+    "centroidMap": {
+     "ns": -25.32,
+     "ew": 28.29
+    },
+    "maxRoofTopZ3x3": 34.08,
+    "droneMinZOverCore": 39.1,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 31235.7,
+     "y": 18252.0,
+     "floorZ": 20,
+     "topZ": 34.08
+    },
+    "terrainZRange3x3": [
+     12,
+     132
+    ],
+    "waterShare3x3": 0.011,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 35,
+   "name": "Al-Arqas",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "al-arqas",
+   "culture": "Gharu'ndim",
+   "region": "A'mun Desert",
+   "cell": "0x8F58003B",
+   "gazetteerCell": "0x8F58003B",
+   "map": {
+    "ns": -31.24,
+    "ew": 13.74
+   },
+   "teleport": {
+    "best": "@telepoi Al-Arqas",
+    "alt": null,
+    "gazetteerBest": "@telepoi Al-Arqas"
+   },
+   "why": "acpedia: an oasis 'island of succor' in the trackless A'mun Desert dunes",
+   "visualHooks": "desert dunes with the oasis town (core LB 0x9058, 31.2S 13.7E); lifestone at 27727,16952",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      27726.5,
+      16952.3,
+      -0.1,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x9058",
+    "structures3x3": 9,
+    "structuresPerLb": {
+     "0x9057": 1,
+     "0x9058": 8
+    },
+    "centroidWorld": [
+     27764.7,
+     16970.7
+    ],
+    "centroidMap": {
+     "ns": -31.24,
+     "ew": 13.74
+    },
+    "maxRoofTopZ3x3": 44,
+    "droneMinZOverCore": 49,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 27828,
+     "y": 17028,
+     "floorZ": 0,
+     "topZ": 14.08
+    },
+    "terrainZRange3x3": [
+     0,
+     42
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 36,
+   "name": "Yaraq",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "core",
+   "gazetteerId": "yaraq",
+   "culture": "Gharu'ndim",
+   "region": "A'mun Desert / Inner Sea cove",
+   "cell": "0x7D64000D",
+   "gazetteerCell": "0x7D64000D",
+   "map": {
+    "ns": -21.65,
+    "ew": -1.39
+   },
+   "teleport": {
+    "best": "@telepoi Yaraq",
+    "alt": null,
+    "gazetteerBest": "@telepoi Yaraq"
+   },
+   "why": "acpedia: desert-dwellers' town led by the wizard Raqur al-Hayra to a cove on the Inner Sea; Gharu'ndim starter town",
+   "visualHooks": "BONFIRE at 24371,19069 z14 plus a FOUNTAIN at 24037,19088 z12: the best flames-and-water pair in the realm; Inner Sea cove (water 11%); lifestone at 24038,19306 z12",
+   "fxSpawns": {
+    "bonfire": [
+     [
+      24370.8,
+      19069.4,
+      14.0,
+      "Bonfire"
+     ]
+    ],
+    "fountain": [
+     [
+      24037.0,
+      19088.1,
+      12.0,
+      "Fountain"
+     ]
+    ],
+    "lifestone": [
+     [
+      24037.7,
+      19305.8,
+      12.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x7D64",
+    "structures3x3": 14,
+    "structuresPerLb": {
+     "0x7C63": 1,
+     "0x7D63": 1,
+     "0x7D64": 8,
+     "0x7E63": 1,
+     "0x7E64": 1,
+     "0x7E65": 2
+    },
+    "centroidWorld": [
+     24135.3,
+     19271.8
+    ],
+    "centroidMap": {
+     "ns": -21.65,
+     "ew": -1.39
+    },
+    "maxRoofTopZ3x3": 44.75,
+    "droneMinZOverCore": 49.8,
+    "tallest": {
+     "type": "5-story building with spire roof, 4 interior cells",
+     "x": 24276,
+     "y": 19476,
+     "floorZ": 14,
+     "topZ": 44.75
+    },
+    "terrainZRange3x3": [
+     0,
+     30
+    ],
+    "waterShare3x3": 0.114,
+    "roadLandblocks": 6
+   },
+   "subSites": null
+  },
+  {
+   "order": 37,
+   "name": "Tufa",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "optional",
+   "gazetteerId": "tufa",
+   "culture": "Gharu'ndim (the gazetteer's 'Sho' is wrong)",
+   "region": "A'mun Desert",
+   "cell": "0x876C0008",
+   "gazetteerCell": "0x876C0008",
+   "map": {
+    "ns": -14.75,
+    "ew": 5.79
+   },
+   "teleport": {
+    "best": "@telepoi Tufa",
+    "alt": null,
+    "gazetteerBest": "@telepoi Tufa"
+   },
+   "why": "acpedia: desert oasis town obliterated by Shadow Spires in 11 PY; residents live in tents around the crater. Still inhabited, with a distinctive top-down crater shot",
+   "visualHooks": "the blast crater with a ring of tents (7 tent structures, roofs at about z 17); top-down or rising reveal",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      25758.9,
+      21114.2,
+      -0.1,
+      "Life Stone"
+     ],
+     [
+      26144.4,
+      21042.8,
+      26,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      25884.1,
+      20905.1,
+      10,
+      "Well"
+     ],
+     [
+      25765.4,
+      20803.9,
+      10,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x866C",
+    "structures3x3": 7,
+    "structuresPerLb": {
+     "0x866C": 5,
+     "0x866D": 1,
+     "0x876D": 1
+    },
+    "centroidWorld": [
+     25858.1,
+     20926.8
+    ],
+    "centroidMap": {
+     "ns": -14.75,
+     "ew": 5.79
+    },
+    "maxRoofTopZ3x3": 16.8,
+    "droneMinZOverCore": 21.8,
+    "tallest": {
+     "type": "three-story building with pitched roof, 3 interior cells",
+     "x": 25854.2,
+     "y": 20894.6,
+     "floorZ": 10,
+     "topZ": 16.8
+    },
+    "terrainZRange3x3": [
+     0,
+     44
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 38,
+   "name": "Samsur",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "samsur",
+   "culture": "Gharu'ndim",
+   "region": "Gharu'ndim Plains",
+   "cell": "0x977B000C",
+   "gazetteerCell": "0x977B000C",
+   "map": {
+    "ns": -3.01,
+    "ew": 19.33
+   },
+   "teleport": {
+    "best": "@telepoi Samsur",
+    "alt": null,
+    "gazetteerBest": "@telepoi Samsur"
+   },
+   "why": "acpedia: one of the first Gharu'ndim settlements, founded by Musansayn, who made peace with the Aluvians; a Nexus starter town",
+   "visualHooks": "FOUNTAIN at 29165,23790 z0; lifestone; well",
+   "fxSpawns": {
+    "fountain": [
+     [
+      29165.2,
+      23790,
+      0,
+      "Fountain"
+     ]
+    ],
+    "lifestone": [
+     [
+      29101.5,
+      23744.2,
+      0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      28983.0,
+      23818.1,
+      20,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Victory Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x977B",
+    "structures3x3": 11,
+    "structuresPerLb": {
+     "0x967A": 1,
+     "0x967B": 1,
+     "0x977B": 8,
+     "0x987B": 1
+    },
+    "centroidWorld": [
+     29106.2,
+     23745.6
+    ],
+    "centroidMap": {
+     "ns": -3.01,
+     "ew": 19.33
+    },
+    "maxRoofTopZ3x3": 44.85,
+    "droneMinZOverCore": 49.9,
+    "tallest": {
+     "type": "three-story building with tapered roof, 7 interior cells",
+     "x": 28956,
+     "y": 23724,
+     "floorZ": 20,
+     "topZ": 44.85
+    },
+    "terrainZRange3x3": [
+     0,
+     40
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 7
+   },
+   "subSites": null
+  },
+  {
+   "order": 39,
+   "name": "Al-Jalima",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "standard",
+   "gazetteerId": "al-jalima",
+   "culture": "Gharu'ndim",
+   "region": "Gharu'ndim Plains",
+   "cell": "0x8588002C",
+   "gazetteerCell": "0x8588002C",
+   "map": {
+    "ns": 7.46,
+    "ew": 4.73
+   },
+   "teleport": {
+    "best": "@telepoi Al-Jalima",
+    "alt": null,
+    "gazetteerBest": "@telepoi Al-Jalima"
+   },
+   "why": "acpedia: expansion town founded among the crypts of the Dericostian Undead; a hilltop town",
+   "visualHooks": "FOUNTAIN at 25577,26211 z86 with the lifestone and well beside it on the hilltop (terrain z 64..218, roofs to z 100)",
+   "fxSpawns": {
+    "fountain": [
+     [
+      25576.5,
+      26210.9,
+      86,
+      "Fountain"
+     ]
+    ],
+    "lifestone": [
+     [
+      25600.7,
+      26216.4,
+      86,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      25592.2,
+      26232.0,
+      86.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x8588",
+    "structures3x3": 8,
+    "structuresPerLb": {
+     "0x8588": 7,
+     "0x8589": 1
+    },
+    "centroidWorld": [
+     25603.8,
+     26257.8
+    ],
+    "centroidMap": {
+     "ns": 7.46,
+     "ew": 4.73
+    },
+    "maxRoofTopZ3x3": 100.08,
+    "droneMinZOverCore": 105.1,
+    "tallest": {
+     "type": "three-story building with tapered roof, 31 interior cells",
+     "x": 25596,
+     "y": 26268,
+     "floorZ": 86,
+     "topZ": 100.08
+    },
+    "terrainZRange3x3": [
+     64,
+     218
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 40,
+   "name": "Zaikhal",
+   "chapter": "ch6",
+   "chapterTitle": "The Gharu'ndim Realm",
+   "tier": "core",
+   "gazetteerId": "zaikhal",
+   "culture": "Gharu'ndim",
+   "region": "Gharu'ndim north hills",
+   "cell": "0x80900013",
+   "gazetteerCell": "0x80900013",
+   "map": {
+    "ns": 13.55,
+    "ew": 0.66
+   },
+   "teleport": {
+    "best": "@telepoi Zaikhal",
+    "alt": null,
+    "gazetteerBest": "@telepoi Zaikhal"
+   },
+   "why": "acpedia: the Gharu'ndim capital among the northern hills, original headquarters of the Arcanum; chapter climax",
+   "visualHooks": "Qufana's Forge (flames) at 24637,27807 z128; two lifestones; wells; hill city (terrain z 64..204, roofs to z 158)",
+   "fxSpawns": {
+    "flames": [
+     [
+      24637.1,
+      27806.8,
+      127.8,
+      "Qufana's Forge"
+     ]
+    ],
+    "lifestone": [
+     [
+      24592.3,
+      27788.2,
+      124,
+      "Life Stone"
+     ],
+     [
+      24838.0,
+      27705.6,
+      73.4,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      24606,
+      27698,
+      124,
+      "Well"
+     ],
+     [
+      24630.6,
+      27779.5,
+      124.1,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Sanctum Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.63,
+   "core": {
+    "coreLb": "0x8090",
+    "structures3x3": 17,
+    "structuresPerLb": {
+     "0x7F8F": 3,
+     "0x7F90": 1,
+     "0x808F": 1,
+     "0x8090": 10,
+     "0x8190": 1,
+     "0x8191": 1
+    },
+    "centroidWorld": [
+     24625.5,
+     27720.7
+    ],
+    "centroidMap": {
+     "ns": 13.55,
+     "ew": 0.66
+    },
+    "maxRoofTopZ3x3": 158.08,
+    "droneMinZOverCore": 163.1,
+    "tallest": {
+     "type": "four-story tower with tapered roof, hollow interior",
+     "x": 24948,
+     "y": 27804,
+     "floorZ": 124,
+     "topZ": 150.35
+    },
+    "terrainZRange3x3": [
+     64,
+     204
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 3
+   },
+   "subSites": null
+  },
+  {
+   "order": 41,
+   "name": "Yanshi",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "yanshi",
+   "culture": "Sho",
+   "region": "Sho Heartlands (NW of the Blackmire)",
+   "cell": "0xB46F001E",
+   "gazetteerCell": "0xB46F001E",
+   "map": {
+    "ns": -12.37,
+    "ew": 42.08
+   },
+   "teleport": {
+    "best": "@telepoi Yanshi",
+    "alt": null,
+    "gazetteerBest": "@telepoi Yanshi"
+   },
+   "why": "acpedia: Sho town built around a large lone rock in the plains NW of the Blackmire Swamp; a Nexus starter town",
+   "visualHooks": "71 structures in the 3x3 (includes housing); roofs to z 79; lifestone at 34643,21563 z42",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      34643.2,
+      21562.9,
+      42,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 19,
+   "portals": [
+    "Trap Floor Portal",
+    "Trap Floor Portal",
+    "Trap Floor Portal",
+    "Trap Floor Portal",
+    "Trap Floor Portal",
+    "Trap Floor Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xB36F",
+    "structures3x3": 71,
+    "structuresPerLb": {
+     "0xB36F": 29,
+     "0xB370": 8,
+     "0xB46F": 3,
+     "0xB470": 28,
+     "0xB56E": 1,
+     "0xB56F": 2
+    },
+    "centroidWorld": [
+     34566.6,
+     21498.1
+    ],
+    "centroidMap": {
+     "ns": -12.37,
+     "ew": 42.08
+    },
+    "maxRoofTopZ3x3": 79,
+    "droneMinZOverCore": 84,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 21 interior cells",
+     "x": 34644,
+     "y": 21612,
+     "floorZ": 48,
+     "topZ": 79
+    },
+    "terrainZRange3x3": [
+     20,
+     64
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 42,
+   "name": "Sawato",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "sawato",
+   "culture": "Sho",
+   "region": "Blackmire Swamp",
+   "cell": "0xC95B0001",
+   "gazetteerCell": "0xC95B0001",
+   "map": {
+    "ns": -28.69,
+    "ew": 59.33
+   },
+   "teleport": {
+    "best": "@telepoi Sawato",
+    "alt": null,
+    "gazetteerBest": "@telepoi Sawato"
+   },
+   "why": "acpedia: Sho village hidden in the Blackmire Swamp near the old Yaosai fortress",
+   "visualHooks": "swamp village on roads (8 road LBs); lifestone and well",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      38703.5,
+      17559.5,
+      12.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      38726.5,
+      17623.8,
+      12.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xC95B",
+    "structures3x3": 12,
+    "structuresPerLb": {
+     "0xC95B": 12
+    },
+    "centroidWorld": [
+     38707.6,
+     17582.2
+    ],
+    "centroidMap": {
+     "ns": -28.69,
+     "ew": 59.33
+    },
+    "maxRoofTopZ3x3": 25.59,
+    "droneMinZOverCore": 30.6,
+    "tallest": {
+     "type": "two-story building with pitched roof, 7 interior cells",
+     "x": 38648.3,
+     "y": 17553.3,
+     "floorZ": 12,
+     "topZ": 25.59
+    },
+    "terrainZRange3x3": [
+     0,
+     38
+    ],
+    "waterShare3x3": 0.03,
+    "roadLandblocks": 8
+   },
+   "subSites": null
+  },
+  {
+   "order": 43,
+   "name": "Shoushi",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "core",
+   "gazetteerId": "shoushi",
+   "culture": "Sho",
+   "region": "Sho Heartlands",
+   "cell": "0xDA55001D",
+   "gazetteerCell": "0xDA55001D",
+   "map": {
+    "ns": -33.46,
+    "ew": 72.84
+   },
+   "teleport": {
+    "best": "@telepoi Shoushi",
+    "alt": null,
+    "gazetteerBest": "@telepoi Shoushi"
+   },
+   "why": "acpedia: Sho starter town south of the Blackmire, built to protect Hebian-To from Mosswart raiders",
+   "visualHooks": "57 structures, the best Sho street pans; FOUNTAIN, lifestone and well together at about 41945,16430 z20",
+   "fxSpawns": {
+    "fountain": [
+     [
+      41945.5,
+      16432.7,
+      20,
+      "Fountain"
+     ]
+    ],
+    "lifestone": [
+     [
+      41944.8,
+      16423.1,
+      20,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      41934.1,
+      16421.5,
+      20,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Shoushi Grotto Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xDA55",
+    "structures3x3": 57,
+    "structuresPerLb": {
+     "0xD955": 5,
+     "0xDA55": 42,
+     "0xDA56": 6,
+     "0xDB54": 1,
+     "0xDB55": 1,
+     "0xDB56": 2
+    },
+    "centroidWorld": [
+     41948.7,
+     16438.3
+    ],
+    "centroidMap": {
+     "ns": -33.46,
+     "ew": 72.84
+    },
+    "maxRoofTopZ3x3": 51,
+    "droneMinZOverCore": 56,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 41940,
+     "y": 16476,
+     "floorZ": 20,
+     "topZ": 51
+    },
+    "terrainZRange3x3": [
+     10,
+     58
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 8
+   },
+   "subSites": null
+  },
+  {
+   "order": 44,
+   "name": "Hebian-to",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "core",
+   "gazetteerId": "hebian-to",
+   "culture": "Sho",
+   "region": "Sho Heartlands (mouth of the River Prosper)",
+   "cell": "0xE64E002F",
+   "gazetteerCell": "0xE64E002F",
+   "map": {
+    "ns": -39.31,
+    "ew": 83.05
+   },
+   "teleport": {
+    "best": "@telepoi Hebian-to",
+    "alt": null,
+    "gazetteerBest": "@telepoi Hebian-to"
+   },
+   "why": "acpedia: first Sho settlement and capital, at the mouth of the River Prosper; the Sho library",
+   "visualHooks": "river mouth and sea (water 14%); Red Iron Forge (flames) at 44398,15084 z34; two lifestones; well",
+   "fxSpawns": {
+    "flames": [
+     [
+      44397.7,
+      15084.2,
+      33.7,
+      "Red Iron Forge"
+     ]
+    ],
+    "lifestone": [
+     [
+      44052.0,
+      15084.3,
+      12.0,
+      "Life Stone"
+     ],
+     [
+      44423.8,
+      15100.1,
+      32.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      44461.8,
+      15111.5,
+      32,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 3,
+   "portals": [
+    "Cragstone Portal",
+    "Sanctum Residential Halls Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xE74E",
+    "structures3x3": 20,
+    "structuresPerLb": {
+     "0xE54D": 1,
+     "0xE54E": 1,
+     "0xE64E": 1,
+     "0xE74D": 1,
+     "0xE74E": 16
+    },
+    "centroidWorld": [
+     44400.2,
+     15034.0
+    ],
+    "centroidMap": {
+     "ns": -39.31,
+     "ew": 83.05
+    },
+    "maxRoofTopZ3x3": 63,
+    "droneMinZOverCore": 68,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 44436,
+     "y": 15132.1,
+     "floorZ": 32,
+     "topZ": 63
+    },
+    "terrainZRange3x3": [
+     0,
+     32
+    ],
+    "waterShare3x3": 0.141,
+    "roadLandblocks": 8
+   },
+   "subSites": null
+  },
+  {
+   "order": 45,
+   "name": "Tou-Tou",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "core",
+   "gazetteerId": "tou-tou",
+   "culture": "Sho",
+   "region": "Tou peninsula (east coast)",
+   "cell": "0xF75C000D",
+   "gazetteerCell": "0xF5590034",
+   "map": {
+    "ns": -27.94,
+    "ew": 95.83
+   },
+   "teleport": {
+    "best": "@teleloc 0xF75C000D 30 105 20.1 1 0 0 0",
+    "alt": "@telepoi Tou-Tou (lands at Tou-Tou Outpost, 0xF559, about 575 m SW)",
+    "gazetteerBest": "@telepoi Tou-Tou"
+   },
+   "why": "acpedia: once a peaceful Sho village at the end of a peninsula, now ruined and held by the Shadows, beside a giant Empyrean lighthouse. A dramatic ruin, not a dead stop",
+   "visualHooks": "the ruins on obsidian-scorched ground (LB 0xF75C, z 20) with a Flames spawn at 47431,17754; EMPYREAN LIGHTHOUSE 0x010011F3 at 47748,18132 (base z 70, top z 148); at the outpost (0xF559) a 4-spawn FLAMES cluster at about 47250,17130 z19.6 plus lifestone and fountain. Shadow creatures (level 180+) may be in frame",
+   "fxSpawns": {
+    "flames": [
+     [
+      47430.5,
+      17753.7,
+      20.2,
+      "Flames"
+     ]
+    ],
+    "well": [
+     [
+      47454.7,
+      17726.5,
+      20,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xF75C",
+    "structures3x3": 16,
+    "structuresPerLb": {
+     "0xF65B": 1,
+     "0xF65C": 3,
+     "0xF65D": 2,
+     "0xF75B": 2,
+     "0xF75C": 4,
+     "0xF75D": 1,
+     "0xF85C": 1,
+     "0xF85D": 2
+    },
+    "centroidWorld": [
+     47467.7,
+     17763.2
+    ],
+    "centroidMap": {
+     "ns": -27.94,
+     "ew": 95.83
+    },
+    "maxRoofTopZ3x3": 81.35,
+    "droneMinZOverCore": 86.3,
+    "tallest": {
+     "type": "single-story building",
+     "x": 47412.8,
+     "y": 17660.0,
+     "floorZ": 20,
+     "topZ": 36.05
+    },
+    "terrainZRange3x3": [
+     0,
+     76
+    ],
+    "waterShare3x3": 0.021,
+    "roadLandblocks": 6
+   },
+   "subSites": [
+    {
+     "name": "Tou-Tou Outpost (telepoi drop)",
+     "teleport": "@telepoi Tou-Tou",
+     "coreLb": "0xF559",
+     "centroidMap": [
+      -30.07,
+      94.53
+     ],
+     "maxRoofTopZ": 191.63,
+     "flames": [
+      [
+       47250.2,
+       17131.2,
+       19.6
+      ],
+      [
+       47248.9,
+       17130.1,
+       19.6
+      ],
+      [
+       47249.6,
+       17128.1,
+       19.6
+      ],
+      [
+       47251.4,
+       17128.1,
+       19.6
+      ]
+     ]
+    },
+    {
+     "name": "Tou-Tou Empyrean Lighthouse",
+     "model": "0x010011F3",
+     "world": [
+      47748,
+      18132
+     ],
+     "baseZ": 70,
+     "topZ": 148,
+     "droneMinZ": 153,
+     "lb": "0xF85E",
+     "map": {
+      "ns": -26.4,
+      "ew": 97.0
+     }
+    }
+   ]
+  },
+  {
+   "order": 46,
+   "name": "Baishi",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "baishi",
+   "culture": "Sho",
+   "region": "Sho Heartlands (base of the Linvak mountains)",
+   "cell": "0xCE410007",
+   "gazetteerCell": "0xCE410007",
+   "map": {
+    "ns": -49.52,
+    "ew": 62.49
+   },
+   "teleport": {
+    "best": "@telepoi Baishi",
+    "alt": null,
+    "gazetteerBest": "@telepoi Baishi"
+   },
+   "why": "acpedia: Sho fort-town in a wooded dale at the foot of the Linvak mountains, along the Snowflake Range",
+   "visualHooks": "Blade's Heart Forge (flames) at 39430,12643 z54; lifestone; well; roofs to z 85",
+   "fxSpawns": {
+    "flames": [
+     [
+      39429.8,
+      12643.3,
+      54.0,
+      "Blade's Heart Forge"
+     ]
+    ],
+    "lifestone": [
+     [
+      39443.6,
+      12564.1,
+      54.0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      39473.8,
+      12614.0,
+      54.0,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 15,
+   "portals": [
+    "Atrium Residential Halls Portal",
+    "Portal to Town Network",
+    "North Baishi Cottages Portal",
+    "Oboro Portal",
+    "Tanshi Portal",
+    "Jai-Tan Dale Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xCD41",
+    "structures3x3": 14,
+    "structuresPerLb": {
+     "0xCD40": 1,
+     "0xCD41": 13
+    },
+    "centroidWorld": [
+     39466.3,
+     12584.3
+    ],
+    "centroidMap": {
+     "ns": -49.52,
+     "ew": 62.49
+    },
+    "maxRoofTopZ3x3": 85,
+    "droneMinZOverCore": 90,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 39467.3,
+     "y": 12466.4,
+     "floorZ": 54,
+     "topZ": 85
+    },
+    "terrainZRange3x3": [
+     44,
+     118
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 4
+   },
+   "subSites": null
+  },
+  {
+   "order": 47,
+   "name": "Lin",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "lin",
+   "culture": "Sho",
+   "region": "Sho Heartlands (forest)",
+   "cell": "0xDC3C0011",
+   "gazetteerCell": "0xDC3C0011",
+   "map": {
+    "ns": -54.18,
+    "ew": 73.84
+   },
+   "teleport": {
+    "best": "@telepoi Lin",
+    "alt": null,
+    "gazetteerBest": "@telepoi Lin"
+   },
+   "why": "acpedia: forest town founded after Mayoi as an early-warning post against Lugian raiders",
+   "visualHooks": "forest town (core LB 0xDB3B); well",
+   "fxSpawns": {
+    "well": [
+     [
+      42224.5,
+      11462.3,
+      20,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xDB3B",
+    "structures3x3": 5,
+    "structuresPerLb": {
+     "0xDB3B": 4,
+     "0xDC3C": 1
+    },
+    "centroidWorld": [
+     42190.4,
+     11465.1
+    ],
+    "centroidMap": {
+     "ns": -54.18,
+     "ew": 73.84
+    },
+    "maxRoofTopZ3x3": 57,
+    "droneMinZOverCore": 62,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 42108,
+     "y": 11412,
+     "floorZ": 26,
+     "topZ": 57
+    },
+    "terrainZRange3x3": [
+     0,
+     64
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 5
+   },
+   "subSites": null
+  },
+  {
+   "order": 48,
+   "name": "Nanto",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "nanto",
+   "culture": "Sho",
+   "region": "Sho frontier",
+   "cell": "0xE63E0022",
+   "gazetteerCell": "0xE63E0022",
+   "map": {
+    "ns": -52.56,
+    "ew": 82.18
+   },
+   "teleport": {
+    "best": "@telepoi Nanto",
+    "alt": null,
+    "gazetteerBest": "@telepoi Nanto"
+   },
+   "why": "acpedia: once-flourishing Sho frontier town on the old realm's edge (survived a Gigas warlord's assault); a Nexus starter town",
+   "visualHooks": "hillside town (z 42..126, roofs to z 149); lifestone at 44059,11945 z118; well",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      44058.8,
+      11945.3,
+      118,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      44165.4,
+      11885.6,
+      96,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 2,
+   "portals": [
+    "Portal to Town Network",
+    "Mysterious Tunnels Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xE63D",
+    "structures3x3": 13,
+    "structuresPerLb": {
+     "0xE53D": 3,
+     "0xE53E": 2,
+     "0xE63D": 8
+    },
+    "centroidWorld": [
+     44190.8,
+     11853.4
+    ],
+    "centroidMap": {
+     "ns": -52.56,
+     "ew": 82.18
+    },
+    "maxRoofTopZ3x3": 149,
+    "droneMinZOverCore": 154,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 44051.8,
+     "y": 11914.7,
+     "floorZ": 118,
+     "topZ": 149
+    },
+    "terrainZRange3x3": [
+     42,
+     126
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 7
+   },
+   "subSites": null
+  },
+  {
+   "order": 49,
+   "name": "Mayoi",
+   "chapter": "ch7",
+   "chapterTitle": "The Sho Lands",
+   "tier": "standard",
+   "gazetteerId": "mayoi",
+   "culture": "Sho",
+   "region": "Base of the Tou peninsula (bay)",
+   "cell": "0xE6320021",
+   "gazetteerCell": "0xE6320021",
+   "map": {
+    "ns": -61.5,
+    "ew": 82.19
+   },
+   "teleport": {
+    "best": "@telepoi Mayoi",
+    "alt": null,
+    "gazetteerBest": "@telepoi Mayoi"
+   },
+   "why": "acpedia: quiet town by a bay where calm waves roll onto the sand; Shoyanen Kenchu's spire to the SE",
+   "visualHooks": "BAY and beach (water 11%); two lifestones; well",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      44219.5,
+      9611.2,
+      28,
+      "Life Stone"
+     ],
+     [
+      44468.7,
+      9687.7,
+      0,
+      "Life Stone"
+     ]
+    ],
+    "well": [
+     [
+      43987.8,
+      9628.5,
+      28,
+      "Well"
+     ]
+    ]
+   },
+   "portalCount": 3,
+   "portals": [
+    "Oriel Residential Halls Portal",
+    "Mountain Sewer Portal",
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": true,
+   "suggestedTimeOfDay": 0.72,
+   "core": {
+    "coreLb": "0xE532",
+    "structures3x3": 14,
+    "structuresPerLb": {
+     "0xE532": 7,
+     "0xE632": 5,
+     "0xE733": 2
+    },
+    "centroidWorld": [
+     44192.7,
+     9708.9
+    ],
+    "centroidMap": {
+     "ns": -61.5,
+     "ew": 82.19
+    },
+    "maxRoofTopZ3x3": 59,
+    "droneMinZOverCore": 64,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 44268,
+     "y": 9732,
+     "floorZ": 28,
+     "topZ": 59
+    },
+    "terrainZRange3x3": [
+     0,
+     116
+    ],
+    "waterShare3x3": 0.108,
+    "roadLandblocks": 2
+   },
+   "subSites": null
+  },
+  {
+   "order": 50,
+   "name": "Kryst",
+   "chapter": "ch8",
+   "chapterTitle": "Southern Isles & the Linvak Mountains",
+   "tier": "standard",
+   "gazetteerId": "kryst",
+   "culture": "Sho / Jojiist (mixed escaped slaves)",
+   "region": "Vesayen Isles (Laesvos Island)",
+   "cell": "0xE822002A",
+   "gazetteerCell": "0xE822002A",
+   "map": {
+    "ns": -74.44,
+    "ew": 84.39
+   },
+   "teleport": {
+    "best": "@telepoi Kryst",
+    "alt": null,
+    "gazetteerBest": "@telepoi Kryst"
+   },
+   "why": "acpedia: a refuge village of escaped slaves founded on Jojiism and the Code of Pwyll on a tropical jungle island",
+   "visualHooks": "jungle island beach (water 32%); Royal Guard patrol on the beach at 74.3S 84.6E; lifestone at 44699,6665",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      44698.9,
+      6665.3,
+      0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.8,
+   "core": {
+    "coreLb": "0xE922",
+    "structures3x3": 9,
+    "structuresPerLb": {
+     "0xE722": 1,
+     "0xE821": 1,
+     "0xE822": 2,
+     "0xE922": 5
+    },
+    "centroidWorld": [
+     44720.6,
+     6601.7
+    ],
+    "centroidMap": {
+     "ns": -74.44,
+     "ew": 84.39
+    },
+    "maxRoofTopZ3x3": 39.59,
+    "droneMinZOverCore": 44.6,
+    "tallest": {
+     "type": "two-story building with tapered roof, 9 interior cells",
+     "x": 44628.0,
+     "y": 6512.1,
+     "floorZ": 26,
+     "topZ": 39.59
+    },
+    "terrainZRange3x3": [
+     0,
+     34
+    ],
+    "waterShare3x3": 0.32,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 51,
+   "name": "Freehold",
+   "chapter": "ch8",
+   "chapterTitle": "Southern Isles & the Linvak Mountains",
+   "tier": "optional",
+   "gazetteerId": "freehold",
+   "culture": "Aluvian-led ex-slaves",
+   "region": "Vesayen Isles",
+   "cell": "0xF2220035",
+   "gazetteerCell": "0xF224001A",
+   "map": {
+    "ns": -73.79,
+    "ew": 92.29
+   },
+   "teleport": {
+    "best": "@teleloc 0xF2220035 152 116 18.1 1 0 0 0",
+    "alt": "@telepoi Freehold (lands on the coast at 0xF224, about 290 m north)",
+    "gazetteerBest": "@telepoi Freehold"
+   },
+   "why": "acpedia 'MacNiall's Freehold': breakaway settlement of MacNiall's band deeper in the Vesayen Isles",
+   "visualHooks": "5 buildings (LB 0xF222, at about 74.2S 92.2E) on a sandy coast (water 72% of the 3x3). Teleloc derived by this study: terrain z 18, nearest object 9.6 m",
+   "fxSpawns": {},
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.8,
+   "core": {
+    "coreLb": "0xF223",
+    "structures3x3": 1,
+    "structuresPerLb": {
+     "0xF223": 1
+    },
+    "centroidWorld": [
+     46617.4,
+     6758.8
+    ],
+    "centroidMap": {
+     "ns": -73.79,
+     "ew": 92.29
+    },
+    "maxRoofTopZ3x3": 34.95,
+    "droneMinZOverCore": 40.0,
+    "tallest": {
+     "type": "two-story building with spire roof, 9 interior cells",
+     "x": 46617.4,
+     "y": 6758.8,
+     "floorZ": 18,
+     "topZ": 34.95
+    },
+    "terrainZRange3x3": [
+     0,
+     22
+    ],
+    "waterShare3x3": 0.715,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 52,
+   "name": "Kara",
+   "chapter": "ch8",
+   "chapterTitle": "Southern Isles & the Linvak Mountains",
+   "tier": "core",
+   "gazetteerId": "kara",
+   "culture": "Sho (Jojiist)",
+   "region": "Linvak Mountains",
+   "cell": "0xBA170039",
+   "gazetteerCell": "0xBA170039",
+   "map": {
+    "ns": -83.17,
+    "ew": 47.13
+   },
+   "teleport": {
+    "best": "@telepoi Kara",
+    "alt": null,
+    "gazetteerBest": "@telepoi Kara"
+   },
+   "why": "acpedia: Jojiist town hidden deep in the Linvak Mountains, proud on a hillside above a calm lake",
+   "visualHooks": "hillside above the LAKE (water 3%), mountain backdrop (terrain z 50..276, roofs to z 163); lifestone at 35746,4469 z132",
+   "fxSpawns": {
+    "lifestone": [
+     [
+      35746.0,
+      4469.3,
+      132.0,
+      "Life Stone"
+     ]
+    ]
+   },
+   "portalCount": 14,
+   "portals": [
+    "Portal to Town Network",
+    "Yukikaze  Portal",
+    "North Adjamaer Cottages Portal",
+    "Ishilai Inlet Settlement Portal",
+    "Norstead Portal",
+    "South Adjamaer Cottages Portal"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.8,
+   "core": {
+    "coreLb": "0xBA17",
+    "structures3x3": 9,
+    "structuresPerLb": {
+     "0xBA17": 9
+    },
+    "centroidWorld": [
+     35779.2,
+     4507.4
+    ],
+    "centroidMap": {
+     "ns": -83.17,
+     "ew": 47.13
+    },
+    "maxRoofTopZ3x3": 163,
+    "droneMinZOverCore": 168,
+    "tallest": {
+     "type": "three-story octagon building with tapered roof, 15 interior cells",
+     "x": 35748,
+     "y": 4500,
+     "floorZ": 132,
+     "topZ": 163
+    },
+    "terrainZRange3x3": [
+     50,
+     276
+    ],
+    "waterShare3x3": 0.027,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 53,
+   "name": "Frost Haven",
+   "chapter": "ch8",
+   "chapterTitle": "Southern Isles & the Linvak Mountains",
+   "tier": "optional",
+   "gazetteerId": "frost-haven",
+   "culture": "Snowmen",
+   "region": "Linvak Mountains (by Mount Ingot)",
+   "cell": "0x9F29000E",
+   "gazetteerCell": "0x95210030",
+   "map": {
+    "ns": -68.6,
+    "ew": 25.4
+   },
+   "teleport": {
+    "best": "@teleloc 0x9F29000E 36 131 290.1 1 0 0 0",
+    "alt": null,
+    "gazetteerBest": "@tele 74.80S 17.80E"
+   },
+   "why": "acpedia 'Frost Haven' (listed on the Towns page; MISSING from the gazetteer's towns): the Snowman village beside Mount Ingot at 68.4S 25.4E; a snow prelude to the finale",
+   "visualHooks": "5 snow huts (0x01001370, base z 290, top z 297) around 30564,8003 on ice and snow (terrain z 290..364). The gazetteer POI's '@tele 74.80S 17.80E' is WRONG: that is the Land Bridge Villas drop where the route starts. Teleloc derived by this study: terrain z 290, no object within 14 m. NPC snowmen may be seasonal; the huts are in the DAT",
+   "fxSpawns": {},
+   "portalCount": 0,
+   "portals": [],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.8,
+   "core": {
+    "coreLb": "0x9F29",
+    "structures3x3": 5,
+    "structuresPerLb": {
+     "0x9F29": 5
+    },
+    "centroidWorld": [
+     30564.4,
+     8002.9
+    ],
+    "centroidMap": {
+     "ns": -68.6,
+     "ew": 25.4
+    },
+    "maxRoofTopZ3x3": 297.15,
+    "droneMinZOverCore": 302.1,
+    "tallest": {
+     "type": "single-story building with tapered roof, 4 interior cells",
+     "x": 30587.6,
+     "y": 7980.8,
+     "floorZ": 290,
+     "topZ": 297.15
+    },
+    "terrainZRange3x3": [
+     146,
+     512
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  },
+  {
+   "order": 54,
+   "name": "Linvak Tukal",
+   "chapter": "ch8",
+   "chapterTitle": "Southern Isles & the Linvak Mountains",
+   "tier": "hero",
+   "gazetteerId": "linvak-tukal",
+   "culture": "Lugian",
+   "region": "Linvak Mountains",
+   "cell": "0xA21E001A",
+   "gazetteerCell": "0xA21E001A",
+   "map": {
+    "ns": -77.6,
+    "ew": 28.0
+   },
+   "teleport": {
+    "best": "@telepoi Linvak Tukal",
+    "alt": null,
+    "gazetteerBest": "@telepoi Linvak Tukal"
+   },
+   "why": "acpedia: the mighty Lugian super-fortress and capital of the peaceful Lugians ('Great Tukal'). The most spectacular surface settlement in Dereth, for the finale at golden hour",
+   "visualHooks": "49 structures on a z 560 snow massif; a 15-story hall at 31164,5868 tops out at z 676.4, so drones go to z >= 682 over the core. Snow and ice; the portal; sunset over the Linvak range",
+   "fxSpawns": {},
+   "portalCount": 1,
+   "portals": [
+    "Portal to Town Network"
+   ],
+   "lanternStatics": 0,
+   "streetPanCandidate": false,
+   "suggestedTimeOfDay": 0.8,
+   "core": {
+    "coreLb": "0xA21E",
+    "structures3x3": 49,
+    "structuresPerLb": {
+     "0xA21E": 49
+    },
+    "centroidWorld": [
+     31188.0,
+     5844.0
+    ],
+    "centroidMap": {
+     "ns": -77.6,
+     "ew": 28.0
+    },
+    "maxRoofTopZ3x3": 676.39,
+    "droneMinZOverCore": 681.4,
+    "tallest": {
+     "type": "15-story hall with 6-cell open layout",
+     "x": 31164,
+     "y": 5868,
+     "floorZ": 560,
+     "topZ": 676.39
+    },
+    "terrainZRange3x3": [
+     316,
+     560
+    ],
+    "waterShare3x3": 0.0,
+    "roadLandblocks": 0
+   },
+   "subSites": null
+  }
+ ],
+ "excluded": [
+  {
+   "name": "The Underground City",
+   "why": "brief: excluded; acpedia: a dungeon city underground (EnvCell, cell 0x01E901C2)"
+  },
+  {
+   "name": "Xarabydun",
+   "why": "brief: excluded; acpedia: Arcanum HQ that began below ground in the Yalaini grottos (tunnel/underground tags)"
+  },
+  {
+   "name": "Kor-Gursha",
+   "why": "brief: excluded; acpedia: an underground Burun village on the world of Bur (EnvCell 0x009C0247)"
+  },
+  {
+   "name": "Crater Lake Village",
+   "why": "indoor: teleport cell 0x90D00107 is an EnvCell (0x0107 >= 0x100); acpedia lists it as Mount Esper-Crater Village, in a crater reached by portal"
+  },
+  {
+   "name": "Martine's Retreat",
+   "why": "indoor: EnvCell 0x56600187; acpedia: an underground settlement under the centre of Rithwic"
+  },
+  {
+   "name": "Mar'uun",
+   "why": "acpedia: 'Underground Town' (categories Dungeon/Town/Unmapped), ruined since Old Ghosts; WBT finds 0 surface structures in the 3x3 around 0x9472"
+  },
+  {
+   "name": "Hoshino Town 2",
+   "why": "not a standalone town: acpedia calls it a small group of ghost-filled buildings south of Hoshino Fortress (a tier-8 hunting ground). Merged into the optional 'Hoshino Fortress' stop"
+  },
+  {
+   "name": "Hoshino Town 3",
+   "why": "same as Town 2 (buildings SE of the fortress, spectral mobs); merged into the optional 'Hoshino Fortress' stop"
+  },
+  {
+   "name": "Sanamar Palace",
+   "why": "not a separate town: it is the Royal Hall of King Varicci II (acpedia 'Royal Hall', 70.0N 62.5W), Sanamar's palace. Merged into Sanamar as its climax sub-site with the teleloc @teleloc 0x31D7001B 72 50 80.1 1 0 0 0"
+  }
+ ],
+ "missingFromGazetteer": [
+  {
+   "name": "Frost Haven",
+   "source": "acpedia 'Towns' page (Independent/Other) and the 'Frost Haven' page",
+   "status": "INCLUDED (ch8, optional)",
+   "teleport": "@teleloc 0x9F29000E 36 131 290.1 1 0 0 0",
+   "map": "68.6S 25.4E",
+   "note": "gazetteer has it only as a POI with wrong coordinates (74.8S 17.8E = Land Bridge Villas drop)"
+  },
+  {
+   "name": "Hoshino Town 1",
+   "source": "acpedia Category:Town",
+   "status": "folded into 'Hoshino Fortress' (optional)",
+   "map": "79.7N 40.8W"
+  },
+  {
+   "name": "Royal Hall (Sanamar)",
+   "source": "acpedia 'Royal Hall' / Sanamar page",
+   "status": "folded into Sanamar",
+   "teleport": "@teleloc 0x31D7001B 72 50 80.1 1 0 0 0"
+  },
+  {
+   "name": "Tou-Tou (ruined town proper)",
+   "source": "acpedia 'Tou-Tou' (28.0S 95.7E)",
+   "status": "gazetteer's Tou-Tou drop is the Outpost about 575 m SW; ruins teleloc @teleloc 0xF75C000D 30 105 20.1 1 0 0 0"
+  },
+  {
+   "name": "Mount Esper-Crater Village",
+   "source": "acpedia 'Towns' page",
+   "status": "excluded (= Crater Lake Village, EnvCell)"
+  },
+  {
+   "name": "Nexus towns / Tou-Tou/Archive / Town Template / Towns",
+   "source": "acpedia Category:Town",
+   "status": "not places (index/archive/template pages)"
+  }
+ ],
+ "gazetteerCorrections": [
+  "Candeth Keep: gazetteer teleloc z 10.112 corrected to 48.1 (terrain z 48 at that point; nearest structure 37 m)",
+  "Khayyaban: gazetteer teleloc z 31.885 is 4.7 m below the terrain (36.55); use @telepoi Khayyaban",
+  "Bandit Castle: gazetteer cell 0xBDD00006 is the portal drop at the hill foot; the castle is LB 0xBDD2 (66.4N 49.9E, z 186)",
+  "Freehold: gazetteer cell 0xF224001A is the coastal drop; the 5 buildings are in LB 0xF222 (about 74.2S 92.2E)",
+  "Tou-Tou: gazetteer cell 0xF5590034 is Tou-Tou Outpost; the ruined town is LB 0xF75C and the lighthouse LB 0xF85E",
+  "Frost Haven: gazetteer POI coordinates are wrong (74.8S 17.8E); the village is LB 0x9F29 (68.6S 25.4E)",
+  "Region/culture labels fixed: Timaru and Ahurenga are Tumerok capitals on Marae Lassel (gazetteer says Gharu'ndim); Oolutanga's Refuge is on Aphus Lassel (gazetteer says Aluvian Heartlands); Tufa is Gharu'ndim (gazetteer says Sho); Silyun is Viamontian (gazetteer says Empyrean); Wai Jhou is in the Direlands Obsidian Plains; Fiun Outpost is on Vanguard Isle in the Halaetan Isles",
+  "WBT architecture heuristics are unreliable for odd sites: the Hoshino fortress shows as 'Aluvian', Frost Haven as 'Gharu'ndim' and Tufa's tents as 'Sho'",
+  "WBT cannot load LBs 0x2481/0x2581/0x2681 (Fort Tethana): describe/list-objects/query-radius fail although client_cell_1.dat has them (0x2581: 126 cells, 310 objects, 27 buildings); get-height works"
+ ]
+}
