@@ -119,7 +119,7 @@ import {
   waitForBoot,
   windowInfo,
 } from "./lib/session.mjs";
-import { DECIDE_OPTIONS, judgeInput, rehearseShot, selectSchedule, shootSchedule } from "./lib/shoot.mjs";
+import { DECIDE_OPTIONS, STAND_HOP_M, judgeInput, rehearseShot, selectSchedule, shootSchedule } from "./lib/shoot.mjs";
 import { analyzeSongFile, formatSongSummary } from "./audio/analyze.mjs";
 import { compilePlan, estimateShootTime } from "./plan/compile.mjs";
 import { assemblyArgv, buildAssembly, toCmx3600 } from "./plan/edl.mjs";
@@ -1288,9 +1288,12 @@ command("rehearse", "stepped dry run of one shot (no capture)",
 command("shoot", "record takes site by site (never across a teleport)",
   `film shoot <timeline.json> (--site=<id> | --shot=<id>[,<id>…] | --all) [--retakes=1] [--codec=avc|vp9|frames]
             [--bitrate=40000000] [--rehearse | --no-rehearse] [--rehearse-fps=8] [--locked] [--vp9-container=mp4|webm]
-            [--project=<dir>] [--ffmpeg=<path>] [--capped]
+            [--hop=40] [--project=<dir>] [--ffmpeg=<path>] [--capped]
   Per site: (abort a leftover page take) → teleport → readiness → prewarm (best-effort: an incomplete prewarm
-  warns and is noted in shoot-log.jsonl and the site's reports); per shot: prepare → [rehearse, always with the
+  warns and is noted in shoot-log.jsonl and the site's reports). Grass and the server's nearby objects follow the
+  hidden player, so before an outdoor shot whose camera path (built offline) is more than --hop metres from it the
+  player is moved there with @teleloc and the readiness gate runs again (never during a take; not for actor /
+  visible-avatar shots; a failed hop only warns; --hop=0 = never). Per shot: prepare → [rehearse, always with the
   stepped JEV limits] → shoot while draining the recorder → ffmpeg mux → takes/<shot>.mp4 + reports/<shot>.json
   (+ shoot-log.jsonl, <shot>.jev.jsonl with that shot's JEV calls only); keepOrRetake (JEV or the code verdict)
   retakes up to --retakes times while the verdict is not keep/act; a failed retake keeps the earlier attempt.
@@ -1321,7 +1324,9 @@ command("shoot", "record takes site by site (never across a teleport)",
       vp9Container,
       ffmpeg: resolveFfmpeg(strArg(args, "ffmpeg"), deps.env),
       capped: boolArg(args, "capped"),
+      hopM: numArg(args, "hop", STAND_HOP_M, { min: 0, max: 1000 }),
     };
+    const { buildShot } = await loadRegistry(ctx);
     ctx.eventFile = path.join(paths.reports, "jev-client.jsonl");
     return withLock(ctx, "shoot", () => withSession(ctx, async (s) => {
       const page = requireFilmPage(s);
@@ -1350,6 +1355,7 @@ command("shoot", "record takes site by site (never across a teleport)",
         selection,
         paths,
         ...opts,
+        buildShot: opts.hopM > 0 && typeof buildShot === "function" ? buildShot : null,
         jev: jev.client,
         broker,
         keepOrRetake,
@@ -1359,7 +1365,7 @@ command("shoot", "record takes site by site (never across a teleport)",
         sleep: deps.sleep,
         io,
       });
-      const text = [`shot ${r.shots.length} take(s) across ${r.teleports} site(s)`]
+      const text = [`shot ${r.shots.length} take(s) across ${r.teleports} site(s)${r.hops ? ` (${r.hops} in-site hop(s))` : ""}`]
         .concat(r.shots.map((x) => `  ${x.shotId}: ${path.basename(x.file)} · ${x.frames} frames · ${x.kept ? "kept" : "NOT KEPT"} (${x.verdict.band}, ${x.verdict.source}${x.attempts > 1 ? `, ${x.attempts} attempts` : ""}${x.failedAttempts?.length ? `, retake ${x.failedAttempts.map((f) => f.attempt).join("/")} failed` : ""})${x.issues?.length ? ` · page issue(s): ${x.issues.map((i) => (Number.isFinite(i.minDurationSec) ? `${i.code} (min ${i.minDurationSec} s)` : i.code)).join(", ")}` : ""}`))
         .concat(r.failures.map((f) => `  FAILED ${f.shotId} at ${f.stage}: ${f.message}`))
         .join("\n");

@@ -97,7 +97,8 @@ validate, compile, techniques) — never boot or shoot.
   `--password=[redacted]`). Never write it into a plan, note, doc, log, memory or commit. It is single-login: one
   film tab at a time; after a disconnect wait ~25–65 s ("Account In Use").
 - **Teleports take ≈10 s → shoot by location.** `shoot` walks the compiled schedule (one teleport per site, then
-  every take at that site); never record across a teleport. `scout` and `rehearse` do NOT teleport — `go` there first.
+  every take at that site, hopping the hidden player to any outdoor shot more than `--hop` = 40 m away so grass and
+  nearby server objects are there); never record across a teleport. `scout` and `rehearse` do NOT teleport — `go` there first.
 - **JEV costs money.** Caps `--jev-max-usd-per-hour=2` and `--jev-max-calls-per-min=600` are the defaults on every
   command that talks to JEV; `=0` refuses every call before the network (the pilot flies its code policy). For
   rehearsals prefer `pilot.mode: "code"` (free) or `"shadow"` (JEV is asked and its agreement logged, but it never

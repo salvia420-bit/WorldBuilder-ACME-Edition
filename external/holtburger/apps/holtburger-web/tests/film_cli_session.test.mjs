@@ -76,7 +76,7 @@ import { IVF_HEADER_BYTES, createTakeSink, ivfFileHeader, ivfFrameHeader, sniffC
 import { muxArgv } from "../tools/film/lib/ffmpeg.mjs";
 import { JEV_ENDPOINT, choiceQ } from "../tools/film/lib/jev.mjs";
 import { createJevBroker } from "../tools/film/lib/jev_broker.mjs";
-import { DECIDE_OPTIONS, FLIGHT_GAP_WARN_M, PAGE_ABORT_MAX, PAGE_IDLE_WAIT_MS, flightOf, issueLine, judgeInput, mergeIssues, pageIssuesOf, selectSchedule, settlePage, shootSchedule } from "../tools/film/lib/shoot.mjs";
+import { DECIDE_OPTIONS, FLIGHT_GAP_WARN_M, HOP_LIFT_M, PAGE_ABORT_MAX, PAGE_IDLE_WAIT_MS, STAND_HOP_M, flightOf, issueLine, judgeInput, mergeIssues, pageIssuesOf, selectSchedule, settlePage, shootSchedule, standPointOf } from "../tools/film/lib/shoot.mjs";
 import { compilePlan } from "../tools/film/plan/compile.mjs";
 import { buildShot, createRegistry, defineTechnique } from "../scene3d/film/shots/index.js";
 import { makeTrajectory } from "../scene3d/film/shots/trajectory.js";
@@ -1584,6 +1584,8 @@ async function runSchedule(tp, timeline, extra = {}) {
       },
       io: { info: (m) => infos.push(String(m)), warn: (m) => warns.push(String(m)), scrub: (t) => String(t) },
       drainPollMs: 50,
+      ...(extra.buildShot ? { buildShot: extra.buildShot } : {}),
+      ...(extra.hopM !== undefined ? { hopM: extra.hopM } : {}),
     });
   } catch (e) {
     error = e;
@@ -2219,6 +2221,113 @@ await check("S7 no output stream and no file under the temp tree contains the pa
     }
   };
   walk(TMP);
+});
+
+await check("S30 in-site hops: before an OUTDOOR shot whose camera path is more than STAND_HOP_M from the hidden player, the player is moved there with @teleloc (page ground + HOP_LIFT_M) and the readiness gate runs again — never during a take; a near shot, a shot at the same place, a visible-avatar shot, an actor shot and an indoor shot never hop; no ground height → a warning, no hop; the hop goes to shoot-log.jsonl and the shot's report; hopM 0 or no buildShot = never", async () => {
+  const LB = 192;
+  const anchor = [32532, 34567, 94];
+  const stand = (id, pos, extra = {}) => ({ id, pos, extra });
+  const shots = [
+    stand("near", [32533, 34570, 94]), // 3 m from the landing point
+    stand("terrace", [32532, 34688, 66]), // 121 m north → hop
+    stand("terrace2", [32540, 34690, 66]), // 8 m from the new spot → no hop
+    stand("avatar", [32700, 34900, 40], { showAvatar: true }),
+    stand("actor", [32700, 34900, 40], { actor: [{ emote: "/wave", at: 0 }] }),
+    stand("nogroundshot", [33000, 35000, 40]),
+    stand("cellshot", [32700, 34900, 40], { cell: 0x01d90108 }),
+  ];
+  const tl = shootTimeline([{ id: "A", shots: shots.map((x) => ({ id: x.id })) }]);
+  tl.schedule[0].anchor = anchor;
+  for (const it of tl.items) {
+    const x = shots.find((q) => q.id === it.shotId);
+    Object.assign(it.take, { subject: { kind: "point", pos: x.pos, radius: 2, height: 3 }, anchor, capture: { width: 64, height: 36, fps: 10 }, ...x.extra });
+    it.take.spec = { duration: 0.5, technique: "test.offset", params: { dx: 4, dy: -3 } };
+  }
+  // A stand-in builder: the camera holds (subject + [dx, dy]) for the whole shot.
+  const built = [];
+  const buildShot = (spec, ctx) => {
+    built.push(spec.technique);
+    const p = [ctx.subject.pos[0] + spec.params.dx, ctx.subject.pos[1] + spec.params.dy, ctx.subject.pos[2] + 2];
+    return { duration: spec.duration, sample: () => ({ pos: p.slice() }) };
+  };
+  const run = async (extra) => {
+    const tp = makeTakePage();
+    let player = [anchor[0] + 1, anchor[1] + 1, anchor[2]];
+    const teleport = tp.film.world.teleport;
+    tp.film.world.teleport = (cmd) => {
+      const r = teleport(cmd);
+      const m = /^@teleloc\s+0x([0-9a-f]{8})\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/i.exec(cmd);
+      if (m) {
+        const cell = parseInt(m[1], 16) >>> 0;
+        player = [(cell >>> 24) * LB + Number(m[2]), ((cell >>> 16) & 0xff) * LB + Number(m[3]), Number(m[4])];
+      }
+      return r;
+    };
+    const groundCalls = [];
+    tp.film.query = {
+      subject: (ref) => (ref === "player" ? { ok: true, subject: { guid: 0x50000001, pos: player.slice() } } : { ok: false, code: "FILM_SUBJECT_NOT_FOUND", error: { message: "no" } }),
+      groundZ: (xy) => {
+        groundCalls.push(xy);
+        if (xy[0] > 32900) return { ok: false, code: "FILM_NO_GROUND", error: { code: "FILM_NO_GROUND", message: "no ground yet" } };
+        return { ok: true, x: xy[0], y: xy[1], z: 66 };
+      },
+    };
+    const res = await runSchedule(tp, tl, extra);
+    return { tp, res, groundCalls, player: () => player };
+  };
+  const { tp, res } = await run({ buildShot });
+  assert.equal(res.error, null, String(res.error?.stack ?? res.error));
+  assert.equal(res.r.ok, true, JSON.stringify(res.r.failures));
+  const cmds = tp.teleports.map((t) => t.cmd);
+  assert.equal(cmds[0], "@telepoi A");
+  const hopsSent = cmds.filter((c) => c.startsWith("@teleloc"));
+  assert.equal(hopsSent.length, 1, `exactly one hop (terrace): ${JSON.stringify(cmds)}`);
+  // terrace + [4, -3] = (32536, 34685) → LB 0xA9B4, local (88, 125) → cell 1 + 3*8 + 5 = 0x1E, z = 66 + HOP_LIFT_M.
+  const m = /^@teleloc 0x([0-9A-F]{8}) ([\d.]+) ([\d.]+) ([\d.]+) /i.exec(hopsSent[0]);
+  assert.ok(m, hopsSent[0]);
+  assert.equal(m[1].toUpperCase(), "A9B4001E");
+  assert.deepEqual([Number(m[2]), Number(m[3]), Number(m[4])], [88, 125, 66 + HOP_LIFT_M]);
+  assert.ok(tp.teleports.every((t) => !t.takeRunning), "never during a take");
+  const iHop = tp.calls.indexOf(`teleport ${hopsSent[0]}`);
+  assert.ok(iHop > tp.calls.indexOf("shoot near") && iHop < tp.calls.indexOf("prepare terrace"), "the hop is between the near take and the terrace prepare");
+  assert.equal(tp.calls[iHop + 1], "ready", "the readiness gate runs after the hop");
+  assert.equal(res.r.hops, 1);
+  assert.equal(res.r.teleports, 1, "site teleports are still counted on their own");
+  const rep = JSON.parse(fs.readFileSync(path.join(res.paths.reports, "terrace.json"), "utf8"));
+  assert.equal(rep.hop.ok, true);
+  assert.equal(rep.hop.distM, 117, "hypot(3, 117) from the landing point");
+  assert.equal(rep.hop.cmd, hopsSent[0]);
+  assert.ok(!fs.readFileSync(path.join(res.paths.reports, "terrace2.json"), "utf8").includes('"hop"'), "no hop note on a shot that did not hop");
+  const hopRows = res.shootLog().filter((r) => r.event === "hop");
+  assert.deepEqual(hopRows.map((r) => [r.shotId, r.ok, r.distM]), [["terrace", true, 117]]);
+  assert.ok(res.warns.some((w) => w.includes("nogroundshot") && w.includes("no ground height")), res.warns.join("\n"));
+  assert.ok(!built.includes(undefined));
+  // hopM 0 → never; no buildShot → never.
+  for (const extra of [{ buildShot, hopM: 0 }, {}]) {
+    const z = await run(extra);
+    assert.equal(z.res.r.ok, true);
+    assert.deepEqual(z.tp.teleports.map((t) => t.cmd), ["@telepoi A"]);
+    assert.equal(z.res.r.hops, 0);
+    assert.equal(z.groundCalls.length, 0);
+  }
+  assert.equal(STAND_HOP_M, 40);
+});
+
+await check("S31 standPointOf with the REAL technique registry: a low-angle Life Stone shot stands within a few metres of the stone; a point subject without a builder falls back to the subject; an entity subject (position unknown offline) has none", () => {
+  const take = {
+    spec: { technique: "classic.low-angle", duration: 9.0866, params: { azimuthDeg: 120, azimuthRef: "compass", elevationDeg: -25, distance: 5.5, thirds: "center", pushM: 1.0 }, framing: "FS" },
+    subject: { kind: "point", pos: [32529.3, 34571.8, 94], height: 3.2, radius: 1.2 },
+    anchor: [32532, 34567.1, 94],
+    capture: { width: 1920, height: 1080, fps: 24 },
+  };
+  take.spec.subject = take.subject;
+  const sp = standPointOf({ take }, buildShot);
+  assert.equal(sp.source, "camera");
+  const d = Math.hypot(sp.pos[0] - 32529.3, sp.pos[1] - 34571.8);
+  assert.ok(d > 1 && d < 8, `stands by the stone (${d.toFixed(2)} m)`);
+  assert.deepEqual(standPointOf({ take }, null), { pos: [32529.3, 34571.8], spanM: 0, source: "subject" });
+  assert.equal(standPointOf({ take: { ...take, subject: { kind: "entity", ref: "Alcott" } } }, buildShot), null);
+  assert.equal(standPointOf({ take: { ...take, spec: { ...take.spec, technique: "no.such" } } }, buildShot).source, "subject", "a build that throws falls back");
 });
 
 fs.rmSync(TMP, { recursive: true, force: true });

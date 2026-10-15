@@ -103,7 +103,7 @@ actor `moveTo`, which still warns.
 
 | Kind | Shape | Resolved in the page as |
 |---|---|---|
-| point | `{kind:"point", pos:[x,y,z], radius?, height?, heading?}` | a static subject (radius 0.6 m, height 1.8 m by default) |
+| point | `{kind:"point", pos:[x,y,z], radius?, height?, heading?}` | a static subject (radius 0.6 m, height 1.8 m by default). Aimed at an object (a Life Stone, statue, brazier), that object is the subject's BODY: never faded as an occluder, and a ray stopped by it sees the subject (take report `subjectBody`) — only while the point's radius ≤ 8 m (a wider point is a place) |
 | entity | `{kind:"entity", ref, moving=false, radius?, height?}` — `ref` = guid number, `"0x…"` guid or a name | `query.subject(ref)` at prepare; `moving: true` follows it live every frame (and makes the shot realtime, as does a realtime-hint technique) |
 | player | `{kind:"player", moving?}` or `"player"` | the local player (the avatar is shown for the take; a realtime-hint technique makes the shot realtime). `moving` defaults to `true` when the shot's actor walks (`actor.moveTo` / `actor.moves`): the page then follows the avatar live every frame (framing, sensors, take metrics), like a `moving` entity. A realtime take also follows the player live unless `moving: false`. An explicit `moving: false` with a walking actor wins but warns |
 | path | `{kind:"path", points:[[x,y,z]…≥ 2]}` | `ctx.path` (not a framing subject: techniques that need a subject reject it) |

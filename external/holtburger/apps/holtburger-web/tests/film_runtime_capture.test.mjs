@@ -2743,6 +2743,53 @@ check("E1 the wait is bounded and reported: 30 s cap, a stalled override (fog op
 
 // ---------------------------------------------------------------------------
 
+check("T2 a POINT subject's own body (holtburg.02: a 1.2 m subject on a Life Stone) is never faded: the stone and a fadeable statue whose footprints hold the subject's axis go to the sensors as subjectBodyIds and the report; a neighbouring NPC, a tree off the axis and procedural scenery do not; a wide point (a town square) has no body", async () => {
+  const LS = 0x7a9b4005;
+  const NPC = 0x7a9b4010;
+  const STATUE = "placement:00000000:object:7";
+  const TREE = "placement:00000000:object:8";
+  const ents = [
+    { guid: LS, pos: [100, 130, 0], radius: 1.6, height: 3.6, isLocal: false },
+    { guid: NPC, pos: [103, 132, 0], radius: 0.48, height: 1.8, isLocal: false },
+    { guid: 0x50000001, pos: [100, 130, 0], radius: 0.48, height: 1.8, isLocal: true },
+  ];
+  const rows = [
+    { source: "object", kind: "prop", pos: [100.4, 130, 0], radius: 1, height: 2, lbKey: 0, index: 7 },
+    { source: "object", kind: "tree", pos: [110, 130, 0], radius: 2.5, height: 8, lbKey: 0, index: 8 },
+    { source: "scenery", kind: "rock", pos: [100, 130, 0], radius: 1.5, height: 1.5, lbKey: 0, index: 2 },
+    { source: "object", kind: "building", pos: [100, 130, 0], radius: 9, height: 7, lbKey: 0, index: 9 },
+  ];
+  const fadeLookups = [];
+  const wq = {
+    groundZ: () => 0,
+    entitiesNear: () => ents.map((e) => ({ ...e })),
+    staticsNearCached: () => rows.map((r) => ({ ...r })),
+    staticFadeTargets: (key) => (fadeLookups.push(key), null),
+  };
+  const shotOn = async (subject) => {
+    const hidden = [];
+    const bodies = [];
+    const R = rig({ setpoint: { fadeIds: [LS, NPC, STATUE, TREE] }, onSense: (_p, ctx) => bodies.push(ctx.subjectBodyIds) });
+    R.live.entityManager = { _filmHiddenGuids: new Set(), setFilmHidden(g, on) { hidden.push([g, on]); return true; } };
+    const player = playerOn(R, { worldQuery: wq });
+    const tr = TR.makeTrajectory({ id: "stone", technique: "classic.low-angle", family: "classic", duration: 1, positionAt: (t) => [100, 124 + t, 1], orientAt: { h: 0, p: 0.3, r: 0 }, subject });
+    player.prepare({ trajectory: tr, capture: { fps: 10 } });
+    const rep = await player.shoot({ fps: 10 });
+    return { rep, hidden, bodies };
+  };
+  fadeLookups.length = 0;
+  const a = await shotOn({ pos: [100, 130, 0], radius: 1.2, height: 3.2 });
+  assert.deepEqual(a.rep.subjectBody, [LS, STATUE], "the stone and the statue on the axis; not the NPC, the dolly, the off-axis tree, scenery or a building");
+  assert.ok(a.bodies.length > 0 && a.bodies.every((b) => Array.isArray(b) && b.length === 2 && b[0] === LS && b[1] === STATUE), "every sense() call names the body");
+  assert.deepEqual(a.hidden, [[NPC, true], [NPC, false]], "only the NPC is faded (and restored); the Life Stone never");
+  assert.equal(a.rep.faded.entities, 1);
+  assert.ok(!fadeLookups.includes(STATUE) && fadeLookups.includes(TREE), "the statue is never looked up for a fade; the tree is");
+  // A town square (radius 30) is a place, not an object: no body, so the stone at its centre fades like anything else.
+  const b = await shotOn({ pos: [100, 130, 0], radius: 30, height: 12 });
+  assert.deepEqual(b.rep.subjectBody, []);
+  assert.deepEqual(b.hidden.filter(([, on]) => on).map(([g]) => g).sort(), [LS, NPC].sort());
+});
+
 for (const run of pending) await run();
 console.log(`film_runtime_capture: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -122,7 +122,12 @@ against the cwd, else the project; a missing file exits 2; plain `--song` is ref
 
 What `shoot` does (`tools/film/lib/shoot.mjs`) — per site: (a take still running on the page is aborted first —
 `shoot` never teleports under a running take) → teleport → readiness gate → prewarm (collision, heightmap corridor,
-statics/buildings/EnvCells around the anchor and the subjects). Prewarm is best-effort: an incomplete one prints
+statics/buildings/EnvCells around the anchor and the subjects) → per shot, a HOP when the shot's camera path is more
+than `--hop` metres (default 40; `--hop=0` = never) from the hidden player: grass is drawn only around the player
+(dense to 48 m) and the server only sends the objects near it (NPCs, Life Stones, portals), so `shoot` moves it
+with `@teleloc` to the camera path's centre (built offline from the plan) and runs the readiness gate again — between
+takes, never for actor / visible-avatar or indoor shots; a hop costs ≈ 15–20 s, a failed one only warns
+(`event:"hop"` in `shoot-log.jsonl`, `hop` in the shot's report). Prewarm is best-effort: an incomplete one prints
 `prewarm incomplete … missing terrain: 0x…; shooting anyway`, adds a `stage:"prewarm"` row to `shoot-log.jsonl` and
 a `prewarm` note to the site's take reports — expect pop-in there and check the contact sheet. A site whose teleport
 or readiness check throws becomes a failure for its shots (stage `site`) and the next site still runs. Per shot and
@@ -144,7 +149,8 @@ per run with a different gap) as
 `shoot-log.jsonl` row and `<shot>.rehearsal.json`); they never fail or retake a take. Exit 1 when a site is not ready
 or fails, or a shot has no kept take.
 
-Useful `shoot` flags: `--shot=s010,s040` (subset, still grouped by site), `--codec=avc|vp9|frames` (the page may
+Useful `shoot` flags: `--shot=s010,s040` (subset, still grouped by site), `--hop=40` (in-site hop distance, 0 = off),
+`--codec=avc|vp9|frames` (the page may
 fall back avc → vp9 → JPEG frames; the sink follows), `--bitrate=40000000`, `--locked` (replay the rehearsal's
 realised table with no pilot — a bit-identical path), `--rehearse-fps=8`, `--capped` (ffmpeg under
 `capped-build`). JEV broker limits are set per take: realtime `{timeoutMs: 1200, maxRetries: 0}`, stepped

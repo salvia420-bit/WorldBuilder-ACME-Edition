@@ -128,7 +128,7 @@ import { buildShot as defaultBuildShot, getTechnique } from "../shots/index.js";
 import {
   TABLE_STRIDE, bakeTrajectory, isTrajectory, normalizeBounds, tableChecksum, trajectoryFromTable, validateTrajectory,
 } from "../shots/trajectory.js";
-import { isStaticFadeKey } from "../scene/world_query.js";
+import { FADEABLE_STATIC_KINDS, FADEABLE_STATIC_SOURCES, isStaticFadeKey, staticFadeKey } from "../scene/world_query.js";
 import { FILM_CLOCK_MAX_FPS, FILM_CLOCK_MIN_FPS } from "./film_clock.js";
 
 /** Pre-roll floor: frames rendered at the start pose (never recorded) after the cut into a take. */
@@ -162,6 +162,10 @@ export const TAKE_DEFAULTS = Object.freeze({
   occludedFrac: 0.4,
   /** A static placement within (revealOccluder.radius + this) m of a reveal shot's occluder is never faded. */
   revealGuardM: 1.5,
+  /** Slack (m) of the point subject's body test (subjectBodyOf): footprint radius and height span. */
+  subjectBodyPadM: 0.3,
+  /** A point subject wider than this (m) is a place, not an object: it has no body (subjectBodyOf). */
+  subjectBodyMaxRadiusM: 8,
   /** A static fade key with no live draw is looked up again only after this many frames (the scan is not per-frame). */
   fadeRetryFrames: 15,
   /**
@@ -1363,6 +1367,8 @@ export function createTakePlayer(deps = {}) {
       sceneSig: null,
       dof: { used: false, writes: 0, enabled: false, errors: 0 },
       fades: { entities: [], particles: [], statics: [] },
+      // The point subject's own body (the Life Stone it is aimed at): never an occluder, never faded.
+      subjectBody: subjectBodyOf(),
       fadeFallbacks: 0,
       fadeMisses: new Map(),
       actorResults: [],
@@ -1842,6 +1848,7 @@ export function createTakePlayer(deps = {}) {
       indoor: plan.indoor,
       nominalAhead: aheadPoints(R, p, fin(R.prevPose.t, 0)),
       fadedIds: fadedIdsOf(R),
+      subjectBodyIds: R.subjectBody,
     };
     try {
       return sensors.sense({ ...R.prevPose }, ctx, dt);
@@ -1897,6 +1904,66 @@ export function createTakePlayer(deps = {}) {
     const f = R.fades;
     if (!f.entities.length && !f.particles.length && !f.statics.length) return null;
     return [...f.entities, ...f.particles.map((p) => p.key), ...f.statics.map((s) => s.key)];
+  }
+
+  /**
+   * A POINT subject's own body: the entities and fadeable placements whose footprint holds the
+   * subject's axis — the Life Stone, statue or brazier the shot is aimed at. Its plan radius is
+   * often the crystal / figure only, so a ray to the subject can stop on the body's outer parts
+   * (a Life Stone's prongs): the sensors count that as seeing the subject (`subjectBodyIds`) and
+   * fade() never hides it — it IS the shot, like a reveal shot's own occluder. Resolved once per
+   * run, at its start (the site is streamed in by then). None for a guid subject (its guid is
+   * excluded already), a moving or path subject, or a point wider than subjectBodyMaxRadiusM
+   * (a town square is a place, not an object).
+   * @returns {Array<number|string>} guids and static fade keys
+   */
+  function subjectBodyOf() {
+    const ids = [];
+    const wq = d.worldQuery;
+    if (!wq || typeof wq.entitiesNear !== "function" || plan.subjectGuid || plan.liveSubjectFn) return ids;
+    let s0 = null;
+    let s1 = null;
+    try {
+      s0 = subjectAt(0);
+      s1 = subjectAt(plan.D);
+    } catch (_) {
+      return ids;
+    }
+    const base = s0 && !s0.guid ? vec3(s0.pos) : null;
+    const end = s1 ? vec3(s1.pos) : null;
+    if (!base || !end || Math.hypot(end[0] - base[0], end[1] - base[1], end[2] - base[2]) > 1e-3) return ids;
+    if (fin(s0.radius, 0) > TAKE_DEFAULTS.subjectBodyMaxRadiusM) return ids;
+    const pad = TAKE_DEFAULTS.subjectBodyPadM;
+    const h = Math.max(0, fin(s0.height, 0));
+    // Footprint holds the subject's axis, and the height spans overlap.
+    const holds = (pos, r, hh) => {
+      const p = vec3(pos);
+      if (!p || !Number.isFinite(r) || r < 0) return false;
+      const top = p[2] + Math.max(0, fin(hh, 0));
+      return Math.hypot(p[0] - base[0], p[1] - base[1]) <= r + pad && p[2] <= base[2] + h + pad && top >= base[2] - pad;
+    };
+    // A body holding the axis lies within h/2 of its middle (entitiesNear / staticsNear: surface distance).
+    const mid = [base[0], base[1], base[2] + h / 2];
+    const reach = h / 2 + pad;
+    try {
+      for (const e of wq.entitiesNear(mid, reach) || []) {
+        if (e && !e.isLocal && Number.isFinite(e.guid) && e.guid > 0 && holds(e.pos, e.radius, e.height)) ids.push(e.guid >>> 0);
+      }
+    } catch (_) {
+      /* no entities */
+    }
+    try {
+      const rows = typeof wq.staticsNearCached === "function" ? wq.staticsNearCached(mid, reach) : [];
+      for (const row of rows || []) {
+        if (!row || !FADEABLE_STATIC_SOURCES.includes(row.source) || !FADEABLE_STATIC_KINDS.includes(row.kind)) continue;
+        if (!holds(row.pos, row.radius, row.height)) continue;
+        const key = staticFadeKey(row);
+        if (key) ids.push(key);
+      }
+    } catch (_) {
+      /* no statics */
+    }
+    return ids;
   }
 
   /** True when a placement sits on the reveal shot's own occluder (never faded: it IS the shot). */
@@ -2076,7 +2143,7 @@ export function createTakePlayer(deps = {}) {
     for (const id of ids) {
       if (typeof id === "number" && Number.isFinite(id) && id > 0) {
         const guid = id >>> 0;
-        if (guid === plan.subjectGuid) continue;
+        if (guid === plan.subjectGuid || R.subjectBody.includes(guid)) continue;
         if (R.fades.entities.includes(guid)) {
           handled += 1;
           continue;
@@ -2095,6 +2162,7 @@ export function createTakePlayer(deps = {}) {
           /* a rig that cannot be hidden stays */
         }
       } else if (isStaticFadeKey(id)) {
+        if (R.subjectBody.includes(id)) continue;
         if (R.fades.statics.some((f) => f.key === id)) {
           handled += 1;
           continue;
@@ -2391,6 +2459,7 @@ export function createTakePlayer(deps = {}) {
           aspect: plan.aspect,
           indoor: plan.indoor,
           nominalAhead: aheadPoints(R, 0, 0),
+          subjectBodyIds: R.subjectBody,
         }, i === 0 ? 0 : dt);
       } catch (_) {
         /* warm-up only */
@@ -3255,6 +3324,8 @@ export function createTakePlayer(deps = {}) {
       reveal: plan.reveal,
       dof: { ...R.dof },
       faded: { ...fades, fallbackFrames: R.fadeFallbacks },
+      // The point subject's own body (guids / placement keys): seen as the subject, never faded.
+      subjectBody: R.subjectBody.slice(),
       // The prepare-time checks travel with every take report (rehearse, shoot, a failed take's
       // partial): the nominal's validation (issues incl. 'overspeed' with minDurationSec) and the
       // drone / fpv flight check, plus how far the craft really trailed the nominal this run.

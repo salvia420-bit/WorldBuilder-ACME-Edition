@@ -26,7 +26,9 @@
 //     `occluderIds` = what the pilot may fade: rig guids, particle keys and the
 //     fade keys of placed tree / prop statics (world_query describeHit `fadeKey`); a
 //     ray stopped by an occluder the runtime already faded (`ctx.fadedIds`) sees
-//     the subject. A SCENERY (procedural collider) hit never carries an id (v1:
+//     the subject, and so does one stopped by the subject's own body
+//     (`ctx.subjectBodyIds`: the Life Stone / statue a POINT subject is aimed at —
+//     never an occluder, never in occluderIds). A SCENERY (procedural collider) hit never carries an id (v1:
 //     CollisionHit names no placement — world_query FADEABLE_STATIC_SOURCES), so it
 //     is never in occluderIds and never seen through, whatever is in fadedIds.
 // Indoors (`ctx.indoor`) every probe also sweeps the EnvCell layers: `ctx.cellIds`,
@@ -263,6 +265,8 @@ export function readNominalAhead(raw, poseT, aheadSec) {
  * `senseFrame:'camera'` (always the camera heading), `indoor` (no terrain march; the
  * EnvCell layers are swept), `cellIds` (cell sweeps; default indoors = renderSetCells(sh)),
  * `fadedIds` (ids the runtime has faded out — a subject ray they stop counts as clear),
+ * `subjectBodyIds` (guids / placement fade keys that ARE the point subject's body — a
+ * subject ray they stop sees the subject; take_player subjectBodyOf),
  * `terrainZAt` (override; null disables terrain),
  * `layers`, `framing` ('MS'), `aspect` (16/9), `lensRadius` (2), `subjectIsObstacle`
  * (false: the subject's guid is excluded from the clearance / path probes too, so a
@@ -487,7 +491,9 @@ export function createSensors(deps = {}) {
         if (!self) {
           const k = refine(r);
           const id = k.guid !== null ? k.guid : k.fadeKey;
-          if (id !== null && F.faded && F.faded.has(id)) {
+          if (id !== null && F.subjectBody && F.subjectBody.has(id)) {
+            // The point subject's own body (the Life Stone it is aimed at): seeing it IS seeing the subject.
+          } else if (id !== null && F.faded && F.faded.has(id)) {
             // Faded out by the runtime for this take: the camera sees past it.
             rec.seenThrough = true;
           } else {
@@ -704,6 +710,7 @@ export function createSensors(deps = {}) {
       indoor,
       cellIds: c.cellIds ?? (indoor ? renderSetCells(sh) : null),
       faded: fadedSet(c.fadedIds),
+      subjectBody: fadedSet(c.subjectBodyIds),
       layers: c.layers ?? null,
       terrainZAt: indoor ? undefined : terrainZAt,
       subject,

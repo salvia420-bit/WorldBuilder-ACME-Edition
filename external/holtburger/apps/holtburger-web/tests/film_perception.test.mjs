@@ -2045,5 +2045,26 @@ await check("S10 every CollisionHit freed; bad poses and a throwing los never th
   assert.equal(b.budget.limit, 16);
 });
 
+await check("S18 a POINT subject aimed at a Life Stone (holtburg.02: radius 1.2 m, the prongs stand ~2 m out): a ray stopped by a prong outside the subject radius is an occluder (its guid in occluderIds) — unless ctx.subjectBodyIds names the stone as the subject's own body: then the rays SEE the subject and nothing is offered for a fade; another body id does not clear it", () => {
+  const LS = 0x7a9b4005;
+  const stone = { guid: LS, pos: [E[0], E[1] + 6, 0], meta: { itemType: F.ITEM_TYPE_LIFE_STONE, name: "Life Stone" } };
+  // One prong between the camera and the crystal: 1.8 m from the stone's axis (outside 1.2 + the 0.3 m self pad).
+  const prong = { type: "cyl", c: [E[0], E[1] + 4.2], r: 0.4, z0: 0, z1: 4, guid: LS };
+  const subject = { pos: [E[0], E[1] + 6, 0], radius: 1.2, height: 3.2 };
+  const rigOf = () => sensorRig({ entities: [stone], sh: { prims: { objects: [prong] }, dims: new Map([[LS, [1.6, 3.6]]]) } });
+  const run = (R, extra) => {
+    let f;
+    for (let i = 0; i < 3; i++) f = R.sensors.sense(pose0(), { subject, ...extra }, 0.1);
+    return f.subject;
+  };
+  const bare = run(rigOf(), {});
+  assert.ok(bare.visibleFrac < 1, `the prong hides part of the subject (visibleFrac ${bare.visibleFrac})`);
+  assert.deepEqual(bare.occluderIds, [LS], "without a body the stone is offered as an occluder (the holtburg.02 fade)");
+  const body = run(rigOf(), { subjectBodyIds: [LS] });
+  assert.deepEqual([body.visibleFrac, body.occluderIds, body.occluderKind, body.unseenSec], [1, [], null, 0], "the subject's own body is seen, never an occluder");
+  const other = run(rigOf(), { subjectBodyIds: [0x7a9b4006, "placement:a9b4fffe:object:3"] });
+  assert.deepEqual(other.occluderIds, [LS], "only the named body counts as the subject");
+});
+
 console.log(`film_perception: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

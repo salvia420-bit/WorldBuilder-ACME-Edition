@@ -27,6 +27,15 @@
 // a `prewarm` note to that site's take reports. A site whose teleport/readiness throws records each of its shots
 // as a failure (stage 'site') and the schedule goes on; only usage errors (no __film, no method) abort the run.
 //
+// In-site HOPS (`hopM`, `film shoot --hop`, default STAND_HOP_M): grass is drawn around the hidden player
+// (terrain_grass: dense to 48 m) and the server only sends the objects near it (NPCs, Life Stones, portals), so
+// before each OUTDOOR shot whose camera path (standPointOf: built offline like `plan validate --dry`, its
+// horizontal centroid) lies more than hopM from the player, the player is moved there with `@teleloc` (ground +
+// HOP_LIFT_M) and the readiness gate runs again — between takes, after settlePage, so nothing is recorded across
+// it. Shots with an actor cue or a visible avatar (the site teleport placed the player on purpose) never hop. A hop
+// that fails or is not ready only warns (the shot is taken from where the player is); it adds an `event:'hop'` row
+// to shoot-log.jsonl and a `hop` note to that shot's report.
+//
 // Per take (attempt k = 0 … retakes):
 //   1. __film.world.avatar(true) when take.showAvatar (and false again afterwards, even on failure)
 //   2. __film.prepare(item.take)  (locked: {…take, table: realised table of the rehearsal})
@@ -57,7 +66,8 @@ import { FilmCliError, EXIT, jsonReplacer } from "./args.mjs";
 import { DRAIN_MAX_BYTES, createTakeSink, drainTake } from "./drain.mjs";
 import { muxArgv, runFfmpeg } from "./ffmpeg.mjs";
 import { appendJsonl, writeJsonFile } from "./project.mjs";
-import { filmCall, filmCallWith, goAndWait } from "./session.mjs";
+import { filmCall, filmCallWith, goAndWait, readyTargetsForCommand } from "./session.mjs";
+import { localFromWorld, telelocCmd } from "../../../scene3d/film/core/units.js";
 
 /** Broker per-call limits by capture mode (SPEC §3.2: the page waits 1.5 s realtime, 15 s stepped). */
 export const DECIDE_OPTIONS = Object.freeze({
@@ -595,6 +605,148 @@ async function prewarmSite(page, entry, { io, log, paths, now }) {
   return note;
 }
 
+/** A shot whose camera path is more than this far (m, horizontal) from the hidden player moves the player first. */
+export const STAND_HOP_M = 40;
+/** A hop lands this far (m) above the ground height the page reports (the server drops the player onto it). */
+export const HOP_LIFT_M = 0.5;
+/** Camera samples per shot for its stand point. */
+const STAND_SAMPLES = 13;
+
+const isXyz = (v) => Array.isArray(v) && v.length >= 3 && v.slice(0, 3).every(Number.isFinite);
+
+/**
+ * Where the hidden player should stand for a shot: the horizontal centroid of its camera path, built offline
+ * like `plan validate --dry` (scene3d/film/shots buildShot, ground unknown — only the horizontal path is used),
+ * else the point subject's position. null when the position cannot be known offline (an entity / player
+ * subject) or there is nothing to build.
+ * @param {object} item timeline item (`item.take`: spec, subject, path, anchor, capture)
+ * @param {Function|null} buildShot scene3d/film/shots/index.js buildShot
+ * @returns {{pos: number[], spanM: number, source: 'camera'|'subject'}|null}
+ */
+export function standPointOf(item, buildShot) {
+  const take = item && typeof item === "object" ? item.take : null;
+  if (!take || typeof take !== "object") return null;
+  const s = take.subject;
+  const point = s && typeof s === "object" && !Array.isArray(s) && (s.kind ?? "point") === "point" && isXyz(s.pos) ? s
+    : Array.isArray(s) && isXyz(s) ? { pos: s } : null;
+  const pathPts = Array.isArray(take.path) ? take.path : s && s.kind === "path" && Array.isArray(s.points) ? s.points : undefined;
+  if (!point && !pathPts) return null;
+  const pts = [];
+  if (typeof buildShot === "function" && take.spec && typeof take.spec === "object") {
+    try {
+      const cap = take.capture ?? {};
+      const subject = point ? {
+        pos: point.pos.slice(0, 3),
+        radius: Number.isFinite(point.radius) ? point.radius : 0.6,
+        height: Number.isFinite(point.height) ? point.height : 1.8,
+        ...(Number.isFinite(point.heading) ? { heading: point.heading } : {}),
+      } : null;
+      const traj = buildShot(take.spec, {
+        subject,
+        anchor: isXyz(take.anchor) ? take.anchor : point ? point.pos : pathPts[0],
+        groundZ: () => null,
+        path: pathPts,
+        ...(Number.isFinite(cap.width) && Number.isFinite(cap.height) && cap.height > 0 ? { aspect: cap.width / cap.height } : {}),
+        ...(Number.isFinite(cap.fps) ? { fps: cap.fps } : {}),
+      });
+      const D = traj && Number.isFinite(traj.duration) ? Math.max(0, traj.duration) : 0;
+      for (let i = 0; i < STAND_SAMPLES; i++) {
+        const pose = traj.sample((D * i) / (STAND_SAMPLES - 1));
+        if (pose && isXyz(pose.pos)) pts.push(pose.pos);
+      }
+    } catch {
+      pts.length = 0;
+    }
+  }
+  if (!pts.length) return point ? { pos: [point.pos[0], point.pos[1]], spanM: 0, source: "subject" } : null;
+  const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+  const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  const spanM = Math.max(...pts.map((p) => Math.hypot(p[0] - cx, p[1] - cy)));
+  return { pos: [cx, cy], spanM, source: "camera" };
+}
+
+/** The hidden player's position (AC world metres) from the page, or null. */
+async function playerPosOf(page) {
+  try {
+    const r = await filmCallWith(page, { soft: true, timeoutMs: 15_000 }, "query.subject", "player");
+    return r && r.ok === true && r.subject && isXyz(r.subject.pos) ? r.subject.pos.slice(0, 3) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Move the hidden player next to a shot's camera path when it is more than `hopM` away (see the header).
+ * @returns {Promise<{hopped: boolean, playerPos: number[]|null, note?: object, stuck?: string}>}
+ */
+async function hopForShot(o) {
+  const { page, entry, item, hopM, io, log, paths, now, sleep } = o;
+  const take = item.take ?? {};
+  const actor = Array.isArray(take.actor) ? take.actor.length > 0 : take.actor !== undefined && take.actor !== null;
+  if (entry.indoor === true || take.indoor === true || (take.cell !== undefined && take.cell !== null) || take.showAvatar === true || actor) {
+    return { hopped: false, playerPos: o.playerPos };
+  }
+  const stand = standPointOf(item, o.buildShot);
+  if (!stand) return { hopped: false, playerPos: o.playerPos };
+  const from = o.playerPos ?? (await playerPosOf(page));
+  if (!from) {
+    io.warn(`   ${item.shotId}: the hidden player's position is unknown — not moving it`);
+    return { hopped: false, playerPos: null };
+  }
+  const distM = Math.hypot(stand.pos[0] - from[0], stand.pos[1] - from[1]);
+  if (distM <= hopM) return { hopped: false, playerPos: from };
+  let ground = null;
+  try {
+    ground = await filmCallWith(page, { soft: true, timeoutMs: 15_000 }, "query.groundZ", [stand.pos[0], stand.pos[1]]);
+  } catch {
+    ground = null;
+  }
+  if (!ground || ground.ok !== true || !Number.isFinite(ground.z)) {
+    io.warn(`   ${item.shotId}: no ground height at its camera path yet — not moving the player (${Math.round(distM)} m away)`);
+    return { hopped: false, playerPos: from };
+  }
+  const loc = localFromWorld(stand.pos[0], stand.pos[1], ground.z + HOP_LIFT_M);
+  const cmd = telelocCmd(loc.cellId, loc.lx, loc.ly, loc.z);
+  const idle = await settlePage(page, o.idleOpts);
+  if (!idle.ok) {
+    if (idle.code === "NO_FILM" || idle.code === "NO_METHOD") {
+      throw new FilmCliError(`__film.status failed: ${idle.error}`, { exitCode: EXIT.USAGE, code: idle.code });
+    }
+    return { hopped: false, playerPos: from, stuck: stuckMessage(idle) };
+  }
+  io.info(`   ${item.shotId}: the player is ${Math.round(distM)} m from the shot's camera path — hop: ${cmd}`);
+  let go = null;
+  let error = null;
+  try {
+    go = await goAndWait(page, {
+      teleport: cmd,
+      ready: { ...(entry.ready ?? {}), ...readyTargetsForCommand(cmd) },
+      timeoutSec: entry.ready?.timeoutSec ?? 90,
+      now,
+      sleep,
+      log: (m) => io.info(`   ${m}`),
+    });
+  } catch (e) {
+    if (e instanceof FilmCliError && e.exitCode === EXIT.USAGE) throw e;
+    error = e?.message ?? String(e);
+  }
+  const ok = go?.ok === true;
+  if (ok) io.info(`   ready in ${(go.elapsedMs / 1000).toFixed(1)} s`);
+  else io.warn(`   hop for ${item.shotId} ${error ? `failed: ${error}` : `not ready after ${Math.round((go?.elapsedMs ?? 0) / 1000)} s`} — shooting from where the player is`);
+  const note = {
+    from: from.map((v) => Math.round(v * 10) / 10),
+    to: [stand.pos[0], stand.pos[1], loc.z].map((v) => Math.round(v * 10) / 10),
+    distM: Math.round(distM),
+    cmd,
+    ok,
+    ...(go ? { elapsedMs: go.elapsedMs } : {}),
+    ...(error ? { error } : {}),
+  };
+  log(paths.shootLog, { t: new Date(now()).toISOString(), event: "hop", shotId: item.shotId, siteId: entry.siteId, ...note });
+  const after = await playerPosOf(page);
+  return { hopped: true, playerPos: after, note };
+}
+
 /**
  * Shoot the selected part of a timeline on a booted film page.
  * @param {object} o
@@ -622,7 +774,9 @@ async function prewarmSite(page, entry, { io, log, paths, now }) {
  * @param {number} [o.drainPollMs=200]
  * @param {number} [o.idleWaitMs=PAGE_IDLE_WAIT_MS] how long settlePage waits for an idle page
  * @param {number} [o.idlePollMs=1000]
- * @returns {Promise<{ok: boolean, teleports: number, shots: object[], failures: object[]}>} failures:
+ * @param {number} [o.hopM=STAND_HOP_M] in-site hop distance (0 = never move the player inside a site)
+ * @param {Function|null} [o.buildShot] scene3d/film/shots buildShot (standPointOf); null = no hops
+ * @returns {Promise<{ok: boolean, teleports: number, hops: number, shots: object[], failures: object[]}>} failures:
  *   `{shotId, siteId, stage: 'busy'|'site'|'ready'|'plan'|'take'|'verdict', message, issues?}`; shots[]:
  *   `{shotId, siteId, file, frames, kept, verdict, attempts, issues, failedAttempts?, pageIdle?}` (`issues`: the
  *   kept attempt's page issues, see pageIssuesOf)
@@ -638,6 +792,10 @@ export async function shootSchedule(o) {
   const results = [];
   const failures = [];
   let teleports = 0;
+  let hops = 0;
+  const hopM = Number.isFinite(o.hopM) && o.hopM >= 0 ? o.hopM : STAND_HOP_M;
+  const buildShot = typeof o.buildShot === "function" ? o.buildShot : null;
+  let playerPos = null;
   const items = new Map((timeline.items ?? []).map((it) => [it.shotId, it]));
   const wj = (file, obj) => writeJsonFile(file, obj, { fs, scrub: io.scrub, replacer: jsonReplacer });
   const log = (file, obj) => appendJsonl(file, obj, { fs, scrub: io.scrub, replacer: jsonReplacer });
@@ -695,6 +853,7 @@ export async function shootSchedule(o) {
     }
     io.info(`   ready in ${(go.elapsedMs / 1000).toFixed(1)} s`);
     const prewarmNote = entry.prewarm ? await prewarmSite(page, entry, { io, log, paths, now }) : null;
+    playerPos = hopM > 0 && buildShot ? await playerPosOf(page) : null;
 
     for (const shotId of shots) {
       if (stuck) {
@@ -706,8 +865,23 @@ export async function shootSchedule(o) {
         failures.push({ shotId, siteId: entry.siteId, stage: "plan", message: `shot ${shotId} is in the schedule but not in timeline.items` });
         continue;
       }
+      let hopNote = null;
+      if (hopM > 0 && buildShot) {
+        const h = await hopForShot({ page, entry, item, hopM, buildShot, playerPos, idleOpts, io, log, paths, now, sleep });
+        playerPos = h.playerPos;
+        if (h.stuck) {
+          stuck = h.stuck;
+          io.warn(`${stuck} — skipping the remaining shots`);
+          failures.push({ shotId, siteId: entry.siteId, stage: "busy", message: stuck });
+          continue;
+        }
+        if (h.hopped) {
+          hops++;
+          hopNote = h.note;
+        }
+      }
       try {
-        const r = await shootOne({ ...o, fs, now, sleep, codec, retakes, entry, item, wj, log, prewarmNote });
+        const r = await shootOne({ ...o, fs, now, sleep, codec, retakes, entry, item, wj, log, prewarmNote, hopNote });
         results.push(r);
         if (!r.kept) {
           const retake = r.failedAttempts?.length ? ` (retake ${r.failedAttempts.map((f) => f.attempt).join(", ")} failed: ${r.failedAttempts.at(-1).message})` : "";
@@ -733,7 +907,7 @@ export async function shootSchedule(o) {
       }
     }
   }
-  return { ok: failures.length === 0, teleports, shots: results, failures };
+  return { ok: failures.length === 0, teleports, hops, shots: results, failures };
 }
 
 async function shootOne(o) {
@@ -886,6 +1060,7 @@ async function shootOne(o) {
       validation: validationSummary(firstPrep),
       flight: shotFlight,
       ...(o.prewarmNote ? { prewarm: o.prewarmNote } : {}),
+      ...(o.hopNote ? { hop: o.hopNote } : {}),
       startedAt,
       ms: now() - t0,
     };

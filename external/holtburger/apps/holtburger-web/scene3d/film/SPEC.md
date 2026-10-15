@@ -33,7 +33,9 @@ always owns safety; the per-shot standing order is a sentence the director write
 (terrain/object rings, LRU, far ring, ACE creature visibility ≈3×3 landblocks with a 112.5 m first-sight clamp):
 - The hidden player character is the **streaming dolly**. Before shooting at a site the director teleports it
   there and waits for the readiness gate (§3.4). Cameras stay within ≈3 landblocks (≈600 m) of the player
-  outdoors and inside the player's landblock for dungeons.
+  outdoors and inside the player's landblock for dungeons. Grass (terrain_grass: dense to 48 m) and the server's
+  nearby objects follow the player, so `film shoot` also HOPS it inside a site (`@teleloc`, `--hop`, default 40 m)
+  to each outdoor shot's camera path (§6 CLI walk).
 - **Shooting schedule ≠ edit order.** Shots are grouped by site, sites ordered to minimise teleports, every shot
   is its own take; assembly reorders takes into timeline order. Never record across a teleport.
 
@@ -471,7 +473,10 @@ Runtime modules (they receive deps; they never import stateful scene3d modules):
   1 m/s² per metre of the craft's radial error (`swingStep`, `LIVE_SUBJECT.swingRadialYield`): a turn sharper than the
   craft's amax freezes the swing until it is done. Pilot fades (`setpoint.fadeIds`): rig guids → `setFilmHidden`,
   particle keys → `emitter.filmHidden`, static placement keys → the statics seam (§4 items 4/7, SEAMS.md "Hides"),
-  each restored exactly after the take; a reveal shot's own occluder is never faded; a fade that hides nothing takes
+  each restored exactly after the take; a reveal shot's own occluder is never faded, nor is a POINT subject's own body
+  (take report `subjectBody`: the entities and fadeable placements whose footprint holds the subject's axis — the Life
+  Stone a 1.2 m point subject is aimed at — resolved at the run's start; none for a point wider than 8 m, a guid,
+  moving or path subject; the sensors count a ray it stops as seeing the subject); a fade that hides nothing takes
   the reroute bias that frame; the sensors see past what the take faded (`fadedIds`). Rendered takes run the particle
   cull with `recheckInterval: 1` (restored after) and first wait, for at most 30 s and only on the live loop (before the
   clock holds it), until an AdminEnvirons fog change has settled (report `environ`). **Realtime** takes run on
@@ -495,7 +500,8 @@ subject:{visibleFrac, unseenSec, ndc:[x,y]|null, sizeRatio, occluderKind, occlud
 density}|null, inView:[{family, occludes, range}]}, limits:{canRise, canSink, roomLeft, roomRight, ceiling},
 ages:{…}}` — ranges metres, `Infinity` = nothing within 25 m.
 `subject.occluderIds` = what the pilot may fade: rig guids, particle keys, and the fade keys of PLACED statics
-(LandBlockInfo stabs) `placement:<lbKey hex8>:object:<row>`. A static key appears only when world_query `describeHit`
+(LandBlockInfo stabs) `placement:<lbKey hex8>:object:<row>` — never the subject's own body (`ctx.subjectBodyIds`:
+a subject ray it stops sees the subject). A static key appears only when world_query `describeHit`
 names a placed tree or small prop unambiguously (candidates: the placements within 4 m of the hit):
 - **Statics / building hits** (rays stop on the render bounds): the candidate whose axis is nearest relative to its
   radius (`staticHitScore` = axis distance ÷ radius), the hit inside its radius (score ≤ 1), no neighbour scoring
@@ -690,7 +696,11 @@ The plan lane's code is the contract; full field reference = `PLAN_FIELDS` + `ex
   report `environ`); re-applying the fog already showing is a no-op (`changed:false`); the retail fog roll-in stays on
   (the film never uses `?environRetail=off`, which snaps the fog on).
 - CLI walk: per schedule entry teleport → `world.ready(entry.ready)` → `world.prewarm(entry.prewarm)` → per shot
-  `prepare(item.take)` → [`rehearse`] → `shoot({fps, width, height, codec, bitrate, mode: item.captureMode})`.
+  [hop] → `prepare(item.take)` → [`rehearse`] → `shoot({fps, width, height, codec, bitrate, mode: item.captureMode})`.
+  Hop (`--hop`, default 40 m, 0 = off): an OUTDOOR shot without actor cues or a visible avatar whose camera path —
+  built offline with the technique registry, its horizontal centroid (`standPointOf`) — lies farther than that from
+  the player (`query.subject('player')`) moves it there between takes: settle → `@teleloc` at `query.groundZ` +
+  0.5 m → `world.ready` again (best-effort: a failure warns; shoot-log `event:'hop'`, report `hop`).
   Before each teleport the CLI checks `__film.status()` and aborts any running take; after a failed take it calls
   `__film.abort()` and waits for an idle page. While it waits it polls `__film.status()` and RE-SENDS `__film.abort()`
   on every poll that still finds the page busy (at most `PAGE_ABORT_MAX` = 30, never after the ≈ 90 s idle wait):

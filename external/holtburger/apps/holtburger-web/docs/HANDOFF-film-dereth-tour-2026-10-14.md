@@ -4,6 +4,27 @@
 the GTX-1070 box. Nothing is running now (shoot driver and idle watcher stopped, the hidden test Chrome on the 1070
 closed, the person's own Chrome never touched). Resume = the commands in §4.
 
+## 0. Update (later on 2026-10-14): two shoot bugs fixed, re-shoot from Holtburg
+The owner watched the taste reel and spotted three problems. All three are fixed or understood:
+1. **Taste reel was silent after the first note.** The cause was my encode command's broken `afade=t=out:st=0:d=0`
+   filter, not the pipeline. `edit/Dereth-Tour-taste-Holtburg-GlendenWood-v2.mp4` has the music. Taildrop it when
+   the Redmi is online (it was offline at the time).
+2. **The Life Stone vanished mid-shot in `holtburg.02`.** The film's occluder fade hid it (report:
+   `faded.entities: 1`). The shot used a point subject with a 1.2 m radius on the stone, whose prongs stand about
+   2 m out, so a ray stopped by a prong counted as a blocker. It was NOT the clouds; only the take player can hide
+   an entity. Heroic Age survived because its subject radius was 1.5 m. Fix: a point subject's **own body** (any
+   entity or fadeable placement whose footprint holds the subject's axis, for points ≤ 8 m wide) is never faded,
+   and a ray it stops counts as seeing the subject (`take_player.subjectBodyOf`, sensors `subjectBodyIds`, take
+   report `subjectBody`). About 87 tour shots aim a point at an object (Life Stones, portals, statues, braziers).
+3. **Grass and server objects follow the hidden player, which used to teleport once per site.** Now `film shoot`
+   **hops** the player inside a site. Before each outdoor shot whose camera path (built offline) is more than
+   `--hop` (default 40 m) from the player, it runs `@teleloc` to the path's centre at ground + 0.5 m and the
+   readiness gate again. Hops happen between takes, never for actor or visible-avatar shots, and a failed hop only
+   warns. The current timeline has **223 hops**, roughly 60–75 extra minutes over the whole shoot.
+- Both fixes have tests (film_perception S18, film_runtime_capture "own body", film_cli_session S30/S31; each test
+  was shown to fail with its fix removed). The fair-weather Holtburg takes shot before the fixes moved to
+  `takes/pre-fix/` and `reports/pre-fix/`, so the next run reshoots Holtburg completely.
+
 ## 1. What the film is (owner brief, binding)
 - A complete tour of Dereth's **surface towns**, cut to **one long public-domain classical recording**, 1920×1080 @ 24 fps.
 - Excluded: the Underground City, Xarabydun, Kor-Gursha (Bur), Crater Lake Village, Martine's Retreat, Mar'uun, anything
@@ -25,8 +46,8 @@ closed, the person's own Chrome never touched). Resume = the commands in §4.
 | Music | `song/music.mp3` (live dir only, 57:12): Beethoven — Egmont Overture + Symphony No. 3 "Eroica", Czech National Symphony Orchestra (Musopen 2012). **Composition and recording public domain**; `song/LICENSE.txt` has every source URL and the courtesy credit line |
 | Research | `research/town-*.json` (dossiers with verified coordinates), `roster.json`, `final-plan-build/` (deterministic plan builder), `critic-fixes.py` (**re-run after any `build.py` rebuild**, it is not inside build.py), `egg-orchard/` (route + floor renders) |
 | Scripts | `scripts/shoot-driver.sh` (per-site, resumable, CDP/JEV-budget guards, `STOP_AFTER_SITES`), `scripts/wait-and-resume.sh` (idle watcher → relaunch → boot → one review site), `scripts/film-run.sh` (CLI wrapper that reads the film account password at run time from the repo script that owns it — never copy it) |
-| Takes so far | `takes/holtburg.01-02.mp4` (fair weather); `takes/overcast/holtburg.01-05`, `glenden-wood.01-05` (first, stormy-sky run — superseded) |
-| Taste reel | `edit/Dereth-Tour-taste-Holtburg-GlendenWood.mp4` (the 10 overcast takes over the opening of the music; also Taildropped to the Redmi) |
+| Takes so far | none current. Superseded: `takes/pre-fix/holtburg.01-02` (fair weather, before the §0 fixes) and `takes/overcast/holtburg.01-05`, `glenden-wood.01-05` (stormy-sky run) |
+| Taste reel | `edit/Dereth-Tour-taste-Holtburg-GlendenWood-v2.mp4` (the 10 overcast takes over the opening of the music; v1 was silent, see §0) |
 | JEV key | `~/.config/holtburger-film/openrouter.key` (mode 600; the owner's key, $2 limit, expires ≈ 2026-10-15). Spend so far ≈ $0.05 (Heroic Age example) + $0.0003 (tour) |
 
 ## 3. What happened (so the next session doesn't repeat it)
@@ -73,7 +94,8 @@ cd $P && STOP_AFTER_SITES=1 setsid nohup ./shoot-driver.sh >> driver.log 2>&1 < 
 ```
 **Review, then the full run:** build a per-town contact sheet (4 frames × each shot) and look at it; if the sky/sun is
 right, `cd $P && setsid nohup ./shoot-driver.sh >> driver.log 2>&1 < /dev/null &` (it skips sites that already have
-reports; ≈ 2–3 min per town on the 1070 → roughly 2.5–3 h for all 57 sites). Re-shoot a bad shot by moving its
+reports; ≈ 2–3 min per town on the 1070 plus the in-site hops → roughly 3.5–4 h for all 57 sites). In the
+driver log, `hop:` lines show each move. A shot's report `hop` / `subjectBody` fields show what happened. Re-shoot a bad shot by moving its
 `takes/<id>.*` and `reports/<id>.json` aside and re-running its site. Check the Egg Orchard corridor and Fort Tethana
 first (critic: rehearse-worthy).
 **Assemble + share:** `node tools/film/film.mjs assemble $P/timeline.json --edl --capped` → `edit/final.mp4`; make a
@@ -81,6 +103,10 @@ phone copy (`ffmpeg -i final.mp4 -c:v libx264 -crf 23 -preset medium -c:a aac -b
 `tailscale file cp share.mp4 redmi-note-13-5g:`. Credit line (courtesy) is in `song/LICENSE.txt`.
 
 ## 5. Code changes this session (committed with this handoff)
+- Second commit: occluder fade never hides a point subject's own body (`scene3d/film/runtime/take_player.js`,
+  `scene3d/film/scene/sensors.js`); `film shoot --hop` in-site hops (`tools/film/lib/shoot.mjs`
+  `standPointOf`/`hopForShot`, `tools/film/film.mjs`); tests in film_perception, film_runtime_capture and
+  film_cli_session; SPEC.md / README.md / the film-mode skill docs updated.
 - `tools/film/lib/session.mjs`, `tools/film/film.mjs`: `film boot --clouds=on|off` (default on) and `--weather=fair|live`
   (default fair → `cloudWeather=off`); `tests/film_cli.test.mjs` covers both; `.claude/skills/film-mode/reference/1070.md`
   boot-URL table updated.
