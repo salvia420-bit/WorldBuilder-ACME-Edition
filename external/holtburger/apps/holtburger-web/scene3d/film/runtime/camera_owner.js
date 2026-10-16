@@ -69,6 +69,11 @@ export const VIEWER_CELL_RADIUS_M = 0.3;
 export const VIEWER_CELL_STEP_M = 8;
 /** A move longer than this (m) without a cut cell re-seeds the carried cell instead of walking. */
 export const VIEWER_CELL_RESEED_M = 192;
+/**
+ * How far (m) the eye may sit outside the carried INDOOR cell's mesh box before the walk's
+ * answer is read as a wall exit and the cell is re-resolved from the landscape under the eye.
+ */
+export const VIEWER_CELL_BOX_MARGIN_M = 1;
 /** Player head height above the pose z (m) — the cells.js walk pivot (viewer_cell.js VIEWER_PIVOT_Z_M). */
 export const VIEWER_PIVOT_Z_M = 1.5;
 /** Valid vertical fov range (deg, exclusive) accepted by write(). */
@@ -309,7 +314,7 @@ export function createCameraOwner(deps = {}) {
     pendingCut: 0,
     pendingReseed: false,
   };
-  const counters = { writes: 0, rejected: 0, reasserts: 0, cellWalks: 0, cellSeeds: 0, cuts: 0, focusWrites: 0, parks: 0, eyeLightRefs: 0 };
+  const counters = { writes: 0, rejected: 0, reasserts: 0, cellWalks: 0, cellSeeds: 0, cellEscapes: 0, cuts: 0, focusWrites: 0, parks:0, eyeLightRefs: 0 };
 
   /** The persp camera to own (cameraSwitcher.persp, else liveScene3d.camera). */
   function findCamera() {
@@ -366,7 +371,86 @@ export function createCameraOwner(deps = {}) {
     }
   }
 
-  /** Walk `from → to` from `seed`, sub-stepped every VIEWER_CELL_STEP_M; returns the reached cell. */
+  /**
+   * AC-world box `[minX, minY, minZ, maxX, maxY, maxZ]` of a resident EnvCell's own surfaces,
+   * or null when unknown (not resident, surfaces pooled, no THREE). The container is an
+   * identity Group under cellsGroup, so its space is AC world; only the `mesh-<cell>` group is
+   * read (the container's other children are the cell's static objects, not its walls).
+   * Cached per container object, so a re-baked cell is measured again and an evicted one is
+   * not kept alive.
+   */
+  const cellBoxes = new WeakMap();
+  function cellBox(cell) {
+    const T = d.THREE;
+    const map = live.cellContainers3d;
+    const container = map && typeof map.get === "function" ? map.get(cell >>> 0) : null;
+    if (!container || typeof container !== "object") return null;
+    if (cellBoxes.has(container)) return cellBoxes.get(container);
+    if (!T || typeof T.Box3 !== "function" || typeof T.Matrix4 !== "function") return null;
+    const kids = Array.isArray(container.children) ? container.children : [];
+    const group = kids.find((k) => k && typeof k.name === "string" && k.name.startsWith("mesh-")) || null;
+    if (!group || typeof group.traverse !== "function") return null;
+    const box = new T.Box3(), part = new T.Box3(), m = new T.Matrix4(), local = new T.Matrix4();
+    let meshes = 0;
+    group.traverse((o) => {
+      const g = o && o.isMesh ? o.geometry : null;
+      if (!g) return;
+      if (!g.boundingBox && typeof g.computeBoundingBox === "function") g.computeBoundingBox();
+      if (!g.boundingBox || g.boundingBox.isEmpty()) return;
+      m.identity();
+      for (let p = o; p && p !== container; p = p.parent) {
+        if (p.matrixAutoUpdate === false) local.copy(p.matrix);
+        else local.compose(p.position, p.quaternion, p.scale);
+        m.premultiply(local);
+      }
+      part.copy(g.boundingBox).applyMatrix4(m);
+      box.union(part);
+      meshes += 1;
+    });
+    // An empty group (surfaces not attached yet) is not cached: the next call measures again.
+    if (meshes === 0) return null;
+    const out = [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z];
+    cellBoxes.set(container, out);
+    return out;
+  }
+
+  /** True when `cell` is an indoor cell whose known box the point `p` is clearly outside. */
+  function outsideIndoorCell(cell, p) {
+    if (!isIndoorCell(cell)) return false;
+    const b = cellBox(cell);
+    if (!b) return false;
+    const M = VIEWER_CELL_BOX_MARGIN_M;
+    return p[0] < b[0] - M || p[1] < b[1] - M || p[2] < b[2] - M || p[0] > b[3] + M || p[1] > b[4] + M || p[2] > b[5] + M;
+  }
+
+  /**
+   * The cell at `p` asked from the landscape: seeded with the outdoor landcell under `p`, the
+   * wasm resolver returns the resident building cell that contains `p`, else that landcell.
+   * 0 off the world grid.
+   */
+  function cellFromLandscape(h, p) {
+    let land = 0;
+    try {
+      land = localFromWorld(p[0], p[1], p[2]).cellId >>> 0;
+    } catch (_) {
+      land = 0;
+    }
+    if (land === 0) return 0;
+    const c = h && typeof h.resolveViewerCell === "function" ? resolveOnce(h, p, p, land) : 0;
+    return c !== 0 ? c : land;
+  }
+
+  /**
+   * Walk `from → to` from `seed`, sub-stepped every VIEWER_CELL_STEP_M; returns the reached cell.
+   *
+   * The wasm walk is the gameplay camera's: from an EnvCell, leaving through a wall (no
+   * portal) keeps the last cell, because the gameplay camera is clipped at that wall anyway.
+   * The film camera is not clipped. A drone whose head→eye seed line crossed a building would
+   * otherwise stay "inside" that room for the whole shot, drawing only that room's interior
+   * chain and skipping the outdoor doorway punch (Bandit Castle, 2026-10-16). So after each
+   * step, an eye clearly outside the carried indoor cell's box is re-resolved from the
+   * landscape under it.
+   */
   function walk(h, from, to, seed) {
     const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
     const L = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -379,6 +463,13 @@ export function createCameraOwner(deps = {}) {
       const c = resolveOnce(h, a, b, cell);
       counters.cellWalks += 1;
       if (c !== 0) cell = c;
+      if (outsideIndoorCell(cell, b)) {
+        const o = cellFromLandscape(h, b);
+        if (o !== 0 && o !== cell) {
+          cell = o;
+          counters.cellEscapes += 1;
+        }
+      }
       a = b;
     }
     return cell;

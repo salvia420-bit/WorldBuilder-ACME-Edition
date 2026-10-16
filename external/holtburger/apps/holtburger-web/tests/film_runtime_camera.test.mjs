@@ -63,6 +63,7 @@ const LOS = await import("../scene3d/film/scene/los.js");
 const GB = await import("../scene3d/film/core/gimbal.js");
 const { mulberry32 } = await import("../scene3d/film/core/rng.js");
 const { FilmError } = await import("../scene3d/film/core/errors.js");
+const UNITS = await import("../scene3d/film/core/units.js");
 
 let passed = 0;
 let failed = 0;
@@ -399,6 +400,84 @@ check("C3 parkCell() (review seams-11): the viewer cell is dropped and unpublish
   assert.deepEqual(live.filmViewer, { cell: (LB | 0x101) >>> 0 });
   assert.equal(owner.parkCell().parked, true);
   assert.equal(owner.parkCell().parked, false, "parking twice: nothing left to drop");
+});
+
+/**
+ * Bandit Castle (2026-10-16): a building whose room 0x0130 spans local x 100..120, y 40..60,
+ * z 0..10, with the hidden player outside it at local (95, 50). The fake resolver has the wasm
+ * walk's two shapes: seeded indoors, every exit is a wall ("void") exit that keeps the seed;
+ * seeded outdoors, it answers by containment — the room when the point is inside it, else the
+ * landcell under the point.
+ */
+function makeBuildingWorld({ container = "mesh" } = {}) {
+  const ROOM = (LB | 0x130) >>> 0;
+  const inRoom = (x, y, z) => x >= LBX + 100 && x <= LBX + 120 && y >= LBY + 40 && y <= LBY + 60 && z >= 0 && z <= 10;
+  const sh = {
+    resolveCalls: [],
+    resolveViewerCell(fx, fy, fz, tx, ty, tz, _r, seed) {
+      this.resolveCalls.push({ from: [fx, fy, fz], to: [tx, ty, tz], seed });
+      if ((seed & 0xffff) >= 0x100) return seed >>> 0;
+      return inRoom(tx, ty, tz) ? ROOM : UNITS.localFromWorld(tx, ty, tz).cellId;
+    },
+    getLocalPlayerPose() {
+      return { landblockId: UNITS.localFromWorld(LBX + 95, LBY + 50, 0).cellId, x: 95, y: 50, z: 4, heading: 0, free() {} };
+    },
+  };
+  // cells.js shape: identity container → "mesh-<cell>" group at the cell origin → surface meshes.
+  const cellContainers3d = new Map();
+  if (container !== "none") {
+    const c = new THREE.Group();
+    c.name = `envcell-${ROOM.toString(16)}`;
+    const g = new THREE.Group();
+    g.name = `mesh-${ROOM.toString(16)}`;
+    g.position.set(LBX + 100, LBY + 40, 0);
+    if (container === "mesh") {
+      const geo = new THREE.BoxGeometry(20, 20, 10);
+      geo.translate(10, 10, 5);
+      g.add(new THREE.Mesh(geo));
+    }
+    c.add(g);
+    // A static object far outside the room must not widen the room's box.
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    lamp.position.set(LBX + 180, LBY + 50, 5);
+    c.add(lamp);
+    cellContainers3d.set(ROOM, c);
+  }
+  const cs = new FakeSwitcher();
+  const live = { cameraSwitcher: cs, sessionHandle: sh, camera: cs.persp, cellContainers3d };
+  const owner = CO.createCameraOwner({ liveScene3d: live, THREE, sessionHandle: sh, window: {} });
+  return { ROOM, sh, live, owner };
+}
+
+check("C3 wall exit: an eye outside the carried room's box is re-resolved from the landscape (Bandit Castle drone)", () => {
+  const { ROOM, live, owner } = makeBuildingWorld();
+  owner.own();
+  // Drone 105 m east of the player, at room height: the head→eye seed line runs through the room.
+  const eye = [LBX + 200, LBY + 50, 6];
+  owner.write({ pos: eye, h: 0, p: 0, fov: 45 });
+  const outdoor = UNITS.localFromWorld(eye[0], eye[1], eye[2]).cellId;
+  assert.equal(owner.viewerCell(), outdoor, "the drone is outdoors, not in the room the seed line crossed");
+  assert.equal(owner.viewerIndoor(), false);
+  assert.deepEqual(live.filmViewer, { cell: outdoor });
+  assert.ok(owner.stats().cellEscapes >= 1, "the wall exit was counted");
+  // Flying into the room re-enters it; moving about inside keeps it.
+  owner.write({ pos: [LBX + 115, LBY + 50, 5], h: 0, p: 0, fov: 45 });
+  assert.equal(owner.viewerCell(), ROOM, "inside the room (by containment from the landscape)");
+  owner.write({ pos: [LBX + 104, LBY + 45, 5], h: 0, p: 0, fov: 45 });
+  assert.equal(owner.viewerCell(), ROOM, "still inside: the room is kept");
+  // Within the margin past the wall the room is still kept (a doorway straddle).
+  owner.write({ pos: [LBX + 120 + CO.VIEWER_CELL_BOX_MARGIN_M * 0.5, LBY + 50, 5], h: 0, p: 0, fov: 45 });
+  assert.equal(owner.viewerCell(), ROOM, "inside the margin");
+});
+
+check("C3 wall exit fails safe: with no resident room mesh the walk's cell stands (today's behaviour)", () => {
+  for (const container of ["none", "empty"]) {
+    const { ROOM, owner } = makeBuildingWorld({ container });
+    owner.own();
+    owner.write({ pos: [LBX + 200, LBY + 50, 6], h: 0, p: 0, fov: 45 });
+    assert.equal(owner.viewerCell(), ROOM, `${container}: no box, no override`);
+    assert.equal(owner.stats().cellEscapes, 0);
+  }
 });
 
 check("C4 release(): unwraps positionCamera and restores mode / yaw / pitch / fov / csmFitFov / fade / viewer cell", () => {
