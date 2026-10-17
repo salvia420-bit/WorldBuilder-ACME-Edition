@@ -2019,9 +2019,10 @@ function scanDynamicCasterMovement(scene3d) {
 //     (WebGLShadowMap.render), so every managed light runs with
 //     autoUpdate=false and gets a one-shot `needsUpdate`, which three clears
 //     when that map renders (a mark not consumed this frame stays pending).
-//   * The staleness ceiling is PER CASCADE (frames since that map was last
-//     marked), so a cascade no mover touches still refreshes every
-//     ?shadowMaxStale frames for in-place limb animation, tree sway, streaming.
+//   * The staleness ceiling is PER CASCADE (frames since that map last
+//     re-rastered its static casters — a full or ceiling raster), so every
+//     cascade still refreshes every ?shadowMaxStale frames for in-place limb
+//     animation, tree sway and streaming, mover or no mover.
 // Camera/sun refits, the indoor flip, the single-shadow recentre and a thrown
 // CSM tick still mark every cascade at once, exactly as before.
 //
@@ -2039,6 +2040,15 @@ function scanDynamicCasterMovement(scene3d) {
 // an idle NPC's limb shadows — refresh at the ?shadowMaxStale cadence (every
 // 12 frames) while someone walks out of range, the cadence they already had
 // whenever nobody walked.
+
+// Raster reasons left on `light.userData.hbShadowReason` for the shadow pass
+// (?shadowStaticCache, scene3d/shadow_caster_list.js — same values there;
+// lighting.js keeps no import of it: composite-eval tests load this file with
+// its imports stripped). MOVER: only rigs changed. STATIC: the ceiling fired.
+// FRUSTUM: refit / indoor flip / recentre / CSM error / warm.
+const SHADOW_REASON_MOVER = 1;
+const SHADOW_REASON_STATIC = 2;
+const SHADOW_REASON_FRUSTUM = 4;
 
 const SHADOW_MOVER_DEFAULT_RADIUS_M = 4; // a rig whose meshes have not loaded yet
 const SHADOW_MOVER_PAD_M = 0.75; // limb swing beyond the measured pose
@@ -2301,6 +2311,9 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
       const l = lightsIn[i];
       if (l && l.shadow) {
         l.shadow.autoUpdate = false;
+        // ?shadowStaticCache (scene3d/shadow_caster_list.js) only caches the
+        // lights this gate manages — it needs the reasons below.
+        l.userData.hbShadowManaged = true;
         lights.push(l);
       }
     }
@@ -2328,26 +2341,49 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
   // run of full rasters (a camera pan) — the next scan then compares
   // neighbouring frames, not a pose from before the pan.
   const moverMask = scanShadowMovers(scene3d, lights) & all;
-  let mask = (shadowDirty ? all : 0) | moverMask;
+  const fullMask = shadowDirty ? all : 0;
+  // The ceiling counts frames since a cascade last re-rastered its STATIC
+  // casters (a full or ceiling raster). A mover's raster does not reset it:
+  // under ?shadowStaticCache that raster redraws only the rigs over cached
+  // statics, so sway / streaming / animated scenery still need the ceiling.
+  // (Without the cache, a ceiling mark landing on a mover frame merges into
+  // the same raster.)
   const maxStale = cfg.shadowMaxStaleFrames | 0;
   let staleMask = 0;
   if (maxStale > 0) {
     for (let i = 0; i < n; i += 1) {
-      if (!(mask & (1 << i)) && st.stale[i] + 1 >= maxStale) staleMask |= 1 << i;
+      if (!(fullMask & (1 << i)) && st.stale[i] + 1 >= maxStale) staleMask |= 1 << i;
     }
   }
-  mask |= staleMask;
+  const mask = fullMask | staleMask | moverMask;
+
+  // The dynamic root ?shadowStaticCache redraws over the cached statics.
+  const dynRoot = scene3d.entitiesGroup || null;
+  if (shadowMap.__hbShadowDynamicRoot !== dynRoot) shadowMap.__hbShadowDynamicRoot = dynRoot;
 
   let pending = false;
   for (let i = 0; i < n; i += 1) {
-    const sh = lights[i].shadow;
-    if (mask & (1 << i)) {
+    const l = lights[i];
+    const sh = l.shadow;
+    const bit = 1 << i;
+    if (mask & bit) {
       sh.needsUpdate = true;
-      st.stale[i] = 0;
+      // Why this map rasters — OR'd until a raster consumes it (the shadow
+      // pass reads + clears it; see shadow_caster_list.js shadowStaticCacheRender).
+      l.userData.hbShadowReason =
+        (l.userData.hbShadowReason | 0) |
+        (fullMask & bit ? SHADOW_REASON_FRUSTUM : 0) |
+        (staleMask & bit ? SHADOW_REASON_STATIC : 0) |
+        (moverMask & bit ? SHADOW_REASON_MOVER : 0);
       stats.cascadeMarks[i] += 1;
-    } else {
-      st.stale[i] += 1;
     }
+    // A full raster restarts every cascade's ceiling at once; stagger the
+    // restart (cascade i starts i/n of the way in) so the ceiling rasters of
+    // a still scene land on different frames — three ~1/3-cost spikes per
+    // ceiling period instead of one full one. Earlier, never later.
+    if (fullMask & bit) st.stale[i] = maxStale > 0 ? Math.floor((i * maxStale) / n) : 0;
+    else if (staleMask & bit) st.stale[i] = 0;
+    else st.stale[i] += 1;
     // A mark three has not consumed yet (no world render since) stays armed.
     if (sh.needsUpdate === true) pending = true;
   }

@@ -8,8 +8,8 @@
 // three.module.js as in test_shadow_caster_list.mjs — it is not exported) on a
 // stub renderer that records which cascade maps three actually rendered.
 //
-//   A  first gated frame warms all 3 cascades; then nothing until the 12-frame
-//      ceiling, which refreshes all 3 (RP5 cadence unchanged)
+//   A  first gated frame warms all 3 cascades; then each cascade's 12-frame
+//      ceiling, staggered (one cascade per ceiling frame), every 12 frames
 //   B  a rig walking where only the FAR cascade's frustum reaches re-renders
 //      only that cascade
 //   C  a HIDDEN rig walking inside every cascade re-renders nothing; its
@@ -150,10 +150,19 @@ L.__resetRp5ConfigForTest(undefined);
 {
   const S = makeSession();
   check("A1 first gated frame warms all 3 cascades", S.frame() === "012");
-  let quiet = true;
-  for (let f = 2; f <= 12; f += 1) if (S.frame() !== "") quiet = false;
-  check("A2 a static scene rasters nothing for the next 11 frames", quiet);
-  check("A3 the 12-frame ceiling refreshes all 3", S.frame() === "012");
+  // Ceiling after a full raster is staggered: cascade i restarts i/3 of the
+  // way into the 12-frame period (frames 5 / 9 / 13 for cascades 2 / 1 / 0),
+  // then each refreshes every 12 frames, never two on the same frame.
+  const at = { 0: [], 1: [], 2: [] };
+  let multi = false;
+  for (let f = 2; f <= 37; f += 1) {
+    const got = S.frame();
+    if (got.length > 1) multi = true;
+    for (const ch of got) at[ch].push(f);
+  }
+  check("A2 a static scene: first ceilings staggered (c2@5, c1@9, c0@13)", at[2][0] === 5 && at[1][0] === 9 && at[0][0] === 13, JSON.stringify(at));
+  check("A3 ...then every cascade every 12 frames", [0, 1, 2].every((i) => at[i].every((f, k) => k === 0 || f - at[i][k - 1] === 12)) && at[0].length === 3);
+  check("A3 ...one cascade per ceiling frame", !multi);
   check("A4 managed lights run autoUpdate=false", S.lights.every((l) => l.shadow.autoUpdate === false));
 }
 
@@ -181,6 +190,7 @@ L.__resetRp5ConfigForTest(undefined);
 
 // ---------------------------------------------------------------- C
 {
+  L.__resetRp5ConfigForTest({ shadowMaxStaleFrames: 600 }); // isolate from the ceiling
   const S = makeSession();
   S.frame();
   const rig = makeRig(S.world, 0, 10);
@@ -203,10 +213,12 @@ L.__resetRp5ConfigForTest(undefined);
   const gone = S.frame();
   check("C4 a hidden ANCESTOR is a visibility flip too", gone === "012", `got "${gone}"`);
   S.world.entitiesGroup.visible = true;
+  L.__resetRp5ConfigForTest(undefined);
 }
 
 // ---------------------------------------------------------------- D
 {
+  L.__resetRp5ConfigForTest({ shadowMaxStaleFrames: 600 });
   const S = makeSession();
   S.frame();
   const rig = makeRig(S.world, 4000, 4000);
@@ -215,6 +227,7 @@ L.__resetRp5ConfigForTest(undefined);
   let none = true;
   for (let f = 0; f < 8; f += 1) if (S.frame(() => { rig.root.position.x += 1; }) !== "") none = false;
   check("D1 a walker outside every cascade rasters nothing", none);
+  L.__resetRp5ConfigForTest(undefined);
 }
 
 // ---------------------------------------------------------------- E + F
