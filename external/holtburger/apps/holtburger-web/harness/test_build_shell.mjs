@@ -350,7 +350,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // interior_aperture_cull.js, interior_shadow_cull.js, msaa_world.js,
   // terrain_far_simplify.js, + scene3d/film/flags.js (added by a film commit
   // without a regen) (generator --check: up to date, 432 modules) → 411.
-  const NON_APP_PRELOADS = 411;
+  // 2026-10-17 (outdoor-fps wave 2, card "binds"): + scene3d/uniform_bind_patch.js
+  // (index.js; generator --check: up to date, 433 modules) → 412.
+  const NON_APP_PRELOADS = 412;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

@@ -1113,6 +1113,9 @@ const TIER5 = [
   { tier: 5, flag: "filmMode(runtime_overlay)", file: "tests/film_runtime_overlay.test.mjs" },
   { tier: 5, flag: "filmMode(runtime_world)", file: "tests/film_runtime_world.test.mjs" },
   { tier: 5, flag: "filmMode(terrain_corridor)", file: "tests/film_terrain_corridor.test.mjs" },
+  // 2026-10-17 fps wave 2 (card "binds"): texture-unit pins + light upload memo,
+  // proven exact on three r184's real renderer over tests/helpers/fake_webgl2.mjs.
+  { tier: 5, flag: "texUnitPin+lightUploadOnce", file: "tests/uniform_bind_patch.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
