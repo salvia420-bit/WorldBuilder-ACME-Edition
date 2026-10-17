@@ -161,6 +161,27 @@ export function farFogSkyHz() {
 }
 
 /**
+ * 2026-10-17 — `?farFogFence` (DEFAULT ON, `=off` escape): the horizon-probe
+ * readback goes through a PERSISTENT pixel-pack buffer + `fenceSync`, polled
+ * once per frame from the fog tick, and is read back only once the fence is
+ * observed signalled — never before the next frame (loop.js
+ * `_issueFogFence` / `_harvestFogFence`). Off = three's
+ * `readRenderTargetPixelsAsync` as before.
+ */
+let _farFogFence;
+export function farFogFenceEnabled() {
+  if (_farFogFence !== undefined) return _farFogFence;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = (new URLSearchParams(window.location.search || "").get("farFogFence") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  return (_farFogFence = on);
+}
+
+/**
  * 2026-10-08 — minimum angle, in degrees, between the fog probe and the SKY's
  * sun (`?farFogSunAvoid=<deg>`, default 45; 0 = off). Owner on the 1070,
  * dusk at the coast facing the sunset: the whole frame went orange-white.

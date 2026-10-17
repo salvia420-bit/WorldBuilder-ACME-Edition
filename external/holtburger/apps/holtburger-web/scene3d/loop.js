@@ -47,7 +47,7 @@ import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSea
 import {
   terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin,
   farFogFloorM, farFogFloorMinLb,
-  farFogSkyProbeEnabled, farFogSkyElevDeg, farFogSkyHz, farFogTint,
+  farFogSkyProbeEnabled, farFogSkyElevDeg, farFogSkyHz, farFogTint, farFogFenceEnabled,
   farFogSunAvoidDeg, avoidSunAzimuth,
   horizonFogEnabled, horizonFogNearFrac, computeFogBand,
 } from "./far_terrain_flags.js";
@@ -1779,6 +1779,131 @@ function _memoReadability(renderer) {
   } catch (_) { /* fail-soft: three keeps asking */ }
 }
 
+// ===========================================================================
+// ?farFogFence (2026-10-17, DEFAULT ON; `=off` escape) — a fenced readback
+// that is never read before the GPU says it is done.
+//
+// THE STALL. three's `readRenderTargetPixelsAsync` (the 2026-10-05 path below)
+// polls its fence from a 4 ms setTimeout and calls `getBufferSubData` in the
+// promise continuation. The 1070 trace (2026-10-17, LB 0xE632) shows every one
+// of those reads blocking inside `ImplementationBase::WaitForCmd` — a
+// synchronous round-trip to the GPU process — for 1.0-4.7 ms (avg ~2.5 ms),
+// 4x/s, in a TimerFire task between frames (profile: `getBufferSubData`
+// 51 ms of 7.25 s, ~0.23 ms/frame averaged, all of it hitches). It also
+// creates and deletes a pixel-pack buffer for every read.
+//
+// THE PATH. One PERSISTENT `STREAM_READ` pixel-pack buffer per context. Issue
+// (inside the throttled probe, the probe target still bound): sentinel the
+// buffer (0xFFFF — the same "read never landed" proof as the array path),
+// `readPixels` into it, unbind, `fenceSync`, `flush`. Harvest (the fog tick of
+// a LATER frame): one non-blocking `getSyncParameter(SYNC_STATUS)` per frame;
+// only once it reports SIGNALED is the buffer read, synchronously, inside the
+// frame — the copy is complete, so Chrome can serve `getBufferSubData` from its
+// readback shadow instead of a GPU-process round-trip. While pending, the probe
+// returns null and the caller keeps `_fogProbeLast` (the colour lags a frame or
+// two at most, as the card allows). Never harvested while `?asyncLink` has a
+// compile in flight (the 2026-10-06 rule above); a fence that has not signalled
+// after FOG_FENCE_TIMEOUT_MS counts as a failure (three in a row = the sticky
+// authored-hex fallback, as before). `window.__farFogProbeStats` reports the
+// read cost (`maxReadMs` should stay ~0 on the 1070 — the thing to check).
+const FOG_FENCE_TIMEOUT_MS = 2000;
+const _fogFence = { gl: null, buf: null, sync: null, issuedAt: 0, polls: 0 };
+const _fogFenceStats = { issued: 0, reads: 0, lastReadMs: 0, maxReadMs: 0, sumReadMs: 0,
+  lastPolls: 0, maxPolls: 0, timeouts: 0, fallbacks: 0 };
+if (typeof window !== "undefined") {
+  window.__farFogProbeStats = () => ({
+    ..._fogFenceStats,
+    avgReadMs: _fogFenceStats.reads ? _fogFenceStats.sumReadMs / _fogFenceStats.reads : 0,
+    pending: _fogFence.sync !== null,
+    fence: farFogFenceEnabled(),
+  });
+}
+const _FOG_PENDING = Symbol("fog-fence-pending");
+
+/** Issue the fenced read of the bound probe target. False ⇒ caller falls back. */
+function _issueFogFence(renderer, now) {
+  const gl = renderer.getContext?.();
+  if (!gl || typeof gl.fenceSync !== "function" || gl.PIXEL_PACK_BUFFER === undefined
+      || typeof gl.getBufferSubData !== "function") return false;
+  const caps = renderer.capabilities;
+  // Same readability gate three's readers apply (memoised by _memoReadability).
+  if (caps && typeof caps.textureFormatReadable === "function"
+      && (!caps.textureFormatReadable(THREE.RGBAFormat) || !caps.textureTypeReadable(THREE.HalfFloatType))) {
+    return false;
+  }
+  const f = _fogFence;
+  if (f.gl !== gl || !f.buf) {
+    f.buf = gl.createBuffer();
+    f.gl = gl;
+    if (!f.buf) return false;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, _fogProbeBuf.byteLength, gl.STREAM_READ);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  }
+  _fogProbeBuf.fill(0xffff);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
+  gl.bufferSubData(gl.PIXEL_PACK_BUFFER, 0, _fogProbeBuf); // sentinel: a failed read stays NaN
+  gl.readPixels(0, 0, _FOG_PROBE_PX, _FOG_PROBE_PX, gl.RGBA, gl.HALF_FLOAT, 0);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  if (!sync) return false;
+  gl.flush();
+  f.sync = sync;
+  f.issuedAt = now;
+  f.polls = 0;
+  _fogFenceStats.issued += 1;
+  return true;
+}
+
+function _dropFogFence() {
+  const f = _fogFence;
+  if (f.sync && f.gl) { try { f.gl.deleteSync(f.sync); } catch (_) {} }
+  f.sync = null;
+  _fogProbeInFlight = false;
+}
+
+/**
+ * Poll a pending fenced read: `_FOG_PENDING` while the GPU is not done (or a
+ * compile is in flight), else the sample (or null on failure — recorded).
+ */
+function _harvestFogFence(now) {
+  const f = _fogFence;
+  const gl = f.gl;
+  f.polls += 1;
+  let status = null;
+  try { status = gl.getSyncParameter(f.sync, gl.SYNC_STATUS); } catch (_) { status = null; }
+  if (status !== gl.SIGNALED) {
+    if (status === null || now - f.issuedAt > FOG_FENCE_TIMEOUT_MS) {
+      _fogFenceStats.timeouts += 1;
+      _dropFogFence();
+      return _fogProbeFailed(new Error("far-fog fence never signalled"));
+    }
+    return _FOG_PENDING;
+  }
+  if (asyncLinkBusy()) return _FOG_PENDING;
+  const t0 = performance.now();
+  try {
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, _fogProbeBuf);
+  } catch (err) {
+    _dropFogFence();
+    return _fogProbeFailed(err);
+  } finally {
+    try { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch (_) {}
+  }
+  const ms = performance.now() - t0;
+  const st = _fogFenceStats;
+  st.reads += 1;
+  st.lastReadMs = ms;
+  st.sumReadMs += ms;
+  if (ms > st.maxReadMs) st.maxReadMs = ms;
+  st.lastPolls = f.polls;
+  if (f.polls > st.maxPolls) st.maxPolls = f.polls;
+  const at = f.issuedAt;
+  _dropFogFence();
+  try { return _fogProbeSucceeded(_reduceFogProbe(_fogProbeBuf, at)); } catch (err) { return _fogProbeFailed(err); }
+}
+
 function sampleHorizonSkyRadiance(scene3d) {
   if (_fogProbeDead) return null;
   const renderer = scene3d?.renderer;
@@ -1800,6 +1925,13 @@ function sampleHorizonSkyRadiance(scene3d) {
   //     probe takes over exactly as before.
   if (scene3d?.nullRender) return null;
   if (!(scene3d?.terrainBakedLbs?.size > 0)) return null;
+  // ?farFogFence: a pending fenced read is polled (once per frame) before
+  // anything else; it lands in `_fogProbeLast` when the fence has signalled.
+  if (_fogFence.sync !== null) {
+    const nowH = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    const r = _harvestFogFence(nowH);
+    return r === _FOG_PENDING ? null : r;
+  }
   // One async read at a time: the buffer belongs to the in-flight read until
   // it settles. The caller reuses `_fogProbeLast` meanwhile.
   if (_fogProbeInFlight) return null;
@@ -1898,6 +2030,21 @@ function sampleHorizonSkyRadiance(scene3d) {
     // sweep). This probe's target never changes and it is the app's only
     // readback caller, so memoise the two readability answers once.
     _memoReadability(renderer);
+    // ?farFogFence (default): persistent PBO + fence, harvested on a later
+    // frame by the poll above. Falls through to the three path when the
+    // context lacks the pieces.
+    if (farFogFenceEnabled()) {
+      _fogProbeInFlight = true;
+      let issued = false;
+      try { issued = _issueFogFence(renderer, now); } catch (_) { issued = false; }
+      if (issued) return null; // the caller keeps `_fogProbeLast` until the fence signals
+      _fogProbeInFlight = false;
+      _fogFenceStats.fallbacks += 1;
+      try {
+        const gl = renderer.getContext();
+        if (gl && gl.PIXEL_PACK_BUFFER !== undefined) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      } catch (_) {}
+    }
     if (typeof renderer.readRenderTargetPixelsAsync === "function") {
       // The readPixels into a PIXEL_PACK_BUFFER is issued synchronously inside
       // this call (while the probe target is still bound — the `finally` below
@@ -1946,6 +2093,20 @@ function sampleHorizonSkyRadiance(scene3d) {
       renderer.autoClear = prevAutoClear;
     }
   }
+}
+
+/** Test seam (tests/far_fog_fence.test.mjs): the probe + its module state. */
+export function __fogProbeForTest(scene3d) { return sampleHorizonSkyRadiance(scene3d); }
+export function __fogProbeStateForTest(reset) {
+  if (reset) {
+    _dropFogFence();
+    _fogFence.gl = null; _fogFence.buf = null;
+    _fogProbeNextMs = 0; _fogProbeFails = 0; _fogProbeDead = false; _fogProbeLast = null;
+    _fogProbeInFlight = false;
+    for (const k of Object.keys(_fogFenceStats)) _fogFenceStats[k] = 0;
+  }
+  return { last: _fogProbeLast, inFlight: _fogProbeInFlight, dead: _fogProbeDead,
+    fails: _fogProbeFails, pending: _fogFence.sync !== null, stats: { ..._fogFenceStats } };
 }
 
 /**

@@ -625,6 +625,8 @@ const TIER5 = [
   { tier: 5, flag: "anim_cache_evict_dispose", file: "test_anim_cache_evict_dispose.mjs" },
   { tier: 5, flag: "particle_time_latch", file: "test_particle_time_latch.mjs" },
   { tier: 5, flag: "fog_probe_pbo_unbind", file: "test_fog_probe_pbo_unbind.mjs" },
+  // 2026-10-17 cpuframe: far-fog probe read through a persistent PBO + fence, read a frame later.
+  { tier: 5, flag: "farFogFence", file: "tests/far_fog_fence.test.mjs" },
   { tier: 5, flag: "frame_split_probe", file: "test_frame_split_probe.mjs" },
   { tier: 5, flag: "landblock_lru_frame_slot", file: "test_landblock_lru_frame_slot.mjs" },
   { tier: 5, flag: "mem_census", file: "test_mem_census.mjs" },
