@@ -3113,19 +3113,27 @@
                         );
                         return;
                       }
-                      sceneIndex
+                      // init3D already started and built its own renderer on
+                      // this canvas: a second one would share its GL context.
+                      if (window.__init3DStarted === true) return;
+                      // `?preInitShare` (DEFAULT ON, 2026-10-17): init3D awaits
+                      // this promise instead of building a second renderer
+                      // when it starts before the handle lands (autoLogin).
+                      window.__preInit3DPromise = sceneIndex
                         .preInit3D(c)
                         .then((handle) => {
                           window.__preInit3DHandle = handle;
                           console.log(
                             "[boot] preInit3D handle staged on window.__preInit3DHandle"
                           );
+                          return handle;
                         })
                         .catch((e) => {
                           console.warn(
                             "[boot] preInit3D failed; init3D will build inline:",
                             e
                           );
+                          return null;
                         });
                     };
                     if (document.readyState === "loading") {
@@ -3892,6 +3900,25 @@
           // DOM, eager-import failed, or this is the Phase 7.0 capture
           // path with no `?renderer=3d`), init3D builds it inline so
           // the existing 3-arg call sites stay green.
+          //
+          // `?preInitShare` (DEFAULT ON, 2026-10-17; `=off` escape): under
+          // autoLogin init3D used to start before the eager handle landed and
+          // build a SECOND WebGLRenderer + atmosphere on the same canvas (same
+          // GL context; the eager one was never used). Wait for the in-flight
+          // eager preInit3D instead, up to 20 s, then fall back to inline.
+          window.__init3DStarted = true;
+          let __preHandle = window.__preInit3DHandle;
+          {
+            const __ps = new URLSearchParams(window.location.search).get("preInitShare");
+            const __preShareOff = __ps === "off" || __ps === "0" || __ps === "false" || __ps === "no";
+            if (!__preHandle && !__preShareOff && window.__preInit3DPromise) {
+              __preHandle = await Promise.race([
+                window.__preInit3DPromise,
+                new Promise((r) => setTimeout(() => r(null), 20000)),
+              ]);
+              if (!__preHandle) console.warn("[boot] eager preInit3D not ready in 20 s — init3D builds inline");
+            }
+          }
           await init3D(canvas, window.__sessionHandle, {
             fetch_landblock_heightmaps,
             // Phase 2.1 — visual-only subdivided mesh. Read by
@@ -4110,7 +4137,7 @@
             ...(typeof __hbWasmNs?.fetchEnvCellDepsInLandblock === "function"
               ? { fetchEnvCellDepsInLandblock: __hbWasmNs.fetchEnvCellDepsInLandblock }
               : {}),
-          }, window.__preInit3DHandle);
+          }, __preHandle);
           // (The 9-LB Holtburg warmup fetch + its free() are retired — see the
           // spawn-driven-boot note at the top of renderHoltburg. The HUD panels
           // stay DOM-wired by the login/spawn flow regardless of renderer.)
