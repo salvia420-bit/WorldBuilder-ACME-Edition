@@ -364,6 +364,25 @@ export function _isParkedLb(node) {
   }
 }
 
+// Per-frame memo of `_isParkedLb` by landblock id (2026-10-17, cpuframe).
+// The rAF reclaim loop asked the LRU once PER INSTANCE per frame, and most
+// instances are parked: live 1070 probe, 3,441 instances of which 3,364 sat in
+// parked landblocks (77 anchors in the scene). 1070 profile: `_isParkedLb`
+// 56.5 ms of 7.25 s. Every anchor of a landblock shares the answer, and
+// nothing inside the (synchronous) loop parks or unparks, so one LRU query per
+// landblock per frame gives the same result. Cleared at the top of each loop.
+const _parkedMemo = new Map();
+function _isParkedLbMemo(node) {
+  const lb = node?.userData?.landblockId;
+  if (lb == null) return false;
+  let v = _parkedMemo.get(lb);
+  if (v === undefined) {
+    v = _isParkedLb(node);
+    _parkedMemo.set(lb, v);
+  }
+  return v;
+}
+
 /**
  * Get-or-create the shared driver for an animation DID: fetch the keyframes
  * once, build the clip + a non-rendered template Group of part subgroups, and a
@@ -1241,6 +1260,7 @@ function _ensureRaf() {
     _tickCalls += 1;
     _lastDt = dt;
     _poseFrame += 1;
+    _parkedMemo.clear();
     // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement),
     // and its retail SetOmega orbit (?animSceneryOmega).
     for (const g of _didGroups.values()) {
@@ -1270,7 +1290,7 @@ function _ensureRaf() {
         // re-attach this node. Skip it (it is invisible and un-posed while
         // parked) and reclaim on the tick after the pool true-disposes it.
         // See `_isParkedLb`.
-        if (_isParkedLb(inst.node)) {
+        if (_isParkedLbMemo(inst.node)) {
           if (inst.instanced) _collapseInstanced(inst);
           continue;
         }
