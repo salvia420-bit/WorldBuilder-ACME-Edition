@@ -216,10 +216,15 @@ class _BuildingBatch extends THREE.BatchedMesh {
   }
 }
 
-const _bldBatchStats = {
+// buildings.js loads as TWO module instances (index.js imports
+// `./buildings.js?v=phase-d-batch`), so the tally lives on globalThis: both
+// instances count into one object and __buildingBatchStats reads it whichever
+// instance set the window hook (1070 2026-10-17: the hook read 0s while 20
+// batches drew).
+const _bldBatchStats = (globalThis.__hbBuildingBatchTally ??= {
   feeds: 0, nodesIn: 0, batched: 0, batches: 0, uniqueGeoms: 0,
   loners: 0, ptIneligible: 0, ptAddFail: 0, disposed: 0,
-};
+});
 /** Diag: cumulative building-batch tally. */
 export function buildingBatchStats() {
   return { ..._bldBatchStats, enabled: buildingMatBatchEnabled() };
