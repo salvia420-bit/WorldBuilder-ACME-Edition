@@ -72,6 +72,18 @@ import { envCellPoolsActive, offerCellSurfacesToPools, poolCellVisibilityTick, p
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 import { getOcclusionCuller, CELL_SHRINK_M } from "./occlusion_cull.js";
+// ?interiorShadowCull (perf 2026-10-17): interiors cast no sun shadows while the
+// camera is outdoors.
+import { interiorCastWanted, syncCellShadowCast, requestShadowRaster } from "./interior_shadow_cull.js";
+// ?interiorApertureCull (perf 2026-10-17): outdoors, an interior room is drawn
+// only when a door/window it can be seen through is in view.
+import {
+  interiorApertureCullActive,
+  interiorApertureCullMode,
+  interiorApertureCullStats,
+  apertureViewRects,
+  cellSeenThroughApertures,
+} from "./interior_aperture_cull.js";
 // ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
 // returns exactly today's setTimeout(0) macrotask yield (byte-identical).
 import { frameWorkW6Yield } from "./frame_work.js";
@@ -3424,6 +3436,20 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   const registry = scene3d.cellContainers3d;
   if (!(registry instanceof Map)) return;
 
+  // ?interiorApertureCull (perf 2026-10-17, interior_aperture_cull.js) —
+  // outdoors, a room stays in the set only if its screen rect touches a
+  // front-facing, on-screen door/window aperture (retail reaches interiors
+  // from outside only through building portals). 141 interior draws were in
+  // view at LB 0xE632. Same arming as the occlusion culler: never indoors /
+  // split-armed / under ?cellBugParity. A throw steps aside for the frame.
+  if (!isIndoor && !splitArmed && !CELL_BUG_PARITY && visibleSet.size > 0 && interiorApertureCullActive()) {
+    try {
+      _gateInteriorsByAperture(scene3d, sessionHandle, visibleSet, registry, cellId >>> 0, viewerCell >>> 0);
+    } catch (_) {
+      interiorApertureCullStats().skipped = "threw";
+    }
+  }
+
   // ?occlusionCull (perf 2026-10-06, occlusion_cull.js) — outdoors, drop the
   // interior cells whose (shrunk) bounds put no sample on screen last frame:
   // the walls hide them. Through a doorway/window, or over an open courtyard
@@ -3464,6 +3490,13 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       else poolCellVisibilityTick(visibleSet);
     } catch (_) { /* fail-soft: the container half still runs */ }
   }
+  // ?interiorShadowCull (perf 2026-10-17, interior_shadow_cull.js) — outdoors,
+  // the interior rooms in view stop casting sun shadows (the shell already
+  // shadows them; 54 shadow draws a frame at LB 0xE632). Synced lazily on the
+  // containers drawn this frame — a hidden container casts nothing anyway —
+  // and one forced raster when a drawn caster actually changed.
+  const castOn = interiorCastWanted(isIndoor);
+  let castChanged = false;
   if (CELL_BUG_PARITY) {
     for (const [thisCellId, container] of registry) {
       const want = container?.userData?.isEnvCell
@@ -3472,6 +3505,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       if (container.visible !== want) {
         container.visible = want;
       }
+      if (want && syncCellShadowCast(container, castOn)) castChanged = true;
     }
   } else {
     const lastVisible = scene3d._lastCellVisibleSet ?? (scene3d._lastCellVisibleSet = new Set());
@@ -3482,9 +3516,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     // bounded by visibleSet.size (~11 typically).
     for (const cellId of visibleSet) {
       const container = registry.get(cellId);
-      if (container && container.visible !== true) {
+      if (!container) continue;
+      if (container.visible !== true) {
         container.visible = true;
       }
+      if (syncCellShadowCast(container, castOn)) castChanged = true;
     }
     // Newly-hidden cells: iterate prior frame's set and flip out anything
     // no longer visible. Typical diff is 0-3 entries.
@@ -3500,6 +3536,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     lastVisible.clear();
     for (const cellId of visibleSet) lastVisible.add(cellId);
   }
+  if (castChanged) requestShadowRaster(scene3d.renderer);
 
   // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
   // against the just-applied visibility state. Reuses `cellId` resolved
@@ -3520,12 +3557,108 @@ function _occCellBox(container) {
   try { _occBox3.setFromObject(container); } catch (_) { return null; }
   if (_occBox3.isEmpty()) return null;
   const mn = _occBox3.min, mx = _occBox3.max;
-  const b = [mn.x, mn.y, mn.z, mx.x, mx.y, mx.z];
+  const raw = [mn.x, mn.y, mn.z, mx.x, mx.y, mx.z];
+  const b = raw.slice();
   for (let k = 0; k < 3; k++) {
     if (b[k + 3] - b[k] > 3 * CELL_SHRINK_M) { b[k] += CELL_SHRINK_M; b[k + 3] -= CELL_SHRINK_M; }
   }
-  container.userData.__occBox = { n, b };
+  container.userData.__occBox = { n, b, raw };
   return b;
+}
+// The same bounds UNSHRUNK (?interiorApertureCull wants the room's full extent:
+// its door frames sit on the box edge). Shares the cache above.
+function _cellRawBox(container) {
+  return _occCellBox(container) ? container.userData.__occBox.raw : null;
+}
+
+// ?interiorApertureCull (perf 2026-10-17, interior_aperture_cull.js) — outdoors,
+// drop each interior cell whose screen rect touches no front-facing on-screen
+// door/window aperture (retail draws interiors from outside only through
+// PView::DrawPortal → ConstructView, acclient.c:462565/462507). Runs before the
+// occlusion culler, so the rooms it drops never cost a query either.
+const _apVp = new THREE.Matrix4();
+const _apMvp = new THREE.Matrix4();
+const _apMvpArr = new Float32Array(16);
+const _apCam = new THREE.Vector3();
+const _apRects = [];
+const _apCands = [];
+function _gateInteriorsByAperture(scene3d, sessionHandle, visibleSet, registry, keepA, keepB) {
+  const st = interiorApertureCullStats();
+  st.candidates = 0;
+  st.culled = 0;
+  // Interior rooms in this frame's set (the outdoor LandCells are not in the
+  // registry). None → no wasm call at all.
+  _apCands.length = 0;
+  for (const cid of visibleSet) {
+    if (cid === keepA || cid === keepB) continue;
+    const container = registry.get(cid);
+    if (container && container.userData?.isEnvCell) _apCands.push(cid, container);
+  }
+  if (_apCands.length === 0) {
+    st.skipped = "no-interiors";
+    return;
+  }
+  try {
+    _apertureGateCandidates(scene3d, sessionHandle, visibleSet, st);
+  } finally {
+    _apCands.length = 0; // hold no containers between frames
+  }
+}
+function _apertureGateCandidates(scene3d, sessionHandle, visibleSet, st) {
+  const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  const worldRoot = scene3d.worldRoot ?? null;
+  if (!camera?.projectionMatrix || !camera.matrixWorldInverse || !worldRoot) {
+    st.skipped = "no-camera";
+    return;
+  }
+  const hasV3 = typeof sessionHandle.getVisiblePortalAperturesWithSidedness === "function";
+  if (!hasV3 && typeof sessionHandle.getVisiblePortalApertures !== "function") {
+    st.skipped = "stale-pkg-no-aperture-export";
+    return;
+  }
+  const nearPlane = acCameraFrame(camera, worldRoot) ? makeNearPlane(_acCamVec, _acFwdVec) : null;
+  if (!nearPlane) {
+    st.skipped = "no-near-plane";
+    return;
+  }
+  // Same composition as the visibility walk above: projection · view for the
+  // main-scene cell boxes, · worldRoot for the AC-space aperture polygons.
+  _apVp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _apMvp.multiplyMatrices(_apVp, worldRoot.matrixWorld);
+  for (let i = 0; i < 16; i++) _apMvpArr[i] = _apMvp.elements[i];
+  const flat = hasV3
+    ? sessionHandle.getVisiblePortalAperturesWithSidedness(_apMvpArr, 0)
+    : sessionHandle.getVisiblePortalApertures(_apMvpArr, 0);
+  const ap = apertureViewRects(flat, _apMvpArr, {
+    nearPlane,
+    camAc: _acCamVec,
+    withCellCenter: hasV3,
+    withPortalSide: hasV3,
+    sidedness: interiorApertureCullMode() === "on",
+    out: _apRects,
+  });
+  st.frames += 1;
+  st.skipped = "";
+  st.offered = ap.offered;
+  st.inView = ap.inView;
+  st.away = ap.away;
+  st.behind = ap.behind;
+  st.offscreen = ap.offscreen;
+  if (ap.full) {
+    st.straddle += 1;
+    return;
+  }
+  camera.getWorldPosition(_apCam);
+  const vp = _apVp.elements;
+  for (let i = 0; i < _apCands.length; i += 2) {
+    const b = _cellRawBox(_apCands[i + 1]);
+    if (!b) continue; // unmeasurable → keep
+    st.candidates += 1;
+    if (cellSeenThroughApertures(b, vp, _apCam, ap.rects)) continue;
+    visibleSet.delete(_apCands[i]);
+    st.culled += 1;
+  }
+  st.culledTotal += st.culled;
 }
 
 // Portal-stencil feed (2026-07-05, ?portalStencil). Runs each frame AFTER
