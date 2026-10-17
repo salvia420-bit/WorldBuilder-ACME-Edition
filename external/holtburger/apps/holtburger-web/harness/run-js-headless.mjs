@@ -377,6 +377,7 @@ const TIER5 = [
   // 2026-10-07 particles drawn after the cloud + aerial composite (split post
   // chain; the -sky glow stays behind the clouds).
   { tier: 5, flag: "particlesOverClouds", file: "tests/particles_over_clouds.test.mjs" },
+  { tier: 5, flag: "msaaWorldOnly", file: "tests/msaa_world.test.mjs" },
   // 2026-10-05 audio retail parity (voice pool, retail mixer, 0xF750, UI/portal sounds, volume 0).
   { tier: 5, flag: "audio_voice_pool", file: "tests/audio_voice_pool.test.mjs" },
   { tier: 5, flag: "audioRetailPan", file: "tests/audio_retail_mixer.test.mjs" },
