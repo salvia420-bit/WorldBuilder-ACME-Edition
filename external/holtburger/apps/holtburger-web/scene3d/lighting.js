@@ -2477,7 +2477,69 @@ export function releaseLight(scene3d, light) {
  *   wasmExportMissing: boolean, // true if fetchSetupModelLights absent
  * }>}
  */
-export async function attachSetupModelLights(scene3d, wasmExports) {
+// ?lightObjectFrame (2026-10-16, DEFAULT ON; `=off` escape). A Setup's
+// LightInfo lives in the OBJECT frame: retail CPartArray::SetFrame hands every
+// light the object's own frame (LIGHTLIST::set_frame, acclient.c:325029) and
+// the hardware light is Frame::combine(object frame, LightInfo.offset)
+// (:380601) — the LightInfo key is never a part index. Entity rigs parented
+// each light under `parts[key]`, so a light rode its part's pose and motion:
+// every portal's purple / coloured light sat on part 0 (posed 1.415 m up and
+// spun 360° every 4 s by MotionTable 0x09000003), 3.7 m up at rest, orbiting
+// a 2.3 m circle that dipped ~0.9 m into the ground — and froze at a random
+// phase beyond the 120 m animation gate, so the glow "popped" as the player
+// walked toward or away from the portal. ON: an entity's lights hang off its
+// rig ROOT at the LightInfo offset (unscaled by the object scale, as retail's
+// frame carries no scale). Buildings / statics / cell props keep their entries
+// (a fused static mesh IS the object frame). `=off`: per-part, as before.
+export function lightObjectFrameEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("lightObjectFrame") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _lightObjectFrameFlag;
+export function _lightObjectFrameOn() {
+  if (_lightObjectFrameFlag === undefined) _lightObjectFrameFlag = lightObjectFrameEnabled();
+  return _lightObjectFrameFlag;
+}
+/** Test seam (`undefined` re-reads the URL). */
+export function __setLightObjectFrameForTest(v) { _lightObjectFrameFlag = v; }
+
+/**
+ * Hang a Setup light off an object-frame parent: the LightInfo offset in that
+ * frame, undoing a uniform parent scale (retail's object frame has none).
+ */
+export function placeLightInObjectFrame(light, parent) {
+  if (!objectFrameScaled(parent)) return light;
+  const sx = parent.scale.x;
+  // From the authored offset (never the live position: a template built from
+  // this light later must still read the unscaled offset).
+  const o = light.userData?.setupLightOrigin;
+  if (o && Number.isFinite(o.x)) light.position.set(o.x / sx, o.y / sx, o.z / sx);
+  else light.position.divideScalar(sx);
+  const tgt = light.userData?.spotTargetLocal;
+  if (tgt && light.target?.position) light.target.position.set(tgt.x / sx, tgt.y / sx, tgt.z / sx);
+  return light;
+}
+/** True when an object-frame parent carries a (uniform) non-unit scale. */
+export function objectFrameScaled(parent) {
+  const sx = parent?.scale?.x;
+  return Number.isFinite(sx) && sx > 1e-6 && Math.abs(sx - 1) > 1e-6;
+}
+
+/** Setup ids whose LightInfo table is empty (the entity spawn hook skips them). */
+const _noLightSetups = new Set();
+const _NO_LIGHT_SETUPS_CAP = 8192;
+
+/**
+ * `opts.entities` (2026-10-16): attach the lights of just these entity
+ * instances — the spawn-commit hook (entities.js), so an entity that spawns in
+ * an area already baked is lit at once instead of at the next landblock bake.
+ */
+export async function attachSetupModelLights(scene3d, wasmExports, opts = undefined) {
   const summary = {
     lightCount: 0,
     pointLightCount: 0,
@@ -2610,10 +2672,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     }
   }
 
-  function recordEntities(entityManager) {
-    const map = entityManager?.entityMap;
-    if (!map || typeof map.forEach !== "function") return;
-    map.forEach((inst) => {
+  function recordEntities(entityManager, only = null) {
+    const map = only ? null : entityManager?.entityMap;
+    if (!only && (!map || typeof map.forEach !== "function")) return;
+    const visit = (inst) => {
       const root = inst?.root;
       if (!root) return;
       const setupId =
@@ -2623,6 +2685,7 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // spawn after a rescan are caught by the next per-LB rescan.
       if (inst._setupLightScanned) return;
       inst._setupLightScanned = true;
+      if (only && _noLightSetups.has(setupId)) return; // known: no lights
       const parts = inst.parts || [];
       let entry = partsBySetupId.get(setupId);
       if (!entry) {
@@ -2636,6 +2699,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // (a) skip a rig that despawned while the fetch was in flight and
       // (b) stamp `__ownerGuid` for window.__diag.lights.
       const ownerGuid = (inst.guid ?? 0) >>> 0;
+      // ?lightObjectFrame — one object-frame entry (partIndex -1 takes every
+      // light of the Setup) on the rig root.
+      if (_lightObjectFrameOn()) {
+        entry.push({ partIndex: -1, object3D: root, lbKey: null, ownerInst: inst, ownerGuid, objectFrame: true });
+        return;
+      }
       for (let pi = 0; pi < parts.length; pi += 1) {
         const p = parts[pi];
         if (p) entry.push({ partIndex: pi, object3D: p, lbKey: null, ownerInst: inst, ownerGuid });
@@ -2645,7 +2714,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       if (parts.length === 0) {
         entry.push({ partIndex: 0, object3D: root, lbKey: null, ownerInst: inst, ownerGuid });
       }
-    });
+    };
+    if (only) {
+      for (const inst of only) visit(inst);
+    } else {
+      map.forEach(visit);
+    }
   }
 
   // Render-completeness audit (2026-05-29) — GAP 1: EnvCell interior static
@@ -2697,10 +2771,15 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     }
   }
 
-  recordBuildingTree(scene3d.buildingsGroup);
-  recordStatics(scene3d.staticsGroup);
-  recordEntities(scene3d.entityManager);
-  recordCellStatics(scene3d.cellsGroup);
+  const onlyEntities = opts && Array.isArray(opts.entities) ? opts.entities : null;
+  if (onlyEntities) {
+    recordEntities(scene3d.entityManager, onlyEntities);
+  } else {
+    recordBuildingTree(scene3d.buildingsGroup);
+    recordStatics(scene3d.staticsGroup);
+    recordEntities(scene3d.entityManager);
+    recordCellStatics(scene3d.cellsGroup);
+  }
 
   if (partsBySetupId.size === 0) {
     return summary;
@@ -2733,6 +2812,8 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     }
     const lightCount = bundle.partCount | 0;
     if (lightCount === 0) {
+      if (_noLightSetups.size >= _NO_LIGHT_SETUPS_CAP) _noLightSetups.clear();
+      _noLightSetups.add(setupId >>> 0);
       summary.noLightModels += 1;
       if (typeof bundle.free === "function") {
         try { bundle.free(); } catch (_) {}
@@ -2764,8 +2845,8 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // placement setups never pay the template cost.
       /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
       let template = null;
-      for (const { partIndex, object3D, lbKey, cellId, ownerInst, ownerGuid } of partEntries) {
-        if (partIndex !== targetPartIndex) continue;
+      for (const { partIndex, object3D, lbKey, cellId, ownerInst, ownerGuid, objectFrame } of partEntries) {
+        if (partIndex !== targetPartIndex && partIndex !== -1) continue;
         // LIGHT-GUARD — the entity despawned (or was LOD-respawned under the
         // same guid) while `fetchSetupModelLights` was awaited: attaching
         // would parent a light to a disposed rig and push it into
@@ -2793,6 +2874,11 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
           inst = createLightFromTemplate(template, null);
         }
         attachedAny = true;
+        if (objectFrame && objectFrameScaled(object3D)) {
+          // build the template from the UNSCALED source before it is moved
+          if (template === null && inst === lightObj) template = getOrBuildLightTemplate(lightObj);
+          placeLightInObjectFrame(inst, object3D);
+        }
         object3D.add(inst);
         // B10b (likely:spotlight-target): an oriented SpotLight aims at
         // its `.target`; parent the target as a sibling under the SAME

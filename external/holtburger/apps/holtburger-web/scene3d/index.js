@@ -5081,6 +5081,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // ── per-emitter birth state ────────────────────────────────────
         const now = currentTime();
         const anchor = new THREE.Vector3();
+        // The cull's own sphere (particle_manager.js rp6CullSphere: the part
+        // frame + sprite reach under ?rp6TrueSphere); the inline rebuild below
+        // stays as the fallback for an older module.
+        let cullSphere = null;
+        try { cullSphere = (await import("./particles/particle_manager.js")).rp6CullSphere || null; } catch (_) { cullSphere = null; }
         const rows = [];
         const verdicts = {};
         let falseCullSuspects = 0;
@@ -5105,11 +5110,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               else if (p.position) anchor.set(p.position.x || 0, p.position.y || 0, p.position.z || 0);
               if (rp6Cam) dist = +anchor.distanceTo(camPos).toFixed(1);
             }
-            // Frustum inputs EXACTLY as _rp6ShouldCull assembles them:
-            // sphere = (anchor world pos, sortingSphere.radius + |parentOffset|).
+            // Frustum inputs EXACTLY as _rp6ShouldCull assembles them.
             let radius = em.info?.sortingSphere?.radius ?? 0;
             const poff = em.parentOffset?.position;
             if (poff && typeof poff.length === "function") radius += poff.length();
+            if (cullSphere) {
+              const r = cullSphere(em, anchor);
+              if (r >= 0) {
+                radius = r;
+                if (rp6Cam) dist = +anchor.distanceTo(camPos).toFixed(1);
+              }
+            }
             let inFrustum = null, angleDeg = null, rejectPlane = null;
             if (rp6Cam && p) {
               const sph = new THREE.Sphere(anchor.clone(), radius);

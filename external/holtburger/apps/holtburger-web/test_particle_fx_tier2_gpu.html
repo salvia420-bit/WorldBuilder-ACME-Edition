@@ -331,19 +331,28 @@ try {
   // ---- S. showcase --------------------------------------------------------------------------------
   show._resetFxShowcaseForTest();
   const sScene = new THREE.Scene();
-  const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL } };
+  // ?portalSetPiece (2026-10-16): the set piece keys on the portal's Setup — the
+  // purple town portal 0x020001B3 and a Destroyed Portal 0x020019E4 (the
+  // "dead" mood of the disc). Rig roots in THREE axes here, so the Setup-local
+  // centre lands in front of them; a compile / draw check only.
+  const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL, modelId: 0x020001b3 } };
+  const dead = { guid: 0x70000003, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL, modelId: 0x020019e4 } };
   const stone = { guid: 0x70000002, root: new THREE.Group(), meta: { objDescFlags: show.ODF_LIFESTONE } };
-  portal.root.position.set(-0.8, -1.4, -2); stone.root.position.set(0.9, -1.4, -2);
-  sScene.add(portal.root, stone.root);
+  portal.root.position.set(-0.8, -1.4, -3.5); dead.root.position.set(0.0, 0.6, -3.5); stone.root.position.set(0.9, -1.4, -2);
+  sScene.add(portal.root, dead.root, stone.root);
   sScene.updateMatrixWorld(true);
   const sCam = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
   sCam.position.set(0, 0, 3); sCam.lookAt(0, 0, -2); sCam.layers.enableAll(); sCam.updateMatrixWorld(true);
-  const s3dS = { entityManager: { entityMap: new Map([[portal.guid, portal], [stone.guid, stone]]) }, scene: sScene, camera: sCam, renderer };
+  const s3dS = { entityManager: { entityMap: new Map([[portal.guid, portal], [dead.guid, dead], [stone.guid, stone]]) }, scene: sScene, camera: sCam, renderer };
+  // the portal pieces fade in over 0.6 s first
+  for (const t of [29000, 29250, 29500, 29750]) show.tickFxShowcase(s3dS, t);
   show.fireFxShowcaseCue("levelUp", { x: 0, y: -1.4, z: -1 }, 30000);
   const nS = show.tickFxShowcase(s3dS, 30500);
   const sImg = drawScene(sScene, rt, sCam);
   check("S. the portal disc, the lifestone shaft, the level-up column (+ flare) draw in one call",
     nS >= 3 && allFinite(sImg) && rgbSum(sImg) > 0.05, `instances ${nS}, sum ${rgbSum(sImg).toFixed(3)}`);
+  check("S. a live and a dead portal disc both draw (the moods share the one program)",
+    show.fxShowcaseStats().portals === 2 && allFinite(sImg), `portals ${show.fxShowcaseStats().portals}`);
   const sx = [];
   for (const src of poc.fxGlowExtraSources()) { src.collect(sx); src.setFrame?.({ depthTexture: depthTex, width: 64, height: 64, camera: sCam, isLog: true, scale: 1 }); }
   const flareX = sx.find((e) => e.object.userData?.isFxShowcase);

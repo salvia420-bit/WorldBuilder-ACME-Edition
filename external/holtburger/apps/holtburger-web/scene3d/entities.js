@@ -1360,6 +1360,7 @@ import {
 // Phase 3 (P3.1) — shared emit helper: runs each particle component's emit(ctx)
 // for a descriptor and returns [{emitterInfo, partIndex, parentOffset}] specs.
 import { attachParticleEmitters } from "./vfx/particle_attach.js";
+import { PORTAL_SETUPS } from "./vfx/portal_setups.js";
 import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 derived day/weather/season for ctx.env
 import { FAMILY_ORDER } from "./vfx/registry.js";
 // Tier 2 `?fxMotion` (2026-10-10): elemental swing trails (vfx/fx_ribbons.js).
@@ -1426,7 +1427,7 @@ import {
 // === Wave R2.A (2026-05-28) — reuse the static-light constructor so
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
-import { buildLightForSetupLight } from "./lighting.js";
+import { buildLightForSetupLight, attachSetupModelLights, _lightObjectFrameOn, placeLightInObjectFrame } from "./lighting.js";
 // A9-Stage2 (unification survey 2026-06-11): the single JS owner of
 // part-array → Object3D transform semantics. `?rigModule=off` reverts to
 // the inline legacy paths below (byte-identical-transform acceptance bar).
@@ -3933,6 +3934,68 @@ class EntityInstance {
  * `tick(dt)` each rAF and `drainEntityEvents3D` consumes events into
  * spawn / setPose / setMotion / remove.
  */
+// ?portalRecreateInPlace (2026-10-16, DEFAULT ON; `=off` escape). ACE re-sends
+// a portal's CreateObject when it re-enters the player's visibility, and
+// spawn() tore an existing rig down and rebuilt it: the swirl restarted from
+// nothing (a 7 m faint layer that regrows over 2 s), the set piece faded in
+// again and the portal's light was gone until the next landblock rescan — a
+// portal "popping" as the player walked toward or away from it. Retail applies
+// a create for the instance it already has in place (SmartBox::
+// HandleCreateObject, acclient.c:145881: same INSTANCE_TS → UpdateVisualDesc /
+// HandleReceivedPosition / DoSetState, nothing torn down). The wire's instance
+// timestamp is not on the spawn meta, so "same instance" is read as: a portal
+// Setup (vfx/portal_setups.js), the same Setup, landblock, position, heading,
+// scale, translucency and ObjDesc changes. Anything else rebuilds, as before.
+// Scoped to portals: they never move, and a rebuild is what made them pop.
+function _readPortalRecreateInPlace() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("portalRecreateInPlace") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _portalRecreateInPlaceFlag;
+export function portalRecreateInPlaceEnabled() {
+  if (_portalRecreateInPlaceFlag === undefined) _portalRecreateInPlaceFlag = _readPortalRecreateInPlace();
+  return _portalRecreateInPlaceFlag;
+}
+/** Test seam (`undefined` re-reads the URL). */
+export function __setPortalRecreateInPlaceForTest(v) { _portalRecreateInPlaceFlag = v; }
+
+function _sameU32(a, b) {
+  const la = a ? a.length : 0, lb = b ? b.length : 0;
+  if (la !== lb) return false;
+  for (let i = 0; i < la; i += 1) if ((a[i] >>> 0) !== (b[i] >>> 0)) return false;
+  return true;
+}
+const _near = (a, b, eps) => Math.abs((+a || 0) - (+b || 0)) <= eps;
+
+/**
+ * Pure: is `meta` a re-sent CreateObject for the portal instance `cur` already
+ * draws (see ?portalRecreateInPlace)?
+ */
+export function samePortalInstance(cur, meta) {
+  if (!cur || !meta || cur._disposed || !cur.root) return false;
+  const old = cur.meta || {};
+  const sid = ((meta.modelId ?? meta.setupId ?? 0) >>> 0);
+  if (!sid || !PORTAL_SETUPS.has(sid)) return false;
+  if (((old.modelId ?? old.setupId ?? 0) >>> 0) !== sid) return false;
+  if (((old.landblockId ?? 0) >>> 0) !== ((meta.landblockId ?? 0) >>> 0)) return false;
+  if (!_near(old.x, meta.x, 0.01) || !_near(old.y, meta.y, 0.01) || !_near(old.z, meta.z, 0.01)) return false;
+  // the same heading either way round (q and -q are one rotation)
+  const dot = (+old.qw || 0) * (+meta.qw || 0) + (+old.qx || 0) * (+meta.qx || 0) +
+    (+old.qy || 0) * (+meta.qy || 0) + (+old.qz || 0) * (+meta.qz || 0);
+  if (Math.abs(dot) < 0.9999) return false;
+  if (!_near(old.objScale ?? 1, meta.objScale ?? 1, 1e-4)) return false;
+  if (!_near(old.physicsTranslucency ?? 0, meta.physicsTranslucency ?? 0, 1e-4)) return false;
+  if (((old.paletteId ?? 0) >>> 0) !== ((meta.paletteId ?? 0) >>> 0)) return false;
+  return _sameU32(old.modelChanges, meta.modelChanges) &&
+    _sameU32(old.textureChanges, meta.textureChanges) &&
+    _sameU32(old.subPalettes, meta.subPalettes);
+}
+
 export class EntityManager {
   constructor(scene3d, wasmExports) {
     this.scene3d = scene3d;
@@ -4383,6 +4446,16 @@ export class EntityManager {
       return this.spawnInFlight.get(guid);
     }
     if (this.entityMap.has(guid)) {
+      // ?portalRecreateInPlace — a re-sent CreateObject for the SAME portal
+      // instance keeps the portal (retail SmartBox::HandleCreateObject applies
+      // a same-instance create in place: visual desc, position, state, vector
+      // — acclient.c:145881 — and only rebuilds a NEWER instance).
+      const cur = this.entityMap.get(guid);
+      if (portalRecreateInPlaceEnabled() && samePortalInstance(cur, meta)) {
+        if (meta.name) cur.meta.name = meta.name;
+        cur._recreatedInPlace = (cur._recreatedInPlace | 0) + 1;
+        return cur;
+      }
       // Re-spawn → tear down then rebuild. Mirrors
       // `ensureEntitySprite`'s `entry.modelId === 0` upgrade path.
       this.remove(guid);
@@ -4566,8 +4639,8 @@ export class EntityManager {
                 // the post plants) spawned buried whenever a near band
                 // matched and popped back up when it didn't ("the sign keeps
                 // dropping"). Thread the band pick as a part-0 model change
-                // instead; wire-commanded model changes still win (the wasm
-                // part walk takes the FIRST match per part index).
+                // instead; wire-commanded model changes still win (the swap
+                // is prepended and the wasm part walk takes the LAST match).
                 lodPartSwap = substitute;
               } else {
                 setupId = substitute;
@@ -4585,13 +4658,16 @@ export class EntityManager {
     let modelChanges = meta.modelChanges ?? new Uint32Array(0);
     if (lodPartSwap) {
       // Spawn-time LOD as a per-part substitution (see the band-pick block
-      // above). Appended AFTER wire changes so a wire-commanded part-0
-      // swap keeps precedence. Local copy only — meta stays untouched so
-      // a T9 LOD respawn re-derives from the wire state.
+      // above). PREPENDED so a wire-commanded part-0 swap keeps precedence:
+      // the wasm part walk takes the LAST match per part index (lib.rs
+      // walk_setup_parts — ACE lists worn items after the body), so the old
+      // append let the original model's band replace a wire-swapped part 0.
+      // Local copy only — meta stays untouched so a T9 LOD respawn
+      // re-derives from the wire state.
       const withLod = new Uint32Array(modelChanges.length + 2);
-      withLod.set(modelChanges);
-      withLod[modelChanges.length] = 0;
-      withLod[modelChanges.length + 1] = lodPartSwap >>> 0;
+      withLod[0] = 0;
+      withLod[1] = lodPartSwap >>> 0;
+      withLod.set(modelChanges, 2);
       modelChanges = withLod;
     }
     const textureChanges = meta.textureChanges ?? new Uint32Array(0);
@@ -5569,6 +5645,20 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // ?lightObjectFrame (2026-10-16): light THIS entity's Setup lights now.
+    // They were attached only by the per-landblock rescan, so an entity that
+    // (re)spawned into an already-baked area — a portal ACE re-sent, a summoned
+    // Gateway — stayed unlit until the next bake. Idempotent with the rescan
+    // (`_setupLightScanned`); projectiles keep their own pool lights.
+    if (
+      _lightObjectFrameOn() &&
+      !inst._isProjectile &&
+      (setupId >>> 24) === 0x02 &&
+      this.scene3d &&
+      typeof this.wasmExports?.fetchSetupModelLights === "function"
+    ) {
+      attachSetupModelLights(this.scene3d, this.wasmExports, { entities: [inst] }).catch(() => {});
+    }
     // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): a rig rebuilt while its
     // guid is film-hidden (the respawn fallback, visibility churn) comes back
     // hidden. `_filmHiddenGuids` only exists once setFilmHidden has run.
@@ -13820,7 +13910,11 @@ export class EntityManager {
         continue;
       }
       const targetPartIndex = sl.partIndex >>> 0;
-      const partGroup = inst.parts[targetPartIndex];
+      // ?lightObjectFrame (lighting.js): a Setup light lives in the OBJECT
+      // frame (retail LIGHTLIST::set_frame), so it hangs off the rig root —
+      // never the part whose index happens to equal the LightInfo key.
+      const objectFrame = _lightObjectFrameOn();
+      const partGroup = objectFrame ? inst.root : inst.parts[targetPartIndex];
       if (!partGroup) {
         // Light references a part index this rig didn't build — skip.
         if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
@@ -13848,6 +13942,7 @@ export class EntityManager {
           light.intensity = light.userData.__setupIntensity;
         }
       }
+      if (objectFrame) placeLightInObjectFrame(light, partGroup);
       partGroup.add(light);
       if (Array.isArray(active)) active.push(light);
       if (!Array.isArray(inst._setupLights)) inst._setupLights = [];

@@ -31,10 +31,30 @@
 //              leaves its element's scorch / rime / stain (vfx/fx_cues.js) —
 //              nothing to add here.
 //
-// The portal's centre and size come from its swirl distortion source
-// (vfx/fx_distort.js — the retail swirl emitter's own origin), its colour from
-// the swirl's FX light (vfx/fx_lights.js); without them (tier-1 switches off)
-// a 1.6 m-high centre, a 1.5 m radius and portal violet.
+// EVERY PORTAL (2026-10-16, `?portalSetPiece`, DEFAULT ON, `=off` escape). The
+// set piece keys on the portal's SETUP (vfx/portal_setups.js, generated from
+// client_portal.dat by tools/particle-fx/portal_setups.py): every Setup built on
+// the portal quad 0x0100168B — disc portals (purple, coloured, the white
+// Gateway every summon spell / gem / NPC creates), pillar portals, the 39
+// Destroyed Portals and the dark shadow portals — whether it is a Portal weenie,
+// a creature / generic wearing a portal, or a static portal decoration in a
+// dungeon cell (statics.js registers those anchors). Before, it keyed on
+// ObjectDescriptionFlags PORTAL, which ACE also sets on the 22 disguised portals
+// (bookcases, statues, arena arches, floor pads, the invisible Great Hall — they
+// grew a violet disc and ring) and never on a static portal. The centre is the
+// portal's own geometry (the main swirl's part frame + hook offset, or the
+// quad), not the nearest swirl distortion source: on pillar and destroyed
+// portals that source was the funnel on the ground-level anchor, so the disc
+// sat in the ground and jumped up whenever another swirl won the tie. Colour
+// and radius come from the table (the main swirl's tier-1 light colour and
+// distortion radius), so they no longer depend on whether the swirl's FX light
+// got a pool slot. The nearest 8 portals within 60 m get a piece; a piece fades
+// in, fades with distance (48 → 60 m) and fades out, instead of popping at the
+// range edge. Kinds: `dead` (the Destroyed Portals' broken rigs) draws a dim,
+// unstable ember of portal space and a faint ring; `dark` (shadow portals) a
+// slow starless haze. `=off`, or a Setup not in the table: the old rule (the
+// ODF bit, centre / colour from the live swirl source and light) — but only
+// where a swirl source exists, so a disguised portal never gets a disc.
 //
 // ONE draw for every disc, shaft, column, flare and aura (an instanced
 // billboard, the kind is per instance), one program, plus the flare's glow
@@ -63,6 +83,8 @@ import { fxTier2Enabled } from "./fx_tier2.js";
 import { fxTier1Enabled } from "./fx_tier1.js";
 import { addFxDecal, releaseFxDecal } from "./fx_decals.js";
 import { fxDistortSwirlNear } from "./fx_distort.js";
+import { PORTAL_SETUPS } from "./portal_setups.js";
+import { registerStaticPortalAnchor, unregisterStaticPortalAnchor, staticPortalAnchors } from "./portal_registry.js";
 import { fxEmitterLightNear } from "./fx_lights.js";
 import { fxNowMs } from "../fx_clock.js";
 import { registerLateFxSource, registerFxGlowExtras } from "../particles_over_clouds.js";
@@ -83,6 +105,21 @@ export const FX_SHOWCASE_MAX = 16;
 export const FX_SHOWCASE_KIND = Object.freeze({ disc: 1, shaft: 2, flare: 3, aura: 4 });
 const SCAN_MS = 500;
 const RANGE_M = 60;
+// `?portalSetPiece`: a portal piece fades with distance from here to RANGE_M,
+// stays tracked to PORTAL_KEEP_M (no churn at the edge), and fades in / out
+// over PORTAL_FADE_S. At most PORTAL_MAX portals (the nearest) carry a piece.
+const PORTAL_FADE_START_M = 48;
+const PORTAL_KEEP_M = RANGE_M + 6;
+const PORTAL_FADE_S = 0.6;
+const PORTAL_MAX = 8;
+// Per kind: disc and ring intensity factors and the shader mood (vAux.w):
+// 0 a live portal, 1 a dead one (dim, unstable ember), 2 a dark one (haze).
+const PORTAL_KIND_LOOK = Object.freeze({
+  disc: Object.freeze({ disc: 1, ring: 1, mood: 0 }),
+  pillar: Object.freeze({ disc: 1, ring: 1, mood: 0 }),
+  dead: Object.freeze({ disc: 0.6, ring: 0.35, mood: 1 }),
+  dark: Object.freeze({ disc: 0.5, ring: 0.3, mood: 2 }),
+});
 // `?lifestoneFx`: a lifestone already in the set leaves it only past this
 // (its crystal materials, aura and light fade out and back in, never flicker
 // at the edge of the scan range).
@@ -114,6 +151,39 @@ export function _setPortalFxLumForTest(on) {
   }
 }
 export function portalFxLumEnabled() { return _portalFxLumOn; }
+
+// `?portalSetPiece` (see the EVERY PORTAL note above). Read once at module load;
+// `_setPortalSetPieceForTest` is the seam.
+function _readPortalSetPiece() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("portalSetPiece") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _portalSetPieceOn = _readPortalSetPiece();
+/** Test seam: force `?portalSetPiece` (null re-reads the URL). */
+export function _setPortalSetPieceForTest(on) {
+  _portalSetPieceOn = on == null ? _readPortalSetPiece() : !!on;
+}
+export function portalSetPieceEnabled() { return _portalSetPieceOn; }
+
+/** Static portal decorations (vfx/portal_registry.js; statics.js registers them). */
+const _staticPortals = staticPortalAnchors();
+export { registerStaticPortalAnchor, unregisterStaticPortalAnchor };
+/** Pure: the portal-table row for a Setup id, or null. */
+export function portalSetupFor(setupId) {
+  return PORTAL_SETUPS.get(setupId >>> 0) || null;
+}
+/** Pure: a portal piece's distance fade (1 inside PORTAL_FADE_START_M, 0 past RANGE_M). */
+export function portalDistanceFade(dist) {
+  if (!(dist >= 0)) return 0;
+  if (dist <= PORTAL_FADE_START_M) return 1;
+  if (dist >= RANGE_M) return 0;
+  const t = (dist - PORTAL_FADE_START_M) / (RANGE_M - PORTAL_FADE_START_M);
+  return 1 - t * t * (3 - 2 * t);
+}
 
 /** The purple swirl's tier-1 light colour (0x320002CD, data/particle-fx-tier1.json). */
 export const PORTAL_REF_COLOR = Object.freeze([0.8335, 0.0611, 1.0]);
@@ -256,11 +326,18 @@ void main() {
 	float t = uShowTime;
 	vec3 c = vec3( 0.0 );
 	if ( kind < 1.5 ) {
-		// portal space: a slow swirling nebula in the portal's colour, a few stars
+		// portal space: a slow swirling nebula in the portal's colour, a few stars.
+		// mood (vAux.w, ?portalSetPiece): 0 a live portal; 1 a dead one — its portal
+		// space burnt down to a dim, wavering ember with a hollow heart; 2 a dark one
+		// — a slow, starless haze
+		float mood = vAux.w;
+		float dead = 1.0 - step( 0.5, abs( mood - 1.0 ) );
+		float dark = step( 1.5, mood );
+		float hollow = max( dead, dark );
 		float r = length( vUv );
 		if ( r > 1.0 ) discard;
 		float th = r > 1e-4 ? atan( vUv.y, vUv.x ) : 0.0;
-		float sw = th + r * 3.2 - t * 0.35 + seed * 6.2831853;
+		float sw = th + r * 3.2 - t * mix( 0.35, 0.12, dark ) + seed * 6.2831853;
 		vec2 pp = vec2( cos( sw ), sin( sw ) ) * r * 2.5;
 		float n = hbShowFbm( pp + vec2( t * 0.05, -t * 0.03 ) );
 		float mask = 1.0 - smoothstep( 0.55, 1.0, r );
@@ -268,7 +345,9 @@ void main() {
 		c = mix( deep, vCol.rgb, smoothstep( 0.35, 0.85, n ) ) * mask * 0.55;
 		vec2 cell = floor( pp * 6.0 + 50.0 );
 		float st = step( 0.965, hbShowHash( cell + seed * 17.0 ) );
-		c += vec3( st * pow( 0.5 + 0.5 * sin( t * 3.0 + hbShowHash( cell ) * 30.0 ), 6.0 ) ) * mask;
+		c += vec3( st * pow( 0.5 + 0.5 * sin( t * 3.0 + hbShowHash( cell ) * 30.0 ), 6.0 ) ) * mask * ( 1.0 - hollow );
+		c *= mix( 1.0, 0.35 + 0.3 * hbShowNoise( vec2( t * 1.3, seed * 11.0 ) ), dead );
+		c *= mix( 1.0, smoothstep( 0.0, 0.45, r ), hollow * 0.8 );
 	} else if ( kind < 2.5 ) {
 		// light shaft: a soft core, a noise mask scrolling up, glitter rising
 		float u = vUv.x;
@@ -440,6 +519,7 @@ const _bursts = [];
 const _auraList = [];
 let _flares = 0;
 let _lastScan = -Infinity;
+let _lastTickMs = NaN;   // ?portalSetPiece fade clock
 let _gain = 1;   // `window.__fxShowcase.gain` (live tuning)
 const _stats = { portals: 0, lifestones: 0, auras: 0, bursts: 0, drawn: 0, scans: 0 };
 
@@ -467,17 +547,125 @@ function _colorOf(src, fallback) {
   return fallback.slice();
 }
 
+// ---------------------------------------------------------------------------
+// `?portalSetPiece` — every portal, from its Setup (see the EVERY PORTAL note)
+// ---------------------------------------------------------------------------
+
+/** This scan's portal candidates (pooled records; `_candN` live). */
+const _cands = [];
+let _candN = 0;
+function _cand() {
+  let c = _cands[_candN];
+  if (!c) {
+    c = { key: null, row: null, centre: new THREE.Vector3(), ground: new THREE.Vector3(), radius: 1.5, color: null, k: 1, dist: 0 };
+    _cands[_candN] = c;
+  }
+  _candN++;
+  return c;
+}
+
+function _setupOf(inst) {
+  const m = inst?.meta;
+  return ((m?.modelId ?? m?.setupId ?? inst?._setupId ?? 0) >>> 0);
+}
+
+/**
+ * A table portal (`row`) drawn by `obj` — an entity rig root or a static
+ * script anchor, both Setup-local AC frames under worldRoot: the centre is the
+ * Setup-local point through the object's world matrix.
+ */
+function _tableCandidate(key, obj, row) {
+  try { obj.updateWorldMatrix(true, false); } catch (_) { return; }
+  const c = _cand();
+  c.key = key;
+  c.row = row;
+  c.centre.set(row.centre[0], row.centre[1], row.centre[2]).applyMatrix4(obj.matrixWorld);
+  c.ground.setFromMatrixPosition(obj.matrixWorld);
+  c.dist = c.centre.distanceTo(_cam);
+  if (c.dist > PORTAL_KEEP_M) { _candN--; return; }
+  const sc = Number.isFinite(obj.scale?.x) && obj.scale.x > 0 ? obj.scale.x : 1;
+  c.radius = row.radius * sc;
+  c.color = row.color;
+  c.k = _portalFxLumOn ? portalLumScale(row.color) : 1;
+}
+
+/**
+ * A Portal-weenie (ODF bit) whose Setup is not in the table: the old rule, but
+ * only where a portal swirl actually burns (a disguised portal has none).
+ */
+function _legacyCandidate(inst) {
+  try { inst.root.updateWorldMatrix(true, false); _root.setFromMatrixPosition(inst.root.matrixWorld); } catch (_) { return; }
+  const sw = fxDistortSwirlNear(_root, 6, _swirl);
+  if (!sw) return;
+  const c = _cand();
+  c.key = inst;
+  c.row = null;
+  c.centre.set(sw.x, sw.y, sw.z);
+  c.ground.copy(_root);
+  c.dist = c.centre.distanceTo(_cam);
+  if (c.dist > PORTAL_KEEP_M) { _candN--; return; }
+  c.radius = Math.min(3.5, Math.max(0.8, sw.radius * 0.95));
+  const light = sw.emitter && sw.emitter._fxLight ? sw.emitter._fxLight : fxEmitterLightNear(c.centre, 3);
+  c.color = light ? _colorOf(light, PORTAL_VIOLET) : PORTAL_VIOLET;
+  c.k = _portalFxLumOn && light ? portalLumScale(c.color) : 1;
+}
+
+/** The nearest PORTAL_MAX candidates get (or keep) a piece; the rest fade out. */
+function _commitPortals(now, seen) {
+  const n = _candN;
+  const list = _cands.slice(0, n).sort((a, b) => a.dist - b.dist);
+  for (let i = 0; i < list.length && i < PORTAL_MAX; i++) {
+    const c = list[i];
+    seen.add(c.key);
+    let p = _pieces.get(c.key);
+    if (!p || !p.setPiece) {
+      if (p && p.ring) releaseFxDecal(p.ring);
+      p = { kind: "portal", setPiece: true, ring: null, centre: new THREE.Vector3(), ground: new THREE.Vector3(),
+        radius: 1.5, color: PORTAL_VIOLET.slice(), seed: Math.random(), t0: now, fade: 0, target: 1, k: 1,
+        look: PORTAL_KIND_LOOK.disc, ringI: 0, setupKind: "disc" };
+      _pieces.set(c.key, p);
+    }
+    p.target = 1;
+    p.centre.copy(c.centre);
+    p.ground.copy(c.ground);
+    p.radius = Math.min(3.5, Math.max(0.5, c.radius));
+    p.color = c.color.slice();
+    p.k = c.k;
+    p.setupKind = c.row ? c.row.kind : "disc";
+    p.look = PORTAL_KIND_LOOK[p.setupKind] || PORTAL_KIND_LOOK.disc;
+    p.ringI = 0.9 * p.k * p.look.ring;
+    // the ground ring (a persistent mark): re-placed when it moved, recoloured;
+    // its intensity follows the piece's fade every frame (tickFxShowcase)
+    const ringR = p.radius * 1.05;
+    if (!p.ring || p.ring.released || Math.hypot(p.ring.x - p.ground.x, p.ring.z - p.ground.z) > 0.3) {
+      if (p.ring) releaseFxDecal(p.ring);
+      p.ring = addFxDecal({ position: p.ground, kind: "ring", radius: ringR, height: 1.6, color: p.color,
+        intensity: p.ringI * p.fade * portalDistanceFade(p.centre.distanceTo(_cam)) });
+    } else {
+      p.ring.color[0] = p.color[0]; p.ring.color[1] = p.color[1]; p.ring.color[2] = p.color[2];
+      p.ring.radius = ringR;
+    }
+  }
+  _candN = 0;
+}
+
 function _scan(scene3d, now) {
   _stats.scans++;
   const seen = new Set();
   const map = scene3d?.entityManager?.entityMap;
   const lifestoneOn = lifestoneFxEnabled();
+  const setPiece = _portalSetPieceOn;
+  _candN = 0;
   if (map) {
     for (const inst of map.values()) {
       if (!inst || !inst.root || inst._disposed) continue;
+      // `?portalSetPiece`: a portal SETUP is a portal, whatever its weenie type
+      const row = setPiece ? PORTAL_SETUPS.get(_setupOf(inst)) : null;
+      if (row) { _tableCandidate(inst, inst.root, row); continue; }
       const odf = _odfOf(inst);
       const kind = (odf & ODF_PORTAL) ? "portal" : ((odf & ODF_LIFESTONE) ? "lifestone" : null);
       if (!kind) continue;
+      if (kind === "portal" && setPiece) { _legacyCandidate(inst); continue; }
       try { inst.root.updateWorldMatrix(true, false); _root.setFromMatrixPosition(inst.root.matrixWorld); } catch (_) { continue; }
       const had = kind === "lifestone" && lifestoneOn && _pieces.has(inst);
       if (_root.distanceTo(_cam) > (had ? LIFESTONE_KEEP_M : RANGE_M)) continue;
@@ -533,8 +721,19 @@ function _scan(scene3d, now) {
       }
     }
   }
+  if (setPiece) {
+    // static portal decorations (statics.js registers their script anchors)
+    for (const [anchor, sid] of _staticPortals) {
+      if (!anchor.parent) { _staticPortals.delete(anchor); continue; }
+      const row = PORTAL_SETUPS.get(sid);
+      if (row) _tableCandidate(anchor, anchor, row);
+    }
+    _commitPortals(now, seen);
+  }
   for (const [inst, p] of _pieces) {
     if (!seen.has(inst)) {
+      // `?portalSetPiece` pieces fade out (tickFxShowcase deletes them at 0)
+      if (p.setPiece) { p.target = 0; continue; }
       if (p.ring) releaseFxDecal(p.ring);
       if (p.kind === "lifestone") lifestoneFxRelease(inst);   // fades out, then reverts the crystal
       _pieces.delete(inst);
@@ -573,6 +772,10 @@ export function fireFxShowcaseCue(look, rootWorld, nowMs) {
  */
 export function tickFxShowcase(scene3d, nowMs) {
   const now = Number.isFinite(nowMs) ? nowMs : fxNowMs();
+  // `?portalSetPiece` fade clock — advanced on EVERY tick (also the early
+  // returns below), so a piece born after a quiet spell starts at fade 0
+  const dt = Number.isFinite(_lastTickMs) && now >= _lastTickMs ? Math.min(0.25, (now - _lastTickMs) / 1000) : 0;
+  _lastTickMs = now;
   const on = fxTier2Enabled("fxShowcase");
   if (!on) {
     if (_pieces.size) { for (const p of _pieces.values()) if (p.ring) releaseFxDecal(p.ring); _pieces.clear(); }
@@ -619,10 +822,24 @@ export function tickFxShowcase(scene3d, nowMs) {
     A3[o] = age; A3[o + 1] = grow; A3[o + 2] = a3z; A3[o + 3] = a3w;
     n++;
   };
-  for (const p of _pieces.values()) {
+  for (const [key, p] of _pieces) {
     const age = (now - p.t0) / 1000;
     const fadeIn = Math.min(1, age / 0.6);
-    if (p.kind === "portal") {
+    if (p.setPiece) {
+      // `?portalSetPiece`: fade in / out, and with distance (no pop at 60 m)
+      p.fade = Math.min(1, Math.max(0, p.fade + (p.target > 0 ? dt : -dt) / PORTAL_FADE_S));
+      if (p.fade <= 0 && p.target <= 0) {
+        if (p.ring) releaseFxDecal(p.ring);
+        _pieces.delete(key);
+        continue;
+      }
+      const vis = p.fade * portalDistanceFade(p.centre.distanceTo(_cam));
+      if (p.ring) p.ring.intensity = p.ringI * vis;
+      // a fade of 0 still takes its slot: the vertex stage culls it (aS1.z <= 0)
+      _stats.portals++;
+      put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.disc, p.radius * 0.85, 0, vis, p.seed, p.color,
+        0.9 * (p.k ?? 1) * p.look.disc, age, 1, p.look.mood, 0);
+    } else if (p.kind === "portal") {
       _stats.portals++;
       put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.disc, p.radius * 0.85, 0, fadeIn, p.seed, p.color, 0.9 * (p.k ?? 1), age, 1);
     } else {
@@ -686,6 +903,9 @@ export function _resetFxShowcaseForTest() {
   _auraList.length = 0;
   _flares = 0;
   _lastScan = -Infinity;
+  _lastTickMs = NaN;
+  _candN = 0;
+  _staticPortals.clear();
   _resetLifestoneFxForTest();
   if (_mesh) _mesh.visible = false;
 }

@@ -1237,60 +1237,8 @@ function _billboardEmitterRetail(emitter, camera, mode, scene) {
  * @returns {boolean}
  */
 function _rp6ShouldCull(emitter, camera) {
-  const parent = emitter.parent;
-  if (!parent) return false; // no anchor → don't cull (bail open)
-  // PROJ-VIS (2026-10-05): never cull an emitter riding a ballistic projectile
-  // (entities.js stamps `root.userData.__ballistic` at the flight seed). Its
-  // anchor crosses the frustum in a fraction of a second while the cull flag
-  // is only re-evaluated every `recheckInterval` ticks, and a culled emitter
-  // emits NOTHING — for a world-space trail (is_parent_local=false) those
-  // skipped births are permanent gaps in the trail. Projectile emitters are few
-  // and short-lived, so the exemption costs ~nothing.
-  if (parent.userData && parent.userData.__ballistic === true) return false;
-
-  // World-space emitter origin. Entity rigs live under worldRoot
-  // (rotated -π/2 about X), so the LOCAL parent.position is NOT in the
-  // camera's space; compose up via getWorldPosition when available
-  // (matches the entity tick-gate at entities.js:7073). Plain-POJO
-  // parents (tests) fall back to their raw position.
-  if (typeof parent.getWorldPosition === "function") {
-    parent.getWorldPosition(_rp6WorldPos);
-  } else if (parent.position) {
-    _rp6WorldPos.set(
-      parent.position.x ?? 0,
-      parent.position.y ?? 0,
-      parent.position.z ?? 0,
-    );
-  } else {
-    return false; // no position → bail open
-  }
-
-  // sortingSphere.radius bounds how far this emitter's particles travel
-  // from the anchor (InitEnd: max(maxOffset, maxA·lifespan)). Adding it
-  // to the frustum-test radius is what keeps projectile-trajectory
-  // emitters live: a burst that spawns at the anchor and flies outward
-  // stays "in" until its WHOLE reachable sphere clears the frustum.
-  let radius = emitter.info?.sortingSphere?.radius ?? 0;
-
-  // RP6 (2026-06-08): the sphere is centered at the RIG ORIGIN
-  // (parent.getWorldPosition), but a part-anchored emitter (isParentLocal
-  // / partIndex >= 0) and any emitter with a non-zero parentOffset emits
-  // at a point OFFSET from that origin — e.g. a weapon tip or a far
-  // attachment on a large rig. sortingSphere.radius alone does NOT
-  // account for that static offset, so on a large rig the true particle
-  // region can lie outside the origin-centered sphere → we'd over-cull a
-  // part-anchored effect that is in fact on-screen. Inflate the test
-  // radius by the static offset magnitude so the sphere conservatively
-  // covers the real anchor. This only ever makes the cull MORE
-  // conservative (keeps more emitters live), aligning with the guardrail
-  // "only cull when the WHOLE reachable region is out". The dynamic
-  // per-part frame offset (partFrames) is not composed here to keep the
-  // test cheap; the static parentOffset is the dominant contributor and
-  // covers the common case.
-  const off = emitter.parentOffset?.position;
-  if (off && typeof off.length === "function") {
-    radius += off.length();
-  }
+  const radius = rp6CullSphere(emitter, _rp6WorldPos);
+  if (radius < 0) return false; // no anchor / no position → don't cull (bail open)
 
   // Distance cap — measured anchor-to-camera, slackened by the sphere
   // radius so a large-radius emitter near the cap edge isn't culled
@@ -1324,6 +1272,116 @@ function _rp6ShouldCull(emitter, camera) {
   _rp6Sphere.center.copy(_rp6WorldPos);
   _rp6Sphere.radius = radius;
   return !_rp6Frustum.intersectsSphere(_rp6Sphere);
+}
+
+// ?rp6TrueSphere (2026-10-16, DEFAULT ON; `=off` escape) — the cull sphere
+// bounds what the emitter DRAWS. It was centred on the rig/anchor ORIGIN with
+// the particles' travel radius plus the static hook offset, so a part-anchored
+// emitter's own part frame (the "dynamic per-part offset … not composed here")
+// and the sprites' size were both outside it. That is most of a portal: the
+// purple swirl rides part 0 posed 1.4 m up in 5x-scaled 1.4 m layers, and a
+// destroyed portal's sputters ride parts up to 3 m up behind a 0.9 m sphere on
+// the ground — so whenever the portal's foot left the frame (walking up to it,
+// the camera pitching) its swirl was culled and popped back as the foot came
+// back. ON: the centre is the part frame the emitter rides (`partFrames`,
+// entity rigs and the static anchors alike) and the radius adds the reach of
+// one sprite — the GfxObj's bounding radius times the largest scale a particle
+// takes (retail clamps to [0.1, 10]). Only ever widens the sphere: an emitter
+// can only stay live longer, never be culled where it was not before.
+let _RP6_TRUE_SPHERE_ON = null;
+export function rp6TrueSphereEnabled() {
+  if (_RP6_TRUE_SPHERE_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("rp6TrueSphere") || "").toLowerCase();
+      _RP6_TRUE_SPHERE_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _RP6_TRUE_SPHERE_ON = true;
+    }
+  }
+  return _RP6_TRUE_SPHERE_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setRp6TrueSphereFlag(on) { _RP6_TRUE_SPHERE_ON = on == null ? null : !!on; }
+
+/**
+ * The largest distance a drawn sprite reaches from its particle's centre:
+ * the emitter GfxObj's bounding radius (stamped by addEmitter as
+ * `_gfxRadius`) times the largest scale over its life — start/final scale
+ * plus the random spread, clamped like retail (0.1..10). Cached on the
+ * emitter; 0 when the geometry is unknown.
+ */
+export function rp6SpriteReach(emitter) {
+  if (typeof emitter._rp6Reach === "number") return emitter._rp6Reach;
+  const r = emitter._gfxRadius;
+  const info = emitter.info;
+  let reach = 0;
+  if (Number.isFinite(r) && r > 0 && info) {
+    const rand = Math.abs(+info.scaleRand || 0);
+    const clampScale = (v) => Math.min(10, Math.max(0.1, (Number.isFinite(v) ? v : 1) + rand));
+    reach = r * Math.max(clampScale(info.startScale), clampScale(info.finalScale));
+  }
+  emitter._rp6Reach = reach;
+  return reach;
+}
+
+/**
+ * RP6's culling sphere for one emitter: writes the WORLD centre into `out`
+ * and returns the radius (or -1 when the emitter has no usable anchor, which
+ * the caller reads as "do not cull"). Shared with `__diag.portalEmitterState`
+ * so the diagnostic tests the very sphere the cull used.
+ */
+export function rp6CullSphere(emitter, out) {
+  const parent = emitter.parent;
+  if (!parent) return -1;
+  // PROJ-VIS (2026-10-05): never cull an emitter riding a ballistic projectile
+  // (entities.js stamps `root.userData.__ballistic` at the flight seed). Its
+  // anchor crosses the frustum in a fraction of a second while the cull flag
+  // is only re-evaluated every `recheckInterval` ticks, and a culled emitter
+  // emits NOTHING — for a world-space trail (is_parent_local=false) those
+  // skipped births are permanent gaps in the trail. Projectile emitters are few
+  // and short-lived, so the exemption costs ~nothing.
+  if (parent.userData && parent.userData.__ballistic === true) return -1;
+
+  const trueSphere = rp6TrueSphereEnabled();
+  // World-space emitter origin. Entity rigs live under worldRoot
+  // (rotated -π/2 about X), so the LOCAL parent.position is NOT in the
+  // camera's space; compose up via getWorldPosition when available
+  // (matches the entity tick-gate at entities.js:7073). Plain-POJO
+  // parents (tests) fall back to their raw position. ?rp6TrueSphere: a
+  // part-anchored emitter is centred on its PART (partFrames[i] is WORLD).
+  const pi = emitter.partIndex;
+  const partFrame =
+    trueSphere && pi !== -1 && (pi >>> 0) !== 0xffffffff && parent.partFrames
+      ? parent.partFrames[pi]
+      : null;
+  if (partFrame && partFrame.position) {
+    out.copy(partFrame.position);
+  } else if (typeof parent.getWorldPosition === "function") {
+    parent.getWorldPosition(out);
+  } else if (parent.position) {
+    out.set(parent.position.x ?? 0, parent.position.y ?? 0, parent.position.z ?? 0);
+  } else {
+    return -1; // no position → bail open
+  }
+
+  // sortingSphere.radius bounds how far this emitter's particles travel
+  // from the anchor (InitEnd: max(maxOffset, maxA·lifespan)). Adding it
+  // to the frustum-test radius is what keeps projectile-trajectory
+  // emitters live: a burst that spawns at the anchor and flies outward
+  // stays "in" until its WHOLE reachable sphere clears the frustum.
+  let radius = emitter.info?.sortingSphere?.radius ?? 0;
+
+  // RP6 (2026-06-08): a part-anchored emitter (isParentLocal / partIndex
+  // >= 0) and any emitter with a non-zero parentOffset emits at a point
+  // OFFSET from the sphere centre — a weapon tip, a far attachment on a large
+  // rig. Inflate the test radius by the static offset magnitude so the sphere
+  // conservatively covers the real anchor (only ever MORE conservative).
+  const off = emitter.parentOffset?.position;
+  if (off && typeof off.length === "function") {
+    radius += off.length();
+  }
+  if (trueSphere) radius += rp6SpriteReach(emitter);
+  return radius;
 }
 
 // ── ?additiveFogBlack live switch (2026-10-07) ────────────────────────────────
@@ -2072,6 +2130,16 @@ export class ParticleManager {
     });
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
+    // ?rp6TrueSphere: one sprite's bounding radius (the shared GfxObj quad).
+    try {
+      if (geometry && !geometry.boundingSphere && typeof geometry.computeBoundingSphere === "function") {
+        geometry.computeBoundingSphere();
+      }
+      const gr = geometry?.boundingSphere?.radius;
+      emitter._gfxRadius = Number.isFinite(gr) ? gr : 0;
+    } catch (_) {
+      emitter._gfxRadius = 0;
+    }
     // `?particleFx`: this emitter's profile row (synthesized `fxProfile` name,
     // else the retail 0x32 DID, else the neutral row 0). Resolved once.
     emitter._fxRow = particleFxRowFor(info);

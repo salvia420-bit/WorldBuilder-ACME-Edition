@@ -75,6 +75,8 @@ import * as THREE from "three";
 import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
+import { createPartFramesProxy } from "./setup_rig.js";
+import { registerStaticPortalAnchor } from "./vfx/portal_registry.js";
 // T13 (ST3, `?geomBundles`): HBG1 bundle consumption — armed only by
 // index.html's initGeomBundles (requires ?packSource); every reader below
 // is behind geomBundlesActive(), so the OFF arm is byte-identical legacy.
@@ -1111,6 +1113,8 @@ async function fetchAndDrainScenery(cellIds, wasmExports, urgent = false) {
 async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   const groupsByModel = new Map();
   const didDegradeByModel = new Map();
+  // ?degradePose — modelId → ModelMesh.degradePartFrame (posed models only).
+  const degradeFrameByModel = new Map();
   const allSurfaceDids = new Set();
   let skippedZeroTri = 0;
   // streamFix retryability (2026-07-02): count the TRANSIENT drop classes —
@@ -1133,6 +1137,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     return {
       groupsByModel,
       didDegradeByModel,
+      degradeFrameByModel,
       allSurfaceDids,
       skippedZeroTri,
       starvedCount,
@@ -1172,6 +1177,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
         return {
           groupsByModel,
           didDegradeByModel,
+          degradeFrameByModel,
           allSurfaceDids,
           skippedZeroTri,
           starvedCount,
@@ -1192,6 +1198,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     return {
       groupsByModel,
       didDegradeByModel,
+      degradeFrameByModel,
       allSurfaceDids,
       skippedZeroTri,
       starvedCount,
@@ -1245,6 +1252,10 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     const dd = (m.didDegrade ?? 0) >>> 0;
     if (dd !== 0) {
       didDegradeByModel.set(id, dd);
+      // ?degradePose — the pose the bands must take (empty/absent = none).
+      let dpf = null;
+      try { dpf = m.degradePartFrame; } catch (_) { dpf = null; }
+      if (dpf && dpf.length === 10) degradeFrameByModel.set(id, Float32Array.from(dpf));
     }
 
     // RP1 — per-surface partition (the buildings.js path). One group per
@@ -1288,6 +1299,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   return {
     groupsByModel,
     didDegradeByModel,
+    degradeFrameByModel,
     allSurfaceDids,
     skippedZeroTri,
     starvedCount,
@@ -1319,6 +1331,7 @@ function adoptIntoStaticGeomCache(cache, primary, hits, lbKey, leases) {
       groups,
       surfaceDids: primary.surfaceDidsByModel.get(id) || [],
       didDegrade: primary.didDegradeByModel.get(id) || 0,
+      degradePartFrame: primary.degradeFrameByModel?.get(id) || null,
     });
     if (e.groups !== groups) {
       // A concurrent bake inserted this model while we were fetching it. Use
@@ -1327,6 +1340,11 @@ function adoptIntoStaticGeomCache(cache, primary, hits, lbKey, leases) {
       primary.groupsByModel.set(id, e.groups);
       if (e.didDegrade && e.degraded === null) primary.didDegradeByModel.set(id, e.didDegrade);
       else primary.didDegradeByModel.delete(id);
+      if (e.didDegrade && e.degraded === null && e.degradePartFrame) {
+        primary.degradeFrameByModel?.set(id, e.degradePartFrame);
+      } else {
+        primary.degradeFrameByModel?.delete(id);
+      }
     }
     cache.acquire(lbKey, id);
     leases.push(id);
@@ -1339,6 +1357,9 @@ function adoptIntoStaticGeomCache(cache, primary, hits, lbKey, leases) {
     primary.groupsByModel.set(id, e.groups);
     for (const d of e.surfaceDids) primary.allSurfaceDids.add(d);
     if (e.didDegrade && e.degraded === null) primary.didDegradeByModel.set(id, e.didDegrade);
+    if (e.didDegrade && e.degraded === null && e.degradePartFrame) {
+      primary.degradeFrameByModel?.set(id, e.degradePartFrame);
+    }
   }
 }
 
@@ -1423,6 +1444,75 @@ function degradedSurfaceKey(surfaceDid, doubleSided) {
   return `${surfaceDid >>> 0}|${doubleSided ? 1 : 0}`;
 }
 
+// ?degradePose (2026-10-16, DEFAULT ON; `=off` escape). A degrade band is a
+// GfxObj for the Setup's PART: retail picks it inside the part
+// (CPhysicsPart::UpdateViewerDistance, acclient.c:315098) and draws it at the
+// part's own frame (CPhysicsPart::calc_draw_frame, :315066). The bands here are
+// fetched as raw 0x01 GfxObjs and were drawn at the Setup origin, so every
+// static whose Setup poses its part sank, slid or tilted whenever a band was
+// active and popped back at full detail ("the sign is stuck in the ground and
+// pops up as we walk toward it") — 180 Setups / 2,234 outdoor placements in
+// the base DATs move 5 cm or more. The entity path had the same defect until
+// 9f105e74. ModelMesh.degradePartFrame (the pose the full-detail mesh uses,
+// lib.rs resolve_degrade_part_frame) now poses every band clone.
+export function degradePoseEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("degradePose") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _degradePoseFlag;
+function _degradePoseOn() {
+  if (_degradePoseFlag === undefined) _degradePoseFlag = degradePoseEnabled();
+  return _degradePoseFlag;
+}
+// Test seam.
+export function __setDegradePoseForTest(v) { _degradePoseFlag = v; }
+const _degradePoseStats = { modelsPosed: 0, bandsPosed: 0, rejected: 0 };
+/** Cumulative ?degradePose counters (diag). */
+export function degradePoseStats() {
+  return { enabled: _degradePoseOn(), ..._degradePoseStats };
+}
+if (typeof window !== "undefined") {
+  try { window.__degradePose = { stats: degradePoseStats }; } catch (_) {}
+}
+
+/**
+ * The band pose for one model: `ModelMesh.degradePartFrame` (10 floats,
+ * `[ox,oy,oz, qw,qx,qy,qz, sx,sy,sz]`, AC Setup-local axes, DAT quaternion
+ * order) → `{ matrix, o, q }` (three.js order), or null when there is none
+ * (stale pkg, identity pose) or it would mirror the band (a non-positive
+ * scale flips winding, which `applyMatrix4` does not undo). Pure.
+ */
+export function degradeBandPose(frame) {
+  if (!frame || frame.length !== 10) return null;
+  for (let i = 0; i < 10; i += 1) if (!Number.isFinite(frame[i])) return null;
+  const [ox, oy, oz, qw, qx, qy, qz, sx, sy, sz] = frame;
+  if (!(sx > 0 && sy > 0 && sz > 0)) return null;
+  const q = new THREE.Quaternion(qx, qy, qz, qw);
+  if (q.lengthSq() < 1e-8) return null;
+  q.normalize();
+  const o = new THREE.Vector3(ox, oy, oz);
+  const matrix = new THREE.Matrix4().compose(o, q, new THREE.Vector3(sx, sy, sz));
+  return { matrix, o, q };
+}
+
+/**
+ * Pose one band clone in place: the vertices move to where the Setup draws the
+ * part (`R·(S·v) + T`, the walk's order) and the geometry keeps the pose for
+ * the billboard tick (`userData.degradePose`, which pivots a billboard leaf
+ * round the PART, retail's calc_draw_frame). `geom.userData` must be the
+ * clone's own object (BufferGeometry.clone shares it with the source).
+ */
+function poseDegradeBand(geom, pose) {
+  geom.applyMatrix4(pose.matrix);
+  geom.userData.degradePose = { o: pose.o, q: pose.q };
+  _degradePoseStats.bandsPosed += 1;
+}
+
 /**
  * F#5 — fetch degraded variant geometries for every model that
  * reports a non-zero didDegrade. One wasm round-trip resolves them
@@ -1469,7 +1559,8 @@ async function fetchDegradedGeometries(
   didDegradeByModel,
   fetchModelMeshes,
   fetchDegradeInfo,
-  baseGroupsByModel = null
+  baseGroupsByModel = null,
+  degradeFrameByModel = null
 ) {
   const degradedGeomByModel = new Map();
   if (!didDegradeByModel || didDegradeByModel.size === 0) {
@@ -1650,6 +1741,17 @@ async function fetchDegradedGeometries(
   // ?retailDegrade folds same-GfxObj levels itself (`retailBandSwapDistances`).
   const collapseDup = !retail && _lodCollapseDupOn();
   for (const [modelId, chain] of perModel) {
+    // ?degradePose — the part pose every band of this model takes (null = the
+    // bands draw as fetched: a raw 0x01 model, an identity pose, a stale pkg).
+    let pose = null;
+    if (degradeFrameByModel && _degradePoseOn()) {
+      const frame = degradeFrameByModel.get(modelId);
+      if (frame) {
+        pose = degradeBandPose(frame);
+        if (pose) _degradePoseStats.modelsPosed += 1;
+        else _degradePoseStats.rejected += 1;
+      }
+    }
     // ?lodCollapseDup — plan every surface's level list BEFORE cloning, so a
     // dropped duplicate is never cloned. surfaceKey → planLodDupCollapse
     // result; a surface without a plan emits exactly as before.
@@ -1735,10 +1837,14 @@ async function fetchDegradedGeometries(
         // Carry the band's authored swap distance + billboard mode on the
         // cloned geometry's userData so the node builders read them per
         // level exactly as the single-band path did, plus on the list entry
-        // for direct access.
-        geom.userData = geom.userData || {};
+        // for direct access. The clone gets its OWN userData object:
+        // BufferGeometry.clone shares the source's, so every model citing
+        // this band wrote into one object (last lodDist / pose / cache tag
+        // won for all of them).
+        geom.userData = { ...(geom.userData || {}) };
         if (dist != null) geom.userData.lodDist = dist;
         if (band.degradeMode) geom.userData.degradeMode = band.degradeMode;
+        if (pose) poseDegradeBand(geom, pose);
         let arr = bySurfaceLevels.get(surfaceKey);
         if (!arr) {
           arr = [];
@@ -1767,8 +1873,9 @@ async function fetchDegradedGeometries(
         } catch (_) {
           continue;
         }
-        geom.userData = geom.userData || {};
+        geom.userData = { ...(geom.userData || {}) };
         geom.userData.lodDist = RETAIL_DEGRADE_PARKED;
+        if (pose) poseDegradeBand(geom, pose);
         bySurfaceLevels.set(surfaceKey, [{
           geometry: geom,
           dist: RETAIL_DEGRADE_PARKED,
@@ -2245,6 +2352,8 @@ export const __lodTestSeams = {
   fetchDegradedGeometries,
   buildSingletonNode,
   buildInstancedNode,
+  // tests/statics_degrade_pose.test.mjs — the billboard pivot of a posed band
+  orientBillboardLeaf: _orientBillboardLeaf,
 };
 // Test seam (tests/statics_retail_degrade.test.mjs) — the flag-off swap
 // distances (pinned there) and the ?retailDegrade chain / builder helpers.
@@ -2877,7 +2986,8 @@ export async function bakeStaticsForLandblock(
       primary.didDegradeByModel,
       mmFetch,
       wasmExports.fetch_gfx_obj_degrade_info,
-      primary.groupsByModel // ?lodCollapseDup band-0 comparison
+      primary.groupsByModel, // ?lodCollapseDup band-0 comparison
+      primary.degradeFrameByModel // ?degradePose
     ),
     // Per-LB surface preload. The ring driver preloads ALL ring DIDs in a
     // single batch (Phase 7.2 buildings.js pattern); the lazy-add path only
@@ -3709,7 +3819,8 @@ export async function bakeStaticsRing(
         primary.didDegradeByModel,
         mmFetch,
         wasmExports.fetch_gfx_obj_degrade_info,
-        primary.groupsByModel // ?lodCollapseDup band-0 comparison
+        primary.groupsByModel, // ?lodCollapseDup band-0 comparison
+        primary.degradeFrameByModel // ?degradePose
       );
   mark(`stage2: fetchDegradedGeometries (${primary.didDegradeByModel?.size ?? 0} degraded${scene3d.wireframeMode ? " — SKIPPED in wire" : ""})`);
 
@@ -4130,6 +4241,8 @@ const _bbCamLocal = new THREE.Vector3();
 const _bbInvMat = new THREE.Matrix4();
 const _bbEuler = new THREE.Euler();
 const _bbDir = new THREE.Vector3();
+const _bbPartInv = new THREE.Quaternion();
+const _bbPivot = new THREE.Vector3();
 
 /**
  * Orient one degraded leaf mesh toward `camLocal` (camera position in
@@ -4138,9 +4251,15 @@ const _bbDir = new THREE.Vector3();
  * Writes `leaf.quaternion`.
  */
 function _orientBillboardLeaf(leaf, camLocal, mode) {
-  // Vector from the leaf (at local origin) to the camera, in the AC
-  // local frame (X east, Y north, Z up).
+  // ?degradePose: a posed band (statics.js poseDegradeBand) carries its part
+  // pose `{o, q}`. Retail's calc_draw_frame (acclient.c:315066) keeps the
+  // PART's position and replaces its heading, so the camera direction is taken
+  // from the part origin and the leaf pivots round it (see the tail below).
+  const pose = leaf.geometry?.userData?.degradePose || null;
+  // Vector from the leaf (at local origin, or the part origin) to the camera,
+  // in the AC local frame (X east, Y north, Z up).
   _bbDir.copy(camLocal);
+  if (pose) _bbDir.sub(pose.o);
   const lenSq = _bbDir.lengthSq();
   if (lenSq < 1e-8) return; // camera coincident — leave as-is.
 
@@ -4159,6 +4278,7 @@ function _orientBillboardLeaf(leaf, camLocal, mode) {
     // which is a negative rotation about +Y in a right-handed frame).
     _bbEuler.set(0, -pitch, yaw, "ZYX");
     leaf.quaternion.setFromEuler(_bbEuler);
+    _pivotBillboardLeaf(leaf, pose);
     return;
   }
 
@@ -4173,6 +4293,18 @@ function _orientBillboardLeaf(leaf, camLocal, mode) {
   const yaw = Math.atan2(_bbDir.y, _bbDir.x);
   _bbEuler.set(0, 0, yaw, "ZYX");
   leaf.quaternion.setFromEuler(_bbEuler);
+  _pivotBillboardLeaf(leaf, pose);
+}
+
+// A posed band's vertices are T·R·S·v (part origin T, part rotation R, part
+// scale S). The billboard wants T·B·S·v (B the facing set above), so the leaf
+// transform is T·B·R⁻¹·T⁻¹: quaternion B·R⁻¹, position o − (B·R⁻¹)·o. No pose
+// → the leaf stays at the LOD origin, as before.
+function _pivotBillboardLeaf(leaf, pose) {
+  if (!pose) return;
+  leaf.quaternion.multiply(_bbPartInv.copy(pose.q).invert());
+  _bbPivot.copy(pose.o).applyQuaternion(leaf.quaternion);
+  leaf.position.copy(pose.o).sub(_bbPivot);
 }
 
 /**
@@ -4881,6 +5013,94 @@ function _staticScriptsEnabled() {
   return true;
 }
 
+// ?staticPartAnchor (2026-10-16, DEFAULT ON; `=off` escape). A default
+// script's CreateParticle hook names a PART (retail ParticleEmitter::
+// SetParenting parents the emitter to `parts[part_index]`, acclient.c:330252),
+// but a static script anchor was a bare Group with no `partFrames`, so the
+// emitter runtime fell back to the placement origin for every part-anchored
+// hook (particle_emitter.js `_resolveAnchorFrame`): a static portal's swirl
+// sat 1.4 m low, a destroyed portal's sputters and rings up to 3 m low — in
+// the ground — and a lamp's flame at the foot of its post. In the base DATs
+// 753 scripted Setups anchor an emitter to a part posed 5 cm or more off the
+// Setup origin (20 of them as 215 outdoor statics). The anchor now carries one
+// child node per part in the static mesh's own pose (wasm `fetchSetupPartPose`
+// = the frames walk_setup_parts draws the mesh with) and the entity rigs'
+// live `partFrames` accessor (setup_rig.js). Stale pkg / `=off` → as before.
+export function staticPartAnchorEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("staticPartAnchor") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+let _staticPartAnchorFlag;
+function _staticPartAnchorOn() {
+  if (_staticPartAnchorFlag === undefined) _staticPartAnchorFlag = staticPartAnchorEnabled();
+  return _staticPartAnchorFlag;
+}
+// Test seam.
+export function __setStaticPartAnchorForTest(v) { _staticPartAnchorFlag = v; }
+const _staticPartAnchorStats = { anchors: 0, parts: 0, missing: 0 };
+/** Cumulative ?staticPartAnchor counters (diag). */
+export function staticPartAnchorStats() {
+  return { enabled: _staticPartAnchorOn(), ..._staticPartAnchorStats, cachedSetups: _staticPartPoses.size };
+}
+if (typeof window !== "undefined") {
+  try { window.__staticPartAnchor = { stats: staticPartAnchorStats }; } catch (_) {}
+}
+/** setupId → Promise<Float32Array|null> (7 floats per part); a failed fetch is not kept. */
+const _staticPartPoses = new Map();
+function _fetchStaticPartPose(wasmExports, setupId) {
+  let p = _staticPartPoses.get(setupId);
+  if (p) return p;
+  p = Promise.resolve()
+    .then(() => wasmExports.fetchSetupPartPose(setupId))
+    .then((a) => (a && a.length > 0 && a.length % 7 === 0 ? Float32Array.from(a) : null))
+    .catch(() => null)
+    .then((a) => {
+      if (!a) _staticPartPoses.delete(setupId);
+      return a;
+    });
+  _staticPartPoses.set(setupId, p);
+  return p;
+}
+
+/**
+ * Give a static script anchor its part frames: one child node per Setup part
+ * in the static mesh's pose, read through the same live world-frame accessor
+ * the entity rigs expose (`createPartFramesProxy`). Returns the part count (0
+ * when the model is not a Setup, the export is missing, or the flag is off —
+ * the anchor then stays a bare Group and every hook roots at the origin).
+ */
+export async function attachStaticPartFrames(anchor, setupId, wasmExports) {
+  const sid = setupId >>> 0;
+  if (!anchor || !_staticPartAnchorOn() || (sid >>> 24) !== 0x02) return 0;
+  if (typeof wasmExports?.fetchSetupPartPose !== "function") return 0;
+  const pose = await _fetchStaticPartPose(wasmExports, sid);
+  if (!pose) {
+    _staticPartAnchorStats.missing += 1;
+    return 0;
+  }
+  const n = pose.length / 7;
+  const nodes = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const o = i * 7;
+    const node = new THREE.Object3D();
+    node.name = `part_${i}`;
+    node.position.set(pose[o], pose[o + 1], pose[o + 2]);
+    // DAT order (qw, qx, qy, qz) → three.js (x, y, z, w)
+    node.quaternion.set(pose[o + 4], pose[o + 5], pose[o + 6], pose[o + 3]);
+    anchor.add(node);
+    nodes[i] = node;
+  }
+  anchor.partFrames = createPartFramesProxy(THREE, nodes);
+  _staticPartAnchorStats.anchors += 1;
+  _staticPartAnchorStats.parts += n;
+  return n;
+}
+
 // Statics-node leak fix (2026-07-07): default_script ambient emitters
 // (braziers/torches/fountains/gemSparkle) registered their staticsGroup
 // billboards under a per-anchor monotonic owner key `static:<seq>`, which the
@@ -5432,10 +5652,10 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
       .toString(16)
       .padStart(8, "0")}`;
     anchor.position.set(worldX, worldY, p.z);
-    anchor.quaternion.setFromAxisAngle(
-      new THREE.Vector3(0, 0, 1),
-      p.rotationZ ?? 0
-    );
+    // The static MESH's orientation (yaw-only unless ?fullPlacementQuat=on,
+    // where it is the full placement quaternion) — so a part frame below
+    // lands where the mesh draws that part.
+    applyPlacementOrientation(anchor.quaternion, p, new THREE.Vector3(0, 0, 1));
     const s = typeof p.scale === "number" && p.scale > 0 ? p.scale : 1;
     if (s !== 1) anchor.scale.set(s, s, s);
     // A11-S2: one owner key per anchor (the static placement IS the
@@ -5453,6 +5673,11 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     };
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
+    // ?staticPartAnchor — part-anchored hooks ride their part, not the origin.
+    // eslint-disable-next-line no-await-in-loop
+    await attachStaticPartFrames(anchor, p.modelId, wasmExports);
+    // ?portalSetPiece — a static portal decoration gets the portal set piece.
+    if (registerStaticPortalAnchor(anchor, p.modelId)) anchor.userData.portalSetup = p.modelId >>> 0;
     // eslint-disable-next-line no-await-in-loop
     emitterCount += await _runStaticParticleChain(
       manager,
@@ -5607,6 +5832,11 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     }
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
+    // ?staticPartAnchor — the interior twin (cells.js threads `modelId`).
+    // eslint-disable-next-line no-await-in-loop
+    await attachStaticPartFrames(anchor, it.modelId, wasmExports);
+    // ?portalSetPiece — the dungeon portal decorations (portal space cells).
+    if (registerStaticPortalAnchor(anchor, it.modelId)) anchor.userData.portalSetup = it.modelId >>> 0;
     // eslint-disable-next-line no-await-in-loop
     emitterCount += await _runStaticParticleChain(
       manager,
@@ -5692,6 +5922,8 @@ export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wa
     const pesId = ud.defaultScriptId >>> 0;
     if (!pesId) continue;
     if (!anchor.parent || !lbLive(ud.landblockId >>> 0)) continue; // R-10
+    // ?portalSetPiece — an unparked static portal is a portal again.
+    if (ud.portalSetup) registerStaticPortalAnchor(anchor, ud.portalSetup);
     // eslint-disable-next-line no-await-in-loop
     emitters += await _runStaticParticleChain(
       manager,

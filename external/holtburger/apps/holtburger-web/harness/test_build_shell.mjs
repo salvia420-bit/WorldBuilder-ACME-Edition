@@ -342,7 +342,11 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // retention, fade/selection lighting, radial fog, environ override, light
   // tick, HUD focus/lock/keys, appraisal text, spell-bar sync, barber, …)
   // (generator --check: up to date, 423 modules) → 402.
-  const NON_APP_PRELOADS = 402;
+  // 2026-10-16 (portals, docs/HANDOFF-portals-2026-10-16.md): + scene3d/vfx/
+  // portal_setups.js + portal_registry.js (statics.js / entities.js /
+  // fx_showcase.js), + scene3d/fx_clock.js (added by the 3cd36d98 film commit
+  // without a regen) (generator --check: up to date, 426 modules) → 405.
+  const NON_APP_PRELOADS = 405;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

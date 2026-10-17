@@ -2369,6 +2369,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       if ((so.defaultScriptId >>> 0) !== 0) {
         scriptedInteriorStatics.push({
           defaultScriptId: so.defaultScriptId >>> 0,
+          // ?staticPartAnchor: the Setup whose part frames the hooks ride.
+          modelId: so.did >>> 0,
           x: so.x, y: so.y, z: so.z,
           qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
           // 2026-07-07 leak fix: thread the LB (as the animated sibling does at

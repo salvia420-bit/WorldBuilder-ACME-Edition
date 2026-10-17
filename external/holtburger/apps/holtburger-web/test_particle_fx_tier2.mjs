@@ -671,11 +671,17 @@ async function run() {
   // lifestone's shaft + ring); the default look is checked after it.
   lsfx._setLifestoneFxForTest(false);
   const sScene = new THREE.Scene();
-  const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL } };
+  // ?portalSetPiece (2026-10-16): the set piece keys on the portal's SETUP
+  // (vfx/portal_setups.js) — this is the purple town portal 0x020001B3. Rigs
+  // live under worldRoot (−π/2 about X: AC z-up → THREE y-up), as in the client.
+  const sWorld = new THREE.Group();
+  sWorld.rotation.x = -Math.PI / 2;
+  sScene.add(sWorld);
+  const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL, modelId: 0x020001b3 } };
   const stone = { guid: 0x70000002, root: new THREE.Group(), meta: { objDescFlags: show.ODF_LIFESTONE } };
   portal.root.position.set(5, 0, 0);
   stone.root.position.set(-5, 0, 0);
-  sScene.add(portal.root, stone.root);
+  sWorld.add(portal.root, stone.root);
   sScene.updateMatrixWorld(true);
   const scam = new THREE.PerspectiveCamera(60, 1.6, 0.1, 2000);
   scam.position.set(0, 2, 10);
@@ -688,8 +694,13 @@ async function run() {
   const sMesh = sScene.children.find((o) => o.userData?.isFxShowcase);
   const SA0 = sMesh?.geometry.attributes.aS0.array;
   check("10. ?lifestoneFx=off: a portal gets its portal-space disc, a lifestone its shaft — one instanced draw",
-    nS === 2 && ss.portals === 1 && ss.lifestones === 1 && !!sMesh && SA0[3] === show.FX_SHOWCASE_KIND.disc &&
-    SA0[7] === show.FX_SHOWCASE_KIND.shaft && Math.abs(SA0[1] - 1.6) < 1e-6);
+    nS === 2 && ss.portals === 1 && ss.lifestones === 1 && !!sMesh && (() => {
+      // by kind (portal pieces commit after the entity loop since ?portalSetPiece)
+      const at = (k) => [0, 1].find((i) => SA0[i * 4 + 3] === k);
+      const d = at(show.FX_SHOWCASE_KIND.disc), sh = at(show.FX_SHOWCASE_KIND.shaft);
+      // the disc sits at the purple swirl's centre: part 0 (z 1.415) + the hook's 0.15
+      return d !== undefined && sh !== undefined && Math.abs(SA0[d * 4 + 1] - 1.565) < 1e-5;
+    })());
   const rings = dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 20000);
   check("10. ?lifestoneFx=off: both stand in a persistent light ring on the ground", rings.length === 2 && rings.every((d) => d.persistent && d.kindName === "ring"));
   check("10. the level-up raises a column and flares", show.fireFxShowcaseCue("levelUp", { x: 0, y: 0, z: 0 }, 21000) === true &&
@@ -711,8 +722,9 @@ async function run() {
   const env0 = show.fxColumnEnvelope(0.1), env1 = show.fxColumnEnvelope(1.0), env2 = show.fxColumnEnvelope(3.1);
   check("10. the column ramps in, holds, fades; it grows to full height", env0[0] > 0 && env0[0] < 1 && env1[0] === 1 && env1[1] === 1 && env2[0] === 0);
   s3dS.entityManager.entityMap.delete(portal.guid);
-  show.tickFxShowcase(s3dS, 22000);
-  check("10. a portal out of the scan releases its ring", dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 22000).filter((d) => d.persistent).length === 1);
+  // ?portalSetPiece: a portal that leaves fades out (0.6 s), then lets its ring go
+  for (const t of [22000, 22250, 22500, 22750]) show.tickFxShowcase(s3dS, t);
+  check("10. a portal out of the scan releases its ring", dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 22750).filter((d) => d.persistent).length === 1);
   t2f.setFxTier2Flag("fxShowcase", false);
   show.tickFxShowcase(s3dS, 23000);
   check("10. ?fxShowcase=off: nothing drawn, rings released",

@@ -1002,6 +1002,17 @@ const TIER5 = [
   { tier: 5, flag: "statics_retail_degrade", file: "tests/statics_retail_degrade.test.mjs" },
   { tier: 5, flag: "deg_mul_retail", file: "tests/deg_mul_retail.test.mjs" },
   { tier: 5, flag: "lodCollapseDup", file: "tests/lod_collapse_dup.test.mjs" },
+  // 2026-10-16 statics LOD bands keep the Setup's part pose (signs/props stop
+  // sinking or sliding at a band switch; billboard bands pivot on the part).
+  { tier: 5, flag: "degradePose", file: "tests/statics_degrade_pose.test.mjs" },
+  // 2026-10-16 every portal gets the purple portal's set piece; the portal
+  // "pop" root causes: static part anchors + the true cull sphere, lights in
+  // the object frame, a re-sent portal create applied in place.
+  { tier: 5, flag: "portalSetPiece", file: "tests/portal_set_piece.test.mjs" },
+  { tier: 5, flag: "staticPartAnchor+rp6TrueSphere", file: "tests/portal_particle_anchor.test.mjs" },
+  { tier: 5, flag: "lightObjectFrame", file: "tests/light_object_frame.test.mjs" },
+  { tier: 5, flag: "portalRecreateInPlace", file: "tests/portal_recreate_in_place.test.mjs" },
+  { tier: 5, flag: "lodPartSwapOrder", file: "tests/lod_part_swap_order.test.mjs" },
   { tier: 5, flag: "rynthVtFormatsMetLf", file: "tests/rynth_vt_formats_met_lf.test.mjs" },
   { tier: 5, flag: "rynthVtFormatsComma", file: "tests/rynth_vt_formats_comma.test.mjs" },
   { tier: 5, flag: "rynthVtFormatsAfXf", file: "tests/rynth_vt_formats_af_xf.test.mjs" },

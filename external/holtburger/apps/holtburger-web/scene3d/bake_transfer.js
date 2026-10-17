@@ -41,6 +41,8 @@
  * @property {Uint32Array}  surfaces       unique surface DIDs, first-seen order
  * @property {Float32Array} bbox           [minX,minY,minZ, maxX,maxY,maxZ]
  * @property {number}       didDegrade     LOD degrade-chain DID (0 = none)
+ * @property {number[]|null} degradePartFrame the Setup pose of the part the
+ *           chain belongs to, `[ox,oy,oz, qw,qx,qy,qz, sx,sy,sz]` (null = none)
  */
 
 /**
@@ -147,6 +149,10 @@ export function serializeModelMesh(wasmMesh) {
   // guarded so a stale pkg without the getter serializes 0.
   const decodeMisses =
     typeof wasmMesh.decodeMisses === "number" ? wasmMesh.decodeMisses >>> 0 : 0;
+  // The degrade bands' part pose (10 floats; ModelMesh::degrade_part_frame).
+  // A plain array — it is tiny and never transferred. Stale pkg → null.
+  const dpf = wasmMesh.degradePartFrame;
+  const degradePartFrame = dpf && dpf.length === 10 ? Array.from(dpf) : null;
 
   const mesh = {
     positions,
@@ -157,6 +163,7 @@ export function serializeModelMesh(wasmMesh) {
     surfaces,
     bbox,
     didDegrade,
+    degradePartFrame,
     decodeMisses,
   };
 
@@ -208,6 +215,8 @@ export function reconstructModelMesh(p) {
     surfaces: p.surfaces,
     bbox,
     didDegrade: p.didDegrade >>> 0,
+    // absent (older worker) → undefined, read as "no pose" (statics.js).
+    degradePartFrame: p.degradePartFrame ? Float32Array.from(p.degradePartFrame) : undefined,
     // geom-audit — decode-starvation flag; absent (older worker) → 0.
     decodeMisses: (p.decodeMisses ?? 0) >>> 0,
     // Derived — identical to the wasm-bindgen `triCount` / `worldBounds`

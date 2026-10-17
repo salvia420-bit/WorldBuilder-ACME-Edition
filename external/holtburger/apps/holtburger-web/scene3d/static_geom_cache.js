@@ -145,7 +145,7 @@ export class StaticGeomCache {
    * Returns the entry (the existing one if `modelId` was already inserted — the
    * caller then owns, and must dispose, the geometries it passed).
    */
-  insert(modelId, { groups = [], surfaceDids = [], didDegrade = 0 } = {}) {
+  insert(modelId, { groups = [], surfaceDids = [], didDegrade = 0, degradePartFrame = null } = {}) {
     const id = modelId >>> 0;
     const prior = this.entries.get(id);
     if (prior) return prior;
@@ -154,6 +154,9 @@ export class StaticGeomCache {
       groups,
       surfaceDids: Array.from(surfaceDids, (d) => d >>> 0),
       didDegrade: didDegrade >>> 0,
+      // ?degradePose — the bands' part pose (statics.js), kept so a later
+      // bake that resolves the chain for this entry poses its bands too.
+      degradePartFrame: degradePartFrame || null,
       // null = the degrade chain has not been resolved yet; a Map (possibly
       // empty) = resolved. Distinguishes "no LOD" from "not asked".
       degraded: didDegrade >>> 0 ? null : new Map(),

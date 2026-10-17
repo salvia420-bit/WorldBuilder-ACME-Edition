@@ -55,6 +55,16 @@ for fn in os.listdir(LSD):
 # Portal weenies (a shared creature setup with one portal weenie — the Quiddity
 # Seed on 0x02001770 — must not mark that creature's effects as a portal's).
 setup_portal = {sid for sid, n in setup_portal_n.items() if 2 * n >= len(setup_w[sid])}
+# ...or when it is built on the portal quad itself (2026-10-16). Every disc and
+# pillar portal draws its swirl on GfxObj 0x0100168B (an invisible 2.8 m quad
+# no other model uses), so the quad is the DAT's own portal signature. The
+# weenie rule above only sees the LSD dump: setups whose Portal weenies exist
+# only in ACE (0x02000C19 / 0x02000C1C "Portal Space") and the static-only
+# portal decorations (0x02000C18 / 0x02000C1B / 0x02000C1F ... in dungeon
+# cells, 0x02001582 / 0x020018C2 shadow portals) were "(static/scenery)" and
+# their swirls missed the portal breathing, x1.3 light and x1.25 distortion.
+PORTAL_QUAD = 0x0100168B
+setup_portal |= {sid for sid, s in setups.items() if PORTAL_QUAD in (s.get("parts") or [])}
 
 def top(names, n=4):
     seen = []

@@ -89,6 +89,26 @@ PFX_WORK=<work> python3 tier2.py      # -> ../../data/particle-fx-tier2.json
 cd ../.. && node scripts/gen-particle-fx-profiles.mjs
 ```
 
+## Portal setups (2026-10-16)
+
+`portal_setups.py` lists every Setup built on the portal quad GfxObj
+0x0100168B whose default script spawns something (52 in the base DATs: disc,
+pillar, dead — the Destroyed Portals — and dark) with the set piece's centre
+(the main swirl's part frame in the static pose + its hook offset, or the
+quad), disc radius and colour (from the main swirl's tier-1 row). The portal
+set piece (`scene3d/vfx/fx_showcase.js`, `?portalSetPiece`) keys on it instead
+of the ObjectDescriptionFlags PORTAL bit. Run it after `tier1.py`:
+
+```sh
+python3 portal_setups.py                         # -> ../../data/portal-setups.json
+cd ../.. && node scripts/gen-portal-setups.mjs   # -> scene3d/vfx/portal_setups.js
+```
+
+The same quad is also the `portal` tag's structural rule in `enrich.py` (the
+weenie-type rule only sees the LSD dump, so ACE-only and static-only portal
+setups missed the portal treatment). `tier1_overrides.json` dims the Destroyed
+Portals' sputter lights (retail gives a destroyed portal no light).
+
 ## Editing one effect
 
 Add or edit an entry in an override file (`{"emitters": {"0x3200026E": {"note": …,

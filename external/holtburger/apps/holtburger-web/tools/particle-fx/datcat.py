@@ -476,6 +476,7 @@ def main():
         json.dump({hex(k): {str(kk): vv for kk, vv in v.items()} for k, v in tables.items()}, f)
     with open(os.path.join(OUT, "setups_fx.json"), "w") as f:
         json.dump({hex(k): {"defaultScript": v["defaultScript"], "defaultScriptTable": v["defaultScriptTable"],
+                            "parts": v["parts"],
                             "hooks": [h for h in v["hooks"] if h["type"] in ("CreateParticle", "CreateBlockingParticle", "CallPES")]}
                    for k, v in setups.items()
                    if v["defaultScript"] or v["defaultScriptTable"] or any(h["type"] in ("CreateParticle", "CallPES") for h in v["hooks"])}, f)

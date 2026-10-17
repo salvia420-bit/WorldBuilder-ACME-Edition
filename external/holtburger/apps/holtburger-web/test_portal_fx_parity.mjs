@@ -69,9 +69,25 @@ async function run() {
   check("1. every pillar portal funnel matches the purple pillar (light / distortion / breathing)",
     PILLARS.every((d) => same(T(d), P0, ["light", "distort", "distortKind"]) && catalog.emitters[d].params.pulse === 0.07),
     PILLARS.map((d) => `${d}:${T(d).light.toFixed(1)}/${T(d).distort}`).join(" "));
+  const enrich = src("./tools/particle-fx/enrich.py");
+  // 2026-10-16: the portal-space colour swirls (green / orange / white, on the
+  // ACE-only "Portal Space" weenies and the static dungeon decorations) had no
+  // portal tag — enrich.py only counted LSD Portal weenies. A Setup built on
+  // the portal quad 0x0100168B is a portal setup now.
+  for (const [name, did] of [["portal-space green", "0x32000697"], ["portal-space orange", "0x32000698"], ["portal-space white", "0x3200069A"]]) {
+    const c = catalog.emitters[did];
+    check(`1. ${name} swirl ${did}: portal tag, purple's breathing, light and distortion`,
+      (c.tags || []).includes("portal") && c.params.pulse === 0.07 && c.params.pulseHz === 0.9 && same(T(did), P, ["light", "distort", "distortKind"]),
+      `tags ${JSON.stringify(c.tags)} light ${T(did).light}`);
+  }
+  check("1. the shadow swirls (0x32000877 / 0x32000882 / 0x3200089B) are portal-tagged",
+    ["0x32000877", "0x32000882", "0x3200089B"].every((d) => (catalog.emitters[d].tags || []).includes("portal")));
+  check("1. the generator tags a Setup built on the portal quad",
+    enrich.includes("PORTAL_QUAD = 0x0100168B") && enrich.includes('PORTAL_QUAD in (s.get("parts") or [])'));
+  check("1. the Destroyed Portals' sputters glow at their rings' level, not the live portal's 36 / 9 m",
+    tier1.emitters["0x320009D7"].light === 12 && tier1.emitters["0x320009DB"].lightRange === 4.5);
   check("1. a creature effect on a setup only ONE in four weenies of which is a portal stays untagged (Quiddity Seed 0x02001770)",
     !(catalog.emitters["0x32000751"].tags || []).includes("portal"));
-  const enrich = src("./tools/particle-fx/enrich.py");
   check("1. the generator tags by Portal weenie type, not by name",
     enrich.includes('d.get("weenieType") == 7') && enrich.includes("(portal weenie)") && enrich.includes("2 * n >= len(setup_w[sid])"));
 
@@ -93,23 +109,33 @@ async function run() {
   const lights = await import("./scene3d/vfx/fx_lights.js");
   const dec = await import("./scene3d/vfx/fx_decals.js");
   const scene = new THREE.Scene();
-  const portal = { guid: 0x70000011, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL } };
+  // ?portalSetPiece: the yellow portal Setup 0x020005D6, under a worldRoot like
+  // the client's (−π/2 about X: AC z-up → THREE y-up)
+  const world = new THREE.Group();
+  world.rotation.x = -Math.PI / 2;
+  scene.add(world);
+  const portal = { guid: 0x70000011, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL, modelId: 0x020005d6 } };
   portal.root.position.set(4, 0, 0);
-  scene.add(portal.root);
+  world.add(portal.root);
   scene.updateMatrixWorld(true);
   const cam = new THREE.PerspectiveCamera(60, 1.6, 0.1, 2000);
   cam.position.set(0, 2, 10);
   cam.updateMatrixWorld(true);
   const s3d = { entityManager: { entityMap: new Map([[portal.guid, portal]]) }, scene, camera: cam, renderer: { toneMappingExposure: 5 } };
   const yellow = col(MAIN.yellow);
-  const kY = show.portalLumScale(yellow);
+  // the set piece's colour is the portal table's (the same tier-1 light colour, 4 decimals)
+  const yellowRow = show.portalSetupFor(0x020005d6).color;
+  const kY = show.portalLumScale(yellowRow);
+  check("3. the portal table carries the yellow swirl's own light colour",
+    yellowRow.every((v, i) => Math.abs(v - yellow[i]) < 1e-4), JSON.stringify(yellowRow));
   // the swirl's FX light where the showcase looks for it (no distortion source: root + 1.6 m)
   const lightY = lights.bindEmitterFxLight({ emitter: { numParticles: 3 }, resolvePosition: (o) => { o.set(4, 1.6, 0); return true; },
     intensity: 36, range: 9, color: yellow });
   const read = (now) => {
     show._resetFxShowcaseForTest();
     dec._resetFxDecalsForTest();
-    show.tickFxShowcase(s3d, now);
+    // a piece fades in over 0.6 s (?portalSetPiece) — step past it
+    for (const dt of [0, 250, 500, 750]) show.tickFxShowcase(s3d, now + dt);
     const mesh = scene.children.find((o) => o.userData?.isFxShowcase);
     const ring = dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], now).find((d) => d.persistent);
     return { disc: mesh?.geometry.attributes.aS2.array[3], ring: ring?.intensity, rgb: Array.from(mesh?.geometry.attributes.aS2.array.slice(0, 3) || []),
@@ -129,8 +155,8 @@ async function run() {
   lights._resetFxLightsForTest();
   show._setPortalFxLumForTest(true);
   const fb = read(32000);
-  check("3. no swirl light (tier-1 off): the fallback violet keeps 0.9 (every portal looks the same there)",
-    Math.abs(fb.disc - 0.9) < 1e-6 && Math.abs(fb.ring - 0.9) < 1e-6, `disc ${fb.disc}`);
+  check("3. no swirl light (tier-1 off / no pool slot): the yellow portal stays yellow at purple's luminance (the colour is its Setup's)",
+    Math.abs(fb.disc - 0.9 * kY) < 1e-6 && Math.abs(fb.ring - 0.9 * kY) < 1e-6 && fb.rgb[0] === 1 && fb.rgb[2] < 0.2, `disc ${fb.disc}`);
   show._setPortalFxLumForTest(null);
   check("3. the URL reader: absent = ON", show.portalFxLumEnabled() === true);
   const glsl = show.FX_SHOWCASE_GLSL.fragment;

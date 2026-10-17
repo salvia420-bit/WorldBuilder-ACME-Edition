@@ -7472,6 +7472,11 @@ pub struct ModelMesh {
     /// variant available; JS-side LOD wrappers fall back to a plain
     /// `THREE.Mesh` instead of `THREE.LOD`.
     did_degrade: u32,
+    /// The pose the Setup gives the part `did_degrade` belongs to,
+    /// `[ox, oy, oz, qw, qx, qy, qz, sx, sy, sz]` — see
+    /// [`resolve_degrade_part_frame`]. Empty = draw the bands as fetched
+    /// (raw 0x01 models, identity poses, every non-statics constructor).
+    degrade_part_frame: Vec<f32>,
     /// E8 (2026-06-08): one source polygon id per emitted triangle.
     /// Length = `tri_count`. ADDITIVE + OPTIONAL — existing consumers that
     /// only read positions/uvs/indices are unaffected. Pairs with
@@ -7595,6 +7600,15 @@ impl ModelMesh {
     /// is non-zero; the JS-side `fetch_model_meshes([didDegrade])` round-
     /// trip fetches the degraded geometry for the LOD's distance-100m
     /// slot. The full variant remains at distance 0.
+    /// The Setup pose of the part `didDegrade` belongs to,
+    /// `[ox, oy, oz, qw, qx, qy, qz, sx, sy, sz]` (`Float32Array`, AC axes,
+    /// DAT quaternion order); EMPTY when the bands need no pose. statics.js
+    /// applies it to every degrade band so the band draws where the
+    /// full-detail part does. A stale `pkg/` has no getter → bands as before.
+    #[wasm_bindgen(getter, js_name = degradePartFrame)]
+    pub fn degrade_part_frame(&self) -> js_sys::Float32Array {
+        js_sys::Float32Array::from(self.degrade_part_frame.as_slice())
+    }
     #[wasm_bindgen(getter, js_name = didDegrade)]
     pub fn did_degrade(&self) -> u32 {
         self.did_degrade
@@ -8722,6 +8736,36 @@ fn resolve_static_placement_frame<'a>(
     }
 }
 
+/// The frame [`walk_setup_parts`] poses part `pi` with. Pose priority:
+/// explicit Tier-2 pose override (walk-cycle frame) → Phase C idle anim
+/// frame → static placement frame → identity. Mirrors
+/// ObjectSpriteGenerator.cs:842-852 with an extra preceding override for
+/// the multi-frame bake path. Shared with [`resolve_degrade_part_frame`] so a
+/// static's degrade bands are posed exactly like its full-detail mesh.
+#[cfg(any(target_arch = "wasm32", test))]
+fn setup_part_frame(
+    pose_override: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
+    idle_frame: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
+    placement: Option<&holtburger_dat::file_type::setup_model::PlacementType>,
+    pi: usize,
+) -> (holtburger_common::Vector3, holtburger_common::Quaternion) {
+    pose_override
+        .filter(|f| pi < f.frames.len())
+        .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
+        .or_else(|| {
+            idle_frame.filter(|f| pi < f.frames.len())
+                .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
+        })
+        .or_else(|| {
+            placement.filter(|p| pi < p.anim_frame.frames.len())
+                .map(|p| (p.anim_frame.frames[pi].origin, p.anim_frame.frames[pi].orientation))
+        })
+        .unwrap_or((
+            holtburger_common::Vector3::zero(),
+            holtburger_common::Quaternion::identity(),
+        ))
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn walk_setup_parts<S: holtburger_dat::ResourceSource + ?Sized, F>(
     source: &S,
@@ -8788,25 +8832,7 @@ where
         let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&part_bytes))
             else { continue };
 
-        // Pose priority: explicit Tier-2 pose override (walk-cycle
-        // frame) → Phase C idle anim frame → static placement frame
-        // → identity. Mirrors ObjectSpriteGenerator.cs:842-852 with
-        // an extra preceding override for the multi-frame bake path.
-        let frame_lookup = pose_override
-            .filter(|f| pi < f.frames.len())
-            .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
-            .or_else(|| {
-                idle_frame.as_ref().filter(|f| pi < f.frames.len())
-                    .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
-            })
-            .or_else(|| {
-                placement.filter(|p| pi < p.anim_frame.frames.len())
-                    .map(|p| (p.anim_frame.frames[pi].origin, p.anim_frame.frames[pi].orientation))
-            });
-        let (offset, rot) = frame_lookup.unwrap_or((
-            holtburger_common::Vector3::zero(),
-            holtburger_common::Quaternion::identity(),
-        ));
+        let (offset, rot) = setup_part_frame(pose_override, idle_frame.as_ref(), placement, pi);
 
         // Per-part texture remap table for append_gfx_tris_with_tex_swaps.
         // Wire TMChanges carry SurfaceTexture (0x05) ids — they swap the
@@ -11523,6 +11549,74 @@ fn resolve_did_degrade<S: holtburger_dat::ResourceSource + ?Sized>(
     }
 }
 
+/// The pose a single-part Setup gives the part its degrade chain belongs to
+/// — `[ox, oy, oz, qw, qx, qy, qz, sx, sy, sz]`, the Setup-local frame
+/// (AC axes, DAT quaternion order) plus the part's default scale. Empty when
+/// there is nothing to apply: a raw 0x01 model, a multi-part setup (no
+/// chain, see [`resolve_did_degrade`]), a part with no chain, or an identity
+/// pose at unit scale.
+///
+/// A degrade band is a GfxObj for the PART (retail picks it inside
+/// `CPhysicsPart::UpdateViewerDistance`, acclient.c:315098, and draws it at
+/// the part's own frame — `CPhysicsPart::calc_draw_frame`, :315066). The
+/// statics LOD fetched each band as a raw GfxObj and drew it at the Setup
+/// origin, so every placement whose Setup poses its part (a town sign's
+/// Resting frame lifts the sign +4.66 m) sank, tilted or slid whenever a
+/// band was active and popped back at full detail — the entity path had the
+/// same defect until 9f105e74 threaded its band picks as part-0 model
+/// changes. JS applies this frame to every band geometry (statics.js
+/// `fetchDegradedGeometries`). Same pose chain as the full-detail mesh
+/// ([`walk_setup_parts`] with no override, no wire placement), through the
+/// shared [`setup_part_frame`].
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_degrade_part_frame<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> Vec<f32> {
+    use holtburger_dat::file_type::{GfxObj, SetupModel};
+    use holtburger_dat::ResourceKey;
+    if (model_id >> 24) as u8 != 0x02 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", model_id)) else {
+        return Vec::new();
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return Vec::new();
+    };
+    if setup.parts.len() != 1 || (setup.parts[0] >> 24) as u8 != 0x01 {
+        return Vec::new();
+    }
+    let Ok(pbytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup.parts[0])) else {
+        return Vec::new();
+    };
+    match GfxObj::unpack(&mut std::io::Cursor::new(&pbytes)) {
+        Ok(g) if g.did_degrade.unwrap_or(0) != 0 => {}
+        _ => return Vec::new(),
+    }
+    let idle_frame = try_resolve_idle_anim_frame_with_override(source, &setup, None);
+    let placement = resolve_static_placement_frame(&setup, None, placement_id_flag());
+    let (o, q) = setup_part_frame(None, idle_frame.as_ref(), placement, 0);
+    let s = setup
+        .default_scale
+        .first()
+        .copied()
+        .unwrap_or(holtburger_common::Vector3 { x: 1.0, y: 1.0, z: 1.0 });
+    let identity = o.x == 0.0
+        && o.y == 0.0
+        && o.z == 0.0
+        && q.x == 0.0
+        && q.y == 0.0
+        && q.z == 0.0
+        && s.x == 1.0
+        && s.y == 1.0
+        && s.z == 1.0;
+    if identity {
+        return Vec::new();
+    }
+    vec![o.x, o.y, o.z, q.w, q.x, q.y, q.z, s.x, s.y, s.z]
+}
+
 /// Perf T3: memo of [`resolve_did_degrade`]. It re-read and re-parsed the
 /// model's GfxObj (and, for a Setup, the Setup AND its first part's GfxObj) on
 /// every `fetch_model_meshes` call, i.e. once per model per landblock bake,
@@ -11877,6 +11971,8 @@ fn pack_model_mesh(tris: &[Tri]) -> ModelMesh {
         // (`fetch_model_mesh` / `fetch_model_meshes`) post-fills this
         // via a separate GfxObj walk after the pack returns.
         did_degrade: 0,
+        // Post-filled with `did_degrade` (resolve_degrade_part_frame).
+        degrade_part_frame: Vec::new(),
         // geom-audit: caller post-fills (fetch_model_meshes only).
         decode_misses: 0,
         // E8: per-tri (polygon, side) provenance.
@@ -18904,6 +19000,9 @@ pub async fn fetch_model_mesh(model_id: u32) -> Result<ModelMesh, JsValue> {
     // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
     // variant; JS uses plain Mesh in that case.
     mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), model_id);
+    if mesh.did_degrade != 0 {
+        mesh.degrade_part_frame = resolve_degrade_part_frame(source.as_ref(), model_id);
+    }
     Ok(mesh)
 }
 
@@ -19028,6 +19127,10 @@ pub async fn fetch_model_meshes(
         // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
         // variant; JS uses plain Mesh in that case.
         mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), id);
+        // The bands draw at the part's Setup pose (statics.js LOD levels).
+        if mesh.did_degrade != 0 {
+            mesh.degrade_part_frame = resolve_degrade_part_frame(source.as_ref(), id);
+        }
         out.push(mesh);
     }
     Ok(out)
@@ -19938,6 +20041,64 @@ pub async fn fetch_setup_placement_frames(
     let (placement_key, frames) =
         collect_setup_placement_frames(source.as_ref(), setup_id, placement);
     Ok(SetupPlacementFrames { setup_id, placement_key, frames })
+}
+
+/// The frame every part of a STATIC `setup_id` is drawn in — the static
+/// mesh's own pose ([`walk_setup_parts`] with no override and no wire
+/// placement, through [`setup_part_frame`]: idle anim frame → static
+/// placement chain → identity) — as 7 floats per part,
+/// `[ox, oy, oz, qw, qx, qy, qz]` (Setup-local AC axes, DAT quaternion order).
+/// Empty for a non-Setup id or an unreadable record.
+///
+/// A static's default script anchors each CreateParticle hook to
+/// `parts[part_index]` (retail `ParticleEmitter::SetParenting` parents the
+/// emitter to the part, acclient.c:330252), so a portal swirl rides its
+/// part 1.4 m up and a destroyed portal's sputters ride parts up to 3 m up.
+/// The statics anchors had no part frames, so every such emitter fell back to
+/// the placement origin — on the ground.
+#[cfg(any(target_arch = "wasm32", test))]
+fn setup_static_part_pose<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Vec<f32> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    if (setup_id >> 24) as u8 != 0x02 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) else {
+        return Vec::new();
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return Vec::new();
+    };
+    let idle_frame = try_resolve_idle_anim_frame_with_override(source, &setup, None);
+    let placement = resolve_static_placement_frame(&setup, None, placement_id_flag());
+    let mut out = Vec::with_capacity(setup.parts.len() * 7);
+    for pi in 0..setup.parts.len() {
+        let (o, q) = setup_part_frame(None, idle_frame.as_ref(), placement, pi);
+        out.extend_from_slice(&[o.x, o.y, o.z, q.w, q.x, q.y, q.z]);
+    }
+    out
+}
+
+/// Wasm export: [`setup_static_part_pose`] — the part frames a static's
+/// default-script emitters anchor to (statics.js `attachStaticDefaultScripts*`
+/// builds the anchor's `partFrames` from it, cached per setup). The prefetch
+/// walk covers the motion table / animation the idle frame reads.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupPartPose)]
+pub async fn fetch_setup_part_pose(setup_id: u32) -> Result<js_sys::Float32Array, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = setup_static_part_pose(s, setup_id);
+    })
+    .await?;
+    Ok(js_sys::Float32Array::from(
+        setup_static_part_pose(source.as_ref(), setup_id).as_slice(),
+    ))
 }
 
 // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center ===
@@ -23813,6 +23974,7 @@ impl EnvCellPlacement {
             bbox_min: [0.0; 3],
             bbox_max: [0.0; 3],
             did_degrade: 0,
+            degrade_part_frame: Vec::new(),
             decode_misses: 0,
             // E8: empty replacement mesh — no triangles, no provenance.
             polygon_ids: Vec::new(),
@@ -27653,6 +27815,7 @@ impl ModelMesh {
             bbox_min: self.bbox_min,
             bbox_max: self.bbox_max,
             did_degrade: self.did_degrade,
+            degrade_part_frame: self.degrade_part_frame.clone(),
             decode_misses: self.decode_misses,
             // E8: per-tri (polygon, side) provenance survives the clone.
             polygon_ids: self.polygon_ids.clone(),
@@ -53941,6 +54104,115 @@ mod tests_substitution {
             "part 0 (no offset) expected max x ≤ 1.5, got {part_a_max_x}");
         assert!(part_b_min_x >= 4.5,
             "part 1 (offset +5) expected min x ≥ 4.5, got {part_b_min_x}");
+    }
+
+    /// The statics LOD poses every degrade band with
+    /// `resolve_degrade_part_frame`. Parity: that frame applied to the RAW
+    /// band GfxObj (what `fetch_model_meshes([band])` returns) lands every
+    /// vertex where the setup walk draws the same GfxObj as part 0 — the
+    /// full-detail mesh — through a Resting (0x65) lift, a tilt and a
+    /// per-part scale. The cases with nothing to pose answer empty.
+    #[test]
+    fn degrade_part_frame_poses_bands_like_the_full_mesh() {
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        let setup_id: u32 = 0x02000099;
+        let part: u32 = 0x0100000A;
+        let chain: u32 = 0x11000001;
+        let mut g = GfxObj::unpack(&mut Cursor::new(synth_gfx_obj_one_triangle(part, 0xAAAA_AAAA, 0.0)))
+            .unwrap();
+        g.did_degrade = Some(chain);
+        let mut part_bytes = Vec::new();
+        g.pack(&mut Cursor::new(&mut part_bytes)).unwrap();
+
+        let frame = |x: f32, y: f32, z: f32, q: Quaternion| PlacementType {
+            anim_frame: AnimationFrame {
+                frames: vec![Frame { origin: Vector3 { x, y, z }, orientation: q }],
+                hooks: vec![],
+            },
+        };
+        // 30° about X — a sign leaning back on its post.
+        let (s, c) = (15.0f32.to_radians().sin(), 15.0f32.to_radians().cos());
+        let tilt = Quaternion { w: c, x: s, y: 0.0, z: 0.0 };
+        let mut setup = SetupModel::unpack(&mut Cursor::new(synth_setup_two_parts(setup_id, part, part)))
+            .unwrap();
+        setup.parts = vec![part];
+        setup.flags = 0x02; // per-part default scale
+        setup.default_scale = vec![Vector3 { x: 2.0, y: 2.0, z: 2.0 }];
+        // Default only: the retail (0x65 -> 0) and legacy (0 -> 1) chains
+        // both land on it, so the native run exercises the browser pose.
+        setup.placement_frames.insert(0, frame(0.5, -0.25, 4.66, tilt));
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part), part_bytes);
+        let source = MockSource { files };
+
+        let f = resolve_degrade_part_frame(&source, setup_id);
+        assert_eq!(f.len(), 10, "a posed single-part setup with a chain carries its frame");
+        let (o, q, k) = (
+            Vector3 { x: f[0], y: f[1], z: f[2] },
+            Quaternion { w: f[3], x: f[4], y: f[5], z: f[6] },
+            Vector3 { x: f[7], y: f[8], z: f[9] },
+        );
+        assert!((o.z - 4.66).abs() < 1e-6 && (o.x - 0.5).abs() < 1e-6, "origin {o:?}");
+        assert!((q.w - c).abs() < 1e-6 && (q.x - s).abs() < 1e-6, "orientation {q:?}");
+        assert_eq!((k.x, k.y, k.z), (2.0, 2.0, 2.0));
+
+        let raw = triangulate_model(&source, part).expect("raw band");
+        let full = triangulate_model(&source, setup_id).expect("full mesh");
+        assert_eq!(raw.len(), full.len());
+        for (r, w) in raw.iter().zip(full.iter()) {
+            for vi in 0..3 {
+                let v = Vector3 { x: r.pos[vi][0] * k.x, y: r.pos[vi][1] * k.y, z: r.pos[vi][2] * k.z };
+                let p = quat_rotate(q, v);
+                let posed = [p.x + o.x, p.y + o.y, p.z + o.z];
+                for a in 0..3 {
+                    assert!(
+                        (posed[a] - w.pos[vi][a]).abs() < 1e-5,
+                        "vertex {vi} axis {a}: posed band {} vs full mesh {}",
+                        posed[a],
+                        w.pos[vi][a]
+                    );
+                }
+            }
+        }
+
+        // the static script anchors' part frames are the same pose
+        let anchor = setup_static_part_pose(&source, setup_id);
+        assert_eq!(anchor.len(), 7);
+        assert_eq!(&anchor[..], &f[..7], "anchor part frame == the band pose (origin + rotation)");
+        assert!(setup_static_part_pose(&source, part).is_empty(), "a raw GfxObj has no parts");
+
+        // nothing to pose: a raw 0x01 model, a chainless part, a multi-part
+        // setup, an identity pose at unit scale
+        assert!(resolve_degrade_part_frame(&source, part).is_empty());
+        let mut files = source.files.clone();
+        let mut plain = setup.clone();
+        plain.flags = 0;
+        plain.default_scale = vec![];
+        plain.placement_frames.clear();
+        let mut plain_bytes = Vec::new();
+        plain.pack(&mut Cursor::new(&mut plain_bytes)).unwrap();
+        files.insert(("eor/portal".into(), setup_id), plain_bytes);
+        assert!(resolve_degrade_part_frame(&MockSource { files: files.clone() }, setup_id).is_empty());
+        let mut two = setup.clone();
+        two.parts = vec![part, part];
+        two.default_scale = vec![Vector3 { x: 2.0, y: 2.0, z: 2.0 }; 2];
+        for p in two.placement_frames.values_mut() {
+            let f0 = p.anim_frame.frames[0].clone();
+            p.anim_frame.frames.push(f0);
+        }
+        let mut two_bytes = Vec::new();
+        two.pack(&mut Cursor::new(&mut two_bytes)).unwrap();
+        files.insert(("eor/portal".into(), setup_id), two_bytes);
+        assert!(resolve_degrade_part_frame(&MockSource { files: files.clone() }, setup_id).is_empty());
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part), synth_gfx_obj_one_triangle(part, 0xAAAA_AAAA, 0.0));
+        assert!(resolve_degrade_part_frame(&MockSource { files }, setup_id).is_empty());
     }
 
     /// `pose_override = None` preserves Phase C behaviour — the

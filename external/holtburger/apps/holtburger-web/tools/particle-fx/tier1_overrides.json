@@ -1,0 +1,7 @@
+{
+  "_note": "Per-DID tier-1 corrections (tier1.py merges them over the generated terms; null removes a term). 2026-10-16: the Destroyed Portals' (Setup 0x020019E4, 39 towns) sputter swirls were portal-tagged vortexes and got the live purple portal's x1.3 light — a 36-intensity, 9 m purple pool that flashed on for 0.5 s every 3.3 s / 5 s as each sputter fired. Retail gives a destroyed portal no light at all (its Setup has no LightInfo); the dead portal now glows at the level of its own ring layers (0x320009D9/DA: 13.5 over 4.2 m), so the sputters still flicker on the ground but no longer strobe the square.",
+  "emitters": {
+    "0x320009D7": { "light": 12.0, "lightRange": 4.5 },
+    "0x320009DB": { "light": 12.0, "lightRange": 4.5 }
+  }
+}
