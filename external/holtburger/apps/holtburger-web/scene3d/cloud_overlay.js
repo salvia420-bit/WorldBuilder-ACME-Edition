@@ -67,7 +67,71 @@ import { EffectComposer, EffectPass, RenderPass } from 'postprocessing';
  *   and a prebake load failure auto-falls-back to it.
  * @property {string} [assetsBaseUrl] — override the prebaked-asset base URL
  *   (default: `../assets/clouds/` relative to this module). For testing.
+ * @property {string} [search] — query string the `?cloudsBootOrder` /
+ *   `?cloudsMainPass` reads use instead of the page URL. For testing.
  */
+
+// `?cloudsBootOrder` (2026-10-17, DEFAULT "legacy"; `=off|0|false|no` escape)
+// — make the clouds' boot order deterministic.
+//
+// THE RACE. With `?cloudsMainPass` (default on) the CloudsEffect ends up in the
+// main composer, but until the atmosphere pipeline exists (it waits for the LUTs)
+// the legacy path marches it through this overlay's private composer whenever
+// the sky pass runs. So a session's FIRST raymarch happens either on the legacy
+// private composer (the sky drew before the pipeline was built) or directly in
+// the main pass (the pipeline was built first). The 1070 A/B of 2026-10-17
+// (Holtburg pinned, 9 fresh sessions, log and reversed-Z) split exactly on that:
+// legacy-first 8/9 = the BRIGHT sky (cloud buffer alpha ~0.65-0.83), main-first
+// 1/9 = the DARK one (alpha 1.0). Relinking the four cloud programs on a bright
+// page changed nothing, and a node replica of both orders (real CloudOverlay +
+// takram + pmndrs + three over tests/helpers/fake_webgl2.mjs, real pipeline)
+// feeds every cloud draw identical uniforms, textures, texture state and
+// targets, so what the legacy first march leaves behind is not in that JS/GL
+// state — the order is made deterministic instead of guessing it.
+//
+// BRIGHT is the look that was tuned: the 2026-10-07 owner session on the 1070
+// (b8819698 vis-test → d65ae01e "1070 look pass") hit "clouds painted over hills"
+// — adoption's removePass nulling the effect's depth, which can only happen when
+// a private composer existed, i.e. a legacy-first boot — and its look calls
+// (?cloudsFullOpacity, the Neutral tone, the grade, the night floor) were made
+// on it. So by default a session that would boot main-first gets ONE legacy
+// march first (primeLegacyMarch, called by the pipeline before it builds its
+// composer — the order a legacy-first session has).
+//
+//   absent / anything else  "legacy": legacy marches as today + the prime when
+//                           none happened before the pipeline is built;
+//   `prime`                 legacy marches suppressed until adoption, the prime
+//                           always runs (forces the primed path, for the A/B);
+//   `main`                  legacy marches suppressed, no prime: always
+//                           main-first (takram's documented order; the DARK sky);
+//   `off|0|false|no`        today's race (no prime, nothing suppressed).
+// Inert without the main pass (`?cloudsMainPass=off`). Diag:
+// `window.__cloudStateDiag().timeline` (primed / firstMarch / adopted).
+const CLOUDS_BOOT_ESCAPES = new Set(['off', '0', 'false', 'no']);
+export function cloudsBootOrder(search) {
+  let v = null;
+  try {
+    const s = search ?? (typeof window !== 'undefined' && window.location ? window.location.search : '');
+    v = new URLSearchParams(s ?? '').get('cloudsBootOrder');
+  } catch (_) {
+    v = null;
+  }
+  const t = v == null ? '' : String(v).trim().toLowerCase();
+  if (CLOUDS_BOOT_ESCAPES.has(t)) return 'race';
+  if (t === 'main') return 'main';
+  if (t === 'prime') return 'prime';
+  return 'legacy';
+}
+
+/** Mirrors atmosphere_pipeline.js::cloudsMainPassEnabled (`!== "off"`). */
+function _mainPassExpected(search) {
+  try {
+    const s = search ?? (typeof window !== 'undefined' && window.location ? window.location.search : '');
+    return new URLSearchParams(s ?? '').get('cloudsMainPass') !== 'off';
+  } catch (_) {
+    return true;
+  }
+}
 
 export class CloudOverlay {
   /**
@@ -122,8 +186,13 @@ export class CloudOverlay {
     // never happened). Read-only bookkeeping, see cloudStateSnapshot.
     this._diagStamps = {
       created: _diagNow(), prebaked: null, prebakeFailed: null, procedural: null,
-      adopted: null, firstMarch: null,
+      adopted: null, firstMarch: null, primed: null,
     };
+    // `?cloudsBootOrder` (see cloudsBootOrder above). URL-immutable, read once.
+    this._bootOrder = cloudsBootOrder(opts && opts.search);
+    this._suppressLegacy = _mainPassExpected(opts && opts.search) &&
+      (this._bootOrder === 'main' || this._bootOrder === 'prime');
+    this._priming = false;
     if (proceduralTextures) {
       this._installProceduralNoise();
     } else {
@@ -446,6 +515,29 @@ export class CloudOverlay {
   /** True while the CloudsEffect runs inside the main composer. */
   get mainPassActive() {
     return this._mainPass;
+  }
+
+  /**
+   * `?cloudsBootOrder` (default "legacy", see cloudsBootOrder): give a session
+   * that would boot main-first the legacy first raymarch it is missing. The
+   * atmosphere pipeline calls this before it builds its composer — the moment a
+   * legacy-first session's own first march happened before. Exactly the legacy
+   * preRender (private composer, one march), nothing else; adoption then retires
+   * that composer as usual. Returns true when it marched.
+   */
+  primeLegacyMarch(renderer, camera) {
+    if (this._bootOrder !== 'legacy' && this._bootOrder !== 'prime') return false;
+    if (this._mainPass || !renderer || !this.volume || !this.volume.effect) return false;
+    if (this._diagStamps.firstMarch !== null) return false; // already legacy-first
+    this._priming = true;
+    try {
+      this.preRender(renderer, 0, camera ?? this.camera);
+    } finally {
+      this._priming = false;
+    }
+    const ok = this._diagStamps.firstMarch !== null;
+    this._diagStamps.primed = ok ? _diagNow() : null;
+    return ok;
   }
 
   /** `window.__cloudStateDiag()` — see cloudStateSnapshot (read-only). */
@@ -803,6 +895,9 @@ export class CloudOverlay {
       this.frameCount++;
       return;
     }
+    // `?cloudsBootOrder=main|prime`: no legacy raymarch before adoption (the
+    // prime below is the one exception).
+    if (this._suppressLegacy && !this._priming) return;
     try {
       const cam = activeCam ?? this.camera;
       const prevTarget = renderer.getRenderTarget();
@@ -1185,6 +1280,7 @@ export function cloudStateSnapshot(overlay, renderer, opts = {}) {
     } : null,
   };
   out.timeline = overlay && overlay._diagStamps ? { ...overlay._diagStamps } : null;
+  out.bootOrder = overlay ? overlay._bootOrder ?? null : null;
   try {
     const hist = typeof window !== 'undefined' && Array.isArray(window.__bootStateHistory) ? window.__bootStateHistory : [];
     const inWorld = hist.find((h) => h && h.state === 'in-world');

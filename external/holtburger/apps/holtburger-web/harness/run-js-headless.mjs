@@ -374,6 +374,8 @@ const TIER5 = [
   { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
   { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
   { tier: 5, flag: "cloudsMainPass", file: "tests/clouds_main_pass.test.mjs" },
+  // 2026-10-17 deterministic cloud boot order (the per-session bright/dark sky).
+  { tier: 5, flag: "cloudsBootOrder", file: "tests/clouds_boot_order.test.mjs" },
   // 2026-10-07 particles drawn after the cloud + aerial composite (split post
   // chain; the -sky glow stays behind the clouds).
   { tier: 5, flag: "particlesOverClouds", file: "tests/particles_over_clouds.test.mjs" },
