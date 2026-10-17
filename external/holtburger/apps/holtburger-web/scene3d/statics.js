@@ -700,20 +700,23 @@ function retailLevelSwapDistances(levels, scale) {
 // idempotent + module-local so the second baker call (per-LB lazy +
 // ring driver overlap) doesn't re-call `init_scenery_base_url`.
 const SCENERY_BASE_URL = "../../dist/scenery/";
-// `?sceneryBake=retail` (exact, default OFF) — A/B the retail placement
-// rules (holtburger-scenery-bake `BakeMode::Retail`: acclient.c
-// CLandBlock::get_land_scenes) against the shipped ace-compat bake. The
-// retail dir is a parallel bake; LBs it lacks fall back to the shipped
-// files through symlinks, so only the baked ring differs.
+// `?sceneryBake` — DEFAULT RETAIL (owner, 2026-10-17: "default that on").
+// The retail placement rules (holtburger-scenery-bake `BakeMode::Retail`:
+// acclient.c CLandBlock::get_land_scenes) are the ones live ACE places its
+// physics scenery with, so the client now draws and collides with the trees
+// and rocks the server has. `?sceneryBake=ace-compat` (or off/0/false/no)
+// escapes to the old shipped ace-compat bake in `dist/scenery/`. The retail
+// dir is a parallel bake; LBs it lacks fall back to the shipped files
+// through symlinks, so only the baked ring differs.
 const RETAIL_SCENERY_BASE_URL = "../../dist/scenery-retail/";
+const SCENERY_BAKE_ESCAPES = new Set(["ace-compat", "off", "0", "false", "no"]);
 export function sceneryBaseUrlFor(search) {
   try {
     const s = search ?? globalThis.location?.search ?? "";
-    return new URLSearchParams(s).get("sceneryBake") === "retail"
-      ? RETAIL_SCENERY_BASE_URL
-      : SCENERY_BASE_URL;
+    const v = (new URLSearchParams(s).get("sceneryBake") || "").trim().toLowerCase();
+    return SCENERY_BAKE_ESCAPES.has(v) ? SCENERY_BASE_URL : RETAIL_SCENERY_BASE_URL;
   } catch (_) {
-    return SCENERY_BASE_URL;
+    return RETAIL_SCENERY_BASE_URL;
   }
 }
 let _sceneryBaseUrlInitialized = false;
