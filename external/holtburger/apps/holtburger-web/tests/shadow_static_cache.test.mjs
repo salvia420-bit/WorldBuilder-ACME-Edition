@@ -25,7 +25,8 @@
 //   S8  hidden rigs root: overlay draws nothing dynamic, still exact
 //   S9  scissor off + depth mask on at every blit; render target and
 //       renderer.clear restored after the call
-//   S10 a throwing blit: session falls back to plain rasters, output exact
+//   S10 a throwing blit — or a GL error reported after one of the first two
+//       blits — falls back to plain rasters for the session, output exact
 //   S11 stand-downs: =off seam, no dynamic root, ?shadowMoverScope=off
 //   S12 the flag reader
 //
@@ -359,6 +360,30 @@ L.__resetRp5ConfigForTest(undefined);
   check("S9 every blit runs with the scissor test off and depth writes on", blits.length > 0 && blits.every((x) => x.scissor === false && x.depthMask === true));
   check("S9 the caller's render target is restored", f9.rtRestored && f9b.rtRestored);
   check("S9 renderer.clear is restored", f9.clearRestored && f9b.clearRestored);
+
+  // S10a — a blit the driver rejects (gl.getError after one of the first
+  // blits of the session) is an error too.
+  {
+    SSC.__resetShadowStaticCacheForTest();
+    const GL_INVALID_OPERATION = 0x0502;
+    let pendingErr = 0;
+    const gl = { NO_ERROR: 0, getError() { const e = pendingErr; pendingErr = 0; return e; } };
+    S.R.renderer.getContext = () => gl;
+    const copy = S.R.renderer.copyTextureToTexture;
+    S.R.renderer.copyTextureToTexture = function (...args) { copy.apply(this, args); pendingErr = GL_INVALID_OPERATION; };
+    S.world.camera.position.x += 1; // FRUSTUM now, so the next rig frame REFRESHes (its blit is checked)
+    S.frame(() => { rig.root.position.y += 0.2; });
+    const warn0 = console.warn; console.warn = () => {};
+    const fe = S.frame(() => { rig.root.position.y += 0.2; });
+    console.warn = warn0;
+    const st = SSC.getShadowStaticCacheStats();
+    check("S10a a GL error after a checked blit stands the cache down, this frame re-rastered plain + exact", st.errors === 1 && /GL error 0x502/.test(st.lastError || "") && fe.rastered !== "" && S.allRasteredExact(fe), JSON.stringify({ e: st.errors, le: st.lastError, r: fe.rastered }));
+    S.R.renderer.copyTextureToTexture = copy;
+    delete S.R.renderer.getContext;
+    SSC.__resetShadowStaticCacheForTest();
+    S.world.camera.position.x += 1;
+    S.frame(() => { rig.root.position.y += 0.2; });
+  }
 
   // S10 — a throwing blit.
   S.R.renderer.throwOnBlit = true;

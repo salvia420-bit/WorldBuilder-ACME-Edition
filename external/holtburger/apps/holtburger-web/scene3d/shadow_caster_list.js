@@ -451,6 +451,13 @@ function _ensureCache(st, light, renderer) {
   return st.rt;
 }
 
+// The first blits of a session are checked with gl.getError(): a depth blit
+// the driver rejects raises no exception, and an OVERLAY drawn over a map the
+// blit never reached would smear rig shadows. Two checks (each a pipeline
+// sync, so not more) — then trust the path.
+const BLIT_GL_CHECKS = 2;
+let _blitChecks = 0;
+
 /** Depth blit src -> dst through three (its state cache stays in sync). */
 function _blitDepth(renderer, srcDepth, dstDepth) {
   const state = renderer.state;
@@ -459,7 +466,16 @@ function _blitDepth(renderer, srcDepth, dstDepth) {
   if (state && state.buffers && state.buffers.depth && typeof state.buffers.depth.setMask === "function") {
     state.buffers.depth.setMask(true);
   }
+  const gl = _blitChecks < BLIT_GL_CHECKS && typeof renderer.getContext === "function" ? renderer.getContext() : null;
+  if (gl && typeof gl.getError === "function") {
+    for (let k = 0; k < 8 && gl.getError() !== gl.NO_ERROR; k += 1); // drain earlier errors
+  }
   renderer.copyTextureToTexture(srcDepth, dstDepth);
+  if (gl && typeof gl.getError === "function") {
+    _blitChecks += 1;
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) throw new Error(`depth blit raised GL error 0x${(err >>> 0).toString(16)}`);
+  }
   sscStats.blits += 1;
 }
 
@@ -681,6 +697,7 @@ export function __setShadowStaticCacheOffForTest(v) { sscCtl.off = !!v; }
 export function __resetShadowStaticCacheForTest() {
   sscCtl.off = false;
   sscCtl.broken = false;
+  _blitChecks = 0;
   for (const k of Object.keys(sscStats)) sscStats[k] = typeof sscStats[k] === "number" ? 0 : null;
 }
 export function __shadowStaticCacheStateForTest(light) {
