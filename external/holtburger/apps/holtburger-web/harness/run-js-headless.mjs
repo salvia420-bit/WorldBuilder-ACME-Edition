@@ -508,6 +508,7 @@ const TIER5 = [
   // 2026-10-17 cpuframe: the static manager ticks once per frame (statics.js
   // loads twice → two _spLoop drivers), RP6 cadence kept.
   { tier: 5, flag: "particleTickOnce", file: "tests/particle_tick_once.test.mjs" },
+  { tier: 5, flag: "particleCulledLean", file: "tests/particle_culled_lean.test.mjs" },
   { tier: 5, flag: "staticScriptHookTime", file: "tests/static_script_hooktime.test.mjs" },
   { tier: 5, flag: "particle_single_pass", file: "test_particle_single_pass.mjs" },
   { tier: 5, flag: "particles", file: "test_particles.mjs" },

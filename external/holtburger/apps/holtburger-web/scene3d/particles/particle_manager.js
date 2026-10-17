@@ -234,6 +234,26 @@ export function particleTickOnceEnabled() {
 /** Test/A-B seam (`null` re-reads the URL on next use). */
 export function setParticleTickOnceFlag(on) { _TICK_ONCE_ON = on == null ? null : !!on; }
 
+// ?particleCulledLean (2026-10-17, DEFAULT ON; `=off` escape) — a culled
+// INSTANCED emitter skips the per-tick `_setPartsVisible(false)` re-assert:
+// its slot meshes are scene-detached carriers, so the flag they carry is never
+// drawn (see the culled branch in `_tickLatched`). Per-mesh emitters, whose
+// slot meshes ARE the draw, are unchanged.
+let _CULLED_LEAN_ON = null;
+export function particleCulledLeanEnabled() {
+  if (_CULLED_LEAN_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleCulledLean") || "").toLowerCase();
+      _CULLED_LEAN_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _CULLED_LEAN_ON = true;
+    }
+  }
+  return _CULLED_LEAN_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleCulledLeanFlag(on) { _CULLED_LEAN_ON = on == null ? null : !!on; }
+
 /** Diagnostic counters for the RP6 cull path (read by probes/tests). */
 export const PARTICLE_RP6_STATS = {
   // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
@@ -2350,6 +2370,8 @@ export class ParticleManager {
     // every manager without a lookup) leaves the loop below exactly as before.
     const cellLookup = this._cellLookup;
     const cellGate = cellLookup !== null && particleCellGateEnabled();
+    // ?particleCulledLean — read once per tick (see the culled branch).
+    const leanCulled = particleCulledLeanEnabled();
     let cellHidden = 0;
 
     // Instanced buckets are rebuilt from scratch every tick: reset the write
@@ -2502,7 +2524,17 @@ export class ParticleManager {
         // the cull's GPU-submission savings. Free slots are already invisible;
         // `_setPartsVisible` reads before it writes, so the steady state is a
         // compare per occupied slot and no property churn.
-        if (!drained) _setPartsVisible(emitter, false);
+        // ?particleCulledLean: an INSTANCED emitter's slot meshes are never in
+        // the scene graph (addEmitter / _applyInstancing detach them — they are
+        // transform+opacity carriers read by _appendInstances), so their
+        // `visible` draws nothing either way; a culled instanced emitter
+        // vanishes because it does not append. The walk was 27% of the static
+        // tick (1070 profile, `_setPartsVisible` 82.6 ms of 302 ms; every
+        // static emitter was instanced and persistent in the live probe).
+        // Per-mesh emitters keep the per-tick re-assert above.
+        if (!drained && !(leanCulled && emitter._instKey !== null && emitter._instKey !== undefined)) {
+          _setPartsVisible(emitter, false);
+        }
         continue;
       }
 
