@@ -4785,12 +4785,91 @@ export function disposeStaticsBillboards() {
   _bbRafId = 0;
 }
 
+// ?billboardTickGate (2026-10-17, DEFAULT ON; `=off` escape) — the billboard
+// walk runs only when its answer can have changed.
+//
+// (1) ONCE PER FRAME. This file loads as two module instances on the unbundled
+//     page (`./statics.js?v=phase7-par` from index.js, `./statics.js` from
+//     loop.js / cells.js — impl/task-T11-report.md D5), so two `_bbLoop`s
+//     walked the same staticsGroup every frame: 1070 profile (2026-10-17)
+//     `tickStaticsBillboards` 37.9 + 35.1 ms of 7.25 s. The second walk of a
+//     frame recomputed the same quaternions from the same camera.
+// (2) ONLY ON CHANGE. A degraded leaf's facing is a function of the camera's
+//     world position, the LOD node's (immobile) matrixWorld and which leaf is
+//     showing — and with a still camera the LOD level cannot change either.
+//     So the walk is skipped while the active camera object, its world
+//     position (exact compare) and the staticsGroup child count all match the
+//     last walk. Any change re-arms THREE walks (this frame + the next two):
+//     a node added this frame still has an identity matrixWorld until the
+//     render after it, and the walk that follows that render is the one that
+//     faces it correctly. A same-count swap (one node out, one in, same frame)
+//     is caught by a full walk at least every BB_GATE_MAX_SKIP + 1 frames.
+// Standing still (the measured case) the walk becomes ~1 in 8 frames.
+const BB_GATE_MAX_SKIP = 7;
+const BB_GATE_HOLD = 2;
+const _bbGateCam = new THREE.Vector3();
+// Shared by BOTH module instances (a module-level Map would be per instance).
+const _bbGateState = (typeof globalThis !== "undefined")
+  ? (globalThis.__hbBillboardGate || (globalThis.__hbBillboardGate = new WeakMap()))
+  : new WeakMap();
+let _bbGateFlag;
+export function billboardTickGateEnabled() {
+  if (_bbGateFlag !== undefined) return _bbGateFlag;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("billboardTickGate") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  return (_bbGateFlag = on);
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setBillboardTickGateForTest(v) { _bbGateFlag = v; }
+
+/**
+ * Should the billboard walk run this frame? `ts` is the rAF timestamp (one
+ * value per frame across every callback); a non-number never dedupes. Flag
+ * off ⇒ always true (two walks per frame again, as before).
+ */
+export function staticsBillboardTickDue(scene3d, ts) {
+  const group = scene3d?.staticsGroup;
+  if (!group) return false;
+  if (!billboardTickGateEnabled()) return true;
+  let st = _bbGateState.get(group);
+  if (!st) {
+    st = { ts: NaN, cam: null, x: NaN, y: NaN, z: NaN, n: -1, skipped: 0, hold: 0 };
+    _bbGateState.set(group, st);
+  }
+  if (typeof ts === "number") {
+    if (st.ts === ts) return false; // the other module instance already walked
+    st.ts = ts;
+  }
+  const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  if (!cam) return true; // tickStaticsBillboards no-ops without a camera anyway
+  cam.getWorldPosition(_bbGateCam);
+  const n = group.children ? group.children.length : 0;
+  const same = st.cam === cam && st.n === n
+    && st.x === _bbGateCam.x && st.y === _bbGateCam.y && st.z === _bbGateCam.z;
+  if (!same) {
+    st.cam = cam; st.n = n;
+    st.x = _bbGateCam.x; st.y = _bbGateCam.y; st.z = _bbGateCam.z;
+    st.hold = BB_GATE_HOLD;
+    st.skipped = 0;
+    return true;
+  }
+  if (st.hold > 0) { st.hold -= 1; st.skipped = 0; return true; }
+  if (st.skipped >= BB_GATE_MAX_SKIP) { st.skipped = 0; return true; }
+  st.skipped += 1;
+  return false;
+}
+
 if (typeof window !== "undefined" && _billboardEnabled()) {
-  const _bbLoop = () => {
+  const _bbLoop = (ts) => {
     if (_bbDisposed) return;
     try {
       const live = window.liveScene3d;
-      if (live) tickStaticsBillboards(live);
+      if (live && staticsBillboardTickDue(live, ts)) tickStaticsBillboards(live);
     } catch (_) {}
     _bbRafId = window.requestAnimationFrame(_bbLoop);
   };
