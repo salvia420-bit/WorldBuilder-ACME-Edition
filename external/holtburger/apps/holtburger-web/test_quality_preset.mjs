@@ -73,17 +73,17 @@ console.log("\nGroup 1: preset table integrity");
             PRESETS.mid.csm === false
     );
     check(
-        "high preset: all features on, subdivLevel=4",
+        "high preset: all features on except csm (off 2026-10-17), subdivLevel=4",
         !("shadows" in PRESETS.high) &&
             PRESETS.high.pom === true &&
-            PRESETS.high.csm === true &&
+            PRESETS.high.csm === false &&
             PRESETS.high.subdivLevel === 4
     );
     check(
-        "ultra preset: all features on, subdivLevel=8",
+        "ultra preset: all features on except csm (off 2026-10-17), subdivLevel=8",
         !("shadows" in PRESETS.ultra) &&
             PRESETS.ultra.pom === true &&
-            PRESETS.ultra.csm === true &&
+            PRESETS.ultra.csm === false &&
             PRESETS.ultra.subdivLevel === 8
     );
     // Per spec § Phase X.1 acceptance criterion #1: `?quality=low`
@@ -108,10 +108,10 @@ console.log("\nGroup 2: URL parsing");
 
     const q2 = getQuality("https://example.com/?quality=high", DESKTOP_UA);
     check(
-        "?quality=high → preset=high, all heavy on",
+        "?quality=high → preset=high, heavy on except csm",
         q2.preset === "high" &&
             q2.flags.pom === true &&
-            q2.flags.csm === true &&
+            q2.flags.csm === false &&
             q2.flags.subdivLevel === 4
     );
 

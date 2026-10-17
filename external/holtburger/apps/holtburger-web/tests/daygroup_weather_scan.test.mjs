@@ -3,18 +3,18 @@
 // non-zero PES as rain droplets. The moon proxy (Setup 0x02000714, PES 0x330007DB, props 0x00,
 // begin == end == 0 → always visible) sits in all 20 retail DayGroups, so every DayGroup read
 // as a storm. Retail's weather test is `properties & 0x04` alone (GameSky::MakeObject /
-// GameSky::Draw, acclient.c:308427 / :308475). `?stormScan=retail` opts into that rule; the
-// default keeps the legacy scan byte-identical until the owner eye-tests the cloud look.
-//   S1  `?stormScan=retail` (exactly) selects the retail rule; no flag or any other value is legacy
-//   S2  the default (legacy) scan is unchanged: the moon alone still scans as a storm with
+// GameSky::Draw, acclient.c:308427 / :308475). The retail rule is the DEFAULT since 2026-10-17
+// (owner); `?stormScan=legacy` (or off/0/false/no) keeps the legacy scan byte-identical.
+//   S1  no flag / any other value selects the retail rule; legacy/off/0/false/no is legacy
+//   S2  the legacy scan is unchanged: the moon alone still scans as a storm with
 //       droplets, and a 0x0D Setup is still the first "streak"
 //   S3  retail: the moon alone, and a Sunny-like DayGroup set, are not a storm
 //   S4  retail: a streak (0x04 / 0x05) is a storm with its GfxObj as streak_gfx_id; a 0x0D rain
 //       Setup is a storm with droplets and no streak id
 //   S5  retail: invisible weather objects, nulls, unreadable entries and non-arrays are skipped
 //   S6  retail: "weather off" (visual_options.js dropWeatherSkyObjects) and "no storm" agree
-//   S7  weatherForState under `?stormScan=retail` (fresh module): a Sunny-like set is not a
-//       storm even on a DayGroup whose table profile storms; the default module still storms
+//   S7  weatherForState on the default (retail) module: a Sunny-like set is not a storm even on
+//       a DayGroup whose table profile storms; a fresh `?stormScan=legacy` module still storms
 //
 // Run from apps/holtburger-web/:  node tests/daygroup_weather_scan.test.mjs
 
@@ -49,33 +49,34 @@ const SUNNY_LIKE = [
 ];
 const NONE = { is_storm: false, has_droplets: false, streak_gfx_id: 0 };
 
-test("S1: ?stormScan=retail selects the retail rule; anything else is legacy", () => {
-  assert.equal(STORM_SCAN_MODE, STORM_SCAN_LEGACY, "no URL flag → legacy");
-  assert.equal(stormScanMode("?stormScan=retail"), STORM_SCAN_RETAIL);
-  assert.equal(stormScanMode("stormScan=retail&clouds=on"), STORM_SCAN_RETAIL);
-  for (const s of ["", "?stormScan=legacy", "?stormScan=on", "?stormScan=RETAIL", "?stormScan=1", "?clouds=on"]) {
+test("S1: the retail rule is the default; legacy/off/0/false/no keep the legacy scan", () => {
+  assert.equal(STORM_SCAN_MODE, STORM_SCAN_RETAIL, "no URL flag → retail");
+  for (const s of ["", "?stormScan=retail", "stormScan=retail&clouds=on", "?stormScan=on", "?stormScan=RETAIL", "?stormScan=1", "?clouds=on"]) {
+    assert.equal(stormScanMode(s), STORM_SCAN_RETAIL, s);
+  }
+  for (const s of ["?stormScan=legacy", "?stormScan=LEGACY", "?stormScan=off", "?stormScan=0", "?stormScan=false", "?stormScan=no"]) {
     assert.equal(stormScanMode(s), STORM_SCAN_LEGACY, s);
   }
   const saved = globalThis.window.location;
   try {
-    globalThis.window.location = { search: "?stormScan=retail" };
-    assert.equal(stormScanMode(), STORM_SCAN_RETAIL, "defaults to the page URL");
+    globalThis.window.location = { search: "?stormScan=legacy" };
+    assert.equal(stormScanMode(), STORM_SCAN_LEGACY, "defaults to the page URL");
     globalThis.window.location = null;
-    assert.equal(stormScanMode(), STORM_SCAN_LEGACY, "no location → legacy");
+    assert.equal(stormScanMode(), STORM_SCAN_RETAIL, "no location → retail");
   } finally {
     globalThis.window.location = saved;
   }
 });
 
-test("S2: the default (legacy) scan is unchanged", () => {
-  assert.deepEqual(scanWeatherSkyObjects([MOON]), { is_storm: true, has_droplets: true, streak_gfx_id: 0 },
+test("S2: the legacy scan is unchanged", () => {
+  assert.deepEqual(scanWeatherSkyObjects([MOON], STORM_SCAN_LEGACY), { is_storm: true, has_droplets: true, streak_gfx_id: 0 },
     "legacy still reads the moon proxy as rain droplets");
-  assert.deepEqual(scanWeatherSkyObjects(SUNNY_LIKE).is_storm, true);
-  assert.deepEqual(scanWeatherSkyObjects([RAIN, STREAK]),
+  assert.deepEqual(scanWeatherSkyObjects(SUNNY_LIKE, STORM_SCAN_LEGACY).is_storm, true);
+  assert.deepEqual(scanWeatherSkyObjects([RAIN, STREAK], STORM_SCAN_LEGACY),
     { is_storm: true, has_droplets: true, streak_gfx_id: 0x02000588 }, "a 0x0D Setup is still the first streak");
-  assert.deepEqual(scanWeatherSkyObjects([CLOUDS, sky(0x08, 0x01001234)]), NONE);
+  assert.deepEqual(scanWeatherSkyObjects([CLOUDS, sky(0x08, 0x01001234)], STORM_SCAN_LEGACY), NONE);
   for (const set of [[MOON], SUNNY_LIKE, [RAIN, STREAK], [CLOUDS, STREAK2], [sky(0x04, 0x01004c42, 0, false)]]) {
-    assert.deepEqual(scanWeatherSkyObjects(set), scanWeatherSkyObjects(set, STORM_SCAN_LEGACY));
+    assert.deepEqual(scanWeatherSkyObjects(set), scanWeatherSkyObjects(set, STORM_SCAN_RETAIL), "the default is the retail scan");
   }
 });
 
@@ -113,27 +114,28 @@ test("S6: retail — dropping the weather objects always leaves no storm", () =>
   }
 });
 
-test("S7: weatherForState follows ?stormScan=retail; the default module still storms", async () => {
+test("S7: weatherForState on the default (retail) module; ?stormScan=legacy still storms", async () => {
   const stormy = dw.getProfiles().findIndex((p) => p.is_storm);
   assert.ok(stormy >= 0, "some DayGroup profile storms in the table");
   const state = { dayGroupIndex: stormy };
-  assert.equal(dw.weatherForState(state, stormy, SUNNY_LIKE).is_storm, true, "default = legacy scan");
-  assert.equal(dw.weatherForState(state, 0, [MOON]).is_storm, true, "default = legacy scan");
+  assert.equal(dw.STORM_SCAN_MODE, STORM_SCAN_RETAIL);
+  const sunny = dw.weatherForState(state, stormy, SUNNY_LIKE);
+  assert.equal(sunny.is_storm, false, "the scan replaces the table storm");
+  assert.deepEqual(sunny._weather, NONE);
+  assert.equal(sunny.name, dw.getProfiles()[stormy].name, "T/Td/P profile kept");
+  assert.equal(dw.weatherForState({ dayGroupIndex: 0 }, 0, [...SUNNY_LIKE, RAIN]).is_storm, true);
+  const streak = dw.weatherForState({ dayGroupIndex: 0 }, 0, [MOON, STREAK]);
+  assert.equal(streak.is_storm, true);
+  assert.equal(streak._weather.streak_gfx_id, 0x01004c42);
+  assert.equal(dw.weatherForState(state, stormy, []).is_storm, true, "an empty snapshot keeps the table");
 
   const saved = globalThis.window.location;
-  globalThis.window.location = { search: "?stormScan=retail" };
+  globalThis.window.location = { search: "?stormScan=legacy" };
   try {
-    const retail = await import("../scene3d/daygroup_weather.js?stormScanRetail");
-    assert.equal(retail.STORM_SCAN_MODE, STORM_SCAN_RETAIL);
-    const sunny = retail.weatherForState(state, stormy, SUNNY_LIKE);
-    assert.equal(sunny.is_storm, false, "the scan replaces the table storm");
-    assert.deepEqual(sunny._weather, NONE);
-    assert.equal(sunny.name, dw.getProfiles()[stormy].name, "T/Td/P profile kept");
-    assert.equal(retail.weatherForState({ dayGroupIndex: 0 }, 0, [...SUNNY_LIKE, RAIN]).is_storm, true);
-    const streak = retail.weatherForState({ dayGroupIndex: 0 }, 0, [MOON, STREAK]);
-    assert.equal(streak.is_storm, true);
-    assert.equal(streak._weather.streak_gfx_id, 0x01004c42);
-    assert.equal(retail.weatherForState(state, stormy, []).is_storm, true, "an empty snapshot keeps the table");
+    const legacy = await import("../scene3d/daygroup_weather.js?stormScanLegacy");
+    assert.equal(legacy.STORM_SCAN_MODE, STORM_SCAN_LEGACY);
+    assert.equal(legacy.weatherForState(state, stormy, SUNNY_LIKE).is_storm, true, "legacy scan");
+    assert.equal(legacy.weatherForState(state, 0, [MOON]).is_storm, true, "legacy scan");
   } finally {
     globalThis.window.location = saved;
   }

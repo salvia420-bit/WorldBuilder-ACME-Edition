@@ -425,7 +425,10 @@ export const PRESETS = {
         pomStepsPrimary: 16,
         pomStepsSelfShadow: 8,
         statPom: true,
-        csm: true,
+        // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
+        // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
+        // with it off). Retail AC had no real-time sun shadows. `?csm=on` restores them.
+        csm: false,
         bloom: true,
         vignette: true,
         lensFlare: false,
@@ -525,7 +528,10 @@ export const PRESETS = {
         pomStepsPrimary: 24,
         pomStepsSelfShadow: 12,
         statPom: true,
-        csm: true,
+        // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
+        // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
+        // with it off). Retail AC had no real-time sun shadows. `?csm=on` restores them.
+        csm: false,
         bloom: true,
         vignette: true,
         lensFlare: false,
@@ -990,10 +996,12 @@ export function getQuality(url, userAgent) {
         // (returns null) under Node, when WebGL is unavailable, when
         // `WEBGL_debug_renderer_info` is stripped, or when the
         // renderer string isn't on the HIGH allowlist or LOW
-        // deny-list. NEVER auto-promotes to ULTRA.
+        // deny-list. A HIGH probe resolves to ULTRA since 2026-10-17
+        // (owner: "we keep ultra" — the human-play default on the 1070);
+        // `?quality=` and the saved Graphics setting still win.
         const probe = detectGpuTier();
         if (probe && (probe.tier === "high" || probe.tier === "low")) {
-            preset = probe.tier;
+            preset = probe.tier === "high" ? "ultra" : probe.tier;
             source = "gpu-probe";
             if (!_gpuTierLogged) {
                 _gpuTierLogged = true;

@@ -1668,7 +1668,7 @@ function readFogLerpFlag() {
 // HOW. One tiny private render of the sky scene (the takram SkyMaterial quad
 // only — stars/moons hidden for the probe) through a narrow-FOV camera aimed
 // `farFogSkyElevDeg` above the horizon, into an 8x8 HalfFloat target, then a
-// readback. The readback is throttled to `farFogSkyHz` (default 4 Hz) and
+// readback. The readback is throttled to `farFogSkyHz` (default 1 Hz) and
 // skipped entirely indoors, when `scene.fog` is absent, and after three
 // consecutive failures (sticky fall-back to the authored hex).
 //
