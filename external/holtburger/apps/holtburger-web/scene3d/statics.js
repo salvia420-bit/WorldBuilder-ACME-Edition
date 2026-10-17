@@ -108,6 +108,8 @@ import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 import { canSupplyPlanes } from "./surface_planes.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
+// ?staticsCullGate: film takes rely on the per-frame pass (leaf, no imports).
+import { filmModeEnabled } from "./film/flags.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
 // ParticleManager is ticked from the main loop (loop.js manager phase) and
 // the private rAF below never arms. time_rng.js is dependency-free, so this
@@ -4647,7 +4649,71 @@ export function cullStaticsGroup(scene3d, culler) {
   if (!group || !culler || !culler.valid) return { tested: 0, culled: 0 };
   const children = group.children;
   if (!children || children.length === 0) return { tested: 0, culled: 0 };
+  // ?staticsCullGate — skip the walk while nothing it reads has changed.
+  if (_cullGateSkip(scene3d, group, culler)) return _cullGate.last;
+  const result = _cullStaticsWalk(group, children, culler);
+  _cullGate.last = result;
+  return result;
+}
 
+// ?staticsCullGate (2026-10-17, DEFAULT ON; `=off` escape) — the per-frame
+// statics cull walk is skipped while its inputs are unchanged.
+//
+// The walk tests every staticsGroup child (~1,700 at LB 0xE632) against the
+// frustum each frame: `cullStaticsGroup` 170 ms of a 7.25 s 1070 profile
+// (2026-10-17), ~0.8 ms/frame, nearly all of it re-deriving the answer it
+// gave the frame before — the measured case is a player standing still. Its
+// verdict per node is a function of the frustum (`culler._mvp`, the AC-space
+// view-projection), the node's cached cull sphere (statics never move), the
+// light-ownership guardrail and two markers. So it is skipped while the MVP is
+// bit-identical, the child count is unchanged and `scene3d.activeLights` (the
+// light attach that flips `_staticOwnsLight`, lighting.js) has the same
+// length — with a full walk at least every CULL_GATE_EVERY frames, which is
+// the latency of the changes it cannot see: a `__deadBatch` flip (re-derived
+// on the ~10 Hz optimize tick anyway), a same-count child swap, a foreign
+// `visible` write the walk used to undo the next frame. Film mode keeps the
+// per-frame walk (its hide markers are applied with a direct write, but the
+// takes are frame-stepped). Any camera motion re-runs it every frame.
+const CULL_GATE_EVERY = 4;
+const _cullGate = {
+  valid: false, group: null, n: -1, lights: -1, skipped: 0,
+  mvp: new Float64Array(16), last: { tested: 0, culled: 0 },
+};
+let _cullGateFlag;
+export function staticsCullGateEnabled() {
+  if (_cullGateFlag !== undefined) return _cullGateFlag;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("staticsCullGate") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  if (on) { try { if (filmModeEnabled()) on = false; } catch (_) {} }
+  return (_cullGateFlag = on);
+}
+/** Test seam: true/false forces the gate, undefined re-reads the URL. Resets state. */
+export function __setStaticsCullGateForTest(v) { _cullGateFlag = v; _cullGate.valid = false; }
+
+function _cullGateSkip(scene3d, group, culler) {
+  const st = _cullGate;
+  const m = culler._mvp && culler._mvp.elements;
+  if (!m || !staticsCullGateEnabled()) { st.valid = false; return false; }
+  const n = group.children.length;
+  const lights = Array.isArray(scene3d.activeLights) ? scene3d.activeLights.length : -1;
+  if (st.valid && st.group === group && st.n === n && st.lights === lights
+      && st.skipped < CULL_GATE_EVERY - 1) {
+    const p = st.mvp;
+    let same = true;
+    for (let i = 0; i < 16; i++) { if (p[i] !== m[i]) { same = false; break; } }
+    if (same) { st.skipped += 1; return true; }
+  }
+  st.valid = true; st.group = group; st.n = n; st.lights = lights; st.skipped = 0;
+  for (let i = 0; i < 16; i++) st.mvp[i] = m[i];
+  return false;
+}
+
+function _cullStaticsWalk(group, children, culler) {
   // Hoist the horizon sqrt out of the per-node loop (was recomputed per node
   // per frame). `cullHorizon` is the metre horizon; the per-node test only
   // needs to add the sphere radius to it.

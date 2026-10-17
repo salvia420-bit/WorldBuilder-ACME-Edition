@@ -1013,6 +1013,7 @@ const TIER5 = [
   { tier: 5, flag: "degradePose", file: "tests/statics_degrade_pose.test.mjs" },
   // 2026-10-17 cpuframe: one billboard walk per frame, skipped while nothing moved.
   { tier: 5, flag: "billboardTickGate", file: "tests/statics_billboard_gate.test.mjs" },
+  { tier: 5, flag: "staticsCullGate", file: "tests/statics_cull_gate.test.mjs" },
   // 2026-10-16 every portal gets the purple portal's set piece; the portal
   // "pop" root causes: static part anchors + the true cull sphere, lights in
   // the object frame, a re-sent portal create applied in place.
