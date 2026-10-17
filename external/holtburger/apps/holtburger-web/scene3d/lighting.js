@@ -455,6 +455,11 @@ const LIGHT_SORT_INTERVAL = 4;
 //                           LINE). An explicit small N (e.g. 1 = every
 //                           frame) is honoured as-is (only raises raster
 //                           frequency, always safe).
+//   ?shadowMoverScope=off   (fps wave 1, 2026-10-17; DEFAULT ON) revert the
+//                           per-cascade mover scope (see
+//                           applyMoverScopedShadowGate) to the RP5 global
+//                           caster hash: ANY rig root moving anywhere — hidden,
+//                           off-screen, 300 m away — re-rasters all 3 cascades.
 //   ?csmCamEps=<m2> ?csmSunEps=<v2>  override the CSM refit thresholds
 //                           (squared metres / squared unit-vector). Larger
 //                           = fewer refits + (because the static-shadow
@@ -485,11 +490,24 @@ function _rp5ReadParams() {
   }
 }
 
+/** `?shadowMoverScope` (fps wave 1, 2026-10-17) — default ON; `off`/`0`/`false`/`no` disables. */
+function _shadowMoverScopeFlag() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("shadowMoverScope") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
 let _rp5Config;
 function getRp5Config() {
   if (_rp5Config !== undefined) return _rp5Config;
   const cfg = {
     shadowStaticGate: true,
+    // fps wave 1 (2026-10-17) — per-cascade mover scope; `?shadowMoverScope=off`
+    // restores the RP5 global caster hash.
+    shadowMoverScope: _shadowMoverScopeFlag(),
     lightSortInterval: RP5_DEFAULT_LIGHT_SORT_INTERVAL,
     shadowMaxStaleFrames: RP5_DEFAULT_SHADOW_MAX_STALE,
     csmCamEps: null, // null ⇒ use csm.js's validated default
@@ -540,6 +558,12 @@ function getRp5Config() {
   }
   _rp5Config = cfg;
   return _rp5Config;
+}
+
+/** Test seam: `undefined` re-reads the URL on next use; an object merges over the defaults. */
+export function __resetRp5ConfigForTest(next) {
+  _rp5Config = undefined;
+  if (next && typeof next === "object") _rp5Config = { ...getRp5Config(), ...next };
 }
 
 // === Problem-A fix (2026-06-15) — fixed light POOL (always-on; ?lightPool=off) =====
@@ -1722,7 +1746,8 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // RP5 — STATIC-SCENE SHADOW GATE (the big win). Drive the three.js
   // shadow-map RASTER off `shadowDirty` so a provably-static scene skips
   // re-rendering all (1 or 3) shadow maps. Runs AFTER both shadow paths
-  // have updated their frusta this frame. See applyStaticShadowGate.
+  // have updated their frusta this frame. See applyStaticShadowGate (and,
+  // per cascade by default, applyMoverScopedShadowGate).
   applyStaticShadowGate(scene3d, lighting, shadowDirty);
 
   // === Per-SetupModel light cap (top-32 by squared distance) ==========
@@ -1778,6 +1803,12 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
  *     true zero) so the ceiling can never permanently freeze a shadow even
  *     in the residual cases the per-caster scan doesn't cover.
  *
+ * fps wave 1 (2026-10-17): by default the decision above is made PER
+ * CASCADE (applyMoverScopedShadowGate + scanShadowMovers): a rig change marks
+ * only the cascades whose shadow frustum holds it, hidden rigs are not
+ * casters, and the ceiling counts per cascade. The all-or-nothing RP5 body
+ * below is the `?shadowMoverScope=off` escape.
+ *
  * No-op (leaves three's default per-frame raster) when:
  *   - `?shadowStaticGate=off`, OR
  *   - no renderer / no shadowMap reachable, OR
@@ -1822,6 +1853,14 @@ function applyStaticShadowGate(scene3d, lighting, shadowDirty) {
   const hasSingleShadow = !!(lighting && lighting.sun && lighting.sun.castShadow);
   const hasCsm = !!(lighting && lighting.csmState);
   if (!hasSingleShadow && !hasCsm) return;
+
+  // fps wave 1 (2026-10-17) — per-cascade mover scope (default). The RP5
+  // body below stays as the `?shadowMoverScope=off` escape, byte-identical.
+  if (cfg.shadowMoverScope) {
+    const lights = hasCsm ? lighting.csmState.lights : [lighting.sun];
+    applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lights, cfg);
+    return;
+  }
 
   // One-time: take manual control of the raster. We flip autoUpdate off
   // exactly once (guarded so a third party flipping it back on mid-session
@@ -1951,6 +1990,378 @@ function scanDynamicCasterMovement(scene3d) {
   // here avoids a spurious re-raster the frame the hash is first seeded.
   if (prev === undefined) return false;
   return hash !== prev;
+}
+
+// === fps wave 1 (2026-10-17) — per-cascade mover scope (`?shadowMoverScope`,
+// DEFAULT ON, `=off` restores the RP5 global hash above) ======================
+//
+// MEASURED (1070, quality ultra, LB 0xE632, player standing still): the RP5
+// gate re-rastered ALL 3 cascades on 46% of frames — ~1,260 casters, 390
+// draws, ~12 ms of main thread each time. Of 180 frames' triggers, 60 were
+// "an entity moved", 9 the 12-frame staleness ceiling, 0 sun/camera; one
+// chicken walking 68 m away re-rendered every cascade. The global hash above
+// cannot say WHERE a rig moved, nor whether it draws into a shadow map at all.
+//
+// WHAT CHANGES (per rig, per tick — `scanShadowMovers`):
+//   * A change is: the root transform moved (the RP5 quantisation) while the
+//     rig is DRAWN, a visibility flip, a spawn or a despawn. A hidden rig
+//     (the per-entity frustum cull, ?occlusionCull, a hidden ancestor) puts
+//     nothing in any shadow map — three's WebGLShadowMap.renderObject returns
+//     at `visible === false` — so its walking is not a change. (A flip IS: the
+//     RP5 hash never saw one, the ceiling picked it up ≤12 frames late.)
+//   * A change dirties exactly the cascades whose shadow frustum — the one
+//     three culls that light's casters against, `LightShadow.getFrustum()`,
+//     set when that map last rendered — holds the rig's bounding sphere at its
+//     PREVIOUS pose (its old shadow must be erased) or its NEW pose grown by
+//     the step it just took (where its next shadow lands).
+//   * Only dirty cascades re-raster. three r184 skips a light whose
+//     `shadow.autoUpdate === false && shadow.needsUpdate === false`
+//     (WebGLShadowMap.render), so every managed light runs with
+//     autoUpdate=false and gets a one-shot `needsUpdate`, which three clears
+//     when that map renders (a mark not consumed this frame stays pending).
+//   * The staleness ceiling is PER CASCADE (frames since that map was last
+//     marked), so a cascade no mover touches still refreshes every
+//     ?shadowMaxStale frames for in-place limb animation, tree sway, streaming.
+// Camera/sun refits, the indoor flip, the single-shadow recentre and a thrown
+// CSM tick still mark every cascade at once, exactly as before.
+//
+// LAG — the RP5 bound, per cascade. This tick runs BEFORE entityManager.tick,
+// so it compares a rig's previous-frame pose (P[t-1]) with the one before
+// (P[t-2]); the raster later this frame draws P[t]. Cascade c's map holds the
+// rig as it was at c's last raster. If that old pose touched c, the first step
+// away from it touches c at the old sphere and re-rasters c the next frame; if
+// the rig walks INTO c, the first scan that sees it inside c re-rasters c.
+// Either way ≤1 frame, and the step growth usually closes even that.
+//
+// WHAT COULD LOOK DIFFERENT: nothing a raster draws. What changes is which
+// frames raster: a far or hidden walker no longer re-renders the near
+// cascades, so effects that rode on those free re-rasters — tree-sway shadows,
+// an idle NPC's limb shadows — refresh at the ?shadowMaxStale cadence (every
+// 12 frames) while someone walks out of range, the cadence they already had
+// whenever nobody walked.
+
+const SHADOW_MOVER_DEFAULT_RADIUS_M = 4; // a rig whose meshes have not loaded yet
+const SHADOW_MOVER_PAD_M = 0.75; // limb swing beyond the measured pose
+const SHADOW_MOVER_STEP_CAP_M = 8; // growth cap (a teleport is two spheres, not a smear)
+const SHADOW_MOVER_REMEASURE_SCANS = 120; // re-measure a moving rig's radius (equip, scale)
+const SHADOW_MOVER_RETRY_SCANS = 15; // ...sooner while it has no measurable mesh
+
+/** Largest axis scale of a column-major Matrix4 `elements` array. */
+function _maxAxisScale(e) {
+  const sx = e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+  const sy = e[4] * e[4] + e[5] * e[5] + e[6] * e[6];
+  const sz = e[8] * e[8] + e[9] * e[9] + e[10] * e[10];
+  return Math.sqrt(Math.max(sx, sy, sz));
+}
+
+/**
+ * Radius about (wx,wy,wz) enclosing every mesh under `root` (held items
+ * included — they hang off the rig's part nodes). -1 when nothing is
+ * measurable yet. Refreshes the rig's world matrices first: a rig spawned
+ * since the last render still has identity matrices on its parts (which
+ * would measure its distance to the world origin), and the renderer
+ * recomputes the same matrices from the same local transforms anyway.
+ */
+function _measureRigRadius(root, wx, wy, wz) {
+  if (typeof root.updateWorldMatrix === "function") {
+    try {
+      root.updateWorldMatrix(false, true);
+    } catch (_) {
+      return -1;
+    }
+  }
+  let best = -1;
+  const stack = [root];
+  while (stack.length) {
+    const o = stack.pop();
+    if (o.isMesh || o.isLine || o.isPoints) {
+      let bs = null;
+      try {
+        if (o.isInstancedMesh || o.isBatchedMesh) {
+          if (o.boundingSphere == null && typeof o.computeBoundingSphere === "function") o.computeBoundingSphere();
+          bs = o.boundingSphere;
+        } else if (o.geometry) {
+          const g = o.geometry;
+          if (g.boundingSphere == null && typeof g.computeBoundingSphere === "function") g.computeBoundingSphere();
+          bs = g.boundingSphere;
+        }
+      } catch (_) {
+        bs = null;
+      }
+      if (bs && bs.center && o.matrixWorld && bs.radius >= 0) {
+        const e = o.matrixWorld.elements;
+        const c = bs.center;
+        const x = e[0] * c.x + e[4] * c.y + e[8] * c.z + e[12];
+        const y = e[1] * c.x + e[5] * c.y + e[9] * c.z + e[13];
+        const z = e[2] * c.x + e[6] * c.y + e[10] * c.z + e[14];
+        const d = Math.hypot(x - wx, y - wy, z - wz) + bs.radius * _maxAxisScale(e);
+        if (d > best) best = d; // NaN compares false — skipped
+      }
+    }
+    const ch = o.children;
+    if (ch) for (let i = 0; i < ch.length; i += 1) stack.push(ch[i]);
+  }
+  return best;
+}
+
+/**
+ * Bitmask of the managed shadow lights whose current shadow frustum holds
+ * the sphere. A light never rastered (no map yet) counts — its frustum is
+ * three's placeholder, and it needs its first raster anyway. A non-finite
+ * sphere counts for every light (err toward drawing).
+ */
+function _shadowLightMask(lights, n, cx, cy, cz, r) {
+  const all = (1 << n) - 1;
+  if (!(Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(cz) && Number.isFinite(r))) return all;
+  let m = 0;
+  for (let i = 0; i < n; i += 1) {
+    const sh = lights[i].shadow;
+    const f = sh && sh.map ? (typeof sh.getFrustum === "function" ? sh.getFrustum() : sh._frustum) : null;
+    const planes = f && f.planes;
+    if (!planes || planes.length < 6) {
+      m |= 1 << i;
+      continue;
+    }
+    let inside = true;
+    for (let k = 0; k < 6; k += 1) {
+      const p = planes[k];
+      const nn = p.normal;
+      if (nn.x * cx + nn.y * cy + nn.z * cz + p.constant < -r) {
+        inside = false;
+        break;
+      }
+    }
+    if (inside) m |= 1 << i;
+  }
+  return m;
+}
+
+function _remeasureMover(rec, root, cx, cy, cz, epoch) {
+  const since = epoch - rec.measuredAt;
+  if (since < (rec.measured ? SHADOW_MOVER_REMEASURE_SCANS : SHADOW_MOVER_RETRY_SCANS)) return;
+  rec.measuredAt = epoch;
+  const r = _measureRigRadius(root, cx, cy, cz);
+  if (r >= 0) {
+    rec.r = r + SHADOW_MOVER_PAD_M;
+    rec.measured = true;
+  } else {
+    rec.measured = false;
+  }
+}
+
+/**
+ * Per-rig change scan for the mover-scoped gate (see the block comment
+ * above). Returns the bitmask of `lights` whose shadow map a rig change made
+ * stale. Allocation-free per tick apart from a record per new rig.
+ *
+ * @param {Object} scene3d - the live `liveScene3d` shape (reads
+ *   `entityManager.entityMap`; keeps its records on `scene3d._shadowMovers`).
+ * @param {THREE.Light[]} lights - the managed shadow lights (cascades or sun).
+ * @returns {number}
+ */
+export function scanShadowMovers(scene3d, lights) {
+  const n = lights.length;
+  let st = scene3d._shadowMovers;
+  if (!st) {
+    st = scene3d._shadowMovers = {
+      recs: new Map(),
+      epoch: 0,
+      stats: { scans: 0, changes: 0, hiddenMoves: 0, spawns: 0, despawns: 0, lastMask: 0 },
+    };
+  }
+  const epoch = (st.epoch = (st.epoch + 1) | 0);
+  const recs = st.recs;
+  const stats = st.stats;
+  stats.scans += 1;
+  let mask = 0;
+  const map = scene3d?.entityManager?.entityMap;
+  if (map && typeof map.forEach === "function") {
+    map.forEach((inst, guid) => {
+      const root = inst && inst.root;
+      if (!root || !root.position || !root.quaternion) return;
+      const p = root.position;
+      const q = root.quaternion;
+      const px = (p.x * 1000) | 0;
+      const py = (p.y * 1000) | 0;
+      const pz = (p.z * 1000) | 0;
+      const qx = (q.x * 1000) | 0;
+      const qy = (q.y * 1000) | 0;
+      const qz = (q.z * 1000) | 0;
+      const qw = (q.w * 1000) | 0;
+      let vis = true;
+      for (let o = root; o; o = o.parent) {
+        if (o.visible === false) {
+          vis = false;
+          break;
+        }
+      }
+      // World centre = parent.matrixWorld × local position: valid for a rig
+      // that has never rendered, and for a held item (parented under its
+      // wielder's part, whose matrix is the last render's — the pose the
+      // local position belongs to).
+      let cx = p.x;
+      let cy = p.y;
+      let cz = p.z;
+      const par = root.parent;
+      if (par && par.matrixWorld) {
+        const e = par.matrixWorld.elements;
+        cx = e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12];
+        cy = e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13];
+        cz = e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14];
+      }
+      let rec = recs.get(guid);
+      if (rec && rec.inst !== inst) {
+        // guid reused by a new instance: the old rig's shadow goes.
+        if (rec.vis) mask |= _shadowLightMask(lights, n, rec.cx, rec.cy, rec.cz, rec.r);
+        rec = undefined;
+      }
+      if (!rec) {
+        rec = {
+          inst, px, py, pz, qx, qy, qz, qw, vis, cx, cy, cz,
+          r: SHADOW_MOVER_DEFAULT_RADIUS_M, measured: false, measuredAt: -Infinity, seen: epoch,
+        };
+        recs.set(guid, rec);
+        if (vis) {
+          _remeasureMover(rec, root, cx, cy, cz, epoch);
+          mask |= _shadowLightMask(lights, n, cx, cy, cz, rec.r);
+          stats.spawns += 1;
+        }
+        return;
+      }
+      rec.seen = epoch;
+      const moved =
+        px !== rec.px || py !== rec.py || pz !== rec.pz ||
+        qx !== rec.qx || qy !== rec.qy || qz !== rec.qz || qw !== rec.qw;
+      if (vis !== rec.vis || (vis && moved)) {
+        stats.changes += 1;
+        // Old shadow out (the sphere it was drawn at).
+        if (rec.vis) mask |= _shadowLightMask(lights, n, rec.cx, rec.cy, rec.cz, rec.r);
+        // New shadow in, grown by the step just taken (next frame's pose).
+        if (vis) {
+          _remeasureMover(rec, root, cx, cy, cz, epoch);
+          let step = Math.hypot(cx - rec.cx, cy - rec.cy, cz - rec.cz);
+          if (!(step >= 0)) step = 0;
+          if (step > SHADOW_MOVER_STEP_CAP_M) step = SHADOW_MOVER_STEP_CAP_M;
+          mask |= _shadowLightMask(lights, n, cx, cy, cz, rec.r + step);
+        }
+      } else if (moved) {
+        stats.hiddenMoves += 1;
+      }
+      rec.px = px; rec.py = py; rec.pz = pz;
+      rec.qx = qx; rec.qy = qy; rec.qz = qz; rec.qw = qw;
+      rec.vis = vis;
+      rec.cx = cx; rec.cy = cy; rec.cz = cz;
+    });
+  }
+  // Despawned (or entity map gone): its last drawn shadow goes.
+  for (const [guid, rec] of recs) {
+    if (rec.seen === epoch) continue;
+    if (rec.vis) mask |= _shadowLightMask(lights, n, rec.cx, rec.cy, rec.cz, rec.r);
+    recs.delete(guid);
+    stats.despawns += 1;
+  }
+  stats.lastMask = mask;
+  return mask;
+}
+
+/**
+ * The mover-scoped static-shadow gate (default; `?shadowMoverScope=off` runs
+ * the RP5 body of applyStaticShadowGate instead). Same contract as RP5 — the
+ * raster OUTPUT is three's, untouched; only which maps raster on which frame
+ * changes — but per managed light (the 3 CSM cascades, or the single-shadow
+ * sun) instead of all-or-nothing. See the block comment above scanShadowMovers.
+ *
+ * @param {Object} scene3d
+ * @param {Object|null} lighting
+ * @param {boolean} shadowDirty - refit / indoor flip / recentre / CSM error:
+ *   every managed light re-rasters.
+ * @param {THREE.WebGLRenderer} renderer
+ * @param {THREE.Light[]} lightsIn - csmState.lights, or [sun].
+ * @param {Object} cfg - getRp5Config().
+ */
+function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lightsIn, cfg) {
+  const shadowMap = renderer.shadowMap;
+  let st = scene3d._shadowScope;
+  let same = !!st && st.renderer === renderer && st.src.length === lightsIn.length;
+  if (same) {
+    for (let i = 0; i < lightsIn.length; i += 1) {
+      if (st.src[i] !== lightsIn[i]) {
+        same = false;
+        break;
+      }
+    }
+  }
+  // Take control: first gated frame, or the managed light set changed (a new
+  // csmState after a quality flip). Warm every map once.
+  if (!scene3d._rp5ShadowGateActive || !same) {
+    scene3d._rp5ShadowGateActive = true;
+    shadowMap.autoUpdate = false;
+    const lights = [];
+    for (let i = 0; i < lightsIn.length; i += 1) {
+      const l = lightsIn[i];
+      if (l && l.shadow) {
+        l.shadow.autoUpdate = false;
+        lights.push(l);
+      }
+    }
+    st = scene3d._shadowScope = {
+      renderer,
+      src: lightsIn.slice(),
+      lights,
+      stale: new Array(lights.length).fill(0),
+      stats: {
+        ticks: 0, rasterTicks: 0, fullTicks: 0, moverTicks: 0, staleTicks: 0,
+        cascadeMarks: new Array(lights.length).fill(0), lastMask: 0,
+      },
+    };
+    shadowDirty = true;
+    scene3d._rp5ShadowStaleFrames = 0;
+    if (lighting) lighting._rp5GatedRenderer = renderer;
+  }
+  const lights = st.lights;
+  const n = lights.length;
+  const all = (1 << n) - 1;
+  const stats = st.stats;
+  stats.ticks += 1;
+
+  // Always scan, so each rig's record holds last frame's pose even across a
+  // run of full rasters (a camera pan) — the next scan then compares
+  // neighbouring frames, not a pose from before the pan.
+  const moverMask = scanShadowMovers(scene3d, lights) & all;
+  let mask = (shadowDirty ? all : 0) | moverMask;
+  const maxStale = cfg.shadowMaxStaleFrames | 0;
+  let staleMask = 0;
+  if (maxStale > 0) {
+    for (let i = 0; i < n; i += 1) {
+      if (!(mask & (1 << i)) && st.stale[i] + 1 >= maxStale) staleMask |= 1 << i;
+    }
+  }
+  mask |= staleMask;
+
+  let pending = false;
+  for (let i = 0; i < n; i += 1) {
+    const sh = lights[i].shadow;
+    if (mask & (1 << i)) {
+      sh.needsUpdate = true;
+      st.stale[i] = 0;
+      stats.cascadeMarks[i] += 1;
+    } else {
+      st.stale[i] += 1;
+    }
+    // A mark three has not consumed yet (no world render since) stays armed.
+    if (sh.needsUpdate === true) pending = true;
+  }
+  if (pending) shadowMap.needsUpdate = true;
+
+  if (mask) {
+    stats.rasterTicks += 1;
+    if (shadowDirty) stats.fullTicks += 1;
+    else if (moverMask) stats.moverTicks += 1;
+    else stats.staleTicks += 1;
+  }
+  stats.lastMask = mask;
+  // RP5 probe compatibility: 0 on a frame that arms a raster.
+  scene3d._rp5ShadowStaleFrames = mask ? 0 : (scene3d._rp5ShadowStaleFrames | 0) + 1;
 }
 
 /**

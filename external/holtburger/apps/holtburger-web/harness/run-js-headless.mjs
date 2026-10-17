@@ -634,6 +634,9 @@ const TIER5 = [
   // empty multidraws skip three's draw setup.
   { tier: 5, flag: "bm_indirect_per_camera", file: "test_bm_indirect_per_camera.mjs" },
   { tier: 5, flag: "shadow_caster_list", file: "test_shadow_caster_list.mjs" },
+  // fps wave 1 (2026-10-17): the static-shadow gate re-rasters only the
+  // cascades a rig change touches (hidden rigs are not casters).
+  { tier: 5, flag: "shadowMoverScope", file: "tests/shadow_mover_scope.test.mjs" },
   { tier: 5, flag: "skip_empty_multidraw", file: "test_skip_empty_multidraw.mjs" },
   { tier: 5, flag: "static_atlas_growth", file: "test_static_atlas_growth.mjs" },
   { tier: 5, flag: "static_atlas_pages", file: "test_static_atlas_pages.mjs" },
