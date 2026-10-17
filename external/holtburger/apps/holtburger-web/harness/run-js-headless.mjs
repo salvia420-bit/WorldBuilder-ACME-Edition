@@ -399,6 +399,8 @@ const TIER5 = [
   // 2026-10-08 — ambient critters fly their retail SetOmega orbit; server movers
   // walk at their own clip tempo (?animSceneryOmega / ?creatureGait).
   { tier: 5, flag: "animSceneryOmega", file: "tests/animated_scenery_omega.test.mjs" },
+  // 2026-10-17 cpuframe: instanced DAT-anim scenery posed in the vertex shader.
+  { tier: 5, flag: "animSceneryGpu", file: "tests/anim_scenery_gpu.test.mjs" },
   { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
   // 2026-10-08 — playhead parity: retail hook timing on the real EntityManager
   // (?hookFrameExit; also pins the end-of-tick hook queue the retired
