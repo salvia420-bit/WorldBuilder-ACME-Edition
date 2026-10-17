@@ -92,7 +92,11 @@ async function attach(setupId, animId, omega, sourceObjIdx) {
 
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
 function wing(bucket) {
-  bucket.getMatrixAt(0, _m);
+  // The matrix the instance is DRAWN with: on a ?animSceneryGpu bucket the
+  // slot holds the static placement and the vertex shader applies the pose
+  // row (animSceneryEffectiveMatrixAt mirrors it); on the CPU path, the slot.
+  if (typeof AS.animSceneryEffectiveMatrixAt === "function") AS.animSceneryEffectiveMatrixAt(bucket, 0, _m);
+  else bucket.getMatrixAt(0, _m);
   _m.decompose(_p, _q, _s);
   return { angle: Math.atan2(_p.y - ANCHOR.y, _p.x - ANCHOR.x), r: Math.hypot(_p.x - ANCHOR.x, _p.y - ANCHOR.y), z: _p.z };
 }

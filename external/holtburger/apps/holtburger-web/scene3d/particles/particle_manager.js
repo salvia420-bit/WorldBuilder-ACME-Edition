@@ -193,6 +193,67 @@ const _RP6 = {
 };
 const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
 
+// ?particleTickOnce (2026-10-17, DEFAULT ON; `=off` escape) — the static
+// manager is ticked AT MOST ONCE per animation frame.
+//
+// THE DOUBLE TICK. statics.js is loaded as TWO module instances on the
+// unbundled page: scene3d/index.js imports `./statics.js?v=phase7-par` and
+// loop.js / cells.js import `./statics.js` (a different specifier = a second
+// module; impl/task-T11-report.md D5). Each instance arms its own `_spLoop`
+// self-rAF, and both reach the ONE static ParticleManager (the shared
+// `scene3d._staticParticleManager`), so every frame paid two full ticks.
+// Measured on the 1070 (LB 0xE632, 2026-10-17 profile): `_spLoop statics.js`
+// 196 ms + `_spLoop statics.js?v=phase7-par` 143 ms of a 7.25 s profile — the
+// whole "static particle loop 1.55 ms/frame" was 2 x ~0.78 ms; live probe:
+// 14 manager ticks in 7 rAF frames.
+//
+// WHY THE SECOND TICK DREW NOTHING NEW. The two loops run back to back in the
+// same frame (rAF callbacks keep their registration order), ~0.2 ms apart, so
+// the second tick's latched clock is barely past the first: no emitter's
+// birthrate elapses in it (one emission per update at most — retail
+// ShouldEmitParticle), the particle ages move by that sliver, and the
+// instanced buckets are rebuilt from scratch identically. The one thing it DID
+// change is RP6's cadence: `recheckInterval` counts TICKS, so two ticks a
+// frame re-evaluated the cull set every 3 frames, not 6. `tickFrame` keeps
+// that cadence: once it has seen a second driver in a frame it re-checks
+// every `round(interval / 2)` of its (now single) ticks — the same frames as
+// before. `tick()` itself is unchanged (entity managers, tests, the
+// `?particleClock=loop|sim` main-loop driver all call it directly).
+let _TICK_ONCE_ON = null;
+export function particleTickOnceEnabled() {
+  if (_TICK_ONCE_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleTickOnce") || "").toLowerCase();
+      _TICK_ONCE_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _TICK_ONCE_ON = true;
+    }
+  }
+  return _TICK_ONCE_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleTickOnceFlag(on) { _TICK_ONCE_ON = on == null ? null : !!on; }
+
+// ?particleCulledLean (2026-10-17, DEFAULT ON; `=off` escape) — a culled
+// INSTANCED emitter skips the per-tick `_setPartsVisible(false)` re-assert:
+// its slot meshes are scene-detached carriers, so the flag they carry is never
+// drawn (see the culled branch in `_tickLatched`). Per-mesh emitters, whose
+// slot meshes ARE the draw, are unchanged.
+let _CULLED_LEAN_ON = null;
+export function particleCulledLeanEnabled() {
+  if (_CULLED_LEAN_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleCulledLean") || "").toLowerCase();
+      _CULLED_LEAN_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _CULLED_LEAN_ON = true;
+    }
+  }
+  return _CULLED_LEAN_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleCulledLeanFlag(on) { _CULLED_LEAN_ON = on == null ? null : !!on; }
+
 /** Diagnostic counters for the RP6 cull path (read by probes/tests). */
 export const PARTICLE_RP6_STATS = {
   // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
@@ -1566,6 +1627,11 @@ export class ParticleManager {
     // every `_RP6.recheckInterval` ticks; between re-checks each
     // emitter keeps its cached `_rp6Culled` decision.
     this._rp6Frame = 0;
+    // ?particleTickOnce — the rAF timestamp of the last `tickFrame` that
+    // ticked, and whether a second driver was ever seen in one frame (see
+    // the flag note: it halves the RP6 recheck interval to keep its cadence).
+    this._frameTs = -1;
+    this._frameDupDrivers = false;
     // Perf (2026-06-27) — per-slot material POOL. Each emitter slot needs its
     // OWN material instance (per-particle opacity lerps must not stomp
     // neighbours), so addEmitter() `baseMaterial.clone()`d up to maxParticles
@@ -2254,6 +2320,25 @@ export class ParticleManager {
     }
   }
 
+  /**
+   * Self-rAF driver entry (statics.js `_spLoop`): `tick()` at most once per
+   * animation frame. `ts` is the rAF callback timestamp — identical for every
+   * callback of one frame — so a second driver in the same frame is a no-op
+   * (see `?particleTickOnce`). A non-number `ts` (no rAF) or the flag off ticks
+   * unconditionally, exactly as before. Returns true when it ticked.
+   */
+  tickFrame(ts) {
+    if (typeof ts === "number" && particleTickOnceEnabled()) {
+      if (ts === this._frameTs) {
+        this._frameDupDrivers = true;
+        return false;
+      }
+      this._frameTs = ts;
+    }
+    this.tick();
+    return true;
+  }
+
   _tickLatched() {
     const removeIds = [];
     // `?particleFx`: shared time + scene-light uniforms (idempotent per frame).
@@ -2265,8 +2350,14 @@ export class ParticleManager {
     // tick we build the frustum once (amortized over all emitters);
     // `camera === null` means we couldn't resolve a camera → bail open
     // (treat every emitter as visible this tick).
+    // ?particleTickOnce: a manager whose duplicate driver is now suppressed
+    // ticks half as often, so it re-checks every half-interval of ticks —
+    // the same frames the double tick re-checked on.
     this._rp6Frame = (this._rp6Frame + 1) >>> 0;
-    const recheck = (this._rp6Frame % _RP6.recheckInterval) === 0;
+    const interval = this._frameDupDrivers
+      ? Math.max(1, Math.round(_RP6.recheckInterval / 2))
+      : _RP6.recheckInterval;
+    const recheck = (this._rp6Frame % interval) === 0;
     const camera = recheck ? _rp6PrepareFrustum() : null;
 
     // Billboard (2026-06-24): the active camera, resolved EVERY tick (cheap —
@@ -2279,6 +2370,8 @@ export class ParticleManager {
     // every manager without a lookup) leaves the loop below exactly as before.
     const cellLookup = this._cellLookup;
     const cellGate = cellLookup !== null && particleCellGateEnabled();
+    // ?particleCulledLean — read once per tick (see the culled branch).
+    const leanCulled = particleCulledLeanEnabled();
     let cellHidden = 0;
 
     // Instanced buckets are rebuilt from scratch every tick: reset the write
@@ -2431,7 +2524,17 @@ export class ParticleManager {
         // the cull's GPU-submission savings. Free slots are already invisible;
         // `_setPartsVisible` reads before it writes, so the steady state is a
         // compare per occupied slot and no property churn.
-        if (!drained) _setPartsVisible(emitter, false);
+        // ?particleCulledLean: an INSTANCED emitter's slot meshes are never in
+        // the scene graph (addEmitter / _applyInstancing detach them — they are
+        // transform+opacity carriers read by _appendInstances), so their
+        // `visible` draws nothing either way; a culled instanced emitter
+        // vanishes because it does not append. The walk was 27% of the static
+        // tick (1070 profile, `_setPartsVisible` 82.6 ms of 302 ms; every
+        // static emitter was instanced and persistent in the live probe).
+        // Per-mesh emitters keep the per-tick re-assert above.
+        if (!drained && !(leanCulled && emitter._instKey !== null && emitter._instKey !== undefined)) {
+          _setPartsVisible(emitter, false);
+        }
         continue;
       }
 

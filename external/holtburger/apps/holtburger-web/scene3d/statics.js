@@ -108,6 +108,8 @@ import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 import { canSupplyPlanes } from "./surface_planes.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
+// ?staticsCullGate: film takes rely on the per-frame pass (leaf, no imports).
+import { filmModeEnabled } from "./film/flags.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
 // ParticleManager is ticked from the main loop (loop.js manager phase) and
 // the private rAF below never arms. time_rng.js is dependency-free, so this
@@ -116,7 +118,7 @@ import { currentTime, particleClockMode, rng } from "./particles/time_rng.js";
 // Task #7 — true mesh-animated scenery (flags/foliage). Static import is
 // cycle-safe: animated_scenery.js imports statics.js only via a deferred
 // dynamic import() inside a function, never at module load.
-import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./animated_scenery.js";
+import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees, animSceneryBucketVisEnabled } from "./animated_scenery.js";
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled, windSwayGpuEnabled } from "./tree_wind.js";
@@ -4647,7 +4649,71 @@ export function cullStaticsGroup(scene3d, culler) {
   if (!group || !culler || !culler.valid) return { tested: 0, culled: 0 };
   const children = group.children;
   if (!children || children.length === 0) return { tested: 0, culled: 0 };
+  // ?staticsCullGate — skip the walk while nothing it reads has changed.
+  if (_cullGateSkip(scene3d, group, culler)) return _cullGate.last;
+  const result = _cullStaticsWalk(group, children, culler);
+  _cullGate.last = result;
+  return result;
+}
 
+// ?staticsCullGate (2026-10-17, DEFAULT ON; `=off` escape) — the per-frame
+// statics cull walk is skipped while its inputs are unchanged.
+//
+// The walk tests every staticsGroup child (~1,700 at LB 0xE632) against the
+// frustum each frame: `cullStaticsGroup` 170 ms of a 7.25 s 1070 profile
+// (2026-10-17), ~0.8 ms/frame, nearly all of it re-deriving the answer it
+// gave the frame before — the measured case is a player standing still. Its
+// verdict per node is a function of the frustum (`culler._mvp`, the AC-space
+// view-projection), the node's cached cull sphere (statics never move), the
+// light-ownership guardrail and two markers. So it is skipped while the MVP is
+// bit-identical, the child count is unchanged and `scene3d.activeLights` (the
+// light attach that flips `_staticOwnsLight`, lighting.js) has the same
+// length — with a full walk at least every CULL_GATE_EVERY frames, which is
+// the latency of the changes it cannot see: a `__deadBatch` flip (re-derived
+// on the ~10 Hz optimize tick anyway), a same-count child swap, a foreign
+// `visible` write the walk used to undo the next frame. Film mode keeps the
+// per-frame walk (its hide markers are applied with a direct write, but the
+// takes are frame-stepped). Any camera motion re-runs it every frame.
+const CULL_GATE_EVERY = 4;
+const _cullGate = {
+  valid: false, group: null, n: -1, lights: -1, skipped: 0,
+  mvp: new Float64Array(16), last: { tested: 0, culled: 0 },
+};
+let _cullGateFlag;
+export function staticsCullGateEnabled() {
+  if (_cullGateFlag !== undefined) return _cullGateFlag;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("staticsCullGate") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  if (on) { try { if (filmModeEnabled()) on = false; } catch (_) {} }
+  return (_cullGateFlag = on);
+}
+/** Test seam: true/false forces the gate, undefined re-reads the URL. Resets state. */
+export function __setStaticsCullGateForTest(v) { _cullGateFlag = v; _cullGate.valid = false; }
+
+function _cullGateSkip(scene3d, group, culler) {
+  const st = _cullGate;
+  const m = culler._mvp && culler._mvp.elements;
+  if (!m || !staticsCullGateEnabled()) { st.valid = false; return false; }
+  const n = group.children.length;
+  const lights = Array.isArray(scene3d.activeLights) ? scene3d.activeLights.length : -1;
+  if (st.valid && st.group === group && st.n === n && st.lights === lights
+      && st.skipped < CULL_GATE_EVERY - 1) {
+    const p = st.mvp;
+    let same = true;
+    for (let i = 0; i < 16; i++) { if (p[i] !== m[i]) { same = false; break; } }
+    if (same) { st.skipped += 1; return true; }
+  }
+  st.valid = true; st.group = group; st.n = n; st.lights = lights; st.skipped = 0;
+  for (let i = 0; i < 16; i++) st.mvp[i] = m[i];
+  return false;
+}
+
+function _cullStaticsWalk(group, children, culler) {
   // Hoist the horizon sqrt out of the per-node loop (was recomputed per node
   // per frame). `cullHorizon` is the metre horizon; the per-node test only
   // needs to add the sphere radius to it.
@@ -4676,6 +4742,10 @@ export function cullStaticsGroup(scene3d, culler) {
     // consistent with the census particle fix (de24059d).
     const ud = node.userData;
     if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) continue;
+    // Animated-scenery buckets own their visibility (?animSceneryBucketVis,
+    // animated_scenery.js): their instances span every visited landblock, so
+    // the sphere cached here on first sight went stale and hid every critter.
+    if (ud && ud.isAnimatedSceneryInstanced === true && animSceneryBucketVisEnabled()) continue;
     // BatchedMesh statics (static-batch consolidation, stat-atlas buckets)
     // sit at the group origin with their placements in per-instance matrices,
     // so the isMesh sphere derivation below would center the cull sphere at
@@ -4785,12 +4855,91 @@ export function disposeStaticsBillboards() {
   _bbRafId = 0;
 }
 
+// ?billboardTickGate (2026-10-17, DEFAULT ON; `=off` escape) — the billboard
+// walk runs only when its answer can have changed.
+//
+// (1) ONCE PER FRAME. This file loads as two module instances on the unbundled
+//     page (`./statics.js?v=phase7-par` from index.js, `./statics.js` from
+//     loop.js / cells.js — impl/task-T11-report.md D5), so two `_bbLoop`s
+//     walked the same staticsGroup every frame: 1070 profile (2026-10-17)
+//     `tickStaticsBillboards` 37.9 + 35.1 ms of 7.25 s. The second walk of a
+//     frame recomputed the same quaternions from the same camera.
+// (2) ONLY ON CHANGE. A degraded leaf's facing is a function of the camera's
+//     world position, the LOD node's (immobile) matrixWorld and which leaf is
+//     showing — and with a still camera the LOD level cannot change either.
+//     So the walk is skipped while the active camera object, its world
+//     position (exact compare) and the staticsGroup child count all match the
+//     last walk. Any change re-arms THREE walks (this frame + the next two):
+//     a node added this frame still has an identity matrixWorld until the
+//     render after it, and the walk that follows that render is the one that
+//     faces it correctly. A same-count swap (one node out, one in, same frame)
+//     is caught by a full walk at least every BB_GATE_MAX_SKIP + 1 frames.
+// Standing still (the measured case) the walk becomes ~1 in 8 frames.
+const BB_GATE_MAX_SKIP = 7;
+const BB_GATE_HOLD = 2;
+const _bbGateCam = new THREE.Vector3();
+// Shared by BOTH module instances (a module-level Map would be per instance).
+const _bbGateState = (typeof globalThis !== "undefined")
+  ? (globalThis.__hbBillboardGate || (globalThis.__hbBillboardGate = new WeakMap()))
+  : new WeakMap();
+let _bbGateFlag;
+export function billboardTickGateEnabled() {
+  if (_bbGateFlag !== undefined) return _bbGateFlag;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("billboardTickGate") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  return (_bbGateFlag = on);
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setBillboardTickGateForTest(v) { _bbGateFlag = v; }
+
+/**
+ * Should the billboard walk run this frame? `ts` is the rAF timestamp (one
+ * value per frame across every callback); a non-number never dedupes. Flag
+ * off ⇒ always true (two walks per frame again, as before).
+ */
+export function staticsBillboardTickDue(scene3d, ts) {
+  const group = scene3d?.staticsGroup;
+  if (!group) return false;
+  if (!billboardTickGateEnabled()) return true;
+  let st = _bbGateState.get(group);
+  if (!st) {
+    st = { ts: NaN, cam: null, x: NaN, y: NaN, z: NaN, n: -1, skipped: 0, hold: 0 };
+    _bbGateState.set(group, st);
+  }
+  if (typeof ts === "number") {
+    if (st.ts === ts) return false; // the other module instance already walked
+    st.ts = ts;
+  }
+  const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  if (!cam) return true; // tickStaticsBillboards no-ops without a camera anyway
+  cam.getWorldPosition(_bbGateCam);
+  const n = group.children ? group.children.length : 0;
+  const same = st.cam === cam && st.n === n
+    && st.x === _bbGateCam.x && st.y === _bbGateCam.y && st.z === _bbGateCam.z;
+  if (!same) {
+    st.cam = cam; st.n = n;
+    st.x = _bbGateCam.x; st.y = _bbGateCam.y; st.z = _bbGateCam.z;
+    st.hold = BB_GATE_HOLD;
+    st.skipped = 0;
+    return true;
+  }
+  if (st.hold > 0) { st.hold -= 1; st.skipped = 0; return true; }
+  if (st.skipped >= BB_GATE_MAX_SKIP) { st.skipped = 0; return true; }
+  st.skipped += 1;
+  return false;
+}
+
 if (typeof window !== "undefined" && _billboardEnabled()) {
-  const _bbLoop = () => {
+  const _bbLoop = (ts) => {
     if (_bbDisposed) return;
     try {
       const live = window.liveScene3d;
-      if (live) tickStaticsBillboards(live);
+      if (live && staticsBillboardTickDue(live, ts)) tickStaticsBillboards(live);
     } catch (_) {}
     _bbRafId = window.requestAnimationFrame(_bbLoop);
   };
@@ -6019,11 +6168,17 @@ let _spRafId = 0;
 let _spDisposed = false;
 
 if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMode() === "off") {
-  const _spLoop = () => {
+  // `ts` (the rAF timestamp) lets the manager drop the SECOND module
+  // instance's tick of the same frame — this file loads twice on the
+  // unbundled page (`?particleTickOnce`, particle_manager.js tickFrame).
+  const _spLoop = (ts) => {
     if (_spDisposed) return;
     try {
       const mgr = _staticParticleMgrRef || window.liveScene3d?._staticParticleManager;
-      if (mgr) mgr.tick();
+      if (mgr) {
+        if (typeof mgr.tickFrame === "function") mgr.tickFrame(ts);
+        else mgr.tick();
+      }
     } catch (_) {}
     _spRafId = window.requestAnimationFrame(_spLoop);
   };

@@ -400,6 +400,9 @@ const TIER5 = [
   // 2026-10-08 — ambient critters fly their retail SetOmega orbit; server movers
   // walk at their own clip tempo (?animSceneryOmega / ?creatureGait).
   { tier: 5, flag: "animSceneryOmega", file: "tests/animated_scenery_omega.test.mjs" },
+  // 2026-10-17 cpuframe: instanced DAT-anim scenery posed in the vertex shader.
+  { tier: 5, flag: "animSceneryGpu", file: "tests/anim_scenery_gpu.test.mjs" },
+  { tier: 5, flag: "animSceneryBucketVis", file: "tests/anim_scenery_bucket_vis.test.mjs" },
   { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
   // 2026-10-08 — playhead parity: retail hook timing on the real EntityManager
   // (?hookFrameExit; also pins the end-of-tick hook queue the retired
@@ -506,6 +509,10 @@ const TIER5 = [
   // 2026-10-08 PLIFECYCLE-2/-5: retail degrade freeze for RP6-culled emitters;
   // static default_script hooks fire at their start_time.
   { tier: 5, flag: "particleCullFreeze", file: "tests/particle_cull_freeze.test.mjs" },
+  // 2026-10-17 cpuframe: the static manager ticks once per frame (statics.js
+  // loads twice → two _spLoop drivers), RP6 cadence kept.
+  { tier: 5, flag: "particleTickOnce", file: "tests/particle_tick_once.test.mjs" },
+  { tier: 5, flag: "particleCulledLean", file: "tests/particle_culled_lean.test.mjs" },
   { tier: 5, flag: "staticScriptHookTime", file: "tests/static_script_hooktime.test.mjs" },
   { tier: 5, flag: "particle_single_pass", file: "test_particle_single_pass.mjs" },
   { tier: 5, flag: "particles", file: "test_particles.mjs" },
@@ -624,6 +631,8 @@ const TIER5 = [
   { tier: 5, flag: "anim_cache_evict_dispose", file: "test_anim_cache_evict_dispose.mjs" },
   { tier: 5, flag: "particle_time_latch", file: "test_particle_time_latch.mjs" },
   { tier: 5, flag: "fog_probe_pbo_unbind", file: "test_fog_probe_pbo_unbind.mjs" },
+  // 2026-10-17 cpuframe: far-fog probe read through a persistent PBO + fence, read a frame later.
+  { tier: 5, flag: "farFogFence", file: "tests/far_fog_fence.test.mjs" },
   { tier: 5, flag: "frame_split_probe", file: "test_frame_split_probe.mjs" },
   { tier: 5, flag: "landblock_lru_frame_slot", file: "test_landblock_lru_frame_slot.mjs" },
   { tier: 5, flag: "mem_census", file: "test_mem_census.mjs" },
@@ -1019,6 +1028,9 @@ const TIER5 = [
   // 2026-10-16 statics LOD bands keep the Setup's part pose (signs/props stop
   // sinking or sliding at a band switch; billboard bands pivot on the part).
   { tier: 5, flag: "degradePose", file: "tests/statics_degrade_pose.test.mjs" },
+  // 2026-10-17 cpuframe: one billboard walk per frame, skipped while nothing moved.
+  { tier: 5, flag: "billboardTickGate", file: "tests/statics_billboard_gate.test.mjs" },
+  { tier: 5, flag: "staticsCullGate", file: "tests/statics_cull_gate.test.mjs" },
   // 2026-10-16 every portal gets the purple portal's set piece; the portal
   // "pop" root causes: static part anchors + the true cull sphere, lights in
   // the object frame, a re-sent portal create applied in place.

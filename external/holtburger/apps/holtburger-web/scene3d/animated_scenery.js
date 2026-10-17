@@ -52,6 +52,11 @@ import { windBend } from "./vfx/components/windBend.js";
 import { visualEnabled } from "./vfx_catalog.js";
 // ?canopySoften (2026-10-07): crown-radial normals for animated foliage parts.
 import { softenCanopyGroups } from "./canopy_soften.js";
+// ?animSceneryGpu (2026-10-17): the instanced pose is composed in the vertex shader.
+import {
+  animSceneryGpuEnabled, animInstMaterialFor, poseRowFor, poseRows, writePoseRow,
+  flushPoseTable, syncAnimInstMaterials, animSceneryGpuDiag, disposeAnimSceneryGpu, posedMatrixFromRow,
+} from "./anim_scenery_gpu.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -212,6 +217,38 @@ export function animSceneryInstancedEnabled() {
   return on;
 }
 
+// ?animSceneryBucketVis (2026-10-17, DEFAULT ON; `=off` escape) — the
+// instanced buckets own their `visible`, and the statics cull leaves them be.
+//
+// THE BUG. Bucket meshes are direct staticsGroup children, so statics.js
+// `cullStaticsGroup` frustum-tested them like any instanced static — with the
+// cull sphere it CACHES FOREVER on first sight (`userData._cullSphere`, from
+// `computeBoundingSphere()` over the instances registered at that moment).
+// A bucket grows with every landblock the player visits, so the cached sphere
+// covers only the first few placements: live on the 1070 (2026-10-17) all 27
+// buckets were `visible:false`, their spheres ~35 km from the player at LB
+// 0xE632 — every butterfly, seagull, bird and insect cloud invisible, still
+// posed every frame. Buckets are `frustumCulled=false` precisely because their
+// instances are scattered (see the header above). Now the cull skips them and
+// this module shows a bucket while it has at least one live (non-collapsed)
+// instance — an all-collapsed bucket draws only degenerate slots, so hiding it
+// is pixel-identical. `=off` restores the statics-cull behaviour.
+let _bucketVisFlag;
+export function animSceneryBucketVisEnabled() {
+  if (_bucketVisFlag !== undefined) return _bucketVisFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("animSceneryBucketVis")?.toLowerCase();
+      if (v != null) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _bucketVisFlag = on;
+  return on;
+}
+/** Test seam: true/false forces, undefined re-reads the URL. */
+export function __setAnimSceneryBucketVisForTest(v) { _bucketVisFlag = v; }
+
 // One shared driver per animation DID: { mixer, template, parts:[Group],
 // numParts, refCount }. The template is NOT added to the scene — it's a pure
 // transform holder the mixer animates; instances copy its part transforms.
@@ -362,6 +399,25 @@ export function _isParkedLb(node) {
   } catch (_) {
     return false;
   }
+}
+
+// Per-frame memo of `_isParkedLb` by landblock id (2026-10-17, cpuframe).
+// The rAF reclaim loop asked the LRU once PER INSTANCE per frame, and most
+// instances are parked: live 1070 probe, 3,441 instances of which 3,364 sat in
+// parked landblocks (77 anchors in the scene). 1070 profile: `_isParkedLb`
+// 56.5 ms of 7.25 s. Every anchor of a landblock shares the answer, and
+// nothing inside the (synchronous) loop parks or unparks, so one LRU query per
+// landblock per frame gives the same result. Cleared at the top of each loop.
+const _parkedMemo = new Map();
+function _isParkedLbMemo(node) {
+  const lb = node?.userData?.landblockId;
+  if (lb == null) return false;
+  let v = _parkedMemo.get(lb);
+  if (v === undefined) {
+    v = _isParkedLb(node);
+    _parkedMemo.set(lb, v);
+  }
+  return v;
 }
 
 /**
@@ -724,22 +780,54 @@ function _getSharedSetupGeom(setupId, wasmExports) {
   return p;
 }
 
-function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDid, materialCache, spFetch) {
-  const key = `${setupId}:${partIdx}:${gIdx}`;
+// ?animSceneryGpu: give the bucket geometry its constant per-vertex pose row.
+// A bucket's geometry is its own (one per setup/part/group) unless one setup
+// is placed with two animation DIDs — then the second bucket gets a copy.
+function _geometryWithPoseRow(geometry, row) {
+  const ud = geometry.userData || (geometry.userData = {});
+  let geo = geometry;
+  if (ud.__hbAiRow !== undefined && ud.__hbAiRow !== row) {
+    geo = geometry.clone();
+    _geomList.push(geo);
+  }
+  const n = geo.getAttribute("position")?.count | 0;
+  geo.setAttribute("hbAiPose", new THREE.BufferAttribute(new Float32Array(n).fill(row), 1));
+  geo.userData.__hbAiRow = row;
+  return geo;
+}
+
+function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDid, materialCache, spFetch, animId, hingeMat) {
+  // GPU buckets are per animation DID too: the pose row rides the geometry.
+  const gpu = animSceneryGpuEnabled();
+  const key = gpu ? `${setupId}:${animId}:${partIdx}:${gIdx}` : `${setupId}:${partIdx}:${gIdx}`;
   let p = _buckets.get(key);
   if (p) return p;
   p = (async () => {
     const mat = await materialCache.get(surfaceDid, spFetch);
     if (!mat) return null;
-    const mesh = new THREE.InstancedMesh(geometry, mat, 128);
+    let drawMat = mat;
+    let geo = geometry;
+    let gpuRow = -1;
+    if (gpu) {
+      const v = animInstMaterialFor(mat);
+      if (v) {
+        gpuRow = poseRowFor(animId, partIdx, hingeMat);
+        geo = _geometryWithPoseRow(geometry, gpuRow);
+        drawMat = v;
+      }
+    }
+    const mesh = new THREE.InstancedMesh(geo, drawMat, 128);
     mesh.count = 0;
     mesh.name = `anim-inst-0x${setupId.toString(16)}-p${partIdx}-g${gIdx}`;
-    mesh.userData = { isAnimatedSceneryInstanced: true }; // no landblockId → LRU never evicts
+    // no landblockId → LRU never evicts. `animGpuRow`: the pose-table row a
+    // GPU-posed bucket draws with (?animSceneryGpu), -1 on the CPU path.
+    mesh.userData = { isAnimatedSceneryInstanced: true, animGpuRow: gpuRow };
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene3d.staticsGroup.add(mesh);
-    const bucket = { mesh, members: [], capacity: 128 };
+    // `active`: members not collapsed (?animSceneryBucketVis shows the bucket iff > 0).
+    const bucket = { mesh, members: [], capacity: 128, gpu: gpuRow >= 0, active: 0 };
     _bucketList.push(bucket);
     return bucket;
   })();
@@ -760,6 +848,7 @@ function _registerSlot(bucket, inst) {
     nm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     nm.instanceMatrix.array.set(old.instanceMatrix.array);
     nm.count = old.count;
+    nm.visible = old.visible;
     const parent = old.parent;
     if (parent) { parent.add(nm); parent.remove(old); }
     old.dispose(); // frees old instance buffers only — geometry/material shared
@@ -769,6 +858,7 @@ function _registerSlot(bucket, inst) {
   const index = bucket.members.length;
   bucket.members.push(inst);
   bucket.mesh.count = bucket.members.length;
+  bucket.active += 1; // a new slot is live (registered instances start un-collapsed)
   return index;
 }
 
@@ -797,11 +887,18 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
     const groups = shared.parts[i];
     for (let g = 0; g < groups.length; g++) {
       // eslint-disable-next-line no-await-in-loop
-      const bucket = await _getOrCreateBucket(scene3d, setupId, i, g, groups[g].geometry, groups[g].surfaceDid, materialCache, spFetch);
+      const bucket = await _getOrCreateBucket(scene3d, setupId, i, g, groups[g].geometry, groups[g].surfaceDid,
+        materialCache, spFetch, animId, shared.hingeMats[i]);
       if (!bucket) continue;
       const index = _registerSlot(bucket, inst);
-      _instScratch.multiplyMatrices(inst.nodeMat, shared.hingeMats[i]); // rest pose until first tick
-      bucket.mesh.setMatrixAt(index, _instScratch);
+      if (bucket.gpu) {
+        // ?animSceneryGpu: the slot holds the STATIC placement; the pose row
+        // (seeded with this hinge rest pose) supplies the part transform.
+        bucket.mesh.setMatrixAt(index, inst.nodeMat);
+      } else {
+        _instScratch.multiplyMatrices(inst.nodeMat, shared.hingeMats[i]); // rest pose until first tick
+        bucket.mesh.setMatrixAt(index, _instScratch);
+      }
       // Record the span too, so a same-frame span flush on this bucket still
       // covers the new slot (perf T9); needsUpdate stays for an immediate
       // whole-buffer upload if a render lands before the next flush.
@@ -810,11 +907,13 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
       inst.slots.push({ bucket, index, partIdx: i });
     }
   }
+  // CPU-posed slots left (0 ⇒ the rAF loop has nothing to write per frame).
+  inst.cpuSlots = inst.slots.reduce((n, s) => n + (s.bucket.gpu ? 0 : 1), 0);
   return inst;
 }
 
-/** Per-frame slot write: template part poses composed once per DID per frame. */
-function _writeInstancedPose(inst, g) {
+/** The DID's template part poses, composed once per DID per frame. */
+function _partMatsFor(g) {
   if (g._poseStamp !== _poseFrame) {
     if (!g._partMats) g._partMats = [];
     for (let j = 0; j < g.parts.length; j++) {
@@ -823,8 +922,57 @@ function _writeInstancedPose(inst, g) {
     }
     g._poseStamp = _poseFrame;
   }
+  return g._partMats;
+}
+
+/**
+ * ?animSceneryGpu — once per frame, after the mixers + orbits advanced: write
+ * each (DID, part) row of the pose table the GPU-posed buckets read.
+ */
+function _updateGpuPoseRows() {
+  const rows = poseRows();
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const g = _didGroups.get(r.animId);
+    if (!g) continue;
+    const pm = _partMatsFor(g)[r.partIdx];
+    if (!pm) continue;
+    writePoseRow(r.row, pm, g.omega ? g.orbitQ : null);
+  }
+  flushPoseTable();
+}
+
+/**
+ * The matrix instance `index` of an animated-scenery bucket is DRAWN with: the
+ * slot's instanceMatrix on the CPU path; on a GPU-posed bucket the vertex
+ * shader's composition of that static placement with the bucket's pose row
+ * (JS mirror). Tests / diag.
+ */
+export function animSceneryEffectiveMatrixAt(mesh, index, out) {
+  const m = out || new THREE.Matrix4();
+  mesh.getMatrixAt(index, m);
+  const row = mesh.userData?.animGpuRow;
+  if (typeof row === "number" && row >= 0) posedMatrixFromRow(m, row, m);
+  return m;
+}
+
+/**
+ * Per-frame slot write: template part poses composed once per DID per frame.
+ * GPU-posed slots (?animSceneryGpu) hold the static placement and are only
+ * (re)written when `restore` — an instance shown again after a collapse.
+ */
+function _writeInstancedPose(inst, g, restore) {
+  _partMatsFor(g);
   const nodeMat = _orbitNodeMatrix(inst, g);
   for (const s of inst.slots) {
+    if (s.bucket.gpu) {
+      if (restore) {
+        s.bucket.mesh.setMatrixAt(s.index, inst.nodeMat);
+        _markDirty(s.bucket, s.index);
+      }
+      continue;
+    }
     const pm = g._partMats[s.partIdx];
     if (!pm) continue;
     _instScratch.multiplyMatrices(nodeMat, pm);
@@ -847,6 +995,7 @@ function _collapseInstanced(inst) {
   for (const s of inst.slots) {
     s.bucket.mesh.setMatrixAt(s.index, _ZERO_MAT);
     _markDirty(s.bucket, s.index);
+    s.bucket.active -= 1;
   }
   inst.collapsed = true;
   _collapseStats.collapses += 1;
@@ -865,6 +1014,7 @@ function _anchorVisible(node) {
 function _reclaimInstancedSlots(inst) {
   for (const s of inst.slots) {
     const b = s.bucket;
+    if (!inst.collapsed) b.active -= 1;
     const m = b.members;
     const lastIdx = m.length - 1;
     if (lastIdx < 0) continue;
@@ -883,6 +1033,16 @@ function _reclaimInstancedSlots(inst) {
     _markDirty(b, s.index);
   }
   inst.slots.length = 0;
+}
+
+/** ?animSceneryBucketVis: each bucket draws iff it has a live instance. */
+function _applyBucketVisibility() {
+  if (!animSceneryBucketVisEnabled()) return;
+  for (let i = 0; i < _bucketList.length; i++) {
+    const b = _bucketList[i];
+    const want = b.active > 0;
+    if (b.mesh.visible !== want) b.mesh.visible = want;
+  }
 }
 
 function _flushDirtyBuckets() {
@@ -1241,12 +1401,16 @@ function _ensureRaf() {
     _tickCalls += 1;
     _lastDt = dt;
     _poseFrame += 1;
+    _parkedMemo.clear();
     // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement),
     // and its retail SetOmega orbit (?animSceneryOmega).
     for (const g of _didGroups.values()) {
       try { g.mixer.update(dt); } catch (_) {}
       _advanceOrbit(g, dt);
     }
+    // ?animSceneryGpu: one pose-table row per (DID, part) instead of a matrix
+    // per instance slot.
+    _updateGpuPoseRows();
     // Distance tick-cull: only COPY the animated pose onto instances within the
     // camera radius (now 800 m — distant sway is wanted); beyond it they freeze.
     const radSq = tickRadiusSq();
@@ -1270,7 +1434,7 @@ function _ensureRaf() {
         // re-attach this node. Skip it (it is invisible and un-posed while
         // parked) and reclaim on the tick after the pool true-disposes it.
         // See `_isParkedLb`.
-        if (_isParkedLb(inst.node)) {
+        if (_isParkedLbMemo(inst.node)) {
           if (inst.instanced) _collapseInstanced(inst);
           continue;
         }
@@ -1289,9 +1453,13 @@ function _ensureRaf() {
           // below (which would otherwise leave it collapsed indefinitely).
           inst.collapsed = false;
           _collapseStats.restores += 1;
+          for (const s of inst.slots) s.bucket.active += 1;
           const g0 = _didGroups.get(inst.animId);
-          if (g0) _writeInstancedPose(inst, g0);
+          if (g0) _writeInstancedPose(inst, g0, true);
         }
+        // ?animSceneryGpu: every slot is GPU-posed — nothing to write per frame
+        // (and no distance cull: the shared row animates them all).
+        if (inst.cpuSlots === 0) continue;
       }
       if (camPos) {
         const p = inst.node.position;
@@ -1310,6 +1478,8 @@ function _ensureRaf() {
       }
     }
     _flushDirtyBuckets();
+    _applyBucketVisibility();
+    syncAnimInstMaterials();
     _rafId = window.requestAnimationFrame(loop);
   };
   _rafId = window.requestAnimationFrame(loop);
@@ -1324,6 +1494,7 @@ export function tickAnimatedScenery(dt) {
     try { g.mixer.update(d); } catch (_) {}
     _advanceOrbit(g, d);
   }
+  _updateGpuPoseRows();
   for (const inst of _instances) {
     const g = _didGroups.get(inst.animId);
     if (!g) continue;
@@ -1336,6 +1507,8 @@ export function tickAnimatedScenery(dt) {
     }
   }
   _flushDirtyBuckets();
+  _applyBucketVisibility();
+  syncAnimInstMaterials();
 }
 
 /** Diagnostic snapshot for the local visual A/B. */
@@ -1346,11 +1519,17 @@ export function animatedSceneryDiag() {
   for (const inst of _instances) if (inst.instanced) instanced += 1;
   let orbitingDids = 0;
   for (const g of _didGroups.values()) if (g.omega) orbitingDids += 1;
+  let gpuBuckets = 0;
+  for (const b of _bucketList) if (b.gpu) gpuBuckets += 1;
   return {
     instances: _instances.length,
     instanced,
     orbitingDids,
     buckets: _bucketList.length,
+    gpuBuckets,
+    gpu: animSceneryGpuDiag(),
+    bucketsVisible: _bucketList.reduce((n, b) => n + (b.mesh.visible ? 1 : 0), 0),
+    bucketsActive: _bucketList.reduce((n, b) => n + (b.active > 0 ? 1 : 0), 0),
     didGroups: _didGroups.size,
     tickCalls: _tickCalls,
     lastDt: _lastDt,
@@ -1392,6 +1571,7 @@ export function disposeAnimatedScenery(_scene3d) {
   _geomList.length = 0;
   _geomCache.clear();
   _windRigCache.clear();
+  disposeAnimSceneryGpu();
 }
 
 // ── INERT diag surface (P4.3 rig byte-identity proof) ────────────────────────
