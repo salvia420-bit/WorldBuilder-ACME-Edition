@@ -597,8 +597,10 @@ const TIER5 = [
   // 2026-10-06 1070 perf campaign (occlusion queries, async shader link guard,
   // hidden-subtree matrix skip, alpha particle instancing, NRA pack LUTs).
   { tier: 5, flag: "occlusion_cull", file: "test_occlusion_cull.mjs" },
-  // 2026-10-17 outdoor fps wave 1 (interiors): interiors cast no sun shadows while outdoors.
+  // 2026-10-17 outdoor fps wave 1 (interiors): no interior sun shadows while outdoors; interiors
+  // drawn from outdoors only through an in-view door/window aperture.
   { tier: 5, flag: "interiorShadowCull", file: "tests/interior_shadow_cull.test.mjs" },
+  { tier: 5, flag: "interiorApertureCull", file: "tests/interior_aperture_cull.test.mjs" },
   { tier: 5, flag: "async_link_guard", file: "test_async_link_guard.mjs" },
   { tier: 5, flag: "skip_hidden_matrix", file: "test_skip_hidden_matrix.mjs" },
   { tier: 5, flag: "particle_inst_alpha", file: "test_particle_inst_alpha.mjs" },
