@@ -60,18 +60,23 @@ export class FrustumCorners {
     // |     |
     // 2 --- 1
     // Clip space spans from [-1, 1]
-    this.near[0].set(1, 1, -1)
-    this.near[1].set(1, -1, -1)
-    this.near[2].set(-1, -1, -1)
-    this.near[3].set(-1, 1, -1)
+    // holtburger `?reversedZ=on` (2026-10-17): three's reversed projection puts
+    // the near plane at NDC z = 1 and the far plane at z = 0, not -1 / 1.
+    const reversed = (camera as Camera & { reversedDepth?: boolean }).reversedDepth === true
+    const nearZ = reversed ? 1 : -1
+    const farZ = reversed ? 0 : 1
+    this.near[0].set(1, 1, nearZ)
+    this.near[1].set(1, -1, nearZ)
+    this.near[2].set(-1, -1, nearZ)
+    this.near[3].set(-1, 1, nearZ)
     for (let i = 0; i < 4; ++i) {
       this.near[i].applyMatrix4(inverseProjectionMatrix)
     }
 
-    this.far[0].set(1, 1, 1)
-    this.far[1].set(1, -1, 1)
-    this.far[2].set(-1, -1, 1)
-    this.far[3].set(-1, 1, 1)
+    this.far[0].set(1, 1, farZ)
+    this.far[1].set(1, -1, farZ)
+    this.far[2].set(-1, -1, farZ)
+    this.far[3].set(-1, 1, farZ)
     for (let i = 0; i < 4; ++i) {
       const corner = this.far[i]
       corner.applyMatrix4(inverseProjectionMatrix)

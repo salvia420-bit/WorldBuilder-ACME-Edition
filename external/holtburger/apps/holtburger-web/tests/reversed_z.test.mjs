@@ -601,5 +601,40 @@ console.log("-- Z10 source wiring ----------------------------------------------
   check("harness registers this suite as tier 5", /\{ tier: 5, flag: "reversedZ", file: "tests\/reversed_z\.test\.mjs" \}/.test(h));
 }
 
+// Z11 takram clouds FrustumCorners (the cloud shadow cascades' camera frustum):
+// it unprojected NDC z = -1 / +1 as near / far, which under three's reversed
+// projection land behind the camera and on the near plane (1070 2026-10-17:
+// reversed sky/clouds 17% brighter than log). The vendored class, run against
+// REAL cameras, must give the same corners for a reversed and a conventional
+// projection.
+{
+  const build = src("vendor/takram-three-clouds/build/index.js");
+  const m = build.match(/var FrustumCorners = class _FrustumCorners \{[\s\S]*?\n\};\n/);
+  check("takram clouds: FrustumCorners class found in the vendored build", !!m);
+  if (m) {
+    const FrustumCorners = new Function("Vector3", `${m[0]}\nreturn FrustumCorners;`)(THREE.Vector3);
+    const mk = (reversed) => {
+      const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000);
+      if (reversed) cam._reversedDepth = true; // what three's setProgram does under reversedDepthBuffer
+      cam.updateProjectionMatrix();
+      return cam;
+    };
+    const cl = mk(false), cr = mk(true);
+    check("real reversed camera: reversedDepth set and the projection differs", cr.reversedDepth === true &&
+      Math.abs(cr.projectionMatrix.elements[10] - cl.projectionMatrix.elements[10]) > 1e-3);
+    const fl = new FrustumCorners(cl, 800), fr = new FrustumCorners(cr, 800);
+    let worst = 0;
+    for (const k of ["near", "far"]) for (let i = 0; i < 4; i++) worst = Math.max(worst, fl[k][i].distanceTo(fr[k][i]));
+    check("FrustumCorners: reversed camera corners == conventional ones (near plane 0.1 m, far clamped 800 m)",
+      worst < 1e-3, `worst corner delta ${worst}`);
+    check("FrustumCorners: near corners at z = -near, far corners at z = -800",
+      Math.abs(fr.near[0].z + 0.1) < 1e-5 && Math.abs(fr.far[2].z + 800) < 1e-2,
+      `near z ${fr.near[0].z}, far z ${fr.far[2].z}`);
+  }
+  const ts = src("vendor/takram-three-clouds/src/helpers/FrustumCorners.ts");
+  check("takram clouds src FrustumCorners.ts carries the same reversed near/far NDC z",
+    /const nearZ = reversed \? 1 : -1/.test(ts) && /const farZ = reversed \? 0 : 1/.test(ts));
+}
+
 console.log(`\nreversed z: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
