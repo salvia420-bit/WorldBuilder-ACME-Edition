@@ -5703,9 +5703,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // testable in CI; visual output requires hardware.
     try {
       // eslint-disable-next-line no-undef
+      // `?clouds` DEFAULT ON since 2026-10-17 (owner: the human-play settings
+      // default on) on the high/ultra tiers only — the raymarch needs a real GPU
+      // (above), and the GPU probe never resolves SwiftShader/llvmpipe to those
+      // tiers. `=off` (or 0/false/no) opts out; `=on` forces them on any tier, as
+      // before. Bots running `?nullRender=1` never get the default.
       const params = new URLSearchParams(window.location.search);
       const cloudsFlag = params.get("clouds");
-      if (cloudsFlag === "on" && !wireframeMode) {
+      const cloudsOff = cloudsFlag === "off" || cloudsFlag === "0" || cloudsFlag === "false" || cloudsFlag === "no";
+      const cloudsBot = params.get("nullRender") === "1";
+      const cloudsTier = ["high", "ultra"].includes(globalThis.window?.__quality?.preset) && !cloudsBot;
+      if ((cloudsFlag === "on" || (cloudsTier && !cloudsOff)) && !wireframeMode) {
         // Optional URL knobs for the eye-test on real GPU. Allow the
         // user to crank coverage / quality without reloading + opening
         // dev console.

@@ -133,9 +133,11 @@ export const STORM_SCAN_LEGACY = 'legacy';
 export const STORM_SCAN_RETAIL = 'retail';
 
 /**
- * `?stormScan` — `retail` (exactly) selects the retail weather bit; anything
- * else, or no flag, keeps the legacy scan. `search` defaults to the page URL.
+ * `?stormScan` — DEFAULT RETAIL since 2026-10-17 (owner: the human-play settings default on).
+ * `legacy` (or off/0/false/no, case-insensitive) keeps the legacy scan; anything else, no flag,
+ * or no URL selects the retail weather bit. `search` defaults to the page URL.
  */
+const STORM_SCAN_ESCAPES = new Set(['legacy', 'off', '0', 'false', 'no']);
 export function stormScanMode(search) {
   let v = null;
   try {
@@ -145,7 +147,9 @@ export function stormScanMode(search) {
   } catch (_) {
     v = null; // no URL: default
   }
-  return v === STORM_SCAN_RETAIL ? STORM_SCAN_RETAIL : STORM_SCAN_LEGACY;
+  return v != null && STORM_SCAN_ESCAPES.has(String(v).trim().toLowerCase())
+    ? STORM_SCAN_LEGACY
+    : STORM_SCAN_RETAIL;
 }
 
 /** Read once at module load (the page URL does not change mid-session). */

@@ -157,7 +157,8 @@ export function farFogSkyElevDeg() {
 
 /** Probe rate cap, in Hz. The readback is a GPU sync — keep it lazy. */
 export function farFogSkyHz() {
-  return _num("farFogSkyHz", 4, 0.1, 60);
+  // 1 Hz since 2026-10-17 (was 4): each readback blocked ~2.5 ms on the 1070 (outdoor-fps measurement).
+  return _num("farFogSkyHz", 1, 0.1, 60);
 }
 
 /**
