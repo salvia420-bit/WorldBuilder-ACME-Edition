@@ -972,6 +972,27 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
   }
 
+  // `?cloudsBootOrder` (default "legacy", cloud_overlay.js cloudsBootOrder): a
+  // session whose sky never drew before this pipeline exists would hand the
+  // CloudsEffect to the main pass without the legacy first raymarch every
+  // other session has (the 2026-10-17 bright/dark split). Give it that march
+  // now, BEFORE the composer below exists — the order a legacy-first boot
+  // has. No-op when the overlay already marched, without the main pass, or
+  // with `?cloudsBootOrder=main|off`.
+  {
+    const bootOverlay = cloudsMainPassEnabled()
+      ? (opts?.cloudOverlay ?? globalThis.window?.liveScene3d?.cloudOverlay ?? null)
+      : null;
+    if (bootOverlay && typeof bootOverlay.primeLegacyMarch === "function") {
+      try {
+        bootOverlay.primeLegacyMarch(renderer, camera);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[clouds] boot prime failed (clouds boot main-first):", e);
+      }
+    }
+  }
+
   // Job A — horizon edge-dissolve toggle. Default OFF; `?horizonFade=on`
   // enables it. Reverted from default-ON (2026-07-06): it inserts
   // HorizonDissolveEffect into the shared fxPass and is UNVALIDATED on a real
