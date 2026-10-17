@@ -1748,6 +1748,16 @@ export class LandblockLRU {
         }
         for (const c of kill) s.buildingsGroup.remove(c);
       }
+      // ?buildingMatBatch (2026-10-17) — a per-(LB, material) building
+      // BatchedMesh owns its batch buffers + per-instance DataTextures (its
+      // source geometries are the shared bake cache's and are NOT disposed).
+      // Same explicit dispose as the statics step below; no BatchedMesh ever
+      // lives in buildingsGroup with the flag off, so this is a no-op there.
+      for (const c of kill) {
+        if (c?.isBatchedMesh && typeof c.dispose === "function") {
+          try { c.dispose(); } catch (_) { /* fail-soft */ }
+        }
+      }
       if (s.buildingMap3d instanceof Map) {
         for (const c of kill) {
           const k = c.userData?.placementKey;
@@ -2473,6 +2483,13 @@ export class LandblockLRU {
     // The stashed ?staticBatch BatchedMesh consolidations are detached, so
     // evict's staticsGroup scan can't dispose them — do it here.
     for (const c of p.statics) {
+      if (c?.isBatchedMesh && typeof c.dispose === "function") {
+        try { c.dispose(); } catch (_) {}
+      }
+    }
+    // ?buildingMatBatch — the stashed per-(LB, material) building batches are
+    // detached the same way (evict's buildingsGroup scan can't reach them).
+    for (const c of p.buildings || []) {
       if (c?.isBatchedMesh && typeof c.dispose === "function") {
         try { c.dispose(); } catch (_) {}
       }
