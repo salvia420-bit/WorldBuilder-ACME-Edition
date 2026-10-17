@@ -1068,6 +1068,8 @@ const TIER5 = [
   { tier: 5, flag: "harness_suite_hygiene", file: "harness/test_suite_hygiene.mjs" },
   { tier: 5, flag: "harness_perf_ratchet", file: "harness/test_perf_ratchet.mjs" },
   { tier: 5, flag: "sceneryBakeFlag", file: "tests/scenery_bake_flag.test.mjs" },
+  // 2026-10-17 Linvak Tukal fps: frozen static script anchors + the static emitter radius.
+  { tier: 5, flag: "staticAnchorRadius", file: "tests/static_anchor_radius.test.mjs" },
   { tier: 5, flag: "combatModePendingProxy", file: "tests/combat_mode_pending_proxy.test.mjs" },
   { tier: 5, flag: "rynthVtSkillCapWiring", file: "tests/rynth_vt_skill_cap_wiring.test.mjs" },
   { tier: 5, flag: "rynthIndoorDoorways", file: "tests/rynth_indoor_doorways.test.mjs" },  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): scene3d/film/** + tools/film/** suites (SPEC scene3d/film/SPEC.md).

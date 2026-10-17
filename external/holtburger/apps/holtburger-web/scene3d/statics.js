@@ -4742,6 +4742,9 @@ function _cullStaticsWalk(group, children, culler) {
     // consistent with the census particle fix (de24059d).
     const ud = node.userData;
     if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) continue;
+    // ?staticAnchorFreeze: a frozen script anchor stays hidden (it draws
+    // nothing; with no cull sphere the restore below would re-show it).
+    if (ud && ud.__anchorFrozen === true) continue;
     // Animated-scenery buckets own their visibility (?animSceneryBucketVis,
     // animated_scenery.js): their instances span every visited landblock, so
     // the sphere cached here on first sight went stale and hid every critter.
@@ -5102,6 +5105,205 @@ const _sealedNow = (scene3d) => {
 };
 const STATIC_SCRIPT_SLICE_MS = 6;
 
+// `?staticAnchorFreeze` (2026-10-17, DEFAULT ON; `=off`/0/false/no escape).
+// A static default_script anchor is an empty Group that only gives its emitter
+// chain (and a portal set piece) a frame: it draws nothing and never moves.
+// Live on the 1070 at Linvak Tukal (LB 0xA21E) the 9x9 object ring held 14,268
+// of them (99% the drizzle scenery 0x02000407/0x02000406, ~256 per landblock),
+// all visible + matrixAutoUpdate, so three recomposed and walked every one each
+// frame (~5-6 ms of a ~28 ms main thread: updateMatrix, multiplyMatrices,
+// updateMatrixWorld, projectObject). Frozen, an anchor's world matrix is
+// computed once (parents included, so worldRoot's axis rotation lands even
+// before the first render), its subtree stops auto-updating, and it is hidden:
+// skip_hidden_matrix.js's scene walk and three's projectObject pass it with one
+// check, and `_cullStaticsWalk` leaves it hidden. Its emitters are unaffected
+// (particle meshes live in the manager's scene, not under the anchor) and the
+// cell gate reads the cell container, not the anchor.
+const STATIC_ANCHOR_FREEZE_ON = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("staticAnchorFreeze")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+
+function _freezeStaticScriptAnchor(anchor) {
+  anchor.updateWorldMatrix(true, true);
+  anchor.traverse((o) => {
+    o.matrixAutoUpdate = false;
+    o.matrixWorldAutoUpdate = false;
+  });
+  anchor.visible = false;
+  anchor.userData.__anchorFrozen = true;
+}
+
+// `?staticScriptRadius=N` (2026-10-17, DEFAULT 2; `=off`/0/false/no ⇒ every
+// object-ring landblock keeps its emitters, as before). Static default_script
+// EMITTERS only exist for landblocks within N (Chebyshev) of the player's; the
+// anchors stay (frozen, above). RP6 never draws a static emitter past
+// `_RP6.maxDistance` = 220 m, and every point within 220 m of the player lies in
+// a landblock at distance <= 2, so N = 2 drops nothing that could be drawn. The
+// rest of the 9x9 ring (79 landblocks at Linvak) only cost per-frame cull and
+// bookkeeping. Hysteresis like ?objRadius: attach at d <= N + 1, tear down at
+// d > N + 1, rebuild at d <= N. The teardown removes only the default_script
+// emitters (parent = one of the landblock's anchors), never the synthesized
+// ones that share the `static:<lbKey>` owner; the rebuild reuses warm-park's
+// `rebuildStaticScriptEmittersForAnchors`. State lives on scene3d because this
+// module loads as two instances (index.js imports it with `?v=`).
+const STATIC_SCRIPT_RADIUS_MIN = 1;
+const STATIC_SCRIPT_RADIUS_MAX = 12;
+let _staticScriptRadius; // undefined = unread, null = off, else N
+export function staticScriptRadiusSetting() {
+  if (_staticScriptRadius !== undefined) return _staticScriptRadius;
+  let v = null;
+  try { v = new URLSearchParams(globalThis.location?.search || "").get("staticScriptRadius"); } catch (_) { v = null; }
+  const s = (v ?? "").trim().toLowerCase();
+  if (s === "off" || s === "0" || s === "false" || s === "no") _staticScriptRadius = null;
+  else {
+    const n = Number.parseInt(s, 10);
+    _staticScriptRadius = Number.isFinite(n) && n >= STATIC_SCRIPT_RADIUS_MIN && n <= STATIC_SCRIPT_RADIUS_MAX ? n : 2;
+  }
+  return _staticScriptRadius;
+}
+/** Test seam: force the setting (`undefined` re-reads the URL). */
+export function __setStaticScriptRadiusForTest(v) { _staticScriptRadius = v; }
+
+const _scriptRadiusStats = { deferredAtAttach: 0, torndownLbs: 0, emittersTorndown: 0, rebuiltLbs: 0 };
+/** The builder scene object that owns the static particle manager. */
+function _scriptsHost(scene3d) {
+  return scene3d?.staticsGroup?.userData?.__staticsHost ?? scene3d;
+}
+function _scriptRadiusState(scene3d) {
+  const host = _scriptsHost(scene3d);
+  let st = host._staticScriptRadius;
+  if (!st) {
+    st = { centers: [], sig: null, deferred: new Set() };
+    host._staticScriptRadius = st;
+    if (typeof window !== "undefined") {
+      window.__staticScriptRadius = () => ({
+        radius: staticScriptRadiusSetting(), centers: st.centers.map((k) => (k >>> 0).toString(16)),
+        deferredLbs: st.deferred.size, ..._scriptRadiusStats,
+      });
+    }
+  }
+  return st;
+}
+function _lbCheb(a, b) {
+  return Math.max(Math.abs(((a >>> 24) & 0xff) - ((b >>> 24) & 0xff)),
+    Math.abs(((a >>> 16) & 0xff) - ((b >>> 16) & 0xff)));
+}
+function _scriptLbDist(centers, lbKey) {
+  let best = Infinity;
+  for (const c of centers) {
+    const d = _lbCheb(c, lbKey);
+    if (d < best) best = d;
+  }
+  return best;
+}
+/** Should a landblock's static default_script emitters exist right now? */
+function _staticScriptWanted(scene3d, landblockId) {
+  const n = staticScriptRadiusSetting();
+  if (n == null || !scene3d) return true;
+  let centers = _scriptsHost(scene3d)._staticScriptRadius?.centers;
+  if (!centers || centers.length === 0) {
+    // Before the first cells tick: the LRU's rig-derived player landblock.
+    let cur = null;
+    try { cur = (scene3d.landblockLru ?? _scriptsHost(scene3d).landblockLru)?.getCurrentLbId?.(); } catch (_) { cur = null; }
+    if (typeof cur !== "number" || cur === 0) return true;
+    centers = [lbKeyOf(cur >>> 0)];
+  }
+  return _scriptLbDist(centers, lbKeyOf(landblockId >>> 0)) <= n + 1;
+}
+/**
+ * Tear down the default_script emitters hanging off `anchors` (one
+ * landblock's) and mark them deferred. Synthesized emitters sharing the owner
+ * key are left alone. The epoch bump stops their pending CallPES loops.
+ */
+function _deferStaticScriptAnchors(scene3d, lbKey, anchors) {
+  const set = new Set();
+  for (const a of anchors) {
+    const ud = a.userData;
+    ud.__scriptDeferred = true;
+    ud.__scriptEpoch = (ud.__scriptEpoch | 0) + 1;
+    set.add(a);
+  }
+  const mgr = _scriptsHost(scene3d)._staticParticleManager;
+  if (!mgr?.particleTable || set.size === 0) return 0;
+  const ids = [];
+  for (const [id, em] of mgr.particleTable) {
+    const p = em?.parent;
+    if (p && (set.has(p) || (p.parent && set.has(p.parent)))) ids.push(id);
+  }
+  if (ids.length === 0) return 0;
+  try { ownerRegistry.destroySome(staticOwnerKeyForLb(lbKey), ids); } catch (_) { /* fail-soft */ }
+  for (const id of ids) {
+    if (mgr.particleTable.has(id)) {
+      try { mgr.destroyParticleEmitter(id); } catch (_) { /* fail-soft */ }
+    }
+  }
+  _scriptRadiusStats.emittersTorndown += ids.length;
+  return ids.length;
+}
+/** Test seams. */
+export const __freezeStaticScriptAnchorForTest = _freezeStaticScriptAnchor;
+export function __cullStaticsWalkForTest(group, children, culler) { return _cullStaticsWalk(group, children, culler); }
+// Test seam: what the tick calls to rebuild a landblock's emitters.
+let _rebuildScriptsFn = null;
+export function __setStaticScriptRebuildForTest(fn) { _rebuildScriptsFn = fn; }
+
+/**
+ * Re-evaluate the static emitter radius against the player's landblock set
+ * (`seen`, the same set ?objRadius uses). Cheap every frame: returns at once
+ * unless the set changed (a landblock crossing).
+ */
+export function tickStaticScriptRadius(scene3d, seen) {
+  const n = staticScriptRadiusSetting();
+  if (n == null || !scene3d || !seen) return;
+  const st = _scriptRadiusState(scene3d);
+  let sig = "";
+  for (const k of seen) sig += k + ",";
+  if (sig === st.sig) return;
+  st.sig = sig;
+  st.centers = [...seen].map((k) => lbKeyOf(k >>> 0));
+  const baked = scene3d.staticsBakedLbs instanceof Set ? scene3d.staticsBakedLbs : null;
+  if (!baked || st.centers.length === 0) return;
+  for (const k of st.deferred) if (!baked.has(k)) st.deferred.delete(k); // evicted
+  let byLb = null;
+  const anchorsOf = (k) => {
+    if (!byLb) {
+      byLb = new Map();
+      for (const c of scene3d.staticsGroup?.children ?? []) {
+        const u = c.userData;
+        if (!u?.isStaticScriptAnchor || u.isCellStaticScriptAnchor) continue;
+        const key = lbKeyOf(u.landblockId >>> 0);
+        let a = byLb.get(key);
+        if (!a) byLb.set(key, (a = []));
+        a.push(c);
+      }
+    }
+    return byLb.get(k) ?? [];
+  };
+  for (const raw of baked) {
+    const k = lbKeyOf(raw >>> 0);
+    const d = _scriptLbDist(st.centers, k);
+    if (d > n + 1 && !st.deferred.has(k)) {
+      st.deferred.add(k);
+      _deferStaticScriptAnchors(scene3d, k, anchorsOf(k));
+      _scriptRadiusStats.torndownLbs += 1;
+    } else if (d <= n && st.deferred.has(k)) {
+      st.deferred.delete(k);
+      const anchors = anchorsOf(k);
+      for (const a of anchors) a.userData.__scriptDeferred = false;
+      if (anchors.length === 0) continue;
+      _scriptRadiusStats.rebuiltLbs += 1;
+      const host = _scriptsHost(scene3d);
+      const rebuild = _rebuildScriptsFn ?? ((h, a) => h._rebuildStaticParticlesForAnchors?.(a));
+      try { Promise.resolve(rebuild(host, anchors)).catch(() => {}); } catch (_) { /* fail-soft */ }
+    }
+  }
+}
+
 // Survey A11-S0 (2026-06-11): `?blockingParticleParity` — DEFAULT-ON
 // (`!== "off"` reader; `=off` restores replace semantics).
 // When on, hook 26 (CreateBlockingParticle) takes retail blocking
@@ -5279,6 +5481,9 @@ export async function attachStaticPartFrames(anchor, setupId, wasmExports) {
  * missing — the caller no-ops in that case (fail-soft).
  */
 async function _ensureStaticParticleManager(scene3d, wasmExports) {
+  // ?staticScriptRadius: the per-frame tick runs on the liveScene3d facade,
+  // which never gets `_staticParticleManager`; both share this staticsGroup.
+  if (scene3d.staticsGroup?.userData) scene3d.staticsGroup.userData.__staticsHost = scene3d;
   if (scene3d._staticParticleManager) { _staticParticleMgrRef = scene3d._staticParticleManager; return scene3d._staticParticleManager; }
   // Phase 3 — expose the per-LB particle evictor on scene3d so landblock_lru
   // (same object as `this.scene3d`, a zero-import leaf) can tear down THIS LB's
@@ -5502,11 +5707,15 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
     return;
   }
   if (ud) ud.__callPesPending = (ud.__callPesPending | 0) + 1;
+  const epoch = ud ? (ud.__scriptEpoch | 0) : 0;
   const tid = setTimeout(() => {
     _staticCallPesTimeouts.delete(tid);
     if (ud) ud.__callPesPending = Math.max(0, (ud.__callPesPending | 0) - 1);
     if (_spDisposed) return; // scene torn down.
     if (!anchor || !anchor.parent) return; // LB evicted — anchor detached.
+    // ?staticScriptRadius — the anchor's chain was torn down (and maybe rebuilt
+    // since, which started a fresh loop): this pending step belongs to the old one.
+    if (ud && ((ud.__scriptEpoch | 0) !== epoch || ud.__scriptDeferred === true)) return;
     _runStaticParticleChain(
       manager, anchor, callPesDid, wasmExports, ownerKey, nextDepth, nextChain
     ).catch(() => {});
@@ -5828,16 +6037,31 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     // ?staticPartAnchor — part-anchored hooks ride their part, not the origin.
     // eslint-disable-next-line no-await-in-loop
     await attachStaticPartFrames(anchor, p.modelId, wasmExports);
+    // ?staticAnchorFreeze — part frames are attached: freeze the subtree.
+    if (STATIC_ANCHOR_FREEZE_ON) _freezeStaticScriptAnchor(anchor);
     // ?portalSetPiece — a static portal decoration gets the portal set piece.
     if (registerStaticPortalAnchor(anchor, p.modelId)) anchor.userData.portalSetup = p.modelId >>> 0;
-    // eslint-disable-next-line no-await-in-loop
-    emitterCount += await _runStaticParticleChain(
-      manager,
-      anchor,
-      p.defaultScriptId >>> 0,
-      wasmExports,
-      ownerKey
-    );
+    // ?staticScriptRadius — beyond the emitter radius the anchor waits for
+    // tickStaticScriptRadius to rebuild its chain when the player comes near.
+    if (!_staticScriptWanted(scene3d, p.landblockId)) {
+      anchor.userData.__scriptDeferred = true;
+      _scriptRadiusState(scene3d).deferred.add(pLbKey);
+      _scriptRadiusStats.deferredAtAttach += 1;
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      emitterCount += await _runStaticParticleChain(
+        manager,
+        anchor,
+        p.defaultScriptId >>> 0,
+        wasmExports,
+        ownerKey
+      );
+      // A landblock crossing during the chain's awaits may have deferred
+      // this landblock (its teardown ran before these emitters existed).
+      if (_scriptRadiusState(scene3d).deferred.has(pLbKey)) {
+        _deferStaticScriptAnchors(scene3d, pLbKey, [anchor]);
+      }
+    }
     // P4/R-10 late-completion re-check: the chain's OWN awaits (script +
     // emitter fetches) can straddle an eviction too — the LRU's one-shot
     // reap already ran, so tear down what this anchor just registered and
@@ -6076,6 +6300,14 @@ export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wa
     if (!anchor.parent || !lbLive(ud.landblockId >>> 0)) continue; // R-10
     // ?portalSetPiece — an unparked static portal is a portal again.
     if (ud.portalSetup) registerStaticPortalAnchor(anchor, ud.portalSetup);
+    // ?staticScriptRadius — an unpark outside the emitter radius stays deferred.
+    const lbKey = lbKeyOf(ud.landblockId >>> 0);
+    if (!_staticScriptWanted(scene3d, ud.landblockId >>> 0)) {
+      ud.__scriptDeferred = true;
+      _scriptRadiusState(scene3d).deferred.add(lbKey);
+      continue;
+    }
+    ud.__scriptDeferred = false;
     // eslint-disable-next-line no-await-in-loop
     emitters += await _runStaticParticleChain(
       manager,
@@ -6084,6 +6316,9 @@ export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wa
       wasmExports,
       ud.particleOwnerKey ?? null
     );
+    if (_scriptsHost(scene3d)._staticScriptRadius?.deferred.has(lbKey)) {
+      _deferStaticScriptAnchors(scene3d, lbKey, [anchor]);
+    }
     if (
       STATIC_SCRIPT_SLICE_ON &&
       performance.now() - sliceStart > STATIC_SCRIPT_SLICE_MS

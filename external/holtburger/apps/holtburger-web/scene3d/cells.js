@@ -90,7 +90,7 @@ import { frameWorkW6Yield } from "./frame_work.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { guardedCompileAsync } from "./bake_prewarm.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
-import { attachStaticDefaultScriptsWorld } from "./statics.js";
+import { attachStaticDefaultScriptsWorld, tickStaticScriptRadius } from "./statics.js";
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
 import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
 import { objectBakeAllowed, tickObjectRadius } from "./object_radius.js";
@@ -4605,6 +4605,9 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // ?objRadius (perf T7, default off ⇒ no-op): hide/show object-baked LBs
   // against the near radius on each landblock crossing.
   tickObjectRadius(scene3d, seen);
+  // ?staticScriptRadius (default 2): static default_script emitters only
+  // within the near radius; torn down / rebuilt on each landblock crossing.
+  tickStaticScriptRadius(scene3d, seen);
   // 2026-05-28 perf: expand the load ring by one LB so prefetch leads
   // motion. Drive-2 captured a 3.3s spike at +101.9s when the player
   // approached the edge of the original PVS-driven ring and 6 new LBs
