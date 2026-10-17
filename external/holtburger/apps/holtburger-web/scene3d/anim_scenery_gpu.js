@@ -47,7 +47,8 @@
 // row); a placement registered far away showed its hinge rest pose until it
 // first came within the radius, now it shows the live pose.
 //
-// No backticks in the GLSL below (a JS template-literal hazard; memory rule).
+// GLSL text below: no backticks, no quotes/apostrophes even in comments (keep
+// to the GLSL ES source character set).
 
 import * as THREE from "three";
 
@@ -209,7 +210,7 @@ const _HEADER = [
   "#ifdef USE_INSTANCING",
   "// ---- " + ANIM_GPU_MARKER + " (anim_scenery_gpu.js ?animSceneryGpu) ----",
   "// instanceMatrix (the attribute) holds the STATIC placement N = T*R*S; the",
-  "// pose table row hbAiPose holds the DID's part pose P (texels 0-3) and orbit",
+  "// pose table row hbAiPose holds the part pose P of the DID (texels 0-3), orbit",
   "// R_o (texels 4-6). Posed matrix = T * R_o * (R*S) * P, exactly the matrix",
   "// the CPU path wrote. Everything below the define reads the posed matrix.",
   "uniform highp sampler2D hbAiPoseTex;",
