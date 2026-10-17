@@ -180,6 +180,7 @@ import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
 import { installShadowCasterList } from "./shadow_caster_list.js";
 import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
+import { installUniformBindPatch, uniformBindPatchTick, installLightUboChunks } from "./uniform_bind_patch.js";
 import { syncBatchMatVariants, batchMatVariantStats } from "./batched_material_variant.js";
 import {
   adaptiveResEnabled,
@@ -581,6 +582,9 @@ function recordRenderDiag(renderer, scene) {
   // this shared render tail; one array/length/tail compare when nothing new.
   // Also publishes __diag.programs (relinks counted with the flag off too).
   retainNewPrograms(renderer);
+  // fps wave 2 (uniform_bind_patch.js): re-adopt three's programs array after
+  // a context restore. One identity compare per frame.
+  uniformBindPatchTick(renderer);
   if (_renderDiagArmed === undefined) {
     try {
       _renderDiagArmed =
@@ -1150,6 +1154,13 @@ export async function preInit3D(canvas) {
   // ?lightLoops (2026-10-06): point / spot light loops stay real loops, so a lit program is
   // ~4x less fragment code (D3DCompile ~3 s per program on the 1070). Must precede every compile.
   installLightLoops(THREE);
+  // ?lightUbo (fps wave 2, 2026-10-17, DEFAULT ON, `=off` escape): the dir /
+  // point / spot / hemisphere light arrays become std140 uniform blocks, one
+  // buffer write per render() instead of ~26 uniform calls per lit program.
+  // The chunk edit is inert until installUniformBindPatch (below, main
+  // renderer only) injects its define, so the paperdoll / dye viewports keep
+  // the stock declarations. Must precede every compile.
+  try { installLightUboChunks(THREE); } catch (_) { /* never break boot */ }
   // ?radialFog=on (OPT-IN, 2026-10-13): retail range fog (acclient.c
   // RenderDeviceD3D::SetDefaultD3DStates, D3DRS_RANGEFOGENABLE = TRUE). three's
   // fog_vertex chunk fogs by eye-to-vertex distance, matching the terrain
@@ -1195,6 +1206,15 @@ export async function preInit3D(canvas) {
     const gl = renderer.getContext();
     renderer.capabilities.maxTextures = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
   } catch (_) { /* capability tweak must never break boot */ }
+  // fps wave 2 (2026-10-17, uniform_bind_patch.js) — `?texUnitPin` (scene-wide
+  // samplers on fixed texture units, so a program switch stops rebinding the
+  // DFG LUT / IBL PMREM / detail tile / CSM maps), `?lightUbo` (the light
+  // arrays in uniform blocks, bound per program here; see installLightUboChunks
+  // above) and `?lightUploadOnce` (the remaining light uniforms walked once per
+  // program per render+camera, not per program switch). All DEFAULT ON, `=off`
+  // escapes, output-identical. AFTER the maxTextures line above: the pins sit
+  // at the top of that range.
+  try { installUniformBindPatch(renderer); } catch (_) { /* never break boot */ }
   // X6 `?texBc7=on` — probe EXT_texture_compression_bptc on THIS context. No-op
   // (and silent) with the flag absent; with the flag on it logs which arm the
   // boot took. Everything downstream reads `bc7Available()`, so an unsupported
