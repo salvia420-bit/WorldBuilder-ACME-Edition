@@ -6019,11 +6019,17 @@ let _spRafId = 0;
 let _spDisposed = false;
 
 if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMode() === "off") {
-  const _spLoop = () => {
+  // `ts` (the rAF timestamp) lets the manager drop the SECOND module
+  // instance's tick of the same frame — this file loads twice on the
+  // unbundled page (`?particleTickOnce`, particle_manager.js tickFrame).
+  const _spLoop = (ts) => {
     if (_spDisposed) return;
     try {
       const mgr = _staticParticleMgrRef || window.liveScene3d?._staticParticleManager;
-      if (mgr) mgr.tick();
+      if (mgr) {
+        if (typeof mgr.tickFrame === "function") mgr.tickFrame(ts);
+        else mgr.tick();
+      }
     } catch (_) {}
     _spRafId = window.requestAnimationFrame(_spLoop);
   };
