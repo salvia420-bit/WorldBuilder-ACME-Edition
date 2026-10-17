@@ -562,6 +562,7 @@ const TIER5 = [
   // 2026-10-07 — terrain fine detail (step 4): micro-relief maths, height blend,
   // gamma crossfade, mip-seam taps, sampler budget on the assembled program.
   { tier: 5, flag: "terrain_micro", file: "test_terrain_micro.mjs" },
+  { tier: 5, flag: "terrainFarSimplify", file: "tests/terrain_far_simplify.test.mjs" },
   { tier: 5, flag: "terrain_ring_batch", file: "test_terrain_ring_batch.mjs" },
   { tier: 5, flag: "terrain_rock", file: "test_terrain_rock.mjs" },
   { tier: 5, flag: "terrain_sand", file: "test_terrain_sand.mjs" },

@@ -185,6 +185,30 @@ import {
   installTerrainMicroDiag,
 } from "./terrain_micro.js";
 
+// 2026-10-17 — TERRAIN FAR SIMPLIFY (?terrainFarSimplify, DEFAULT ON, `=off`
+// escape): the TexMerge composite fades to its bilinear fallback past ~300 m
+// (and its dead bilinear twin is no longer computed where it runs), the detail
+// texture fetch stops where its weight is 0, and the Gouraud-off detail-normal
+// path fades to flat. 1070 measurement + per-feature audit in the module
+// header. Session-constant: `=off` assembles the legacy program verbatim.
+import {
+  TERRAIN_FAR_SIMPLIFY,
+  TERRAIN_FAR_SIMPLIFY_FRAG_GLSL,
+  TERRAIN_FAR_SIMPLIFY_DECL_GLSL,
+  TERRAIN_FAR_SIMPLIFY_MERGE_OPEN_GLSL,
+  TERRAIN_FAR_SIMPLIFY_MERGE_CLOSE_GLSL,
+  TERRAIN_FAR_SIMPLIFY_HARM_MERGED_GLSL,
+  TERRAIN_FAR_SIMPLIFY_HARM_BILIN_GLSL,
+  TERRAIN_FAR_SIMPLIFY_DETAIL_TEX_COND_GLSL,
+  TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_COND_GLSL,
+  TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL,
+  TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FAR_GLSL,
+  terrainFarSimplifyBilinearGlsl,
+  terrainFarSimplifyUniforms,
+  installTerrainFarSimplifyDiag,
+} from "./terrain_far_simplify.js";
+const TERRAIN_FS_ON = TERRAIN_FAR_SIMPLIFY.on;
+
 // 2026-10-07 — terrain shading bevel on: the per-LB vertex-types texture is
 // 18 wide (columns 9..17 carry the 81 retail normals) and the fragment shader
 // gains terrainRoundBevel(). Session-constant (module load).
@@ -1514,6 +1538,105 @@ void main() {
 }
 `;
 
+// 2026-10-17 — the bilinear corner blend (4 atlas taps + the ?paintMode
+// variants), kept as text so it can be spliced in TWO places: before the
+// TexMerge composite with ?terrainFarSimplify=off (the legacy order — the
+// assembled program is then character-for-character the pre-change one) and
+// AFTER the composite, guarded, when it is on (scene3d/terrain_far_simplify.js:
+// the composite overwrote this blend wholesale, so where it runs the four taps
+// were dead work). `out` names the variable the blend writes.
+const TERRAIN_BILINEAR_TAPS_GLSL = `  // 2026-10-07 — atlas taps go through terrainAtlasTex (scene3d/terrain_micro.js):
+  // same atlasUvFor address, explicit continuous-UV gradient under ?terrainGradUv.
+  vec3 c00 = terrainAtlasTex(clamp(t00, 0, 32), uv00).rgb;
+  vec3 c10 = terrainAtlasTex(clamp(t10, 0, 32), uv10).rgb;
+  vec3 c01 = terrainAtlasTex(clamp(t01, 0, 32), uv01).rgb;
+  vec3 c11 = terrainAtlasTex(clamp(t11, 0, 32), uv11).rgb;`;
+function terrainBilinearBlendGlsl(out) {
+  return `  vec3 ${out};
+  if (uPaintMode > 0.5 && !allSameType) {
+    // Stochastic per-vertex winner-take-all (2026-06-21, revised 2026-06-22).
+    // The 9x9 vertex grid carries 1 terrain-type byte per vertex (5.27M total
+    // across the world); the data IS per-vertex. The default bilinear average
+    // mudded distinct types together because the 4 corner colours were just
+    // linearly mixed by position. Here each fragment perturbs the four
+    // bilinear corner weights with a unique noise value and selects the
+    // SINGLE winning corner — distinct textures, no muddying. In the middle
+    // of a single-type region each corner's weight is ~1 so noise cannot flip
+    // it; only near the cell diagonals (weights converge to ~0.5) does noise
+    // decide — that is where the organic, noise-shaped boundary appears.
+    //
+    // Sample the noise at WORLD-SPACE position (vWorldPos.xy in metres), NOT
+    // at vGridUv which is LB-LOCAL [0..8] and resets every 192 m, producing a
+    // visible LB-grid pattern. World-space sampling gives one continuous noise
+    // field across all 5.27M vertices — the user-reported "lines, slightly
+    // different colors" were the 192-m LB-grid repeat of the noise pattern.
+    float NOISE_FREQ = uPaintNoiseFreq / 24.0;     // freq in 1/m
+    float NOISE_STRENGTH = uPaintNoiseStrength;
+    // 2026-10-08 — the AC GROUND plane (east, north) = three (x, -z).
+    // vWorldPos is three world space (y = height): vWorldPos.xy was
+    // (east, height), so on level ground this field varied east-west only.
+    vec2 np = vec2(vWorldPos.x, -vWorldPos.z) * NOISE_FREQ;
+    // Candidate H (2026-06-22): pick the perturbation noise source.
+    // uWarpAmp == 0 -> legacy per-pixel sin-hash (byte-identical to the shipped
+    // winner). uWarpAmp > 0 -> spatially-coherent value noise sampled through a
+    // domain warp: organic, no sin-dot banding, and (being continuous) it does
+    // not sit as a static line grid over scrolling water. The 4 corner offsets
+    // are spread across separate lattice cells so the corners stay decorrelated
+    // while each remains individually smooth.
+    float n00, n10, n01, n11;
+    if (uWarpAmp > 0.0) {
+      vec2 warp = vec2(
+        fragValueNoise2D(np * uWarpFreq),
+        fragValueNoise2D(np * uWarpFreq + vec2(19.3, 7.7))
+      ) * uWarpAmp;
+      vec2 wp = np + warp;
+      n00 = fragValueNoise2D(wp + vec2(0.0, 0.0));
+      n10 = fragValueNoise2D(wp + vec2(11.3, 4.1));
+      n01 = fragValueNoise2D(wp + vec2(5.7, 19.2));
+      n11 = fragValueNoise2D(wp + vec2(23.4, 13.8));
+    } else {
+      n00 = fragHash21(np + vec2(0.317, 0.731)) - 0.5;
+      n10 = fragHash21(np + vec2(0.443, 0.119)) - 0.5;
+      n01 = fragHash21(np + vec2(0.561, 0.917)) - 0.5;
+      n11 = fragHash21(np + vec2(0.682, 0.379)) - 0.5;
+    }
+    float pw00 = w00 + n00 * NOISE_STRENGTH;
+    float pw10 = w10 + n10 * NOISE_STRENGTH;
+    float pw01 = w01 + n01 * NOISE_STRENGTH;
+    float pw11 = w11 + n11 * NOISE_STRENGTH;
+    if (uWinnerSoftness > 0.0) {
+      // Soft top-two blend (Candidate D half): cross-fade between the two
+      // highest-perturbed-weight corner colours across a band of width
+      // uWinnerSoftness (in weight units). Away from a boundary the winner
+      // dominates (pure distinct texture); at the boundary it is a 2-way blend
+      // of the two adjacent types only (distinct, NOT a muddy 4-way average).
+      // No arrays / dynamic indexing (ANGLE D3D11-safe): single-pass top-two.
+      float w1 = -1e9; vec3 col1 = c00;
+      float w2 = -1e9; vec3 col2 = c00;
+      if (pw00 > w1) { w2 = w1; col2 = col1; w1 = pw00; col1 = c00; }
+      else if (pw00 > w2) { w2 = pw00; col2 = c00; }
+      if (pw10 > w1) { w2 = w1; col2 = col1; w1 = pw10; col1 = c10; }
+      else if (pw10 > w2) { w2 = pw10; col2 = c10; }
+      if (pw01 > w1) { w2 = w1; col2 = col1; w1 = pw01; col1 = c01; }
+      else if (pw01 > w2) { w2 = pw01; col2 = c01; }
+      if (pw11 > w1) { w2 = w1; col2 = col1; w1 = pw11; col1 = c11; }
+      else if (pw11 > w2) { w2 = pw11; col2 = c11; }
+      float gap = w1 - w2;
+      float t = clamp(0.5 + 0.5 * gap / max(uWinnerSoftness, 1e-4), 0.0, 1.0);
+      ${out} = mix(col2, col1, t);
+    } else {
+      float maxW = pw00; ${out} = c00;
+      if (pw10 > maxW) { maxW = pw10; ${out} = c10; }
+      if (pw01 > maxW) { maxW = pw01; ${out} = c01; }
+      if (pw11 > maxW) { maxW = pw11; ${out} = c11; }
+    }
+  } else {
+    // Uniform-type cell OR paintMode off: plain bilinear (which for a uniform
+    // cell is just the same texture, slightly averaged for the per-corner UVs).
+    ${out} = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+  }`;
+}
+
 // Fragment shader: ported verbatim from `index.html:1006-1082` minus
 // the PIXI-specific `vColor` varying + uColor/uWorldColorAlpha
 // modulation. The bilinear-blend body is byte-identical to the 2D
@@ -2254,7 +2377,7 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
   float t = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0);
   return length(p - (a + ab * t));
 }
-${terrainDetailFragGlsl().replace(/\n$/, "")}
+${terrainDetailFragGlsl().replace(/\n$/, "")}${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_FRAG_GLSL.replace(/\n$/, "") : ""}
 
 // Wave 2.A — sample the 32×1 terrain palette LUT at the given code.
 // Codes 0..31 clamp to the palette length; the 32-tile (road) layer
@@ -2600,12 +2723,7 @@ void main() {
   vec2 uv01 = wc01 ? waterCellUv : cellUv;
   vec2 uv11 = wc11 ? waterCellUv : cellUv;
 
-  // 2026-10-07 — atlas taps go through terrainAtlasTex (scene3d/terrain_micro.js):
-  // same atlasUvFor address, explicit continuous-UV gradient under ?terrainGradUv.
-  vec3 c00 = terrainAtlasTex(clamp(t00, 0, 32), uv00).rgb;
-  vec3 c10 = terrainAtlasTex(clamp(t10, 0, 32), uv10).rgb;
-  vec3 c01 = terrainAtlasTex(clamp(t01, 0, 32), uv01).rgb;
-  vec3 c11 = terrainAtlasTex(clamp(t11, 0, 32), uv11).rgb;
+${TERRAIN_FS_ON ? "" : TERRAIN_BILINEAR_TAPS_GLSL}
 
   float w00 = (1.0 - fu) * (1.0 - fv);
   float w10 = fu * (1.0 - fv);
@@ -2677,89 +2795,7 @@ void main() {
   // animated water look grainy. Uniform cells fall back to plain bilinear.
   bool allSameType = (t00 == t10) && (t00 == t01) && (t00 == t11);
 
-  vec3 result;
-  if (uPaintMode > 0.5 && !allSameType) {
-    // Stochastic per-vertex winner-take-all (2026-06-21, revised 2026-06-22).
-    // The 9x9 vertex grid carries 1 terrain-type byte per vertex (5.27M total
-    // across the world); the data IS per-vertex. The default bilinear average
-    // mudded distinct types together because the 4 corner colours were just
-    // linearly mixed by position. Here each fragment perturbs the four
-    // bilinear corner weights with a unique noise value and selects the
-    // SINGLE winning corner — distinct textures, no muddying. In the middle
-    // of a single-type region each corner's weight is ~1 so noise cannot flip
-    // it; only near the cell diagonals (weights converge to ~0.5) does noise
-    // decide — that is where the organic, noise-shaped boundary appears.
-    //
-    // Sample the noise at WORLD-SPACE position (vWorldPos.xy in metres), NOT
-    // at vGridUv which is LB-LOCAL [0..8] and resets every 192 m, producing a
-    // visible LB-grid pattern. World-space sampling gives one continuous noise
-    // field across all 5.27M vertices — the user-reported "lines, slightly
-    // different colors" were the 192-m LB-grid repeat of the noise pattern.
-    float NOISE_FREQ = uPaintNoiseFreq / 24.0;     // freq in 1/m
-    float NOISE_STRENGTH = uPaintNoiseStrength;
-    // 2026-10-08 — the AC GROUND plane (east, north) = three (x, -z).
-    // vWorldPos is three world space (y = height): vWorldPos.xy was
-    // (east, height), so on level ground this field varied east-west only.
-    vec2 np = vec2(vWorldPos.x, -vWorldPos.z) * NOISE_FREQ;
-    // Candidate H (2026-06-22): pick the perturbation noise source.
-    // uWarpAmp == 0 -> legacy per-pixel sin-hash (byte-identical to the shipped
-    // winner). uWarpAmp > 0 -> spatially-coherent value noise sampled through a
-    // domain warp: organic, no sin-dot banding, and (being continuous) it does
-    // not sit as a static line grid over scrolling water. The 4 corner offsets
-    // are spread across separate lattice cells so the corners stay decorrelated
-    // while each remains individually smooth.
-    float n00, n10, n01, n11;
-    if (uWarpAmp > 0.0) {
-      vec2 warp = vec2(
-        fragValueNoise2D(np * uWarpFreq),
-        fragValueNoise2D(np * uWarpFreq + vec2(19.3, 7.7))
-      ) * uWarpAmp;
-      vec2 wp = np + warp;
-      n00 = fragValueNoise2D(wp + vec2(0.0, 0.0));
-      n10 = fragValueNoise2D(wp + vec2(11.3, 4.1));
-      n01 = fragValueNoise2D(wp + vec2(5.7, 19.2));
-      n11 = fragValueNoise2D(wp + vec2(23.4, 13.8));
-    } else {
-      n00 = fragHash21(np + vec2(0.317, 0.731)) - 0.5;
-      n10 = fragHash21(np + vec2(0.443, 0.119)) - 0.5;
-      n01 = fragHash21(np + vec2(0.561, 0.917)) - 0.5;
-      n11 = fragHash21(np + vec2(0.682, 0.379)) - 0.5;
-    }
-    float pw00 = w00 + n00 * NOISE_STRENGTH;
-    float pw10 = w10 + n10 * NOISE_STRENGTH;
-    float pw01 = w01 + n01 * NOISE_STRENGTH;
-    float pw11 = w11 + n11 * NOISE_STRENGTH;
-    if (uWinnerSoftness > 0.0) {
-      // Soft top-two blend (Candidate D half): cross-fade between the two
-      // highest-perturbed-weight corner colours across a band of width
-      // uWinnerSoftness (in weight units). Away from a boundary the winner
-      // dominates (pure distinct texture); at the boundary it is a 2-way blend
-      // of the two adjacent types only (distinct, NOT a muddy 4-way average).
-      // No arrays / dynamic indexing (ANGLE D3D11-safe): single-pass top-two.
-      float w1 = -1e9; vec3 col1 = c00;
-      float w2 = -1e9; vec3 col2 = c00;
-      if (pw00 > w1) { w2 = w1; col2 = col1; w1 = pw00; col1 = c00; }
-      else if (pw00 > w2) { w2 = pw00; col2 = c00; }
-      if (pw10 > w1) { w2 = w1; col2 = col1; w1 = pw10; col1 = c10; }
-      else if (pw10 > w2) { w2 = pw10; col2 = c10; }
-      if (pw01 > w1) { w2 = w1; col2 = col1; w1 = pw01; col1 = c01; }
-      else if (pw01 > w2) { w2 = pw01; col2 = c01; }
-      if (pw11 > w1) { w2 = w1; col2 = col1; w1 = pw11; col1 = c11; }
-      else if (pw11 > w2) { w2 = pw11; col2 = c11; }
-      float gap = w1 - w2;
-      float t = clamp(0.5 + 0.5 * gap / max(uWinnerSoftness, 1e-4), 0.0, 1.0);
-      result = mix(col2, col1, t);
-    } else {
-      float maxW = pw00; result = c00;
-      if (pw10 > maxW) { maxW = pw10; result = c10; }
-      if (pw01 > maxW) { maxW = pw01; result = c01; }
-      if (pw11 > maxW) { maxW = pw11; result = c11; }
-    }
-  } else {
-    // Uniform-type cell OR paintMode off: plain bilinear (which for a uniform
-    // cell is just the same texture, slightly averaged for the per-corner UVs).
-    result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
-  }
+${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DECL_GLSL : terrainBilinearBlendGlsl("result")}
 ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_DECL_GLSL : ""}
   // FAR HARMONIZE (below) needs the composite's MEAN-colour twin; -1 = unset
   // (the bilinear path, where the plain corner blend is the twin).
@@ -2774,7 +2810,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // bilinear road painter (uRoadEnabled block below) is gated OFF whenever
   // this path is active so roads aren't double-blended.
   if (uTexMergeEnabled > 0.5) {
-    int colBase = iu * 6;
+    int colBase = iu * 6;${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_MERGE_OPEN_GLSL : ""}
     vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
     int baseLayer = int(baseTexel.r * 255.0 + 0.5);
     // 2026-07-31 (water-fix) — THE headline bug. This composite REPLACES the
@@ -2881,8 +2917,8 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
       }
     }
     result = merged;
-    harmSharpMean = mergedMean;
-  }
+    harmSharpMean = mergedMean;${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_MERGE_CLOSE_GLSL : ""}
+  }${TERRAIN_FS_ON ? terrainFarSimplifyBilinearGlsl(TERRAIN_BILINEAR_TAPS_GLSL, terrainBilinearBlendGlsl("fsBilin")) : ""}
 
   // =====================================================================
   // FAR HARMONIZE (2026-10-08, ?farHarmonize, DEFAULT strength 1.0)
@@ -2917,8 +2953,8 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         vec3 hm11 = terrainTypeMean(t11);
         vec3 harmSmooth = (hm00 * ha00 + hm10 * ha10 + hm01 * ha01 + hm11 * ha11) / haSum;
         vec3 harmSharp = harmSharpMean.x >= 0.0
-          ? harmSharpMean
-          : hm00 * w00 + hm10 * w10 + hm01 * w01 + hm11 * w11;
+          ? ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_HARM_MERGED_GLSL : "harmSharpMean"}
+          : ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_HARM_BILIN_GLSL : "hm00 * w00 + hm10 * w10 + hm01 * w01 + hm11 * w11"};
         vec3 harmRatio = clamp(harmSmooth / max(harmSharp, vec3(1e-3)), vec3(0.5), vec3(2.0));
         result *= mix(vec3(1.0), harmRatio, harmF * (1.0 - waterW));
       }
@@ -3027,7 +3063,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   if (uDetailTexEnabled > 0.5) {
     int dcode = clamp(nearCode, 0, 32);
     int dslice = uCodeToDetailTexSlice[dcode];
-    if (dslice >= 0 && dslice < uDetailTexSliceCount) {
+    if (dslice >= 0 && dslice < uDetailTexSliceCount${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_TEX_COND_GLSL : ""}) {
       float tiling = float(uDetailTexTiling[dcode]);
       vec2 dUv = vGridUv * (tiling * uDetailTexBaseScale);
       vec4 detail = texture(uTerrainDetailTex, vec3(dUv, float(dslice)));
@@ -3242,7 +3278,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   if (uDetailNormalEnabled > 0.5 && !acGouraud) {
     // 2026-07-02 — nearest-corner code (was flat vTerrainCode; see nearCode).
     int slice = uCodeToSlice[clamp(nearCode, 0, 31)];
-    if (slice < 5) {
+    if (slice < 5${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_COND_GLSL : ""}) {
       // ----- Phase 1.3 — slope-gated triplanar detail sampling. -----
       //
       // Existing grid-UV path (vGridUv * uDetailScale) is the XY-plane
@@ -3299,7 +3335,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         vec3 detailTri = detailYz * w.x + detailXz * w.y + detailEncoded * w.z;
         detailEncoded = mix(detailEncoded, detailTri, triBlend);
       }
-      // RNM blend.
+${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM blend.
       vec3 t = baseN * vec3(2.0, 2.0, 2.0) + vec3(-1.0, -1.0, 0.0);
       vec3 u = detailEncoded * vec3(-2.0, -2.0, 2.0) + vec3(1.0, 1.0, -1.0);
       // FU-2 — guard against the latent normalize(0) NaN: a degenerate detail
@@ -3312,7 +3348,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
       // wrap-lit lambert. Expression-identical to the prior inline
       // mix(0.65, 1.0, clamp(dot(combinedN, sunDir), 0.0, 1.0)).
       ndotl = terrainSunNdotl(combinedN, sunDir);
-    }
+    }${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FAR_GLSL : ""}
   }
 
   // FU-2 — geometry-normal slope relief, applied as a WORLD-space factor on
@@ -4265,6 +4301,7 @@ export async function resolveTerrainRingOpts(
   if (TERRAIN_ROUND.enabled) installTerrainRoundDiag(scene3d);
   // 2026-10-07 — terrain fine detail live handle (window.__terrainMicro).
   installTerrainMicroDiag(scene3d);
+  installTerrainFarSimplifyDiag(scene3d);
 
   // Phase 2.2 — animated water/lava displacement.
   // 2026-07-31 (water-fix) — the `subdivLevel >= 2` quality gate is GONE.
@@ -6577,6 +6614,10 @@ export async function bakeTerrainForLandblock(
       // the URL forced `=on`. Cloned into the batch material like every
       // uniform; live: window.__terrainMicro.set({...}).
       ...terrainMicroUniforms(THREE, scene3d?.quality?.preset),
+      // 2026-10-17 — terrain far simplify (scene3d/terrain_far_simplify.js): the
+      // view-depth band (start, end) of the far path. `{}` with the flag off.
+      // Cloned into the batch material; live: window.__terrainFarSimplify.set({...}).
+      ...terrainFarSimplifyUniforms(THREE),
       // Clouds-L — cloud shadow uniforms. Updated each frame from
       // cloud_volume.js when CloudOverlay is wired. Default off
       // (uCloudShadowEnabled=0) so terrain renders correctly when
