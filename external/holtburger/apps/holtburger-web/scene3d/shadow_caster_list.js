@@ -533,29 +533,37 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
   _normal.length = 0;
   _refresh.length = 0;
   _overlay.length = 0;
-  for (let i = 0; i < lights.length; i += 1) {
-    const l = lights[i];
-    if (!_willRaster(l)) continue;
-    const reason = _reasons[i];
-    const sh = l.shadow;
-    const map = sh.map;
-    if (
-      l.userData?.hbShadowManaged !== true || l.isPointLight ||
-      (map && (map.isWebGLCubeRenderTarget || !map.depthTexture))
-    ) {
-      _normal.push(l);
-      continue;
+  try {
+    for (let i = 0; i < lights.length; i += 1) {
+      const l = lights[i];
+      if (!_willRaster(l)) continue;
+      const reason = _reasons[i];
+      const sh = l.shadow;
+      const map = sh.map;
+      if (
+        l.userData?.hbShadowManaged !== true || l.isPointLight ||
+        (map && (map.isWebGLCubeRenderTarget || !map.depthTexture))
+      ) {
+        _normal.push(l);
+        continue;
+      }
+      const st = _stateOf(l);
+      _fillKey(l, st._key);
+      if (reason & SHADOW_REASON_FRUSTUM || !map) {
+        st.valid = false;
+        _normal.push(l);
+      } else if (!(reason & SHADOW_REASON_STATIC) && _usable(st, l, camera.layers.mask)) {
+        _overlay.push(l);
+      } else {
+        _refresh.push(l);
+      }
     }
-    const st = _stateOf(l);
-    _fillKey(l, st._key);
-    if (reason & SHADOW_REASON_FRUSTUM || !map) {
-      st.valid = false;
-      _normal.push(l);
-    } else if (!(reason & SHADOW_REASON_STATIC) && _usable(st, l, camera.layers.mask)) {
-      _overlay.push(l);
-    } else {
-      _refresh.push(l);
-    }
+  } catch (e) {
+    // Nothing rastered yet: stand down and let the caller's plain pass run.
+    sscCtl.broken = true;
+    sscStats.errors += 1;
+    sscStats.lastError = String((e && e.message) || e);
+    return false;
   }
   if (_refresh.length === 0 && _overlay.length === 0) {
     sscStats.passthrough += 1;
