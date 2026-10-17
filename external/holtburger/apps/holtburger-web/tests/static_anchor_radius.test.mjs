@@ -12,6 +12,7 @@
 //       band, bumps the anchor epoch, and does nothing until the player set changes
 //   F5  approaching a deferred landblock rebuilds it through the builder host
 //   F6  the tick works from the liveScene3d facade (state + manager on the host)
+//   F7  RP6's cull sphere reads a frozen anchor's matrixWorld, never getWorldPosition
 //
 // Run from apps/holtburger-web/:  node tests/static_anchor_radius.test.mjs
 
@@ -190,4 +191,22 @@ test("off: the tick is inert", () => {
   assert.equal(w.destroyed.length, 0);
   assert.equal(w.table.size, 2);
   __setStaticScriptRadiusForTest(2);
+});
+
+test("F7: RP6 reads a frozen anchor's matrixWorld directly", async () => {
+  const { rp6CullSphere } = await import("../scene3d/particles/particle_manager.js");
+  const worldRoot = new THREE.Group();
+  worldRoot.rotation.x = -Math.PI / 2;
+  const anchor = new THREE.Group();
+  anchor.position.set(10, 20, 30);
+  anchor.userData = { isStaticScriptAnchor: true };
+  worldRoot.add(anchor);
+  __freezeStaticScriptAnchorForTest(anchor);
+  let calls = 0;
+  anchor.getWorldPosition = function (v) { calls += 1; return THREE.Object3D.prototype.getWorldPosition.call(this, v); };
+  const out = new THREE.Vector3();
+  rp6CullSphere({ parent: anchor, partIndex: -1, info: {} }, out);
+  assert.equal(calls, 0, "no parent-chain recompose");
+  const want = new THREE.Vector3().setFromMatrixPosition(anchor.matrixWorld);
+  assert.ok(out.distanceTo(want) < 1e-9, `${out.toArray()} vs ${want.toArray()}`);
 });

@@ -5145,8 +5145,8 @@ function _freezeStaticScriptAnchor(anchor) {
 // `_RP6.maxDistance` = 220 m, and every point within 220 m of the player lies in
 // a landblock at distance <= 2, so N = 2 drops nothing that could be drawn. The
 // rest of the 9x9 ring (79 landblocks at Linvak) only cost per-frame cull and
-// bookkeeping. Hysteresis like ?objRadius: attach at d <= N + 1, tear down at
-// d > N + 1, rebuild at d <= N. The teardown removes only the default_script
+// bookkeeping. Hysteresis like ?objRadius: attach and rebuild at d <= N, tear
+// down at d > N + 1. The teardown removes only the default_script
 // emitters (parent = one of the landblock's anchors), never the synthesized
 // ones that share the `static:<lbKey>` owner; the rebuild reuses warm-park's
 // `rebuildStaticScriptEmittersForAnchors`. State lives on scene3d because this
@@ -5169,7 +5169,6 @@ export function staticScriptRadiusSetting() {
 /** Test seam: force the setting (`undefined` re-reads the URL). */
 export function __setStaticScriptRadiusForTest(v) { _staticScriptRadius = v; }
 
-const _scriptRadiusStats = { deferredAtAttach: 0, torndownLbs: 0, emittersTorndown: 0, rebuiltLbs: 0 };
 /** The builder scene object that owns the static particle manager. */
 function _scriptsHost(scene3d) {
   return scene3d?.staticsGroup?.userData?.__staticsHost ?? scene3d;
@@ -5178,12 +5177,14 @@ function _scriptRadiusState(scene3d) {
   const host = _scriptsHost(scene3d);
   let st = host._staticScriptRadius;
   if (!st) {
-    st = { centers: [], sig: null, deferred: new Set() };
+    // Stats live here too: this module loads as two instances.
+    st = { centers: [], sig: null, deferred: new Set(),
+      stats: { deferredAtAttach: 0, torndownLbs: 0, emittersTorndown: 0, rebuiltLbs: 0 } };
     host._staticScriptRadius = st;
     if (typeof window !== "undefined") {
       window.__staticScriptRadius = () => ({
         radius: staticScriptRadiusSetting(), centers: st.centers.map((k) => (k >>> 0).toString(16)),
-        deferredLbs: st.deferred.size, ..._scriptRadiusStats,
+        deferredLbs: st.deferred.size, ...st.stats,
       });
     }
   }
@@ -5213,7 +5214,7 @@ function _staticScriptWanted(scene3d, landblockId) {
     if (typeof cur !== "number" || cur === 0) return true;
     centers = [lbKeyOf(cur >>> 0)];
   }
-  return _scriptLbDist(centers, lbKeyOf(landblockId >>> 0)) <= n + 1;
+  return _scriptLbDist(centers, lbKeyOf(landblockId >>> 0)) <= n;
 }
 /**
  * Tear down the default_script emitters hanging off `anchors` (one
@@ -5242,7 +5243,7 @@ function _deferStaticScriptAnchors(scene3d, lbKey, anchors) {
       try { mgr.destroyParticleEmitter(id); } catch (_) { /* fail-soft */ }
     }
   }
-  _scriptRadiusStats.emittersTorndown += ids.length;
+  _scriptRadiusState(scene3d).stats.emittersTorndown += ids.length;
   return ids.length;
 }
 /** Test seams. */
@@ -5290,13 +5291,13 @@ export function tickStaticScriptRadius(scene3d, seen) {
     if (d > n + 1 && !st.deferred.has(k)) {
       st.deferred.add(k);
       _deferStaticScriptAnchors(scene3d, k, anchorsOf(k));
-      _scriptRadiusStats.torndownLbs += 1;
+      st.stats.torndownLbs += 1;
     } else if (d <= n && st.deferred.has(k)) {
       st.deferred.delete(k);
       const anchors = anchorsOf(k);
       for (const a of anchors) a.userData.__scriptDeferred = false;
       if (anchors.length === 0) continue;
-      _scriptRadiusStats.rebuiltLbs += 1;
+      st.stats.rebuiltLbs += 1;
       const host = _scriptsHost(scene3d);
       const rebuild = _rebuildScriptsFn ?? ((h, a) => h._rebuildStaticParticlesForAnchors?.(a));
       try { Promise.resolve(rebuild(host, anchors)).catch(() => {}); } catch (_) { /* fail-soft */ }
@@ -6045,8 +6046,9 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     // tickStaticScriptRadius to rebuild its chain when the player comes near.
     if (!_staticScriptWanted(scene3d, p.landblockId)) {
       anchor.userData.__scriptDeferred = true;
-      _scriptRadiusState(scene3d).deferred.add(pLbKey);
-      _scriptRadiusStats.deferredAtAttach += 1;
+      const rs = _scriptRadiusState(scene3d);
+      rs.deferred.add(pLbKey);
+      rs.stats.deferredAtAttach += 1;
     } else {
       // eslint-disable-next-line no-await-in-loop
       emitterCount += await _runStaticParticleChain(

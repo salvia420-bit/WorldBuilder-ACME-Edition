@@ -1417,6 +1417,11 @@ export function rp6CullSphere(emitter, out) {
       : null;
   if (partFrame && partFrame.position) {
     out.copy(partFrame.position);
+  } else if (parent.userData && parent.userData.__anchorFrozen === true && parent.matrixWorld) {
+    // ?staticAnchorFreeze (statics.js): a frozen static anchor's matrixWorld is
+    // exact and constant; getWorldPosition would recompose its parent chain on
+    // every call (3.6% of the main thread at Linvak Tukal, ~10k emitters).
+    out.setFromMatrixPosition(parent.matrixWorld);
   } else if (typeof parent.getWorldPosition === "function") {
     parent.getWorldPosition(out);
   } else if (parent.position) {
