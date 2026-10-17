@@ -315,7 +315,14 @@ const A = build();
   check("late target: single-sample RGBA16F at the drawing-buffer size",
     rt.samples === 0 && rt.texture.type === THREE.HalfFloatType && rt.width === W && rt.height === H,
     `samples=${rt.samples} ${rt.width}x${rt.height} composerSamples=${p.composer.multisampling}`);
-  check("composer buffers are MSAA (why a private single-sample target)", p.composer.multisampling === 2);
+  // 2026-10-17 `?msaaWorldOnly` (default on, tests/msaa_world.test.mjs): the
+  // samples moved off the ping-pong buffers onto the composer's world target,
+  // which is what the world pass draws into; the late target stays private
+  // and single-sample for the parity / depth reasons above.
+  check("the world pass is MSAA (the composer's world target), the ping-pong buffers are not",
+    p.composer.multisampling === 0 && p.msaaWorldTarget?.samples === 2 &&
+    p.msaaWorldTarget.depthTexture === p.composer.depthTexture,
+    `composer=${p.composer.multisampling} world=${p.msaaWorldTarget?.samples}`);
 
   frame(p);
   const atmosScene = p.fxPass.scene;

@@ -377,6 +377,7 @@ const TIER5 = [
   // 2026-10-07 particles drawn after the cloud + aerial composite (split post
   // chain; the -sky glow stays behind the clouds).
   { tier: 5, flag: "particlesOverClouds", file: "tests/particles_over_clouds.test.mjs" },
+  { tier: 5, flag: "msaaWorldOnly", file: "tests/msaa_world.test.mjs" },
   // 2026-10-05 audio retail parity (voice pool, retail mixer, 0xF750, UI/portal sounds, volume 0).
   { tier: 5, flag: "audio_voice_pool", file: "tests/audio_voice_pool.test.mjs" },
   { tier: 5, flag: "audioRetailPan", file: "tests/audio_retail_mixer.test.mjs" },
@@ -561,6 +562,7 @@ const TIER5 = [
   // 2026-10-07 — terrain fine detail (step 4): micro-relief maths, height blend,
   // gamma crossfade, mip-seam taps, sampler budget on the assembled program.
   { tier: 5, flag: "terrain_micro", file: "test_terrain_micro.mjs" },
+  { tier: 5, flag: "terrainFarSimplify", file: "tests/terrain_far_simplify.test.mjs" },
   { tier: 5, flag: "terrain_ring_batch", file: "test_terrain_ring_batch.mjs" },
   { tier: 5, flag: "terrain_rock", file: "test_terrain_rock.mjs" },
   { tier: 5, flag: "terrain_sand", file: "test_terrain_sand.mjs" },

@@ -80,6 +80,8 @@ import { LayeredHazePass, layerHazeStrength, installLayerHazeHandle } from "./la
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 // cells-portals-2 — `?indoorLandscapeGate` diag counter (skipped frames).
 import { INDOOR_LANDSCAPE_GATE_STATS } from "./indoor_landscape_gate.js";
+// 2026-10-17 — `?msaaWorldOnly`: MSAA on the world pass only, single-sample post chain.
+import { MsaaWorldComposer, msaaWorldOnlyEnabled, msaaWorldSnapshot } from "./msaa_world.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -462,6 +464,11 @@ class SkyCapturePass extends Pass {
 // whatever the parity and whatever the MSAA count, with no depth copy and no
 // extra resolve. Cost: one extra full-screen HDR write+read (T), the moved
 // particle draws, and T's colour (RGBA16F at drawing-buffer size).
+// (2026-10-17, `?msaaWorldOnly` default on: the ping-pong buffers are now
+// single-sample and the samples sit on the composer's world target, which the
+// scene passes draw into. composer.depthTexture still carries the resolved
+// scene depth, so none of the above changes — the parity argument only gets
+// stronger.)
 //
 // WHY THE PARTICLES ARE HIDDEN RATHER THAN RE-LAYERED. Re-layering every
 // particle onto a new camera layer would have to be mirrored by every OTHER
@@ -528,6 +535,9 @@ class PostChainSourcePass extends EffectPass {
     // unchanged across the pass, gl.getError() 1282; with depth resolve off
     // the pass writes T exactly and the error is 0). The depth texture keeps
     // what the world pass resolved into it, which is all any later reader wants.
+    // (2026-10-17: with `?msaaWorldOnly` (default) the output buffer is
+    // single-sample, there is no resolve at all and this guard is inert; it
+    // stays for `?msaaWorldOnly=off`.)
     const restore = outputBuffer && outputBuffer.resolveDepthBuffer === true;
     if (restore) outputBuffer.resolveDepthBuffer = false;
     try {
@@ -1050,7 +1060,17 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // byte-identical to the pre-08-05 composer. `setSize` below preserves
   // `samples` (it resizes the existing targets rather than rebuilding them).
   const msaaSamples = Number.isFinite(opts?.msaa) ? Math.max(0, Math.min(8, opts.msaa | 0)) : 0;
-  const composer = new EffectComposer(renderer, {
+  // 2026-10-17 — `?msaaWorldOnly` (DEFAULT ON, `=off` escape; scene3d/msaa_world.js).
+  // The samples go on ONE world target that the scene passes draw into; the
+  // ping-pong buffers the post chain writes are single-sample. Measured on the
+  // 1070 (ultra, msaa=4): MSAA resolves 1.95 ms/frame, ~1.2 ms of it from post
+  // passes writing 4x buffers — full-screen quads, nothing for MSAA to smooth.
+  // Decided HERE, once, at construction (runtime MSAA changes went through a
+  // black-screen path on the 1070). `opts.msaaWorldOnly` (boolean) wins for tests.
+  const msaaWorldOnly = msaaSamples > 0 &&
+    (typeof opts?.msaaWorldOnly === "boolean" ? opts.msaaWorldOnly : msaaWorldOnlyEnabled());
+  const ComposerClass = msaaWorldOnly ? MsaaWorldComposer : EffectComposer;
+  const composer = new ComposerClass(renderer, {
     frameBufferType: THREE.HalfFloatType,
     // Portal-stencil pass needs a stencil attachment; ?portalPunch's occlusion
     // gate (portal_punch.js) needs one too, but it does NOT get to ask for it
@@ -1079,10 +1099,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // Both absent (the default) → no stencil attachment, plain DepthFormat,
     // legacy unconditional punch: byte-identical to the pre-gate pipeline.
     stencilBuffer: !!portalStencil || !!punchOcclusion,
-    multisampling: msaaSamples,
+    // ?msaaWorldOnly: single-sample ping-pong buffers, the samples go on the
+    // composer's world target (attachWorldTarget below, once the passes exist).
+    multisampling: msaaWorldOnly ? 0 : msaaSamples,
+    worldSamples: msaaWorldOnly ? msaaSamples : 0,
   });
   composer.setSize(width, height);
-  if (msaaSamples > 0) {
+  if (msaaSamples > 0 && !msaaWorldOnly) {
     // Loud once, like the BC7 probe: a boot that spends the multisample store
     // must say so, and `composer.multisampling` reads back the buffer's ACTUAL
     // sample count — 0 here would mean the request was dropped (WebGL 1, or a
@@ -1788,6 +1811,30 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass.setDepthTexture(fxPass.getDepthTexture(), fxPass.fullscreenMaterial?.depthPacking);
   }
 
+  // ?msaaWorldOnly — build the multisampled world target now that every pass
+  // is added: `composer.depthTexture` (created by the first depth-reading
+  // addPass) must be on it BEFORE its first bind (msaa_world.js, THE ANGLE
+  // TRAP). Every pass ahead of the first buffer swap draws into it.
+  const msaaWorldInfo = {
+    flag: msaaWorldOnly,
+    requested: msaaSamples,
+    maxSamples: renderer?.capabilities?.maxSamples ?? null,
+  };
+  if (msaaWorldOnly) {
+    const worldRt = composer.attachWorldTarget();
+    // Loud once, like the legacy line: a boot that spends the multisample
+    // store must say where. three clamps the count to maxSamples at setup.
+    // eslint-disable-next-line no-console
+    console.log(
+      `[msaa] world pass multisampling=${worldRt ? worldRt.samples : 0} (requested ${msaaSamples}, ` +
+        `maxSamples ${msaaWorldInfo.maxSamples ?? "?"}); post chain single-sample (?msaaWorldOnly)`,
+    );
+  }
+  if (typeof window !== "undefined") {
+    // Read-only diag — no runtime toggle on purpose (msaa_world.js header).
+    window.__msaaWorld = () => msaaWorldSnapshot(composer, msaaWorldInfo);
+  }
+
   // Live tuning handle for the 1070 eye-test, mirroring `window.__horizonFade`:
   // `__heatHaze.strength = 0.012`, `.freq`, `.speed`, and `.state` for a
   // snapshot of what the terrain provider is publishing. No-op when off.
@@ -1977,6 +2024,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass,
     fxPostPass,
     particlesOverCloudsPass,
+    // ?msaaWorldOnly (2026-10-17): the multisampled target the scene passes
+    // draw into (null with the flag off or `?msaa=0`, when the composer's own
+    // buffers carry any samples as before). Diag: `window.__msaaWorld()`.
+    get msaaWorldTarget() { return composer.worldTarget ?? null; },
     // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the DoF effect, present
     // only with the flag (the off object keeps its exact shape).
     ...(filmDof ? { filmDof: filmDof.effect } : null),
@@ -2300,6 +2351,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     },
 
     setSize(w, h) {
+      // (?msaaWorldOnly: MsaaWorldComposer.setSize resizes its world target too.)
       composer.setSize(w, h);
       // Bug 11 (2026-10-07, black flicker + 256× "glBlitFramebuffer:
       // Framebuffer is incomplete: Attachments are not all the same size").
@@ -2402,6 +2454,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       } else {
         composer.passes.forEach((p) => p.dispose?.());
       }
+      // ?msaaWorldOnly — the world target is the composer's, not a pass's.
+      composer.disposeWorldTarget?.();
       aerialPerspective.dispose?.();
       lensFlare?.dispose?.();
       bloom?.dispose?.();
