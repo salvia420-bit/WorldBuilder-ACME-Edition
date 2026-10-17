@@ -183,6 +183,7 @@ import {
   resolveDepthMode,
   depthRendererParams,
   installReversedZ,
+  reversedZDiagSnapshot,
 } from "./shader_logdepth.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
@@ -1217,7 +1218,7 @@ export async function preInit3D(canvas) {
       });
     } else {
       // eslint-disable-next-line no-console
-      console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix})`, _rz.notes.length ? _rz.notes : "");
+      console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix}, baseCameraFix=${_rz.baseCameraFix})`, _rz.notes.length ? _rz.notes : "");
     }
   }
   try {
@@ -1231,8 +1232,24 @@ export async function preInit3D(canvas) {
           depthFuncFix: _rzFixes.depthFuncFix,
           packing: _rzFixes.packing,
           sortKeyFix: _rzFixes.sortKeyFix,
+          baseCameraFix: _rzFixes.baseCameraFix,
           notes: _rzFixes.notes.slice(),
         } : null,
+      });
+      // Read-only, both depth modes: the sky A/B's discriminators (LUT source,
+      // cloud noise source and whether its GPU textures were generated, the
+      // clouds program's depth define, the base-Camera fix). Sync readback of
+      // four texels — console use only.
+      window.__reversedZDiag = () => reversedZDiagSnapshot({
+        renderer,
+        cloudOverlay: window.__cloudOverlay ?? null,
+        atmosphereRuntime: window.__atmosphereRuntime ?? null,
+        Camera: THREE.Camera,
+        readRT: (rt) => {
+          const px = new Uint8Array(4);
+          renderer.readRenderTargetPixels(rt, rt.width >> 1, rt.height >> 1, 1, 1, px);
+          return px;
+        },
       });
     }
   } catch (_) { /* diag only */ }
@@ -5891,6 +5908,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         if (typeof window !== "undefined") {
           // eslint-disable-next-line no-undef
           window.__cloudOverlay = cloudOverlay;
+          // Read-only cloud-state snapshot for the per-session bright/dark sky
+          // A/B (cloud_overlay.js cloudStateSnapshot): noise source + bound
+          // texture identities, uniform digest, linked programs, raw march
+          // probe, LUT source, look, boot timeline.
+          // eslint-disable-next-line no-undef
+          window.__cloudStateDiag = (o) => cloudOverlay.diagSnapshot(renderer, {
+            // eslint-disable-next-line no-undef
+            atmosphereRuntime: window.__atmosphereRuntime ?? null,
+            ...(o || {}),
+          });
           // eslint-disable-next-line no-undef
           window.__setCloudCoverage = (v) => {
             const c = Math.max(0, Math.min(1, +v));

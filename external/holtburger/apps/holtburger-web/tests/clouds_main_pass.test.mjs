@@ -158,5 +158,71 @@ check("AerialPerspective proxies cleared", ap.overlay === null && ap.shadowLengt
 check("the original update is restored", (effect.update(), raymarches === 2));
 check("the legacy sky quad is back", overlay.overlayMesh.parent === skyScene);
 
+// ---------------------------------------------------------------------------
+console.log("\n-- C6 window.__cloudStateDiag (cloudStateSnapshot) ---------------");
+{
+  const { cloudStateSnapshot, diagTextureInfo } = await import("../scene3d/cloud_overlay.js");
+  const cm = effect.cloudsPass.currentMaterial;
+  const progs = new Map();
+  const reads = [];
+  // binary16 of 0.5 / 1.0 / 0.25 / 2048 for the probe decode.
+  const H = { 0.5: 0x3800, 1: 0x3c00, 0.25: 0x3400, 2048: 0x6800 };
+  const diagRenderer = {
+    properties: { get: (m) => { if (!progs.has(m)) progs.set(m, {}); return progs.get(m); } },
+    getPixelRatio: () => 1,
+    readRenderTargetPixels(rt, x, y, w, h, buf, _face, index = 0) {
+      reads.push({ rt, x, y, index });
+      if (buf instanceof Uint16Array) buf.set(index === 1 ? [H[2048], 0, 0, H[1]] : [H[0.5], H[0.25], H[0.5], H[1]]);
+    },
+  };
+  effect.cloudsPass.setSize(64, 36);
+  const s1 = cloudStateSnapshot(overlay, diagRenderer, {});
+  check("noise source + per-texture identities (procedural = render-target textures)",
+    s1.noise.source === "procedural" && s1.noise.procedural.shape?.needsRender === true &&
+    s1.materials.clouds.textures.shapeTexture?.kind === "rt" &&
+    s1.materials.clouds.textures.localWeatherTexture?.kind === "rt", JSON.stringify(s1.materials.clouds.textures.shapeTexture));
+  check("boot timeline stamps (created, procedural install, adoption)",
+    Number.isFinite(s1.timeline.created) && Number.isFinite(s1.timeline.procedural) && Number.isFinite(s1.timeline.adopted));
+  const s2 = cloudStateSnapshot(overlay, diagRenderer, {});
+  check("uniform digest is stable between calls", s1.materials.clouds.uniformsDigest === s2.materials.clouds.uniformsDigest);
+  cm.uniforms.viewMatrix?.value?.makeTranslation?.(1, 2, 3);
+  cm.uniforms.frame.value += 7;
+  const s3 = cloudStateSnapshot(overlay, diagRenderer, {});
+  check("camera / frame uniforms are outside the digest",
+    s3.materials.clouds.uniformsDigest === s1.materials.clouds.uniformsDigest);
+  const cov = effect.coverage;
+  effect.coverage = cov + 0.05;
+  const s4 = cloudStateSnapshot(overlay, diagRenderer, {});
+  effect.coverage = cov;
+  check("a look uniform (coverage) changes the digest",
+    s4.materials.clouds.uniformsDigest !== s1.materials.clouds.uniformsDigest && s4.look.coverage === cov + 0.05);
+  progs.get(cm).currentProgram = { id: 9, cacheKey: Object.keys(cm.defines).filter((d) => d !== "HAZE").join(",") };
+  const s5 = cloudStateSnapshot(overlay, diagRenderer, {});
+  check("a material define the linked program lacks is reported",
+    s5.materials.clouds.program?.id === 9 &&
+    JSON.stringify(s5.materials.clouds.program.definesNotInProgram) === (cm.defines.HAZE != null ? '["HAZE"]' : "[]"),
+    JSON.stringify(s5.materials.clouds.program));
+  check("probe: raw march colour + frontDepth and the resolved buffer, half floats decoded",
+    JSON.stringify(s5.probe.march) === "[0.5,0.25,0.5,1]" && s5.probe.marchDepthVelocity[0] === 2048 &&
+    JSON.stringify(s5.probe.resolved) === "[0.5,0.25,0.5,1]" &&
+    reads.some((r) => r.rt === effect.cloudsPass.currentRenderTarget && r.index === 1) &&
+    reads.some((r) => r.rt === effect.cloudsPass.historyRenderTarget), JSON.stringify(s5.probe));
+  const s6 = cloudStateSnapshot(overlay, diagRenderer, {
+    atmosphereRuntime: { ready: true, source: "bake", plan: "bandwidth:high", loadTimedOut: true, bakeMs: 812 },
+  });
+  check("LUT source / plan / timeout and the look are reported",
+    s6.lut.source === "bake" && s6.lut.loadTimedOut === true && s6.lut.bakeMs === 812 &&
+    Array.isArray(s6.look.layers) && s6.look.layers.length === 4 && s6.camera.near === camera.near);
+  check("diagTextureInfo: prebaked Data3DTexture vs image texture vs null",
+    diagTextureInfo(new THREE.Data3DTexture(new Uint8Array(8), 2, 2, 2)).kind === "data3d" &&
+    diagTextureInfo(new THREE.Texture({ width: 4, height: 4, src: "x/local_weather.png" })).src === "local_weather.png" &&
+    diagTextureInfo(null) === null);
+  const bare = cloudStateSnapshot(null, null, {});
+  check("no overlay / renderer -> partial snapshot, never throws", bare.noise.source === "prebaked" && bare.materials === undefined);
+  const ix = readFileSync(path.join(APP, "scene3d", "index.js"), "utf8");
+  check("index.js installs window.__cloudStateDiag over the overlay's diagSnapshot",
+    /window\.__cloudStateDiag = \(o\) => cloudOverlay\.diagSnapshot\(renderer, \{/.test(ix));
+}
+
 console.log(`\nclouds main pass: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -183,6 +183,29 @@ export function withLogDepth(params) {
 //   7. Render-list sort keys are CLIP z, which shrinks with distance under the
 //      reversed projection: opaque would sort back-to-front and transparent
 //      front-to-back. installReversedZ negates the key on push.
+//   8. The reversed flip in setProgram calls `camera.updateProjectionMatrix()`
+//      UNGUARDED, and the base `THREE.Camera` has no such method. Every render
+//      with a plain `new Camera()` therefore throws a TypeError on that
+//      camera's first draw — after `_reversedDepth` is set, so the second draw
+//      goes through. takram renders its GPU-generated textures exactly that
+//      way: the atmosphere LUT bake (PrecomputedTexturesGenerator, the
+//      `?atmosphereLut` bake / slow-download fallback) and the four cloud noise
+//      textures (Procedural*TextureBase, the `?cloudProcedural` / prebaked-
+//      load-failure fallback). The noise bases clear `needsRender` BEFORE the
+//      throw, so on the reversed buffer those textures were never generated:
+//      zero weather / shape / detail / turbulence, a cloud march with no
+//      density, haze only, in every session that took the fallback (the log
+//      buffer bakes them fine; they are byte-equivalent to the prebaked set).
+//      NOT the per-session bright/dark sky of the 2026-10-17 1070 A/B: that
+//      one flips in log sessions too.
+//      The LUT bake rejected on its first draw: with a download in flight
+//      (the 15 s timeout path) the runtime silently took the download, with
+//      none (`?atmosphereLut=bake`, the bandwidth:low plan) it had no LUTs.
+//      Either way it left three's nested render stacks one level deep and
+//      renderer.autoClear false (which the pmndrs composer keeps anyway).
+//      installReversedZ gives the base Camera a no-op
+//      updateProjectionMatrix: a plain Camera has no parameters to rebuild
+//      from, and its (identity / user-set) matrix stays as it is.
 
 /** The preprocessor guard of every reversed-Z branch in this tree. */
 export const REVERSED_Z_GUARD = "#ifdef USE_REVERSED_DEPTH_BUFFER";
@@ -276,17 +299,17 @@ export function conventionalPackingChunk(src) {
 }
 
 /**
- * Install the reversed-Z fixes three r184 does not make itself (items 1, 2 and
- * 7 in the header). Call ONCE, right after the renderer is built and before
+ * Install the reversed-Z fixes three r184 does not make itself (items 1, 2, 7
+ * and 8 in the header). Call ONCE, right after the renderer is built and before
  * anything compiles. No-op (returns `installed: false`) unless the renderer
  * really runs a reversed depth buffer. A WebGL context restore rebuilds three's
  * state + render lists, so items 1 and 7 re-install on `webglcontextrestored`
  * (three's own listener, registered first, has rebuilt them by then).
  * @returns {{installed:boolean, depthFuncFix:boolean, packing:boolean,
- *            sortKeyFix:boolean, notes:string[]}}
+ *            sortKeyFix:boolean, baseCameraFix:boolean, notes:string[]}}
  */
 export function installReversedZ(THREE, renderer) {
-  const res = { installed: false, depthFuncFix: false, packing: false, sortKeyFix: false, notes: [] };
+  const res = { installed: false, depthFuncFix: false, packing: false, sortKeyFix: false, baseCameraFix: false, notes: [] };
   const depth = renderer && renderer.state && renderer.state.buffers && renderer.state.buffers.depth;
   if (!THREE || !depth || typeof depth.getReversed !== "function" || depth.getReversed() !== true) {
     res.notes.push("renderer is not reversed");
@@ -295,6 +318,7 @@ export function installReversedZ(THREE, renderer) {
   res.installed = true;
   res.depthFuncFix = _fixReversedDepthFuncs(THREE, renderer, res.notes);
   res.sortKeyFix = _fixReversedSortKeys(renderer, res.notes);
+  res.baseCameraFix = _fixBaseCameraProjection(THREE, res.notes);
 
   // (2) Conventional packing helpers (pmndrs readDepth already flipped).
   try {
@@ -322,6 +346,30 @@ export function installReversedZ(THREE, renderer) {
     }
   } catch (_) { /* restore hook is best-effort */ }
   return res;
+}
+
+// (8) Base-Camera renders under the reversed flip (header item 8). Process-
+// wide and idempotent; only ever installed on a reversed renderer.
+function _fixBaseCameraProjection(THREE, notes) {
+  try {
+    const proto = THREE.Camera && THREE.Camera.prototype;
+    if (!proto) {
+      notes.push("no THREE.Camera — base-camera fix skipped");
+      return false;
+    }
+    if (typeof proto.updateProjectionMatrix === "function") return true;
+    Object.defineProperty(proto, "updateProjectionMatrix", {
+      // A plain Camera has no fov / frustum to rebuild a projection from: keep
+      // whatever matrix it carries (takram's fullscreen passes ignore it).
+      value: function updateProjectionMatrixBaseCamera() {},
+      writable: true,
+      configurable: true,
+    });
+    return true;
+  } catch (e) {
+    notes.push(`base-camera fix failed: ${e && e.message}`);
+    return false;
+  }
 }
 
 // (1) Always/Never + Equal/NotEqual. Verified against GL rather than assumed,
@@ -508,4 +556,93 @@ export function glClipProjection(camera, scratch) {
  *  (1); reversed ⇒ z < 0 (behind the eye or past the far plane both land there). */
 export function ndcBehindCamera(ndcZ, camera, threshold = 1.0) {
   return camera && camera.reversedDepth === true ? ndcZ < 0 : ndcZ > threshold;
+}
+
+/**
+ * `window.__reversedZDiag()` — the live state a reversed-vs-log sky A/B needs
+ * to tell its mechanisms apart (the pipeline installs it; duck-typed and pure
+ * so the node suite drives it). Everything is read, nothing toggled. `readRT`
+ * (optional) returns the centre RGBA8 texel of a 2D render target — a
+ * GPU-generated noise texture that was never rendered reads all zeros.
+ * @param {{renderer?:object, camera?:object, cloudOverlay?:object,
+ *          atmosphereRuntime?:object, Camera?:Function,
+ *          readRT?:(rt:object)=>ArrayLike<number>|null}} deps
+ */
+export function reversedZDiagSnapshot(deps = {}) {
+  const { renderer, camera, cloudOverlay, atmosphereRuntime, Camera, readRT } = deps;
+  const depth = renderer && renderer.state && renderer.state.buffers && renderer.state.buffers.depth;
+  const out = {
+    reversed: !!(depth && typeof depth.getReversed === "function" && depth.getReversed() === true),
+    logarithmic: !!(renderer && renderer.capabilities && renderer.capabilities.logarithmicDepthBuffer === true),
+    autoClear: renderer ? renderer.autoClear : null,
+    baseCameraUpdate: Camera && Camera.prototype
+      ? typeof Camera.prototype.updateProjectionMatrix === "function"
+      : null,
+    lut: null,
+    clouds: null,
+  };
+  if (atmosphereRuntime) {
+    out.lut = {
+      ready: atmosphereRuntime.ready === true,
+      source: atmosphereRuntime.source ?? null,
+      plan: atmosphereRuntime.plan ?? null,
+      loadTimedOut: atmosphereRuntime.loadTimedOut === true,
+      bakeAttempted: !!atmosphereRuntime.generator,
+      error: atmosphereRuntime.error ? String(atmosphereRuntime.error && atmosphereRuntime.error.message || atmosphereRuntime.error) : null,
+    };
+  }
+  const eff = cloudOverlay && cloudOverlay.volume && cloudOverlay.volume.effect;
+  if (eff) {
+    const cm = eff.cloudsPass && eff.cloudsPass.currentMaterial;
+    const props = renderer && renderer.properties && typeof renderer.properties.get === "function" && cm
+      ? renderer.properties.get(cm)
+      : null;
+    const prog = props && props.currentProgram;
+    const procedural = {
+      localWeather: eff.proceduralLocalWeather,
+      shape: eff.proceduralShape,
+      shapeDetail: eff.proceduralShapeDetail,
+      turbulence: eff.proceduralTurbulence,
+    };
+    const proceduralState = {};
+    for (const [k, p] of Object.entries(procedural)) {
+      if (!p) continue;
+      const s = { needsRender: p.needsRender === true, cameraFlipped: !!(p.camera && p.camera.reversedDepth === true) };
+      if (typeof readRT === "function" && p.renderTarget && !p.renderTarget.isWebGL3DRenderTarget) {
+        try {
+          const t = readRT(p.renderTarget);
+          if (t) s.centreTexel = Array.from(t);
+        } catch (_) { /* diag */ }
+      }
+      proceduralState[k] = s;
+    }
+    const cam = camera || eff.camera || null;
+    let cascadeNearZ = null;
+    try {
+      const cf = eff.shadowMaps && eff.shadowMaps.cameraFrustum;
+      if (cf && cam && typeof cf.clone === "function") {
+        const c = cf.clone().setFromCamera(cam, eff.shadowMaps.far || cam.far);
+        cascadeNearZ = c.near[0].z;
+      }
+    } catch (_) { /* diag */ }
+    out.clouds = {
+      mainPass: cloudOverlay.mainPassActive === true,
+      noise: cloudOverlay._proceduralTextures ? "procedural" : "prebaked",
+      prebakedLoaded: cloudOverlay._prebakedLoaded === true,
+      lastError: cloudOverlay.lastError ?? null,
+      procedural: proceduralState,
+      definesReversed: !!(cm && cm.defines && cm.defines.USE_REVERSED_DEPTH_BUFFER != null),
+      definesLog: !!(cm && cm.defines && cm.defines.USE_LOGARITHMIC_DEPTH_BUFFER != null),
+      programReversed: prog && typeof prog.cacheKey === "string" ? /USE_REVERSED_DEPTH_BUFFER/.test(prog.cacheKey) : null,
+      depthBufferBound: !!(cm && cm.uniforms && cm.uniforms.depthBuffer && cm.uniforms.depthBuffer.value),
+      frustumCornersReversedAware: /reversedDepth/.test(String(
+        eff.shadowMaps && eff.shadowMaps.cameraFrustum && eff.shadowMaps.cameraFrustum.setFromCamera || "")),
+      // −camera.near when the cloud shadow cascades start at the eye (both modes).
+      cascadeNearZ,
+      cameraNear: cam ? cam.near : null,
+      cameraReversed: cam ? cam.reversedDepth === true : null,
+      frame: eff.frame ?? null,
+    };
+  }
+  return out;
 }

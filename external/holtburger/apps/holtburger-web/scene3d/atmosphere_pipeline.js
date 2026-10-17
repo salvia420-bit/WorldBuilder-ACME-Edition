@@ -1810,6 +1810,18 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (cloudsMainAdopted && typeof fxPass.getDepthTexture === "function" && fxPass.getDepthTexture()) {
     fxPass.setDepthTexture(fxPass.getDepthTexture(), fxPass.fullscreenMaterial?.depthPacking);
   }
+  // `?reversedZ=on`: the takram CloudsMaterial is a RawShaderMaterial, so three
+  // never injects USE_REVERSED_DEPTH_BUFFER; the vendored onBeforeRender mirrors
+  // it from the renderer (a program swap on the first draw). The renderer is
+  // known here, so set it at adoption: the material's first program already
+  // reads reversed depth, whatever compiles it first. Log buffer: untouched.
+  if (cloudsMainAdopted && renderer.state?.buffers?.depth?.getReversed?.() === true) {
+    const cm = cloudsMain.cloudsPass?.currentMaterial;
+    if (cm && cm.defines && cm.defines.USE_REVERSED_DEPTH_BUFFER == null) {
+      cm.defines.USE_REVERSED_DEPTH_BUFFER = "1";
+      cm.needsUpdate = true;
+    }
+  }
 
   // ?msaaWorldOnly — build the multisampled world target now that every pass
   // is added: `composer.depthTexture` (created by the first depth-reading

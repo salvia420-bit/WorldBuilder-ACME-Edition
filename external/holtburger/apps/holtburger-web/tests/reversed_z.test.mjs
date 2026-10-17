@@ -31,6 +31,14 @@
 //       culling / particle frustum, nameplates / brackets, takram vendor
 //       patches + their re-apply in the vendor build, the pipeline's
 //       near/far sync, the docs row and the harness registration.
+//   Z11 takram clouds FrustumCorners: reversed corners == conventional ones.
+//   Z12 base-Camera renders (takram's GPU bakes on a reversed buffer): three
+//       r184's reversed flip calls `updateProjectionMatrix()` unguarded and
+//       the base Camera has none, so takram's GPU noise / LUT bakes threw on
+//       their first draw and the noise was never generated; the vendored
+//       Procedural*TextureBase classes run against a recording renderer that
+//       replays three's flip, unfixed vs installReversedZ vs log. Plus the
+//       pipeline's eager clouds define and `window.__reversedZDiag`.
 //
 // Run: node tests/reversed_z.test.mjs
 
@@ -51,6 +59,8 @@ const src = (p) => readFileSync(path.join(APP, p), "utf8");
 
 const THREE = await import("three");
 const Z = await import(v("scene3d/shader_logdepth.js"));
+// Z12: three r184's own base Camera, before any installReversedZ below patches it.
+const BASE_CAMERA_UPDATE_AT_IMPORT = typeof THREE.Camera.prototype.updateProjectionMatrix;
 
 let passed = 0;
 let failed = 0;
@@ -634,6 +644,181 @@ console.log("-- Z10 source wiring ----------------------------------------------
   const ts = src("vendor/takram-three-clouds/src/helpers/FrustumCorners.ts");
   check("takram clouds src FrustumCorners.ts carries the same reversed near/far NDC z",
     /const nearZ = reversed \? 1 : -1/.test(ts) && /const farZ = reversed \? 0 : 1/.test(ts));
+}
+
+// Z12 base-Camera renders under the reversed flip (shader_logdepth.js header
+// item 8; found chasing the 2026-10-17 bright-sky A/B, which turned out to
+// flip per session in log mode too — a separate mechanism). three r184's setProgram
+// flips every camera it meets on a reversed buffer with an UNGUARDED
+// `camera.updateProjectionMatrix()`; the base Camera has none, so the takram
+// bakes that draw with `new Camera()` threw on their first draw. The cloud
+// noise bases clear `needsRender` before drawing, so the four noise textures
+// of the procedural path (`?cloudProcedural=on`, or the prebaked-noise load
+// failing) were never generated on the reversed buffer only.
+console.log("-- Z12 base-Camera renders under the reversed flip ----------------------");
+{
+  check("three r184's base Camera has no updateProjectionMatrix (the root cause)",
+    BASE_CAMERA_UPDATE_AT_IMPORT === "undefined", BASE_CAMERA_UPDATE_AT_IMPORT);
+  const flipRe = /if \( reversedDepthBuffer && camera\.reversedDepth !== true \) \{\s*camera\._reversedDepth = true;\s*camera\.updateProjectionMatrix\(\);/;
+  check("three r184 setProgram flips with an unguarded updateProjectionMatrix (src + build)",
+    flipRe.test(src("node_modules/three/src/renderers/WebGLRenderer.js")) &&
+    flipRe.test(src("node_modules/three/build/three.module.js")));
+
+  // A recording renderer that replays exactly that flip on every draw.
+  const makeRec = (reversed) => {
+    const rec = { draws: [], targets: [] };
+    rec.renderer = {
+      state: { buffers: { depth: { getReversed: () => reversed } } },
+      setRenderTarget(rt, layer = 0) { rec.targets.push(rt ? layer : null); },
+      render(mesh, camera) {
+        if (reversed && camera.reversedDepth !== true) {
+          camera._reversedDepth = true;
+          camera.updateProjectionMatrix();
+        }
+        rec.draws.push(mesh.material.uniforms.layer.value);
+      },
+    };
+    return rec;
+  };
+
+  // The vendored classes, bound to the REAL three classes their build imports.
+  const build = src("vendor/takram-three-clouds/build/index.js");
+  const extract = (name) => {
+    const re = new RegExp(`import \\{([^}]*)\\} from "three";\\s*var ${name} = class \\{[\\s\\S]*?\\n\\};\\n`);
+    const m = build.match(re);
+    if (!m) return null;
+    const names = [], vals = [];
+    for (const part of m[1].split(",").map((t) => t.trim()).filter(Boolean)) {
+      const [orig, alias = orig] = part.split(/\s+as\s+/);
+      names.push(alias); vals.push(THREE[orig]);
+    }
+    const body = m[0].slice(m[0].indexOf(`var ${name} =`));
+    return new Function(...names, `${body}\nreturn ${name};`)(...vals);
+  };
+  const P3 = extract("Procedural3DTextureBase");
+  const P2 = extract("ProceduralTextureBase");
+  check("takram clouds: Procedural3DTextureBase + ProceduralTextureBase found, both draw with a base `new Camera()`",
+    !!P3 && !!P2 && new P3({ size: 2, fragmentShader: "" }).camera.constructor === THREE.Camera &&
+    new P2({ size: 2, fragmentShader: "" }).camera.constructor === THREE.Camera);
+
+  if (P3 && P2) {
+    const SIZE = 4;
+    const run = (Base, reversed) => {
+      const tex = new Base({ size: SIZE, fragmentShader: "" });
+      const rec = makeRec(reversed);
+      let threw = null;
+      for (let frame = 0; frame < 3; frame++) {
+        try { tex.render(rec.renderer, 1 / 60); } catch (e) { threw ??= e; }
+      }
+      return { tex, rec, threw };
+    };
+
+    // Unfixed: the camera method deleted == the import-time r184 base Camera.
+    const proto = THREE.Camera.prototype;
+    const saved = Object.getOwnPropertyDescriptor(proto, "updateProjectionMatrix");
+    if (saved) delete proto.updateProjectionMatrix;
+    let u3, u2, l3, l2;
+    try {
+      u3 = run(P3, true); u2 = run(P2, true);
+      l3 = run(P3, false); l2 = run(P2, false);
+    } finally {
+      if (saved) Object.defineProperty(proto, "updateProjectionMatrix", saved);
+    }
+    check("UNFIXED reversed: the 3D noise bake throws a TypeError on its first draw",
+      u3.threw instanceof TypeError && /updateProjectionMatrix/.test(u3.threw.message), String(u3.threw));
+    check("UNFIXED reversed: needsRender already false -> 0 of the layers ever drawn (texture never generated)",
+      u3.tex.needsRender === false && u3.rec.draws.length === 0 && u2.rec.draws.length === 0 &&
+      u2.threw instanceof TypeError, `3D draws ${u3.rec.draws.length}, 2D draws ${u2.rec.draws.length}`);
+    check("log buffer: no flip, every layer drawn once (3D: size layers, 2D: one)",
+      !l3.threw && !l2.threw && l3.rec.draws.length === SIZE && l2.rec.draws.length === 1);
+
+    // Fixed: installReversedZ on a reversed renderer gives the base Camera a no-op.
+    const rz = Z.installReversedZ(THREE, makeRec(true).renderer);
+    check("installReversedZ: baseCameraFix on a reversed renderer", rz.installed && rz.baseCameraFix === true, JSON.stringify(rz));
+    const f3 = run(P3, true), f2 = run(P2, true);
+    check("FIXED reversed: no throw, the same layers in the same order as the log buffer",
+      !f3.threw && !f2.threw && JSON.stringify(f3.rec.draws) === JSON.stringify(l3.rec.draws) &&
+      JSON.stringify(f2.rec.draws) === JSON.stringify(l2.rec.draws) &&
+      JSON.stringify(f3.rec.targets) === JSON.stringify(l3.rec.targets), JSON.stringify(f3.rec.draws));
+    check("FIXED reversed: the bake camera is flipped once and its identity matrix kept",
+      f3.tex.camera.reversedDepth === true && f3.tex.camera.projectionMatrix.equals(new THREE.Matrix4()));
+  }
+
+  // The no-op leaves every matrix alone and no subclass resolves to it.
+  const cam = new THREE.Camera();
+  cam.projectionMatrix.makePerspective(-1, 1, 1, -1, 0.5, 100);
+  const before = cam.projectionMatrix.clone();
+  cam._reversedDepth = true;
+  cam.updateProjectionMatrix();
+  check("base Camera no-op keeps a user-set projection matrix",
+    cam.projectionMatrix.equals(before) && typeof THREE.Camera.prototype.updateProjectionMatrix === "function");
+  check("Perspective / Orthographic / Array cameras keep their own updateProjectionMatrix",
+    THREE.PerspectiveCamera.prototype.updateProjectionMatrix !== THREE.Camera.prototype.updateProjectionMatrix &&
+    THREE.OrthographicCamera.prototype.updateProjectionMatrix !== THREE.Camera.prototype.updateProjectionMatrix &&
+    new THREE.ArrayCamera().updateProjectionMatrix === THREE.PerspectiveCamera.prototype.updateProjectionMatrix);
+  const fnBefore = THREE.Camera.prototype.updateProjectionMatrix;
+  const rzAgain = Z.installReversedZ(THREE, makeRec(true).renderer);
+  check("a second install keeps the same no-op (idempotent)",
+    rzAgain.baseCameraFix === true && THREE.Camera.prototype.updateProjectionMatrix === fnBefore);
+  const offRz = Z.installReversedZ(THREE, makeRec(false).renderer);
+  check("log renderer: installReversedZ installs nothing (baseCameraFix false)",
+    offRz.installed === false && offRz.baseCameraFix === false);
+
+  // The atmosphere LUT bake draws the same way (takram PrecomputedTexturesGenerator).
+  const atm = src("vendor/takram/three-atmosphere.js");
+  check("takram atmosphere: the LUT generator renders with a base Camera (`Camera as St`, `this.camera = new St()`)",
+    /\bCamera as St\b/.test(atm) && /this\.camera = new St\(\), this\.updating = false/.test(atm));
+
+  // Wiring: the clouds define set at adoption, the boot log + diag.
+  const ap = src("scene3d/atmosphere_pipeline.js");
+  check("pipeline: USE_REVERSED_DEPTH_BUFFER set on the adopted CloudsMaterial (reversed renderer only)",
+    /if \(cloudsMainAdopted && renderer\.state\?\.buffers\?\.depth\?\.getReversed\?\.\(\) === true\) \{[\s\S]{0,200}cm\.defines\.USE_REVERSED_DEPTH_BUFFER = "1";/.test(ap));
+  const ix = src("scene3d/index.js");
+  check("index.js: boot log + __depthMode carry baseCameraFix; window.__reversedZDiag installed",
+    /baseCameraFix=\$\{_rz\.baseCameraFix\}/.test(ix) && /baseCameraFix: _rzFixes\.baseCameraFix/.test(ix) &&
+    /window\.__reversedZDiag = \(\) => reversedZDiagSnapshot\(/.test(ix));
+
+  // window.__reversedZDiag's snapshot on stubs: the discriminators it reports.
+  const m = build.match(/var FrustumCorners = class _FrustumCorners \{[\s\S]*?\n\};\n/);
+  const FrustumCorners = m ? new Function("Vector3", `${m[0]}\nreturn FrustumCorners;`)(THREE.Vector3) : null;
+  const mainCam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000);
+  mainCam._reversedDepth = true;
+  mainCam.updateProjectionMatrix();
+  const cm = { defines: { USE_REVERSED_DEPTH_BUFFER: "1" }, uniforms: { depthBuffer: { value: {} } } };
+  const never = { needsRender: false, camera: new THREE.Camera(), renderTarget: { width: 512, height: 512 } };
+  const snap = Z.reversedZDiagSnapshot({
+    renderer: {
+      state: { buffers: { depth: { getReversed: () => true } } },
+      capabilities: { logarithmicDepthBuffer: false },
+      autoClear: false,
+      properties: { get: (o) => (o === cm ? { currentProgram: { cacheKey: "x,USE_REVERSED_DEPTH_BUFFER,y" } } : {}) },
+    },
+    cloudOverlay: {
+      mainPassActive: true, _proceduralTextures: true, _prebakedLoaded: false, lastError: "prebake load failed: x",
+      volume: { effect: {
+        camera: mainCam, frame: 42, cloudsPass: { currentMaterial: cm },
+        proceduralLocalWeather: never,
+        shadowMaps: FrustumCorners ? { far: 800, cameraFrustum: new FrustumCorners() } : null,
+      } },
+    },
+    atmosphereRuntime: { ready: true, source: "load", plan: "default", loadTimedOut: true, generator: {}, error: null },
+    Camera: THREE.Camera,
+    readRT: () => new Uint8Array(4),
+  });
+  check("__reversedZDiag: depth mode, LUT source / timeout / bake attempt, noise source + never-generated texel",
+    snap.reversed === true && snap.logarithmic === false && snap.baseCameraUpdate === true &&
+    snap.lut.source === "load" && snap.lut.loadTimedOut === true && snap.lut.bakeAttempted === true &&
+    snap.clouds.noise === "procedural" && snap.clouds.prebakedLoaded === false &&
+    snap.clouds.procedural.localWeather.needsRender === false &&
+    JSON.stringify(snap.clouds.procedural.localWeather.centreTexel) === "[0,0,0,0]", JSON.stringify(snap));
+  check("__reversedZDiag: clouds define + program both reversed, depth bound, cascades start at -near",
+    snap.clouds.definesReversed && !snap.clouds.definesLog && snap.clouds.programReversed === true &&
+    snap.clouds.depthBufferBound && snap.clouds.cameraReversed === true &&
+    (!FrustumCorners || (snap.clouds.frustumCornersReversedAware && Math.abs(snap.clouds.cascadeNearZ + 0.1) < 1e-5)),
+    JSON.stringify(snap.clouds));
+  const empty = Z.reversedZDiagSnapshot({});
+  check("__reversedZDiag: no renderer / overlay / runtime -> nulls, never throws",
+    empty.reversed === false && empty.lut === null && empty.clouds === null);
 }
 
 console.log(`\nreversed z: ${passed} passed, ${failed} failed`);
