@@ -72,6 +72,9 @@ import { envCellPoolsActive, offerCellSurfacesToPools, poolCellVisibilityTick, p
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 import { getOcclusionCuller, CELL_SHRINK_M } from "./occlusion_cull.js";
+// ?interiorShadowCull (perf 2026-10-17): interiors cast no sun shadows while the
+// camera is outdoors.
+import { interiorCastWanted, syncCellShadowCast, requestShadowRaster } from "./interior_shadow_cull.js";
 // ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
 // returns exactly today's setTimeout(0) macrotask yield (byte-identical).
 import { frameWorkW6Yield } from "./frame_work.js";
@@ -3464,6 +3467,13 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       else poolCellVisibilityTick(visibleSet);
     } catch (_) { /* fail-soft: the container half still runs */ }
   }
+  // ?interiorShadowCull (perf 2026-10-17, interior_shadow_cull.js) — outdoors,
+  // the interior rooms in view stop casting sun shadows (the shell already
+  // shadows them; 54 shadow draws a frame at LB 0xE632). Synced lazily on the
+  // containers drawn this frame — a hidden container casts nothing anyway —
+  // and one forced raster when a drawn caster actually changed.
+  const castOn = interiorCastWanted(isIndoor);
+  let castChanged = false;
   if (CELL_BUG_PARITY) {
     for (const [thisCellId, container] of registry) {
       const want = container?.userData?.isEnvCell
@@ -3472,6 +3482,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       if (container.visible !== want) {
         container.visible = want;
       }
+      if (want && syncCellShadowCast(container, castOn)) castChanged = true;
     }
   } else {
     const lastVisible = scene3d._lastCellVisibleSet ?? (scene3d._lastCellVisibleSet = new Set());
@@ -3482,9 +3493,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     // bounded by visibleSet.size (~11 typically).
     for (const cellId of visibleSet) {
       const container = registry.get(cellId);
-      if (container && container.visible !== true) {
+      if (!container) continue;
+      if (container.visible !== true) {
         container.visible = true;
       }
+      if (syncCellShadowCast(container, castOn)) castChanged = true;
     }
     // Newly-hidden cells: iterate prior frame's set and flip out anything
     // no longer visible. Typical diff is 0-3 entries.
@@ -3500,6 +3513,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     lastVisible.clear();
     for (const cellId of visibleSet) lastVisible.add(cellId);
   }
+  if (castChanged) requestShadowRaster(scene3d.renderer);
 
   // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
   // against the just-applied visibility state. Reuses `cellId` resolved
