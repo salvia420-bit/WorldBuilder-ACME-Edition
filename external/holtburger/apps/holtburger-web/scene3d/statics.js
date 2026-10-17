@@ -118,7 +118,7 @@ import { currentTime, particleClockMode, rng } from "./particles/time_rng.js";
 // Task #7 — true mesh-animated scenery (flags/foliage). Static import is
 // cycle-safe: animated_scenery.js imports statics.js only via a deferred
 // dynamic import() inside a function, never at module load.
-import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./animated_scenery.js";
+import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees, animSceneryBucketVisEnabled } from "./animated_scenery.js";
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled, windSwayGpuEnabled } from "./tree_wind.js";
@@ -4742,6 +4742,10 @@ function _cullStaticsWalk(group, children, culler) {
     // consistent with the census particle fix (de24059d).
     const ud = node.userData;
     if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) continue;
+    // Animated-scenery buckets own their visibility (?animSceneryBucketVis,
+    // animated_scenery.js): their instances span every visited landblock, so
+    // the sphere cached here on first sight went stale and hid every critter.
+    if (ud && ud.isAnimatedSceneryInstanced === true && animSceneryBucketVisEnabled()) continue;
     // BatchedMesh statics (static-batch consolidation, stat-atlas buckets)
     // sit at the group origin with their placements in per-instance matrices,
     // so the isMesh sphere derivation below would center the cull sphere at

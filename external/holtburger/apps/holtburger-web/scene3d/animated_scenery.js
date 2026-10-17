@@ -217,6 +217,38 @@ export function animSceneryInstancedEnabled() {
   return on;
 }
 
+// ?animSceneryBucketVis (2026-10-17, DEFAULT ON; `=off` escape) — the
+// instanced buckets own their `visible`, and the statics cull leaves them be.
+//
+// THE BUG. Bucket meshes are direct staticsGroup children, so statics.js
+// `cullStaticsGroup` frustum-tested them like any instanced static — with the
+// cull sphere it CACHES FOREVER on first sight (`userData._cullSphere`, from
+// `computeBoundingSphere()` over the instances registered at that moment).
+// A bucket grows with every landblock the player visits, so the cached sphere
+// covers only the first few placements: live on the 1070 (2026-10-17) all 27
+// buckets were `visible:false`, their spheres ~35 km from the player at LB
+// 0xE632 — every butterfly, seagull, bird and insect cloud invisible, still
+// posed every frame. Buckets are `frustumCulled=false` precisely because their
+// instances are scattered (see the header above). Now the cull skips them and
+// this module shows a bucket while it has at least one live (non-collapsed)
+// instance — an all-collapsed bucket draws only degenerate slots, so hiding it
+// is pixel-identical. `=off` restores the statics-cull behaviour.
+let _bucketVisFlag;
+export function animSceneryBucketVisEnabled() {
+  if (_bucketVisFlag !== undefined) return _bucketVisFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("animSceneryBucketVis")?.toLowerCase();
+      if (v != null) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _bucketVisFlag = on;
+  return on;
+}
+/** Test seam: true/false forces, undefined re-reads the URL. */
+export function __setAnimSceneryBucketVisForTest(v) { _bucketVisFlag = v; }
+
 // One shared driver per animation DID: { mixer, template, parts:[Group],
 // numParts, refCount }. The template is NOT added to the scene — it's a pure
 // transform holder the mixer animates; instances copy its part transforms.
@@ -794,7 +826,8 @@ function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDi
     mesh.matrixAutoUpdate = false;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene3d.staticsGroup.add(mesh);
-    const bucket = { mesh, members: [], capacity: 128, gpu: gpuRow >= 0 };
+    // `active`: members not collapsed (?animSceneryBucketVis shows the bucket iff > 0).
+    const bucket = { mesh, members: [], capacity: 128, gpu: gpuRow >= 0, active: 0 };
     _bucketList.push(bucket);
     return bucket;
   })();
@@ -815,6 +848,7 @@ function _registerSlot(bucket, inst) {
     nm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     nm.instanceMatrix.array.set(old.instanceMatrix.array);
     nm.count = old.count;
+    nm.visible = old.visible;
     const parent = old.parent;
     if (parent) { parent.add(nm); parent.remove(old); }
     old.dispose(); // frees old instance buffers only — geometry/material shared
@@ -824,6 +858,7 @@ function _registerSlot(bucket, inst) {
   const index = bucket.members.length;
   bucket.members.push(inst);
   bucket.mesh.count = bucket.members.length;
+  bucket.active += 1; // a new slot is live (registered instances start un-collapsed)
   return index;
 }
 
@@ -960,6 +995,7 @@ function _collapseInstanced(inst) {
   for (const s of inst.slots) {
     s.bucket.mesh.setMatrixAt(s.index, _ZERO_MAT);
     _markDirty(s.bucket, s.index);
+    s.bucket.active -= 1;
   }
   inst.collapsed = true;
   _collapseStats.collapses += 1;
@@ -978,6 +1014,7 @@ function _anchorVisible(node) {
 function _reclaimInstancedSlots(inst) {
   for (const s of inst.slots) {
     const b = s.bucket;
+    if (!inst.collapsed) b.active -= 1;
     const m = b.members;
     const lastIdx = m.length - 1;
     if (lastIdx < 0) continue;
@@ -996,6 +1033,16 @@ function _reclaimInstancedSlots(inst) {
     _markDirty(b, s.index);
   }
   inst.slots.length = 0;
+}
+
+/** ?animSceneryBucketVis: each bucket draws iff it has a live instance. */
+function _applyBucketVisibility() {
+  if (!animSceneryBucketVisEnabled()) return;
+  for (let i = 0; i < _bucketList.length; i++) {
+    const b = _bucketList[i];
+    const want = b.active > 0;
+    if (b.mesh.visible !== want) b.mesh.visible = want;
+  }
 }
 
 function _flushDirtyBuckets() {
@@ -1406,6 +1453,7 @@ function _ensureRaf() {
           // below (which would otherwise leave it collapsed indefinitely).
           inst.collapsed = false;
           _collapseStats.restores += 1;
+          for (const s of inst.slots) s.bucket.active += 1;
           const g0 = _didGroups.get(inst.animId);
           if (g0) _writeInstancedPose(inst, g0, true);
         }
@@ -1430,6 +1478,7 @@ function _ensureRaf() {
       }
     }
     _flushDirtyBuckets();
+    _applyBucketVisibility();
     syncAnimInstMaterials();
     _rafId = window.requestAnimationFrame(loop);
   };
@@ -1458,6 +1507,7 @@ export function tickAnimatedScenery(dt) {
     }
   }
   _flushDirtyBuckets();
+  _applyBucketVisibility();
   syncAnimInstMaterials();
 }
 
@@ -1478,6 +1528,8 @@ export function animatedSceneryDiag() {
     buckets: _bucketList.length,
     gpuBuckets,
     gpu: animSceneryGpuDiag(),
+    bucketsVisible: _bucketList.reduce((n, b) => n + (b.mesh.visible ? 1 : 0), 0),
+    bucketsActive: _bucketList.reduce((n, b) => n + (b.active > 0 ? 1 : 0), 0),
     didGroups: _didGroups.size,
     tickCalls: _tickCalls,
     lastDt: _lastDt,
