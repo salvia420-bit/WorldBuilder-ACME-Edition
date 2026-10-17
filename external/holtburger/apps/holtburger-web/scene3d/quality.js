@@ -826,10 +826,12 @@ export function isMobileUA(ua) {
 // LOW deny-list: integrated GPUs, older mobile GPUs, and embedded
 // chips that should run the `low` preset by default.
 //
-// Anything matched by neither list defaults to MID. We NEVER auto-
-// promote to ULTRA — that tier is a deliberate opt-in via
-// `?quality=ultra`.
-const GPU_HIGH_RE = /RTX 30\d\d|RTX 40\d\d|RTX 20[678]0|RX 7[890]\d\d|RX 6[89]\d\d|M[1-4]( Pro| Max| Ultra)?|Apple GPU|Radeon Pro/i;
+// Anything matched by neither list defaults to MID. Since 2026-10-17 a
+// HIGH match resolves to the ULTRA preset (getQuality, owner: "we keep
+// ultra"); `?quality=` and the saved Graphics setting still win.
+// GTX 10x0 / 16x0 joined HIGH the same day: the owner's GTX 1070 (ANGLE
+// "NVIDIA GeForce GTX 1070 … D3D11") matched neither list and booted MID.
+const GPU_HIGH_RE = /RTX 30\d\d|RTX 40\d\d|RTX 20[678]0|GTX 10[678]0|GTX 16[56]0|RX 7[890]\d\d|RX 6[89]\d\d|M[1-4]( Pro| Max| Ultra)?|Apple GPU|Radeon Pro/i;
 const GPU_LOW_RE = /Mali|Adreno [0-5]\d\d|PowerVR SGX|Intel\(R\) (HD|UHD|Iris Plus)|Intel\(R\) Atom|Tegra/i;
 
 // Detect coarse GPU tier via a throwaway 1×1 probe canvas.
