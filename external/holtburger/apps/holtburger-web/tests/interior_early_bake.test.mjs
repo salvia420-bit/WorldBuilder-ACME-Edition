@@ -365,7 +365,8 @@ await t("E10 contract: lib.rs export + cells.js gate + docs row", async () => {
   // (__interiorEarlyBake.kicked 0). index.html must thread it through the namespace import.
   const html = readFileSync(path.join(APP, "index.html"), "utf8");
   const call = html.indexOf("await init3D(canvas, window.__sessionHandle, {");
-  const end = html.indexOf("}, window.__preInit3DHandle);", call);
+  // 2026-10-17 `?preInitShare`: the handle argument is the awaited `__preHandle`.
+  const end = html.indexOf("}, __preHandle);", call);
   assert.ok(call > 0 && end > call, "init3D call found");
   const opts = html.slice(call, end);
   assert.match(opts, /typeof __hbWasmNs\?\.fetchEnvCellDepsInLandblock === "function"\s*\?\s*\{ fetchEnvCellDepsInLandblock: __hbWasmNs\.fetchEnvCellDepsInLandblock \}/,
