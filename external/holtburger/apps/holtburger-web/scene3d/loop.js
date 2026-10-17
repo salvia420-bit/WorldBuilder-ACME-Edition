@@ -4088,7 +4088,10 @@ function _armMotion(scene3d, em, upd) {
     // restore the server-authoritative STANCE half of UpdateMotion
     // 0xF74C. setLocalStance touches only the Ready/idle base pose
     // and never the predictor-owned walk/run clip.
-    em.setLocalStance(motionGuid, st);
+    // missile-anim (2026-10-17): `forced` = the skipped motion was
+    // server-forced (!isAutonomous) — ACE's closing Ready of a shot, which
+    // setLocalStance plays when the rig holds an aim / Reload substate.
+    em.setLocalStance(motionGuid, st, { forced: !isAuto });
   }
   // F3-4 (bughunt 2026-06-09): sticky-attack target rides on model_id
   // of KIND_MOTION (0 = none/clear). Remote-only — the local player is

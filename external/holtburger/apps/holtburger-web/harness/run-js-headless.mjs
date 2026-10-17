@@ -331,6 +331,8 @@ const TIER5 = [
   // viewer order, viewer sphere, scenery sweep, in-place turns, ViewCombatTarget.
   { tier: 5, flag: "cameraViewerStep", file: "tests/camera_viewer_step.test.mjs" },
   { tier: 5, flag: "motionLinkFidelity", file: "tests/motion_link_fidelity.test.mjs" },
+  // 2026-10-17 missile-anim — aim and Reload as substates (MA-1..MA-5).
+  { tier: 5, flag: "missileSubstate", file: "tests/missile_substate_motion.test.mjs" },
   { tier: 5, flag: "world-state", file: "tests/world-state.test.cjs" },
   { tier: 5, flag: "world_object", file: "tests/world_object.test.cjs" },
   { tier: 5, flag: "world_object_property_dict", file: "tests/world_object_property_dict.test.cjs" },

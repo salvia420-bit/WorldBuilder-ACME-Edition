@@ -515,6 +515,21 @@ function readStyleLinkSpeedFlag() {
   }
 }
 
+// ?missileSubstate (2026-10-17, missile-anim, DEFAULT ON; `=off`/`0`/`false`
+// escape) — the missile-attack motions (aim level, Reload) are SUBSTATES:
+// link from the current substate (or the retail two-hop through Ready), then
+// the framerate-0 hold cycle, and the closing Ready plays Reload→Ready. See
+// `isMissileSubstateCommand`. `this._missileSubstateOn`.
+export function missileSubstateEnabled(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = (new URLSearchParams(s ?? "").get("missileSubstate") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
 // ?styleChainRetail (2026-10-08, cmotiontable-5, DEFAULT ON; `=off`/`0`/`false`
 // escape) — two retail rules of the GetObjectSequence style branch
 // (acclient.c:337726-337745): (1) when the direct style link is missing, the
@@ -2724,14 +2739,21 @@ const STATIONARY_COMMANDS = new Set([
 //
 // Citations to `MotionCommand.cs`:
 // - Reload (0x0016, L29), Unload (0x0017, L30) — bow/crossbow reload.
+//   2026-10-17 missile-anim: Reload is a class-0x40 SUBSTATE (link + a
+//   framerate-0 hold cycle + the Reload→Ready link on the closing Ready), so
+//   setMotion routes it around the action branch under `?missileSubstate`
+//   (isMissileReloadCommand). It stays in this set for the coarse class only.
 // - Pickup (0x0018, L31), StoreInBackpack (0x0019, L32) — item pickup.
 //   `acclient.c:343297` references `substate > 0x40000018` as the
 //   "ranged action" branch threshold.
 // - Eat (0x001A, L33), Drink (0x001B, L34), Reading (0x001C, L35).
 // - EnterPortal (0x00A0, L167), ExitPortal (0x00A1, L168) — portal
 //   transition flashes.
-// - BowNoAmmo (0x00E8, L239), CrossBowNoAmmo (0x00E9, L240) — misfire
-//   recovery animations. Class 0x80 in ACE but the low-16 is a one-shot.
+// - BowNoAmmo (0x00E8, L239), CrossBowNoAmmo (0x00E9, L240) — these are
+//   STANCES (0x800000E8/E9: styleDefaults entries of player MT 0x09000001,
+//   ACE MotionStance.cs), not one-shots. They are only reached here as a
+//   command, which no server sends (ACE never selects them), so the entry
+//   is inert; kept so the coarse class stays unchanged (missile-anim MA-6).
 // - Pickup5/10/15/20 (0x0136-0x0139, L318-321) — tall-target pickup
 //   variants.
 const INTERACTION_COMMANDS = new Set([
@@ -3593,6 +3615,50 @@ function isSubstateCastGesture(cmd) {
   return cls === 0 || cls === 0x40;
 }
 
+// 2026-10-17 missile-anim (`?missileSubstate`, default ON). ACE puts every
+// missile-attack motion in the forward_command slot, for players, monsters and
+// the combat-entry reload alike (Player_Missile.cs LaunchMissile,
+// Monster_Missile.cs LaunchMissile, Creature_Missile.cs ReloadMissileAmmo): the
+// aim level (AimLevel/AimHigh*/AimLow*, GetAimLevel), then Reload at the attack
+// anim speed, then Ready. All three are class-0x40 SUBSTATES. Retail
+// GetObjectSequence's substate branch (acclient.c:337763-337840) plays
+// link(current → new), or, when the table has no such link, link(current →
+// style default) + link(default → new), then the new substate's CYCLE. The aim
+// and Reload cycles are framerate-0 HOLDS, so the shot itself lives in the
+// LINKS (player MT 0x09000001, DAT dump 2026-10-17):
+//   bow       Ready→AimHigh30 0x0300045B[0..5] raise, hold frame 5 ·
+//             AimHigh30→Ready 1-frame snap (low>high clamps, :341085) +
+//             Ready→Reload 0x030004AE[0..22]@69 reach for the quiver, hold 22 ·
+//             Reload→Ready 0x030004AE[22..72]@69 draw + nock (sound hook f46)
+//   crossbow  the same shape on 0x03000472/0470/0474 and 0x030004AD
+//   thrown /  Ready→Aim* 0x0300049F[0..17]@45 wind-up, hold 17 ·
+//   atlatl    Aim*→Reload 0x0300049F[18..]@45 THE THROW (a direct link) ·
+//             Reload→Ready 0x030004A0@45 draw the next one
+// Reload used to ride the one-shot ACTION path (Ready→Reload overlay, then
+// back to the base cycle): the second half never played, the throw was replaced
+// by Ready→Reload (= 0x030004A0 reversed, an un-draw), and the local rig, whose
+// closing Ready is skipped as predictor-owned, stayed frozen in the aim hold.
+function isMissileAimCommand(cmd) {
+  const c = cmd >>> 0;
+  const low = c & 0xffff;
+  const cls = c >>> 24;
+  return low >= 0x001e && low <= 0x002a && (cls === 0 || cls === 0x40);
+}
+function isMissileReloadCommand(cmd) {
+  const c = cmd >>> 0;
+  const cls = c >>> 24;
+  return (c & 0xffff) === 0x0016 && (cls === 0 || cls === 0x40);
+}
+function isMissileSubstateCommand(cmd) {
+  return isMissileAimCommand(cmd) || isMissileReloadCommand(cmd);
+}
+// The wasm bridge filters a forward-slot use command (Reload, Eat, Drink) out of
+// KIND_MOTION and leaves motion_command 0 there (position.rs), which setMotion
+// reads as Ready; the real command follows as KIND_MOTION_ACTION in the same
+// drain. A Reload issued within this window of such a Ready that replaced an
+// aim and has not committed links from that aim (see `_missileReloadFrom`).
+const MISSILE_READY_COALESCE_MS = 50;
+
 // Wave 3.E (2026-05-19) — typed widening of `classifyMotionCommand`.
 //
 // **Purpose.** When the renderer plays a swing (`setMotion(guid, cmd,
@@ -4220,6 +4286,7 @@ export class EntityManager {
     this._cycleRestartOn = readCycleRestartAfterActionFlag();
     this._styleLinkSpeedOn = readStyleLinkSpeedFlag();
     this._styleChainRetailOn = readStyleChainRetailFlag();
+    this._missileSubstateOn = missileSubstateEnabled();
     // cmotiontable-3: geometry-free link bakes (`_fetchLinkEntry`).
     this._linkOnlyBakeOn = readLinkOnlyBakeFlag();
     // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
@@ -10953,12 +11020,19 @@ export class EntityManager {
   // no ceiling, so `_UNIFIED_QUEUE_MAX` pending entries are kept and the oldest
   // pending (never the in-flight head) is dropped past that. Recorded in the
   // ledger under J5.
-  _enqueueUnifiedOneShot(inst, motion, numAnims, rec) {
+  _enqueueUnifiedOneShot(inst, motion, numAnims, rec, continuation = false) {
     if (!inst._unifiedQueue) inst._unifiedQueue = createMotionQueue();
     const q = inst._unifiedQueue;
     rec.numAnims = Math.max(1, numAnims | 0);
-    for (const dropped of addToQueue(q, motion >>> 0, rec.numAnims, rec)) {
-      try { dropped.seq.free(); } catch (_) { /* already freed */ }
+    // missile-anim: `continuation` = the second link of ONE retail node (the
+    // two-hop substate change appends both links under a single add_to_queue,
+    // acclient.c:330149). It joins the tail without the redundant-link
+    // collapse, which would otherwise fold it onto its own first link.
+    const dropped = continuation
+      ? (q.list.push({ motion: motion >>> 0, numAnims: rec.numAnims, payload: rec }), [])
+      : addToQueue(q, motion >>> 0, rec.numAnims, rec);
+    for (const d of dropped) {
+      try { d.seq.free(); } catch (_) { /* already freed */ }
     }
     while (q.list.length > _UNIFIED_QUEUE_MAX + 1) {
       const victim = q.list.splice(1, 1)[0];
@@ -11683,7 +11757,8 @@ export class EntityManager {
       at: performance.now(),
     };
     const c = classifyMotionCommand(rec.cmd);
-    if ((c === "attack" || c === "cast") && !isSubstateCastGesture(rec.cmd)) {
+    if ((c === "attack" || c === "cast") && !isSubstateCastGesture(rec.cmd) &&
+        !(this._missileSubstateOn && isMissileReloadCommand(rec.cmd))) {
       st.actions.push(rec);
       if (st.actions.length > SPAWN_MOTION_STASH_ACTIONS) st.actions.shift();
     } else {
@@ -11780,11 +11855,16 @@ export class EntityManager {
     // pending WAITS for it, then plays the gesture→Ready recoil link.
     const low = (motionCommand >>> 0) & 0xffff;
     const idleClass = low === CMD_LOW_READY || low === CMD_LOW_STOP || low === 0;
+    // missile-anim (`?missileSubstate`): Reload is a held substate like the cast
+    // gesture — it supersedes a waiting Ready, and the closing Ready ACE sends
+    // ~0.3 s later (reloadTime) waits for its commit, so a cold bake can't drop
+    // the reach-for-the-quiver half and leave the next link keyed off nothing.
+    const reloadSub = this._missileSubstateOn && isMissileReloadCommand(motionCommand);
     if (!idleClass) {
       const c = classifyMotionCommand(motionCommand >>> 0);
       // Action one-shots (windups, swings, emotes) queue on top of whatever
       // base cycle commits; they never supersede a waiting Ready.
-      if (!((c === "attack" || c === "cast") && !isSubstateCastGesture(motionCommand))) {
+      if (!((c === "attack" || c === "cast") && !isSubstateCastGesture(motionCommand) && !reloadSub)) {
         inst._motionIssueSeq = ((inst._motionIssueSeq | 0) + 1) | 0;
       }
     } else {
@@ -11795,7 +11875,7 @@ export class EntityManager {
       return this._setMotionAfterCastGesture(inst, pending, guid, motionCommand, motionStance, motionSpeed);
     }
     const p = this._setMotionImpl(guid, motionCommand, motionStance, motionSpeed);
-    if (isSubstateCastGesture(motionCommand)) {
+    if (isSubstateCastGesture(motionCommand) || reloadSub) {
       const tracked = p.catch(() => {}).then(() => {
         if (inst._castGesturePending === tracked) inst._castGesturePending = null;
       });
@@ -11910,9 +11990,15 @@ export class EntityManager {
     // `_motionSpeed` sped up the Ready idle that followed (2x breathing
     // between windups) until the next locomotion command reset it.
     let actionSpeed = 0;
+    // missile-anim: the OLD substate's speed, for hop 1 of a two-hop substate
+    // change (retail add_motion(link, substate_mod), acclient.c:337803).
+    const prevSubstateSpeed = this._unifiedOneShotSpeed(inst);
     {
       const c0 = classifyMotionCommand(motionCommand >>> 0);
-      if ((c0 === "attack" || c0 === "cast") && !isSubstateCastGesture(motionCommand)) {
+      // A Reload is a substate (`?missileSubstate`): its speed (ACE GetAnimSpeed)
+      // is the substate speed, which scales its entry link.
+      if ((c0 === "attack" || c0 === "cast") && !isSubstateCastGesture(motionCommand) &&
+          !(this._missileSubstateOn && isMissileReloadCommand(motionCommand))) {
         const s0 = +motionSpeed;
         actionSpeed = Number.isFinite(s0) && s0 > 0 ? s0 : 1.0;
       }
@@ -12084,6 +12170,11 @@ export class EntityManager {
     if (castGestureSubstate && (cmd >>> 16) === 0) {
       cmd = (0x40000000 | cmd) >>> 0;
     }
+    // missile-anim (`?missileSubstate`): the Reload substate takes the same
+    // link + cycle path (see isMissileSubstateCommand). `cmd` is already the
+    // full 0x40000016 here (fullMotionCommand above).
+    const reloadSubstate = this._missileSubstateOn && isMissileReloadCommand(cmd);
+    const heldSubstate = castGestureSubstate || reloadSubstate;
     let cls = classifyMotionCommand(cmd);
     // === COL-20 / F4 — turn-phase gate. A MoveTo* envelope arrives as a bare
     // forward-locomotion hint (`moveto_locomotion_hint`, lib.rs:6710, emitted
@@ -12239,7 +12330,8 @@ export class EntityManager {
     // tables put swings in `NonCombat`; the link lookup either has
     // an entry or it doesn't, we pass `stance` straight through.
     //
-    if ((cls === "attack" || cls === "cast") && !castGestureSubstate) {
+    // A held substate (cast gesture, missile Reload) skips this branch.
+    if ((cls === "attack" || cls === "cast") && !heldSubstate) {
       // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
       // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
       // Tier 2 `?fxMotion`: a melee swing lets the held elemental weapons trail.
@@ -12427,11 +12519,19 @@ export class EntityManager {
     // last fetch finished.
     const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
     const styleLinksP = inst._pendingStyleLinks || null;
+    // missile-anim: what this Ready replaces (also when it dedupes against a
+    // Ready cycle whose aim never committed), for `_missileReloadFrom`.
+    if ((cmd & 0xffff) === CMD_LOW_READY) {
+      inst._readyIssue = { at: _entityNowMs(), prev: (inst.lastMotionCommand ?? 0) >>> 0 };
+    }
     if (cacheKey === inst.currentActionKey && !styleLinksP) {
       // Already on this cycle. A gesture whose commit never landed (superseded
       // or no cycle) must not stay the remembered substate: setLocalStance
       // would keep re-issuing Ready and the next link would key off it.
-      if (isSubstateCastGesture(inst.lastMotionCommand ?? 0) && !castGestureSubstate) {
+      const last0 = (inst.lastMotionCommand ?? 0) >>> 0;
+      if ((isSubstateCastGesture(last0) && !castGestureSubstate) ||
+          // missile-anim: the same for an aim / Reload that never committed.
+          (this._missileSubstateOn && isMissileSubstateCommand(last0) && last0 !== (cmd >>> 0))) {
         inst.lastMotionCommand = cmd;
       }
       return; // already playing
@@ -12453,17 +12553,25 @@ export class EntityManager {
     // `lastMotionCommand` is 0, which would otherwise skip the gesture link.
     // Bug 18: after a style change the substate is the NEW style's Ready, so
     // the forward command links from there (the chain's entry link).
-    const fromMotion = castGestureSubstate
+    let fromMotion = castGestureSubstate
       ? READY_SUBSTATE
       : styleLinksP
         ? CMD_READY_FULL
         : ((inst.lastMotionCommand ?? 0) >>> 0);
+    // missile-anim: a Reload right behind the bridge's synthesized Ready links
+    // from the aim the rig is still showing (see `_missileReloadFrom`).
+    if (reloadSubstate && !styleLinksP) fromMotion = this._missileReloadFrom(inst, fromMotion);
     let linkP = null;
+    // missile-anim (`?missileSubstate`): a change into or out of an aim / Reload
+    // substate resolves the retail substate-branch links — the direct link, else
+    // the two-hop through Ready (`_fetchSubstateLinks`). Bow and crossbow have no
+    // Aim*→Reload link, so the shot is Aim*→Ready + Ready→Reload, as in retail.
+    let hopsP = null;
     if (
       fromMotion !== 0 &&
       fromMotion !== cmd &&
       cacheKey !== inst.currentActionKey &&
-      ((cls !== "attack" && cls !== "cast") || castGestureSubstate)
+      ((cls !== "attack" && cls !== "cast") || heldSubstate)
     ) {
       // The link's INNER key is the full 32-bit command (C3), but the wire
       // Ready (KIND_MOTION low16) and setLocalStance's Ready are bare 0x0003:
@@ -12471,7 +12579,12 @@ export class EntityManager {
       // missed and the wasm fell back to the Ready CYCLE, i.e. no recoil.
       const linkTo = (isSubstateCastGesture(fromMotion) && cmd === CMD_LOW_READY)
         ? CMD_READY_FULL : cmd;
-      linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, linkTo, stance);
+      if (this._missileSubstateOn && !styleLinksP &&
+          (isMissileSubstateCommand(cmd) || isMissileSubstateCommand(fromMotion))) {
+        hopsP = this._fetchSubstateLinks(inst, setupId, mtableId, fromMotion, linkTo, stance, prevSubstateSpeed);
+      } else {
+        linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, linkTo, stance);
+      }
     }
     inst.lastMotionCommand = cmd;
 
@@ -12509,6 +12622,7 @@ export class EntityManager {
       }
     }
     const linkEntry = linkP ? await linkP : null;
+    const hops = hopsP ? await hopsP : null;
     const styleLinks = styleLinksP ? await styleLinksP : null;
     // Re-check — the entity may have been removed between the cache hit and
     // now; a newer setMotion may have superseded this one (audit F6). A
@@ -12516,6 +12630,15 @@ export class EntityManager {
     if (!this.entityMap.has(guid >>> 0)) return;
     if (inst._motionToken !== motionToken) return;
     if (inst._pendingStyleLinks === styleLinksP) inst._pendingStyleLinks = null;
+    // missile-anim (`?missileSubstate`): retail refuses a substate the table has
+    // no cycle for — GetObjectSequence returns 0 and the state keeps its old
+    // substate (acclient.c:337763-337767, falls to LABEL_80). A creature table
+    // without Reload (a lugian's rock throw) must stay in its aim, so the
+    // closing Ready still plays Aim*→Ready, which IS that creature's throw.
+    if (this._missileSubstateOn && isMissileSubstateCommand(cmd) && !styleLinksP && !entry?.clip) {
+      if ((inst.lastMotionCommand >>> 0) === (cmd >>> 0)) inst.lastMotionCommand = fromMotion;
+      return;
+    }
     // ---- commit: links + cycle in ONE synchronous step (no tick between) ----
     // Order matches retail's sequence build: the transition (exit) link, the
     // style link(s), then the destination cycle (acclient.c:337726-745).
@@ -12539,7 +12662,13 @@ export class EntityManager {
         styleN++;
       }
     }
-    const entryPlayed = !!(linkEntry && this._playLinkEntry(inst, linkEntry, fromMotion, cmd, stance));
+    let entryPlayed = !!(linkEntry && this._playLinkEntry(inst, linkEntry, fromMotion, cmd, stance));
+    // missile-anim: the substate links in play order (hop 1 at the old
+    // substate's speed, the entry hop at this command's speed), queued as one
+    // node keyed by this command, as retail's single add_to_queue.
+    for (const h of (hops || [])) {
+      if (this._playLinkEntry(inst, h.entry, h.fromCmd, cmd, stance, h.speed, h.continuation)) entryPlayed = true;
+    }
     if (entryPlayed) linked = true;
     if (styleLinks) {
       const m = styleLinks.meta || {};
@@ -12577,8 +12706,65 @@ export class EntityManager {
     // attack/cast actions and death have already returned, so cls is a cycle
     // (walk/run/idle/Ready/held door state/held cast gesture).
     if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry, cmd, !linked)) {
+      // missile-anim: the substate the rig is SHOWING (lastMotionCommand is the
+      // one most recently issued, committed or not) — read by _missileReloadFrom.
+      inst._committedMotion = cmd >>> 0;
+      inst._committedAtMs = _entityNowMs();
       try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
     }
+  }
+
+  // missile-anim (`?missileSubstate`): the substate a Reload links FROM. The
+  // wasm bridge turns a forward-slot Reload into KIND_MOTION(0) + KIND_MOTION_
+  // ACTION(Reload) (position.rs filters the use command out of the locomotion
+  // slot), and setMotion reads that 0 as a Ready. That Ready already re-stamped
+  // `lastMotionCommand` with Ready, but its commit is superseded by this Reload
+  // in the same drain, so the rig never left the aim. Retail sees only the
+  // Reload and links from the aim (Aim*→Reload: the thrown/atlatl throw; bow and
+  // crossbow take the two-hop through Ready). Only when that Ready replaced an
+  // aim, was issued within MISSILE_READY_COALESCE_MS and has NOT committed, so a
+  // real Ready (one that already played) is never undone.
+  _missileReloadFrom(inst, fromMotion) {
+    const from = fromMotion >>> 0;
+    if ((from & 0xffff) !== CMD_LOW_READY) return from;
+    const r = inst._readyIssue;
+    if (!r || !isMissileAimCommand(r.prev)) return from;
+    if (_entityNowMs() - r.at > MISSILE_READY_COALESCE_MS) return from;
+    const readyCommitted = ((inst._committedMotion ?? 0) & 0xffff) === CMD_LOW_READY &&
+      (inst._committedAtMs ?? -Infinity) >= r.at;
+    if (readyCommitted) return from;
+    return fullMotionCommand(r.prev & 0xffff) >>> 0;
+  }
+
+  // missile-anim (`?missileSubstate`): the links retail's GetObjectSequence
+  // substate branch appends for `fromCmd → toCmd` (acclient.c:337779-337803;
+  // OpenAC CMotionTable.cs:241-269; WebAC MotionManager.substateLinks): the
+  // direct link(from → to); when the table has none, link(from → style default
+  // Ready) at the OLD substate speed, then link(Ready → to) at the new speed. With
+  // hop 2 missing, hop 1 alone plays at the new speed. Fetch only — resolves to
+  // `[{ entry, fromCmd, speed, continuation }]` in play order (`speed` undefined
+  // = the command's own speed); empty when nothing is authored. Retail appends
+  // all of it as ONE pending_animations node keyed by the command, so the caller
+  // queues every hop under `to`, the second as a `continuation`.
+  async _fetchSubstateLinks(inst, setupId, mtableId, fromCmd, toCmd, stance, prevSpeed) {
+    const from = fromCmd >>> 0;
+    const to = toCmd >>> 0;
+    const direct = await this._fetchLinkEntry(inst, setupId, mtableId, from, to, stance);
+    if (direct) return [{ entry: direct, fromCmd: from, speed: undefined, continuation: false }];
+    if ((from & 0xffff) === CMD_LOW_READY) return [];
+    const toReady = (to & 0xffff) === CMD_LOW_READY;
+    const [exit, enter] = await Promise.all([
+      toReady ? Promise.resolve(null) : this._fetchLinkEntry(inst, setupId, mtableId, from, CMD_READY_FULL, stance),
+      toReady ? Promise.resolve(null) : this._fetchLinkEntry(inst, setupId, mtableId, CMD_READY_FULL, to, stance),
+    ]);
+    const out = [];
+    if (enter) {
+      if (exit) out.push({ entry: exit, fromCmd: from, speed: prevSpeed, continuation: false });
+      out.push({ entry: enter, fromCmd: CMD_READY_FULL, speed: undefined, continuation: !!exit });
+    } else if (exit) {
+      out.push({ entry: exit, fromCmd: from, speed: undefined, continuation: false });
+    }
+    return out;
   }
 
   /**
@@ -12617,8 +12803,10 @@ export class EntityManager {
    *
    * @param {number} guid — local player GUID
    * @param {number} motionStance — u32 MotionStance from UpdateMotion
+   * @param {{forced?: boolean}} [opts] — `forced`: the skipped UpdateMotion
+   *   was server-forced (`!isAutonomous`), e.g. ACE's closing Ready of a shot.
    */
-  setLocalStance(guid, motionStance) {
+  setLocalStance(guid, motionStance, opts) {
     const g = (guid >>> 0);
     const inst = this.entityMap.get(g);
     if (!inst) return;
@@ -12645,6 +12833,23 @@ export class EntityManager {
     // the arms stay out until the next keypress. Issue the Ready ourselves so
     // the gesture→Ready recoil link plays.
     if (isSubstateCastGesture(lastCmd) && (lastCmd >>> 24) === 0x40) {
+      this.setMotion(g, CMD_LOW_READY, stance);
+      return;
+    }
+    // missile-anim (`?missileSubstate`): the local rig is HOLDING a missile
+    // substate (an aim, or the Reload hold). ACE closes every shot with a
+    // server-forced Ready (Player_Missile.cs LaunchMissile, Creature_Missile.cs
+    // ReloadMissileAmmo) and runs out of ammo with a NonCombat style change, both
+    // skipped above as predictor-owned. Retail applies every non-autonomous
+    // motion to the player (CPhysics::SetObjectMovement, acclient.c:311149), so
+    // issue that Ready: Reload→Ready (draw + nock) plays, or the stance chain
+    // exits the aim. Before, the archer froze in the aim/Reload hold until the
+    // next key, and an aim (its cycle classifies "walk") read as `moving` below,
+    // which re-issued the AIM in the new stance — no such cycle, stuck aim pose
+    // in peace mode. `opts.forced` = the skipped motion was server-forced
+    // (`!isAutonomous`); an autonomous echo of our own movement must not end it.
+    if (this._missileSubstateOn && isMissileSubstateCommand(lastCmd) &&
+        (changed || opts?.forced === true)) {
       this.setMotion(g, CMD_LOW_READY, stance);
       return;
     }
@@ -14355,8 +14560,9 @@ export class EntityManager {
   // already on the playhead. Synchronous. On completion the tick falls back
   // to the `_unifiedLoco` cycle. `speed` (optional) is the link's own
   // framerate multiplier (retail AddMotion(link, speed)); it defaults to the
-  // entity's motion speed.
-  _playLinkEntry(inst, entry, fromCmd, toCmd, stance, speed = undefined) {
+  // entity's motion speed. `continuation` (missile-anim): a further link of the
+  // same queue node (see `_enqueueUnifiedOneShot`).
+  _playLinkEntry(inst, entry, fromCmd, toCmd, stance, speed = undefined, continuation = false) {
     const MS = _motionSequenceClass();
     const d = entry?.sequenceDescriptor;
     if (!MS || !d) return false;
@@ -14376,7 +14582,7 @@ export class EntityManager {
       speed: sp };
     // `numAnims` is the link's AnimData segment count — retail's `num_anims`
     // is exactly that (CMotionTable fills it in as it appends nodes).
-    this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
+    this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec, continuation);
     // Audit C1/F3: stamp the server-swing time (attack/cast only — locomotion
     // transition links must NOT suppress a later legitimate CMT swing) so
     // index.html's guessed-swing dedup sees an in-flight server swing.

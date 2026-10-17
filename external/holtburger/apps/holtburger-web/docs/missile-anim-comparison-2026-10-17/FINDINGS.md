@@ -1,0 +1,23 @@
+# Missile weapon animations — findings ledger (2026-10-17)
+
+Scope: bow / crossbow / atlatl / thrown, local + remote + creatures. First comparison of missile ANIMATIONS (earlier rounds covered collision/physics). Method: decomp → real DAT (player MotionTable 0x09000001 via WB.Terminal `chorizite-parse-dat-record`) → ACE → OpenAC/WebAC; every lead read-verified. Code: one commit on branch `missile-anim-2026-10-17` (65528c7a), JS only, flag `?missileSubstate` (default ON, `=off` escape).
+
+**Retail.** ACE sends aim (GetAimLevel) → [launchTime = Ready→Aim link length: projectile + PickupEvent hides ammo] → Reload @GetAnimSpeed → [reloadTime] Ready + ParentEvent ammo→RightHand → [Reload→Ready length] AttackDone. All are 0x40 substates: `CMotionTable::GetObjectSequence` substate branch acclient.c:337763-337840 (two-hop via the style default :337779-337803; no cycle → refused, LABEL_80); `AnimSequenceNode::set_animation_id` :341085 clamps low > high.
+
+**DAT.** Bow: Ready→Aim 045A/045B/0458[0..N]@30, hold N; NO Aim→Reload; Ready→Reload 04AE[0..22]@69; hold 22; Reload→Ready 04AE[22..72]@69 (sound f46). Crossbow: same on 0474/0472/0470 + 04AD. Thrown/Atlatl: Ready→Aim 049F/04B1/04AF/04B0[0..17]@45, hold 17; Aim→Reload [18..]@45 = THE THROW; Ready→Reload 04A0 reversed; Reload→Ready 04A0 forward.
+
+| id | sev | what's wrong | retail | OpenAC / WebAC | status | flag |
+|----|-----|--------------|--------|----------------|--------|------|
+| MA-1 | high | Reload played as a one-shot action overlay (Ready→Reload, then back to the base cycle): Reload→Ready (nock / re-cock / draw-next) never played; pop to aim/Ready. All rigs, every shot + the combat-entry reload | :337763-337840; ACE Player_Missile / Creature_Missile | OpenAC CMotionTable.cs:216-285; WebAC MotionManager.applySubstate :604-626, ServerObjectManager.ts:2694-2702 | shipped | missileSubstate |
+| MA-2 | high | Single-hop substate links: thrown/atlatl played Ready→Reload (reversed draw) instead of Aim→Reload (the throw); bow/crossbow need Aim→Ready + Ready→Reload. Fix `_fetchSubstateLinks`, one queue node (continuation) | :337779-337803; add_to_queue :330149 | OpenAC CMotionTable.cs:241-269; WebAC substateLinks :213-234 | shipped | missileSubstate |
+| MA-3 | high | Local rig frozen in the aim/Reload hold: the closing Ready was skipped as predictor-owned; setLocalStance only handled cast gestures. Fix: the forced Ready plays; loop.js passes `forced = !isAutonomous` | CPhysics::SetObjectMovement :311149 | OpenAC LiveEntityNetworkUpdateController.cs:276,385-424; WebAC applyServerForwardToLocalPlayer :103-143 | shipped | missileSubstate |
+| MA-4 | med | Out of ammo: the aim cycle ("walk") read as moving → AIM re-issued in NonCombat (no cycle) → stuck aim in peace mode. Fix: exit link + sheathe + Ready | style branch :337700-337745 | WebAC ServerObjectManager.ts:2629-2640 | shipped | missileSubstate |
+| MA-5 | med | position.rs filters forward-slot Reload/Eat/Drink out of KIND_MOTION → motion 0 = a synthesized Ready before the KIND_MOTION_ACTION. JS mitigation `_missileReloadFrom` (≤ 50 ms, uncommitted Ready that replaced an aim). Rust fix (real low-16 on KIND_MOTION, no ACTION) optional | :311149, :337763 | — | shipped (JS) / Rust deferred | missileSubstate |
+| MA-6 | low | BowNoAmmo/CrossBowNoAmmo 0x800000E8/E9 labelled one-shots; they are stances, never sent | PlayerInReadyPosition missile case | enum only in both | rejected (comment fixed) | — |
+| MA-7 | med | Same root cause for Eat/Drink/Pickup/StoreInBackpack/Reading (hold + return link missing) | :337763-337840 | WebAC generic substates | deferred (out of scope; own eye-test) | — |
+| MA-8 | — | Projectile timing vs animation: consistent (launchTime = aim link; PickupEvent/ParentEvent handled by held-4/held-6); ammo now reappears at the reach and is nocked | ACE Player_Missile.cs | neither syncs | rejected (no defect) | — |
+| MA-9 | — | Click-time shot prediction double-play: none (`?serverSwing` default ON) | ExecuteAttack :408626 | none | rejected | — |
+| MA-10 | — | Draw/sheathe into missile stances: style links resolve (two-hop get_link, Bug 18 chain) | :337700-337745 | — | rejected | — |
+| MA-11 | — | A late local turn-end Ready can't override aim/Reload (`_motionIssueSeq` gate; Reload now bumps it) | — | — | rejected | — |
+
+Code touched: scene3d/entities.js (helpers, `missileSubstateEnabled`, `setMotion`, `_setMotionImpl`, `_fetchSubstateLinks`, `_missileReloadFrom`, `_enqueueUnifiedOneShot` / `_playLinkEntry` continuation, `setLocalStance`), scene3d/loop.js, docs/url-flags.md, tests/missile_substate_motion.test.mjs. No Rust changed. Evidence dumps (MotionTable/animation JSON): /mnt/wbterminal1/wt/missile-anim-scratch/.
