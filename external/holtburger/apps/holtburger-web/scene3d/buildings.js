@@ -81,6 +81,11 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas } from "./static_atlas.js
 // T22-PRODUCER (ST9, `?drawPools`): the pooled producer. Inert unless the full
 // F-11.3 chain armed it (index.js initPoolWorld), so the OFF arm never calls it.
 import { poolWorldActive, addSingletonsToPools } from "./pool_producer.js";
+// ?buildingMatBatch (2026-10-17): per-(landblock, material) BatchedMeshes draw
+// through the member material's synced variant, exactly like the statics
+// batchers (batched_material_variant.js — one program per object kind, no
+// batched/plain program flip on a shared material).
+import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -132,6 +137,266 @@ const BUILDING_BATCH = (() => {
   }
 })();
 
+// ?buildingMatBatch (DEFAULT-ON 2026-10-17; `=off|0|false|no` escapes to the
+// pre-2026-10-17 route byte for byte) — batch building surfaces by MATERIAL,
+// per landblock, instead of offering them to the cross-LB statics atlas.
+//
+// WHY THE ATLAS NEVER TOOK THEM. Measured live on the 1070 at Linvak Tukal
+// (__atlasStats: nodesIn 391, atlased 1, ptBc7Deferred 390): every building
+// surface was held out by the BC7 deferral (`bc7AtlasShouldDefer`). Two causes,
+// both outside this file:
+//   R1 — buildings draw with the floor-bias CLONE (materials.js
+//        getCachedFloorBias), minted with `{...base.userData}` right after
+//        preload, i.e. while the base's BC7 upgrade is still in flight. The
+//        clone copies `__bc7Pending: true`; the upgrade deletes the marker on
+//        the BASE only (bc7_textures.js upgradeMaterialToBc7) and
+//        `_repointAlbedoForDid` re-points the clone's map without clearing it,
+//        so the clone reads "pending" for the rest of the session (probe: 192
+//        of 215 clones pending, 0 of their bases).
+//   R2 — even a clean deferral is never re-offered on the default arm: the
+//        `atlasRefeed` hold-out list (`_rsMembers`) is only populated under
+//        `?texCompressedOnly`; re-offering otherwise waits for the LB to
+//        evict and re-stream.
+// So buildings rendered as ~140 singleton draws. Fixing R1/R2 would NOT be an
+// identical-output fix: the atlas's array material adds statPom (24-step POM +
+// sun self-shadow at ultra), derives AO from the seam-height field, rebuilds the
+// normal's Z, samples fract()+textureGrad, keeps BC7 arrays at mip level 0 and
+// drops the floor bias. The few building parts that did reach it cost 2-3 ms of
+// GPU for 1-3 draws (1070 census, fps2-int).
+//
+// WHAT THIS DOES INSTEAD. Building surfaces of one landblock that share a
+// material OBJECT (the per-DID floor-bias clone) become ONE THREE.BatchedMesh
+// drawing through that same material (its batched variant) — same shader
+// source, same textures, samplers, uniforms, blending, depth bias and both
+// depth modes, by construction. Landblock granularity keeps every per-LB
+// consumer exact: the LRU evict/park scans, ?objRadius hides and the cells.js
+// indoor split all act on buildingsGroup top-level nodes by
+// `userData.landblockId`, and the bucket carries it. The bucket is anchored at
+// its landblock's origin so instance matrices stay small: float32 vertex
+// precision within ~1e-5 m of the singleton path, instead of the ~2 mm
+// camera-relative jitter a world-origin bucket gets at 31 km (as the 3x3-region
+// statics buckets do).
+// See `consolidateBuildingSurfaces` for the exact admission rules.
+let _matBatchFlag;
+export function buildingMatBatchEnabled() {
+  if (_matBatchFlag !== undefined) return _matBatchFlag;
+  let on = true;
+  try {
+    const v = new URLSearchParams(window.location.search).get("buildingMatBatch");
+    if (v != null) {
+      const s = String(v).toLowerCase();
+      on = !(s === "off" || s === "0" || s === "false" || s === "no");
+    }
+  } catch (_) {
+    on = true;
+  }
+  return (_matBatchFlag = on);
+}
+/** Test seam: true/false forces the arm, undefined re-reads the URL. */
+export function __setBuildingMatBatchForTest(v) { _matBatchFlag = v; }
+
+/** The per-material building batch runs for this bake (wireframe keeps its own
+ *  shared MeshBasic buckets + fill companions, so it stays on the legacy path). */
+function _matBatchActive(scene3d) {
+  if (!BUILDING_BATCH || !buildingMatBatchEnabled()) return false;
+  if (scene3d && (scene3d.wireframeMode || scene3d.materialCache?.wireframeMode)) return false;
+  return true;
+}
+
+// A building bucket owns its batch geometry + per-instance DataTextures and holds
+// its member's batched variant; every teardown (LRU evict, disposeParked, a
+// failed build) ends in dispose(), so the release rides it. Idempotent.
+class _BuildingBatch extends THREE.BatchedMesh {
+  dispose() {
+    if (this.userData && this.userData.__disposed) return this;
+    if (this.userData) this.userData.__disposed = true;
+    try { releaseBatchedMaterial(this); } catch (_) { /* fail-soft */ }
+    _bldBatchStats.disposed += 1;
+    return super.dispose();
+  }
+}
+
+const _bldBatchStats = {
+  feeds: 0, nodesIn: 0, batched: 0, batches: 0, uniqueGeoms: 0,
+  loners: 0, ptIneligible: 0, ptAddFail: 0, disposed: 0,
+};
+/** Diag: cumulative building-batch tally. */
+export function buildingBatchStats() {
+  return { ..._bldBatchStats, enabled: buildingMatBatchEnabled() };
+}
+if (typeof window !== "undefined") window.__buildingBatchStats = buildingBatchStats;
+
+const _O3D_OBR = THREE.Object3D.prototype.onBeforeRender;
+const _O3D_OAR = THREE.Object3D.prototype.onAfterRender;
+const _anchorInv = new THREE.Matrix4();
+const _instLocal = new THREE.Matrix4();
+
+// A BatchedMesh copies every geometry into ONE buffer layout fixed by its first
+// geometry, so members must agree on attribute names / widths / types and on
+// indexing — keyed, so a mismatch opens its own bucket instead of falling out.
+function _attrSig(g) {
+  const parts = [];
+  for (const name of Object.keys(g.attributes).sort()) {
+    const a = g.attributes[name];
+    const kind = a.isInterleavedBufferAttribute ? "i" : (a.array && a.array.constructor ? a.array.constructor.name : "?");
+    parts.push(`${name}:${a.itemSize}:${a.normalized ? 1 : 0}:${kind}`);
+  }
+  parts.push(g.index ? `ix:${g.index.array.constructor.name}` : "nx");
+  return parts.join(",");
+}
+
+/**
+ * Can this flattened building surface draw as one instance of a material batch
+ * with a byte-identical image? Everything that would make the draw differ in
+ * ORDER, STATE or SHAPE keeps it a singleton:
+ *   - blended / non-depth-writing materials: the transparent pass sorts per
+ *     OBJECT back to front, and a bucket sorts as one object;
+ *   - renderOrder, frustumCulled=false, custom render hooks or depth materials,
+ *     hidden nodes: per-object state a bucket cannot carry per instance;
+ *   - geometry groups, a draw range or morph targets: BatchedMesh draws the
+ *     whole geometry and has no morph path;
+ *   - ShaderMaterials (no batching chunk) and multi-material meshes;
+ *   - no landblockId: the bucket would be unevictable.
+ */
+function _batchEligible(n) {
+  if (!n || !n.isMesh || n.isInstancedMesh || n.isBatchedMesh || n.isSkinnedMesh || n.isLOD) return false;
+  const m = n.material;
+  const g = n.geometry;
+  if (!m || Array.isArray(m) || m.isMaterial !== true || m.isShaderMaterial) return false;
+  if (!g || g.isBufferGeometry !== true || !g.attributes || !g.attributes.position) return false;
+  if (n.userData == null || n.userData.landblockId == null) return false;
+  if (n.visible === false || m.visible === false) return false;
+  if (m.transparent === true || m.depthWrite === false || m.depthTest === false) return false;
+  if ((n.renderOrder | 0) !== 0 || n.frustumCulled === false) return false;
+  if (n.onBeforeRender !== _O3D_OBR || n.onAfterRender !== _O3D_OAR) return false;
+  if (n.customDepthMaterial || n.customDistanceMaterial) return false;
+  if (Array.isArray(g.groups) && g.groups.length > 0) return false;
+  if (g.drawRange && (g.drawRange.start !== 0 || g.drawRange.count !== Infinity)) return false;
+  if (g.morphAttributes && Object.keys(g.morphAttributes).length > 0) return false;
+  return true;
+}
+
+/**
+ * ?buildingMatBatch — collapse flattened building surface meshes (world TRS,
+ * `userData.landblockId` stamped, parent-less or about to be re-parented) into
+ * one BatchedMesh per (landblock, material object, layer mask, shadow flags,
+ * attribute layout). Groups of one, and every node `_batchEligible` refuses,
+ * pass through unchanged. Returns `{ out, batches }`: `out` is what the caller
+ * attaches to buildingsGroup (passthrough singletons + the new batches).
+ * Geometry shared across placements (one per modelId part surface, via the
+ * bake cache) is added ONCE per bucket and instanced per placement. NEVER
+ * throws for a single node: a node that will not fit stays a singleton.
+ */
+export function consolidateBuildingSurfaces(nodes) {
+  _bldBatchStats.feeds += 1;
+  const out = [];
+  const batches = [];
+  const groups = new Map(); // key -> Mesh[]
+  for (const n of nodes) {
+    _bldBatchStats.nodesIn += 1;
+    let key = null;
+    try {
+      if (_batchEligible(n)) {
+        const lbKey = ((n.userData.landblockId >>> 0) & 0xffff0000) >>> 0;
+        key = `${lbKey}|${n.material.id}|${n.layers.mask}|` +
+          `${n.castShadow ? 1 : 0}${n.receiveShadow ? 1 : 0}|${_attrSig(n.geometry)}`;
+      }
+    } catch (_) { key = null; }
+    if (key === null) {
+      _bldBatchStats.ptIneligible += 1;
+      if (n) out.push(n);
+      continue;
+    }
+    let arr = groups.get(key);
+    if (!arr) { arr = []; groups.set(key, arr); }
+    arr.push(n);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) {
+      // One draw either way — a 1-instance batch would only add a program
+      // variant and a per-frame cull walk.
+      _bldBatchStats.loners += group.length;
+      out.push(...group);
+      continue;
+    }
+    const tmpl = group[0];
+    const mat = tmpl.material;
+    const gidOf = new Map(); // BufferGeometry -> gid (-1 until added)
+    let verts = 0;
+    let idx = 0;
+    for (const m of group) {
+      const g = m.geometry;
+      if (gidOf.has(g)) continue;
+      gidOf.set(g, -1);
+      verts += g.attributes.position.count;
+      if (g.index) idx += g.index.count;
+    }
+    let bm;
+    try {
+      bm = new _BuildingBatch(group.length, Math.max(1, verts), Math.max(1, idx), batchedMaterialFor(mat));
+    } catch (_) {
+      _bldBatchStats.ptAddFail += group.length;
+      out.push(...group);
+      continue;
+    }
+    holdBatchedMaterial(bm);
+    // Anchor at the landblock origin (AC metres, the frame buildingsGroup and
+    // the flattened nodes share): instance translations stay < ~200 m, so the
+    // float32 batching matrices carry the same precision the singleton path
+    // gets from three's float64 modelViewMatrix.
+    const lbId = tmpl.userData.landblockId >>> 0;
+    const ox = ((lbId >>> 24) & 0xff) * METERS_PER_LANDBLOCK;
+    const oy = ((lbId >>> 16) & 0xff) * METERS_PER_LANDBLOCK;
+    bm.position.set(ox, oy, 0);
+    bm.updateMatrix();
+    _anchorInv.makeTranslation(-ox, -oy, 0);
+    let added = 0;
+    for (const m of group) {
+      try {
+        m.updateMatrix();
+        let gid = gidOf.get(m.geometry);
+        if (gid === undefined || gid < 0) {
+          gid = bm.addGeometry(m.geometry);
+          gidOf.set(m.geometry, gid);
+          _bldBatchStats.uniqueGeoms += 1;
+        }
+        const iid = bm.addInstance(gid);
+        _instLocal.multiplyMatrices(_anchorInv, m.matrix);
+        bm.setMatrixAt(iid, _instLocal);
+        added += 1;
+      } catch (_) {
+        // Layout/budget mismatch — keep it a singleton (never vanish).
+        _bldBatchStats.ptAddFail += 1;
+        out.push(m);
+      }
+    }
+    if (added === 0) {
+      try { bm.dispose(); } catch (_) { /* fail-soft */ }
+      continue;
+    }
+    // Opaque members only (see _batchEligible): no per-instance depth sort.
+    bm.sortObjects = false;
+    bm.perObjectFrustumCulled = true; // same sphere-vs-frustum test a Mesh gets
+    bm.frustumCulled = true;          // landblock-bounded: cull the node whole
+    bm.castShadow = !!tmpl.castShadow;
+    bm.receiveShadow = !!tmpl.receiveShadow;
+    bm.layers.mask = tmpl.layers.mask;
+    const surf = (tmpl.userData.surfaceDid >>> 0) || 0;
+    bm.userData = {
+      landblockId: tmpl.userData.landblockId,
+      surfaceDid: surf,
+      __buildingBatch: true,
+      instances: added,
+    };
+    bm.name = `building-batch-lb${lbId.toString(16).padStart(8, "0")}-s${surf.toString(16).padStart(8, "0")}-x${added}`;
+    _bldBatchStats.batches += 1;
+    _bldBatchStats.batched += added;
+    out.push(bm);
+    batches.push(bm);
+  }
+  return { out, batches };
+}
+
 // Flatten built placementGroups' surface meshes into staticsGroup-relative singletons and
 // feed them to the cross-LB atlas. Each placementGroup is DETACHED (no parent) here, so
 // `updateMatrixWorld(true)` makes every leaf mesh's `matrixWorld` equal its transform in the
@@ -147,7 +412,15 @@ function _carriesEnvDetail(n) {
   return !!(m && !Array.isArray(m) && m.userData && m.userData.__envDetailKind);
 }
 
-function _feedBuildingGroupsToAtlas(groups, scene3d) {
+// `opts.deferAttach` (?buildingMatBatch per-LB path): return the top-level
+// nodes instead of adding them, so the caller can prewarm the BATCHED programs
+// before attach. Without it every node is attached here, as before.
+function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
+  const attachList = opts && opts.deferAttach ? [] : null;
+  const attach = (n) => {
+    if (attachList) attachList.push(n);
+    else scene3d.buildingsGroup.add(n);
+  };
   let singletons = [];
   for (const g of groups) {
     g.updateMatrixWorld(true); // detached → subtree matrixWorld == staticsGroup-relative
@@ -173,7 +446,7 @@ function _feedBuildingGroupsToAtlas(groups, scene3d) {
     for (const n of singletons) (_carriesEnvDetail(n) ? keepOwnMaterial : rest).push(n);
     singletons = rest;
   }
-  for (const n of keepOwnMaterial) scene3d.buildingsGroup.add(n);
+  for (const n of keepOwnMaterial) attach(n);
   // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5) — THE PRODUCER SWAP,
   // consumer 2 of 3. Buildings already flatten to staticsGroup-relative
   // singletons here, which is exactly the pooled producer's input contract, so
@@ -206,11 +479,15 @@ function _feedBuildingGroupsToAtlas(groups, scene3d) {
   }
   // With pools armed but `?statAtlas=off`, the residue goes straight to the
   // group — the atlas is not resurrected by the pooled arm.
-  const { passthrough } = (BUILDING_BATCH && statAtlasEnabled())
+  // ?buildingMatBatch: the residue is batched by its OWN material instead and
+  // is never offered to the atlas (whose array material would change the image).
+  const matBatch = _matBatchActive(scene3d);
+  const { passthrough } = (!matBatch && BUILDING_BATCH && statAtlasEnabled())
     ? addSingletonsToCrossLbAtlas(toAtlas, scene3d)
     : { passthrough: toAtlas };
-  for (const n of passthrough) scene3d.buildingsGroup.add(n); // world-baked TRS → correct under buildingsGroup
-  return passthrough.length + keepOwnMaterial.length;
+  const top = matBatch ? consolidateBuildingSurfaces(passthrough).out : passthrough;
+  for (const n of top) attach(n); // world-baked TRS → correct under buildingsGroup
+  return attachList || top.length + keepOwnMaterial.length;
 }
 
 // A3 (busted-world load fix 2026-06-20) — concurrent-call dedup for the
@@ -1037,7 +1314,18 @@ export async function bakeBuildingsForLandblock(
     // results live on the material/texture objects). Safe without a residency re-check: the
     // LB isn't LRU-tracked until this baker resolves (the attach loop is past all awaits).
     // `?bakePrewarm=off` skips the await and attaches straight away.
-    if (_pendingGroups.length > 0) {
+    if (_pendingGroups.length > 0 && _matBatchActive(scene3d)) {
+      // ?buildingMatBatch: route (flatten → pools if armed → per-material
+      // batches) BEFORE the prewarm, so what gets compiled in the background is
+      // what will draw — the batched variants' programs, not the singletons'.
+      // The groups are still detached here, which the flatten requires.
+      const top = _feedBuildingGroupsToAtlas(_pendingGroups, scene3d, { deferAttach: true });
+      const _tmp = new THREE.Group();
+      for (const n of top) _tmp.add(n);
+      await prewarmSubtree(scene3d, _tmp);
+      for (const n of [..._tmp.children]) _tmp.remove(n);
+      for (const n of top) scene3d.buildingsGroup.add(n);
+    } else if (_pendingGroups.length > 0) {
       const _tmp = new THREE.Group();
       for (const g of _pendingGroups) _tmp.add(g);
       await prewarmSubtree(scene3d, _tmp);
@@ -1326,7 +1614,8 @@ export async function bakeBuildingsRing(
       }
       let partCount = 0;
       let surfaceMeshCount = 0;
-      const lbBatchGroups = (BUILDING_BATCH && statAtlasEnabled()) || poolWorldActive() ? [] : null;
+      const lbBatchGroups =
+        (BUILDING_BATCH && statAtlasEnabled()) || poolWorldActive() || _matBatchActive(scene3d) ? [] : null;
       for (const placement of buildings) {
         const placementLbX = (placement.landblockId >>> 24) & 0xff;
         const placementLbY = (placement.landblockId >>> 16) & 0xff;

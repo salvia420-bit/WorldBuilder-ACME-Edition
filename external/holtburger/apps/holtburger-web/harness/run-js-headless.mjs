@@ -1116,6 +1116,10 @@ const TIER5 = [
   // 2026-10-17 fps wave 2 (card "binds"): texture-unit pins + light upload memo,
   // proven exact on three r184's real renderer over tests/helpers/fake_webgl2.mjs.
   { tier: 5, flag: "texUnitPin+lightUploadOnce", file: "tests/uniform_bind_patch.test.mjs" },
+  // 2026-10-17 fps wave 3 (card "atlas"): building surfaces batched per (landblock,
+  // material) through their own material — routing, geometry/transform identity and
+  // GL-level shader/uniform/state identity in both depth modes, LRU lifecycle.
+  { tier: 5, flag: "buildingMatBatch", file: "tests/building_mat_batch.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
