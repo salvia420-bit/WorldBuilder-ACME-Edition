@@ -14,8 +14,19 @@
 import { readFileSync } from "node:fs";
 import { stripExports } from "./splice_module.mjs";
 
+// ./shader_logdepth.js is pure (no imports): suites get its GENUINE exports, so
+// a suite asserting on a depth-bias patch sees the production GLSL.
+const genuineShaderLogdepth = (name) =>
+  "(() => {\n" +
+  stripExports(readFileSync(new URL("../../scene3d/shader_logdepth.js", import.meta.url), "utf8")) +
+  `\nreturn ${name};\n})()`;
+
 /** Stubs for every module `scene3d/materials.js` statically imports. */
 export const MATERIALS_JS_STUBS = Object.freeze({
+  // ./shader_logdepth.js — `?reversedZ=on` vertex twins of the log-depth biases
+  // (2026-10-17). Genuine (see genuineShaderLogdepth).
+  reversedBiasScale: genuineShaderLogdepth("reversedBiasScale"),
+  reversedDepthBiasVertexGlsl: genuineShaderLogdepth("reversedDepthBiasVertexGlsl"),
   // ./adapter.js — pixel→texture uploads. Suites that need a real texture
   // override these; the default is "no texture produced".
   surfacePixelsToTexture: "() => null",

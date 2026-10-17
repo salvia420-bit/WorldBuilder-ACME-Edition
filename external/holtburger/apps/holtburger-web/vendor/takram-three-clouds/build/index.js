@@ -1951,6 +1951,16 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
         delete this.defines.USE_LOGARITHMIC_DEPTH_BUFFER;
       }
     }
+    const prevReversedDepthBuffer = this.defines.USE_REVERSED_DEPTH_BUFFER != null;
+    const nextReversedDepthBuffer = renderer.state?.buffers?.depth?.getReversed?.() === true;
+    if (nextReversedDepthBuffer !== prevReversedDepthBuffer) {
+      if (nextReversedDepthBuffer) {
+        this.defines.USE_REVERSED_DEPTH_BUFFER = "1";
+      } else {
+        delete this.defines.USE_REVERSED_DEPTH_BUFFER;
+      }
+      this.needsUpdate = true;
+    }
     const prevPowder = this.defines.POWDER != null;
     const nextPowder = this.uniforms.powderScale.value > 0;
     if (nextPowder !== prevPowder) {

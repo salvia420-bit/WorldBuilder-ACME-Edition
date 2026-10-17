@@ -978,7 +978,11 @@ export class SelectionBracketLayer {
 
     // Behind-camera test — retail's `viewconeCheck` (:379711) returning 0.
     this._vC.project(camera);
-    if (this._vC.z > BEHIND_CAMERA_NDC_Z) {
+    // `?reversedZ=on` (camera.reversedDepth): three's reversed projection maps
+    // behind-the-eye points to NDC z < 0, not z > 1 (shader_logdepth.js
+    // ndcBehindCamera, inlined).
+    this._behindRev = camera.reversedDepth === true;
+    if (this._behindRev ? this._vC.z < 0 : this._vC.z > BEHIND_CAMERA_NDC_Z) {
       this._showOffScreen(this._vC, w, h);
       return;
     }
@@ -1052,7 +1056,7 @@ export class SelectionBracketLayer {
     let nx = ndc.x;
     let ny = ndc.y;
     // Behind the camera: the perspective divide mirrors the point.
-    if (ndc.z > BEHIND_CAMERA_NDC_Z) { nx = -nx; ny = -ny; }
+    if (this._behindRev === true ? ndc.z < 0 : ndc.z > BEHIND_CAMERA_NDC_Z) { nx = -nx; ny = -ny; }
     const len = Math.hypot(nx, ny) || 1;
     nx /= len; ny /= len;
     const halfW = w / 2;

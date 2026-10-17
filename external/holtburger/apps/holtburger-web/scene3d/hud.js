@@ -286,7 +286,12 @@ export class NameplateLayer {
       // frustum).
       this._tmpVec.project(camera);
       projected += 1;
-      if (this._tmpVec.z > NAMEPLATE_HIDE_BEHIND_THRESHOLD) {
+      // `?reversedZ=on` (camera.reversedDepth): three's reversed projection maps
+      // behind-the-eye (and past-far) points to NDC z < 0, not z > 1
+      // (shader_logdepth.js ndcBehindCamera — inlined: this module loads standalone).
+      if (camera.reversedDepth === true
+        ? this._tmpVec.z < 0
+        : this._tmpVec.z > NAMEPLATE_HIDE_BEHIND_THRESHOLD) {
         entry.el.style.display = "none";
         hiddenBehind += 1;
         continue;

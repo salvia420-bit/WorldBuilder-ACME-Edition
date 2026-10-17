@@ -176,6 +176,14 @@ import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { retainNewPrograms } from "./program_retention.js";
 import { installLightLoops } from "./light_loops.js";
 import { installRadialFog } from "./radial_fog.js";
+import {
+  reversedZRequested,
+  threeContextAttributes,
+  probeClipControl,
+  resolveDepthMode,
+  depthRendererParams,
+  installReversedZ,
+} from "./shader_logdepth.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
 import { installShadowCasterList } from "./shadow_caster_list.js";
@@ -1156,11 +1164,67 @@ export async function preInit3D(canvas) {
   // shaders' vFogDist (scene3d/radial_fog.js). Must precede every compile.
   // Without the flag nothing is touched.
   installRadialFog(THREE);
-  const renderer = new THREE.WebGLRenderer({
+  // ?reversedZ=on (OPT-IN, 2026-10-17): reversed-Z depth instead of the
+  // logarithmic buffer, so opaque draws keep early depth rejection (the log
+  // buffer makes every program write gl_FragDepth). Needs EXT_clip_control,
+  // probed on THIS canvas with three's own context attributes (the same
+  // context three then gets back); without it the log buffer stays, logged
+  // once. Absent flag: no probe, today's exact renderer parameters.
+  // See shader_logdepth.js "REVERSED-Z" for what three does and what we fix.
+  const _rendererAntialias = !!quality.flags.antialias && (wireframeMode || _canvasMsaa);
+  let _depthMode = resolveDepthMode({ requested: false });
+  if (reversedZRequested()) {
+    _depthMode = resolveDepthMode({
+      requested: true,
+      clipControl: probeClipControl(canvas, threeContextAttributes({ antialias: _rendererAntialias })),
+    });
+    if (!_depthMode.reversed) {
+      // eslint-disable-next-line no-console
+      console.warn(`[reversedZ] ?reversedZ=on but ${_depthMode.reason} — keeping the logarithmic depth buffer`);
+    }
+  }
+  let renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: !!quality.flags.antialias && (wireframeMode || _canvasMsaa),
-    logarithmicDepthBuffer: true,
+    ...depthRendererParams(_depthMode.mode),
   });
+  let _rzFixes = null;
+  if (_depthMode.reversed) {
+    const _rz = installReversedZ(THREE, renderer);
+    _rzFixes = _rz;
+    if (!_rz.installed) {
+      // The probe saw the extension but three did not arm it — never run with
+      // neither encoding: rebuild on the same canvas (same context) with log.
+      // eslint-disable-next-line no-console
+      console.warn("[reversedZ] renderer did not arm a reversed depth buffer — rebuilding with the logarithmic buffer", _rz.notes);
+      renderer.dispose();
+      _depthMode = { mode: "log", reversed: false, reason: "renderer-not-reversed" };
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: _rendererAntialias,
+        ...depthRendererParams("log"),
+      });
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix})`, _rz.notes.length ? _rz.notes : "");
+    }
+  }
+  try {
+    if (typeof window !== "undefined") {
+      window.__depthMode = Object.freeze({
+        ..._depthMode,
+        requested: reversedZRequested(),
+        logarithmic: renderer.capabilities.logarithmicDepthBuffer === true,
+        reversedState: renderer.state.buffers.depth.getReversed() === true,
+        fixes: _rzFixes ? {
+          depthFuncFix: _rzFixes.depthFuncFix,
+          packing: _rzFixes.packing,
+          sortKeyFix: _rzFixes.sortKeyFix,
+          notes: _rzFixes.notes.slice(),
+        } : null,
+      });
+    }
+  } catch (_) { /* diag only */ }
   // Goal-1 (2026-06-22): three.js `renderer.debug.checkShaderErrors` defaults TRUE, which
   // forces a SYNCHRONOUS `getProgramInfoLog`/LINK_STATUS read after every shader-program
   // link — a main-thread FLUSH that blocks on the GPU compile. The 1070 `pvsRingRadius=10`
@@ -4826,7 +4890,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
       best.matrixWorld.decompose(pos, quat, scl);
       const ndc = pos.clone().project(cam);
-      const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z >= -1 && ndc.z <= 1;
+      // `?reversedZ=on`: the visible NDC z range is [0, 1] (cam.reversedDepth).
+      const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z >= (cam.reversedDepth === true ? 0 : -1) && ndc.z <= 1;
 
       // Edge-on test: |world quad-normal · camera view dir|. ~1 face-on, ~0 edge-on.
       let faceDot = null, faceAngleDeg = null;
@@ -5049,7 +5114,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         if (rp6Cam) {
           rp6Cam.updateMatrixWorld();
           mvp.multiplyMatrices(rp6Cam.projectionMatrix, rp6Cam.matrixWorldInverse);
-          frustum.setFromProjectionMatrix(mvp);
+          frustum.setFromProjectionMatrix(mvp, rp6Cam.coordinateSystem, rp6Cam.reversedDepth === true);
           rp6Cam.getWorldDirection(camFwd);
           if (Number.isFinite(rp6Cam.fov)) {
             // Diagonal half-angle ≈ the widest in-view angle, so a point inside
@@ -5072,7 +5137,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           const before = frustum.planes.map((p) => p.constant);
           rp6Cam.updateMatrixWorld(true);
           const mvp2 = new THREE.Matrix4().multiplyMatrices(rp6Cam.projectionMatrix, rp6Cam.matrixWorldInverse);
-          const f2 = new THREE.Frustum().setFromProjectionMatrix(mvp2);
+          const f2 = new THREE.Frustum().setFromProjectionMatrix(mvp2, rp6Cam.coordinateSystem, rp6Cam.reversedDepth === true);
           out.rp6Camera.staleMatrixDelta = +Math.max(
             ...f2.planes.map((p, i) => Math.abs(p.constant - before[i]))
           ).toFixed(6);

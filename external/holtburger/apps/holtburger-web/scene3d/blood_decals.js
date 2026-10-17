@@ -395,6 +395,13 @@ function _buildPool() {
         vFragDepth = 1.0 + gl_Position.w * ${BLOOD_DEPTH_BIAS.toFixed(4)};
         vIsPerspective = float( projectionMatrix[2][3] == -1.0 );
 #endif
+#ifdef USE_REVERSED_DEPTH_BUFFER
+        // ?reversedZ=on: the same 0.1 % pull toward the eye on reversed clip z
+        // (reversed depth ~ near / distance), in the vertex stage, so the decal
+        // never writes gl_FragDepth. The material polygonOffset is live here too
+        // (factor sign-flipped by three; see shader_logdepth.js REVERSED-Z #6).
+        gl_Position.z /= ${BLOOD_DEPTH_BIAS.toFixed(4)};
+#endif
       }`,
     fragmentShader: /* glsl */ `
       uniform sampler2D uMap;

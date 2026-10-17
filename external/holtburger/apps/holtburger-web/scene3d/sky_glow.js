@@ -182,7 +182,12 @@ export const SKY_GLOW_FRAGMENT_BODY = [
   "\tfloat hbSkyGlowW = 1.0 - smoothstep( hbSkyGlowFalloff.x, hbSkyGlowFalloff.y, hbSkyGlowR );",
   "\toutgoingLight *= hbSkyGlowW * hbSkyGlowGain;",
   "\t#include <opaque_fragment>",
+  "\t#ifdef USE_REVERSED_DEPTH_BUFFER",
+  "\t// ?reversedZ=on: the cleared (far) value is 0 and the test GreaterEqual.",
+  "\tgl_FragDepth = 0.0;",
+  "\t#else",
   "\tgl_FragDepth = 1.0;",
+  "\t#endif",
   "",
 ].join("\n");
 

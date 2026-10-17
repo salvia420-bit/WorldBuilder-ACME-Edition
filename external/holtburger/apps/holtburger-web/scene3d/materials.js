@@ -101,6 +101,8 @@ import { armCpuRelease } from "./texture_release.js";
 import { PLANE } from "./surface_planes.js";
 // ?lumNight (2026-10-07): ambient-like luminosity dims at night.
 import { registerLuminousMaterial } from "./luminous_night.js";
+// ?reversedZ=on: vertex-stage twins of the log-depth biases below (no gl_FragDepth).
+import { reversedBiasScale, reversedDepthBiasVertexGlsl } from "./shader_logdepth.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -750,6 +752,14 @@ export function applyWireVertexAOPatch(material) {
   material.userData.__aoPatched = true;
 }
 
+// Reversed-Z twins of the three log-depth biases (shader_logdepth.js
+// reversedBiasScale: the same relative distance shift, converted at the main
+// camera's far plane). Built at compile time, not at module load: suites that
+// splice this module with hand-written import stubs evaluate its top level.
+function _revDepthBiasGlsl(logDelta) {
+  return reversedDepthBiasVertexGlsl(reversedBiasScale(logDelta));
+}
+
 // 2026-06-02 — wire-fill z-fight fix. The renderer runs
 // `logarithmicDepthBuffer: true`, so every material writes `gl_FragDepth`,
 // which makes `polygonOffset` a NO-OP (the fixed-function offset is discarded
@@ -770,6 +780,12 @@ export function applyFillDepthBias(material) {
       #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
         gl_FragDepth += 2.0e-4;
       #endif`,
+    );
+    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
+    // write (scale < 1: pushed away). Compiles out under the log buffer.
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <logdepthbuf_vertex>",
+      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(2.0e-4),
     );
   });
   material.userData = material.userData ?? {};
@@ -797,6 +813,12 @@ export function applyFloorDepthBias(material) {
         gl_FragDepth -= 2.0e-4;
       #endif`,
     );
+    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
+    // write (scale > 1: pulled toward the eye). Compiles out under the log buffer.
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <logdepthbuf_vertex>",
+      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(-2.0e-4),
+    );
   });
   material.userData = material.userData ?? {};
   material.userData.__floorBiased = true;
@@ -821,6 +843,12 @@ export function applyStaticDepthBias(material) {
       #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
         gl_FragDepth -= 4.0e-4;
       #endif`,
+    );
+    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
+    // write (scale > 1: pulled toward the eye). Compiles out under the log buffer.
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <logdepthbuf_vertex>",
+      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(-4.0e-4),
     );
   });
   material.userData = material.userData ?? {};
@@ -1337,16 +1365,31 @@ float _csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   // through to the next cascade. The selector logic above this loop
   // picks the correct cascade so out-of-range hits are rare; still,
   // a defensive return prevents shader divisions by zero.
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // ?reversedZ=on: the cascade camera is reversed too (three r184 flips shadow
+  // cameras and compares GreaterEqual), so "past the far plane" is z < 0 and
+  // the bias moves the reference UP (toward the light).
+  if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
+      shadowCoord.y < 0.0 || shadowCoord.y > 1.0 ||
+      shadowCoord.z < 0.0) {
+    return 1.0;
+  }
+#else
   if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
       shadowCoord.y < 0.0 || shadowCoord.y > 1.0 ||
       shadowCoord.z > 1.0) {
     return 1.0;
   }
+#endif
   // 2026-10-07: hardware depth compare on the cascade's DEPTH texture
   // (sampler2DShadow, LessEqual): 1 = lit, 0 = shadowed, and every tap is
   // already a bilinear 2x2 PCF. Four half-texel taps soften the edge.
   float bias = 0.0007;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  float ref = shadowCoord.z + bias;
+#else
   float ref = shadowCoord.z - bias;
+#endif
   vec2 tx = 0.5 / vec2(textureSize(sm, 0));
   return 0.25 * (
       texture(sm, vec3(shadowCoord.xy + vec2(-tx.x, -tx.y), ref))

@@ -106,6 +106,12 @@ import {
 // cells-portals-1 — `?rigCellGate=on` (OPT-IN): tickPortalSeal publishes the
 // walk's outside-view count for the gate's landcell-rig clause.
 import { rigCellGateEnabled } from "./rig_cell_gate.js";
+// `?reversedZ=on` (shader_logdepth.js REVERSED-Z): every MVP below feeds code
+// written for GL clip space (the wasm frustum + PView walks, portal_clip,
+// interior_aperture_cull). glClipProjection returns the camera's own matrix on
+// the log buffer (no copy) and a GL-convention copy under reversed depth.
+import { glClipProjection } from "./shader_logdepth.js";
+const _glClipProj = new THREE.Matrix4();
 // cells-portals-2 — `?indoorLandscapeGate=on` (OPT-IN): tickPortalSeal decides
 // whether the armed indoor frame may skip the landscape (retail LScape::draw
 // runs only under `outside_view.view_count`, acclient.c:461476).
@@ -3080,7 +3086,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         // Three.js's Matrix4.multiplyMatrices(a, b) computes a·b.
         const mvp = _mvpScratch ?? (_mvpScratch = new Float32Array(16));
         const m = _mvpMatrixScratch ?? (_mvpMatrixScratch = new THREE.Matrix4());
-        m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        m.multiplyMatrices(glClipProjection(camera, _glClipProj), camera.matrixWorldInverse);
         m.multiply(worldRoot.matrixWorld);
         for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
         // Phase 5 PView port (2026-05-25): when the wasm exposes the
@@ -3273,7 +3279,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         if (cam?.projectionMatrix && cam.matrixWorldInverse && wr) {
           const mvp = _mvpScratch ?? (_mvpScratch = new Float32Array(16));
           const m = _mvpMatrixScratch ?? (_mvpMatrixScratch = new THREE.Matrix4());
-          m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+          m.multiplyMatrices(glClipProjection(cam, _glClipProj), cam.matrixWorldInverse);
           m.multiply(wr.matrixWorld);
           for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
           const pv = sessionHandle.getRenderSetWithPView(mvp, 0);
@@ -3623,7 +3629,7 @@ function _apertureGateCandidates(scene3d, sessionHandle, visibleSet, st) {
   }
   // Same composition as the visibility walk above: projection · view for the
   // main-scene cell boxes, · worldRoot for the AC-space aperture polygons.
-  _apVp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _apVp.multiplyMatrices(glClipProjection(camera, _glClipProj), camera.matrixWorldInverse);
   _apMvp.multiplyMatrices(_apVp, worldRoot.matrixWorld);
   for (let i = 0; i < 16; i++) _apMvpArr[i] = _apMvp.elements[i];
   const flat = hasV3
@@ -3776,7 +3782,7 @@ export function tickPortalStencil(scene3d, sessionHandle) {
   try {
     // Same MVP composition tickCellVisibility3D uses: fold worldRoot's AC→three
     // rotation in so the AC-space aperture verts project correctly.
-    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiplyMatrices(glClipProjection(camera, _glClipProj), camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
 
@@ -3921,7 +3927,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     // Same MVP composition tickCellVisibility3D / tickPortalStencil use: fold
     // worldRoot's AC→three rotation in so the AC-space aperture verts project
     // correctly.
-    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiplyMatrices(glClipProjection(camera, _glClipProj), camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
     // Own typeof-guards — these used to read `hasV2` from tickPortalStencil's
@@ -4387,7 +4393,7 @@ function _tickPortalSealBody(scene3d, sessionHandle) {
     return;
   }
   try {
-    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiplyMatrices(glClipProjection(camera, _glClipProj), camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
     const flat = hasOutside

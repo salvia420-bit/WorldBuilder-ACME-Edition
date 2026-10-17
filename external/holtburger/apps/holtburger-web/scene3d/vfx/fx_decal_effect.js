@@ -157,6 +157,11 @@ float hbDecalFbm( vec2 p ) {
 void main() {
 	vec2 suv = gl_FragCoord.xy / uDecalRes;
 	float d = texture2D( uDecalDepth, suv ).x;
+	#ifdef USE_REVERSED_DEPTH_BUFFER
+	// ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared)
+	if ( d <= 0.0 ) discard;   // sky: nothing to mark
+	float w = ( uDecalNearFar.x * uDecalNearFar.y ) / ( d * ( uDecalNearFar.y - uDecalNearFar.x ) + uDecalNearFar.x );
+	#else
 	if ( d >= 0.999999 ) discard;   // sky: nothing to mark
 	float w;
 	if ( uDecalIsLog > 0.5 ) {
@@ -165,6 +170,7 @@ void main() {
 		float z = d * 2.0 - 1.0;
 		w = ( 2.0 * uDecalNearFar.x * uDecalNearFar.y ) / ( uDecalNearFar.y + uDecalNearFar.x - z * ( uDecalNearFar.y - uDecalNearFar.x ) );
 	}
+	#endif
 	vec2 ndc = suv * 2.0 - 1.0;
 	vec3 vp = vec3( ( ndc.x + uDecalProj.z ) * w / uDecalProj.x, ( ndc.y + uDecalProj.w ) * w / uDecalProj.y, -w );
 	vec3 wp = ( uDecalCamWorld * vec4( vp, 1.0 ) ).xyz;
@@ -324,9 +330,14 @@ vec2 hbDecalDot( vec2 p, float density, float rad, float size, float pxc ) {
 }
 // linear view depth of one scene depth value
 float hbDecalW( float d ) {
+	#ifdef USE_REVERSED_DEPTH_BUFFER
+	// ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared)
+	return ( uDecalNearFar.x * uDecalNearFar.y ) / ( d * ( uDecalNearFar.y - uDecalNearFar.x ) + uDecalNearFar.x );
+	#else
 	if ( uDecalIsLog > 0.5 ) return exp2( d * uDecalLogFar ) - 1.0;
 	float z = d * 2.0 - 1.0;
 	return ( 2.0 * uDecalNearFar.x * uDecalNearFar.y ) / ( uDecalNearFar.y + uDecalNearFar.x - z * ( uDecalNearFar.y - uDecalNearFar.x ) );
+	#endif
 }
 // view-space position of depth texel p at view depth w (the eye is the origin: small numbers)
 vec3 hbDecalViewAt( ivec2 p, vec2 dsz, float w ) {
@@ -341,7 +352,11 @@ void main() {
 	ivec2 lim = ivec2( dsz ) - 1;
 	ivec2 p = clamp( ivec2( gl_FragCoord.xy * ( dsz / uDecalRes ) ), ivec2( 0 ), lim );
 	float d = texelFetch( uDecalDepth, p, 0 ).x;
+	#ifdef USE_REVERSED_DEPTH_BUFFER
+	if ( d <= 0.0 ) discard;        // ?reversedZ=on sky (cleared reversed depth is 0)
+	#else
 	if ( d >= 0.999999 ) discard;   // sky: nothing to mark
+	#endif
 	float w = hbDecalW( d );
 	vec3 c0 = hbDecalViewAt( p, dsz, w );
 	// eye-relative offset from the mark's centre, in world axes: every term is

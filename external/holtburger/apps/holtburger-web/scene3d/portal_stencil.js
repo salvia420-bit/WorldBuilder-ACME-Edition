@@ -78,7 +78,11 @@ function makeResetMaterial() {
       precision highp float;
       out vec4 _c;
       void main() {
+        #ifdef USE_REVERSED_DEPTH_BUFFER
+        gl_FragDepth = 0.0; // ?reversedZ=on: far is 0 (shader_logdepth.js REVERSED-Z)
+        #else
         gl_FragDepth = ${FAR_DEPTH.toFixed(7)};
+        #endif
         _c = vec4(0.0);
       }`,
   });

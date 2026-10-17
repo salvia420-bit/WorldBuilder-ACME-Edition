@@ -65,4 +65,30 @@ for (const [spec, entry, out] of targets) {
   });
   console.log(`  ${spec.padEnd(44)} -> ${out}`);
 }
+
+// LOCAL PATCH (2026-10-17, `?reversedZ=on`): readDepthValue hands every takram
+// reader CONVENTIONAL depth (1 - d) under a reversed depth buffer, as pmndrs
+// readDepth() does — see scene3d/shader_logdepth.js "REVERSED-Z". Fails loudly
+// if a new @takram build changed the anchor.
+{
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const file = resolve(root, "vendor/takram/three-geospatial-shaders.js");
+  const src = readFileSync(file, "utf8");
+  const anchor = "  #else // DEPTH_PACKING == 3201\n  return texture(depthBuffer, uv).r;\n  #endif // DEPTH_PACKING == 3201\n";
+  const patched = "  #else // DEPTH_PACKING == 3201\n" +
+    "  #ifdef USE_REVERSED_DEPTH_BUFFER\n" +
+    "  // holtburger ?reversedZ=on (2026-10-17, scripts/build-vendor-takram.mjs\n" +
+    "  // re-applies this): every takram reader is written for conventional depth\n" +
+    "  // (far = 1), so hand it 1 - d, exactly as pmndrs readDepth() does.\n" +
+    "  return 1.0 - texture(depthBuffer, uv).r;\n" +
+    "  #else // USE_REVERSED_DEPTH_BUFFER\n" +
+    "  return texture(depthBuffer, uv).r;\n" +
+    "  #endif // USE_REVERSED_DEPTH_BUFFER\n" +
+    "  #endif // DEPTH_PACKING == 3201\n";
+  if (!src.includes(patched)) {
+    if (src.split(anchor).length !== 2) throw new Error("build-vendor-takram: readDepthValue anchor not found — re-derive the reversed-Z patch");
+    writeFileSync(file, src.replace(anchor, patched));
+    console.log("  patched readDepthValue (reversed-Z) -> vendor/takram/three-geospatial-shaders.js");
+  }
+}
 console.log("done");

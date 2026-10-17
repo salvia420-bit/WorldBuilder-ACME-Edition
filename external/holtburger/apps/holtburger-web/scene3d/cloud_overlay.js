@@ -261,7 +261,12 @@ export class CloudOverlay {
           // is 0 (set by the JS side when no depth texture is wired).
           if (sceneDepthThreshold > 0.0) {
             float d = texture2D(sceneDepthTex, vUv).r;
+            #ifdef USE_REVERSED_DEPTH_BUFFER
+            // ?reversedZ=on: cleared (sky) is 0, any geometry is > 0.
+            if (d > 0.0) discard;
+            #else
             if (d < sceneDepthThreshold) discard;
+            #endif
           }
           vec4 c = texture2D(cloudTex, vUv);
           // Discard pixels that aren't a real cloud contribution. The

@@ -49,7 +49,8 @@ function mainBody(src) {
 }
 const count = (s, re) => (s.match(re) || []).length;
 function guardsBalanced(s) {
-  return count(s, /^\s*#if\b/gm) === count(s, /^\s*#endif\b/gm);
+  // #if / #ifdef / #ifndef all open a block (the reversed-Z branches are #ifdef).
+  return count(s, /^\s*#if(?:n?def)?\b/gm) === count(s, /^\s*#endif\b/gm);
 }
 
 function checkVertex(label, src) {

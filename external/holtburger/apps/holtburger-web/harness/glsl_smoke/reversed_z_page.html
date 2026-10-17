@@ -1,0 +1,159 @@
+<!doctype html><html><body><canvas id="c" width="64" height="64"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "postprocessing": "/pp/index.js" } }</script>
+<script type="module">
+// harness/glsl_smoke/reversed_z_page.html — driven by reversed_z_smoke.mjs.
+// ?mode=log | reversed. Every check renders into a FLOAT depth target (the
+// composer's world depth is DEPTH_COMPONENT32F) and reads colour back.
+import * as THREE from "three";
+import * as Z from "/app/scene3d/shader_logdepth.js";
+import { PortalPunchPass, __test_makeDepthRestoreMaterial } from "/app/scene3d/portal_punch.js";
+
+const out = { errors: [], checks: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+const check = (name, ok, detail = "") => out.checks.push({ name, ok: !!ok, detail: String(detail) });
+try {
+  const mode = new URLSearchParams(location.search).get("mode") === "log" ? "log" : "reversed";
+  const canvas = document.getElementById("c");
+  const clip = Z.probeClipControl(canvas, Z.threeContextAttributes());
+  const dm = Z.resolveDepthMode({ requested: mode === "reversed", clipControl: clip });
+  out.mode = mode; out.clipControl = clip; out.depthMode = dm;
+  const renderer = new THREE.WebGLRenderer({ canvas, ...Z.depthRendererParams(dm.mode) });
+  renderer.debug.checkShaderErrors = true;
+  out.fixes = dm.reversed ? Z.installReversedZ(THREE, renderer) : null;
+  const rev = renderer.state.buffers.depth.getReversed() === true;
+  out.reversed = rev;
+  if (mode === "reversed") check("EXT_clip_control present and the renderer armed reversed depth", clip && rev, `clip=${clip} rev=${rev}`);
+  else check("log mode: logarithmic buffer, not reversed", renderer.capabilities.logarithmicDepthBuffer && !rev);
+
+  const S = 64;
+  const target = () => {
+    const rt = new THREE.WebGLRenderTarget(S, S, { type: THREE.HalfFloatType, depthBuffer: true });
+    rt.depthTexture = new THREE.DepthTexture(S, S, THREE.FloatType);
+    rt.depthTexture.format = THREE.DepthFormat;
+    return rt;
+  };
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 5000);
+  const quad = (D, color, matOpts = {}) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(4 * D, 4 * D), new THREE.MeshBasicMaterial({ color, ...matOpts }));
+    m.position.z = -D;
+    return m;
+  };
+  const px = (rt) => {
+    const b = new Uint16Array(4);
+    renderer.readRenderTargetPixels(rt, S / 2, S / 2, 1, 1, b);
+    return Array.from(b, (h) => THREE.DataUtils.fromHalfFloat(h));
+  };
+  const is = (c, r, g, b) => Math.abs(c[0] - r) < 0.05 && Math.abs(c[1] - g) < 0.05 && Math.abs(c[2] - b) < 0.05;
+  const draw = (rt, objs, clear = true) => {
+    const sc = new THREE.Scene();
+    for (const o of objs) sc.add(o);
+    renderer.setRenderTarget(rt);
+    renderer.autoClear = clear;
+    renderer.render(sc, cam);
+    renderer.autoClear = true;
+    renderer.setRenderTarget(null);
+  };
+
+  // S1 — depthFunc Always must draw (r184 maps Always -> NEVER under reversed).
+  {
+    const rt = target();
+    const near = quad(2, 0xff0000);
+    const far = quad(5, 0x00ff00, { depthFunc: THREE.AlwaysDepth });
+    far.renderOrder = 1;
+    draw(rt, [near, far]);
+    check("AlwaysDepth draws over a nearer surface", is(px(rt), 0, 1, 0), JSON.stringify(px(rt)));
+    rt.dispose();
+  }
+  // S2 — precision: 0.3 m apart at 1 km, drawn far-to-near and near-to-far.
+  {
+    const rt = target();
+    const a = quad(1000, 0x0000ff); const b = quad(1000.3, 0xffff00);
+    a.renderOrder = 1; b.renderOrder = 0;
+    draw(rt, [a, b]);
+    const c1 = px(rt);
+    a.renderOrder = 0; b.renderOrder = 1;
+    draw(rt, [a, b]);
+    const c2 = px(rt);
+    check("0.3 m at 1 km resolves (nearer plane wins in both draw orders)", is(c1, 0, 0, 1) && is(c2, 0, 0, 1), `${c1} ${c2}`);
+    rt.dispose();
+  }
+  // S3 — the GPU's depth texel decodes to the true distance (reversed: n f / (d (f - n) + n)).
+  {
+    const rt = target();
+    draw(rt, [quad(37, 0xffffff)]);
+    const copy = new THREE.WebGLRenderTarget(S, S, { type: THREE.FloatType, depthBuffer: false });
+    const mat = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { tDepth: { value: rt.depthTexture } },
+      vertexShader: "void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }",
+      fragmentShader: "precision highp float; uniform highp sampler2D tDepth; out vec4 o; void main(){ o = vec4(texelFetch(tDepth, ivec2(gl_FragCoord.xy), 0).r, 0.0, 0.0, 1.0); }",
+      depthTest: false, depthWrite: false,
+    });
+    const sc = new THREE.Scene(); sc.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+    renderer.setRenderTarget(copy); renderer.render(sc, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)); renderer.setRenderTarget(null);
+    const f = new Float32Array(4); renderer.readRenderTargetPixels(copy, S / 2, S / 2, 1, 1, f);
+    const d = f[0];
+    const dist = rev ? Z.reversedDepthToViewDist(d, cam.near, cam.far) : Z.logDepthToViewDist(d, cam.far);
+    out.depthTexel = d; out.decoded = dist;
+    check("depth texel at 37 m decodes to 37 m", Math.abs(dist - 37) < 0.05, `d=${d} dist=${dist}`);
+    copy.dispose(); rt.dispose();
+  }
+  // S4 — portal punch: far-Z inside the aperture, then an interior behind the facade shows.
+  {
+    const rt = target();
+    const facade = quad(3, 0xff0000);
+    const pp = new PortalPunchPass(null, cam);
+    const punch = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), pp._punchMat);
+    punch.position.z = -4; punch.renderOrder = 1;
+    const interior = quad(10, 0x00ff00); interior.renderOrder = 2;
+    draw(rt, [facade, punch, interior]);
+    check("punch resets depth to far: the interior behind the facade draws", is(px(rt), 0, 1, 0), JSON.stringify(px(rt)));
+    rt.dispose();
+  }
+  // S5 — floor-bias twin: the biased surface wins its exact coplanar tie when drawn FIRST.
+  {
+    const rt = target();
+    const biased = quad(25, 0x00ff00);
+    const scale = Z.reversedBiasScale(-2.0e-4);
+    biased.material.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace("#include <logdepthbuf_fragment>",
+        "#include <logdepthbuf_fragment>\n#if defined( USE_LOGARITHMIC_DEPTH_BUFFER )\n gl_FragDepth -= 2.0e-4;\n#endif");
+      sh.vertexShader = sh.vertexShader.replace("#include <logdepthbuf_vertex>", "#include <logdepthbuf_vertex>" + Z.reversedDepthBiasVertexGlsl(scale));
+    };
+    biased.material.customProgramCacheKey = () => "revzSmokeBias";
+    const plain = quad(25, 0xff0000);
+    biased.renderOrder = 0; plain.renderOrder = 1;
+    draw(rt, [biased, plain]);
+    check("floor bias (log gl_FragDepth / reversed gl_Position.z twin) wins the coplanar tie", is(px(rt), 0, 1, 0), JSON.stringify(px(rt)));
+    rt.dispose();
+  }
+  // S6 — transparent back-to-front (r184 keys the sort on clip z, which shrinks with distance under reversed).
+  {
+    const rt = target();
+    const back = quad(8, 0xff0000, { transparent: true, opacity: 0.5, depthWrite: false });
+    const front = quad(4, 0x0000ff, { transparent: true, opacity: 0.5, depthWrite: false });
+    draw(rt, [front, back]);
+    const c = px(rt);
+    // back first, then front over it: blue weighs 0.5, red 0.25.
+    check("transparent sorted back-to-front", c[2] > c[0] + 0.1, JSON.stringify(c));
+    rt.dispose();
+  }
+  // S7 — the patched portal shaders link.
+  {
+    const mats = [new PortalPunchPass(null, cam)._punchMat, new PortalPunchPass(null, cam, "seal")._punchMat, __test_makeDepthRestoreMaterial()];
+    const sc = new THREE.Scene();
+    mats.forEach((m) => sc.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m)));
+    renderer.compile(sc, cam);
+    const gl = renderer.getContext();
+    const progs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+    out.programs = progs;
+    check("every program links (portal punch / seal / restore, bias, copies)", progs.length > 0 && progs.every((p) => p.linked), JSON.stringify(progs));
+  }
+  const gl = renderer.getContext();
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (e) {
+  out.errors.push(String(e && e.stack || e).slice(0, 600));
+}
+window.__smoke = out;
+</script></body></html>

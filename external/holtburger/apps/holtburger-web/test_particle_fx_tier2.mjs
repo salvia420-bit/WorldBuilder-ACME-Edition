@@ -482,9 +482,15 @@ async function run() {
       S("?fxDecalSmooth=maybe") === true && S("?fxDecals=off") === true);
     const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
     const L = fxm.FX_DECAL_GLSL_LEGACY;
+    // 2026-10-17 `?reversedZ=on`: the legacy fragment gained USE_REVERSED_DEPTH_BUFFER
+    // branches (depth decode + sky test). With the define absent (the log buffer)
+    // the preprocessor removes them, so the pin hashes the stripped text — still
+    // the 2026-10-10 shader byte for byte on the log buffer.
+    const { stripReversedZBranches } = await import("./scene3d/shader_logdepth.js");
+    const Lf = stripReversedZBranches(L.fragment);
     check("8b. =off is the 2026-10-10 box shader byte for byte (pinned hashes)",
-      fnv(L.vertex) === "32caf9ce" && L.vertex.length === 599 && fnv(L.fragment) === "c1aca30d" && L.fragment.length === 4921 &&
-      L.composite === fxm.FX_DECAL_GLSL.composite, `${fnv(L.vertex)} ${fnv(L.fragment)}`);
+      fnv(L.vertex) === "32caf9ce" && L.vertex.length === 599 && fnv(Lf) === "c1aca30d" && Lf.length === 4921 &&
+      L.composite === fxm.FX_DECAL_GLSL.composite, `${fnv(L.vertex)} ${fnv(Lf)}`);
     const smE0 = new fxm.FxDecalEffect({ camera: mcam, smooth: true });
     const lgE0 = new fxm.FxDecalEffect({ camera: mcam, smooth: false });
     check("8b. the effect builds the pair its flag picks (both passes)",

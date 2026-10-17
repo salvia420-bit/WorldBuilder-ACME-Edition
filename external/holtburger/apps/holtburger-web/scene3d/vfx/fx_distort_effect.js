@@ -43,8 +43,14 @@ uniform float uFxDistLogFC;                 // 2 / log2(cameraFar + 1)
 
 float hbFxDistDepth(const in vec2 uv) {
   float d = texture2D(depthBuffer, uv).r;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared)
+  if (d <= 0.0) return 1.0e6;               // sky: behind everything
+  return (cameraNear * cameraFar) / (d * (cameraFar - cameraNear) + cameraNear);
+#else
   if (d >= 0.9999) return 1.0e6;            // sky: behind everything
   return exp2(2.0 * d / uFxDistLogFC) - 1.0;
+#endif
 }
 
 void mainUv(inout vec2 uv) {

@@ -401,12 +401,18 @@ void main() {
 	#ifdef HB_SHOWCASE_GLOW
 	float gd = texture2D( uGlowDepth, gl_FragCoord.xy / uGlowRes ).x;
 	float gw;
+	#ifdef USE_REVERSED_DEPTH_BUFFER
+	// ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared)
+	if ( gd <= 0.0 ) gw = 1e7;
+	else gw = ( uGlowNearFar.x * uGlowNearFar.y ) / ( gd * ( uGlowNearFar.y - uGlowNearFar.x ) + uGlowNearFar.x );
+	#else
 	if ( gd >= 0.999999 ) gw = 1e7;
 	else if ( uGlowIsLog > 0.5 ) gw = exp2( gd * uGlowLogFar ) - 1.0;
 	else {
 		float z = gd * 2.0 - 1.0;
 		gw = ( 2.0 * uGlowNearFar.x * uGlowNearFar.y ) / ( uGlowNearFar.y + uGlowNearFar.x - z * ( uGlowNearFar.y - uGlowNearFar.x ) );
 	}
+	#endif
 	c *= clamp( 1.0 - ( vDepth - gw ) * 2.0, 0.0, 1.0 ) * uGlowScale;
 	#endif
 	if ( max( max( c.r, c.g ), c.b ) < 0.0008 ) discard;

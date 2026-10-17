@@ -86,7 +86,14 @@ float readDepthValue(const sampler2D depthBuffer, const vec2 uv) {
   #if DEPTH_PACKING == 3201
   return unpackRGBAToDepth(texture(depthBuffer, uv));
   #else // DEPTH_PACKING == 3201
+  #ifdef USE_REVERSED_DEPTH_BUFFER
+  // holtburger ?reversedZ=on (2026-10-17, scripts/build-vendor-takram.mjs
+  // re-applies this): every takram reader is written for conventional depth
+  // (far = 1), so hand it 1 - d, exactly as pmndrs readDepth() does.
+  return 1.0 - texture(depthBuffer, uv).r;
+  #else // USE_REVERSED_DEPTH_BUFFER
   return texture(depthBuffer, uv).r;
+  #endif // USE_REVERSED_DEPTH_BUFFER
   #endif // DEPTH_PACKING == 3201
 }
 #endif // DEPTH_PACKING

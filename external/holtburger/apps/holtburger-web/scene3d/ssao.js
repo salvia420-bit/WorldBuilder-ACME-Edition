@@ -20,6 +20,7 @@
 // handed in by `setDepthTexture` because `needsDepthTexture` is true) and is
 // LOGARITHMIC (index.js `logarithmicDepthBuffer: true`): three writes
 // gl_FragDepth = log2(1 + w) / log2(far + 1), so w = exp2(d * log2(far + 1)) - 1.
+// Under `?reversedZ=on` it is reversed (1 near, 0 far): w = n f / (d (f - n) + n).
 //
 // Cost on the 1070 at 1920x1080: ~0.5 M half-res pixels x (12 + 4) depth taps
 // + 2 x 9 blur taps. Live tuning: `window.__ssao` (radius / intensity / bias /
@@ -71,10 +72,19 @@ uniform float uBias;
 uniform float uProjScale;
 uniform vec2 uFade;
 varying vec2 vUv;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+// ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared) -> metres.
+uniform vec2 uNearFar;
+float revW(float d) { return (uNearFar.x * uNearFar.y) / (d * (uNearFar.y - uNearFar.x) + uNearFar.x); }
+#endif
 
 float viewW(vec2 uv) {
   float d = texture2D(tDepth, uv).r;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  return revW(d);
+#else
   return exp2(d * uLogFC) - 1.0;
+#endif
 }
 vec3 viewPos(vec2 uv, float w) {
   vec2 ndc = uv * 2.0 - 1.0;
@@ -84,8 +94,13 @@ vec3 viewPosAt(vec2 uv) { return viewPos(uv, viewW(uv)); }
 
 void main() {
   float d = texture2D(tDepth, vUv).r;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  if (d <= 0.0) { gl_FragColor = vec4(1.0, 1.0e6, 0.0, 1.0); return; }
+  float w = revW(d);
+#else
   if (d >= 0.99999) { gl_FragColor = vec4(1.0, 1.0e6, 0.0, 1.0); return; }
   float w = exp2(d * uLogFC) - 1.0;
+#endif
   if (w > uFade.y) { gl_FragColor = vec4(1.0, w, 0.0, 1.0); return; }
   vec3 P = viewPos(vUv, w);
   // Normal from the nearer neighbour per axis (avoids smearing across an edge).
@@ -183,6 +198,8 @@ export class SsaoPass extends Pass {
       uBias: { value: this.params.bias },
       uProjScale: { value: 500 },
       uFade: { value: new THREE.Vector2(this.params.fadeStart, this.params.fadeEnd) },
+      // ?reversedZ=on only (the uniform is declared under USE_REVERSED_DEPTH_BUFFER).
+      uNearFar: { value: new THREE.Vector2(0.1, 5000) },
     });
     this.blurMat = fsMaterial(BLUR_FRAG, {
       tAO: { value: null },
@@ -221,6 +238,7 @@ export class SsaoPass extends Pass {
     const pm = this.camera.projectionMatrix.elements;
     u.uProj.value.set(pm[0], pm[5]);
     u.uLogFC.value = Math.log2(this.camera.far + 1.0);
+    u.uNearFar.value.set(this.camera.near, this.camera.far);
     // Pixels per metre at unit distance, in AO-target pixels.
     u.uProjScale.value = 0.5 * u.uRes.value.y * pm[5];
     u.uRadius.value = p.radius;

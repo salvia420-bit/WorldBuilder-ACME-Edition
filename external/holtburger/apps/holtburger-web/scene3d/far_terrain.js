@@ -70,6 +70,7 @@ import {
   glslFingerprint,
 } from "./terrain_shared_glsl.js";
 import { radialFogTerrainGlsl } from "./radial_fog.js";
+import { REVERSED_BIAS_NOMINAL_FAR } from "./shader_logdepth.js";
 import {
   farTerrainEnabled,
   farRingEnabled,
@@ -411,6 +412,11 @@ out float vViewDepth;
 out float vFragDepth;
 out float vIsPerspective;
 #endif
+#ifdef USE_REVERSED_DEPTH_BUFFER
+// ?reversedZ=on: the fragment stage's log-depth push, applied here instead (see
+// main) so this shader never writes gl_FragDepth. Same uniform as the fragment.
+uniform float uFarDepthBias;
+#endif
 
 void main() {
   // The composite is a contiguous PATCH_LB x PATCH_LB image of this patch's
@@ -428,6 +434,12 @@ void main() {
 #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
   vFragDepth = 1.0 + gl_Position.w;
   vIsPerspective = float( projectionMatrix[2][3] == -1.0 );
+#endif
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // Reversed twin of gl_FragDepth = log + uFarDepthBias: the same relative push
+  // away from the eye, (far + 1)^-bias on reversed clip z (shader_logdepth.js
+  // reversedBiasScale, at the main camera's far plane).
+  gl_Position.z *= exp2(-uFarDepthBias * ${Math.log2(REVERSED_BIAS_NOMINAL_FAR + 1).toFixed(6)});
 #endif
 }
 `;

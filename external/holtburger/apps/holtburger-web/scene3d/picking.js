@@ -954,6 +954,16 @@ export function setupClickPicking({
     const camera = liveScene3d.cameraSwitcher?.getActive?.() ?? liveScene3d.camera;
     if (!camera) return null;
     raycaster.setFromCamera(ndc, camera);
+    if (camera.isOrthographicCamera && camera.reversedDepth === true) {
+      // `?reversedZ=on`: three r184's setFromCamera puts an ORTHO ray origin at
+      // NDC z = (near + far) / (near - far), the camera plane only in GL clip
+      // space; under the reversed projection that lands past the far plane and
+      // the ray starts behind the scene. Reversed NDC z of the camera plane is
+      // far / (far - near).
+      raycaster.ray.origin
+        .set(ndc.x, ndc.y, camera.far / (camera.far - camera.near))
+        .unproject(camera);
+    }
 
     // F7 — pick-time filter: raycast ONLY against entity roots, never the
     // full scene tree (which would walk all ~16,700 Holtburg statics on

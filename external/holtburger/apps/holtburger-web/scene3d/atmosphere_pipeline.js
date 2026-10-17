@@ -1961,6 +1961,23 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     if (filmDof) filmDof.effect.mainCamera = cam;
   }
 
+  // `?reversedZ=on` (shader_logdepth.js REVERSED-Z): the reversed depth decodes
+  // in the effect shaders (heat haze, fxDistort, and pmndrs' own getViewZ behind
+  // the horizon dissolve / DoF) read the EffectMaterial's cameraNear/cameraFar,
+  // which pmndrs only copies on a camera (re)target — keep them live (portal
+  // space animates near/far). Two compares per pass per frame; never runs on
+  // the log buffer.
+  const reversedZ = renderer.state?.buffers?.depth?.getReversed?.() === true;
+  function _syncFxNearFar(cam) {
+    if (!cam) return;
+    for (const p of [fxPass, fxPostPass]) {
+      const u = p && p.fullscreenMaterial && p.fullscreenMaterial.uniforms;
+      if (!u) continue;
+      if (u.cameraNear && u.cameraNear.value !== cam.near) u.cameraNear.value = cam.near;
+      if (u.cameraFar && u.cameraFar.value !== cam.far) u.cameraFar.value = cam.far;
+    }
+  }
+
   // Bug 11 diag: one line per resize (rate-limited) — correlate any
   // "[.WebGL] GL_INVALID_FRAMEBUFFER_OPERATION" with the resize that preceded it.
   let _lastResizeLogMs = -1e9;
@@ -2327,6 +2344,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         retargetFxPass(cam);
         activeCamera = cam;
       }
+      if (reversedZ) _syncFxNearFar(activeCamera);
       // Portal-stencil pass draws with the CURRENT render camera — set every
       // frame (not only on a switch) so its mainCamera can never be undefined
       // when it has work (the "reading 'layers' of undefined" freeze).

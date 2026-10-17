@@ -131,6 +131,11 @@ export function collectOutdoorRemainderHidden(rem, out = []) {
 // geometry has a smaller gl_FragDepth and wins.
 
 const FAR_DEPTH = 0.99999899;
+// Reversed-Z (`?reversedZ=on`): far is 0, and the punch writes the cleared value
+// itself, so a punched pixel the cells pass leaves empty reads as SKY to every
+// depth reader (`d <= 0`) — as the log punch reads as sky to their
+// `d >= 0.9999` tests. Interiors drawn after it pass GreaterEqual against 0.
+export const FAR_DEPTH_REVERSED = 0.0;
 
 // Single stencil ref for the occlusion gate (same value portal_stencil.js used).
 const STENCIL_REF = 1;
@@ -276,7 +281,23 @@ function makeSealMaterial(logDepth = sealLogDepthEnabled()) {
   // Flag OFF (escape): NO gl_FragDepth write — the rasterizer's interpolated
   // PERSPECTIVE depth, i.e. the pre-2026-10-05 seal (wrong space vs the log
   // buffer). Armed: the helper prepends the log gl_FragDepth write.
-  const fragmentShader = /* glsl */ `
+  // Reversed-Z (`?reversedZ=on`): no log write, but the armed seal still writes
+  // its depth PER FRAGMENT (gl_FragCoord.z, the pixel-centre value) exactly as
+  // the log write does: under MSAA every covered sample then holds the same
+  // value, so the resolved depth the restore copies equals the restore draw's
+  // own gl_FragCoord.z. A rasterised (per-sample) stamp would resolve to a
+  // sample-position depth that never matches on a slanted doorway.
+  const fragmentShader = logDepth
+    ? /* glsl */ `
+      precision highp float;
+      out vec4 _c;
+      void main() {
+        #ifdef USE_REVERSED_DEPTH_BUFFER
+          gl_FragDepth = gl_FragCoord.z;
+        #endif
+        _c = vec4(0.0);
+      }`
+    : /* glsl */ `
       precision highp float;
       out vec4 _c;
       void main() {
@@ -307,7 +328,11 @@ function makePunchMaterial(stencilGate = false) {
       precision highp float;
       out vec4 _c;
       void main() {
+        #ifdef USE_REVERSED_DEPTH_BUFFER
+        gl_FragDepth = ${FAR_DEPTH_REVERSED.toFixed(1)};
+        #else
         gl_FragDepth = ${FAR_DEPTH.toFixed(8)};
+        #endif
         _c = vec4(0.0);
       }`,
   });
@@ -786,7 +811,16 @@ export function narrowCameraToRect(renderer, cam, target, rect) {
  * surface that won keeps its depth.
  */
 export const DEPTH_RESTORE_EPS = 1e-5;
-export function restoredDepth(cur, sealOwn, saved) {
+// Reversed-Z: the same test RELATIVE to the seal's own depth. Reversed depth is
+// ~near / distance, so an absolute 1e-5 would be 0.5 % of the distance at 50 m
+// (25 cm of door frame read as "the wall"); relative 1e-5 is 0.5 mm there. The
+// seal writes its depth per fragment (makeSealMaterial), so a doorway the cells
+// pass did not cover matches to the last bit.
+export const DEPTH_RESTORE_REL_EPS_REVERSED = 1e-5;
+export function restoredDepth(cur, sealOwn, saved, reversed = false) {
+  if (reversed) {
+    return Math.abs(cur - sealOwn) <= DEPTH_RESTORE_REL_EPS_REVERSED * Math.abs(sealOwn) ? saved : cur;
+  }
   return Math.abs(cur - sealOwn) <= DEPTH_RESTORE_EPS ? saved : cur;
 }
 
@@ -875,7 +909,12 @@ function makeDepthRestoreMaterial() {
           float own = gl_FragCoord.z;
         #endif
         float cur = texelFetch(tCur, p, 0).r;
+        #ifdef USE_REVERSED_DEPTH_BUFFER
+        // relative test (DEPTH_RESTORE_REL_EPS_REVERSED) — reversed depth is ~near/distance
+        gl_FragDepth = abs(cur - own) <= 1.0e-5 * abs(own) ? texelFetch(tSaved, p, 0).r : cur;
+        #else
         gl_FragDepth = abs(cur - own) <= 1.0e-5 ? texelFetch(tSaved, p, 0).r : cur;
+        #endif
         _c = vec4(0.0);
       }`;
   const m = new THREE.ShaderMaterial({

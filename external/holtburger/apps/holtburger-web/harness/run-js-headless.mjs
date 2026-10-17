@@ -378,6 +378,8 @@ const TIER5 = [
   // chain; the -sky glow stays behind the clouds).
   { tier: 5, flag: "particlesOverClouds", file: "tests/particles_over_clouds.test.mjs" },
   { tier: 5, flag: "msaaWorldOnly", file: "tests/msaa_world.test.mjs" },
+  // 2026-10-17 `?reversedZ=on` (opt-in): reversed-Z depth instead of the log buffer.
+  { tier: 5, flag: "reversedZ", file: "tests/reversed_z.test.mjs" },
   // 2026-10-05 audio retail parity (voice pool, retail mixer, 0xF750, UI/portal sounds, volume 0).
   { tier: 5, flag: "audio_voice_pool", file: "tests/audio_voice_pool.test.mjs" },
   { tier: 5, flag: "audioRetailPan", file: "tests/audio_retail_mixer.test.mjs" },
@@ -1158,6 +1160,7 @@ const NEEDS_BROWSER = [
   { file: "test_particle_fx_tier2_gpu.cjs", why: `particle FX tier 2 — ${BROWSER_WHY}` },
   { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 

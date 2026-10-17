@@ -667,8 +667,14 @@ uniform float uFxCsmFar;
 float hbFxCsmTap( highp sampler2DShadow sm, mat4 m, vec3 wp ) {
 	vec4 sc = m * vec4( wp, 1.0 );
 	sc.xyz /= max( sc.w, 1e-6 );
+	#ifdef USE_REVERSED_DEPTH_BUFFER
+	// ?reversedZ=on: reversed cascade (GreaterEqual) — far is z < 0, bias toward the light
+	if ( sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z < 0.0 ) return 1.0;
+	return texture( sm, vec3( sc.xy, sc.z + 0.0015 ) );
+	#else
 	if ( sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0 ) return 1.0;
 	return texture( sm, vec3( sc.xy, sc.z - 0.0015 ) );
+	#endif
 }
 float hbFxCsm( vec3 wp, float viewDepth ) {
 	if ( viewDepth > uFxCsmFar ) return 1.0;
@@ -1068,12 +1074,18 @@ const FRAG_COLOR = /* glsl */`
 			// scene depth by hand (a 0.5 m soft edge)
 			float fxGd = texture2D( uFxGlowDepth, gl_FragCoord.xy / uFxGlowRes ).x;
 			float fxGw;
+			#ifdef USE_REVERSED_DEPTH_BUFFER
+			// ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared)
+			if ( fxGd <= 0.0 ) fxGw = 1e7;
+			else fxGw = ( uFxGlowNearFar.x * uFxGlowNearFar.y ) / ( fxGd * ( uFxGlowNearFar.y - uFxGlowNearFar.x ) + uFxGlowNearFar.x );
+			#else
 			if ( fxGd >= 0.999999 ) fxGw = 1e7;
 			else if ( uFxGlowIsLog > 0.5 ) fxGw = exp2( fxGd * uFxGlowLogFar ) - 1.0;
 			else {
 				float fxZ = fxGd * 2.0 - 1.0;
 				fxGw = ( 2.0 * uFxGlowNearFar.x * uFxGlowNearFar.y ) / ( uFxGlowNearFar.y + uFxGlowNearFar.x - fxZ * ( uFxGlowNearFar.y - uFxGlowNearFar.x ) );
 			}
+			#endif
 			fxC *= vFxGlow * uFxGlowScale * clamp( 1.0 - ( vFxD.w - fxGw ) * 2.0, 0.0, 1.0 );
 		}
 	#endif
@@ -1422,6 +1434,8 @@ function _softState() {
       uNear: { value: 0.1 },
       uFar: { value: 1000 },
       uIsLog: { value: 1 },
+      // ?reversedZ=on (raw material: no USE_REVERSED_DEPTH_BUFFER define, so a uniform)
+      uIsRev: { value: 0 },
     },
     vertexShader: /* glsl */`
 in vec3 position;
@@ -1438,12 +1452,16 @@ uniform float uLogFar;
 uniform float uNear;
 uniform float uFar;
 uniform float uIsLog;
+uniform float uIsRev;
 in vec2 vUv;
 out vec4 fxOut;
 void main() {
 	float d = texture( tDepth, vUv ).x;
 	float w;
-	if ( uIsLog > 0.5 ) {
+	if ( uIsRev > 0.5 ) {
+		// reversed-Z: 1 near, 0 far / cleared (the far plane, like the log arm's d = 1)
+		w = ( uNear * uFar ) / ( d * ( uFar - uNear ) + uNear );
+	} else if ( uIsLog > 0.5 ) {
 		w = exp2( d * uLogFar ) - 1.0;
 	} else {
 		float z = d * 2.0 - 1.0;
@@ -1499,12 +1517,14 @@ export function particleFxBeforeLate(renderer, depthTexture, camera, width, heig
     if (w !== s.w || h !== s.h) { s.target.setSize(w, h); s.w = w; s.h = h; }
     const far = Number.isFinite(camera.far) && camera.far > 0 ? camera.far : 1000;
     const isLog = renderer.capabilities?.logarithmicDepthBuffer === true;
+    const isRev = renderer.state?.buffers?.depth?.getReversed?.() === true;
     const u = s.mat.uniforms;
     u.tDepth.value = depthTexture;
     u.uLogFar.value = Math.log2(far + 1);
     u.uNear.value = Number.isFinite(camera.near) ? camera.near : 0.1;
     u.uFar.value = far;
     u.uIsLog.value = isLog ? 1 : 0;
+    u.uIsRev.value = isRev ? 1 : 0;
     const prev = renderer.getRenderTarget();
     const prevAuto = renderer.autoClear;
     renderer.autoClear = false;

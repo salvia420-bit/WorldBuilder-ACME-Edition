@@ -2113,16 +2113,30 @@ uniform float uCsmBlend;
 float csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   vec4 sc = m * vec4(worldPos, 1.0);
   sc.xyz /= max(sc.w, 1e-6);
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // ?reversedZ=on: reversed cascade cameras (GreaterEqual compare) — past the
+  // far plane is z < 0 and the bias moves the reference toward the light (+).
+  if (sc.x < 0.0 || sc.x > 1.0 ||
+      sc.y < 0.0 || sc.y > 1.0 ||
+      sc.z < 0.0) {
+    return 1.0;
+  }
+#else
   if (sc.x < 0.0 || sc.x > 1.0 ||
       sc.y < 0.0 || sc.y > 1.0 ||
       sc.z > 1.0) {
     return 1.0;
   }
+#endif
   // 2026-10-07: hardware depth compare on the cascade's DEPTH texture
   // (sampler2DShadow, LessEqual): 1 = lit, 0 = shadowed, and every tap is
   // already a bilinear 2x2 PCF. Four half-texel taps soften the edge.
   float bias = 0.0007;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  float ref = sc.z + bias;
+#else
   float ref = sc.z - bias;
+#endif
   vec2 tx = 0.5 / vec2(textureSize(sm, 0));
   return 0.25 * (
       texture(sm, vec3(sc.xy + vec2(-tx.x, -tx.y), ref))

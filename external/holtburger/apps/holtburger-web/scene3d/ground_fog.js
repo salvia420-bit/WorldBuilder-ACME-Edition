@@ -235,6 +235,9 @@ uniform sampler2D uSceneDepth;
 uniform float uDepthThreshold;   // 0.0 = no depth wired ⇒ never sample
 uniform float uLogDepthFC;       // 2.0 / log2(cameraFar + 1.0)
 uniform float uSoftnessM;        // 0.0 = the soft-particle term is disabled
+#ifdef USE_REVERSED_DEPTH_BUFFER
+uniform vec2 uFogNearFar;        // ?reversedZ=on: camera near / far for the reversed decode
+#endif
 
 varying vec2 vQuadUv;
 varying float vAlpha;
@@ -258,6 +261,15 @@ void main() {
   if (uDepthThreshold > 0.0 && uSoftnessM > 0.0) {
     vec2 uvScreen = vClip.xy / max(vClip.w, 1e-6) * 0.5 + 0.5;
     float d = texture2D(uSceneDepth, uvScreen).r;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+    // ?reversedZ=on: reversed depth (1 near, 0 far / cleared — an unbound
+    // sampler's 0 also reads as "no occluder"). JS twin:
+    // shader_logdepth.js::reversedDepthToViewDist.
+    if (d > 0.0) {
+      float sceneDist = (uFogNearFar.x * uFogNearFar.y) / (d * (uFogNearFar.y - uFogNearFar.x) + uFogNearFar.x);
+      soft = clamp((sceneDist - vViewDist) / uSoftnessM, 0.0, 1.0);
+    }
+#else
     // Sentinel-aware: at/over the threshold is sky or an unwritten texel, i.e.
     // NO occluder — leave the fog at full strength rather than dissolving it.
     if (d < uDepthThreshold) {
@@ -266,6 +278,7 @@ void main() {
       float sceneDist = exp2(2.0 * d / uLogDepthFC) - 1.0;
       soft = clamp((sceneDist - vViewDist) / uSoftnessM, 0.0, 1.0);
     }
+#endif
   }
 
   float a = mask * vAlpha * near * soft * uOpacity;
@@ -347,6 +360,13 @@ export function createGroundFog(opts = {}) {
     uDepthThreshold: { value: 0 },       // SENTINEL — no depth wired yet
     uLogDepthFC: { value: groundFogLogDepthFC(opts.cameraFar) },
     uSoftnessM: { value: softnessM },
+    // ?reversedZ=on only (declared under USE_REVERSED_DEPTH_BUFFER): [near, far].
+    uFogNearFar: {
+      value: [
+        Number.isFinite(opts.cameraNear) && opts.cameraNear > 0 ? opts.cameraNear : 0.1,
+        Number.isFinite(opts.cameraFar) && opts.cameraFar > 1 ? opts.cameraFar : 10000,
+      ],
+    },
   };
 
   let geometry = null;
@@ -482,9 +502,13 @@ export function createGroundFog(opts = {}) {
       return true;
     },
 
-    /** Update the log-depth constant when the camera's far plane changes. */
-    setCameraFar(far) {
+    /** Update the log-depth constant when the camera's far plane changes
+     *  (and, for `?reversedZ=on`, the near/far pair of the reversed decode). */
+    setCameraFar(far, near) {
       uniforms.uLogDepthFC.value = groundFogLogDepthFC(far);
+      const nf = uniforms.uFogNearFar.value;
+      if (Number.isFinite(far) && far > 1) nf[1] = far;
+      if (Number.isFinite(near) && near > 0) nf[0] = near;
       return uniforms.uLogDepthFC.value;
     },
 

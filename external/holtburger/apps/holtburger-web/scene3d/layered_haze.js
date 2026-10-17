@@ -68,10 +68,18 @@ uniform vec3 uHazeColor;
 uniform vec4 uHaze;      // strength, nearM, distScaleM, heightScaleM
 uniform vec2 uHazeTone;  // blue shift, max haze
 varying vec2 vUv;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+uniform vec2 uNearFar;   // ?reversedZ=on: raw reversed depth -> metres
+#endif
 void main() {
   vec4 src = texture2D(inputBuffer, vUv);
   if (uHaze.x <= 0.0) { gl_FragColor = src; return; }
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  float rd = texture2D(tDepth, vUv).r;
+  float w = (uNearFar.x * uNearFar.y) / (rd * (uNearFar.y - uNearFar.x) + uNearFar.x);
+#else
   float w = exp2(texture2D(tDepth, vUv).r * uLogFar) - 1.0;
+#endif
   if (w >= uSkyM) { gl_FragColor = src; return; }
   vec4 r = uInvProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
   vec3 ray = r.xyz / r.w;
@@ -105,6 +113,8 @@ export class LayeredHazePass extends Pass {
         inputBuffer: { value: null },
         tDepth: { value: null },
         uLogFar: { value: Math.log2(5001) },
+        // ?reversedZ=on only (declared under USE_REVERSED_DEPTH_BUFFER).
+        uNearFar: { value: new THREE.Vector2(0.1, 5000) },
         uSkyM: { value: 4500 },
         uInvProj: { value: new THREE.Matrix4() },
         uCamWorld: { value: new THREE.Matrix4() },
@@ -140,6 +150,7 @@ export class LayeredHazePass extends Pass {
     if (!u.tDepth.value || !cam || !cam.isPerspectiveCamera) strength = 0;
     if (cam) {
       u.uLogFar.value = Math.log2(cam.far + 1.0);
+      u.uNearFar.value.set(cam.near, cam.far);
       u.uSkyM.value = cam.far * 0.9;
       u.uInvProj.value.copy(cam.projectionMatrixInverse);
       u.uCamWorld.value.copy(cam.matrixWorld);

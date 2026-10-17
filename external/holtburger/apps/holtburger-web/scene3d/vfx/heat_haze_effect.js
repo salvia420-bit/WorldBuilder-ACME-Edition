@@ -90,8 +90,15 @@ uniform float uLogDepthFC;    // 2.0 / log2(cameraFar + 1.0)
 // Reads the RAW depth texel on purpose -- see the trap-T4 note in the header.
 float hbHeatDistanceM(const in vec2 uv) {
   float d = texture2D(depthBuffer, uv).r;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared); pmndrs keeps
+  // cameraNear / cameraFar on every effect material.
+  if (d <= 0.0) return -1.0;
+  return (cameraNear * cameraFar) / (d * (cameraFar - cameraNear) + cameraNear);
+#else
   if (d >= 0.9999) return -1.0;
   return exp2(2.0 * d / uLogDepthFC) - 1.0;
+#endif
 }
 
 void mainUv(inout vec2 uv) {

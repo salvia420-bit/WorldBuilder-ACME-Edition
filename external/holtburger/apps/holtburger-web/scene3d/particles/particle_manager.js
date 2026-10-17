@@ -1023,7 +1023,9 @@ function _rp6PrepareFrustum() {
   }
   // MVP = projection · viewInverse. Same composition cells.js:759 uses.
   _rp6Mvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  _rp6Frustum.setFromProjectionMatrix(_rp6Mvp);
+  // `?reversedZ=on`: reversed projection ⇒ swapped near/far plane extraction
+  // (camera.reversedDepth is false on the log buffer — identical call).
+  _rp6Frustum.setFromProjectionMatrix(_rp6Mvp, camera.coordinateSystem, camera.reversedDepth === true);
   return camera;
 }
 

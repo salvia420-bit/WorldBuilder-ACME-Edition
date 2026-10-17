@@ -732,9 +732,11 @@ function _fogProvider() {
         _stats.fogBuilds += 1;
       }
       const cam = frameCtx.camera;
-      if (cam && Number.isFinite(cam.far) && cam.far !== _swamp.fogCameraFar) {
+      if (cam && Number.isFinite(cam.far) &&
+          (cam.far !== _swamp.fogCameraFar || cam.near !== _swamp.fogCameraNear)) {
         _swamp.fogCameraFar = cam.far;
-        _swamp.fog.setCameraFar(cam.far);
+        _swamp.fogCameraNear = cam.near;
+        _swamp.fog.setCameraFar(cam.far, cam.near);
       }
       const p = frameCtx.playerPos;
       _swamp.fog.update(dt, frameCtx.tSec, p.x, p.y, p.z);
@@ -790,6 +792,7 @@ export function initTerrainSwamp(opts = {}) {
     seed: Number.isFinite(opts.seed) ? opts.seed | 0 : 0x5357414d,
     fog: null,
     fogCameraFar: 0,
+    fogCameraNear: 0,
     registered: [],
     oracleRef: typeof opts.getOracle === "function"
       ? opts.getOracle

@@ -165,7 +165,10 @@ export class FrustumCuller {
     // mvp = projection · viewInverse · worldRoot — frustum in AC space.
     this._mvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this._mvp.multiply(worldRoot.matrixWorld);
-    this.frustum.setFromProjectionMatrix(this._mvp);
+    // `?reversedZ=on`: three hands the camera a reversed projection; the plane
+    // extraction must know (near/far rows swap). camera.reversedDepth is false
+    // on the log buffer — identical call.
+    this.frustum.setFromProjectionMatrix(this._mvp, camera.coordinateSystem, camera.reversedDepth === true);
 
     // Camera origin → AC space: invert worldRoot's transform and apply it
     // to the camera's WORLD position. (worldRoot is a child of the scene
