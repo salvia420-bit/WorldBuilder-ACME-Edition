@@ -21,7 +21,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 globalThis.window ??= {};
-globalThis.window.location ??= { search: "" };
+// The fence mechanics below step the clock in 4 Hz periods (300 ms gaps); pin the
+// cadence so the default (1 Hz since 2026-10-17) doesn't throttle the second issue.
+globalThis.window.location ??= { search: "?farFogSkyHz=4" };
 globalThis.window.requestAnimationFrame ??= () => 0;
 globalThis.window.cancelAnimationFrame ??= () => {};
 // loop.js pulls in play_effect_vfx.js, which polls 30 s for a plugin client.
