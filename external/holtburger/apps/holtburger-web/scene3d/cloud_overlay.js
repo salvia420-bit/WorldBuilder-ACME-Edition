@@ -118,11 +118,18 @@ export class CloudOverlay {
     // are behaviour-identical, NOT a quality change.
     this._proceduralTextures = proceduralTextures;
     this._prebakedLoaded = false;
+    // `window.__cloudStateDiag()` boot timeline (performance.now() ms; null =
+    // never happened). Read-only bookkeeping, see cloudStateSnapshot.
+    this._diagStamps = {
+      created: _diagNow(), prebaked: null, prebakeFailed: null, procedural: null,
+      adopted: null, firstMarch: null,
+    };
     if (proceduralTextures) {
       this._installProceduralNoise();
     } else {
       this._loadPrebakedNoise(opts && opts.assetsBaseUrl).catch((err) => {
         this.lastError = 'prebake load failed: ' + String(err);
+        this._diagStamps.prebakeFailed = _diagNow();
         // eslint-disable-next-line no-console
         console.warn('[clouds] prebaked noise load failed → procedural fallback:', err);
         try { this._installProceduralNoise(); } catch (_) {}
@@ -400,11 +407,13 @@ export class CloudOverlay {
         return;
       }
       origUpdate.call(effect, renderer, inputBuffer, deltaTime);
+      if (this._diagStamps && this._diagStamps.firstMarch === null) this._diagStamps.firstMarch = _diagNow();
       overlay.map = effect.cloudsPass?.outputBuffer ?? blank;
       shadowLength.map = effect.cloudsPass?.shadowLengthBuffer ?? blank;
     };
 
     this._mainPass = true;
+    if (this._diagStamps) this._diagStamps.adopted = _diagNow();
     return true;
   }
 
@@ -439,6 +448,11 @@ export class CloudOverlay {
     return this._mainPass;
   }
 
+  /** `window.__cloudStateDiag()` — see cloudStateSnapshot (read-only). */
+  diagSnapshot(renderer, opts) {
+    return cloudStateSnapshot(this, renderer, opts);
+  }
+
   /**
    * Original path: generate the four noise textures on the GPU at boot.
    * Assigning a Procedural*Texture (not a plain Texture) routes through the
@@ -453,6 +467,7 @@ export class CloudOverlay {
     effect.shapeDetailTexture = new CloudShapeDetail();
     effect.turbulenceTexture = new Turbulence();
     this._proceduralTextures = true;
+    if (this._diagStamps) this._diagStamps.procedural = _diagNow();
   }
 
   /**
@@ -600,6 +615,7 @@ export class CloudOverlay {
       this._stbnTex = stbn;
     }
     this._prebakedLoaded = true;
+    if (this._diagStamps) this._diagStamps.prebaked = _diagNow();
   }
 
   /**
@@ -848,6 +864,7 @@ export class CloudOverlay {
       // runs the cloud raymarch with proper MRT wiring. Output lands
       // in composer.outputBuffer.
       this.composer.render(dt);
+      if (this._diagStamps && this._diagStamps.firstMarch === null) this._diagStamps.firstMarch = _diagNow();
 
       // Patch cameraHeight uniform AFTER the composer ran (which calls
       // CloudsMaterial.copyCameraSettings, which sets cameraHeight via
@@ -990,4 +1007,241 @@ export class CloudOverlay {
       this.lastError = String(err);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// `window.__cloudStateDiag(opts)` (2026-10-17, read-only, both depth modes).
+//
+// The 1070 A/B found the open sky BIMODAL PER SESSION (log and reversed-Z
+// alike): a "dark" session's cloud buffer reads alpha 1.0 / rgb ~0.092 where a
+// "bright" one reads alpha ~0.65-0.83 / rgb ~0.075, with the CloudsEffect and
+// AerialPerspective uniform VALUES identical. Cloud alpha is set by the march's
+// extinction alone (takram clouds.frag: marchClouds' transmittance, plus the
+// haze term) — never by the atmosphere LUTs — so with equal uniforms the state
+// has to live in what the march SAMPLES (the four noise textures, STBN, the
+// scene depth), in the program actually linked, or in the boot order that put
+// them there. This snapshot reports each of those, so one dark and one bright
+// session diff to the mechanism:
+//   noise     source (prebaked / procedural), the boot stamps, and per noise
+//             sampler the bound texture's identity (kind, size, id, flipY) —
+//             a different kind or id = a different texture set;
+//   uniforms  a digest of every non-camera uniform value (same digest = the
+//             coordinator's "identical"), plus the texture uniforms by name;
+//   programs  the linked program per cloud material (id + cache-key hash) vs
+//             the material's defines — a define not in the program = a stale
+//             program;
+//   probe     the RAW low-res march (colour + frontDepth) and the resolved
+//             buffer at one pixel — frontDepth shows whether the ray stopped
+//             at a cloud or at scene depth;
+//   lut / look / camera / timeline — LUT source + plan + bandwidth tier, the
+//             storm/fair look and its flag, cameraHeight, and when the
+//             prebake / adoption / first march / in-world happened.
+// `opts`: { x, y } probe position in 0..1 (default 0.5, 0.85 — upper sky),
+// `atmosphereRuntime`, `full: true` adds every uniform value. Synchronous
+// readbacks: console use only.
+// ---------------------------------------------------------------------------
+
+function _diagNow() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? Math.round(performance.now())
+    : Date.now();
+}
+
+function _fnv(str) {
+  let h = 0x811c9dc5;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+
+function _half(h) {
+  const s = (h & 0x8000) ? -1 : 1;
+  const e = (h >> 10) & 0x1f;
+  const f = h & 0x3ff;
+  if (e === 0) return s * Math.pow(2, -14) * (f / 1024);
+  if (e === 31) return f ? NaN : s * Infinity;
+  return s * Math.pow(2, e - 15) * (1 + f / 1024);
+}
+
+/** Identity + shape of a bound texture (null-safe). */
+export function diagTextureInfo(t) {
+  if (!t) return null;
+  const img = t.image || {};
+  // Render-target first: a GPU-generated (procedural) noise volume is a
+  // Data3DTexture too, the prebaked one is not a render-target texture.
+  const kind = t.isDepthTexture ? 'depth'
+    : t.isRenderTargetTexture ? 'rt'
+    : t.isData3DTexture ? 'data3d'
+    : t.isDataArrayTexture ? 'array'
+    : t.isDataTexture ? 'data'
+    : 'image';
+  const out = {
+    kind, id: t.id ?? null, name: t.name || '', w: img.width ?? null, h: img.height ?? null,
+    d: img.depth ?? null, type: t.type ?? null, format: t.format ?? null,
+    flipY: t.flipY === true, mipmaps: t.generateMipmaps === true, version: t.version ?? null,
+  };
+  if (typeof img.src === 'string') out.src = img.src.split('/').pop();
+  return out;
+}
+
+// Uniforms that move with the camera / frame (excluded from the digest).
+const DIAG_CAMERA_UNIFORMS = new Set([
+  'projectionMatrix', 'inverseProjectionMatrix', 'viewMatrix', 'inverseViewMatrix',
+  'reprojectionMatrix', 'viewReprojectionMatrix', 'cameraPosition', 'temporalJitter',
+  'frame', 'jitterOffset', 'moonDirection', 'cameraNear', 'cameraFar',
+]);
+
+function _uniformValueKey(v) {
+  if (v == null) return 'null';
+  if (typeof v === 'number' || typeof v === 'boolean') return String(+(+v).toPrecision(7));
+  if (v.isTexture) return 'T' + (v.id ?? '?');
+  if (Array.isArray(v)) return '[' + v.map(_uniformValueKey).join(',') + ']';
+  if (v.elements) return 'M' + Array.from(v.elements, (x) => +x.toPrecision(7)).join(',');
+  if (typeof v.toArray === 'function') return 'V' + v.toArray().map((x) => +(+x).toPrecision(7)).join(',');
+  if (typeof v === 'object') {
+    return '{' + Object.keys(v).sort().map((k) => k + ':' + _uniformValueKey(v[k])).join(',') + '}';
+  }
+  return String(v);
+}
+
+function _materialDiag(renderer, m, full) {
+  if (!m) return null;
+  const u = m.uniforms || {};
+  const keys = Object.keys(u).sort();
+  const textures = {};
+  const parts = [];
+  const values = full ? {} : undefined;
+  for (const k of keys) {
+    const v = u[k] && u[k].value;
+    if (v && v.isTexture) textures[k] = diagTextureInfo(v);
+    if (full) values[k] = _uniformValueKey(v);
+    if (!DIAG_CAMERA_UNIFORMS.has(k)) parts.push(k + '=' + _uniformValueKey(v));
+  }
+  const defines = Object.keys(m.defines || {}).sort().map((k) => `${k}=${m.defines[k]}`);
+  let program = null;
+  try {
+    const p = renderer && renderer.properties && renderer.properties.get(m).currentProgram;
+    if (p) {
+      const key = typeof p.cacheKey === 'string' ? p.cacheKey : '';
+      program = {
+        id: p.id ?? null,
+        keyHash: _fnv(key),
+        // A material define the linked program's key does not carry.
+        definesNotInProgram: key ? Object.keys(m.defines || {}).filter((d) => key.indexOf(d) < 0) : null,
+      };
+    }
+  } catch (_) { /* diag */ }
+  return {
+    uniformsDigest: _fnv(parts.join(';')), textures, defines, definesHash: _fnv(defines.join(';')),
+    version: m.version ?? null, program, values,
+  };
+}
+
+function _readTexel(renderer, rt, u, v, textureIndex = 0) {
+  if (!renderer || !rt || typeof renderer.readRenderTargetPixels !== 'function') return null;
+  try {
+    const tex = (rt.textures && rt.textures[textureIndex]) || rt.texture;
+    const x = Math.min(rt.width - 1, Math.max(0, Math.floor(u * rt.width)));
+    const y = Math.min(rt.height - 1, Math.max(0, Math.floor(v * rt.height)));
+    const half = tex && tex.type === THREE.HalfFloatType;
+    const flt = tex && tex.type === THREE.FloatType;
+    const buf = half ? new Uint16Array(4) : flt ? new Float32Array(4) : new Uint8Array(4);
+    if (half) buf.fill(0xffff); // binary16 NaN sentinel: an unreadable target stays NaN
+    renderer.readRenderTargetPixels(rt, x, y, 1, 1, buf, undefined, textureIndex);
+    const vals = Array.from(buf, (b) => (half ? _half(b) : flt ? b : b / 255));
+    return vals.map((n) => (Number.isFinite(n) ? +n.toFixed(4) : n));
+  } catch (e) {
+    return String(e && e.message || e);
+  }
+}
+
+/**
+ * The cloud-state snapshot behind `window.__cloudStateDiag()` (see the block
+ * comment above). Duck-typed and read-only: nothing is toggled or written.
+ * @param {CloudOverlay} overlay
+ * @param {THREE.WebGLRenderer|null} renderer
+ * @param {{x?:number, y?:number, atmosphereRuntime?:object, full?:boolean}} [opts]
+ */
+export function cloudStateSnapshot(overlay, renderer, opts = {}) {
+  const o = opts || {};
+  const px = Number.isFinite(o.x) ? o.x : 0.5;
+  const py = Number.isFinite(o.y) ? o.y : 0.85;
+  const vol = overlay && overlay.volume;
+  const eff = vol && vol.effect;
+  const cp = eff && eff.cloudsPass;
+  const sp = eff && eff.shadowPass;
+  const cm = cp && cp.currentMaterial;
+  const out = { t: _diagNow() };
+
+  out.noise = {
+    source: overlay && overlay._proceduralTextures ? 'procedural' : 'prebaked',
+    prebakedLoaded: !!(overlay && overlay._prebakedLoaded),
+    lastError: (overlay && overlay.lastError) ?? null,
+    procedural: eff ? {
+      localWeather: eff.proceduralLocalWeather ? { needsRender: eff.proceduralLocalWeather.needsRender === true } : null,
+      shape: eff.proceduralShape ? { needsRender: eff.proceduralShape.needsRender === true } : null,
+      shapeDetail: eff.proceduralShapeDetail ? { needsRender: eff.proceduralShapeDetail.needsRender === true } : null,
+      turbulence: eff.proceduralTurbulence ? { needsRender: eff.proceduralTurbulence.needsRender === true } : null,
+    } : null,
+  };
+  out.timeline = overlay && overlay._diagStamps ? { ...overlay._diagStamps } : null;
+  try {
+    const hist = typeof window !== 'undefined' && Array.isArray(window.__bootStateHistory) ? window.__bootStateHistory : [];
+    const inWorld = hist.find((h) => h && h.state === 'in-world');
+    if (out.timeline) out.timeline.inWorld = inWorld ?? null;
+  } catch (_) { /* diag */ }
+
+  const rt = o.atmosphereRuntime ?? null;
+  out.lut = rt ? {
+    ready: rt.ready === true, source: rt.source ?? null, plan: rt.plan ?? null,
+    loadTimedOut: rt.loadTimedOut === true, loadMs: rt.loadMs ?? null, bakeMs: rt.bakeMs ?? null,
+    error: rt.error ? String(rt.error && rt.error.message || rt.error) : null,
+  } : null;
+  try {
+    out.bandwidth = typeof window !== 'undefined' && typeof window.__bandwidthTier === 'function'
+      ? window.__bandwidthTier() : null;
+  } catch (_) { out.bandwidth = null; }
+
+  if (eff) {
+    out.look = {
+      stormLookApplied: vol._stormLookApplied ?? null,
+      wxFlags: vol._wxFlags ? { ...vol._wxFlags } : null,
+      coverage: typeof eff.coverage === 'number' ? eff.coverage : null,
+      haze: eff.haze ?? null,
+      hazeDensityScale: eff.clouds && 'hazeDensityScale' in eff.clouds ? eff.clouds.hazeDensityScale : null,
+      layers: Array.isArray(eff.cloudLayers)
+        ? eff.cloudLayers.map((l) => [l.channel, l.altitude, l.height, l.densityScale, l.coverageFilterWidth])
+        : null,
+    };
+    out.camera = {
+      cameraHeightUniform: cm && cm.uniforms && cm.uniforms.cameraHeight ? cm.uniforms.cameraHeight.value : null,
+      cameraWorldY: eff.camera && eff.camera.position ? eff.camera.position.y : null,
+      near: eff.camera ? eff.camera.near : null, far: eff.camera ? eff.camera.far : null,
+      fov: eff.camera ? eff.camera.fov ?? null : null,
+      reversedDepth: eff.camera ? eff.camera.reversedDepth === true : null,
+    };
+    out.mainPass = overlay.mainPassActive === true;
+    out.frame = eff.frame ?? null;
+    out.stbn = diagTextureInfo(cm && cm.uniforms && cm.uniforms.stbnTexture && cm.uniforms.stbnTexture.value);
+    out.depth = diagTextureInfo(cm && cm.uniforms && cm.uniforms.depthBuffer && cm.uniforms.depthBuffer.value);
+    out.resolution = cm && cm.uniforms && cm.uniforms.resolution ? cm.uniforms.resolution.value.toArray() : null;
+    try {
+      out.pixelRatio = renderer && typeof renderer.getPixelRatio === 'function' ? renderer.getPixelRatio() : null;
+    } catch (_) { out.pixelRatio = null; }
+    out.materials = {
+      clouds: _materialDiag(renderer, cm, o.full),
+      cloudsResolve: _materialDiag(renderer, cp && cp.resolveMaterial, o.full),
+      shadow: _materialDiag(renderer, sp && sp.currentMaterial, o.full),
+      shadowResolve: _materialDiag(renderer, sp && sp.resolveMaterial, o.full),
+    };
+    out.probe = cp ? {
+      at: [px, py],
+      // Low-res raw march: rgba, then depthVelocity (r = frontDepth in m).
+      march: _readTexel(renderer, cp.currentRenderTarget, px, py, 0),
+      marchDepthVelocity: _readTexel(renderer, cp.currentRenderTarget, px, py, 1),
+      // Resolved (temporal) buffer = AerialPerspective's overlay map.
+      resolved: _readTexel(renderer, cp.historyRenderTarget, px, py, 0),
+    } : null;
+  }
+  return out;
 }

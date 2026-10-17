@@ -5908,6 +5908,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         if (typeof window !== "undefined") {
           // eslint-disable-next-line no-undef
           window.__cloudOverlay = cloudOverlay;
+          // Read-only cloud-state snapshot for the per-session bright/dark sky
+          // A/B (cloud_overlay.js cloudStateSnapshot): noise source + bound
+          // texture identities, uniform digest, linked programs, raw march
+          // probe, LUT source, look, boot timeline.
+          // eslint-disable-next-line no-undef
+          window.__cloudStateDiag = (o) => cloudOverlay.diagSnapshot(renderer, {
+            // eslint-disable-next-line no-undef
+            atmosphereRuntime: window.__atmosphereRuntime ?? null,
+            ...(o || {}),
+          });
           // eslint-disable-next-line no-undef
           window.__setCloudCoverage = (v) => {
             const c = Math.max(0, Math.min(1, +v));
