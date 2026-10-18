@@ -40,7 +40,7 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // weatherForState) lives in loop.js::tickWeatherState (clouds-independent).
 // This module only READS the storm flag (real DayGroup SkyObject signal).
 import { readWeatherFlags } from './weather_state.js';
-import { applyCloudLook } from './cloud_storm_look.js';
+import { applyCloudLook, cloudLayersMatchLook } from './cloud_storm_look.js';
 // 2026-10-07 — ?cloudNight (DEFAULT ON): light the clouds with the sky's
 // night-ramped elevation instead of the raw never-setting retail pitch, and
 // fade cloud shadows + light shafts with the direct sun. Rationale: cloud_night.js.
@@ -268,6 +268,12 @@ export class CloudVolume {
     // ally (covers a session that boots mid-storm).
     this._stormLookApplied = undefined;
     this._wxFlags = { is_storm: false, temperature_C: NaN };
+    // Look bookkeeping for `window.__cloudStateDiag().look` (2026-10-17): how
+    // often and why the look was (re)applied, last few applies.
+    this._lookApplies = 0;
+    this._lookDriftReapplies = 0;
+    this._lookInvalidated = null;
+    this._lookLog = [];
   }
 
   /**
@@ -394,14 +400,26 @@ export class CloudVolume {
 
     // Storm-reactive look (2026-08-01, replaces the WMO layer config).
     // `is_storm` is the real DayGroup SkyObject signal (loop.js W4 scan →
-    // weather_state); the look is re-applied only on a flag EDGE (or once
-    // at boot), never per-frame. `?cloudWeather=off` freezes the
-    // fair-weather baseline cloud_overlay applied at construct time.
+    // weather_state); the look is written on a flag EDGE (or once at boot,
+    // or after invalidateCloudLook), never per-frame. `?cloudWeather=off`
+    // freezes the fair-weather baseline cloud_overlay applied at construct time.
+    //
+    // 2026-10-17 (1070, Holtburg pinned): under a storm DayGroup, sessions
+    // whose first raymarch ran on the legacy private composer before the main
+    // pass adopted the effect rendered the FAIR sky although `_stormLookApplied`
+    // said storm (and a storm toggled later rendered correctly) — an edge
+    // applied before adoption did not survive it, and the edge never fired
+    // again. So adoption now invalidates the edge (CloudOverlay.adoptMainPass →
+    // invalidateCloudLook) and the next tick re-applies; and whenever the
+    // layers stop carrying the look the flag says is applied (40 compares, at
+    // the sky-tick rate), the look is written again (`driftReapplies`).
     if (readCloudWeatherAutoFlag()) {
       const storm = !!readWeatherFlags(this._wxFlags).is_storm;
-      if (storm !== this._stormLookApplied) {
-        this._stormLookApplied = storm;
-        applyCloudLook(this.effect, storm);
+      const drift = storm === this._stormLookApplied && !cloudLayersMatchLook(this.effect, storm);
+      if (storm !== this._stormLookApplied || drift) {
+        const why = drift ? 'drift'
+          : this._stormLookApplied === undefined ? (this._lookInvalidated ?? 'boot') : 'edge';
+        this._applyLook(storm, why);
       }
     }
 
@@ -532,8 +550,31 @@ export class CloudVolume {
    */
   _applyWeatherToCloudLayers() {
     const storm = !!readWeatherFlags(this._wxFlags).is_storm;
+    return this._applyLook(storm, 'devtools');
+  }
+
+  /** Write the look and record why (see the tick's storm block). */
+  _applyLook(storm, why) {
     this._stormLookApplied = storm;
-    return applyCloudLook(this.effect, storm);
+    this._lookInvalidated = null;
+    const ok = applyCloudLook(this.effect, storm);
+    this._lookApplies++;
+    if (why === 'drift') this._lookDriftReapplies++;
+    const t = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now();
+    this._lookLog.push({ t, storm, why });
+    if (this._lookLog.length > 8) this._lookLog.shift();
+    return ok;
+  }
+
+  /**
+   * Forget which look is applied, so the next tick writes the current one
+   * again (CloudOverlay.adoptMainPass / releaseMainPass: whatever the effect
+   * went through before the hand-over, the look is re-asserted after it).
+   * @param {string} [reason]
+   */
+  invalidateCloudLook(reason = 'invalidated') {
+    this._stormLookApplied = undefined;
+    this._lookInvalidated = reason;
   }
 
   /**
