@@ -729,6 +729,40 @@ await check("books-journal-2: Next past a blank last page you wrote is refused w
   bus.emit("bookUpdated", {});
 });
 
+await check("2026-10-18: every BookSnapshotJs / page box is freed — rerenders and the 500 ms range watch", async () => {
+  // playerBook() builds a fresh wasm box (every page cloned) and `.pages`
+  // a box per page on each read; the range watch reads one every 500 ms.
+  const saved = handle.playerBook;
+  let snaps = 0;
+  let snapsFreed = 0;
+  let pageBoxes = 0;
+  let pagesFreed = 0;
+  handle.playerBook = () => {
+    snaps += 1;
+    const b = book;
+    return {
+      objectGuid: b.objectGuid, authorName: b.authorName, inscription: b.inscription,
+      maxCharsPerPage: b.maxCharsPerPage, maxNumPages: b.maxNumPages, scribeId: 0,
+      get pages() { return b.pages.map((p) => { pageBoxes += 1; return { ...p, free() { pagesFreed += 1; } }; }); },
+      free() { snapsFreed += 1; },
+    };
+  };
+  try {
+    bus.emit("bookUpdated", {});
+    assert.ok(isOpen("hb-book-panel"));
+    assert.match(text("hb-book-panel"), /Tome of Lore/);
+    assert.match(text("hb-book-panel"), /by Gaerlan/);
+    const afterRender = snaps;
+    await new Promise((r) => setTimeout(r, 600)); // at least one range-watch tick
+    assert.ok(snaps > afterRender, "the range watch read the book");
+    assert.equal(snapsFreed, snaps, "every snapshot freed");
+    assert.equal(pagesFreed, pageBoxes, "every page box freed");
+  } finally {
+    handle.playerBook = saved;
+    bus.emit("bookUpdated", {});
+  }
+});
+
 /* ── [6] house ────────────────────────────────────────────────────────── */
 console.log("[house]");
 await check("House tab shows status, dwelling, map location and maintenance — no hex landblock", () => {

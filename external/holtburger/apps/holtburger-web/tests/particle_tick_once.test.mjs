@@ -1,11 +1,12 @@
 // tests/particle_tick_once.test.mjs — ?particleTickOnce (2026-10-17, default ON).
 //
-// statics.js loads as TWO module instances on the unbundled page
-// (`./statics.js?v=phase7-par` from scene3d/index.js, `./statics.js` from
-// loop.js / cells.js), and each arms its own `_spLoop` rAF that ticks the ONE
-// shared static ParticleManager — two full ticks per frame (1070 profile:
-// 196 + 143 ms of 7.25 s; live probe: 14 ticks in 7 frames). `tickFrame(ts)`
-// drops the second driver of a frame. Locks:
+// statics.js loaded as TWO module instances on the unbundled page until
+// 2026-10-18 (`./statics.js?v=phase7-par` from scene3d/index.js, `./statics.js`
+// from loop.js / cells.js; STREAM-STATICS-3 made it one), and each armed its
+// own `_spLoop` rAF that ticked the ONE shared static ParticleManager — two
+// full ticks per frame (1070 profile: 196 + 143 ms of 7.25 s; live probe: 14
+// ticks in 7 frames). `tickFrame(ts)` still drops any second driver of a
+// frame. Locks:
 //   1. same rAF timestamp → the second call is a no-op; a new timestamp ticks;
 //   2. `?particleTickOnce=off` and a non-number timestamp tick every call;
 //   3. RP6's re-check cadence in FRAMES is unchanged: an emitter coming back

@@ -592,19 +592,28 @@ export function mount(ctx) {
     return () => {};
   }
   ensureStyles();
-  const client = ctx?.client ?? window.__pluginClient ?? null;
-  state.client = client;
 
   // The plugin bus dispatches a CustomEvent — the payload is ev.detail.
   // (Pre-2026-10-05 this read `.results` off the Event itself, so the
   // material results never reached the window.)
   const onResult = (ev) => onSalvageResult(ev?.detail ?? ev);
-  try {
-    client?.events?.on?.("salvageResult", onResult);
-    state.unsubscribeSalvage = () => client?.events?.off?.("salvageResult", onResult);
-  } catch (e) {
-    console.warn("[salvage-panel] salvageResult subscribe failed:", e);
-  }
+  // The bar mounts this at page load with ctx.client null; the bus exists
+  // only after login, so subscribe through __pluginClientReady (2026-10-18:
+  // bound at mount only, no salvage result ever arrived).
+  let disposed = false;
+  const subscribe = (client) => {
+    if (disposed || state.unsubscribeSalvage || !client?.events?.on) return;
+    state.client = client;
+    try {
+      client.events.on("salvageResult", onResult);
+      state.unsubscribeSalvage = () => client.events.off?.("salvageResult", onResult);
+    } catch (e) {
+      console.warn("[salvage-panel] salvageResult subscribe failed:", e);
+    }
+  };
+  const client = ctx?.client ?? window.__pluginClient ?? null;
+  if (client?.events?.on) subscribe(client);
+  else window.__pluginClientReady?.then?.((c) => subscribe(c ?? window.__pluginClient));
 
   function onAddItemEvent(ev) {
     const d = ev?.detail ?? {};
@@ -626,6 +635,7 @@ export function mount(ctx) {
   window.addEventListener("hb:salvage-confirm-result", onConfirmResult);
 
   return () => {
+    disposed = true;
     window.removeEventListener("hb:salvage-panel-add-item", onAddItemEvent);
     window.removeEventListener("hb:salvage-confirm-result", onConfirmResult);
     try { state.unsubscribeSalvage?.(); } catch (_) {}

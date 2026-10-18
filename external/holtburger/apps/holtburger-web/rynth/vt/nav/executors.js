@@ -11,7 +11,7 @@
 //
 // The one async exception (C4/V-8) is the jump: the Jump executor and the
 // Point executor's stuck rung wrap goto_compose.attemptJumpLeg as a JOB and
-// poll its settled flag from step().
+// poll its settled flag from step(); cancel() aborts it before the fire.
 //
 // Casts go ONLY through host.CastUntargetedSafe (C6; recall spells are
 // SelfTargeted). UseObject claims the host item token (C8). Output goes
@@ -117,12 +117,17 @@ export function pointLeg(point, pose) {
 }
 
 /** Start an async job (the jump primitive) whose outcome step() polls.
- *  `job.promise` resolves (never rejects) once `settled` is set. */
+ *  `job.promise` resolves (never rejects) once `settled` is set. `fn` gets
+ *  the job's isAborted(), which reads true after `job.cancel()` (an
+ *  executor's cancel: operator STOP, a yield, a reset). */
 export function runJob(fn) {
-  const job = { settled: false, result: null, promise: null };
+  const job = { settled: false, result: null, promise: null, cancelled: false };
+  job.cancel = () => {
+    job.cancelled = true;
+  };
   let p;
   try {
-    p = Promise.resolve(fn());
+    p = Promise.resolve(fn(() => job.cancelled));
   } catch (e) {
     job.settled = true;
     job.result = { ok: false, error: msg(e) };
@@ -396,8 +401,9 @@ function pointExecutor(point, ctx) {
   const st = { leg: null, job: null };
   const ex = base(point, ctx);
   Object.defineProperty(ex, "pinned", { get: () => !!(st.job && !st.job.settled) });
-  // The stuck-rung jump job (cannot be cancelled): ActiveNav keeps an
-  // unsettled one when it resets this executor (review runtime-2).
+  // The stuck-rung jump job: cancel() aborts it before the fire, but it lands
+  // asynchronously, so ActiveNav keeps an unsettled one when it resets this
+  // executor (review runtime-2).
   Object.defineProperty(ex, "job", { get: () => st.job });
   Object.defineProperty(ex, "label", {
     get: () => {
@@ -430,7 +436,13 @@ function pointExecutor(point, ctx) {
       ctx.cancelLeg(st.leg);
       const { leg, tune } = jumpArgs(gc, { headingDeg, holdShift: false, delayMs: NAV_TUNING.stuckJumpMs, direction: "forward" });
       ctx.log(`nav: ${why} — trying a directional jump (heading ${headingDeg.toFixed(0)})`);
-      st.job = runJob(() => gc.attemptJumpLeg({ host: ctx.host }, leg, tune));
+      const job = runJob((isAborted) => gc.attemptJumpLeg({ host: ctx.host, isAborted }, leg, tune));
+      // Aborted before the fire: the rung is still there, for a rebound
+      // executor sharing mem too (it never reads this job).
+      job.promise.then(() => {
+        if (job.result && job.result.aborted) mem.jumped = false;
+      });
+      st.job = job;
       return "running";
     }
     return ex._fail("stuck");
@@ -470,6 +482,7 @@ function pointExecutor(point, ctx) {
   };
   ex.cancel = () => {
     if (st.leg) ctx.cancelLeg(st.leg);
+    if (st.job) st.job.cancel();
   };
   return ex;
 }
@@ -1003,8 +1016,15 @@ function jumpExecutor(point, ctx) {
   ex.step = (now) => {
     if (st.job) {
       if (!st.job.settled) return "running";
-      mem.finished = true;
       const r = st.job.result || {};
+      if (r.aborted) {
+        // Cancelled before the fire (operator STOP, a yield): jump again,
+        // fresh, when the waypoint runs again.
+        st.job = null;
+        mem.startedAt = null;
+        return "running";
+      }
+      mem.finished = true;
       return r.ok ? "done" : ex._fail(r.error || "jump failed");
     }
     if (mem.startedAt != null) {
@@ -1026,8 +1046,18 @@ function jumpExecutor(point, ctx) {
       direction: point.ext && point.ext.direction ? point.ext.direction : "forward",
     });
     mem.startedAt = now;
-    st.job = runJob(() => gc.attemptJumpLeg({ host: ctx.host }, leg, tune));
+    const job = runJob((isAborted) => gc.attemptJumpLeg({ host: ctx.host, isAborted }, leg, tune));
+    // A rebound executor shares mem, not the job: an aborted jump is retried
+    // there too instead of waiting out the rebind grace. Its _resumeClock may
+    // have moved startedAt meanwhile; no newer jump starts before this runs.
+    job.promise.then(() => {
+      if (job.result && job.result.aborted && !mem.finished) mem.startedAt = null;
+    });
+    st.job = job;
     return "running";
+  };
+  ex.cancel = () => {
+    if (st.job) st.job.cancel();
   };
   return ex;
 }
@@ -1044,7 +1074,7 @@ function jumpExecutor(point, ctx) {
  *   claimMovement(tag), lastChatAt(), setLastChatAt(t), spellName?(id).
  * → { point, type, step(nowMs) → "running"|"done"|"failed", cancel(), label,
  *     pinned, expectsTeleport, failReason, warning, job? (Point/Jump: the
- *     attemptJumpLeg job in flight, { settled, result, promise }) }
+ *     attemptJumpLeg job in flight, { settled, result, promise, cancel() }) }
  */
 export function makeExecutor(point, ctx) {
   if (!ctx.mem || typeof ctx.mem !== "object") ctx.mem = {};

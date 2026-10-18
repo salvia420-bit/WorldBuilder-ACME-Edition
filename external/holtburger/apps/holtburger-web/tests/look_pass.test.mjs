@@ -592,8 +592,11 @@ console.log("\n-- L17 painted light + layered haze ----------------------------"
   check("the pass decodes the LOG depth and skips the sky",
     lh.includes("float w = exp2(texture2D(tDepth, vUv).r * uLogFar) - 1.0;") && lh.includes("if (w >= uSkyM) { gl_FragColor = src; return; }"));
   const ap = src("scene3d/atmosphere_pipeline.js");
-  check("pipeline: split chain = after the late scrub, before the bloom / tone-map pass",
-    /if \(lateScrubPass\) composer\.addPass\(lateScrubPass\);[\s\S]{0,260}if \(layeredHaze\) composer\.addPass\(layeredHaze\);\s*composer\.addPass\(fxPostPass\);/.test(ap));
+  // 2026-10-18: before the late particles too (they write no depth, so a haze
+  // after them fogged a near spell by the hills behind it). The executed pass
+  // order is pinned in tests/particles_over_clouds.test.mjs P4 / P4b.
+  check("pipeline: split chain = after the clouds / aerial pass, before the late particles and the bloom / tone-map pass",
+    /composer\.addPass\(fxPass\);\s*if \(particlesOverCloudsPass\) \{[\s\S]{0,320}if \(lateHazePass\) composer\.addPass\(lateHazePass\);\s*composer\.addPass\(particlesOverCloudsPass\);\s*if \(lateScrubPass\) composer\.addPass\(lateScrubPass\);\s*composer\.addPass\(fxPostPass\);/.test(ap));
 }
 
 // ---------------------------------------------------------------------------

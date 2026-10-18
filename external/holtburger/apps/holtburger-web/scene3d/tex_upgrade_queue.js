@@ -197,9 +197,18 @@ function _defaultLinkBps() {
   }
 }
 
-/** HTTP version of the game origin's shard/suite downloads, from resource
- *  timing: "h1" | "h2" | "h3", or null while no such entry exists. */
+/** HTTP version of the game origin's shard/suite downloads: "h1" | "h2" |
+ *  "h3", or null while timing shows none. A /shards/ or /suite/ resource entry
+ *  wins, but the page rarely has one: the shard records are fetched in the
+ *  shard-fetch / bake workers (their own timelines), and index.html's
+ *  modulepreloads fill the 250-entry resource buffer before the first /suite/
+ *  fetch. The navigation entry (same origin, never dropped) stands in. */
 function _defaultProtocol() {
+  const norm = (e) => {
+    const p = String((e && e.nextHopProtocol) || "").toLowerCase();
+    if (!p) return null;
+    return p.startsWith("h3") ? "h3" : p === "h2" ? "h2" : "h1";
+  };
   try {
     if (typeof performance === "undefined" || typeof performance.getEntriesByType !== "function") return null;
     const all = performance.getEntriesByType("resource");
@@ -207,10 +216,11 @@ function _defaultProtocol() {
       const e = all[i];
       const name = String(e && e.name);
       if (!(name.includes("/shards/") || name.includes("/suite/"))) continue;
-      const p = String(e.nextHopProtocol || "").toLowerCase();
-      if (!p) continue;
-      return p.startsWith("h3") ? "h3" : p === "h2" ? "h2" : "h1";
+      const p = norm(e);
+      if (p) return p;
     }
+    const nav = performance.getEntriesByType("navigation");
+    return (nav && nav.length && norm(nav[0])) || null;
   } catch (_) {
     /* diag-grade input */
   }

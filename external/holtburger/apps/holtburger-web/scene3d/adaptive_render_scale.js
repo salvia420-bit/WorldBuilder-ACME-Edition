@@ -109,6 +109,11 @@ export function adaptiveResGpuCheckEnabled() {
  * module exists for is already handled at boot by computeInitialRenderScale.
  */
 export const BOOT_GRACE_MS = 30_000;
+/** No `ready` this long after the first `in-world`: it is not coming (a failed
+ *  atmosphere / SkyDome init skips every `ready` emitter in index.js), so the
+ *  grace ends anyway instead of holding every lower for the whole session.
+ *  Well past the 90 s the autoLogin watchdog allows a slow boot for `ready`. */
+export const BOOT_READY_WAIT_MS = 120_000;
 export function adaptiveResBootGraceEnabled() {
   try {
     if (typeof window === "undefined" || !window.location) return true;
@@ -122,11 +127,15 @@ export function adaptiveResBootGraceEnabled() {
 }
 
 /** True while the client has not yet reported scene `ready`, or did so less
- *  than `graceMs` ago (wall clock, the `__bootStateHistory` timestamps). */
-export function bootGraceActive(history, nowMs = Date.now(), graceMs = BOOT_GRACE_MS) {
+ *  than `graceMs` ago (wall clock, the `__bootStateHistory` timestamps). With
+ *  no `ready`, it ends `readyWaitMs` after the first `in-world`. */
+export function bootGraceActive(history, nowMs = Date.now(), graceMs = BOOT_GRACE_MS, readyWaitMs = BOOT_READY_WAIT_MS) {
   if (!Array.isArray(history)) return false;
   const ready = history.find((e) => e && e.state === "ready");
-  if (!ready) return true;
+  if (!ready) {
+    const inWorld = history.find((e) => e && e.state === "in-world");
+    return !(inWorld && Number.isFinite(inWorld.ts) && nowMs - inWorld.ts >= readyWaitMs);
+  }
   return !(Number.isFinite(ready.ts) && nowMs - ready.ts >= graceMs);
 }
 

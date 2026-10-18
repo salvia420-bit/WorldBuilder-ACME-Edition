@@ -133,7 +133,7 @@ prepare reads the world: `abort()` and wait for `status().active === false`. `st
 | `version` | `"film-1"` |
 | `status()` | `{version, active, busy, runtimeReady, timeSources, cameraOwned, viewerCell, clean, cleanState, take, recorder, pilot, lastTake, clock, look, flags:{filmMode, filmDof, dof, dofEnabled, jevBridge}, bridge}` |
 | `clean(on = true, {bubbles})` | strip HUD/overlays/brackets/bubbles/cursor and lock input; `clean(false)` restores |
-| `own()` / `release()` | take / return the camera (`release` refuses with FILM_BUSY while a take / prepare / shoot / rehearse / scout runs) |
+| `own()` / `release()` | take / return the camera; `release` also undoes the take's look (`look: {ok, restored}`; the next prepare re-applies it) and refuses with FILM_BUSY while a take / prepare / shoot / rehearse / scout runs |
 | `pose(pose, {cell})` | set an absolute AC pose `{pos, q \| h,p,r, fov, focus?}` now (FILM_BUSY while a take / prepare / shoot / rehearse / scout runs) |
 | `world.teleport(cmd)` / `world.command(cmd)` | send an `@` admin command (single line ≤ 200; logout/DB-writing verbs refused). Both answer `{ok:false, code:'FILM_BUSY'}` and send nothing while a take / prepare / shoot / rehearse / scout runs. When idle, `teleport` then parks the film viewer cell (`camera_owner.parkCell`: `liveScene3d.filmViewer` deleted until the next camera write) and returns `{ok, cmd, viewerParked}` |
 | `world.ready({lbKeys, interiorLb, settleSec, timeoutSec})` | the readiness gate report `{ok, checks, waitedMs, timedOut}` (`timedOut`: `timeoutSec` passed before every check held; SPEC §3.4) |

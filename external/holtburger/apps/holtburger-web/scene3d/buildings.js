@@ -216,11 +216,11 @@ class _BuildingBatch extends THREE.BatchedMesh {
   }
 }
 
-// buildings.js loads as TWO module instances (index.js imports
-// `./buildings.js?v=phase-d-batch`), so the tally lives on globalThis: both
-// instances count into one object and __buildingBatchStats reads it whichever
-// instance set the window hook (1070 2026-10-17: the hook read 0s while 20
-// batches drew).
+// buildings.js loaded as TWO module instances until 2026-10-18 (index.js
+// imported `./buildings.js?v=phase-d-batch`; STREAM-STATICS-3 made it one), so
+// the tally lives on globalThis: both instances counted into one object and
+// __buildingBatchStats read it whichever instance set the window hook (1070
+// 2026-10-17: the hook read 0s while 20 batches drew). Kept: harmless now.
 const _bldBatchStats = (globalThis.__hbBuildingBatchTally ??= {
   feeds: 0, nodesIn: 0, batched: 0, batches: 0, uniqueGeoms: 0,
   loners: 0, ptIneligible: 0, ptAddFail: 0, disposed: 0,

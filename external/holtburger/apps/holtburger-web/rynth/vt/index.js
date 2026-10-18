@@ -899,8 +899,8 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     const ourHooks = [support.idle.peaceHook];
     const boostLoot = () => safe(() => options.getValue("BoostLootPriority") === true, false) === true;
     // A VT-nav executor in flight (recall cast, portal/NPC use, jump waypoint) keeps the tick ahead of
-    // Combat/Loot/Buffing, below only Vitals/Unwedge: the action cannot be cancelled mid-way (attemptJumpLeg
-    // drives input ~10 s) and C# keeps nav ticking through it. Never true at Default (nav disabled ⇒ not pinned).
+    // Combat/Loot/Buffing, below only Vitals/Unwedge: a cancel throws the action away (attemptJumpLeg drives
+    // input ~10 s and stops before the fire once aborted, RYNTH-4) and C# keeps nav ticking through it. Never true at Default (nav disabled ⇒ not pinned).
     const pinnedFirst = () => safe(() => nav.slot.pinned() === true, false) === true;
     if (aux && typeof aux === "object") {
       if (!Array.isArray(aux.slots)) aux.slots = [];

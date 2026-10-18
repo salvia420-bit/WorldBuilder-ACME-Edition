@@ -149,7 +149,7 @@ await test("§5 cells.js syncs casters from the visibility tick", () => {
   const tick = src.slice(src.indexOf("export function tickCellVisibility3D"));
   assert.ok(/interiorCastWanted\(isIndoor\)/.test(tick), "cast mode keyed on the viewer cell");
   assert.ok((tick.match(/syncCellShadowCast\(container, castOn\)/g) || []).length >= 2, "both container loops sync");
-  assert.ok(/requestShadowRaster\(scene3d\.renderer\)/.test(tick), "one raster when a caster changed");
+  assert.ok(/requestShadowRaster\(scene3d\.renderer, scene3d\)/.test(tick), "one raster when a caster changed");
 });
 
 console.log(`\ninterior_shadow_cull: ${passed} passed`);

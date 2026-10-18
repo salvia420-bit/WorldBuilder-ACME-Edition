@@ -1139,6 +1139,80 @@ const TIER5 = [
   // ground or rose against the drawn terrain, with a cause (?clampReplant / ?waterQuadrantRetail
   // are wasm-side and covered by the holtburger-core terrain_hop_real_* suites).
   { tier: 5, flag: "hopDiag", file: "tests/hop_diag.test.mjs" },
+  // 2026-10-18 systematic-review fix pass (docs/2026-10-18-systematic-code-review.md).
+  // RUSTNET-1: a superseded ?netWorker connect gives up instead of logging in directly.
+  { tier: 5, flag: "netWorker", file: "tests/net_worker_superseded.test.mjs" },
+  // STREAM-TERRAIN-2: a failed HD record fetch is retried, only proven absence latches.
+  { tier: 5, flag: "texBc7", file: "tests/bc7_fetch_failure_retry.test.mjs" },
+  // PLUGINS-A-1/2, PLUGINSB-1/3/4: plugins mounted before login (bar client null) bind
+  // their bus listeners once the client is ready, exactly once.
+  { tier: 5, flag: "plugins_late_client_bind", file: "tests/plugins_late_client_bind.test.mjs" },
+  // PLUGINSB-2: vendor-ui reads the live SessionHandle after a reconnect.
+  { tier: 5, flag: "vendor_ui_handle_reconnect", file: "tests/vendor_ui_handle_reconnect.test.mjs" },
+  // PLUGINSB-5: a failed WorldObjectManager.load() stops queueing spawns.
+  { tier: 5, flag: "world_object_manager_load_fail", file: "tests/world_object_manager_load_fail.test.mjs" },
+  // PLUGINS-A-4 class: the item icon lookup frees its playerInventory() boxes.
+  { tier: 5, flag: "entityIconInventoryFree", file: "tests/entity_icon_inventory_free.test.mjs" },
+  // Same class: a toolbar disposed before login never binds its bus listeners.
+  { tier: 5, flag: "targetBarLateBind", file: "tests/target_bar_late_bind.test.mjs" },
+  // ENTITIES-1..4: a same-guid respawn is no deselect, keeps prevSelectedID, and stale
+  // bakes / hooks skip the old rig.
+  { tier: 5, flag: "sameGuidRespawn", file: "tests/same_guid_respawn.test.mjs" },
+  // ENTITIES-5: AnimationCache frees the EntityAnimationData box after copying it.
+  { tier: 5, flag: "animCacheBoxFree", file: "tests/anim_cache_box_free.test.mjs" },
+  // RENDER-1/2 + draw-sort: the render patches survive a WebGL context restore.
+  { tier: 5, flag: "asyncLink+texUnitPin+drawSortProgram", file: "tests/webgl_restore_render_patches.test.mjs" },
+  // RENDER-3: occlusion proxies reset on a context restore.
+  { tier: 5, flag: "occlusionCull", file: "tests/occlusion_cull_restore.test.mjs" },
+  // RENDER-4: ?farFogFence re-arms after a restore; a dead probe falls back to the authored hex.
+  { tier: 5, flag: "farFogFence", file: "tests/far_fog_fence_restore.test.mjs" },
+  // RENDER-5: requestShadowRaster re-rasters the managed lights under the mover-scope gate.
+  { tier: 5, flag: "interiorShadowCull", file: "tests/interior_shadow_raster_scope.test.mjs" },
+  // RENDER-6: the adaptive-res boot grace ends without a 'ready'.
+  { tier: 5, flag: "adaptiveResBootGrace", file: "tests/adaptive_res_boot_grace_cap.test.mjs" },
+  // SKY-1/3/5: the late haze runs before the late particles, on every camera.
+  { tier: 5, flag: "layerHaze", file: "tests/sky_late_haze_camera.test.mjs" },
+  // SKY-2: the SAO sky sentinel fits a half-float target.
+  { tier: 5, flag: "ssao", file: "tests/sky2_ssao_sky_sentinel.test.mjs" },
+  // SKY-4: the cloud look stops overwriting a knob-set coverage.
+  { tier: 5, flag: "cloudCoverage", file: "tests/sky4_cloud_coverage_knob.test.mjs" },
+  // SKY-6: the color-grade blend allocates nothing per frame.
+  { tier: 5, flag: "grade", file: "tests/sky6_color_grade_alloc.test.mjs" },
+  // SKY-7: the dirt footfall rate-limit map is swept.
+  { tier: 5, flag: "terrainDirt", file: "tests/sky7_dirt_footfall_sweep.test.mjs" },
+  // SHELL-1/2/7: escaped char-select names, CharacterError releases the spawn latch.
+  { tier: 5, flag: "charSelectSpawn", file: "tests/shell_charselect_spawn.test.mjs" },
+  // SHELL-3: /logout keeps the bridge + server endpoint.
+  { tier: 5, flag: "logoutEndpoint", file: "tests/shell_logout_endpoint.test.mjs" },
+  // SHELL-4/5: the remote-sync and motion diag guid maps are LRU-capped.
+  { tier: 5, flag: "diagGuidCaps", file: "tests/shell_diag_guid_caps.test.mjs" },
+  // FILM-1..5: dungeon cell carry, sub-10fps stepping, encoder close, look restore, nameplate mask.
+  { tier: 5, flag: "filmMode(review_film1_5)", file: "tests/film_review_film1_5.test.mjs" },
+  // VFXAUDIO-1/2/3: evicted flashes leave activeLights, far lights skip the dedupe scan, interior scope.
+  { tier: 5, flag: "fxLights", file: "tests/fx_lights_vfxaudio.test.mjs" },
+  // VFXAUDIO-5: fx_distort reads the film clock.
+  { tier: 5, flag: "fxDistort(fx_clock)", file: "tests/fx_distort_film_clock.test.mjs" },
+  // VFXAUDIO-4: portal anchors are swept on registration.
+  { tier: 5, flag: "portalSetPiece", file: "tests/portal_registry_sweep.test.mjs" },
+  // RYNTH-1..4: meta disable releases keys, truncated .nav / .met rows rejected, jump abort.
+  { tier: 5, flag: "rynthMetaDisable", file: "tests/rynth_meta_disable_release.test.mjs" },
+  { tier: 5, flag: "rynthNavTruncated", file: "tests/rynth_nav_truncated.test.mjs" },
+  { tier: 5, flag: "rynthMetRowBound", file: "tests/rynth_met_row_bound.test.mjs" },
+  { tier: 5, flag: "rynthJumpAbort", file: "tests/rynth_jump_abort.test.mjs" },
+  // RYNTH-4 leftover: a /rs jump stops when its slot leaves or ActiveNav is disposed.
+  { tier: 5, flag: "rynthRsJumpCancel", file: "tests/rynth_rs_jump_cancel.test.mjs" },
+  // STREAM-STATICS-1/2: a radius crossing mid-attach neither doubles nor leaks chains.
+  { tier: 5, flag: "staticScriptRadius(race)", file: "tests/static_script_radius_race.test.mjs" },
+  // STREAM-STATICS-4: the whole cell subtree is matrix-frozen.
+  { tier: 5, flag: "freezeStaticMatrix", file: "tests/cell_freeze_subtree.test.mjs" },
+  // STREAM-STATICS-3: statics.js / buildings.js evaluate once.
+  { tier: 5, flag: "staticsSingleInstance", file: "tests/statics_single_instance.test.mjs" },
+  // STREAM-TERRAIN-1: the LOD rebake drain skips evicted / parked landblocks.
+  { tier: 5, flag: "lodRebake", file: "tests/terrain_lod_rebake.test.mjs" },
+  // STREAM-TERRAIN-3: an eviction mid-build does not mark the landblock populated.
+  { tier: 5, flag: "interiorBuildShare", file: "tests/cell_containers_evict.test.mjs" },
+  // STREAM-TERRAIN-4: the tex-upgrade protocol probe falls back to the navigation entry.
+  { tier: 5, flag: "texUpgradeQueue", file: "tests/tex_upgrade_queue_proto.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

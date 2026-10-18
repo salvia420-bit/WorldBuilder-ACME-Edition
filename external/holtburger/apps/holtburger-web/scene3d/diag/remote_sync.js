@@ -27,12 +27,18 @@
 // raise) played, and each remote action one-shot (windups, swings) with
 // whether its link resolved and played.
 //
-// Cost: O(1) per update / cast; bounded rings. Fail-soft: every hook site is
-// wrapped in try/catch + optional chaining.
+// Cost: O(1) per update / cast; bounded rings, and at most MAX_GUIDS remotes
+// (least recently updated dropped first; the summary covers those kept).
+// Fail-soft: every hook site is wrapped in try/catch + optional chaining.
 
 const MAX_TAIL = 200;
 const MAX_PER_GUID = 64;
 const MAX_MISSES = 16;
+/**
+ * Remotes kept in `byGuid`. Every respawn is a fresh guid, so a long session
+ * would otherwise keep a 64-record ring for each one it ever saw.
+ */
+export const MAX_GUIDS = 256;
 /** Server step that counts as "the entity moved" (m). */
 export const MOVING_M = 0.5;
 /** Rig within this of the previous server pose = it stood still (m). */
@@ -117,6 +123,7 @@ export function createRemoteSync(nowFn = () => (typeof performance !== "undefine
   const byGuid = new Map();
   const tail = [];
   let farUpdates = 0;
+  let droppedRemotes = 0;
   const heldReasons = Object.create(null);
   const actionMissReasons = Object.create(null);
   const actionMisses = []; // last MAX_MISSES missed remote actions
@@ -134,10 +141,16 @@ export function createRemoteSync(nowFn = () => (typeof performance !== "undefine
     let e = byGuid.get(guid);
     if (!e) {
       e = { guid, name: name || "", updates: 0, moving: 0, held: 0, heldReasons: {}, recent: [], cast: { gestures: 0, linkPlayed: 0, actions: 0, actionsPlayed: 0 } };
-      byGuid.set(guid, e);
-    } else if (!e.name && name) {
-      e.name = name;
+      if (byGuid.size >= MAX_GUIDS) {
+        byGuid.delete(byGuid.keys().next().value);
+        droppedRemotes += 1;
+      }
+    } else {
+      // Map order = recency: re-inserted at the end on every touch.
+      byGuid.delete(guid);
+      if (!e.name && name) e.name = name;
     }
+    byGuid.set(guid, e);
     return e;
   }
 
@@ -278,6 +291,7 @@ export function createRemoteSync(nowFn = () => (typeof performance !== "undefine
       worst.sort((a, b) => b.heldFrac - a.heldFrac || b.moving - a.moving);
       return {
         remotes: byGuid.size,
+        droppedRemotes,
         updates,
         movingUpdates: moving,
         heldFrac: moving ? round2(held / moving) : null,
@@ -299,6 +313,7 @@ export function createRemoteSync(nowFn = () => (typeof performance !== "undefine
       tail.length = 0;
       actionMisses.length = 0;
       farUpdates = 0;
+      droppedRemotes = 0;
       for (const k of Object.keys(cast)) cast[k] = 0;
       for (const k of Object.keys(heldReasons)) delete heldReasons[k];
       for (const k of Object.keys(actionMissReasons)) delete actionMissReasons[k];

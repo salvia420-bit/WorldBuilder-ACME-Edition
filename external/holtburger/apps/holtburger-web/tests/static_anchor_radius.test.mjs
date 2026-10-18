@@ -109,7 +109,10 @@ function makeWorld() {
     const list = [];
     for (let i = 0; i < nAnchors; i++) {
       const a = new THREE.Group();
-      a.userData = { isStaticScriptAnchor: true, landblockId: (key | 0x0001) >>> 0, defaultScriptId: 0x33000113 };
+      // A chained anchor: the attach stamps `__scriptDeferred = false` when it
+      // runs the chain (unset = attach still in flight, which the tick skips).
+      a.userData = { isStaticScriptAnchor: true, landblockId: (key | 0x0001) >>> 0, defaultScriptId: 0x33000113,
+        __scriptDeferred: false };
       staticsGroup.add(a);
       table.set(nextId++, { parent: a });
       list.push(a);

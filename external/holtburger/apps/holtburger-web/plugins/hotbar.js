@@ -79,6 +79,8 @@ import {
   cooldownStep,
   defaultOnUrlFlag,
   matchCooldownEnchantment,
+  takeInventoryRows,
+  takeInventorySnapshot,
 } from "./inventory_helpers.js";
 import { castSpellViaHandleResult } from "../ui/ac_cast_spell.js";
 import { announceCastRefusal, MSG_NO_SELECTION } from "../ui/ac_spell_target_compat.js";
@@ -991,14 +993,17 @@ export function mount(ctx) {
   // UiEffects (PropertyInt 18) bitmask for a hotbar-bound item guid, from the
   // live wasm inventory snapshot (InventoryItem.uiEffects). 0 if not found.
   function _itemUiEffects(guid) {
+    // Each playerInventory() row is a wasm box: walk them inside a snapshot
+    // that frees every one (2026-10-18 review, the PLUGINS-A-4 class).
+    const snap = takeInventorySnapshot(window.__sessionHandle ?? null);
     try {
-      const h = window.__sessionHandle;
-      if (!h?.playerInventory) return 0;
       const g = guid >>> 0;
-      for (const it of h.playerInventory()) {
+      for (const it of snap.inv) {
         if ((it.guid >>> 0) === g) return (it.uiEffects >>> 0) || 0;
       }
-    } catch (_) { /* default 0 */ }
+    } catch (_) { /* default 0 */ } finally {
+      snap.free();
+    }
     return 0;
   }
 
@@ -1405,9 +1410,9 @@ export function mount(ctx) {
         if (guid > 0) {
           // Validate against canBindToHotbar — rejects Container + Sigil.
           try {
-            const handle = window.__sessionHandle ?? null;
-            const inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
-            const item = inv.find((x) => (x.guid >>> 0) === guid) || null;
+            // Plain copied rows, boxes freed (canBindToHotbar reads primitives).
+            const inv = takeInventoryRows(window.__sessionHandle ?? null);
+            const item = inv.find((x) => x.guid === guid) || null;
             if (item && typeof canBindToHotbar === "function") {
               const v = canBindToHotbar(item);
               if (!v.ok) {
@@ -1621,9 +1626,12 @@ export function mount(ctx) {
     const handle = window.__sessionHandle ?? null;
     if (!handle || typeof handle.playerShortcuts !== "function") return false;
     const flat = handle.playerShortcuts();
+    // One copied snapshot per merge (boxes freed), taken only when a server
+    // item slot asks — not a fresh unfreed playerInventory() per slot.
+    let wcidByGuid = null;
     const wcidOf = (guid) => {
-      const inv = handle.playerInventory?.() ?? [];
-      return inv.find((x) => (x.guid >>> 0) === (guid >>> 0))?.wcid;
+      if (!wcidByGuid) wcidByGuid = new Map(takeInventoryRows(handle).map((r) => [r.guid, r.wcid]));
+      return wcidByGuid.get(guid >>> 0);
     };
     let merged = null;
     if (!perChar) {
@@ -1846,15 +1854,27 @@ export function mount(ctx) {
     const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
     for (const slot of slotEls) slot.classList.toggle("cooldown-active", active > 0);
   };
-  try {
-    client?.events?.on?.("playerInventoryChanged", onInventoryChanged);
-    client?.events?.on?.("landblockChanged", onLandblockChanged);
-    client?.events?.on?.("sharedCooldownChanged", onSharedCooldown);
-  } catch (_) {}
   let neverSeenSweepTimer = null;
   let serverMerged = false;
   let statsBus = null;     // per character: the playerStatsUpdated retry (below)
+  let itemBus = null;      // inventory / landblock / cooldown listeners
   let disposed = false;
+  // 2026-10-18: the bar mounts at page load with ctx.client null and the bus
+  // exists only after login, so these bind late through __pluginClientReady
+  // (as subscribeStats below). Bound at mount only, they never attached live:
+  // a used-up item kept its slot, unresolved icons never re-rendered and no
+  // slot showed a cooldown.
+  const subscribeItemBus = (c) => {
+    if (disposed || itemBus || !c?.events?.on) return;
+    itemBus = c.events;
+    try {
+      itemBus.on("playerInventoryChanged", onInventoryChanged);
+      itemBus.on("landblockChanged", onLandblockChanged);
+      itemBus.on("sharedCooldownChanged", onSharedCooldown);
+    } catch (_) {}
+  };
+  if (client?.events?.on) subscribeItemBus(client);
+  else window.__pluginClientReady?.then?.(subscribeItemBus);
   function finishReconcile(merged) {
     reconcileDone = true;
     reconcileDoneAt = Date.now();
@@ -1975,10 +1995,11 @@ export function mount(ctx) {
     if (neverSeenSweepTimer) clearTimeout(neverSeenSweepTimer);
     clearTimeout(migrateTimer);
     try {
-      client?.events?.off?.("playerInventoryChanged", onInventoryChanged);
-      client?.events?.off?.("landblockChanged", onLandblockChanged);
-      client?.events?.off?.("sharedCooldownChanged", onSharedCooldown);
+      itemBus?.off?.("playerInventoryChanged", onInventoryChanged);
+      itemBus?.off?.("landblockChanged", onLandblockChanged);
+      itemBus?.off?.("sharedCooldownChanged", onSharedCooldown);
     } catch (_) {}
+    itemBus = null;
     controls.dispose();
     tooltip.dispose();
     overlay.remove();

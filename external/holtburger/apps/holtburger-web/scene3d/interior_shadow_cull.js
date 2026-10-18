@@ -34,6 +34,12 @@
 // When a sync changed any caster, the caller forces one shadow-map raster
 // (`shadowMap.needsUpdate = true`): lighting.js's RP5 static-shadow gate would
 // otherwise keep showing the old casters until its next trigger (≤ 12 frames).
+// Under the per-light ?shadowMoverScope gate (lighting.js
+// applyMoverScopedShadowGate, default on) that flag alone rasters NOTHING:
+// every managed light has `shadow.autoUpdate = false`, and three skips a light
+// whose `needsUpdate` is false too. So each managed light is marked as well,
+// with the STATIC reason, so ?shadowStaticCache re-rasters its cached statics
+// instead of overlaying the pre-flip ones.
 //
 // Live A/B seam: `window.__interiorShadowCull.off = true` restores the built
 // casters on the next tick (stats under `.stats`).
@@ -98,14 +104,26 @@ export function syncCellShadowCast(container, castOn) {
   return changed;
 }
 
+// shadow_caster_list.js SHADOW_REASON_STATIC (duplicated, as lighting.js does).
+const SHADOW_REASON_STATIC = 2;
+
 /**
  * One forced shadow raster, after a visible caster changed. Only touches a
  * renderer whose raster is manually driven (the RP5 gate set autoUpdate=false);
  * with three's default per-frame raster there is nothing to request.
+ * `scene3d` carries the mover-scope gate's managed lights (`_shadowScope`).
  */
-export function requestShadowRaster(renderer) {
+export function requestShadowRaster(renderer, scene3d = null) {
   const sm = renderer?.shadowMap;
   if (!sm || !sm.enabled || sm.autoUpdate !== false) return false;
+  const scope = scene3d?._shadowScope;
+  if (scope && scope.renderer === renderer && Array.isArray(scope.lights)) {
+    for (const l of scope.lights) {
+      if (!l || !l.shadow) continue;
+      l.shadow.needsUpdate = true;
+      l.userData.hbShadowReason = (l.userData.hbShadowReason | 0) | SHADOW_REASON_STATIC;
+    }
+  }
   sm.needsUpdate = true;
   stats.rasters += 1;
   return true;

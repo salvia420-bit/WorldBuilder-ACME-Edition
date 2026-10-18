@@ -19,6 +19,7 @@
 
 import { fetchIconDataUrl, fetchItemIconDataUrl, fetchSpellIconDataUrl } from "./ac_icon_cache.js";
 import { resolveContainedItemMeta } from "../plugins/contained_item_meta.js";
+import { takeInventorySnapshot } from "../plugins/inventory_helpers.js";
 
 /**
  * Resolve any of the supported binding shapes to a CSS-ready data URL.
@@ -103,14 +104,17 @@ function lookupItemIconId(itemGuid) {
   const g = (itemGuid >>> 0);
   // Primary source: SessionHandle.playerInventory() flat snapshot the
   // inventory plugin refreshes on every InventoryUpdated event. The
-  // snapshot is the WorldState's source of truth for owned items.
+  // snapshot is the WorldState's source of truth for owned items. Each row
+  // is a wasm box, freed here (the hotbar's icon refresh calls this per
+  // unresolved slot; 2026-10-18 review, PLUGINS-A-4 class).
   try {
-    const handle = window.__sessionHandle ?? null;
-    const inv = handle?.playerInventory?.();
-    if (Array.isArray(inv) || (inv && typeof inv.length === "number")) {
-      for (const it of inv) {
+    const snap = takeInventorySnapshot(window.__sessionHandle ?? null);
+    try {
+      for (const it of snap.inv) {
         if (((it?.guid >>> 0) === g) && it?.iconId) return it.iconId >>> 0;
       }
+    } finally {
+      snap.free();
     }
   } catch (_) {}
   // Fallback: WorldObjectManager taxonomy mirror (populated by

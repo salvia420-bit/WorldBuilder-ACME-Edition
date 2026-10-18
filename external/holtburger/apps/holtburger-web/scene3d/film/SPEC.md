@@ -355,7 +355,7 @@ prepare reads the subject, sun and route); `abort()` and wait for `status().acti
 |---|---|
 | `status()` | `{ok, version, active, busy, runtimeReady, timeSources, cameraOwned, viewerCell, clean, cleanState, take, recorder, pilot, lastTake, clock, look, flags, bridge}` |
 | `clean(on=true)` | strip HUD/DOM/overlays/brackets/bubbles/cursor; lock input; `false` restores |
-| `own()` / `release()` | take/return the camera (`release` → FILM_BUSY while a take, prepare, shoot, rehearse or scout runs) |
+| `own()` / `release()` | take/return the camera; `release` also undoes the take's look and returns it as `look: {ok, restored}` (the next prepare re-applies it; 2026-10-18 FILM-4) (`release` → FILM_BUSY while a take, prepare, shoot, rehearse or scout runs) |
 | `pose(poseJson)` | set an absolute AC-frame pose now (FILM_BUSY while a take, prepare, shoot, rehearse or scout runs) |
 | `world.teleport(cmd)` / `world.command(cmd)` | `sessionHandle.sendChat(cmd)` (commands must start with `@`; one line ≤ 200 chars; logout / DB-writing verbs refused). While a take, prepare, shoot, rehearse or scout runs both answer FILM_BUSY and send nothing. When idle, `teleport` then parks the film viewer cell (`camera_owner.parkCell`) → `{ok, cmd, viewerParked}`; `command` only sends |
 | `world.ready(opts)` | async readiness gate report (§3.4) |

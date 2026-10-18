@@ -99,23 +99,35 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 `;
 
 const lerp = (a, b, t) => a + (b - a) * t;
+const ONE3 = Object.freeze([1, 1, 1]);
+const lerp3 = (out, a, b, k) => {
+  out[0] = lerp(a[0], b[0], k);
+  out[1] = lerp(a[1], b[1], k);
+  out[2] = lerp(a[2], b[2], k);
+  return out;
+};
+const gradeOut = () => ({
+  wb: [0, 0, 0], tint: [0, 0, 0], lift: [0, 0, 0], gain: [0, 0, 0], gamma: [0, 0, 0],
+  contrast: 0, pivot: 0, saturation: 0, vibrance: 0,
+});
 
-/** Blend two grade param sets at night fraction `t` into plain numbers. */
-export function blendGrade(day, night, t) {
+/**
+ * Blend two grade param sets at night fraction `t` into plain numbers. `out`
+ * (a previous result) is filled in place: the effect blends every frame and
+ * passes its own, so the per-frame path allocates nothing.
+ */
+export function blendGrade(day, night, t, out = gradeOut()) {
   const k = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0));
-  const m3 = (a, b) => [0, 1, 2].map((i) => lerp(a[i], b[i], k));
-  const one = [1, 1, 1];
-  return {
-    wb: m3(day.wb, night.wb),
-    tint: m3(day.tint ?? one, night.tint ?? one),
-    lift: m3(day.lift, night.lift),
-    gain: m3(day.gain, night.gain),
-    gamma: m3(day.gamma, night.gamma),
-    contrast: lerp(day.contrast, night.contrast, k),
-    pivot: lerp(day.pivot, night.pivot, k),
-    saturation: lerp(day.saturation, night.saturation, k),
-    vibrance: lerp(day.vibrance, night.vibrance, k),
-  };
+  lerp3(out.wb, day.wb, night.wb, k);
+  lerp3(out.tint, day.tint ?? ONE3, night.tint ?? ONE3, k);
+  lerp3(out.lift, day.lift, night.lift, k);
+  lerp3(out.gain, day.gain, night.gain, k);
+  lerp3(out.gamma, day.gamma, night.gamma, k);
+  out.contrast = lerp(day.contrast, night.contrast, k);
+  out.pivot = lerp(day.pivot, night.pivot, k);
+  out.saturation = lerp(day.saturation, night.saturation, k);
+  out.vibrance = lerp(day.vibrance, night.vibrance, k);
+  return out;
 }
 
 export class ColorGradeEffect extends Effect {
@@ -143,6 +155,8 @@ export class ColorGradeEffect extends Effect {
     // through the same remap the sky / moons / ground dim use.
     this._nightSource = nightSource;
     this._night = null;
+    // The per-frame blend result, reused (blendGrade fills it in place).
+    this._blend = gradeOut();
   }
 
   _nightNow() {
@@ -164,7 +178,7 @@ export class ColorGradeEffect extends Effect {
       const a = 1 - Math.exp(-Math.max(0, deltaTime || 0) * 4);
       this._night += (target - this._night) * a;
     }
-    const p = blendGrade(this.day, this.night, this._night);
+    const p = blendGrade(this.day, this.night, this._night, this._blend);
     const u = this.uniforms;
     u.get("uWB").value.fromArray(p.wb);
     u.get("uTint").value.fromArray(p.tint);

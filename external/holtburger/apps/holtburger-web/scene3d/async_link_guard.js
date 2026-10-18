@@ -39,6 +39,17 @@
 // orders multiplies V8 hidden classes and turns three's material reads
 // megamorphic (2.2x slower reads measured with prototype variants mixed into
 // the population — see batched_material_variant.js).
+//
+// CONTEXT RESTORE. three's onContextRestore builds a NEW WebGLProperties (and
+// program cache) and assigns it to `renderer.properties`, so the guard reads
+// that property at each use rather than holding the boot-time object (with the
+// dead map every material drawn first after a restore read "no program",
+// was deferred and compiled every frame, and never drew). Every stamp and every
+// slow-path record from before the loss describes programs that are gone: a
+// `webglcontextrestored` listener bumps an epoch folded into the combo stamp
+// and drops the records, so the restored world goes back through the deferred
+// compile instead of every stamped material linking synchronously in the first
+// restored frame.
 
 import { withWarmTarget } from "./shader_prewarm.js";
 
@@ -326,8 +337,9 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
   if (!FLAG || !renderer || typeof renderer.renderBufferDirect !== "function") return null;
   if (renderer.__hbAsyncLink) return renderer.__hbAsyncLink;
   const orig = renderer.renderBufferDirect;
-  const props = renderer.properties;
-  const slow = new WeakMap(); // material -> newLinkState()
+  // NOT captured: a context restore replaces renderer.properties (see header).
+  const propsOf = (m) => renderer.properties.get(m);
+  let slow = new WeakMap(); // material -> newLinkState()
   const stateOf = (m) => { let st = slow.get(m); if (!st) { st = newLinkState(); slow.set(m, st); } return st; };
   // Keyed by MATERIAL: three's compile() re-collects the target scene's lights,
   // so one compile per material — not per object — keeps a burst of new trees
@@ -391,7 +403,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
     pollArmed = false;
     for (const m of pollPending) {
       let prog = null;
-      try { prog = props.get(m).currentProgram; } catch (_) { /* disposed */ }
+      try { prog = propsOf(m).currentProgram; } catch (_) { /* disposed */ }
       let ready = true;
       try { ready = !prog || typeof prog.isReady !== "function" || prog.isReady() === true; } catch (_) { ready = true; }
       if (ready) {
@@ -409,7 +421,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
         st.combos.add(st.comboAtQueue);
         if (st.verMoveAtQueue) {
           let progs = 0;
-          try { progs = props.get(m).programs?.size ?? 0; } catch (_) { /* disposed */ }
+          try { progs = propsOf(m).programs?.size ?? 0; } catch (_) { /* disposed */ }
           st.verNoop = progs > st.progsAtQueue ? 0 : st.verNoop + 1;
         }
         stats.compiled += 1;
@@ -444,7 +456,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
       // A re-compile of a material that already has a program (a version or
       // kind move, not a first link): the compile below tells us whether it
       // needed a new program at all.
-      const qmp = props.get(qm);
+      const qmp = propsOf(qm);
       st.verMoveAtQueue = !!qmp.currentProgram;
       st.progsAtQueue = qmp.programs?.size ?? 0;
       objs.push(ctx.object);
@@ -483,18 +495,33 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
   // must be checked again).
   let mainScene = null;
   const clearOk = (ev) => { const m = ev && ev.target; if (m) m.__hbLinkOk = -1; };
+  // Context-restore epoch, in the bits above objectCombo's eight: a stamp from
+  // before the last restore no longer matches (one OR per draw, no 5th field).
+  let comboEpoch = 0;
+  const onContextRestored = () => {
+    comboEpoch += 256;
+    slow = new WeakMap(); // combos / compiled versions / trust: all for dead programs
+    readySigs.clear(); // the new program cache holds none of them
+    // In-flight polls belong to the old context; queued objects compile into the new one.
+    stats.inFlight -= pollPending.size;
+    pollPending.clear();
+  };
+  const canvas = renderer.domElement;
+  if (canvas && typeof canvas.addEventListener === "function") {
+    try { canvas.addEventListener("webglcontextrestored", onContextRestored, false); } catch (_) {}
+  }
   const ctl = { off: false }; // live A/B seam: window.__asyncLink.off = true
   renderer.renderBufferDirect = function (camera, scene, geometry, material, object, group) {
     if (ctl.off) return orig.call(this, camera, scene, geometry, material, object, group);
-    if (material && (material.__hbLinkOk !== material.version || material.__hbLinkOkOwner !== material || material.__hbLinkOkCombo !== objectCombo(object, material)) && scene !== null && object) {
+    if (material && (material.__hbLinkOk !== material.version || material.__hbLinkOkOwner !== material || material.__hbLinkOkCombo !== (objectCombo(object, material) | comboEpoch)) && scene !== null && object) {
       if (mainScene === null) mainScene = getMainScene() || null;
       if (scene === mainScene) {
         const combo = objectCombo(object, material);
         // Mesh*Material, or (?asyncLinkFar) a far-terrain patch / opted-in ShaderMaterial.
         if (!asyncLinkEligible(material)) {
-          stamp(material, combo); // never eligible: stamp and forget
+          stamp(material, combo | comboEpoch); // never eligible: stamp and forget
         } else {
-          const mp = props.get(material);
+          const mp = propsOf(material);
           const s0 = slow.get(material);
           if (s0 !== undefined) s0.curSig = null; // fingerprint cache: this decision only
           let d = linkDecision(material, mp, combo, s0);
@@ -521,7 +548,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
             }
             return;
           }
-          stamp(material, combo);
+          stamp(material, combo | comboEpoch);
           if (material.__hbLinkOkListen !== true && typeof material.addEventListener === "function") {
             try { material.addEventListener("dispose", clearOk); } catch (_) {}
             material.__hbLinkOkListen = true;
@@ -556,7 +583,12 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
     guards: (m) => !ctl.off && asyncLinkEligible(m),
     /** Test seam: the slow-path state of a material (undefined if none). */
     stateOf: (m) => slow.get(m),
-    uninstall() { renderer.renderBufferDirect = orig; delete renderer.__hbAsyncLink; if (_activeApi === api) _activeApi = null; },
+    uninstall() {
+      renderer.renderBufferDirect = orig;
+      try { canvas?.removeEventListener?.("webglcontextrestored", onContextRestored, false); } catch (_) {}
+      delete renderer.__hbAsyncLink;
+      if (_activeApi === api) _activeApi = null;
+    },
   };
   try { Object.defineProperty(renderer, "__hbAsyncLink", { value: api, configurable: true }); } catch (_) { renderer.__hbAsyncLink = api; }
   _activeApi = api;

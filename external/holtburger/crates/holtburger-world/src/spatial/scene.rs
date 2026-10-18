@@ -441,6 +441,14 @@ const REMOTE_FRICTION_NORMAL_CUTOFF: f32 = 0.25;
 /// D7 safety cap (s) on an arc that never meets a floor. Not retail (retail
 /// has a real collision sweep); it only stops a body hanging in the air.
 const REMOTE_ARC_MAX_S: f32 = 4.0;
+
+/// RUSTCRATES-1 — a settle fall's own cap: its free-fall time from rest plus
+/// a margin, never below the D7 cap. 4 s carries only ~78 m of fall from
+/// rest, so a 78-100 m settle (inside `REMOTE_SETTLE_MAX_DROP_M`) used to
+/// snap its last metres to the floor in one slice.
+fn remote_settle_arc_max_s(drop: f32) -> f32 {
+    ((2.0 * drop / -REMOTE_ARC_GRAVITY).sqrt() + 0.5).max(REMOTE_ARC_MAX_S)
+}
 /// D7 stopgap: a body standing more than this above every floor we can
 /// sample stands on geometry we cannot sample (a static such as a dock —
 /// static physics BSPs are not floor-probed here); its root motion keeps
@@ -7049,7 +7057,7 @@ impl SpatialScene {
                         let (mut next, v, mut landed) =
                             step_remote_arc(self, &arc, body.pose, body.remote_velocity, quantum);
                         let elapsed = arc.elapsed + quantum;
-                        if landed.is_none() && elapsed >= REMOTE_ARC_MAX_S {
+                        if landed.is_none() && elapsed >= arc.max_s {
                             let (z, n) = remote_ground_at(self, &next, next.coords.z + 0.05)
                                 .unwrap_or((arc.takeoff_z, up));
                             next.coords.z = z;
@@ -7087,6 +7095,7 @@ impl SpatialScene {
                         takeoff_z: next.coords.z,
                         unsampled_floor: None,
                         elapsed: 0.0,
+                        max_s: REMOTE_ARC_MAX_S,
                     });
                     self.remote_airborne_changes.push((guid, true));
                 }
@@ -7439,6 +7448,7 @@ impl SpatialScene {
                 takeoff_z: start_z,
                 unsampled_floor,
                 elapsed: 0.0,
+                max_s: REMOTE_ARC_MAX_S,
             });
             // spawnz: the jump's own arc lands the body; no settle on top.
             body.remote_settle_pending = false;
@@ -7566,6 +7576,7 @@ impl SpatialScene {
                 takeoff_z: body.pose.coords.z,
                 unsampled_floor: None,
                 elapsed: 0.0,
+                max_s: remote_settle_arc_max_s(drop),
             });
             body.remote_contact_plane = None;
             // Retail `CMotionInterp::LeaveGround` (acclient.c:344457) — the

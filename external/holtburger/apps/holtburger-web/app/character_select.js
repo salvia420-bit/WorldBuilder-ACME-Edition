@@ -323,7 +323,10 @@ export function initCharacterSelect(deps) {
       try { globalThis.window?.liveScene3d?.warmTerrainAssets?.(); } catch (_) {}
       if (key === "new") { previewNewCharacterSpot(); return; }
       const k = acctKey();
-      const loc = loadLastLocation(globalThis.localStorage, lastLocationKey({ ...k, charId: id }));
+      // Blocked site data: the localStorage getter itself throws.
+      let storage = null;
+      try { storage = globalThis.localStorage; } catch (_) { storage = null; }
+      const loc = loadLastLocation(storage, lastLocationKey({ ...k, charId: id }));
       if (loc) startSpawnPreview({ loc }).catch(() => {});
       else {
         // No spot on this browser yet: still warm the terrain chain once the
@@ -456,6 +459,17 @@ export function initCharacterSelect(deps) {
       showError(info?.text || String(ev.detail?.message || "Could not enter the world."));
       render();
     }
+  });
+  // A CharacterError (app/client_events.js `holtburger:charerror`, which also
+  // frees the refused character's Spawn button): retail RecvNotice_
+  // CharacterError shows the ID_CHAR_ERROR text and the screen stays usable,
+  // so a refused Enter ends "Entering game..." here. 2 / 7 / 22 have no text
+  // and show nothing.
+  window.addEventListener("holtburger:charerror", (ev) => {
+    if (root.dataset.open !== "1") return;
+    state.entering = false;
+    showError(characterErrorInfo(ev?.detail?.code).text);
+    render();
   });
 
   const api = {

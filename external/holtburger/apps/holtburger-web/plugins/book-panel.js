@@ -364,16 +364,33 @@ function buildOverlay() {
 // parchment can be screenshotted without a real book in the pack.
 let _debugSnap = null;
 
+// playerBook() builds a fresh wasm BookSnapshotJs (every page cloned), and
+// each `.pages` read builds a box per page; the range watch reads one every
+// 500 ms.
+// Copy to a plain snapshot and free the boxes here (2026-10-18), as
+// house-panel readSnap does.
 function readSnapshot() {
   if (_debugSnap) return _debugSnap;
   const handle = window.__sessionHandle;
   if (!handle?.playerBook) return null;
+  let o = null;
   try {
-    return handle.playerBook();
+    o = handle.playerBook();
   } catch (e) {
     console.warn("[book-panel] playerBook getter failed:", e);
     return null;
   }
+  if (!o) return null;
+  const out = {};
+  for (const k of ["objectGuid", "maxNumPages", "maxCharsPerPage", "inscription", "authorName", "scribeId"]) {
+    try { if (o[k] !== undefined) out[k] = o[k]; } catch (_) {}
+  }
+  let raw = [];
+  try { raw = Array.from(o.pages || []); } catch (_) { raw = []; }
+  out.pages = pagesOf({ pages: raw });
+  for (const p of raw) { try { p?.free?.(); } catch (_) {} }
+  try { o.free?.(); } catch (_) {}
+  return out;
 }
 
 function pagesOf(snap) {

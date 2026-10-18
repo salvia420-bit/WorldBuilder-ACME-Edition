@@ -201,14 +201,20 @@ function showTooltip(screenX, screenY, model, guid) {
   el.style.left = `${Math.round(pos.x)}px`;
   el.style.top = `${Math.round(pos.y)}px`;
   _currentGuid = guid >>> 0;
-  try { _client?.events?.emit?.("hoverEntity", { guid: _currentGuid, name: model.name, source: "tooltip" }); } catch (_) {}
+  emitHover({ guid: _currentGuid, name: model.name, source: "tooltip" });
+}
+
+// The bar mounts this at page load with ctx.client null and the bus exists
+// only after login, so resolve it per emit (2026-10-18).
+function emitHover(detail) {
+  try { (_client ?? window.__pluginClient)?.events?.emit?.("hoverEntity", detail); } catch (_) {}
 }
 
 function hideTooltip(emitBus = true) {
   if (_root) _root.style.display = "none";
   if (_restTimer) { clearTimeout(_restTimer); _restTimer = null; }
   if (emitBus && _currentGuid !== 0) {
-    try { _client?.events?.emit?.("hoverEntity", { guid: 0 }); } catch (_) {}
+    emitHover({ guid: 0 });
   }
   _currentGuid = 0;
 }
@@ -227,7 +233,7 @@ function armRestTimer(x, y) {
     if (!model) {
       // No name yet — emit the guid so other plugins can react, but
       // don't paint a tooltip with no content.
-      try { _client?.events?.emit?.("hoverEntity", { guid, name: null, source: "tooltip" }); } catch (_) {}
+      emitHover({ guid, name: null, source: "tooltip" });
       hideTooltip(false);
       return;
     }

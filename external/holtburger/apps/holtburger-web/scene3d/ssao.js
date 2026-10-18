@@ -94,11 +94,14 @@ vec3 viewPosAt(vec2 uv) { return viewPos(uv, viewW(uv)); }
 
 void main() {
   float d = texture2D(tDepth, vUv).r;
+  // Sky: no AO, and a far sentinel distance for the blur weights. It must fit
+  // the RG16F target (max 65504): a larger value may be stored as +Inf, and
+  // Inf - Inf in the blur turns the whole sky's AO into NaN.
 #ifdef USE_REVERSED_DEPTH_BUFFER
-  if (d <= 0.0) { gl_FragColor = vec4(1.0, 1.0e6, 0.0, 1.0); return; }
+  if (d <= 0.0) { gl_FragColor = vec4(1.0, 6.0e4, 0.0, 1.0); return; }
   float w = revW(d);
 #else
-  if (d >= 0.99999) { gl_FragColor = vec4(1.0, 1.0e6, 0.0, 1.0); return; }
+  if (d >= 0.99999) { gl_FragColor = vec4(1.0, 6.0e4, 0.0, 1.0); return; }
   float w = exp2(d * uLogFC) - 1.0;
 #endif
   if (w > uFade.y) { gl_FragColor = vec4(1.0, w, 0.0, 1.0); return; }
@@ -211,6 +214,7 @@ export class SsaoPass extends Pass {
     this.scene = new THREE.Scene();
     this.scene.add(this.quad);
     this.orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.ran = false;
     this.stats = { frames: 0 };
   }
 
@@ -233,6 +237,9 @@ export class SsaoPass extends Pass {
 
   render(renderer /* , inputBuffer, outputBuffer */) {
     const u = this.saoMat.uniforms;
+    // `ran` tells the composite whether rtA holds THIS frame's AO: a skipped
+    // frame (the top-down ortho camera, no depth yet) leaves an older frame's.
+    this.ran = false;
     if (!this.enabled || !u.tDepth.value || !this.camera || !this.camera.isPerspectiveCamera) return;
     const p = this.params;
     const pm = this.camera.projectionMatrix.elements;
@@ -265,6 +272,7 @@ export class SsaoPass extends Pass {
     renderer.render(this.scene, this.orthoCam);
     renderer.setRenderTarget(prevTarget);
     renderer.autoClear = prevAutoClear;
+    this.ran = true;
     this.stats.frames += 1;
   }
 
@@ -304,7 +312,9 @@ export class SsaoCompositeEffect extends Effect {
   update() {
     const p = this._pass;
     this.uniforms.get("tSsao").value = p.texture;
-    this.uniforms.get("uSsaoStrength").value = p.enabled ? p.params.strength : 0.0;
+    // Runs after the AO pass in the same frame (it is added ahead of the pass
+    // that composites it), so `ran` is this frame's.
+    this.uniforms.get("uSsaoStrength").value = p.enabled && p.ran ? p.params.strength : 0.0;
     this.uniforms.get("uGrassAo").value = p.params.grassAo;
   }
 }

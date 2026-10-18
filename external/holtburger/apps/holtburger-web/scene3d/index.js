@@ -46,12 +46,12 @@ const TERRAIN_AUDIT_ON = (() => {
 })();
 import {
   bakeBuildingsForLandblock,
-} from "./buildings.js?v=phase-d-batch";
+} from "./buildings.js";
 import {
   bakeStaticsForLandblock,
   getOrCreateMaterialCache,
   SEALED_STATICS_SKIP_ON,
-} from "./statics.js?v=phase7-par";
+} from "./statics.js";
 // ?statAtlas cross-LB static atlas per-LB eviction hook. Imported with the SAME
 // specifier statics.js uses (no ?v=) so it is the SAME module instance → shares
 // _lbMembership state. Wired onto liveScene3d at LRU construction so the LRU's

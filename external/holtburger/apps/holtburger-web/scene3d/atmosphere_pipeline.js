@@ -453,6 +453,11 @@ class SkyCapturePass extends Pass {
 //   ParticlesOverClouds  (the particle draw objects)   -> T
 //   EffectPass[Bloom, Vignette?, ToneMapping, Dithering]  reads T -> screen
 //
+// With `?layerHaze` (default on) the haze is what writes T: the atmosphere
+// EffectPass writes the composer buffer and LayeredHaze draws it into T, so
+// the particles land on a hazed scene. A haze drawn after them would fog a
+// near spell by the distance of the hills behind it (they write no depth).
+//
 // WHY A PRIVATE TARGET AND NOT A RenderPass ON THE PING-PONG BUFFERS. The
 // composer's buffers are MSAA (`?msaa`, default 2): a RenderPass's depth test
 // runs against the multisampled depth RENDERBUFFER of the buffer it draws into,
@@ -513,7 +518,9 @@ class PostChainTargetPass extends EffectPass {
  * Reads the late target instead of the composer's input buffer. With
  * `?nanScrub` on, that is the late NanScrub pass and the post half (built with
  * `latePass = null`) reads the composer input the scrub wrote; with it off, the
- * post half reads the late target itself.
+ * post half reads the late target itself. Under `?layerHaze` the atmosphere
+ * half is one too (`latePass = null`): it writes the composer buffer the haze
+ * then draws into the late target (PostChainHazePass).
  */
 class PostChainSourcePass extends EffectPass {
   constructor(camera, latePass, ...effects) {
@@ -545,6 +552,32 @@ class PostChainSourcePass extends EffectPass {
     } finally {
       if (restore) outputBuffer.resolveDepthBuffer = true;
     }
+  }
+}
+
+/**
+ * `?layerHaze` on the split chain (2026-10-18): the LayeredHazePass, drawn
+ * from the finished cloud + aerial composite (the composer input) INTO the
+ * late target, ahead of the late particle draw. It samples the stable depth
+ * copy, never T's depth attachment, and never swaps the ping-pong buffers.
+ */
+class PostChainHazePass extends Pass {
+  constructor(haze, latePass) {
+    super("LayeredHazePass", null, null);
+    this.needsSwap = false;
+    this.needsDepthTexture = true;
+    // Own property: the haze is not added to the composer, so this pass
+    // disposes it (pmndrs Pass.dispose takes every own Pass property).
+    this.haze = haze;
+    this._latePass = () => latePass;
+  }
+  setDepthTexture(depthTexture, depthPacking) {
+    this.haze.setDepthTexture(depthTexture, depthPacking);
+  }
+  render(renderer, inputBuffer, _outputBuffer) {
+    const late = this._latePass();
+    late.attachSceneDepth();
+    this.haze.render(renderer, inputBuffer, late.renderTarget);
   }
 }
 
@@ -1565,7 +1598,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // (and the clouds) apply on top — distant haze is never darkened.
   const ssaoPass = ssaoOpt ? new SsaoPass(camera) : null;
   // 2026-10-08 — ?layerHaze (default 0.4): after the clouds / aerial
-  // perspective pass, before bloom + tone mapping (see layered_haze.js).
+  // perspective pass, before bloom + tone mapping (see layered_haze.js); on the
+  // split chain also before the late particles (PostChainHazePass).
   const layerHazeStr = layerHazeStrength();
   const layeredHaze = layerHazeStr > 0
     ? new LayeredHazePass(camera, {
@@ -1738,6 +1772,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // as its own pass (bloom reads its INPUT buffer in update(), before any merged
   // effect runs): T -> late NanScrub -> composer buffer -> post half.
   let lateScrubPass = null;
+  let lateHazePass = null;
   let particlesOverCloudsPass = null;
   let fxPostPass = null;
   let fxPass;
@@ -1757,7 +1792,14 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): DoF over the finished
     // clouds + aerial + late particles, sorted ahead of fxGlow / bloom.
     if (filmDof) postEffects.push(filmDof.effect);
-    fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
+    if (layeredHaze) {
+      // 2026-10-18: the haze writes T from the finished composite, so the late
+      // particles are drawn over it rather than hazed by the depth behind them.
+      fxPass = new PostChainSourcePass(camera, null, ...atmosEffects);
+      lateHazePass = new PostChainHazePass(layeredHaze, particlesOverCloudsPass);
+    } else {
+      fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
+    }
     if (nanScrubOn) {
       lateScrubPass = new PostChainSourcePass(camera, particlesOverCloudsPass, makeNanScrub());
       fxPostPass = new PostChainSourcePass(camera, null, ...postEffects);
@@ -1806,11 +1848,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (layeredHaze && !particlesOverCloudsPass) composer.addPass(layeredHaze);
   composer.addPass(fxPass);
   if (particlesOverCloudsPass) {
+    // Split chain: after clouds + aerial perspective, before the late
+    // particles (drawn into the same target) and the bloom / tone-mapping
+    // pass — haze in HDR over the finished scene, under the particles.
+    if (lateHazePass) composer.addPass(lateHazePass);
     composer.addPass(particlesOverCloudsPass);
     if (lateScrubPass) composer.addPass(lateScrubPass);
-    // Split chain: after clouds + aerial perspective + late particles, before
-    // the bloom / tone-mapping pass — haze in HDR over the finished scene.
-    if (layeredHaze) composer.addPass(layeredHaze);
     composer.addPass(fxPostPass);
   }
   // Hand the clouds over only once the pass that now owns them exists: the
@@ -1973,8 +2016,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
    *
    * ⚠ INVARIANT: CALL THIS ONLY ON AN EXPLICIT CAMERA SWITCH, never per frame.
    * The define flip is a program-cache-key change — one recompile per switch is
-   * the intended cost; per-frame would fork programs every frame. Both call
-   * sites are already behind `cam !== activeCamera`.
+   * the intended cost; per-frame would fork programs every frame. Its caller
+   * (_switchCamera) only runs behind `cam !== activeCamera`.
    */
   function retargetFxPass(cam) {
     // `.mainCamera`, not `.camera`: on the pmndrs BASE Pass `set mainCamera` is
@@ -1990,6 +2033,23 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // autofocus camera); set it directly too, so autofocus can never measure
     // from a stale camera whichever pass holds the effect. Idempotent.
     if (filmDof) filmDof.effect.mainCamera = cam;
+  }
+
+  // Every pass that holds the render camera, for both switch paths (render()'s
+  // C-key path and setCamera). 2026-10-18: render() kept its own list and
+  // missed the AO and haze passes, so in topDown they decoded the ortho
+  // camera's linear depth with the perspective log formula.
+  function _switchCamera(cam) {
+    worldRenderPass.camera = cam;
+    cellsRenderPass.camera = cam;
+    aerialPerspective.camera = cam;
+    ssaoPass?.setCamera?.(cam);
+    layeredHaze?.setCamera?.(cam);
+    worldMaskPass.setCamera(cam);
+    cellsMaskPass.setCamera(cam);
+    cellsPostMaskPass.setCamera(cam);
+    retargetFxPass(cam);
+    activeCamera = cam;
   }
 
   // `?reversedZ=on` (shader_logdepth.js REVERSED-Z): the reversed depth decodes
@@ -2066,7 +2126,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     cellsRenderPass,
     cellsPostMaskPass,
     // With `?particlesOverClouds` built: fxPass = [HeatHaze?, Clouds,
-    // AerialPerspective] into the late target, fxPostPass = [Bloom, …,
+    // AerialPerspective] into the late target (under `?layerHaze`, into the
+    // composer buffer the haze draws into it), fxPostPass = [Bloom, …,
     // Dithering] from it. Otherwise fxPass is the single legacy pass and both
     // others are null.
     fxPass,
@@ -2365,16 +2426,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     },
 
     render(cam, dt = 0) {
-      if (cam && cam !== activeCamera) {
-        worldRenderPass.camera = cam;
-        cellsRenderPass.camera = cam;
-        aerialPerspective.camera = cam;
-        worldMaskPass.setCamera(cam);
-        cellsMaskPass.setCamera(cam);
-        cellsPostMaskPass.setCamera(cam);
-        retargetFxPass(cam);
-        activeCamera = cam;
-      }
+      if (cam && cam !== activeCamera) _switchCamera(cam);
       if (reversedZ) _syncFxNearFar(activeCamera);
       // Portal-stencil pass draws with the CURRENT render camera — set every
       // frame (not only on a switch) so its mainCamera can never be undefined
@@ -2473,16 +2525,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
     setCamera(cam) {
       if (!cam || cam === activeCamera) return;
-      worldRenderPass.camera = cam;
-      cellsRenderPass.camera = cam;
-      aerialPerspective.camera = cam;
-      ssaoPass?.setCamera?.(cam);
-      layeredHaze?.setCamera?.(cam);
-      worldMaskPass.setCamera(cam);
-      cellsMaskPass.setCamera(cam);
-      cellsPostMaskPass.setCamera(cam);
-      retargetFxPass(cam);
-      activeCamera = cam;
+      _switchCamera(cam);
     },
 
     dispose() {

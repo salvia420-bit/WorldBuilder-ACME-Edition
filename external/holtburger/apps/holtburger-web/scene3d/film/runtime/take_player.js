@@ -238,7 +238,10 @@ export const NEUTRAL_SETPOINT = Object.freeze({
   source: "none",
 });
 
-/** The film clock's fps floor: slower takes render at this clock rate (film time still advances 1/fps per frame). */
+/**
+ * The film clock's fps floor: a slower take steps the clock ⌈floor/fps⌉ times per film frame
+ * (only the last step is grabbed), so the world still advances 1/fps per film frame.
+ */
 const CLOCK_FPS_FLOOR = FILM_CLOCK_MIN_FPS;
 
 /** Live-subject re-anchoring of takes whose subject moves on the wall clock (see the header). */
@@ -3146,8 +3149,10 @@ export function createTakePlayer(deps = {}) {
     }
   }
 
-  async function renderStep(R, clock, grabT) {
+  async function renderStep(R, clock, grabT, sub = 1) {
     if (!R.render) return;
+    // A take below the clock's floor: the film frame's earlier clock frames are drawn, not grabbed.
+    for (let i = 1; i < sub; i += 1) await clock.step();
     if (grabT !== null) R.armed = { t: grabT, ts: undefined };
     const pr = clock.step();
     // step() stamps its timestamp before rendering; a synchronous postRender inside
@@ -3164,7 +3169,10 @@ export function createTakePlayer(deps = {}) {
     const clock = R.render ? clockOf() : null;
     if (R.render && !clock) throw new FilmError("stepped take: no film clock (window.__renderOnce / the index.js seam is missing)", "FILM_RENDER_UNAVAILABLE");
     if (R.render && clock.active) throw new FilmError("stepped take: the film clock is already running", "FILM_BUSY");
-    const clockFps = clamp(R.fps, CLOCK_FPS_FLOOR, FILM_CLOCK_MAX_FPS);
+    // Below the floor (the CLI rehearses at 8 fps) a film frame is `sub` clock frames, so tick
+    // dt, the particle / FX / scenery time and the time-lapse move 1/fps per film frame.
+    const sub = R.fps < CLOCK_FPS_FLOOR ? Math.ceil(CLOCK_FPS_FLOOR / R.fps) : 1;
+    const clockFps = clamp(R.fps * sub, CLOCK_FPS_FLOOR, FILM_CLOCK_MAX_FPS);
     if (R.render) {
       const b = { fps: clockFps, seed: plan.seed };
       if (plan.timeLapse) b.timeLapse = plan.timeLapse;
@@ -3183,7 +3191,7 @@ export function createTakePlayer(deps = {}) {
           R.droneStart = R.drone ? pose0 : null;
         }
         preRollStep(R, i, pose0, dt);
-        await renderStep(R, clock, null);
+        await renderStep(R, clock, null, sub);
       }
       for (let k = 0; ; k += 1) {
         if (abortRequested) {
@@ -3208,7 +3216,7 @@ export function createTakePlayer(deps = {}) {
           notePopIn(R);
           fireCues(R, t);
         }
-        await renderStep(R, clock, R.record ? t : null);
+        await renderStep(R, clock, R.record ? t : null, sub);
         if (R.record && R.recorder) {
           if (R.recorder.state === "failed") {
             throw new FilmError(`the recorder failed: ${(R.recorder.stats().errors || []).slice(-1)[0] || "unknown error"}`, "FILM_RECORDER_FAILED");

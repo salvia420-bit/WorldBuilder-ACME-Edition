@@ -301,15 +301,25 @@ export function mount(ctx) {
     return () => {};
   }
   ensureStyles();
+  // The bar mounts this at page load with ctx.client null; the bus exists
+  // only after login, so subscribe through __pluginClientReady (2026-10-18:
+  // bound at mount only, a fired tinker never left "Working…").
+  let disposed = false;
+  const subscribe = (client) => {
+    if (disposed || state.unsubInventory || !client?.events?.on) return;
+    state.client = client;
+    try {
+      client.events.on("playerInventoryChanged", onInventoryChanged);
+      state.unsubInventory = () => client.events.off?.("playerInventoryChanged", onInventoryChanged);
+    } catch (e) {
+      console.warn("[tinker-panel] playerInventoryChanged subscribe failed:", e);
+    }
+  };
   const client = ctx?.client ?? window.__pluginClient ?? null;
-  state.client = client;
-  try {
-    client?.events?.on?.("playerInventoryChanged", onInventoryChanged);
-    state.unsubInventory = () => client?.events?.off?.("playerInventoryChanged", onInventoryChanged);
-  } catch (e) {
-    console.warn("[tinker-panel] playerInventoryChanged subscribe failed:", e);
-  }
+  if (client?.events?.on) subscribe(client);
+  else window.__pluginClientReady?.then?.((c) => subscribe(c ?? window.__pluginClient));
   return () => {
+    disposed = true;
     try { state.unsubInventory?.(); } catch (_) {}
     state.unsubInventory = null;
     state.client = null;

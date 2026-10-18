@@ -25,7 +25,11 @@
 //       the character is known; PlayerDescription (a playerStatsUpdated with
 //       attributes) loads THIS character's cache and flushes its stale items;
 //       the mount event and the window.__hotbar API (addonSlot) are unchanged;
-//       `?hotbarPerChar=off` restores the browser-wide cache read at mount.
+//       `?hotbarPerChar=off` restores the browser-wide cache read at mount;
+//   [8] production order (mount with client null, the bus after login): the
+//       inventory / landblock / cooldown listeners bind on
+//       __pluginClientReady (a used-up item's slot clears + RemoveShortCut),
+//       and a merge takes ONE freed inventory snapshot for its wcids.
 //
 // Run from apps/holtburger-web/:  node tests/hotbar_per_character.test.mjs
 
@@ -474,6 +478,101 @@ check("legacy: an empty server list never reconciles, binds save to the browser-
 });
 dispose();
 globalThis.location = { search: "" };
+
+console.log("\n[8] mount in production order — the bar before login (client null), the bus after");
+// app/plugin_bar.js mountBar({client: null}) runs at page load; index.html
+// builds window.__pluginClient at login and resolves __pluginClientReady.
+// [5]-[7] pre-set the bus, so they could not see that the inventory /
+// landblock / cooldown listeners never bound (2026-10-18, PLUGINS-A-1).
+const lateClient = window.__pluginClient;
+delete window.__pluginClient;
+let resolveReady = null;
+window.__pluginClientReady = new Promise((r) => { resolveReady = r; });
+seedStorage();
+pdLanded = false;
+serverList = [];
+delete window.__sessionHandle;
+delete window.__hbLoginKey;
+const ITEM_C = 0x7000BB03;
+let invGuids = [ITEM_B, ITEM_B_STALE, ITEM_C];
+let invCalls = 0;
+let boxes = 0;
+let freed = 0;
+const lateHandle = {
+  ...makeHandle(CHAR_B),
+  objectName: () => "Healing Potion",
+  getObjectIconId: () => 0x06001234,
+  playerInventory: () => {
+    invCalls++;
+    return invGuids.map((guid) => { boxes++; return { guid, wcid: 900 + (guid & 0xff), free() { freed++; } }; });
+  },
+};
+const itemHandlers = () => ["playerInventoryChanged", "landblockChanged", "sharedCooldownChanged"]
+  .map((t) => busHandlers.get(t)?.size ?? 0);
+const settle = () => new Promise((r) => setTimeout(r, 0));
+dispose = hotbar.mount({ client: null });
+check("mounted before login: no inventory / landblock / cooldown listener yet", () => {
+  eq(itemHandlers(), [0, 0, 0]);
+});
+window.__pluginClient = lateClient;
+resolveReady(lateClient);
+await settle();
+check("__pluginClientReady resolves → each of the three listeners bound once", () => {
+  eq(itemHandlers(), [1, 1, 1]);
+});
+check("PlayerDescription with 3 server item slots: one inventory snapshot for the wcids, every box freed", () => {
+  window.__hbLoginKey = { server: SERVER, account: ACCOUNT };
+  window.__sessionHandle = lateHandle;
+  pdLanded = true;
+  serverList = [...triple(0, ITEM_B), ...triple(1, ITEM_B_STALE), ...triple(2, ITEM_C)];
+  invCalls = 0; boxes = 0; freed = 0;
+  lateClient.events.emit("playerStatsUpdated", {});
+  eq(slotsNow().slice(0, 3), [
+    { itemGuid: ITEM_B, wcid: 901 }, { itemGuid: ITEM_B_STALE, wcid: 902 }, { itemGuid: ITEM_C, wcid: 903 },
+  ]);
+  eq(invCalls, 2, "the merge's wcid lookup once + the post-merge prune once");
+  eq(freed, boxes, "every InventoryItem box freed");
+});
+check("an item used up (gone from the pack) → its slot clears and RemoveShortCut is sent", () => {
+  calls.length = 0;
+  invGuids = [ITEM_B, ITEM_C];
+  lateClient.events.emit("playerInventoryChanged", {});
+  eq(slotsNow()[1], null, "slot 2 cleared");
+  eq(calls.filter((c) => c[0] === "removeShortcut"), [["removeShortcut", 1]]);
+  eq(slotsNow()[0], { itemGuid: ITEM_B, wcid: 901 }, "a present item stays");
+});
+check("sharedCooldownChanged reaches the bar (rec #84 sweep on a pkg without the cooldown getters)", () => {
+  const slots = document.querySelectorAll(".hb-hotbar-slot");
+  ok(slots.length > 0, "slots");
+  lateClient.events.emit("sharedCooldownChanged", { activeCount: 1 });
+  ok(slots.every((s) => s.classList.contains("cooldown-active")), "every slot sweeping");
+  lateClient.events.emit("sharedCooldownChanged", { activeCount: 0 });
+  ok(!slots.some((s) => s.classList.contains("cooldown-active")), "cleared");
+});
+dispose();
+check("dispose unbinds the late listeners", () => {
+  eq(itemHandlers(), [0, 0, 0]);
+});
+dispose = hotbar.mount({ client: lateClient });
+check("a client present at mount binds once (the ready promise adds nothing)", () => {
+  eq(itemHandlers(), [1, 1, 1]);
+});
+await settle();
+check("…still once after the ready promise settles", () => {
+  eq(itemHandlers(), [1, 1, 1]);
+});
+dispose();
+delete window.__pluginClient;
+window.__pluginClientReady = new Promise((r) => { resolveReady = r; });
+dispose = hotbar.mount({ client: null });
+dispose();
+window.__pluginClient = lateClient;
+resolveReady(lateClient);
+await settle();
+check("a bar disposed before login never binds them", () => {
+  eq(itemHandlers(), [0, 0, 0]);
+});
+delete window.__pluginClientReady;
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

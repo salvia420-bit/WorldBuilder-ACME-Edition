@@ -5879,6 +5879,18 @@ function drainOneTerrainLodRebake(scene3d) {
       if (ud && ud.lbX === lbX && ud.lbY === lbY) old.push(c);
     }
   }
+  // 2026-10-18 — the LB left residency after it was queued (parked, or
+  // evicted, between reconcile and this drain — typically a refused re-bake
+  // waiting out its backoff after a portal). Drop it: re-baking here would
+  // put terrain (and a visible batch row) back for a parked LB, or re-track
+  // an evicted one as resident. Unpark re-attaches the stashed mesh and the
+  // normal loaders re-bake an evicted LB when it is wanted again.
+  let parked = false;
+  try { parked = !!scene3d.landblockLru?.isParked?.(lbKey); } catch (_) { /* fail-soft */ }
+  if (old.length === 0 || parked) {
+    scene3d._lodRebakeDropped = (scene3d._lodRebakeDropped | 0) + 1;
+    return;
+  }
   const baked = scene3d.terrainBakedLbs instanceof Set ? scene3d.terrainBakedLbs : null;
   // Clear the idempotency gate so the lazy baker re-bakes (it short-circuits
   // on terrainBakedLbs.has(lbKey)); opts.playerLbKey was updated in reconcile
@@ -5887,7 +5899,7 @@ function drainOneTerrainLodRebake(scene3d) {
   inflight.add(lbKey);
   const refused = () => {
     // Keep the old (still drawn) mesh; restore the gate; retry later.
-    if (baked && old.length > 0) baked.add(lbKey);
+    if (baked) baked.add(lbKey);
     backoff.set(lbKey, ((typeof performance !== "undefined") ? performance.now() : Date.now()) + LOD_REBAKE_RETRY_MS);
     queue.add(lbKey);
     scene3d._lodRebakeRefused = (scene3d._lodRebakeRefused | 0) + 1;

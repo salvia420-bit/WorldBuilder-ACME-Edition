@@ -1432,10 +1432,14 @@ const SEALED_EVICT_ENABLED = (() => {
 // frame at a dense hub (a CPU profile at Town Network: `updateMatrixWorld` 7.7%,
 // cellsGroup ≈ 1,100 of ~2,900 scene nodes). When ON, each cell container's
 // world matrix is computed once at attach (ancestor-safe via
-// updateWorldMatrix(true,true)) then `matrixWorldAutoUpdate=false` makes three
-// skip the whole subtree every frame. SAFE: interior animated scenery +
-// default-script particles live in `staticsGroup` (world-frame), NOT under the
-// cell container, so they still animate.
+// updateWorldMatrix(true,true)) and then its WHOLE subtree is frozen
+// (`_freezeCellSubtree`): three r184 recomposes every `matrixAutoUpdate` node
+// and walks into the children of a `matrixWorldAutoUpdate=false` one, so
+// freezing only the container saved one multiply per cell. The walk still
+// visits each node; it no longer composes or multiplies. SAFE: default-script
+// particles live in `staticsGroup`, and what is parented here AFTER the attach
+// (the animated props `attachAnimatedScenery` hangs on their cell, Setup
+// lights) keeps auto-updating under the frozen nodes.
 /** ?cellStaticMerge totals (window.__cellStaticMerge): props merged, the draw ranges they
  *  had, the merged meshes they became. */
 const _cellStaticMergeStats = { props: 0, ranges: 0, meshes: 0, errors: 0 };
@@ -1450,6 +1454,13 @@ const FREEZE_STATIC_MATRIX = (() => {
   } catch (_) {}
   return true;
 })();
+/** FREEZE_STATIC_MATRIX: stop three recomposing `root`'s subtree (world matrices already computed). */
+function _freezeCellSubtree(root) {
+  root.traverse((o) => {
+    o.matrixAutoUpdate = false;
+    o.matrixWorldAutoUpdate = false;
+  });
+}
 
 // Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
 // bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
@@ -2598,11 +2609,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // matrix ONCE now — updateWorldMatrix(true,…) walks ancestors first, so this
     // is correct regardless of whether the render loop has updated worldRoot yet
     // this frame — then stop three from re-composing the subtree each frame.
-    // Cell VISIBILITY still toggles freely (that never touches the matrix), and
-    // animated scenery/particles live in staticsGroup, not here.
+    // Cell VISIBILITY still toggles freely (that never touches the matrix);
+    // particles live in staticsGroup, and the animated props join later.
     if (FREEZE_STATIC_MATRIX) {
       container.updateWorldMatrix(true, true);
-      container.matrixWorldAutoUpdate = false;
+      _freezeCellSubtree(container);
     }
   }
 
@@ -2704,13 +2715,16 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       // Into the live containers, as the attach above would have left them:
       // the container's current layer mask (1, or the `?portalStencil` cell
       // layer) and, under FREEZE_STATIC_MATRIX, a one-shot world matrix from
-      // the container's frozen one.
+      // the container's frozen one, then frozen like the walls.
       for (const { container, staging } of staged) {
         const mask = container.layers.mask;
         for (const child of staging.children.slice()) {
           child.traverse((o) => { o.layers.mask = mask; });
           container.add(child);
-          if (FREEZE_STATIC_MATRIX) child.updateWorldMatrix(false, true);
+          if (FREEZE_STATIC_MATRIX) {
+            child.updateWorldMatrix(false, true);
+            _freezeCellSubtree(child);
+          }
         }
       }
     } catch (e) {
@@ -2793,10 +2807,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         };
         // Match the attach-time container state: layer 1 (cells render
         // layer) and a one-shot world-matrix compose (the container is
-        // matrix-frozen, but its own matrixWorld is already correct).
+        // matrix-frozen, but its own matrixWorld is already correct), then
+        // frozen like its neighbours.
         m.layers.set(1);
         container.add(m);
         m.updateWorldMatrix(false, false);
+        if (FREEZE_STATIC_MATRIX) _freezeCellSubtree(m);
         if (typeof container.userData?.peeledAnimated === "number") {
           container.userData.peeledAnimated -= 1;
         }
@@ -3542,7 +3558,9 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     lastVisible.clear();
     for (const cellId of visibleSet) lastVisible.add(cellId);
   }
-  if (castChanged) requestShadowRaster(scene3d.renderer);
+  // RENDER-5: pass scene3d so the managed lights' own shadow.autoUpdate
+  // gate (lighting.js mover scope) re-rasters too.
+  if (castChanged) requestShadowRaster(scene3d.renderer, scene3d);
 
   // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
   // against the just-applied visibility state. Reuses `cellId` resolved

@@ -1178,6 +1178,19 @@ function _terrainMaterials() {
   return null;
 }
 
+// The per-entity rate limit keys on guid, and monsters respawn under fresh
+// guids, so a long hunt would grow `lastStepAt` without bound. An entry stops
+// mattering puffMinIntervalSec after its step, and the per-frame puff budget
+// keeps at most ~60 live even at 144 fps, so a sweep past this size frees most
+// of the map and runs rarely.
+const LAST_STEP_SWEEP_AT = 256;
+
+function _sweepLastSteps(tSec) {
+  for (const [key, last] of _dirt.lastStepAt) {
+    if (tSec - last >= DIRT_TUNING.puffMinIntervalSec) _dirt.lastStepAt.delete(key);
+  }
+}
+
 /**
  * THE footfall entry point — the function `entities.js::_fireHook` calls when a
  * `Sound.Footstep1/2` SoundTable hook fires (plan §3.7 item 1). Installed as
@@ -1233,6 +1246,7 @@ export function terrainFootfall(guid, x, y, z) {
   const p = puffForGround(sample, _dirt.wetness);
   if (!p.keep) { _stats.footfallsRejected += 1; return false; }
   _dirt.lastStepAt.set(key, tSec);
+  if (_dirt.lastStepAt.size > LAST_STEP_SWEEP_AT) _sweepLastSteps(tSec);
   _dirt.frameEmits += 1;
   if (_dirt.puffs.emit(x, y, ground, tSec, p.colour, p.dust)) {
     _stats.puffs += 1;
@@ -1582,6 +1596,8 @@ export function terrainDirtStats() {
     // __terrainSnow.visibleRibbons): non-zero means the effect actually landed.
     livePuffs: _dirt && _dirt.puffs ? _dirt.puffs.stats().live : 0,
     visibleHaze: _dirt && _dirt.haze ? _dirt.haze.pool.stats().live : 0,
+    // Per-entity rate-limit entries (swept, so bounded however many guids step).
+    rateLimitEntries: _dirt ? _dirt.lastStepAt.size : 0,
     puffs: _dirt && _dirt.puffs ? _dirt.puffs.stats() : null,
     haze: _dirt && _dirt.haze ? _dirt.haze.stats() : null,
     counters: { ..._stats },

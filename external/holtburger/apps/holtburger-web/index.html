@@ -1136,7 +1136,7 @@
     <link rel="modulepreload" href="./scene3d/batched_material_variant.js">
     <link rel="modulepreload" href="./scene3d/bc7_textures.js">
     <link rel="modulepreload" href="./scene3d/blood_decals.js">
-    <link rel="modulepreload" href="./scene3d/buildings.js?v=phase-d-batch">
+    <link rel="modulepreload" href="./scene3d/buildings.js">
     <link rel="modulepreload" href="./scene3d/camera.js">
     <link rel="modulepreload" href="./scene3d/camera_math.js">
     <link rel="modulepreload" href="./scene3d/canopy_soften.js">
@@ -1292,7 +1292,7 @@
     <link rel="modulepreload" href="./scene3d/static_atlas.js">
     <link rel="modulepreload" href="./scene3d/static_batch_x.js">
     <link rel="modulepreload" href="./scene3d/static_geom_cache.js">
-    <link rel="modulepreload" href="./scene3d/statics.js?v=phase7-par">
+    <link rel="modulepreload" href="./scene3d/statics.js">
     <link rel="modulepreload" href="./scene3d/stream_bake_guard.js">
     <link rel="modulepreload" href="./scene3d/suite_assets.js">
     <link rel="modulepreload" href="./scene3d/sun_direction.js">
@@ -4414,6 +4414,14 @@
         u.searchParams.set("autoSpawn", "select");
         u.searchParams.delete("password");
         if (window.__hbLoginKey?.account) u.searchParams.set("account", window.__hbLoginKey.account);
+        // The bridge + server this session used (picked or typed, or a URL
+        // param the player has since changed): the reload logs back in there.
+        const ep = window.__hbLoginEndpoint;
+        if (ep) {
+          u.searchParams.set("bridge_url", ep.bridgeUrl);
+          u.searchParams.set("server_host", ep.serverHost);
+          u.searchParams.set("server_port", String(ep.serverPort));
+        }
         window.location.replace(u.toString());
         return true;
       };
@@ -4552,6 +4560,9 @@
 
         // 2026-10-09 — the key the remembered character spots are filed under.
         window.__hbLoginKey = { server: `${serverHost}:${serverPort}`, account };
+        // …and the endpoint itself, for the /logout reload: nothing persists
+        // these fields, so the form would come back with its defaults.
+        window.__hbLoginEndpoint = { bridgeUrl, serverHost, serverPort };
 
         const submitBtn = loginForm.querySelector("button[type=submit]");
         // Keep button clickable so retries are possible (bridge / ACE
@@ -4560,7 +4571,9 @@
         // start_session — the latest handle wins.
         submitBtn.dataset.connecting = "1";
         submitBtn.textContent = "Connect (retry)";
-        loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverHost}:${serverPort}</code>) and sending LoginRequest…`;
+        // escapeHtml: the host comes from the community serverslist (picker)
+        // or a URL param, the bridge URL from a URL param.
+        loginStatus.innerHTML = `Connecting to <code>${escapeHtml(bridgeUrl)}</code> (server <code>${escapeHtml(serverHost)}:${serverPort}</code>) and sending LoginRequest…`;
         // 'connecting' fires for both the first kick-Connect and any
         // manual retry. The autonomous orchestrator below overrides
         // this with 'kicking' / 'reconnecting' immediately AFTER this
@@ -4918,7 +4931,7 @@
                     client: window.__pluginClient,
                     onSuccess: ({ name }) => {
                       createStatus.innerHTML =
-                        `<span class="ok">[OK]</span> Wizard created <strong>${name}</strong>. Character list refreshing…`;
+                        `<span class="ok">[OK]</span> Wizard created <strong>${escapeHtml(name)}</strong>. Character list refreshing…`;
                       mod.closeWizard();
                       // Re-render the list — recv loop already
                       // updated `handle.characterList()` via the
@@ -5144,11 +5157,13 @@
             const restoreBtn = ev.target.closest("button[data-restore-id]");
             if (restoreBtn) {
               const id = Number(restoreBtn.dataset.restoreId);
+              // `dataset.name` is the DECODED wire name (renderCharacterList
+              // escapes it into the attribute only): escape it again below.
               const name = restoreBtn.dataset.name || "<unknown>";
               try {
                 handle.restoreCharacter(id);
                 loginStatus.innerHTML =
-                  `<span class="ok">[OK]</span> Restore requested for <strong>${name}</strong>; awaiting CharacterList re-fire.`;
+                  `<span class="ok">[OK]</span> Restore requested for <strong>${escapeHtml(name)}</strong>; awaiting CharacterList re-fire.`;
               } catch (err) {
                 loginStatus.innerHTML =
                   `<span class="fail">[FAIL]</span> restoreCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
@@ -5164,6 +5179,7 @@
               return;
             }
             const id = Number(btn.dataset.id);
+            // The DECODED wire name, as in the Restore branch: escaped below.
             const name = btn.parentElement?.dataset?.name || "<unknown>";
             spawningCharId = id;
             setBootState("spawning", name);
@@ -5182,7 +5198,7 @@
             }
             btn.textContent = "Spawning…";
             loginStatus.innerHTML =
-              `<span class="ok">[OK]</span> Selected <strong>${name}</strong>; ` +
+              `<span class="ok">[OK]</span> Selected <strong>${escapeHtml(name)}</strong>; ` +
               `awaiting CharacterEnterWorldServerReady → CharacterEnterWorld → PlayerCreate.`;
           }, __sessionUiOpts);
 
@@ -6670,6 +6686,10 @@
           renderStatus.textContent = "Booting Holtburg renderer…";
           await renderHoltburg();
         } catch (err) {
+          // RUSTNET-1 (2026-10-18): a ?netWorker=1 attempt that a newer
+          // Connect superseded rejects with err.superseded. The newer attempt
+          // owns the form and the boot state, so this one just goes away.
+          if (err?.superseded) return;
           const msg = String(err?.message ?? err);
           // Escaped: a pre-CharacterList AccountBoot rejects with the
           // server's reason (inventory-session-6); a boot line drops the

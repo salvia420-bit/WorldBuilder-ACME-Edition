@@ -1046,9 +1046,13 @@ check("T1 locked replay reproduces the rehearsal's realised checksum (no pilot, 
 check("T1 rehearse at the CLI's default 8 fps: film time 1/8 s per frame on a ≥ 10 fps clock; render:false never touches the clock", async () => {
   const R = rig();
   R.player.prepare({ trajectory: northDolly(2), capture: { fps: 30 } });
+  const t0 = R.live.frameTime.tsMs;
   const reh = await R.player.rehearse({ fps: 8 });
   assert.equal(reh.frames, 16);
-  assert.equal(R.clockLog.begins[0].fps, 10, "clamped to the film clock's floor");
+  // Review FILM-2 (2026-10-18): a 10 fps clock under an 8 fps take ran the world at 0.8×.
+  assert.equal(R.clockLog.begins[0].fps, 16, "two clock frames per film frame (the clock's floor is 10 fps)");
+  assert.equal(R.clockLog.steps % 2, 0);
+  near(R.live.frameTime.tsMs - t0, (R.clockLog.steps / 2) * 125, 1e-6, "the world clock moves 1/8 s per film frame");
   near(reh.realisedTable.rows[15 * TR.TABLE_STRIDE], 15 / 8, 1e-12, "take time stays k/8");
   assert.equal(reh.realisedTable.fps, 8);
   const steps = R.clockLog.steps;

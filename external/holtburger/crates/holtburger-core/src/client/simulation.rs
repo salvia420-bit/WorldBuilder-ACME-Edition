@@ -50,6 +50,42 @@ fn approximate_move_to_object_projection_target(
 /// acclient.c:346217-346221).
 const HOLD_KEY_RUN: u32 = 2;
 
+/// `UseFinalHeading` (MovementParams bit 6, `bitfield & 0x40`,
+/// acclient.c:345893): the MoveTo ends with a turn to `desired_heading`.
+const MOVETO_USE_FINAL_HEADING: u32 = 0x40;
+
+/// The final facing of a projected server MoveToObject (RUSTCRATES-2).
+/// Retail `MoveToObject_Internal` (acclient.c:345895-345901) adds a turn to
+/// the heading to the object PLUS `desired_heading` only with
+/// UseFinalHeading; that heading is an offset, so it needs no compass
+/// conversion (math.rs). Otherwise the walk ends facing the object.
+fn move_to_object_final_rotation(
+    params: &holtburger_protocol::messages::motion::MoveToParameters,
+    from: &Vector3,
+    object: &Vector3,
+) -> Quaternion {
+    let to_object = from.heading_to(object);
+    if params.movement_parameters & MOVETO_USE_FINAL_HEADING != 0 {
+        Quaternion::from_heading(to_object + params.desired_heading.to_radians())
+    } else {
+        Quaternion::from_heading(to_object)
+    }
+}
+
+/// A MoveToPosition's final facing: the ABSOLUTE wire heading with
+/// UseFinalHeading (acclient.c:345835-345836), else the travel direction.
+fn move_to_position_final_rotation(
+    params: &holtburger_protocol::messages::motion::MoveToParameters,
+    from: &Vector3,
+    destination: &Vector3,
+) -> Quaternion {
+    if params.movement_parameters & MOVETO_USE_FINAL_HEADING != 0 {
+        Quaternion::from_wire_heading(params.desired_heading)
+    } else {
+        Quaternion::from_heading(from.heading_to(destination))
+    }
+}
+
 /// F1 (COL-21) — the server-controlled `MoveToObject` projection's
 /// approach rate in REAL m/s, plus the gait retail's own gate picks.
 ///
@@ -684,11 +720,11 @@ impl ClientSimulationSystem {
                     mto.params.distance_to_object,
                     target_use_radius,
                 );
-                target_pose.rotation = if mto.params.desired_heading.abs() <= 1e-6 {
-                    Quaternion::from_heading(target_pose.coords.heading_to(&mto.origin.position))
-                } else {
-                    Quaternion::from_wire_heading(mto.params.desired_heading)
-                };
+                target_pose.rotation = move_to_object_final_rotation(
+                    &mto.params,
+                    &target_pose.coords,
+                    &mto.origin.position,
+                );
 
                 // F1 (COL-21) — `get_command`'s hold-key rule measures to
                 // the TARGET OBJECT centre, not to the arrival standoff
@@ -909,17 +945,11 @@ impl ClientSimulationSystem {
                         arrival_dist,
                     );
 
-                    // NPC-facing fix (2026-10-11): a wire heading is the
-                    // compass in DEGREES (`from_wire_heading`) — these snaps
-                    // fed it to `from_heading` as pose radians.
-                    if mto.params.desired_heading.abs() <= 1e-6 {
-                        next_pos.rotation = Quaternion::from_heading(
-                            next_pos.coords.heading_to(&mto.origin.position),
-                        );
-                    } else {
-                        next_pos.rotation =
-                            Quaternion::from_wire_heading(mto.params.desired_heading);
-                    }
+                    next_pos.rotation = move_to_object_final_rotation(
+                        &mto.params,
+                        &next_pos.coords,
+                        &mto.origin.position,
+                    );
                 } else {
                     next_pos.coords = mto.origin.position;
                     next_pos.coords.x += arrival_dist;
@@ -929,13 +959,11 @@ impl ClientSimulationSystem {
                 next_pos.landblock_id = mtp.origin.cell_id;
                 next_pos.coords = mtp.origin.position;
 
-                if mtp.params.desired_heading.abs() > 1e-6 {
-                    next_pos.rotation = Quaternion::from_wire_heading(mtp.params.desired_heading);
-                } else {
-                    next_pos.rotation = Quaternion::from_heading(
-                        current_pos.coords.heading_to(&mtp.origin.position),
-                    );
-                }
+                next_pos.rotation = move_to_position_final_rotation(
+                    &mtp.params,
+                    &current_pos.coords,
+                    &mtp.origin.position,
+                );
             }
             MovementTypeData::TurnToHeading(tth) => {
                 next_pos.rotation = Quaternion::from_wire_heading(tth.params.desired_heading);
@@ -1109,6 +1137,44 @@ mod tests {
             WorldEvent::ForcedReposition { guid, pos, sequence }
                 if *guid == remote_guid && *pos == remote_pose && *sequence == 0
         )));
+    }
+
+    /// RUSTCRATES-2 — a MoveToObject's `desired_heading` is an OFFSET from
+    /// the heading to the object, applied only with UseFinalHeading (retail
+    /// `MoveToObject_Internal`, acclient.c:345895-345901); a MoveToPosition's
+    /// is an absolute compass heading, again only with the bit.
+    #[test]
+    fn move_to_final_heading_follows_use_final_heading() {
+        let from = Vector3::new(10.0, 20.0, 0.0);
+        let object = Vector3::new(30.0, 20.0, 0.0);
+        let to_object = from.heading_to(&object);
+        let with = |bits: u32, desired_heading: f32| MoveToParameters {
+            movement_parameters: bits,
+            desired_heading,
+            ..Default::default()
+        };
+        let close = |a: f32, b: f32| {
+            let d = (a - b).rem_euclid(std::f32::consts::TAU);
+            d.min(std::f32::consts::TAU - d) < 1e-4
+        };
+
+        let offset = move_to_object_final_rotation(&with(MOVETO_USE_FINAL_HEADING, 90.0), &from, &object);
+        assert!(
+            close(offset.to_heading(), to_object + 90f32.to_radians()),
+            "object heading + 90 deg, not compass East: {}",
+            offset.to_heading().to_degrees()
+        );
+        let no_bit = move_to_object_final_rotation(&with(0, 90.0), &from, &object);
+        assert!(close(no_bit.to_heading(), to_object), "no final turn: faces the object");
+
+        let dest = Vector3::new(10.0, 40.0, 0.0);
+        let abs = move_to_position_final_rotation(&with(MOVETO_USE_FINAL_HEADING, 0.0), &from, &dest);
+        assert!(
+            close(abs.to_heading(), Quaternion::from_wire_heading(0.0).to_heading()),
+            "UseFinalHeading 0 = compass North, absolute"
+        );
+        let travel = move_to_position_final_rotation(&with(0, 135.0), &from, &dest);
+        assert!(close(travel.to_heading(), from.heading_to(&dest)), "no bit: travel direction");
     }
 
     #[test]

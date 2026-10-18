@@ -58,7 +58,10 @@ function appendSystemLine(text) {
   }
 }
 
-function onLandblockChanged(detail) {
+// The plugin bus dispatches a CustomEvent — the payload is ev.detail
+// (reading `.lbId` off the Event itself gave 0, so nothing ever printed).
+function onLandblockChanged(ev) {
+  const detail = ev?.detail ?? ev;
   const lbId = (detail?.lbId >>> 0) || 0;
   if (!lbId || lbId === _seenLb) return;
   _seenLb = lbId;
@@ -84,19 +87,25 @@ function lbMessagesEnabled() {
 export function mount(ctx) {
   if (typeof window === "undefined") return () => {};
   if (!lbMessagesEnabled()) return () => {};
-  const client = ctx?.client ?? window.__pluginClient ?? null;
-  try {
-    if (typeof client?.events?.on === "function") {
-      _unsub = client.events.on("landblockChanged", onLandblockChanged);
-    }
-  } catch (e) {
-    console.warn("[landblock-messages] subscribe failed:", e);
-  }
-  return () => {
+  // The bar mounts this at page load with ctx.client null; the bus exists
+  // only after login, so subscribe through __pluginClientReady. api.js
+  // events.on returns nothing, so keep our own unsubscribe.
+  let disposed = false;
+  const subscribe = (client) => {
+    if (disposed || _unsub || typeof client?.events?.on !== "function") return;
     try {
-      if (typeof _unsub === "function") _unsub();
-      else if (_unsub?.off) _unsub.off();
-    } catch (_) {}
+      client.events.on("landblockChanged", onLandblockChanged);
+      _unsub = () => client.events.off?.("landblockChanged", onLandblockChanged);
+    } catch (e) {
+      console.warn("[landblock-messages] subscribe failed:", e);
+    }
+  };
+  const client = ctx?.client ?? window.__pluginClient ?? null;
+  if (typeof client?.events?.on === "function") subscribe(client);
+  else window.__pluginClientReady?.then?.((c) => subscribe(c ?? window.__pluginClient));
+  return () => {
+    disposed = true;
+    try { _unsub?.(); } catch (_) {}
     _unsub = null;
     _seenLb = 0;
   };

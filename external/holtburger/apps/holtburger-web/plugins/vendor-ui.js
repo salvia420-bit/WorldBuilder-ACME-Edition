@@ -1186,13 +1186,17 @@ export function mount(ctx) {
 
   function tryHook() {
     const client = ctx?.client ?? window.__pluginClient ?? null;
-    const handle = window.__sessionHandle ?? null;
-    if (!client?.events?.on || !handle?.getVendorState) return false;
+    if (!client?.events?.on || !window.__sessionHandle?.getVendorState) return false;
+    // A reconnect (autoLogin retry) installs a NEW SessionHandle and frees
+    // the old one, while the facade is rebound in place (attachHandle).
+    // Read the handle per call; a captured one throws on its null pointer.
+    const sessionHandle = () => window.__sessionHandle ?? null;
 
     const pullProfile = (vendorGuid) => {
       // Wave F.4 (2026-05-27): typed-profile fields (accept categories,
       // magic flag, min/max). Absent on older wasm builds.
-      if (typeof handle.getCurrentVendorProfile !== "function") return null;
+      const handle = sessionHandle();
+      if (typeof handle?.getCurrentVendorProfile !== "function") return null;
       try {
         return handle.getCurrentVendorProfile(vendorGuid >>> 0);
       } catch (e) {
@@ -1208,10 +1212,12 @@ export function mount(ctx) {
         console.warn("[vendor-ui] kind=12 event without vendor guid; ignoring", detail);
         return;
       }
+      const handle = sessionHandle();
+      if (!handle?.getVendorState) return;
       const raw = handle.getVendorState(vendorGuid);
       if (!raw) {
         setTimeout(() => {
-          const retry = handle.getVendorState(vendorGuid);
+          const retry = sessionHandle()?.getVendorState?.(vendorGuid);
           if (retry) openWith(retry, pullProfile(vendorGuid));
         }, 50);
         return;
@@ -1225,7 +1231,7 @@ export function mount(ctx) {
       try { resolvePendingSellSplits(); } catch (e) { console.warn("[vendor-ui] split resolve failed", e); }
       try {
         const vendorGuid = state.vendorState.vendorGuid >>> 0;
-        const raw = handle.getVendorState(vendorGuid);
+        const raw = sessionHandle()?.getVendorState?.(vendorGuid);
         if (raw) {
           state.vendorState = enrichWithProfile(snapshotFromWasm(raw), pullProfile(vendorGuid));
           render();

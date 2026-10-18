@@ -718,6 +718,11 @@ export class AnimationCache {
             // the same frames, times and hooks whichever export baked it.
             const { clip, sequenceDescriptor, hooks, exitHooks, rootMotionNet } =
                 AnimationCache._motionFields(animData, partCount, numFrames, framerate, partNames, key);
+            // Last read of `animData` (rest pose and meshes are drained above):
+            // free the wasm box now, as `getLink` does.
+            if (typeof animData.free === "function") {
+                try { animData.free(); } catch (_) {}
+            }
 
             return {
                 clip,
@@ -1059,6 +1064,11 @@ export class AnimationCache {
             }
             const { clip, sequenceDescriptor, hooks, exitHooks, rootMotionNet } =
                 AnimationCache._motionFields(animData, partCount, numFrames, framerate, partNames, key);
+            // Everything above is a copy (the getters clone, the hooks are
+            // snapshotted): free the wasm box now, not at a later GC.
+            if (typeof animData.free === "function") {
+                try { animData.free(); } catch (_) {}
+            }
             return {
                 clip,
                 sequenceDescriptor,

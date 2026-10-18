@@ -121,11 +121,14 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         "[confirm/request] type={} ctx={} {}",
                         data.confirmation_type as u32, data.context, data.text
                     ));
-                    pending_confirmations.borrow_mut().push(PendingConfirmation {
-                        confirm_type: data.confirmation_type as u32,
-                        context: data.context,
-                        text: data.text.clone(),
-                    });
+                    push_pending_confirmation(
+                        &mut pending_confirmations.borrow_mut(),
+                        PendingConfirmation {
+                            confirm_type: data.confirmation_type as u32,
+                            context: data.context,
+                            text: data.text.clone(),
+                        },
+                    );
                     // crafting-1 (2026-10-08): retail hands every request
                     // to a player dialog (ClientUISystem::
                     // Handle_Character__ConfirmationRequest,
@@ -146,6 +149,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::CharacterConfirmationDone(
                     data,
                 ) => {
+                    // RUSTNET-3: closed, so it leaves the bot queue too.
+                    retire_pending_confirmation(
+                        &mut pending_confirmations.borrow_mut(),
+                        data.confirmation_type as u32,
+                        data.context,
+                    );
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CONFIRMATION_DONE,
                         string_payload: None,

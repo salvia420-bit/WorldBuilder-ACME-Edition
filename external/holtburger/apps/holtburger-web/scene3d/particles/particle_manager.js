@@ -196,10 +196,11 @@ const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
 // ?particleTickOnce (2026-10-17, DEFAULT ON; `=off` escape) — the static
 // manager is ticked AT MOST ONCE per animation frame.
 //
-// THE DOUBLE TICK. statics.js is loaded as TWO module instances on the
-// unbundled page: scene3d/index.js imports `./statics.js?v=phase7-par` and
-// loop.js / cells.js import `./statics.js` (a different specifier = a second
-// module; impl/task-T11-report.md D5). Each instance arms its own `_spLoop`
+// THE DOUBLE TICK. statics.js was loaded as TWO module instances on the
+// unbundled page until 2026-10-18 (STREAM-STATICS-3 made it one): scene3d/
+// index.js imported `./statics.js?v=phase7-par` and loop.js / cells.js import
+// `./statics.js` (a different specifier = a second module;
+// impl/task-T11-report.md D5). Each instance armed its own `_spLoop`
 // self-rAF, and both reach the ONE static ParticleManager (the shared
 // `scene3d._staticParticleManager`), so every frame paid two full ticks.
 // Measured on the 1070 (LB 0xE632, 2026-10-17 profile): `_spLoop statics.js`
@@ -1702,11 +1703,15 @@ export class ParticleManager {
       return Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z);
     };
     if (t1.light > 0 && fxTier1Enabled("fxLights")) {
+      // an interior static chain's anchor carries its EnvCell (statics.js
+      // attachStaticDefaultScriptsWorld); entity rigs carry none
+      const pud = emitter.parent ? emitter.parent.userData : null;
       emitter._fxLight = bindEmitterFxLight({
         emitter, resolvePosition: resolve, intensity: t1.light, range: t1.lightRange, color: t1.lightColor,
         flicker: t1.flicker, flickerHz: t1.flickerHz, pulse: t1.pulse, pulseHz: t1.pulseHz, transient: finite,
         // layer 0 = an outdoor static chain (entities and interiors ride layer 1)
         outdoor: (emitter.renderLayer | 0) === 0,
+        cellId: pud && pud.isCellStaticScriptAnchor && pud.cellId != null ? pud.cellId >>> 0 : null,
       });
     }
     if (t1.distort > 0 && fxTier1Enabled("fxDistort")) {

@@ -11149,6 +11149,9 @@ pub(crate) fn model_tri_cache_clear_all() -> u32 {
     if let Ok(mut m) = DEGRADE_LEVELS_MEMO.lock() {
         m.clear();
     }
+    if let Ok(mut m) = DEGRADE_PART_FRAME_MEMO.lock() {
+        m.clear();
+    }
     model_tri_cache().clear()
 }
 
@@ -11734,6 +11737,48 @@ fn resolve_degrade_part_frame<S: holtburger_dat::ResourceSource + ?Sized>(
         return Vec::new();
     }
     vec![o.x, o.y, o.z, q.w, q.x, q.y, q.z, s.x, s.y, s.z]
+}
+
+/// RUSTCORE-2 (2026-10-18): memo of [`resolve_degrade_part_frame`]. Like the
+/// did-degrade lookup Perf T3 memoised, it re-parsed the Setup, the part's
+/// full GfxObj and the idle MotionTable / Animation on every
+/// `fetch_model_meshes` call — once per model per landblock bake. The frame
+/// is a pure function of `model_id` against the immutable DAT (the
+/// placement flag is fixed for the session), so it is stored once, under the
+/// same gate as [`DID_DEGRADE_MEMO`]: only when the lookup read every record
+/// it needed, since a missing record folds into the same empty frame.
+/// Cleared with the tri memo.
+#[cfg(any(target_arch = "wasm32", test))]
+static DEGRADE_PART_FRAME_MEMO: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u32, Vec<f32>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_degrade_part_frame_cached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> Vec<f32> {
+    if let Some(v) = DEGRADE_PART_FRAME_MEMO
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&model_id).cloned())
+    {
+        return v;
+    }
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
+    let v = resolve_degrade_part_frame(&counting, model_id);
+    if counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        if let Ok(mut m) = DEGRADE_PART_FRAME_MEMO.lock() {
+            if m.len() >= DID_DEGRADE_MEMO_CAP {
+                m.clear();
+            }
+            m.insert(model_id, v.clone());
+        }
+    }
+    v
 }
 
 /// Perf T3: memo of [`resolve_did_degrade`]. It re-read and re-parsed the
@@ -12391,6 +12436,29 @@ static BC7_MISSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 #[cfg(target_arch = "wasm32")]
 static BC7_BAD_MAGIC: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// STREAM-TERRAIN-2 — the verdict for an HD record `get_file_by_key` could
+/// not serve after its prefetch. Empty (absent: the JS source negative-caches
+/// it for the session) unless the prefetch itself FAILED and absence is not
+/// proven. A network blip, a 5xx or a sha mismatch then rejects, so the JS
+/// source retries later instead of latching the surface at retail resolution.
+/// v1's `UnknownKey` is the manifest saying the record does not exist.
+#[cfg(target_arch = "wasm32")]
+fn hd_record_miss(
+    source: &holtburger_resource_http::ManifestResourceSource,
+    key: holtburger_dat::ResourceKey<'_>,
+    fetched: Result<(), holtburger_resource_http::PrefetchError>,
+) -> Result<Vec<u8>, JsValue> {
+    use holtburger_dat::ResourceSource as _;
+    match fetched {
+        Err(holtburger_resource_http::PrefetchError::UnknownKey { .. }) | Ok(()) => Ok(Vec::new()),
+        Err(_) if source.key_known_absent(key) => Ok(Vec::new()),
+        Err(e) => Err(JsValue::from_str(&format!(
+            "{} {:#010x} fetch failed: {e}",
+            key.namespace, key.file_id
+        ))),
+    }
+}
+
 /// X6 — whether the loaded manifest carries the BC7 namespace at all. JS logs
 /// this once at init so a flag-ON boot against an archive with no BC7 records
 /// says so instead of silently fetching nothing.
@@ -12413,20 +12481,22 @@ pub fn bc7_namespace_present() -> bool {
 /// asked for exactly once per session.
 ///
 /// Hydrate-then-read, the documented `global_source` contract: `prefetch`
-/// (async) before the sync `get_file_by_key`. Errors are swallowed into the
-/// empty return — a missing BC7 record must never disturb a render.
+/// (async) before the sync `get_file_by_key`. Absence is the empty return; a
+/// FAILED fetch of a record that may exist rejects (`hd_record_miss`), so a
+/// transient is never negative-cached as absent. The JS caller catches it — a
+/// missing BC7 record must never disturb a render.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
+pub async fn bc7_blocks(rs_id: u32) -> Result<Vec<u8>, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource as _};
     // Only RenderSurface ids are keys in this namespace (the contract). A
     // Surface (0x08) id here would be a caller bug; refuse rather than fetch.
     if rs_id >> 24 != 0x06 {
         BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(source) = global_source::try_global_source() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !source.has_namespace(BC7_TEX_NAMESPACE) {
         // Once, loudly: flag ON against an archive with no BC7 namespace is a
@@ -12441,23 +12511,22 @@ pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
             ));
         }
         BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
+    let key = ResourceKey::new(BC7_TEX_NAMESPACE, rs_id);
     // Provable absence (a loaded per-namespace catalog that lacks the key)
     // short-circuits before the network hop. `key_known_absent` returns false
     // for "not hydrated yet", so this never latches a transient.
-    if source.key_known_absent(ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)) {
+    if source.key_known_absent(key) {
         BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let _ = source
-        .prefetch(&[ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)])
-        .await;
-    let bytes = match source.get_file_by_key(ResourceKey::new(BC7_TEX_NAMESPACE, rs_id)) {
+    let fetched = source.prefetch(&[key]).await;
+    let bytes = match source.get_file_by_key(key) {
         Ok(b) => b,
         Err(_) => {
             BC7_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Vec::new();
+            return hd_record_miss(&source, key, fetched);
         }
     };
     // Cheapest possible sanity gate; the full container validation (block
@@ -12465,10 +12534,10 @@ pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
     // also what the offline verifier exercises.
     if bytes.len() < 20 || &bytes[..4] != BC7_MAGIC {
         BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
     BC7_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    bytes
+    Ok(bytes)
 }
 
 /// P1 — the raw `HBC7` preview payload (quarter-res level0 + chain) for one
@@ -12476,35 +12545,34 @@ pub async fn bc7_blocks(rs_id: u32) -> Vec<u8> {
 /// `bc7_blocks` with two deliberate differences: the namespace is
 /// `holtburger/tex-bc7-pre`, and a missing namespace is SILENT — pre-records
 /// are an optional acceleration layer, so a full-only archive is a normal
-/// deployment, not a delivery gap.
+/// deployment, not a delivery gap. A failed fetch rejects, as there.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn bc7_pre_blocks(rs_id: u32) -> Vec<u8> {
+pub async fn bc7_pre_blocks(rs_id: u32) -> Result<Vec<u8>, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource as _};
     if rs_id >> 24 != 0x06 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(source) = global_source::try_global_source() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !source.has_namespace(BC7_PRE_NAMESPACE) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    if source.key_known_absent(ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)) {
-        return Vec::new();
+    let key = ResourceKey::new(BC7_PRE_NAMESPACE, rs_id);
+    if source.key_known_absent(key) {
+        return Ok(Vec::new());
     }
-    let _ = source
-        .prefetch(&[ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)])
-        .await;
-    let bytes = match source.get_file_by_key(ResourceKey::new(BC7_PRE_NAMESPACE, rs_id)) {
+    let fetched = source.prefetch(&[key]).await;
+    let bytes = match source.get_file_by_key(key) {
         Ok(b) => b,
-        Err(_) => return Vec::new(),
+        Err(_) => return hd_record_miss(&source, key, fetched),
     };
     if bytes.len() < 20 || &bytes[..4] != BC7_MAGIC {
         BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    bytes
+    Ok(bytes)
 }
 
 /// P2 — XUBC7 payload namespace (basisu KTX2, scheme-6 supercompression;
@@ -12521,34 +12589,35 @@ const KTX2_MAGIC: &[u8; 12] = &[
 /// `Vec` for absent. Same silent-absence contract as `bc7_pre_blocks`: the
 /// xu7 namespace is an optional codec upgrade, so a dist without it is a
 /// normal deployment. Validation here is the 12-byte KTX2 identifier only.
+/// A failed fetch rejects (`hd_record_miss`); every JS caller then falls
+/// back to the tex-bc7 lane.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn xu7_blocks(rs_id: u32) -> Vec<u8> {
+pub async fn xu7_blocks(rs_id: u32) -> Result<Vec<u8>, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource as _};
     if rs_id >> 24 != 0x06 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(source) = global_source::try_global_source() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !source.has_namespace(TEX_XU7_NAMESPACE) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    if source.key_known_absent(ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)) {
-        return Vec::new();
+    let key = ResourceKey::new(TEX_XU7_NAMESPACE, rs_id);
+    if source.key_known_absent(key) {
+        return Ok(Vec::new());
     }
-    let _ = source
-        .prefetch(&[ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)])
-        .await;
-    let bytes = match source.get_file_by_key(ResourceKey::new(TEX_XU7_NAMESPACE, rs_id)) {
+    let fetched = source.prefetch(&[key]).await;
+    let bytes = match source.get_file_by_key(key) {
         Ok(b) => b,
-        Err(_) => return Vec::new(),
+        Err(_) => return hd_record_miss(&source, key, fetched),
     };
     if bytes.len() < KTX2_MAGIC.len() || &bytes[..KTX2_MAGIC.len()] != KTX2_MAGIC {
         BC7_BAD_MAGIC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    bytes
+    Ok(bytes)
 }
 
 /// T15 (ST5, `?texCompressedOnly`) — SCALARS-ONLY surface decode (pass 5
@@ -19120,7 +19189,7 @@ pub async fn fetch_model_mesh(model_id: u32) -> Result<ModelMesh, JsValue> {
     // variant; JS uses plain Mesh in that case.
     mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), model_id);
     if mesh.did_degrade != 0 {
-        mesh.degrade_part_frame = resolve_degrade_part_frame(source.as_ref(), model_id);
+        mesh.degrade_part_frame = resolve_degrade_part_frame_cached(source.as_ref(), model_id);
     }
     Ok(mesh)
 }
@@ -19248,7 +19317,7 @@ pub async fn fetch_model_meshes(
         mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), id);
         // The bands draw at the part's Setup pose (statics.js LOD levels).
         if mesh.did_degrade != 0 {
-            mesh.degrade_part_frame = resolve_degrade_part_frame(source.as_ref(), id);
+            mesh.degrade_part_frame = resolve_degrade_part_frame_cached(source.as_ref(), id);
         }
         out.push(mesh);
     }
@@ -22037,7 +22106,98 @@ fn drain_pending_cell_membership_into(scene: &mut holtburger_world::SpatialScene
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = enqueueClearLandblockCollision)]
 pub fn enqueue_clear_landblock_collision(lb_id: u32) {
-    LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().push(lb_id & 0xFFFF_0000));
+    let lb_high = lb_id & 0xFFFF_0000;
+    bump_landblock_evict_epoch(lb_high);
+    purge_pending_env_cell_products(lb_high);
+    LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().push(lb_high));
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
+    /// STREAM-TERRAIN-3 (2026-10-18): per-landblock eviction count (keyed
+    /// `0xXXYY0000`), bumped by `enqueueClearLandblockCollision`. An in-flight
+    /// `fetchEnvCellsInLandblock` compares it with the value it started under
+    /// and stops queueing collision once it moves. One entry per landblock
+    /// ever evicted (at most 65,536 u32 pairs).
+    static LANDBLOCK_EVICT_EPOCH: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn landblock_evict_epoch(lb_high: u32) -> u32 {
+    LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().get(&lb_high).copied().unwrap_or(0))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn bump_landblock_evict_epoch(lb_high: u32) {
+    LANDBLOCK_EVICT_EPOCH.with(|m| {
+        let mut m = m.borrow_mut();
+        let e = m.entry(lb_high).or_insert(0);
+        *e = e.wrapping_add(1);
+    });
+}
+
+/// Drop the cell-keyed entries of landblock `lb_high` from one pending pile.
+#[cfg(any(target_arch = "wasm32", test))]
+fn retain_off_landblock<T>(pile: &mut Vec<(u32, T)>, lb_high: u32) {
+    pile.retain(|(cell_id, _)| cell_id & 0xFFFF_0000 != lb_high);
+}
+
+/// STREAM-TERRAIN-3: at eviction, the EnvCell products still waiting for a
+/// `TickMovement` drain came from builds the eviction just orphaned. The
+/// drain runs the collision clear BEFORE the inserts, so without this they
+/// would be inserted right after it. A build started after the eviction
+/// pushes under the new epoch, so nothing of a re-entry is lost. Fail-soft:
+/// a pile that is somehow borrowed is left alone (the old behaviour).
+#[cfg(target_arch = "wasm32")]
+fn purge_pending_env_cell_products(lb_high: u32) {
+    let _ = CELL_GRAPH_PENDING.with(|c| {
+        c.try_borrow_mut().map(|mut g| {
+            retain_off_landblock(&mut g.aabbs, lb_high);
+            retain_off_landblock(&mut g.seen_outside, lb_high);
+            retain_off_landblock(&mut g.restrictions, lb_high);
+            retain_off_landblock(&mut g.portals, lb_high);
+            retain_off_landblock(&mut g.visible_edges, lb_high);
+            retain_off_landblock(&mut g.portal_polygons, lb_high);
+        })
+    });
+    let _ = CELL_PHYSICS_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = CELL_BSP_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = CELL_MEMBERSHIP_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = CELL_STATIC_BSP_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+}
+
+#[cfg(test)]
+mod landblock_evict_epoch_tests {
+    use super::*;
+
+    #[test]
+    fn epoch_moves_per_landblock_only() {
+        let a = 0x8602_0000;
+        let b = 0xA9B4_0000;
+        let a0 = landblock_evict_epoch(a);
+        let b0 = landblock_evict_epoch(b);
+        bump_landblock_evict_epoch(a);
+        assert_eq!(landblock_evict_epoch(a), a0.wrapping_add(1));
+        assert_eq!(landblock_evict_epoch(b), b0, "another landblock's builds stay live");
+    }
+
+    #[test]
+    fn retain_off_landblock_drops_only_that_landblocks_cells() {
+        // 0x8602 has its x byte >= 0x80: the mask must compare unsigned.
+        let mut pile = vec![
+            (0x8602_0100u32, 'a'),
+            (0xA9B4_0100, 'b'),
+            (0x8602_013F, 'c'),
+            (0x8603_0100, 'd'),
+        ];
+        retain_off_landblock(&mut pile, 0x8602_0000);
+        assert_eq!(pile, vec![(0xA9B4_0100, 'b'), (0x8603_0100, 'd')]);
+    }
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): drain the pending
@@ -26472,11 +26632,18 @@ enum InteriorStabBsp {
 /// the 0x02 per-stab fallback walk + per-part BSP walk. The 0x02 fallback walk
 /// is the batch-mode keyed walk (same `…:static-bsp:0x02` key, its own dedup
 /// map); `rounds > 0` means it still had misses and bumps `per_stab_fallback`.
+///
+/// RUSTCORE-1 (2026-10-18): a stab whose fallback walk ended with FAILED keys
+/// goes into `walk_failed`, and its later placements in the same build skip
+/// the walk (they still recompute from whatever is resident). Each walk starts
+/// with an empty exclusion set, so it rediscovered the bad key and spent the
+/// whole retry ladder (~1 s of backoff) again for every placement.
 #[cfg(target_arch = "wasm32")]
 async fn interior_stab_memo_entry(
     source: &std::sync::Arc<holtburger_resource_http::ManifestResourceSource>,
     stab_id: u32,
     per_stab_fallback: &mut u32,
+    walk_failed: &mut std::collections::HashSet<u32>,
 ) -> InteriorStabMemo {
     use holtburger_dat::{ResourceKey, ResourceSource};
     let aabb_local = static_object_local_aabb(source.as_ref(), stab_id);
@@ -26511,18 +26678,23 @@ async fn interior_stab_memo_entry(
             out
         }
         0x02 => {
-            let stats = prefetch::ensure_walk_prefetched_keyed_batch(
-                prefetch::WalkCacheKey::new("fetchEnvCellsInLandblock:static-bsp:0x02")
-                    .with_u32(stab_id),
-                source,
-                move |s| {
-                    let _ = walk_setup_parts_with_geom(s, stab_id);
-                },
-                true,
-            )
-            .await;
-            if stats.rounds > 0 {
-                *per_stab_fallback += 1;
+            if !walk_failed.contains(&stab_id) {
+                let stats = prefetch::ensure_walk_prefetched_keyed_batch(
+                    prefetch::WalkCacheKey::new("fetchEnvCellsInLandblock:static-bsp:0x02")
+                        .with_u32(stab_id),
+                    source,
+                    move |s| {
+                        let _ = walk_setup_parts_with_geom(s, stab_id);
+                    },
+                    true,
+                )
+                .await;
+                if stats.rounds > 0 {
+                    *per_stab_fallback += 1;
+                }
+                if stats.failed > 0 {
+                    walk_failed.insert(stab_id);
+                }
             }
             match walk_setup_parts_with_geom_and_bsp(source.as_ref(), stab_id) {
                 Some(parts) => InteriorStabBsp::Parts(
@@ -26846,6 +27018,14 @@ pub async fn fetch_env_cells_in_landblock(
     const LB_M: f32 = 192.0;
 
     let landblock_high = landblock_id & 0xFFFF_0000;
+    // STREAM-TERRAIN-3 (2026-10-18): the eviction epoch this build started
+    // under. The build is never cancelled (its placements still reach the
+    // caller), but once the JS LRU evicts the landblock it queues no more
+    // collision products: those would land after the clear and leave the
+    // evicted landblock orphaned collision (doubled on re-entry). Checked
+    // after every await, because an eviction can only run while suspended.
+    let evict_epoch0 = landblock_evict_epoch(landblock_high);
+    let lb_live = || landblock_evict_epoch(landblock_high) == evict_epoch0;
     let info_cell = landblock_high | 0x0000_FFFE;
     let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
     let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
@@ -27107,6 +27287,9 @@ pub async fn fetch_env_cells_in_landblock(
     let mut stab_memo: std::collections::HashMap<u32, std::rc::Rc<InteriorStabMemo>> =
         std::collections::HashMap::new();
     let mut per_stab_fallback: u32 = 0;
+    // RUSTCORE-1: stabs whose fallback walk failed this build (see
+    // `interior_stab_memo_entry`).
+    let mut stab_walk_failed: std::collections::HashSet<u32> = std::collections::HashSet::new();
     // Post-fetch CPU window for the build log: light collection + the cell
     // loop (the post-stage yield above is outside it).
     let loop_t0 = if stab_batch_on { js_perf_now() } else { 0.0 };
@@ -27162,6 +27345,11 @@ pub async fn fetch_env_cells_in_landblock(
         if let Some(y) = build_yield.as_mut() {
             y.maybe_yield(false).await;
         }
+        // STREAM-TERRAIN-3: an eviction while this build was suspended
+        // (any await above) queued a collision clear for this landblock;
+        // from then on its products would land after the clear, as
+        // orphaned collision. The render placements are still built.
+        let queue_cell = lb_live();
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
         let cell_structure = envcell.cell_structure;
         // EnvCell wire format stores surface table as u16 indices; OR
@@ -27315,6 +27503,9 @@ pub async fn fetch_env_cells_in_landblock(
             mesh_local_aabb.transform_by(cell_orientation, cell_origin)
         };
         CELL_GRAPH_PENDING.with(|pending| {
+            if !queue_cell {
+                return;
+            }
             let mut pending = pending.borrow_mut();
             pending.aabbs.push((envcell.cell_id, world_aabb));
             // 2026-06-04 (Phase 4 ambient-sound gate): queue this cell's
@@ -27488,6 +27679,9 @@ pub async fn fetch_env_cells_in_landblock(
                         }
                         if !cell_phys_tris.is_empty() {
                             CELL_PHYSICS_PENDING.with(|pending| {
+                                if !queue_cell {
+                                    return;
+                                }
                                 pending
                                     .borrow_mut()
                                     .push((envcell.cell_id, cell_phys_tris));
@@ -27539,6 +27733,9 @@ pub async fn fetch_env_cells_in_landblock(
                                 scale: 1.0, // E3.4: env-cell room geometry is unscaled
                             };
                             CELL_BSP_PENDING.with(|pending| {
+                                if !queue_cell {
+                                    return;
+                                }
                                 pending.borrow_mut().push((envcell.cell_id, bsp));
                             });
                         }
@@ -27560,6 +27757,9 @@ pub async fn fetch_env_cells_in_landblock(
                                 orientation: cell_orientation,
                             };
                             CELL_MEMBERSHIP_PENDING.with(|pending| {
+                                if !queue_cell {
+                                    return;
+                                }
                                 pending.borrow_mut().push((envcell.cell_id, membership));
                             });
                         }
@@ -27626,6 +27826,9 @@ pub async fn fetch_env_cells_in_landblock(
                                 portal.resolved_other_cell_id(landblock_high);
                             let portal_side = portal.portal_side();
                             CELL_GRAPH_PENDING.with(|pending| {
+                                if !queue_cell {
+                                    return;
+                                }
                                 let mut pending = pending.borrow_mut();
                                 pending.portal_polygons.push((
                                     envcell.cell_id,
@@ -27670,8 +27873,13 @@ pub async fn fetch_env_cells_in_landblock(
                     Some(m) => m,
                     None => {
                         let m = std::rc::Rc::new(
-                            interior_stab_memo_entry(&source, stab.stab_id, &mut per_stab_fallback)
-                                .await,
+                            interior_stab_memo_entry(
+                                &source,
+                                stab.stab_id,
+                                &mut per_stab_fallback,
+                                &mut stab_walk_failed,
+                            )
+                            .await,
                         );
                         if stab_memo_on {
                             stab_memo.insert(stab.stab_id, m.clone());
@@ -27692,12 +27900,14 @@ pub async fn fetch_env_cells_in_landblock(
                     default_script_id: memo.default_script_id,
                     default_animation_id: memo.default_animation_id,
                 });
-                stage_interior_stab_bsps(
-                    &memo.bsp,
-                    envcell.cell_id,
-                    holtburger_common::Vector3::new(world_x, world_y, world_z),
-                    holtburger_common::Quaternion { w: qw, x: qx, y: qy, z: qz },
-                );
+                if lb_live() {
+                    stage_interior_stab_bsps(
+                        &memo.bsp,
+                        envcell.cell_id,
+                        holtburger_common::Vector3::new(world_x, world_y, world_z),
+                        holtburger_common::Quaternion { w: qw, x: qx, y: qy, z: qz },
+                    );
+                }
                 continue;
             }
             let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
@@ -27766,6 +27976,9 @@ pub async fn fetch_env_cells_in_landblock(
                         );
                         if !polys.is_empty() {
                             CELL_STATIC_BSP_PENDING.with(|pile| {
+                                if !lb_live() {
+                                    return;
+                                }
                                 pile.borrow_mut().push((
                                     envcell.cell_id,
                                     holtburger_world::CellPhysicsBsp {
@@ -27808,6 +28021,9 @@ pub async fn fetch_env_cells_in_landblock(
                                 );
                                 let wq = stab_world_orientation.multiply(b.rot);
                                 CELL_STATIC_BSP_PENDING.with(|pile| {
+                                    if !lb_live() {
+                                        return;
+                                    }
                                     pile.borrow_mut().push((
                                         envcell.cell_id,
                                         holtburger_world::CellPhysicsBsp {
@@ -39753,6 +39969,82 @@ pub struct PendingConfirmation {
     pub text: String,
 }
 
+/// RUSTNET-3 (2026-10-18): only the rynth host drains the queue, so a human
+/// session used to grow it for the whole session, and a bot booted later got
+/// every stale dialog as live. Closed dialogs now leave it (server
+/// ConfirmationDone, or our own answer) and it keeps the newest few.
+pub(crate) const PENDING_CONFIRMATIONS_MAX: usize = 16;
+
+/// Queue a server confirmation dialog for the `pendingConfirmations()` poll.
+/// A re-sent (type, context) replaces its older copy; past the cap the
+/// oldest dialog goes (ACE times an unanswered one out as a decline anyway).
+pub(crate) fn push_pending_confirmation(
+    queue: &mut Vec<PendingConfirmation>,
+    p: PendingConfirmation,
+) {
+    retire_pending_confirmation(queue, p.confirm_type, p.context);
+    if queue.len() >= PENDING_CONFIRMATIONS_MAX {
+        queue.remove(0);
+    }
+    queue.push(p);
+}
+
+/// Drop the dialog for (type, context): the server closed it or we answered.
+pub(crate) fn retire_pending_confirmation(
+    queue: &mut Vec<PendingConfirmation>,
+    confirm_type: u32,
+    context: u32,
+) {
+    queue.retain(|p| !(p.confirm_type == confirm_type && p.context == context));
+}
+
+#[cfg(test)]
+mod pending_confirmation_tests {
+    use super::*;
+
+    fn req(confirm_type: u32, context: u32) -> PendingConfirmation {
+        PendingConfirmation {
+            confirm_type,
+            context,
+            text: format!("dialog {confirm_type}/{context}"),
+        }
+    }
+
+    #[test]
+    fn done_and_answer_retire_the_dialog() {
+        let mut q = Vec::new();
+        push_pending_confirmation(&mut q, req(5, 100));
+        push_pending_confirmation(&mut q, req(5, 101));
+        push_pending_confirmation(&mut q, req(1, 100));
+        retire_pending_confirmation(&mut q, 5, 100);
+        let left: Vec<(u32, u32)> = q.iter().map(|p| (p.confirm_type, p.context)).collect();
+        assert_eq!(left, vec![(5, 101), (1, 100)], "only the matching (type, context) leaves");
+        retire_pending_confirmation(&mut q, 7, 7);
+        assert_eq!(q.len(), 2, "an unknown dialog retires nothing");
+    }
+
+    #[test]
+    fn queue_is_bounded_and_keeps_the_newest() {
+        let mut q = Vec::new();
+        for ctx in 0..(PENDING_CONFIRMATIONS_MAX as u32 + 10) {
+            push_pending_confirmation(&mut q, req(5, ctx));
+        }
+        assert_eq!(q.len(), PENDING_CONFIRMATIONS_MAX);
+        assert_eq!(q.first().map(|p| p.context), Some(10), "the oldest went first");
+        assert_eq!(q.last().map(|p| p.context), Some(PENDING_CONFIRMATIONS_MAX as u32 + 9));
+    }
+
+    #[test]
+    fn a_resent_request_replaces_its_copy() {
+        let mut q = Vec::new();
+        push_pending_confirmation(&mut q, req(5, 100));
+        push_pending_confirmation(&mut q, req(1, 1));
+        push_pending_confirmation(&mut q, req(5, 100));
+        let left: Vec<(u32, u32)> = q.iter().map(|p| (p.confirm_type, p.context)).collect();
+        assert_eq!(left, vec![(1, 1), (5, 100)]);
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct SessionHandle {
@@ -46429,6 +46721,12 @@ impl SessionHandle {
         accepted: bool,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
+        // Answered (a player dialog or the bot): no longer pending (RUSTNET-3).
+        retire_pending_confirmation(
+            &mut self.pending_confirmations.borrow_mut(),
+            confirm_type,
+            context,
+        );
         self.cmd_tx
             .unbounded_send(SessionCommand::ConfirmationResponse {
                 confirmation_type: confirm_type,
@@ -54473,6 +54771,61 @@ mod tests_substitution {
         assert!(resolve_degrade_part_frame(&MockSource { files }, setup_id).is_empty());
     }
 
+    /// RUSTCORE-2 — the band pose is resolved once per model: a repeat call
+    /// answers from the memo without reading a record, and a lookup with a
+    /// record missing is not memoised (its empty frame would hide the pose
+    /// for the session). Cleared with the tri memo.
+    #[test]
+    fn degrade_part_frame_is_memoised_only_on_a_complete_read() {
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        let _guard = crate::tests_surface_cache::MODEL_TRI_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let setup_id: u32 = 0x0200_D0E5;
+        let part: u32 = 0x0100_D0E5;
+        let mut g = GfxObj::unpack(&mut Cursor::new(synth_gfx_obj_one_triangle(part, 0xAAAA_AAAA, 0.0)))
+            .unwrap();
+        g.did_degrade = Some(0x1100_0001);
+        let mut part_bytes = Vec::new();
+        g.pack(&mut Cursor::new(&mut part_bytes)).unwrap();
+        let mut setup = SetupModel::unpack(&mut Cursor::new(synth_setup_two_parts(setup_id, part, part)))
+            .unwrap();
+        setup.parts = vec![part];
+        setup.placement_frames.insert(
+            0,
+            PlacementType {
+                anim_frame: AnimationFrame {
+                    frames: vec![Frame {
+                        origin: Vector3 { x: 0.0, y: 0.0, z: 2.5 },
+                        orientation: Quaternion { w: 1.0, x: 0.0, y: 0.0, z: 0.0 },
+                    }],
+                    hooks: vec![],
+                },
+            },
+        );
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+
+        let mut partial: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        partial.insert(("eor/portal".into(), setup_id), setup_bytes.clone());
+        let mut files = partial.clone();
+        files.insert(("eor/portal".into(), part), part_bytes);
+        let full = MockSource { files };
+        let empty = MockSource { files: HashMap::new() };
+
+        model_tri_cache_clear_all();
+        assert!(
+            resolve_degrade_part_frame_cached(&MockSource { files: partial }, setup_id).is_empty(),
+            "the part record is missing"
+        );
+        let f = resolve_degrade_part_frame_cached(&full, setup_id);
+        assert_eq!(f.len(), 10, "the partial read was not memoised");
+        assert_eq!(f, resolve_degrade_part_frame(&full, setup_id), "memo-through is byte-identical");
+        assert_eq!(resolve_degrade_part_frame_cached(&empty, setup_id), f, "a repeat reads no record");
+        model_tri_cache_clear_all();
+        assert!(resolve_degrade_part_frame_cached(&empty, setup_id).is_empty(), "cleared with the tri memo");
+    }
+
     /// `pose_override = None` preserves Phase C behaviour — the
     /// idle-anim resolver runs as the first lookup. With a setup
     /// that has no MotionTable AND no placement frames, both lookups
@@ -61697,7 +62050,7 @@ mod tests_surface_cache {
     /// harness handed each test its own copy and no guard was needed; a SHARED
     /// cache makes them contend. `into_inner()` on poisoning keeps one failing
     /// test from cascading into the others.
-    static MODEL_TRI_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static MODEL_TRI_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// §2.2 regression gate: the memo must be ONE cache for the whole process,
     /// not one per thread. Native `std::thread` stands in for the wasm-threads

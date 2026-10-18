@@ -18,13 +18,17 @@
 // what we *wanted*. Same "no cheating" stance as wire.js / events.js:
 // every read is of state the runtime already committed.
 //
-// Cost per hook fire: O(1) — one Map lookup, one history push, one
-// optional shift() when the per-guid ring exceeds 20 entries (and one
-// shift() on the global 200-entry ring). Holtburg setMotion peaks at
-// ~50 hits/sec during a busy combat scene; well within budget.
+// Cost per hook fire: O(1) — one Map lookup (plus the delete/re-set that
+// keeps byGuid in recency order), one history push, one optional shift()
+// when the per-guid ring exceeds 20 entries (and one shift() on the global
+// 200-entry ring). Holtburg setMotion peaks at ~50 hits/sec during a busy
+// combat scene; well within budget.
 //
 // Devtools entry points exposed on `__diag.motion`:
-//   byGuid       — Map(guid → { guid, name, current, history })
+//   byGuid       — Map(guid → { guid, name, current, history }) for the
+//                  MAX_GUIDS (512) entities with the latest applied motion;
+//                  the one longest without one is dropped (every respawn is
+//                  a fresh guid, so the map used to grow all session)
 //   globalHistory — flat ring of every transition, newest at end
 //   snapshot(guid?) — one entry, or whole-world map
 //   stuckEntities(thresholdMs = 5000) — entries with no transition in N ms,
@@ -56,6 +60,7 @@
 
 const MAX_GLOBAL_HISTORY = 200;
 const MAX_PER_GUID_HISTORY = 20;
+const MAX_GUIDS = 512;
 const DEFAULT_STUCK_THRESHOLD_MS = 5000;
 
 /**
@@ -161,6 +166,7 @@ export function attachMotion(diag) {
     coverage: new Map(),
     maxGlobalHistory: MAX_GLOBAL_HISTORY,
     maxPerGuidHistory: MAX_PER_GUID_HISTORY,
+    maxGuids: MAX_GUIDS,
     maxLinkPlays: MAX_LINK_PLAYS,
     // RETIRED (2026-10-05) — hard-wired 0: the AnimationMixer is gone, so no
     // animation can start on a frozen driver any more. See the header.
@@ -230,12 +236,19 @@ export function attachMotion(diag) {
           current: null,
           history: [],
         };
-        motion.byGuid.set(g, entry);
-      } else if (!entry.name && inst.meta?.name) {
-        // Name may have been empty at the first spawn-time snapshot
-        // (e.g. metadata fetch finished after spawn-attempt). Refresh.
-        entry.name = inst.meta.name;
+        if (motion.byGuid.size >= motion.maxGuids) {
+          motion.byGuid.delete(motion.byGuid.keys().next().value);
+        }
+      } else {
+        // Map order = recency: re-inserted at the end below.
+        motion.byGuid.delete(g);
+        if (!entry.name && inst.meta?.name) {
+          // Name may have been empty at the first spawn-time snapshot
+          // (e.g. metadata fetch finished after spawn-attempt). Refresh.
+          entry.name = inst.meta.name;
+        }
       }
+      motion.byGuid.set(g, entry);
 
       const prior = entry.current;
       const next = buildCurrent(inst, now);

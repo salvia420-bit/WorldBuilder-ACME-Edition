@@ -71,7 +71,8 @@ export const VIEWER_CELL_STEP_M = 8;
 export const VIEWER_CELL_RESEED_M = 192;
 /**
  * How far (m) the eye may sit outside the carried INDOOR cell's mesh box before the walk's
- * answer is read as a wall exit and the cell is re-resolved from the landscape under the eye.
+ * answer is read as a wall exit and the cell is re-resolved (escapeCell: the landscape under
+ * the eye, or in a dungeon the room box that holds it).
  */
 export const VIEWER_CELL_BOX_MARGIN_M = 1;
 /** Player head height above the pose z (m) — the cells.js walk pivot (viewer_cell.js VIEWER_PIVOT_Z_M). */
@@ -268,7 +269,8 @@ export function ensureFilmHooks(liveScene3d, opts = {}) {
  * - `currentPose()` → OwnedPose (last write, else read back from the camera) or null.
  * - `viewerCell()` → carried viewer cell (0 = none).
  * - `setCutCell(cell)` → the parsed cell: the NEXT write seeds the carried cell
- *   with it instead of walking from the previous eye (hard cuts, dungeon sites).
+ *   with it instead of walking from the previous eye (hard cuts, dungeon sites);
+ *   an eye clearly outside that cell's box is re-resolved like a wall exit.
  *   0 / null / invalid = a cut with no plan cell: the next write re-seeds from
  *   the player-head walk (never walks from the previous eye through walls).
  * - `parkCell()` → `{ok, parked, cell}`: forget the carried cell (and a pending cut),
@@ -440,6 +442,59 @@ export function createCameraOwner(deps = {}) {
     return c !== 0 ? c : land;
   }
 
+  /** The cell's SeenOutside bit (a building room, not a dungeon); true without the wasm export (the 10-16 escape). */
+  function seenOutside(h, cell) {
+    if (!h || typeof h.isCellSeenOutside !== "function") return true;
+    try {
+      return h.isCellSeenOutside(cell >>> 0) === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * The resident dungeon cell of `cell`'s own landblock (a dungeon's cells all share it) whose
+   * box contains `p`, the smallest one where boxes overlap at a portal; 0 when none does.
+   * Building rooms are skipped: the landscape answer already tested them by containment.
+   */
+  function cellByBox(h, cell, p) {
+    const map = live.cellContainers3d;
+    if (!map || typeof map.keys !== "function") return 0;
+    const lb = (cell & 0xffff0000) >>> 0;
+    let best = 0;
+    let bestVol = Infinity;
+    for (const k of map.keys()) {
+      const c = k >>> 0;
+      if (c === cell >>> 0 || (c & 0xffff0000) >>> 0 !== lb || !isIndoorCell(c)) continue;
+      const b = cellBox(c);
+      if (!b || p[0] < b[0] || p[1] < b[1] || p[2] < b[2] || p[0] > b[3] || p[1] > b[4] || p[2] > b[5]) continue;
+      if (seenOutside(h, c)) continue;
+      const vol = (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
+      if (vol < bestVol) {
+        best = c;
+        bestVol = vol;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * `cell`, or the cell an eye clearly outside its box is really in (a wall exit; a cut or
+   * seed cell the eye is not in). A building room (SeenOutside) is left for the landscape
+   * under the eye. A dungeon cell is not: no building is around it, so the landscape answers
+   * the outdoor landcell and cells.js would drop the whole dungeon. It is left only for a
+   * building cell that contains the eye, else for the resident dungeon cell of its landblock
+   * whose box holds the eye; with neither, the walk's cell stands.
+   */
+  function escapeCell(h, cell, p) {
+    if (!outsideIndoorCell(cell, p)) return cell;
+    let o = cellFromLandscape(h, p);
+    if (o === 0 || !(isIndoorCell(o) || seenOutside(h, cell))) o = cellByBox(h, cell, p);
+    if (o === 0 || o === cell) return cell;
+    counters.cellEscapes += 1;
+    return o;
+  }
+
   /**
    * Walk `from → to` from `seed`, sub-stepped every VIEWER_CELL_STEP_M; returns the reached cell.
    *
@@ -448,8 +503,7 @@ export function createCameraOwner(deps = {}) {
    * The film camera is not clipped. A drone whose head→eye seed line crossed a building would
    * otherwise stay "inside" that room for the whole shot, drawing only that room's interior
    * chain and skipping the outdoor doorway punch (Bandit Castle, 2026-10-16). So after each
-   * step, an eye clearly outside the carried indoor cell's box is re-resolved from the
-   * landscape under it.
+   * step, an eye clearly outside the carried indoor cell's box is re-resolved (escapeCell).
    */
   function walk(h, from, to, seed) {
     const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
@@ -463,13 +517,7 @@ export function createCameraOwner(deps = {}) {
       const c = resolveOnce(h, a, b, cell);
       counters.cellWalks += 1;
       if (c !== 0) cell = c;
-      if (outsideIndoorCell(cell, b)) {
-        const o = cellFromLandscape(h, b);
-        if (o !== 0 && o !== cell) {
-          cell = o;
-          counters.cellEscapes += 1;
-        }
-      }
+      cell = escapeCell(h, cell, b);
       a = b;
     }
     return cell;
@@ -516,7 +564,10 @@ export function createCameraOwner(deps = {}) {
   function carryCell(eye) {
     const h = sh();
     if (state.pendingCut !== 0) {
+      // The plan's cell is the site's room; the eye may start rooms away from it (a corridor
+      // dolly, an fpv route from its fromCell), and a static shot never walks out of it.
       state.cell = state.pendingCut >>> 0;
+      if (h && typeof h.resolveViewerCell === "function") state.cell = escapeCell(h, state.cell, eye);
       state.pendingCut = 0;
       counters.cuts += 1;
     } else if (state.pendingReseed || state.cell === 0 || state.cellEye === null) {

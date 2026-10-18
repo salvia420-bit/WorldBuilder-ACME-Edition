@@ -15,7 +15,8 @@
 //       the alpha bucket and per-mesh slot meshes, never the sky chain
 //       (patched `-sky` bucket or not).
 //   P4  REAL pipeline (vendored takram via a resolve hook, recording renderer):
-//       pass order; the first half never swaps and writes the late target;
+//       pass order; the `?layerHaze` pass (default on) writes the late target
+//       from the cloud/aerial composite BEFORE the particles are drawn into it;
 //       the second half reads it; the late target is single-sample and gets
 //       composer.depthTexture; one composer.render draws every particle
 //       exactly once — hidden in the world pass, drawn in the late pass after
@@ -23,6 +24,7 @@
 //       world pass, and everything is visible again afterwards.
 //   P5  split frame (indoor depth split armed): legacy passes, no late draw.
 //   P6  `__particlesOverClouds.set(false)` A/B without a reload.
+//   P4b `?layerHaze=off`: the first half never swaps and writes the late target.
 //   P7  `=off` (URL and opts): the legacy single EffectPass, no late pass, the
 //       particles drawn in the world pass.
 //   P8  `?cloudsMainPass=off`: no split even with the flag on (the legacy
@@ -288,12 +290,14 @@ const A = build();
   // 2026-10-07 (later): the late target is scrubbed again before bloom (1070:
   // negative-radiance pixels in T brought the black flashing back).
   const iLateScrub = names.findLastIndex((n) => /^EffectPass\[NanScrub\]$/.test(n));
-  // 2026-10-08 — ?layerHaze (default on) sits between the late scrub and the
-  // post half: haze in HDR over the finished scene, before bloom/tone mapping.
+  // 2026-10-08 — ?layerHaze (default on): haze in HDR over the finished clouds +
+  // aerial perspective, before bloom/tone mapping. 2026-10-18: and BEFORE the
+  // late particles — they write no depth, so a haze after them fogged a near
+  // spell by the distance of the hills behind it.
   const iHaze = names.indexOf("LayeredHazePass");
-  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> ParticlesOverClouds -> NanScrub -> LayeredHaze -> [Bloom, ToneMapping, ColorGrade, Dithering]",
-    iRestore >= 0 && iRestore < iScrub && iScrub < iAtmos && iAtmos < iLate && iLate < iLateScrub &&
-    iLateScrub === iHaze - 1 && iHaze === iPost - 1 && iPost === names.length - 1,
+  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> LayeredHaze -> ParticlesOverClouds -> NanScrub -> [Bloom, ToneMapping, ColorGrade, Dithering]",
+    iRestore >= 0 && iRestore < iScrub && iScrub < iAtmos && iAtmos === iHaze - 1 && iHaze === iLate - 1 &&
+    iLate === iLateScrub - 1 && iLateScrub === iPost - 1 && iPost === names.length - 1,
     names.join(" | "));
   check("the late scrub reads the late target, swaps, and the post half reads the composer input",
     p.composer.passes[iLateScrub]._latePass?.() === p.particlesOverCloudsPass && p.composer.passes[iLateScrub].needsSwap === true &&
@@ -305,8 +309,12 @@ const A = build();
   check("returned handles: fxPass = atmosphere half, fxPostPass = post half",
     p.fxPass === p.composer.passes[iAtmos] && p.fxPostPass === p.composer.passes[iPost] &&
     p.particlesOverCloudsPass === p.composer.passes[iLate]);
-  check("the atmosphere half never swaps the ping-pong buffers (even after a recompile)",
-    p.fxPass.needsSwap === false && (p.fxPass.recompile(), p.fxPass.needsSwap === false));
+  // With the haze (default) the haze is what writes the late target; section
+  // P4b pins the haze-off chain, where the atmosphere half writes it itself.
+  const hazePass = p.composer.passes[iHaze];
+  check("?layerHaze: the atmosphere half writes the composer buffer, the haze pass (never swapping, even after a recompile) holds the pipeline's haze",
+    p.fxPass.needsSwap === true && hazePass.needsSwap === false && hazePass.needsDepthTexture === true &&
+    hazePass.haze === p.layeredHaze && (p.fxPass.recompile(), hazePass.needsSwap === false));
   check("the late pass neither swaps nor blits depth",
     p.particlesOverCloudsPass.needsSwap === false && p.particlesOverCloudsPass.needsDepthBlit === false);
   check("only the post half renders to screen",
@@ -336,8 +344,13 @@ const A = build();
     `world=${worldCalls().length} late=${lateCalls().length}`);
   check("draw order: world -> cloud/aerial composite -> particles -> bloom/tone map",
     iW >= 0 && iW < iA && iA < iL && iL < iP, `w=${iW} a=${iA} l=${iL} p=${iP}`);
-  check("the composite writes the late target, the particles draw into it",
-    calls[iA]?.target === rt && calls[iL]?.target === rt);
+  const iH = idx((c) => c.scene === p.layeredHaze.scene);
+  check("the composite writes a composer buffer, the haze draws it into the late target, then the particles",
+    calls[iA]?.target && calls[iA].target !== rt && calls[iH]?.target === rt && calls[iL]?.target === rt &&
+    iA < iH && iH < iL && p.layeredHaze.material.uniforms.inputBuffer.value === calls[iA].target.texture,
+    `a=${iA} h=${iH} l=${iL}`);
+  check("the haze samples the stable depth copy, never the late target's depth attachment",
+    !!p.layeredHaze.material.uniforms.tDepth.value && p.layeredHaze.material.uniforms.tDepth.value !== rt.depthTexture);
   check("the post half renders to screen", calls[iP]?.target === null);
   const lateScrubPass = p.composer.passes[iLateScrub];
   check("the late scrub's input is the late target", lateScrubPass.fullscreenMaterial.uniforms.inputBuffer.value === rt.texture);
@@ -411,6 +424,28 @@ console.log("\n-- P6 A/B without a reload --------------------------------------
   p.dispose();
   check("dispose leaves the borrowed depth texture alone (detached first)",
     p.particlesOverCloudsPass.renderTarget.depthTexture === null);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- P4b ?layerHaze=off: the atmosphere half writes the late target ------");
+{
+  // layered_haze.js reads `window.location` (this test's window is a plain object).
+  window.location = { search: "?layerHaze=off" };
+  const { p } = build();
+  delete window.location;
+  const names = p.composer.passes.map(describe);
+  const iAtmos = names.findIndex((n) => /^EffectPass\[(FxDistortEffect,)?(FxDecalEffect,)?CloudsEffect,AerialPerspectiveEffect\]$/.test(n));
+  const iLate = names.indexOf("ParticlesOverClouds");
+  check("no haze pass; [Clouds, Aerial] -> ParticlesOverClouds directly",
+    p.layeredHaze === null && !names.includes("LayeredHazePass") && iAtmos >= 0 && iLate === iAtmos + 1, names.join(" | "));
+  check("the atmosphere half never swaps the ping-pong buffers (even after a recompile)",
+    p.fxPass.needsSwap === false && (p.fxPass.recompile(), p.fxPass.needsSwap === false));
+  frame(p);
+  const rt = p.particlesOverCloudsPass.renderTarget;
+  const atmos = calls.find((c) => c.scene === p.fxPass.scene);
+  check("the composite writes the late target, the particles draw into it",
+    atmos?.target === rt && lateCalls().length === 1 && lateCalls()[0].target === rt);
+  p.dispose();
 }
 
 // ---------------------------------------------------------------------------

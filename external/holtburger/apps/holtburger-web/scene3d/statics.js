@@ -4861,12 +4861,12 @@ export function disposeStaticsBillboards() {
 // ?billboardTickGate (2026-10-17, DEFAULT ON; `=off` escape) — the billboard
 // walk runs only when its answer can have changed.
 //
-// (1) ONCE PER FRAME. This file loads as two module instances on the unbundled
-//     page (`./statics.js?v=phase7-par` from index.js, `./statics.js` from
-//     loop.js / cells.js — impl/task-T11-report.md D5), so two `_bbLoop`s
-//     walked the same staticsGroup every frame: 1070 profile (2026-10-17)
-//     `tickStaticsBillboards` 37.9 + 35.1 ms of 7.25 s. The second walk of a
-//     frame recomputed the same quaternions from the same camera.
+// (1) ONCE PER FRAME. This file loaded as two module instances on the unbundled
+//     page until 2026-10-18 (`./statics.js?v=phase7-par` from index.js,
+//     `./statics.js` from loop.js / cells.js — impl/task-T11-report.md D5), so
+//     two `_bbLoop`s walked the same staticsGroup every frame: 1070 profile
+//     (2026-10-17) `tickStaticsBillboards` 37.9 + 35.1 ms of 7.25 s. The second
+//     walk of a frame recomputed the same quaternions from the same camera.
 // (2) ONLY ON CHANGE. A degraded leaf's facing is a function of the camera's
 //     world position, the LOD node's (immobile) matrixWorld and which leaf is
 //     showing — and with a still camera the LOD level cannot change either.
@@ -4881,7 +4881,7 @@ export function disposeStaticsBillboards() {
 const BB_GATE_MAX_SKIP = 7;
 const BB_GATE_HOLD = 2;
 const _bbGateCam = new THREE.Vector3();
-// Shared by BOTH module instances (a module-level Map would be per instance).
+// On globalThis so the two module instances of (1) shared it.
 const _bbGateState = (typeof globalThis !== "undefined")
   ? (globalThis.__hbBillboardGate || (globalThis.__hbBillboardGate = new WeakMap()))
   : new WeakMap();
@@ -4903,7 +4903,7 @@ export function __setBillboardTickGateForTest(v) { _bbGateFlag = v; }
 /**
  * Should the billboard walk run this frame? `ts` is the rAF timestamp (one
  * value per frame across every callback); a non-number never dedupes. Flag
- * off ⇒ always true (two walks per frame again, as before).
+ * off ⇒ always true (a walk every frame, as before).
  */
 export function staticsBillboardTickDue(scene3d, ts) {
   const group = scene3d?.staticsGroup;
@@ -4915,7 +4915,7 @@ export function staticsBillboardTickDue(scene3d, ts) {
     _bbGateState.set(group, st);
   }
   if (typeof ts === "number") {
-    if (st.ts === ts) return false; // the other module instance already walked
+    if (st.ts === ts) return false; // already walked this frame
     st.ts = ts;
   }
   const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
@@ -5149,8 +5149,9 @@ function _freezeStaticScriptAnchor(anchor) {
 // down at d > N + 1. The teardown removes only the default_script
 // emitters (parent = one of the landblock's anchors), never the synthesized
 // ones that share the `static:<lbKey>` owner; the rebuild reuses warm-park's
-// `rebuildStaticScriptEmittersForAnchors`. State lives on scene3d because this
-// module loads as two instances (index.js imports it with `?v=`).
+// `rebuildStaticScriptEmittersForAnchors`. State lives on the builder scene
+// (the tick runs on the liveScene3d facade; this module also loaded as two
+// instances until index.js dropped its `?v=` import, 2026-10-18).
 const STATIC_SCRIPT_RADIUS_MIN = 1;
 const STATIC_SCRIPT_RADIUS_MAX = 12;
 let _staticScriptRadius; // undefined = unread, null = off, else N
@@ -5177,8 +5178,10 @@ function _scriptRadiusState(scene3d) {
   const host = _scriptsHost(scene3d);
   let st = host._staticScriptRadius;
   if (!st) {
-    // Stats live here too: this module loads as two instances.
-    st = { centers: [], sig: null, deferred: new Set(),
+    // Stats live here too (they once had to: the module loaded twice).
+    // `split` ⊆ `deferred`: deferred by an attach or unpark that may already
+    // have chained some of the landblock's anchors (see tickStaticScriptRadius).
+    st = { centers: [], sig: null, deferred: new Set(), split: new Set(),
       stats: { deferredAtAttach: 0, torndownLbs: 0, emittersTorndown: 0, rebuiltLbs: 0 } };
     host._staticScriptRadius = st;
     if (typeof window !== "undefined") {
@@ -5269,7 +5272,9 @@ export function tickStaticScriptRadius(scene3d, seen) {
   st.centers = [...seen].map((k) => lbKeyOf(k >>> 0));
   const baked = scene3d.staticsBakedLbs instanceof Set ? scene3d.staticsBakedLbs : null;
   if (!baked || st.centers.length === 0) return;
-  for (const k of st.deferred) if (!baked.has(k)) st.deferred.delete(k); // evicted
+  for (const k of st.deferred) {
+    if (!baked.has(k)) { st.deferred.delete(k); st.split.delete(k); } // evicted
+  }
   let byLb = null;
   const anchorsOf = (k) => {
     if (!byLb) {
@@ -5285,16 +5290,28 @@ export function tickStaticScriptRadius(scene3d, seen) {
     }
     return byLb.get(k) ?? [];
   };
+  // Per anchor, `__scriptDeferred` is false while its chain runs, true once it
+  // is torn down or deferred, and unset while its attach is still in flight
+  // (the attach decides that one). A crossing during a landblock's time-sliced
+  // attach or unpark splits it: the anchors already chained keep their
+  // emitters, the rest are deferred, and the landblock goes into `deferred`
+  // (and `split`). So the teardown takes every running chain, also on a split
+  // landblock already in `deferred`, and the rebuild only the torn-down ones.
   for (const raw of baked) {
     const k = lbKeyOf(raw >>> 0);
     const d = _scriptLbDist(st.centers, k);
-    if (d > n + 1 && !st.deferred.has(k)) {
-      st.deferred.add(k);
-      _deferStaticScriptAnchors(scene3d, k, anchorsOf(k));
-      st.stats.torndownLbs += 1;
+    if (d > n + 1 && (!st.deferred.has(k) || st.split.has(k))) {
+      if (!st.deferred.has(k)) {
+        st.deferred.add(k);
+        st.stats.torndownLbs += 1;
+      }
+      st.split.delete(k);
+      const live = anchorsOf(k).filter((a) => a.userData.__scriptDeferred === false);
+      if (live.length > 0) _deferStaticScriptAnchors(scene3d, k, live);
     } else if (d <= n && st.deferred.has(k)) {
       st.deferred.delete(k);
-      const anchors = anchorsOf(k);
+      st.split.delete(k);
+      const anchors = anchorsOf(k).filter((a) => a.userData.__scriptDeferred === true);
       for (const a of anchors) a.userData.__scriptDeferred = false;
       if (anchors.length === 0) continue;
       st.stats.rebuiltLbs += 1;
@@ -5768,10 +5785,19 @@ async function _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, owne
     // 2026-10-07 read OFF on a bare URL), so owner-scoped teardown works
     // with `?particleOwner=off` too — otherwise the `static:<lbKey>` key
     // would be inert and the billboards would leak.
+    const ud = anchor?.userData;
+    const anchorEpoch = ud ? (ud.__scriptEpoch | 0) : 0;
     const id =
       ownerKey !== null
         ? await ownerRegistry.addEmitter(ownerKey, manager, req)
         : await manager.addEmitter(req);
+    // ?staticScriptRadius — the anchor was torn down while this create was in
+    // flight (the teardown only reaped emitters already in the table).
+    if (id !== 0 && ud && ((ud.__scriptEpoch | 0) !== anchorEpoch || ud.__scriptDeferred === true)) {
+      try { if (ownerKey !== null) ownerRegistry.destroySome(ownerKey, [id]); } catch (_) { /* fail-soft */ }
+      try { if (manager.particleTable?.has(id)) manager.destroyParticleEmitter(id); } catch (_) { /* fail-soft */ }
+      return 0;
+    }
     return id !== 0 ? 1 : 0;
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -5789,15 +5815,21 @@ async function _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, owne
  * disposeStaticParticles cancels it, and guarded exactly like the CallPES
  * re-run (`_spDisposed`, a detached anchor) plus the owner epoch: an LB
  * evict/park runs `destroyAllForOwner` on the anchor's key, and a hook armed
- * before that must not rebuild an emitter on the torn-down owner.
+ * before that must not rebuild an emitter on the torn-down owner. The
+ * ?staticScriptRadius teardown destroys only some of the owner's emitters
+ * (owner epoch unchanged), so the anchor's own epoch is checked too, as the
+ * CallPES re-run does.
  */
 function _scheduleStaticCreate(manager, anchor, hook, emitterInfo, ownerKey, fireAt) {
   const epoch = ownerKey !== null ? ownerRegistry._epoch(ownerKey) : 0;
+  const ud = anchor?.userData;
+  const anchorEpoch = ud ? (ud.__scriptEpoch | 0) : 0;
   const tid = setTimeout(() => {
     _staticCallPesTimeouts.delete(tid);
     if (_spDisposed) return; // scene torn down.
     if (!anchor || !anchor.parent) return; // LB evicted — anchor detached.
     if (ownerKey !== null && ownerRegistry._epoch(ownerKey) !== epoch) return;
+    if (ud && ((ud.__scriptEpoch | 0) !== anchorEpoch || ud.__scriptDeferred === true)) return;
     _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, ownerKey).catch(() => {});
   }, Math.max(0, (fireAt - currentTime()) * 1000));
   _staticCallPesTimeouts.add(tid);
@@ -5820,6 +5852,12 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
   // PLIFECYCLE-5: the script's start — retail arms every hook at script start
   // + entry.start_time (ScriptManager::AddScriptInternal / NextHook).
   const chainT0 = currentTime();
+  // ?staticScriptRadius — a teardown during this chain's awaits (it bumps the
+  // anchor's epoch) ends the chain: its later hooks would land on the torn-down
+  // anchor, or arm a CallPES loop under the new epoch beside the rebuild's.
+  const ud = anchor?.userData;
+  const anchorEpoch = ud ? (ud.__scriptEpoch | 0) : 0;
+  const stale = () => !!ud && ((ud.__scriptEpoch | 0) !== anchorEpoch || ud.__scriptDeferred === true);
   let ps;
   try {
     ps = await wasmExports.fetchPhysicsScript(pesId);
@@ -5835,6 +5873,7 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
   if (typeof ps.free === "function") ps.free();
   let attached = 0;
   for (const e of entries) {
+    if (stale()) break;
     // CallPES (19): re-play arm — the ambient loop that refreshes finite
     // swarms. Schedule the sub-script re-run (self = perpetual loop) and move
     // on. Fire-and-forget; never blocks the create-particle hooks below.
@@ -5861,6 +5900,7 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
       );
       continue;
     }
+    if (stale()) break;
     const hook = {
       emitterId,
       partIndex:
@@ -6035,21 +6075,32 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     };
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
+    const epoch0 = anchor.userData.__scriptEpoch | 0;
     // ?staticPartAnchor — part-anchored hooks ride their part, not the origin.
     // eslint-disable-next-line no-await-in-loop
     await attachStaticPartFrames(anchor, p.modelId, wasmExports);
+    // Parked during that await (park keeps the LB in staticsBakedLbs, so
+    // _lbLive cannot see it): unpark's rebuild runs this anchor's chain, and
+    // already has if it claimed the anchor (its epoch moved). Chaining here
+    // too doubled the emitters and the CallPES loop, and freezing a detached
+    // anchor baked a matrixWorld without worldRoot (2026-10-18 review).
+    const handedOff = !anchor.parent || (anchor.userData.__scriptEpoch | 0) !== epoch0;
     // ?staticAnchorFreeze — part frames are attached: freeze the subtree.
-    if (STATIC_ANCHOR_FREEZE_ON) _freezeStaticScriptAnchor(anchor);
+    if (STATIC_ANCHOR_FREEZE_ON && !handedOff) _freezeStaticScriptAnchor(anchor);
     // ?portalSetPiece — a static portal decoration gets the portal set piece.
     if (registerStaticPortalAnchor(anchor, p.modelId)) anchor.userData.portalSetup = p.modelId >>> 0;
-    // ?staticScriptRadius — beyond the emitter radius the anchor waits for
-    // tickStaticScriptRadius to rebuild its chain when the player comes near.
-    if (!_staticScriptWanted(scene3d, p.landblockId)) {
+    if (handedOff) {
+      // unpark's rebuild owns the chain.
+    } else if (!_staticScriptWanted(scene3d, p.landblockId)) {
+      // ?staticScriptRadius — beyond the emitter radius the anchor waits for
+      // tickStaticScriptRadius to rebuild its chain when the player comes near.
       anchor.userData.__scriptDeferred = true;
       const rs = _scriptRadiusState(scene3d);
       rs.deferred.add(pLbKey);
+      rs.split.add(pLbKey);
       rs.stats.deferredAtAttach += 1;
     } else {
+      anchor.userData.__scriptDeferred = false; // chained: the tick tears it down past N + 1
       // eslint-disable-next-line no-await-in-loop
       emitterCount += await _runStaticParticleChain(
         manager,
@@ -6210,19 +6261,23 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     }
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
+    const epoch0 = anchor.userData.__scriptEpoch | 0;
     // ?staticPartAnchor — the interior twin (cells.js threads `modelId`).
     // eslint-disable-next-line no-await-in-loop
     await attachStaticPartFrames(anchor, it.modelId, wasmExports);
     // ?portalSetPiece — the dungeon portal decorations (portal space cells).
     if (registerStaticPortalAnchor(anchor, it.modelId)) anchor.userData.portalSetup = it.modelId >>> 0;
-    // eslint-disable-next-line no-await-in-loop
-    emitterCount += await _runStaticParticleChain(
-      manager,
-      anchor,
-      it.defaultScriptId >>> 0,
-      wasmExports,
-      ownerKey
-    );
+    // Parked or claimed by an unpark rebuild mid-await — see the outdoor twin.
+    if (anchor.parent && (anchor.userData.__scriptEpoch | 0) === epoch0) {
+      // eslint-disable-next-line no-await-in-loop
+      emitterCount += await _runStaticParticleChain(
+        manager,
+        anchor,
+        it.defaultScriptId >>> 0,
+        wasmExports,
+        ownerKey
+      );
+    }
     // P4/R-10 late-completion re-check — see the outdoor twin above.
     if (!_cellLbLive(it)) {
       _deadLbs.add(itLbKey);
@@ -6283,6 +6338,17 @@ export function _evictStaticParticlesForLb(lbKeyOrId) {
  */
 export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wasmExports) {
   if (!Array.isArray(anchors) || anchors.length === 0) return 0;
+  // Claim the anchors before the first await: the epoch bump ends a CallPES
+  // loop still pending from before a park, and an anchor whose epoch moves
+  // again before its turn (a radius teardown; a later rebuild then owns it)
+  // is skipped, so two overlapping rebuilds never both run its chain.
+  const claim = new Map();
+  for (const anchor of anchors) {
+    const ud = anchor?.userData;
+    if (!ud?.isStaticScriptAnchor) continue;
+    ud.__scriptEpoch = (ud.__scriptEpoch | 0) + 1;
+    claim.set(anchor, ud.__scriptEpoch);
+  }
   const manager = await _ensureStaticParticleManager(scene3d, wasmExports);
   if (!manager) return 0;
   const lbLive = (lbId) => {
@@ -6297,16 +6363,21 @@ export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wa
   for (const anchor of anchors) {
     const ud = anchor?.userData;
     if (!ud?.isStaticScriptAnchor) continue;
+    if ((ud.__scriptEpoch | 0) !== claim.get(anchor)) continue;
     const pesId = ud.defaultScriptId >>> 0;
     if (!pesId) continue;
     if (!anchor.parent || !lbLive(ud.landblockId >>> 0)) continue; // R-10
     // ?portalSetPiece — an unparked static portal is a portal again.
     if (ud.portalSetup) registerStaticPortalAnchor(anchor, ud.portalSetup);
     // ?staticScriptRadius — an unpark outside the emitter radius stays deferred.
+    // Interior anchors are exempt (their attach and the tick skip them), so
+    // the tick would never rebuild one deferred here.
     const lbKey = lbKeyOf(ud.landblockId >>> 0);
-    if (!_staticScriptWanted(scene3d, ud.landblockId >>> 0)) {
+    if (!ud.isCellStaticScriptAnchor && !_staticScriptWanted(scene3d, ud.landblockId >>> 0)) {
       ud.__scriptDeferred = true;
-      _scriptRadiusState(scene3d).deferred.add(lbKey);
+      const rs = _scriptRadiusState(scene3d);
+      rs.deferred.add(lbKey);
+      rs.split.add(lbKey);
       continue;
     }
     ud.__scriptDeferred = false;
@@ -6318,7 +6389,7 @@ export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wa
       wasmExports,
       ud.particleOwnerKey ?? null
     );
-    if (_scriptsHost(scene3d)._staticScriptRadius?.deferred.has(lbKey)) {
+    if (!ud.isCellStaticScriptAnchor && _scriptsHost(scene3d)._staticScriptRadius?.deferred.has(lbKey)) {
       _deferStaticScriptAnchors(scene3d, lbKey, [anchor]);
     }
     if (
@@ -6405,9 +6476,9 @@ let _spRafId = 0;
 let _spDisposed = false;
 
 if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMode() === "off") {
-  // `ts` (the rAF timestamp) lets the manager drop the SECOND module
-  // instance's tick of the same frame — this file loads twice on the
-  // unbundled page (`?particleTickOnce`, particle_manager.js tickFrame).
+  // `ts` (the rAF timestamp) lets the manager drop a second tick of the same
+  // frame — this file loaded twice on the unbundled page until 2026-10-18
+  // (`?particleTickOnce`, particle_manager.js tickFrame).
   const _spLoop = (ts) => {
     if (_spDisposed) return;
     try {

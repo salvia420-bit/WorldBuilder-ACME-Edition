@@ -145,9 +145,10 @@ export class ActiveNav {
     this._jumpJob = null;
     this._jumpRelease = null;
     // A Point/Jump executor's attemptJumpLeg job still in flight when that
-    // executor was reset (pause/resume/setActive/route edit): it cannot be
-    // cancelled and keeps driving input, so no new executor runs and no
-    // `/rs jump` starts until it settles (review runtime-2).
+    // executor was reset (pause/resume/setActive/route edit): a cancelled job
+    // stops before the fire but still settles asynchronously (within a pose
+    // poll), so no new executor runs and no `/rs jump` starts until it
+    // settles (review runtime-2, RYNTH-4).
     this._orphanJob = null;
 
     this.signalsLatest = { vendorOpen: null, tell: null, useDone: null, portalIn: null, portalOut: null, teleportArrived: null };
@@ -714,7 +715,9 @@ export class ActiveNav {
   _startJump(req) {
     const gc = this.gotoCompose;
     this._cancelLeg();
-    this._jumpJob = runJob(() => gc.attemptJumpLeg({ host: this.host }, req.leg, req.tune));
+    // RYNTH-4: the job's isAborted() reads true after _jumpJob.cancel() (the
+    // slot leaving, dispose), so the turn/charge stops and the jump never fires.
+    this._jumpJob = runJob((isAborted) => gc.attemptJumpLeg({ host: this.host, isAborted }, req.leg, req.tune));
     this._jumpJob.promise.then(() => this._reapJump());
   }
   _reapJump() {
@@ -763,6 +766,8 @@ export class ActiveNav {
       this._jumpReq = null;
       this.log(`queued jump dropped (${next})`);
     }
+    // A running jump stops too; it reaps as "jump aborted (cancelled)".
+    if (this._jumpJob) this._jumpJob.cancel();
   }
 
   // ── router ownership ────────────────────────────────────────────────────
@@ -828,6 +833,7 @@ export class ActiveNav {
     this._exec = null;
     this._disposed = true;
     if (this._jumpReq && !this._jumpJob) this._jumpReq = null;
+    if (this._jumpJob) this._jumpJob.cancel();
     for (const u of this._unsubs) {
       try {
         u();

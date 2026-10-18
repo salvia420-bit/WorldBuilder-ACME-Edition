@@ -739,8 +739,11 @@ export function mountToolbarControls(field, opts = {}) {
   };
   const onStatsUpdated = () => updateStance();
   let bus = null;
+  // A toolbar disposed before login must not bind when the ready promise
+  // resolves later (2026-10-18 review, the PLUGINS-A late-bind class).
+  let disposed = false;
   const subscribe = (client) => {
-    if (!client?.events?.on || bus) return;
+    if (disposed || !client?.events?.on || bus) return;
     bus = client.events;
     bus.on("selectionChanged", onSelectionChanged);
     bus.on("playerStatsUpdated", onStatsUpdated);
@@ -767,6 +770,7 @@ export function mountToolbarControls(field, opts = {}) {
     refs,
     getCombatMode: () => state.mode,
     dispose() {
+      disposed = true;
       clearInterval(timer);
       if (bus?.off) {
         try { bus.off("selectionChanged", onSelectionChanged); } catch (_) {}

@@ -54,8 +54,9 @@ export function drawSortProgramEnabled() {
  *  shells/statics/cells/entities still holds and programs group inside each
  *  phase. */
 export function makeProgramSort(renderer, phaseOf = null) {
-  const props = renderer.properties;
-  const info = renderer.info;
+  // `renderer.properties` / `renderer.info` are read at each use, not held: a
+  // WebGL context restore replaces both (three initGLContext), and the held
+  // ones froze the frame stamp (every memo a hit) on a dead program map.
   // The memo lives ON the material (three own-props, never copied by
   // Material.copy/clone or serialized by toJSON), stamped with this
   // comparator's token so two renderers can never read each other's keys.
@@ -65,9 +66,9 @@ export function makeProgramSort(renderer, phaseOf = null) {
   // save GPU binds. Two property reads are near-free on a hit.
   const tok = {};
   function programKey(material) {
-    const frame = info.render.frame;
+    const frame = renderer.info.render.frame;
     if (material.__dspTok === tok && material.__dspFrame === frame) return material.__dspKey;
-    const p = props.get(material).currentProgram;
+    const p = renderer.properties.get(material).currentProgram;
     const key = p ? p.id : Number.MAX_SAFE_INTEGER;
     material.__dspTok = tok;
     material.__dspFrame = frame;

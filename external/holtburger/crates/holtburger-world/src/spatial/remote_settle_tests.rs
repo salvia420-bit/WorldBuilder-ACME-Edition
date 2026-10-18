@@ -425,6 +425,40 @@ fn an_interpolating_body_waits() {
     assert!((z(&scene) - TERRAIN_Z).abs() < 1e-4);
 }
 
+/// RUSTCRATES-1 — a drop the D7 4 s cap cannot carry (~78 m from rest) but
+/// inside `REMOTE_SETTLE_MAX_DROP_M` flies the whole parabola: no slice moves
+/// further than the fall speed allows, and it lands at the free-fall time
+/// instead of snapping its last ~12 m to the floor at 4 s.
+#[test]
+fn deep_settle_falls_the_whole_parabola() {
+    let _on = SettleSwitch::set(true);
+    let mut scene = ready_scene();
+    let h = 90.0;
+    create(&mut scene, at(50.0, 50.0, TERRAIN_Z + h));
+    assert_eq!(scene.start_remote_settles(eligible), 1);
+    let mut t = 0.0;
+    let mut prev = z(&scene);
+    let mut worst_step: f32 = 0.0;
+    while scene.remote_arc(MOB).is_some() {
+        scene.step_remote_position_managers(SLICE);
+        t += SLICE;
+        let now = z(&scene);
+        worst_step = worst_step.max(prev - now);
+        prev = now;
+        assert!(t < 10.0, "the fall never landed");
+    }
+    assert!((z(&scene) - TERRAIN_Z).abs() < 1e-4, "on the terrain: {}", z(&scene));
+    let free_fall = (2.0 * h / 9.8).sqrt();
+    assert!(free_fall > 4.0, "the case the 4 s cap used to cut: {free_fall} s");
+    assert!((t - free_fall).abs() <= 2.0 * SLICE, "fell in {t} s, free fall {free_fall} s");
+    let v_land = 9.8 * free_fall;
+    assert!(
+        worst_step <= v_land * SLICE + 0.5,
+        "no snap: largest one-slice drop {worst_step} m (fall speed allows {} m)",
+        v_land * SLICE
+    );
+}
+
 /// A body far above every floor the scene holds probably stands on
 /// something the scene lacks: left alone.
 #[test]

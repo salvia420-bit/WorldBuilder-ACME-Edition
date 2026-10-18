@@ -113,7 +113,10 @@ export function dispatchClientEvent(evt, D) {
       if (btn) btn.textContent = "Spawned";
     }
     loginStatus.innerHTML =
-      `<span class="ok">[OK]</span> Spawned <strong>${name}</strong> ` +
+      // escapeHtml: `dataset.name` is the DECODED wire name (index.html
+      // renderCharacterList escapes it into the attribute and the browser
+      // decodes it back), so the shard-supplied name is escaped again here.
+      `<span class="ok">[OK]</span> Spawned <strong>${escapeHtml(name)}</strong> ` +
       `<span class="hint">(GUID ${guidHex})</span>. ` +
       `<span class="hint">Player + entities render via the live entity layer.</span>`;
   } else if (evt.kind === ClientEventKind.CHARACTER_LIST_RECEIVED) {
@@ -630,6 +633,29 @@ export function dispatchClientEvent(evt, D) {
         } catch (_) { /* best-effort */ }
       }
     }
+    // A refused Enter World (character still in the world, server full, …):
+    // ACE keeps the session, so release the spawn index.html latched on the
+    // Spawn click — retail drops back to a usable character select. The wasm
+    // reports kind=1 PlayerSpawned eagerly on SelectCharacter (lifecycle.rs,
+    // Workstream A), so spawningCharId is usually null by now and
+    // spawnedPlayerGuid holds the refused id; kind=7 refills it on a retry.
+    // Only that character is offered again: this session's WorldState was
+    // built for its guid (another character needs a reload). Not a
+    // boot-state 'error': auto_login's char-in-world retry reads the stash
+    // above. The character screen (app/character_select.js) shows the
+    // ID_CHAR_ERROR dialog off the event below.
+    const refusedId = D.enteredWorld ? null : (D.spawningCharId ?? D.spawnedPlayerGuid);
+    if (refusedId != null) {
+      D.spawningCharId = null;
+      D.spawnedPlayerGuid = null;
+      try {
+        for (const b of characterUl?.querySelectorAll?.("button[data-id]") ?? []) {
+          b.disabled = Number(b.dataset.id) !== refusedId;
+          b.textContent = "Spawn";
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    try { window.dispatchEvent(new CustomEvent("holtburger:charerror", { detail: window.__lastCharacterError })); } catch (_) {}
   } else if (evt.kind === ClientEventKind.PLAYER_STATS_UPDATED) {
     // Phase 4 step 4 follow-on: PlayerStatsUpdated.
     // The recv loop coalesces all stat-bearing wire

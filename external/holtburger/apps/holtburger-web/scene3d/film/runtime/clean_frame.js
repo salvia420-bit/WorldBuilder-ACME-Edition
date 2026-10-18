@@ -241,7 +241,9 @@ export function createCleanFrame(deps = {}) {
       });
     }
 
-    // 7. Nameplate sprites + the hello cube.
+    // 7. Nameplate sprites + the hello cube. With ?nameplates=on, nameplate_sprite.js's own
+    // rAF LOD rewrites `.visible` of the nearest sprites every frame, so each sprite is also
+    // taken off every camera layer (layers.mask 0): the renderer skips it whatever the LOD sets.
     attempt(steps, "nameplates", () => {
       const map = em && em.entityMap;
       if (!map || typeof map.values !== "function") return { ok: false, skipped: "no entityMap" };
@@ -250,11 +252,19 @@ export function createCleanFrame(deps = {}) {
         if (!inst || typeof inst !== "object") continue;
         for (const key of ["_nameplateSprite", "_buffBadgeSprite"]) {
           const s = inst[key];
-          if (s && typeof s === "object" && s.visible !== false) {
-            saved.nameplates.push({ obj: s, visible: s.visible });
-            s.visible = false;
-            n += 1;
+          if (!s || typeof s !== "object") continue;
+          const entry = { obj: s };
+          if (s.layers && Number.isInteger(s.layers.mask) && s.layers.mask !== 0) {
+            entry.mask = s.layers.mask;
+            s.layers.mask = 0;
           }
+          if (s.visible !== false) {
+            entry.visible = s.visible;
+            s.visible = false;
+          }
+          if (entry.mask === undefined && entry.visible === undefined) continue;
+          saved.nameplates.push(entry);
+          n += 1;
         }
       }
       return { ok: true, hidden: n };
@@ -318,7 +328,10 @@ export function createCleanFrame(deps = {}) {
       return true;
     });
     attempt(steps, "nameplates", () => {
-      for (const n of s.nameplates) n.obj.visible = n.visible;
+      for (const n of s.nameplates) {
+        if (n.mask !== undefined) n.obj.layers.mask = n.mask;
+        if (n.visible !== undefined) n.obj.visible = n.visible;
+      }
       return true;
     });
     attempt(steps, "helloCube", () => {

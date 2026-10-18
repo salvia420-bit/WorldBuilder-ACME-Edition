@@ -540,6 +540,30 @@ function _hookProgram(st, program) {
   };
 }
 
+// three's context restore builds a new WebGLCapabilities whose maxTextures is
+// back at MAX_TEXTURE_IMAGE_UNITS (16 on ANGLE/D3D11): put back the limit the
+// pins were planned against (index.js raises it to
+// MAX_COMBINED_TEXTURE_IMAGE_UNITS at boot), or every pinned sampler above it
+// logs three's per-upload "Trying to use N texture units" warning (plain warn,
+// not warnOnce) until reload. Never above the restored context's own combined
+// limit; if that came back lower, the pins are re-planned for it (every program
+// after a restore is a new one).
+function _restoreUnitLimit(st) {
+  const caps = st.renderer.capabilities;
+  if (!caps) return;
+  let max = st.stats.maxTextures;
+  try {
+    const combined = st.gl.getParameter(st.gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) | 0;
+    if (combined > 0 && combined < max) max = combined;
+  } catch (_) { /* keep the planned limit */ }
+  if ((caps.maxTextures | 0) < max) caps.maxTextures = max;
+  if (max !== st.stats.maxTextures) {
+    st.stats.maxTextures = max;
+    st.pinUnits.clear();
+    for (const [name, unit] of pinUnitsFor(max, st.pinNames)) st.pinUnits.set(name, unit);
+  }
+}
+
 function _adoptArray(st, arr) {
   st.arr = arr;
   if (!Array.isArray(arr)) return;
@@ -585,6 +609,7 @@ export function installUniformBindPatch(renderer, opts = {}) {
     blocks: null,
     lightOff: false,
     renderer,
+    pinNames: opts.pinNames || PIN_NAMES,
     pinUnits: pinUnitsFor(maxTextures, opts.pinNames || PIN_NAMES),
     cam: null,
     arr: null,
@@ -617,7 +642,8 @@ export function installUniformBindPatch(renderer, opts = {}) {
   const api = {
     stats: st.stats,
     pinUnits: st.pinUnits,
-    /** Per-frame: re-adopt after a context restore (three swaps the array). */
+    /** Re-adopt after a context restore (three swaps the array): run from the
+     *  restore event and, as a fallback, every render tail. */
     tick() {
       const arr = renderer.info && renderer.info.programs;
       if (arr !== st.arr) {
@@ -625,12 +651,22 @@ export function installUniformBindPatch(renderer, opts = {}) {
         // A restored context lost every buffer: rebuild them before the new
         // programs (hooked below) draw.
         if (st.ubo) _uboInit(st);
+        _restoreUnitLimit(st);
         _adoptArray(st, arr);
       }
     },
     /** Live A/B for the light memo (pins are per program and stay). */
     setLightOnce(on) { st.lightOff = !on; return !st.lightOff; },
   };
+  // Adopt the restored context before its FIRST draw, not at that frame's
+  // render tail: in between, its lit programs (compiled with the define) drew
+  // with no buffer at their block bindings, and every pin warned. three's own
+  // restore listener was registered in its constructor, so it has already
+  // swapped info / capabilities when this one runs.
+  const canvas = renderer.domElement;
+  if (canvas && typeof canvas.addEventListener === "function") {
+    try { canvas.addEventListener("webglcontextrestored", () => api.tick(), false); } catch (_) { /* render tail still adopts */ }
+  }
   try {
     Object.defineProperty(renderer, "__hbUniformBindPatch", { value: api, configurable: true });
   } catch (_) {

@@ -434,6 +434,10 @@ pub struct RemoteArc {
     pub unsampled_floor: Option<f32>,
     /// Seconds spent airborne (safety cap).
     pub elapsed: f32,
+    /// The safety cap on `elapsed`: the D7 `REMOTE_ARC_MAX_S` for a jump or a
+    /// walk off a ledge, the fall's own free-fall time for a settle
+    /// (RUSTCRATES-1).
+    pub max_s: f32,
 }
 
 impl SpatialBody {

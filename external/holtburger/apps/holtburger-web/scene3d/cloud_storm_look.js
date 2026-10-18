@@ -104,6 +104,11 @@ const LAYER_KEYS = [
 // layer the look does not profile is reset to.
 const DEFAULT_DENSITY_PROFILE = Object.freeze({ expTerm: 0, exponent: 0, linearTerm: 0.75, constantTerm: 0.25 });
 
+// The coverage each effect was last given by the look. A coverage that no
+// longer matches it was set by a knob (`?cloudCoverage`, `__setCloudCoverage`),
+// and the look leaves it alone from then on.
+const _lookCoverage = new WeakMap();
+
 /**
  * Write one of the two looks onto a CloudsEffect (or an effect-shaped test
  * double: `{ cloudLayers: [{},{},{},{}], coverage, haze, clouds }`).
@@ -132,8 +137,15 @@ export function applyCloudLook(effect, isStorm) {
   // Coverage is a TOP-LEVEL CloudsEffect property (`effect.coverage`), NOT
   // on the `effect.clouds` uniform proxy — writing the proxy was the
   // historical dead-knob trap (verified in-browser 2026-07-06).
+  // 2026-10-18: only while nothing else has set it. index.js applies
+  // `?cloudCoverage` right after the overlay's construct-time fair look, and
+  // the boot / adoption / storm-edge re-applies used to put 0.5 back over it.
   if (typeof effect.coverage === 'number') {
-    effect.coverage = isStorm ? STORM_COVERAGE : FAIR_COVERAGE;
+    const last = _lookCoverage.get(effect);
+    if (last === undefined || effect.coverage === last) {
+      effect.coverage = isStorm ? STORM_COVERAGE : FAIR_COVERAGE;
+      _lookCoverage.set(effect, effect.coverage);
+    }
   }
   // takram's built-in ground haze: ensure on (idempotent — one shader
   // recompile at most), density stepped by the storm state.

@@ -283,6 +283,7 @@ export class MetaEngine {
     this._vendor = null;
     this._stopPass = false;
     this._curRuleId = null;
+    this._gateOpen = false; // the last running tick had a meta loaded and enabled (see tick)
     this._destroyed = false;
     this._echoed = new Set();
     this._warned = new Set();
@@ -315,6 +316,7 @@ export class MetaEngine {
       if (!norm.ok) return { ok: false, warnings: norm.warnings, error: norm.error };
       if (source && typeof source === "object") norm.meta.source = { ...norm.meta.source, ...source };
       else if (typeof source === "string" && source) norm.meta.source = { ...norm.meta.source, loadedFrom: source };
+      this._releaseHostEffects("load"); // the old meta's setmotion keys
       this._install(norm.meta);
       const st = this.st;
       st.metaName = name !== null && name !== undefined && text(name).trim() ? text(name).trim() : norm.meta.name || null;
@@ -368,6 +370,7 @@ export class MetaEngine {
 
   unload() {
     try {
+      this._releaseHostEffects("unload");
       this._install(null);
       this.st.metaName = null;
       this.st.stack = [];
@@ -677,14 +680,20 @@ export class MetaEngine {
           this._flushVars(true); // persist pending vars on stop
           this._releaseHostEffects("hold"); // I-3: STOP lets go of setmotion keys
         }
+        this._gateOpen = false;
         this._closedGate(now);
         return;
       }
       if (!wasRunning) this.enterState(st.state, "macroStart"); // Run Macro off→on edge
       if (!this._meta || !this.enabled) {
+        // EnableMeta turned off (panel, /vt meta disable, SetOpt, a Return
+        // from an empty stack) lets go of setmotion keys like STOP does.
+        if (this._gateOpen) this._releaseHostEffects("disable");
+        this._gateOpen = false;
         this._closedGate(now);
         return;
       }
+      this._gateOpen = true;
       this._watchdogStep(now, !this._portalActive());
       const since = now - this._lastPass;
       // A clock that stepped back (since < 0) must not stall passes until it catches up.
@@ -705,7 +714,8 @@ export class MetaEngine {
   }
 
   // Let go of what host functions engaged (setmotion keys; FunctionRegistry
-  // release hooks): on the running→held edge, portalIn and destroy.
+  // release hooks): on the running→held and enabled→disabled edges, load,
+  // unload, portalIn and destroy.
   _releaseHostEffects(reason) {
     try {
       const f = this.expr && this.expr.functions;

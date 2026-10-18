@@ -324,6 +324,11 @@ export function createLandblockStream(D) {
   // a 50-cell town hall lands one bake per cell on first entry.
   const cellContainersPopulatedLbs = new Set();
   const cellContainersPopulateInFlight = new Set();
+  // 2026-10-18: per-LB eviction count, bumped by `__onLandblockEvicted`. A
+  // build that sees it change across its await was evicted mid-way: the
+  // collision clear dropped its earlier cells, so it must not mark the LB
+  // populated, and the in-flight bit it held now belongs to any re-entry.
+  const cellContainersEvictGen = new Map();
   // Cell-container registry: stable across LB entries. JS adds
   // entries on `ensureCellContainersForLandblock`, never removes
   // (capture probe walks the map). Phase D's culling toggles
@@ -351,6 +356,7 @@ export function createLandblockStream(D) {
     buildingAabbsPopulateInFlight.delete(lb);
     cellContainersPopulatedLbs.delete(lb);
     cellContainersPopulateInFlight.delete(lb);
+    cellContainersEvictGen.set(lb, (cellContainersEvictGen.get(lb) || 0) + 1);
     // DAT-01 phase 2e: the scenery colliders were purged wasm-side by
     // `enqueueClearLandblockCollision` -> `clear_landblocks_collision`
     // (the scenery family is wired into that batched clear), so the
@@ -379,6 +385,11 @@ export function createLandblockStream(D) {
       return;
     }
     cellContainersPopulateInFlight.add(lbId);
+    const evictGen = cellContainersEvictGen.get(lbId) || 0;
+    const notEvicted = () => (cellContainersEvictGen.get(lbId) || 0) === evictGen;
+    const markPopulated = () => {
+      if (notEvicted()) cellContainersPopulatedLbs.add(lbId);
+    };
     try {
       // `?interiorBuildShare`: join cells.js's in-flight build of this LB (or
       // let it join ours) — one wasm build, one set of queued cell products.
@@ -391,7 +402,7 @@ export function createLandblockStream(D) {
         : fetchEnvCellsInLandblock(lbId));
       const soleOwner = !share || share.consumersOf(placements) <= 1;
       if (!placements || placements.length === 0) {
-        cellContainersPopulatedLbs.add(lbId);
+        markPopulated();
         return;
       }
       const app = D.liveScene?.app;
@@ -443,7 +454,7 @@ export function createLandblockStream(D) {
         const wantRenderer3d =
           new URLSearchParams(window.location.search).get("renderer") !== "2d";
         if (wantRenderer3d || window.liveScene3d) {
-          cellContainersPopulatedLbs.add(lbId);
+          markPopulated();
         }
         return;
       }
@@ -453,7 +464,7 @@ export function createLandblockStream(D) {
       // in 3D the function already returned at the `if (!app)` gate above,
       // after the wasm-side fetchEnvCellsInLandblock queued the cell-graph +
       // physics data the 3D path consumes. Bookkeeping kept:
-      cellContainersPopulatedLbs.add(lbId);
+      markPopulated();
       // `?interiorBuildShare`: a shared array belongs to its reader.
       if (soleOwner) for (const placement of placements) placement.free();
     } catch (e) {
@@ -461,7 +472,8 @@ export function createLandblockStream(D) {
         `[phase6.C] fetchEnvCellsInLandblock(0x${lbId.toString(16)}) failed:`, e
       );
     } finally {
-      cellContainersPopulateInFlight.delete(lbId);
+      // After an eviction the bit is a re-entry's (the hook cleared ours).
+      if (notEvicted()) cellContainersPopulateInFlight.delete(lbId);
     }
   }
   // Cell-residency watchdog (2026-07-18, soak-9 door/freeze fix).
@@ -1267,7 +1279,8 @@ export function createLandblockStream(D) {
   // inputs (item_type + obj_desc_flags + weenie_flags); the manager
   // runs canonicalClassify() — same algorithm as ACPlugin / retail
   // acclient.exe. Read-only over upd; no .free() or mutation.
-  // Pre-load spawns silently dropped per manager's loaded-guard.
+  // Pre-load spawns are buffered by the manager (`_pendingCreate`) and
+  // replayed when its load() completes.
   function neutralSpawn(upd) {
     if (D.worldObjectManager) {
       D.worldObjectManager.onObjectCreated({

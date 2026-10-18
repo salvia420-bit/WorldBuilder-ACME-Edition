@@ -423,7 +423,8 @@ const pin = (name, hash, len, text, opts = {}) => {
   const fd = await import(v("scene3d/vfx/fx_distort_effect.js"));
   pin("fx distort effect", "2df31453", 2926, new fd.FxDistortEffect({}).getFragmentShader());
   const ss = await import(v("scene3d/ssao.js"));
-  pin("ssao (SAO pass)", "4c7ca565", 2292, new ss.SsaoPass(new THREE.PerspectiveCamera()).saoMat.fragmentShader);
+  // Re-pinned 2026-10-18 (SKY-2): the sky sentinel 1.0e6 -> 6.0e4 (RG16F range) + its comment.
+  pin("ssao (SAO pass)", "d3d21115", 2510, new ss.SsaoPass(new THREE.PerspectiveCamera()).saoMat.fragmentShader);
   const pp = await import(v("scene3d/portal_punch.js"));
   pin("portal punch", "70abf2c8", 135, new pp.PortalPunchPass(null, new THREE.PerspectiveCamera())._punchMat.fragmentShader);
   pin("portal seal (armed)", "cd68919a", 487, new pp.PortalPunchPass(null, new THREE.PerspectiveCamera(), "seal")._punchMat.fragmentShader);

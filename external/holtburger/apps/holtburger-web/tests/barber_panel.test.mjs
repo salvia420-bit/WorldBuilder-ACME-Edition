@@ -13,7 +13,8 @@
 //       Gearknight / Olthoi rows, labels, Apply's effect order;
 //   [2] the panel opens on the `startBarber` bus event (app/client_events.js
 //       routes UI_EVENT tag "barber" there) with the player's heritage /
-//       gender and the 16 fields;
+//       gender and the 16 fields — subscribed on __pluginClientReady, since
+//       the bar mounts it at page load with client null (2026-10-18);
 //   [3] Cancel sends nothing; Apply calls finishBarber exactly once (also
 //       on a double click) and runs the Undead/Shadow local effects; a
 //       Cancel / title-bar X / newer StartBarber while barberApply is still
@@ -256,10 +257,14 @@ const bus = {
   emit(n, detail) { for (const f of [...(busL.get(n) || [])]) f(new FakeEvent(n, { detail })); },
   count(n) { return busL.get(n)?.size ?? 0; },
 };
-globalThis.__pluginClient = { events: bus };
+// Production order: the bar mounts every slot at page load with client null
+// (app/plugin_bar.js mountBar); index.html builds __pluginClient at login and
+// resolves __pluginClientReady.
+let resolveReady = null;
+globalThis.__pluginClientReady = new Promise((r) => { resolveReady = r; });
 
 const panel = await import("../plugins/barber-panel.js");
-const unmount = panel.mount({ client: globalThis.__pluginClient });
+const unmount = panel.mount({ client: null });
 
 const root = () => document.getElementById("hb-barber-panel");
 const isOpen = () => root()?.dataset?.open === "1";
@@ -267,7 +272,11 @@ const q = (sel) => root()?.querySelector(sel);
 const count = (name) => calls.filter((c) => c[0] === name).length;
 const rest = FIELDS.join(",");
 
-await check("mount subscribes to the startBarber bus event", () => {
+await check("mount before login waits; __pluginClientReady subscribes startBarber once", async () => {
+  assert.equal(bus.count("startBarber"), 0);
+  globalThis.__pluginClient = { events: bus };
+  resolveReady(globalThis.__pluginClient);
+  await settle();
   assert.equal(bus.count("startBarber"), 1);
 });
 
@@ -504,6 +513,24 @@ await check("[5] a stale pkg/ (no barberInit) or a malformed payload keeps it cl
 
 await check("unmount unsubscribes", () => {
   unmount();
+  assert.equal(bus.count("startBarber"), 0);
+});
+
+await check("a client at mount subscribes at once (once); an unmount before login never subscribes", async () => {
+  const again = panel.mount({ client: globalThis.__pluginClient });
+  assert.equal(bus.count("startBarber"), 1);
+  await settle();
+  assert.equal(bus.count("startBarber"), 1);
+  again();
+  assert.equal(bus.count("startBarber"), 0);
+  const client = globalThis.__pluginClient;
+  delete globalThis.__pluginClient;
+  let resolveLate = null;
+  globalThis.__pluginClientReady = new Promise((r) => { resolveLate = r; });
+  panel.mount({ client: null })();
+  globalThis.__pluginClient = client;
+  resolveLate(client);
+  await settle();
   assert.equal(bus.count("startBarber"), 0);
 });
 

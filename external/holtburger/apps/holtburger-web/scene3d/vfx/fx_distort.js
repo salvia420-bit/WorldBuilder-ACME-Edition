@@ -20,6 +20,7 @@
 
 import * as THREE from "three";
 import { fxTier1Enabled } from "./fx_tier1.js";
+import { fxNowMs } from "../fx_clock.js";
 
 export const FX_DISTORT_MAX = 16;
 export const FX_DISTORT_KINDS = Object.freeze({ heat: 1, swirl: 2, ring: 3, ripple: 4 });
@@ -29,8 +30,11 @@ const _stats = { added: 0, shockwaves: 0, live: 0, onScreen: 0 };
 const RING_MS = 650;
 const SHOCK_MAX = 8;
 
+// The stamps share the clock fx_distort_effect.js measures phase on: on wall
+// time, a ring spawned in a stepped film take whose clock lags got a negative
+// phase, was never pruned and drew as a frozen pinch.
 function _now() {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  return fxNowMs(); // the film clock during a stepped take (fx_clock.js), else performance.now()
 }
 
 /**

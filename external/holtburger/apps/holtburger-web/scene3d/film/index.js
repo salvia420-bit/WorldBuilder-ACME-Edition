@@ -1173,6 +1173,18 @@ export function installFilmMode(deps = {}) {
     } catch (_) {
       /* best effort */
     }
+    // The take's look (sky pin, fog override, grade …) and the film avatar hide outlive the
+    // api otherwise: the person on the 1070 may open this tab later.
+    try {
+      look.restore();
+    } catch (_) {
+      /* best effort */
+    }
+    try {
+      world.avatar(true);
+    } catch (_) {
+      /* best effort */
+    }
     disposed = true;
     INSTALLED.delete(live);
     if (win && win.__film === api) {
@@ -1196,9 +1208,11 @@ export function installFilmMode(deps = {}) {
       return { on: true, ...cleanFrame.apply({ bubbles }) };
     }),
     own: safeSync(() => ({ ...cameraOwner.own(), owned: cameraOwner.owned })),
+    // Hands the client back (the CLI's `status --release`): the camera and the take's look.
+    // The next prepare applies its take's whole look again.
     release: safeSync(() => {
       if (cameraBusy()) throw new FilmError("release: a take is running", "FILM_BUSY");
-      return { ...cameraOwner.release(), owned: cameraOwner.owned };
+      return { ...cameraOwner.release(), owned: cameraOwner.owned, look: look.restore() };
     }),
     pose: safeSync(pose),
     world: {

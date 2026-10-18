@@ -527,8 +527,8 @@ function armResolverFor(guid, did = 0x33000a02) {
 {
   armResolverFor(GUID);
   const { ctx, attachCalls } = makePlayCtx();
-  ctx.entityMap.set(GUID, { guid: GUID });
   const root = new THREE.Object3D();
+  ctx.entityMap.set(GUID, { guid: GUID, root });
   ctx._playDefaultScriptResolved(GUID, root);
   await drain();
   await drain();
@@ -550,6 +550,21 @@ function armResolverFor(guid, did = 0x33000a02) {
   delete globalThis.__A11S5_FETCH_PST;
 }
 
+// 4b2. same-guid respawn mid-resolve → dropped: the map now holds a NEW rig
+//      for the guid, so the old rig's play must not land on it (ENTITIES
+//      review follow-up, 2026-10-18).
+{
+  armResolverFor(GUID);
+  const { ctx, attachCalls } = makePlayCtx();
+  const oldRig = new THREE.Object3D();
+  ctx.entityMap.set(GUID, { guid: GUID, root: new THREE.Object3D() });
+  ctx._playDefaultScriptResolved(GUID, oldRig);
+  await drain();
+  await drain();
+  check("4b2. respawned guid (another rig mapped) → no attach", attachCalls.length === 0);
+  delete globalThis.__A11S5_FETCH_PST;
+}
+
 // 4c. did 0 (resolver yields nothing) → no attach.
 {
   globalThis.__A11S5_FETCH_PST = () => null; // null table → resolve 0
@@ -559,8 +574,9 @@ function armResolverFor(guid, did = 0x33000a02) {
     tableByGuid: { [GUID]: TABLE_DID },
   });
   const { ctx, attachCalls } = makePlayCtx();
-  ctx.entityMap.set(GUID, { guid: GUID });
-  ctx._playDefaultScriptResolved(GUID, new THREE.Object3D());
+  const root = new THREE.Object3D();
+  ctx.entityMap.set(GUID, { guid: GUID, root });
+  ctx._playDefaultScriptResolved(GUID, root);
   await drain();
   await drain();
   check("4c. resolved did 0 → no attach (no-op)", attachCalls.length === 0);
@@ -571,8 +587,9 @@ function armResolverFor(guid, did = 0x33000a02) {
 {
   armResolverFor(GUID);
   const { ctx, attachCalls } = makePlayCtx();
-  ctx.entityMap.set(GUID, { guid: GUID });
-  ctx._playDefaultScriptResolved(GUID, new THREE.Object3D(), 3);
+  const root = new THREE.Object3D();
+  ctx.entityMap.set(GUID, { guid: GUID, root });
+  ctx._playDefaultScriptResolved(GUID, root, 3);
   await drain();
   await drain();
   check("4d. hook-18 part index threaded to _attachParticleChainForEntity", attachCalls.length === 1 && attachCalls[0]?.[4] === 3);
@@ -616,8 +633,8 @@ check(
   /DEFAULT_SCRIPT_SPAWN_ON\s*&&\s*\n\s*pesId === 0\s*&&\s*\n(?:\s*\/\/[^\n]*\n)*(?:\s*!\(PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON && inst\._isProjectile === true\)\s*&&\s*\n)?\s*!this\._particleChainsAttached\.has\(guid\)/.test(entitiesSrc),
 );
 check(
-  "spawn arm: drops despawn-mid-resolve (!this.entityMap.has(guid)) and re-checks the idempotency set",
-  /this\._resolveDefaultScriptDid\(guid\)[\s\S]{0,260}!this\.entityMap\.has\(guid\)[\s\S]{0,120}this\._particleChainsAttached\.has\(guid\)[\s\S]{0,120}this\._particleChainsAttached\.add\(guid\)/.test(entitiesSrc),
+  "spawn arm: drops despawn/respawn-mid-resolve (this.entityMap.get(guid) !== inst) and re-checks the idempotency set",
+  /this\._resolveDefaultScriptDid\(guid\)[\s\S]{0,260}this\.entityMap\.get\(guid\) !== inst[\s\S]{0,120}this\._particleChainsAttached\.has\(guid\)[\s\S]{0,120}this\._particleChainsAttached\.add\(guid\)/.test(entitiesSrc),
 );
 check(
   "hook 17 (DefaultScript) PScriptType fallback calls _playDefaultScriptResolved when pesId===0",

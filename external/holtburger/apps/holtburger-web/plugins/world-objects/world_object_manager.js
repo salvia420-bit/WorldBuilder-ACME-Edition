@@ -78,6 +78,9 @@ export class WorldObjectManager extends EventTarget {
     // would otherwise never see classified.
     this._pendingCreate = [];
     this._pendingDelete = [];
+    // Set when load() threw: nothing retries it, so buffering after that
+    // only grew the queues for the page's lifetime (2026-10-18).
+    this.loadFailed = false;
   }
 
   /**
@@ -93,8 +96,16 @@ export class WorldObjectManager extends EventTarget {
   }
 
   async load(taxonomyUrl, enumsUrl) {
-    await this.taxonomy.load(taxonomyUrl);
-    await this.enums.load(enumsUrl);
+    this.loadFailed = false;
+    try {
+      await this.taxonomy.load(taxonomyUrl);
+      await this.enums.load(enumsUrl);
+    } catch (e) {
+      this.loadFailed = true;
+      this._pendingCreate = [];
+      this._pendingDelete = [];
+      throw e;
+    }
     this.loaded = true;
     // Drain any events that arrived during the async load window.
     const pendingCreates = this._pendingCreate;
@@ -120,7 +131,7 @@ export class WorldObjectManager extends EventTarget {
    */
   onObjectCreated(event) {
     if (!this.loaded) {
-      this._pendingCreate.push(event);
+      if (!this.loadFailed) this._pendingCreate.push(event);
       return null;
     }
     const { guid, classId, itemType, objDescFlags, weenieFlags } = this.#normalizeCreationPayload(event);
@@ -173,7 +184,7 @@ export class WorldObjectManager extends EventTarget {
   /** Called on a kind=? ObjectDeleted / Released. */
   onObjectDeleted(event) {
     if (!this.loaded) {
-      this._pendingDelete.push(event);
+      if (!this.loadFailed) this._pendingDelete.push(event);
       return false;
     }
     const guid = event.guid ?? event.objectId;

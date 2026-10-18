@@ -285,10 +285,13 @@ export function spawnFxFlash(o) {
   const p = o.position;
   if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return null;
   // Cap concurrent flashes: drop the oldest (its envelope is the furthest gone).
+  // releaseFxLight, not a bare _release: the tick only walks live flashes, so
+  // an evicted one left in activeLights stayed there for the session — dead,
+  // but still out-ranking every static lamp within 48 m for a pool slot.
   if (_flashes.size >= FLASH_MAX) {
     let oldest = null;
     for (const f of _flashes) if (!oldest || f._t0 < oldest._t0) oldest = f;
-    if (oldest) _release(oldest);
+    if (oldest) releaseFxLight(oldest);
   }
   const s = new FxLightSource("flash");
   s.position.set(p.x, p.y, p.z);
@@ -315,7 +318,7 @@ export function spawnFxFlash(o) {
  * every tick. Returns the source (call `releaseFxLight` when the emitter dies).
  * @param {{emitter:object, resolvePosition:(out:THREE.Vector3)=>boolean,
  *   intensity:number, range:number, color:number[], flicker?:number, flickerHz?:number,
- *   pulse?:number, pulseHz?:number, transient?:boolean, outdoor?:boolean}} o
+ *   pulse?:number, pulseHz?:number, transient?:boolean, outdoor?:boolean, cellId?:number|null}} o
  */
 export function bindEmitterFxLight(o) {
   if (!fxTier1Enabled("fxLights") || !o || !o.emitter || typeof o.resolvePosition !== "function") return null;
@@ -337,9 +340,14 @@ export function bindEmitterFxLight(o) {
   // An OUTDOOR static chain's light carries a (non-null) `__lbKey` like the
   // setup lamps it sits beside, so the pool's cell scoping drops it while the
   // player is in a sealed dungeon (lighting.js selectCellScopedSources) — a
-  // surface brazier must not light the crypt below. Entity / interior emitters
-  // stay dynamic (always candidates), as entity Setup lights are.
-  if (o.outdoor) s.userData.__lbKey = 0;
+  // surface brazier must not light the crypt below. An INTERIOR chain's light
+  // carries its anchor's EnvCell (`__cellId`) like the prop's own Setup lamps,
+  // so it drops out while that room is outside the render set — a hidden
+  // room's fire must not light through the wall or take a visible room's slot
+  // (RND-05). Entity emitters stay dynamic (always candidates), as entity
+  // Setup lights are.
+  if (o.cellId != null) s.userData.__cellId = o.cellId >>> 0;
+  else if (o.outdoor) s.userData.__lbKey = 0;
   _emitterLights.add(s);
   _stats.emitterLights++;
   return s;
@@ -387,6 +395,7 @@ function _removeFromActive(s) {
 function _dedupeAndRegister(scene3d, ref) {
   // Positions of every NON-FX source once (THREE lights: matrixWorld based).
   const lights = Array.isArray(scene3d?.activeLights) ? scene3d.activeLights : [];
+  const reach2 = (REGISTER_RADIUS_OUT + 4) * (REGISTER_RADIUS_OUT + 4);
   let n = 0;
   if (_staticPos.length < lights.length * 3) _staticPos = new Float32Array(Math.max(64, lights.length * 3 * 2));
   for (let i = 0; i < lights.length; i++) {
@@ -399,7 +408,7 @@ function _dedupeAndRegister(scene3d, ref) {
     if (!Number.isFinite(_tmp.x)) continue;
     if (ref) {
       const dx = _tmp.x - ref.x, dy = _tmp.y - ref.y, dz = _tmp.z - ref.z;
-      if (dx * dx + dy * dy + dz * dz > (REGISTER_RADIUS_OUT + 4) * (REGISTER_RADIUS_OUT + 4)) continue;
+      if (dx * dx + dy * dy + dz * dz > reach2) continue;
     }
     _staticPos[n * 3] = _tmp.x; _staticPos[n * 3 + 1] = _tmp.y; _staticPos[n * 3 + 2] = _tmp.z;
     n++;
@@ -421,6 +430,13 @@ function _dedupeAndRegister(scene3d, ref) {
       heldSkipped++;
       continue;
     }
+    // Past the same reach as the statics above (4 m beyond the registration
+    // radius, a few 1.2 m dedupe links), a light can neither register nor
+    // decide whether one that could is suppressed: skip the two scans, which
+    // otherwise compare every lit emitter of the static-script ring with every
+    // kept one (O(E²) per pass).
+    const d2 = ref ? s.position.distanceToSquared(ref) : 0;
+    if (d2 > reach2) { s.suppressed = false; s.registered = false; continue; }
     let sup = false;
     for (let i = 0; i < n && !sup; i++) {
       const dx = _staticPos[i * 3] - s.position.x, dy = _staticPos[i * 3 + 1] - s.position.y, dz = _staticPos[i * 3 + 2] - s.position.z;
@@ -434,7 +450,6 @@ function _dedupeAndRegister(scene3d, ref) {
     else kept.push(s);
     // registration radius (with hysteresis)
     if (ref) {
-      const d2 = s.position.distanceToSquared(ref);
       const lim = s.registered ? REGISTER_RADIUS_OUT : REGISTER_RADIUS;
       s.registered = !sup && d2 < lim * lim;
     } else {

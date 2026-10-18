@@ -152,7 +152,11 @@ check("per-stab keyed walk still inside the loop, under its own key", () => {
   const loop = idx(FN, "for envcell in cells_raw {", "loop");
   const perStab = idx(FN, '"fetchEnvCellsInLandblock:static-bsp:0x02"', "per-stab key (OFF arm)");
   assert(perStab > loop, "OFF: the legacy fallback walk is inside the loop");
-  const memoCall = idx(FN, "interior_stab_memo_entry(&source, stab.stab_id, &mut per_stab_fallback)", "ON: memo entry");
+  // RUSTCORE-1 (2026-10-18): the call also threads the build's failed-walk set.
+  const memoCall = FN.search(
+    /interior_stab_memo_entry\(\s*&source,\s*stab\.stab_id,\s*&mut per_stab_fallback,\s*&mut stab_walk_failed,?\s*\)/,
+  );
+  assert(memoCall >= 0, "ON: memo entry: `interior_stab_memo_entry(&source, stab.stab_id, &mut per_stab_fallback, &mut stab_walk_failed)` not found");
   assert(memoCall > loop, "ON: the fallback runs from inside the loop");
   assert(
     FN.indexOf('"fetchEnvCellsInLandblock:stab-batch"', loop) === -1,
@@ -161,6 +165,8 @@ check("per-stab keyed walk still inside the loop, under its own key", () => {
   const entry = itemBody(LIB, "async fn interior_stab_memo_entry(");
   assert(/prefetch::ensure_walk_prefetched_keyed_batch\(\s*prefetch::WalkCacheKey::new\("fetchEnvCellsInLandblock:static-bsp:0x02"\)\s*\.with_u32\(stab_id\)/.test(entry), "ON per-stab walk: batch mode, same key");
   assert(/if stats\.rounds > 0 \{\s*\*per_stab_fallback \+= 1;/.test(entry), "a per-stab walk that still had misses is counted");
+  assert(/if !walk_failed\.contains\(&stab_id\) \{\s*let stats = prefetch::ensure_walk_prefetched_keyed_batch\(/.test(entry), "RUSTCORE-1: a stab whose walk already failed this build skips the walk");
+  assert(/if stats\.failed > 0 \{\s*walk_failed\.insert\(stab_id\);/.test(entry), "RUSTCORE-1: a walk that ends with failed keys is remembered");
 });
 
 console.log("S4 — OFF keeps today's sequence");

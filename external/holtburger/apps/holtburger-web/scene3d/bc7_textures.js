@@ -1053,6 +1053,13 @@ const _stats = {
  */
 export const TEX_DROPPED = Object.freeze({ texDropped: true });
 
+// STREAM-TERRAIN-2 (2026-10-18) — how long a FAILED fetch's null verdict
+// stands. The wasm record exports reject only when the fetch itself failed
+// (network blip, 5xx, sha mismatch) for a record that may exist; that is not
+// proof of absence, so after this the next ask re-fetches. An empty payload
+// (proven absent) stays a verdict for the session.
+const BC7_FAIL_RETRY_MS = 30000;
+
 // HD byte log — BOTH arms, diag only (`window.__texUpgradeQueue.report()`
 // reads it): every full-tier network byte this module counts into
 // `bytesFetched`, stamped with epoch ms, plus the per-rsId full-phase verdict
@@ -1331,6 +1338,24 @@ export class Bc7RecordSource {
     // record (`{width,height,blocksX,blocksY,levels}`) or null, standing in for
     // `wasm.xu7_blocks` + the basisu transcoder. Production never sets it.
     this._xu7ParsedImpl = opts.xu7ParsedImpl || null;
+    // STREAM-TERRAIN-2 — rsId -> when its fetch FAILED, per lane (full, pre,
+    // twin). The lane's null verdict expires BC7_FAIL_RETRY_MS later
+    // (`_expireFailed`). `opts.now` is a test seam.
+    this._now = opts.now || Date.now;
+    this._failedAt = new Map();
+    this._preFailedAt = new Map();
+    this._hbc7FailedAt = new Map();
+  }
+
+  /** STREAM-TERRAIN-2 — forget a FAILED fetch's null verdict once it is
+   *  BC7_FAIL_RETRY_MS old, so the next ask re-fetches. `map` is null for the
+   *  twin lane, whose failures live in `_hbc7FailedAt` alone. */
+  _expireFailed(failedAt, map, id) {
+    if (failedAt.size === 0) return;
+    const at = failedAt.get(id);
+    if (at === undefined || this._now() - at < BC7_FAIL_RETRY_MS) return;
+    failedAt.delete(id);
+    if (map && map.get(id) === null) map.delete(id);
   }
 
   /** The hbc7 (`holtburger/tex-bc7`) fetch, shared by `_begin` and
@@ -1363,6 +1388,8 @@ export class Bc7RecordSource {
     const cur = this._cache.get(id);
     if (cur && !_xu7Records.has(cur)) return Promise.resolve(cur); // already swapped
     if (this._hbc7Absent.has(id)) return Promise.resolve(null);
+    this._expireFailed(this._hbc7FailedAt, null, id);
+    if (this._hbc7FailedAt.has(id)) return Promise.resolve(null);
     const joined = this._hbc7InflightP.get(id);
     if (joined) {
       // ?texUpgradeQueue: the joiner's liveness keeps a queued twin alive (a
@@ -1379,6 +1406,7 @@ export class Bc7RecordSource {
     const bytesP = qctx && qctx.queue
       ? this._queuedFetch(qctx, "twin", id, () => this._fetchHbc7Bytes(id))
       : this._fetchHbc7Bytes(id);
+    let failed = false;
     const p = bytesP
       .then((bytes) => {
         if (bytes === TEX_DROPPED) return TEX_DROPPED;
@@ -1391,10 +1419,12 @@ export class Bc7RecordSource {
       })
       .catch((e) => {
         _stats.lastError = String(e && e.message ? e.message : e);
+        failed = true;
         return null;
       })
       .then((parsed) => {
         if (parsed === TEX_DROPPED) _stats.twinsDropped += 1; // no negative verdict
+        else if (failed) this._hbc7FailedAt.set(id, this._now()); // retried later
         else if (!parsed) this._hbc7Absent.add(id);
         this._hbc7InflightP.delete(id);
         return parsed;
@@ -1482,9 +1512,12 @@ export class Bc7RecordSource {
     return this._inflight.has(id) || this._hbc7InflightP.has(id);
   }
 
-  /** True once we have a verdict (payload or proven-absent) for this id. */
+  /** True once we have a verdict (payload, proven-absent, or a failed fetch
+   *  younger than BC7_FAIL_RETRY_MS) for this id. */
   known(rsId) {
-    return this._cache.has(rsId >>> 0);
+    const id = rsId >>> 0;
+    this._expireFailed(this._failedAt, this._cache, id);
+    return this._cache.has(id);
   }
 
   /**
@@ -1513,6 +1546,7 @@ export class Bc7RecordSource {
   /** Sync accessor: parsed payload, or null while loading / absent. */
   get(rsId) {
     const id = rsId >>> 0;
+    this._expireFailed(this._failedAt, this._cache, id);
     if (this._cache.has(id)) { this._touch(this._cache, id); return this._cache.get(id); }
     if (!this._inflight.has(id)) this._begin(id);
     return null;
@@ -1523,6 +1557,7 @@ export class Bc7RecordSource {
    *  upgrade queue and may resolve `TEX_DROPPED`. */
   getAsync(rsId, qctx) {
     const id = rsId >>> 0;
+    this._expireFailed(this._failedAt, this._cache, id);
     if (this._cache.has(id)) { this._touch(this._cache, id); return Promise.resolve(this._cache.get(id)); }
     return this._begin(id, qctx);
   }
@@ -1535,6 +1570,7 @@ export class Bc7RecordSource {
    */
   getPreAsync(rsId, qctx) {
     const id = rsId >>> 0;
+    this._expireFailed(this._preFailedAt, this._preCache, id);
     if (this._preCache.has(id)) { this._touch(this._preCache, id); return Promise.resolve(this._preCache.get(id)); }
     const impl = this._preFetchImpl
       ? this._preFetchImpl
@@ -1594,6 +1630,7 @@ export class Bc7RecordSource {
       })
       .catch(() => {
         this._put(this._preCache, id, null);
+        this._preFailedAt.set(id, this._now()); // a failure, not absence: retried later
         return null;
       })
       .finally(() => {
@@ -1710,7 +1747,8 @@ export class Bc7RecordSource {
       .catch((e) => {
         _stats.errors += 1;
         _stats.lastError = String(e && e.message ? e.message : e);
-        this._put(this._cache, id, null); // never re-hammer a broken endpoint
+        this._put(this._cache, id, null); // no re-hammer; retried after BC7_FAIL_RETRY_MS
+        this._failedAt.set(id, this._now());
         // eslint-disable-next-line no-console
         console.warn(`[bc7] fetch failed 0x${id.toString(16).toUpperCase()}:`, e);
         return null;
@@ -1775,7 +1813,8 @@ export class Bc7RecordSource {
       .catch((e) => {
         _stats.errors += 1;
         _stats.lastError = String(e && e.message ? e.message : e);
-        this._put(this._cache, id, null); // never re-hammer a broken endpoint
+        this._put(this._cache, id, null); // no re-hammer; retried after BC7_FAIL_RETRY_MS
+        this._failedAt.set(id, this._now());
         // eslint-disable-next-line no-console
         console.warn(`[bc7] fetch failed 0x${id.toString(16).toUpperCase()}:`, e);
         return null;

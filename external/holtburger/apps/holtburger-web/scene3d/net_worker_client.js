@@ -28,6 +28,10 @@
 //      arming + connecting. If the worker errors or times out before ready,
 //      we terminate it and fall back to the direct `start_session` — so a
 //      broken worker never hangs or regresses a working session (Finding 2).
+//      A wait that a NEWER attempt cut short (its terminate in step 1) is
+//      not a failure: that attempt rejects with `err.superseded = true` and
+//      never falls back, because a direct login behind the newer session
+//      makes ACE boot both (account_login_boots_in_use, RUSTNET-1).
 //   3. `net_worker_arm` is called immediately before `start_session` with
 //      nothing that can throw in between, so no stale arm is ever left for a
 //      later direct call to pick up (Finding 5).
@@ -44,6 +48,17 @@ const READY_TIMEOUT_MS = 12000;
 
 // At most one net worker alive at a time (see lifecycle note 1).
 let _activeWorker = null;
+// Bumped by every startNetWorkerSession call; an attempt whose number is no
+// longer current was superseded by a newer Connect.
+let _attemptSeq = 0;
+// Settles the pending ready-wait (if any) when a newer attempt kills its worker.
+let _cancelReadyWait = null;
+
+function supersededError() {
+  const e = new Error("net worker session superseded by a newer connect");
+  e.superseded = true;
+  return e;
+}
 
 // T20 (ST7) / pass-6 D-06.9.3 — census relay plumbing (the bake worker's
 // `wasmMemCensus` twin). Pending resolvers by sequence; a dead/pre-ready
@@ -82,6 +97,11 @@ export function netWorkerMemCensus(timeoutMs = 3000) {
 }
 
 function terminateActiveWorker() {
+  if (_cancelReadyWait) {
+    const cancel = _cancelReadyWait;
+    _cancelReadyWait = null;
+    cancel();
+  }
   if (!_activeWorker) return;
   try {
     _activeWorker.onmessage = null;
@@ -159,6 +179,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     return direct();
   }
 
+  const attempt = ++_attemptSeq;
   // Kill any prior net worker so it can't post into this new session.
   terminateActiveWorker();
 
@@ -167,6 +188,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   await init({
     module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=wasmrev-20261011f", import.meta.url),
   });
+  if (attempt !== _attemptSeq) throw supersededError();
 
   let worker;
   try {
@@ -183,7 +205,15 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   // a clean fallback with no half-built proxy.
   const ready = await new Promise((resolve) => {
     let settled = false;
-    const done = (v) => { if (!settled) { settled = true; clearTimeout(to); resolve(v); } };
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      if (_cancelReadyWait === cancel) _cancelReadyWait = null;
+      resolve(v);
+    };
+    const cancel = () => done("superseded");
+    _cancelReadyWait = cancel;
     const to = setTimeout(() => done(false), READY_TIMEOUT_MS);
     worker.onmessage = (ev) => {
       const t = ev.data && ev.data.t;
@@ -199,10 +229,17 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
     };
   });
 
-  if (!ready || _activeWorker !== worker) {
-    // Init failed/timed out, or a newer session superseded us mid-wait.
+  if (ready === "superseded" || _activeWorker !== worker || attempt !== _attemptSeq) {
+    // A newer session superseded us mid-wait. Give up: falling back to
+    // direct() here sent a second LoginRequest for the same account behind
+    // the newer session, and ACE booted both.
     if (_activeWorker === worker) terminateActiveWorker();
     else { try { worker.terminate(); } catch (_) {} }
+    throw supersededError();
+  }
+  if (!ready) {
+    // Init failed/timed out.
+    terminateActiveWorker();
     console.warn("[net_worker_client] worker not ready; falling back to direct main-thread session");
     return direct();
   }

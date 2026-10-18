@@ -228,6 +228,9 @@ export function parseNav(text) {
       }
       const p = { type: typeRaw, raw: [] };
       const take = () => {
+        // A file cut off mid-point stops here: the partial point (NaN fields)
+        // is dropped, never read as a waypoint at 0/0.
+        if (idx >= lines.length) throw new Error("file ended mid-point");
         p.raw.push(lines[idx]);
         return lines[idx++];
       };
@@ -235,6 +238,7 @@ export function parseNav(text) {
       p.ew = parseFloat(take());
       p.ns = parseFloat(take());
       p.z = parseFloat(take());
+      if (!Number.isFinite(p.ew) || !Number.isFinite(p.ns) || !Number.isFinite(p.z)) throw new Error("non-numeric position");
       p.flag = take(); // skipped flag/colour line (preserved raw)
       switch (typeRaw) {
         case NavPointType.PortalLegacy:
@@ -273,6 +277,7 @@ export function parseNav(text) {
       out.points.push(p);
     } catch (e) {
       out.warning = `parse error at point ${i + 1} (line ${start}): ${e.message}; stopped (${out.points.length} pts)`;
+      idx = start; // its lines stay in `tail` (an unknown type keeps them the same way)
       break;
     }
   }

@@ -4200,6 +4200,7 @@ export class EntityManager {
     this._targetWillinglyLost = false;
     this._lastAttackedAt = -Infinity;
     this._selRemovedGuid = 0;     // despawn-cleared selection, resolved in tick
+    this._selRemovedPrev = 0;     // its prevSelectedID before the release
     this._selRangeNextAt = 0;     // next 1 s range-exit check (ms)
     this._lastCombatMode = 0;     // SetCombatMode edge detector
     // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
@@ -4545,8 +4546,11 @@ export class EntityManager {
         return cur;
       }
       // Re-spawn → tear down then rebuild. Mirrors
-      // `ensureEntitySprite`'s `entry.modelId === 0` upgrade path.
-      this.remove(guid);
+      // `ensureEntitySprite`'s `entry.modelId === 0` upgrade path. The guid
+      // is re-selected once the rebuild lands, so its selection release is
+      // marked like a LOD swap's: not a deselect (no CancelAttack).
+      this._lodRespawnGuid = guid;
+      try { this.remove(guid); } finally { this._lodRespawnGuid = 0; }
     }
     // Batch 9 #2 (2026-06-07): bump + capture this spawn's generation
     // BEFORE any async work. A later remove()/re-spawn of the same GUID
@@ -6181,7 +6185,7 @@ export class EntityManager {
       this._resolveDefaultScriptDid(guid)
         .then((did) => {
           if (did === 0) return;
-          if (!this.entityMap.has(guid)) return; // despawned mid-resolve
+          if (inst._disposed || this.entityMap.get(guid) !== inst) return; // gone or respawned mid-resolve
           if (this._particleChainsAttached.has(guid)) return;
           this._particleChainsAttached.add(guid);
           this._attachParticleChainForEntity(guid, root, did).catch((e) => {
@@ -6225,7 +6229,8 @@ export class EntityManager {
         .then((rawDid) => {
           const did = (rawDid >>> 0);
           if (did === 0) return;
-          if (!this.entityMap.has(guid)) return; // despawned mid-resolve
+          // despawned (or respawned under the same guid) mid-resolve
+          if (inst._disposed || this.entityMap.get(guid) !== inst) return;
           if (this._particleChainsAttached.has(guid)) return;
           this._particleChainsAttached.add(guid);
           this._attachParticleChainForEntity(guid, root, did).catch((e) => {
@@ -8682,7 +8687,8 @@ export class EntityManager {
     this._resolveDefaultScriptDid(g)
       .then((did) => {
         if (did === 0) return;
-        if (!this.entityMap.has(g)) return; // despawned mid-resolve
+        // Gone or respawned mid-resolve: a same-guid respawn maps a new rig.
+        if (this.entityMap.get(g)?.root !== rig) return;
         this._attachParticleChainForEntity(g, rig, did, 0, defaultPartIndex)
           .catch(() => {});
       })
@@ -9943,8 +9949,15 @@ export class EntityManager {
       if (((this._selectedGuid >>> 0) || 0) === 0) {
         // death-3: a rig still mapped only as a death-held / corpse-claimed
         // body is a deleted object — auto-target instead of re-selecting it.
-        if (shouldReselectAfterRemoval(this.entityMap.get(gone))) this._commitSelection(gone);
-        else this._autoTarget("notice");
+        if (shouldReselectAfterRemoval(this.entityMap.get(gone))) {
+          // The object persisted, so retail never touched prevSelectedID: the
+          // re-select keeps the prev from before it (the release's own write
+          // undone) instead of recording the empty selection.
+          const prev = (this._prevSelectedGuid >>> 0) || 0;
+          if (this._commitSelection(gone) === gone) {
+            this._prevSelectedGuid = prev === gone ? this._selRemovedPrev : prev;
+          }
+        } else this._autoTarget("notice");
       }
     }
     const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
@@ -10970,7 +10983,7 @@ export class EntityManager {
         paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
       });
     } catch (_) { return false; }
-    if (!this.entityMap.has(g)) return false;
+    if (inst._disposed || this.entityMap.get(g) !== inst) return false; // gone or respawned
     const d = entry?.sequenceDescriptor;
     if (!d) return false;
     const seq = MS.fromDescriptor(
@@ -11456,7 +11469,7 @@ export class EntityManager {
       // non-human silent-no-op that already applied.
       return;
     }
-    if (!this.entityMap.has(g)) return;
+    if (inst._disposed || this.entityMap.get(g) !== inst) return; // gone or respawned
     const clip = entry?.clip;
     if (!clip) {
       // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
@@ -12306,7 +12319,8 @@ export class EntityManager {
           if (this._deathAnimOn) bakeOpts.fromMotion = CMD_READY_FULL;
           entry = await this.animationCache.get(setupId, mtableId, bakeCmd, stance, fetchKeyframes, bakeOpts);
         } catch (_) { entry = null; }
-        if (!this.entityMap.has(guid >>> 0)) return; // despawned mid-resolve
+        // despawned (or respawned under the same guid) mid-resolve
+        if (inst._disposed || this.entityMap.get(guid >>> 0) !== inst) return;
         if (inst._motionToken !== deathToken) return; // superseded mid-resolve (F6)
         const d = entry?.sequenceDescriptor;
         if (d) {
@@ -12660,8 +12674,10 @@ export class EntityManager {
     const styleLinks = styleLinksP ? await styleLinksP : null;
     // Re-check — the entity may have been removed between the cache hit and
     // now; a newer setMotion may have superseded this one (audit F6). A
-    // superseded call leaves `_pendingStyleLinks` for the newer one.
-    if (!this.entityMap.has(guid >>> 0)) return;
+    // superseded call leaves `_pendingStyleLinks` for the newer one. An
+    // IDENTITY check: after a same-guid respawn `has()` passes for the new rig
+    // while `inst` (and its unchanged token) is the disposed one.
+    if (inst._disposed || this.entityMap.get(guid >>> 0) !== inst) return;
     if (inst._motionToken !== motionToken) return;
     if (inst._pendingStyleLinks === styleLinksP) inst._pendingStyleLinks = null;
     // missile-anim (`?missileSubstate`): retail refuses a substate the table has
@@ -13247,7 +13263,9 @@ export class EntityManager {
     // held-2: an internal rebuild, not a server re-creation — the spawn
     // commit may still replay the `_lastAttach` ledger for it.
     newMeta._internalRespawn = true;
-    this.remove(g);
+    // Nor a deselect: mark the guid around remove() as _respawnForLod does.
+    this._lodRespawnGuid = g;
+    try { this.remove(g); } finally { this._lodRespawnGuid = 0; }
     await this.spawn(newMeta);
     for (const r of reattach) {
       try {
@@ -13853,7 +13871,9 @@ export class EntityManager {
       // selection becomes prevSelectedID. Its SelectionChanged notice (which
       // may auto-target, selection-2) is resolved by `_tickSelectionRules`
       // next tick, after this rig is gone — and skipped for a dynamic-LOD /
-      // re-create respawn of the same guid, which is re-selected instead.
+      // re-create respawn of the same guid, which is re-selected instead
+      // (and gets back the prevSelectedID it had, `_selRemovedPrev`).
+      this._selRemovedPrev = (this._prevSelectedGuid >>> 0) || 0;
       this._prevSelectedGuid = g;
       this._selRemovedGuid = g;
       // Retail target indicator (2026-08-02): drop the overlay too, else the
@@ -13876,7 +13896,8 @@ export class EntityManager {
         window.__pluginClient?.events?.emit?.("selectionChanged", {
           guid: 0,
           prevGuid: g,
-          // same-guid T9 LOD respawn: re-selected right after (not a deselect)
+          // same-guid respawn (T9 LOD swap, appearance rebuild, re-sent
+          // CreateObject): re-selected right after (not a deselect)
           lodRespawn: (this._lodRespawnGuid >>> 0) === g,
         });
       } catch (_) { /* never block despawn on a subscriber fault */ }
@@ -14272,8 +14293,8 @@ export class EntityManager {
       });
     }
     const flat = await inflight;
-    // The entity may have been removed while the fetch was in flight.
-    if (!flat || !this.entityMap.has(guid)) return;
+    // The entity may have been removed (or respawned) while the fetch was in flight.
+    if (!flat || inst._disposed || this.entityMap.get(guid) !== inst) return;
     inst._partSortCenters = flat;
   }
 
@@ -14556,7 +14577,7 @@ export class EntityManager {
     } catch (_) {
       return null;
     }
-    if (!this.entityMap.has(inst.guid >>> 0)) return null;
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) return null;
     if (!entry?.clip) return null;
     // Bugs 2/15/18 (2026-10-07): when the requested link does not exist the
     // wasm bake falls back to the target's CYCLE (lib.rs
@@ -14640,7 +14661,7 @@ export class EntityManager {
     }
     const t0 = performance.now();
     const entry = await this._fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance);
-    if (!this.entityMap.has(inst.guid >>> 0)) {
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) {
       inst._linkMissReason = "removed";
       return false;
     }
@@ -15235,11 +15256,14 @@ export class EntityManager {
         if (ds !== 0) return;
       } catch (_) { /* fall through — treat as no default_script */ }
     }
-    if (!this.entityMap.has(guid)) return; // despawned during the async resolve
+    // Live = this guid still maps to the rig we attach under (a same-guid
+    // respawn puts a NEW rig there; `has()` would pass for it).
+    const live = () => this.entityMap.get(guid)?.root === rig;
+    if (!live()) return; // despawned during the async resolve
 
     const manager = await this._ensureWorldParticleManager(rig);
     if (!manager) return;
-    if (!this.entityMap.has(guid)) return; // despawned during the manager build
+    if (!live()) return; // despawned during the manager build
 
     // P3.1 attach driver (D5): route the single-element entity placement through
     // the CANONICAL attachParticleEmitters — it builds the deterministic emit-ctx
@@ -15279,7 +15303,7 @@ export class EntityManager {
 
     // Despawn raced the awaits: if the entity is already gone, reap now so a late
     // emitter doesn't outlive its rig (mirrors play_effect_vfx.js:1471-1476).
-    if (!this.entityMap.has(guid)) {
+    if (!live()) {
       if (ownedByRegistry) {
         try { ownerRegistry.destroySome(guid >>> 0, ids); } catch (_) {}
       } else {
@@ -16128,7 +16152,10 @@ export class EntityManager {
       this.wasmExports
         .fetchPhysicsScript(callDid)
         .then((sub) => {
-          if (!this.entityMap.has(gKey)) return;
+          // The owner that fired the hook, by IDENTITY: a same-guid respawn
+          // during the fetch would otherwise run the old rig's loop a second
+          // time on the new rig (as the hook-19 animation arm guards).
+          if (inst._disposed || this.entityMap.get(gKey) !== inst) return;
           const subEntries = sub.takeEntries();
           // PORTAL-LOOP: loop iterations do not accumulate depth (see the
           // guard above); the legacy `=off` arm keeps the old accounting.
@@ -19723,7 +19750,9 @@ export class EntityManager {
       );
       return;
     }
-    if (!this.entityMap.has(inst.guid >>> 0)) return; // released mid-await
+    // released (or respawned under the same guid) mid-await — the emitter
+    // would parent to this disposed root and simulate unseen
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) return;
     const parentOffset = {
       position: {
         x: +hook.offsetOriginX,
@@ -19822,8 +19851,8 @@ export class EntityManager {
       );
       return;
     }
-    if (!this.entityMap.has(inst.guid >>> 0)) {
-      // entity released during await
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) {
+      // entity released (or respawned under the same guid) during await
       if (typeof bundle.free === "function") bundle.free();
       return;
     }
@@ -19842,7 +19871,7 @@ export class EntityManager {
     if (!groups || groups.length === 0) return;
 
     // Re-check liveness after the second await (adapter import).
-    if (!this.entityMap.has(inst.guid >>> 0)) return;
+    if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) return;
 
     // Preload materials for any new surface DIDs not already in cache.
     // Fire-and-forget — the new Meshes start with the fallback material

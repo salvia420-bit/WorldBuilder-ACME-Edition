@@ -118,7 +118,9 @@ test("wiring: wasm emits kinds 70/71, client_events dispatches window events, mo
   const ge = src("src/session/messages/game_event.rs");
   assert.match(ge, /kind: CLIENT_EVENT_KIND_CONFIRMATION_REQUEST/);
   assert.match(ge, /GameEvent::CharacterConfirmationDone\(/);
-  assert.match(ge, /pending_confirmations\.borrow_mut\(\)\.push/, "the bot queue stays");
+  // RUSTNET-3 (2026-10-18): the push goes through the bounded, deduped helper.
+  assert.match(ge, /push_pending_confirmation\(\s*&mut pending_confirmations\.borrow_mut\(\),/, "the bot queue stays");
+  assert.match(ge, /retire_pending_confirmation\(/, "a Done retires the request");
   const kinds = src("scene3d/client_event_kinds.js");
   assert.match(kinds, /CONFIRMATION_REQUEST: 70,/);
   assert.match(kinds, /CONFIRMATION_DONE: 71,/);

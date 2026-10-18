@@ -625,10 +625,11 @@ export function createRecorder(opts = {}) {
   function abort(reason) {
     if (!finished()) {
       if (reason !== undefined) st.errors.push(`aborted: ${msgOf(reason)}`);
-      closeEncoder();
       st.state = reason !== undefined ? "failed" : "stopped";
       if (!st.stopPromise) st.stopPromise = Promise.resolve(null).then(() => stats());
     }
+    // Also after a grab / output failure: fail() leaves the (hardware) encoder configured.
+    closeEncoder();
     return stats();
   }
 

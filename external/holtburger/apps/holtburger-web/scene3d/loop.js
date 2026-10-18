@@ -1747,6 +1747,10 @@ function _fogProbeFailed(err) {
   _fogProbeFails += 1;
   if (_fogProbeFails >= _FOG_PROBE_MAX_FAILS && !_fogProbeDead) {
     _fogProbeDead = true;
+    // The caller falls back to `_fogProbeLast`: drop it, or the fog would
+    // freeze at the last sample (no time of day, no weather) for the session
+    // instead of taking the authored hex this warning promises.
+    _fogProbeLast = null;
     // eslint-disable-next-line no-console
     console.warn("[far-terrain S1] horizon sky probe disabled after "
       + `${_fogProbeFails} failures; falling back to the authored fog hex.`, err);
@@ -1806,8 +1810,22 @@ function _memoReadability(renderer) {
 // after FOG_FENCE_TIMEOUT_MS counts as a failure (three in a row = the sticky
 // authored-hex fallback, as before). `window.__farFogProbeStats` reports the
 // read cost (`maxReadMs` should stay ~0 on the 1070 — the thing to check).
+// CONTEXT RESTORE: the WebGL2RenderingContext object survives a loss/restore
+// (so `f.gl !== gl` cannot see it) but the buffer and any pending sync die —
+// bindBuffer(dead) binds nothing, readPixels(..., 0) then fails, the sentinel
+// survives and three such probes latched the sticky fallback for the session.
+// A `webglcontextrestored` listener (registered with the buffer) drops both and
+// gives the probe a fresh failure budget on the new context.
 const FOG_FENCE_TIMEOUT_MS = 2000;
-const _fogFence = { gl: null, buf: null, sync: null, issuedAt: 0, polls: 0 };
+const _fogFence = { gl: null, buf: null, sync: null, issuedAt: 0, polls: 0, canvas: null };
+function _onFogContextRestored() {
+  // No deleteSync: the sync belongs to the lost context.
+  _fogFence.sync = null;
+  _fogFence.buf = null;
+  _fogProbeInFlight = false;
+  _fogProbeFails = 0;
+  _fogProbeDead = false;
+}
 const _fogFenceStats = { issued: 0, reads: 0, lastReadMs: 0, maxReadMs: 0, sumReadMs: 0,
   lastPolls: 0, maxPolls: 0, timeouts: 0, fallbacks: 0 };
 if (typeof window !== "undefined") {
@@ -1836,6 +1854,11 @@ function _issueFogFence(renderer, now) {
     f.buf = gl.createBuffer();
     f.gl = gl;
     if (!f.buf) return false;
+    const canvas = renderer.domElement;
+    if (canvas && f.canvas !== canvas && typeof canvas.addEventListener === "function") {
+      f.canvas = canvas;
+      canvas.addEventListener("webglcontextrestored", _onFogContextRestored, false);
+    }
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
     gl.bufferData(gl.PIXEL_PACK_BUFFER, _fogProbeBuf.byteLength, gl.STREAM_READ);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);

@@ -925,12 +925,26 @@ const JUMP_AXES = Object.freeze({
  *
  * Returns {ok:true, power, headingRad, runFlag, direction} or a typed
  * {ok:false, error, reason:"jump-unavailable"} (mirrors attemptRecallCast's
- * typed-failure pattern) — never throws.
+ * typed-failure pattern), or {ok:false, aborted:true, reason:"aborted"} once
+ * ctx.isAborted() reads true before the fire — never throws.
  */
 export async function attemptJumpLeg(ctx, leg, tune) {
   const { host } = ctx;
   const meta = leg && leg.meta;
   const unavailable = (why) => ({ ok: false, error: `jump-unavailable: ${why}`, reason: "jump-unavailable" });
+  // The caller's cancellation state (operator STOP, the nav executor yielding,
+  // a cancelled replay; attemptRecallCast's idiom). Checked before every input
+  // the turn and the charge send, so an abort ends the jump within one poll
+  // and lets go of the charge key; nothing is fired once it reads true. The
+  // flight and landing waits after the fire send no input and run out.
+  const isAborted = () => {
+    try {
+      return typeof ctx.isAborted === "function" && ctx.isAborted() === true;
+    } catch (_) {
+      return false;
+    }
+  };
+  const aborted = () => ({ ok: false, aborted: true, error: "jump aborted (cancelled)", reason: "aborted" });
   if (!meta || meta.navType !== "jmp") return unavailable("leg carries no jump meta");
   if (!host || typeof host.Jump !== "function" || typeof host.SetMovementInput !== "function") {
     return unavailable("SessionHandle jump/setMovementInput not present (stale pkg/ build)");
@@ -959,6 +973,7 @@ export async function attemptJumpLeg(ctx, leg, tune) {
   const turnDeadline = Date.now() + tune.jumpTurnTimeoutMs;
   for (;;) {
     const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+    if (isAborted()) return aborted();
     if (!pose || pose.heading == null) break; // no facing telemetry -> best-effort, never hang here
     let err = headingRad - pose.heading;
     while (err > Math.PI) err -= 2 * Math.PI;
@@ -970,6 +985,7 @@ export async function attemptJumpLeg(ctx, leg, tune) {
   }
 
   // 2. Gate, build launch velocity, fire.
+  if (isAborted()) return aborted();
   if (!canJumpNow()) return unavailable("canJumpNow() false (airborne or motion state blocks it)");
   let moving = false;
   if (axis) {
@@ -980,7 +996,15 @@ export async function attemptJumpLeg(ctx, leg, tune) {
       moving = false;
     }
   }
-  if (approachMs > 0) await new Promise((r) => setTimeout(r, approachMs));
+  // The charge hold, in poll-sized slices so an abort lets go within one poll.
+  const slice = tune.posePollMs > 0 ? tune.posePollMs : approachMs;
+  for (let left = approachMs; left > 0 && !isAborted(); left -= slice) {
+    await new Promise((r) => setTimeout(r, Math.min(left, slice)));
+  }
+  if (isAborted()) {
+    if (moving) { try { host.SetMovementInput(0, 0, 0, false); } catch (_) { /* best-effort stop */ } }
+    return aborted();
+  }
   if (!canJumpNow()) {
     if (moving) { try { host.SetMovementInput(0, 0, 0, false); } catch (_) { /* best-effort stop */ } }
     return unavailable("canJumpNow() false after the approach hold (airborne or motion state blocks it)");
@@ -1856,7 +1880,14 @@ export async function replayRoute(deps, legs, opts = {}) {
         jumps += 1;
         const jumpLeg = legs[jumpIdx];
         log(`replay: jump leg ${jumpIdx} (heading ${jumpLeg.meta.headingDeg}deg, holdShift=${!!jumpLeg.meta.holdShift}) — firing`);
-        const jr = await attemptJumpLeg(ctx, jumpLeg, tune);
+        // Cancelled while the jump turns or charges: cancel() -> IDLE, or a
+        // newer follow() took the router (as the recall below).
+        const jumpAborted = () => {
+          const rs = router.status.state;
+          return rs === "IDLE" || rs === "WALK" || rs === "PORTAL";
+        };
+        const jr = await attemptJumpLeg({ ...ctx, isAborted: jumpAborted }, jumpLeg, tune);
+        if (jr.aborted) return { ok: false, state: "CANCELLED", legsWalked: walkedTotal };
         if (!jr.ok) {
           return { ok: false, state: "FAILED", error: jr.error, reason: jr.reason, leg: jumpIdx, legsWalked: walkedTotal };
         }

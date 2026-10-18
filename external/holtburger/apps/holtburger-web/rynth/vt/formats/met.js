@@ -174,7 +174,10 @@ class Reader {
     const types = [];
     for (let i = 0; i < nc; i++) types.push(this.line());
     const nr = this.int("row count");
-    if (nr < 0) throw new MetError(`bad row count ${nr}`, this.p);
+    // Every value takes at least one byte, and VTank never writes a row of
+    // zero values: a count the rest of the file cannot hold is corrupt (it
+    // would loop and allocate without bound).
+    if (nr < 0 || (nr > 0 && (nc === 0 || nr * nc > this.end - this.p))) throw new MetError(`bad row count ${nr}`, this.p);
     const rows = [];
     for (let r = 0; r < nr; r++) {
       const row = [];

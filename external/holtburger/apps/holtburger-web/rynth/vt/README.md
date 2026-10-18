@@ -170,6 +170,7 @@ selector is now labelled "Persona" instead of "Profile".
   `bot.stop()`. VT code never calls `kernel.start/stop`; Run Macro is `bot.control`.
 - **Portal space holds** every mover, caster and item action; the meta watchdog pauses;
   `setmotion[]` keys are released on entering portal space and cannot be pressed in it.
+  They are also released when EnableMeta goes off and on a meta load / unload (RYNTH-1).
 - **Imports**: a Wave-1 package never imports another vt package (dependencies are injected);
   only `index.js`, `rs_entry.js` and `glue/` compose them. Nothing here is statically imported by
   `bot.js`, `boot.js`, `app/*`, `index.html` or the HUD (`gen-modulepreload --check`);

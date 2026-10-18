@@ -422,15 +422,25 @@ export function mount(ctx) {
     return () => {};
   }
   ensureStyles();
+  // The bar mounts this at page load with ctx.client null; the bus exists
+  // only after login, so subscribe through __pluginClientReady (2026-10-18:
+  // bound at mount only, no barber page ever opened).
+  let disposed = false;
+  const subscribe = (client) => {
+    if (disposed || state.unsub || !client?.events?.on) return;
+    state.client = client;
+    try {
+      client.events.on("startBarber", onStartBarber);
+      state.unsub = () => client.events.off?.("startBarber", onStartBarber);
+    } catch (e) {
+      console.warn("[barber-panel] startBarber subscribe failed:", e);
+    }
+  };
   const client = ctx?.client ?? window.__pluginClient ?? null;
-  state.client = client;
-  try {
-    client?.events?.on?.("startBarber", onStartBarber);
-    state.unsub = () => client?.events?.off?.("startBarber", onStartBarber);
-  } catch (e) {
-    console.warn("[barber-panel] startBarber subscribe failed:", e);
-  }
+  if (client?.events?.on) subscribe(client);
+  else window.__pluginClientReady?.then?.((c) => subscribe(c ?? window.__pluginClient));
   return () => {
+    disposed = true;
     try { state.unsub?.(); } catch (_) {}
     state.unsub = null;
     state.client = null;

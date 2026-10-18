@@ -32,6 +32,10 @@
 //     visible — its faces would be near-clipped and read as occluded.
 //   - Indoors (the portal walk is already tight, and ?indoorDepthSplit wipes
 //     depth mid-frame) the culler is disarmed: every proxy reads visible.
+//   - A WebGL context restore keeps the same context object but kills every
+//     query: a dead one answers null for QUERY_RESULT_AVAILABLE and never
+//     resolves, freezing its proxy's last verdict (a rig hidden at loss time
+//     stayed hidden in plain view). The restore drops every query and verdict.
 //
 // The proxies are ordinary three.js meshes in the main scene's TRANSPARENT list
 // (after every opaque, whatever the opaque sort), on layer 0, never shadow
@@ -126,8 +130,25 @@ export class OcclusionCuller {
     this.material.name = "occlusion-proxy";
     // The query must bracket a REAL draw: never let ?asyncLink skip it.
     this.material.userData.__noAsyncLink = true;
-    this.stats = { proxies: 0, issued: 0, resolved: 0, hidden: 0, pendingMax: 0, guarded: 0 };
+    this.stats = { proxies: 0, issued: 0, resolved: 0, hidden: 0, pendingMax: 0, guarded: 0, restores: 0 };
     scene.add(this.group);
+    this._onRestored = () => this.contextRestored();
+    this._canvas = renderer.domElement || null;
+    try { this._canvas?.addEventListener?.("webglcontextrestored", this._onRestored, false); } catch (_) {}
+  }
+
+  /** The context came back: every query object is dead. Start each proxy over
+   *  visible with a fresh query, and void any result issued before (as a re-arm). */
+  contextRestored() {
+    this._armEpoch += 1;
+    for (const p of this.proxies.values()) {
+      p.query = null;
+      p.queryPending = false;
+      p._open = false;
+      p.visible = true;
+      p.occludedRun = 0;
+    }
+    this.stats.restores += 1;
   }
 
   /** Once per frame, before any isVisible() read. Resolves finished queries. */
@@ -253,6 +274,7 @@ export class OcclusionCuller {
   }
 
   dispose() {
+    try { this._canvas?.removeEventListener?.("webglcontextrestored", this._onRestored, false); } catch (_) {}
     for (const [key, p] of this.proxies) this._retire(key, p);
     this.scene.remove(this.group);
     this.geometry.dispose();
