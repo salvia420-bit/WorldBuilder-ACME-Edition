@@ -682,6 +682,20 @@ impl StickyManager {
         }
     }
 
+    /// Melee lane (2026-10-18, `?stickyLiveTarget`) — retail
+    /// `adjust_offset` steers at the target object's LIVE `m_position`
+    /// whenever the object exists (`GetObjectA(target_id)`,
+    /// acclient.c:388544-388547) and at the stashed `target_position` only
+    /// when it is gone. The caller hands the live pose in before each step.
+    /// It replaces the stash only for the current target and only once the
+    /// stash was fed — retail's `initialized` gate (:388691-388720) still
+    /// decides when the pull may start.
+    pub fn refresh_live_target(&mut self, target: Guid, live: WorldPosition) {
+        if self.target_id == Some(target) && self.target_position.is_some() {
+            self.target_position = Some(live);
+        }
+    }
+
     /// ACE `StickyManager.ClearTarget` (StickyManager.cs:33-41). The
     /// `cancel_moveto` side effect is surfaced as the bool return so
     /// the OWNER clears the server-controlled projection (spec S9 §3
@@ -1198,6 +1212,12 @@ impl PositionManager {
     /// Minimal TargetManager-subset pose feed (spec S9 §3 L1 step 4).
     pub fn sticky_handle_update_target(&mut self, target: Guid, pose: WorldPosition) {
         self.sticky.handle_update_target(target, pose);
+    }
+
+    /// Melee lane (2026-10-18) — the target's live pose for this step
+    /// ([`StickyManager::refresh_live_target`]).
+    pub fn sticky_refresh_live_target(&mut self, target: Guid, live: WorldPosition) {
+        self.sticky.refresh_live_target(target, live);
     }
 
     /// Per-frame sticky timeout tick (retail `PositionManager::UseTime`
@@ -1828,6 +1848,35 @@ mod tests {
         // stick_to replaces the prior target and DROPS the stale stash.
         sticky.stick_to(guid(0xCC), 0.0);
         assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none());
+    }
+
+    /// Melee lane (2026-10-18, `?stickyLiveTarget`): retail steers at the
+    /// target's LIVE position (acclient.c:388544-388547). A live pose replaces
+    /// a fed stash for the current target only, and never initializes an
+    /// unfed one (retail's `initialized` gate, :388691-388720).
+    #[test]
+    fn sticky_refresh_live_target_steers_at_the_live_pose_once_fed() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(0xAA), 0.0);
+        let cur = pose(50.0, 50.0, 0.0);
+        let live_north = pose(50.0, 60.0, 0.0);
+
+        sticky.refresh_live_target(guid(0xAA), live_north);
+        assert!(
+            sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none(),
+            "a live pose alone does not initialize the stash"
+        );
+
+        // Fed with a stale wire pose to the east; the live body is north.
+        sticky.handle_update_target(guid(0xAA), pose(60.0, 50.0, 0.0));
+        sticky.refresh_live_target(guid(0xAA), live_north);
+        let (step, _) = sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).unwrap();
+        assert!(step.y > 0.3 && step.x.abs() < 1e-5, "pulls north to the live body: {step:?}");
+
+        // Another guid's pose never lands.
+        sticky.refresh_live_target(guid(0xBB), pose(40.0, 50.0, 0.0));
+        let (step, _) = sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).unwrap();
+        assert!(step.y > 0.3 && step.x.abs() < 1e-5, "still north: {step:?}");
     }
 
     /// Spec S9 §4 test 7 — a fresh facade is inert with no sticky installed:

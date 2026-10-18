@@ -544,6 +544,40 @@ fn parse_teleport_hook_flag(search: &str) -> bool {
     })
 }
 
+/// Melee lane (2026-10-18): parse `?retailUnstick=off` (or `&…`). DEFAULT-ON
+/// off-escape shape (`off`/`0`/`false`). When on, the LOCAL player's swing
+/// sticky lives as long as retail's: a self UpdateMotion touches it only when
+/// retail would unpack it (`CPhysics::SetObjectMovement`, acclient.c:311149 —
+/// never ACE's autonomous echo of our own MoveToState, never a stale stamp;
+/// `holtburger_world::handlers::movement::local_motion_sticky_update`). The
+/// JS half (scene3d/picking.js `RETAIL_UNSTICK`) stops clicks and movement
+/// keys from releasing it (retail has no input-side unstick). `=off`: every
+/// self motion, click and movement key releases the glue, as before — the
+/// swing then often lands from where the player stood. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_retail_unstick_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "retailUnstick=off" | "retailUnstick=0" | "retailUnstick=false")
+    })
+}
+
+/// Melee lane (2026-10-18): parse `?stickyLiveTarget=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, the LOCAL swing
+/// sticky pulls toward its target's live body — the one the remote spine
+/// moves and the client draws — as retail's `StickyManager::adjust_offset`
+/// reads the target object's `m_position` (acclient.c:388544-388547). `=off`
+/// aims at the last wire pose (UpdatePosition), which lags a moving monster.
+/// Carrier: `SpatialScene::set_sticky_live_target_enabled`. Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_sticky_live_target_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "stickyLiveTarget=off" | "stickyLiveTarget=0" | "stickyLiveTarget=false")
+    })
+}
+
 /// landdefs-terrain-1 (2026-10-08 follow-ups): parse `?openSeaWall=off` (or
 /// `&…`). DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, an
 /// entirely-water landblock (all 81 vertex terrain codes water —
@@ -704,6 +738,24 @@ fn parse_house_barriers_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| {
         matches!(kv, "houseBarriers=off" | "houseBarriers=0" | "houseBarriers=false")
+    })
+}
+
+/// TERRAIN-HOP (2026-10-18): parse `?waterQuadrantRetail=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`). A shoreline cell picks
+/// its wading-depth corner against the cell centre, as retail
+/// `CLandBlockStruct::calc_water_depth` does (acclient.c:353646), instead of
+/// ACE's `% 24 >= 12`, which reads the near corner on the cell's far edge and
+/// lifted a runner 0.35 m for the frame its step ended there (holtburger-world
+/// `faithful_bridge::set_retail_water_quadrant`). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_water_quadrant_retail_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "waterQuadrantRetail=off" | "waterQuadrantRetail=0" | "waterQuadrantRetail=false"
+        )
     })
 }
 
@@ -1033,6 +1085,21 @@ fn parse_bounce_along_slope_flag(search: &str) -> bool {
 fn parse_clamp_along_ground_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "clampAlongGround=off")
+}
+
+/// CLAMP-REPLANT (2026-10-18): parse `?clampReplant=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, a grounded slice the post-transition
+/// scenery / entity clamp moved is re-run through the transition over the
+/// clamped offset, so the body lands on the ground at the clamped point as
+/// retail's in-transition scenery collision leaves it (the plane carry left a
+/// runner held by a trunk across a terrain crease up to 0.36 m in the ground
+/// or 0.17 m above it for a frame). `=off`: the `?clampAlongGround` plane
+/// carry alone. Native carrier: `USE_CLAMP_REPLANT` (ON). Needs a wasm
+/// rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_clamp_replant_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "clampReplant=off")
 }
 
 /// COMBAT-RADII (2026-07-28): parse `?combatRadii=off` (or
@@ -1709,6 +1776,23 @@ fn parse_remote_leash_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| {
         matches!(kv, "remoteLeash=off" | "remoteLeash=0" | "remoteLeash=false")
+    })
+}
+
+/// spawnz (2026-10-18): `?remoteSettle=off` (also `=0` / `=false`) leaves a
+/// creature the server sent floating in the air. ON: an attackable GRAVITY
+/// creature placed above every floor the scene holds (its CreateObject, a hard
+/// set) falls onto it, as retail's per-object physics drops it (`enter_world`
+/// placement then `UpdatePhysicsInternal`, acclient.c:323441 / :317701); ACE
+/// skips its scatter ground snap past 10 m (`ScatterThreshold_Z`) and never
+/// moves an idle object (holtburger-world `spatial::remote_settle_enabled`).
+/// DEFAULT-ON; rides the effective `remoteInterp` composite and falls along
+/// the `?remoteJumpArc` arc. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_settle_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "remoteSettle=off" | "remoteSettle=0" | "remoteSettle=false")
     })
 }
 
@@ -2603,6 +2687,29 @@ pub fn slow_run_diag_clear() {
     holtburger_core::slow_run_diag::clear()
 }
 
+/// TERRAIN-HOP (2026-10-18) — the hop detector's incident ring as JSON
+/// (`{"count":N,"incidents":[…]}`, oldest first; see
+/// `holtburger_core::hop_diag`): every local manual slice that left the
+/// ground or whose feet rose off the terrain rest. Read on demand by
+/// `__diag.hop` (scene3d/diag/hop.js). Additive, diagnostics-only (no
+/// manifest bump — the slowRunDiag precedent).
+#[wasm_bindgen(js_name = hopDiag)]
+pub fn hop_diag() -> String {
+    holtburger_core::hop_diag::read_json()
+}
+
+/// TERRAIN-HOP — incidents recorded since load (or the last clear).
+#[wasm_bindgen(js_name = hopDiagCount)]
+pub fn hop_diag_count() -> u32 {
+    holtburger_core::hop_diag::count()
+}
+
+/// TERRAIN-HOP — forget every recorded incident.
+#[wasm_bindgen(js_name = hopDiagClear)]
+pub fn hop_diag_clear() {
+    holtburger_core::hop_diag::clear()
+}
+
 /// chat-errors-2 (2026-10-13): retail `HandleFailureEvent`'s text for a
 /// WeenieError `code` (acclient.c:413716, via the generated
 /// `holtburger_core::retail_failure_table`) with `param` in every `%s` slot
@@ -2809,15 +2916,19 @@ impl LandblockMesh {
 }
 
 /// F12-4 — resolve the region's `LandHeightTable` (256 `f32` height-byte→Z
-/// entries) for table-aware terrain height decode, gated behind
-/// `?regionHeightTable=on`. Returns `None` when the flag is off OR the
-/// Region `0x13000000` isn't already in the resource cache — both fall back
-/// to the retail `byte * 2.0` decode (identical to pre-F12-4, since retail's
-/// table IS `byte * 2.0`, hence "no impact on retail data"). On a
-/// custom/modded region DAT the non-linear table keeps render + walk heights
+/// entries) for table-aware terrain height decode (always on since
+/// 2026-06-10). Returns `None` when the Region `0x13000000` isn't already in
+/// the resource cache, and the decode then falls back to `byte * 2.0`.
+/// CORRECTION (spawnz, 2026-10-18): the retail Dereth table is `byte * 2.0`
+/// only up to index 200 (400 m); from 201 it is 404, 408, … up to 700 at 255
+/// (client_portal.dat). The table reproduces ACE's logged `GetZ` at all 1222
+/// scatter spawns in the live log; `* 2` misses 33 of them, by up to 47 m
+/// (25.9 m low under a Magma Golem spawn at 0xA31F000E). Both terrain
+/// fetchers therefore call `ensure_region_resident` first. The table keeps
+/// render + walk heights
 /// aligned with the scenery bake (`holtburger-scenery-bake::height`) and the
-/// server physics integrator. Cheap: a cache read + 256-`f32` parse, never a
-/// network fetch (no `.await`) — a cache miss just yields the fallback.
+/// server. Cheap: a cache read + 256-`f32` parse, never a network fetch (no
+/// `.await`) — a cache miss just yields the fallback.
 #[cfg(target_arch = "wasm32")]
 fn resolve_region_land_height_table() -> Option<Vec<f32>> {
     // INTEGRATED always-on — 2026-06-10. Safe by construction: a cache miss or
@@ -3052,7 +3163,12 @@ pub async fn fetch_landblock_heightmaps(
             .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
     }
 
-    // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
+    // F12-4 — table-aware height decode. spawnz (2026-10-18): make the Region
+    // resident first — the retail table is NOT `byte * 2` from index 201
+    // (404 m) up, and a cache miss here used to decode this batch with the
+    // `* 2` fallback for the rest of the session (terrain 25.9 m low under a
+    // logged 451.8 m spawn — every server-placed object floating over it).
+    ensure_region_resident(&source).await;
     let height_table = resolve_region_land_height_table();
     let mut out = Vec::with_capacity(cell_ids.len());
     for id in &cell_ids {
@@ -3252,7 +3368,10 @@ pub async fn fetch_subdivided_landblocks(
             .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
     }
 
-    // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
+    // F12-4 — table-aware height decode; the Region made resident first, as in
+    // `fetch_landblock_heightmaps` (spawnz 2026-10-18), so the drawn surface
+    // never decodes with the `byte * 2` fallback above 400 m.
+    ensure_region_resident(&source).await;
     let height_table = resolve_region_land_height_table();
     let height_table = height_table.as_deref();
 
@@ -22532,7 +22651,47 @@ async fn populate_building_aabbs_for_landblock_impl(
 pub async fn populate_building_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
-    populate_building_aabbs_for_landblock_impl(landblock_id).await
+    let queued = populate_building_aabbs_for_landblock_impl(landblock_id).await;
+    if queued.is_ok() {
+        note_landblock_collision_part(
+            landblock_id,
+            holtburger_world::spatial::LANDBLOCK_COLLISION_BUILDINGS,
+        );
+    }
+    queued
+}
+
+// spawnz (2026-10-18, `?remoteSettle`): landblock collision parts whose
+// geometry the populate exports have queued, as `(landblock_high, part)`.
+// Drained by the TickMovement arm AFTER every building / static drain
+// (`drain_pending_landblock_collision_parts_into`), so the scene marks a part
+// only once its floors are in — a remote settle waits for both parts.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LANDBLOCK_COLLISION_PARTS_PENDING: std::cell::RefCell<Vec<(u32, u8)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(target_arch = "wasm32")]
+fn note_landblock_collision_part(landblock_id: u32, part: u8) {
+    LANDBLOCK_COLLISION_PARTS_PENDING
+        .with(|c| c.borrow_mut().push((landblock_id & 0xFFFF_0000, part)));
+}
+
+/// spawnz: drain the queued landblock collision parts into the scene
+/// (`SpatialScene::mark_landblock_collision_part`). Returns the count.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn drain_pending_landblock_collision_parts_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    LANDBLOCK_COLLISION_PARTS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, part) in buf.drain(..) {
+            scene.mark_landblock_collision_part(landblock_high, part);
+        }
+        count
+    })
 }
 
 /// Track B4 outdoor-static collision (Tier 1, 2026-06-08): the
@@ -22828,7 +22987,16 @@ async fn populate_statics_aabbs_for_landblock_impl(
 pub async fn populate_statics_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
-    populate_statics_aabbs_for_landblock_impl(landblock_id).await
+    let queued = populate_statics_aabbs_for_landblock_impl(landblock_id).await;
+    if queued.is_ok() {
+        // spawnz: the statics part of the settle residency (see
+        // `LANDBLOCK_COLLISION_PARTS_PENDING`).
+        note_landblock_collision_part(
+            landblock_id,
+            holtburger_world::spatial::LANDBLOCK_COLLISION_STATICS,
+        );
+    }
+    queued
 }
 
 // =====================================================================
@@ -37636,6 +37804,33 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_teleport_hook_flag("?teleportHook=false"));
     }
 
+    /// Melee lane (2026-10-18): `?retailUnstick` parse shape — DEFAULT-ON;
+    /// only `=off` / `=0` / `=false` disable.
+    #[test]
+    fn retail_unstick_flag_defaults_on_unless_off() {
+        use super::parse_retail_unstick_flag;
+        assert!(parse_retail_unstick_flag(""));
+        assert!(parse_retail_unstick_flag("?renderer=3d"));
+        assert!(parse_retail_unstick_flag("?retailUnstick=on"));
+        assert!(!parse_retail_unstick_flag("?retailUnstick=off"));
+        assert!(!parse_retail_unstick_flag("?nosw=1&retailUnstick=0"));
+        assert!(!parse_retail_unstick_flag("?retailUnstick=false"));
+        assert!(parse_retail_unstick_flag("?stickyLiveTarget=off"), "another flag's escape");
+    }
+
+    /// Melee lane (2026-10-18): `?stickyLiveTarget` parse shape — DEFAULT-ON;
+    /// only `=off` / `=0` / `=false` disable.
+    #[test]
+    fn sticky_live_target_flag_defaults_on_unless_off() {
+        use super::parse_sticky_live_target_flag;
+        assert!(parse_sticky_live_target_flag(""));
+        assert!(parse_sticky_live_target_flag("?stickyLiveTarget=on"));
+        assert!(!parse_sticky_live_target_flag("?stickyLiveTarget=off"));
+        assert!(!parse_sticky_live_target_flag("?nosw=1&stickyLiveTarget=0"));
+        assert!(!parse_sticky_live_target_flag("?stickyLiveTarget=false"));
+        assert!(parse_sticky_live_target_flag("?retailUnstick=off"), "another flag's escape");
+    }
+
     /// landdefs-terrain-1 / -3: `?openSeaWall` / `?fallbackWaterRetail` parse
     /// shapes — DEFAULT-ON; only `=off` / `=0` / `=false` disable.
     #[test]
@@ -38160,6 +38355,21 @@ mod wire_state_packs_routing_tests {
         assert!(parse_remote_leash_flag("?retailLeash=off"));
     }
 
+    /// spawnz: `?remoteSettle=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn remote_settle_flag_defaults_on_off_escape() {
+        use super::parse_remote_settle_flag;
+        assert!(parse_remote_settle_flag(""));
+        assert!(parse_remote_settle_flag("?renderer=3d"));
+        assert!(parse_remote_settle_flag("?remoteSettle=on"));
+        assert!(!parse_remote_settle_flag("?remoteSettle=off"));
+        assert!(!parse_remote_settle_flag("?remoteSettle=0"));
+        assert!(!parse_remote_settle_flag("?remoteSettle=false"));
+        assert!(!parse_remote_settle_flag("?nosw=1&remoteSettle=off"));
+        // The jump arc it falls along is a different switch.
+        assert!(parse_remote_settle_flag("?remoteJumpArc=off"));
+    }
+
     /// landdefs-terrain-2: `?houseBarriers=off` DEFAULT-ON off-escape shape.
     #[test]
     fn house_barriers_flag_defaults_on_off_escape() {
@@ -38171,6 +38381,31 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_house_barriers_flag("?houseBarriers=0"));
         assert!(!parse_house_barriers_flag("?houseBarriers=false"));
         assert!(!parse_house_barriers_flag("?nosw=1&houseBarriers=off"));
+    }
+
+    /// TERRAIN-HOP: `?waterQuadrantRetail=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn water_quadrant_retail_flag_defaults_on_off_escape() {
+        use super::parse_water_quadrant_retail_flag;
+        assert!(parse_water_quadrant_retail_flag(""));
+        assert!(parse_water_quadrant_retail_flag("?waterQuadrantRetail=on"));
+        assert!(parse_water_quadrant_retail_flag("?houseBarriers=off"));
+        assert!(!parse_water_quadrant_retail_flag("?waterQuadrantRetail=off"));
+        assert!(!parse_water_quadrant_retail_flag("?waterQuadrantRetail=0"));
+        assert!(!parse_water_quadrant_retail_flag("?waterQuadrantRetail=false"));
+        assert!(!parse_water_quadrant_retail_flag("?nosw=1&waterQuadrantRetail=off"));
+    }
+
+    /// CLAMP-REPLANT (2026-10-18): `?clampReplant` parse shape — DEFAULT-ON;
+    /// only an explicit `=off` disables it.
+    #[test]
+    fn clamp_replant_flag_defaults_on_unless_off() {
+        use super::parse_clamp_replant_flag;
+        assert!(parse_clamp_replant_flag(""));
+        assert!(parse_clamp_replant_flag("?clampReplant=on"));
+        assert!(parse_clamp_replant_flag("?clampAlongGround=off"));
+        assert!(!parse_clamp_replant_flag("?clampReplant=off"));
+        assert!(!parse_clamp_replant_flag("?nosw=1&clampReplant=off"));
     }
 
     /// Phase 3 Phase D: `?faithfulOutdoor=off` DEFAULT-ON off-escape shape.
@@ -51119,6 +51354,12 @@ async fn recv_loop(
     holtburger_world::spatial::house_barrier::set_house_barriers(parse_house_barriers_flag(
         &flag_search(),
     ));
+    // TERRAIN-HOP (2026-10-18): `?waterQuadrantRetail=off` (default ON) — the
+    // retail shoreline wading-depth corner (see
+    // `parse_water_quadrant_retail_flag`).
+    holtburger_world::spatial::faithful_bridge::set_retail_water_quadrant(
+        parse_water_quadrant_retail_flag(&flag_search()),
+    );
     // motion-remote-2: `?remoteRestHeading=off` (default ON) — an at-rest
     // remote body adopts the wire heading (see `parse_remote_rest_heading_flag`).
     holtburger_world::spatial::set_remote_rest_heading(parse_remote_rest_heading_flag(
@@ -51128,6 +51369,9 @@ async fn recv_loop(
     // root motion, re-armed after every accepted correction (see
     // `parse_remote_leash_flag`).
     holtburger_world::spatial::set_remote_leash(parse_remote_leash_flag(&flag_search()));
+    // spawnz: `?remoteSettle=off` (default ON) — a creature the server left
+    // floating falls onto the floor (see `parse_remote_settle_flag`).
+    holtburger_world::spatial::set_remote_settle(parse_remote_settle_flag(&flag_search()));
     // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
     // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
     movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
@@ -51220,6 +51464,10 @@ async fn recv_loop(
     // `parse_bounce_along_slope_flag`.
     movement.set_bounce_along_slope(parse_bounce_along_slope_flag(&flag_search()));
     movement.set_clamp_along_ground(parse_clamp_along_ground_flag(&flag_search()));
+    // CLAMP-REPLANT (2026-10-18): `?clampReplant=off` — the post-transition
+    // clamp's z is the plane carry alone again (default ON: the clamped body
+    // is placed by a re-run transition); see `parse_clamp_replant_flag`.
+    movement.set_clamp_replant(parse_clamp_replant_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see
@@ -51453,6 +51701,14 @@ async fn recv_loop(
     // ON) — see `parse_teleport_hook_flag`; read at the TeleportArrived edge
     // (session/messages/position.rs).
     let teleport_hook_on: bool = parse_teleport_hook_flag(&flag_search());
+    // Melee lane (2026-10-18): `?retailUnstick` (DEFAULT ON) — see
+    // `parse_retail_unstick_flag`; read at the local sticky install
+    // (session/messages/position.rs, UpdateMotion arm).
+    let retail_unstick_on: bool = parse_retail_unstick_flag(&flag_search());
+    // Melee lane (2026-10-18): `?stickyLiveTarget` (DEFAULT ON) — see
+    // `parse_sticky_live_target_flag`; installed on the world at creation
+    // (login.rs / lifecycle.rs).
+    let sticky_live_target_on: bool = parse_sticky_live_target_flag(&flag_search());
     // landdefs-terrain-1 / -3 (2026-10-08 follow-ups): `?openSeaWall` /
     // `?fallbackWaterRetail` (both DEFAULT ON) — installed on the world at
     // creation (login.rs / lifecycle.rs), before any terrain is populated.
@@ -51726,6 +51982,8 @@ async fn recv_loop(
             lifecycle_stamp_gates_on,
             object_blob_queue_on,
             teleport_hook_on,
+            retail_unstick_on,
+            sticky_live_target_on,
             open_sea_wall_on,
             fallback_water_retail_on,
             world_lifecycle_on,

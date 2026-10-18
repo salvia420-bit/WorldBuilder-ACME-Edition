@@ -31,6 +31,10 @@ mod slow_run_tests;
 // no landing, no bounce) over crests, dips and bumps.
 #[cfg(test)]
 mod terrain_hop_tests;
+// TERRAIN-HOP round 2 (2026-10-18): the same runner over the retail terrain
+// around Holtburg — landblock seams, hillsides, frame hitches, echoes.
+#[cfg(test)]
+mod terrain_hop_real_tests;
 // physics-collision-2 (2026-10-13): the local player's transition body from
 // its own Setup (`?setupPlayerBody`).
 #[cfg(test)]

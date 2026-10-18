@@ -95,7 +95,7 @@ export async function initPluginBar(D) {
   //     double-mount armed-spell cleanup).
   // J1.C (2026-05-27): only plugins with non-bar uses (`.view`,
   // `.registerView` hosts) retain entries here; the ~18 bar-slot-only
-  // plugins (vitals-hud, buffs-hud, target-bar, combat-hud, sneak-hud,
+  // plugins (vitals-hud, buffs-hud, target-bar, combat-hud,
   // radar, chat-panel, status-indicators, hotbar, dye-preview,
   // combat-bar, vendor-ui, radial-menu, container-panel, social-panel,
   // trade-panel, book-panel, house-panel) now resolve via the loader's
@@ -123,7 +123,8 @@ export async function initPluginBar(D) {
     // no-op, so listing both here costs nothing and keeps the mount
     // order deterministic instead of relying on the append-at-end
     // fallback for unlisted candidate slots.
-    "vitals-hud", "vitals-orbs", "buffs-hud", "target-bar", "combat-hud", "sneak-hud",
+    // (sneak-hud retired 2026-10-18: its cue lives in combat-hud's row 2.)
+    "vitals-hud", "vitals-orbs", "buffs-hud", "target-bar", "combat-hud",
     "radar", "chat-panel", "status-indicators", "hotbar", "main-panel",
     "dye-preview", "examine-target-watcher",
     // (rynthsuite + fullscreen ad-hoc slots get spliced here)

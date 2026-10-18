@@ -134,6 +134,25 @@ pub(super) fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
     }
 }
 
+thread_local! {
+    static RETAIL_WATER_QUADRANT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// TERRAIN-HOP (2026-10-18): `?waterQuadrantRetail` — a shoreline
+/// (PartiallyWater) cell picks its wading-depth corner against the cell
+/// centre, as retail `CLandBlockStruct::calc_water_depth` does (see
+/// `SceneObjCell::get_water_depth`). Default ON; `=off` restores ACE's
+/// `% 24 >= 12` pick. Read per query, so no cached cell needs a rebuild.
+pub fn retail_water_quadrant_enabled() -> bool {
+    RETAIL_WATER_QUADRANT.with(|c| c.get())
+}
+
+/// Set the switch for this thread (wasm is single-threaded; each `cargo
+/// test` runs on its own thread).
+pub fn set_retail_water_quadrant(on: bool) {
+    RETAIL_WATER_QUADRANT.with(|c| c.set(on));
+}
+
 // ─── SceneObjCell — the per-cell CObjCell adapter ───────────────────────────
 
 /// The pad retail adds to the sphere radius in `CEnvCell::find_transit_cells`'
@@ -431,15 +450,39 @@ impl CObjCell for SceneObjCell {
     /// EntirelyWater ⇒ 0.9; PartiallyWater ⇒ the wading depth of the cell corner
     /// the point falls in (`CLandBlockStruct::calc_water_depth`): 0.45 at a water
     /// corner, 0.1 at a land corner. `point` is the landblock-local low point (the
-    /// frame `find_terrain_collisions` passes); the within-cell quadrant selects
-    /// the corner exactly as ACE — `% 24 >= 12` on X ⇒ east, on Y ⇒ north.
+    /// frame `find_terrain_collisions` passes).
+    ///
+    /// The corner: retail compares the point with the CELL CENTRE —
+    /// `x <= (2·cx + 1)·half_square_length` ⇒ west, the same on y ⇒ south
+    /// (`calc_water_depth` acclient.c:353646, binja 0x005315f0;
+    /// `half_square_length = 24·0.5` :731331), cx/cy from this cell's id.
+    /// [`retail_water_quadrant_enabled`] (default) does that. `=off` keeps ACE's
+    /// `% 24 >= 12` (LandblockStruct.cs:664-668), which agrees inside the cell
+    /// but wraps a point on the cell's own far edge (`x = (cx+1)·24`) to the
+    /// NEAR corner. The world-frame driver lands steps exactly on 24 m edges
+    /// (world x/y are f32 on a 2–4 mm grid at Holtburg), so a runner leaving a
+    /// shoreline cell from its wet half was lifted to the dry corner's rest for
+    /// the frame it sat on the edge: +0.35 m, then down 0.8 m into deep water.
     fn get_water_depth(&self, point: Vector3) -> f32 {
         match self.water_type {
             WaterType::NotWater => 0.0,
             WaterType::EntirelyWater => 0.89999998,
             WaterType::PartiallyWater => {
-                let east = point.x.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5;
-                let north = point.y.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5;
+                let (east, north) = if retail_water_quadrant_enabled() {
+                    let n = (self.cell_id & 0xFFFF).saturating_sub(1);
+                    let cx = (n >> 3) as f32;
+                    let cy = (n & 7) as f32;
+                    let half = CELL_SIZE * 0.5;
+                    (
+                        point.x > (2.0 * cx + 1.0) * half,
+                        point.y > (2.0 * cy + 1.0) * half,
+                    )
+                } else {
+                    (
+                        point.x.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5,
+                        point.y.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5,
+                    )
+                };
                 // corner_is_water order is [SW, SE, NW, NE].
                 let idx = east as usize + 2 * north as usize;
                 if self.corner_is_water[idx] {
@@ -2703,7 +2746,8 @@ pub(crate) fn faithful_diag_step(
 mod drift {
     use super::{
         classify_cell_water, faithful_diag_step, faithful_find_transitional_position,
-        landblock_water_type, FaithfulMover, SceneWorld, WaterType,
+        landblock_water_type, retail_water_quadrant_enabled, set_retail_water_quadrant,
+        FaithfulMover, SceneWorld, WaterType,
     };
     use holtburger_dat::transition::objcell::CellWorld;
     use crate::spatial::entity_collision::EntityCollider;
@@ -6362,6 +6406,57 @@ mod drift {
         let cell = world.get_visible(cell_id).expect("cell");
         assert_eq!(cell.water_type(), WaterType::NotWater);
         assert_eq!(cell.get_water_depth(v(100.0, 100.0, Z)), 0.0);
+    }
+
+    /// TERRAIN-HOP (2026-10-18, `?waterQuadrantRetail`): a shoreline cell
+    /// whose NORTH corners are water. A point ON the cell's north edge (local
+    /// y = 120, the edge the next cell starts at) is in the north half —
+    /// retail picks the corner against the cell centre (`calc_water_depth`,
+    /// acclient.c:353646) — so it wades 0.45 like the rest of the wet half.
+    /// ACE's `% 24 >= 12` wraps that edge to y % 24 = 0 and reads the dry
+    /// SOUTH corner (0.1): the 0.35 m lift a runner got for the frame its
+    /// step ended exactly on the edge (terrain_hop_real_tests.rs, landblock
+    /// 0xAAB5 at local y = 48). The east edge wraps the same way.
+    #[test]
+    fn shoreline_depth_on_the_cells_far_edge_keeps_the_far_corner() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        const Z: f32 = 50.0;
+        // Cell (4,4): x 96..120, y 96..120. NW = vertex (4,5), NE = (5,5).
+        let cell_id = OLB | (4 * 8 + 4 + 1);
+        let mut codes = [0u8; 81];
+        codes[4 * 9 + 5] = 17; // NW corner
+        codes[5 * 9 + 5] = 17; // NE corner
+        let scene = outdoor_scene_with_water([Z; 81], codes);
+        let world = SceneWorld::new(&scene);
+        let cell = world.get_visible(cell_id).expect("cell");
+        assert_eq!(cell.water_type(), WaterType::PartiallyWater);
+        let wet = 0.44999999f32;
+        let dry = 0.1f32;
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+
+        assert!(retail_water_quadrant_enabled(), "default on");
+        // Inside the cell both picks agree.
+        assert!(close(cell.get_water_depth(v(100.0, 117.0, Z)), wet), "north half");
+        assert!(close(cell.get_water_depth(v(100.0, 99.0, Z)), dry), "south half");
+        // The north edge is the north half; the south edge the south half.
+        let north_edge = cell.get_water_depth(v(100.0, 120.0, Z));
+        assert!(close(north_edge, wet), "north edge reads the wet NW corner: {north_edge}");
+        assert!(close(cell.get_water_depth(v(100.0, 96.0, Z)), dry), "south edge");
+        // The far NE corner point is the NE corner.
+        let ne_point = cell.get_water_depth(v(120.0, 120.0, Z));
+        assert!(close(ne_point, wet), "NE corner point: {ne_point}");
+        // Retail's tie (x == centre) goes west/south: (108, 108) is SW.
+        assert!(close(cell.get_water_depth(v(108.0, 108.0, Z)), dry), "centre tie");
+
+        // `=off` (ACE): the far edges wrap to the near corner.
+        set_retail_water_quadrant(false);
+        let ace_north_edge = cell.get_water_depth(v(100.0, 120.0, Z));
+        let ace_ne_point = cell.get_water_depth(v(120.0, 120.0, Z));
+        let ace_inside = cell.get_water_depth(v(100.0, 117.0, Z));
+        set_retail_water_quadrant(true);
+        assert!(close(ace_north_edge, dry), "ACE wraps the north edge south: {ace_north_edge}");
+        assert!(close(ace_ne_point, dry), "ACE wraps the NE point to SW: {ace_ne_point}");
+        assert!(close(ace_inside, wet), "ACE agrees inside the cell");
     }
 
     #[test]

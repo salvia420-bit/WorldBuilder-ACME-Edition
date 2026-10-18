@@ -596,7 +596,7 @@ export function attachCombat(diag) {
   // loginForm submit handler in index.html → `window.__pluginClient
   // = createClient(handle)`), but `attachCombat` runs at diag-init
   // time which can be either before or after login depending on
-  // when the bootstrap finishes. Mirror sneak-hud.js's poll pattern:
+  // when the bootstrap finishes. Mirror the HUD plugins' poll pattern:
   // try once eagerly, then poll on a low-rate interval until the
   // client is up. Subscription is idempotent (a guard flag prevents
   // double-binding) and survives `reset()` (reset clears counters,
@@ -613,8 +613,13 @@ export function attachCombat(diag) {
 let _activeCombat = null;
 let _sneakSubInstalled = false;
 let _sneakSubPollTimer = null;
-const _sneakSubHandler = (meta) => {
-  try { _activeCombat?.onSneakAttackPredicted?.(meta); } catch (_) {}
+// The bus hands listeners a CustomEvent; the prediction payload
+// ({attackerGuid, defenderGuid, scope, ...}) is its `detail`, as in the
+// damageDealt handler below. (2026-10-18: this used to pass the event itself,
+// so every prediction counted as scope "unknown" with defenderGuid 0 and could
+// never match a server sneak hit.) A bare payload is still accepted.
+const _sneakSubHandler = (ev) => {
+  try { _activeCombat?.onSneakAttackPredicted?.(ev?.detail ?? ev); } catch (_) {}
 };
 function _installSneakSubscription() {
   if (_sneakSubInstalled) return;

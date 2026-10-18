@@ -983,7 +983,7 @@ function spellStripFrameCss(sel) {
 // value this needs function-local so nothing sits in a TDZ.)
 function spellStripDockBottom(el, fallback = 124) {
   const SKIP = new Set([
-    "hb-spell-strip", "hb-combat-hud", "hb-combat-hud-death", "hb-sneak-hud", "hb-portal-storm-pulse",
+    "hb-spell-strip", "hb-combat-hud", "hb-combat-hud-death", "hb-portal-storm-pulse",
   ]);
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -1134,6 +1134,17 @@ function installSpellStrip() {
       flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       color: var(--hbk-text-faint, #77705f); font-size: 10px; white-space: nowrap;
     }
+    /* Sneak Attack cue for spells (ui/ac_sneak_attack_cue.js, feed "magic";
+       the twin of the combat HUD's row). It sits at the right end of the
+       tab row, over the empty part right of the roman numerals and above
+       Cast. It is a grid item on top of the tabs, so lighting it never
+       reflows the strip, and it lets clicks through to the tabs. */
+    #${STRIP_ID} .hb-ss-sneak {
+      grid-column: 2 / 4; grid-row: 1;
+      justify-self: end; align-self: end;
+      line-height: 15px; padding-right: 2px;
+      pointer-events: none;
+    }
   `;
   document.head.appendChild(style);
 
@@ -1185,6 +1196,12 @@ function installSpellStrip() {
     tabsEl.appendChild(t);
   }
   body.appendChild(tabsEl);
+
+  // Sneak Attack cue for spells (wired lazily below).
+  const sneakEl = document.createElement("span");
+  sneakEl.className = "hb-ss-sneak";
+  sneakEl.setAttribute?.("aria-hidden", "true");
+  body.appendChild(sneakEl);
 
   // BuiltInSpell — current-spell well.
   const currentEl = document.createElement("div");
@@ -1550,16 +1567,23 @@ function installSpellStrip() {
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
 
-  // hud-ui-8 — the endowment rules load lazily (like sneak-hud's rollup
-  // helper): a new STATIC import here would also have to be stubbed by every
-  // suite that splices this module (harness/lib/splice_module.mjs refuses an
-  // unstubbed import). `?spellbarEndowment=off` never turns the cell on.
+  // hud-ui-8 — the endowment rules load lazily: a new STATIC import here
+  // would also have to be stubbed by every suite that splices this module
+  // (harness/lib/splice_module.mjs refuses an unstubbed import).
+  // `?spellbarEndowment=off` never turns the cell on.
   import("../ui/ac_spell_endowment.js").then((m) => {
     if (!m.spellbarEndowmentEnabled()) return;
     endowLib = m;
     endowDirty = true;
     render();
   }).catch(() => { /* module missing: the strip runs without the endowment */ });
+
+  // Sneak Attack cue for spells, lazily for the same reason. It lights on
+  // ACE's "Sneak Attack! You …" Magic hit line (SpellProjectile.cs:805);
+  // the strip is installed once per page, so the cue is never torn down.
+  import("../ui/ac_sneak_attack_cue.js").then((m) => {
+    m.mountSneakCue(sneakEl, { feed: "magic" });
+  }).catch(() => { /* module missing: no spell sneak cue */ });
 
   // gmSpellcastingUI::UpdateEndowmentIcon — re-read the Held caster; with no
   // spell selected on the open tab the endowment becomes the selection.

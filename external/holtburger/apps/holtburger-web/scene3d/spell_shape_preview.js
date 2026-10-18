@@ -672,7 +672,7 @@ function _onSpellCastInitiated(evt) {
 }
 
 // =====================================================================
-// Self-registration on import (mirrors play_effect_vfx.js + sneak-hud.js).
+// Self-registration on import (mirrors play_effect_vfx.js).
 // =====================================================================
 //
 // The plugin event bus is built inside `plugins/api.js` and only

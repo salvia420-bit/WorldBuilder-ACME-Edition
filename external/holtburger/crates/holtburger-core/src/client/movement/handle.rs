@@ -484,6 +484,12 @@ impl MovementSystemHandle {
         self.inner.set_clamp_along_ground(on);
     }
 
+    /// CLAMP-REPLANT (2026-10-18) — the `?clampReplant` carrier; see
+    /// `MovementSystem::set_clamp_replant`.
+    pub fn set_clamp_replant(&mut self, on: bool) {
+        self.inner.set_clamp_replant(on);
+    }
+
     /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
     /// retail cast-movement arbitration — a server-played cast gesture
     /// suppresses held locomotion until an input edge / gesture end; `=off`

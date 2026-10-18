@@ -40,6 +40,12 @@ pub(crate) struct LoopFlags {
     pub(crate) object_blob_queue_on: bool,
     /// streaming-teleport-2 (2026-10-08 follow-ups): `?teleportHook` (ON).
     pub(crate) teleport_hook_on: bool,
+    /// Melee lane (2026-10-18): `?retailUnstick` (ON) — the local swing
+    /// sticky follows retail's SetObjectMovement gate (position.rs).
+    pub(crate) retail_unstick_on: bool,
+    /// Melee lane (2026-10-18): `?stickyLiveTarget` (ON) — the local swing
+    /// sticky steers at its target's live body (world creation install).
+    pub(crate) sticky_live_target_on: bool,
     /// landdefs-terrain-1 (2026-10-08 follow-ups): `?openSeaWall` (ON).
     pub(crate) open_sea_wall_on: bool,
     /// landdefs-terrain-3 (2026-10-08 follow-ups): `?fallbackWaterRetail` (ON).

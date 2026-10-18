@@ -804,6 +804,7 @@ fn plant_trunk(world: &mut WorldState, lb_high: u32, local: (f32, f32), r: f32) 
 }
 
 /// Run `seconds` of held forward run into/past a trunk at `trunk`.
+#[allow(clippy::too_many_arguments)]
 fn run_into_trunk(
     heights: [f32; 81],
     lb_high: u32,
@@ -813,10 +814,13 @@ fn run_into_trunk(
     seconds: f32,
     guid: Guid,
     along_ground: bool,
+    replant: bool,
 ) -> Report {
     let (mut world, mut movement) = grounded_runner(heights, lb_high, start, EAST, pace.run_rate, guid);
-    // `?clampAlongGround` (browser DEFAULT ON; native const ON).
+    // `?clampAlongGround` and `?clampReplant` (browser DEFAULT ON; native
+    // consts ON).
     movement.set_clamp_along_ground(along_ground);
+    movement.set_clamp_replant(replant);
     plant_trunk(&mut world, lb_high, trunk, 1.5);
     let frames = (seconds / pace.frame_dt).ceil() as usize;
     let dt = Duration::from_secs_f32(pace.frame_dt);
@@ -842,38 +846,44 @@ fn terrain_hop_runner_meeting_a_trunk_on_a_slope_stays_grounded() {
     let trunks = [("head-on", (84.0, 96.0)), ("brush", (84.0, 96.0 + 1.5)), ("brush-far", (84.0, 96.0 + 1.85))];
     let mut failures = Vec::new();
     let mut n = 0u32;
-    for (slope, heights) in [("up22", up22), ("down22", dn22), ("up30", up30), ("down30", dn30)] {
-        for (tname, trunk) in trunks {
-            for lb_high in BOTH_LBS {
-                for pace in PACES {
-                    n += 1;
-                    let r = run_into_trunk(heights, *lb_high, (12.0, 96.0), trunk, pace, 9.0, Guid(0x5000_0F00 + n), true);
-                    let line = format!(
-                        "[terrain-hop trunk] {slope} {tname} lb={:04X} v={:.0}m/s dt={:.1}ms \
-                         trunk_hits={} lift_offs={} airborne_frames={} gap=[{:+.4},{:+.4}]",
-                        lb_high >> 16,
-                        RUN_BASE * pace.run_rate,
-                        pace.frame_dt * 1000.0,
-                        r.bounces,
-                        r.lift_offs,
-                        r.airborne_frames,
-                        r.min_gap,
-                        r.max_gap,
-                    );
-                    eprintln!("{line}");
-                    let grounded = r.lift_offs == 0 && r.airborne_frames == 0;
-                    let planted = r.max_gap <= REST_GAP + 0.02 && r.min_gap >= REST_GAP - 0.02;
-                    if !(grounded && planted) {
-                        failures.push(format!("{line}\n      {}", r.events.join("\n      ")));
+    // The browser defaults (`?clampReplant` re-runs the clamped slice), and
+    // `?clampReplant=off` (the `?clampAlongGround` plane carry alone, exact on
+    // one plane — these slopes have no crease at the trunk).
+    for (mode, replant) in [("replant", true), ("plane-carry", false)] {
+        for (slope, heights) in [("up22", up22), ("down22", dn22), ("up30", up30), ("down30", dn30)] {
+            for (tname, trunk) in trunks {
+                for lb_high in BOTH_LBS {
+                    for pace in PACES {
+                        n += 1;
+                        let r = run_into_trunk(heights, *lb_high, (12.0, 96.0), trunk, pace, 9.0, Guid(0x5000_0F00 + n), true, replant);
+                        let line = format!(
+                            "[terrain-hop trunk] {mode} {slope} {tname} lb={:04X} v={:.0}m/s dt={:.1}ms \
+                             trunk_hits={} lift_offs={} airborne_frames={} gap=[{:+.4},{:+.4}]",
+                            lb_high >> 16,
+                            RUN_BASE * pace.run_rate,
+                            pace.frame_dt * 1000.0,
+                            r.bounces,
+                            r.lift_offs,
+                            r.airborne_frames,
+                            r.min_gap,
+                            r.max_gap,
+                        );
+                        eprintln!("{line}");
+                        let grounded = r.lift_offs == 0 && r.airborne_frames == 0;
+                        let planted = r.max_gap <= REST_GAP + 0.02 && r.min_gap >= REST_GAP - 0.02;
+                        if !(grounded && planted) {
+                            failures.push(format!("{line}\n      {}", r.events.join("\n      ")));
+                        }
                     }
                 }
             }
         }
     }
-    // `?clampAlongGround=off`: the XY-only clamp leaves the feet off the plane.
+    // `?clampAlongGround=off` and `?clampReplant=off`: the XY-only clamp
+    // leaves the feet off the plane.
     let pace = PACES[0];
-    let up = run_into_trunk(up22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF0), false);
-    let dn = run_into_trunk(dn22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF1), false);
+    let up = run_into_trunk(up22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF0), false, false);
+    let dn = run_into_trunk(dn22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF1), false, false);
     eprintln!(
         "[terrain-hop trunk] =off up22 head-on gap=[{:+.4},{:+.4}]  down22 head-on gap=[{:+.4},{:+.4}]",
         up.min_gap, up.max_gap, dn.min_gap, dn.max_gap

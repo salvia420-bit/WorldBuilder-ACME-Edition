@@ -706,6 +706,27 @@ const REAP_MAX_PER_SCAN = 48; // hard per-scan backstop even under a fat time bu
 // hand-back).
 const REMOTE_INTERP_OWNERSHIP_FRAMES = 30;
 
+// spawnz (2026-10-18) — `?remoteSettle` (DEFAULT ON; `=off`/`0`/`false`
+// escape, the same switch as the wasm side's). ACE sends a scatter-spawned
+// creature at its generator's Z when the ground under it is more than 10 m
+// lower (`ScatterThreshold_Z`, PhysicsObj.cs:1393-1440; 771 such spawns in the
+// live log, 10–67 m up) and never moves it while idle; retail drops it
+// (`enter_world` placement, then gravity in `UpdatePhysicsInternal`,
+// acclient.c:323441 / :317701). The wasm remote body now falls onto the floor
+// (holtburger-world `SpatialScene::start_remote_settles`) and exports the fall
+// as managed rows — usually BEFORE the rig has finished building, when
+// `applyManagedPose` had nothing to write to. On the JS side this flag parks
+// the latest row for a guid with no rig yet in the pre-create buffer and
+// replays it at spawn commit (`_drainPreCreate`), so the rig appears where the
+// body stands instead of at the floating CreateObject Z.
+const REMOTE_SETTLE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("remoteSettle")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
+
 // F3-4 (bughunt 2026-06-09) — sticky melee standoff (m). While a monster is
 // sticky-attacking, ACE withholds its position broadcast and relies on the
 // client to keep it glued to the (moving) target. We track the target at this
@@ -6867,7 +6888,16 @@ export class EntityManager {
     const g = guid >>> 0;
     if (this._isLocalPlayerGuid(g)) return;
     const inst = this.entityMap.get(g);
-    if (!inst || !inst.root) return;
+    if (!inst) {
+      // spawnz (`?remoteSettle`): the body moved (a settle fall, a spawn
+      // already running) before this rig was built — keep the LATEST row for
+      // the spawn commit (`_drainPreCreate` "managedPose").
+      if (REMOTE_SETTLE_ON && this._preCreateBufferOn && Number.isFinite(+z)) {
+        this._preCreate.enqueue(g, "managedPose", { x: +x, y: +y, z: +z }, { dedupeKind: true });
+      }
+      return;
+    }
+    if (!inst.root) return;
     if (inst._ballistic) return;
     if (inst._stickyTarget) return;
     // OpenAC comparison 2026-10-04 (remote motion D10): a queue still draining
@@ -7918,6 +7948,10 @@ export class EntityManager {
       } else if (ev.kind === "leaveWorld") {
         // held-4: a PickupEvent that beat this rig's spawn (`leaveWorld`).
         this.leaveWorld(g);
+      } else if (ev.kind === "managedPose") {
+        // spawnz (`?remoteSettle`): where the wasm body stood when its last
+        // row arrived before the rig existed (e.g. landed from a settle fall).
+        this.applyManagedPose(g, ev.data.x, ev.data.y, ev.data.z);
       } else if (!this._preCreateUnknownKindWarned) {
         this._preCreateUnknownKindWarned = true;
         // eslint-disable-next-line no-console

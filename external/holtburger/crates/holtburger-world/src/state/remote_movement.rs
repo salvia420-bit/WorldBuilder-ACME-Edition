@@ -111,6 +111,12 @@ impl WorldState {
     ) {
         use holtburger_common::properties::WorldObjectExt as _;
 
+        // spawnz (`?remoteSettle`): floating creatures start their fall
+        // before this slice moves them, so the arc steps in the same slice.
+        let entities = &self.entities;
+        self.scene
+            .start_remote_settles(|guid| remote_settle_eligibility(entities.get(guid)));
+
         if !self.scene.remote_spine_active() {
             self.scene.step_remote_position_managers(quantum);
             return;
@@ -141,6 +147,52 @@ impl WorldState {
         };
         self.scene.step_remote_spine(quantum, &roots, &resolved, now);
     }
+}
+
+/// spawnz (2026-10-18, `?remoteSettle`) — may this object be settled onto the
+/// floor ([`crate::spatial::SpatialScene::start_remote_settles`])? Retail
+/// gives every non-static GRAVITY object gravity off the ground
+/// (`calc_acceleration`, acclient.c:317787); the settle is limited to the
+/// objects ACE actually leaves floating — scatter-spawned creatures — so it
+/// takes a free-standing, attackable, non-player creature:
+/// - GRAVITY (0x400) and not STATIC / MISSILE (flyers without gravity keep
+///   their height; projectiles fly their own arcs);
+/// - not held or contained (a parented object has no world position of its
+///   own, `update_object` acclient.c:323099);
+/// - ItemType CREATURE, ATTACKABLE, not PLAYER: NPCs and vendors (ACE
+///   `Attackable = false`; default true, WorldObject_Properties.cs:1777) stand
+///   where their retail capture put them, and another player's client reports
+///   its own contact; corpses are containers;
+/// - HIDDEN / FROZEN → `Wait` (retail skips their physics, acclient.c:320033,
+///   :323099).
+pub(crate) fn remote_settle_eligibility(
+    entity: Option<&crate::entity::Entity>,
+) -> crate::spatial::RemoteSettleEligibility {
+    use crate::spatial::RemoteSettleEligibility as E;
+    use holtburger_common::properties::{ObjectDescriptionFlag, PhysicsState, WorldObjectExt as _};
+
+    let Some(entity) = entity else {
+        return E::Never;
+    };
+    let state = entity.physics_state;
+    if !state.contains(PhysicsState::GRAVITY)
+        || state.intersects(PhysicsState::STATIC | PhysicsState::MISSILE)
+    {
+        return E::Never;
+    }
+    if entity.physics_parent_id.is_some_and(|parent| parent != Guid::NULL) || !entity.is_root() {
+        return E::Never;
+    }
+    if !entity.is_creature()
+        || !entity.flags.contains(ObjectDescriptionFlag::ATTACKABLE)
+        || entity.flags.contains(ObjectDescriptionFlag::PLAYER)
+    {
+        return E::Never;
+    }
+    if state.intersects(PhysicsState::HIDDEN | PhysicsState::FROZEN) {
+        return E::Wait;
+    }
+    E::Eligible
 }
 
 #[cfg(test)]

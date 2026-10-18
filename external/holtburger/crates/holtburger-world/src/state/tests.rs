@@ -8076,3 +8076,93 @@ fn fellowship2_recruit_line_names_the_leader() {
         Some("You have been recruited into the Raid Bus fellowship, a fellowship led by Alpha.")
     );
 }
+
+/// usetarget (2026-10-18): one inventory object as ACE's ObjectCreate sends it
+/// (PublicWeenieDescription: ItemType, ItemUseable, TargetType, Container).
+fn usetarget_object_create(
+    guid: Guid,
+    name: &str,
+    container: Guid,
+    item_type: u32,
+    usable: u32,
+    target_type: Option<u32>,
+) -> ObjectDescriptionData {
+    let mut data = ObjectDescriptionData::with_guid(guid);
+    data.public_weenie_desc.name = Some(name.to_string());
+    data.public_weenie_desc.container_id = Some(container);
+    data.public_weenie_desc.item_type = item_type;
+    data.public_weenie_desc.usable = Some(usable);
+    data.public_weenie_desc.target_type = target_type;
+    data
+}
+
+/// usetarget (2026-10-18): the owner's live objects replayed through the real
+/// ObjectCreate path (hydrate_from_odd → ItemUseable / TargetType; container
+/// ownership down into a side pack), then the gate the web client's
+/// `canUseWith` asks before UseWithTarget: two Pyreal Motes in a side pack
+/// (ace_world wcid 6353: ItemUseable 0x80008, TargetType 0x80, MaxStackSize 1)
+/// combine, and a Handy Healing Kit (wcid 628: ItemUseable 0x220008, TargetType
+/// 0x10) may be used on the player (ItemType Creature, ItemUseable 1).
+#[test]
+fn test_usetarget_live_objects_pass_the_can_use_with_gate() {
+    use crate::context::WorldContextExt as _;
+
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0007);
+    let sack_guid = Guid(0x8000_399F);
+    let mote_a = Guid(0x8000_1ED1);
+    let mote_b = Guid(0x8000_8914);
+    let kit_guid = Guid(0x8000_9C5D);
+
+    state.player.guid = player_guid;
+    let mut player = ObjectDescriptionData::with_guid(player_guid);
+    player.public_weenie_desc.name = Some("Tester".to_string());
+    player.public_weenie_desc.item_type = 0x10;
+    player.public_weenie_desc.usable = Some(1);
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(player)));
+
+    let mut sack = usetarget_object_create(sack_guid, "Sack", player_guid, 0x200, 0x38, None);
+    sack.public_weenie_desc.items_capacity = Some(24);
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(sack)));
+    for mote_guid in [mote_a, mote_b] {
+        let mut mote = usetarget_object_create(
+            mote_guid,
+            "Pyreal Mote",
+            sack_guid,
+            0x80,
+            0x8_0008,
+            Some(0x80),
+        );
+        mote.public_weenie_desc.max_stack_size = Some(1);
+        let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(mote)));
+    }
+    let kit = usetarget_object_create(
+        kit_guid,
+        "Handy Healing Kit",
+        player_guid,
+        0x80,
+        0x22_0008,
+        Some(0x10),
+    );
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(kit)));
+
+    assert!(
+        state.player.inventory.contains(&mote_a) && state.player.inventory.contains(&mote_b),
+        "precondition: the side pack's motes are owned"
+    );
+    assert!(
+        state.can_begin_use_with(mote_a),
+        "Use on a mote enters target mode"
+    );
+    assert!(state.can_use_with(mote_a, mote_b), "mote on mote");
+    assert!(state.can_use_with(mote_b, mote_a), "mote on mote, reversed");
+    assert!(
+        state.can_begin_use_with(kit_guid),
+        "Use on a kit enters target mode"
+    );
+    assert!(state.can_use_with(kit_guid, player_guid), "kit on yourself");
+    assert!(
+        !state.can_use_with(kit_guid, mote_a),
+        "a mote is no Creature target"
+    );
+}

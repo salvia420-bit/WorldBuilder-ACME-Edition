@@ -75,6 +75,12 @@ pub use scene::{
 pub use scene::{remote_rest_heading_enabled, set_remote_rest_heading};
 // `?remoteLeash` (motion-remote-3, default ON, `=off` escape).
 pub use scene::{remote_leash_enabled, set_remote_leash};
+// `?remoteSettle` (spawnz, default ON, `=off` escape) and the landblock
+// collision parts a settle waits for.
+pub use scene::{
+    LANDBLOCK_COLLISION_BUILDINGS, LANDBLOCK_COLLISION_STATICS, remote_settle_enabled,
+    set_remote_settle,
+};
 pub use scenery::{
     CYLSPHERE_EPSILON, CylSphereHit, SceneryColliderBatch, SceneryPrimKind, SetupCylSphere,
     SetupSphere, WorldCylSphere, cylsphere_collides_with_sphere, cylsphere_normal_of_collision,
@@ -105,6 +111,11 @@ mod remote_rest_heading_tests;
 /// motion, re-armed after every accepted `MoveOrTeleport` arm.
 #[cfg(test)]
 mod remote_leash_tests;
+
+/// spawnz (2026-10-18) — `?remoteSettle`: a floating GRAVITY creature falls
+/// onto the floor the scene holds (ACE's scatter spawns 10–67 m up).
+#[cfg(test)]
+mod remote_settle_tests;
 
 /// physics-collision-2 (2026-10-13) — `?setupPlayerBody`: the local
 /// player's transition body from its own Setup (human Setup byte-identical).

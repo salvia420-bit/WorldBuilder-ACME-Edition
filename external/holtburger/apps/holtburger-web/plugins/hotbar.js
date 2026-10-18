@@ -32,11 +32,17 @@
 //     to swap (application/x-hb-hotbar-slot). Server-persisted via
 //     AddShortcut/RemoveShortcut, cached in localStorage per server +
 //     account + character (inventory-session-3, hotbarStorageKey).
+//   - The inventory's main pack slot drags on as a shortcut to YOURSELF
+//     (usetarget-2: application/x-hb-self-guid, retail's main pack UIItem is
+//     the player), drawn with the main-pack icon and saved like any item.
 //   - Click a bound slot or press 1-9 / Ctrl+1-9 to fire it, Alt+1-9 for
 //     row 2 (retail gmDefaultMap Quickslot 1-18) (decideFireAction):
+//       * item, target awaited    → that item is the TARGET (usetarget-4:
+//                                   retail UseShortcut's target-mode
+//                                   branch; the self shortcut = yourself)
 //       * item                    → retail UseObject (inventory.js
 //                                   activateItem: wield / wear / target /
-//                                   salvage / Use)
+//                                   salvage / Use; yourself → main pack)
 //       * self-targeted spell     → cast on self
 //       * untargeted spell (ring) → CastUntargetedSpell, selection ignored
 //       * targeted spell + target → cast on the selected entity
@@ -60,13 +66,14 @@ import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { hudRect, hudViewport, toHudPx } from "../ui/hud_scale.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared, fetchItemIconDataUrl } from "../ui/ac_icon_cache.js";
+import { PLAYER_PACK_ICON, ITEM_TYPE_CONTAINER } from "../ui/ac_icon_compose.js";
 import {
   uiEffectBadgesEnabled,
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
-import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import { DropItemFlags, isDropAccepted, SELF_MIME } from "./drop_item_flags.js";
 import {
   canBindToHotbar,
   cooldownStep,
@@ -190,6 +197,7 @@ function spellRecordName(rec) {
 //
 // Returns one of:
 //   { kind: "none" }
+//   { kind: "useTarget",       itemGuid }     // target mode: TargetAcquired(item)
 //   { kind: "activateItem",    itemGuid }     // retail ItemHolder::UseObject
 //   { kind: "castSelf",        spellId }
 //   { kind: "castOnTarget",    spellId, targetGuid }
@@ -202,9 +210,15 @@ function spellRecordName(rec) {
 // When the spell table hasn't loaded yet, pass `true` so the cast
 // defaults to self — matches the JSON-catalog default in
 // plugins/spellbook.js:165.
-export function decideFireAction(bound, { isSelfTargeted, softTargetGuid }) {
+export function decideFireAction(bound, { isSelfTargeted, softTargetGuid, useTargetPending = false }) {
   if (!bound) return { kind: "none" };
   if (bound.itemGuid) {
+    // usetarget-4: gmToolbarUI::UseShortcut (acclient.c:239995) tests the
+    // target mode FIRST — with a use-on-target armed the shortcut's object
+    // is the target (ClientUISystem::ExecuteTargetModeForItem → ItemHolder::
+    // TargetAcquired) and the mode ends: "kit on 2, main pack on 1, press 2
+    // then 1" heals you.
+    if (useTargetPending) return { kind: "useTarget", itemGuid: (bound.itemGuid >>> 0) };
     // gmToolbarUI::UseShortcut (acclient.c:239995) → ItemHolder::UseObject:
     // a weapon wields, armour wears, a kit enters target mode, … — not a
     // bare Use event (plugins/inventory.js activateItem).
@@ -243,6 +257,32 @@ const SHORTCUT_RETARGET = typeof window !== "undefined" ? defaultOnUrlFlag("shor
 // items-5: `?slotCooldown=off` restores the 2.5 s sweep on EVERY slot
 // whenever any shared cooldown is active.
 const SLOT_COOLDOWN = typeof window !== "undefined" ? defaultOnUrlFlag("slotCooldown") : true;
+// usetarget-4 (2026-10-18): `?shortcutTargetMode=off` restores the old press —
+// an item shortcut uses its item even while a use-on-target waits for a target.
+const SHORTCUT_TARGET_MODE = typeof window !== "undefined" ? defaultOnUrlFlag("shortcutTargetMode") : true;
+
+/** The local player's guid (0 before login). */
+function localPlayerGuidNow() {
+  try { return (window.getLocalPlayerGuid?.() >>> 0) || (window.__sessionHandle?.playerGuid?.() >>> 0) || 0; } catch (_) { return 0; }
+}
+/** usetarget-2 — is `binding` a shortcut to yourself (the main pack)? */
+function isSelfBinding(binding) {
+  const g = (binding?.itemGuid >>> 0) || 0;
+  return g !== 0 && g === localPlayerGuidNow();
+}
+/** usetarget-2 — a shortcut to yourself: the main pack, i.e. the player's
+ *  own UIItem. Retail draws the player with the UI-asset player icon as a
+ *  Container (IconData::RenderIcons, acclient.c:437953 IsThePlayer →
+ *  GetDIDByEnum(0x10000004) + m_itemType 0x200) — the main pack's icon. */
+export const SELF_SHORTCUT_ICON = Object.freeze({ iconId: PLAYER_PACK_ICON, itemType: ITEM_TYPE_CONTAINER });
+/** The guid a self-shortcut drop carries — only the local player's (never
+ *  a stale or foreign one) — or 0. */
+export function selfShortcutDropGuid(dataTransfer, playerGuid) {
+  let g = 0;
+  try { g = (parseInt(dataTransfer?.getData?.(SELF_MIME), 10) >>> 0) || 0; } catch (_) { g = 0; }
+  const me = (playerGuid >>> 0) || 0;
+  return g && g === me ? g : 0;
+}
 
 /** The cast an item shortcut press makes under click-to-cast: the armed
  *  spell at the bound item. null = no cast (flag off, no armed spell, or
@@ -281,11 +321,13 @@ export function retargetBindings(slots, from, to) {
  * never seen this session and the post-login grace has not passed; else
  * "clear" (+ RemoveShortCut). Retail never re-binds a shortcut to another
  * stack of the same wcid — RecvNotice_ServerSaysMoveItem (acclient.c:241723)
- * just removes it.
+ * just removes it. usetarget-2: a shortcut to yourself (`selfGuid`, the main
+ * pack) is never an inventory item, so it is always kept.
  */
-export function staleBindingAction(binding, invGuids, seenGuids, neverSeenMayGo) {
+export function staleBindingAction(binding, invGuids, seenGuids, neverSeenMayGo, selfGuid = 0) {
   const g = (binding?.itemGuid >>> 0) || 0;
   if (!g) return "keep";
+  if (g === ((selfGuid >>> 0) || 0)) return "keep";
   if (invGuids?.has?.(g)) return "keep";
   if (!seenGuids?.has?.(g) && !neverSeenMayGo) return "keep";
   return "clear";
@@ -894,11 +936,17 @@ export function mount(ctx) {
     // against races where renderSlot is called repeatedly while the
     // promise is still in flight.
     icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')";
+    // usetarget-2: a shortcut to yourself shows the main pack's icon. Which
+    // path drew the slot is part of its key (a fetch started before the
+    // player guid was known cannot land over it) and is kept in data-self,
+    // so refreshUnresolvedIcons redraws a slot drawn with the wrong identity.
+    const self = isSelfBinding(bound);
     const key = bound.spellId
       ? `spell:${bound.spellId}`
-      : `item:${bound.itemGuid}`;
+      : `${self ? "self" : "item"}:${bound.itemGuid}`;
     icon.dataset.boundKey = key;
-    resolveBindingIcon(bound).then((u) => {
+    icon.dataset.self = self ? "1" : "0";
+    (self ? fetchItemIconDataUrl(SELF_SHORTCUT_ICON, "hotbar:self") : resolveBindingIcon(bound)).then((u) => {
       // Bail if the slot got re-bound while we were fetching.
       if (icon.dataset.boundKey !== key) return;
       icon.dataset.iconOk = u ? "1" : "0";
@@ -1101,9 +1149,17 @@ export function mount(ctx) {
     const action = decideFireAction(bound, {
       isSelfTargeted,
       softTargetGuid: getSoftTargetGuid(),
+      useTargetPending: SHORTCUT_TARGET_MODE && !!window.__useTargeting?.pending,
     });
 
     switch (action.kind) {
+      case "useTarget": {
+        // app/hud_panels.js __useTargeting: Rust canUseWith gate →
+        // useWithTarget, then the target mode ends (retail SetTargetMode(0)).
+        try { window.__useTargeting?.resolve?.(action.itemGuid); }
+        catch (e) { logToChat(`Hotbar ${idx + 1}: target failed — ${e?.message ?? e}`); }
+        return;
+      }
       case "activateItem": {
         if (typeof handle?.useObject !== "function") {
           logToChat(`Hotbar ${idx + 1}: not logged in — useObject unavailable`);
@@ -1111,8 +1167,10 @@ export function mount(ctx) {
         }
         try {
           // Retail UseObject for an owned item (inventory.js); anything it
-          // does not own (or `?hotbarActivate=off`) is a plain Use.
-          if (window.__inventory?.activateItem?.(action.itemGuid) !== true) handle.useObject(action.itemGuid);
+          // does not own (or `?hotbarActivate=off`) is a plain Use — never a
+          // Use of yourself (the self shortcut: retail sends none).
+          if (window.__inventory?.activateItem?.(action.itemGuid) !== true
+              && action.itemGuid !== localPlayerGuidNow()) handle.useObject(action.itemGuid);
           // Successful fire → clear any armed item set by inventory click /
           // context menu. Keyboard 1-7 taps that resolve to needTarget/none
           // do NOT reach this branch, so muscle-memory taps don't nuke
@@ -1277,7 +1335,11 @@ export function mount(ctx) {
     el.addEventListener("drop", (ev) => {
       el.classList.remove("drag-over");
       const sid = ev.dataTransfer?.getData("application/x-hb-spell-id");
-      const iguid = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+      // usetarget-2: the main pack is the player's own UIItem — bound like an
+      // item (retail CreateShortcutToItem accepts the player), so ACE saves
+      // (index, playerGuid) and PlayerDescription restores it.
+      const iguid = ev.dataTransfer?.getData("application/x-hb-inv-guid")
+        || String(selfShortcutDropGuid(ev.dataTransfer, localPlayerGuidNow()) || "");
       if (sid) {
         ev.preventDefault();
         const spellId = Number(sid);
@@ -1615,6 +1677,12 @@ export function mount(ctx) {
     if (!inWorld) return;
     if (!reconcileDone) return;
     if ((Date.now() - firstBindAt) <= 5000) return;
+    // usetarget-2: with no character known (before login, between sessions)
+    // a shortcut to yourself cannot be told from a vanished item, and
+    // clearing it would delete it server-side (RemoveShortCut) — prune
+    // nothing; the next inventory change sweeps again.
+    const me = localPlayerGuidNow();
+    if (!me) return;
     const handle = window.__sessionHandle ?? null;
     if (typeof handle?.playerInventory !== "function") return;
     const inv = handle.playerInventory();
@@ -1626,7 +1694,7 @@ export function mount(ctx) {
     for (let i = 0; i < SLOT_COUNT; i++) {
       const b = state.slots[i];
       if (!b?.itemGuid) continue;
-      if (staleBindingAction(b, invGuids, seenItemGuids, neverSeenMayGo) === "keep") continue;
+      if (staleBindingAction(b, invGuids, seenItemGuids, neverSeenMayGo, me) === "keep") continue;
       // `?shortcutRetarget=off` only: the old re-bind to another stack of the
       // same wcid ("post-restart objectGuid reuse" — ACE item guids are
       // persistent, and retail never re-binds by class; a merge moves the
@@ -1656,12 +1724,15 @@ export function mount(ctx) {
   // server shortcut list arrives with PlayerDescription, ahead of the item
   // burst) never re-resolved its icon: nothing re-rendered it. Retry those
   // slots on every inventory change, independent of the prune's gates.
+  // usetarget-2: also a self shortcut drawn before the player guid was known
+  // (drawn as an item: blank, or the player's own icon), and the reverse.
   function refreshUnresolvedIcons() {
     for (let i = 0; i < SLOT_COUNT; i++) {
       const b = state.slots[i];
       if (!b?.itemGuid) continue;
       const icon = slotEls[i]?.querySelector(".hb-hotbar-slot-icon");
-      if (icon && icon.dataset.iconOk !== "1") renderSlot(i);
+      if (!icon) continue;
+      if (icon.dataset.iconOk !== "1" || (icon.dataset.self === "1") !== isSelfBinding(b)) renderSlot(i);
     }
   }
   const onInventoryChanged = () => {

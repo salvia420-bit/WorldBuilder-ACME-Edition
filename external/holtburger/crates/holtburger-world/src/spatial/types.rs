@@ -346,6 +346,33 @@ pub struct SpatialBody {
     /// Phase C: the last wall normal a remote mover's transition surfaced
     /// (the cliff-slide `N_last` the next transition reads).
     pub remote_wall_normal: Option<Vector3>,
+    /// spawnz (2026-10-18, `?remoteSettle`): the body was placed from a wire
+    /// pose that carried no grounded contact bit (its CreateObject seed or a
+    /// hard set), so it may be floating. Retail drops such an object: every
+    /// object it holds runs `update_object` → `UpdatePhysicsInternal` with
+    /// gravity off the ground (acclient.c:323081, :317701, `calc_acceleration`
+    /// :317787). ACE does not: it moves only objects that move, and its
+    /// scatter spawn keeps the generator's Z when the drop exceeds
+    /// `ScatterThreshold_Z` (10 m, PhysicsObj.cs:1393-1440). Cleared once
+    /// [`crate::spatial::SpatialScene::start_remote_settles`] has decided, or
+    /// by a grounded (`IS_GROUNDED`) wire correction.
+    pub remote_settle_pending: bool,
+}
+
+/// spawnz (2026-10-18): whether a remote object may be settled onto the
+/// floor, answered by the world (which holds its PhysicsState and weenie
+/// flags) for [`crate::spatial::SpatialScene::start_remote_settles`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSettleEligibility {
+    /// A free-standing GRAVITY creature: settle it if it floats.
+    Eligible,
+    /// Not now (hidden or frozen: retail skips its physics — HIDDEN_PS gates
+    /// `UpdatePhysicsInternal`, acclient.c:320033-320034, FROZEN_PS
+    /// deactivates it in `update_object`, :323099); keep the request.
+    Wait,
+    /// Never (no gravity, static, a missile, held, a player, an NPC, not a
+    /// creature, or unknown): drop the request.
+    Never,
 }
 
 /// NETSYNC-3 (2026-10-07): `MotionData.omega.z` of the TurnRight (0x6500000D)
@@ -433,6 +460,7 @@ impl SpatialBody {
             remote_turn_omega_z: None,
             remote_contact_plane: None,
             remote_wall_normal: None,
+            remote_settle_pending: false,
         }
     }
 
@@ -459,6 +487,7 @@ impl SpatialBody {
             remote_turn_omega_z: None,
             remote_contact_plane: None,
             remote_wall_normal: None,
+            remote_settle_pending: false,
         }
     }
 

@@ -2218,6 +2218,119 @@ mod tests {
         assert!(!world.can_use_with(source_guid, target_guid));
     }
 
+    /// The local player as a use-on-target target: on a landblock, a
+    /// Creature, ItemUseable No (the live `human` weenie / Tester rows).
+    fn usetarget_player(guid: Guid) -> Entity {
+        let mut player = entity(guid, "Tester");
+        player.position.landblock_id = Guid(0xA9B4_0021);
+        player
+            .properties
+            .ints
+            .insert(PropertyInt::ItemType, ItemType::CREATURE.bits() as i32);
+        player
+            .properties
+            .ints
+            .insert(PropertyInt::ItemUseable, Usable::NO.bits() as i32);
+        player
+    }
+
+    /// usetarget-1 (2026-10-18): the owner's two Pyreal Motes (wcid 6353; live
+    /// ace_world: ItemUseable 0x80008 = source CONTAINED / target CONTAINED,
+    /// TargetType 0x80 Misc, ItemType 0x80) in a side pack. The Use → click
+    /// flow and the drag-to-combine gate both ask `can_use_with(mote, other)`;
+    /// retail TargetCompatibleWithObject (acclient.c:432295) accepts an owned
+    /// target whose type matches the source's TargetType.
+    #[test]
+    fn usetarget_pyreal_motes_combine_inside_a_side_pack() {
+        let player_guid = Guid(0x5000_0001);
+        let pack_guid = Guid(0x7000_0001);
+        let mote_a = Guid(0x8000_0001);
+        let mote_b = Guid(0x8000_0002);
+
+        let mut world = TestWorld {
+            player_guid: Some(player_guid),
+            inventory: HashSet::from([pack_guid, mote_a, mote_b]),
+            ..Default::default()
+        };
+        world
+            .entities
+            .insert(player_guid, usetarget_player(player_guid));
+        world
+            .entities
+            .insert(pack_guid, item_in_container(pack_guid, player_guid, "Sack"));
+        for guid in [mote_a, mote_b] {
+            let mut mote = item_in_container(guid, pack_guid, "Pyreal Mote");
+            mote.properties
+                .ints
+                .insert(PropertyInt::ItemType, ItemType::MISC.bits() as i32);
+            mote.properties
+                .ints
+                .insert(PropertyInt::TargetType, ItemType::MISC.bits() as i32);
+            mote.properties.ints.insert(
+                PropertyInt::ItemUseable,
+                Usable::SOURCE_CONTAINED_TARGET_CONTAINED.bits() as i32,
+            );
+            world.entities.insert(guid, mote);
+        }
+
+        assert!(world.can_begin_use_with(mote_a), "Use enters target mode");
+        assert!(world.can_use_with(mote_a, mote_b));
+        assert!(world.can_use_with(mote_b, mote_a));
+        assert!(
+            !world.can_use_with(mote_a, player_guid),
+            "the player is no Misc target"
+        );
+    }
+
+    /// usetarget-3 (2026-10-18): a Healing Kit (live ace_world: ItemUseable
+    /// 0x220008 = source CONTAINED / target REMOTE|SELF, TargetType 0x10
+    /// Creature) on yourself — the 3D self pick, the main-pack shortcut,
+    /// Select Self. Retail TargetCompatibleWithObject: the player counts as
+    /// owned (IsOwnedByObject, id == player) and IsUseable_SelfTarget holds;
+    /// ACE Healer.HandleActionUseOnTarget heals a Player target, you included.
+    #[test]
+    fn usetarget_healing_kit_may_target_the_player() {
+        let player_guid = Guid(0x5000_0001);
+        let kit_guid = Guid(0x8000_0003);
+
+        let mut world = TestWorld {
+            player_guid: Some(player_guid),
+            inventory: HashSet::from([kit_guid]),
+            ..Default::default()
+        };
+        world
+            .entities
+            .insert(player_guid, usetarget_player(player_guid));
+        let mut kit = item_in_container(kit_guid, player_guid, "Handy Healing Kit");
+        kit.properties
+            .ints
+            .insert(PropertyInt::ItemType, ItemType::MISC.bits() as i32);
+        kit.properties
+            .ints
+            .insert(PropertyInt::TargetType, ItemType::CREATURE.bits() as i32);
+        kit.properties.ints.insert(
+            PropertyInt::ItemUseable,
+            Usable::SOURCE_CONTAINED_TARGET_REMOTE_OR_SELF.bits() as i32,
+        );
+        world.entities.insert(kit_guid, kit);
+
+        assert!(world.can_begin_use_with(kit_guid), "Use enters target mode");
+        assert!(world.can_use_with(kit_guid, player_guid));
+        assert!(
+            !world.can_use_with(kit_guid, kit_guid),
+            "the kit is no Creature target"
+        );
+
+        // Off any landblock (portal space) the SELF bit still matches.
+        world
+            .entities
+            .get_mut(&player_guid)
+            .unwrap()
+            .position
+            .landblock_id = Guid::NULL;
+        assert!(world.can_use_with(kit_guid, player_guid));
+    }
+
     #[test]
     fn player_owned_helper_includes_inventory_and_equipment() {
         let player_guid = Guid(0x5000_0001);

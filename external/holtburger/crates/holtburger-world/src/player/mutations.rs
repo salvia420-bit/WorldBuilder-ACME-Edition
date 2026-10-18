@@ -372,6 +372,19 @@ impl PlayerState {
         true
     }
 
+    /// Melee lane (2026-10-18) — whether `data` is the self `UpdateMotion`
+    /// [`Self::apply_self_update_motion`] last accepted: both of its stamps
+    /// are the recorded ones. A message that failed gate 1 leaves
+    /// `movement_sequence` at the newer stored stamp; one that failed gate 2
+    /// leaves `server_control_sequence` at the newer stored epoch. Read by the
+    /// wasm recv loop AFTER the routed world handler ran, which has no other
+    /// view of the gate's result. An exact duplicate also reads `true`
+    /// (retail's gate 1 would drop it; the transport already dedupes).
+    pub fn self_update_motion_recorded(&self, data: &MovementEventData) -> bool {
+        self.movement_sequence == data.movement_sequence
+            && self.server_control_sequence == data.server_control_sequence
+    }
+
     /// MOVE-RUNRATE-105 fix A (2026-08-11) — latch the server's own
     /// `my_run_rate` for the local player off a RunForward interpreted
     /// state.

@@ -1162,6 +1162,7 @@
     <link rel="modulepreload" href="./scene3d/diag/events.js">
     <link rel="modulepreload" href="./scene3d/diag/fonts.js">
     <link rel="modulepreload" href="./scene3d/diag/geometry.js">
+    <link rel="modulepreload" href="./scene3d/diag/hop.js">
     <link rel="modulepreload" href="./scene3d/diag/input.js">
     <link rel="modulepreload" href="./scene3d/diag/integrity.js">
     <link rel="modulepreload" href="./scene3d/diag/lod.js">
@@ -2192,6 +2193,20 @@
                 slowRunDiagCount: () => __hbWasmNs.slowRunDiagCount() >>> 0,
                 slowRunDiagClear: () => __hbWasmNs.slowRunDiagClear(),
               }
+            : {}),
+          // TERRAIN-HOP diag rider (2026-10-18; no manifest bump): the hop
+          // detector's incident ring (holtburger_core::hop_diag), read on
+          // demand by __diag.hop (scene3d/diag/hop.js). Each export is
+          // typeof-guarded on its own: a stale pkg/ yields nothing and the
+          // surface says so.
+          ...(typeof __hbWasmNs?.hopDiag === "function"
+            ? { hopDiag: () => __hbWasmNs.hopDiag() }
+            : {}),
+          ...(typeof __hbWasmNs?.hopDiagCount === "function"
+            ? { hopDiagCount: () => __hbWasmNs.hopDiagCount() >>> 0 }
+            : {}),
+          ...(typeof __hbWasmNs?.hopDiagClear === "function"
+            ? { hopDiagClear: () => __hbWasmNs.hopDiagClear() }
             : {}),
           // test-tooling-3 diag rider (2026-10-13; no manifest bump): the recv
           // loop's per-opcode wire-integrity counters (src/wire_integrity.rs),

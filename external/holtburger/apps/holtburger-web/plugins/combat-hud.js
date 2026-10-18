@@ -13,9 +13,17 @@
 //
 //   ┌ retail floaty frame (0x06006129 + 0x0600612A-D) ───────────────────┐
 //   │ [Speed ═══════════ red wave power bar ═══◆══ Power 75%]  PgDn [High] │
-//   │ ☐ Auto Repeat   Recklessness +10                         End [Medium]│
+//   │ ☐ Auto Repeat   Recklessness +10   Sneak Attack +10      End [Medium]│
 //   │ Ins / PgUp: adjust power                                 Del [Low]   │
 //   └─────────────────────────────────────────────────────────────────────┘
+//
+// Sneak Attack row (2026-10-18): replaces the retired floating
+// plugins/sneak-hud.js plaque. Bright on a server-confirmed sneak hit
+// (kind=19 damageDealt, AttackConditions bit 0x4 — the same bit retail's
+// HandleAttackerNotificationEvent prints as "Sneak Attack! ", acclient.c
+// :408415), dim while a swing that left from behind the target is in flight
+// (picking.js prediction). Retail itself shows only the hit-line prefix; the
+// state machine, look and feeds live in ui/ac_sneak_attack_cue.js.
 //
 // Retail layout facts (data/retail-layouts/0x21000007.json):
 //   PowerSlider 0x1000004F  track sprite 0x060074CA; thumb 0x06001923 (12×14)
@@ -227,6 +235,11 @@ function ensureStyles() {
       display: none;
     }
     #${OVERLAY_ID} .hch-reck.is-on { display: inline; }
+    /* Sneak Attack cue — colours / dim / bright / fade come from
+       ui/ac_sneak_attack_cue.js (.hb-sneak-cue). It keeps its width while
+       hidden (visibility, not display), and it is the last item in the row,
+       so lighting it never moves Auto Repeat or Recklessness. */
+    #${OVERLAY_ID} .hch-sneak { flex: 0 0 auto; }
     #${OVERLAY_ID} .hch-hints {
       display: block;
       line-height: 16px;
@@ -625,6 +638,12 @@ function build() {
   const reck = document.createElement("span");
   reck.className = "hch-reck";
   row.appendChild(reck);
+  // Sneak Attack cue (ui/ac_sneak_attack_cue.js, wired in mount()).
+  const sneak = document.createElement("span");
+  sneak.className = "hch-sneak";
+  sneak.dataset.sneak = "off";
+  sneak.setAttribute("aria-hidden", "true");
+  row.appendChild(sneak);
   main.appendChild(row);
 
   // Row 3 — keyboard hints.
@@ -678,7 +697,7 @@ function build() {
 
   state.refs = {
     bar, band, fill, thumb, endL, endR,
-    repeatBox, reck, heightEls,
+    repeatBox, reck, sneak, heightEls,
   };
 
   // Drag by the frame / empty panel area; controls keep their own input.
@@ -708,7 +727,7 @@ function build() {
 // bottom-centre HUD is showing (the toolbar / target bar stack), measured
 // live so a taller toolbar or a different HUD scale never overlaps it.
 const DOCK_SKIP = new Set([
-  OVERLAY_ID, "hb-spell-strip", DEATH_OVERLAY_ID, "hb-sneak-hud", "hb-portal-storm-pulse",
+  OVERLAY_ID, "hb-spell-strip", DEATH_OVERLAY_ID, "hb-portal-storm-pulse",
 ]);
 // Transient roots (hover tooltips over the toolbar, drag ghosts, toasts,
 // context menus) must not shove the panel up and down while they live.
@@ -1011,6 +1030,18 @@ export function mount(_ctx) {
 
   const unbindKeys = installKeys();
 
+  // Sneak Attack cue (row 2). Loaded lazily, like combat-bar's endowment
+  // rules: a new static import would have to be stubbed by every suite that
+  // splices this module (harness/lib/splice_module.mjs). It subscribes to
+  // damageDealt / evadedTarget / sneakAttackPredicted itself once the plugin
+  // client exists.
+  let mounted = true;
+  let unmountSneak = null;
+  import("../ui/ac_sneak_attack_cue.js").then((m) => {
+    if (!mounted || !state.refs?.sneak) return;
+    unmountSneak = m.mountSneakCue(state.refs.sneak, { feed: "attack" });
+  }).catch(() => { /* module missing: the row stays dark, the HUD runs on */ });
+
   // Re-dock on viewport / HUD-scale changes (user-placed windows are
   // re-clamped by attachWindowPosition itself).
   let dockRaf = 0;
@@ -1026,6 +1057,9 @@ export function mount(_ctx) {
     if (clientPoll) clearInterval(clientPoll);
     for (const u of subs) u();
     try { unbindKeys(); } catch (_) {}
+    mounted = false;
+    try { unmountSneak?.(); } catch (_) {}
+    unmountSneak = null;
     cancelAnimationFrame(dockRaf);
     window.removeEventListener("resize", scheduleDock);
     document.removeEventListener("hb-hud-scale-changed", scheduleDock);

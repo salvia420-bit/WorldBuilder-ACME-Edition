@@ -252,6 +252,28 @@ const SERVER_SWING = (() => {
   } catch { return false; }
 })();
 
+// Melee lane (2026-10-18) — `?retailUnstick` (DEFAULT-ON; `=off`/`0`/`false`
+// restores the old release). The local player's swing sticky (ACE puts
+// StickToObject on every swing motion, Player_Melee.cs:420) is retail's
+// StickyManager: it ends on its 1 s timeout, when the swing's action
+// completes, or on the next server motion — never on input. Retail's
+// MoveToManager::CancelMoveTo / CleanUp (acclient.c:345297 / :345143),
+// CPhysicsObj::StopCompletely and CommandInterpreter::TakeControlFromServer
+// (:716934) carry no unstick, and OpenAC releases it only on enter-world and
+// teleport. So `cancelClientMove` no longer calls `stopStick` on every canvas
+// click and movement key: that cut the pull to the monster short mid-swing,
+// while ACE landed the hit from where the player stood. Nothing in this file
+// sticks the player since 86c4d11e, so the sticky a click released was always
+// the server's. The wasm half gates the install site
+// (session/messages/position.rs).
+const RETAIL_UNSTICK = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("retailUnstick")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch { return true; }
+})();
+
 // selection-5 (2026-10-08) — retail drawing-sphere pick fallback
 // (Render::GetMouseSelectionObjectID, acclient.c:380089; scene3d/pick_math.js).
 // DEFAULT-ON; `?pickSphereFallback=off` (or 0/false) = polygon hits only.
@@ -259,6 +281,17 @@ const PICK_SPHERE_FALLBACK = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("pickSphereFallback")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch { return true; }
+})();
+
+// usetarget-3 (2026-10-18) — while a use-on-target waits for its target, your
+// own body is pickable when the item may be used on you (useTargetTakesSelf).
+// DEFAULT-ON; `?useTargetSelfPick=off` (or 0/false) = never (the old pick).
+const USE_TARGET_SELF_PICK = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("useTargetSelfPick")?.toLowerCase();
     return v !== "off" && v !== "0" && v !== "false";
   } catch { return true; }
 })();
@@ -610,10 +643,14 @@ export function setupClickPicking({
   // run-up (`stickToEntity` + a 250 ms re-engage watch) ran the player on the
   // StickyManager in parallel with that charge; it is gone.
 
-  // Release a sticky hold + abort the missile/magic optimistic turn (retail
-  // CancelMoveTo on fresh input / world action, acclient.c:339240).
-  function cancelClientMove() {
-    try { sessionHandle.stopStick?.(); } catch {}
+  // Abort the missile/magic optimistic turn (retail CancelMoveTo on fresh
+  // input / world action, acclient.c:339240). The swing sticky survives it
+  // under `?retailUnstick` (see RETAIL_UNSTICK); `releaseSticky` forces the
+  // release (teardown, or the `=off` escape).
+  function cancelClientMove(releaseSticky = !RETAIL_UNSTICK) {
+    if (releaseSticky) {
+      try { sessionHandle.stopStick?.(); } catch {}
+    }
     try { sessionHandle.cancelPursuit?.(); } catch {}
   }
 
@@ -945,6 +982,24 @@ export function setupClickPicking({
     step();
   }
 
+  // usetarget-3 — your own body is a pick target only while a use-on-target
+  // waits AND the item may be used on you (a healing kit: ItemUseable
+  // 0x220008, target REMOTE|SELF — the Rust canUseWith port of retail
+  // TargetCompatibleWithObject says so). Retail's render pick tests every
+  // drawn part that has an object id, the player's too (CPhysicsPart::Draw
+  // sets check_curr_object, acclient.c:314614; Render::
+  // GetMouseSelectionObjectID :380089): a click on yourself selects you and,
+  // in target mode, ItemHolder::TargetAcquired (:433578) heals you. A NORMAL
+  // click keeps stepping past your own rig (#18): the follow camera puts your
+  // back under the screen centre, where the monster you aim at stands, and a
+  // lockpick / key in target mode must still reach the door behind you.
+  function useTargetTakesSelf(localGuid) {
+    if (!USE_TARGET_SELF_PICK || !localGuid) return false;
+    const pending = (typeof window !== "undefined") ? window.__useTargeting?.pending : null;
+    if (!pending || typeof sessionHandle?.canUseWith !== "function") return false;
+    try { return !!sessionHandle.canUseWith(pending.itemGuid >>> 0, localGuid >>> 0); } catch (_) { return false; }
+  }
+
   function pickEntityAt(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
@@ -977,6 +1032,7 @@ export function setupClickPicking({
       return null;
     }
     const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+    const selfPickable = useTargetTakesSelf(localGuid); // usetarget-3
 
     // Build a fresh flat list of entity roots per click — entities come
     // and go, so caching would just invite the spawn/despawn maintenance
@@ -993,14 +1049,15 @@ export function setupClickPicking({
       .filter(r => r && r.visible !== false);
     if (roots.length === 0) return null;
     // Parallel guid lookup so the hit-to-guid resolution below stays O(1).
-    // Excludes the local player so you can't pick yourself.
+    // Excludes the local player so you can't pick yourself — except as the
+    // target of a use-on-target that may be used on you (usetarget-3).
     const guidByRoot = new Map();
     // The rig each root belongs to (the sphere pass reads ITS parts) — not
     // always the reported guid's own entity, see handoff-1 below.
     const instByRoot = new Map();
     for (const [guid, inst] of em.entityMap) {
       const g = guid >>> 0;
-      if (g === localGuid) continue;
+      if (g === localGuid && !selfPickable) continue;
       if (!inst || !inst.root) continue;
       if (inst.root.visible === false) continue; // PICK-VIS: hidden ⇒ unpickable
       // handoff-1 (2026-10-11, `?handoffLoot`): a dying rig a corpse has
@@ -1025,7 +1082,9 @@ export function setupClickPicking({
     // (excluded above). Standing the player between the camera and an NPC
     // previously returned null (#18); now the loop steps past the self-
     // hit to the NPC behind it. "Can't pick yourself" is preserved: a
-    // self-hit yields no guidByRoot match, so the loop simply advances.
+    // self-hit yields no guidByRoot match, so the loop simply advances
+    // (usetarget-3: unless a self-usable use-on-target is armed — then the
+    // nearest hit wins, yourself included, as in retail).
     const hits = raycaster.intersectObjects(roots, true);
     for (const hit of hits) {
       // A hidden part (e.g. a `materialRendersNothing` mesh, a NoDraw part)
@@ -2029,9 +2088,10 @@ export function setupClickPicking({
     // (chat input, login fields).
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    // Raw movement input cancels the in-flight turn / sticky hold (retail:
+    // Raw movement input cancels the in-flight optimistic turn (retail:
     // raw input cancels MoveTo, acclient.c:339240-339246) — the player
-    // takes over the drive.
+    // takes over the drive. A swing sticky holds until its own end
+    // (`?retailUnstick`, see RETAIL_UNSTICK).
     cancelClientMove();
     // F6-4 — moving stops the server-side attack loop (retail). ACE
     // defaults AutoRepeatAttacks ON, so a single attack otherwise keeps
@@ -2146,7 +2206,8 @@ export function setupClickPicking({
       // A same-guid T9 LOD respawn clears and re-selects the target: not a
       // deselect, so it cancels neither the move nor the attack.
       if (d.lodRespawn) return;
-      // Deselect cancels the in-flight turn / sticky hold.
+      // Deselect cancels the in-flight optimistic turn (a swing sticky holds
+      // under `?retailUnstick`).
       cancelClientMove();
       // combat-magic-2 — a real deselect ends the user's repeat too, even if
       // the throttle below holds back the CancelAttack. Nothing is left to
@@ -2206,7 +2267,7 @@ export function setupClickPicking({
   return {
     destroy() {
       // Cancel any in-flight turn / sticky hold on teardown.
-      cancelClientMove();
+      cancelClientMove(true);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMoveUseTarget);
       canvas.removeEventListener("pointermove", onPointerMoveSelectionFlash);

@@ -4996,6 +4996,89 @@ fn local_sticky_uninitialized_noop_unstick_once_and_replace() {
     assert_eq!(scene.local_sticky_target(), None);
 }
 
+/// Melee lane (2026-10-18, `?stickyLiveTarget`) — the local sticky steers at
+/// its target's LIVE body (retail `GetObjectA(target_id)` → `m_position`,
+/// acclient.c:388544-388547), not the wire stash, on both the split step and
+/// the composed `?retailLeash` chain. `=off` keeps the stash.
+#[test]
+fn local_sticky_steers_at_the_targets_live_body() {
+    let player_guid = Guid(0x5000_00AB);
+    let target_guid = Guid(0x8000_0001);
+    let lb = Guid(0x0102_0000);
+    // The wire stash (the last UpdatePosition) says east; the body the client
+    // simulates and draws has moved north since.
+    let wire = make_position(56.0, 50.0, 0.0);
+    let live = make_position(50.0, 56.0, 0.0);
+    let start = make_position(50.0, 50.0, 0.0);
+    let scene_with = |enabled: bool| {
+        let mut scene = SpatialScene::new();
+        scene.set_sticky_live_target_enabled(enabled);
+        let now = Instant::now();
+        scene.upsert_runtime_body_snapshot(
+            SpatialBodyId::LocalPlayer(player_guid),
+            start,
+            Vector3::zero(),
+            Vector3::zero(),
+            None,
+            now,
+        );
+        scene.update_entity(target_guid, lb, wire);
+        scene.upsert_runtime_body_snapshot(
+            SpatialBodyId::Entity(target_guid),
+            live,
+            Vector3::zero(),
+            Vector3::zero(),
+            None,
+            now,
+        );
+        scene.stick_local_player_to(target_guid, 0.0);
+        scene
+    };
+
+    for (enabled, aim) in [(true, live), (false, wire)] {
+        // Split step: converges to the 0.3 m standoff from the aim point.
+        let mut scene = scene_with(enabled);
+        let mut cur = start;
+        for i in 0..30 {
+            match scene.step_local_sticky(cur, 0.016, 4.0) {
+                LocalStickyStep::Stepped(pose) => cur = pose,
+                other => panic!("stickyLiveTarget={enabled}: frame {i} gave {other:?}"),
+            }
+        }
+        let gap = (cur.coords - aim.coords).length();
+        assert!(
+            (gap - STICKY_RADIUS).abs() < 0.02,
+            "stickyLiveTarget={enabled}: gap {gap} to the aim {:?}",
+            aim.coords
+        );
+
+        // Composed chain: one slice's offset is the 20 m/s pull toward the aim.
+        let mut scene = scene_with(enabled);
+        scene.set_local_retail_leash(true);
+        let out = scene
+            .adjust_local_offset_chain(
+                SpatialBodyId::LocalPlayer(player_guid),
+                start,
+                Vector3::zero(),
+                0.016,
+                36.0,
+                4.0,
+                true,
+            )
+            .expect("chain armed");
+        let toward = aim.coords - start.coords;
+        let unit = toward * (1.0 / toward.length());
+        let step = 4.0 * 5.0 * 0.016;
+        assert!(
+            (out.offset.x - unit.x * step).abs() < 1e-3
+                && (out.offset.y - unit.y * step).abs() < 1e-3,
+            "stickyLiveTarget={enabled}: chain offset {:?} should point at {:?}",
+            out.offset,
+            aim.coords
+        );
+    }
+}
+
 // === Physics-parity 2026-07-03 (dossier A F14 / B row 58) — the retail
 // LOCAL position lattice behind `?retailLeash` ==========================
 

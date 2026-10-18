@@ -851,6 +851,39 @@ fn test_self_update_motion_gate2_equal_control_accepted_older_drops_after_stamp(
     );
 }
 
+/// Melee lane (2026-10-18): `self_update_motion_recorded` reads the stamp
+/// gates' verdict back after the fact — the wasm recv loop's local sticky
+/// install runs after the routed handler and has no other view of it. True
+/// exactly when `apply_self_update_motion` accepted the message.
+#[test]
+fn test_self_update_motion_recorded_mirrors_the_stamp_gates() {
+    let mut player = PlayerState::new();
+    player.movement_sequence = 20;
+    player.server_control_sequence = 30;
+
+    let swing = self_motion(21, 30, false);
+    assert!(player.apply_self_update_motion(&swing));
+    assert!(player.self_update_motion_recorded(&swing), "accepted: recorded");
+
+    // Gate 1 drop (older movement stamp): the stored stamp stays newer.
+    let stale = self_motion(19, 30, false);
+    assert!(!player.apply_self_update_motion(&stale));
+    assert!(!player.self_update_motion_recorded(&stale));
+
+    // Gate 2 drop (older control epoch): the movement stamp advances but the
+    // epoch does not, so the message still reads as not recorded.
+    let old_epoch = self_motion(22, 29, false);
+    assert!(!player.apply_self_update_motion(&old_epoch));
+    assert_eq!(player.movement_sequence, 22);
+    assert!(!player.self_update_motion_recorded(&old_epoch));
+
+    // An accepted autonomous echo records its stamps too (gate 3 only skips
+    // the unpack); the caller checks `is_autonomous` separately.
+    let echo = self_motion(23, 30, true);
+    assert!(player.apply_self_update_motion(&echo));
+    assert!(player.self_update_motion_recorded(&echo));
+}
+
 /// Gate 3 (acclient.c:311187-311190): an accepted autonomous echo of
 /// the player-controlled object advances the sequences but never
 /// unpacks — style and substate stay untouched.

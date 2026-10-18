@@ -504,6 +504,14 @@ function ensureStyles() {
       border-top: 1px solid var(--hbk-gold-deep, #4e3f1f);
     }
     #${OVERLAY_ID} .hb-inv-items.is-drop-target { outline-offset: -2px; }
+
+    /* usetarget-1: retail's target cursor over the inventory while a
+       use-on-target waits; green / red = the Rust canUseWith answer. */
+    body.use-targeting #${OVERLAY_ID} .hb-inv-slot:not(.is-empty),
+    body.use-targeting #${OVERLAY_ID} .hb-inv-doll-slot.equipped,
+    body.use-targeting #${OVERLAY_ID} .hb-inv-bag:not(.is-empty) { cursor: crosshair; }
+    #${OVERLAY_ID} .use-target-ok { outline: 2px solid #40e070; outline-offset: -2px; }
+    #${OVERLAY_ID} .use-target-bad { outline: 2px solid #ff5555; outline-offset: -2px; }
   `;
   document.head.appendChild(style);
 }
@@ -577,7 +585,8 @@ function openPack(guid) {
 // enters target mode for a kit / stone; only the rest is a plain Use
 // (ACE has no wield path behind Use). Module-level so the hotbar works
 // before the panel was ever opened. Returns false when `guid` is not ours
-// (the caller then sends its own Use); a repeat inside retail's 0.2 s
+// (the caller then sends its own Use) — except the player itself, the main
+// pack (usetarget-2, useSelf below); a repeat inside retail's 0.2 s
 // m_timeLastUsed throttle is swallowed (true). use-4 (2026-10-08 round 2):
 // that throttle is the ONE retail static, shared with the world Use paths
 // (target_cycle.js consumeUseThrottle).
@@ -598,6 +607,38 @@ const RETAIL_AUTO_WEAR = typeof window !== "undefined" ? defaultOnUrlFlag("retai
 // quietly. "In combat" is ClientCombatSystem::combatMode != 1, read from the
 // wasm combatMode() (__combatBarState has no inCombatMode field).
 const RETAIL_WIELD_LEGAL = typeof window !== "undefined" ? defaultOnUrlFlag("retailWieldLegal") : true;
+// usetarget-1 (2026-10-18, `?useTargetGrid=off` = the old select-only
+// clicks): while a use-on-target waits for its target (window.__useTargeting,
+// app/hud_panels.js — retail target mode 3), a left click on an item cell, a
+// worn item's paperdoll slot, a side pack or the main pack slot TARGETS that
+// object instead of selecting / opening it: retail UIElement_ItemList::
+// HandleTargetedUseLeftClick (acclient.c:272399) → ClientUISystem::
+// ExecuteTargetModeForItem (:402078) → ItemHolder::TargetAcquired (:433578).
+// The main pack slot's UIItem is the player, so it targets yourself. Before
+// this, "use a pyreal mote, then click the other mote" only selected it.
+const USE_TARGET_GRID = typeof window !== "undefined" ? defaultOnUrlFlag("useTargetGrid") : true;
+// usetarget-2 (`?selfShortcut=off`): the main pack slot drags onto the
+// toolbar as a shortcut to yourself (plugins/hotbar.js), and using the player
+// — that shortcut outside target mode, the toolbar Use button with yourself
+// selected — opens the main pack (useSelf) instead of sending a Use of
+// yourself.
+const SELF_SHORTCUT = typeof window !== "undefined" ? defaultOnUrlFlag("selfShortcut") : true;
+/** Retail ItemHolder::UseObject on the player (acclient.c:433354): it is no
+ *  usable object (ItemUseable 1, DetermineUseResult 0), so no Use event goes
+ *  out; CPlayerSystem::UsingItem (:400434) finds it owned and a container and
+ *  sends CM_UI::SendNotice_OpenContainedContainer(player) — gmInventoryUI
+ *  shows itself on the main pack (:222373). Spends the shared 0.2 s throttle. */
+function useSelf() {
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  if (consumeUseThrottle(now)) {
+    openPack(0);
+    try {
+      const mp = window.__mainPanel;
+      if (!(mp?.isOpen?.() && mp?.currentViewId?.() === "inventory")) mp?.showView?.("inventory");
+    } catch (_) {}
+  }
+  return true;
+}
 function wieldEquipState(rows) {
   let inCombatMode = !!window.__combatBarState?.inCombatMode;
   const h = RETAIL_WIELD_LEGAL ? sessionHandleNow() : null;
@@ -616,6 +657,7 @@ function activateItem(guid, { cell = null } = {}) {
   const h = sessionHandleNow();
   const rows = takeInventoryRows(h);
   const row = rows.find((r) => r.guid === g);
+  if (!row && SELF_SHORTCUT && g === localPlayerGuid()) return useSelf();
   if (!row) return false;
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
   if (!consumeUseThrottle(now)) return true;
@@ -743,6 +785,46 @@ function doMount(parentEl, _ctx) {
   function packsCap() { return (readHandleNumber("playerContainersCapacity") >>> 0) || DEFAULT_PACKS_CAP; }
   function capacityOf(key) { return packCapacity(rows, key, { mainCap: mainCap(), packsCap: packsCap() }); }
 
+  // ── usetarget-1: target mode in the inventory views ─────────────
+  /** The pending use-on-target this view resolves, or null. */
+  function pendingUseTarget() {
+    if (!USE_TARGET_GRID) return null;
+    const T = window.__useTargeting;
+    return T?.pending && typeof T.resolve === "function" ? T : null;
+  }
+  const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  // The object a click just targeted: the second press of a double-click on
+  // it must not Use / unwield it too (OpenAC RuntimeItemInteraction keeps the
+  // consumed target for the double-click window).
+  let lastTargetPick = { guid: 0, at: -Infinity };
+  function justTargeted(guid) {
+    return lastTargetPick.guid === (guid >>> 0) && nowMs() - lastTargetPick.at < 500;
+  }
+  /** Click on `guid` with a target awaited → it is the target (true). */
+  function resolveUseTarget(guid) {
+    const T = pendingUseTarget();
+    const g = (guid >>> 0) || 0;
+    if (!T || !g) return false;
+    lastTargetPick = { guid: g, at: nowMs() };
+    hideItemTooltip();
+    try { T.resolve(g); } catch (e) { console.warn("[inv-target] resolve failed:", e); }
+    return true;
+  }
+  // Hover feedback: retail's cursor turns green over a compatible target
+  // (ItemHolder::IsTargetCompatibleWithTargetingObject, acclient.c:432848);
+  // the Rust canUseWith port answers. __useTargeting.cancel() clears it.
+  function markUseTarget(el, guid) {
+    const T = pendingUseTarget();
+    const g = (guid >>> 0) || 0;
+    if (!T || !g || !el) return;
+    const h = sessionHandleNow();
+    let ok = false;
+    try { ok = typeof h?.canUseWith === "function" && !!h.canUseWith(T.pending.itemGuid >>> 0, g); } catch (_) { ok = false; }
+    el.classList.toggle("use-target-ok", ok);
+    el.classList.toggle("use-target-bad", !ok);
+  }
+  function unmarkUseTarget(el) { el?.classList?.remove("use-target-ok", "use-target-bad"); }
+
   // ── gmPaperDollUI ───────────────────────────────────────────────
   const paperdoll = document.createElement("div");
   paperdoll.className = "hb-inv-paperdoll";
@@ -783,8 +865,15 @@ function doMount(parentEl, _ctx) {
     el.addEventListener("mouseenter", () => {
       const nm = el.dataset.itemName;
       showItemTooltip(el, nm ? `${nm}\n${s.name}` : s.name);
+      markUseTarget(el, parseInt(el.dataset.itemGuid, 10));
     });
-    el.addEventListener("mouseleave", hideItemTooltip);
+    el.addEventListener("mouseleave", () => { unmarkUseTarget(el); hideItemTooltip(); });
+    // usetarget-1: with a target awaited, a worn item's slot targets that
+    // item (each slot is an item list — HandleTargetedUseLeftClick).
+    el.addEventListener("click", (ev) => {
+      if (ev.button !== 0) return;
+      if (resolveUseTarget(parseInt(el.dataset.itemGuid, 10))) { ev.preventDefault(); ev.stopPropagation(); }
+    });
     // Equipped item → drag source (to a pack, the grid, the world, the hotbar…).
     el.addEventListener("dragstart", (ev) => {
       const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
@@ -803,6 +892,7 @@ function doMount(parentEl, _ctx) {
       if (!guid) return;
       ev.preventDefault();
       ev.stopPropagation();
+      if (justTargeted(guid)) return; // its first press was a target click
       const h = sessionHandleNow();
       try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
       if (typeof h?.unwieldToPack === "function") {
@@ -911,12 +1001,32 @@ function doMount(parentEl, _ctx) {
   const mainSlot = makeBagCell();
   mainSlot.classList.add("hb-inv-mainpack");
   setBagIcon(mainSlot, MAIN_PACK_ICON_META);
-  mainSlot.addEventListener("click", () => selectPack(0));
+  // usetarget-1: its UIItem is the player — with a target awaited, a click
+  // targets yourself (a healing kit heals you); otherwise it opens the pack.
+  mainSlot.addEventListener("click", () => {
+    if (resolveUseTarget(localPlayerGuid())) return;
+    selectPack(0);
+  });
   mainSlot.addEventListener("mouseenter", () => {
     const c = capacityOf(MAIN_PACK_KEY);
     showItemTooltip(mainSlot, `Main Pack\n${c.used} / ${c.cap} items`);
+    markUseTarget(mainSlot, localPlayerGuid());
   });
-  mainSlot.addEventListener("mouseleave", hideItemTooltip);
+  mainSlot.addEventListener("mouseleave", () => { unmarkUseTarget(mainSlot); hideItemTooltip(); });
+  // usetarget-2: dragged onto the toolbar it is a shortcut to yourself (the
+  // drag carries item_drag.js SELF_MIME, never the item MIMEs).
+  if (SELF_SHORTCUT) {
+    mainSlot.draggable = true;
+    mainSlot.addEventListener("dragstart", (ev) => {
+      const me = localPlayerGuid();
+      if (!me) { ev.preventDefault(); return; }
+      hideItemTooltip();
+      beginItemDrag(ev, {
+        guid: me, self: true, owned: true, sourceList: null, sourceIndex: -1, sourceEl: mainSlot,
+        item: { name: playerName() || "Main Pack", ...MAIN_PACK_ICON_META },
+      });
+    });
+  }
   bagCol.appendChild(mainSlot);
 
   // Inv_ContainerList (+ rope scrollbar).
@@ -951,10 +1061,14 @@ function doMount(parentEl, _ctx) {
         cell.draggable = true;
         cell.addEventListener("click", () => {
           const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+          if (resolveUseTarget(pg)) return; // usetarget-1: the pack is the target
           if (pg) selectPack(pg);
         });
-        cell.addEventListener("mouseenter", onBagEnter);
-        cell.addEventListener("mouseleave", hideItemTooltip);
+        cell.addEventListener("mouseenter", (ev) => {
+          onBagEnter(ev);
+          markUseTarget(cell, parseInt(cell.dataset.packGuid, 10));
+        });
+        cell.addEventListener("mouseleave", () => { unmarkUseTarget(cell); hideItemTooltip(); });
         cell.addEventListener("dragstart", (ev) => {
           const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
           const row = rowsByGuid.get(pg);
@@ -1226,6 +1340,10 @@ function doMount(parentEl, _ctx) {
     const g = cellGuid(cell);
     const row = displayRow(g);
     if (!g || !row || row.stub) return;
+    // usetarget-1: an awaited use-on-target takes this item as its target
+    // (and the second press of that double-click is not also a Use).
+    if (resolveUseTarget(g)) return;
+    if (ev.detail >= 2 && justTargeted(g)) return;
     setSelectedGuid(g);
     const name = row.name || "Item";
     if (ev.detail >= 2 || ev.ctrlKey) { useOrEquip(row, cell); return; }
@@ -1270,6 +1388,7 @@ function doMount(parentEl, _ctx) {
     const g = cellGuid(cell);
     const name = cell._name || "";
     showItemTooltip(cell, name);
+    markUseTarget(cell, g);
     // After the retail 250 ms m_tooltipDelay, upgrade to the cached
     // AppraisalProfile stats when the wasm has one.
     clearTimeout(cell._tipTimer);
@@ -1287,6 +1406,7 @@ function doMount(parentEl, _ctx) {
   }
   function onCellLeave(ev) {
     clearTimeout(ev.currentTarget._tipTimer);
+    unmarkUseTarget(ev.currentTarget);
     hideItemTooltip();
   }
 

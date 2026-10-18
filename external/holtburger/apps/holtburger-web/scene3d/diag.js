@@ -53,6 +53,8 @@ import { attachCollision as _attachCollision } from "./diag/collision.js";
 import { attachRemoteSync as _attachRemoteSync } from "./diag/remote_sync.js";
 // SLOW-RUN (2026-10-11): the wasm slow-run detector's incident ring.
 import { attachSlowRun as _attachSlowRun } from "./diag/slow_run.js";
+// TERRAIN-HOP (2026-10-18): the wasm hop detector's incident ring.
+import { attachHop as _attachHop } from "./diag/hop.js";
 // Phase 2 limbs (2026-08-02): the surface ships inside the module that owns
 // the state (scene3d/limbs.js) rather than a ./diag/ shim, but wires in
 // through the same `attach<Name>(diag)` contract as everything above.
@@ -644,6 +646,7 @@ export function installDiag() {
     ["collision",  _attachCollision],
     ["remoteSync", _attachRemoteSync],
     ["slowRun",    _attachSlowRun],
+    ["hop",        _attachHop],
     ["limbs",      _attachLimbs],
     ["ragdoll",    _attachRagdoll],
     ["killImpulse", _attachKillImpulse],

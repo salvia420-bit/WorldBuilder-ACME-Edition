@@ -23,6 +23,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_moveto_begin_on,
         cast_takes_control_on,
         remote_sticky_on,
+        sticky_live_target_on,
         combat_radii_on,
         server_run_rate_on,
         retail_leash_on,
@@ -180,6 +181,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // COMBAT-RADII (2026-07-28): size-aware
                 // standoffs (?combatRadii, default ON).
                 new_world.set_combat_radii_enabled(combat_radii_on);
+                // Melee lane (2026-10-18): the local swing sticky
+                // steers at its target's live body
+                // (?stickyLiveTarget, default ON).
+                new_world.scene.set_sticky_live_target_enabled(sticky_live_target_on);
                 // MOVE-RUNRATE-105 (2026-08-11): prefer the
                 // server's my_run_rate (?serverRunRate, ON).
                 new_world.set_server_run_rate_enabled(server_run_rate_on);

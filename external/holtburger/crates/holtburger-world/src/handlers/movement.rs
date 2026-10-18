@@ -75,6 +75,57 @@ pub fn remote_motion_sticky_target(data: &MovementTypeData, rust_moveto_sticks: 
     }
 }
 
+/// What one LOCAL-player `UpdateMotion` does to the local StickyManager (the
+/// melee swing glue). See [`local_motion_sticky_update`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalStickyUpdate {
+    /// Retail never unpacks the message, so the sticky target stays as it is.
+    Untouched,
+    /// The unpack preamble's `unstick_from_object` (acclient.c:339519), with
+    /// no case-0 sticky object to stick to afterwards.
+    Unstick,
+    /// Case 0 carried `StickToObject` and this guid (acclient.c:339546-339560).
+    StickTo(Guid),
+}
+
+/// Melee lane (2026-10-18, `?retailUnstick`) — the local sticky install /
+/// release for one self `UpdateMotion`, behind retail's own gate.
+///
+/// Retail `CPhysics::SetObjectMovement` (acclient.c:311149-311218) calls
+/// `unpack_movement` for the player-controlled object only when the message
+/// is NOT autonomous (`autonomous == 0 || !weenie->vfptr[5]()`), and only
+/// after its two stamp gates (movement stamp newer, server-control stamp not
+/// older). The unpack preamble's `unstick_from_object` (:339519) therefore
+/// never runs for ACE's echo of the player's own MoveToState:
+/// `BroadcastMovement` sends it back to the sender with `IsAutonomous = true`
+/// (Player_Networking.cs:365, MovementData.cs:162). The world handler
+/// (`handlers/player.rs`, `accepted && !is_autonomous`), the native runtime and
+/// OpenAC (`RuntimeLiveEntitySessionController.ApplyServerMotionToLocalBody`)
+/// all follow that gate. The wasm install site did not: the echo of the stop
+/// pulse our client sends when a server TurnTo ends — ACE turns the player
+/// before every in-range swing (`melee_max_angle` 0, Player_Melee.cs:177-186)
+/// — arrives just after the swing's StickToObject and released the glue a
+/// frame or two into the pull, while ACE landed the hit anyway.
+///
+/// `sticky_target` is the caller's resolved target (`0` = none);
+/// `stamps_recorded` = the message passed the stamp gates; `retail_gate` =
+/// `?retailUnstick` (off: every self motion sticks or unsticks, as before).
+pub fn local_motion_sticky_update(
+    sticky_target: u32,
+    is_autonomous: bool,
+    stamps_recorded: bool,
+    retail_gate: bool,
+) -> LocalStickyUpdate {
+    if retail_gate && (is_autonomous || !stamps_recorded) {
+        return LocalStickyUpdate::Untouched;
+    }
+    if sticky_target == 0 {
+        LocalStickyUpdate::Unstick
+    } else {
+        LocalStickyUpdate::StickTo(Guid(sticky_target))
+    }
+}
+
 /// NPC-facing fix (2026-10-11) — the facing a TurnTo directive ENDS at, for
 /// the lanes that set it instead of turning: the heading set below (the local
 /// player's entity record; a remote under `?remoteSpine=off`) and the wasm
@@ -607,6 +658,106 @@ mod tests {
         assert_eq!(remote_motion_sticky_target(&swing, false), 0x8000_0042);
         let plain = MovementTypeData::Invalid(MovementInvalid::default());
         assert_eq!(remote_motion_sticky_target(&plain, true), 0, "no sticky_object: unstick");
+    }
+
+    /// Melee lane (2026-10-18, `?retailUnstick`): retail
+    /// `CPhysics::SetObjectMovement` (acclient.c:311149-311218) never unpacks
+    /// the player's autonomous echo or a message that failed the stamp gates,
+    /// so neither may touch the local sticky. A non-autonomous swing still
+    /// sticks and any other applied motion still unsticks (the preamble,
+    /// :339519). With the gate off every self motion acts, as before.
+    #[test]
+    fn local_motion_sticky_update_follows_set_object_movement_gate() {
+        let target = 0x8000_0042;
+        let stick = LocalStickyUpdate::StickTo(holtburger_common::Guid(target));
+
+        // ACE's swing echo: non-autonomous, applied.
+        assert_eq!(local_motion_sticky_update(target, false, true, true), stick);
+        // A server TurnTo / stance change after it: the preamble unsticks.
+        assert_eq!(local_motion_sticky_update(0, false, true, true), LocalStickyUpdate::Unstick);
+        // The echo of our own MoveToState (the TurnTo's stop pulse): untouched.
+        assert_eq!(
+            local_motion_sticky_update(0, true, true, true),
+            LocalStickyUpdate::Untouched,
+            "an autonomous self echo never reaches unpack_movement"
+        );
+        // A stale or reordered message (stamp gates failed): untouched, even
+        // one that carries a sticky object.
+        for sticky in [0, target] {
+            assert_eq!(
+                local_motion_sticky_update(sticky, false, false, true),
+                LocalStickyUpdate::Untouched
+            );
+        }
+
+        // `?retailUnstick=off`: the pre-fix behaviour, every self motion acts.
+        assert_eq!(local_motion_sticky_update(0, true, true, false), LocalStickyUpdate::Unstick);
+        assert_eq!(local_motion_sticky_update(0, false, false, false), LocalStickyUpdate::Unstick);
+        assert_eq!(local_motion_sticky_update(target, true, false, false), stick);
+    }
+
+    /// Melee lane (2026-10-18): the wasm install's composition, on the
+    /// sequence that cut the pull short. The routed world handler runs the
+    /// stamp gates first; the install reads them back
+    /// (`self_update_motion_recorded`) and checks the autonomous bit. ACE
+    /// swings with StickToObject, then echoes back the stop pulse our client
+    /// sent when ACE's pre-swing TurnTo ended; neither that echo nor a stale
+    /// copy may release the glue, and the next real server motion does.
+    #[test]
+    fn swing_sticky_survives_the_echo_of_our_own_turn_stop() {
+        use holtburger_common::Guid;
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        let mut state = WorldState::synthetic();
+        state.player.guid = Guid(0x5000_0001);
+        let me = state.player.guid;
+        let target = Guid(0x8000_0042);
+        let motion = |seq: u16, control: u16, autonomous: bool, sticky: Option<Guid>| {
+            Box::new(MovementEventData {
+                guid: me,
+                object_instance_sequence: 1,
+                movement_sequence: seq,
+                server_control_sequence: control,
+                is_autonomous: autonomous,
+                movement_type: MovementType::Invalid,
+                motion_flags: if sticky.is_some() { 0x01 } else { 0 },
+                current_style: 0x3D,
+                data: MovementTypeData::Invalid(MovementInvalid {
+                    sticky_object: sticky,
+                    ..MovementInvalid::default()
+                }),
+            })
+        };
+        let install = |state: &mut WorldState, data: Box<MovementEventData>| {
+            let sticky_target = remote_motion_sticky_target(&data.data, true);
+            let _ = state.handle_message(&GameMessage::UpdateMotion(data.clone()));
+            local_motion_sticky_update(
+                sticky_target,
+                data.is_autonomous,
+                state.player.self_update_motion_recorded(&data),
+                true,
+            )
+        };
+
+        assert_eq!(
+            install(&mut state, motion(2, 4, false, Some(target))),
+            LocalStickyUpdate::StickTo(target),
+            "the swing sticks"
+        );
+        assert_eq!(
+            install(&mut state, motion(3, 4, true, None)),
+            LocalStickyUpdate::Untouched,
+            "ACE's echo of our stop pulse leaves the glue alone"
+        );
+        assert_eq!(
+            install(&mut state, motion(1, 4, false, None)),
+            LocalStickyUpdate::Untouched,
+            "a stale, reordered motion leaves it alone too"
+        );
+        assert_eq!(
+            install(&mut state, motion(4, 5, false, None)),
+            LocalStickyUpdate::Unstick,
+            "the next real server motion unsticks (the unpack preamble)"
+        );
     }
 
     /// NPC-facing fix (2026-10-11): `turn_directive_facing`, the facing a

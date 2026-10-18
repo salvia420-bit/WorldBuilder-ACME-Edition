@@ -1824,8 +1824,39 @@ const USE_SCENERY_COLLISION: bool = true;
 /// can kind of go in the air just a little tiny bit"). Retail collides
 /// scenery INSIDE the transition, so its body always ends on the contact
 /// plane. When on, a grounded slice's XY correction moves z along the
-/// settled contact plane (`TransitionOutcome::contact_plane`).
+/// settled contact plane (`TransitionOutcome::contact_plane`). Since
+/// 2026-10-18 this is the fallback: [`USE_CLAMP_REPLANT`] re-runs the clamped
+/// slice through the transition first, which is exact across a terrain crease
+/// where one plane is not.
 const USE_CLAMP_ALONG_GROUND: bool = true;
+
+/// CLAMP-REPLANT (2026-10-18) — `?clampReplant` (browser DEFAULT ON, `=off`
+/// escape; native const ON). Retail collides scenery INSIDE the transition:
+/// `CLandBlock::get_land_scenes` makes every tree and rock a `CPhysicsObj` in
+/// its landcell (`makeObject` → `set_initial_frame` → `add_obj_to_cell`,
+/// acclient.c:352707-352714) and `CObjCell::find_obj_collisions` resolves it
+/// step by step, so a body a trunk stops is validated WHERE it stops
+/// (`validate_walkable` / `step_down` on the plane under it). Ours clamps
+/// after the transition, and `?clampAlongGround` carries z along the
+/// transition's own contact plane — exact on one plane only. Across a terrain
+/// crease between the transition's result and the clamped pose (a 0.2 s
+/// quantum carries the body 3.6 m past a trunk) the feet ended 0.36 m in the
+/// ground, lifted back out the next slice, or 0.17 m above it, dropped the
+/// next slice: `terrain_hop_real_trees_on_hillsides`, 9 floats and 63 pops in
+/// 1001 runs. When on, a grounded slice the post-transition clamps moved is
+/// re-run through the transition from its start over the CLAMPED offset, so
+/// the terrain, water and statics place the body there and its contact
+/// plane, grounding and stationary-fall state come from that transition.
+const USE_CLAMP_REPLANT: bool = true;
+/// A post-transition XY correction shorter than this is none (the scenery
+/// clamp backs off 1 mm from a contact).
+const CLAMP_REPLANT_MIN_M: f32 = 1e-3;
+/// A clamped offset shorter than this held the body where it began (pressed
+/// head-on into a trunk): it stays planted there.
+const CLAMP_REPLANT_HELD_M: f32 = 0.01;
+/// The re-run must not carry the body further than the clamped offset by
+/// more than this.
+const CLAMP_REPLANT_SLACK_M: f32 = 0.01;
 
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
@@ -2399,6 +2430,9 @@ pub(crate) struct MovementSystem {
     /// [`USE_CLAMP_ALONG_GROUND`] const; read by
     /// [`Self::clamp_along_ground_enabled`].
     clamp_along_ground_runtime: Option<bool>,
+    /// `?clampReplant` (browser DEFAULT ON). `None` = the
+    /// [`USE_CLAMP_REPLANT`] const; read by [`Self::clamp_replant_enabled`].
+    clamp_replant_runtime: Option<bool>,
     /// F2 (2026-07-27) — the install-time speed resolution for the
     /// SERVER-commanded MoveTo currently on the driver (see
     /// [`ServerMoveToDrive`]). Cleared with the pursuit (arrival,
@@ -2990,6 +3024,7 @@ impl MovementSystem {
             landing_bounce_runtime: None,
             bounce_along_slope_runtime: None,
             clamp_along_ground_runtime: None,
+            clamp_replant_runtime: None,
             server_moveto_drive: None,
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
@@ -3295,6 +3330,78 @@ impl MovementSystem {
     /// [`USE_CLAMP_ALONG_GROUND`] effective predicate.
     pub(crate) fn clamp_along_ground_enabled(&self) -> bool {
         self.clamp_along_ground_runtime.unwrap_or(USE_CLAMP_ALONG_GROUND)
+    }
+
+    /// CLAMP-REPLANT (2026-10-18) — install the `?clampReplant` runtime
+    /// carrier (see [`USE_CLAMP_REPLANT`]; the browser passes ON unless
+    /// `=off`).
+    pub(crate) fn set_clamp_replant(&mut self, on: bool) {
+        self.clamp_replant_runtime = Some(on);
+    }
+
+    /// [`USE_CLAMP_REPLANT`] effective predicate.
+    pub(crate) fn clamp_replant_enabled(&self) -> bool {
+        self.clamp_replant_runtime.unwrap_or(USE_CLAMP_REPLANT)
+    }
+
+    /// CLAMP-REPLANT — the grounded slice the post-transition clamps moved,
+    /// placed by the transition at the clamped XY (see [`USE_CLAMP_REPLANT`]
+    /// and the call site in `finish_manual_slice_via_transition`). `None`
+    /// keeps the `?clampAlongGround` plane carry: the re-run collided, came
+    /// back ungrounded, or carried the body past the clamped offset.
+    fn replant_after_clamp(
+        &self,
+        world: &WorldState,
+        input: &holtburger_world::spatial::transition::TransitionInput,
+        outcome: &holtburger_world::spatial::transition::TransitionOutcome,
+        clamped: &holtburger_common::position::WorldPosition,
+        leash_delta: Vector3,
+    ) -> Option<holtburger_world::spatial::transition::TransitionOutcome> {
+        use holtburger_world::spatial::collision::TransitionState;
+        use holtburger_world::spatial::transition::{TransitionInput, TransitionOutcome};
+        let begin_g = input.begin.global_coords();
+        let clamped_g = clamped.global_coords();
+        let (cx, cy) = (clamped_g.x - begin_g.x, clamped_g.y - begin_g.y);
+        let clamped_len = cx.hypot(cy);
+        if clamped_len < CLAMP_REPLANT_HELD_M {
+            // Held where it began: planted where it stood, on the plane it
+            // stood on.
+            return Some(TransitionOutcome {
+                pose: holtburger_common::position::WorldPosition {
+                    rotation: clamped.rotation,
+                    ..input.begin
+                },
+                contact_plane: input.last_contact_plane.or(outcome.contact_plane),
+                cell_changed: false,
+                ..*outcome
+            });
+        }
+        let retry_input = TransitionInput {
+            end: holtburger_common::position::WorldPosition {
+                landblock_id: input.begin.landblock_id,
+                coords: Vector3::new(
+                    input.begin.coords.x + cx,
+                    input.begin.coords.y + cy,
+                    input.begin.coords.z + leash_delta.z,
+                ),
+                rotation: input.end.rotation,
+            },
+            ..*input
+        };
+        let retry = holtburger_world::spatial::transition::find_transitional_position_dispatch(
+            world,
+            &retry_input,
+            self.faithful_transition_enabled(),
+            self.faithful_outdoor_enabled(),
+            self.faithful_stepup_enabled(),
+        );
+        let ok = !matches!(
+            retry.state,
+            TransitionState::Collided | TransitionState::Invalid
+        );
+        let landed = retry.pose.global_coords();
+        let moved_len = (landed.x - begin_g.x).hypot(landed.y - begin_g.y);
+        (ok && retry.grounded && moved_len <= clamped_len + CLAMP_REPLANT_SLACK_M).then_some(retry)
     }
 
     /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
@@ -9292,6 +9399,32 @@ impl MovementSystem {
                 pose.coords.y += disp.y;
             }
         }
+        // CLAMP-REPLANT (`?clampReplant`, see `USE_CLAMP_REPLANT`): retail
+        // collides scenery inside the transition, so a body stopped by a trunk
+        // is validated where it stops. When the XY corrections above moved a
+        // grounded body, re-run the transition over the clamped offset and
+        // take its pose, contact plane and grounding; the plane carry below
+        // then has nothing left to correct.
+        let post_clamp_m = {
+            let realized = outcome.pose.global_coords();
+            let corrected = pose.global_coords();
+            (corrected.x - realized.x).hypot(corrected.y - realized.y)
+        };
+        let outcome = if self.clamp_replant_enabled()
+            && !was_airborne
+            && outcome.grounded
+            && post_clamp_m > CLAMP_REPLANT_MIN_M
+        {
+            match self.replant_after_clamp(&*world, &input, &outcome, &pose, leash_delta) {
+                Some(replanted) => {
+                    pose = replanted.pose;
+                    replanted
+                }
+                None => outcome,
+            }
+        } else {
+            outcome
+        };
         // CLAMP-ALONG-GROUND (`?clampAlongGround`): the two XY-only
         // corrections above (FU-3 entities, scenery) moved a grounded body
         // off the plane the transition settled it on. Carry z along that
@@ -9723,6 +9856,23 @@ impl MovementSystem {
             None => pose,
         };
 
+        // TERRAIN-HOP (2026-10-18): the always-on hop detector
+        // (`crate::hop_diag`, `__diag.hop`): a grounded slice that ended
+        // airborne, or whose feet rose against the drawn terrain. Reads
+        // state, decides nothing.
+        let _ = crate::hop_diag::observe(crate::hop_diag::slice_from(
+            &*world,
+            &input,
+            &outcome,
+            &pose,
+            leash_delta,
+            dt_s,
+            was_airborne,
+            lift_off.is_some(),
+            transition_ok,
+            candidate_moved,
+            post_clamp_m,
+        ));
         let _ = world.set_local_player_runtime_pose(pose);
     }
 

@@ -14,6 +14,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         routine_pos_guard_on,
         remote_sticky_on,
         teleport_hook_on,
+        retail_unstick_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -1103,22 +1104,36 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             } else {
                 sticky_target
             };
+            // Melee lane (2026-10-18, `?retailUnstick`): only a message retail
+            // would unpack touches the glue (`CPhysics::SetObjectMovement`,
+            // acclient.c:311149 — not ACE's autonomous echo of our own
+            // MoveToState, not a stale stamp). The routed world handler above
+            // already ran the stamp gates (`apply_self_update_motion`); read
+            // its verdict back. Off the routed path there is no gate to read.
             if holtburger_world::spatial::USE_STICKY_MANAGER
                 && let Some(w) = world.borrow_mut().as_mut()
                 && w.player.guid != holtburger_common::Guid::NULL
                 && data.guid == w.player.guid
             {
-                if local_sticky_target != 0 {
-                    let target =
-                        holtburger_common::Guid(local_sticky_target);
-                    let target_radius =
-                        w.combat_sticky_radius(target);
-                    w.scene.stick_local_player_to(
-                        target,
-                        target_radius,
-                    );
-                } else {
-                    w.scene.unstick_local_player();
+                use holtburger_world::handlers::movement::{
+                    LocalStickyUpdate, local_motion_sticky_update,
+                };
+                let stamps_recorded = !wire_state_packs_stage1_on
+                    || w.player.self_update_motion_recorded(&data);
+                match local_motion_sticky_update(
+                    local_sticky_target,
+                    data.is_autonomous,
+                    stamps_recorded,
+                    retail_unstick_on,
+                ) {
+                    LocalStickyUpdate::StickTo(target) => {
+                        let target_radius = w.combat_sticky_radius(target);
+                        w.scene.stick_local_player_to(target, target_radius);
+                    }
+                    LocalStickyUpdate::Unstick => {
+                        w.scene.unstick_local_player();
+                    }
+                    LocalStickyUpdate::Untouched => {}
                 }
             }
             // A2-P3 R2 (2026-06-12, W3+ S9 Stage R2;

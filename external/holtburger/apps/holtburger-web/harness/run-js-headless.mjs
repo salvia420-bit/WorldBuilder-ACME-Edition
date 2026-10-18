@@ -1122,6 +1122,23 @@ const TIER5 = [
   // material) through their own material — routing, geometry/transform identity and
   // GL-level shader/uniform/state identity in both depth modes, LRU lifecycle.
   { tier: 5, flag: "buildingMatBatch", file: "tests/building_mat_batch.test.mjs" },
+  // 2026-10-18 owner-bug lanes. usetarget: target-mode clicks in the inventory views
+  // (?useTargetGrid), the main pack as a shortcut to yourself (?selfShortcut), shortcut
+  // presses in target mode (?shortcutTargetMode), the 3D self pick for a self-usable item
+  // (?useTargetSelfPick).
+  { tier: 5, flag: "useTargetGrid", file: "tests/use_target_inventory.test.mjs" },
+  { tier: 5, flag: "selfShortcut", file: "tests/hotbar_self_shortcut.test.mjs" },
+  { tier: 5, flag: "useTargetSelfPick", file: "tests/use_target_self_pick.test.mjs" },
+  // melee: the swing sticky lives as long as retail's (?retailUnstick).
+  { tier: 5, flag: "retailUnstick", file: "tests/retail_unstick.test.mjs" },
+  // sneak: the Sneak Attack cue inside the combat HUD / spell strip (no flag; HUD).
+  { tier: 5, flag: "sneakAttackCue", file: "tests/sneak_attack_cue.test.mjs" },
+  // spawnz: a creature the server left floating falls onto the floor (?remoteSettle).
+  { tier: 5, flag: "remoteSettle", file: "tests/remote_settle.test.mjs" },
+  // hop: the always-on hop detector (`__diag.hop`): a grounded local slice that left the
+  // ground or rose against the drawn terrain, with a cause (?clampReplant / ?waterQuadrantRetail
+  // are wasm-side and covered by the holtburger-core terrain_hop_real_* suites).
+  { tier: 5, flag: "hopDiag", file: "tests/hop_diag.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

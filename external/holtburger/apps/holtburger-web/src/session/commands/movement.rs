@@ -1097,6 +1097,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                     w.scene.building_triangles_total(),
                 ));
             }
+            // spawnz (`?remoteSettle`): mark the landblock collision parts
+            // whose geometry the drains above just moved in — LAST, so a
+            // remote settle never trusts a landblock before its floors land.
+            let _ = crate::drain_pending_landblock_collision_parts_into(&mut w.scene);
             // Phase 6 step D: publish a snapshot of the
             // local player's current cell + render set
             // so the rAF tick can synchronously query it
@@ -1751,6 +1755,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                                 u32_payload_2: Some(u32::from(airborne)),
                                 f32_payload: None,
                             });
+                        }
+                        // spawnz (`?remoteSettle`): one console line per tick
+                        // that started settle falls (the eye-test tell).
+                        let (settled, highest) = w.scene.take_remote_settle_stats();
+                        if settled > 0 {
+                            console_log_str(&format!(
+                                "[remoteSettle] {settled} floating creature(s) falling onto the \
+                                 floor (highest drop {highest:.1} m)"
+                            ));
                         }
                         // R3 moveto-4 (2026-10-08 follow-ups): the
                         // remote MoveToManager node-motion edges this

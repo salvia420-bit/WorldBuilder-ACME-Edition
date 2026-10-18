@@ -26,6 +26,9 @@
 //     targets (vendor, trade, hotbar, salvage) that read the same MIMEs.
 //   - plugins/spellbook.js application/x-hb-spell-id (spell drag source)
 //   - plugins/hotbar.js application/x-hb-hotbar-slot (slot-swap source)
+//   - plugins/inventory.js main pack slot application/x-hb-self-guid
+//     (usetarget-2: the player's own UIItem — a shortcut to yourself; only
+//     SHORTCUT accepts it, so no item target ever acts on the player)
 
 /**
  * Bitfield enumeration of drop-target classes. Targets pass an OR-ed
@@ -47,6 +50,8 @@ const INV_MIME       = "application/x-hb-inv-guid";
 const INV_TEXT_MIME  = "text/x-hb-item-guid";
 const SPELL_MIME     = "application/x-hb-spell-id";
 const HOTBAR_MIME    = "application/x-hb-hotbar-slot";
+/** The main pack drag (plugins/item_drag.js SELF_MIME): the player's guid. */
+export const SELF_MIME = "application/x-hb-self-guid";
 
 // Per-flag MIME acceptance table. An entry's value is the list of
 // MIME strings that satisfy that flag. validateDragMimeForTarget
@@ -54,7 +59,7 @@ const HOTBAR_MIME    = "application/x-hb-hotbar-slot";
 const MIME_FOR_FLAG = {
   [DropItemFlags.CONTAINER]: [INV_MIME, INV_TEXT_MIME],
   [DropItemFlags.VENDOR]:    [INV_MIME, INV_TEXT_MIME],
-  [DropItemFlags.SHORTCUT]:  [SPELL_MIME, INV_MIME, HOTBAR_MIME],
+  [DropItemFlags.SHORTCUT]:  [SPELL_MIME, INV_MIME, HOTBAR_MIME, SELF_MIME],
   [DropItemFlags.SALVAGE]:   [INV_MIME, INV_TEXT_MIME],
   [DropItemFlags.TRADE]:     [INV_MIME, INV_TEXT_MIME],
 };

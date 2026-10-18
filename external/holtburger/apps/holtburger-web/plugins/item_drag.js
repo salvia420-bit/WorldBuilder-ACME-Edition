@@ -60,6 +60,16 @@ import { CHARACTER_OPTION, isCharacterOptionEnabled } from "../ui/ac_character_o
 
 export const INV_MIME = "application/x-hb-inv-guid";
 export const INV_TEXT_MIME = "text/x-hb-item-guid";
+// usetarget-2 (2026-10-18): the main pack slot's drag. Retail's
+// Inv_MainPackSlot holds the PLAYER's own UIItem (gmInventoryUI::
+// RecvNotice_SetDisplayInventory, acclient.c:222199 ItemList_AddItem(
+// m_topContainer, player_id)), and the toolbar takes it as a shortcut to
+// yourself (gmToolbarUI::HandleDropRelease :241141 → CreateShortcutToItem
+// :240523; IsShortcutEligible :239885 excepts the player). It carries this
+// MIME INSTEAD of the item pair, so no item drop target (a pack, the 3D view,
+// a vendor, the trade window) acts on it — only the hotbar slots
+// (drop_item_flags.js SHORTCUT).
+export const SELF_MIME = "application/x-hb-self-guid";
 
 const STYLE_ID = "hb-item-drag-style";
 const GHOST_ID = "hb-item-drag-ghost";
@@ -273,7 +283,8 @@ function publishDragState(state) {
  * `dragstart`. `payload`:
  *   guid, item {name, wcid, stackSize, iconId, validLocations, equipMask,
  *   isPack, maxStackSize?}, owned, sourceList {key, kind}, sourceIndex,
- *   sourceEl, iconUrl?
+ *   sourceEl, iconUrl?, self? (usetarget-2: `guid` is the player — the
+ *   main pack — and the drag carries SELF_MIME only)
  */
 export function beginItemDrag(ev, payload) {
   const dt = ev?.dataTransfer;
@@ -282,8 +293,12 @@ export function beginItemDrag(ev, payload) {
   ensureStyles();
   const item = payload.item || {};
   try {
-    dt.setData(INV_MIME, String(guid));
-    dt.setData(INV_TEXT_MIME, String(guid));
+    if (payload.self) {
+      dt.setData(SELF_MIME, String(guid));
+    } else {
+      dt.setData(INV_MIME, String(guid));
+      dt.setData(INV_TEXT_MIME, String(guid));
+    }
     dt.setData("text/plain", item.name || "");
     // "all": consumers pick their own dropEffect (hotbar "copy", tinker
     // "link", vendor/trade "move"); any value outside effectAllowed makes

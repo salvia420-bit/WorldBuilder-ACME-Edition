@@ -352,6 +352,45 @@ pub fn set_remote_leash(on: bool) {
     REMOTE_LEASH.with(|c| c.set(on));
 }
 
+thread_local! {
+    static REMOTE_SETTLE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// spawnz (2026-10-18): `?remoteSettle` — a GRAVITY creature the server left
+/// floating falls onto the floor the scene holds, as retail's own physics
+/// drops it. Retail places a created object with PLACEMENT | SLIDE
+/// (`SmartBox::HandleCreateObject` → `enter_world`, acclient.c:145993 →
+/// :323441 → :323365), the placement transition finds no contact under a
+/// floating object (`SetPositionInternal` :322586-322614 → gravity from
+/// `calc_acceleration` :317787), and `update_object` → `UpdatePhysicsInternal`
+/// integrates the fall every frame (:323081, :317701). ACE moves only objects
+/// that move, and its scatter spawn keeps the generator's Z when the drop
+/// exceeds `ScatterThreshold_Z` = 10 m (PhysicsObj.cs:1393-1440; the live log
+/// holds 771 such spawns 10–67 m up). Default ON; `=off` is the escape.
+pub fn remote_settle_enabled() -> bool {
+    REMOTE_SETTLE.with(|c| c.get())
+}
+
+/// Set the switch for this thread (wasm is single-threaded; each `cargo
+/// test` runs on its own thread).
+pub fn set_remote_settle(on: bool) {
+    REMOTE_SETTLE.with(|c| c.set(on));
+}
+
+/// spawnz: the per-landblock collision parts a settle waits for (see
+/// [`SpatialScene::mark_landblock_collision_part`]). The wasm marks each after
+/// its populate export queued that part's geometry.
+pub const LANDBLOCK_COLLISION_BUILDINGS: u8 = 0b01;
+/// The landblock's outdoor statics (`populateStaticsAabbsForLandblock`).
+pub const LANDBLOCK_COLLISION_STATICS: u8 = 0b10;
+const LANDBLOCK_COLLISION_ALL: u8 = LANDBLOCK_COLLISION_BUILDINGS | LANDBLOCK_COLLISION_STATICS;
+
+/// spawnz: the deepest drop a settle starts. A body higher than this above
+/// every floor the scene holds is left alone (likely standing on something
+/// the scene does not hold). Not retail (retail holds every floor); the
+/// highest ACE scatter float in the live log is 67.3 m.
+const REMOTE_SETTLE_MAX_DROP_M: f32 = 100.0;
+
 /// motion-remote-3 — `ConstrainTo(object, &object->m_position, start, max)`
 /// after an accepted remote `MoveOrTeleport` (acclient.c:145223-145227): the
 /// running offset starts at zero, and start/max come from the object's OWN
@@ -437,6 +476,19 @@ const USE_REMOTE_MOVETO_FACING: bool = true;
 /// (`Creature.GetRotateDelay`, Creature_Navigation.cs), whose motion's unpack
 /// cancels the turn (`cancel_moveto`, :339518) a slice short of the player.
 const USE_REMOTE_MOVETO_BEGIN: bool = true;
+
+/// Melee lane (2026-10-18) — native baseline for
+/// [`SpatialScene::set_sticky_live_target_enabled`] (`?stickyLiveTarget`,
+/// `=off` escape). Retail's `StickyManager::adjust_offset` pulls toward the
+/// sticky target's LIVE position — `CPhysicsObj::GetObjectA(target_id)` →
+/// its `m_position` — and reads the stashed `target_position` only when the
+/// object is gone (acclient.c:388544-388547); ACE
+/// (`StickyManager.adjust_offset`: `target == null ? TargetPosition :
+/// target.Position`) and OpenAC (`GetRelationshipTarget`) port the same. Our
+/// local stash is the wire pose (the last UpdatePosition, `entity_poses`), so
+/// a monster that moved on our screen since — the spine's body, which is what
+/// the client draws — pulled the attacker to where it had been.
+const USE_STICKY_LIVE_TARGET: bool = true;
 
 /// R3 moveto-2 (2026-10-08) — how far past a MoveTo turn node the remote D5
 /// turn carries the body (rad, ≈0.057°). Retail turns the TurnRight/TurnLeft
@@ -1600,6 +1652,14 @@ pub struct SpatialScene {
     /// Populated by [`Self::populate_terrain_water_codes`], cleared per landblock
     /// by [`Self::clear_terrain_water_codes_for_landblock`].
     terrain_water_codes: Arc<HashMap<u32, [u8; 81]>>,
+    /// spawnz (2026-10-18): per landblock (`cell_id & 0xFFFF_0000`), which of
+    /// its collision parts have been drained into the scene
+    /// (`LANDBLOCK_COLLISION_BUILDINGS` | `LANDBLOCK_COLLISION_STATICS`). A
+    /// remote settle ([`Self::start_remote_settles`]) waits for both, so a
+    /// creature on a dock, porch or roof is not dropped through a floor that
+    /// has not streamed in yet. Set by [`Self::mark_landblock_collision_part`],
+    /// cleared by [`Self::clear_landblocks_collision`].
+    landblock_collision_parts: HashMap<u32, u8>,
     /// Workstream Sky-B (parametric skybox, 2026-05-11): the parsed
     /// SkyDesc + GameTime for the active Region. `None` until the
     /// wasm bundle's `populateSkyDescFromRegion` lands; populated once
@@ -1685,6 +1745,9 @@ pub struct SpatialScene {
     /// (retail `CMotionInterp::LeaveGround` / `HitGround`,
     /// acclient.c:344457 / :344429).
     remote_airborne_changes: Vec<(Guid, bool)>,
+    /// spawnz (`?remoteSettle`): `(falls started, highest drop m)` since the
+    /// last [`Self::take_remote_settle_stats`] (the wasm's console summary).
+    remote_settle_stats: (usize, f32),
     /// R3 moveto-4 (2026-10-08 follow-ups): per-tick changes of a remote
     /// body's MoveTo node motion ([`SpatialBody::remote_moveto_motion`]:
     /// the full MotionCommand the remote MoveToManager holds, `0` = none),
@@ -1752,6 +1815,10 @@ pub struct SpatialScene {
     /// `USE_STICKY_MANAGER` is off (no install site runs) —
     /// byte-identical default behavior.
     local_sticky_target: Option<Guid>,
+    /// Melee lane (2026-10-18) — `?stickyLiveTarget` (default
+    /// [`USE_STICKY_LIVE_TARGET`]): the LOCAL sticky steers at its target's
+    /// live body, not the wire stash ([`Self::local_sticky_live_target`]).
+    sticky_live_target_enabled: bool,
     /// A2-P3 R2 (2026-06-12, W3+ S9 Stage R2) — runtime switch for
     /// REMOTE-entity sticky. COMPOSES on top of the A2-P2 triple: set
     /// once at world creation from `?stickyRetail` AND the effective
@@ -1957,6 +2024,7 @@ impl SpatialScene {
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
             terrain_water_codes: Arc::new(HashMap::new()),
+            landblock_collision_parts: HashMap::new(),
             sky_desc: None,
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
@@ -1968,6 +2036,7 @@ impl SpatialScene {
             remote_motion_keep_enabled: true,
             remote_turn_enabled: true,
             remote_airborne_changes: Vec::new(),
+            remote_settle_stats: (0, 0.0),
             remote_moveto_phase_changes: Vec::new(),
             remote_spine_enabled: false,
             remote_sweep_enabled: false,
@@ -1976,6 +2045,7 @@ impl SpatialScene {
             remote_movers: HashMap::new(),
             open_sea_wall_enabled: true,
             local_sticky_target: None,
+            sticky_live_target_enabled: USE_STICKY_LIVE_TARGET,
             remote_sticky_enabled: false,
             remote_sticky_targets: HashMap::new(),
             remote_sticky_stepped: HashSet::new(),
@@ -2131,7 +2201,13 @@ impl SpatialScene {
         // sticking object); `?combatRadii=off` restores the `0.0`
         // CPartArray-null fallback (acclient.c:319756-319763).
         let local_part_radius = self.local_player_part_radius();
+        // Melee lane (2026-10-18): the sticky slot steers at the target's
+        // live body (`?stickyLiveTarget`, see `local_sticky_live_target`).
+        let live_target = self.local_sticky_live_target();
         let body = self.body_store.body_mut(body_id)?;
+        if let Some((target, pose)) = live_target {
+            body.position_manager.sticky_refresh_live_target(target, pose);
+        }
         let outcome = body.position_manager.adjust_offset_chain(
             current,
             intended_offset,
@@ -2278,6 +2354,18 @@ impl SpatialScene {
     /// MoveTo refactor phase G — install `?targetVoyeur` (see the field doc).
     pub fn set_target_voyeur_enabled(&mut self, enabled: bool) {
         self.target_voyeur_enabled = enabled;
+    }
+
+    /// Melee lane (2026-10-18) — install `?stickyLiveTarget` (see
+    /// [`USE_STICKY_LIVE_TARGET`]). Set once at world creation by the wasm
+    /// caller; native keeps the const.
+    pub fn set_sticky_live_target_enabled(&mut self, enabled: bool) {
+        self.sticky_live_target_enabled = enabled;
+    }
+
+    /// The `?stickyLiveTarget` switch.
+    pub fn sticky_live_target_enabled(&self) -> bool {
+        self.sticky_live_target_enabled
     }
 
     /// NPC-facing fix (2026-10-11) — install `?remoteMoveToBegin` (see the
@@ -3678,6 +3766,24 @@ impl SpatialScene {
     /// a non-resident lookup (`add_outside_cell`, objcell.rs:553).
     pub fn terrain_landblock_resident(&self, cell_id: u32) -> bool {
         self.terrain_heights.contains_key(&(cell_id & 0xFFFF_0000))
+    }
+
+    /// spawnz (2026-10-18): record that one collision part
+    /// (`LANDBLOCK_COLLISION_BUILDINGS` / `LANDBLOCK_COLLISION_STATICS`) of
+    /// `cell_id`'s landblock is in the scene. The wasm calls this after it has
+    /// drained that part's queued geometry (buildings, statics), never before.
+    pub fn mark_landblock_collision_part(&mut self, cell_id: u32, part: u8) {
+        *self.landblock_collision_parts.entry(cell_id & 0xFFFF_0000).or_insert(0) |= part;
+    }
+
+    /// spawnz: are `cell_id`'s landblock's terrain heights, buildings and
+    /// statics all in the scene — every floor `remote_ground_at` can find?
+    pub fn landblock_collision_ready(&self, cell_id: u32) -> bool {
+        self.terrain_landblock_resident(cell_id)
+            && self
+                .landblock_collision_parts
+                .get(&(cell_id & 0xFFFF_0000))
+                .is_some_and(|parts| parts & LANDBLOCK_COLLISION_ALL == LANDBLOCK_COLLISION_ALL)
     }
 
     /// Phase D / WS1: the 9×9 corner-height grid for `cell_id`'s landblock, or
@@ -5335,6 +5441,9 @@ impl SpatialScene {
                 idx.remove(lb);
             }
         }
+        // spawnz: the buildings and statics just dropped are no longer floors a
+        // remote settle may trust; the re-populate re-marks them.
+        self.landblock_collision_parts.retain(|lb, _| !in_set(*lb));
 
         (
             edges_removed,
@@ -6167,6 +6276,9 @@ impl SpatialScene {
                         end_remote_arc(&mut body, guid, &mut self.remote_airborne_changes);
                         body.remote_velocity = Vector3::zero();
                     }
+                    // spawnz: placed — it may float unless the server says
+                    // it stands on something (`IS_GROUNDED`).
+                    body.remote_settle_pending = ctx.contact != Some(true);
                     // Export the hard set as a managed row (OpenAC
                     // comparison 2026-10-04, remote motion D4): JS ignores
                     // wire positions while a body is wasm-driven, so an
@@ -6203,6 +6315,8 @@ impl SpatialScene {
                             body.remote_velocity = Vector3::zero();
                             self.remote_stepped_poses.insert(guid, pose); // D4
                         }
+                        // spawnz: a snap places it (see the hard set above).
+                        body.remote_settle_pending = ctx.contact != Some(true);
                     } else {
                         // Near + contact: InterpolateTo with the NON-player
                         // blip radius (20/100, acclient.c:315872-315878),
@@ -6267,6 +6381,12 @@ impl SpatialScene {
                             // constrains to `object->m_position`).
                             body.position_manager.remote_constrain_to(0.0, start, max);
                         }
+                        // spawnz: the server says it stands on something
+                        // there (`IS_GROUNDED`, ACE PositionPack.cs:72 from
+                        // its OnWalkable) — even a floor the scene lacks.
+                        if ctx.contact == Some(true) {
+                            body.remote_settle_pending = false;
+                        }
                         body.sampling.mode = mode;
                     }
                 }
@@ -6298,6 +6418,16 @@ impl SpatialScene {
                     end_remote_arc(&mut body, guid, &mut self.remote_airborne_changes);
                 }
                 body.remote_velocity = Vector3::zero();
+                // spawnz: the CreateObject seed (a new body lands here) and a
+                // re-create carry no contact bit — the object may float. A
+                // rotation-only bookkeeping write (`set_entity_rotation`,
+                // only off the spine) keeps the request as it was.
+                let moved = prior_authoritative_pose.is_none_or(|prior| {
+                    prior.landblock_id != pose.landblock_id || prior.coords != pose.coords
+                });
+                if moved || !body_existed {
+                    body.remote_settle_pending = true;
+                }
                 body.pose = pose;
                 body.sampling.mode = mode;
             }
@@ -7310,6 +7440,8 @@ impl SpatialScene {
                 unsampled_floor,
                 elapsed: 0.0,
             });
+            // spawnz: the jump's own arc lands the body; no settle on top.
+            body.remote_settle_pending = false;
             // Retail `CMotionInterp::LeaveGround` edge (:344457). The interp
             // queue is kept: it idles while the body is out of contact
             // (:389208) and corrects after the landing.
@@ -7322,6 +7454,187 @@ impl SpatialScene {
         self.body_store
             .body(SpatialBodyId::Entity(guid))
             .and_then(|body| body.remote_arc)
+    }
+
+    /// spawnz (2026-10-18, `?remoteSettle`) — is a settle still pending for
+    /// this remote body (diag/tests)?
+    pub fn remote_settle_pending(&self, guid: Guid) -> bool {
+        self.body_store
+            .body(SpatialBodyId::Entity(guid))
+            .is_some_and(|body| body.remote_settle_pending)
+    }
+
+    /// spawnz (2026-10-18, `?remoteSettle`, default ON) — drop each floating
+    /// remote creature onto the floor the scene holds, the fall retail's own
+    /// physics gives it. A body placed from a wire pose without a grounded
+    /// contact bit (its CreateObject seed, a hard set) is pending
+    /// ([`SpatialBody::remote_settle_pending`]); this decides each pending
+    /// body once:
+    /// - `eligibility` (the world's PhysicsState / weenie answer) `Never` →
+    ///   the request is dropped; `Wait` (hidden, frozen) → kept;
+    /// - outdoors only (no settle indoors: an EnvCell floor search reaches
+    ///   only the body's own cell), never while airborne, never while an
+    ///   interpolation node or the sticky lane owns the body (kept);
+    /// - kept until its landblock's terrain, buildings and statics are all in
+    ///   the scene ([`Self::landblock_collision_ready`]), so a creature on a
+    ///   dock or a porch is not dropped through a floor still streaming in —
+    ///   within a cell of the landblock's edge the neighbour's too, and a
+    ///   floor the neighbour owns there (a bridge) holds it where it is;
+    /// - more than `REMOTE_UNKNOWN_FLOOR_M` above the highest floor
+    ///   `remote_ground_at` finds (terrain, building and static floors at or
+    ///   below it) and at most `REMOTE_SETTLE_MAX_DROP_M` → it falls from
+    ///   rest: the D7 arc (`step_remote_arc`, the retail
+    ///   `UpdatePhysicsInternal` parabola) lands it on that floor, with the
+    ///   leave-ground / hit-ground edges the rig plays as Falling and the
+    ///   landing. Otherwise it stands where it is.
+    ///
+    /// Retail: the created object is placed with PLACEMENT | SLIDE
+    /// (`enter_world`, acclient.c:323441 → :323365); with no contact under it
+    /// (`SetPositionInternal` :322586-322614) `calc_acceleration` (:317787)
+    /// gives it gravity and `update_object` (:323081) → `UpdatePhysicsInternal`
+    /// (:317701) integrates the fall from rest. Not retail: retail only
+    /// simulates objects within 96 m of the player (:323114); this settles any
+    /// body whose landblock collision is resident. Returns the falls started.
+    pub fn start_remote_settles(
+        &mut self,
+        eligibility: impl Fn(Guid) -> super::RemoteSettleEligibility,
+    ) -> usize {
+        use super::RemoteSettleEligibility as E;
+        if !self.remote_interp_enabled
+            || !self.remote_jump_arc_enabled
+            || !remote_settle_enabled()
+        {
+            return 0;
+        }
+        // (guid, the drop to fall if it falls) for every pending body decided
+        // this slice.
+        let mut decided: Vec<(Guid, Option<f32>)> = Vec::new();
+        for body in self.body_store.bodies.values() {
+            let SpatialBodyId::Entity(guid) = body.id else {
+                continue;
+            };
+            if !body.remote_settle_pending {
+                continue;
+            }
+            match eligibility(guid) {
+                E::Never => {
+                    decided.push((guid, None));
+                    continue;
+                }
+                E::Wait => continue,
+                E::Eligible => {}
+            }
+            if body.remote_arc.is_some() || body.pose.is_indoors() {
+                decided.push((guid, None));
+                continue;
+            }
+            if body.position_manager.queue_active()
+                || self.remote_sticky_targets.contains_key(&guid)
+            {
+                continue;
+            }
+            if !self.landblock_collision_ready(body.pose.landblock_id.0) {
+                continue;
+            }
+            let ceiling = body.pose.coords.z + 0.05;
+            let Some((floor, _)) = remote_ground_at(self, &body.pose, ceiling) else {
+                continue;
+            };
+            // A floor the landblock next door owns (a bridge, a dock) that
+            // the arc's own-landblock floor search would fall through.
+            let Some(next_door) = self.remote_settle_neighbour_floor(&body.pose, ceiling) else {
+                continue;
+            };
+            if next_door.is_some_and(|z| z > floor + 0.05) {
+                decided.push((guid, None));
+                continue;
+            }
+            let drop = body.pose.coords.z - floor;
+            let falls = drop > REMOTE_UNKNOWN_FLOOR_M && drop <= REMOTE_SETTLE_MAX_DROP_M;
+            decided.push((guid, falls.then_some(drop)));
+        }
+        let mut started = 0;
+        for (guid, drop) in decided {
+            let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
+                continue;
+            };
+            body.remote_settle_pending = false;
+            let Some(drop) = drop else {
+                continue;
+            };
+            body.remote_arc = Some(super::RemoteArc {
+                takeoff_z: body.pose.coords.z,
+                unsampled_floor: None,
+                elapsed: 0.0,
+            });
+            body.remote_contact_plane = None;
+            // Retail `CMotionInterp::LeaveGround` (acclient.c:344457) — the
+            // rig plays Falling until the arc's hit-ground edge.
+            self.remote_airborne_changes.push((guid, true));
+            self.remote_settle_stats.0 += 1;
+            self.remote_settle_stats.1 = self.remote_settle_stats.1.max(drop);
+            started += 1;
+        }
+        started
+    }
+
+    /// spawnz — `(falls started, highest drop m)` since the last take, for the
+    /// wasm's `[remoteSettle]` console line.
+    pub fn take_remote_settle_stats(&mut self) -> (usize, f32) {
+        std::mem::take(&mut self.remote_settle_stats)
+    }
+
+    /// spawnz — the highest building / static floor at or below `ceiling_z`
+    /// under `pose` that a NEIGHBOURING landblock owns, for a body within one
+    /// land cell (24 m) of its landblock's edge: `remote_ground_at` reads only
+    /// the body's own landblock, so a bridge or dock registered next door
+    /// would be fallen through. `None` while such a neighbour's collision is
+    /// not in the scene yet (wait); `Some(None)` when it holds no floor there.
+    fn remote_settle_neighbour_floor(
+        &self,
+        pose: &WorldPosition,
+        ceiling_z: f32,
+    ) -> Option<Option<f32>> {
+        const REACH_M: f32 = 24.0;
+        let (lb_x, lb_y) = pose.landblock_coords();
+        let local = pose.coords;
+        let g = pose.global_coords();
+        let near = |d: i32, v: f32| match d {
+            -1 => v < REACH_M,
+            1 => v > 192.0 - REACH_M,
+            _ => true,
+        };
+        let mut best: Option<f32> = None;
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                if (dx == 0 && dy == 0) || !near(dx, local.x) || !near(dy, local.y) {
+                    continue;
+                }
+                let (nx, ny) = (i32::from(lb_x) + dx, i32::from(lb_y) + dy);
+                if !(0..=255).contains(&nx) || !(0..=255).contains(&ny) {
+                    continue;
+                }
+                let neighbour = ((nx as u32) << 24) | ((ny as u32) << 16);
+                if !self.landblock_collision_ready(neighbour) {
+                    return None;
+                }
+                let statics = self
+                    .statics_physics_bsp
+                    .get(&neighbour)
+                    .and_then(|list| highest_static_floor(list, g.x, g.y, ceiling_z))
+                    .map(|(z, _)| z);
+                let building = super::highest_floor_z_under(
+                    self.building_triangles_for_landblock(neighbour),
+                    g.x,
+                    g.y,
+                    ceiling_z,
+                );
+                for z in [statics, building].into_iter().flatten() {
+                    best = Some(best.map_or(z, |b| b.max(z)));
+                }
+            }
+        }
+        Some(best)
     }
 
     /// D5 — what the remote MoveTo pump needs from a remote body: its pose,
@@ -7471,6 +7784,24 @@ impl SpatialScene {
         self.local_sticky_target
     }
 
+    /// Melee lane (2026-10-18, `?stickyLiveTarget`) — the LOCAL sticky
+    /// target's live body pose: the `m_position` retail's
+    /// `StickyManager::adjust_offset` reads every frame
+    /// (`GetObjectA(target_id)`, acclient.c:388544-388547; see
+    /// [`USE_STICKY_LIVE_TARGET`]). For a remote target that is the body the
+    /// spine moves and the client draws. `None` when the switch is off,
+    /// nothing is stuck, or the target has no body here — retail then uses
+    /// its last `target_position`, which is our fed stash.
+    fn local_sticky_live_target(&self) -> Option<(Guid, WorldPosition)> {
+        if !self.sticky_live_target_enabled {
+            return None;
+        }
+        let target = self.local_sticky_target?;
+        self.body_store
+            .body(SpatialBodyId::Entity(target))
+            .map(|body| (target, body.pose))
+    }
+
     /// A3-D3 driver (M4.1) — whether the LOCAL player's
     /// position-manager interpolation queue is active (retail
     /// `CPhysicsObj::IsInterpolating`, the MoveTo driver's
@@ -7520,6 +7851,7 @@ impl SpatialScene {
         if self.local_sticky_target.is_none() {
             return LocalStickyStep::Inactive;
         }
+        let live_target = self.local_sticky_live_target();
         let Some(body) = self
             .body_store
             .bodies
@@ -7531,6 +7863,9 @@ impl SpatialScene {
         if body.position_manager.sticky_use_time(quantum) {
             self.local_sticky_target = None;
             return LocalStickyStep::TimedOut;
+        }
+        if let Some((target, pose)) = live_target {
+            body.position_manager.sticky_refresh_live_target(target, pose);
         }
         // COMBAT-RADII (2026-07-28) — `my_radius` is retail's
         // `CPartArray::GetRadius` on the STICKING object
@@ -7764,6 +8099,13 @@ impl SpatialScene {
     pub fn suspend_runtime_bodies(&mut self, now: Instant) {
         for body in self.body_store.bodies.values_mut() {
             if let Some(authoritative_pose) = body.authoritative_pose {
+                // spawnz: a remote put back on its wire pose may float again.
+                if matches!(body.id, SpatialBodyId::Entity(_))
+                    && body.remote_arc.is_none()
+                    && body.pose.coords != authoritative_pose.coords
+                {
+                    body.remote_settle_pending = true;
+                }
                 body.pose = authoritative_pose;
             }
             body.sampling.mode = SpatialSampleMode::Suspended;
