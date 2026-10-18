@@ -100,6 +100,10 @@ const LAYER_KEYS = [
   'coverageFilterWidth', 'shadow',
 ];
 
+// takram's CloudLayer default density profile (vendor CloudLayer.ts) — what a
+// layer the look does not profile is reset to.
+const DEFAULT_DENSITY_PROFILE = Object.freeze({ expTerm: 0, exponent: 0, linearTerm: 0.75, constantTerm: 0.25 });
+
 /**
  * Write one of the two looks onto a CloudsEffect (or an effect-shaped test
  * double: `{ cloudLayers: [{},{},{},{}], coverage, haze, clouds }`).
@@ -120,8 +124,7 @@ export function applyCloudLook(effect, isStorm) {
     // storm profile would leak into the fair look on restore.
     const dp = layers[i].densityProfile;
     if (dp) {
-      const p = src[i].densityProfile ??
-        { expTerm: 0, exponent: 0, linearTerm: 0.75, constantTerm: 0.25 };
+      const p = src[i].densityProfile ?? DEFAULT_DENSITY_PROFILE;
       dp.expTerm = p.expTerm; dp.exponent = p.exponent;
       dp.linearTerm = p.linearTerm; dp.constantTerm = p.constantTerm;
     }
@@ -138,6 +141,35 @@ export function applyCloudLook(effect, isStorm) {
   if (effect.clouds && 'hazeDensityScale' in effect.clouds) {
     effect.clouds.hazeDensityScale =
       isStorm ? STORM_HAZE_DENSITY : FAIR_HAZE_DENSITY;
+  }
+  return true;
+}
+
+/**
+ * True when the effect's four cloud layers carry exactly the look's values —
+ * every layer key plus the density profile. Coverage and haze are deliberately
+ * NOT compared: `?cloudCoverage` / `__setCloudCoverage` tune them live, and the
+ * look must not fight a knob. Nothing but applyCloudLook writes the layers in
+ * production, so a mismatch while the flag says this look means something
+ * reset them after the look was applied (cloud_volume.js re-applies it then).
+ *
+ * @param {Object} effect — takram CloudsEffect (or a test double)
+ * @param {boolean} isStorm
+ * @returns {boolean} also true when the effect has no usable cloudLayers
+ */
+export function cloudLayersMatchLook(effect, isStorm) {
+  const layers = effect?.cloudLayers;
+  if (!layers || layers.length < 4) return true;
+  const src = isStorm ? STORM_LAYERS : FAIR_LAYERS;
+  for (let i = 0; i < 4; i++) {
+    const l = layers[i];
+    for (const key of LAYER_KEYS) if (l[key] !== src[i][key]) return false;
+    const dp = l.densityProfile;
+    if (dp) {
+      const p = src[i].densityProfile ?? DEFAULT_DENSITY_PROFILE;
+      if (dp.expTerm !== p.expTerm || dp.exponent !== p.exponent ||
+          dp.linearTerm !== p.linearTerm || dp.constantTerm !== p.constantTerm) return false;
+    }
   }
   return true;
 }

@@ -40,7 +40,7 @@
 
 import * as THREE from 'three';
 import { CloudVolume } from './cloud_volume.js';
-import { applyCloudLook } from './cloud_storm_look.js';
+import { applyCloudLook, cloudLayersMatchLook } from './cloud_storm_look.js';
 import { updateFromPosition as wxUpdateFromPosition } from './weather_state.js';
 import {
   CloudShape, CloudShapeDetail, LocalWeather, Turbulence,
@@ -71,43 +71,25 @@ import { EffectComposer, EffectPass, RenderPass } from 'postprocessing';
  *   `?cloudsMainPass` reads use instead of the page URL. For testing.
  */
 
-// `?cloudsBootOrder` (2026-10-17, DEFAULT "legacy"; `=off|0|false|no` escape)
-// — make the clouds' boot order deterministic.
+// `?cloudsBootOrder` (2026-10-17, DEBUG KNOB, default OFF) — pin the clouds'
+// boot order for an A/B.
 //
-// THE RACE. With `?cloudsMainPass` (default on) the CloudsEffect ends up in the
-// main composer, but until the atmosphere pipeline exists (it waits for the LUTs)
+// With `?cloudsMainPass` (default on) the CloudsEffect ends up in the main
+// composer, but until the atmosphere pipeline exists (it waits for the LUTs)
 // the legacy path marches it through this overlay's private composer whenever
-// the sky pass runs. So a session's FIRST raymarch happens either on the legacy
-// private composer (the sky drew before the pipeline was built) or directly in
-// the main pass (the pipeline was built first). The 1070 A/B of 2026-10-17
-// (Holtburg pinned, 9 fresh sessions, log and reversed-Z) split exactly on that:
-// legacy-first 8/9 = the BRIGHT sky (cloud buffer alpha ~0.65-0.83), main-first
-// 1/9 = the DARK one (alpha 1.0). Relinking the four cloud programs on a bright
-// page changed nothing, and a node replica of both orders (real CloudOverlay +
-// takram + pmndrs + three over tests/helpers/fake_webgl2.mjs, real pipeline)
-// feeds every cloud draw identical uniforms, textures, texture state and
-// targets, so what the legacy first march leaves behind is not in that JS/GL
-// state — the order is made deterministic instead of guessing it.
-//
-// BRIGHT is the look that was tuned: the 2026-10-07 owner session on the 1070
-// (b8819698 vis-test → d65ae01e "1070 look pass") hit "clouds painted over hills"
-// — adoption's removePass nulling the effect's depth, which can only happen when
-// a private composer existed, i.e. a legacy-first boot — and its look calls
-// (?cloudsFullOpacity, the Neutral tone, the grade, the night floor) were made
-// on it. So by default a session that would boot main-first gets ONE legacy
-// march first (primeLegacyMarch, called by the pipeline before it builds its
-// composer — the order a legacy-first session has).
-//
-//   absent / anything else  "legacy": legacy marches as today + the prime when
-//                           none happened before the pipeline is built;
-//   `prime`                 legacy marches suppressed until adoption, the prime
-//                           always runs (forces the primed path, for the A/B);
-//   `main`                  legacy marches suppressed, no prime: always
-//                           main-first (takram's documented order; the DARK sky);
-//   `off|0|false|no`        today's race (no prime, nothing suppressed).
+// the sky pass runs, so a session's first raymarch is either legacy-first or
+// main-first, by timing. The 1070 A/B of 2026-10-17 first read the bright/dark
+// sky split as that race; the live follow-up found the switch is the STORM
+// LOOK (cloud_volume.js tick / CloudOverlay.adoptMainPass), so nothing is
+// forced by default any more. The knob stays for pinning an order:
+//   absent / anything else / `off|0|false|no`  nothing pinned (today's boot);
+//   `legacy`  a session that would boot main-first gets ONE legacy march first
+//             (primeLegacyMarch, called by the pipeline before it builds its
+//             composer);
+//   `prime`   legacy marches suppressed until adoption, the prime always runs;
+//   `main`    legacy marches suppressed, no prime: always main-first.
 // Inert without the main pass (`?cloudsMainPass=off`). Diag:
-// `window.__cloudStateDiag().timeline` (primed / firstMarch / adopted).
-const CLOUDS_BOOT_ESCAPES = new Set(['off', '0', 'false', 'no']);
+// `window.__cloudStateDiag()` (`bootOrder`, `timeline.primed/firstMarch/adopted`).
 export function cloudsBootOrder(search) {
   let v = null;
   try {
@@ -117,10 +99,8 @@ export function cloudsBootOrder(search) {
     v = null;
   }
   const t = v == null ? '' : String(v).trim().toLowerCase();
-  if (CLOUDS_BOOT_ESCAPES.has(t)) return 'race';
-  if (t === 'main') return 'main';
-  if (t === 'prime') return 'prime';
-  return 'legacy';
+  if (t === 'legacy' || t === 'main' || t === 'prime') return t;
+  return 'off';
 }
 
 /** Mirrors atmosphere_pipeline.js::cloudsMainPassEnabled (`!== "off"`). */
@@ -483,6 +463,9 @@ export class CloudOverlay {
 
     this._mainPass = true;
     if (this._diagStamps) this._diagStamps.adopted = _diagNow();
+    // The storm/fair look is edge-applied by the volume tick; re-assert it
+    // after the hand-over (cloud_volume.js tick, 2026-10-17 storm-look loss).
+    this.volume.invalidateCloudLook?.('adopted');
     return true;
   }
 
@@ -508,6 +491,7 @@ export class CloudOverlay {
     this._mainPassAP = null;
     this._mainPass = false;
     this._mainPassArmed = false;
+    this.volume?.invalidateCloudLook?.('released');
     if (this._skySceneBeforeMainPass) this.attachToSkyScene(this._skySceneBeforeMainPass);
     this._skySceneBeforeMainPass = null;
   }
@@ -1189,7 +1173,13 @@ const DIAG_CAMERA_UNIFORMS = new Set([
 function _uniformValueKey(v) {
   if (v == null) return 'null';
   if (typeof v === 'number' || typeof v === 'boolean') return String(+(+v).toPrecision(7));
-  if (v.isTexture) return 'T' + (v.id ?? '?');
+  // Texture by kind + size, NOT id: ids count textures created before it, so
+  // they differ between sessions and would make every cross-session digest
+  // differ (identities are reported per sampler in `textures`).
+  if (v.isTexture) {
+    const i = diagTextureInfo(v);
+    return `T:${i.kind}:${i.w}x${i.h}x${i.d}`;
+  }
   if (Array.isArray(v)) return '[' + v.map(_uniformValueKey).join(',') + ']';
   if (v.elements) return 'M' + Array.from(v.elements, (x) => +x.toPrecision(7)).join(',');
   if (typeof v.toArray === 'function') return 'V' + v.toArray().map((x) => +(+x).toPrecision(7)).join(',');
@@ -1301,6 +1291,11 @@ export function cloudStateSnapshot(overlay, renderer, opts = {}) {
   if (eff) {
     out.look = {
       stormLookApplied: vol._stormLookApplied ?? null,
+      // Do the layers carry the applied look right now? (false = reset after it)
+      layersMatch: typeof vol._stormLookApplied === 'boolean' ? cloudLayersMatchLook(eff, vol._stormLookApplied) : null,
+      applies: vol._lookApplies ?? null,
+      driftReapplies: vol._lookDriftReapplies ?? null,
+      log: Array.isArray(vol._lookLog) ? vol._lookLog.slice() : null,
       wxFlags: vol._wxFlags ? { ...vol._wxFlags } : null,
       coverage: typeof eff.coverage === 'number' ? eff.coverage : null,
       haze: eff.haze ?? null,

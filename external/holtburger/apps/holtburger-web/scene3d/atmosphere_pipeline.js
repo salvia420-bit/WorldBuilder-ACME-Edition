@@ -972,13 +972,11 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
   }
 
-  // `?cloudsBootOrder` (default "legacy", cloud_overlay.js cloudsBootOrder): a
-  // session whose sky never drew before this pipeline exists would hand the
-  // CloudsEffect to the main pass without the legacy first raymarch every
-  // other session has (the 2026-10-17 bright/dark split). Give it that march
-  // now, BEFORE the composer below exists — the order a legacy-first boot
-  // has. No-op when the overlay already marched, without the main pass, or
-  // with `?cloudsBootOrder=main|off`.
+  // `?cloudsBootOrder=legacy|prime` (debug knob, default off; cloud_overlay.js
+  // cloudsBootOrder): pin a legacy-first boot by giving a session whose sky
+  // never drew before this pipeline exists one legacy raymarch now, BEFORE the
+  // composer below exists. No-op by default, when the overlay already marched,
+  // or without the main pass.
   {
     const bootOverlay = cloudsMainPassEnabled()
       ? (opts?.cloudOverlay ?? globalThis.window?.liveScene3d?.cloudOverlay ?? null)
