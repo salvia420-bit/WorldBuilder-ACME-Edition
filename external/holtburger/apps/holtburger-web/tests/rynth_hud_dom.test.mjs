@@ -244,6 +244,24 @@ await check("Settings: 7 vitals thresholds drive vitals.cfg; Auto buffs; recover
   assert.ok(qa("button", sec).some((b) => b.textContent === "Auto"));
   await tick(300);
   assert.match(sec.textContent, /Recovery spells — heal:/);
+  // The buff picker (2026-10-19): one row per scroll-ladder family, under its
+  // group heading, label + best known tier; the box carries the spell id.
+  const list = q(".rhud-buff-list", sec);
+  assert.deepStrictEqual(qa(".rhud-buff-group", list).map((g) => g.textContent), ["Attributes"]);
+  const rows = qa("label", list);
+  assert.equal(rows.length, 1);
+  assert.equal(q(".rhud-grow", rows[0]).textContent, "Strength");
+  assert.equal(q(".rhud-buff-tier", rows[0]).textContent, "I");
+  assert.equal(q("input", rows[0]).value, "2");
+  // Tick + Apply: the saved list is the row's ladder spell, and the list is
+  // re-filled from it (a fresh, checked row).
+  q("input", rows[0]).checked = true;
+  click(qa("button", sec).find((b) => b.textContent === "Apply buff list"));
+  await tick(50);
+  const after = qa("label", q(".rhud-buff-list", sec));
+  assert.equal(after.length, 1);
+  assert.notEqual(after[0], rows[0], "re-rendered after Apply");
+  assert.equal(q("input", after[0]).checked, true, "checked from the saved list");
 });
 
 await check("Navigation: saved routes list + Follow; goto inputs", async () => {

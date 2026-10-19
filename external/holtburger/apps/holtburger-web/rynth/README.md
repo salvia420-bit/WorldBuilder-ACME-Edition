@@ -78,7 +78,7 @@ both through `boot.js`.
 | `hud_bridge.js` | The only file that knows the bot API for the HUD: a pure view-model snapshot + the HUD's commands. | 2026-10-12 |
 | `../plugins/rynth-hud.js` | **The RynthSuite HUD** — see below. | RynthAi dashboard |
 | `vt/` | **The VTank layer** (2026-10-13): settings profiles, the VTank monster list + expressions, items, consumables, buffs, routes, metas, loot profiles and the `/rs` `/vt` `/ra` `/mt` `/ub` commands, added to the kernel as optional `aux` slots and loop hooks that are inert at the Default profile. `?botVt=off` boots without it. See `vt/README.md`. | PLAN (`/mnt/wbterminal1/rynth-vtank-2026-10-12/design/PLAN.md`) |
-| `../plugins/rynth-vt/` | The VTank panel (9 tabs; opened by the HUD's **VT** button or `/rs ui`), loaded lazily. | VTank / RynthAi windows |
+| `../plugins/rynth-vt/` | The VTank panel (command bar + 8 tabs; opened by the HUD's **VT** button or `/rs ui`), loaded lazily. | VTank / RynthAi windows |
 
 ## The RynthSuite HUD (2026-10-12)
 

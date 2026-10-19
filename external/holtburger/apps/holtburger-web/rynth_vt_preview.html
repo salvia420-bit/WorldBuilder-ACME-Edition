@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VTank Panel Preview</title>
+    <!--
+      rynth_vt_preview.html — the RynthSuite VTank panel (plugins/rynth-vt/) on
+      a scripted world (tools/rynth-vt-preview/world.js): the real panel, bridge,
+      settings and buff ladder over a fake bot. No client, no wasm, no server —
+      for reviewing the panel's layout and wording without logging in.
+      Open http://127.0.0.1:8765/apps/holtburger-web/rynth_vt_preview.html
+      (scripts/serve.py), optionally ?tab=buffs (any panel tab).
+    -->
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        min-height: 100vh;
+        background:
+          radial-gradient(ellipse at 30% 20%, rgba(90, 110, 70, 0.35), transparent 60%),
+          radial-gradient(ellipse at 80% 90%, rgba(40, 60, 90, 0.4), transparent 55%),
+          linear-gradient(180deg, #1b2418 0%, #0e130d 100%);
+        color: #d8cfb8;
+        font: 13px/1.45 "Times New Roman", serif;
+      }
+      .note { position: absolute; left: 24px; top: 12px; right: 16px; max-width: 568px; color: #a8a090; font-size: 12px; }
+      .note b { color: #f3d27a; font-weight: normal; }
+      #hb-rynth-vt { left: 24px !important; top: 64px !important; right: auto !important; }
+      @media (max-width: 599px) { #hb-rynth-vt { left: 0 !important; top: 0 !important; zoom: 0.62; } }
+    </style>
+  </head>
+  <body>
+    <div class="note"><b>RynthSuite — VTank panel preview.</b> The real panel code on a scripted world: a developer
+      character near Holtburg, a looping route, a monster list, items, a meta and loot profiles. Every control works
+      against the fake bot; nothing reaches a server.</div>
+    <script type="module">
+      import { installHudKit } from "./ui/hud_kit.js";
+      import { installPreviewWorld } from "./tools/rynth-vt-preview/world.js";
+      import { openVtPanel } from "./plugins/rynth-vt/panel.js";
+
+      installHudKit();
+      await installPreviewWorld(window);
+      const tab = new URLSearchParams(location.search).get("tab") || "main";
+      await openVtPanel({ tab });
+    </script>
+  </body>
+</html>

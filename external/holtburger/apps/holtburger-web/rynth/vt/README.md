@@ -19,7 +19,7 @@ checklist on the 1070 is still pending.
 - **At the Default profile it changes nothing.** Every new option defaults to today's
   behaviour (D3); the parity oracle `tests/rynth_vt_parity.test.mjs` (T-P1) runs one
   scripted world with and without the layer and compares every kernel action and every host
-  action call. The VTank/RynthAi defaults are one click away: **Profiles → Apply
+  action call. The VTank/RynthAi defaults are one click away: **⋯ (profile drawer) → Apply
   VTank/RynthAi defaults** (or `/rs settings preset vtank`) writes Autostack, Autocram, Peace
   Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells and pet refill into the active (user)
   profile. These are RynthAi's values (`LegacyUiSettings.cs`, PLAN D3), not read from a
@@ -33,7 +33,7 @@ checklist on the 1070 is still pending.
 |---|---|
 | `/rs …` `/vt …` (chat bar, meta Chat actions, nav Chat points, `host.InvokeChatParser`) | `app/slash_commands.js` hands the line to `window.__rynthVt.route` (`rs_entry.js`) — **never to ACE**. `/ra` `/mt` `/ub` are the RynthAi / Mag-Tools / UtilityBelt compat tables. `@rs …` still goes to the server as typed. |
 | `!bot rs …` / `!bot vt …` tells | `control_channel.js` → the bot's dispatcher (owner allowlist + rate limit unchanged); the first 3 result lines are the reply. |
-| RynthSuite HUD → **VT** button (selectors row), `/rs ui [tab]` | Opens the VTank panel (`plugins/rynth-vt/panel.js`, lazy), 9 tabs: Options (+ Advanced) · Profiles · Vitals · Monsters · Items · Consumables · Buffs · Route · Meta. |
+| RynthSuite HUD → **VT** button (selectors row), `/rs ui [tab]` | Opens the VTank panel (`plugins/rynth-vt/panel.js`, lazy). A command bar (RUN · COMBAT BUFF NAV LOOT META · profile ▾ · ⋯ Save As / Delete / presets) over one row of 8 tabs: Main (Options + Vitals) · Monsters · Items (+ Consumables) · Buffs · Route · Loot · Meta · Advanced. The v1 tab names still open (`/rs ui vitals` → Main, `consumables` → Items, `profiles` → Main). `rynth_vt_preview.html` shows the panel on a scripted world, without a client. |
 | RynthSuite HUD **Nav** toggle | With a VTank route loaded it is that route's navigation (EnableNavigation + resume); otherwise the old atlas follow / cancel. HUD "Stop moving" pauses a VTank route until Nav is clicked again. |
 
 `/rs help` lists every verb; `/ra help`, `/mt help`, `/ub help` the compat ones. Settings and
@@ -199,7 +199,7 @@ selector is now labelled "Persona" instead of "Profile".
   `?botVt=off` page they always use the HUD blob, as before the layer); the HUD's own
   edits (monster priorities, loot floor, vitals, buff list) still write `rynth.hud.settings.v1`
   and are also noted into the active profile (Default ⇒ the overlay). **Import HUD settings**
-  (Profiles tab, `/rs settings importhud`) copies the HUD blob into a user profile.
+  (the panel's ⋯ profile drawer, `/rs settings importhud`) copies the HUD blob into a user profile.
 - Selecting a profile pushes all of its values (legacy ones included) and loads its nav
   profile, meta and loot profile — except a meta that is already running under the same
   name, which keeps its state, call stack and timers (a meta can switch profiles from its own
@@ -223,6 +223,13 @@ selector is now labelled "Persona" instead of "Profile".
   buff and vitals loops' `setSkillCap` (one `rynth/skill_cap.js` `createHostSkillCap` over
   the host, rebuilt when a threshold changes, re-applied to a loop `bot.setBuffs` replaced);
   off — the default — never touches a loop, and turning it off hands both loops `null`.
+- **The scroll ladder** (2026-10-19): `rynth/spell_ladders.json` marks every buff family's
+  scroll spells, tiers I–VIII (`rynth/buff_families.js`; checked against the ACE world
+  DB's scroll items). The Buffs tab and Auto only ever show and cast those — a developer who
+  knows every spell no longer gets Zongo's Fist for Strength or Combat Medication (60 s) for
+  Regeneration. The Buffs tab writes family selections only (`toLadderSpec`), and `index.js`
+  rewrites a list saved before the ladder flags onto the ladder once the table is loaded
+  (the bot casts an off-ladder id in an explicit `?botBuffs` / HUD spec exactly as named).
 
 Storage (all `localStorage`, try/catch everywhere):
 
@@ -233,7 +240,7 @@ Storage (all `localStorage`, try/catch everywhere):
 | `rynth.vt.v1.nav.<name>`, `rynth.vt.v1.meta.<name>`, `rynth.vt.v1.loot.<name>` | nav routes, metas, loot profiles (overwrite on save) |
 | `rynth.vt.v1.pvars.<guid>`, `rynth.vt.v1.gvars` | persistent / global meta variables (scalars); global ones written by another tab are re-read, and a flush merges only this tab's own changes |
 | `rynth.vt.v1.creatures` | learned creature profiles (LRU 2000) |
-| `rynth.vt.ui.v1` | panel prefs (open, tab, opacity); its position is `hb.window.ffff0141` |
+| `rynth.vt.ui.v1` | panel prefs (open, tab, opacity, Route tab "Show path" and add kind); its position is `hb.window.ffff0141` |
 
 ## Expressions (monster list and metas)
 
@@ -273,6 +280,14 @@ One dialect for both (PLAN §3.4). Things that differ from what you might expect
   NPC Talk, Checkpoint, Jump) follow §2.8 of the plan. Stuck points retry, jump, skip, then
   pause with a chat alert; unwedge's recall / `@teleloc` rungs are suppressed while a VT route
   is active.
+- The route is drawn in the 3D world (2026-10-19, `scene3d/route_overlay.js`, as VTank drew it
+  in the retail client): a ring at every walked waypoint (at the arrival radius), the path
+  between them with direction chevrons (a dashed closing leg on Circular routes; teleport legs
+  hidden), the in-place waypoints (Recall, Pause, Chat, Checkpoint, Jump) as small gems at the
+  waypoint they run at, the current waypoint pulsing green with a line from your feet. It
+  shows while the panel's Route tab is open, or always with the tab's **Show path** pinned
+  (also after a reload, without opening the panel); `NavLineThickness` / `NavRingThickness`
+  (Advanced › Navigation) set its widths. Six draw calls while shown, none when hidden.
 - `/rs reverseroute` reverses the points and moves the index to the same waypoint, so the walk
   turns around on Circular and Linear routes (it does not also flip a Linear route's
   direction, as C# `MetaManager`; the plan's "flip" was dropped). `true` / `false` are

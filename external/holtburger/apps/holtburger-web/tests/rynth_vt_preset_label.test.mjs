@@ -9,7 +9,9 @@
 // not pinned here — the title's listed settings are checked AGAINST
 // PRESETS.vtank, so a later value change must update the title too.
 //
-// Mounts plugins/rynth-vt/tab_profiles.js alone on the small fake DOM
+// Mounts the panel's command bar (plugins/rynth-vt/bar.js — the preset button
+// lives in its profile drawer since the v2 layout, 2026-10-19; v1 had it on
+// the Profiles tab) alone on the small fake DOM
 // (tests/helpers/social_fake_dom.mjs) with a fake bridge.
 //
 // Run from apps/holtburger-web/:  node tests/rynth_vt_preset_label.test.mjs
@@ -20,7 +22,7 @@ import { installFakeDom, FakeEvent } from "./helpers/social_fake_dom.mjs";
 globalThis.window = globalThis;
 const { document } = installFakeDom(globalThis);
 
-const { createProfilesTab } = await import("../plugins/rynth-vt/tab_profiles.js");
+const { createCommandBar } = await import("../plugins/rynth-vt/bar.js");
 const { PRESETS } = await import("../rynth/vt/settings/schema.js");
 
 let pass = 0;
@@ -52,9 +54,11 @@ const ctx = {
   report: (r, okText) => reports.push([r, okText]),
   refresh: () => {},
 };
-const tab = createProfilesTab(ctx);
-document.body.appendChild(tab.el);
-const presetBtn = () => qa("button", tab.el).find((b) => /defaults/.test(b.textContent)) || null;
+const bar = createCommandBar(ctx);
+document.body.append(bar.el, bar.drawer);
+const presetBtn = () => qa("button", bar.drawer).find((b) => /defaults/.test(b.textContent)) || null;
+const snapFor = (active) => ({ run: { phase: "running" }, header: { active, profiles: [{ name: active.name, kind: active.kind, label: active.name }], switches: {} } });
+const tab = { update: (snap) => bar.update(snapFor(snap.view.active)) };
 
 await check("the preset button reads 'Apply VTank/RynthAi defaults'", () => {
   const b = presetBtn();

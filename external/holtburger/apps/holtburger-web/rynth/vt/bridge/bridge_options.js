@@ -1,11 +1,14 @@
 // rynth/vt/bridge/bridge_options.js — the VT bridge's settings side (PLAN
-// W1-10, §3.16; G:1-58).
+// W1-10, §3.16; G:1-66).
 //
-// Options tab (G:1-42), its "Advanced…" sub-view (every SCHEMA row, grouped,
-// typed, inert rows flagged), the Vitals tab (G:60-66) and the Profiles tab
-// (G:44-58): pure view-models over VtOptions + the commands the panel drives.
-// Everything here works WITHOUT a bot (the page session's VtOptions), which is
-// how a player edits a profile before pressing START.
+// The panel's command bar (Run Macro, the five subsystem switches, the
+// profile select — G:7, G:20-21, G:51-57, G:237), the Main tab (VTank's
+// Options page G:14-42 + the Vitals page G:60-66, with the player's live
+// vitals) and the Advanced tab (the rows no other tab shows; a filter
+// searches every SCHEMA row): pure view-models over VtOptions + the commands
+// the panel drives. PANEL_LAYOUT is the one table that says which tab shows
+// which setting. Everything here works WITHOUT a bot (the page session's
+// VtOptions), which is how a player edits a profile before pressing START.
 //
 // This file also hosts the bridge's tiny shared helpers (safe / ok / fail /
 // command), imported by the other bridge files — the package has no util
@@ -147,9 +150,100 @@ export function forceRebuffState(bot) {
   };
 }
 
+// ── panel layout: which tab shows which setting ────────────────────────────
+//
+// The command bar carries the five subsystem switches (VTank scattered them
+// over Options, Profiles and Meta); Main is VTank's Options page plus the
+// Vitals page; Buffs and Loot show the few knobs that belong to them. Every
+// row not placed here — today's advanced page, and any row a later schema
+// adds — lands on the Advanced tab, so nothing can go missing.
+
+/** Command-bar switch id → canonical key (G:20-21, G:56-57, G:237). */
+export const SUBSYSTEM_KEYS = Object.freeze({
+  combat: "EnableCombat",
+  buff: "EnableBuffing",
+  nav: "EnableNavigation",
+  loot: "EnableLooting",
+  meta: "EnableMeta",
+});
+
+/** Main tab: ranges, behaviour switches and pets (G:14-42 minus the subsystems). */
+export const MAIN_LAYOUT = Object.freeze({
+  ranges: Object.freeze(["MonsterRange", "RingRange", "ApproachRange", "FollowNavMin"]),
+  behaviour: Object.freeze([
+    "BoostNavPriority", "BoostLootPriority", "PeaceModeWhenIdle", "RebuffWhenIdle", "EnableAutostack", "EnableAutocram",
+    "UseDispelItems", "CastDispelSelf", "AutoFellowMgmt", "ManaChargesWhenOff",
+  ]),
+  pets: Object.freeze(["SummonPets", "CustomPetRangeEnabled", "CustomPetRange", "PetMinMonsters"]),
+});
+
+/** Main tab: the vitals matrix (G:60-66) — top-off and in-combat levels per
+ *  vital, plus the emergency Stamina→Health rule and the Stamina→Mana floor
+ *  (rynth/vitals.js B15/B16). */
+export const VITALS_KEYS = Object.freeze({
+  topOff: Object.freeze({ hp: "TopOffHP", st: "TopOffStam", mn: "TopOffMana" }),
+  combat: Object.freeze({ hp: "HealAt", st: "RestamAt", mn: "GetManaAt" }),
+  emergencyHp: "EmergencyHP",
+  emergencyStamFloor: "EmergencyStamFloor",
+  manaRechargeStamFloor: "ManaRechargeStamFloor",
+});
+
+export const BUFFS_TAB_KEYS = Object.freeze(["RebuffSecondsRemaining", "BuffTierSkillCap"]);
+export const LOOT_TAB_KEYS = Object.freeze(["LootMinValue", "CorpseApproachRangeMax"]);
+/** Never drawn: Show Editor has no function (deprecated in VTank too, G:58). */
+const HIDDEN_KEYS = Object.freeze(["ShowEditor"]);
+
+const HOME = new Map();
+const home = (keys, where) => {
+  for (const k of keys) HOME.set(k, where);
+};
+home(Object.values(SUBSYSTEM_KEYS), "bar");
+home([...MAIN_LAYOUT.ranges, ...MAIN_LAYOUT.behaviour, ...MAIN_LAYOUT.pets], "main");
+home([
+  ...Object.values(VITALS_KEYS.topOff), ...Object.values(VITALS_KEYS.combat),
+  VITALS_KEYS.emergencyHp, VITALS_KEYS.emergencyStamFloor, VITALS_KEYS.manaRechargeStamFloor,
+], "main");
+home(BUFFS_TAB_KEYS, "buffs");
+home(LOOT_TAB_KEYS, "loot");
+home(HIDDEN_KEYS, "hidden");
+
+/** Where the panel shows a setting: "bar" | "main" | "buffs" | "loot" | "hidden" | "advanced". */
+export function settingHome(key) {
+  return HOME.get(String(key)) || "advanced";
+}
+
+// ── live vitals (no bot needed) ────────────────────────────────────────────
+
+// SessionHandle.playerStats().vitals: stride-4 [type, current, base, max];
+// types = rynth/vitals.js VITAL_HEALTH 1 / STAMINA 3 / MANA 5 (the same read
+// as rynth/hud_bridge.js readPlayerVitals; C2 keeps the bridge self-contained).
+const VITAL_SLOT = Object.freeze({ 1: "hp", 3: "st", 5: "mn" });
+
+/** { hp, st, mn } → { cur, max } | null. The wasm stats box is copied, then freed. */
+export function readVitals(handle) {
+  const out = { hp: null, st: null, mn: null };
+  const v = safe(() => {
+    const box = handle?.playerStats?.();
+    try {
+      return Array.from(box?.vitals || []).map(Number);
+    } finally {
+      try {
+        if (box && typeof box.free === "function") box.free();
+      } catch {
+        /* already freed */
+      }
+    }
+  }, []) || [];
+  for (let i = 0; i + 3 < v.length; i += 4) {
+    const slot = VITAL_SLOT[v[i]];
+    if (slot && v[i + 3] > 0) out[slot] = { cur: Math.max(0, v[i + 1]), max: v[i + 3] };
+  }
+  return out;
+}
+
 // ── view-models ────────────────────────────────────────────────────────────
 
-/** Active profile summary (every tab shows the Default read-only banner). */
+/** Active profile summary (the command bar's profile select and read-only chip). */
 export function profileSummary(options) {
   const a = safe(() => options?.profiles?.active?.(), null);
   if (!a) return null;
@@ -163,82 +257,93 @@ export function profileSummary(options) {
   };
 }
 
-/** Options tab (G:1-42): page "options" rows by group + run/force-buff state. */
-export function optionsTabView(options, bot) {
-  const rows = allRows(options);
+const PROFILE_LIST_TTL_MS = 2000;
+
+/**
+ * The command bar (every tab, every refresh): the five subsystem switches,
+ * the profile list for the select (ProfileStore.list() walks storage keys, so
+ * it is reused for a moment — `cache` is the caller's { at, options, list }),
+ * and the Mine Only state. `live` = { navStatus } from the snapshot's single
+ * bot.vt read: a paused route shows its switch as paused.
+ */
+export function headerView(options, { now = Date.now(), cache = null, navStatus = null } = {}) {
+  const value = (k) => safe(() => options?.getValue?.(k), null);
+  const switches = {};
+  for (const [id, key] of Object.entries(SUBSYSTEM_KEYS)) {
+    switches[id] = { key, on: !!value(key), available: !!options };
+  }
+  if (navStatus && navStatus.paused) switches.nav.paused = String(navStatus.paused.reason || navStatus.paused);
+  let list;
+  if (cache && cache.options === options && now - cache.at < PROFILE_LIST_TTL_MS) list = cache.list;
+  else {
+    list = (safe(() => options?.profiles?.list?.(), []) || []).map((p) => ({
+      name: String(p.name ?? ""),
+      kind: String(p.kind ?? ""),
+      label: String(p.label ?? p.name ?? ""),
+    }));
+    if (cache) Object.assign(cache, { at: now, options, list });
+  }
+  const active = profileSummary(options);
   return {
-    groups: groupRows(rows.filter((r) => r.page === "options")),
-    run: runState(bot),
-    forceRebuff: forceRebuffState(bot),
+    switches,
+    profiles: list,
+    active,
+    mineOnly: !!(active && (active.kind === "char" || active.kind === "bychar")),
+    presets: ["vtank"],
   };
 }
 
-/** The "Advanced…" sub-view: EVERY schema row, grouped, filterable. */
+/** Main tab: ranges, the vitals matrix (with the player's live vitals), behaviour switches, pets. */
+export function mainTabView(options, live = null) {
+  const byKey = new Map(allRows(options).map((r) => [r.key, r]));
+  const pick = (keys) => keys.map((k) => byKey.get(k)).filter(Boolean);
+  const trio = (o) => ({ hp: byKey.get(o.hp) || null, st: byKey.get(o.st) || null, mn: byKey.get(o.mn) || null });
+  return {
+    available: byKey.size > 0,
+    ranges: pick(MAIN_LAYOUT.ranges),
+    behaviour: pick(MAIN_LAYOUT.behaviour),
+    pets: pick(MAIN_LAYOUT.pets),
+    vitals: {
+      topOff: trio(VITALS_KEYS.topOff),
+      combat: trio(VITALS_KEYS.combat),
+      emergencyHp: byKey.get(VITALS_KEYS.emergencyHp) || null,
+      emergencyStamFloor: byKey.get(VITALS_KEYS.emergencyStamFloor) || null,
+      manaRechargeStamFloor: byKey.get(VITALS_KEYS.manaRechargeStamFloor) || null,
+      live: live && typeof live === "object" ? live : { hp: null, st: null, mn: null },
+    },
+  };
+}
+
+/** The rows of `keys` (in that order) — the Buffs and Loot tabs' own knobs. */
+export function rowsFor(options, keys) {
+  const byKey = new Map(allRows(options).map((r) => [r.key, r]));
+  return keys.map((k) => byKey.get(k)).filter(Boolean);
+}
+
+/**
+ * Advanced tab: every row no other tab shows, grouped, inert ("Not on web")
+ * last. With a filter it searches EVERY row (name, label, VTank name, group)
+ * and says where each one normally lives (`home`).
+ */
 export function advancedTabView(options, filter = "") {
   const f = String(filter ?? "").trim().toLowerCase();
-  let rows = allRows(options);
-  if (f) {
-    rows = rows.filter((r) =>
-      [r.key, r.label, r.group, r.page, ...r.vtNames].some((s) => String(s).toLowerCase().includes(f)),
-    );
-  }
+  const all = allRows(options).map((r) => ({ ...r, home: settingHome(r.key) }));
+  const rows = f ? all.filter((r) => advancedMatch(r, f)) : all.filter((r) => r.home === "advanced");
   const order = (r) => {
     const i = PAGE_ORDER.indexOf(r.page);
     return i < 0 ? PAGE_ORDER.length : i;
   };
   const sorted = rows.map((r, i) => [r, i]).sort((a, b) => order(a[0]) - order(b[0]) || a[1] - b[1]).map((x) => x[0]);
-  // "Not on web" (inert) last, whatever page it sits on.
   const live = sorted.filter((r) => !r.inert);
   const inert = sorted.filter((r) => r.inert);
-  return { filter: f, groups: groupRows([...live, ...inert]), count: rows.length };
-}
-
-// Vitals tab (G:60-66): the six VTank fields + the three web extras.
-const VITALS_LAYOUT = Object.freeze([
-  { title: "Top-off levels (no combat target)", keys: ["TopOffHP", "TopOffStam", "TopOffMana"] },
-  { title: "In combat (recharge at)", keys: ["HealAt", "RestamAt", "GetManaAt"] },
-  { title: "Web extras", keys: ["EmergencyHP", "EmergencyStamFloor", "ManaRechargeStamFloor"] },
-]);
-
-export function vitalsTabView(options) {
-  const rows = allRows(options).filter((r) => r.page === "vitals");
-  const byKey = new Map(rows.map((r) => [r.key, r]));
-  const used = new Set();
-  const groups = [];
-  for (const g of VITALS_LAYOUT) {
-    const list = g.keys.map((k) => byKey.get(k)).filter(Boolean);
-    for (const r of list) used.add(r.key);
-    if (list.length) groups.push({ group: g.title, rows: list });
-  }
-  const rest = rows.filter((r) => !used.has(r.key));
-  if (rest.length) groups.push({ group: "Other", rows: rest });
-  return { groups };
-}
-
-const PROFILE_KEYS = Object.freeze(["EnableNavigation", "EnableLooting", "ShowEditor"]);
-
-/** Profiles tab (G:44-58): profiles + the three checkboxes + refs.
- *  Nav profiles and loot profiles are filled in by the lists/route bridges. */
-export function profilesTabView(options) {
-  const list = safe(() => options?.profiles?.list?.(), []) || [];
-  const active = profileSummary(options);
-  const rows = new Map(allRows(options).map((r) => [r.key, r]));
-  const toggles = {};
-  for (const k of PROFILE_KEYS) toggles[k] = rows.get(k) || null;
-  const ref = (n) => safe(() => options?.getRef?.(n), null);
   return {
-    profiles: list.map((p) => ({
-      name: String(p.name ?? ""),
-      kind: String(p.kind ?? ""),
-      label: String(p.label ?? p.name ?? ""),
-    })),
-    active,
-    mineOnly: !!(active && (active.kind === "char" || active.kind === "bychar")),
-    readOnly: !!(active && active.readOnly),
-    banner: active && active.readOnly ? "Default is read-only — Save As to keep changes" : null,
-    toggles,
-    refs: { navProfile: ref("navProfile"), metaName: ref("metaName"), lootProfile: ref("lootProfile") },
-    presets: ["vtank"],
+    filter: f,
+    searching: !!f,
+    groups: groupRows(live),
+    inert: groupRows(inert),
+    count: live.length,
+    inertCount: inert.length,
+    total: all.length,
   };
 }
 

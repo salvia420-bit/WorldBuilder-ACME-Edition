@@ -1076,6 +1076,11 @@ const TIER5 = [
   { tier: 5, flag: "staticAnchorRadius", file: "tests/static_anchor_radius.test.mjs" },
   { tier: 5, flag: "combatModePendingProxy", file: "tests/combat_mode_pending_proxy.test.mjs" },
   { tier: 5, flag: "rynthVtSkillCapWiring", file: "tests/rynth_vt_skill_cap_wiring.test.mjs" },
+  // 2026-10-19 buff scroll ladder: canonical families (a dev character never gets Zongo's Fist) + the VT list migration.
+  { tier: 5, flag: "rynthBuffCanonical", file: "tests/rynth_buff_canonical.test.mjs" },
+  { tier: 5, flag: "rynthVtBuffSpecMigration", file: "tests/rynth_vt_buff_spec_migration.test.mjs" },
+  // 2026-10-19 the VTank route drawn in the world (scene3d/route_overlay.js; Route tab › Show path).
+  { tier: 5, flag: "rynthRouteOverlay", file: "tests/route_overlay.test.mjs" },
   { tier: 5, flag: "rynthIndoorDoorways", file: "tests/rynth_indoor_doorways.test.mjs" },  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): scene3d/film/** + tools/film/** suites (SPEC scene3d/film/SPEC.md).
   { tier: 5, flag: "filmMode(audio_lyrics)", file: "tests/film_audio_lyrics.test.mjs" },
   { tier: 5, flag: "filmMode(audio_structure)", file: "tests/film_audio_structure.test.mjs" },

@@ -207,8 +207,10 @@ async function main() {
       const reqB = host.calls.melee.length;
       host.emit(combatEvt("attackDone", { error: "ActionCancelled" }));
       NOW += 1500; loop.tick();
-      check("the cancelled loop's stale ActionCancelled does not end the new engagement",
-        reqB === 2 && host.calls.melee.length === 2, `reqB=${reqB} now=${host.calls.melee.length}`);
+      // b's request waits for the cancelled loop's ActionCancelled (ACE drops a
+      // request while that loop is still `Attacking`), then goes out once.
+      check("the cancelled loop's stale ActionCancelled releases b's held request and does not end the new engagement",
+        reqB === 1 && host.calls.melee.length === 2, `reqB=${reqB} now=${host.calls.melee.length}`);
       // Kill b (hp=0): no cancel; the kill's own late ActionCancelled is swallowed.
       b.hf = 0;
       NOW += 100; loop.tick();

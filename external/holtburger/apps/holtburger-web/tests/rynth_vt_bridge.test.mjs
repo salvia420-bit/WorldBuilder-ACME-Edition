@@ -41,7 +41,8 @@ async function check(name, fn) {
     console.log(`  FAIL ${name}\n       ${e && e.stack ? e.stack.split("\n").slice(0, 4).join("\n       ") : e}`);
   }
 }
-const ALL_TABS = [...VT_TABS, "advanced"];
+// v2 tabs + the v1 names `/rs ui` still accepts
+const ALL_TABS = [...VT_TABS, "options", "vitals", "profiles", "consumables"];
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
 // ── fakes ──────────────────────────────────────────────────────────────
@@ -336,9 +337,14 @@ await check("normalizeTab: ids, aliases, advanced", () => {
   assert.equal(normalizeTab("Route"), "route");
   assert.equal(normalizeTab("nav"), "route");
   assert.equal(normalizeTab("ADVANCED"), "advanced");
-  assert.equal(normalizeTab("settings"), "profiles");
+  assert.equal(normalizeTab("settings"), "main");
+  assert.equal(normalizeTab("vitals"), "main", "v1 Vitals joined Main");
+  assert.equal(normalizeTab("options"), "main");
+  assert.equal(normalizeTab("profiles"), "main");
+  assert.equal(normalizeTab("Consumables"), "items", "v1 Consumables joined Items");
+  assert.equal(normalizeTab("loot"), "loot");
   assert.equal(normalizeTab("bogus"), null);
-  assert.equal(VT_TABS.length, 9);
+  assert.deepStrictEqual([...VT_TABS], ["main", "monsters", "items", "buffs", "route", "loot", "meta", "advanced"]);
 });
 
 await check("never throws on a broken bot surface (throwing getters and services)", async () => {
@@ -391,12 +397,20 @@ await check("works with NO bot: opt/profiles go to win.__rynthVt.session().optio
   const win = { __bot: null, __rynthVt: { session: () => ({ options }) } };
   const b = createVtBridge({ win });
   const snap = b.snapshot("options");
+  assert.equal(snap.tab, "main", "v1 name → Main");
   assert.equal(snap.present, false);
   assert.equal(snap.settings, true);
   assert.equal(snap.run.phase, "no-bot");
-  const groups = snap.view.groups.map((g) => g.group);
-  assert.deepStrictEqual(groups, ["Subsystems", "Ranges"]);
-  const mr = snap.view.groups[1].rows[0];
+  assert.deepStrictEqual(snap.view.ranges.map((r) => r.key), ["MonsterRange"]);
+  // the command bar: five switches from the options, the profile list
+  const hdr = snap.header;
+  assert.deepStrictEqual(Object.keys(hdr.switches), ["combat", "buff", "nav", "loot", "meta"]);
+  assert.equal(hdr.switches.combat.on, true);
+  assert.equal(hdr.switches.nav.on, false);
+  assert.equal(hdr.switches.buff.available, true, "EnableBuffing has no row here: off, still switchable");
+  assert.deepStrictEqual(hdr.profiles.map((p) => p.name), ["Default", "[By char]", "Hunt"]);
+  assert.equal(hdr.active.readOnly, true);
+  const mr = snap.view.ranges[0];
   assert.equal(mr.key, "MonsterRange");
   assert.equal(mr.lbf, true);
   assert.equal(mr.unitText, "m");
@@ -433,19 +447,27 @@ await check("works with NO bot: opt/profiles go to win.__rynthVt.session().optio
   assert.equal(r.ok, true);
   const tail = options.calls.slice(-2);
   assert.deepStrictEqual(tail, [["selectProfile", "Default", "default"], ["profiles.remove", "MyHunt", "char"]]);
-  // Vitals + Advanced + Profiles snapshots also work bot-less
+  // Main (vitals) + Advanced + Loot snapshots also work bot-less
   const v = b.snapshot("vitals").view;
-  assert.deepStrictEqual(v.groups.map((g) => g.group), ["Top-off levels (no combat target)", "In combat (recharge at)", "Web extras"]);
-  assert.equal(v.groups[2].rows[0].web, true);
+  assert.equal(v.vitals.topOff.hp.key, "TopOffHP");
+  assert.equal(v.vitals.combat.hp.key, "HealAt");
+  assert.equal(v.vitals.combat.st, null, "no RestamAt row in this schema");
+  assert.equal(v.vitals.emergencyHp.web, true);
+  assert.deepStrictEqual(v.vitals.live, { hp: null, st: null, mn: null }, "no session handle: no live vitals");
   const adv = b.snapshot("advanced").view;
-  assert.equal(adv.count, ROWS.length, "every schema row");
-  assert.equal(adv.groups.at(-1).group, "Not on web", "inert rows last");
+  assert.deepStrictEqual(adv.groups.flatMap((g) => g.rows.map((x) => x.key)), ["AttackHeight"], "only what no other tab shows");
+  assert.deepStrictEqual(adv.inert.flatMap((g) => g.rows.map((x) => x.key)), ["DoJiggle"], "inert rows apart (ShowEditor is never drawn)");
+  assert.equal(adv.total, ROWS.length);
   await b.opt.setFilter("height");
   assert.deepStrictEqual(b.snapshot("advanced").view.groups.flatMap((g) => g.rows.map((x) => x.key)), ["AttackHeight"]);
-  const p = b.snapshot("profiles").view;
-  assert.ok(p.toggles.EnableNavigation && p.toggles.EnableLooting && p.toggles.ShowEditor);
-  assert.equal(p.navProfiles.available, false);
-  assert.equal(p.loot.available, false);
+  await b.opt.setFilter("range");
+  const found = b.snapshot("advanced").view.groups.flatMap((g) => g.rows);
+  assert.deepStrictEqual(found.map((x) => [x.key, x.home]), [["MonsterRange", "main"]], "the filter searches every row and names its home");
+  await b.opt.setFilter("");
+  assert.deepStrictEqual(b.snapshot("buffs").view.rows.map((x) => x.key), ["RebuffSecondsRemaining"], "the Buffs tab's own knobs");
+  const lt = b.snapshot("loot").view;
+  assert.equal(lt.available, false);
+  assert.deepStrictEqual(lt.rows, [], "no LootMinValue row in this schema");
   // Monsters list edits work without a bot (profile list)
   assert.equal((await b.monsters.add("Drudge Skulker")).ok, true);
   assert.equal(options.lists.monsters.length, 2, "DEFAULT row + entry stored");
@@ -676,7 +698,7 @@ await check("loot.* and meta import/export/load/save go through bot.vt.library",
   ]);
   assert.equal(lib.calls.at(-1)[1], "hunt2");
   assert.equal(lib.calls.at(-1)[2].rules.length, 3, "saveMeta gets the engine's current meta");
-  const pv = b.snapshot("profiles").view.loot;
+  const pv = b.snapshot("loot").view;
   assert.deepStrictEqual(pv.nodeTypes.map((t) => t.name), ["SpellNameMatch", "StringValueMatch"]);
   assert.equal(pv.available, true);
   // without a library: a clean refusal
@@ -731,14 +753,17 @@ await check("buffs.setEnabled / setAuto project the enabled set as lists.buffs.s
   await b.buffs.list();
   v = b.snapshot("buffs").view;
   assert.equal(v.loading, false);
-  assert.deepStrictEqual(v.rows.map((r) => [r.spellId, r.tier, r.schoolName, r.remainingS, r.enabled]), [[11, 8, "Creature", 120, true], [20, 6, "Creature", null, true], [30, 7, "Creature", null, true]]);
+  assert.deepStrictEqual(v.buffs.map((r) => [r.spellId, r.tier, r.schoolName, r.remainingS, r.enabled, r.state]), [[11, 8, "Creature", 120, true, "low"], [20, 6, "Creature", null, true, "missing"], [30, 7, "Creature", null, true, "missing"]]);
+  assert.deepStrictEqual(v.summary, { total: 3, enabled: 3, active: 1, low: 1, soon: 0, missing: 2 });
+  assert.equal(v.buffs[0].tierText, "VIII");
   assert.equal(v.auto, true, "no buff config = auto");
   let r = await b.buffs.setEnabled(20, false);
   assert.equal(r.ok, true);
   assert.deepStrictEqual(w.options.lists.buffs.spec, [11, 30]);
   assert.deepStrictEqual(w.options.lists.buffs.disabled, [20]);
   v = b.snapshot("buffs").view;
-  assert.deepStrictEqual(v.rows.map((x) => x.enabled), [true, false, true]);
+  assert.deepStrictEqual(v.buffs.map((x) => x.enabled), [true, false, true]);
+  assert.equal(v.buffs[1].state, "off");
   r = await b.buffs.setEnabled(20, true);
   assert.deepStrictEqual(w.options.lists.buffs.spec, [11, 20, 30], "back in dynamic order");
   r = await b.buffs.setAuto(true);
@@ -747,6 +772,15 @@ await check("buffs.setEnabled / setAuto project the enabled set as lists.buffs.s
   assert.deepStrictEqual(w.options.lists.buffs.spec, [11, 20, 30]);
   r = await b.buffs.setEnabled(11, false);
   assert.deepStrictEqual(w.options.lists.buffs.spec, [20, 30]);
+  // a whole group in ONE write (the Buffs tab's group box)
+  const writes = w.options.calls.filter((c) => c[0] === "setList").length;
+  r = await b.buffs.setEnabledMany([20, 30], false);
+  assert.equal(r.ok, true);
+  assert.equal(w.options.calls.filter((c) => c[0] === "setList").length, writes + 1, "one write");
+  assert.deepStrictEqual(w.options.lists.buffs.spec, []);
+  r = await b.buffs.setEnabledMany([11, 20, 30], true);
+  assert.deepStrictEqual(w.options.lists.buffs.spec, [11, 20, 30]);
+  assert.equal((await b.buffs.setEnabledMany([], true)).ok, false);
   // nothing known yet (not logged in / unreadable spellbook): an explicit
   // projection would store spec [] = buff nothing → refused, list untouched
   const w2 = makeWorld({ host: { TryGetKnownSpells: () => [] } });
@@ -769,10 +803,14 @@ await check("Buffs tab with the REAL buff_loop.js ladder (default importer)", as
   const r = await b.buffs.list();
   assert.equal(r.ok, true, r.error);
   assert.equal(r.loading, false);
-  const ids = r.rows.map((x) => x.spellId);
+  const ids = r.buffs.map((x) => x.spellId);
   assert.ok(ids.includes(2087) && ids.includes(1450), `best tier per family: ${ids}`);
   assert.ok(!ids.includes(2), "Strength I collapses into its family's best tier");
-  assert.equal(r.rows.find((x) => x.spellId === 2087).tier, 7);
+  const str = r.buffs.find((x) => x.spellId === 2087);
+  assert.equal(str.tier, 7);
+  assert.equal(str.familyLabel, "Strength");
+  assert.equal(str.group, "Attributes");
+  assert.deepStrictEqual(r.groups.map((g) => g.group), ["Attributes"], "Strength + Willpower are both attributes");
 });
 
 await check("navProfiles.saveAs → nav.save; select → nav.loadByName; route.add uses insert mode + selection", async () => {
@@ -927,6 +965,118 @@ await check("ensureViewRenderer attaches only when the ViewManager has none", ()
   assert.equal(b.releaseViewRenderer(mine), false);
   assert.equal(b.ensureViewRenderer(f), true, "the next open attaches again");
   assert.equal(createVtBridge({ win: {} }).releaseViewRenderer(mine), false, "no layer: no-op");
+});
+
+await check("v2 switches: NAV / META through their live services, the rest straight to the option", async () => {
+  const w = makeWorld();
+  const b = createVtBridge({ win: w.win });
+  let r = await b.switches.set("nav", true);
+  assert.equal(r.ok, true);
+  assert.deepStrictEqual(w.vt.nav.calls.slice(-2), [["setEnabled", true], ["resume"]], "a paused route resumes");
+  r = await b.switches.set("meta", true);
+  assert.equal(r.ok, true);
+  assert.equal(w.vt.meta.enabled, true, "the engine's own switch");
+  r = await b.switches.set("combat", false);
+  assert.deepStrictEqual(w.options.calls.at(-1), ["set", "EnableCombat", false, "ui"]);
+  r = await b.switches.set("loot", false);
+  assert.deepStrictEqual(w.options.calls.at(-1), ["set", "EnableLooting", false, "ui"]);
+  assert.equal((await b.switches.set("bogus", true)).ok, false);
+  // the same switches edited as options (Advanced search) take the bar's path
+  const navCalls = w.vt.nav.calls.length;
+  assert.equal((await b.opt.set("EnableNav", false)).ok, true);
+  assert.deepStrictEqual(w.vt.nav.calls.slice(navCalls), [["setEnabled", false]], "the VTank name too, through ActiveNav");
+  assert.equal((await b.opt.set("enablemeta", false)).ok, true);
+  assert.equal(w.vt.meta.enabled, false);
+  // no bot: NAV / META write the profile's options
+  const options = makeOptions();
+  const nb = createVtBridge({ win: { __bot: null, __rynthVt: { session: () => ({ options }) } } });
+  assert.equal((await nb.switches.set("nav", true)).ok, true);
+  assert.deepStrictEqual(options.calls.at(-1), ["set", "EnableNavigation", true, "ui"]);
+  assert.equal((await nb.switches.set("meta", true)).ok, true);
+  assert.deepStrictEqual(options.calls.at(-1), ["set", "EnableMeta", true, "ui"]);
+  assert.equal(nb.snapshot("main").header.switches.nav.on, true);
+});
+
+await check("v2 items.addAs: Auto routes a weapon to the Items list and anything else to Consumables; explicit kinds/types; by name", async () => {
+  const inv = [{ guid: 0x7004, name: "Heavy Axe", wcid: 4 }, { guid: 0x7005, name: "Healing Kit", wcid: 5 }];
+  let sel = 0x7004;
+  const w = makeWorld({ host: { GetSelectedItemId: () => sel, TryGetPlayerInventory: () => inv } });
+  w.vt.items.classify = (row) => (/axe/i.test(row.name) ? "melee" : null);
+  const b = createVtBridge({ win: w.win });
+  let r = await b.items.addAs({ as: "auto" });
+  assert.equal(r.ok, true);
+  assert.deepStrictEqual(w.vt.items.calls.at(-1), ["add", { guid: 0x7004, kind: "melee", noBuffs: false }]);
+  sel = 0x7005;
+  r = await b.items.addAs({ as: "auto" });
+  assert.equal(r.ok, true);
+  assert.deepStrictEqual(w.vt.consumables.calls.at(-1), ["add", { guid: 0x7005 }], "the SUP model detects the type");
+  r = await b.items.addAs({ as: "StaminaKit" });
+  assert.deepStrictEqual(w.vt.consumables.calls.at(-1), ["add", { guid: 0x7005, type: "StaminaKit" }]);
+  r = await b.items.addAs({ as: "shield", noBuffs: true });
+  assert.equal(r.ok, false, "an explicit combat kind never makes a healing kit a shield");
+  assert.match(r.error, /Healing Kit is not a weapon, shield/);
+  sel = 0x7004;
+  r = await b.items.addAs({ as: "shield", noBuffs: true });
+  assert.deepStrictEqual(w.vt.items.calls.at(-1), ["add", { guid: 0x7004, kind: "shield", noBuffs: true }], "a weapon may be filed under another combat kind");
+  sel = 0x7005;
+  assert.equal((await b.items.addAs({ as: "auto", name: "  " })).ok, false, "an empty name is refused, not read as the selection");
+  r = await b.items.addAs({ as: "auto", name: "heavy axe" });
+  assert.deepStrictEqual(w.vt.items.calls.at(-1), ["add", { name: "heavy axe", kind: "melee", noBuffs: false }], "by name: classified from the inventory row");
+  r = await b.items.addAs({ as: "auto", name: "Healing Kit" });
+  assert.deepStrictEqual(w.vt.consumables.calls.at(-1), ["add", { name: "Healing Kit" }]);
+  assert.equal((await b.items.addAs({ as: "bogus" })).ok, false);
+  sel = 0;
+  assert.equal((await b.items.addAs({ as: "melee" })).ok, false, "nothing selected");
+  // a second copy of a monster entry is refused (the first match wins, G:103)
+  assert.equal((await b.monsters.add("Drudge Skulker")).ok, true);
+  const dup = await b.monsters.add("drudge skulker");
+  assert.equal(dup.ok, false);
+  assert.match(dup.error, /already on the list/);
+  // the Items tab's view: both lists + the selection preview
+  sel = 0x7004;
+  const v = b.snapshot("items").view;
+  assert.deepStrictEqual(v.selection, { guid: 0x7004, name: "Heavy Axe", owned: true, kind: "melee" });
+  assert.equal(v.combatAvailable && v.consumablesAvailable, true);
+  assert.ok(Array.isArray(v.combat) && Array.isArray(v.consumables));
+  assert.equal(v.kindLabels.caster, "Wand/Staff/Orb");
+});
+
+await check("v2 route view: distances (positional points only), the selection, dirty; overlay data", async () => {
+  // waypoint 0 is at ew 1, ns 2 → world (24708, 24948); stand 30 m north of it
+  const lbX = Math.floor(24708 / 192);
+  const lbY = Math.floor(24948 / 192);
+  const pose = { objCellId: ((lbX << 24) | (lbY << 16) | 1) >>> 0, x: 24708 - lbX * 192, y: 24948 - lbY * 192 + 30, z: 0 };
+  const w = makeWorld({ host: { TryGetPlayerPose: () => pose, GetSelectedId: () => 0x80000001 } });
+  const b = createVtBridge({ win: w.win });
+  const v = b.snapshot("route").view;
+  assert.equal(Math.round(v.points[0].distM), 30);
+  assert.equal(v.points[1].distM, null, "a Pause has no position");
+  assert.equal(v.points[0].detail, "2.00N, 1.00E");
+  assert.deepStrictEqual(v.selection, { guid: 0x80000001, name: "Drudge Skulker" });
+  assert.equal(v.dirty, false);
+  const o = b.routeOverlay();
+  assert.deepStrictEqual(o, { routeType: 1, activeIndex: 0, reversed: false, finished: false, paused: false, enabled: true, points: [{ type: 0, ew: 1, ns: 2, z: 0 }, { type: 3, ew: 0, ns: 0, z: 0 }] });
+  assert.deepStrictEqual(b.routeOverlayStyle(), { navLineThickness: 6, navRingThickness: 6, ringRadiusM: 3 }, "no thickness rows here: VTank's defaults; rings at the arrival radius");
+  assert.equal(createVtBridge({ win: { __bot: null } }).routeOverlay(), null, "no layer: null");
+});
+
+await check("v2 monsters view: the row governing the selected / locked monster (MonsterList.resolve)", async () => {
+  const w = makeWorld({ host: { GetSelectedId: () => 0x80000001 } });
+  w.options.lists.monsters = [{ text: "DEFAULT" }, { text: "Drudge Skulker", priority: 3 }];
+  w.vt.monsters = { resolve: (g) => (g === 0x80000001 ? { entry: { text: "drudge skulker" }, index: 1 } : null) };
+  const b = createVtBridge({ win: w.win });
+  let v = b.snapshot("monsters").view;
+  assert.equal(v.targetIndex, 1);
+  assert.equal(v.targetSource, "selection");
+  w.vt.monsters = { resolve: () => ({ entry: { text: "Something Else" }, index: 1 }) };
+  v = b.snapshot("monsters").view;
+  assert.equal(v.targetIndex, null, "the live list disagrees with the stored one → no marker");
+  // a selected NPC / door / player is not governed by any row (not even DEFAULT)
+  w.vt.monsters = { resolve: () => ({ entry: { text: "DEFAULT" }, index: 0 }) };
+  w.bot.host.ObjectIsAttackable = () => false;
+  assert.equal(b.snapshot("monsters").view.targetIndex, null);
+  w.bot.host.ObjectIsAttackable = () => true;
+  assert.equal(b.snapshot("monsters").view.targetIndex, 0, "a monster no entry names: DEFAULT");
 });
 
 console.log(fail === 0 ? `rynth_vt_bridge: all ${pass} checks passed` : `rynth_vt_bridge: ${fail} FAILED (${pass} passed)`);

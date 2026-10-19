@@ -437,6 +437,8 @@ export function createHudBridge(env = {}) {
   let lastNav = null; // { text, ok, at } — the last goto/route/egress outcome
   let catalog = null; // Map id -> {name, level, school, untargeted, duration}
   let catalogPromise = null;
+  let buffLib = null; // { m: rynth/buff_loop.js, ladder: spell_ladders.json } (Settings buff picker)
+  let buffLibPromise = null;
   // Fallback stop memory (only used when no OperatorControl is available).
   let fbDirectorWasOn = false;
   // Buff-list changes are awaited straight through bot.setBuffs(): bot.js
@@ -1063,22 +1065,92 @@ export function createHudBridge(env = {}) {
     }
     return catalogPromise;
   }
-  /** Known self-buff spells (untargeted enchantments with a duration) —
-   *  the Settings tab's buff picker. One row per spell id, highest level
-   *  first within a family name. */
+  // rynth/buff_loop.js + its ladder table, lazily (the bot loads the same
+  // module; location-relative like every other import here).
+  function loadBuffLib() {
+    if (buffLib) return Promise.resolve(buffLib);
+    if (!buffLibPromise) {
+      buffLibPromise = Promise.resolve()
+        .then(() => importer(moduleUrl("rynth/buff_loop.js")))
+        .then(async (m) => {
+          if (!m || typeof m.canonicalBuffFamilies !== "function") return null;
+          const t = typeof m.loadSpellLadders === "function" ? await m.loadSpellLadders() : null;
+          if (!t || typeof t !== "object" || !Object.keys(t).length) return null;
+          buffLib = { m, ladder: t };
+          return buffLib;
+        })
+        .catch(() => null)
+        .then((r) => {
+          if (!r) buffLibPromise = null; // retry on the next open
+          return r;
+        });
+    }
+    return buffLibPromise;
+  }
+  /** The Settings tab's self-buff picker (2026-10-19): one row per buff
+   *  family the character knows a SCROLL-LADDER spell of — never the quest /
+   *  NPC / potion spells sharing a family (Zongo's Fist, Combat Medication…)
+   *  — in the bot's own buff order (buff_loop.js canonicalBuffFamilies):
+   *    { rows: [{ id, family, label, tier, tierText, group, groupOrder, order,
+   *               school, name, checked, pinned }],
+   *      offList: [{ id, name }] }
+   *  id = the best known ladder spell (what Apply saves; the bot's B4 still
+   *  upgrades within the family); name = its catalog name (null when the
+   *  catalog didn't load). checked = the saved list names the family (any of
+   *  its spells); pinned = { id, name } when it names it by a spell OFF the
+   *  ladder — an explicit pick the bot casts as named; Apply replaces it with
+   *  the row's ladder spell. A known pin whose family has no ladder spell
+   *  known still gets a row (so Apply keeps it). offList = saved ids the
+   *  picker can't show (no bot family, or not castable here): Apply drops
+   *  them. A saved "auto" checks nothing. */
   async function knownSelfBuffs() {
     const h = getHandle();
     const known = safe(() => Array.from(h?.playerKnownSpells?.() || []).map((x) => Number(x) >>> 0), []) || [];
-    const cat = await loadCatalog();
-    if (!cat) return [];
-    const out = [];
-    for (const id of known) {
-      const s = cat.get(id);
-      if (!s || !s.untargeted || !(Number(s.duration) > 0)) continue;
-      out.push({ id, name: String(s.name), level: Number(s.level) || 0, school: Number(s.school) || 0 });
+    const lib = await loadBuffLib();
+    if (!lib) return { rows: [], offList: [] };
+    const { m, ladder } = lib;
+    const cat = await loadCatalog(); // names only; the rows don't need it
+    const nameOf = (id) => (cat && cat.get(id) ? String(cat.get(id).name) : null);
+    const fams = safe(() => m.canonicalBuffFamilies({ knownIds: known, ladder }), []) || [];
+    const rows = fams.map((f) => ({
+      id: f.spellId, family: f.category, label: f.label, tier: f.tier, tierText: f.tierText,
+      group: f.group, groupOrder: f.groupOrder, order: f.order, school: f.school,
+      name: nameOf(f.spellId), checked: false, pinned: null,
+    }));
+    const byFamily = new Map(rows.map((r) => [r.family, r]));
+    const offList = [];
+    const saved = Array.isArray(settings.buffs) ? settings.buffs.map((x) => Number(x) >>> 0) : [];
+    const knownSet = new Set(known);
+    for (const id of saved) {
+      // Only enchantments are family members (a Heal Self boost shares the
+      // Healing Mastery category but is no buff).
+      const lrow = ladder[String(id)];
+      const ench = Array.isArray(lrow) && (lrow.length < 3 || (Number(lrow[2]) & 2) !== 0);
+      const fam = ench ? safe(() => m.buffFamilyOf(id, ladder), null) : null;
+      const pin = !safe(() => m.isCanonicalBuff(id, ladder), false);
+      let row = fam != null ? byFamily.get(fam) : null;
+      if (!row && pin && fam != null && knownSet.has(id)) {
+        const info = safe(() => m.buffFamilyInfo(fam), null);
+        if (info) {
+          // A known pin of a bot family with no ladder spell known.
+          row = {
+            id, family: fam, label: info.label, tier: Number(ladder[String(id)]?.[1]) || null, tierText: "",
+            group: info.group, groupOrder: info.groupOrder, order: info.order, school: info.school,
+            name: nameOf(id), checked: false, pinned: null, pinOnly: true,
+          };
+          rows.push(row);
+          byFamily.set(fam, row);
+        }
+      }
+      if (!row) {
+        offList.push({ id, name: nameOf(id) });
+        continue;
+      }
+      row.checked = true;
+      if (pin && !row.pinned) row.pinned = { id, name: nameOf(id) };
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    return out;
+    rows.sort((a, b) => a.groupOrder - b.groupOrder || a.order - b.order);
+    return { rows, offList };
   }
 
   return {

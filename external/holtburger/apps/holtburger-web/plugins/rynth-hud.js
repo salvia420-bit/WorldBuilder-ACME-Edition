@@ -224,6 +224,8 @@ function ensureStyles() {
   #${ROOT_ID} .rhud-num { width: 52px; }
   #${ROOT_ID} .rhud-grid2 { display: grid; grid-template-columns: 1fr 56px; gap: 3px 6px; align-items: center; }
   #${ROOT_ID} .rhud-note { color: var(--hbk-text-faint, #77705f); font-style: italic; margin: 2px 0 4px; }
+  #${ROOT_ID} .rhud-buff-group { margin: 5px 0 1px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--hbk-text-dim, #a8a090); }
+  #${ROOT_ID} .rhud-buff-tier { flex: 0 0 auto; min-width: 30px; text-align: right; color: var(--hbk-value, #8aef6d); }
   #${ROOT_ID} .rhud-loglist { font-family: var(--hb-font-mono, ui-monospace, Menlo, Consolas, monospace); font-size: 10px; line-height: 14px; white-space: pre-wrap; word-break: break-word; }
   #${ROOT_ID} .rhud-ai-host > div { position: static !important; width: auto !important; right: auto !important; bottom: auto !important; z-index: auto !important; background: transparent !important; border: 0 !important; padding: 0 !important; }
 
@@ -650,11 +652,17 @@ function buildSettings(sec) {
 
   sec.appendChild(el("div", "hbk-divider"));
   sec.appendChild(el("div", "hbk-section-title", "Self-buffs to maintain"));
-  const note = el("div", "rhud-note", "Your known self-buff spells. The bot keeps each one up (highest tier you know).");
+  // One row per buff family you know a scroll spell of (hud_bridge.js
+  // knownSelfBuffs), grouped, in the bot's own buff order; the tier column is
+  // the best tier you know. Quest / NPC / potion spells are never offered.
+  const note = el("div", "rhud-note", "One row per buff you know from scrolls. The bot keeps each ticked one up at the best tier you know.");
   sec.appendChild(note);
   const list = el("div", "rhud-buff-list");
   list.appendChild(el("div", "hbk-empty", "Loading spells…"));
   sec.appendChild(list);
+  const listNote = el("div", "rhud-note", "");
+  listNote.hidden = true;
+  sec.appendChild(listNote);
   const row = el("div", "rhud-row");
   const apply = btn("hbk-btn-small", "Apply buff list");
   const auto = btn("hbk-btn-small", "Auto", "Maintain every self-buff you know (the bot picks the best tier)");
@@ -666,7 +674,10 @@ function buildSettings(sec) {
     try {
       const r = await S.bridge.setBuffs("auto");
       report(r, (x) => (x.live ? "Maintaining all known self-buffs" : "Auto buffs saved — applies on the next start (or Restart)"));
-      if (r && r.ok) for (const cb of list.querySelectorAll("input")) cb.checked = false;
+      if (r && r.ok) {
+        for (const cb of list.querySelectorAll("input")) cb.checked = false;
+        fillBuffs();
+      }
     } finally { auto.disabled = false; refresh(); }
   });
   sec.appendChild(el("div", "hbk-divider"));
@@ -680,35 +691,56 @@ function buildSettings(sec) {
     try {
       const r = await S.bridge.setBuffs(ids);
       report(r, (x) => (x.live ? `Maintaining ${ids.length} buff(s)` : `Saved ${ids.length} buff(s) — applies on the next start (or Restart)`));
+      if (r && r.ok) fillBuffs(); // pins / dropped ids are gone now
     } finally { apply.disabled = false; refresh(); }
   });
   restart.addEventListener("click", async () => {
     restart.disabled = true;
     try { report(await S.bridge.restart(), () => "Bot restarted with the HUD settings"); } finally { restart.disabled = false; refresh(); }
   });
-  const savedBuffs = S.bridge.getSettings().buffs;
-  const want = new Set(Array.isArray(savedBuffs) ? savedBuffs.map(Number) : []);
-  if (savedBuffs === "auto") setText(note, "Buff list: AUTO — every self-buff you know (best tier). Tick spells + Apply for a fixed list.");
-  S.bridge.knownSelfBuffs().then((spells) => {
+  const NOTE_FIXED = note.textContent;
+  const fillBuffs = () => S.bridge.knownSelfBuffs().then((res) => {
     if (!list.isConnected && list.parentNode == null) return;
+    setText(note, S.bridge.getSettings().buffs === "auto"
+      ? "Buff list: AUTO — every buff you know from scrolls, for your trained skills (best tier). Tick buffs + Apply for a fixed list."
+      : NOTE_FIXED);
+    const rows = Array.isArray(res?.rows) ? res.rows : [];
+    const offList = Array.isArray(res?.offList) ? res.offList : [];
     list.textContent = "";
-    if (!spells.length) {
-      list.appendChild(el("div", "hbk-empty", "No known self-buff spells (or the spell catalog failed to load)."));
-      return;
+    if (!rows.length) {
+      list.appendChild(el("div", "hbk-empty", "No known self-buff spells (or the spell list failed to load)."));
     }
-    for (const s of spells) {
+    let group = null;
+    for (const r of rows) {
+      if (r.group !== group) {
+        group = r.group;
+        list.appendChild(el("div", "rhud-buff-group", group));
+      }
       const lab = el("label", "hbk-label rhud-row");
       const cb = el("input", "hbk-check");
       cb.type = "checkbox";
-      cb.value = String(s.id);
-      cb.checked = want.has(s.id);
-      lab.append(cb, el("span", "rhud-grow", s.name));
+      cb.value = String(r.id); // Apply saves the family's scroll spell (or a pin-only row's pin)
+      cb.checked = !!r.checked;
+      const pin = r.pinned ? r.pinned.name || `spell ${r.pinned.id}` : null;
+      lab.title = r.pinOnly
+        ? `${pin} — your saved pick (not a scroll spell; you know no scroll spell of this buff). Apply keeps it.`
+        : pin
+          ? `${pin} — your saved pick (not a scroll spell). Apply switches it to ${r.name || `the tier ${r.tierText} scroll spell`}.`
+          : r.name || `${r.label} ${r.tierText}`;
+      lab.append(cb, el("span", "rhud-grow", r.label), el("span", "rhud-buff-tier", pin ? "pinned" : r.tierText));
       list.appendChild(lab);
     }
+    const parts = [];
+    const pins = rows.filter((r) => r.pinned && !r.pinOnly).map((r) => r.pinned.name || `spell ${r.pinned.id}`);
+    if (pins.length) parts.push(`Pinned (not scroll spells): ${pins.join(", ")} — Apply switches them to the scroll spell.`);
+    if (offList.length) parts.push(`Also in your saved list, not offered here: ${offList.map((o) => o.name || `spell ${o.id}`).join(", ")} — Apply drops them.`);
+    listNote.hidden = parts.length === 0;
+    setText(listNote, parts.join(" "));
   }).catch(() => {
     list.textContent = "";
     list.appendChild(el("div", "hbk-empty", "Spell list unavailable."));
   });
+  fillBuffs();
   sec._inputs = inputs;
 }
 
@@ -1146,15 +1178,21 @@ function vtModuleUrl(rel) {
 /** The VTank panel was left open last session (plugins/rynth-vt/panel.js
  *  keeps `{open}` in rynth.vt.ui.v1; the module itself never auto-opens). */
 function vtPanelWasOpen() {
+  return vtUiPref("open") === true;
+}
+/** One key of the VTank panel's per-viewer prefs (rynth.vt.ui.v1), or undefined. */
+function vtUiPref(key) {
   try {
     const o = JSON.parse(localStorage.getItem(VT_UI_KEY) || "null");
-    return !!(o && typeof o === "object" && o.open === true);
+    return o && typeof o === "object" ? o[key] : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 /** Install window.__rynthVt (lazy, location.href-relative); reopen the
- *  VTank panel when it was left open. Failure = the HUD as it was. */
+ *  VTank panel when it was left open, or — closed, with the Route tab's
+ *  "Show path" pinned — load it only to draw the route in the world.
+ *  Failure = the HUD as it was. */
 function installVtEntry() {
   const url = vtModuleUrl(VT_ENTRY_PATH);
   if (!url) return;
@@ -1165,6 +1203,11 @@ function installVtEntry() {
       if (api && typeof api.openPanel === "function" && vtPanelWasOpen()) {
         S.vtPanelUsed = true;
         Promise.resolve(api.openPanel()).catch(() => {});
+      } else if (vtUiPref("routeShowPath") === true) {
+        const panelUrl = vtModuleUrl(VT_PANEL_PATH);
+        if (!panelUrl) return;
+        S.vtPanelUsed = true;
+        import(panelUrl).then((p) => p.ensureRouteOverlay?.()).catch(() => {});
       }
     })
     .catch(() => { /* no VTank layer on this page: /rs reports it, the HUD works as before */ });

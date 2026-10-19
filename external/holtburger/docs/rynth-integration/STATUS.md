@@ -21,6 +21,62 @@ wsbridge). Run the suite with `apps/holtburger-web/rynth_test_all.cjs`.
 > per this project's doc-debt convention (see `HANDOFF-omnibus-2026-07-21.md`'s own
 > banner for the sibling case).
 
+## 2026-10-19 update — VTank panel v2, the buff scroll ladder, melee re-target, the route in the world
+
+Owner report: the VTank section had redundancy and low information density (Vitals), the buff list
+offered spells players can't normally cast, routes being laid out could not be seen in the world,
+and melee "would wait maybe 10 seconds before attacking the next thing". Code only (the 1070 was
+down); every item below is covered by node tests, none is live-verified yet.
+
+- **Panel v2** (`plugins/rynth-vt/`): a command bar on every tab (RUN · COMBAT BUFF NAV LOOT META ·
+  profile ▾ · ⋯ Save As / Delete / presets / Import HUD) over ONE row of 8 tabs — Main (Options +
+  Vitals, with live HP/Stam/Mana bars marked at the top-off and in-combat levels) · Monsters ·
+  Items (+ Consumables, one Add that routes by kind) · Buffs (grouped, folding, tier + time left,
+  item-bane matrix, Force Buff) · Route (Add here + one kind picker, distances, Show path) · Loot
+  (from the old Profiles tab; its own rule-editor picker) · Meta · Advanced (only what no other tab
+  shows; the search finds every option). Each control has one home (navigation could be switched
+  on from three tabs before). `/rs ui` keeps the v1 names. `rynth_vt_preview.html` runs the real
+  panel on a scripted world with no client.
+- **Buff scroll ladder** (`rynth/buff_families.js`, `spell_ladders.json` flag 4/8, `rynth/buff_loop.js`,
+  `rynth/hud_bridge.js`): a developer character (`@addallspells`) got Zongo's Fist, Ketnan's Eye,
+  Combat Medication (60 s) … because they out-ranked the scroll spell of the same family. Buffs now
+  resolve only to each family's scroll ladder I–VIII (checked against the ACE world DB's 2,513 scroll
+  items), in the VT Buffs tab, the HUD picker and the bot's casting; Missile Weapon Mastery is a
+  family now (archers); stored VT lists are moved onto the ladder (`rynth/vt/index.js` 12c).
+- **Melee re-target** (`rynth/combat_loop.js`): after a kill the bot requested the next swing while
+  ACE was still in the killing swing (`Attacking`), which ACE drops silently (`Player_Melee.cs`
+  :98-100), so the bot waited out its 9 s silence fallback. It now waits for that loop's AttackDone
+  (≤ 3 s); the same on a mid-swing re-target. `rynth_melee_retarget_test.cjs`: 3-monster fight
+  32.5 s → 16.9 s, kill→next swing 9.1 s → 1.3 s. Archers had the same stall.
+- **The route in the world** (`scene3d/route_overlay.js`): rings at the walked waypoints (arrival
+  radius), the path with chevrons, in-place waypoints as gems, the current waypoint pulsing green
+  with a line from your feet; on the Route tab or always with Show path; VTank's
+  `NavLineThickness` / `NavRingThickness` are live. 6 draw calls shown, 0 hidden, no boot cost.
+
+Gate (alone, capped-build, 2026-10-19 08:40-08:51): JS gate **817 passed / 0 failed / 0 skipped**
+(new rows `rynthBuffCanonical`, `rynthVtBuffSpecMigration`, `rynthRouteOverlay`); node runner **69 passed /
+0 failed / 32 skipped** (+ `rynth_melee_retarget_test.cjs`); `gen-modulepreload --check` up to date (434
+modules — nothing new in the boot graph); `lint-url-flags` 0 undocumented readers. Logs:
+`/mnt/wbterminal1/tmp/vt-panel-v2/`. A report-only review (v1→v2 parity table + 20 findings) was
+fixed in full before the gate.
+
+### Live checklist for the next 1070 session (2026-10-19 items)
+
+| # | Check | Pass looks like |
+|---|---|---|
+| V1 | Melee character, 3+ monsters clustered, bot running | next swing within ~1-2 s of each kill; console `[combat] kill confirmed …` then the swing; `__bot.combat.status.state` is `ENGAGE` < 1 s, then `ATTACK`; never `the killed loop's attack end never came` |
+| V2 | V1 with a bow, and with the next monster 5-12 m away | same, plus the charge |
+| V3 | Casters, HUD STOP / Restart mid-fight, looting the last corpse | as before |
+| B1 | Developer character: VT Buffs tab and HUD Settings › Self-buffs | only scroll names (Might of the Lugians / Incantation of …), no Zongo's Fist / Combat Medication; archers see Missile Weapon Mastery |
+| B2 | A profile saved before today with a buff list | chat line "buff list: N off-ladder spell(s) moved…" once; the list then shows ladder spells |
+| P1 | Open the panel (HUD **VT**), click through every tab | one tab row; switches reflect the HUD's toggles; no console errors |
+| P2 | Main: let HP drop in a fight | the HP bar falls past the white (in-combat) mark and the bot heals |
+| R1 | Route tab open, add 3-4 points with **Add here** | azure rings at foot level, legs with chevrons, green current ring + arrow + label, a line from your feet |
+| R2 | `/rs nav setcurrent 3`, `/rs nav type linear`, `/rs nav stop`, nav off | marker moves (no rebuild), closing leg and chevrons drop, marker amber, then grey |
+| R3 | Indoors (a dungeon route), and behind a hill | rings on the floor (not 192 m off); faint path through terrain, marker solid |
+| R4 | Advanced › Route line/ring thickness 16 then 1 | ~0.32 m wide, then a hairline |
+| R5 | Perf: `liveScene3d.renderer.info.autoReset=false`, toggle Show path | +5-6 draw calls; no frame-time change; first enable compile spike < 16 ms |
+
 ## 2026-10-13 update — the VTank feature set
 
 Goal: every feature in the VTank guide (`/mnt/wbterminal1/rynth-vtank-2026-10-12/vtank_guide.txt`,
@@ -89,7 +145,7 @@ Wave-1 modules landed as `008a22ae`. The reviewed tree after the final gate is s
   `host.InvokeChatParser` lines use the same dispatcher; `!bot rs|vt <line>` tells reply with
   the first 3 result lines. `/rs help` lists every verb.
 - **The HUD** — the **VT** button in the selectors row (`plugins/rynth-hud.js:340`) or
-  `/rs ui [tab]` opens the VTank panel: Options (+ Advanced) · Profiles · Vitals · Monsters ·
+  `/rs ui [tab]` opens the VTank panel (v2 layout 2026-10-19: command bar + Main · Monsters · Items · Buffs · Route · Loot · Meta · Advanced; the v1 names below still open the matching tab). v1 tabs: Options (+ Advanced) · Profiles · Vitals · Monsters ·
   Items · Consumables · Buffs · Route · Meta. With a VTank route loaded the HUD **Nav** toggle
   drives that route.
 - **Profiles** — Default is read-only: edits live in a page overlay, lost on reload or when
@@ -113,7 +169,7 @@ Wave-1 modules landed as `008a22ae`. The reviewed tree after the final gate is s
 | Checkpoint "server verified position" | No seam | Pose stable ≥ 750 ms, 10 s cap |
 | `/mp`, `/hr` in chat waypoints | No SessionHandle export | Fall through to ACE `@mp` / `@hr` |
 | Alinco3 loot connector | No format reference | `.utl` + the Value floor |
-| Show Editor | Deprecated in VTank | Disabled checkbox |
+| Show Editor | Deprecated in VTank | Not drawn (v2 panel); the option still round-trips through `/rs opt` |
 | Client-renderer advanced options (FPS, radar, nav line width) | No retail renderer | Inert schema rows, round-tripped, greyed |
 | Jump strafe direction in `.nav` | No known encoding | Web extension field, dropped on export with a warning |
 | Meta functions needing client memory (Dereth clock) or monster enchantments | Not readable | An error value (`unsupported: <name>`), logged once per name — never a silent `""` |

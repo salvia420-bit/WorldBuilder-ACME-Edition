@@ -37,6 +37,25 @@
 //   a stance change or a cast gesture silently drops it.
 // - Switching or dropping a live engagement sends CancelAttack (ACE keeps
 //   swinging at the old MeleeTarget otherwise).
+// - After a KILL the next target's request waits for the killed loop's
+//   AttackDone (2026-10-19, owner: "with melee combat, it would wait maybe 10
+//   seconds before attacking the next thing"). The kill is confirmed from the
+//   death motion, which ACE sends from inside the swing that landed the blow
+//   (Creature_Death.cs Die); that swing keeps `Attacking` set until its
+//   animation ends (Player_Melee.cs Attack :283/:363, Player_Missile.cs
+//   :193/:282), and a request arriving meanwhile is DROPPED without any reply
+//   (Player_Melee.cs:98-100, Player_Missile.cs:105-106). The bot used to send
+//   it on the kill tick, swallow the killed loop's ActionCancelled as stale,
+//   and sit out MELEE_SWING_PATIENCE_MS (9 s) with no swing. Retail never sends
+//   such a request: EndAttackRequest queues an attack made while the previous
+//   one's response is pending (attackServerResponsePending, set by
+//   ExecuteAttack acclient.c:408657 -> attackWhenResponseReceived :408986-408990)
+//   and HandleAttackDoneEvent sends it (:409216, :409264-409269) — as the
+//   page's own attack path does (scene3d/picking.js fireOnce). Without an event
+//   plane, or when the end does not come within STALE_LOOP_END_TTL_MS, the
+//   request goes as before. A CancelAttack re-target (a live engaged target
+//   lost to a re-lock) waits the same way: ACE keeps `Attacking` / the old
+//   MeleeTarget until the cancelled loop's AttackDone.
 
 // T9 — alt must beat locked+stickiness. C#'s 25.0 (CombatManager.cs:344) is
 // on ScoreCandidate's 2-pts-per-yard distance scale ((maxDist-d)/maxDist*100,
@@ -82,10 +101,12 @@ const QUERY_HEALTH_INTERVAL_MS = 1000;
 const MELEE_SWING_PATIENCE_MS = 9000;
 const ATTACK_REISSUE_MIN_MS = 1000; // never re-request an attack faster than this
 // A kill or a CancelAttack leaves ONE loop-end (attackDone ActionCancelled)
-// still in flight for the OLD loop — it lands a swing-length after the death
-// motion, i.e. after the next request. Each such end is expected (counted)
-// and swallowed instead of ending the new engagement; an expectation older
-// than this is dropped so a lost event can't eat a real refusal for good.
+// still in flight for the OLD loop — after a kill it lands when the killing
+// swing's animation ends. Each such end is expected (counted) and swallowed
+// instead of ending the new engagement; an expectation older than this is
+// dropped so a lost event can't eat a real refusal for good. After a kill the
+// next request waits for that end (header, 2026-10-19), so this is also the
+// longest a lost end can delay the next attack.
 const STALE_LOOP_END_TTL_MS = 3000;
 // Engage ranges (metres, centre to centre as the bot measures; ACE measures
 // cylinder distance, so these carry the radii as margin).
@@ -235,6 +256,10 @@ export class RynthCombatLoop {
     this._pendingDelta = null; // magic damage awaiting its fraction drop (P12)
     this._staleEnds = 0; // old-loop attackDone ends still expected (kill/cancel)
     this._staleEndsAt = 0;
+    // One of those ends belongs to a KILLED loop: hold the next melee/missile
+    // request until it arrives (header, 2026-10-19; _killedLoopEndOwed).
+    this._staleHold = false;
+    this._staleHoldWaited = false; // the hold has kept a request back (log on a lapse)
     this._approach = null; // { target, bestDist, bestAt } — run-up progress
     this.unreachable = new Map(); // guid -> parkedUntil (approach stalled / no-damage blacklist)
     this._castHoldUntil = 0; // mana-refusal backoff for war casts
@@ -519,9 +544,13 @@ export class RynthCombatLoop {
         // after a kill/cancel is expected — swallow it (see the TTL note).
         if (this._staleEnds > 0 && now - this._staleEndsAt <= STALE_LOOP_END_TTL_MS) {
           this._staleEnds--;
+          // The killed loop is over (ACE's `Attacking` cleared before this
+          // was sent): the held request may go on the next tick.
+          if (this._staleEnds === 0) this._staleHold = false;
           return;
         }
         this._staleEnds = 0;
+        this._staleHold = false;
         if (!g) return;
         g.loopEnded = true;
         g.loopEndedAt = now;
@@ -812,17 +841,51 @@ export class RynthCombatLoop {
     const now = Date.now();
     const hf = this.host.TryGetTargetHealthFraction(g.target);
     if (hf === 0 || this._deathSeen(g.target, now)) {
-      this._expectStaleEnd(now); // the killed loop still owes its ActionCancelled
+      this._expectStaleEnd(now, true); // the killed loop still owes its ActionCancelled
       return;
     }
-    if (this._cancelAttack() !== false) this._expectStaleEnd(now);
+    // A mid-swing CancelAttack only flags the swing (AttackCancelled); ACE
+    // keeps `Attacking` and the old MeleeTarget until that loop's AttackDone
+    // (Player_Melee.cs HandleActionCancelAttack / OnAttackDone), dropping a
+    // request in between — so the re-target waits for it like a kill does.
+    if (this._cancelAttack() !== false) this._expectStaleEnd(now, true);
     this.log(`cancel attack on ${g.target.toString(16)} (${reason})`);
   }
 
-  _expectStaleEnd(now) {
+  /** Count one more old-loop end in flight. `hold`: it is a KILLED loop's —
+   *  ACE is still animating the swing that landed the blow, so the next
+   *  request must wait for it (_killedLoopEndOwed). A CancelAttack's end is
+   *  only swallowed, as before. */
+  _expectStaleEnd(now, hold = false) {
     const live = this._staleEnds > 0 && now - this._staleEndsAt <= STALE_LOOP_END_TTL_MS;
     this._staleEnds = (live ? this._staleEnds : 0) + 1;
     this._staleEndsAt = now;
+    const held = live && this._staleHold;
+    this._staleHold = held || hold;
+    if (!held) this._staleHoldWaited = false;
+  }
+
+  /** True while a killed loop's AttackDone is still owed: a melee/missile
+   *  request sent now would land in the killing swing's animation and ACE
+   *  would drop it silently (Player_Melee.cs:98-100, Player_Missile.cs:105-106)
+   *  — retail queues it until AttackDone (attackWhenResponseReceived,
+   *  acclient.c:408986-408990 / :409264-409269). Only with an event plane
+   *  (without one the end can never arrive) and for at most
+   *  STALE_LOOP_END_TTL_MS. */
+  _killedLoopEndOwed(now) {
+    if (!this._staleHold) return false;
+    if (!this._evTapLive || !(this._staleEnds > 0)) {
+      this._staleHold = false;
+      return false;
+    }
+    if (now - this._staleEndsAt > STALE_LOOP_END_TTL_MS) {
+      this._staleHold = false;
+      // Only worth a line when it actually held a request back (a lost event).
+      if (this._staleHoldWaited) this.log(`the killed loop's attack end never came (${STALE_LOOP_END_TTL_MS / 1000}s) — attacking anyway`);
+      return false;
+    }
+    this._staleHoldWaited = true;
+    return true;
   }
 
   _dropLock(reason) {
@@ -1332,8 +1395,10 @@ export class RynthCombatLoop {
       this._markKilledAt(this.locked, now);
       this.damageModel.delete(this.locked);
       if (this._engage && this._engage.target === this.locked) {
-        // ACE ends its own loop on the kill; its ActionCancelled is still owed.
-        if (!this._engage.loopEnded) this._expectStaleEnd(now);
+        // ACE ends its own loop on the kill; its ActionCancelled is still owed,
+        // and until it comes ACE is still in the killing swing — the next
+        // request waits for it (_killedLoopEndOwed, header 2026-10-19).
+        if (!this._engage.loopEnded) this._expectStaleEnd(now, true);
         this._engage = null;
       }
       this._pendingDelta = null;
@@ -1496,6 +1561,14 @@ export class RynthCombatLoop {
     // exactly the parallel run-up 86c4d11e Phase F removed from the client.
     // While the request is live the hands-off branch above never re-sticks.
     this._releaseStick();
+    // Just after a kill: ACE is still playing the swing / reload that landed
+    // it and would drop this request without a word, leaving the engagement
+    // to the 9 s patience fallback. Wait for that loop's AttackDone (a tick or
+    // a few; STALE_LOOP_END_TTL_MS at most) — the header, 2026-10-19.
+    if (this._killedLoopEndOwed(now)) {
+      this.state = "ENGAGE";
+      return;
+    }
     this.state = "ATTACK";
     if (g && now - g.issuedAt < ATTACK_REISSUE_MIN_MS) return;
     if (g && g.loopEnded && g.endError && g.endError !== "ActionCancelled") {

@@ -1,20 +1,26 @@
 // tests/rynth_vt_panel_dom.test.mjs — the VTank panel DOM (PLAN W1-10 UI,
-// §3.16; plugins/rynth-vt/).
+// §3.16; plugins/rynth-vt/; v2 layout 2026-10-19).
 //
 // Mounts plugins/rynth-vt/panel.js on the small fake DOM
 // (tests/helpers/social_fake_dom.mjs) with the REAL bridge
 // (rynth/vt/bridge/vt_bridge.js) over a FAKE VT layer on window.__bot (C2: no
 // other vt package is imported here) and drives the real handlers:
-//   • 9 tabs in two rows; kit classes on every input / select / textarea;
+//   • one tab row (Main · Monsters · Items · Buffs · Route · Loot · Meta ·
+//     Advanced); the command bar (RUN, five switches, profile select, the
+//     read-only chip, the profile drawer); the v1 tab names still open;
+//   • kit classes on every input / select / textarea;
 //   • refresh ≤ 2 Hz, only while open AND visible; no list rebuild under a
 //     focused input;
-//   • Options: Run Macro + Advanced sub-view (every row, inert greyed);
-//   • Monsters: columns incl. WC/FC/Cp/DC/Cs and P −1..4;
-//   • Route: the VTank buttons, insert mode, green arrow;
+//   • Main: ranges, the vitals matrix with live bars + marks, behaviour rows;
+//   • Advanced: only the rows no other tab shows; the filter searches all;
+//   • Monsters: columns incl. WC/FC/Cp/DC/Cs and P −1..4, filter-as-you-type,
+//     the row governing the target, the [E] editor;
+//   • Items: the selection preview and one Add that routes by kind;
+//   • Buffs: grouped rows, per-group box, the item-buff matrix;
+//   • Route: Add here, the kind picker, insert mode, green arrow, distances;
+//   • Loot: the profile select and the rule editor;
 //   • Meta: fired rows red, state dropdown, rule editor, windowed list;
 //   • meta view windows built/updated/removed by meta_views.js;
-//   • Profiles: Nav profile select + Save route, the loot-rule editor;
-//   • Buffs: item families per Items entry, No-Buffs greyed;
 //   • Escape closes; dispose removes everything.
 //
 // Run from apps/holtburger-web/:  node tests/rynth_vt_panel_dom.test.mjs
@@ -62,18 +68,37 @@ const change = (el, value) => {
 const q = (sel, root = document) => root.querySelector(sel);
 const qa = (sel, root = document) => root.querySelectorAll(sel);
 const byText = (root, sel, text) => qa(sel, root).find((b) => b.textContent === text) || null;
+/** A two-step confirm button: arm, let the double-click guard pass, confirm. */
+const confirmClick = (btn) => {
+  click(btn);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 1000;
+  try {
+    click(btn);
+  } finally {
+    Date.now = realNow;
+  }
+};
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
 // ── fake VT layer (stands in for SET / NAV / META / CMB / SUP / INT-2) ──
 const ROWS = [
   { key: "EnableCombat", vt: ["EnableCombat"], type: "bool", dflt: true, page: "options", group: "Subsystems", label: "Enable Combat", consumer: "combat" },
+  { key: "EnableBuffing", vt: ["EnableBuffing"], type: "bool", dflt: true, page: "options", group: "Subsystems", label: "Enable Buffing", consumer: "buff" },
   { key: "MonsterRange", vt: ["AttackDistance"], type: "float", unit: "m", vtUnit: "lbf", dflt: 40, min: 1, max: 200, page: "options", group: "Ranges", label: "Monster Range", consumer: "combat" },
+  { key: "BoostLootPriority", vt: ["LootPriorityBoost"], type: "bool", dflt: false, page: "options", group: "Priority", label: "Boost Loot Priority", consumer: "kernel" },
+  { key: "PeaceModeWhenIdle", vt: ["IdlePeaceMode"], type: "bool", dflt: false, page: "options", group: "Idle", label: "Peace Mode When Idle", consumer: "idle" },
+  { key: "SummonPets", vt: ["SummonPets"], type: "bool", dflt: false, page: "options", group: "Pets", label: "Summon Pets", consumer: "pets" },
   { key: "EnableNavigation", vt: ["EnableNav"], type: "bool", dflt: false, page: "profiles", group: "Subsystems", label: "Enable Auto-Navigation", consumer: "nav" },
   { key: "EnableLooting", vt: ["EnableLooting"], type: "bool", dflt: true, page: "profiles", group: "Subsystems", label: "Enable Looting", consumer: "loot" },
   { key: "ShowEditor", vt: ["ShowEditor"], type: "bool", dflt: false, page: "profiles", group: "Profiles", label: "Show Editor", consumer: "inert" },
+  { key: "EnableMeta", vt: ["EnableMeta"], type: "bool", dflt: false, page: "meta", group: "Subsystems", label: "Enable Meta", consumer: "meta" },
   { key: "HealAt", vt: ["Recharge-Norm-HitP"], type: "int", unit: "pct", dflt: 60, min: 0, max: 100, page: "vitals", group: "Vitals", label: "Heal at", consumer: "vitals" },
   { key: "TopOffHP", vt: ["Recharge-NoTarg-HitP"], type: "int", unit: "pct", dflt: 95, min: 0, max: 100, page: "vitals", group: "Vitals", label: "Top off HP", consumer: "vitals" },
   { key: "EmergencyHP", vt: [], type: "int", unit: "pct", dflt: 30, min: 0, max: 100, page: "vitals", group: "Vitals", label: "Emergency HP", consumer: "vitals" },
+  { key: "RebuffSecondsRemaining", vt: ["RebufTimeRemainingSeconds"], type: "int", unit: "s", dflt: 300, min: 30, max: 1800, page: "advanced", group: "Buffing", label: "Rebuff when seconds remaining below", consumer: "buff" },
+  { key: "LootMinValue", vt: [], type: "int", dflt: 0, min: 0, max: 1e9, page: "advanced", group: "Looting", label: "Loot minimum value", consumer: "loot" },
+  ...[35, 85, 135, 185].map((d, i) => ({ key: `BuffMinSkillLevelTier${i + 1}`, vt: [], type: "int", dflt: d, min: 1, max: 500, page: "advanced", group: "Buffing", label: `Min skill for buff tier ${i + 1}`, consumer: "buff" })),
   { key: "AttackHeight", vt: ["AttackHeight"], type: "enum", values: [1, 2, 3], dflt: 2, page: "advanced", group: "Combat", label: "Attack height", consumer: "combat" },
   { key: "BuffProfileBanes", vt: ["BuffProfile_Banes"], type: "string", dflt: "", page: "advanced", group: "Not on web", label: "Bane buff profile", consumer: "inert" },
   { key: "DoJiggle", vt: ["DoJiggle"], type: "bool", dflt: false, page: "advanced", group: "Not on web", label: "Jiggle", consumer: "inert" },
@@ -91,7 +116,7 @@ function makeOptions() {
     profiles: {
       list: () => [{ name: "Default", kind: "default", label: "Default" }, { name: "[By char]", kind: "bychar", label: "[By char]" }, { name: "Hunt", kind: "shared", label: "Hunt" }],
       active: () => ({ ...act }),
-      remove: () => ({ ok: true }),
+      remove: (n, k) => (calls.push(["profiles.remove", n, k]), { ok: true }),
     },
     list: () => ROWS.map((row) => ({ key: row.key, vtName: row.vt[0] ?? row.key, value: values.get(row.key), dflt: row.dflt, inert: row.consumer === "inert", row })),
     get: (n) => (find(n) ? { ok: true, value: values.get(find(n).key), row: find(n), key: find(n).key } : { ok: false, error: "unknown" }),
@@ -123,7 +148,7 @@ function makeOptions() {
   };
 }
 
-function makeEngine(rules) {
+function makeEngine(rules, options = null) {
   let cur = { v: 1, name: "hunt", source: { kind: "json" }, rules: clone(rules), navs: {}, warnings: [] };
   const counts = { load: 0, replaceMeta: 0, enterState: [] };
   return {
@@ -136,7 +161,12 @@ function makeEngine(rules) {
       cur = clone(m);
       return { ok: true, warnings: [] };
     },
-    enabled: true,
+    get enabled() {
+      return !!options?.getValue("EnableMeta");
+    },
+    set enabled(v) {
+      options?.set("EnableMeta", !!v, { source: "meta" });
+    },
     setDebug() {},
     enterState: (s, why) => (counts.enterState.push([s, why]), true),
     snapshot: () => ({
@@ -146,6 +176,10 @@ function makeEngine(rules) {
   };
 }
 
+// The player stands 12 m east of route point 0 (ew 10, ns 20): world
+// (26868, 29268) → landblock 0x8B98, local (180, 84); +12 m east.
+const POSE = { objCellId: ((139 << 24) | (152 << 16) | 0x0001) >>> 0, x: 192, y: 84, z: 0 };
+
 function makeWorld() {
   const options = makeOptions();
   options.lists.items = [
@@ -154,6 +188,7 @@ function makeWorld() {
     { guid: 0x7003, name: "Wand", wcid: 3, kind: "caster", element: "Fire", noBuffs: false },
   ];
   const navCalls = [];
+  const itemCalls = [];
   const lib = { calls: [] };
   Object.assign(lib, {
     listMetas: () => [{ name: "hunt" }],
@@ -165,21 +200,33 @@ function makeWorld() {
     loadLoot: (n) => (lib.calls.push(["loadLoot", n]), { ok: true }),
     clearLoot: () => (lib.calls.push(["clearLoot"]), { ok: true }),
   });
+  const inventory = [
+    { guid: 0x7004, name: "Heavy Axe", wcid: 4, itemType: 1 },
+    { guid: 0x7005, name: "Healing Kit", wcid: 5, itemType: 128 },
+  ];
+  let selectedItem = 0x7004;
   const vt = {
     options,
     session: { options },
     items: {
       list: () => options.getList("items"),
       find: (g) => options.getList("items").find((e) => e.guid === g) || null,
+      classify: (row) => (/axe|sword|wand|shield/i.test(row.name) ? "melee" : null),
       update: () => ({ ok: true }),
       remove: () => ({ ok: true }),
-      add: () => ({ ok: true }),
+      add: (e) => (itemCalls.push(["items.add", clone(e)]), { ok: true, entry: { name: "Heavy Axe", kind: e.kind, noBuffs: !!e.noBuffs } }),
       resolveGuid: (e) => e.guid,
     },
-    consumables: { list: () => [{ guid: 0x6001, name: "Pea", wcid: 9, type: "PeaComponent", keepAtLeast: 5 }], add: () => ({ ok: true }), update: () => ({ ok: true }), remove: () => ({ ok: true }) },
+    consumables: {
+      list: () => [{ guid: 0x6001, name: "Pea", wcid: 9, type: "PeaComponent", keepAtLeast: 5 }],
+      add: (e) => (itemCalls.push(["consumables.add", clone(e)]), { ok: true, entry: { name: "Healing Kit", type: e.type || "HealthKit" } }),
+      update: () => ({ ok: true }),
+      remove: () => ({ ok: true }),
+    },
+    monsters: { resolve: (g) => (g === 0x5001 ? { entry: { text: options.lists.monsters[1]?.text ?? "" }, index: options.lists.monsters.length > 1 ? 1 : 0 } : { entry: null, index: 0 }) },
     nav: {
       route: () => ({ name: "loop", routeType: 1, points: [{ type: 0, ew: 10, ns: 20, z: 0 }, { type: 3, pauseMs: 4000, ew: 10, ns: 20, z: 0 }, { type: 4, chat: "/ls", ew: 0, ns: 0, z: 0 }], activeIndex: 1, reversed: false, followTarget: null }),
-      status: () => ({ name: "loop", type: 1, typeName: "circular", i: 1, n: 3, exec: "pause 4 s", lastResult: null, reversed: false, enabled: true, paused: null, blockedBy: null }),
+      status: () => ({ name: "loop", type: 1, typeName: "circular", i: 1, n: 3, exec: "pause 4 s", lastResult: null, reversed: false, enabled: !!options.getValue("EnableNavigation"), paused: null, blockedBy: null, dirty: true }),
       addHere: (t, f, o) => (navCalls.push(["addHere", t, { ...f }, { ...o }]), { ok: true, index: 0 }),
       save: (n) => (navCalls.push(["save", n]), { ok: true }),
       loadByName: (n) => (navCalls.push(["loadByName", n]), { ok: true }),
@@ -187,44 +234,56 @@ function makeWorld() {
       step: (d) => (navCalls.push(["step", d]), { ok: true }),
       removeAt: (i) => (navCalls.push(["removeAt", i]), { ok: true }),
       setType: (t) => (navCalls.push(["setType", t]), { ok: true }),
-      setEnabled: (on) => (navCalls.push(["setEnabled", on]), { ok: true }),
-      resume: () => ({ ok: true }),
+      setEnabled: (on) => (navCalls.push(["setEnabled", on]), options.set("EnableNavigation", on, { source: "ui" })),
+      resume: () => (navCalls.push(["resume"]), { ok: true }),
       reverse: () => true,
-      clear: () => ({ ok: true }),
+      clear: () => (navCalls.push(["clear"]), { ok: true }),
       updatePoint: (i, p) => (navCalls.push(["updatePoint", i, p]), { ok: true }),
     },
-    navProfiles: { list: () => [{ name: "loop" }, { name: "runback" }], remove: () => ({ ok: true }), importText: () => ({ ok: true }), exportText: () => ({ ok: true, text: "" }) },
-    meta: makeEngine([
-      { id: "r1", state: "Default", enabled: true, cond: { t: "Death" }, act: { t: "SetState", state: "dead" } },
-      { id: "r2", state: "Default", enabled: true, cond: { t: "NavEmpty" }, act: { t: "Chat", text: "/vt nav load fighting" } },
-      { id: "r3", state: "dead", enabled: true, cond: { t: "Always" }, act: { t: "Chat", text: "/vt nav load runback" } },
-    ]),
+    navProfiles: { list: () => [{ name: "loop" }, { name: "runback" }], remove: (n) => (navCalls.push(["remove", n]), { ok: true }), importText: () => ({ ok: true }), exportText: () => ({ ok: true, text: "" }) },
+    meta: null,
     library: lib,
     views: { renderer: null, list: () => [], setRenderer(r) { this.renderer = r; }, click: (v, c) => ({ ok: true, v, c }) },
     statusLine: () => "VT: Default · nav 2/3",
     parseExpr: (t) => (/>\s*$/.test(t) ? { ok: false, error: "unexpected end", pos: t.length } : { ok: true, dynamic: /range/.test(t) }),
   };
+  vt.meta = makeEngine([
+    { id: "r1", state: "Default", enabled: true, cond: { t: "Death" }, act: { t: "SetState", state: "dead" } },
+    { id: "r2", state: "Default", enabled: true, cond: { t: "NavEmpty" }, act: { t: "Chat", text: "/vt nav load fighting" } },
+    { id: "r3", state: "dead", enabled: true, cond: { t: "Always" }, act: { t: "Chat", text: "/vt nav load runback" } },
+  ], options);
   const ctl = [];
   const bot = {
     vt,
     host: {
-      TryGetObjectName: () => null,
-      TryGetKnownSpells: () => [1635],
+      TryGetObjectName: (g) => (g === 0x7004 ? "Heavy Axe" : g === 0x5001 ? "Drudge Skulker" : null),
+      TryGetKnownSpells: () => [1635, 2, 18],
       TryGetSpellRecord: (id) => ({ id, name: `Spell ${id}`, school: 4 }),
+      TryGetPlayerPose: () => ({ ...POSE }),
+      GetSelectedItemId: () => selectedItem,
+      TryGetPlayerInventory: () => inventory,
+      TryGetSelfEnchantments: () => [{ spellId: 2, family: 1, remainingS: 200 }],
     },
     kernel: { operatorHeld: false },
     combat: { locked: 0 },
     buff: { forceRebuff() {}, cancelForceRebuff() {} },
     control: { stop: (o) => (ctl.push(["stop", o]), { ok: true }), resume: () => (ctl.push(["resume"]), { ok: true }), isStopped: () => false },
   };
-  return { bot, vt, options, navCalls, lib, ctl };
+  return { bot, vt, options, navCalls, itemCalls, lib, ctl, setSelectedItem: (g) => { selectedItem = g; } };
 }
 
 const W = makeWorld();
 window.__bot = W.bot;
+// live vitals (SessionHandle.playerStats: stride-4 [type, current, base, max])
+window.__sessionHandle = { playerStats: () => ({ vitals: [1, 180, 0, 360, 3, 150, 0, 200, 5, 90, 0, 100], free() {} }) };
+const LADDER = { 2: [1, 1, 3, 1], 18: [37, 1, 3, 1], 1635: [100, 1, 3, 1] };
 const realBridge = createVtBridge({
   win: window,
-  importer: async () => ({ buildDynamicBuffList: ({ knownIds }) => knownIds, loadSpellLadders: async () => ({ 1635: [100, 1, 3, 1] }) }),
+  importer: async () => ({
+    buildDynamicBuffList: ({ knownIds }) => knownIds.filter((id) => LADDER[id] && id !== 1635),
+    loadSpellLadders: async () => LADDER,
+    BASE_CREATURE_BUFFS: [["Strength Self", 1], ["Invulnerability Self", 37]],
+  }),
 });
 let snaps = 0;
 const bridge = new Proxy(realBridge, {
@@ -245,54 +304,158 @@ panel.configureVtPanel({
 const root = () => document.getElementById("hb-rynth-vt");
 const tabBtn = (id) => q(`.hbk-tab[data-tab='${id}']`, root());
 const body = (id) => q(`.rvt-tab-body[data-tab='${id}']`, root());
+const sw = (id) => q(`.rvt-tgl[data-switch='${id}']`, root());
 const openTab = async (id) => {
   click(tabBtn(id));
   await flush();
 };
 
 // ── tests ──────────────────────────────────────────────────────────────
-await check("opens with 9 tabs in two rows (Options · Profiles · Vitals · Monsters · Items / Consumables · Buffs · Route · Meta)", async () => {
-  await panel.openVtPanel({ tab: "options" });
+await check("opens with ONE tab row (Main · Monsters · Items · Buffs · Route · Loot · Meta · Advanced) and the command bar", async () => {
+  await panel.openVtPanel({ tab: "main" });
   assert.equal(panel.isVtPanelOpen(), true);
   const r = root();
   assert.ok(r && r.classList.contains("hbk-window"));
   assert.ok(q(".hbk-titlebar", r) && q(".hbk-close", r));
   const rows = qa(".rvt-tabs", r);
-  assert.equal(rows.length, 2);
-  assert.deepStrictEqual(qa(".hbk-tab", rows[0]).map((b) => b.textContent), ["Options", "Profiles", "Vitals", "Monsters", "Items"]);
-  assert.deepStrictEqual(qa(".hbk-tab", rows[1]).map((b) => b.textContent), ["Consumables", "Buffs", "Route", "Meta"]);
-  assert.equal(tabBtn("options").getAttribute("aria-selected"), "true");
+  assert.equal(rows.length, 1, "one tab row");
+  assert.deepStrictEqual(qa(".hbk-tab", rows[0]).map((b) => b.textContent), ["Main", "Monsters", "Items", "Buffs", "Route", "Loot", "Meta", "Advanced"]);
+  assert.equal(tabBtn("main").getAttribute("aria-selected"), "true");
   assert.equal(r.dataset.open, "1");
-  assert.match(q(".rvt-banner", r).textContent, /Default is read-only/);
+  assert.deepStrictEqual(qa(".rvt-tgl", r).map((b) => b.textContent), ["Combat", "Buff", "Nav", "Loot", "Meta"]);
+  assert.equal(sw("combat").getAttribute("aria-pressed"), "true", "EnableCombat default on");
+  assert.equal(sw("nav").getAttribute("aria-pressed"), "false");
+  assert.equal(q(".rvt-run", r).textContent, "RUNNING");
+  assert.equal(q(".rvt-ro", r).hidden, false, "Default: the read-only chip shows");
+  assert.equal(q(".rvt-banner", r), null, "no banner row");
+  assert.deepStrictEqual(qa(".rvt-profile-select option", r).map((o) => o.value), ["default:Default", "bychar:[By char]", "shared:Hunt"]);
   assert.equal(q(".rvt-status", r).textContent, "VT: Default · nav 2/3");
 });
 
-await check("Options: Run Macro toggles through bot.control; Advanced lists every row, inert greyed", async () => {
-  const b = body("options");
-  const run = q(".rvt-run", b);
-  assert.equal(run.textContent, "RUNNING");
-  click(run);
+await check("command bar: RUN pauses through bot.control; the switches write their options (NAV / META through their services)", async () => {
+  const r = root();
+  click(q(".rvt-run", r));
   await flush();
   assert.deepStrictEqual(W.ctl.at(-1), ["stop", { persist: true, reason: "VT panel" }]);
-  const mr = q(".rvt-opt[data-key='MonsterRange'] input", b);
+  click(sw("combat"));
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "EnableCombat", false, "ui"]);
+  assert.equal(sw("combat").getAttribute("aria-pressed"), "false", "refreshed off");
+  click(sw("loot"));
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "EnableLooting", false, "ui"]);
+  click(sw("nav"));
+  await flush();
+  assert.deepStrictEqual(W.navCalls.slice(-2), [["setEnabled", true], ["resume"]], "NAV on = ActiveNav.setEnabled + resume");
+  assert.equal(sw("nav").getAttribute("aria-pressed"), "true");
+  click(sw("meta"));
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "EnableMeta", true, "meta"], "META through the engine's enabled setter");
+});
+
+await check("profile drawer: Mine only under Default is the Save As flag; Save As; select; read-only chip opens the drawer", async () => {
+  const r = root();
+  const drawer = q(".rvt-drawer", r);
+  assert.equal(drawer.hidden, true);
+  click(q(".rvt-ro", r));
+  await flush();
+  assert.equal(drawer.hidden, false, "chip → drawer");
+  const mineCb = qa("input.hbk-check", drawer).find((i) => i.parentNode && /Mine only/.test(i.parentNode.textContent));
+  const nCalls = W.options.calls.length;
+  change(mineCb, true);
+  await flush();
+  assert.equal(W.options.calls.slice(nCalls).some((c) => c[0] === "setMineOnly"), false, "Default: no setMineOnly");
+  panel.refreshVtPanel();
+  assert.equal(mineCb.checked, true, "the flag survives a refresh");
+  q(".rvt-saveas-name", drawer).value = "Solo";
+  click(byText(drawer, "button", "Save As"));
+  await flush();
+  assert.deepStrictEqual(W.options.calls.find((c) => c[0] === "saveAs"), ["saveAs", "Solo", true], "Save As → a [Char] profile");
+  assert.equal(drawer.hidden, true, "drawer closes after Save As");
+  change(q(".rvt-profile-select", r), "shared:Hunt");
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["selectProfile", "Hunt", "shared"]);
+  assert.equal(q(".rvt-ro", r).hidden, true, "a user profile: no chip");
+  // Delete asks twice
+  click(q(".rvt-more", r));
+  const del = byText(q(".rvt-drawer", r), "button", "Delete");
+  click(del);
+  assert.equal(W.options.calls.some((c) => c[0] === "profiles.remove"), false, "first click only arms");
+  assert.equal(del.textContent, "Delete it?");
+  click(del);
+  assert.equal(W.options.calls.some((c) => c[0] === "profiles.remove"), false, "a double-click is not a confirmation");
+  confirmClick(del);
+  await flush();
+  assert.deepStrictEqual(W.options.calls.find((c) => c[0] === "profiles.remove"), ["profiles.remove", "Hunt", "shared"]);
+  W.options.selectProfile("Default", "default");
+  click(q(".rvt-more", r));
+  panel.refreshVtPanel({ force: true });
+});
+
+await check("Main: ranges, the vitals matrix (live bars + marks), the emergency rule, behaviour rows", async () => {
+  const b = body("main");
+  const mr = q("input[data-key='MonsterRange']", b);
   assert.equal(mr.value, "40");
   change(mr, "25");
   await flush();
   assert.deepStrictEqual(W.options.calls.at(-1), ["set", "MonsterRange", 25, "ui"]);
-  click(byText(b, "button", "Advanced Options…"));
+  const top = q("input[data-key='topOff.hp']", b);
+  assert.equal(top.value, "95");
+  change(top, "90");
   await flush();
-  const adv = q(".rvt-options-advanced", b);
-  assert.equal(adv.hidden, false);
-  assert.equal(qa(".rvt-opt", adv).length, ROWS.length, "every schema row");
-  assert.equal(qa(".rvt-opt.is-inert", adv).length, 3, "inert rows greyed");
-  const ah = q(".rvt-opt[data-key='AttackHeight'] select", adv);
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "TopOffHP", 90, "ui"]);
+  assert.equal(q("input[data-key='combat.hp']", b).value, "60");
+  assert.equal(q("input[data-key='combat.st']", b).disabled, true, "no RestamAt row in this schema → disabled");
+  change(q("input[data-key='EmergencyHP']", b), "25");
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "EmergencyHP", 25, "ui"]);
+  const hp = q(".rvt-vbar.is-hp", b);
+  assert.equal(q(".rvt-vbar-text", hp).textContent, "50%", "180 / 360");
+  assert.equal(q(".rvt-vbar-fill", hp).style.width, "50.0%");
+  assert.equal(q(".rvt-vmark.is-idle", hp).style.left, "90%", "top-off mark at 90");
+  assert.equal(q(".rvt-vmark.is-combat", hp).style.left, "60%", "combat mark at 60");
+  assert.match(hp.title, /180 \/ 360/);
+  const beh = qa(".rvt-checks .rvt-opt", b).map((x) => x.dataset.key);
+  assert.deepStrictEqual(beh, ["BoostLootPriority", "PeaceModeWhenIdle"], "behaviour rows from the schema");
+  change(q(".rvt-checks input[data-key='PeaceModeWhenIdle']", b), true);
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "PeaceModeWhenIdle", true, "ui"]);
+  assert.ok(q(".rvt-opt[data-key='PeaceModeWhenIdle']", b).classList.contains("is-changed"), "changed → gold");
+  change(q("input[data-key='SummonPets']", b), true);
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "SummonPets", true, "ui"]);
+});
+
+await check("Advanced: only the rows no other tab shows; inert folded; the filter searches every row and says where it lives", async () => {
+  await openTab("advanced");
+  const b = body("advanced");
+  const shown = qa(".rvt-adv-groups .rvt-opt", b).map((x) => x.dataset.key);
+  assert.deepStrictEqual(shown, ["buffTiers", "AttackHeight"], "MonsterRange / HealAt / RebuffSecondsRemaining / LootMinValue / switches live elsewhere");
+  // the tier rows draw as one strip of I … IV fields, each bound to its own row
+  const strip = q(".rvt-tierstrip", b);
+  assert.deepStrictEqual(qa(".rvt-tiercell .rvt-faint", strip).map((x) => x.textContent), ["I", "II", "III", "IV"]);
+  const t3 = q("input[data-key='BuffMinSkillLevelTier3']", strip);
+  assert.equal(t3.value, "135");
+  change(t3, "150");
+  await flush();
+  assert.deepStrictEqual(W.options.calls.at(-1), ["set", "BuffMinSkillLevelTier3", 150, "ui"]);
+  assert.equal(q(".rvt-adv-inert", b).hidden, true, "Not on web folded");
+  assert.deepStrictEqual(qa(".rvt-adv-inert .rvt-opt.is-inert", b).map((x) => x.dataset.key), ["BuffProfileBanes", "DoJiggle"]);
+  const ah = q(".rvt-opt[data-key='AttackHeight'] select", b);
   change(ah, "3");
   await flush();
   assert.deepStrictEqual(W.options.calls.at(-1), ["set", "AttackHeight", 3, "ui"], "enum value typed");
-  assert.equal(JSON.parse(localStorage.getItem("rynth.vt.ui.v1")).sub, "advanced");
-  click(byText(b, "button", "◂ Options"));
+  const f = q(".rvt-adv-filter", b);
+  f.value = "range";
+  f.dispatchEvent(new FakeEvent("input"));
   await flush();
-  assert.equal(q(".rvt-options-main", b).hidden, false);
+  const hit = q(".rvt-opt[data-key='MonsterRange']", b);
+  assert.ok(hit, "search finds a Main-tab row");
+  assert.equal(q(".rvt-home", hit).textContent, "Main tab");
+  f.value = "";
+  f.dispatchEvent(new FakeEvent("input"));
+  await flush();
+  assert.equal(q(".rvt-opt[data-key='MonsterRange']", b), null);
 });
 
 await check("refresh ≤ 2 Hz, only while open AND visible", async () => {
@@ -315,7 +478,7 @@ await check("refresh ≤ 2 Hz, only while open AND visible", async () => {
   assert.equal(snaps, 2, "re-open refreshes once");
 });
 
-await check("Monsters: columns incl. WC/FC/Cp/DC/Cs, P −1..4, Add / [E] editor with parse errors", async () => {
+await check("Monsters: columns incl. WC/FC/Cp/DC/Cs, P −1..4, Add, filter-as-you-type, the target's row, the [E] editor", async () => {
   await openTab("monsters");
   const b = body("monsters");
   const head = qa("th", b).map((x) => x.textContent);
@@ -329,6 +492,7 @@ await check("Monsters: columns incl. WC/FC/Cp/DC/Cs, P −1..4, Add / [E] editor
   click(byText(b, "button", "Add"));
   await flush();
   assert.equal(W.options.lists.monsters.length, 2);
+  assert.equal(add.value, "", "field cleared after Add");
   const row1 = q("tr.rvt-mon-row[data-index='1']", b);
   assert.ok(row1, "new row rendered");
   const wc = q(".rvt-col[data-col='WC']", row1);
@@ -336,8 +500,25 @@ await check("Monsters: columns incl. WC/FC/Cp/DC/Cs, P −1..4, Add / [E] editor
   await flush();
   assert.equal(W.options.lists.monsters[1].WC, true);
   const weapon = q(".rvt-weapon", row1);
-  assert.deepStrictEqual(qa("option", weapon).map((o) => o.textContent), ["AUTO", "Kite Shield", "Wand"].filter((n) => n !== "Kite Shield"), "weapons = caster/melee/missile items");
-  click(qa("button", row1).find((x) => x.textContent === "E"));
+  assert.deepStrictEqual(qa("option", weapon).map((o) => o.textContent), ["AUTO", "Wand"], "weapons = caster/melee/missile items");
+  // filter-as-you-type
+  add.value = "mosswart";
+  add.dispatchEvent(new FakeEvent("input"));
+  assert.equal(q("tr.rvt-mon-row[data-index='1']", b).hidden, true, "a non-matching row hides");
+  assert.equal(q("tr.rvt-mon-row.is-default", b).hidden, false, "DEFAULT always shows");
+  assert.equal(q(".rvt-mon-filtered", b).hidden, false);
+  add.value = "";
+  add.dispatchEvent(new FakeEvent("input"));
+  assert.equal(q("tr.rvt-mon-row[data-index='1']", b).hidden, false);
+  // the row governing the locked target
+  W.bot.combat.locked = 0x5001;
+  panel.refreshVtPanel();
+  assert.ok(q("tr.rvt-mon-row[data-index='1']", b).classList.contains("is-target"), "row 1 governs the target");
+  assert.match(q("tr.rvt-mon-row[data-index='1'] td.rvt-name", b).title, /current target \(Drudge Skulker\)/);
+  W.bot.combat.locked = 0;
+  panel.refreshVtPanel();
+  assert.equal(qa("tr.is-target", b).length, 0);
+  click(qa("button", q("tr.rvt-mon-row[data-index='1']", b)).find((x) => x.textContent === "E"));
   await flush();
   const ed = q(".rvt-expr", b);
   assert.equal(ed.hidden, false);
@@ -386,26 +567,133 @@ await check("no list rebuild under a focused input; rebuild after blur", async (
   panel.refreshVtPanel();
 });
 
-await check("Route: VTank buttons, insert mode, green arrow, pause/chat edit", async () => {
+await check("Items: the selection preview; one Add routes by kind (Auto → combat item / consumable; explicit type); both lists", async () => {
+  await openTab("items");
+  const b = body("items");
+  assert.equal(q(".rvt-selname", b).textContent, "Heavy Axe");
+  assert.match(q(".rvt-selname", b).title, /combat item: Melee weapon/);
+  click(byText(b, "button", "Add"));
+  await flush();
+  assert.deepStrictEqual(W.itemCalls.at(-1), ["items.add", { guid: 0x7004, kind: "melee", noBuffs: false }], "Auto: a weapon → the Items list");
+  W.setSelectedItem(0x7005);
+  panel.refreshVtPanel({ force: true });
+  assert.equal(q(".rvt-selname", b).textContent, "Healing Kit");
+  click(byText(b, "button", "Add"));
+  await flush();
+  assert.deepStrictEqual(W.itemCalls.at(-1), ["consumables.add", { guid: 0x7005 }], "Auto: anything else → the Consumables list (type detected there)");
+  change(q(".rvt-add-as", b), "HealthKit");
+  assert.equal(qa("input.hbk-check", q(".rvt-addbar", b))[0].disabled, true, "No Buffs is for combat items only");
+  click(byText(b, "button", "Add"));
+  await flush();
+  assert.deepStrictEqual(W.itemCalls.at(-1), ["consumables.add", { guid: 0x7005, type: "HealthKit" }]);
+  assert.equal(q(".rvt-add-as", b).value, "auto", "a successful add resets Add as");
+  change(q(".rvt-add-as", b), "shield");
+  const nb = qa("input.hbk-check", q(".rvt-addbar", b))[0];
+  assert.equal(nb.disabled, false);
+  change(nb, true);
+  const before = W.itemCalls.length;
+  click(byText(b, "button", "Add"));
+  await flush();
+  assert.equal(W.itemCalls.length, before, "a healing kit is never added as a shield");
+  assert.match(q(".rvt-msg", root()).textContent, /Healing Kit is not a weapon, shield/);
+  W.setSelectedItem(0x7004);
+  panel.refreshVtPanel({ force: true });
+  click(byText(b, "button", "Add"));
+  await flush();
+  assert.deepStrictEqual(W.itemCalls.at(-1), ["items.add", { guid: 0x7004, kind: "shield", noBuffs: true }], "explicit kind + No Buffs");
+  assert.equal(nb.checked, false, "No Buffs resets after the add");
+  // by name: No Buffs works without a selection; an empty name is refused
+  W.setSelectedItem(0);
+  panel.refreshVtPanel({ force: true });
+  assert.equal(byText(b, "button", "Add").disabled, true, "nothing selected: Add is off");
+  assert.equal(nb.disabled, false, "…but No Buffs still applies to Add by name");
+  const n0 = W.itemCalls.length;
+  click(byText(b, "button", "Add by name"));
+  await flush();
+  assert.equal(W.itemCalls.length, n0, "an empty name adds nothing");
+  assert.match(q(".rvt-msg", root()).textContent, /type the item's name/);
+  W.setSelectedItem(0x7004);
+  assert.equal(qa(".rvt-item-row", b).length, 3, "combat items");
+  assert.ok(q(".rvt-item-row[data-guid='" + 0x7002 + "']", b).classList.contains("is-nobuffs"));
+  assert.equal(qa(".rvt-cons-row", b).length, 1, "consumables");
+  assert.equal(q(".rvt-cons-keep", b).value, "5", "pea keep-at-least");
+});
+
+await check("Buffs: grouped rows with tier + time, the per-group box, the item-buff matrix (No-Buffs greyed)", async () => {
+  await openTab("buffs");
+  await flush(5);
+  panel.refreshVtPanel({ force: true });
+  const b = body("buffs");
+  assert.deepStrictEqual(qa(".rvt-bgroup-head", b).map((h) => h.dataset.group), ["Attributes", "Defenses"]);
+  const str = q(".rvt-buff-row[data-spell='2']", b);
+  assert.equal(q(".rvt-grow", str).textContent, "Strength");
+  assert.equal(q(".rvt-tier", str).textContent, "I");
+  assert.equal(str.dataset.state, "low", "200 s left < the 300 s rebuff threshold");
+  assert.equal(q(".rvt-buff-rem", str).textContent, "3m 20s");
+  assert.equal(q(".rvt-buff-row[data-spell='18']", b).dataset.state, "missing");
+  // a group folds (and stays folded across a rebuild: a per-viewer pref)
+  const head = q(".rvt-bgroup-head[data-group='Defenses']", b);
+  click(head);
+  const gridOf = (h) => h.parentNode.childNodes[h.parentNode.childNodes.indexOf(h) + 1];
+  assert.equal(gridOf(head).hidden, true, "folded");
+  assert.equal(q(".rvt-fold", head).textContent, "▸");
+  panel.refreshVtPanel({ force: true });
+  const head2 = q(".rvt-bgroup-head[data-group='Defenses']", b);
+  assert.equal(gridOf(head2).hidden, true, "still folded after a rebuild");
+  click(head2);
+  assert.equal(gridOf(head2).hidden, false, "unfolded");
+  assert.match(q(".rvt-bgroup-head[data-group='Defenses'] .rvt-sec-meta", b).textContent, /^1\/1 · 1 due$/, "on/total · due");
+  const all = q(".rvt-bgroup-head[data-group='Attributes'] .rvt-bgroup-all", b);
+  change(all, false);
+  await flush(5);
+  assert.deepStrictEqual(W.options.lists.buffs.disabled, [2], "group off → one write");
+  const blocks = qa(".rvt-itembuff", b);
+  assert.equal(blocks.length, 3);
+  const shield = blocks.find((x) => x.dataset.guid === String(0x7001));
+  const fams = qa("input[data-family]", shield);
+  assert.equal(fams.length, 8, "impen + 7 banes");
+  assert.equal(fams.every((i) => i.checked), true, "shield default: all on");
+  const buckler = blocks.find((x) => x.dataset.guid === String(0x7002));
+  assert.ok(buckler.classList.contains("is-nobuffs"), "No-Buffs greyed");
+  assert.equal(qa("input[data-family]", buckler).every((i) => i.disabled && !i.checked), true);
+  const wand = blocks.find((x) => x.dataset.guid === String(0x7003));
+  assert.equal(qa("input[data-family]", wand).some((i) => i.checked), false, "caster default: none");
+  change(qa("input[data-family]", shield).find((i) => i.dataset.family === "bane:fire"), false);
+  await flush();
+  assert.equal(W.options.lists.buffs.itemSpells[String(0x7001)].includes("bane:fire"), false);
+  assert.equal(q("input[data-key='RebuffSecondsRemaining']", b).value, "300", "the rebuff knob");
+  assert.ok(byText(b, "button", "Force Buff"));
+});
+
+await check("Route: Add here, the kind picker, insert mode, green arrow, distances, pause edit", async () => {
   await openTab("route");
   const b = body("route");
-  for (const t of ["Add", "Open Vendor", "Add Portal/NPC", "Add NPC Talk", "Add Recall", "Add Pause", "Add Chat", "Add Checkpoint", "Add Jump", "▲", "▼", "Load", "Save", "Export .nav"]) {
-    assert.ok(byText(b, "button", t), `button ${t}`);
-  }
-  assert.deepStrictEqual(qa(".rvt-insert-mode option", b).map((o) => o.textContent), ["Add to End", "Insert Above", "Insert Below"]);
-  assert.deepStrictEqual(qa(".rvt-route-type option", b).map((o) => o.textContent), ["Circular", "Linear", "Follow", "Once"]);
+  assert.deepStrictEqual(qa(".rvt-route-type .rvt-seg-btn", b).map((o) => o.textContent), ["Circular", "Linear", "Once", "Follow"]);
+  assert.ok(q(".rvt-route-type .rvt-seg-btn[data-value='1']", b).classList.contains("is-on"));
+  assert.deepStrictEqual(qa(".rvt-insert-mode option", b).map((o) => o.value), ["end", "above", "below"]);
   const active = q(".rvt-point.is-active", b);
   assert.equal(active.dataset.index, "1", "green arrow on the current waypoint");
   assert.equal(q(".rvt-arrow", active).textContent, "➜");
-  assert.deepStrictEqual(qa(".rvt-recall-select option", b).map((o) => o.value), ["1635"], "known recalls only");
+  assert.equal(q(".rvt-point[data-index='0'] .rvt-dist", b).textContent, "12 m", "you stand 12 m from waypoint 1");
+  assert.equal(q(".rvt-point[data-index='2'] .rvt-dist", b).textContent, "", "chat points have no position");
+  assert.equal(q(".rvt-dirty", b).hidden, false, "unsaved route");
+  click(byText(b, "button", "Add here"));
+  await flush();
+  assert.deepStrictEqual(W.navCalls.at(-1), ["addHere", 0, {}, { mode: "end", selected: null }]);
   change(q(".rvt-insert-mode", b), "above");
   await flush();
   click(q(".rvt-point[data-index='2']", b));
   await flush();
+  change(q(".rvt-add-kind", b), "3");
+  const addKind = qa("button", q(".rvt-route-add", b)).at(-1);
+  assert.equal(addKind.textContent, "Add Pause");
   q(".rvt-pause-s", b).value = "7";
-  click(byText(b, "button", "Add Pause"));
+  click(addKind);
   await flush();
   assert.deepStrictEqual(W.navCalls.at(-1), ["addHere", 3, { seconds: 7 }, { mode: "above", selected: 2 }]);
+  change(q(".rvt-add-kind", b), "2");
+  assert.equal(addKind.textContent, "Add Recall");
+  assert.deepStrictEqual(qa(".rvt-recall-select option", b).map((o) => o.value), ["1635"], "known recalls only");
   click(q(".rvt-point[data-index='0'] .rvt-arrow", b));
   await flush();
   assert.deepStrictEqual(W.navCalls.at(-1), ["setActive", 0]);
@@ -415,7 +703,78 @@ await check("Route: VTank buttons, insert mode, green arrow, pause/chat edit", a
   change(q(".rvt-point[data-index='1'] .rvt-point-pause", b), "9");
   await flush();
   assert.deepStrictEqual(W.navCalls.at(-1), ["updatePoint", 1, { pauseMs: 9000 }]);
+  click(q(".rvt-route-type .rvt-seg-btn[data-value='2']", b));
+  await flush();
+  assert.deepStrictEqual(W.navCalls.at(-1), ["setType", 2]);
+  const clear = byText(b, "button", "Clear");
+  click(clear);
+  assert.notDeepEqual(W.navCalls.at(-1), ["clear"], "Clear asks twice");
+  confirmClick(clear);
+  await flush();
+  assert.deepStrictEqual(W.navCalls.at(-1), ["clear"]);
   assert.match(q(".rvt-status", root()).textContent, /^Nav: 2\/3 circular · pause 4 s/);
+});
+
+await check("Route: the path is drawn in the world on the Route tab, hidden elsewhere, kept with Show path pinned", async () => {
+  await openTab("route");
+  for (let i = 0; i < 20 && !window.__rynthRouteOverlay; i++) await flush();
+  const ov = window.__rynthRouteOverlay;
+  assert.ok(ov && typeof ov.setVisible === "function", "scene3d/route_overlay.js installed on the Route tab");
+  assert.equal(ov.status().visible, true, "visible on the Route tab");
+  assert.equal(ov.status().sceneReady, false, "no 3D scene in this page: it waits, nothing attached");
+  await openTab("main");
+  assert.equal(ov.status().visible, false, "hidden off the Route tab");
+  await openTab("route");
+  const pin = qa("input.hbk-check", body("route")).find((i) => i.parentNode && /Show path/.test(i.parentNode.textContent));
+  change(pin, true);
+  await openTab("main");
+  assert.equal(ov.status().visible, true, "pinned: drawn from any tab");
+  panel.closeVtPanel();
+  assert.equal(ov.status().visible, true, "pinned: drawn with the panel closed");
+  assert.equal(JSON.parse(localStorage.getItem("rynth.vt.ui.v1")).routeShowPath, true, "a per-viewer pref");
+  await panel.openVtPanel({ tab: "route" });
+  change(pin, false);
+  await openTab("main");
+  assert.equal(ov.status().visible, false, "unpinned and off the tab: hidden");
+});
+
+await check("Loot: the profile select loads; the rule editor (New → rule → condition → Save)", async () => {
+  await openTab("loot");
+  const b = body("loot");
+  const lootSel = q(".rvt-lootprofile-select", b);
+  assert.deepStrictEqual(qa("option", lootSel).map((o) => o.textContent), ["(Value floor)", "basic"]);
+  change(lootSel, "basic");
+  await flush();
+  assert.deepStrictEqual(W.lib.calls.at(-1), ["loadLoot", "basic"]);
+  assert.equal(q("input[data-key='LootMinValue']", b).value, "0", "the Value floor knob");
+  click(byText(b, "button", "New"));
+  await flush();
+  q(".rvt-lootedit-name", b).value = "mine";
+  click(byText(b, "button", "Add rule"));
+  click(byText(b, "button", "Add condition"));
+  await flush();
+  const typeSel = q(".rvt-node-type", b);
+  assert.deepStrictEqual(qa("option", typeSel).map((o) => o.textContent), ["SpellNameMatch", "StringValueMatch"]);
+  change(typeSel, "2");
+  await flush();
+  const data = qa(".rvt-lootcond input", b);
+  assert.equal(data.length, 2, "arity 2 → two data fields");
+  assert.deepStrictEqual(data.map((i) => i.placeholder), ["pattern", "key"], "data-line names from the node type");
+  change(data[0], "Name");
+  change(data[1], "Pyreal");
+  const act = qa(".rvt-lootrule select", b).find((s) => qa("option", s).some((o) => o.value === "KeepUpTo"));
+  change(act, "KeepUpTo");
+  const keep = qa(".rvt-lootrule input", b).find((i) => i.placeholder === "count");
+  assert.equal(keep.hidden, false);
+  change(keep, "3");
+  click(byText(b, "button", "Save rules"));
+  await flush();
+  const put = W.lib.calls.find((c) => c[0] === "putLoot");
+  assert.ok(put, "library.putLoot called");
+  assert.equal(put[1], "mine");
+  assert.deepStrictEqual(put[2].rules[0].conditions, [{ type: 2, typeName: "StringValueMatch", data: ["Name", "Pyreal"] }]);
+  assert.equal(put[2].rules[0].action, "KeepUpTo");
+  assert.equal(put[2].rules[0].keepCount, 3);
 });
 
 await check("Meta: fired rows red, state dropdown, rule editor (replaceMeta, never load)", async () => {
@@ -430,6 +789,7 @@ await check("Meta: fired rows red, state dropdown, rule editor (replaceMeta, nev
   await flush();
   assert.deepStrictEqual(W.vt.meta.counts.enterState.at(-1), ["dead", "manual"]);
   assert.match(q(".rvt-meta-strip", b).textContent, /State: Default · 12s in state/);
+  assert.equal(qa("input", b).some((i) => i.parentNode && /Enable Meta/.test(i.parentNode.textContent)), false, "Enable Meta lives on the command bar");
   click(byText(b, "button", "Add Rule"));
   await flush();
   const ed = q(".rvt-rule-editor", b);
@@ -461,7 +821,7 @@ await check("Meta: fired rows red, state dropdown, rule editor (replaceMeta, nev
   assert.deepStrictEqual(added.act, { t: "CreateView", view: "panel", xml: "<view title='x'></view>" });
   assert.equal(W.vt.meta.counts.load, 0, "engine.load never");
   assert.ok(W.vt.meta.counts.replaceMeta >= 1);
-  click(q(".rvt-rule[data-id='r2'] button", b).parentNode.querySelectorAll("button").find((x) => x.textContent === "✕"));
+  click(qa("button", q(".rvt-rule[data-id='r2']", b)).find((x) => x.textContent === "✕"));
   await flush();
   assert.equal(W.vt.meta.meta().rules.some((r) => r.id === "r2"), false);
 });
@@ -469,7 +829,7 @@ await check("Meta: fired rows red, state dropdown, rule editor (replaceMeta, nev
 await check(`Meta: the rule list is windowed above ${META_VIRTUAL_THRESHOLD} rows`, async () => {
   const many = Array.from({ length: 250 }, (_, i) => ({ id: `r${i + 1}`, state: "Default", enabled: true, cond: { t: "Always" }, act: { t: "None" } }));
   const saved = W.vt.meta;
-  W.vt.meta = makeEngine(many);
+  W.vt.meta = makeEngine(many, W.options);
   panel.refreshVtPanel({ force: true });
   const b = body("meta");
   const n = qa(".rvt-rule", b).length;
@@ -516,101 +876,15 @@ await check("meta views: windows built, updated and removed by meta_views.js; pa
   assert.equal(q(".rvt-view[data-view='ColRings']"), null, "window removed");
 });
 
-await check("Profiles: Nav profile select + Save route; loot select; the loot-rule editor", async () => {
-  await openTab("profiles");
-  const b = body("profiles");
-  const navSel = q(".rvt-navprofile-select", b);
-  assert.deepStrictEqual(qa("option", navSel).map((o) => o.value), ["", "loop", "runback"]);
-  assert.equal(navSel.value, "loop", "current ref selected");
-  change(navSel, "runback");
-  await flush();
-  assert.deepStrictEqual(W.navCalls.at(-1), ["loadByName", "runback"]);
-  q(".rvt-saveroute-name", b).value = "fighting";
-  click(byText(b, "button", "Save route as…"));
-  await flush();
-  assert.deepStrictEqual(W.navCalls.at(-1), ["save", "fighting"]);
-  const lootSel = q(".rvt-lootprofile-select", b);
-  assert.deepStrictEqual(qa("option", lootSel).map((o) => o.textContent), ["(Value floor)", "basic"]);
-  change(lootSel, "basic");
-  await flush();
-  assert.deepStrictEqual(W.lib.calls.at(-1), ["loadLoot", "basic"]);
-  const showEd = qa("input", b).find((i) => i.parentNode && /Show Editor/.test(i.parentNode.textContent));
-  assert.equal(showEd.disabled, true, "Show Editor disabled (deprecated)");
-  // loot rules: New → Add rule → Add condition (node type from lootNodeTypes) → Save
-  click(byText(b, "button", "New"));
-  await flush();
-  q(".rvt-lootedit-name", b).value = "mine";
-  click(byText(b, "button", "Add rule"));
-  click(byText(b, "button", "Add condition"));
-  await flush();
-  const typeSel = q(".rvt-node-type", b);
-  assert.deepStrictEqual(qa("option", typeSel).map((o) => o.textContent), ["SpellNameMatch", "StringValueMatch"]);
-  change(typeSel, "2");
-  await flush();
-  const data = qa(".rvt-lootcond input", b);
-  assert.equal(data.length, 2, "arity 2 → two data fields");
-  assert.deepStrictEqual(data.map((i) => i.placeholder), ["pattern", "key"], "data-line names from the node type");
-  change(data[0], "Name");
-  change(data[1], "Pyreal");
-  const act = qa(".rvt-lootrule select", b).find((s) => qa("option", s).some((o) => o.value === "KeepUpTo"));
-  change(act, "KeepUpTo");
-  const keep = qa(".rvt-lootrule input", b).find((i) => i.placeholder === "count");
-  assert.equal(keep.hidden, false);
-  change(keep, "3");
-  click(byText(b, "button", "Save rules"));
-  await flush();
-  const put = W.lib.calls.find((c) => c[0] === "putLoot");
-  assert.ok(put, "library.putLoot called");
-  assert.equal(put[1], "mine");
-  assert.deepStrictEqual(put[2].rules[0].conditions, [{ type: 2, typeName: "StringValueMatch", data: ["Name", "Pyreal"] }]);
-  assert.equal(put[2].rules[0].action, "KeepUpTo");
-  assert.equal(put[2].rules[0].keepCount, 3);
-  // Mine Only while Default is active = the Save As flag (G:54-55), not a scope move
-  const mineCb = qa("input.hbk-check", b).find((i) => i.parentNode && /Mine Only/.test(i.parentNode.textContent));
-  assert.equal(mineCb.disabled, false, "usable under Default");
-  const nCalls = W.options.calls.length;
-  change(mineCb, true);
-  await flush();
-  assert.equal(W.options.calls.slice(nCalls).some((c) => c[0] === "setMineOnly"), false, "Default: no setMineOnly");
-  panel.refreshVtPanel();
-  assert.equal(mineCb.checked, true, "the flag survives a refresh");
-  q(".rvt-saveas-name", b).value = "Solo";
-  click(byText(b, "button", "Save As"));
-  await flush();
-  assert.deepStrictEqual(W.options.calls.find((c) => c[0] === "saveAs"), ["saveAs", "Solo", true], "Save As → a [Char] profile");
-  W.options.selectProfile("Default", "default");
-  // Enable Auto-Navigation with a live nav = the Route tab's path (setEnabled + resume)
-  const navCb = qa("input.hbk-check", b).find((i) => i.parentNode && /Enable Auto-Navigation/.test(i.parentNode.textContent));
-  change(navCb, false);
-  await flush();
-  assert.deepStrictEqual(W.navCalls.at(-1), ["setEnabled", false]);
-});
-
-await check("Buffs: item families per Items entry, No-Buffs greyed", async () => {
-  await openTab("buffs");
-  await flush(5);
-  panel.refreshVtPanel({ force: true });
-  const b = body("buffs");
-  const blocks = qa(".rvt-itembuff", b);
-  assert.equal(blocks.length, 3);
-  const shield = blocks.find((x) => x.dataset.guid === String(0x7001));
-  const fams = qa("input[data-family]", shield);
-  assert.equal(fams.length, 8, "impen + 7 banes");
-  assert.equal(fams.every((i) => i.checked), true, "shield default: all on");
-  const buckler = blocks.find((x) => x.dataset.guid === String(0x7002));
-  assert.ok(buckler.classList.contains("is-nobuffs"), "No-Buffs greyed");
-  assert.equal(qa("input[data-family]", buckler).every((i) => i.disabled && !i.checked), true);
-  const wand = blocks.find((x) => x.dataset.guid === String(0x7003));
-  assert.equal(qa("input[data-family]", wand).some((i) => i.checked), false, "caster default: none");
-  change(qa("input[data-family]", shield).find((i) => i.dataset.family === "bane:fire"), false);
-  await flush();
-  assert.equal(W.options.lists.buffs.itemSpells[String(0x7001)].includes("bane:fire"), false);
-  assert.ok(qa(".rvt-buff-row", b).length >= 1, "self-buff rows from the dynamic list");
+await check("the v1 tab names still open the right tab (/rs ui vitals | consumables | profiles | options)", async () => {
+  for (const [old, now] of [["vitals", "main"], ["consumables", "items"], ["profiles", "main"], ["options", "main"], ["nav", "route"], ["advanced", "advanced"]]) {
+    await panel.openVtPanel({ tab: old });
+    assert.equal(tabBtn(now).getAttribute("aria-selected"), "true", `${old} → ${now}`);
+  }
 });
 
 await check("kit classes on every input / select / textarea of every tab", async () => {
-  for (const id of ["options", "profiles", "vitals", "monsters", "items", "consumables", "buffs", "route", "meta"]) await openTab(id);
-  click(byText(body("options"), "button", "Advanced Options…"));
+  for (const id of ["main", "monsters", "items", "buffs", "route", "loot", "meta", "advanced"]) await openTab(id);
   click(byText(body("meta"), "button", "Add Rule"));
   await flush();
   const r = root();
@@ -627,6 +901,7 @@ await check("kit classes on every input / select / textarea of every tab", async
 await check("Escape: inside a field only blurs; elsewhere closes", async () => {
   await openTab("route");
   const r = root();
+  change(q(".rvt-add-kind", r), "4");
   const field = q(".rvt-chat-text", r);
   field.focus();
   const ev = new FakeEvent("keydown", { key: "Escape" });
@@ -645,7 +920,7 @@ await check("Escape: inside a field only blurs; elsewhere closes", async () => {
 });
 
 await check("dispose removes the window, the stylesheet, the timers and the meta-view renderer", async () => {
-  await panel.openVtPanel({ tab: "options" });
+  await panel.openVtPanel({ tab: "main" });
   const t = timers.at(-1);
   assert.ok(W.vt.views.renderer, "renderer attached while the panel exists");
   panel.disposeVtPanel();
@@ -653,12 +928,13 @@ await check("dispose removes the window, the stylesheet, the timers and the meta
   assert.equal(document.getElementById("hb-rynth-vt-style"), null);
   assert.ok(cleared.includes(t.id));
   assert.equal(W.vt.views.renderer, null, "the panel's renderer is detached (its windows need the stylesheet)");
+  assert.equal(window.__rynthRouteOverlay, undefined, "the route overlay went with the panel");
   assert.equal(panel.isVtPanelOpen(), false);
   assert.equal(panel.refreshVtPanel(), false);
   // re-open after dispose rebuilds from scratch, restoring the saved tab
   await panel.openVtPanel();
   assert.ok(root());
-  assert.equal(tabBtn("options").getAttribute("aria-selected"), "true");
+  assert.equal(tabBtn("main").getAttribute("aria-selected"), "true");
   assert.ok(W.vt.views.renderer, "re-attached on open");
   panel.disposeVtPanel();
   assert.equal(root(), null);

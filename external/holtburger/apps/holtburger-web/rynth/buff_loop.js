@@ -126,17 +126,81 @@
 // keeps today's pick. When a school's castable tier moves the ladders are
 // re-resolved; a rise also returns that school's fizzle-walked tiers it now
 // covers (_checkSkillCap).
+//
+// Scroll ladder (2026-10-19, owner report "the buff list contains spells
+// players shouldn't normally be able to cast"): a SpellCategory holds the
+// normal scroll ladder AND quest / NPC / potion spells, and ACE's
+// @addallspells (PlayerSpellTable) grants several of the latter. B4's
+// best-(tier, Power) pick then preferred them on a dev character — Zongo's
+// Fist (VII, Power 420, 3 h) over Might of the Lugians (VII, 300); under a
+// skill cap or a fizzle walk, Combat Medication / Zombies Persistence (60 s
+// spells, recast every minute) over Robustify / Regeneration Self VI. RynthAi
+// never could: its resolver is NAME-based (GetDynamicSelfBuffId). Now
+// spell_ladders.json marks each bot family's scroll ladder (flag bit 2,
+// derived and checked by rynth_spell_ladders_test.cjs; families in
+// buff_families.js) and
+//   * buildDynamicBuffList and the B4 resolution use ladder members only
+//     (_ladderRungs): never a spell off the ladder while a ladder member is
+//     known. A family whose only known members are off the ladder is skipped
+//     by the dynamic list, and an explicit ladder request for it is dropped
+//     by filterCastableBuffs (nothing on the ladder to cast).
+//   * A desired id OFF the ladder (a ?botBuffs= / bot.setBuffs() / saved-list
+//     pick) is an explicit pin: cast exactly as named while it is known — no
+//     tier upgrade, no skill cap. When it is unknown, or walked off by the
+//     fizzle / unknown-spell / no-show valves, the family falls back to its
+//     ladder at or below the pin's tier (a walk never goes up); the fizzle
+//     walk's 10-minute retry brings the pin back.
+//   * Families without ladder data (outside buff_families.js, or a table
+//     baked before 2026-10-19) resolve exactly as before.
+//   * Same-tier ladder copies resolve by Power, then the copy a scroll
+//     teaches, then the lower id (deterministic for the five "Light Weapon
+//     Mastery Self VII" ids).
+// The pickers read the same data: canonicalBuffFamilies() (one row per
+// family, HUD Settings), buffFamilyInfo / BUFF_GROUPS / isCanonicalBuff /
+// canonicalTier / canonicalLadder / buffFamilyOf (VT Buffs tab), and
+// toLadderSpec() moves a family-selector spec saved from the old list onto
+// the ladder (else its off-ladder ids would read as pins).
 
 import { portalSpaceActive } from "./portal_gate.js";
 import { buffSchoolOf, capRose, capsBySchool } from "./skill_cap.js";
+import {
+  SKILL,
+  BASE_CREATURE_BUFFS,
+  SKILL_BUFFS,
+  LIFE_BUFFS,
+  AURA_BUFFS,
+  BUFF_FAMILY_ORDER,
+  LADDER_FLAG_SELF_TARGETED,
+  LADDER_FLAG_ENCHANTMENT,
+  LADDER_FLAG_SCROLL,
+  ROMAN,
+  buffFamilyInfo,
+  rowCanonical,
+  rowIsEnchantment,
+  rungOrder,
+  canonicalLadderOf,
+  bestKnownByFamily,
+} from "./buff_families.js";
+
+// The family catalogue and its display info live in buff_families.js (pure —
+// the ladder generator imports it too); re-exported here because buff_loop.js
+// is what the bot, the HUD bridge and the VT bridge load.
+export {
+  BASE_CREATURE_BUFFS,
+  SKILL_BUFFS,
+  LIFE_BUFFS,
+  AURA_BUFFS,
+  BUFF_GROUPS,
+  BUFF_FAMILY_ORDER,
+  buffFamilyInfo,
+  buffFamilies,
+} from "./buff_families.js";
 
 // Lazy-loaded family tier ladder (id -> [category, tier, flags, power],
 // self-beneficial spells, baked from the spell DAT — rynth_spell_ladders_test
 // .cjs documents and checks the shape). Shared across all buff-loop instances.
 let LADDER_TABLE = null;
 let LADDER_PROMISE = null;
-const LADDER_FLAG_SELF_TARGETED = 1;
-const LADDER_FLAG_ENCHANTMENT = 2;
 // Module-relative by default: the old "/apps/holtburger-web/rynth" literal
 // only resolved when the page was served from the holtburger repo root, and
 // a 404 silently emptied the table (no B4/B5, no self-target flags).
@@ -152,8 +216,10 @@ export function loadSpellLadders(base) {
 }
 
 async function readLadderTable(url) {
-  // Node (tests, harness tools) has no fetch for file: URLs.
-  if (url.startsWith("file:") && typeof window === "undefined") {
+  // Node (tests, harness tools) has no fetch for file: URLs — also under a
+  // fake DOM that defines `window` (tests/rynth_hud_dom.test.mjs).
+  const node = typeof process !== "undefined" && !!(process.versions && process.versions.node);
+  if (url.startsWith("file:") && (node || typeof window === "undefined")) {
     const fs = await import("node:fs/promises");
     return JSON.parse(await fs.readFile(new URL(url), "utf8"));
   }
@@ -549,6 +615,10 @@ export class RynthBuffLoop {
   // Meta shape: { category, tier, selfTargeted, enchantment, power } — the two
   // booleans are null when the source doesn't say (catalog fallback, or a
   // pre-2026-10-12 two-field table row).
+  //   canonical — on its family's normal scroll ladder (flag bit 2); null when
+  //               the table has no ladder data for the family (catalog
+  //               fallback, a family outside buff_families.js, an old table).
+  //   scroll    — taught by a scroll (flag bit 3; the same-tier tie-break).
   _spellMeta(id) {
     const key = String(id >>> 0);
     const t = LADDER_TABLE;
@@ -561,6 +631,8 @@ export class RynthBuffLoop {
         selfTargeted: flags == null ? null : (flags & LADDER_FLAG_SELF_TARGETED) !== 0,
         enchantment: flags == null ? null : (flags & LADDER_FLAG_ENCHANTMENT) !== 0,
         power: row.length > 3 ? Number(row[3]) || 0 : 0,
+        canonical: rowCanonical(row, t),
+        scroll: flags == null ? false : (flags & LADDER_FLAG_SCROLL) !== 0,
       };
     }
     const s = this.host.s;
@@ -577,6 +649,8 @@ export class RynthBuffLoop {
             selfTargeted: typeof self === "boolean" ? self : null,
             enchantment: null,
             power: Number(recordField(r, "power")) || 0,
+            canonical: null,
+            scroll: false,
           };
         }
       } catch (_) {
@@ -593,6 +667,11 @@ export class RynthBuffLoop {
   // (an Incantation nominally tier 8 that lands skill-capped at 6 must not
   // recast forever chasing 8) — _recordOwnLanding. With the opt-in skill cap,
   // the best rung within the cap of its school (header).
+  // Scroll ladder (2026-10-19, header): a family with ladder data resolves to
+  // its canonical members only. A desired id OFF the ladder is an explicit
+  // pin: cast as named while known (no upgrade, no skill cap); once it is
+  // unknown or walked off (fizzles / not in the book / silent no-show) the
+  // family falls back to its ladder at or below the pin's tier.
   _buildLadders() {
     this._laddersBuilt = true;
     // [War, Life, Item, Creature, Void] castable levels, one read per build.
@@ -621,10 +700,12 @@ export class RynthBuffLoop {
       // _castSelfBuff). Unknown (null) stays eligible — it is cast targeted.
       if (meta.selfTargeted === false) continue;
       if (!byFamily.has(meta.category)) byFamily.set(meta.category, []);
-      byFamily.get(meta.category).push({ id, tier: meta.tier, power: meta.power || 0 });
+      byFamily.get(meta.category).push({ id, tier: meta.tier, power: meta.power || 0, canonical: meta.canonical, scroll: meta.scroll });
     }
     // Resolve each raw desired buff to the best known tier in its family.
+    const knownSet = new Set(known);
     const resolved = [];
+    if (!this._ladderLogged) this._ladderLogged = new Map();
     for (const rawId of this.rawDesired) {
       const meta = this._spellMeta(rawId);
       const fam = meta ? meta.category : this._familyOfSpell.get(rawId);
@@ -632,20 +713,26 @@ export class RynthBuffLoop {
         resolved.push(rawId); // no ladder data (or not an enchantment) — keep as-is
         continue;
       }
-      const cap = this._familyAchievedTier.get(fam) ?? 8;
+      const pinned = !!meta && meta.canonical === false;
+      if (pinned && knownSet.has(rawId) && !this._unresolvable.has(rawId) && meta.selfTargeted !== false) {
+        if (this._ladderLogged.get(rawId) !== rawId) this.log(`ladder: ${rawId} kept as named (family ${fam}: off the scroll ladder, an explicit pick)`);
+        this._ladderLogged.set(rawId, rawId);
+        resolved.push(rawId);
+        continue;
+      }
+      const cap = Math.min(this._familyAchievedTier.get(fam) ?? 8, pinned ? meta.tier : 8);
       // Tier first (C# BuffManager targets the highest LEVEL), Power breaks a
-      // same-tier tie — ACE's stacking winner within a category.
-      const ladder = byFamily
-        .get(fam)
+      // same-tier tie — ACE's stacking winner within a category — then the
+      // copy a scroll teaches, then the lower id (buff_families.js rungOrder).
+      const ladder = this._ladderRungs(byFamily.get(fam), meta)
         .filter((e) => e.tier <= cap)
-        .sort((a, b) => b.tier - a.tier || b.power - a.power);
+        .sort((a, b) => b.tier - a.tier || rungOrder(a, b));
       // Opt-in skill cap: the best rung its school's buffed skill reaches
       // (RynthAi GetDynamicSelfBuffId); none within it keeps today's pick.
       const pick = caps ? ladder.find((e) => e.tier <= caps[this._spellSchool(e.id) - 1]) || ladder[0] : ladder[0];
       const best = pick ? pick.id : rawId;
       // Log a resolution once, not on every rebuild (B5 rebuilds after each
       // family's first landing — the same 4 lines used to repeat per confirm).
-      if (!this._ladderLogged) this._ladderLogged = new Map();
       if (best !== rawId && this._ladderLogged.get(rawId) !== best) {
         this.log(`ladder: ${rawId} -> ${best} (family ${fam}, tier ${this._spellTier.get(best)})`);
       }
@@ -653,6 +740,21 @@ export class RynthBuffLoop {
       resolved.push(best);
     }
     this.desired = resolved;
+  }
+
+  // The rungs a desired buff may resolve to among its family's known members
+  // (`members`: {id, tier, power, canonical, scroll}). A family with scroll-
+  // ladder data never resolves to a spell off the ladder while a ladder member
+  // is known — Zongo's Fist (VII, Power 420) used to beat Might of the Lugians
+  // (VII, 300), Combat Medication (a 60 s spell) beat Robustify. A ladder
+  // request (canonical id) or a pin's fallback with no ladder member known
+  // gets none (the raw id is kept). Without ladder data (catalog fallback, a
+  // family outside buff_families.js, an older table) every member, as before.
+  _ladderRungs(members, rawMeta) {
+    const ladder = members.filter((e) => e.canonical === true);
+    if (ladder.length) return ladder;
+    if (rawMeta && rawMeta.canonical != null) return members.filter((e) => e.canonical == null);
+    return members.filter((e) => e.canonical !== false);
   }
 
   // B5 flap guard — the highest tier each family has been SEEN at in the
@@ -1380,21 +1482,24 @@ export class RynthBuffLoop {
         });
       }
     }
-    // Desired ladders from the known book (same source as _buildLadders).
+    // Desired ladders from the known book (same source as _buildLadders: the
+    // family's scroll ladder when it has one, a known pin alone).
     const known = s.playerKnownSpells ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
     const desired = [];
     for (const rawId of this.rawDesired) {
       const meta = this._spellMeta(rawId);
       const fam = meta?.category ?? this._familyOfSpell.get(rawId);
-      const ladder = [];
+      const members = [];
       for (const id of known) {
         const m = this._spellMeta(id);
         if (!m || m.category !== fam) continue;
-        ladder.push({
-          Id: id, Name: this._nbSpellName(id, fam), Family: fam, Tier: m.tier,
-          Known: !this._unresolvable.has(id), // folds the B9 walk-down blacklist
-        });
+        members.push({ id, tier: m.tier, canonical: m.canonical });
       }
+      const pin = meta && meta.canonical === false && known.includes(rawId) && !this._unresolvable.has(rawId);
+      const ladder = (pin ? members.filter((e) => e.id === rawId) : this._ladderRungs(members, meta)).map((e) => ({
+        Id: e.id, Name: this._nbSpellName(e.id, fam), Family: fam, Tier: e.tier,
+        Known: !this._unresolvable.has(e.id), // folds the B9 walk-down blacklist
+      }));
       desired.push({
         BaseName: this._nbSpellName(rawId, fam), SkillUsable: true,
         MaxTier: 8, Ladder: ladder, // no GetHighestBuffSpellTier live (documented gap)
@@ -1813,61 +1918,23 @@ export class RynthBuffLoop {
 // Willpower, the other creature buffs plus a mastery for every TRAINED skill
 // (IsSkillUsable = training >= 2, :1892), life/armor/protections, weapon auras.
 // Step 7 (armor banes) are ITEM enchantments cast on worn armor — B7's job,
-// which needs item guids — so they are not in the self list. Each entry is
-// [base name, SpellCategory]; the category is the B2/B4 family, so any known
-// member stands in and B4 upgrades it to the best known tier.
-// rynth_magic_update_test.cjs checks every category against the catalog.
-const SKILL = Object.freeze({
-  MeleeDefense: 6, MissileDefense: 7, ArcaneLore: 14, MagicDefense: 15, ManaConversion: 16,
-  ItemTinkering: 18, AssessPerson: 19, Deception: 20, Healing: 21, Jump: 22, Lockpick: 23, Run: 24,
-  AssessCreature: 27, WeaponTinkering: 28, ArmorTinkering: 29, MagicItemTinkering: 30,
-  CreatureEnchantment: 31, ItemEnchantment: 32, LifeMagic: 33, WarMagic: 34, Leadership: 35,
-  Loyalty: 36, Fletching: 37, Alchemy: 38, Cooking: 39, Salvaging: 40, TwoHandedCombat: 41,
-  VoidMagic: 43, HeavyWeapons: 44, LightWeapons: 45, FinesseWeapons: 46, Shield: 48, DualWield: 49,
-  Recklessness: 50, SneakAttack: 51, DirtyFighting: 52, Summoning: 54,
-});
+// which needs item guids — so they are not in the self list. The family
+// tables ([base name, SpellCategory]) live in buff_families.js; the category
+// is the B2/B4 family, so any known ladder member stands in and B4 upgrades it
+// to the best known tier. rynth_magic_update_test.cjs checks every category
+// against the catalog.
+// Scroll ladder (2026-10-19): a family is offered only through its normal
+// scroll ladder (spell_ladders.json flag bit 2 — RynthAi resolves buffs by
+// NAME, SpellManager.GetDynamicSelfBuffId, so it never could pick Zongo's Fist
+// or Combat Medication); a character that knows nothing but quest / NPC /
+// potion spells of a family gets no entry for it. A table without ladder data
+// keeps the pre-2026-10-19 pick (best known enchantment by tier, Power).
 const SKILL_TRAINED = 2; // SkillAdvancementClass.Trained
-
-export const BASE_CREATURE_BUFFS = Object.freeze([
-  ["Strength Self", 1], ["Endurance Self", 3], ["Coordination Self", 7], ["Quickness Self", 5],
-  ["Focus Self", 9], ["Willpower Self", 11], ["Magic Resistance Self", 41],
-  ["Invulnerability Self", 37], ["Impregnability Self", 39],
-]);
-// C# CreatureSkillBuffs (:250-289), insertion order: [skill, base name, category].
-export const SKILL_BUFFS = Object.freeze([
-  [SKILL.MeleeDefense, "Invulnerability Self", 37], [SKILL.MissileDefense, "Impregnability Self", 39],
-  [SKILL.MagicDefense, "Magic Resistance Self", 41], [SKILL.HeavyWeapons, "Heavy Weapon Mastery", 31],
-  [SKILL.LightWeapons, "Light Weapon Mastery", 17], [SKILL.FinesseWeapons, "Finesse Weapon Mastery", 23],
-  [SKILL.TwoHandedCombat, "Two Handed Combat Mastery", 593], [SKILL.Shield, "Shield Mastery", 674],
-  [SKILL.DualWield, "Dual Wield Mastery", 668], [SKILL.Recklessness, "Recklessness Mastery", 671],
-  [SKILL.SneakAttack, "Sneak Attack Mastery", 677], [SKILL.DirtyFighting, "Dirty Fighting Mastery", 665],
-  [SKILL.AssessCreature, "Monster Attunement", 63], [SKILL.AssessPerson, "Person Attunement", 205],
-  [SKILL.ArcaneLore, "Arcane Enlightenment", 53], [SKILL.ArmorTinkering, "Armor Tinkering Expertise", 55],
-  [SKILL.ItemTinkering, "Item Tinkering Expertise", 57], [SKILL.MagicItemTinkering, "Magic Item Tinkering Expertise", 59],
-  [SKILL.WeaponTinkering, "Weapon Tinkering Expertise", 61], [SKILL.Salvaging, "Arcanum Salvaging", 435],
-  [SKILL.Run, "Sprint", 77], [SKILL.Jump, "Jumping Mastery", 69], [SKILL.Loyalty, "Fealty", 75],
-  [SKILL.Leadership, "Leadership Mastery", 71], [SKILL.Deception, "Deception Mastery", 65],
-  [SKILL.Healing, "Healing Mastery", 67], [SKILL.Lockpick, "Lockpick Mastery", 73],
-  [SKILL.Cooking, "Cooking Mastery", 216], [SKILL.Fletching, "Fletching Mastery", 218],
-  [SKILL.Alchemy, "Alchemy Mastery", 221], [SKILL.ManaConversion, "Mana Conversion Mastery", 51],
-  [SKILL.CreatureEnchantment, "Creature Enchantment Mastery", 43], [SKILL.ItemEnchantment, "Item Enchantment Mastery", 45],
-  [SKILL.LifeMagic, "Life Magic Mastery", 47], [SKILL.WarMagic, "War Magic Mastery", 49],
-  [SKILL.VoidMagic, "Void Magic Mastery", 645], [SKILL.Summoning, "Summoning Mastery", 696],
-]);
-export const LIFE_BUFFS = Object.freeze([
-  ["Regeneration Self", 93], ["Rejuvenation Self", 95], ["Mana Renewal Self", 97], ["Armor Self", 115],
-  ["Acid Protection Self", 101], ["Fire Protection Self", 109], ["Cold Protection Self", 105],
-  ["Lightning Protection Self", 107], ["Blade Protection Self", 113], ["Piercing Protection Self", 111],
-  ["Bludgeoning Protection Self", 103],
-]);
-export const AURA_BUFFS = Object.freeze([
-  ["Aura of Blood Drinker Self", 154], ["Aura of Hermetic Link Self", 195], ["Aura of Heart Seeker Self", 152],
-  ["Aura of Spirit Drinker Self", 695], ["Aura of Swift Killer Self", 158], ["Aura of Defender Self", 156],
-]);
 
 /**
  * RynthAi's dynamic self-buff list for a character, as spell ids (one known
- * enchantment per family — the highest tier; the loop's B4 re-resolves it).
+ * scroll-ladder spell per family — the highest tier; the loop's B4 re-resolves
+ * it).
  * @param {{knownIds: Iterable<number>, skills?: Map<number,number>|null, ladder?: object}} p
  *   skills: SkillType -> training (SkillAdvancementClass); null/absent means
  *   "unknown" and, like C# `_charSkills == null`, counts every skill usable.
@@ -1875,19 +1942,7 @@ export const AURA_BUFFS = Object.freeze([
  */
 export function buildDynamicBuffList({ knownIds, skills = null, ladder = LADDER_TABLE } = {}) {
   if (!ladder || typeof ladder !== "object") return [];
-  const bestByFamily = new Map(); // category -> {id, tier, power}
-  for (const raw of knownIds || []) {
-    const id = Number(raw) >>> 0;
-    const row = ladder[String(id)];
-    if (!row) continue;
-    const flags = row.length > 2 ? Number(row[2]) : LADDER_FLAG_ENCHANTMENT;
-    if (!(flags & LADDER_FLAG_ENCHANTMENT)) continue;
-    const cur = bestByFamily.get(row[0]);
-    const power = Number(row[3]) || 0;
-    if (!cur || row[1] > cur.tier || (row[1] === cur.tier && power > cur.power)) {
-      bestByFamily.set(row[0], { id, tier: row[1], power });
-    }
-  }
+  const best = bestKnownByFamily(knownIds, ladder); // category -> {id, tier, power, scroll}
   const usable = (skill) => !skills || (skills.get(skill) ?? 0) >= SKILL_TRAINED;
   const families = [];
   const push = (cat) => {
@@ -1904,29 +1959,107 @@ export function buildDynamicBuffList({ knownIds, skills = null, ladder = LADDER_
   }
   for (const [, cat] of LIFE_BUFFS) push(cat); // step 5
   for (const [, cat] of AURA_BUFFS) push(cat); // step 6
-  return families.filter((cat) => bestByFamily.has(cat)).map((cat) => bestByFamily.get(cat).id);
+  return families.filter((cat) => best.has(cat)).map((cat) => best.get(cat).id);
 }
 
 /**
- * Keep the desired buffs this character can cast at SOME tier: the id itself
- * is known, or its family holds a known enchantment (B4 resolves to it). A
- * plain "is this exact id known" filter drops "Strength Self I" from a
- * character that only kept Strength Self VI.
+ * Keep the desired buffs this character can cast at SOME tier, the way B4
+ * resolves them: the id itself is known (a known spell off the scroll ladder
+ * is an explicit pick, cast as named), or its family holds a known
+ * scroll-ladder spell — for an id off the ladder, one at or below its tier
+ * (the pin's fallback). A plain "is this exact id known" filter drops
+ * "Strength Self I" from a character that only kept Strength Self VI. Families
+ * without ladder data (an older table, a family outside buff_families.js)
+ * keep the old rule: any known enchantment of the family.
  */
 export function filterCastableBuffs(desired, knownIds, ladder = LADDER_TABLE) {
   const known = new Set(Array.from(knownIds || [], (n) => Number(n) >>> 0));
-  const knownFamilies = new Set();
+  const knownFamilies = new Set(); // families with a known enchantment
+  const lowestLadderTier = new Map(); // family -> lowest known scroll-ladder tier
   if (ladder && typeof ladder === "object") {
     for (const id of known) {
       const row = ladder[String(id)];
-      if (row && (row.length < 3 || Number(row[2]) & LADDER_FLAG_ENCHANTMENT)) knownFamilies.add(row[0]);
+      if (!row || !rowIsEnchantment(row)) continue;
+      knownFamilies.add(row[0]);
+      if (rowCanonical(row, ladder) === true) lowestLadderTier.set(row[0], Math.min(lowestLadderTier.get(row[0]) ?? Infinity, row[1]));
     }
   }
   return Array.from(desired || [], (n) => Number(n) >>> 0).filter((id) => {
     if (known.has(id)) return true;
     const row = ladder && ladder[String(id)];
-    return !!row && knownFamilies.has(row[0]);
+    if (!row) return false;
+    const canon = rowIsEnchantment(row) ? rowCanonical(row, ladder) : null; // a Boost is no family member
+    if (canon === null) return knownFamilies.has(row[0]);
+    const low = lowestLadderTier.get(row[0]);
+    return low !== undefined && (canon || low <= row[1]);
   });
+}
+
+// ── Scroll-ladder helpers (HUD Settings picker, VT Buffs tab) ────────────────
+// All take the ladder table (default: the one loadSpellLadders() loaded) and
+// are pure table lookups.
+
+/** Is `id` on its family's normal scroll ladder (spell_ladders.json bit 2)? */
+export function isCanonicalBuff(id, ladder = LADDER_TABLE) {
+  return rowCanonical(ladder && ladder[String(Number(id) >>> 0)], ladder) === true;
+}
+
+/** The ladder tier (1..8) of a scroll-ladder spell; null for any other id. */
+export function canonicalTier(id, ladder = LADDER_TABLE) {
+  const row = ladder && ladder[String(Number(id) >>> 0)];
+  return rowCanonical(row, ladder) === true ? Number(row[1]) : null;
+}
+
+/** The family (SpellCategory) of a laddered self buff; null when the table
+ *  doesn't hold the id. */
+export function buffFamilyOf(id, ladder = LADDER_TABLE) {
+  const row = ladder && ladder[String(Number(id) >>> 0)];
+  return Array.isArray(row) ? row[0] : null;
+}
+
+/** A buff spec whose ids name FAMILIES (the VT Buffs tab's rows), rewritten
+ *  onto the scroll ladder: an id off the ladder, in a family with ladder data,
+ *  becomes that family's tier-I ladder spell (B4 still resolves it to the best
+ *  known tier); every other id, and "auto", unchanged. Migrates a spec captured
+ *  from the pre-2026-10-19 dynamic list (4395 for Blood Drinker VIII, Zongo's
+ *  Fist…), which buff_loop.js would otherwise honour as an explicit pin. Not
+ *  for a spec of explicit picks (?botBuffs=, bot.setBuffs from a script). */
+export function toLadderSpec(spec, ladder = LADDER_TABLE) {
+  if (!Array.isArray(spec)) return spec;
+  return spec.map((raw) => {
+    const id = Number(raw) >>> 0;
+    const row = ladder && ladder[String(id)];
+    if (rowCanonical(row, ladder) !== false || !rowIsEnchantment(row)) return id; // a Boost (Heal Self) is no family member
+    const first = canonicalLadderOf(row[0], ladder)[0];
+    return first ? first.id : id;
+  });
+}
+
+/** One family's scroll ladder, ascending by tier: [{ id, tier, power, scroll }]
+ *  (same-tier copies — e.g. the five "Light Weapon Mastery Self VII" ids —
+ *  in B4's preference order); [] for a family without ladder data. */
+export function canonicalLadder(category, ladder = LADDER_TABLE) {
+  return canonicalLadderOf(category, ladder);
+}
+
+/**
+ * One row per buff family the character can maintain on its scroll ladder —
+ * the best KNOWN ladder spell (highest tier, B4's same-tier order) — in the
+ * bot's own buff order (BUFF_FAMILY_ORDER). Trained skills are NOT applied (a
+ * picker lists every family; buildDynamicBuffList applies them).
+ * @returns {{category, spellId, tier, tierText, power, label, base, group,
+ *   groupOrder, order, school}[]} [] without ladder data.
+ */
+export function canonicalBuffFamilies({ knownIds, ladder = LADDER_TABLE } = {}) {
+  if (!ladder || typeof ladder !== "object") return [];
+  const best = bestKnownByFamily(knownIds, ladder);
+  const out = [];
+  for (const cat of BUFF_FAMILY_ORDER) {
+    const b = best.get(cat);
+    if (!b || rowCanonical(ladder[String(b.id)], ladder) !== true) continue;
+    out.push({ ...buffFamilyInfo(cat), spellId: b.id, tier: b.tier, tierText: ROMAN[b.tier] || "", power: b.power });
+  }
+  return out;
 }
 
 /** Read the trained-skill map off a SessionHandle (playerStats().skills,

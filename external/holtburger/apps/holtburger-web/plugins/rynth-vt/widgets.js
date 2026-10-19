@@ -76,11 +76,14 @@ export function shouldRebuild(container, sig, force = false) {
   return true;
 }
 
-/** Set an input/select value unless the player is in it. */
+/** Set an input/select value unless the player is typing in / choosing from
+ *  it. A checkbox or radio is always set: a click focuses it, and a refused
+ *  toggle must show the stored state again at once. */
 export function setValue(input, v) {
   if (!input) return;
-  if (docOf(input)?.activeElement === input) return;
-  if (input.type === "checkbox") {
+  const clicky = input.type === "checkbox" || input.type === "radio";
+  if (!clicky && docOf(input)?.activeElement === input) return;
+  if (clicky) {
     const on = !!v;
     if (input.checked !== on) input.checked = on;
     return;
@@ -208,6 +211,16 @@ export function row(doc, ...children) {
 
 const fmtNum = (v) => (typeof v === "number" && Number.isFinite(v) ? String(Math.round(v * 1e6) / 1e6) : v == null ? "" : String(v));
 
+/** A settings row's tooltip: its help, its VTank name(s) (or "web option"), the ×240 landblock note, inert. */
+export function rowTip(r, withLabel = false) {
+  const vt = Array.isArray(r.vtNames) && r.vtNames.length
+    ? `VTank: ${r.vtNames.join(", ")}${r.lbf ? " (×240 m when set by this name)" : ""}`
+    : "web option";
+  return [withLabel ? r.label : "", r.help, vt, r.inert ? "not implemented on web — stored and round-tripped only" : ""]
+    .filter(Boolean)
+    .join(" — ");
+}
+
 /**
  * A typed editor for one settings row (bridge rowView): bool → checkbox,
  * int/float → number, enum → select, string → text. `onCommit(key, value)`
@@ -216,9 +229,7 @@ const fmtNum = (v) => (typeof v === "number" && Number.isFinite(v) ? String(Math
 export function optionEditor(doc, r, onCommit) {
   const wrap = el(doc, "div", `rvt-opt${r.inert ? " is-inert" : ""}${r.web ? " is-web" : ""}`);
   wrap.dataset.key = r.key;
-  const tip = [r.help, r.vtNames.length ? `VTank: ${r.vtNames.join(", ")}${r.lbf ? " (×240 m when set by this name)" : ""}` : "web option", r.inert ? "not implemented on web — stored and round-tripped only" : ""]
-    .filter(Boolean)
-    .join(" — ");
+  const tip = rowTip(r);
   let input;
   if (r.type === "bool") {
     const c = checkbox(doc, r.label, tip);
@@ -257,6 +268,146 @@ export function optionEditor(doc, r, onCommit) {
   update(r);
   return { wrap, input, update };
 }
+
+// ── v2 building blocks (2026-10-19) ────────────────────────────────────────
+
+/** A small icon button (✕ ▲ ▼ ✎ …) for row actions; screen readers get its title, not the glyph. */
+export function iconBtn(doc, text, title, cls = "") {
+  const b = btn(doc, text, title, `rvt-ico${cls ? ` ${cls}` : ""}`);
+  if (title) b.setAttribute("aria-label", title);
+  return b;
+}
+
+/** A switch: a pill button carrying aria-pressed (the command bar's COMBAT / BUFF / …). */
+export function toggleBtn(doc, label, title, cls = "") {
+  const b = btn(doc, label, title, `rvt-tgl${cls ? ` ${cls}` : ""}`);
+  b.setAttribute("aria-pressed", "false");
+  return b;
+}
+
+export function setToggle(b, on) {
+  if (!b) return;
+  const v = on ? "true" : "false";
+  if (b.getAttribute("aria-pressed") !== v) b.setAttribute("aria-pressed", v);
+  b.classList.toggle("is-on", !!on);
+}
+
+/** One-of-N buttons ([value, label, title?] each); `onPick(value)` on click. */
+export function segmented(doc, options, onPick, cls = "") {
+  const wrap = el(doc, "div", `rvt-seg${cls ? ` ${cls}` : ""}`);
+  wrap.setAttribute("role", "radiogroup");
+  wrap._rvtBtns = new Map();
+  for (const [value, label, title] of options) {
+    const b = btn(doc, label, title || null, "rvt-seg-btn");
+    b.dataset.value = String(value);
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", "false");
+    b.addEventListener("click", () => onPick(String(value)));
+    wrap._rvtBtns.set(String(value), b);
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+
+export function setSegmented(wrap, value, disabled = false) {
+  for (const [v, b] of wrap?._rvtBtns || []) {
+    const on = v === String(value);
+    b.classList.toggle("is-on", on);
+    const a = on ? "true" : "false";
+    if (b.getAttribute("aria-checked") !== a) b.setAttribute("aria-checked", a);
+    b.disabled = !!disabled;
+  }
+}
+
+/**
+ * A two-step button for destructive actions: the first click arms it (the
+ * label becomes `confirmLabel`) for `ms`; a second click inside that window
+ * runs `onConfirm`. Nothing is lost to a stray click, and no modal dialog. A
+ * double-click is not a confirmation (a second click within `minMs` of arming
+ * is ignored), and `disarm()` — call it when the thing it would act on
+ * changes (a different profile picked) — drops a pending arm.
+ */
+export function confirmBtn(doc, label, confirmLabel, title, onConfirm, ms = 3000, minMs = 400) {
+  const b = btn(doc, label, title);
+  let timer = 0;
+  let armedAt = 0;
+  const disarm = () => {
+    if (timer) clearTimeout(timer);
+    timer = 0;
+    b.classList.remove("is-armed");
+    setText(b, label);
+  };
+  b.addEventListener("click", () => {
+    if (!b.classList.contains("is-armed")) {
+      b.classList.add("is-armed");
+      setText(b, confirmLabel);
+      armedAt = Date.now();
+      timer = setTimeout(disarm, ms);
+      return;
+    }
+    if (Date.now() - armedAt < minMs) return;
+    disarm();
+    onConfirm();
+  });
+  b.disarm = disarm;
+  return b;
+}
+
+/** A compact file picker: a kit button that opens a hidden <input type=file> (see fileInput). */
+export function fileButton(doc, label, opts, onFile) {
+  const input = fileInput(doc, opts, onFile);
+  input.hidden = true;
+  const b = btn(doc, label, opts && opts.title ? opts.title : null);
+  b.addEventListener("click", () => input.click?.());
+  const wrap = el(doc, "span", "rvt-filebtn");
+  wrap.append(b, input);
+  return { wrap, btn: b, input };
+}
+
+/** <input type=number> + unit, for grids (Main ranges, the vitals matrix). */
+export function numField(doc, { unit = "", title = "", cls = "rvt-num-xs" } = {}) {
+  const wrap = el(doc, "span", "rvt-numf");
+  const input = numInput(doc, { cls });
+  if (title) input.title = title;
+  wrap.appendChild(input);
+  if (unit) wrap.appendChild(el(doc, "span", "rvt-unit", unit));
+  return { wrap, input };
+}
+
+/**
+ * Bind a statically built control to a settings row that arrives with the
+ * snapshot: `bindRow(control, onCommit)` → update(row|null). Number inputs
+ * take the row's min / max / step and commit Numbers; checkboxes commit
+ * booleans. A missing row disables the control (older schema, no settings).
+ */
+export function bindRow({ input, wrap = null, tip = null }, onCommit) {
+  let cur = null;
+  const isCheck = input.type === "checkbox";
+  input.addEventListener("change", () => {
+    if (!cur) return;
+    if (isCheck) onCommit(cur.key, input.checked);
+    else onCommit(cur.key, input.value === "" ? cur.dflt : Number(input.value));
+  });
+  return (row) => {
+    cur = row || null;
+    input.disabled = !row;
+    if (!row) return;
+    if (!isCheck) {
+      if (row.min != null) input.min = String(row.min);
+      if (row.max != null) input.max = String(row.max);
+      input.step = row.type === "int" ? "1" : row.unit === "power" ? "0.01" : "0.1";
+    }
+    const title = rowTip(row, true);
+    setTitle(input, title);
+    if (tip) setTitle(tip, title);
+    if (isCheck) setValue(input, !!row.value);
+    else setValue(input, typeof row.value === "number" ? String(Math.round(row.value * 1e6) / 1e6) : row.value);
+    (wrap || tip || input).classList.toggle("is-changed", !row.isDefault);
+  };
+}
+
+/** Roman tier text (VTank / retail spell levels). */
+export const ROMAN = Object.freeze(["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII"]);
 
 /** "12m 03s" / "1h 4m" / "—". */
 export function fmtSecs(s) {

@@ -193,8 +193,10 @@ await check("schema: every guide option (G:1-66) and every §4.2 row is present"
     "EnableMissileCrafting", "StartMacroOnLogin", "BuffProfile_Banes", "SpellDiffExcessThreshold-Hunt",
     "JumpOutWandCasting", "DoJiggle", "AttackMinimumDistance", "TargetLock", "HealOthersAt", "RestamOthersAt",
     "InfuseOthersAt", "MonsterDisengageRange", "TargetNoProgressTimeoutSec", "EnableFPSLimit", "TargetFPSFocused",
-    "TargetFPSBackground", "NavRingThickness", "NavLineThickness", "ShowTerrainPassability"];
+    "TargetFPSBackground", "ShowTerrainPassability"];
   for (const n of inert) assert.equal(findRow(n)?.row.consumer, "inert", `${n} is an inert row`);
+  // VTank's route display widths drive the in-world route (scene3d/route_overlay.js, 2026-10-19)
+  for (const n of ["NavRingThickness", "NavLineThickness"]) assert.equal(findRow(n)?.row.consumer, "overlay", `${n} draws the route`);
   for (const n of ["CorpseApproachRange-Min", "NavFarStopRange", "DoorIDRange", "HelperDistanceHitP", "AttackDistance",
     "ApproachDistance", "RingDistance", "NavCloseStopRange", "CorpseApproachRange-Max", "DoorOpenRange"]) {
     assert.equal(findRow(n).row.vtUnit, "lbf", `${n} is a landblock-fraction name`);

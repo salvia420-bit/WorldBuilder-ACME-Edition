@@ -1,32 +1,64 @@
-// plugins/rynth-vt/tab_buffs.js — the VTank Buffs tab (G:183, D21, D38).
+// plugins/rynth-vt/tab_buffs.js — the VTank Buffs tab (G:183, D21, D38; v2
+// layout 2026-10-19).
 //
-// Top: the self-buff list in the macro's own order (buff_loop.js
-// buildDynamicBuffList over the spells you know) with the resolved tier,
-// school, time remaining and an Enabled box per spell; "Auto" maintains every
-// known self buff. The enabled set is projected to the running bot through
-// bot.setBuffs (list "buffs" = { spec, disabled }).
-// Below: one block per Items-tab entry with its item-buff families
-// (Impenetrability + the seven banes; a plain-Add shield gets all eight by
-// default, other kinds none) and "Reset to default". No-Buffs items are shown
-// greyed and cannot be changed (G:157).
+//   header      Auto (maintain every self buff you know) · rebuff below N s ·
+//               cap tiers by magic skill · Force Buff / Cancel (G:10-11)
+//   summary     how many buffs are maintained, on you, due, missing
+//   self buffs  the macro's own list (buff_loop.js buildDynamicBuffList over
+//               the spells you know — RynthAi order), grouped (Attributes ·
+//               Defenses · Masteries · Regeneration · Protections · Weapon
+//               auras), two columns: Enabled box, the buff, its tier and the
+//               time left — green, yellow (under twice the rebuff threshold),
+//               orange (under it: recast now), red (maintained but not on
+//               you). A group's box turns the whole group on or off.
+//   item buffs  a matrix: the Items tab's weapons and shields × Impenetrability
+//               and the seven banes (a plain-Add shield gets all eight by
+//               default, other kinds none, D38); No-Buffs items greyed (G:157).
+// The enabled set is projected to the running bot through bot.setBuffs (list
+// "buffs" = { spec, disabled, itemSpells }).
 
-import { el, btn, setText, setValue, shouldRebuild, sectionTitle, note, row, checkbox, fmtSecs } from "./widgets.js";
+import {
+  el, btn, setText, setTitle, setValue, shouldRebuild, row, checkbox, fmtSecs, numField, bindRow, iconBtn,
+} from "./widgets.js";
+
+const BANE_SHORT = Object.freeze({
+  impen: "Imp", "bane:slash": "Blade", "bane:pierce": "Pierce", "bane:bludgeon": "Bludg", "bane:fire": "Flame",
+  "bane:cold": "Frost", "bane:lightning": "Light", "bane:acid": "Acid",
+});
+
+const timeText = (r) => {
+  if (r.permanent) return "∞";
+  if (r.state === "off") return "off";
+  if (r.remainingS == null) return "missing";
+  return fmtSecs(r.remainingS);
+};
 
 export function createBuffsTab(ctx) {
   const { doc, bridge } = ctx;
   const root = el(doc, "div", "rvt-tab-body rvt-tab-buffs");
   root.dataset.tab = "buffs";
 
-  root.appendChild(sectionTitle(doc, "Self buffs"));
-  const auto = checkbox(doc, "Auto — maintain every self buff you know", "The bot picks the best tier of every known self buff");
-  const status = el(doc, "span", "rvt-note");
-  root.appendChild(row(doc, auto.lab, status));
-  const list = el(doc, "div", "rvt-list rvt-buff-list");
+  // ── header ───────────────────────────────────────────────────────────────
+  const auto = checkbox(doc, "Auto — every self buff you know", "The bot keeps up the best tier of every known self buff (RynthAi BuildDynamicBuffList)");
+  const rebuff = numField(doc, { unit: "s" });
+  rebuff.input.dataset.key = "RebuffSecondsRemaining";
+  const rebuffLbl = el(doc, "span", "rvt-lbl", "rebuff below");
+  const cap = checkbox(doc, "Cap tiers by skill");
+  cap.cb.dataset.key = "BuffTierSkillCap";
+  const fb = btn(doc, "Force Buff", "Recast every buff now; pausing the macro resumes where it left off (G:10)");
+  const cfb = btn(doc, "Cancel", "Cancel a Force Buff sequence (G:11)");
+  root.appendChild(row(doc, auto.lab, rebuffLbl, rebuff.wrap, cap.lab, el(doc, "span", "rvt-grow"), fb, cfb));
+  const summary = el(doc, "div", "rvt-bsum");
+  root.appendChild(summary);
+
+  const list = el(doc, "div", "rvt-buff-groups");
   root.appendChild(list);
 
-  root.appendChild(sectionTitle(doc, "Item buffs (Items tab)"));
-  root.appendChild(note(doc, "Shields get Impenetrability and every bane by default; weapons and casters get none (their auras are self buffs)."));
-  const items = el(doc, "div", "rvt-list rvt-itembuff-list");
+  const itemsHead = el(doc, "div", "rvt-sec", "Item buffs");
+  const itemsMeta = el(doc, "span", "rvt-sec-meta", "shields get Impenetrability + every bane by default; weapons and casters none");
+  itemsHead.appendChild(itemsMeta);
+  root.appendChild(itemsHead);
+  const items = el(doc, "div", "rvt-itembuffs");
   root.appendChild(items);
 
   const done = async (p, okText) => {
@@ -35,32 +67,97 @@ export function createBuffsTab(ctx) {
     ctx.refresh({ force: true });
     return r;
   };
+  const commit = async (key, value) => {
+    ctx.report(await bridge.opt.set(key, value), (x) => x.echo || `${key} = ${x.value}`);
+    ctx.refresh();
+  };
+  const knob = { RebuffSecondsRemaining: bindRow({ ...rebuff, tip: rebuffLbl }, commit), BuffTierSkillCap: bindRow({ input: cap.cb, tip: cap.lab }, commit) };
   auto.cb.addEventListener("change", () => done(bridge.buffs.setAuto(auto.cb.checked), auto.cb.checked ? "Buffs: auto" : "Buffs: fixed list"));
+  fb.addEventListener("click", async () => done(bridge.run.forceBuff(), "Force buff"));
+  cfb.addEventListener("click", async () => done(bridge.run.cancelForceBuff(), "Force buff cancelled"));
 
-  function buildRows(v) {
+  const groupMetas = new Map(); // group → its header's "on/total · due" text
+  /** "6/6 · 2 due" — maintained / total, and how many are under the rebuff threshold or missing. */
+  function groupMetaText(g) {
+    const on = g.rows.filter((r) => r.enabled).length;
+    const due = g.rows.filter((r) => r.state === "low" || r.state === "missing").length;
+    return `${on}/${g.rows.length}${due ? ` · ${due} due` : ""}`;
+  }
+
+  function buildGroups(v) {
     list.textContent = "";
+    groupMetas.clear();
     if (v.loading) {
-      list.appendChild(el(doc, "div", "hbk-empty", "Loading the spell ladder…"));
+      list.appendChild(el(doc, "div", "rvt-empty", "Loading the spell ladder…"));
       return;
     }
     if (v.error) {
-      list.appendChild(el(doc, "div", "hbk-empty", `Buff list unavailable: ${v.error}`));
+      list.appendChild(el(doc, "div", "rvt-empty", `Buff list unavailable: ${v.error}`));
       return;
     }
-    if (!(v.rows || []).length) {
-      list.appendChild(el(doc, "div", "hbk-empty", "No known self buffs (log in, or learn some spells)."));
+    const groups = Array.isArray(v.groups) ? v.groups : [];
+    if (!groups.length) {
+      list.appendChild(el(doc, "div", "rvt-empty", "No known self buffs (log in, or learn some spells)."));
       return;
     }
-    for (const r of v.rows) {
-      const it = el(doc, "div", "rvt-item rvt-buff-row");
-      it.dataset.spell = String(r.spellId);
-      const en = checkbox(doc, "", "Enabled");
-      en.cb.checked = !!r.enabled;
-      en.cb.addEventListener("change", () => done(bridge.buffs.setEnabled(r.spellId, en.cb.checked)));
-      const rem = el(doc, "span", "rvt-note rvt-buff-rem", r.permanent ? "permanent" : fmtSecs(r.remainingS));
-      it.append(en.cb, el(doc, "span", "rvt-grow", r.name), el(doc, "span", "rvt-note", r.tier != null ? `T${r.tier}` : ""),
-        el(doc, "span", "rvt-note", r.schoolName || ""), rem);
-      list.appendChild(it);
+    const collapsed = new Set(Array.isArray(ctx.pref("buffsCollapsed")) ? ctx.pref("buffsCollapsed") : []);
+    for (const g of groups) {
+      const head = el(doc, "div", "rvt-sec rvt-bgroup-head");
+      head.dataset.group = g.group;
+      const all = el(doc, "input", "hbk-check rvt-bgroup-all");
+      all.type = "checkbox";
+      const on = g.rows.filter((r) => r.enabled).length;
+      all.checked = on === g.rows.length;
+      all.title = `Maintain every ${g.group.toLowerCase()} buff (or none)`;
+      all.addEventListener("change", () => done(bridge.buffs.setEnabledMany(g.rows.map((r) => r.spellId), all.checked), `${g.group}: ${all.checked ? "all on" : "all off"}`));
+      const fold = el(doc, "span", "rvt-fold", collapsed.has(g.group) ? "▸" : "▾");
+      const title = el(doc, "span", "rvt-fold-title", g.group);
+      const meta = el(doc, "span", "rvt-sec-meta", groupMetaText(g));
+      groupMetas.set(g.group, meta);
+      head.append(all, fold, title, meta);
+      head.title = "Click to fold / unfold";
+      head.tabIndex = 0;
+      head.setAttribute("role", "button");
+      list.appendChild(head);
+      const grid = el(doc, "div", "rvt-bgrid");
+      grid.hidden = collapsed.has(g.group);
+      head.setAttribute("aria-expanded", grid.hidden ? "false" : "true");
+      const toggleFold = () => {
+        grid.hidden = !grid.hidden;
+        setText(fold, grid.hidden ? "▸" : "▾");
+        head.setAttribute("aria-expanded", grid.hidden ? "false" : "true");
+        if (grid.hidden) collapsed.add(g.group);
+        else collapsed.delete(g.group);
+        ctx.pref("buffsCollapsed", [...collapsed]);
+      };
+      head.addEventListener("click", (e) => {
+        if (String(e?.target?.tagName || "").toUpperCase() === "INPUT") return;
+        toggleFold();
+      });
+      head.addEventListener("keydown", (e) => {
+        if (e.target !== head || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault?.();
+        toggleFold();
+      });
+      for (const r of g.rows) {
+        const it = el(doc, "div", `rvt-brow rvt-buff-row${r.enabled ? "" : " is-off"}`);
+        it.dataset.spell = String(r.spellId);
+        it.dataset.state = r.state || "ok";
+        const en = el(doc, "input", "hbk-check");
+        en.type = "checkbox";
+        en.checked = !!r.enabled;
+        en.title = r.enabled ? "Maintained — click to stop" : "Not maintained — click to keep it up";
+        en.setAttribute("aria-label", `Maintain ${r.familyLabel || r.name}`);
+        en.addEventListener("change", () => done(bridge.buffs.setEnabled(r.spellId, en.checked)));
+        const name = el(doc, "span", "rvt-grow", r.familyLabel || r.name);
+        name.title = `${r.name}${r.schoolName ? ` — ${r.schoolName}` : ""}`;
+        const tier = el(doc, "span", "rvt-tier", r.tierText || (r.tier != null ? `T${r.tier}` : ""));
+        tier.title = r.tier != null ? `Tier ${r.tier}: the best tier you know (the bot upgrades as you learn more)` : "";
+        const rem = el(doc, "span", "rvt-btime rvt-buff-rem", timeText(r));
+        it.append(en, name, tier, rem);
+        grid.appendChild(it);
+      }
+      list.appendChild(grid);
     }
   }
 
@@ -68,47 +165,95 @@ export function createBuffsTab(ctx) {
     items.textContent = "";
     const rows = v.items || [];
     if (!rows.length) {
-      items.appendChild(el(doc, "div", "hbk-empty", "No Items-tab entries."));
+      items.appendChild(el(doc, "div", "rvt-empty", "No weapons or shields on the Items tab."));
       return;
     }
+    const fams = v.families || [];
+    const t = el(doc, "table", "rvt-ibm");
+    const head = el(doc, "tr");
+    head.appendChild(el(doc, "th", "rvt-name", "Item"));
+    for (const f of fams) {
+      const th = el(doc, "th", null, BANE_SHORT[f] || f);
+      th.title = (v.familyLabels && v.familyLabels[f]) || f;
+      head.appendChild(th);
+    }
+    head.appendChild(el(doc, "th"));
+    t.appendChild(head);
     for (const it of rows) {
-      const box = el(doc, "div", `rvt-item rvt-itembuff${it.noBuffs ? " is-nobuffs" : ""}`);
-      box.dataset.guid = String(it.guid);
-      const head = row(doc, el(doc, "span", "rvt-grow", `${it.name} (${it.kind})${it.noBuffs ? " — No Buffs" : it.overridden ? " — custom" : ""}`));
-      const reset = btn(doc, "Reset to default", "Use the default families for this kind");
+      const tr = el(doc, "tr", `rvt-itembuff${it.noBuffs ? " is-nobuffs" : ""}`);
+      tr.dataset.guid = String(it.guid);
+      const name = el(doc, "td", `rvt-name${it.overridden && !it.noBuffs ? " is-custom" : ""}`, it.overridden && !it.noBuffs ? `${it.name} ✱` : it.name);
+      name.title = `${it.name} (${it.kind})${it.noBuffs ? " — No Buffs" : it.overridden ? " — custom banes (⟲ resets to this kind's default)" : ""}`;
+      tr.appendChild(name);
+      for (const f of it.families) {
+        const td = el(doc, "td");
+        const cb = el(doc, "input", "hbk-check");
+        cb.type = "checkbox";
+        cb.checked = !!f.on;
+        cb.disabled = !!it.noBuffs;
+        cb.dataset.family = f.family;
+        cb.title = `${f.label}${f.dflt ? " (default for this kind)" : ""}`;
+        cb.addEventListener("change", () => done(bridge.buffs.setItemSpell(it.guid, f.family, cb.checked)));
+        td.appendChild(cb);
+        tr.appendChild(td);
+      }
+      const td = el(doc, "td");
+      const reset = iconBtn(doc, "⟲", "Reset to the default banes for this kind");
       reset.disabled = it.noBuffs || !it.overridden;
       reset.addEventListener("click", () => done(bridge.buffs.resetItemSpells(it.guid), "Reset to default"));
-      head.appendChild(reset);
-      const fams = el(doc, "div", "rvt-fams");
-      for (const f of it.families) {
-        const c = checkbox(doc, f.label, `${f.family}${f.dflt ? " (default for this kind)" : ""}`);
-        c.cb.checked = !!f.on;
-        c.cb.disabled = !!it.noBuffs;
-        c.cb.dataset.family = f.family;
-        c.cb.addEventListener("change", () => done(bridge.buffs.setItemSpell(it.guid, f.family, c.cb.checked)));
-        fams.appendChild(c.lab);
-      }
-      const wrap = el(doc, "div", "rvt-itembuff-wrap");
-      wrap.append(head, fams);
-      box.appendChild(wrap);
-      items.appendChild(box);
+      td.appendChild(reset);
+      tr.appendChild(td);
+      t.appendChild(tr);
     }
+    items.appendChild(t);
+  }
+
+  function renderSummary(v) {
+    const s = v.summary;
+    const sig = JSON.stringify([s, !!v.present]);
+    if (summary._rvtSig === sig) return;
+    summary._rvtSig = sig;
+    summary.textContent = "";
+    if (!s || !s.total) return;
+    const part = (label, n, cls = "") => {
+      const sp = el(doc, "span");
+      const b = el(doc, "b", cls || null, String(n));
+      sp.append(b, doc.createTextNode(` ${label}`));
+      summary.appendChild(sp);
+    };
+    part("maintained", `${s.enabled}/${s.total}`);
+    part("on you", s.active);
+    if (s.soon) part("due soon", s.soon, "is-warn");
+    if (s.low) part("below the rebuff threshold", s.low, "is-warn");
+    if (s.missing) part("missing", s.missing, "is-bad");
+    if (!v.present) summary.appendChild(el(doc, "span", "rvt-faint", "· start the bot to buff"));
   }
 
   function update(snap, { force = false } = {}) {
     const v = snap?.view || {};
     setValue(auto.cb, !!v.auto);
     auto.cb.disabled = snap?.settings === false;
-    setText(status, v.loading ? "loading…" : v.present ? "" : "start the bot to apply buffs live");
-    const rowSig = JSON.stringify([v.loading, v.error, (v.rows || []).map((r) => [r.spellId, r.enabled, r.name])]);
-    if (shouldRebuild(list, rowSig, force)) buildRows(v);
+    const byKey = new Map((v.rows || []).map((r) => [r.key, r]));
+    for (const [k, upd] of Object.entries(knob)) upd(byKey.get(k) || null);
+    const fr = v.forceRebuff || {};
+    fb.disabled = !snap?.present;
+    cfb.disabled = !snap?.present || fr.cancellable === false;
+    fb.classList.toggle("is-active", !!fr.active);
+    setTitle(fb, fr.active ? "Force Buff running — Cancel stops it" : "Recast every buff now; pausing the macro resumes where it left off (G:10)");
+    const rows = Array.isArray(v.buffs) ? v.buffs : [];
+    const sig = JSON.stringify([v.loading, v.error, rows.map((r) => [r.spellId, r.enabled, r.familyLabel, r.group, r.tier])]);
+    if (shouldRebuild(list, sig, force)) buildGroups(v);
     else {
-      // cheap live text: time remaining
-      for (const r of v.rows || []) {
-        const it = list.querySelector(`.rvt-buff-row[data-spell='${r.spellId}'] .rvt-buff-rem`);
-        if (it) setText(it, r.permanent ? "permanent" : fmtSecs(r.remainingS));
+      // cheap live text: time left and its colour, and each group's "due" count
+      for (const r of rows) {
+        const it = list.querySelector(`.rvt-buff-row[data-spell='${r.spellId}']`);
+        if (!it) continue;
+        if (it.dataset.state !== (r.state || "ok")) it.dataset.state = r.state || "ok";
+        setText(it.querySelector(".rvt-buff-rem"), timeText(r));
       }
+      for (const g of Array.isArray(v.groups) ? v.groups : []) setText(groupMetas.get(g.group), groupMetaText(g));
     }
+    renderSummary(v);
     if (shouldRebuild(items, JSON.stringify(v.items || []), force)) buildItems(v);
   }
 

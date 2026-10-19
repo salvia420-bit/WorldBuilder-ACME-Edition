@@ -32,6 +32,7 @@ globalThis.localStorage = storage;
 
 const bridgeMod = await import("../rynth/hud_bridge.js");
 const opStop = await import("../rynth/ai/operator_stop.js");
+const buffLoopMod = await import("../rynth/buff_loop.js"); // the Settings buff picker's ladder data (real table)
 const { buildViewModel, createHudBridge, describeNavError, VITALS_FIELDS } = bridgeMod;
 
 let pass = 0;
@@ -138,6 +139,7 @@ function env(win, extra = {}) {
     if (url.endsWith("rynth/ai/operator_stop.js")) return opStop;
     if (url.endsWith("rynth/boot.js")) return extra.boot;
     if (url.endsWith("rynth/atlas.js")) return extra.atlasMod;
+    if (url.endsWith("rynth/buff_loop.js")) return buffLoopMod;
     throw new Error(`unexpected import ${url}`);
   };
   return {
@@ -445,10 +447,57 @@ await check("held casts: buff/vitals status.blocked + the last refusal, in playe
   assert.equal(bridgeMod.describeBlock(null), null);
 });
 
-await check("known self-buffs: untargeted spells with a duration, from the catalog", async () => {
+await check("known self-buffs: one row per buff family on its scroll ladder, grouped in the bot's order (2026-10-19)", async () => {
+  resetStorage();
+  // Known: Strength Self I (2, family 1), Armor Self I (24, family 115),
+  // Stamina to Health Self I (1664, a Boost) and Flame Bolt I (27, war).
   const br = createHudBridge(env({ __sessionHandle: fakeHandle() }));
-  const list = await br.knownSelfBuffs();
-  assert.deepStrictEqual(list.map((s) => s.id), [24, 2]); // sorted by name; 1664 (no duration) + 27 (targeted) excluded
+  const { rows, offList } = await br.knownSelfBuffs();
+  assert.deepStrictEqual(rows.map((r) => [r.id, r.family, r.label, r.tierText, r.group]), [
+    [2, 1, "Strength", "I", "Attributes"],
+    [24, 115, "Armor", "I", "Protections"],
+  ]);
+  assert.equal(rows[0].name, "Strength Self I", "tooltip name from the catalog");
+  assert.deepStrictEqual(rows.map((r) => [r.checked, r.pinned]), [[false, null], [false, null]]);
+  assert.deepStrictEqual(offList, []);
+});
+
+await check("known self-buffs: a saved list checks families; an off-ladder pick shows as a pin; ids the picker can't show are listed", async () => {
+  resetStorage();
+  const handle = { ...fakeHandle(), playerKnownSpells: () => [2, 1332, 2087, 3864, 24, 2929] };
+  const br = createHudBridge(env({ __sessionHandle: handle }));
+  // 3864 Zongo's Fist (Strength, off the ladder), 1332 Strength Self VI,
+  // 27 Flame Bolt I (no buff family), 99999 (unknown everywhere), 6 Heal
+  // Self I (a Boost in the Healing Mastery category — no buff).
+  await br.setBuffs([3864, 1332, 27, 99999, 6]);
+  const { rows, offList } = await br.knownSelfBuffs();
+  const str = rows.find((r) => r.family === 1);
+  assert.equal(str.id, 2087, "the best known LADDER spell: Might of the Lugians, never Zongo's Fist");
+  assert.equal(str.tierText, "VII");
+  assert.equal(str.checked, true);
+  assert.deepStrictEqual(str.pinned, { id: 3864, name: null }, "the saved off-ladder pick is surfaced (catalog has no name for it here)");
+  const armor = rows.find((r) => r.family === 115);
+  assert.equal(armor.checked, false);
+  assert.deepStrictEqual(offList.map((o) => o.id), [27, 99999, 6]);
+  assert.ok(!rows.some((r) => r.id === 3864 || r.id === 2929), "no quest/NPC spell is ever a row");
+  // "auto" checks nothing.
+  await br.setBuffs("auto");
+  const auto = await br.knownSelfBuffs();
+  assert.ok(auto.rows.every((r) => !r.checked && !r.pinned));
+});
+
+await check("known self-buffs: a known pin whose family has no ladder spell known keeps a row (Apply keeps it)", async () => {
+  resetStorage();
+  const handle = { ...fakeHandle(), playerKnownSpells: () => [2929] }; // Tusker Might only
+  const br = createHudBridge(env({ __sessionHandle: handle }));
+  assert.deepStrictEqual((await br.knownSelfBuffs()).rows, [], "nothing on the ladder known: no rows");
+  await br.setBuffs([2929]);
+  const { rows } = await br.knownSelfBuffs();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, 2929);
+  assert.equal(rows[0].pinOnly, true);
+  assert.equal(rows[0].checked, true);
+  assert.equal(rows[0].label, "Strength");
 });
 
 await check("routes: list + follow through the shared atlas; goto validates and reports a sidecar timeout", async () => {

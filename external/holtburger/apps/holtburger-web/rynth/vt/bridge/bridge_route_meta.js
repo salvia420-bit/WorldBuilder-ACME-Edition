@@ -19,7 +19,7 @@
 // fields) with the guide's labels (G:246-292); the panel builds its
 // condition/action editors from them.
 
-import { RECALL_SPELL_NAMES } from "../../nav_file.js";
+import { RECALL_SPELL_NAMES, degToWorld } from "../../nav_file.js";
 import { safe, ok, fail, command, asResult, clone, isFn, num } from "./bridge_options.js";
 
 // ── Appendix B keyword tables ──────────────────────────────────────────────
@@ -109,7 +109,28 @@ const POINT_LABELS = Object.freeze({
 });
 // Waypoint types whose "Add" picks up the world selection (G:199-202).
 const SELECTION_TYPES = new Set([0, 1, 5, 6, 7]);
+// Waypoint types the walk reaches by position (the Route tab shows their
+// distance; Recall / Pause / Chat run wherever the route happens to be).
+const POSITIONAL_TYPES = new Set([0, 1, 5, 6, 7, 8, 9]);
 const RECALL_CACHE_MS = 5000;
+
+/** The player's world position (metres) from a host pose { objCellId, x, y }
+ *  — the frame nav_file.js legToNavPoint / degToWorld share; null when unknown. */
+export function poseWorld(pose) {
+  if (!pose || !Number.isFinite(pose.x) || !Number.isFinite(pose.y)) return null;
+  const lb = Number(pose.objCellId) >>> 0;
+  return { wx: ((lb >>> 24) & 0xff) * 192 + pose.x, wy: ((lb >>> 16) & 0xff) * 192 + pose.y };
+}
+
+/** Horizontal metres from `here` to a waypoint, or null (no position / no pose). */
+export function pointDistanceM(here, p) {
+  if (!here || !p || !POSITIONAL_TYPES.has(Number(p.type))) return null;
+  const ew = Number(p.ew);
+  const ns = Number(p.ns);
+  if (!Number.isFinite(ew) || !Number.isFinite(ns)) return null;
+  const { wx, wy } = degToWorld(ew, ns);
+  return Math.hypot(wx - here.wx, wy - here.wy);
+}
 
 // ── descriptions ───────────────────────────────────────────────────────────
 
@@ -240,6 +261,13 @@ export function describePoint(p, spellName = (id) => RECALL_SPELL_NAMES[id] || `
     default:
       return POINT_LABELS[t] || `type ${t}`;
   }
+}
+
+/** describePoint without its leading type word ("Recall: X" → "X") — the Route tab shows the type in its own column. */
+export function pointDetail(p, spellName) {
+  const label = describePoint(p, spellName);
+  const t = POINT_LABELS[Number(p && p.type)];
+  return t && label.startsWith(t) ? label.slice(t.length).replace(/^:?\s*/, "") : label;
 }
 
 /**
@@ -395,12 +423,18 @@ export function createRouteMetaBridge(ctx) {
   }
 
   // ── view-models ──────────────────────────────────────────────────────────
-  function routeView(vt, bot) {
+  /** ActiveNav.status() of this layer, or null (the snapshot reads it once and shares it). */
+  function navStatus(vt) {
+    const nav = navOf(vt);
+    return nav && isFn(nav.status) ? safe(() => nav.status(), null) : null;
+  }
+
+  function routeView(vt, bot, st = undefined) {
     const nav = navOf(vt);
     const host = ctx.hostOf(bot);
     const profiles = profilesOf(vt);
     const options = ctx.optionsOf(vt);
-    const st = nav && isFn(nav.status) ? safe(() => nav.status(), null) : null;
+    if (st === undefined) st = navStatus(vt);
     const route = nav && isFn(nav.route) ? safe(() => nav.route(), null) : null;
     const points = route && Array.isArray(route.points) ? route.points : [];
     const active = route ? Number(route.activeIndex) || 0 : 0;
@@ -409,10 +443,20 @@ export function createRouteMetaBridge(ctx) {
       const rec = safe(() => host?.TryGetSpellRecord?.(id), null);
       return (rec && rec.name) || RECALL_SPELL_NAMES[id] || `spell ${id}`;
     };
+    const here = nav ? poseWorld(safe(() => host?.TryGetPlayerPose?.(), null)) : null;
+    const selGuid = nav
+      ? (Number(safe(() => (isFn(host?.GetSelectedId) ? host.GetSelectedId() : 0), 0)) >>> 0)
+        || (Number(safe(() => ctx.win?.liveScene3d?.entityManager?.getSelectedTarget?.(), 0)) >>> 0)
+      : 0;
+    const selName = selGuid
+      ? safe(() => host?.TryGetObjectName?.(selGuid), null) ?? safe(() => ctx.win?.__sessionHandle?.objectName?.(selGuid), null)
+      : null;
     return {
       available: !!nav,
       status: st,
       statusLine: nav ? statusLine(st) : "Start the bot to edit routes.",
+      name: (st && st.name) || (route && route.name) || null,
+      dirty: !!(st && st.dirty),
       routeType: route ? Number(route.routeType) || 1 : 1,
       activeIndex: active,
       reversed: !!(route && route.reversed),
@@ -424,19 +468,51 @@ export function createRouteMetaBridge(ctx) {
         type: Number(p.type),
         typeLabel: POINT_LABELS[Number(p.type)] || String(p.type),
         label: describePoint(p, nameOf),
+        detail: pointDetail(p, nameOf),
         active: i === active,
         selected: i === ui.selected,
         pauseMs: num(p.pauseMs),
         chat: typeof p.chat === "string" ? p.chat : null,
+        distM: pointDistanceM(here, p),
       })),
       insertMode: ui.insertMode,
       selected: ui.selected,
+      selection: selGuid ? { guid: selGuid, name: typeof selName === "string" && selName ? selName : null } : null,
       types: ROUTE_TYPES.map((t) => ({ ...t })),
       insertModes: INSERT_MODES.slice(),
       directions: JUMP_DIRECTIONS.slice(),
       profiles: profiles && isFn(profiles.list) ? (safe(() => profiles.list(), []) || []).map((p) => ({ name: String(p.name ?? ""), savedAt: num(p.savedAt) })) : [],
       currentProfile: safe(() => options?.getRef?.("navProfile"), null),
       recalls: nav ? knownRecalls(host) : [],
+    };
+  }
+
+  /**
+   * Plain route data for the in-world path overlay (scene3d/route_overlay.js):
+   * the waypoints with their map coordinates (+ a Portal/NPC's recorded
+   * object position and class, which the overlay draws the ring at and reads
+   * teleports from), the current index, the route type and whether the route
+   * is paused / finished / switched off — no labels, no host reads beyond
+   * ActiveNav.route() and its `enabled`. null without a route.
+   */
+  function overlayData(vt) {
+    const nav = navOf(vt);
+    const route = nav && isFn(nav.route) ? safe(() => nav.route(), null) : null;
+    if (!route || !Array.isArray(route.points)) return null;
+    return {
+      routeType: Number(route.routeType) || 1,
+      activeIndex: Number(route.activeIndex) || 0,
+      reversed: !!route.reversed,
+      finished: !!route.finished,
+      paused: !!route.paused,
+      enabled: !!safe(() => nav.enabled !== false, true),
+      points: route.points.map((p) => {
+        const o = { type: Number(p.type), ew: num(Number(p.ew)), ns: num(Number(p.ns)), z: num(Number(p.z)) };
+        for (const k of ["objectClass", "exitEW", "exitNS", "exitZ"]) {
+          if (p[k] != null && Number.isFinite(Number(p[k]))) o[k] = Number(p[k]);
+        }
+        return o;
+      }),
     };
   }
 
@@ -796,6 +872,8 @@ export function createRouteMetaBridge(ctx) {
     route,
     navProfiles,
     meta,
+    navStatus,
+    overlayData,
     ensureViewRenderer,
     releaseViewRenderer,
     views: { route: routeView, navProfiles: navProfilesView, meta: metaView },

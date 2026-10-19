@@ -5,18 +5,19 @@
 // dropdown in the bottom left changes the current state (G:230 — the engine
 // re-arms every rule, "manual" entry). Add Rule opens the rule editor: the
 // condition on the left, the action on the right (G:242), with an editor for
-// every Appendix-B keyword (All/Any/Not and DoAll nest). Enable Meta, Debug,
-// the meta library (load / save) and .met / .af / .json import and export.
-// A snapshot strip shows the state, seconds in state, the call stack, the
-// watchdog and the last fired rule / error.
+// every Appendix-B keyword (All/Any/Not and DoAll nest). One header row: the
+// meta library (load / save), .met / .af / .json import and export, Debug
+// (Enable Meta is META on the command bar since v2, 2026-10-19). A snapshot
+// strip shows the state, seconds in state, the call stack, the watchdog and
+// the last fired rule / error.
 //
 // Edits never reload the meta: the bridge applies them with
 // engine.replaceMeta(clone, { keepState: true }) (critic C3). Above 200 rows
 // the list is windowed (only the visible rows exist in the DOM).
 
 import {
-  el, btn, setText, setValue, shouldRebuild, sectionTitle, row, checkbox, textInput, numInput, textArea, select,
-  fillSelect, fileInput, downloadFile,
+  el, btn, setText, setValue, shouldRebuild, row, checkbox, textInput, numInput, textArea, select,
+  fillSelect, fileButton, downloadFile, iconBtn,
 } from "./widgets.js";
 
 export const META_VIRTUAL_THRESHOLD = 200;
@@ -36,17 +37,15 @@ export function createMetaTab(ctx) {
   root.dataset.tab = "meta";
 
   // ── header ───────────────────────────────────────────────────────────────
-  const enable = checkbox(doc, "Enable Meta", "EnableMeta: run the meta rules (checked ~3×/s before normal operation, G:237)");
-  const debug = checkbox(doc, "Debug", "Print state changes and rule errors to chat");
-  const libSel = select(doc, [["", "(meta library)"]], "rvt-grow rvt-meta-library");
+  const libSel = select(doc, [["", "(meta library)"]], "rvt-meta-library");
+  libSel.title = "Saved metas";
   const bLoad = btn(doc, "Load", "Load the selected meta (starts in Default)");
-  root.appendChild(row(doc, enable.lab, debug.lab, libSel, bLoad));
-  const name = textInput(doc, "meta name", "rvt-grow rvt-meta-name");
-  const bSave = btn(doc, "Save", "Save the current rules to the library");
+  const name = textInput(doc, "meta name", "rvt-name-in rvt-meta-name");
+  const bSave = btn(doc, "Save", "Save the current rules to the library under this name (or the selected meta's)");
   const kindSel = select(doc, KINDS.map((k) => [k, `.${k}`]), "rvt-meta-kind");
-  const bExport = btn(doc, "Export", "Download the named meta");
-  root.appendChild(row(doc, name, bSave, kindSel, bExport));
-  const imp = fileInput(doc, { accept: ".met,.af,.json", binary: (f) => /\.met$/i.test(f?.name || ""), title: "Import a VTank .met, a metaf .af or a JSON meta" }, async (f, data, err) => {
+  kindSel.title = "Export format";
+  const bExport = btn(doc, "Export", "Download the named (or selected) meta");
+  const imp = fileButton(doc, "Import", { accept: ".met,.af,.json", binary: (f) => /\.met$/i.test(f?.name || ""), title: "Import a VTank .met, a metaf .af or a JSON meta" }, async (f, data, err) => {
     if (err || data == null) return ctx.report({ ok: false, error: `could not read ${f?.name ?? "the file"}` });
     const kind = kindOf(f.name);
     if (!kind) return ctx.report({ ok: false, error: "meta files are .met, .af or .json" });
@@ -54,18 +53,23 @@ export function createMetaTab(ctx) {
     ctx.report(await bridge.meta.importFile(nm, data, kind), (x) => `Imported ${nm}${x.warnings && x.warnings.length ? ` (${x.warnings.length} warning(s))` : ""}`);
     ctx.refresh({ force: true });
   });
-  root.appendChild(row(doc, el(doc, "span", null, "Import"), imp));
+  const debug = checkbox(doc, "Debug", "Print state changes and rule errors to chat");
+  root.appendChild(row(doc, el(doc, "span", "rvt-lbl", "Meta"), libSel, bLoad, el(doc, "span", "rvt-grow"), name, bSave, kindSel, bExport, imp.wrap, debug.lab));
   const strip = el(doc, "div", "rvt-strip rvt-meta-strip");
   root.appendChild(strip);
 
   // ── rule list ────────────────────────────────────────────────────────────
-  root.appendChild(sectionTitle(doc, "Rules"));
+  const rulesHead = el(doc, "div", "rvt-sec", "Rules");
+  const rulesMeta = el(doc, "span", "rvt-sec-meta");
+  rulesHead.appendChild(rulesMeta);
+  root.appendChild(rulesHead);
   const list = el(doc, "div", "rvt-list rvt-rules rvt-virtual hbk-scroll");
   root.appendChild(list);
   const addRule = btn(doc, "Add Rule", "Add a rule: state, condition, action");
+  addRule.classList.add("is-primary");
   const stateSel = select(doc, [["Default", "Default"]], "rvt-state-select");
   stateSel.title = "The current meta state — pick one to switch to it now (G:230)";
-  root.appendChild(row(doc, el(doc, "span", null, "State"), stateSel, addRule));
+  root.appendChild(row(doc, el(doc, "span", "rvt-lbl", "State"), stateSel, addRule));
 
   // ── rule editor ──────────────────────────────────────────────────────────
   const editor = el(doc, "div", "rvt-editor rvt-rule-editor");
@@ -84,7 +88,6 @@ export function createMetaTab(ctx) {
     return r;
   };
 
-  enable.cb.addEventListener("change", () => done(bridge.meta.setEnabled(enable.cb.checked), enable.cb.checked ? "Meta enabled" : "Meta disabled"));
   debug.cb.addEventListener("change", () => done(bridge.meta.setDebug(debug.cb.checked)));
   bLoad.addEventListener("click", () => {
     if (!libSel.value) return ctx.report({ ok: false, error: "pick a meta from the library" });
@@ -115,17 +118,19 @@ export function createMetaTab(ctx) {
     const text = el(doc, "span", "rvt-grow", `${r.condText}  →  ${r.actText}`);
     text.title = `${r.id} · ${r.state}${r.fired ? " · already ran in this state" : ""}`;
     it.append(en.cb, text);
-    for (const [label, title, fn] of [
-      ["✎", "Edit", () => openEditor(r)],
-      ["▲", "Move up (within its state)", () => done(bridge.meta.moveRule(r.id, -1))],
-      ["▼", "Move down (within its state)", () => done(bridge.meta.moveRule(r.id, +1))],
-      ["⧉", "Duplicate", () => done(bridge.meta.duplicateRule(r.id))],
-      ["✕", "Delete", () => done(bridge.meta.deleteRule(r.id), "Rule deleted")],
+    const acts = el(doc, "span", "rvt-acts");
+    for (const [label, title, fn, cls] of [
+      ["✎", "Edit", () => openEditor(r), ""],
+      ["▲", "Move up (within its state)", () => done(bridge.meta.moveRule(r.id, -1)), ""],
+      ["▼", "Move down (within its state)", () => done(bridge.meta.moveRule(r.id, +1)), ""],
+      ["⧉", "Duplicate", () => done(bridge.meta.duplicateRule(r.id)), ""],
+      ["✕", "Delete", () => done(bridge.meta.deleteRule(r.id), "Rule deleted"), "is-danger"],
     ]) {
-      const b = btn(doc, label, title);
+      const b = iconBtn(doc, label, title, cls);
       b.addEventListener("click", fn);
-      it.appendChild(b);
+      acts.appendChild(b);
     }
+    it.appendChild(acts);
     return it;
   }
   function headRow(g) {
@@ -328,7 +333,6 @@ export function createMetaTab(ctx) {
     const v = snap?.view || {};
     if (Array.isArray(v.condKeywords)) condKw = v.condKeywords;
     if (Array.isArray(v.actKeywords)) actKw = v.actKeywords;
-    setValue(enable.cb, !!v.enabled);
     setValue(debug.cb, !!v.debug);
     fillSelect(libSel, [["", "(meta library)"], ...(v.library || []).map((m) => [m.name, m.name])]);
     if (v.name && (v.library || []).some((m) => m.name === v.name)) setValue(libSel, v.name);
@@ -339,10 +343,13 @@ export function createMetaTab(ctx) {
     setText(strip, stripText(v));
     const sig = JSON.stringify([v.available, v.loaded, (v.groups || []).map((g) => [g.state, g.current, g.rules.map((r) => [r.id, r.enabled, r.fired, r.condText, r.actText])])]);
     if (shouldRebuild(list, sig, force)) build(v);
+    const nRules = (v.groups || []).reduce((n, g) => n + g.rules.length, 0);
+    const nFired = (v.groups || []).reduce((n, g) => n + g.rules.filter((r) => r.fired).length, 0);
+    setText(rulesMeta, v.available && v.loaded ? `${nRules} rule${nRules === 1 ? "" : "s"} · ${(v.groups || []).length} state${(v.groups || []).length === 1 ? "" : "s"}${nFired ? ` · ${nFired} ran in this state` : ""}` : "");
     const avail = !!v.available;
-    for (const c of [enable.cb, debug.cb, stateSel, addRule]) c.disabled = !avail && c !== enable.cb;
+    for (const c of [debug.cb, stateSel, addRule]) c.disabled = !avail;
     const lib = !!v.libraryAvailable;
-    for (const c of [libSel, bLoad, bSave, kindSel, bExport, imp]) c.disabled = !lib;
+    for (const c of [libSel, bLoad, bSave, kindSel, bExport, imp.btn]) c.disabled = !lib;
   }
 
   return { id: "meta", el: root, snapshotId: () => "meta", update, renderWindow };

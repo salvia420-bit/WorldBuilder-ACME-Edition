@@ -853,6 +853,42 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     projectSkillCap(true);
     undo.push(() => clearSkillCap());
 
+    // ── (12c) the profile's buff list stays on the scroll ladder (2026-10-19).
+    // spell_ladders.json now marks each family's scroll spells, and the buff
+    // loop casts an off-ladder id in a spec exactly as named (a deliberate
+    // pick, e.g. ?botBuffs). A VT list never means that: it is the Buffs
+    // tab's family selection, and one saved before the ladder flags (a
+    // developer who knows every spell got Zongo's Fist for Strength, Combat
+    // Medication for Regeneration) would keep casting those. Once the buff
+    // module and its table are loaded, any off-ladder id in the active list
+    // is rewritten onto its family's ladder (buff_loop.js toLadderSpec; the
+    // loop upgrades it to the best known tier) — through setList, so the bot
+    // gets the same push a Buffs-tab edit makes. A list already on the ladder
+    // is never written.
+    const ladderMig = { lib: null, sig: null };
+    import(new URL("../buff_loop.js", import.meta.url).href)
+      .then(async (m) => {
+        if (!m || typeof m.toLadderSpec !== "function" || typeof m.loadSpellLadders !== "function") return;
+        await m.loadSpellLadders();
+        if (!disposed) ladderMig.lib = m;
+      })
+      .catch(() => { /* no buff module: lists stay as saved */ });
+    function migrateBuffList() {
+      const m = ladderMig.lib;
+      if (!m || disposed) return;
+      const list = safe(() => options.getList("buffs"), null);
+      const spec = list && Array.isArray(list.spec) ? list.spec.map((x) => Number(x) >>> 0) : null;
+      const sig = spec ? spec.join(",") : "";
+      if (!spec || sig === ladderMig.sig) return;
+      ladderMig.sig = sig; // this list is handled — rewritten below, or left as it is
+      const next = [...new Set((safe(() => m.toLadderSpec(spec), spec) || spec).map((x) => Number(x) >>> 0))];
+      if (next.join(",") === sig) return;
+      const r = safe(() => options.setList("buffs", { ...list, spec: next }, { source: "migrate" }), null);
+      if (!r || r.ok === false) return; // refused: not retried until the list changes
+      ladderMig.sig = next.join(",");
+      say(`buff list: ${spec.length - next.filter((x) => spec.includes(x)).length} off-ladder spell(s) moved onto their family's scroll ladder`);
+    }
+
     // ── option changes → the services that mirror them ───────────────────────
     const offOptions = options.onChange((evt) => {
       if (disposed || !evt) return;
@@ -979,6 +1015,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     function oneHz(t) {
       safe(() => ledger.prune());
       safe(() => options.syncCells());
+      migrateBuffList();
       // A new buff loop (bot.setBuffs built one) or a newly loaded spell table
       // or a changed spellbook re-projects the item buffs.
       const entries = safe(() => items.list().length, 0);

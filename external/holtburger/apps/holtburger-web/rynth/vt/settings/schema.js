@@ -195,10 +195,13 @@ const ROWS = [
     "inert"),
   int("TargetFPSBackground", ["TargetFPSBackground"], undefined, 30, 5, 60, "advanced", "Not on web",
     "Target FPS (background)", "inert"),
-  int("NavRingThickness", ["NavRingThickness"], undefined, 6, 1, 16, "advanced", "Not on web", "Nav ring thickness",
-    "inert"),
-  int("NavLineThickness", ["NavLineThickness"], undefined, 6, 1, 16, "advanced", "Not on web", "Nav line thickness",
-    "inert"),
+  // VTank's route display widths (2026-10-19): scene3d/route_overlay.js draws
+  // the route in the world (Route tab › Show path); 1 = a hairline … 16,
+  // 0.02 m per step (the default 6 = 0.12 m).
+  int("NavRingThickness", ["NavRingThickness"], undefined, 6, 1, 16, "advanced", "Navigation", "Route ring thickness",
+    "overlay", { help: "Width of the waypoint rings the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
+  int("NavLineThickness", ["NavLineThickness"], undefined, 6, 1, 16, "advanced", "Navigation", "Route line thickness",
+    "overlay", { help: "Width of the lines between waypoints the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
   inertBool("ShowTerrainPassability", ["ShowTerrainPassability"], true, "Show terrain passability"),
 ];
 

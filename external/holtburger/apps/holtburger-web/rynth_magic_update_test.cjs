@@ -22,7 +22,10 @@
 //                                                         (cases F-*)
 //   * vitals resolve recovery spells to the highest known tier, demote on
 //     fizzles, and re-read the book.                      (cases V-*)
-//   * RynthAi's dynamic buff list.                        (cases D-*)
+//   * RynthAi's dynamic buff list; the scroll ladder (2026-10-19:
+//     quest / NPC / potion spells never offered or resolved to — L4, L5, D4;
+//     Missile Weapon Mastery, the family RynthAi lacks — D5;
+//     tests/rynth_buff_canonical.test.mjs has the full set). (cases D-*)
 //   * heal_reflex claims the cast token only when it acts. (cases H-*)
 //
 // Run: node rynth_magic_update_test.cjs   (exit 1 on any FAIL)
@@ -153,6 +156,18 @@ async function main() {
       const loop = mk(host, [874]);
       check("L3 B4 ladders enchantments only (Healing Mastery VI, not Heal Self)",
         loop.desired[0] === 879, `desired=${JSON.stringify(loop.desired)}`);
+    }
+    {
+      // 2026-10-19 scroll ladder: Zongo's Fist (3864, family 1, VII, Power
+      // 420 — PlayerSpellTable / @addallspells) out-powers Might of the
+      // Lugians (VII, 300) but is no scroll spell.
+      const host = makeHost({ known: [2, 2087, 3864] });
+      const loop = mk(host, [2]);
+      check("L4 B4 never resolves to a spell off the scroll ladder (Might of the Lugians, not Zongo's Fist)",
+        loop.desired[0] === 2087, `desired=${JSON.stringify(loop.desired)}`);
+      const pin = mk(makeHost({ known: [2, 2087, 3864, 4325] }), [3864]);
+      check("L5 an explicit off-ladder pick is cast as named (no upgrade to the Incantation)",
+        pin.desired[0] === 3864, `desired=${JSON.stringify(pin.desired)}`);
     }
 
     // ── T — self-targeted casts ─────────────────────────────────────────
@@ -526,6 +541,29 @@ async function main() {
       const kept = filterCastableBuffs([2, 99999, 1083], [1332], ladder);
       check("D3 filterCastableBuffs keeps a family known at another tier, drops unknowns",
         JSON.stringify(kept) === JSON.stringify([2]), JSON.stringify(kept));
+    }
+    {
+      // 2026-10-19: quest / NPC / potion spells of a family are never offered.
+      // Known: Strength Self I, Tusker Might, Zongo's Fist, Regeneration Self I,
+      // Combat Medication (60 s), Zombies Persistence (60 s); Focus only as
+      // Ketnan's Eye.
+      const list = buildDynamicBuffList({ knownIds: [2, 2929, 3864, 165, 3848, 4022, 3530], skills: null, ladder });
+      const names = list.map((id) => catalog[String(id)]?.name);
+      check("D4 dynamic list: scroll-ladder spells only; a family known only off the ladder (Focus: Ketnan's Eye) is skipped",
+        JSON.stringify(names) === JSON.stringify(["Strength Self I", "Regeneration Self I"]), JSON.stringify(names));
+    }
+    {
+      // 2026-10-19: Missile Weapon Mastery (category 19), which RynthAi lacks,
+      // follows the trained Missile Weapons skill (SkillType 47) right after
+      // the other weapon masteries. Known: Heavy / Light / Missile Weapon
+      // Mastery Self I; Heavy + Missile trained, Light untrained.
+      const known = [418, 298, 467];
+      const on = buildDynamicBuffList({ knownIds: known, skills: new Map([[44, 2], [45, 1], [47, 2]]), ladder }).map((id) => catalog[String(id)]?.name);
+      const off = buildDynamicBuffList({ knownIds: known, skills: new Map([[44, 2], [45, 1], [47, 1]]), ladder }).map((id) => catalog[String(id)]?.name);
+      check("D5 Missile Weapon Mastery is offered for a trained Missile Weapons skill, after Heavy Weapon Mastery; not when untrained",
+        JSON.stringify(on) === JSON.stringify(["Heavy Weapon Mastery Self I", "Missile Weapon Mastery Self I"]) &&
+          JSON.stringify(off) === JSON.stringify(["Heavy Weapon Mastery Self I"]),
+        JSON.stringify({ on, off }));
     }
 
     // ── S — runtime control used by the HUD ──────────────────────────────
