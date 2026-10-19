@@ -6,8 +6,12 @@
 //             minimum-value rule, or a VT Classic Looter .utl from the
 //             library — selecting one loads it; Import .utl / Export /
 //             Delete. Alinco3 connector files are not supported on the web.
-//   knobs     Loot minimum value (the Value floor) and the corpse approach
-//             range — the Looting rows VTank keeps among its Advanced options.
+//   knobs     Loot minimum value (the Value floor), the corpse ranges (how
+//             far to go for one, how near to walk before opening it), whose
+//             corpses (VTank: your own kills; + fellows' / everyone's; rares
+//             only) and what happens after one (read unknown scrolls, combine
+//             salvage with the Ust) — the Looting rows VTank keeps among its
+//             Advanced options (live since 2026-10-19).
 //   rules     a minimal rule editor for any library profile (its own picker
 //             follows the profile in use until you pick another, so a rule
 //             can be fixed without switching the looter mid-hunt) or a New
@@ -58,12 +62,39 @@ export function createLootTab(ctx) {
   const corpse = numField(doc, { unit: "m" });
   corpse.input.dataset.key = "CorpseApproachRangeMax";
   const corpseLbl = el(doc, "span", "rvt-lbl", "Corpse range");
-  root.appendChild(row(doc, minLbl, minVal.wrap, el(doc, "span", "rvt-sep"), corpseLbl, corpse.wrap));
+  const openAt = numField(doc, { unit: "m" });
+  openAt.input.dataset.key = "CorpseApproachRangeMin";
+  const openLbl = el(doc, "span", "rvt-lbl", "open within");
+  root.appendChild(row(doc, minLbl, minVal.wrap, el(doc, "span", "rvt-sep"), corpseLbl, corpse.wrap, openLbl, openAt.wrap));
   const commit = async (key, value) => {
     ctx.report(await bridge.opt.set(key, value), (x) => x.echo || `${key} = ${x.value}`);
     ctx.refresh();
   };
-  const knobs = { LootMinValue: bindRow({ ...minVal, tip: minLbl }, commit), CorpseApproachRangeMax: bindRow({ ...corpse, tip: corpseLbl }, commit) };
+  const knobs = {
+    LootMinValue: bindRow({ ...minVal, tip: minLbl }, commit),
+    CorpseApproachRangeMax: bindRow({ ...corpse, tip: corpseLbl }, commit),
+    CorpseApproachRangeMin: bindRow({ ...openAt, tip: openLbl }, commit),
+  };
+  // whose corpses, and what happens after one — checkboxes bound to their rows
+  const checkRow = (label, items) => {
+    const r = row(doc, el(doc, "span", "rvt-lbl", label));
+    for (const [key, text] of items) {
+      const c = checkbox(doc, text);
+      c.cb.dataset.key = key;
+      r.appendChild(c.lab);
+      knobs[key] = bindRow({ input: c.cb, tip: c.lab }, commit);
+    }
+    root.appendChild(r);
+  };
+  checkRow("Corpses: yours +", [
+    ["LootFellowCorpses", "fellows'"],
+    ["LootAllCorpses", "everyone's (after 100 s)"],
+    ["LootOnlyRareCorpses", "rares only"],
+  ]);
+  checkRow("After a corpse", [
+    ["ReadUnknownScrolls", "read unknown scrolls"],
+    ["CombineSalvage", "combine salvage (Ust)"],
+  ]);
 
   // ── rules editor ─────────────────────────────────────────────────────────
   const head = el(doc, "div", "rvt-sec", "Rules");

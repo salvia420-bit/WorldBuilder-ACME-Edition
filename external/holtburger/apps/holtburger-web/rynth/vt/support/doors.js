@@ -21,6 +21,20 @@
 //             (navigation walks on). A door that ends in cooldown is skipped
 //             for 60 s (so a locked door with no pick cannot block the route
 //             forever — the C# controller re-targets it every 5 s).
+// Door ID (DoorIdentifyRange, VTank DoorIDRange; 0 = off): the 500 ms scan
+// also appraises the closed doors within that range (RequestId, nearest
+// first; ≤ 2 a second, an unanswered door again after 10 s, a locked one
+// again after 60 s as buffs move the skill), and the "appraised" signal notes
+// whether each answer came while the door was LOCKED: ACE (AppraiseInfo.cs)
+// sends AppraisalLockpickSuccessPercent (PropertyInt 173) only then, and the
+// client merges appraisals, so an older percent outlives the lock. Locked
+// (PropertyBool 3) is live (ACE broadcasts each change). A door known
+// UNLOCKED is opened as before. A door known LOCKED is never used blind: it
+// is picked first (AutoUnlockDoors, a Consumables lockpick, a chance > 0 or
+// not known yet — its answer is waited for 2 s) and its failed picks are the
+// 3 attempts; with AutoUnlockDoors off, a 0 % chance (no percent in a locked
+// answer: no ResistLockpick) or no lockpick it is not tried at all, and
+// status().note says why. Nothing known ⇒ the flow above, unchanged.
 // An in-progress door yields whatever a boosted nav yields to (buffing, a
 // loot in flight, a gentle-mode fight-back) and whenever navWants() turns
 // false: it is dropped, not failed.
@@ -42,6 +56,8 @@ import {
   inPortal,
   busyCount,
   objName,
+  objInt,
+  objBool,
   distanceTo,
   claimItem,
   releaseItem,
@@ -65,11 +81,22 @@ export const DOOR_TUNING = Object.freeze({
   // frame). A door left behind meanwhile (a fight moved the player) is dropped
   // instead of re-used — ACE would walk the bot back to it.
   REACH_SLACK_M: 2,
+  // Door ID (DoorIdentifyRange): one appraisal request per door at most this
+  // often, at most ID_RATE_PER_S in all; a locked door's pick chance is
+  // re-read after ID_REFRESH_MS (buffs move the Lockpick skill). A door known
+  // locked whose answer is still on its way waits up to ID_WAIT_MS for it.
+  ID_RETRY_MS: 10_000,
+  ID_REFRESH_MS: 60_000,
+  ID_RATE_PER_S: 2,
+  ID_WAIT_MS: 2_000,
 });
 const T = DOOR_TUNING;
 const ODF_DOOR = 0x1000;
 const PHYS_ETHEREAL = 0x4;
 const DOOR_NAME_RE = /\b(door|gate|hatch|portcullis)\b/i;
+// ACE PropertyBool / PropertyInt ids (ACE.Entity/Enum/Properties).
+const PBOOL_LOCKED = 3;
+const PINT_LOCKPICK_PCT = 173; // AppraisalLockpickSuccessPercent (not ResistLockpick, 38)
 
 export function createDoors(deps = {}) {
   const { host = null, options = null, subscribe = null, consumables = null } = deps;
@@ -96,6 +123,12 @@ export function createDoors(deps = {}) {
     unlocks: 0,
     lastAction: null,
     disposed: false,
+    ids: new Map(), // guid -> {reqAt, at, locked}: our appraisal requests and what the last answer showed
+    idSent: [], // RequestId timestamps (the per-second budget)
+    idSignal: false, // "appraised" is subscribed (without it no door is appraised)
+    appraisals: 0,
+    lock: null, // {guid, name, locked, chance}: the door worked on, or the nearest one left alone
+    note: "",
   };
 
   const unsubs = [];
@@ -106,6 +139,8 @@ export function createDoors(deps = {}) {
       };
       unsubs.push(subscribe("useDone", answered));
       unsubs.push(subscribe("useFailed", answered));
+      unsubs.push(subscribe("appraised", onAppraised));
+      st.idSignal = true;
     } catch (e) {
       log(`subscribe failed: ${errText(e)}`);
     }
@@ -129,19 +164,133 @@ export function createDoors(deps = {}) {
     return at != null && t - at < ms && t >= at;
   }
 
-  function nearestClosedDoor(t) {
+  // ── door ID (DoorIdentifyRange) ─────────────────────────────────────────
+  /** An appraisal answer for a door we asked about: did it come while the
+   *  door was locked (only then does its pick chance count)? */
+  function onAppraised(sig) {
+    try {
+      const g = Number(sig && sig.guid) >>> 0;
+      const rec = g ? st.ids.get(g) : null;
+      if (!rec) return;
+      rec.at = now();
+      rec.locked = objBool(host, g, PBOOL_LOCKED);
+    } catch (e) {
+      log(`appraised: ${errText(e)}`);
+    }
+  }
+  /** What is known of a door's lock: {locked: true | false | null, chance}.
+   *  `chance` (AppraisalLockpickSuccessPercent, 0-100) only from an answer
+   *  seen while it was locked — one without it cannot be picked (0); else
+   *  null (not known). */
+  function lockOf(g) {
+    const l = objBool(host, g, PBOOL_LOCKED);
+    if (l !== true) return { locked: l === false ? false : null, chance: null };
+    const rec = st.ids.get(g);
+    if (!rec || rec.at == null || rec.locked !== true) return { locked: true, chance: null };
+    const pct = objInt(host, g, PINT_LOCKPICK_PCT);
+    return { locked: true, chance: pct === undefined ? 0 : Math.max(0, Math.min(100, Math.round(pct))) };
+  }
+  function lockText(lock) {
+    if (lock.locked === false) return "unlocked";
+    if (lock.locked !== true) return "lock not known";
+    return lock.chance === null ? "locked" : `locked, ${lock.chance}% to pick`;
+  }
+  /** Appraise this door (again) now? Never asked; asked and not answered
+   *  (again every ID_RETRY_MS); locked now while its last answer came
+   *  unlocked (after ID_WAIT_MS), or that locked answer is ID_REFRESH_MS
+   *  old. Otherwise not: the Locked flag itself is live. */
+  function idDue(g, t, locked) {
+    const rec = st.ids.get(g);
+    if (!rec) return true;
+    const since = t >= rec.reqAt ? t - rec.reqAt : 0;
+    if (rec.at == null || rec.at < rec.reqAt) return since >= T.ID_RETRY_MS;
+    if (locked !== true) return false;
+    if (rec.locked !== true) return since >= T.ID_WAIT_MS;
+    return t - rec.at >= T.ID_REFRESH_MS || t < rec.at;
+  }
+  /** Our appraisal of a locked door is still on its way (the lock is known,
+   *  its chance not yet): it waits a moment rather than being picked blind. */
+  function idPending(g, t) {
+    const rec = st.ids.get(g);
+    return !!rec && (rec.at == null || rec.at < rec.reqAt) && t - rec.reqAt < T.ID_WAIT_MS && t >= rec.reqAt;
+  }
+  /** One RequestId within the per-second budget. → false when it is spent. */
+  function requestId(g, t) {
+    while (st.idSent.length && !(t - st.idSent[0] < 1000 && t >= st.idSent[0])) st.idSent.shift();
+    if (st.idSent.length >= T.ID_RATE_PER_S) return false;
+    st.idSent.push(t);
+    const rec = st.ids.get(g) || { reqAt: t, at: null, locked: undefined };
+    rec.reqAt = t;
+    st.ids.set(g, rec);
+    if (call(host, "RequestId", g) !== false) st.appraisals++;
+    return true;
+  }
+  /** How a closed door in reach is handled: {} = use it (unlocked, or the
+   *  lock not known: the flow above), {pick} = known locked, picked first,
+   *  {wait} = known locked, its appraisal on the way, {skip: why} = known
+   *  locked and not tried. */
+  function planFor(g, lock, t) {
+    if (lock.locked !== true) return {};
+    if (!optBool(options, "AutoUnlockDoors", false)) return { skip: "locked — Auto unlock doors is off" };
+    if (lock.chance === 0) return { skip: `${lockText(lock)} — not tried` };
+    if (lock.chance === null && idPending(g, t)) return { wait: true };
+    const pick = lockpick();
+    if (!pick) return { skip: `${lockText(lock)} — no lockpick on the Consumables tab` };
+    return { pick };
+  }
+  function noteLock(g, name, lock, note) {
+    st.lock = { guid: g, name, locked: lock.locked, chance: lock.chance };
+    st.note = `${name}: ${note}`;
+  }
+
+  /**
+   * The 500 ms scan: the nearest closed door within OpenDoorRange to work on
+   * ({guid, dist, lock, pick}) or null. On the way it appraises the closed
+   * doors within DoorIdentifyRange (nearest first) and notes the nearest
+   * locked door it leaves alone (status().note).
+   */
+  function scan(t) {
     const range = Math.max(0.5, optNum(options, "OpenDoorRange", 5));
+    const idRange = st.idSignal && typeof host?.RequestId === "function" ? Math.max(0, optNum(options, "DoorIdentifyRange", 20)) : 0;
     const guids = call(host, "NearbyGuids");
     if (!Array.isArray(guids)) return null;
-    let best = null;
+    if (st.ids.size > 64) for (const [g, r] of st.ids) if (t - Math.max(r.reqAt, r.at ?? -Infinity) >= T.ID_REFRESH_MS) st.ids.delete(g);
+    const reach = Math.max(range, idRange);
+    const doors = [];
     for (const g0 of guids) {
       const g = Number(g0) >>> 0;
       if (!g || g >= 0x80000000) continue; // doors are static objects
       if (recent(st.opened, g, T.OPENED_SKIP_MS, t) || recent(st.failed, g, T.FAILED_SKIP_MS, t)) continue;
       if (!isDoor(g) || isOpen(g)) continue;
       const d = distanceTo(host, g);
-      if (d == null || d > range) continue;
-      if (!best || d < best.dist) best = { guid: g, dist: d };
+      if (d == null || d > reach) continue;
+      doors.push({ guid: g, dist: d, lock: lockOf(g) });
+    }
+    // Appraise first (nearest first, within the budget), so a door asked
+    // about just now reads as pending below.
+    if (idRange > 0) {
+      const due = doors.filter((c) => c.dist <= idRange && idDue(c.guid, t, c.lock.locked));
+      due.sort((a, b) => a.dist - b.dist);
+      for (const c of due) if (!requestId(c.guid, t)) break;
+    }
+    let best = null;
+    let left = null;
+    for (const c of doors) {
+      if (c.dist > range) continue;
+      const plan = planFor(c.guid, c.lock, t);
+      if (plan.skip || plan.wait) {
+        if (!left || c.dist < left.dist) left = { ...c, why: plan.skip || "locked — appraising it" };
+        continue;
+      }
+      if (!best || c.dist < best.dist) best = { ...c, pick: plan.pick || null };
+    }
+    if (!best && left) {
+      const name = objName(host, left.guid) || "door";
+      noteLock(left.guid, name, left.lock, left.why);
+      log(`${name}: ${left.why}`);
+    } else if (!best && st.state === "none") {
+      st.lock = null;
+      st.note = "";
     }
     return best;
   }
@@ -181,10 +330,12 @@ export function createDoors(deps = {}) {
     st.opened.set(st.door, t);
     st.opens++;
     log(`door ${st.doorName || st.door} open`);
+    if (st.lock && st.lock.guid === st.door) st.note = `${st.lock.name}: open`;
     reset();
   }
   function toCooldown(t, why) {
     log(`door ${st.doorName || st.door}: ${why} — cooldown`);
+    if (st.lock && st.lock.guid === st.door) st.note = `${st.lock.name}: ${why} — skipped for ${T.FAILED_SKIP_MS / 1000} s`;
     st.failed.set(st.door, t);
     releaseItem(host, OWNER);
     st.state = "cooldown";
@@ -213,21 +364,64 @@ export function createDoors(deps = {}) {
     return null;
   }
 
+  /** One more try (MAX_ATTEMPTS in all): a door known to be locked goes
+   *  back to the lockpick ("checking"), never to a blind use. */
+  function again(t, why) {
+    st.attempts++;
+    if (st.attempts >= T.MAX_ATTEMPTS) return toCooldown(t, why);
+    if (lockOf(st.door).locked === true) {
+      st.state = "checking";
+      st.actionAt = t;
+      return;
+    }
+    st.state = "opening";
+    if (!use(t)) toCooldown(t, "use not sent");
+  }
+
+  /** "checking": the use did not open the door, or it is known locked. */
+  function check(t) {
+    const lock = lockOf(st.door);
+    if (lock.locked === false) return again(t, `max attempts (${T.MAX_ATTEMPTS}): unlocked but shut`); // the use was lost
+    if (!optBool(options, "AutoUnlockDoors", false)) return toCooldown(t, "not open and auto-unlock is off");
+    if (lock.chance === 0) return toCooldown(t, "locked, 0% to pick");
+    const pick = lockpick();
+    if (!pick) return toCooldown(t, "locked and no lockpick on the Consumables tab");
+    if (!claimItem(host, OWNER)) return;
+    if (call(host, "UseItemOnTarget", pick.guid, st.door) !== true) {
+      releaseItem(host, OWNER);
+      return toCooldown(t, "lockpick use not sent");
+    }
+    st.state = "unlocking";
+    st.actionAt = t;
+    st.actionSeq = st.sigSeq;
+    st.unlocks++;
+    st.lastAction = { kind: "lockpick", door: st.door, pick: pick.guid, at: t };
+    noteLock(st.door, st.doorName, lock, `${lockText(lock)} — using ${pick.name || "a lockpick"}`);
+    log(`using ${pick.name || "lockpick"} on ${st.doorName}${lock.chance === null ? "" : ` (${lock.chance}% to pick)`}`);
+  }
+
   function step(t) {
     // Prune the skip books now and then.
     if (st.opened.size > 64) for (const [g, at] of st.opened) if (t - at >= T.OPENED_SKIP_MS) st.opened.delete(g);
     if (st.failed.size > 64) for (const [g, at] of st.failed) if (t - at >= T.FAILED_SKIP_MS) st.failed.delete(g);
 
     if (st.state === "none") {
-      const hit = nearestClosedDoor(t);
+      const hit = scan(t);
       if (!hit) return;
       st.door = hit.guid;
       st.doorDist = hit.dist;
       st.doorName = objName(host, hit.guid) || "door";
       st.attempts = 0;
+      if (hit.pick) {
+        // Known locked: the lockpick first — a use would only be refused.
+        st.state = "checking";
+        st.actionAt = t;
+        return check(t);
+      }
       st.state = "opening";
-      if (!use(t)) reset();
-      else log(`opening ${st.doorName} (${hit.dist.toFixed(1)} m)`);
+      if (!use(t)) return reset();
+      noteLock(st.door, st.doorName, hit.lock, "opening");
+      log(`opening ${st.doorName} (${hit.dist.toFixed(1)} m)`);
       return;
     }
     if (st.state === "cooldown") {
@@ -238,11 +432,7 @@ export function createDoors(deps = {}) {
     // Timeout guard for the action-waiting states.
     if ((st.state === "opening" || st.state === "unlocking" || st.state === "retry") && t - st.actionAt > attemptTimeout()) {
       if (isOpen(st.door)) return markOpened(t);
-      st.attempts++;
-      if (st.attempts >= T.MAX_ATTEMPTS) return toCooldown(t, `max attempts (${T.MAX_ATTEMPTS})`);
-      st.state = "opening";
-      if (!use(t)) toCooldown(t, "use not sent");
-      return;
+      return again(t, `max attempts (${T.MAX_ATTEMPTS})`);
     }
     switch (st.state) {
       case "opening":
@@ -251,36 +441,27 @@ export function createDoors(deps = {}) {
         st.state = "checking";
         st.actionAt = t;
         return;
-      case "checking": {
-        if (!optBool(options, "AutoUnlockDoors", false)) return toCooldown(t, "not open and auto-unlock is off");
-        const pick = lockpick();
-        if (!pick) return toCooldown(t, "locked and no lockpick on the Consumables tab");
-        if (!claimItem(host, OWNER)) return;
-        if (call(host, "UseItemOnTarget", pick.guid, st.door) !== true) {
-          releaseItem(host, OWNER);
-          return toCooldown(t, "lockpick use not sent");
+      case "checking":
+        return check(t);
+      case "unlocking": {
+        const locked = lockOf(st.door).locked;
+        if (locked === true) {
+          // Known locked: the pick's own answer decides (UseWithTarget is not
+          // busy-counted, so busy 0 says nothing yet). Still locked after it
+          // (ACE broadcasts Locked only when a pick succeeds) ⇒ it failed:
+          // pick again, bounded by the attempts and the timeout guard.
+          if (!answered()) return;
+          return again(t, `the lock was not picked in ${T.MAX_ATTEMPTS} tries`);
         }
-        st.state = "unlocking";
-        st.actionAt = t;
-        st.actionSeq = st.sigSeq;
-        st.unlocks++;
-        st.lastAction = { kind: "lockpick", door: st.door, pick: pick.guid, at: t };
-        log(`using ${pick.name || "lockpick"} on ${st.doorName}`);
-        return;
-      }
-      case "unlocking":
-        if (!settled(t)) return;
+        if (locked !== false && !settled(t)) return;
         st.state = "retry";
         if (!use(t)) toCooldown(t, "use not sent");
         return;
+      }
       case "retry":
         if (!settled(t)) return;
         if (isOpen(st.door)) return markOpened(t);
-        st.attempts++;
-        if (st.attempts >= T.MAX_ATTEMPTS) return toCooldown(t, "max attempts after unlock");
-        st.state = "opening";
-        if (!use(t)) toCooldown(t, "use not sent");
-        return;
+        return again(t, "max attempts after unlock");
       default:
         reset();
     }
@@ -338,7 +519,7 @@ export function createDoors(deps = {}) {
     if (busyCount(host) !== 0 || itemTokenHeldByOther(host, OWNER)) return false;
     if (t - st.scanAt < T.SCAN_INTERVAL_MS && t >= st.scanAt) return st.scanHit !== 0;
     st.scanAt = t;
-    const hit = nearestClosedDoor(t);
+    const hit = scan(t);
     st.scanHit = hit ? hit.guid : 0;
     return !!hit;
   }
@@ -397,6 +578,12 @@ export function createDoors(deps = {}) {
       attempts: st.attempts,
       opens: st.opens,
       unlocks: st.unlocks,
+      appraisals: st.appraisals,
+      // The door worked on (or the nearest locked one left alone) and what
+      // is known of its lock; `note` says it in words ("Vault Door: locked,
+      // 37% to pick — using Lockpick").
+      lock: st.lock ? { ...st.lock } : null,
+      note: st.note || null,
       lastAction: st.lastAction,
     };
   }

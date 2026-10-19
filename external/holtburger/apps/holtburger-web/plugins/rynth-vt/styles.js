@@ -221,6 +221,9 @@ export const VT_CSS = `
   #${VT_ROOT_ID} table.rvt-ibm td.rvt-name { text-align: left; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #${VT_ROOT_ID} table.rvt-ibm tr.is-nobuffs td { color: var(--hbk-text-faint, #77705f); filter: grayscale(0.8); opacity: 0.6; }
   #${VT_ROOT_ID} table.rvt-ibm td.rvt-name.is-custom { color: var(--hbk-gold-bright, #f3d27a); }
+  #${VT_ROOT_ID} table.rvt-ibm tr.rvt-wornarmor td { border-bottom: 1px solid var(--hbk-gold-deep, #4e3f1f); }
+  #${VT_ROOT_ID} table.rvt-ibm tr.rvt-wornarmor td.rvt-name { color: var(--hbk-gold-bright, #f3d27a); }
+  #${VT_ROOT_ID} table.rvt-ibm td.is-worn .hbk-check { opacity: 0.5; }
 
   /* ── Route ─────────────────────────────────────────────────────────── */
   #${VT_ROOT_ID} .rvt-points { max-height: 236px; min-height: 60px; border: 1px solid rgba(78, 63, 31, 0.7); }

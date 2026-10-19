@@ -5,7 +5,8 @@
 // advance tables per route type, nearest-Point start index, reversal,
 // insert/delete index rules, sentinel-aware distances, the Follow `.nav`
 // form, the `.af` vnd/tlk/flw re-typing, byte-stable `.nav` round trips and
-// the NavProfiles store wrapper (overwrite, empty routes).
+// the NavProfiles store wrapper (overwrite, empty routes), the Follow leader
+// trail (follow_trail.js) and executors.walkTargetWorld.
 //
 // Run from apps/holtburger-web/:  node tests/rynth_vt_nav_model.test.mjs
 
@@ -428,6 +429,116 @@ await check("NavProfiles importText(.af) picks the named section, else the first
   assert.equal(np.get("Other").points.length, 9);
   assert.equal(np.importText("x", "garbage").ok, false);
 });
+// ── FollowAroundCorners: the leader trail (follow_trail.js) ────────────────
+const { FollowTrail, TRAIL_TUNING, trailPoint } = await import("../rynth/vt/nav/follow_trail.js");
+const { walkTargetWorld } = await import("../rynth/vt/nav/executors.js");
+const L = (x, y) => ({ cell: 0x7d640001, x, y, z: 0, wx: x, wy: y });
+const xy = (tr) => tr.points.map((p) => [p.wx, p.wy]);
+
+await check("FollowTrail: a leader running straight away keeps ONE point (no corner ahead); a turn over 15° keeps the corner; then a point every 5 m of straight run; < 1 m adds nothing; ≤ 1 sample per 250 ms", () => {
+  const tr = new FollowTrail(7);
+  const me = L(0, 0);
+  let t = 0;
+  const s = (x, y) => tr.sample((t += 250), L(x, y), me);
+  for (let x = 10; x <= 30; x++) s(x, 0);
+  assert.deepEqual(xy(tr), [[30, 0]], "in line with us: one leg");
+  assert.equal(tr.next(), null, "no corner between us and them");
+  s(30.5, 0);
+  assert.deepEqual(xy(tr), [[30, 0]], "under 1 m");
+  assert.equal(tr.sample(t + 100, L(40, 0), me), null, "too soon after the last sample");
+  s(30, 3);
+  assert.deepEqual(xy(tr), [[30, 0], [30, 3]], "a 90° turn keeps the corner");
+  assert.deepEqual([tr.next().wx, tr.next().wy], [30, 0]);
+  for (let y = 4; y <= 20; y++) s(30, y);
+  assert.deepEqual(xy(tr), [[30, 0], [30, 5], [30, 10], [30, 15], [30, 20]], "a straight run: a point every 5 m");
+  s(30.4, 22); // 11° off the line (the last leg is full: a new point)…
+  assert.deepEqual(xy(tr).slice(-2), [[30, 20], [30.4, 22]]);
+  s(30.8, 24); // …and the next one in line with it replaces it
+  assert.deepEqual(xy(tr).slice(-2), [[30, 20], [30.8, 24]], "replaced, not added");
+});
+
+await check("FollowTrail.prune: a point within 1.5 m is reached; within 3 m and nearer the next point than it is, passed; beside a corner (not past it) it stays", () => {
+  const tr = new FollowTrail(7);
+  tr.points = [L(30, 0), L(30, 5), L(30, 10), L(30, 15)];
+  assert.equal(tr.prune(L(29.2, 0.5)), 1, "reached");
+  assert.equal(tr.prune(L(30.5, 7)), 1, "(30,5) passed on the way to (30,10)");
+  assert.deepEqual(xy(tr), [[30, 10], [30, 15]]);
+  const corner = new FollowTrail(7);
+  corner.points = [L(30, 0), L(30, 10)];
+  assert.equal(corner.prune(L(27.5, 0.2)), 0, "2.5 m short of the corner: the inside of the turn is not cut");
+  assert.equal(corner.prune(null), 0);
+});
+
+await check("FollowTrail: a teleport (the leader or we move ≥ 30 m faster than 20 m/s) starts over at the leader; a long sampling gap is a walk, not a teleport; capped at maxPoints", () => {
+  const tr = new FollowTrail(7);
+  let t = 0;
+  tr.sample((t += 250), L(10, 0), L(0, 0));
+  tr.sample((t += 250), L(12, 0), L(0, 0));
+  tr.sample((t += 250), L(12, 5), L(0, 0));
+  assert.equal(tr.size, 2);
+  assert.equal(tr.sample((t += 250), L(60, 5), L(0, 0)), "reset", "the leader: 48 m in 250 ms");
+  assert.deepEqual(xy(tr), [[60, 5]]);
+  tr.sample((t += 250), L(60, 8), L(0, 0));
+  assert.equal(tr.size, 2);
+  assert.equal(tr.sample((t += 250), L(60, 9), L(200, 0)), "reset", "we moved 200 m in 250 ms");
+  assert.deepEqual(xy(tr), [[60, 9]]);
+  assert.equal(tr.sample((t += 10_000), L(60, 49), L(200, 0)), "sampled", "40 m in 10 s (no samples during a fight): walked");
+  const zig = new FollowTrail(1);
+  for (let i = 0; i < 300; i++) zig.sample((t += 250), L(i * 2, i % 2 ? 3 : 0), L(-50, 0));
+  assert.equal(zig.size, TRAIL_TUNING.maxPoints, "the oldest go");
+  assert.deepEqual(xy(zig).at(-1), [598, 3]);
+});
+
+await check("FollowTrail.prune(me, join): a walk that (re)starts joins their path at the point nearest the follower (a tie: the later one) — their wander before it is dropped; walking, only the reached / passed prefix; keepLast keeps their last steps", () => {
+  const tr = new FollowTrail(7);
+  // their wander west of us, then away east around a corner
+  tr.points = [L(-6, 2), L(-5, -3), L(-8, 1), L(-4, 4), L(2, 6), L(10, 6), L(10, 20)];
+  const me = L(0, 5);
+  assert.equal(tr.prune(me), 0, "walking: only the reached / passed prefix");
+  assert.equal(tr.prune(me, true), 4, "(re)start: joined at (2,6), nearest us");
+  assert.deepEqual(xy(tr), [[2, 6], [10, 6], [10, 20]]);
+  const tie = new FollowTrail(7);
+  tie.points = [L(3, 0), L(0, 10), L(-3, 0), L(-3, -10)];
+  assert.equal(tie.prune(L(0, 0), true), 2, "a tie goes to the later point (further along their path)");
+  assert.deepEqual(xy(tie), [[-3, 0], [-3, -10]]);
+  const near = new FollowTrail(7);
+  near.points = [L(-20, 0), L(-20, 10), L(3, 3)];
+  near.prune(L(0, 0), true);
+  assert.deepEqual(xy(near), [[3, 3]], "the leader is the nearest point: no corner ahead");
+  assert.equal(near.next(), null);
+  const k = new FollowTrail(7);
+  k.points = [L(0, 0), L(1, 0), L(2, 0), L(3, 0), L(4, 0), L(5, 0)];
+  k.keepLast(TRAIL_TUNING.holdKeep);
+  assert.deepEqual(xy(k), [[2, 0], [3, 0], [4, 0], [5, 0]]);
+  k.keepLast(TRAIL_TUNING.holdKeep);
+  assert.equal(k.size, 4);
+});
+
+await check("FollowTrail: drop / reset; trailPoint keeps the cell for the router leg; walkTargetWorld = where a waypoint walks to (Portal/NPC at its object's recorded spot, in-place types null)", () => {
+  const tr = new FollowTrail(1);
+  tr.points = [L(0, 0), L(5, 0), L(10, 0)];
+  tr.drop(tr.points[1]);
+  assert.deepEqual(xy(tr), [[10, 0]]);
+  tr.reset(L(3, 3));
+  assert.deepEqual(xy(tr), [[3, 3]]);
+  tr.reset();
+  assert.equal(tr.size, 0);
+  assert.equal(tr.lastLeader, null);
+  const p = trailPoint({ objCellId: 0x7d640105, x: 10, y: 20, z: 5 });
+  assert.deepEqual(p, { cell: 0x7d640105, x: 10, y: 20, z: 5, wx: 0x7d * 192 + 10, wy: 0x64 * 192 + 20 });
+  assert.equal(trailPoint(null), null);
+  assert.equal(trailPoint({ objCellId: 1, x: NaN, y: 0 }), null);
+  const here = pointWorld(pt(33.6, 42.0));
+  assert.deepEqual(walkTargetWorld(pt(33.6, 42.0)), here);
+  assert.deepEqual(walkTargetWorld({ type: POINT.OpenVendor, ew: 33.6, ns: 42.0, z: 0.4 }), here);
+  const portal = { type: POINT.PortalNPC, ew: 56.8, ns: 33.6, z: 0, name: "Baishi Portal", exitEW: 33.6, exitNS: 42.0 };
+  assert.deepEqual(walkTargetWorld(portal), { wx: here.wx, wy: here.wy }, "the object's recorded position, not the stale own one");
+  assert.deepEqual(walkTargetWorld({ ...portal, exitEW: 0, exitNS: 0 }), pointWorld(portal), "no object position: its own");
+  for (const type of [POINT.Recall, POINT.Pause, POINT.Chat, POINT.Checkpoint, POINT.Jump]) assert.equal(walkTargetWorld({ type, ew: 33.6, ns: 42.0, z: 0 }), null, `type ${type} runs in place`);
+  assert.equal(walkTargetWorld(pt(0, 0)), null, "the 0,0 sentinel");
+  assert.equal(walkTargetWorld(null), null);
+});
+
 await check("barrel exports the package surface", () => {
   for (const k of ["ROUTE", "makeRoute", "advance", "parseNavVt", "parseAfNavsVt", "writeNavVt", "retypeAfPoint", "NavProfiles", "ActiveNav", "makeExecutor"]) {
     assert.ok(k in nav, k);

@@ -17,6 +17,16 @@
 // coverage assertions prove the world really drives combat, loot, vitals and
 // buffing.
 //
+// 2026-10-19: the former "Not on web" options went live with VTank's /
+// RynthAi's defaults (owner decision) — at Default the layer now loots by
+// VTank's corpse rule (your own kills only, read from the corpse's "Killed by
+// …" description after one appraisal), helps fellows, buffs worn armor, reads
+// scrolls, salvages and refills ammo. In this world (no fellowship, no Ust, no
+// scrolls, no launcher, no armor spells known, and a session without string
+// properties ⇒ the loot loop keeps its literal corpse rule) none of that acts,
+// so T-P1 stays byte-identical. T-P1b gives the corpses their description: the
+// layer then appraises each corpse once and loots the same corpses and items.
+//
 // Run from apps/holtburger-web/:  node tests/rynth_vt_parity.test.mjs
 
 import assert from "node:assert/strict";
@@ -67,8 +77,10 @@ function fmt(a) {
   }
 }
 
-/** The scripted world, reacting to what the session is asked to do. */
-function makeWorld() {
+/** The scripted world, reacting to what the session is asked to do.
+ *  descs: corpses carry ACE's LongDesc ("Killed by Tester."), readable once
+ *  appraised (an appraisal answers on the next heartbeat). */
+function makeWorld({ descs = false } = {}) {
   const W = {
     tick: 0,
     mode: 8,
@@ -198,7 +210,11 @@ function makeWorld() {
       W.pickAt = { item: item >>> 0, at: W.tick + 2 };
     },
     putItemInContainer: (...a) => act("putItemInContainer", ...a),
-    requestAppraisal: (g) => act("requestAppraisal", g >>> 0),
+    requestAppraisal: (g) => {
+      act("requestAppraisal", g >>> 0);
+      const e = W.ents.get(g >>> 0);
+      if (descs && e && e.corpse && !e.appraiseAt) e.appraiseAt = W.tick + 1;
+    },
     queryHealth: (g) => act("queryHealth", g >>> 0),
     sendChat: (t) => act("sendChat", t),
     sendTell: (...a) => act("sendTell", ...a),
@@ -208,6 +224,14 @@ function makeWorld() {
     setMovementInput: (...a) => act("setMovementInput", ...a),
     jump: (...a) => act("jump", ...a),
   };
+  if (descs) {
+    const answered = (g) => {
+      const e = W.ents.get(g >>> 0);
+      return e && e.appraiseAt != null && W.tick >= e.appraiseAt ? e : null;
+    };
+    s.objectStringProperty = (g, k) => (k === 16 && answered(g)?.corpse ? "Killed by Tester." : undefined);
+    s.getLastIdTime = (g) => (answered(g) ? Date.now() : 0);
+  }
   W.session = s;
   return W;
 }
@@ -294,7 +318,7 @@ function stepWorld(W, i) {
   }
 }
 
-async function run(config, label) {
+async function run(config, label, world = {}) {
   const realNow = Date.now;
   let NOW = 1_760_000_000_000;
   Date.now = () => NOW;
@@ -302,7 +326,7 @@ async function run(config, label) {
   const realWarn = console.warn;
   console.log = () => {};
   console.warn = () => {};
-  const W = makeWorld();
+  const W = makeWorld(world);
   const trace = [];
   let bot = null;
   try {
@@ -317,11 +341,10 @@ async function run(config, label) {
     for (let i = 0; i < N_TICKS; i++) {
       NOW += TICK_MS;
       stepWorld(W, i);
-      // The operator re-applies the buff list (HUD / director set_buffs).
-      // Besides being a real event, it resets buff_loop's B11 batch pass,
-      // which otherwise never completes once the kernel stops giving the loop
-      // the tick (a pre-existing behaviour reported by INT-2): the short buff
-      // can then run low and be recast inside the run.
+      // The operator re-applies the buff list (HUD / director set_buffs) —
+      // a real event both runs see. (It used to be the only thing that ended
+      // buff_loop's B11 batch pass once the kernel stopped giving the loop the
+      // tick; heartbeat() ends a finished pass itself since 2026-10-19.)
       if (i === 200) await bot.setBuffs([SPELL_STR]);
       bot.host._tick();
       const ks = bot.kernel.status;
@@ -343,6 +366,8 @@ async function run(config, label) {
 const A = await run({ vt: false }, "layer absent");
 const A2 = await run({ vt: false }, "layer absent (again)");
 const B = await run({}, "default layer");
+const AD = await run({ vt: false }, "layer absent, corpse descriptions", { descs: true });
+const BD = await run({}, "default layer, corpse descriptions", { descs: true });
 
 function firstDiff(x, y) {
   const n = Math.max(x.length, y.length);
@@ -382,6 +407,20 @@ await check("T-P1: identical kernel.action trace, kernel.status and host action 
   assert.equal(d, null, d ? `first divergence at tick ${d.i}\n  absent : ${d.a}\n  layer  : ${d.b}` : "");
   assert.deepEqual(B.actions, A.actions);
   assert.equal(B.trace.length, N_TICKS);
+});
+
+await check("T-P1b: with corpse descriptions the Default layer (VTank's corpse rule) appraises each corpse once and loots the same corpses and items", () => {
+  const opened = (r) => r.actions.filter((x) => /useObject\(/.test(x)).map((x) => x.replace(/^\d+:/, ""));
+  const picked = (r) => r.actions.filter((x) => /moveItem\(/.test(x)).map((x) => x.replace(/^\d+:/, ""));
+  assert.deepEqual(opened(BD), opened(AD), "the same corpses opened, in the same order");
+  assert.deepEqual(picked(BD), picked(AD), "the same items taken");
+  assert.equal(BD.looted, AD.looted);
+  assert.equal(BD.kills, AD.kills);
+  const asked = BD.actions.filter((x) => /requestAppraisal\(/.test(x)).map((x) => x.replace(/^\d+:/, ""));
+  const corpses = new Set(opened(AD).map((x) => x.replace(/^useObject\((\d+)\)$/, "$1")));
+  assert.ok(corpses.size >= 2, `two corpses looted (${[...corpses].join(", ")})`);
+  for (const c of corpses) assert.equal(asked.filter((x) => x === `requestAppraisal(${c})`).length, 1, `corpse ${c} appraised once`);
+  assert.equal(AD.actions.filter((x) => /requestAppraisal\(/.test(x)).length, 0, "without the layer nothing reads the description");
 });
 
 console.log(fail === 0 ? `rynth_vt_parity: all ${pass} checks passed` : `rynth_vt_parity: ${fail} FAILED (${pass} passed)`);

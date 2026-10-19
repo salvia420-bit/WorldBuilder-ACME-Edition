@@ -55,6 +55,10 @@ const ERROR_MSG_MS = 12000; // a refusal says how to fix it: give it time to be 
 // The route drawn in the world (scene3d/route_overlay.js, lazy): shown while
 // the Route tab is open, or always with the tab's "Show path" pinned.
 const ROUTE_OVERLAY_URL = new URL("../../scene3d/route_overlay.js", import.meta.url).href;
+// The profile's page-level display options (frame-rate limit, steep ground):
+// the HUD installs the controller on mount; opening the panel installs it too
+// (idempotent), so it also works on a ?rynthHud=off page.
+const DISPLAY_URL = new URL("./display.js", import.meta.url).href;
 
 export const VT_TABS_UI = Object.freeze([
   { id: "main", label: "Main", title: "Ranges, vitals and the Options switches (VTank Options + Vitals)" },
@@ -417,6 +421,7 @@ function stopTimer() {
 
 // ── public API (§3.16) ─────────────────────────────────────────────────────
 export function openVtPanel({ tab } = {}) {
+  import(DISPLAY_URL).then((m) => m.installVtDisplay?.(env().win)).catch(() => {});
   try {
     if (!S.root) {
       S.ui = loadUi();

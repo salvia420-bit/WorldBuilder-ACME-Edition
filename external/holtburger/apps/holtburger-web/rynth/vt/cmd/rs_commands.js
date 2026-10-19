@@ -496,6 +496,8 @@ verb(
           st.enabled ? "enabled" : "disabled",
         ];
         if (st.paused) bits.push(`paused: ${st.paused.reason}`);
+        // why an enabled route isn't walking right now (far off course, portal space, …)
+        else if (st.enabled && st.blockedBy && !/^(disabled|empty route|route finished)$/.test(st.blockedBy)) bits.push(`held: ${st.blockedBy}`);
         if (st.reversed) bits.push("reversed");
         if (st.followTarget) bits.push(`following ${st.followTarget.name || st.followTarget.guid}`);
         if (st.exec) bits.push(`exec: ${st.exec}`);

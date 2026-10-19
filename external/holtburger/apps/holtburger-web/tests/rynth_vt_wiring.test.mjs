@@ -126,13 +126,13 @@ function unstage(tmp) {
 
 delete globalThis.__rynthVtSessions;
 
-await check("bot.vt present by default: 7 aux slots in the kernel, planner detached, acquireRangeFn set (G9), stop() disposes", async () => {
+await check("bot.vt present by default: its aux slots in the kernel (rank order), planner detached, acquireRangeFn set (G9), stop() disposes", async () => {
   const { s } = fakeSession();
   const bot = await createGrindBot(s, { ...QUIET });
   try {
     assert.ok(bot.vt, "bot.vt");
     assert.equal(bot.vt.disposed, false);
-    assert.equal(bot.kernel.aux.slots.length, 7);
+    assert.deepEqual(bot.kernel.aux.slots.map((x) => x.name), bot.vt.auxSlotOrder);
     assert.equal(bot.combat.vt, null);
     assert.equal(typeof bot.combat.acquireRangeFn, "function");
     assert.equal(bot.combat.acquireRangeFn(40), 40);

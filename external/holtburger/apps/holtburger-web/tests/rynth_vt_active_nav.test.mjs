@@ -11,8 +11,10 @@
 // hysteresis, portal-space hold, Once keeps nav enabled, external-teleport
 // re-sync, onLeave keeps the index, the stuck ladder, loadEmbedded(""), a
 // second ActiveNav on the same state, the generation guard, boost/D39 wants,
-// `/rs jump` gating, the router's per-leg arriveM, and the guide's
-// death/runback example (a Once "runback" and a Circular "fighting" route).
+// `/rs jump` gating, the router's per-leg arriveM, the guide's
+// death/runback example (a Once "runback" and a Circular "fighting" route),
+// FollowAroundCorners (the leader's path walked corner by corner, watchLeader)
+// and NavFarStopDistance (the route holds off course, resumes by itself).
 //
 // The real router reads Date.now(): the test drives a fake clock by
 // replacing Date.now for this process only.
@@ -730,7 +732,8 @@ await check("Jump: a failed job FAILS the waypoint", async () => {
 
 // ── Follow ─────────────────────────────────────────────────────────────────
 await check("Follow: PursueObject beyond 8 m, stop inside 5 m, hysteresis between (R3, Q21)", async () => {
-  const env = await makeEnv();
+  // FollowAroundCorners off: straight at the leader (the trail walk is below).
+  const env = await makeEnv({ options: fakeOptions({ FollowAroundCorners: false }) });
   const G = 0x50000077;
   env.world.addObject(G, "Leader Bob", 10, 0, 0x8);
   env.nav.load({ routeType: ROUTE.Follow, points: [], followTarget: { guid: G, name: "Leader Bob" } });
@@ -756,6 +759,364 @@ await check("Follow: PursueObject beyond 8 m, stop inside 5 m, hysteresis betwee
   await env.tick();
   assert.equal(env.nav.status().exec, "follow target out of range");
   assert.equal(count(env.world, "StopCompletely"), 2);
+});
+
+// ── FollowAroundCorners (follow_trail.js) ──────────────────────────────────
+const LEADER = 0x50000077;
+/** The leader: runs `path` ([[dx, dy], …] metres from BASE) at `speed` m/s. */
+function leaderOn(world, path, speed = 6) {
+  const L = { i: 1, x: path[0][0], y: path[0][1] };
+  const put = () => world.addObject(LEADER, "Leader Bob", L.x, L.y, 0x8);
+  put();
+  L.step = (dtMs) => {
+    let s = (speed * dtMs) / 1000;
+    while (s > 0 && L.i < path.length) {
+      const [tx, ty] = path[L.i];
+      const d = Math.hypot(tx - L.x, ty - L.y);
+      if (d <= s) {
+        L.x = tx;
+        L.y = ty;
+        s -= d;
+        L.i++;
+      } else {
+        L.x += ((tx - L.x) / d) * s;
+        L.y += ((ty - L.y) / d) * s;
+        s = 0;
+      }
+    }
+    put();
+  };
+  return L;
+}
+const followLeader = (env) => env.nav.load({ routeType: ROUTE.Follow, points: [], followTarget: { guid: LEADER, name: "Leader Bob" } });
+/** Metres from a leg / a MoveToPosition call ({lb,x,y} | [_, lb, x, y]) to BASE + (dx, dy). */
+function offBy(at, dx, dy) {
+  const [wx, wy] = Array.isArray(at) ? worldXY(at[1], at[2], at[3]) : worldXY(at.lb, at.x, at.y);
+  const c = W(dx, dy);
+  return Math.hypot(wx - c.wx, wy - c.wy);
+}
+const poseOff = (world, dx, dy) => {
+  const p = world.poseW();
+  const c = W(dx, dy);
+  return Math.hypot(p.wx - c.wx, p.wy - c.wy);
+};
+
+await check("FollowAroundCorners (the default): the leader turns a corner → the follower runs to it first (router legs), then along their path, then straight at them; off: no leg, straight at them across the corner", async () => {
+  async function run(opts, path = [[10, 0], [30, 0], [30, 30]]) {
+    const env = await makeEnv({ options: fakeOptions(opts) });
+    const L = leaderOn(env.world, path);
+    followLeader(env);
+    let near = Infinity;
+    for (let i = 0; i < 220; i++) {
+      L.step(100);
+      await env.tick();
+      near = Math.min(near, poseOff(env.world, 30, 0));
+    }
+    return { env, near };
+  }
+  const on = await run({}); // FollowAroundCorners absent: the schema default (on)
+  assert.ok(on.env.follows.length >= 5, `router legs along their path (${on.env.follows.length})`);
+  assert.ok(on.env.follows.every((legs) => legs.length === 1 && legs[0].followTrail === true && legs[0].arriveM === 1));
+  assert.ok(offBy(on.env.follows[0][0], 30, 0) <= 2, "the first leg goes to the corner they turned");
+  assert.ok(on.near <= 2.5, `through the corner (closest ${on.near.toFixed(2)} m)`);
+  assert.ok(poseOff(on.env.world, 30, 30) < 5.5, "and up to them at the end");
+  assert.match(on.env.nav.status().exec, /holding/);
+  assert.equal(on.env.state.follow.moving, false);
+  assert.deepEqual(on.env.bot.tags(), [], "the claim is released");
+  // Their last corner passed while still > 5 m from them: straight at them (the pursuit) again.
+  const short = await run({}, [[10, 0], [30, 0], [30, 12]]);
+  assert.equal(count(short.env.world, "PursueObject"), 2, "the start, and after their last corner");
+  assert.equal(short.env.state.follow.mode ?? null, null);
+  assert.match(short.env.nav.status().exec, /holding/);
+  const off = await run({ FollowAroundCorners: false });
+  assert.equal(off.env.follows.length, 0, "no router leg: PursueObject / MoveToPosition at them");
+  assert.ok(off.near > 4, `the corner is cut (closest ${off.near.toFixed(2)} m)`);
+});
+
+await check("FollowAroundCorners: a yield cancels the corner leg and keeps the trail (the same corner after); off mid-corner: the leg is cancelled, straight at them at once; out of sight: stop and their path is dropped; beside them (< 5 m): stop", async () => {
+  const env = await makeEnv();
+  const L = leaderOn(env.world, [[10, 0], [30, 0], [30, 30]]);
+  followLeader(env);
+  for (let i = 0; i < 60 && !env.follows.length; i++) {
+    L.step(100);
+    await env.tick();
+  }
+  assert.equal(env.follows.length, 1, "the corner leg");
+  assert.equal(env.router.status.state, "WALK");
+  assert.deepEqual(env.bot.tags(), ["vt-nav-follow"]);
+  assert.match(env.nav.status().exec, /^following Leader Bob: [\d.]+ m, on their path \(\d+ corners? ahead\)$/);
+  const corner = env.follows[0][0].trailPoint;
+  env.nav.slot.onLeave("Combat");
+  assert.equal(env.router.status.state, "IDLE", "a yield cancels the corner leg");
+  assert.deepEqual(env.bot.tags(), [], "and releases the claim");
+  await env.tick();
+  assert.equal(env.follows.length, 2, "re-issued when the slot is back");
+  assert.equal(env.follows[1][0].trailPoint, corner, "to the same corner: the trail was kept");
+  env.options.v.FollowAroundCorners = false;
+  await env.tick();
+  assert.equal(env.router.status.state, "IDLE", "off mid-corner: the corner leg is cancelled");
+  assert.ok(offBy(env.world.calls.filter((c) => c[0] === "MoveToPosition").at(-1), L.x, L.y) < 1, "straight at them at once");
+  assert.equal(env.state.follow.mode, null);
+  env.options.v.FollowAroundCorners = true;
+  env.world.objects.delete(LEADER);
+  await env.tick();
+  assert.equal(env.nav.status().exec, "follow target out of range");
+  assert.equal(env.state.follow.moving, false);
+  // Back in sight further on: their old corner is gone — straight at them.
+  const n = env.follows.length;
+  const p = count(env.world, "PursueObject");
+  env.world.addObject(LEADER, "Leader Bob", 40, 30, 0x8);
+  await env.tick();
+  assert.equal(env.follows.length, n, "no leg to the corner seen before they left sight");
+  assert.equal(count(env.world, "PursueObject"), p + 1);
+  // Beside them: stop.
+  const me = env.world.poseW();
+  env.world.addObject(LEADER, "Leader Bob", me.wx - W(0, 0).wx + 3, me.wy - W(0, 0).wy, 0x8);
+  await env.tick();
+  assert.equal(env.state.follow.moving, false);
+  assert.match(env.nav.status().exec, /holding/);
+});
+
+await check("FollowAroundCorners: watchLeader (the layer's pre-tick) keeps recording their path while a fight holds the tick — after it the follower runs that path from the corner (unwatched: to where they were, then straight)", async () => {
+  async function run(watch) {
+    const env = await makeEnv();
+    env.world.frozen = true;
+    const L = leaderOn(env.world, [[12, 0], [30, 0], [30, 20]]);
+    followLeader(env);
+    await env.tick(); // 12 m: running at them
+    assert.equal(count(env.world, "PursueObject"), 1);
+    env.nav.slot.onLeave("Combat"); // a fight holds the tick for 7 s
+    for (let i = 0; i < 70; i++) {
+      clock.t += 100;
+      L.step(100);
+      if (watch) env.nav.watchLeader(clock.t);
+    }
+    await env.tick();
+    return env.follows.length ? env.follows[0][0] : null;
+  }
+  const leg = await run(true);
+  assert.ok(leg && leg.followTrail === true, "a corner leg after the fight");
+  assert.ok(offBy(leg, 30, 0) <= 2, `to the corner they turned meanwhile (${offBy(leg, 30, 0).toFixed(2)} m off)`);
+  const blind = await run(false);
+  assert.ok(blind && offBy(blind, 12, 0) <= 1, "unwatched: to where they were when the fight began");
+  // watchLeader is inert unless a Follow route runs, and never throws.
+  const env = await makeEnv();
+  env.nav.load({ routeType: ROUTE.Once, points: [P(10)] });
+  env.nav.watchLeader();
+  env.nav.watchLeader(NaN);
+  assert.equal(env.world.calls.length, 0);
+});
+
+const farAlerts = (w) => w.chat.filter((l) => /far-stop range/.test(l));
+/** `laps` laps around a follower at the origin, `r` metres out (8 corners a lap). */
+function lapsAround(r, laps, from = 0) {
+  const out = [];
+  for (let lap = 0; lap < laps; lap++) for (let k = 0; k < 8; k++) out.push([r * Math.cos(from + (k * Math.PI) / 4), r * Math.sin(from + (k * Math.PI) / 4)]);
+  return out;
+}
+/** Their wander inside the 5-8 m hold band: laps around us (24 corners), and
+ *  laps that begin with the corner nearest us (which a join alone would keep
+ *  the whole wander after). [points, their radius] */
+const WANDERS = [
+  [[...lapsAround(6.5, 3), [6.5, 0]], 6.5],
+  [[[5.2, 0], [5.2, 3], ...lapsAround(7.5, 2, Math.PI / 6), [7.5, 0]], 7.5],
+];
+/** Then away north, and east at a corner at (6.5, 12). */
+const LEAVE = [[6.5, 3], [6.5, 6], [6.5, 9], [6.5, 12], [9, 12], [12, 12], [15, 12], [18, 12]];
+/** Legs to a point of their laps (`r` metres from the origin). */
+const wanderLegs = (env, r) =>
+  env.follows.filter((legs) => {
+    const [wx, wy] = worldXY(legs[0].lb, legs[0].x, legs[0].y);
+    const o = W(0, 0);
+    return Math.abs(Math.hypot(wx - o.wx, wy - o.wy) - r) < 0.3;
+  }).length;
+
+await check("FollowAroundCorners (review): their wander while we hold 5-8 m away is not walked later — only their last steps are kept, and the walk joins their path where it passes nearest us; their corner is still walked", async () => {
+  for (const [wander, r] of WANDERS) {
+    const env = await makeEnv();
+    const put = (x, y) => env.world.addObject(LEADER, "Leader Bob", x, y, 0x8);
+    put(...wander[0]);
+    followLeader(env);
+    for (const p of wander) {
+      put(...p);
+      for (let i = 0; i < 3; i++) await env.tick();
+    }
+    assert.equal(env.follows.length, 0, "holding: no leg");
+    assert.equal(env.state.follow.moving, false);
+    for (const p of LEAVE) {
+      put(...p);
+      for (let i = 0; i < 3; i++) await env.tick();
+    }
+    await env.run(12_000);
+    assert.ok(wanderLegs(env, r) <= 2, `at most their last steps there (${wanderLegs(env, r)} legs for their ${wander.length} corners)`);
+    assert.ok(env.follows.some((legs) => offBy(legs[0], 6.5, 12) < 1.5), "their corner is walked");
+    assert.ok(poseOff(env.world, 18, 12) < 5.5, "and up to them");
+  }
+});
+
+await check("FollowAroundCorners (review): their wander near us during a fight (watchLeader) is not walked after it; a far-stop hold forgets their path out there (back in range: straight at them)", async () => {
+  for (const [wander, r] of WANDERS) {
+    const env = await makeEnv();
+    env.world.frozen = true;
+    const put = (x, y) => env.world.addObject(LEADER, "Leader Bob", x, y, 0x8);
+    put(12, 0);
+    followLeader(env);
+    await env.tick(); // 12 m: running at them
+    env.nav.slot.onLeave("Combat"); // a fight holds the tick; the pre-tick still watches them
+    const watch = (p) => {
+      put(...p);
+      for (let i = 0; i < 3; i++) {
+        clock.t += 100;
+        env.nav.watchLeader(clock.t);
+      }
+    };
+    for (const p of wander) watch(p);
+    for (const p of LEAVE) watch(p);
+    env.world.frozen = false;
+    await env.run(12_000);
+    assert.ok(wanderLegs(env, r) <= 2, `at most their last steps near us (${wanderLegs(env, r)} legs for their ${wander.length} corners)`);
+    assert.ok(env.follows.some((legs) => offBy(legs[0], 6.5, 12) < 1.5), "their corner is walked");
+  }
+  // Far-stop: they turn a corner within range at (30, 0), run off past it and
+  // around more corners, then come back within it further from us than that
+  // corner — which a kept trail would join first.
+  const far = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 40 }) });
+  far.world.frozen = true;
+  const fput = (x, y) => far.world.addObject(LEADER, "Leader Bob", x, y, 0x8);
+  fput(10, 0);
+  followLeader(far);
+  await far.tick();
+  const trip = [[20, 0], [30, 0], [30, 10], [30, 20], [30, 30], [20, 40], [10, 45], [0, 50]];
+  for (let i = 0; i < 10; i++) trip.push([0, 50]); // they linger out there
+  trip.push([0, 45], [0, 39]);
+  let legsAtHold = -1;
+  for (const p of trip) {
+    fput(...p);
+    for (let i = 0; i < 3; i++) {
+      clock.t += 100;
+      far.nav.watchLeader(clock.t);
+      await far.tick();
+    }
+    if (legsAtHold < 0 && /^leader too far/.test(far.nav.status().blockedBy || "")) legsAtHold = far.follows.length;
+  }
+  assert.ok(legsAtHold >= 0, "held while they were out of range");
+  assert.equal(far.nav.status().blockedBy, null, "back within range");
+  assert.equal(far.follows.length, legsAtHold, "no leg to their (30, 0) corner or their trip out there");
+  assert.ok(count(far.world, "PursueObject") >= 2, "straight at them");
+});
+
+await check("FollowAroundCorners (review): a new follow target forgets the old leader — the far-stop never judges the previous leader's distance (setFollowTarget, load)", async () => {
+  for (const how of ["setFollowTarget", "load"]) {
+    const env = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }) });
+    env.world.frozen = true;
+    env.world.addObject(LEADER, "Leader Bob", 20, 0, 0x8);
+    followLeader(env);
+    await env.tick(); // Bob seen: 20 m, followed
+    env.world.addObject(LEADER, "Leader Bob", 90, 0, 0x8); // Bob now far away
+    const ALICE = 0x50000088; // not in sight yet
+    if (how === "setFollowTarget") env.nav.setFollowTarget({ guid: ALICE, name: "Alice" });
+    else env.nav.load({ routeType: ROUTE.Follow, points: [], followTarget: { guid: ALICE, name: "Alice" } });
+    await env.run(500);
+    assert.equal(farAlerts(env.world).length, 0, `${how}: no far-stop alert about Bob`);
+    assert.equal(env.nav.status().exec, "follow target out of range", how);
+    assert.equal(env.nav.status().blockedBy, null, how);
+  }
+});
+
+// ── NavFarStopDistance (VTank NavFarStopRange) ─────────────────────────────
+await check("NavFarStopDistance: a waypoint beyond it holds the route — no leg, the slot declines the tick, blockedBy says why, ONE chat alert — and back within range it walks on by itself; EnableNavigation is never touched", async () => {
+  const env = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }) });
+  env.world.frozen = true;
+  env.nav.load({ routeType: ROUTE.Once, points: [P(100), P(140)] });
+  await env.run(2000);
+  assert.equal(env.follows.length, 0, "no leg");
+  assert.equal(env.nav.slot.wants({}), false);
+  assert.equal(env.nav.status().blockedBy, "far off course: 100 m > 50 m");
+  assert.equal(farAlerts(env.world).length, 1, "one alert for the hold");
+  assert.equal(farAlerts(env.world)[0], "[RynthSuite] nav: waypoint 1/2 is 100 m away, past the nav far-stop range (50 m) — holding the route until you are back within range");
+  assert.equal(env.options.v.EnableNavigation, true);
+  assert.equal(env.nav.status().enabled, true);
+  assert.equal(env.nav.paused, null, "held, not paused");
+  env.nav.slot.tick({}); // a tick that came without wants(): still no leg
+  assert.equal(env.follows.length, 0);
+  assert.equal(farAlerts(env.world).length, 1);
+  env.world.setPoseRel(60); // back within range (moved by hand)
+  await env.tick();
+  assert.equal(env.follows.length, 1, "walking again");
+  assert.equal(env.nav.status().blockedBy, null);
+  assert.ok(env.logs.some((l) => /back within the nav far-stop range/.test(l)));
+  // Off course again at once: the same waypoint within 60 s is logged, not re-alerted.
+  env.world.setPoseRel(-10);
+  await env.tick();
+  assert.equal(env.router.status.state, "IDLE", "the slot left: our leg is cancelled");
+  assert.match(env.nav.status().blockedBy, /^far off course: 110 m > 50 m$/);
+  assert.equal(farAlerts(env.world).length, 1);
+  // Another waypoint is another hold.
+  env.nav.setActive(1);
+  await env.tick();
+  assert.equal(farAlerts(env.world).length, 2);
+  assert.match(farAlerts(env.world)[1], /waypoint 2\/2 is 150 m away/);
+  // 0 = off.
+  env.options.v.NavFarStopDistance = 0;
+  await env.tick();
+  assert.equal(env.nav.status().blockedBy, null);
+  assert.equal(env.follows.length, 2);
+});
+
+await check("NavFarStopDistance: in-place waypoints (Chat, Pause, Recall…) are never held; Portal/NPC is measured at its portal's recorded position (exitEW/exitNS), not its own stale coordinates", async () => {
+  const chats = [];
+  const env = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }), runChat: (t) => chats.push(t) });
+  env.world.frozen = true;
+  env.nav.load({ routeType: ROUTE.Once, points: [{ type: POINT.Chat, ...at(500), z: 0, chat: "/rs echo hi" }, P(400)] });
+  await env.run(500);
+  assert.deepEqual(chats, ["/rs echo hi"], "the Chat point ran where we stand");
+  assert.equal(env.nav.route().activeIndex, 1);
+  assert.equal(env.nav.status().blockedBy, "far off course: 400 m > 50 m");
+  const exit = at(10);
+  const portal = { type: POINT.PortalNPC, ...at(4000), z: 0, name: "Baishi Portal", objectClass: 14, exitEW: exit.ew, exitNS: exit.ns, exitZ: 0 };
+  const env2 = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }) });
+  env2.world.frozen = true;
+  env2.world.addObject(0x7a000099, "Baishi Portal", 10, 0, 0x40000);
+  env2.nav.load({ routeType: ROUTE.Once, points: [portal] });
+  await env2.tick();
+  assert.equal(env2.nav.status().blockedBy, null, "10 m from the portal");
+  assert.ok(env2.follows.length === 1 && offBy(env2.follows[0][0], 10, 0) < 0.5, "approaching it");
+  const env3 = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }) });
+  env3.nav.load({ routeType: ROUTE.Once, points: [{ ...portal, exitEW: 0, exitNS: 0 }] });
+  await env3.tick();
+  assert.equal(env3.nav.status().blockedBy, "far off course: 4000 m > 50 m", "no recorded portal position: its own");
+});
+
+await check("NavFarStopDistance: an external teleport while held re-syncs a Circular route first (died → respawned at the far end of the route), and it walks from there", async () => {
+  const env = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 100 }) });
+  env.world.frozen = true;
+  env.nav.load({ routeType: ROUTE.Circular, points: [P(0), P(500), P(1000)] });
+  env.nav.setActive(1);
+  await env.run(500);
+  assert.equal(env.nav.status().blockedBy, "far off course: 500 m > 100 m");
+  assert.equal(env.follows.length, 0);
+  env.world.setPoseRel(990);
+  await env.tick();
+  assert.equal(env.nav.route().activeIndex, 2, "re-synced to the nearest Point");
+  assert.equal(env.nav.status().blockedBy, null);
+  assert.equal(env.follows.length, 1);
+});
+
+await check("NavFarStopDistance on a Follow route: a leader beyond it is not followed (no pursuit), one alert; back within range the follow picks up", async () => {
+  const env = await makeEnv({ options: fakeOptions({ NavFarStopDistance: 50 }) });
+  env.world.frozen = true;
+  env.world.addObject(LEADER, "Leader Bob", 80, 0, 0x8);
+  followLeader(env);
+  await env.run(1000);
+  assert.equal(count(env.world, "PursueObject"), 0);
+  assert.equal(env.nav.status().blockedBy, "leader too far: 80 m > 50 m");
+  assert.equal(env.nav.status().exec, "following Leader Bob: 80.0 m");
+  assert.equal(farAlerts(env.world).length, 1);
+  assert.match(farAlerts(env.world)[0], /follow target Leader Bob is 80 m away, past the nav far-stop range \(50 m\) — holding until they are back within range/);
+  env.world.addObject(LEADER, "Leader Bob", 30, 0, 0x8);
+  await env.tick();
+  assert.deepEqual(env.world.calls.filter((c) => c[0] === "PursueObject"), [["PursueObject", LEADER]]);
+  assert.equal(env.nav.status().blockedBy, null);
 });
 
 // ── holds / ownership ──────────────────────────────────────────────────────

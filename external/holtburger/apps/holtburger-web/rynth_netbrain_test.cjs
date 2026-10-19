@@ -132,6 +132,67 @@ function check(name, ok, detail) {
         const sel2 = loop._selectTarget();
         check("mode on: throttled tick holds C# lock", sel2 === A && loop.locked === A,
           `sel=${sel2?.toString(16)} locked=${loop.locked?.toString(16)}`);
+
+        // The VT layer's options in the C# seat (2026-10-19): an explicit
+        // MonsterDisengageRange reaches C# (it keeps the lock to 50 m, not
+        // its own MonsterRange + 3), and a TargetLock selection holds over the
+        // C# pick (the slice has no selection input).
+        const opts = { TargetLock: false, AttackMinDistance: 0, MonsterDisengageRange: 50, TargetNoProgressTimeoutSec: 0, DoJiggle: false };
+        const vtLoop = (over = {}) => {
+          const l = new cl.RynthCombatLoop(host, { log: () => {} });
+          const o = { ...opts, ...over };
+          l.optFn = (k) => o[k];
+          l.attachNetBrain(brain, "on", nb, { minIntervalMs: 0 });
+          return l;
+        };
+        const L = A;
+        const near = { ...ents[A] };
+        ents[B].y = 200; // out of the way
+        ents[L].y = 98; // 48 m
+        const held = vtLoop();
+        held.locked = L;
+        held.lastSeenLockedAt = Date.now();
+        const kept = held._selectTarget();
+        ents[L].y = 103; // 53 m: past 50
+        const gone = held._selectTarget();
+        ents[L].y = 98;
+        const literal = new cl.RynthCombatLoop(host, { log: () => {} });
+        literal.attachNetBrain(brain, "on", nb, { minIntervalMs: 0 });
+        literal.locked = L;
+        literal.lastSeenLockedAt = Date.now();
+        const litSel = literal._selectTarget();
+        check("mode on + VT MonsterDisengageRange 50: C# keeps the lock at 48 m, drops it at 53 m (literal path: C#'s own 43 m)",
+          kept === L && gone === 0 && litSel === 0, `kept=${kept?.toString(16)} gone=${gone} literal=${litSel?.toString(16)}`);
+        Object.assign(ents[A], near);
+        ents[B].y = 80;
+        host.GetSelectedId = () => B;
+        const picked = vtLoop({ TargetLock: true })._selectTarget();
+        const csPick = vtLoop({ TargetLock: false })._selectTarget();
+        delete host.GetSelectedId;
+        check("mode on + VT TargetLock: the selected olthoi holds over the C# pick (the near drudge)", picked === B && csPick === A,
+          `TargetLock=${picked?.toString(16)} off=${csPick?.toString(16)}`);
+
+        // The planner's monster-list verdicts steer the C# pick as they steer
+        // the JS scan: C#'s own favourite (the near drudge) at priority −1 — or
+        // an A-off row with nothing left to cast — is no candidate; a P2
+        // olthoi outranks a P1 drudge; equal priorities leave C#'s scoring as is.
+        const planned = (verdict, lock = 0) => {
+          const l = new cl.RynthCombatLoop(host, { log: () => {} });
+          l.vt = { scanVerdict: verdict };
+          l.attachNetBrain(brain, "on", nb, { minIntervalMs: 0 });
+          l.locked = lock;
+          l.lastSeenLockedAt = Date.now();
+          return l._selectTarget();
+        };
+        const e0 = d.errors.combat;
+        const ignoreA = (g) => (g === A ? { ignore: true } : { scoreBias: 1000 });
+        const ignored = planned(ignoreA);
+        const ranked = planned((g) => ({ scoreBias: g === B ? 2000 : 1000 }));
+        const equal = planned(() => ({ scoreBias: 1000 }));
+        const relocked = planned(ignoreA, A); // the locked drudge turns ignored mid-fight
+        check("mode on + VT planner: an ignored drudge is no C# candidate (a locked one is re-locked off), a P2 olthoi outranks a P1 drudge, equal P keeps C#'s pick",
+          ignored === B && ranked === B && equal === A && relocked === B && d.errors.combat === e0,
+          `ignored=${ignored?.toString(16)} ranked=${ranked?.toString(16)} equal=${equal?.toString(16)} relocked=${relocked?.toString(16)} errors=${d.errors.combat - e0}`);
       }
 
       // Loot shadow end-to-end: real RynthLootLoop in the LOOT state, real

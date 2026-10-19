@@ -58,9 +58,14 @@ const WIELD_GAP_MS = 3000;
 
 /**
  * VTank ObjectClass from an ItemType bitfield and ObjectDescriptionFlags
- * (canonical ACPlugin WorldObject.GetObjectClass order).
+ * (canonical ACPlugin WorldObject.GetObjectClass order). `spellDid` is the
+ * object's Spell DataId (PropertyDataId 28, from the CreateObject header):
+ * a Writable item with one is a Scroll (ACPlugin PASS 3b reads the header's
+ * Spell flag; in the ACE world DB the 2513 WeenieType Scroll weenies are the
+ * only Writable items with a spell). Without it a scroll reads Unknown, as
+ * before.
  */
-export function objectClassFrom(itemType, descFlags) {
+export function objectClassFrom(itemType, descFlags, spellDid) {
   const it = Number(itemType) >>> 0;
   const df = Number(descFlags) >>> 0;
   const C = OBJECT_CLASS;
@@ -109,6 +114,7 @@ export function objectClassFrom(itemType, descFlags) {
   if (cls === C.Unknown && it & IT.WRITABLE && df & ODF.BOOK) {
     cls = df & ODF.INSCRIBABLE ? C.Journal : df & ODF.STUCK ? C.Sign : C.Book;
   }
+  if (it & IT.WRITABLE && Number(spellDid) >>> 0) cls = C.Scroll;
   // A creature is a Monster only when attackable (RynthAi ResolveEffectiveObjectClass,
   // ExpressionEngine.cs:1676-1700); otherwise it is an NPC.
   if (cls === C.Monster && !(df & ODF.ATTACKABLE)) cls = C.Npc;

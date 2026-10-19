@@ -11,6 +11,14 @@
 // C# authority: ~/rynthnav-inputs/rynthsuite/Plugins/RynthCore.Plugin.RynthAi/
 // Combat/CombatManager.cs — cited per scenario below.
 //
+// 2026-10-19: the VTank options the VT layer feeds through `loop.optFn` —
+// T3 MonsterDisengageRange hysteresis (TargetScoring.cs DisengageDistance /
+// the "out of range" validation drop / the engaged-target scan range),
+// AttackMinDistance and TargetLock (MOSS CombatTargetSelection: priority
+// first, then the selection) — including the netBrain "on" seat (the C#
+// input's disengage / user-never-attack feed; the selection outranks the C#
+// pick). Without optFn every scenario above is the literal path.
+//
 // Run: node rynth_combatparity_test.cjs   (exits 1 on any FAIL)
 
 "use strict";
@@ -85,6 +93,16 @@ async function main() {
     ({ RynthWebHost } = await import("file://" + whTmp));
   } finally {
     fs.unlinkSync(whTmp);
+  }
+  // …and the netBrain shadow harness (shadowTick/diag; no bundle is loaded —
+  // the TargetLock-under-"on" scenario drives it with a fake brain).
+  const nbTmp = path.join(os.tmpdir(), `netbrain_paritytest_${process.pid}.mjs`);
+  fs.writeFileSync(nbTmp, fs.readFileSync(path.join(__dirname, "rynth", "netbrain.js"), "utf8"));
+  let nbModule;
+  try {
+    nbModule = await import("file://" + nbTmp);
+  } finally {
+    fs.unlinkSync(nbTmp);
   }
 
   const realNow = Date.now;
@@ -327,6 +345,337 @@ async function main() {
         "report 11 Contract 0.1 vs webhost.js ObjectIsAttackable capability-absent",
         aBare === true && bareHost.HasObjectDescFlags(0xc) === false,
         `bareAttackable=${aBare} bareHas=${bareHost.HasObjectDescFlags(0xc)}`
+      );
+    }
+
+    // ── 7. VTank options through the VT layer's optFn (2026-10-19) ──────
+    const VT_DEFAULTS = { TargetLock: false, AttackMinDistance: 0, MonsterDisengageRange: 0, TargetNoProgressTimeoutSec: 0, DoJiggle: false };
+    const vtLoop = (host, over = {}) => {
+      const loop = mkLoop(host);
+      const opts = { ...VT_DEFAULTS, ...over };
+      loop.optFn = (k) => opts[k];
+      return loop;
+    };
+    const at = (id, name, d) => ({ id, name, x: 96, y: 96 + d }); // d metres north of the player
+    const hex = (g) => (g >>> 0).toString(16);
+
+    // 7a. T3 auto hysteresis: the engaged lock is kept out to MonsterRange + 3
+    // m (and still wins the stickiness contest there); without the layer it
+    // leaves the scan at 40 m and the alternative re-locks at once.
+    {
+      const A = 0x10000041, B = 0x10000042;
+      const host = makeHost([at(A, "Drudge", 41.5), at(B, "Drudge", 35)]);
+      const plain = mkLoop(host);
+      plain.locked = A;
+      plain.lastSeenLockedAt = NOW;
+      frozen(NOW);
+      const s0 = plain._selectTarget();
+      const vt = vtLoop(host);
+      vt.locked = A;
+      vt.lastSeenLockedAt = NOW;
+      const s1 = vt._selectTarget();
+      const scanHasLock = vt._scanTargets().some((t) => t.guid === A);
+      check(
+        "T3 auto disengage: lock at 41.5 m kept (MonsterRange 40 + 3); literal path re-locks",
+        "TargetScoring.cs DisengageDistance :157-158, engaged scan range :266-268",
+        s0 === B && s1 === A && scanHasLock,
+        `literal=${hex(s0)} vt=${hex(s1)} scanHasLock=${scanHasLock}`
+      );
+      const lone = makeHost([at(0x10000043, "Drudge", 41.5)]);
+      const fresh = vtLoop(lone);
+      check(
+        "T3: a NEW target still needs MonsterRange (41.5 m is not acquired)",
+        "TargetScoring.cs scan: dist > (isEngaged ? max(MonsterRange, disengage) : MonsterRange)",
+        fresh._selectTarget() === 0,
+        `locked=${hex(fresh.locked)}`
+      );
+    }
+
+    // 7b. Past the disengage range the lock is dropped at once ("out of
+    // range"), not held through the 1.5 s scan grace (which is for a lock
+    // gone from the snapshot) — the literal path still holds it.
+    {
+      const A = 0x10000044;
+      const host = makeHost([at(A, "Drudge", 43.5)]);
+      const plain = mkLoop(host);
+      plain.locked = A;
+      plain.lastSeenLockedAt = NOW;
+      frozen(NOW + 100);
+      const s0 = plain._selectTarget();
+      const logs = [];
+      const vt = vtLoop(host);
+      vt.log = (m) => logs.push(m);
+      vt.locked = A;
+      vt.lastSeenLockedAt = NOW;
+      const s1 = vt._selectTarget();
+      check(
+        "T3: lock at 43.5 m (> 43) dropped at once as out of range; literal path holds it through the grace",
+        "TargetScoring.cs validation: Distance > disengageLimit -> Drop(\"out of range\") (:242)",
+        s0 === A && s1 === 0 && logs.some((l) => /out of range/.test(l)),
+        `literal=${hex(s0)} vt=${hex(s1)} logs=${JSON.stringify(logs)}`
+      );
+    }
+
+    // 7c. An explicit MonsterDisengageRange beyond MonsterRange is used as is;
+    // one at or below it means auto (+3 m); host.nearbyRangeM caps it.
+    {
+      const A = 0x10000045;
+      const keepAt = (d, over, nearby) => {
+        const host = makeHost([at(A, "Drudge", d)]);
+        if (nearby !== undefined) host.nearbyRangeM = nearby;
+        const loop = vtLoop(host, over);
+        loop.locked = A;
+        loop.lastSeenLockedAt = NOW;
+        frozen(NOW + 100);
+        return loop._selectTarget() === A;
+      };
+      const r = {
+        d50at48: keepAt(48, { MonsterDisengageRange: 50 }),
+        d50at51: keepAt(51, { MonsterDisengageRange: 50 }),
+        d30at42: keepAt(42, { MonsterDisengageRange: 30 }),
+        d30at44: keepAt(44, { MonsterDisengageRange: 30 }),
+        cap45at44: keepAt(44, { MonsterDisengageRange: 100 }, 45),
+        cap45at46: keepAt(46, { MonsterDisengageRange: 100 }, 45),
+        cap0at60: keepAt(60, { MonsterDisengageRange: 100 }, 0),
+      };
+      check(
+        "T3: MonsterDisengageRange 50 keeps to 50 m; 30 (≤ MonsterRange) = auto 43 m; capped at host.nearbyRangeM (0 = unlimited)",
+        "TargetScoring.cs DisengageDistance; cells.js nearbyRangeM",
+        r.d50at48 && !r.d50at51 && r.d30at42 && !r.d30at44 && r.cap45at44 && !r.cap45at46 && r.cap0at60,
+        JSON.stringify(r)
+      );
+    }
+
+    // 7d. AttackMinDistance: nothing nearer is acquired; a lock that closes
+    // inside it is left at once (re-lock if anything else qualifies, else drop).
+    {
+      const X = 0x10000046, Y = 0x10000047;
+      const host = makeHost([at(X, "Rat", 3), at(Y, "Rat", 8)]);
+      frozen(NOW);
+      const off = vtLoop(host)._selectTarget();
+      const on = vtLoop(host, { AttackMinDistance: 5 })._selectTarget();
+      const relock = vtLoop(host, { AttackMinDistance: 5 });
+      relock.locked = X;
+      relock.lastSeenLockedAt = NOW;
+      const r1 = relock._selectTarget();
+      const alone = makeHost([at(X, "Rat", 3)]);
+      const drop = vtLoop(alone, { AttackMinDistance: 5 });
+      drop.locked = X;
+      drop.lastSeenLockedAt = NOW;
+      frozen(NOW + 100);
+      const r2 = drop._selectTarget();
+      check(
+        "AttackMinDistance 5: the 3 m rat is never engaged (8 m one is); a lock inside it re-locks / drops at once",
+        "VTank AttackMinimumDistance (webac combatPlan.ts candidates: m.dist < min)",
+        off === X && on === Y && r1 === Y && r2 === 0,
+        `off=${hex(off)} on=${hex(on)} relock=${hex(r1)} alone=${hex(r2)}`
+      );
+    }
+
+    // 7e. TargetLock: the selected monster is locked over a nearer one and
+    // stays locked (no stickiness contest); a new selection moves the lock.
+    {
+      const N = 0x10000048, S = 0x10000049;
+      const host = makeHost([at(N, "Mite", 5), at(S, "Mite", 30)]);
+      host.GetSelectedId = () => host.sel;
+      host.sel = S;
+      frozen(NOW);
+      const off = vtLoop(host)._selectTarget();
+      const loop = vtLoop(host, { TargetLock: true });
+      const first = loop._selectTarget();
+      frozen(NOW + 5000);
+      const later = loop._selectTarget();
+      host.sel = N;
+      const moved = loop._selectTarget();
+      const plain = mkLoop(host); // no layer: the selection is never read
+      const lit = plain._selectTarget();
+      check(
+        "TargetLock: the selected 30 m mob beats a 5 m one and is kept; reselecting moves the lock; off / no layer = nearest",
+        "MOSS CombatTargetSelection (webac combatPlan.ts candidates rule 5)",
+        off === N && first === S && later === S && moved === N && lit === N,
+        `off=${hex(off)} first=${hex(first)} later=${hex(later)} moved=${hex(moved)} literal=${hex(lit)}`
+      );
+    }
+
+    // 7f. TargetLock only takes a VALID candidate: beyond MonsterRange, not
+    // attackable, recently killed, a player, nothing selected → normal pick.
+    {
+      const N = 0x1000004a, S = 0x1000004b;
+      const pick = (sEnt, sel = S, setup) => {
+        const host = makeHost([at(N, "Mite", 5), sEnt]);
+        host.GetSelectedId = () => sel;
+        const loop = vtLoop(host, { TargetLock: true });
+        if (setup) setup(loop, host);
+        frozen(NOW);
+        return loop._selectTarget();
+      };
+      const r = {
+        far: pick(at(S, "Mite", 45)),
+        unattackable: pick({ ...at(S, "Vendor", 20), attackable: false }),
+        killed: pick(at(S, "Mite", 20), S, (loop) => loop.recentlyKilled.set(S, NOW - 1000)),
+        parked: pick(at(S, "Mite", 20), S, (loop) => loop.unreachable.set(S, NOW + 30_000)),
+        none: pick(at(S, "Mite", 20), 0),
+        valid: pick(at(S, "Mite", 20)),
+      };
+      check(
+        "TargetLock: an out-of-range / unattackable / killed / blacklisted selection (or none) falls back to the nearest",
+        "TargetLock = the selection only when it is a candidate",
+        r.far === N && r.unattackable === N && r.killed === N && r.parked === N && r.none === N && r.valid === S,
+        JSON.stringify(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, hex(v)])))
+      );
+    }
+
+    // 7g. Priority first, then the selection: a higher-priority candidate
+    // outranks it; an equal one does not; P -1 (the planner's ignore) is not a
+    // candidate at all.
+    {
+      const N = 0x1000004c, S = 0x1000004d;
+      const run = (verdict) => {
+        const host = makeHost([at(N, "Mite", 5), at(S, "Mite", 30)]);
+        host.GetSelectedId = () => S;
+        const loop = vtLoop(host, { TargetLock: true });
+        loop.vt = { scanVerdict: verdict };
+        frozen(NOW);
+        return loop._selectTarget();
+      };
+      const higher = run((g) => ({ scoreBias: g === N ? 2000 : 1000 }));
+      const equal = run(() => ({ scoreBias: 1000 }));
+      const lower = run((g) => ({ scoreBias: g === N ? 0 : 1000 }));
+      const ignored = run((g) => (g === S ? { ignore: true } : { scoreBias: 1000 }));
+      check(
+        "TargetLock: a P+1 monster outranks the selection; equal / lower priority do not; an ignored (P -1) selection is no candidate",
+        "MOSS CombatTargetSelection: priority, then TargetLock",
+        higher === N && equal === S && lower === S && ignored === N,
+        `higher=${hex(higher)} equal=${hex(equal)} lower=${hex(lower)} ignored=${hex(ignored)}`
+      );
+    }
+
+    // 7h. A one-frame 0 selection read (a rig LOD swap) keeps the selection;
+    // a real deselect falls back to normal selection after SELECTION_HOLD_MS.
+    {
+      const N = 0x1000004e, S = 0x1000004f;
+      const host = makeHost([at(N, "Mite", 5), at(S, "Mite", 30)]);
+      host.sel = S;
+      host.GetSelectedId = () => host.sel;
+      const loop = vtLoop(host, { TargetLock: true });
+      frozen(NOW);
+      const a = loop._selectTarget();
+      host.sel = 0;
+      frozen(NOW + 100);
+      const gap = loop._selectTarget();
+      frozen(NOW + 700);
+      const after = loop._selectTarget();
+      check(
+        "TargetLock: a 0 read 100 ms after the selection keeps it (LOD swap); 600 ms of none = normal pick (nearer one steals)",
+        "webhost.js selectionClock (LOD respawn re-selects the same guid a frame later)",
+        a === S && gap === S && after === N,
+        `a=${hex(a)} gap=${hex(gap)} after=${hex(after)}`
+      );
+    }
+
+    // 7i. netBrain "on" seat: the C# pick drives the lock — except the
+    // player's TargetLock selection, which the C# slice cannot see. The C#
+    // input carries the disengage range and AttackMinDistance (user-never-attack).
+    {
+      const N = 0x8000a050, S = 0x8000a051, Z = 0x8000a052; // > 2^31: the int32 round trip
+      const host = makeHost([at(N, "Mite", 5), at(S, "Mite", 30), at(Z, "Mite", 2)]);
+      host.GetPlayerId = () => 0x50000001;
+      host.GetSelectedId = () => S;
+      let input = null;
+      const brain = {
+        scoreTargets: (inp) => {
+          input = inp;
+          return { SelectedTargetId: N | 0, LockedTargetId: N | 0, Switched: true, TargetLostScanAtMs: -1, Scanned: [{ Id: N | 0, Score: 90 }], Excluded: [] };
+        },
+      };
+      const run = (over) => {
+        const loop = vtLoop(host, over);
+        loop.attachNetBrain(brain, "on", nbModule, { minIntervalMs: 0 });
+        frozen(NOW);
+        loop.tick();
+        return loop.locked;
+      };
+      const free = run({ AttackMinDistance: 3 });
+      const cfg = input && input.Config;
+      const zRow = input && input.Entities.find((e) => (e.Id >>> 0) === Z);
+      const nRow = input && input.Entities.find((e) => (e.Id >>> 0) === N);
+      const locked = run({ AttackMinDistance: 3, TargetLock: true });
+      const plain = mkLoop(host);
+      plain.attachNetBrain(brain, "on", nbModule, { minIntervalMs: 0 });
+      plain.tick();
+      const lit = input && input.Config;
+      check(
+        "netBrain on: C# drives (N) unless TargetLock holds the selection (S); input carries MonsterDisengageRange 43 + UserNeverAttack < AttackMinDistance; 0.0 without the layer",
+        "combat_loop.js _selectTarget on-mode / _nbBuildInput; TargetScoring.cs DisengageDistance / user-never-attack",
+        free === N && locked === S && cfg && cfg.MonsterDisengageRange === 43 && zRow && zRow.UserNeverAttack === true &&
+          nRow && nRow.UserNeverAttack === false && plain.locked === N && lit && lit.MonsterDisengageRange === 0,
+        `free=${hex(free)} locked=${hex(locked)} disengage=${cfg && cfg.MonsterDisengageRange} z=${zRow && zRow.UserNeverAttack} literalDisengage=${lit && lit.MonsterDisengageRange}`
+      );
+    }
+
+    // 7j. The planner's monster-list verdicts reach the C# seat as the JS scan
+    // applies them: ignored (priority −1 / an A-off row with nothing left to
+    // cast) = user-never-attack; the P×1000 bias + the JS legacy priority term
+    // = a per-creature rule keyed by a unique "#vt{guid8}" name tag, ahead of
+    // the name rules. Players and non-creatures are never asked; without a
+    // planner the input is exactly the literal one.
+    {
+      const I = 0x8000a060, P2 = 0x8000a061, P1 = 0x8000a062, Q = 0x8000a063, PLAYER = 0x50000002, CHEST = 0x8000a064;
+      const host = makeHost([
+        at(I, "Drudge", 5), at(P2, "Mite Scion", 10), at(P1, "Mite", 15), at(Q, "Rat", 20),
+        { ...at(CHEST, "Chest", 3), itemType: 512 },
+      ]);
+      host.GetPlayerId = () => 0x50000001;
+      const players = new Set([PLAYER]);
+      host.NearbyGuids = () => [I, P2, P1, Q, PLAYER, CHEST];
+      host.TryGetObjectPosition = (g) => (g === PLAYER ? { objCellId: LB >>> 0, x: 96, y: 100, z: 0 } : host.byId.get(g) ? { objCellId: LB >>> 0, x: host.byId.get(g).x, y: host.byId.get(g).y, z: 0 } : null);
+      host.TryGetObjectName = (g) => (g === PLAYER ? "Someone" : host.byId.get(g)?.name ?? null);
+      host.ObjectIsPlayer = (g) => players.has(g);
+      let input = null;
+      const brain = { scoreTargets: (inp) => ((input = inp), { SelectedTargetId: 0, LockedTargetId: 0, TargetLostScanAtMs: -1, Scanned: [], Excluded: [] }) };
+      const asked = [];
+      const loop = mkLoop(host);
+      loop.priorities = { mite: 3 }; // JS legacy term (3 − 1) × 5 = 10 for both mites
+      loop.vt = {
+        scanVerdict: (g) => {
+          asked.push(g);
+          if (g === I) return { ignore: true };
+          if (g === Q) throw new Error("planner bug");
+          return { scoreBias: g === P2 ? 2000 : 1000 };
+        },
+      };
+      loop.attachNetBrain(brain, "on", nbModule, { minIntervalMs: 0 });
+      frozen(NOW);
+      loop._selectTarget();
+      const row = (g) => input.Entities.find((e) => (e.Id >>> 0) === g);
+      const tag = (g) => `#vt{${(g >>> 0).toString(16).padStart(8, "0")}}`;
+      const rules = input.Config.MonsterRules;
+      const ok =
+        row(I).UserNeverAttack === true && row(I).Name === "Drudge" &&
+        row(P2).Name === `Mite Scion ${tag(P2)}` && row(P2).UserNeverAttack === false &&
+        row(P1).Name === `Mite ${tag(P1)}` && row(Q).Name === `Rat ${tag(Q)}` &&
+        row(PLAYER).Name === "Someone" && row(CHEST).Name === "Chest" &&
+        JSON.stringify(rules) === JSON.stringify([
+          { Name: tag(P2), Priority: 403 }, { Name: tag(P1), Priority: 203 }, { Name: tag(Q), Priority: 1 }, { Name: "mite", Priority: 3 },
+        ]) &&
+        !asked.includes(PLAYER) && !asked.includes(CHEST);
+      check(
+        "netBrain on + the VT planner: ignored = UserNeverAttack; P×1000 + legacy term = a tagged per-creature rule ahead of the name rules",
+        "combat_loop.js _nbBuildInput vs _scanTargets (scanVerdict ignore / scoreBias); TargetScoring.cs ScoreCandidate FirstOrDefault rule",
+        ok,
+        JSON.stringify({ rows: input.Entities.map((e) => [hex(e.Id), e.Name, e.UserNeverAttack]), rules, asked: asked.map(hex) })
+      );
+      // No planner: the literal input (names untagged, the name rules only).
+      const plain = mkLoop(host);
+      plain.priorities = { mite: 3 };
+      plain.attachNetBrain(brain, "on", nbModule, { minIntervalMs: 0 });
+      plain._selectTarget();
+      check(
+        "netBrain on without a planner: the literal input (no tags, name rules only, nothing never-attack)",
+        "no-layer path unchanged",
+        input.Entities.every((e) => !/#vt\{/.test(e.Name) && e.UserNeverAttack === false) &&
+          JSON.stringify(input.Config.MonsterRules) === JSON.stringify([{ Name: "mite", Priority: 3 }]),
+        JSON.stringify(input.Config.MonsterRules)
       );
     }
   } finally {

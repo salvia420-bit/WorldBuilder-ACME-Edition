@@ -445,7 +445,9 @@ export function createVtOptions({ schema = SCHEMA, profiles, cells = null, log, 
     // host.nearbyRangeM = max(base, MonsterRange+5, ApproachRange+5): re-derive
     // once the new value is readable (MonsterRange with no combat loop reads it
     // from the record).
-    if ((row.key === "ApproachRange" || row.key === "MonsterRange") && boundCells) boundCells.refreshDerived?.(ctx());
+    if ((row.key === "ApproachRange" || row.key === "MonsterRange" || row.key === "MonsterDisengageRange") && boundCells) {
+      boundCells.refreshDerived?.(ctx());
+    }
     const shown = fmtValue(present(row, v, { viaVt }));
     const inert = row.consumer === "inert";
     const echo = `[RynthSuite] Set option ${String(name).trim()} = ${shown}${inert ? " (not implemented on web)" : ""}`;

@@ -335,15 +335,17 @@ await check("(c) a new shared profile: Settings by VTank name (×240 lbf), clamp
   assert.ok(Math.abs(options.get("AttackDistance", { vtUnits: true }).value - 1 / 12) < 1e-9, "reads back in VTank units");
   assert.equal(options.getValue("OpenDoorRange"), 6, "DoorOpenRange 0.025 × 240");
   assert.equal(options.getValue("HealAt"), 70);
-  assert.equal(options.getValue("BuffProfileBanes"), "Banes1");
+  // "Banes1" is no bane profile (VTank's enum, All/None or ALFCBPS letters): reported, not imported
+  assert.equal(options.getValue("BuffProfileBanes"), "ALFCBPS", "left at its default");
   assert.equal(options.getValue("AttackHeight"), 3);
-  assert.equal(options.getValue("NavFarStopDistance"), 1000, "999999 landblocks clamp to the row max");
-  for (const k of ["EnableCombat", "MonsterRange", "OpenDoorRange", "HealAt", "BuffProfileBanes", "AttackHeight", "NavFarStopDistance", "monsters"]) {
+  assert.equal(options.getValue("NavFarStopDistance"), 100000, "999999 landblocks (VTank's 'off') clamp to the 100 km row max");
+  assert.equal(r.applied.includes("BuffProfileBanes"), false);
+  for (const k of ["EnableCombat", "MonsterRange", "OpenDoorRange", "HealAt", "AttackHeight", "NavFarStopDistance", "monsters"]) {
     assert.ok(r.applied.includes(k), `applied ${k}`);
   }
   assert.deepEqual(r.unknown, ["NotARealOption"]);
   const w = r.warnings.join("\n");
-  assert.match(w, /NavFarStopRange 999999: outside the web range — NavFarStopDistance = 1000/);
+  assert.match(w, /NavFarStopRange 999999: outside the web range — NavFarStopDistance = 100000/);
   assert.match(w, /1 setting\(s\) not known here, not imported: NotARealOption/);
   assert.match(w, /table-valued setting\(s\) not imported: RechargeHandlerSet/);
   assert.match(w, /Items tab: 2 object id\(s\) not imported/);
@@ -380,6 +382,22 @@ await check("(c) mineOnly ⇒ a [Char] profile; a path/.usd name is stripped; a 
   assert.equal(profiles.active().kind, "char");
   assert.ok(storage.getItem(`${charPrefix("1342177281")}Melee-1`), "stored under the character's prefix");
   assert.equal(options.getValue("MonsterRange"), 20);
+});
+
+await check("(c) the bane profile: BuffProfile_Banes (VTank's enum) wins over a BuffProfile-Banes letters row unless it says Custom (1), in any file order", () => {
+  const base = parseUsd(fixture());
+  const withBanes = (rows) => ({ ...base, settings: [...base.settings.filter((x) => !/^buffprofile[_-]banes$/i.test(x.vtName)), ...rows] });
+  const imp = (name, rows) => {
+    const { options } = mkOptions();
+    const r = importUsdProfile(options, name, withBanes(rows), { normalizeMonster: normalizeEntry });
+    assert.equal(r.ok, true, r.error);
+    return options.getValue("BuffProfileBanes");
+  };
+  const letters = { vtName: "BuffProfile-Banes", t: "s", value: "ALFCBPS", type: 5 };
+  assert.equal(imp("BanesA", [{ vtName: "BuffProfile_Banes", t: "i", value: 4, type: 1 }, letters]), "B", "enum 4 (B) with stale letters after it");
+  assert.equal(imp("BanesB", [letters, { vtName: "BuffProfile_Banes", t: "i", value: 5, type: 1 }]), "BPS", "letters first, enum 5 (BPS) after");
+  assert.equal(imp("BanesC", [{ vtName: "BuffProfile_Banes", t: "i", value: 1, type: 1 }, { ...letters, value: "SA" }]), "AS", "Custom: the letters");
+  assert.equal(imp("BanesD", [{ ...letters, value: "lfc" }]), "LFC", "letters alone");
 });
 
 await check("(c) malformed MyMonsters cells fall back to the validator's defaults (no throw, no bad types)", () => {

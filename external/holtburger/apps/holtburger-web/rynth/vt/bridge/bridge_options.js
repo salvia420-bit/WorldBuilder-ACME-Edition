@@ -167,29 +167,42 @@ export const SUBSYSTEM_KEYS = Object.freeze({
   meta: "EnableMeta",
 });
 
-/** Main tab: ranges, behaviour switches and pets (G:14-42 minus the subsystems). */
+/** Main tab: ranges, behaviour switches and pets (G:14-42 minus the subsystems;
+ *  2026-10-19: + the attack minimum / disengage ranges, Target lock and Start
+ *  on login, made live that day). */
 export const MAIN_LAYOUT = Object.freeze({
-  ranges: Object.freeze(["MonsterRange", "RingRange", "ApproachRange", "FollowNavMin"]),
+  ranges: Object.freeze(["MonsterRange", "RingRange", "ApproachRange", "FollowNavMin", "AttackMinDistance", "MonsterDisengageRange"]),
   behaviour: Object.freeze([
     "BoostNavPriority", "BoostLootPriority", "PeaceModeWhenIdle", "RebuffWhenIdle", "EnableAutostack", "EnableAutocram",
-    "UseDispelItems", "CastDispelSelf", "AutoFellowMgmt", "ManaChargesWhenOff",
+    "UseDispelItems", "CastDispelSelf", "AutoFellowMgmt", "ManaChargesWhenOff", "TargetLock", "StartMacroOnLogin",
   ]),
   pets: Object.freeze(["SummonPets", "CustomPetRangeEnabled", "CustomPetRange", "PetMinMonsters"]),
 });
 
 /** Main tab: the vitals matrix (G:60-66) — top-off and in-combat levels per
- *  vital, plus the emergency Stamina→Health rule and the Stamina→Mana floor
- *  (rynth/vitals.js B15/B16). */
+ *  vital, the "others" levels and distances VTank's helper heals fellows at
+ *  (2026-10-19) with its switches, plus the emergency Stamina→Health rule and
+ *  the Stamina→Mana floor (rynth/vitals.js B15/B16). */
 export const VITALS_KEYS = Object.freeze({
   topOff: Object.freeze({ hp: "TopOffHP", st: "TopOffStam", mn: "TopOffMana" }),
   combat: Object.freeze({ hp: "HealAt", st: "RestamAt", mn: "GetManaAt" }),
+  others: Object.freeze({ hp: "HealOthersAt", st: "RestamOthersAt", mn: "InfuseOthersAt" }),
+  othersRange: Object.freeze({ hp: "HelperHealDistance", st: "HelperRestamDistance", mn: "HelperInfuseDistance" }),
+  helpers: Object.freeze(["DoHelp", "UseHealersHeart", "JumpOutWandCasting"]),
   emergencyHp: "EmergencyHP",
   emergencyStamFloor: "EmergencyStamFloor",
   manaRechargeStamFloor: "ManaRechargeStamFloor",
 });
 
 export const BUFFS_TAB_KEYS = Object.freeze(["RebuffSecondsRemaining", "BuffTierSkillCap"]);
-export const LOOT_TAB_KEYS = Object.freeze(["LootMinValue", "CorpseApproachRangeMax"]);
+/** Drawn by the Buffs tab's item-buff matrix (its "Worn armor" row), not as rows. */
+const BUFFS_MATRIX_KEYS = Object.freeze(["BuffArmorImpen", "BuffProfileBanes"]);
+/** Loot tab knobs: the value floor and corpse ranges, whose corpses (VTank's
+ *  ownership rule), and what happens after a corpse (2026-10-19). */
+export const LOOT_TAB_KEYS = Object.freeze([
+  "LootMinValue", "CorpseApproachRangeMax", "CorpseApproachRangeMin",
+  "LootFellowCorpses", "LootAllCorpses", "LootOnlyRareCorpses", "ReadUnknownScrolls", "CombineSalvage",
+]);
 /** Never drawn: Show Editor has no function (deprecated in VTank too, G:58). */
 const HIDDEN_KEYS = Object.freeze(["ShowEditor"]);
 
@@ -201,13 +214,16 @@ home(Object.values(SUBSYSTEM_KEYS), "bar");
 home([...MAIN_LAYOUT.ranges, ...MAIN_LAYOUT.behaviour, ...MAIN_LAYOUT.pets], "main");
 home([
   ...Object.values(VITALS_KEYS.topOff), ...Object.values(VITALS_KEYS.combat),
+  ...Object.values(VITALS_KEYS.others), ...Object.values(VITALS_KEYS.othersRange), ...VITALS_KEYS.helpers,
   VITALS_KEYS.emergencyHp, VITALS_KEYS.emergencyStamFloor, VITALS_KEYS.manaRechargeStamFloor,
 ], "main");
 home(BUFFS_TAB_KEYS, "buffs");
+home(BUFFS_MATRIX_KEYS, "buffs");
 home(LOOT_TAB_KEYS, "loot");
+home(["ShowTerrainPassability"], "route"); // the Route tab's "Steep" switch
 home(HIDDEN_KEYS, "hidden");
 
-/** Where the panel shows a setting: "bar" | "main" | "buffs" | "loot" | "hidden" | "advanced". */
+/** Where the panel shows a setting: "bar" | "main" | "buffs" | "loot" | "route" | "hidden" | "advanced". */
 export function settingHome(key) {
   return HOME.get(String(key)) || "advanced";
 }
@@ -306,6 +322,9 @@ export function mainTabView(options, live = null) {
     vitals: {
       topOff: trio(VITALS_KEYS.topOff),
       combat: trio(VITALS_KEYS.combat),
+      others: trio(VITALS_KEYS.others),
+      othersRange: trio(VITALS_KEYS.othersRange),
+      helpers: pick(VITALS_KEYS.helpers),
       emergencyHp: byKey.get(VITALS_KEYS.emergencyHp) || null,
       emergencyStamFloor: byKey.get(VITALS_KEYS.emergencyStamFloor) || null,
       manaRechargeStamFloor: byKey.get(VITALS_KEYS.manaRechargeStamFloor) || null,

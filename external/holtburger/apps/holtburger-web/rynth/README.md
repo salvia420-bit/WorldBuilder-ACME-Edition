@@ -77,7 +77,7 @@ both through `boot.js`.
 | `boot.js` | The `?bot=1` auto-boot (URL → createGrindBot config, operator-stop latch, takeover rebind with live-settings carry-over) as one function the HUD's START shares. | 2026-10-12 |
 | `hud_bridge.js` | The only file that knows the bot API for the HUD: a pure view-model snapshot + the HUD's commands. | 2026-10-12 |
 | `../plugins/rynth-hud.js` | **The RynthSuite HUD** — see below. | RynthAi dashboard |
-| `vt/` | **The VTank layer** (2026-10-13): settings profiles, the VTank monster list + expressions, items, consumables, buffs, routes, metas, loot profiles and the `/rs` `/vt` `/ra` `/mt` `/ub` commands, added to the kernel as optional `aux` slots and loop hooks that are inert at the Default profile. `?botVt=off` boots without it. See `vt/README.md`. | PLAN (`/mnt/wbterminal1/rynth-vtank-2026-10-12/design/PLAN.md`) |
+| `vt/` | **The VTank layer** (2026-10-13): settings profiles, the VTank monster list + expressions, items, consumables, buffs, routes, metas, loot profiles and the `/rs` `/vt` `/ra` `/mt` `/ub` commands, added to the kernel as optional `aux` slots and loop hooks that are inert at the Default profile — except the former "Not on web" options made live on 2026-10-19 (fellow healing, worn-armor banes, VTank's corpse rule, scroll reading, Ust salvage, ammo refill, follow corners, the frame cap, the steep-ground tint), which take VTank's / RynthAi's defaults by the owner's decision. `?botVt=off` boots without it. See `vt/README.md`. | PLAN (`/mnt/wbterminal1/rynth-vtank-2026-10-12/design/PLAN.md`) |
 | `../plugins/rynth-vt/` | The VTank panel (command bar + 8 tabs; opened by the HUD's **VT** button or `/rs ui`), loaded lazily. | VTank / RynthAi windows |
 
 ## The RynthSuite HUD (2026-10-12)

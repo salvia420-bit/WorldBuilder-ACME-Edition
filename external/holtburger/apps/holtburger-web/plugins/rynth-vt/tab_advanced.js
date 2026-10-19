@@ -3,9 +3,11 @@
 // 2026-10-19).
 //
 // Lists every option no other tab shows (Buffing tiers, Combat, Navigation,
-// Mana, Consumables, Pets refill …) as typed editors, grouped; the options
-// that do nothing on the web ("Not on web", D19) are folded away below and
-// still round-trip through /rs opt and metas. The filter searches EVERY
+// Mana, Consumables, Pets refill, Crafting, Display …) as typed editors,
+// grouped; an option that does nothing on the web (D19 — since 2026-10-19
+// only Show Editor, which VTank deprecated too, and only a search shows it)
+// is folded away below and still round-trips through /rs opt and metas.
+// The filter searches EVERY
 // option — including the ones on Main, Buffs, Loot and the command bar — and
 // says where each match normally lives, so a VTank name typed from memory
 // always finds its setting. v1 made this a sub-view of Options (two clicks)
@@ -13,7 +15,7 @@
 
 import { el, btn, setText, shouldRebuild, optionEditor, textInput, numInput, bindRow, ROMAN } from "./widgets.js";
 
-const HOME_TEXT = Object.freeze({ bar: "command bar", main: "Main tab", buffs: "Buffs tab", loot: "Loot tab", hidden: "not shown" });
+const HOME_TEXT = Object.freeze({ bar: "command bar", main: "Main tab", buffs: "Buffs tab", loot: "Loot tab", route: "Route tab", hidden: "not shown" });
 // The eight "Min skill for … tier N" rows of a family (buff tiers, war spell
 // tiers) draw as ONE strip of eight fields under I … VIII.
 const TIER_RE = /^(Buff)?MinSkillLevelTier([1-8])$/;

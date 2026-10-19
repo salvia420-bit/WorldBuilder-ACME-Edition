@@ -87,7 +87,9 @@ export const VT_LAYER_VERSION = 1;
 export const POST_TICK_DIVIDER = 5;
 const ONE_HZ_MS = 1000;
 const CAT_SYSTEM = 0;
-const VT_RANK_ORDER = ["Supplies", "JumpNow", "Pets", "Doors", "Navigate", "BuffItems", "IdleRebuff"];
+const VT_RANK_ORDER = [
+  "Supplies", "Helpers", "Ammo", "JumpNow", "Pets", "ReadScrolls", "Salvage", "Doors", "Navigate", "BuffItems", "IdleRebuff",
+];
 
 const errText = (e) => String(e && e.message ? e.message : e);
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
@@ -389,6 +391,40 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
         safe(() => combat.invalidateScan?.());
       });
     }
+    // (7c) The options the loops read themselves (made live 2026-10-19:
+    // TargetLock, AttackMinDistance, MonsterDisengageRange,
+    // TargetNoProgressTimeoutSec and DoJiggle in combat; LootFellowCorpses,
+    // LootAllCorpses, LootOnlyRareCorpses, CorpseApproachRangeMin and
+    // ReadUnknownScrolls in loot — CombineSalvage is support/salvage.js's;
+    // BuffArmorImpen / BuffProfileBanes in buff) come through ONE injected
+    // reader, `loop.optFn(key)`. Without the layer (?botVt=off) the field is
+    // absent and every loop keeps its literal path. Re-bound at 1 Hz for a
+    // loop the bot rebuilt (bot.setBuffs).
+    const optFn = (key) => options.getValue(key);
+    const optLoops = new Set();
+    function bindLoopOpts() {
+      for (const loop of [bot.combat, bot.loot, bot.buff]) {
+        if (!loop || typeof loop !== "object" || loop.optFn === optFn) continue;
+        loop.optFn = optFn;
+        optLoops.add(loop);
+      }
+    }
+    function unbindLoopOpts() {
+      for (const loop of optLoops) if (loop.optFn === optFn) loop.optFn = null;
+      optLoops.clear();
+    }
+    bindLoopOpts();
+    undo.push(() => unbindLoopOpts());
+    layer.optFn = optFn;
+    // (7d) DoJiggle strafes only while no other mover owns the body (the
+    // router, a goto, loot's approach, a jump — bot.movementClaimed).
+    const movementClaimedFn = () => safe(() => bot.movementClaimed?.() === true, true) === true;
+    if (combat) {
+      combat.movementClaimedFn = movementClaimedFn;
+      undo.push(() => {
+        if (combat.movementClaimedFn === movementClaimedFn) combat.movementClaimedFn = null;
+      });
+    }
     function refreshPlanner() {
       if (!combat || disposed) return;
       // Stay attached while a SwitchWandsToDebuff swap still owes the weapon
@@ -542,9 +578,27 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       monsterPetDmg: (g) => safe(() => monsters.resolve(Number(g) >>> 0, { seq: host.snap?.seq, now: clock() }).entry.petDmg, "PAuto"),
       doorsRank: () => nav.slot.rank(),
       navWants: (ctx) => nav.slot.enabled() === true && nav.slot.wants(ctx) === true,
+      // a Healer's Heart swap still owing the weapons back survives a rebind
+      helpersState: (session.ext.helpersState ||= {}),
+      // local chat alerts (a weapon the helper could not hand back)
+      print: (text, category) => printOut(text, category),
+      // the bound .utl's SalvageCombine bands (Salvage's CombineSalvage)
+      lootProfile: () => (session.ext.lootProfile && session.ext.lootProfile.profile) || null,
     });
     Object.assign(layer, { support, consumables: support.consumables });
     undo.push(() => support.dispose());
+    // A Healer's Heart in the wand slot between two fellow heals is the
+    // helper's: the planner's loadout — and combat itself, planner attached or
+    // not (no mode / war-spell stand-down, no swap) — leaves it alone until it
+    // is handed back.
+    const loadoutHeldFn = () => safe(() => support.helpers.holdsWandSlot() === true, false) === true;
+    planner.wandSlotHeld = loadoutHeldFn;
+    if (combat) {
+      combat.loadoutHeldFn = loadoutHeldFn;
+      undo.push(() => {
+        if (combat.loadoutHeldFn === loadoutHeldFn) combat.loadoutHeldFn = null;
+      });
+    }
 
     // (11a) Buff items preempt the route — D39 extended to the Consumables
     // BuffItem (G:174/G:181; V-23; review guide-1/wiring-1). Navigate wants
@@ -556,11 +610,17 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     // portal, jump) is never preempted. Doors reads nav.slot.wants too, so it
     // steps aside the same way. Nothing changes while no BuffItem is due.
     const navWantsOwn = nav.slot.wants;
+    // The same for the post-corpse work (2026-10-19): a scroll to read or an
+    // item to salvage with the Ust waits beforeIdle, so under Boost Nav the
+    // route would starve it until it ended (the pack filling meanwhile).
+    const stepsAsideFor = [support.buffItems.slot, support.scrolls.slot, support.salvage.slot];
     nav.slot.wants = (ctx) => {
       if (navWantsOwn(ctx) !== true) return false;
       if (safe(() => nav.slot.pinned() === true, false) === true) return true;
-      const items = support.buffItems.slot;
-      return !(safe(() => items.enabled() === true && items.wants(ctx) === true, false) === true);
+      for (const other of stepsAsideFor) {
+        if (safe(() => other.enabled() === true && other.wants(ctx) === true, false) === true) return false;
+      }
+      return true;
     };
 
     // ── the library: meta + loot files for CMD and the UI (critic C2) ───────
@@ -925,8 +985,12 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     // ── (11) kernel aux slots (§3.13 order) + the boost-loot policy ─────────
     const ourSlots = [
       support.supplies.slot,
+      support.helpers.slot,
+      support.ammo.slot,
       nav.jumpSlot,
       support.pets.slot,
+      support.scrolls.slot,
+      support.salvage.slot,
       support.doors.slot,
       nav.slot,
       support.buffItems.slot,
@@ -1015,6 +1079,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     function oneHz(t) {
       safe(() => ledger.prune());
       safe(() => options.syncCells());
+      safe(() => bindLoopOpts());
       migrateBuffList();
       // A new buff loop (bot.setBuffs built one) or a newly loaded spell table
       // or a changed spellbook re-projects the item buffs.
@@ -1076,6 +1141,9 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
         } catch (e) {
           say(`command pump failed: ${errText(e)}`);
         }
+        // FollowAroundCorners: keep recording a Follow leader's path while a
+        // fight (or anything else) holds the tick. Reads only.
+        safe(() => nav.watchLeader(t));
       }
       safe(() => quests.tick(t));
       safe(() => options.autosaveTick(t));
@@ -1099,7 +1167,11 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       if (postN !== 0) return;
       const t = finite(nowArg) ? nowArg : clock();
       const k = bot.kernel || null;
-      if (safe(() => k?.operatorHeld === true, false) === true) return;
+      const held = safe(() => k?.operatorHeld === true, false) === true;
+      // The helper's fellow-vitals hold is released on STOP too, so it ticks
+      // before the held return.
+      safe(() => support.helpers.reflex.tick(t, { held, kernelAction: k ? k.action : "Idle", running: safe(() => k?.running === true, false) === true }));
+      if (held) return;
       const info = { held: false, kernelAction: k ? k.action : "Idle", running: safe(() => k?.running === true, false) === true };
       try {
         const invOn = safe(() => support.inventory.reflex.enabled() === true, false) === true;
@@ -1154,9 +1226,12 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       if (combat) {
         if (combat.vt === planner) combat.vt = null;
         if (combat.acquireRangeFn === acquireFn) combat.acquireRangeFn = null;
+        if (combat.movementClaimedFn === movementClaimedFn) combat.movementClaimedFn = null;
+        if (combat.loadoutHeldFn === loadoutHeldFn) combat.loadoutHeldFn = null;
         safe(() => combat.invalidateScan?.());
       }
       if (bot.loot && lootBinding.classify && bot.loot.classify === lootBinding.classify) bot.loot.classify = null;
+      unbindLoopOpts();
       if (ib.wrote && bot.buff && typeof bot.buff.setItemBuffs === "function") safe(() => bot.buff.setItemBuffs([]));
       clearSkillCap();
       safe(() => removeAux());

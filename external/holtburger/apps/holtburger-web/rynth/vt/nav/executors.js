@@ -365,6 +365,29 @@ function objectAnchor(point) {
   return pointWorld(point);
 }
 
+/**
+ * Where a waypoint walks the player to (world frame), or null for one that
+ * runs in place: Point, Portal and Open Vendor at their own position;
+ * Portal/NPC and NPC Talk at their object's recorded position (objectAnchor —
+ * their own coordinates are often stale in real files, e.g. MatronHive.nav's
+ * Baishi Portal point sits on the route's starting spot); Recall, Pause,
+ * Chat, Checkpoint, Jump and the 0,0 sentinel → null. ActiveNav's
+ * NavFarStopDistance measures the route against it.
+ */
+export function walkTargetWorld(point) {
+  switch (point && point.type) {
+    case POINT.Point:
+    case POINT.PortalLegacy:
+    case POINT.OpenVendor:
+      return pointWorld(point);
+    case POINT.PortalNPC:
+    case POINT.NpcTalk:
+      return objectAnchor(point);
+    default:
+      return null;
+  }
+}
+
 const sameName = (a, b) => typeof a === "string" && typeof b === "string" && a.trim().toLowerCase() === b.trim().toLowerCase() && a.trim() !== "";
 
 // ── executors ─────────────────────────────────────────────────────────────
@@ -1107,4 +1130,4 @@ export function makeExecutor(point, ctx) {
   }
 }
 
-export default { makeExecutor, NAV_TUNING, BUDGET_ANCHORS, CAST_OWNER, ITEM_OWNER, legTimeoutMs, pointLeg, bearingDeg, posWorld, runJob, jumpArgs };
+export default { makeExecutor, NAV_TUNING, BUDGET_ANCHORS, CAST_OWNER, ITEM_OWNER, legTimeoutMs, pointLeg, bearingDeg, posWorld, runJob, jumpArgs, walkTargetWorld };

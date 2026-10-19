@@ -268,6 +268,13 @@ const CAPABILITY_CANDIDATES = {
   GetLastTellerName: ["lastTellerName"],
   // Retail TurnToObject (rate-limited face-target; no heading math).
   TurnToObject: ["turnToEntity"],
+
+  // ── 2026-10-19 VTank options made live (additive) ─────────────────
+  // The Ust (Salvage / CombineSalvage), and the ammo-slot wield paths the
+  // inventory panel already drives (missile-ammo refill).
+  CreateTinkeringTool: ["createTinkeringTool"],
+  SetWielded: ["setWielded"],
+  SplitStackToWield: ["splitStackToWield"],
 };
 
 /**
@@ -406,6 +413,13 @@ function installEventTap(host) {
 // windup fix; level-8 Incantations ~7 s), letting a second module's cast land
 // inside the first one's still-open window.
 const CAST_TOKEN_TIMEOUT_MS = 12_000;
+// A cast refusal (kind 13) is dispatched after ACE's UseDone moved the count
+// on, so the claim it belongs to has usually cleared already (or its owner
+// released it early): castOwner() still names a cleared claim's owner while
+// the claim is younger than this — a windup and its refusal (2026-10-19:
+// combat took the helper's refusals as its own after a release, and a vitals
+// claim that was never released kept naming vitals for good).
+const CAST_OWNER_WINDOW_MS = 6000;
 
 // Page net-pump staleness (magic slice B1): see RynthWebHost._pumpIfStale.
 // Narrowed 2026-10-12 (review #16): a HIDDEN page (rAF stopped) is pumped
@@ -609,6 +623,10 @@ function normalizeSpellRecord(r, id) {
     roughLevel: finiteOr(r.roughLevel, 0),
     baseRangeConstant: finiteOr(r.baseRangeConstant, 0),
     baseRangeMod: finiteOr(r.baseRangeMod, 0),
+    // the spell's difficulty ("power": 1, 50, 100 … 400 for an Incantation;
+    // debuffs sit 25 above their tier) — VTank's SpellDiffExcessThreshold
+    // and the ReadUnknownScrolls skill check read it (2026-10-19).
+    power: finiteOr(r.power, 0),
   });
 }
 
@@ -626,6 +644,7 @@ export class RynthWebHost {
     this._worker = null;
     this._workerUrl = null;
     this._castToken = null; // { owner, issuedAt, useDoneAtIssue } — 02 C3 shared serializer
+    this._lastCast = null; // { owner, issuedAt } of the last cleared claim — castOwner()
     this._confirms = []; // retained server confirmation dialogs (TryGetPendingConfirmations)
     // Join the push-event tap: the page's dispatchClientEvent forwards each
     // drained ClientEvent here (app/client_events.js). Events are the PUSH
@@ -694,6 +713,7 @@ export class RynthWebHost {
     // Per-session state: a cast claim or a dialog from the previous session
     // can never resolve on the new one.
     this._castToken = null;
+    this._lastCast = null;
     this._confirms = [];
     // VTank seam per-session state (W1-8): an item claim, the per-seq
     // inventory memo, the enchantment receipt book and the appraisal rate
@@ -705,6 +725,10 @@ export class RynthWebHost {
     this._roomMemo = null;
     this._enchReceived = new Map();
     this._creatureIdAt = new Map();
+    // A fellow-vitals hold that outlived the old session (the helper, or an
+    // open fellowship panel — one shared count) asks the new one again: ACE's
+    // FellowshipPanelOpen flag is per session.
+    if ((Number(globalThis.__hbFellowUpdateRefs) || 0) > 0) this.FellowshipRequestUpdates(true);
     return this;
   }
 
@@ -760,14 +784,18 @@ export class RynthWebHost {
     const t = this._castToken;
     if (!t) return false;
     if (this.has("GetUseDoneSeq") && this.GetUseDoneSeq() !== t.useDoneAtIssue) {
-      this._castToken = null;
+      this._noteCastCleared(t);
       return false;
     }
     if (Date.now() - t.issuedAt > CAST_TOKEN_TIMEOUT_MS) {
-      this._castToken = null;
+      this._noteCastCleared(t);
       return false;
     }
     return true;
+  }
+  _noteCastCleared(t) {
+    this._castToken = null;
+    this._lastCast = { owner: t.owner, issuedAt: t.issuedAt };
   }
   /** Claim the shared cast token. Call immediately before issuing a cast.
    *  Returns true if the caller may cast now — the token was free, or
@@ -776,6 +804,7 @@ export class RynthWebHost {
    *  an unresolved claim; the caller must skip casting this tick. */
   tryClaimCast(owner) {
     if (this._castTokenLive()) return this._castToken.owner === owner;
+    this._lastCast = null; // a new cast owns whatever is refused next
     this._castToken = {
       owner,
       issuedAt: Date.now(),
@@ -788,11 +817,23 @@ export class RynthWebHost {
    *  UseDoneSeq/the timeout would have cleared it. No-op if a different
    *  owner holds it (or nothing does). */
   releaseCast(owner) {
-    if (this._castToken && this._castToken.owner === owner) this._castToken = null;
+    if (this._castToken && this._castToken.owner === owner) this._noteCastCleared(this._castToken);
   }
-  /** Read-only status snapshot for diagnostics (`__diag`-style callers). */
+  /** Read-only status snapshot for diagnostics (`__diag`-style callers) — a
+   *  RAW read: a claim lingers until the next tryClaimCast. Refusal
+   *  attribution reads castOwner(). */
   get castToken() {
     return this._castToken ? { ...this._castToken } : null;
+  }
+  /** Who a cast refusal arriving now belongs to: the live claim's owner, else
+   *  the owner of the last claim while it is younger than CAST_OWNER_WINDOW_MS
+   *  (cleared by its UseDone or released early — the refusal still comes);
+   *  null when nobody cast lately. Refusal handlers (combat, vitals, the
+   *  planner, the helper, ammo) drop a refusal whose owner isn't theirs. */
+  castOwner(now = Date.now()) {
+    if (this._castTokenLive()) return this._castToken.owner;
+    const last = this._lastCast;
+    return last && now - last.issuedAt <= CAST_OWNER_WINDOW_MS ? last.owner : null;
   }
 
   // ── capability probes (the RynthCoreHost Has* plane) ───────────────
@@ -1199,6 +1240,14 @@ export class RynthWebHost {
           maxHealth: Number(m.maxHealth ?? 0),
           stamina: Number(m.currentStamina ?? m.stamina ?? 0),
           mana: Number(m.currentMana ?? m.mana ?? 0),
+          // the helper's percentages need the maxima too (2026-10-19); the
+          // vitals only flow while someone asked for them
+          // (FellowshipRequestUpdates — ACE Fellowship.cs FellowshipPanelOpen).
+          maxStamina: Number(m.maxStamina ?? 0),
+          maxMana: Number(m.maxMana ?? 0),
+          // ACE's FullUpdate writes a constant here (GameEventFellowshipFullUpdate
+          // "TODO: shareLoot"): a hint, never the loot permission itself.
+          shareLoot: !!m.shareLoot,
           sharePercent: Number(m.sharePercent ?? 0),
         });
       }
@@ -1314,6 +1363,11 @@ export class RynthWebHost {
           // never projected, so both were dead on live data (2026-10-12).
           attuned: Number(it.attuned ?? 0) | 0,
           bonded: Number(it.bonded ?? 0) | 0,
+          // PropertyInt AmmoType (50): a launcher's and its ammo's must match
+          // exactly (ACE Player_Inventory.cs) — the missile-ammo refill reads
+          // it; weaponSkill tells a bow from a crossbow (2026-10-19).
+          ammoType: Number(it.ammoType ?? 0) >>> 0,
+          weaponSkill: Number(it.weaponSkill ?? 0) >>> 0,
         });
       } catch (_) {
         /* one bad row must not drop the snapshot */
@@ -2433,6 +2487,39 @@ export class RynthWebHost {
   }
   FellowshipRequestUpdates(want) {
     return this._act("FellowshipUpdateRequest", !!want);
+  }
+  /// Hold (on=true) / release the fellow-vitals stream: ACE sends fellows'
+  /// vitals only while the player said its fellowship panel is open
+  /// (Fellowship.cs FellowshipPanelOpen). The page's fellowship panel and the
+  /// bot's helper share ONE count (globalThis.__hbFellowUpdateRefs,
+  /// plugins/fellowship-panel.js), so closing the panel never stops the
+  /// helper's updates. → the new hold count.
+  FellowshipHoldUpdates(on) {
+    const g = globalThis;
+    const before = Math.max(0, Number(g.__hbFellowUpdateRefs) || 0);
+    const after = Math.max(0, before + (on ? 1 : -1));
+    g.__hbFellowUpdateRefs = after;
+    if (before === 0 && after > 0) this.FellowshipRequestUpdates(true);
+    else if (before > 0 && after === 0) this.FellowshipRequestUpdates(false);
+    return after;
+  }
+  /// GameActionCreateTinkeringTool (0x027D) — retail's "Salvage" button: the
+  /// Ust (wcid 20646) salvages `itemGuids` into bags, and bags given with it
+  /// are merged per material (ACE Player_Crafting.cs HandleSalvaging). The
+  /// verdict lands as a SalvageOperationsResult (ClientEvent kind 52).
+  CreateTinkeringTool(toolGuid, itemGuids) {
+    const ids = Uint32Array.from((itemGuids || []).map((g) => Number(g) >>> 0).filter(Boolean));
+    if (!ids.length) return false;
+    return this._act("CreateTinkeringTool", Number(toolGuid) >>> 0, ids);
+  }
+  /// Wield `itemGuid` into `slot` (an EquipMask bit, e.g. 0x00800000 Ammo)
+  /// — the inventory panel's drag-to-paperdoll path (plugins/item_drag.js).
+  SetWielded(itemGuid, slot) {
+    return this._act("SetWielded", Number(itemGuid) >>> 0, Number(slot) >>> 0);
+  }
+  /// Split `amount` off a stack straight into a wield slot (ammo).
+  SplitStackToWield(stackGuid, slot, amount) {
+    return this._act("SplitStackToWield", Number(stackGuid) >>> 0, Number(slot) >>> 0, Math.max(1, amount | 0));
   }
   /**
    * Plain fellowship view {name, leaderGuid, open, isLocked, evenShare,

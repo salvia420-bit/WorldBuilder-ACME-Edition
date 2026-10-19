@@ -985,6 +985,181 @@ await check("CreatureProfiles: appraisal → maxHp/resists/weakest; species; LRU
   assert.equal(b.maxHp(9), 5, "quota keeps the in-memory copy");
 });
 
+await check("WarSpellMode vtank: SpellDiffExcessThresholdHunt — the highest rung whose power + threshold ≤ the buffed skill (skill 400)", () => {
+  const w = makeWorld({ opts: { WarSpellMode: "vtank" } });
+  const pick = (t) => {
+    if (t !== undefined) w.values.SpellDiffExcessThresholdHunt = t;
+    w.tick();
+    const p = w.planner.nextCast(DRUDGE, { mode: 8, now: NOW });
+    return p && p.spellId;
+  };
+  assert.equal(pick(undefined), 2128, "unset ⇒ the default 25: power ≤ 375 ⇒ Ilservian's Flame (300), not the Incantation (400)");
+  assert.equal(pick(25), 2128);
+  assert.equal(pick(0), 4439, "0: 400 + 0 ≤ 400 ⇒ Incantation of Flame Bolt");
+  assert.equal(pick(-50), 4439, "a negative threshold lowers the skill needed");
+  assert.equal(pick(101), 85, "power ≤ 299 ⇒ Flame Bolt VI (250)");
+  assert.equal(pick(350), 81, "power ≤ 50 ⇒ Flame Bolt II");
+  assert.equal(pick(399), 27, "power ≤ 1 ⇒ Flame Bolt I");
+  assert.equal(pick(400), null, "nothing castable ⇒ null (the legacy war pick decides)");
+  // legacy mode ignores the threshold (MinSkillLevelTier: 400 < 435 ⇒ L7)
+  w.values.WarSpellMode = "legacy";
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, S: true }]);
+  assert.equal(pick(-500), 2129, "legacy: Sizzling Fury (L7) whatever the threshold");
+});
+
+await check("SpellDiffExcessThresholdHunt gates by the spell's OWN school (debuffs too); untrained ⇒ nothing; unreadable skills ⇒ no cap", () => {
+  const w = makeWorld({ entries: [E("Drudge Skulker", { I: true, damageType: "Fire" })], opts: { WarSpellMode: "vtank" } });
+  let skills = { 31: { current: 400, training: 3 }, 33: { current: 400, training: 3 }, 34: { current: 300, training: 3 }, 43: { current: 400, training: 3 } };
+  w.host.TryGetPlayerStats = () => (skills ? { skills } : null);
+  const imperil = w.cast(DRUDGE);
+  assert.equal(imperil.spellId, 2074, "Life 400: power ≤ 375 ⇒ Gossamer Flesh (325), not the Incantation (400)");
+  const bolt = w.cast(DRUDGE);
+  assert.equal(bolt.spellId, 85, "War 300: power ≤ 275 ⇒ Flame Bolt VI (250)");
+  skills = { ...skills, 34: { current: 300, training: 1 } };
+  w.tick();
+  assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }), null, "untrained War ⇒ no bolt (legacy fallback)");
+  skills = null;
+  w.tick();
+  assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }).spellId, 4439, "unreadable skills ⇒ no cap");
+  const d = makeWorld({ entries: [E("Drudge Skulker", { I: true, A: false })], opts: { WarSpellMode: "vtank", SpellDiffExcessThresholdHunt: 76 } });
+  assert.equal(d.cast(DRUDGE).spellId, 1327, "Life 400 − 76 = 324 < 325 ⇒ Imperil Other VI (275)");
+});
+
+await check("vtank mode hands bestCastable the power cap + the live spell record's power (the table's fallback); legacy the tier cap", () => {
+  const w = makeWorld({ opts: { WarSpellMode: "vtank" } });
+  const seen = [];
+  const spy = { ...T, bestCastable: (fam, o) => (seen.push(o), T.bestCastable(fam, o)) };
+  w.host.TryGetSpellRecord = (id) => (id === 4439 ? { id, power: 400 } : id === 27 ? { id } : null);
+  const p = new AttackPlanner({ host: w.host, options: w.options, monsters: w.monsters, spells: spy, now, log: () => {} });
+  assert.equal(p.nextCast(DRUDGE, { mode: 8, now: NOW }).spellId, 2128);
+  const o = seen[seen.length - 1];
+  assert.equal(typeof o.maxLevelBySchool, "undefined");
+  assert.equal(o.maxPowerBySchool(1), 375, "War 400 − 25");
+  assert.equal(o.powerOf(4439), 400, "TryGetSpellRecord(id).power");
+  assert.equal(o.powerOf(27), 0, "a record without power ⇒ unknown");
+  assert.equal(o.powerOf(5), 0, "no record ⇒ unknown");
+  w.values.WarSpellMode = "legacy";
+  w.monsters.setEntries([{ ...DEFAULT_ENTRY, S: true }]);
+  w.tick();
+  p.nextCast(DRUDGE, { mode: 8, now: NOW });
+  const l = seen[seen.length - 1];
+  assert.equal(typeof l.maxPowerBySchool, "undefined");
+  assert.equal(l.maxLevelBySchool(1), 7, "MinSkillLevelTier: 400 ⇒ L7");
+});
+
+await check("a Healer's Heart (Heal Other own spell AND used wielded) is never the debuff wand nor a monster row's weapon; pack-usable Heal Other casters stay casters", () => {
+  const HEART = 0x60000010; // The Healer's Heart: 1166, ItemUseable 0x600004 (source Wielded)
+  const SEED = 0x60000011; // Legendary Seed of Mornings: 2072, ItemUseable 0x600008 (source Contained)
+  const ODD = 0x60000012; // a category-79 spell the id list doesn't name, used wielded
+  const BLIND = 0x60000013; // a Heal Other caster whose ItemUseable can't be read: the spell alone decides
+  const spellOf = { [HEART]: 1166, [SEED]: 2072, [ODD]: 9999, [BLIND]: 1164 };
+  const useOf = { [HEART]: 0x600004, [SEED]: 0x600008, [ODD]: 0x600004 };
+  const names = { [HEART]: "The Healer's Heart", [SEED]: "Legendary Seed of Mornings", [ODD]: "Odd Orb", [BLIND]: "Blind Orb" };
+  const setup = (w, guids) => {
+    w.host.inventory.unshift(...guids.map((g) => ({ guid: g, name: names[g], wcid: 9, itemType: IT.caster, validLocations: EM.held, equipMask: 0 })));
+    w.host.TryGetObjectDataIdProperty = (g, s) => (s === 28 ? spellOf[g] : undefined);
+    w.host.TryGetSpellRecord = (id) => (id === 9999 ? { id, category: 79 } : null);
+    const ints = w.host.TryGetObjectIntProperty;
+    w.host.TryGetObjectIntProperty = (g, s) => (s === 16 ? useOf[g] : ints(g, s));
+  };
+  const debuffer = () => makeWorld({ entries: [E("Drudge Skulker", { Y: true, A: true })], wielded: [[BOW, IT.missile, EM.missile]], mode: 4, opts: { SwitchWandsToDebuff: true } });
+  const swapTo = (w) => {
+    assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+    assert.deepEqual(w.host.actions.at(-1), ["unwield", BOW]);
+    w.host.wielded = [];
+    w.emit({ type: "equip", item: BOW, wielder: SELF, failed: false });
+    NOW += 3000;
+    w.tick();
+    assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+    return w.host.actions.at(-1);
+  };
+  // The Heart first on the Items tab and first in the pack: the real wand is wielded.
+  const w = debuffer();
+  setup(w, [HEART]);
+  w.items.add({ guid: HEART });
+  w.items.add({ guid: WAND });
+  assert.deepEqual(swapTo(w), ["wield", WAND, 0], "the wand, never the Heart");
+  // Only hearts (wielded-use, a category-79 one, an unreadable one) in the pack: no debuff wand at all.
+  const solo = debuffer();
+  setup(solo, [HEART, ODD, BLIND]);
+  solo.host.inventory = solo.host.inventory.filter((r) => r.guid !== WAND);
+  solo.items.add({ guid: HEART });
+  assert.equal(solo.planner.ensureLoadout(DRUDGE, NOW), "ok", "nothing to swap to");
+  assert.ok(!solo.host.actions.some((a) => a[0] === "wield" || a[0] === "unwield"), JSON.stringify(solo.host.actions));
+  // A pack-usable Heal Other caster (Seed of Mornings) is a debuff wand like any caster.
+  const seed = debuffer();
+  setup(seed, [HEART, SEED]);
+  seed.host.inventory = seed.host.inventory.filter((r) => r.guid !== WAND);
+  assert.deepEqual(swapTo(seed), ["wield", SEED, 0], "the Seed (pack-usable), not the Heart");
+  // A monster row naming the Heart as its weapon fights with what is in hand (one warning)…
+  const row = makeWorld({ entries: [E("Drudge Skulker", { weapon: HEART })], wielded: [[SWORD, IT.melee, EM.melee]], mode: 2 });
+  setup(row, [HEART]);
+  row.items.add({ guid: HEART });
+  assert.equal(row.planner.ensureLoadout(DRUDGE, NOW), "ok");
+  row.tick();
+  assert.equal(row.planner.ensureLoadout(DRUDGE, NOW + 100), "ok");
+  assert.ok(!row.host.actions.some((a) => a[0] === "wield"), JSON.stringify(row.host.actions));
+  assert.equal(row.logs.filter((m) => /Healer's Heart/.test(m)).length, 1, JSON.stringify(row.logs));
+  // …one naming a pack-usable Heal Other caster is wielded for it.
+  const seedRow = makeWorld({ entries: [E("Drudge Skulker", { weapon: SEED })], wielded: [[SWORD, IT.melee, EM.melee]], mode: 2 });
+  setup(seedRow, [SEED]);
+  seedRow.items.add({ guid: SEED });
+  assert.equal(seedRow.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  assert.deepEqual(seedRow.host.actions.at(-1), ["wield", SEED, 0]);
+});
+
+await check("refusal attribution reads host.castOwner() (the live or recent claim), not the raw token; the raw token only without castOwner", () => {
+  const w = makeWorld({ opts: { WarSpellMode: "vtank" } });
+  const fizzle = () => w.emit({ type: "useFailed", code: 0x0402, text: "Your spell fizzled." });
+  const castAndFizzle = (owner, raw) => {
+    const p = w.planner.nextCast(DRUDGE, { mode: 8, now: NOW });
+    w.planner.onCastIssued(DRUDGE, p, true);
+    w.host.castOwner = owner === undefined ? undefined : () => owner;
+    w.host.castToken = raw;
+    fizzle();
+    w.tick();
+  };
+  castAndFizzle("vitals", null); // vitals' refusal: not ours
+  castAndFizzle(null, { owner: "vitals" }); // a stale raw vitals claim, aged out of castOwner: ours
+  castAndFizzle("combat", { owner: "vitals" }); // ours
+  assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }).spellId, 2128, "2 of ours so far");
+  castAndFizzle(undefined, { owner: "buff" }); // no castOwner (fake / old host): the raw token decides — not ours
+  assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }).spellId, 2128, "still 2");
+  castAndFizzle(undefined, null);
+  assert.equal(w.planner.nextCast(DRUDGE, { mode: 8, now: NOW }).spellId, 85, "the 3rd of ours excludes Ilservian's Flame");
+});
+
+await check("wandSlotHeld: while the helpers' heart swap holds the wand slot ensureLoadout is busy and wields nothing; absent / false / throwing = as before", () => {
+  const mkRow = () => {
+    const w = makeWorld({ entries: [E("Drudge Skulker", { weapon: SWORD })], wielded: [[WAND, IT.caster, EM.held]], mode: 8 });
+    w.items.add({ guid: SWORD });
+    return w;
+  };
+  const w = mkRow();
+  let held = true;
+  w.planner.wandSlotHeld = () => held;
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  assert.equal(w.host.actions.length, 0, "no claim, no disengage, no wield over the heart");
+  held = false;
+  w.tick();
+  assert.equal(w.planner.ensureLoadout(DRUDGE, NOW), "busy", "the swap the row wants now goes ahead");
+  assert.deepEqual(w.host.actions.at(-1), ["wield", SWORD, 0]);
+  for (const hook of [undefined, () => false, () => "yes", () => { throw new Error("x"); }]) {
+    const v = mkRow();
+    v.planner.wandSlotHeld = hook;
+    assert.equal(v.planner.ensureLoadout(DRUDGE, NOW), "busy");
+    assert.deepEqual(v.host.actions.at(-1), ["wield", SWORD, 0], String(hook));
+  }
+  // A swap of our own in flight is still waited out first (the hook comes after it).
+  const s = mkRow();
+  s.planner.ensureLoadout(DRUDGE, NOW);
+  s.planner.wandSlotHeld = () => true;
+  NOW += 3100;
+  s.tick();
+  assert.equal(s.planner.ensureLoadout(DRUDGE, NOW), "busy");
+  assert.equal(s.planner.status().swap, null, "our timed-out swap was cleared before the hold");
+});
+
 await check("priorityOf works while inactive (DEFAULT P); status() shape; dispose detaches the signal handlers", () => {
   const w = makeWorld();
   assert.equal(w.planner.priorityOf(DRUDGE), 1);

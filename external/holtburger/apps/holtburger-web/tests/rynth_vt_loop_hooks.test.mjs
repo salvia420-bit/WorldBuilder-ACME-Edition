@@ -821,7 +821,11 @@ function runBuffGolden(setup) {
 // deliberate change (combat_loop.js: after a kill the next melee/missile request
 // waits for the killed loop's AttackDone; this world never sends one, so the
 // tick-16 request goes out after the 3 s STALE_LOOP_END_TTL_MS, tick 29); loot
-// and buff unchanged.
+// and buff unchanged. `buff` re-baselined 2026-10-19 (b) for a deliberate fix
+// (buff_loop.js heartbeat() ends a finished B11/B12 pass the kernel no longer
+// ticks — before, _forceRebuffing stuck true and hid every later expiry): the
+// same casts and statuses every tick; tick 195 ends the pass one tick earlier
+// and ticks 138/147/196/222/246 add the pass-end check's spell-record reads.
 const GOLDEN = {
   combat: [
     "2031d7bb543149b6543149b63bafec50543149b654260311543149b6543149b682c3295f82c3295fc4b3067b3293b971",
@@ -889,16 +893,16 @@ const GOLDEN = {
     "a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49db56ee62a2225f49a2225f49a2225f49a2225f49a2225f49",
     "a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49a2225f49",
     "fe9d9409a2225f49ca68a693a2225f49ca68a693a2225f49fe9d9409222bea2ae7b189673e3fdd3dda9c8be51a007a63",
-    "f932addfb7efe79877143db7de76692377143db71a4a1d340f2ed134fa396d595ed5dacba520a9c82ed6adcd479fa390",
-    "74964cabd1477700dee7d3980f2ed134fa396d595ed5dacb35bc260b5ed5dacbfa396d595ed5dacbfa396d595ed5dacb",
+    "f932addfb7efe79877143db7de76692377143db71a4a1d345ed5dacbfa396d595ed5dacba520a9c82ed6adcd479fa390",
+    "74964cabd1477700dee7d3985ed5dacbfa396d595ed5dacb35bc260b5ed5dacbfa396d595ed5dacbfa396d595ed5dacb",
     "35bc260b5ed5dacbfa396d595ed5dacbfa396d595ed5dacb35bc260b5ed5dacb02464f0a5ed5dacbfa396d595ed5dacb",
     "35bc260b5ed5dacbfa396d595ed5dacbfa396d595ed5dacb3fe06eee5ed5dacbfa396d595ed5dacbfa396d595ed5dacb",
     "35bc260b5ed5dacbfa396d595ed5dacbfa396d595ed5dacb35bc260b5ed5dacbfa396d59db627b1c4197fd29479fa390",
-    "266c97758dfb8fbe44f575bd6f54e03dc8314675f1adc4d71826ab53f1adc4d7da1cd384de916851da1cd384de916851",
+    "266c97758dfb8fbe44f575bd36dd2b1ca3d1d25ef1adc4d71826ab53f1adc4d7da1cd384de916851da1cd384de916851",
     "7915d7b52ed6adcd479fa390f55866ae479fa3902785808111fa51a31be91fea003d0c23abc3886f53d1d9e8e61cc21f",
-    "53d1d9e8726d3ca105aacf794a830aa530371cff14d86b8e298a8f87b71de8620a1aa4483f648ab714858a7b5a2c4153",
+    "53d1d9e8726d3ca105aacf794a830aa530371cff14d86b8e0a1aa448b71de8620a1aa4483f648ab714858a7b5a2c4153",
     "078d75ea30371cff14d86b8e07a6401c231c3c948887b9ce25f989f456b0e5ad0c6b06a798afccd10c6b06a72a753c16",
-    "cc6ff6a06ebfe3721d5f810c8f7ef5be688816442ab4b0a4f839317e4a54d4017f5fb9ed10130f407f5fb9ed4a54d401",
+    "cc6ff6a06ebfe3721d5f810c8f7ef5be688816442ab4b0a47f5fb9ed4a54d4017f5fb9ed10130f407f5fb9ed4a54d401",
     "7f5fb9ed4a54d4017f5fb9ed10130f407f5fb9ed43ee83237f5fb9ed4a54d401",
   ].join(""),
 };
@@ -1668,6 +1672,55 @@ await check("GOLDEN at the Default layer: acquireRangeFn (m) => m, monsterRangeM
     assert.equal(loop.setItemBuffs(rows), 2);
   });
   compareGolden("buff@Default", b.digests, GOLDEN.buff, b.logs);
+});
+
+// ── the combat options made live 2026-10-19, at their schema defaults ─────
+// TargetLock off, AttackMinDistance 0, MonsterDisengageRange 0 (auto = the
+// perimeter + 3 m — the one new default behaviour), TargetNoProgressTimeoutSec
+// 0, DoJiggle off. In this world no lock ever sits between 40 and 43 m, so
+// every host ACTION and the loop state match the literal run tick for tick;
+// only reads differ: with the layer the scan memo is also keyed on the lock
+// (the disengage range keeps it in), so a lock change inside one snapshot
+// re-scans — a fresher scan (e.g. right after a blacklist), never a larger one.
+const COMBAT_OPT_DEFAULTS = { TargetLock: false, AttackMinDistance: 0, MonsterDisengageRange: 0, TargetNoProgressTimeoutSec: 0, DoJiggle: false };
+const HOST_ACTION = /^(MeleeAttack|MissileAttack|CastSpell|CastSpellAt|CastUntargetedSafe|StickToObject|StopStick|CancelAttack|TurnToHeading|ToggleCombatMode|QueryHealth|StopCompletely|tryClaimCast|releaseCast|SetMovementInput)\b/;
+
+await check("GOLDEN combat with the VT combat options at their schema defaults: identical host actions + loop state every tick; the scan only ever fresher", () => {
+  NOW = 1_800_000_000_000;
+  const base = runCombatGolden();
+  NOW = 1_800_000_000_000;
+  const vt = runCombatGolden((loop) => {
+    loop.optFn = (k) => COMBAT_OPT_DEFAULTS[k];
+    loop.movementClaimedFn = () => false;
+  });
+  let fresher = 0;
+  for (let i = 0; i < base.logs.length; i++) {
+    const a = JSON.parse(base.logs[i]);
+    const b = JSON.parse(vt.logs[i]);
+    assert.deepEqual(b.c.filter((c) => HOST_ACTION.test(c)), a.c.filter((c) => HOST_ACTION.test(c)), `tick ${i}: host actions`);
+    assert.deepEqual([b.st, b.ls, b.aw], [a.st, a.ls, a.aw], `tick ${i}: loop state`);
+    assert.ok(b.scan.every((s) => a.scan.includes(s)), `tick ${i}: the scan grew\n  literal ${a.scan}\n  layer   ${b.scan}`);
+    if (b.scan.length < a.scan.length) fresher++;
+  }
+  assert.ok(fresher <= 3, `fresher scans ${fresher}`);
+  assert.ok(!vt.logs.some((l) => l.includes("SetMovementInput")), "no jiggle at the defaults");
+  assert.equal(vt.loop.kills, base.loop.kills);
+});
+
+await check("netBrain input: MonsterDisengageRange 0.0 without the layer; with optFn the JS disengage range (auto +3 m, explicit, capped by nearbyRangeM)", () => {
+  const { loop, host } = combatRig();
+  assert.equal(loop._nbBuildInput(0, NOW).Config.MonsterDisengageRange, 0);
+  const opts = { ...COMBAT_OPT_DEFAULTS };
+  loop.optFn = (k) => opts[k];
+  assert.equal(loop._nbBuildInput(0, NOW).Config.MonsterDisengageRange, 43);
+  opts.MonsterDisengageRange = 55;
+  assert.equal(loop._nbBuildInput(0, NOW).Config.MonsterDisengageRange, 55);
+  host.nearbyRangeM = 50;
+  assert.equal(loop._nbBuildInput(0, NOW).Config.MonsterDisengageRange, 50, "the entity scan's radius caps it");
+  loop.acquireRangeFn = () => 60; // navigating with Approach Range 60
+  opts.MonsterDisengageRange = 0;
+  host.nearbyRangeM = 0;
+  assert.equal(loop._nbBuildInput(0, NOW).Config.MonsterDisengageRange, 63, "auto = the acquire perimeter + 3 m");
 });
 
 // ── kernel status at the Default profile (critic B7) ──────────────────────

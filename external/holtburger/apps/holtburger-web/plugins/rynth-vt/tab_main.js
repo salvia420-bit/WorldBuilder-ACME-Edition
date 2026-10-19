@@ -4,15 +4,18 @@
 //
 //   Vitals     live HP / Stam / Mana bars with the two recharge levels marked
 //              on them (gold = top-off with no combat target, white = in
-//              combat), the matrix that sets those levels, and the two
-//              conditional rules of rynth/vitals.js: the emergency
-//              Stamina→Health cast (HP ≤ x % while Stam > y %, B15) and the
-//              Stamina→Mana floor (B16).
-//   Ranges     Monster · Ring · Approach · Follow/Nav Min (metres).
+//              combat), the matrix that sets those levels and the levels and
+//              distances fellows are helped at (VTank's "… others at"), the
+//              helper's switches, and the two conditional rules of
+//              rynth/vitals.js: the emergency Stamina→Health cast (HP ≤ x %
+//              while Stam > y %, B15) and the Stamina→Mana floor (B16).
+//   Ranges     Monster · Ring · Approach · Follow/Nav Min · Attack min ·
+//              Disengage (metres).
 //   Pets       Summon Pets, Custom Pet Range (+ metres), Pet Min. Monsters.
 //   Behaviour  the Options-page switches: Boost Nav / Loot Priority, Peace
 //              Mode / Rebuff When Idle, Autostack, Autocram, dispel items /
-//              self, Auto Fellow Mgmt., Mana charges when off.
+//              self, Auto Fellow Mgmt., Mana charges when off, Target lock,
+//              Start on login.
 //
 // The subsystem switches are on the command bar; every other option is on the
 // Advanced tab. Values come from the bridge (schema rows with live values; a
@@ -31,6 +34,13 @@ const RANGE_LABELS = Object.freeze({
   RingRange: "Ring range",
   ApproachRange: "Approach",
   FollowNavMin: "Follow/Nav min",
+  AttackMinDistance: "Attack min",
+  MonsterDisengageRange: "Disengage",
+});
+const HELPER_LABELS = Object.freeze({
+  DoHelp: "Help fellows",
+  UseHealersHeart: "Healer's Heart first",
+  JumpOutWandCasting: "Jump out of the heart",
 });
 
 export function createMainTab(ctx) {
@@ -77,21 +87,23 @@ export function createMainTab(ctx) {
     bars[v.id] = { bar, fill, idle, fight, text };
   }
   // the matrix rows
-  const matrixRow = (label, tip, path) => {
+  const matrixRow = (label, tip, path, unit = "%") => {
     const l = el(doc, "span", "rvt-lbl", label);
     l.title = tip;
     mx.appendChild(l);
     for (const v of VITALS) {
       const cell = el(doc, "span", "rvt-vit-cell");
-      const f = numField(doc, { unit: "%" });
+      const f = numField(doc, { unit });
       f.input.dataset.key = `${path}.${v.id}`;
       cell.appendChild(f.wrap);
       mx.appendChild(cell);
-      binders.push([(vw) => vw.vitals[path][v.id], bindRow(f, commit)]);
+      binders.push([(vw) => vw.vitals[path]?.[v.id] ?? null, bindRow(f, commit)]);
     }
   };
   matrixRow("Top-off", "No combat target: recharge up to these levels (Recharge-NoTarg, G:64-66)", "topOff");
   matrixRow("In combat", "Fighting: recharge when a vital drops below these levels (Recharge-Norm)", "combat");
+  matrixRow("Others", "Heal / restam / infuse a fellowship member whose vital drops below these levels (Recharge-Helper; 0 = never)", "others");
+  matrixRow("Others ≤", "…when they are no farther than this (HelperDistanceHitP / Stam / Mana)", "othersRange", "m");
   const legend = el(doc, "div", "rvt-vit-legend");
   const key = (cls, text) => {
     const s = el(doc, "span");
@@ -118,6 +130,15 @@ export function createMainTab(ctx) {
     ruleField((vw) => vw.vitals.manaRechargeStamFloor, "ManaRechargeStamFloor"),
   );
   vit.appendChild(r1);
+  // the helper's switches (VTank DoHelp, UseHealersHeart, JumpOutWandCasting)
+  const r2 = el(doc, "div", "rvt-rule-line rvt-helpers");
+  for (const k of Object.keys(HELPER_LABELS)) {
+    const c = checkbox(doc, HELPER_LABELS[k]);
+    c.cb.dataset.key = k;
+    r2.appendChild(c.lab);
+    binders.push([(vw) => (vw.vitals.helpers || []).find((r) => r.key === k) || null, bindRow({ input: c.cb, tip: c.lab }, commit)]);
+  }
+  vit.appendChild(r2);
 
   // ── Ranges ───────────────────────────────────────────────────────────────
   const rng = card("Ranges");

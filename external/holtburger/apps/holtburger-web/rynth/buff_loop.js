@@ -160,6 +160,37 @@
 // canonicalTier / canonicalLadder / buffFamilyOf (VT Buffs tab), and
 // toLadderSpec() moves a family-selector spec saved from the old list onto
 // the ladder (else its off-ladder ids would read as pins).
+//
+// B11/B12 pass end (2026-10-19): heartbeat() ends a batch / Force pass once
+// every desired buff is recast or parked (_endFinishedPass). Only tick() used
+// to, and the kernel gives the loop no tick then (all read active), so the
+// pass stayed open and no buff was ever recast again.
+//
+// Worn armor (2026-10-19, the VTank options BuffArmorImpen / BuffProfileBanes
+// made live). They are read through `optFn`, the VT layer's option reader
+// (rynth/vt/index.js binds it; absent without the layer, ?botVt=off — and then
+// nothing in this paragraph applies, B7 is exactly as before):
+//   * Impenetrability or a bane cast on YOURSELF lands on every enchantable
+//     armor and clothing piece you wear and on your shield (ACE
+//     WorldObject_Magic.cs TryCastItemEnchantment_WithRedirects), so worn
+//     armor is one B7 cast per family at our own guid, at the best tier in the
+//     spellbook (_wornArmor), after the self buffs (RynthAi step 7) and before
+//     the Items tab's casts — of which an EQUIPPED shield's are dropped for
+//     the families the worn casts cover (_itemPass).
+//   * B7 runs only inside a buff tick, and the kernel stops ticking this loop
+//     once every SELF buff is up (kernel.js _buffNeeded), so an item enchant
+//     was cast at login and then only when a self buff happened to be
+//     missing. With the layer, status counts the item enchants as buffs — a
+//     due one keeps the kernel on Buffing like a self buff — and so:
+//   * an item cast resolves on ACE's own answer (its UseDone; the "You cast …
+//     on <item>" lines come before it) instead of a flat 5 s, and one that
+//     enchanted nothing, fizzled FIZZLE_WALK_LIMIT times in a row (a worn
+//     family steps a tier down meanwhile) or was refused for its spellbook /
+//     place is held (_itemNoLine, _holdRefusedItem) rather than recast every
+//     few seconds with the bot parked on Buffing; a busy / in-the-air refusal
+//     backs off TRANSIENT_BACKOFF_MS;
+//   * Force Buff recasts the item enchants too, and the B3 threshold and the
+//     idle-rebuff window move their recast point (_itemRecastAfterMs).
 
 import { portalSpaceActive } from "./portal_gate.js";
 import { buffSchoolOf, capRose, capsBySchool } from "./skill_cap.js";
@@ -290,6 +321,15 @@ const COMPONENTS_PARK_MS = 5 * 60_000;
 const MANA_BACKOFF_MS = 15_000;
 const TRANSIENT_BACKOFF_MS = 1_000;
 const PLACE_PARK_MS = 60_000;
+// Layer B7 (header, "Worn armor"): an item cast that enchanted nothing is
+// retried after this long; silent twice in a row it waits noShowCooldownMs
+// (B9's two strikes).
+const ITEM_SILENT_RETRY_MS = 60_000;
+// ACE ItemType Armor (shields too) | Clothing — the worn pieces a self-cast
+// Impenetrability / bane enchants (WeenieType Clothing or a shield).
+const ITEM_TYPE_WORN = 0x2 | 0x4;
+// The worn-armor casts re-read the spellbook and the inventory at most this often.
+const WORN_REFRESH_MS = 1_000;
 
 // WeenieError codes a cast request can come back with (holtburger-protocol
 // errors.rs; ACE Player_Magic.cs SendUseDoneEvent / SendWeenieError sites).
@@ -351,7 +391,7 @@ function readEnchantmentRows(s) {
   return rows;
 }
 
-// B7 confirm line for a NAMED item: ACE WorldObject_Magic.cs:1422 "You cast
+// B7 confirm line for a NAMED item: ACE WorldObject_Magic.cs:443 "You cast
 // <spell> on <target><suffix>", suffix "" | ", surpassing X" | ", refreshing X"
 // | ", but it is surpassed by X" (:411-420). The name must end the line or
 // precede the suffix comma, so "Shield" never matches "Shield Golem".
@@ -366,6 +406,81 @@ function itemCastLine(name) {
     ITEM_CAST_RE_CACHE.set(name, re);
   }
   return re;
+}
+
+// B7 confirm line for a WORN-ARMOR cast (target = ourselves): ACE answers it
+// once per enchanted item, "You cast <spell> on <item><suffix>" (the line
+// above), so it is matched by the spell's own name — the items are whatever
+// is worn — and no other cast's line confirms it.
+const WORN_CAST_RE_CACHE = new Map();
+function wornCastLine(spellName) {
+  let re = WORN_CAST_RE_CACHE.get(spellName);
+  if (!re) {
+    const esc = String(spellName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    re = new RegExp(`^You cast ${esc} on `);
+    WORN_CAST_RE_CACHE.set(spellName, re);
+  }
+  return re;
+}
+
+// The worn-armor families (header, "Worn armor"): [family, VTank bane letter
+// (null = Impenetrability, BuffArmorImpen), tier I-VI base name, tier VII
+// name, spell ids of tiers I..VIII] in the Buffs tab's column order. The ids
+// and names are rynth/vt/data/combat_spells.json "impen" / "bane:<el>" (the
+// Items tab's ladders; tests/rynth_buff_worn_armor.test.mjs checks this copy —
+// buff_loop.js reads nothing of the VT layer but its options).
+const WORN_ARMOR_LADDERS = [
+  ["impen", null, "Impenetrability", "Brogard's Defiance", [51, 1482, 1483, 1484, 1485, 1486, 2108, 4407]],
+  ["bane:slash", "S", "Blade Bane", "Swordsman's Bane", [37, 1558, 1559, 1560, 1561, 1562, 2094, 4393]],
+  ["bane:pierce", "P", "Piercing Bane", "Archer's Bane", [1569, 1570, 1571, 1572, 1573, 1574, 2113, 4412]],
+  ["bane:bludgeon", "B", "Bludgeon Bane", "Tusker's Bane", [1511, 1512, 1513, 1514, 1515, 1516, 2098, 4397]],
+  ["bane:fire", "F", "Flame Bane", "Inferno's Bane", [1547, 1548, 1549, 1550, 1551, 1552, 2102, 4401]],
+  ["bane:cold", "C", "Frost Bane", "Gelidite's Bane", [1523, 1524, 1525, 1526, 1527, 1528, 2104, 4403]],
+  ["bane:lightning", "L", "Lightning Bane", "Astyrrian's Bane", [1535, 1536, 1537, 1538, 1539, 1540, 2110, 4409]],
+  ["bane:acid", "A", "Acid Bane", "Olthoi's Bane", [1493, 1494, 1495, 1496, 1497, 1498, 2092, 4391]],
+];
+
+/** The worn-armor families: { family, letter, rungs: [{ id, tier, name }] }
+ *  (tiers ascending; `letter` null for Impenetrability). Frozen. */
+export const WORN_ARMOR_FAMILIES = Object.freeze(
+  WORN_ARMOR_LADDERS.map(([family, letter, base, vii, ids]) =>
+    Object.freeze({
+      family,
+      letter,
+      rungs: Object.freeze(
+        ids.map((id, i) =>
+          Object.freeze({ id, tier: i + 1, name: i === 7 ? `Incantation of ${base}` : i === 6 ? vii : `${base} ${ROMAN[i + 1]}` })
+        )
+      ),
+    })
+  )
+);
+const WORN_FAMILY_OF = new Map(WORN_ARMOR_FAMILIES.flatMap((f) => f.rungs.map((r) => [r.id, f.family])));
+
+// VTank's bane letters in its order, and its BuffProfile_Banes enum (1 =
+// Custom: the letters themselves).
+const BANE_LETTERS = "ALFCBPS";
+const BANE_ENUM = Object.freeze({ 2: "ALFCBPS", 3: "", 4: "B", 5: "BPS", 6: "BPSA", 7: "BPSAC", 8: "ALFC" });
+
+/** A bane profile as VTank writes it — its enum 2-8, All / None, or letters in
+ *  any case / order / separators — → canonical letters ("" = none); null for
+ *  anything else. A copy of rynth/vt/settings/schema.js baneLetters (the
+ *  BuffProfileBanes codec; buff_loop.js imports nothing of rynth/vt), so a
+ *  value stored before the codec ("Banes1", "All", "2") reads as the codec
+ *  would read it; tests/rynth_buff_worn_armor.test.mjs keeps the two in step. */
+export function baneLetters(raw) {
+  if (raw === null || raw === undefined || typeof raw === "object") return null;
+  if (typeof raw === "boolean") return raw ? BANE_LETTERS : "";
+  const s = String(raw).trim();
+  if (!s || /^none$/i.test(s)) return "";
+  if (/^all$/i.test(s)) return BANE_LETTERS;
+  let n = null;
+  if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) n = Number(s);
+  else if (/^[+-]?0x[0-9a-f]+$/i.test(s)) n = (s.startsWith("-") ? -1 : 1) * parseInt(s.replace(/^[+-]/, ""), 16);
+  if (n !== null) return Object.prototype.hasOwnProperty.call(BANE_ENUM, n) ? BANE_ENUM[n] : null;
+  const up = s.toUpperCase().replace(/[\s,;+]/g, "");
+  if (!/^[ALFCBPS]+$/.test(up)) return null;
+  return [...BANE_LETTERS].filter((c) => up.includes(c)).join("");
 }
 
 // serde_wasm_bindgen hands getSpellRecord back as a Map; older bundles and
@@ -465,6 +580,18 @@ export class RynthBuffLoop {
     this._schoolOf = new Map(); // spellId -> MagicSchool (memo, skill cap only)
     this._itemLastCast = new Map(); // "spellId:itemGuid" -> confirmed ts
     this._itemPending = null; // { spellId, itemGuid, issuedAt }
+    //   optFn                   key -> the VT option's value (VtOptions.getValue),
+    //                           bound by rynth/vt/index.js; null without the
+    //                           layer. Worn armor and the layer's B7 bookkeeping
+    //                           below exist only with it (header, "Worn armor").
+    this.optFn = null;
+    this._itemHeldUntil = new Map(); // "spellId:itemGuid" -> ts (a silent / refused item cast)
+    this._itemSilent = new Map(); // "spellId:itemGuid" -> silent casts in a row
+    this._itemFizzles = new Map(); // "spellId:itemGuid" -> fizzles in a row
+    this._wornWalkedUntil = new Map(); // worn rung -> ts: fizzle-walked off its family until then
+    this._itemForceAt = 0; // Force Buff: item enchants confirmed before it are recast
+    this._wornMemo = null; // _wornArmor's last read
+    this._wornUnresolvable = new Set(); // worn rungs ACE refused as not in the spellbook
     this._running = false;
     // 2026-10-12 resolution state.
     this._evtTapped = false; // push-plane subscription (B7 chat + refusals)
@@ -550,11 +677,20 @@ export class RynthBuffLoop {
     // An item buff projected by the VT layer carries its item's name (U2 H5):
     // only "You cast <spell> on <that item>[, suffix]" confirms it, so a
     // debuff/other-target line can no longer confirm a pending item enchant.
-    // Without a name, today's any-target form.
-    const itemName = this._itemPending.itemName;
-    if (itemName ? itemCastLine(itemName).test(e.text) : /^You cast .+ on /.test(e.text)) {
-      const key = `${this._itemPending.spellId}:${this._itemPending.itemGuid}`;
+    // Without a name, today's any-target form. A worn-armor cast is confirmed
+    // by the first of its per-item lines, by the spell's name (wornCastLine).
+    const p = this._itemPending;
+    const itemName = p.itemName;
+    const hit = p.worn
+      ? wornCastLine(p.spellName).test(e.text)
+      : itemName
+        ? itemCastLine(itemName).test(e.text)
+        : /^You cast .+ on /.test(e.text);
+    if (hit) {
+      const key = `${p.spellId}:${p.itemGuid}`;
       this._itemLastCast.set(key, Date.now());
+      this._itemSilent.delete(key);
+      this._itemFizzles.delete(key);
       this.log(`item enchant confirmed: ${e.text.slice(0, 60)}`);
       this._itemPending = null;
       if (typeof this.host.releaseCast === "function") this.host.releaseCast("buff"); // C3 shared serializer
@@ -596,12 +732,14 @@ export class RynthBuffLoop {
     this._forceRebuffing = true;
     this._forceRebuffCast = new Set();
     this.allActiveSince = 0;
+    this._itemForceAt = Date.now(); // with the layer, the item enchants too (_itemDue)
     this.log("force rebuff: recasting all buffs");
   }
 
   /** "Cancel Force Rebuff" — back to timer mode; an in-flight cast still
    *  resolves. */
   cancelForceRebuff() {
+    this._itemForceAt = 0;
     if (!this._forceRebuffing) return;
     this._forceRebuffing = false;
     this.log("force rebuff cancelled");
@@ -1043,11 +1181,35 @@ export class RynthBuffLoop {
   // comes: a family walked down to a tier that then landed reads all-active,
   // so the kernel would never tick this loop to notice. Likewise a skill-cap
   // move (opt-in): a family re-resolved UP reads inactive and wakes the kernel.
+  // And it ends a finished B11/B12 pass (_endFinishedPass).
   heartbeat() {
     if (!this.registryReady) return; // login gate owns the pre-ready window
     if (Date.now() - this.lastRefreshAt > PERIODIC_REFRESH_INTERVAL_MS) this._refresh();
     this._expireFizzleWalks(Date.now());
     this._checkSkillCap();
+    this._endFinishedPass(Date.now());
+  }
+
+  // B11/B12 — a batch (or Force) pass is over once tick()'s cast loop would
+  // skip every desired buff: its spell parked (B9), its family parked (B10),
+  // or recast this pass (_isActive). tick()'s "Nothing left to cast this pass"
+  // branch ends it — but only on one more buff tick, and the kernel gives none:
+  // with every family in _forceRebuffCast status reads all active and nothing
+  // pending, so kernel._buffNeeded() is false. The pass stayed open,
+  // _isActive() kept answering from it, no buff read below the threshold again
+  // and none was ever recast (until setDesired / Cancel / bot.setBuffs).
+  // Never with a cast in flight; the parks are only read (tick() prunes them).
+  _endFinishedPass(now) {
+    if (!this._forceRebuffing || this.pending) return;
+    for (const spellId of this.desired) {
+      const parked = this.parkedUntil.get(spellId);
+      if (parked && now < parked) continue;
+      const fam = this._familyForSpell(spellId);
+      if (fam !== undefined && (this._rejectParkedUntil.get(fam) ?? 0) > now) continue;
+      if (!this._isActive(spellId)) return; // still to cast this pass
+    }
+    this._forceRebuffing = false;
+    this.log("batch rebuff complete");
   }
 
   _familyForSpell(spellId) {
@@ -1155,7 +1317,8 @@ export class RynthBuffLoop {
    *  also true when a desired, non-parked buff would be recast by a tick()
    *  under that window — remaining ≤ rebuffSecondsRemaining + extraWindowS,
    *  the window capped per family by _idleWindowFor (permanent and
-   *  short-duration-held families never count). */
+   *  short-duration-held families never count). With the VT layer the item
+   *  enchants count as well (status, _itemCounts), under the window too. */
   needsBuff({ extraWindowS = 0 } = {}) {
     if (this.enabled === false) return false;
     const st = this.status;
@@ -1167,7 +1330,8 @@ export class RynthBuffLoop {
     this.idleRebuffWindowS = extra;
     try {
       const now = Date.now();
-      return this.desired.some((id) => !this._isParked(id, now) && !this._isActiveReal(id));
+      if (this.desired.some((id) => !this._isParked(id, now) && !this._isActiveReal(id))) return true;
+      return (this._itemCounts(now, extra)?.due ?? 0) > 0;
     } finally {
       this.idleRebuffWindowS = prev;
     }
@@ -1188,6 +1352,220 @@ export class RynthBuffLoop {
     }
     this.itemBuffs = out;
     return out.length;
+  }
+
+  // ── worn armor + the layer's B7 bookkeeping (header, "Worn armor") ───────
+
+  /** A VT option through the injected reader; `dflt` without the layer, for
+   *  an unset key, or when the read throws. */
+  _opt(key, dflt) {
+    const f = this.optFn;
+    if (typeof f !== "function") return dflt;
+    try {
+      const v = f(key);
+      return v === undefined || v === null ? dflt : v;
+    } catch (_) {
+      return dflt;
+    }
+  }
+
+  // The spellbook as a Set (empty when unreadable).
+  _knownSpellSet() {
+    const s = this.host.s;
+    try {
+      return new Set(s && s.playerKnownSpells ? Array.from(s.playerKnownSpells() || [], Number) : []);
+    } catch (_) {
+      return new Set();
+    }
+  }
+
+  // The inventory rows — the host's per-heartbeat memo when it has one; []
+  // when unreadable.
+  _inventoryRows() {
+    const h = this.host;
+    try {
+      const rows =
+        typeof h.TryGetPlayerInventoryCached === "function"
+          ? h.TryGetPlayerInventoryCached()
+          : typeof h.TryGetPlayerInventory === "function"
+            ? h.TryGetPlayerInventory()
+            : null;
+      return Array.isArray(rows) ? rows : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /**
+   * The worn-armor casts the options ask for, re-read at most every
+   * WORN_REFRESH_MS → { entries, covers }; null without the layer.
+   * `entries`: one per family — Impenetrability with BuffArmorImpen, a bane
+   * per BuffProfileBanes letter (baneLetters; a value it can't read means all
+   * of them, the default) — at the highest tier in the spellbook (the Items
+   * tab's resolution, vt/combat/spell_tables.js bestCastable) less the rungs
+   * ACE refused as unknown, and less a fizzle-walked rung while a lower one is
+   * known (_holdRefusedItem), targeted at our own guid:
+   * { spellId, itemGuid, worn, family, spellName }. None while no enchantable
+   * piece is worn (ACE would answer with no line at all) or the inventory is
+   * unreadable. `covers`: the equipped armor / clothing / shield guids those
+   * casts reach (_itemPass).
+   */
+  _wornArmor(now) {
+    if (typeof this.optFn !== "function") return null;
+    const impen = this._opt("BuffArmorImpen", false) === true;
+    const raw = this._opt("BuffProfileBanes", null);
+    const letters = raw === null ? "" : baneLetters(raw) ?? BANE_LETTERS;
+    const sig = `${impen ? "I" : "-"}:${letters}`;
+    const m = this._wornMemo;
+    if (m && m.sig === sig && now >= m.at && now - m.at < WORN_REFRESH_MS) return m;
+    const w = { at: now, sig, entries: [], covers: new Set() };
+    this._wornMemo = w;
+    const fams = WORN_ARMOR_FAMILIES.filter((f) => (f.letter ? letters.includes(f.letter) : impen));
+    let me = 0;
+    try {
+      me = fams.length && typeof this.host.GetPlayerId === "function" ? Number(this.host.GetPlayerId()) >>> 0 : 0;
+    } catch (_) {
+      me = 0;
+    }
+    const known = me ? this._knownSpellSet() : null;
+    const entries = [];
+    for (const f of known ? fams : []) {
+      let pick = null;
+      for (let i = f.rungs.length - 1; i >= 0; i--) {
+        const r = f.rungs[i];
+        if (!known.has(r.id) || this._wornUnresolvable.has(r.id)) continue;
+        if (!pick) pick = r; // every known rung fizzle-walked: the best, held
+        if ((this._wornWalkedUntil.get(r.id) ?? 0) > now) continue;
+        pick = r;
+        break;
+      }
+      if (pick) entries.push({ spellId: pick.id, itemGuid: me, worn: true, family: f.family, spellName: pick.name });
+    }
+    if (entries.length) {
+      for (const r of this._inventoryRows()) {
+        if ((Number(r && r.equipMask) >>> 0) !== 0 && ((Number(r.itemType) >>> 0) & ITEM_TYPE_WORN) !== 0) {
+          w.covers.add(Number(r.guid) >>> 0);
+        }
+      }
+    }
+    if (w.covers.size) w.entries = entries;
+    this._logWorn(w, entries.length > 0);
+    return w;
+  }
+
+  // Log the worn-armor casts when they change, not on every re-read; quiet
+  // while there never was anything to cast.
+  _logWorn(w, resolved) {
+    const sig = w.entries.map((e) => e.spellId).join(",") || (resolved ? "unworn" : "none");
+    if (sig === this._wornLogged) return;
+    const first = this._wornLogged === undefined;
+    this._wornLogged = sig;
+    if (w.entries.length) {
+      this.log(`worn armor: ${w.entries.map((e) => e.spellName).join(", ")} — ${w.covers.size} worn piece(s)`);
+    } else if (!first) {
+      this.log(`worn armor: nothing to cast (${resolved ? "no enchantable piece worn" : "none chosen or known"})`);
+    }
+  }
+
+  /** The B7 list this pass: the Items tab's (setItemBuffs) without the layer;
+   *  with it, the worn-armor casts first (RynthAi step 7), then the Items-tab
+   *  entries less an equipped piece's for a family a worn cast covers — that
+   *  cast enchants it, so it is never cast twice. */
+  _itemPass(now) {
+    const w = this._wornArmor(now);
+    if (!w || !w.entries.length) return this.itemBuffs;
+    const fams = new Set(w.entries.map((e) => e.family));
+    const rest = this.itemBuffs.filter((ib) => !(w.covers.has(ib.itemGuid) && fams.has(WORN_FAMILY_OF.get(ib.spellId))));
+    return [...w.entries, ...rest];
+  }
+
+  /** Is item enchant `ib` due a cast? Without the layer: itemRecastMs after
+   *  its last confirmation, as always. With it: never while held (a silent or
+   *  refused cast), at once when confirmed before a Force Buff, else
+   *  _itemRecastAfterMs(windowS) after its confirmation. */
+  _itemDue(ib, now, windowS = this._idleWindowS()) {
+    const key = `${ib.spellId}:${ib.itemGuid}`;
+    const last = this._itemLastCast.get(key) ?? 0;
+    if (typeof this.optFn !== "function") return now - last >= this.itemRecastMs;
+    if ((this._itemHeldUntil.get(key) ?? 0) > now) return false;
+    if (this._itemForceAt && last < this._itemForceAt) return true;
+    return now - last >= this._itemRecastAfterMs(windowS);
+  }
+
+  /** With the layer, how long after its confirmation an item enchant is
+   *  recast (ms). Its duration is not client-readable: itemRecastMs is the
+   *  recast point, at the default 300 s threshold, of an enchant assumed to
+   *  last itemRecastMs + 300 s (25 + 5 min — the 30 min of Impenetrability and
+   *  every bane at tiers I-V; VI-VIII last longer). Another B3 threshold or the
+   *  idle-rebuff window moves that point as it moves a self buff's, never to
+   *  before half the assumed span (the _idleWindowFor rule). */
+  _itemRecastAfterMs(windowS = 0) {
+    const spanS = this.itemRecastMs / 1000 + REBUFF_SECONDS_REMAINING;
+    const w = typeof windowS === "number" && Number.isFinite(windowS) && windowS > 0 ? windowS : 0;
+    return 1000 * Math.max(spanS / 2, spanS - this._rebuffThresholdS() - w);
+  }
+
+  /** With the layer, the item enchants B7 keeps this pass: { total, due }
+   *  (status / needsBuff); null without the layer or with none. */
+  _itemCounts(now, windowS = 0) {
+    if (typeof this.optFn !== "function") return null;
+    const list = this._itemPass(now);
+    if (!list.length) return null;
+    let due = 0;
+    for (const ib of list) if (this._itemDue(ib, now, windowS)) due++;
+    return { total: list.length, due };
+  }
+
+  // Layer B7: an item cast that enchanted nothing — ACE finished it without a
+  // "You cast … on" line (no enchantable piece worn, the item out of reach or
+  // not a valid target) or never answered — is held ITEM_SILENT_RETRY_MS,
+  // noShowCooldownMs when the cast before it was silent too.
+  _itemNoLine(p, now, why) {
+    const key = `${p.spellId}:${p.itemGuid}`;
+    const n = (this._itemSilent.get(key) || 0) + 1;
+    this._itemSilent.set(key, n);
+    const ms = n >= SILENT_NO_SHOW_THRESHOLD ? this.noShowCooldownMs : ITEM_SILENT_RETRY_MS;
+    this._itemHeldUntil.set(key, now + ms);
+    const on = p.worn ? "worn armor" : `0x${(p.itemGuid >>> 0).toString(16)}`;
+    this.log(`item enchant ${p.spellId} on ${on} ${why} — held ${Math.round(ms / 1000)} s`);
+    this._itemPending = null;
+    this._release();
+  }
+
+  // Layer B7: a refused item cast, by class, as a self buff would be (the
+  // caller already held all buffing for "components" / "mana"):
+  //   fizzle         retried; FIZZLE_WALK_LIMIT in a row hold it
+  //                  FIZZLE_WALK_RETRY_MS (odds, not a ceiling: the self-buff
+  //                  fizzle walk), and a worn family steps a tier down for
+  //                  that long when one is known below it (_wornArmor) —
+  //                  otherwise back-to-back fizzles kept the bot on Buffing;
+  //   transient      busy / in the air: TRANSIENT_BACKOFF_MS;
+  //   unknown-spell  a worn rung leaves its family for good (B9's walk); an
+  //                  Items-tab one waits noShowCooldownMs;
+  //   place          PLACE_PARK_MS.
+  _holdRefusedItem(p, cls, now) {
+    const key = `${p.spellId}:${p.itemGuid}`;
+    if (cls === "fizzle") {
+      const n = (this._itemFizzles.get(key) || 0) + 1;
+      if (n < FIZZLE_WALK_LIMIT) {
+        this._itemFizzles.set(key, n);
+        return;
+      }
+      this._itemFizzles.delete(key);
+      this._itemHeldUntil.set(key, now + FIZZLE_WALK_RETRY_MS);
+      if (p.worn) {
+        this._wornWalkedUntil.set(p.spellId, now + FIZZLE_WALK_RETRY_MS);
+        this._wornMemo = null; // re-resolved on the next pass
+      }
+      this.log(`item enchant ${p.spellId} fizzled ${n}x in a row — held ${FIZZLE_WALK_RETRY_MS / 60_000} min`);
+    } else if (cls === "transient") {
+      this._backoffUntil = Math.max(this._backoffUntil, now + TRANSIENT_BACKOFF_MS);
+    } else if (cls === "unknown-spell") {
+      if (p.worn) {
+        this._wornUnresolvable.add(p.spellId);
+        this._wornMemo = null; // re-resolved on the next pass
+      } else this._itemHeldUntil.set(key, now + this.noShowCooldownMs);
+    } else if (cls === "place") this._itemHeldUntil.set(key, now + PLACE_PARK_MS);
   }
 
   _isActive(spellId) {
@@ -1224,7 +1602,7 @@ export class RynthBuffLoop {
 
   get status() {
     const active = this.desired.filter((id) => this._isActive(id));
-    return {
+    const st = {
       ready: this.registryReady,
       desired: this.desired.length,
       active: active.length,
@@ -1238,6 +1616,15 @@ export class RynthBuffLoop {
       blocked: this._blocked && this._blocked.until > Date.now() ? this._blocked.reason : null,
       lastRefusal: this.lastRefusal,
     };
+    // With the layer, B7's item enchants count as buffs: a due one keeps the
+    // kernel on Buffing (kernel.js _buffNeeded, active < desired) — B7's only
+    // tick once every self buff is up (header, "Worn armor").
+    const items = this._itemCounts(Date.now());
+    if (items) {
+      st.desired += items.total;
+      st.active += items.total - items.due;
+    }
+    return st;
   }
 
   _block(reason, ms, now = Date.now()) {
@@ -1849,45 +2236,71 @@ export class RynthBuffLoop {
   }
 
   // B7 — returns true if it issued/awaits an item-enchant cast this tick.
+  // The list is _itemPass: the Items tab's, and with the layer the worn armor
+  // first.
   _maintainItemBuffs(now, h) {
-    if (!this.itemBuffs.length) return false;
+    const list = this._itemPass(now);
+    if (!list.length) return false;
     // Awaiting chat confirmation? Time it out (no-chat = retry next pass).
     if (this._itemPending) {
-      const r = this._itemPending.refusal;
+      const p = this._itemPending;
+      const r = p.refusal;
       if (r) {
         // Refused outright: no chat will come. Components/mana hold all
-        // casting like a self-buff refusal; anything else retries next pass.
-        this.lastRefusal = { code: r.code, cls: r.cls, spellId: this._itemPending.spellId, at: now };
+        // casting like a self-buff refusal; anything else retries next pass
+        // (with the layer, as a self buff would: _holdRefusedItem).
+        this.lastRefusal = { code: r.code, cls: r.cls, spellId: p.spellId, at: now };
         if (r.cls === "components" || r.cls === "mana") {
           const ms = r.cls === "components" ? COMPONENTS_PARK_MS : MANA_BACKOFF_MS;
           this._backoffUntil = Math.max(this._backoffUntil, now + ms);
           this._block(r.cls, ms, now);
         }
-        this.log(`item enchant ${this._itemPending.spellId} refused (${r.cls})`);
+        if (p.layer) this._holdRefusedItem(p, r.cls, now);
+        this.log(`item enchant ${p.spellId} refused (${r.cls})`);
         this._itemPending = null;
         this._release();
         return true;
       }
-      if (now - this._itemPending.issuedAt > 5000) {
-        this.log(`item enchant no-chat timeout (${this._itemPending.spellId})`);
-        this._itemPending = null;
-        if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
+      if (p.layer && p.useDoneAtIssue != null) {
+        // With the layer, on ACE's own answer (B8's clocks): the per-item
+        // lines come before the cast's UseDone (CreatePlayerSpell runs inside
+        // DoCastSpell_Inner, FinishCast sends the UseDone), so a UseDone with
+        // no line after the grace enchanted nothing, and the hard cap is a
+        // lost UseDone. A long windup no longer times out with its line still
+        // to come.
+        if (!p.useDoneAt) {
+          const seq = this._useDoneNow();
+          if (seq != null && seq !== p.useDoneAtIssue) p.useDoneAt = now;
+        }
+        const age = now - p.issuedAt;
+        if (p.useDoneAt && now - p.useDoneAt > SELF_BUFF_USE_DONE_GRACE_MS && age > SELF_BUFF_GIVE_UP_MS) {
+          this._itemNoLine(p, now, "enchanted nothing");
+        } else if (age > SELF_BUFF_HARD_CAP_MS) {
+          this._itemNoLine(p, now, `had no answer in ${SELF_BUFF_HARD_CAP_MS / 1000} s`);
+        }
+        return true;
+      }
+      if (now - p.issuedAt > 5000) {
+        if (p.layer) this._itemNoLine(p, now, "no-chat timeout");
+        else {
+          this.log(`item enchant no-chat timeout (${p.spellId})`);
+          this._itemPending = null;
+          if (typeof h.releaseCast === "function") h.releaseCast("buff"); // C3 shared serializer
+        }
       }
       return true;
     }
     // A cast the host didn't send (below) waits ITEM_SEND_RETRY_MS before the
     // next try instead of re-claiming the token every kernel tick.
     if (now < (this._itemSendRetryAt ?? 0)) return false;
-    for (const ib of this.itemBuffs) {
-      const key = `${ib.spellId}:${ib.itemGuid}`;
-      const last = this._itemLastCast.get(key) ?? 0;
-      if (now - last < this.itemRecastMs) continue; // still fresh (by interval)
+    for (const ib of list) {
+      if (!this._itemDue(ib, now)) continue; // still fresh (by interval), or held
       // C3 shared serializer — see the self-buff cast site above.
       if (typeof h.tryClaimCast === "function" && !h.tryClaimCast("buff")) return true;
       const itemUseDoneAtIssue = this._useDoneNow(); // _refusalIsFor's queued-before-issue check
       let sent = false;
       try {
-        sent = h.CastSpell(ib.itemGuid, ib.spellId) !== false; // targeted at the item
+        sent = h.CastSpell(ib.itemGuid, ib.spellId) !== false; // targeted at the item (worn armor: at us)
       } catch (_) {
         sent = false;
       }
@@ -1905,6 +2318,8 @@ export class RynthBuffLoop {
         useDoneAtIssue: itemUseDoneAtIssue, useDoneEvents: 0, refusal: null,
       };
       if (ib.itemName) this._itemPending.itemName = String(ib.itemName); // tightened B7 confirm (_onChat)
+      if (ib.worn) Object.assign(this._itemPending, { worn: true, spellName: ib.spellName }); // confirmed by the spell's line
+      if (typeof this.optFn === "function") this._itemPending.layer = true; // resolution + holds (header, "Worn armor")
       this.lastCastAt = now;
       return true;
     }
@@ -1917,8 +2332,9 @@ export class RynthBuffLoop {
 // character, in a fixed order — Creature Enchantment Mastery, Focus,
 // Willpower, the other creature buffs plus a mastery for every TRAINED skill
 // (IsSkillUsable = training >= 2, :1892), life/armor/protections, weapon auras.
-// Step 7 (armor banes) are ITEM enchantments cast on worn armor — B7's job,
-// which needs item guids — so they are not in the self list. The family
+// Step 7 (armor banes) are ITEM enchantments on worn armor — B7 casts them at
+// our own guid after the self buffs, with the VT layer's BuffArmorImpen /
+// BuffProfileBanes (_wornArmor) — so they are not in the self list. The family
 // tables ([base name, SpellCategory]) live in buff_families.js; the category
 // is the B2/B4 family, so any known ladder member stands in and B4 upgrades it
 // to the best known tier. rynth_magic_update_test.cjs checks every category

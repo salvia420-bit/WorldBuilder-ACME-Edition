@@ -17,7 +17,10 @@
 // Record: { v:1, name, kind, rev, savedAt, settings, lists, refs, charName? }.
 // `settings` holds canonical keys (normally only values ≠ default — VtOptions
 // writes the diff), `lists` the tab lists (LIST_KEYS), `refs` the nav / meta /
-// loot names (REF_KEYS). Run state is never profile data.
+// loot names (REF_KEYS). Run state is never profile data — except
+// StartMacroOnLogin (owner decision 2026-10-19): a profile may ask for the
+// macro to START when its character logs in (rynth/boot.js
+// maybeStartMacroOnLogin); running / stopped itself is never stored here.
 //
 // Every storage access is try/catch'd (createKv). A failed write returns
 // { ok:false, error } and keeps the in-memory record (still dirty, so the next

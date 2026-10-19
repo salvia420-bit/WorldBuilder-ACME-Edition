@@ -496,6 +496,23 @@ export function pacerDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) {
   return Math.max(0, frameIntervalMs - (nowMs - lastFrameStartMs));
 }
 
+/**
+ * The pace of a cap set at runtime (`window.__setFrameCap` — the VTank
+ * profile's EnableFPSLimit, 2026-10-19): the sleep ends SOFT_CAP_WAKE_EARLY_MS
+ * early and requestAnimationFrame aligns the frame to the display's refresh.
+ * The exact pacer above sleeps a cap at the display's own rate (60 fps on a
+ * 60 Hz screen) for one whole refresh, so the timer lands just past the next
+ * vsync and every frame waits one more — 30 fps. Waking early keeps a cap at
+ * or below the refresh rate exact (60 → 60, 30 → 30 on 60 Hz); on a faster
+ * display the cap can run up to one refresh fast (60 → 72 on 144 Hz). The URL
+ * cap (?targetFps, which tooling measures with) keeps the exact pacer.
+ * Pure: exported for the unit harness.
+ */
+export const SOFT_CAP_WAKE_EARLY_MS = 4;
+export function softCapDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) {
+  return Math.max(0, pacerDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) - SOFT_CAP_WAKE_EARLY_MS);
+}
+
 function terrainInFlightLbKeys(streamGuardState) {
   const inFlight = streamGuardState?.inFlight;
   if (!(inFlight instanceof Set) || inFlight.size === 0) return null;
@@ -2432,8 +2449,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // (idle until window.__renderOnce()). On targetFps, we measure the
   // wall-clock at scheduleNext time and setTimeout the difference up
   // to the per-frame budget; on render-on-demand we no-op (the caller
-  // drives via __renderOnce). Bare rAF stays the default.
-  const _frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
+  // drives via __renderOnce). Bare rAF stays the default. `let`: the
+  // frame cap below (window.__setFrameCap) re-paces it at runtime.
+  let _frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
+  // A runtime cap paces softly (softCapDelayMs); the URL cap stays exact.
+  let _frameCapSoft = false;
   // #14 (2026-06-07): the dt-recovery freeze must scale with the loop's
   // cadence, otherwise a slow paced loop (e.g. ?targetFps=1 → 1000 ms
   // raw dt EVERY frame) permanently trips the >0.5 s recovery arm and
@@ -2447,6 +2467,45 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   const _dtRecoveryThresholdS = renderOnDemand
     ? Infinity
     : Math.max(DT_RECOVERY_RAW_THRESHOLD_S, (_frameIntervalMs / 1000) * 1.5);
+  // VTank Display options (2026-10-19, plugins/rynth-vt/display.js via
+  // scene3d/frame_cap.js): the cap is runtime-settable.
+  // `window.__setFrameCap(fps)` paces the loop as ?targetFps=N would (0 =
+  // bare rAF) → true; `window.__frameCapState()` reads it back. ?targetFps
+  // wins — the URL cap is fixed for the page and the setter refuses (→ false),
+  // as it does under ?renderOnDemand (no pace to set). fps is clamped to
+  // [FRAME_CAP_MIN_FPS, 240]: down to 4 fps (250 ms) the dt-recovery threshold
+  // above keeps its 0.5 s floor (1.5 × 0.25 s < 0.5 s), so that const stays
+  // exact; the portal-space pace (scheduleNext) and the frame-work reference
+  // period (_postRenderStreamSlot) read _frameIntervalMs per frame. A cap
+  // change applies from the next scheduleNext (a pending pacer sleep runs
+  // out at the old pace — at most one frame). The adaptive render-scale
+  // controller is not misled by a cap: it times its OWN rAF chain
+  // (adaptive_render_scale.js start()), which keeps the display rate between
+  // capped frames, and its GPU fence is read one rendered frame later — a cap
+  // only shortens its samples and gives the GPU more slack, so a cap can let
+  // it raise the scale, never lower it.
+  const FRAME_CAP_MIN_FPS = 4;
+  if (typeof window !== "undefined") {
+    window.__setFrameCap = (fps) => {
+      if (targetFps > 0 || renderOnDemand) return false;
+      const n = Number(fps);
+      if (!Number.isFinite(n) || n < 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[render-cadence] invalid frame cap ${fps}; expected fps >= 0 (0 = uncapped)`);
+        return false;
+      }
+      _frameIntervalMs = n > 0 ? 1000 / Math.min(240, Math.max(FRAME_CAP_MIN_FPS, n)) : 0;
+      _frameCapSoft = _frameIntervalMs > 0; // softCapDelayMs: never halves a cap at the display's rate
+      return true;
+    };
+    window.__frameCapState = () => ({
+      fps: _frameIntervalMs > 0 ? Math.round(100000 / _frameIntervalMs) / 100 : 0,
+      intervalMs: _frameIntervalMs,
+      urlFps: targetFps,
+      renderOnDemand,
+      soft: _frameCapSoft,
+    });
+  }
   // sched-timers (2026-06-07): track the in-flight scheduler handles so
   // stop()/onPause()/onResume() can cancel a pending re-arm. Without
   // this, a paused/restored loop (context-loss recovery, hot-swap stop)
@@ -2549,7 +2608,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // F3: budget charged against THIS frame's start (`lastFrameTs`, stamped
       // at the top of tick), so period → _frameIntervalMs exactly. Charging it
       // against the previous scheduleNext double-counted the sleep.
-      const delay = pacerDelayMs(_ivl, lastFrameTs, now);
+      const delay = _frameCapSoft ? softCapDelayMs(_ivl, lastFrameTs, now) : pacerDelayMs(_ivl, lastFrameTs, now);
       if (delay > 0) {
         _schedTimeoutId = setTimeout(() => {
           _schedTimeoutId = null;

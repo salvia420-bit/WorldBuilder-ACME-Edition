@@ -6,7 +6,9 @@
 // insert mode (Add to End / Insert Above / Insert Below, G:210) and the
 // selected row are panel state kept here, so `route.add(type, fields)` places
 // the waypoint the way VTank does. "Add" uses the world selection (a portal ⇒
-// Portal/NPC point; Follow route ⇒ the follow target, G:199).
+// Portal/NPC point; Follow route ⇒ the follow target, G:199). The view also
+// carries the "Steep" switch's settings row (ShowTerrainPassability — a
+// profile option, so it is there without a bot).
 //
 // Meta: MetaEngine (bot.vt.meta) for state/enable/debug/snapshot; rule edits
 // are made on a CLONE of engine.meta() and applied with
@@ -20,7 +22,11 @@
 // condition/action editors from them.
 
 import { RECALL_SPELL_NAMES, degToWorld } from "../../nav_file.js";
-import { safe, ok, fail, command, asResult, clone, isFn, num } from "./bridge_options.js";
+import { safe, ok, fail, command, asResult, clone, isFn, num, rowView } from "./bridge_options.js";
+
+/** The Route tab's "Steep" switch (2026-10-19): the steep-ground tint, drawn
+ *  page-wide by plugins/rynth-vt/display.js whenever the option is on. */
+export const STEEP_KEY = "ShowTerrainPassability";
 
 // ── Appendix B keyword tables ──────────────────────────────────────────────
 // field types: int · float · text · textarea · hex (uint32 shown as hex)
@@ -429,6 +435,13 @@ export function createRouteMetaBridge(ctx) {
     return nav && isFn(nav.status) ? safe(() => nav.status(), null) : null;
   }
 
+  /** The "Steep" switch's settings row (one VtOptions.get, works without a
+   *  bot through the page session); null = no settings yet. */
+  function steepRow(options) {
+    const r = options && isFn(options.get) ? safe(() => options.get(STEEP_KEY), null) : null;
+    return r && r.ok && r.row ? rowView({ row: r.row, value: r.value }) : null;
+  }
+
   function routeView(vt, bot, st = undefined) {
     const nav = navOf(vt);
     const host = ctx.hostOf(bot);
@@ -484,6 +497,7 @@ export function createRouteMetaBridge(ctx) {
       profiles: profiles && isFn(profiles.list) ? (safe(() => profiles.list(), []) || []).map((p) => ({ name: String(p.name ?? ""), savedAt: num(p.savedAt) })) : [],
       currentProfile: safe(() => options?.getRef?.("navProfile"), null),
       recalls: nav ? knownRecalls(host) : [],
+      steep: steepRow(options),
     };
   }
 

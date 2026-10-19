@@ -76,9 +76,55 @@
 //       MAX_INUSE_REFUSALS-th refusal (constants after WebAC corpseBook.ts,
 //       AGPL-3.0; the strings are re-derived from ACE)
 // A corpse ACE opens never sees any of this, so the default path is unchanged.
+//
+// 2026-10-19 — the VTank looting options, made live. They reach the loop
+// through ONE injected reader, `optFn(key)` (rynth/vt/index.js binds it).
+// Without the layer (?botVt=off) it is absent and every path below is the
+// literal loop, host call for host call:
+//   CorpseApproachRangeMin  the reach (REACH_M without the layer): walk to
+//       within it, then Use. ACE's corpse UseRadius is 2 m edge to edge and
+//       the server walks the last steps itself; floored at REACH_FLOOR_M (the
+//       client's MoveTo stops ~0.6 m short of the point).
+//   Corpse ownership (VTank). A corpse's LongDesc (string 16, an assessment
+//       property: one RequestId) reads "Killed by <killer>." (ACE
+//       Creature_Death.CreateCorpse; the admin '+' stripped, "misadventure"
+//       when nobody), plus " This corpse generated a rare item!" on a rare's
+//       (Corpse.TryGenerateRare, before the corpse enters the world). Our kill
+//       — or our pet's, "<me>'s <pet>" (Pet.cs) — and our own corpse: always.
+//       A fellow's kill (TryGetFellowshipInfo names) with LootFellowCorpses, at
+//       once. Anyone else's with LootAllCorpses, from OTHERS_AFTER_MS after we
+//       first saw it (stamped by _findCorpse: a fight in between can only
+//       make that later). Never someone else's rare; never one that names no
+//       killer. LootOnlyRareCorpses: only our own rare's corpse. A corpse whose
+//       description is still on its way is not available (the kernel asks
+//       _findCorpse every tick and must not pin Loot on it); no answer after
+//       DESC_TRIES appraisals names no killer. "You do not yet have the right"
+//       on a fellow's / anyone's corpse is tried again once it is 100 s old,
+//       then every NOT_YET_RETRY_MS (ACE opens a monster corpse to everyone
+//       ~120 s after it appears, Corpse.HalfLife), and left while in view
+//       after MAX_NOT_YET_REFUSALS (a player's corpse never opens). A host that
+//       cannot read descriptions keeps the old rule (every corpse; the server
+//       decides), except that LootOnlyRareCorpses then goes by the
+//       "<me> has discovered the X!" System line (Corpse.EnterWorld, 0.5 s
+//       after a rare's corpse appears; it names no corpse): the corpses the
+//       book saw appear within RARE_HINT_MS before it.
+//   ReadUnknownScrolls. A scroll (Writable, with a Spell DataId 28 — in the
+//       CreateObject header, no appraisal) of a spell we don't know that ACE
+//       would let us learn (canReadScroll: Player_Skills.CanReadScroll) is
+//       taken whatever its value and read after the corpse. A scroll the loot
+//       profile Keeps (Sell, KeepUpTo) is kept; a Read rule's scroll is read
+//       under the same test, and only while ReadUnknownScrolls is on.
+//   A .utl Salvage rule's pickups are salvaged after the corpse.
+// Nothing taken back from our OWN corpse is salvaged or read (a Salvage rule
+// would destroy our own gear). The reading and the salvaging belong to the VT
+// support modules (rynth/vt/support/scrolls.js, salvage.js): each confirmed
+// pickup to read or salvage is handed over through takeWork(purpose), and
+// they start nothing while corpseWorkPending() — a corpse in hand, just
+// finished, or being described — so no read or salvage overlaps a corpse Use.
 
 import { portalSpaceActive } from "./portal_gate.js";
 import { worldX, worldY, isEnvCellId } from "./nav_frame.js";
+import { SCHOOL_SKILL } from "./skill_cap.js";
 
 const CORPSE_WCID = 21;
 const LOOTED_TTL_MS = 5 * 60_000;
@@ -115,6 +161,28 @@ const CHAT_CATEGORY_TRANSIENT = 9; // CommunicationTransientString
 // Corpse refusals (header, 2026-10-13).
 const INUSE_SKIP_MS = 10_000; // "already in use" — someone else has it open
 const MAX_INUSE_REFUSALS = 3; // then parked like any refused corpse
+// The VTank looting options (header, 2026-10-19).
+const REACH_FLOOR_M = 1; // CorpseApproachRangeMin floor
+const PSTR_LONG_DESC = 16; // a corpse's "Killed by X." (after an appraisal)
+const DESC_RETRY_MS = 3000; // an unanswered corpse appraisal is asked again …
+const DESC_TRIES = 3; // … up to this many times; then it names no killer
+const OTHERS_AFTER_MS = 100_000; // VTank: someone else's kill, from 100 s after it appeared
+const NOT_YET_RETRY_MS = 15_000; // "do not yet have the right" on a corpse we may take later
+const MAX_NOT_YET_REFUSALS = 5; // then left while in view
+const RARE_HINT_MS = 5000; // corpses this new when "<me> has discovered the X!" arrives
+const FELLOW_CACHE_MS = 2000;
+const KNOWN_SPELLS_CACHE_MS = 2000;
+const SKILLS_CACHE_MS = 5000;
+const IT_WRITABLE = 0x2000; // ItemType Writable (scrolls, books)
+const DID_SPELL = 28; // PropertyDataId Spell — a scroll's spell
+const SCROLL_SKILL_MARGIN = 50; // ACE Player_Skills magicSkillCheckMargin
+const SKILL_TRAINED = 2; // SkillAdvancementClass.Trained
+const READ_SPELL_TTL_MS = 10 * 60_000; // a spell taken to read keeps its other scrolls from being taken
+const MAX_WORK = 200; // confirmed pickups nobody took over (no support module) are dropped oldest first
+const BOOK_PRUNE_MS = 1000; // the corpse book drops corpses out of view at most this often
+const SETTLE_AFTER_CORPSE_MS = 1500; // ACE keeps us busy through the last pickup's return animation
+const RARE_FOUND_RE = /^(.+) has discovered the (.+)!$/; // ACE Corpse.EnterWorld
+const RARE_TAIL = "This corpse generated a rare item!"; // ACE Corpse.TryGenerateRare
 
 // ACE.Server Corpse.Open (rare / PK / no rights yet) and Container.InUseMessage.
 // The capture is the corpse's Name: "Corpse of X" / "Treasure of X"
@@ -135,6 +203,32 @@ export function parseCorpseRefusal(text) {
     if (m) return { why, name: m[1] };
   }
   return null;
+}
+
+/** ACE Player_Skills.CanReadScroll — can a scroll of difficulty `power` be
+ *  learned with the school's skill row ({ current, training })? Below 50 or
+ *  from 300 anyone can; otherwise the school must be trained and its current
+ *  (buffed) skill ≥ power − 50. An unknown difficulty is not judged (false).
+ *  The loot loop takes scrolls by it and rynth/vt/support/scrolls.js reads by it. */
+export function canReadScroll(power, row) {
+  const p = Number(power);
+  if (!Number.isFinite(p) || p <= 0) return false;
+  if (p < 50 || p >= 300) return true;
+  const skill = Number(row && row.current);
+  return !!row && Number(row.training) >= SKILL_TRAINED && Number.isFinite(skill) && skill >= p - SCROLL_SKILL_MARGIN;
+}
+
+/** A corpse's LongDesc (header, 2026-10-19) → { killer, rare }: the killer it
+ *  names without ACE's admin '+', "" for none or "misadventure"; rare when it
+ *  says the corpse generated a rare item. */
+export function parseCorpseDescription(text) {
+  let s = typeof text === "string" ? text.trim() : "";
+  const rare = s.endsWith(RARE_TAIL);
+  if (rare) s = s.slice(0, -RARE_TAIL.length).trim();
+  const m = /^Killed by (.+)\.$/.exec(s);
+  let killer = m ? m[1].trim().replace(/^\+/, "") : "";
+  if (killer.toLowerCase() === "misadventure") killer = "";
+  return { killer, rare };
 }
 
 // Horizontal distance in the world frame (rynth/nav_frame.js — the one copy
@@ -201,6 +295,20 @@ export class RynthLootLoop {
     this._corpseRefusal = null; // { guid, why } — the last refusal naming this.corpse
     this._barred = new Set(); // corpse guids ACE will not open for us ("may not loot … because"), while in view
     this._inUse = new Map(); // corpse guid -> { n, until } — "already in use" refusals, while in view
+    // The VTank looting options (header, 2026-10-19). `optFn(key)` is the VT
+    // layer's option reader (rynth/vt/index.js binds it); null = the literal loop.
+    this.optFn = null;
+    this._book = new Map(); // corpse guid -> what we know of it, while in view (_bookEntry)
+    this._bookPrunedAt = -Infinity;
+    this._seenScratch = new Set(); // reused by the once-a-second book prune
+    this._ownCorpse = false; // the corpse in hand is our own (nothing from it is tagged)
+    this._fellows = { at: -Infinity, names: [] };
+    this._myNameLc = "";
+    this._known = { at: -Infinity, set: new Set() };
+    this._skills = { at: -Infinity, rows: null };
+    this._readSpells = new Map(); // spell id -> ts a scroll of it was taken to read
+    this._pendingTag = null; // { purpose, spellId } of the pickup in CONFIRM
+    this._work = []; // confirmed pickups for the support modules: { guid, purpose, spellId, at }
     if (host && typeof host.onEvent === "function") host.onEvent((e) => this._onEvent(e));
   }
 
@@ -231,6 +339,7 @@ export class RynthLootLoop {
     if (!e) return;
     if (e.kind === KIND_CHAT) {
       this._noteCorpseRefusal(e);
+      if (typeof this.optFn === "function") this._noteRareFind(e);
       return;
     }
     const now = Date.now();
@@ -291,14 +400,355 @@ export class RynthLootLoop {
       this._finishCorpse(now, `may not loot corpse ${hex} (rare / PK kill) — parked while in view`);
       return true;
     }
+    // A fellow's / anyone's kill we chose to take (header, 2026-10-19): again
+    // once it is 100 s old, then every NOT_YET_RETRY_MS; left while in view
+    // after MAX_NOT_YET_REFUSALS. Not parked — the book holds it back.
+    const e = typeof this.optFn === "function" ? this._book.get(g) : null;
+    if (e && (e.kind === "fellow" || e.kind === "other")) {
+      e.notYet = (e.notYet || 0) + 1;
+      if (e.notYet >= MAX_NOT_YET_REFUSALS) {
+        e.refused = true;
+        this._finishCorpse(now, `no right to loot corpse ${hex} after ${e.notYet} tries — left while in view`, false);
+        return true;
+      }
+      e.retryAt = Math.max(e.seenAt + OTHERS_AFTER_MS, now + NOT_YET_RETRY_MS);
+      this._finishCorpse(now, `no right to loot corpse ${hex} yet — again in ${Math.round((e.retryAt - now) / 1000)}s`, false);
+      return true;
+    }
     this._finishCorpse(now, `no right to loot corpse ${hex} yet — corpse parked`);
     return true;
   }
 
-  // Refusal memory lasts only while the corpse stays in view.
-  _forgetGoneRefusals(seen) {
+  // Refusal memory and the corpse book last only while the corpse stays in
+  // view; the book is pruned only when `book` (once a second, _findCorpse).
+  _forgetGoneRefusals(seen, book = false) {
     for (const g of this._barred) if (!seen.has(g)) this._barred.delete(g);
     for (const g of this._inUse.keys()) if (!seen.has(g)) this._inUse.delete(g);
+    if (!book) return;
+    for (const g of this._book.keys()) if (!seen.has(g)) this._book.delete(g);
+    this._bookPrunedAt = Date.now();
+  }
+
+  /** With the layer: is the loop at a corpse, or about to be? The support
+   *  modules (rynth/vt/support/scrolls.js, salvage.js) start nothing then, so
+   *  no read or salvage overlaps a corpse Use: a corpse in hand (not SCAN);
+   *  back in SCAN less than SETTLE_AFTER_CORPSE_MS ago (ACE keeps us busy
+   *  through the last pickup's return animation, Player_Inventory
+   *  EnqueuePickupDone, and refuses a read meanwhile); or a corpse whose
+   *  description was asked for and may still come. */
+  corpseWorkPending() {
+    if (!this.enabled) return false;
+    if (this.state !== "SCAN") return true;
+    const now = Date.now();
+    if (now - this.stateSince < SETTLE_AFTER_CORPSE_MS && now >= this.stateSince) return true;
+    for (const e of this._book.values()) if (e.desc === undefined && e.descTries > 0 && now - e.descAt < DESC_RETRY_MS) return true;
+    return false;
+  }
+
+  // ── VTank looting options (header, 2026-10-19) ─────────────────────────
+  // The layer's options for this pass, or null without the layer (no optFn):
+  // then every caller keeps the literal path.
+  _vtOpts() {
+    const f = this.optFn;
+    if (typeof f !== "function") return null;
+    const on = (k) => {
+      try {
+        return f(k) === true;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      lootFellow: on("LootFellowCorpses"),
+      lootAll: on("LootAllCorpses"),
+      onlyRare: on("LootOnlyRareCorpses"),
+      readUnknown: on("ReadUnknownScrolls"),
+      desc: this._descCap(),
+    };
+  }
+
+  // How near a corpse the walk goes before the Use.
+  _reachM() {
+    const f = this.optFn;
+    if (typeof f !== "function") return REACH_M;
+    let v;
+    try {
+      v = Number(f("CorpseApproachRangeMin"));
+    } catch {
+      v = NaN;
+    }
+    return Number.isFinite(v) ? Math.max(REACH_FLOOR_M, v) : REACH_M;
+  }
+
+  // Can this host read a corpse's description (string properties + an
+  // appraisal request)? RynthWebHost answers per capability; a fake without
+  // has() is taken at its members.
+  _descCap() {
+    const h = this.host;
+    if (typeof h.TryGetObjectStringProperty !== "function" || typeof h.RequestId !== "function") return false;
+    if (typeof h.has !== "function") return true;
+    try {
+      return h.has("GetObjectStringProperty") === true && h.has("RequestId") === true;
+    } catch {
+      return false;
+    }
+  }
+
+  // The book's entry for a corpse in view, stamped when first seen.
+  _bookEntry(g, now) {
+    let e = this._book.get(g);
+    if (!e) {
+      // desc: { killer, rare } once read; kind: "own" | "fellow" | "other" |
+      // null as last judged; retryAt / notYet / refused: "do not yet have
+      // the right"; rareHint: the rare announcement pointed at it.
+      e = { seenAt: now, desc: undefined, descTries: 0, descAt: 0, askedAt: 0, name: undefined, kind: null, retryAt: 0, notYet: 0, refused: false, rareHint: false };
+      this._book.set(g, e);
+    }
+    return e;
+  }
+
+  // VTank's rule for one corpse in range: "loot", "wait" (a later try),
+  // "skip", or "pending" (its description is on its way).
+  _corpseVerdict(g, e, o, now) {
+    if (!o.desc) return o.onlyRare ? (e.rareHint ? "loot" : "skip") : "loot";
+    if (e.refused) return "skip";
+    if (e.desc === undefined && !this._readDesc(g, e, now)) return "pending";
+    const { killer, rare } = e.desc;
+    let kind = killer ? this._killerKind(killer, now) : null;
+    if (kind !== "own" && this._isOwnCorpse(g, e)) kind = "own";
+    e.kind = kind;
+    if (o.onlyRare) return kind === "own" && rare ? "loot" : "skip";
+    if (!kind) return "skip"; // names no killer, or "misadventure"
+    if (kind === "own") return "loot";
+    if (rare) return "skip"; // never someone else's rare
+    if (kind === "fellow" && o.lootFellow) return now >= e.retryAt ? "loot" : "wait";
+    if (o.lootAll) return now >= Math.max(e.seenAt + OTHERS_AFTER_MS, e.retryAt) ? "loot" : "wait";
+    return "skip";
+  }
+
+  // Read the corpse's description, asking for an appraisal (again every
+  // DESC_RETRY_MS, DESC_TRIES times). An answer without one, or no answer at
+  // all, names no killer. True once e.desc is set.
+  _readDesc(g, e, now) {
+    const h = this.host;
+    let text = null;
+    try {
+      text = h.TryGetObjectStringProperty(g, PSTR_LONG_DESC);
+    } catch {
+      text = null;
+    }
+    if (typeof text !== "string" || !text) {
+      const answered = this._descAnswered(g, e);
+      if (!answered && e.descTries < DESC_TRIES) {
+        if (!e.descTries || now - e.descAt >= DESC_RETRY_MS) {
+          if (!e.descTries) e.askedAt = now;
+          e.descTries++;
+          e.descAt = now;
+          try {
+            h.RequestId(g);
+          } catch {
+            /* asked again on the next retry */
+          }
+        }
+        return false;
+      }
+      if (!answered && now - e.descAt < DESC_RETRY_MS) return false; // the last ask may still be answered
+      text = "";
+    }
+    e.desc = parseCorpseDescription(text);
+    const { killer, rare } = e.desc;
+    this.log(`corpse ${(g >>> 0).toString(16)}: ${killer ? `killed by ${killer}` : "names no killer"}${rare ? " (rare)" : ""}`);
+    return true;
+  }
+
+  // An appraisal of `g` came back since our first ask (GetLastIdTime is in
+  // the Date.now() domain).
+  _descAnswered(g, e) {
+    const h = this.host;
+    if (!e.descTries || typeof h.GetLastIdTime !== "function") return false;
+    let at = 0;
+    try {
+      at = Number(h.GetLastIdTime(g)) || 0;
+    } catch {
+      at = 0;
+    }
+    return at > 0 && at >= e.askedAt;
+  }
+
+  // "own" (we, or our pet "<me>'s <pet>", killed it), "fellow" (a fellow or a
+  // fellow's pet) or "other". Names compare without the admin '+', ignoring case.
+  _killerKind(killer, now) {
+    const k = String(killer).toLowerCase();
+    const by = (n) => !!n && (k === n || k.startsWith(`${n}'s `));
+    if (by(this._myName())) return "own";
+    for (const f of this._fellowNames(now)) if (by(f)) return "fellow";
+    return "other";
+  }
+
+  // Our own corpse ("Corpse of <me>"): ACE lets its victim loot it whoever
+  // killed it.
+  _isOwnCorpse(g, e) {
+    if (e.name === undefined) {
+      let n = null;
+      try {
+        n = typeof this.host.TryGetObjectName === "function" ? this.host.TryGetObjectName(g) : null;
+      } catch {
+        n = null;
+      }
+      e.name = typeof n === "string" ? n.trim().toLowerCase() : "";
+    }
+    const me = this._myName();
+    const m = /^corpse of \+?(.+)$/.exec(e.name);
+    return !!me && !!m && m[1] === me;
+  }
+
+  // Our character's name, lower case, without the admin '+'.
+  _myName() {
+    if (this._myNameLc) return this._myNameLc;
+    const h = this.host;
+    let n = null;
+    try {
+      const me = typeof h.GetPlayerId === "function" ? h.GetPlayerId() : 0;
+      n = me && typeof h.TryGetObjectName === "function" ? h.TryGetObjectName(me) : null;
+    } catch {
+      n = null;
+    }
+    this._myNameLc = typeof n === "string" ? n.trim().replace(/^\+/, "").toLowerCase() : "";
+    return this._myNameLc;
+  }
+
+  // Our fellows' names (not ours), lower case, without the admin '+'.
+  // TryGetFellowshipInfo frees its wasm boxes; TryGetFellowship (older hosts) does not.
+  _fellowNames(now) {
+    const c = this._fellows;
+    if (now - c.at < FELLOW_CACHE_MS && now >= c.at) return c.names;
+    const me = this._myName();
+    const h = this.host;
+    let f = null;
+    try {
+      if (typeof h.TryGetFellowshipInfo === "function") f = h.TryGetFellowshipInfo();
+      else if (typeof h.TryGetFellowship === "function") f = h.TryGetFellowship();
+    } catch {
+      f = null;
+    }
+    const names = [];
+    for (const m of f && Array.isArray(f.members) ? f.members : []) {
+      const n = String((m && m.name) ?? "").trim().replace(/^\+/, "").toLowerCase();
+      if (n && n !== me) names.push(n);
+    }
+    this._fellows = { at: now, names };
+    return names;
+  }
+
+  // "<me> has discovered the X!" — a System line 0.5 s after a rare's corpse
+  // appears (ACE Corpse.EnterWorld); it names the finder, not the corpse. The
+  // corpses the book saw appear within RARE_HINT_MS before it are that rare's:
+  // what LootOnlyRareCorpses goes by on a host that cannot read descriptions.
+  // A corpse the book has not seen yet is not one of them (its first sighting
+  // would date it now).
+  _noteRareFind(e) {
+    if ((e.u32b >>> 0) !== CHAT_CATEGORY_SYSTEM || typeof e.text !== "string") return;
+    const m = RARE_FOUND_RE.exec(e.text.trimEnd());
+    if (!m) return;
+    const me = this._myName();
+    if (!me || m[1].trim().replace(/^\+/, "").toLowerCase() !== me) return;
+    const now = Date.now();
+    for (const entry of this._book.values()) if (now - entry.seenAt <= RARE_HINT_MS) entry.rareHint = true;
+    this.log(`we found a rare: ${m[2]}`);
+  }
+
+  // The spell a corpse item would be read for (ReadUnknownScrolls / a Read
+  // rule — header): a scroll of a spell we don't know and none of whose
+  // scrolls was just taken, that ACE would let us learn (canReadScroll on the
+  // school's skill row). 0 = none.
+  _scrollToRead(item, now) {
+    const h = this.host;
+    let itemType = 0;
+    let spellId = 0;
+    try {
+      itemType = Number(h.TryGetObjectIntProperty(item, 1)) >>> 0; // ItemType
+      spellId = typeof h.TryGetObjectDataIdProperty === "function" ? Number(h.TryGetObjectDataIdProperty(item, DID_SPELL)) >>> 0 : 0;
+    } catch {
+      return 0;
+    }
+    if (!(itemType & IT_WRITABLE) || !spellId) return 0;
+    const taken = this._readSpells.get(spellId);
+    if (taken !== undefined && now - taken < READ_SPELL_TTL_MS) return 0;
+    if (this._knownSpellSet(now).has(spellId)) return 0;
+    let rec = null;
+    try {
+      rec = typeof h.TryGetSpellRecord === "function" ? h.TryGetSpellRecord(spellId) : null;
+    } catch {
+      rec = null;
+    }
+    const skillId = rec ? SCHOOL_SKILL[rec.school] : undefined;
+    if (!skillId) return 0; // no school known: not judged, not taken
+    const rows = this._skillRows(now);
+    const row = rows ? rows[skillId] ?? rows[String(skillId)] ?? null : null;
+    return canReadScroll(rec.power, row) ? spellId : 0;
+  }
+
+  _readId(item, o, now) {
+    return o && o.readUnknown ? this._scrollToRead(item, now) : 0;
+  }
+
+  _knownSpellSet(now) {
+    const c = this._known;
+    if (now - c.at < KNOWN_SPELLS_CACHE_MS && now >= c.at) return c.set;
+    let ids = [];
+    try {
+      ids = typeof this.host.TryGetKnownSpells === "function" ? this.host.TryGetKnownSpells() || [] : [];
+    } catch {
+      ids = [];
+    }
+    this._known = { at: now, set: new Set(Array.from(ids, (x) => Number(x) >>> 0)) };
+    return this._known.set;
+  }
+
+  _skillRows(now) {
+    const c = this._skills;
+    if (now - c.at < SKILLS_CACHE_MS && now >= c.at) return c.rows;
+    let stats = null;
+    try {
+      stats = typeof this.host.TryGetPlayerStats === "function" ? this.host.TryGetPlayerStats() : null;
+    } catch {
+      stats = null;
+    }
+    this._skills = { at: now, rows: stats && stats.skills ? stats.skills : null };
+    return this._skills.rows;
+  }
+
+  // What becomes of a loot-profile pickup after the corpse: a Salvage rule's
+  // item is salvaged; a Read rule's scroll is read when ReadUnknownScrolls
+  // would read it; anything else (Keep, Sell, KeepUpTo) is kept.
+  _pickupTag(item, action, o, now) {
+    if (action === "salvage") return { purpose: "salvage", spellId: 0 };
+    if (action !== "read") return null;
+    const spellId = this._readId(item, o, now);
+    return spellId ? { purpose: "read", spellId } : null;
+  }
+
+  _queueWork(guid, tag, now) {
+    if (this._work.length >= MAX_WORK) this._work.shift();
+    this._work.push({ guid: guid >>> 0, purpose: tag.purpose, spellId: tag.spellId || 0, at: now });
+    if (tag.purpose !== "read" || !tag.spellId) return;
+    this._readSpells.set(tag.spellId, now);
+    if (this._readSpells.size > 64) for (const [id, at] of this._readSpells) if (now - at >= READ_SPELL_TTL_MS) this._readSpells.delete(id);
+  }
+
+  /** The confirmed pickups waiting for `purpose` ("salvage" | "read"), handed
+   *  over once — rynth/vt/support/salvage.js and scrolls.js drain them:
+   *  [{ guid, spellId, at }]. */
+  takeWork(purpose) {
+    if (!this._work.length) return [];
+    const out = [];
+    const keep = [];
+    for (const w of this._work) {
+      if (w.purpose === purpose) out.push({ guid: w.guid, spellId: w.spellId, at: w.at });
+      else keep.push(w);
+    }
+    this._work = keep;
+    return out;
   }
 
   // ── netBrain (D1 path A′) — .NET-wasm LootScoring shadow ────────────────
@@ -369,7 +819,9 @@ export class RynthLootLoop {
     return full;
   }
 
-  _findCorpse() {
+  // `o` = _vtOpts() (header, 2026-10-19): with the layer, a corpse counts
+  // only when VTank's ownership rule takes it now.
+  _findCorpse(o = this._vtOpts()) {
     if (!this.enabled) return null; // looting OFF — kernel _corpseAvailable() stays false, never routes to Loot
     if (this._packFull()) return null;
     const h = this.host;
@@ -378,7 +830,15 @@ export class RynthLootLoop {
     const now = Date.now();
     const maxD = Number.isFinite(this.corpseRangeM) ? this.corpseRangeM : 30;
     let best = null;
-    const seen = this._barred.size || this._inUse.size ? new Set() : null;
+    // Refusal memory is pruned on every call, as before; the layer's corpse
+    // book once a second, through one reused Set (the kernel asks every tick).
+    const pruneBook = o !== null && (now - this._bookPrunedAt >= BOOK_PRUNE_MS || now < this._bookPrunedAt);
+    let seen = null;
+    if (this._barred.size || this._inUse.size) seen = new Set();
+    else if (pruneBook) {
+      seen = this._seenScratch;
+      seen.clear();
+    }
     for (const g of h.NearbyGuids()) {
       if (seen) seen.add(g);
       const t = this.looted.get(g);
@@ -387,22 +847,25 @@ export class RynthLootLoop {
       const inUse = this._inUse.get(g);
       if (inUse && now < inUse.until) continue; // "already in use" — skipped a while
       if (h.TryGetObjectWcid(g) !== CORPSE_WCID) continue;
+      const entry = o ? this._bookEntry(g, now) : null; // stamped when first seen, judged in range
       const pos = h.TryGetObjectPosition(g);
       if (!pos) continue;
       const d = horizontalDistance(me, pos);
       if (d == null || d > maxD) continue;
+      if (entry && this._corpseVerdict(g, entry, o, now) !== "loot") continue;
       if (!best || d < best.d) best = { guid: g, d, pos };
     }
-    if (seen) this._forgetGoneRefusals(seen);
+    if (seen) this._forgetGoneRefusals(seen, pruneBook);
     return best;
   }
 
   /** The VT loot-profile verdict for one corpse item: "pickup" | "skip" |
    *  "pending", or null (no verdict / a throw / anything else) = the Value
-   *  floor decides as before. */
-  _classifyItem(item, now) {
+   *  floor decides as before. `out` (with the layer) receives the verdict's
+   *  rule action (rynth/vt/glue/loot_ctx.js). */
+  _classifyItem(item, now, out = null) {
     try {
-      const v = this.classify(item, { host: this.host, now });
+      const v = this.classify(item, out ? { host: this.host, now, out } : { host: this.host, now });
       return v === "pickup" || v === "skip" || v === "pending" ? v : null;
     } catch (e) {
       this.log(`loot profile threw on ${item.toString(16)}: ${(e && e.message) || e}`);
@@ -462,6 +925,18 @@ export class RynthLootLoop {
     }
   }
 
+  // Pick `item` up and confirm it (CONFIRM). `tag` = { purpose, spellId }: a
+  // pickup the support modules salvage / read after the corpse (header).
+  _issuePickup(item, me, tag = null) {
+    if (!this._pickup(item, me)) return false;
+    this._pickupTries.set(item, (this._pickupTries.get(item) || 0) + 1);
+    this.pendingItem = item;
+    this._pendingFailed = null;
+    this._pendingTag = tag;
+    this._setState("CONFIRM");
+    return true;
+  }
+
   _issueOpen(countTry) {
     if (countTry) this._openTries++;
     this._openIssuedAt = Date.now();
@@ -485,6 +960,8 @@ export class RynthLootLoop {
     this._pickupTries.clear();
     this.pendingItem = 0;
     this._pendingFailed = null;
+    this._pendingTag = null;
+    this._ownCorpse = false;
     this._openRetryAt = 0; // a re-Use pending for THIS corpse must not fire on the next one
     this._setState("SCAN");
   }
@@ -528,8 +1005,11 @@ export class RynthLootLoop {
         this._openTries = 0;
         this._openBusyRetries = 0;
         this._pickupTries.clear();
-        this.log(`corpse ${c.guid.toString(16)} d=${c.d.toFixed(1)}`);
-        if (c.d > REACH_M) {
+        const kind = this.optFn ? this._book.get(c.guid)?.kind : null;
+        // Our own corpse: what we take back from it is never salvaged or read.
+        this._ownCorpse = this.optFn ? this._isOwnCorpse(c.guid, this._bookEntry(c.guid, now)) : false;
+        this.log(`corpse ${c.guid.toString(16)} d=${c.d.toFixed(1)}${kind ? ` (${kind === "own" ? "ours" : `${kind}'s kill`})` : ""}`);
+        if (c.d > this._reachM()) {
           h.MoveToPosition(c.pos.objCellId, c.pos.x, c.pos.y, c.pos.z, true);
           this._lastApproachD = undefined;
           this._lastApproachIssue = Date.now();
@@ -548,7 +1028,7 @@ export class RynthLootLoop {
           this._setState("SCAN");
           return;
         }
-        if (d <= REACH_M) {
+        if (d <= this._reachM()) {
           h.StopCompletely();
           this._issueOpen(true);
           return;
@@ -621,11 +1101,15 @@ export class RynthLootLoop {
           return;
         }
         const me = h.GetPlayerId();
+        // null without the layer (header, 2026-10-19) — and at our own corpse:
+        // nothing taken back from it is tagged to be salvaged or read.
+        const o = this._ownCorpse ? null : this._vtOpts();
         while (this.items.length) {
           const item = this.items[0];
           // VT loot profile verdict first (null = today's Value rule below).
           if (this.classify) {
-            const v = this._classifyItem(item, now);
+            const out = o ? {} : null;
+            const v = this._classifyItem(item, now, out);
             if (v === "pending") {
               // Appraisal-gated rule: hold the item at the head like the
               // Value(19) gate below — one RequestId, the same timeout — then
@@ -640,23 +1124,33 @@ export class RynthLootLoop {
               this.log(`appraisal timeout on ${item.toString(16)} — loot profile skips it`);
               this.items.shift();
               this._assessAt.delete(item);
+              // ReadUnknownScrolls still takes a scroll to read.
+              const readId = this._readId(item, o, now);
+              if (readId && this._issuePickup(item, me, { purpose: "read", spellId: readId })) return;
               continue;
             }
             if (v === "skip") {
               this.items.shift();
               this._assessAt.delete(item);
+              const readId = this._readId(item, o, now);
+              if (readId && this._issuePickup(item, me, { purpose: "read", spellId: readId })) return;
               continue;
             }
             if (v === "pickup") {
               this.items.shift();
               this._assessAt.delete(item);
-              if (!this._pickup(item, me)) continue;
-              this._pickupTries.set(item, (this._pickupTries.get(item) || 0) + 1);
-              this.pendingItem = item;
-              this._pendingFailed = null;
-              this._setState("CONFIRM");
+              if (!this._issuePickup(item, me, o ? this._pickupTag(item, out.action, o, now) : null)) continue;
               return;
             }
+          }
+          // ReadUnknownScrolls: a scroll to read is taken whatever its value
+          // (no loot profile keeps it, so it is read).
+          const readId = this._readId(item, o, now);
+          if (readId) {
+            this.items.shift();
+            this._assessAt.delete(item);
+            if (this._issuePickup(item, me, { purpose: "read", spellId: readId })) return;
+            continue;
           }
           const raw = h.TryGetObjectIntProperty(item, 19); // Value
           // Appraisal gate (LootScoring finding #1): with a value floor set,
@@ -679,11 +1173,7 @@ export class RynthLootLoop {
           const value = raw ?? 0;
           if (this._nb) this._nbShadowItem(item, raw, value >= this.minValue);
           if (value < this.minValue) continue;
-          if (!this._pickup(item, me)) continue;
-          this._pickupTries.set(item, (this._pickupTries.get(item) || 0) + 1);
-          this.pendingItem = item;
-          this._pendingFailed = null;
-          this._setState("CONFIRM");
+          if (!this._issuePickup(item, me)) continue;
           return;
         }
         this._assessAt.clear();
@@ -694,6 +1184,8 @@ export class RynthLootLoop {
         if (this._hasInInventory(this.pendingItem)) {
           this.lootedCount++;
           this.log(`picked up ${this.pendingItem.toString(16)} (${this.lootedCount})`);
+          if (this._pendingTag) this._queueWork(this.pendingItem, this._pendingTag, now); // salvaged / read after the corpse
+          this._pendingTag = null;
           this.pendingItem = 0;
           this._nextPickupAt = now + NEXT_PICKUP_DELAY_MS;
           this._setState("LOOT");
@@ -701,6 +1193,7 @@ export class RynthLootLoop {
           const { code } = this._pendingFailed;
           const item = this.pendingItem;
           this._pendingFailed = null;
+          this._pendingTag = null;
           this.pendingItem = 0;
           const tries = this._pickupTries.get(item) || 0;
           if (now - this._lastBusyAt <= BUSY_WINDOW_MS && tries < MAX_PICKUP_TRIES) {
@@ -714,6 +1207,7 @@ export class RynthLootLoop {
           this._setState("LOOT");
         } else if (age > PICKUP_TIMEOUT_MS) {
           this.log(`pickup timeout ${this.pendingItem.toString(16)} — skipping`);
+          this._pendingTag = null;
           this.pendingItem = 0;
           this._setState("LOOT");
         }

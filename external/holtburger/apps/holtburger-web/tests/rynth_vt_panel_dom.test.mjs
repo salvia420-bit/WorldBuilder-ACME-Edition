@@ -440,7 +440,8 @@ await check("Advanced: only the rows no other tab shows; inert folded; the filte
   await flush();
   assert.deepStrictEqual(W.options.calls.at(-1), ["set", "BuffMinSkillLevelTier3", 150, "ui"]);
   assert.equal(q(".rvt-adv-inert", b).hidden, true, "Not on web folded");
-  assert.deepStrictEqual(qa(".rvt-adv-inert .rvt-opt.is-inert", b).map((x) => x.dataset.key), ["BuffProfileBanes", "DoJiggle"]);
+  // (BuffProfileBanes lives on the Buffs tab's "Worn armor" row since 2026-10-19 — never on Advanced)
+  assert.deepStrictEqual(qa(".rvt-adv-inert .rvt-opt.is-inert", b).map((x) => x.dataset.key), ["DoJiggle"]);
   const ah = q(".rvt-opt[data-key='AttackHeight'] select", b);
   change(ah, "3");
   await flush();
@@ -736,6 +737,46 @@ await check("Route: the path is drawn in the world on the Route tab, hidden else
   change(pin, false);
   await openTab("main");
   assert.equal(ov.status().visible, false, "unpinned and off the tab: hidden");
+});
+
+await check("Route: Steep sits right after Show path and is the profile's ShowTerrainPassability (through the bridge, not a UI pref)", async () => {
+  await openTab("route");
+  const b = body("route");
+  const checkOf = (re) => qa("input.hbk-check", b).find((i) => i.parentNode && re.test(i.parentNode.textContent));
+  const steep = checkOf(/^Steep$/);
+  const showPath = checkOf(/^Show path$/);
+  assert.ok(steep, "a Steep switch");
+  const r = steep.parentNode.parentNode;
+  assert.equal(r.childNodes.indexOf(steep.parentNode), r.childNodes.indexOf(showPath.parentNode) + 1, "right next to Show path");
+  assert.equal(steep.disabled, true, "no ShowTerrainPassability row in this profile: disabled");
+  // the option's row (schema.js) arrives with the settings
+  ROWS.push({ key: "ShowTerrainPassability", vt: ["ShowTerrainPassability"], type: "bool", dflt: true, page: "advanced", group: "Navigation", label: "Show steep ground", consumer: "overlay", help: "Tint ground too steep to walk up red around you." });
+  W.options.values.set("ShowTerrainPassability", true);
+  try {
+    panel.refreshVtPanel({ force: true });
+    assert.equal(steep.disabled, false);
+    assert.equal(steep.checked, true, "on by default (RynthAi)");
+    assert.match(steep.parentNode.title, /^Show steep ground — Tint ground too steep/, "the row's tooltip");
+    assert.equal(steep.parentNode.classList.contains("is-changed"), false);
+    change(steep, false);
+    await flush();
+    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", false, "ui"], "written to the active profile");
+    assert.equal(steep.checked, false);
+    assert.ok(steep.parentNode.classList.contains("is-changed"), "off ≠ the default: marked");
+    assert.ok(!Object.keys(JSON.parse(localStorage.getItem("rynth.vt.ui.v1"))).some((k) => /steep|passab/i.test(k)), "not a per-viewer pref");
+    // an edit made elsewhere (/rs opt, a meta, a profile switch) shows on the next refresh
+    W.options.values.set("ShowTerrainPassability", true);
+    panel.refreshVtPanel();
+    assert.equal(steep.checked, true);
+    change(steep, true);
+    await flush();
+    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", true, "ui"]);
+  } finally {
+    ROWS.pop();
+    W.options.values.delete("ShowTerrainPassability");
+    panel.refreshVtPanel({ force: true });
+  }
+  assert.equal(steep.disabled, true, "the row went away: disabled again");
 });
 
 await check("Loot: the profile select loads; the rule editor (New → rule → condition → Save)", async () => {

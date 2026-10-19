@@ -7,8 +7,11 @@
 //   route          type Circular (ABC-ABC) · Linear (ABC-CBA) · Once · Follow
 //                  (a player), Reverse (/rs reverseroute), "Show path" (draw
 //                  the route in the 3D world even when this tab is closed —
-//                  while it is open the path is always drawn), insert mode
-//                  (at the end / above / below the selected row, G:210).
+//                  while it is open the path is always drawn), "Steep" (the
+//                  profile's ShowTerrainPassability: ground too steep to walk
+//                  up tinted red around you, route or not — display.js),
+//                  insert mode (at the end / above / below the selected row,
+//                  G:210).
 //   waypoints      ➜ marks the current waypoint (click one to make it current,
 //                  ▲▼ step it, G:211); each row shows its type, detail and how
 //                  far you are from it; Pause / Chat rows edit in place; ✕
@@ -23,7 +26,7 @@
 
 import {
   el, btn, setText, setTitle, setValue, shouldRebuild, row, checkbox, textInput, numInput, select, fillSelect,
-  fileButton, downloadFile, segmented, setSegmented, confirmBtn, iconBtn,
+  fileButton, downloadFile, segmented, setSegmented, confirmBtn, iconBtn, bindRow,
 } from "./widgets.js";
 
 const INSERT_LABELS = Object.freeze({ end: "at the end", above: "above the selected", below: "below the selected" });
@@ -79,9 +82,12 @@ export function createRouteTab(ctx) {
   const typeSeg = segmented(doc, ROUTE_TYPES, (t) => done(bridge.route.setType(Number(t))), "rvt-route-type");
   const rev = btn(doc, "⇅ Reverse", "Reverse the route — the walk turns around at the same waypoint (/rs reverseroute)");
   const showPath = checkbox(doc, "Show path", "Draw the route in the world even when this tab is closed (while it is open the path is always drawn)");
+  // Steep: a profile option (ShowTerrainPassability), not a per-viewer pref —
+  // its row arrives with the view (null = no settings yet: disabled).
+  const steep = checkbox(doc, "Steep", "Tint ground too steep to walk up red around you, with or without a route");
   const insSel = select(doc, ["end", "above", "below"].map((m) => [m, INSERT_LABELS[m]]), "rvt-insert-mode");
   insSel.title = "Where new waypoints go, relative to the selected row (G:210)";
-  root.appendChild(row(doc, typeSeg, rev, showPath.lab, el(doc, "span", "rvt-grow"), el(doc, "span", "rvt-lbl", "insert"), insSel));
+  root.appendChild(row(doc, typeSeg, rev, showPath.lab, steep.lab, el(doc, "span", "rvt-grow"), el(doc, "span", "rvt-lbl", "insert"), insSel));
 
   // ── waypoint list ────────────────────────────────────────────────────────
   const up = iconBtn(doc, "▲", "Current waypoint: previous");
@@ -155,6 +161,7 @@ export function createRouteTab(ctx) {
     return r;
   };
   const added = (x) => (x.follow ? `Following ${x.follow.name || "selection"}` : `Waypoint ${Number(x.index) + 1} added`);
+  const bindSteep = bindRow({ input: steep.cb, tip: steep.lab }, (key, value) => done(bridge.opt.set(key, value), (x) => x.echo || `${key} = ${x.value}`));
 
   rev.addEventListener("click", () => done(bridge.route.reverse(), (x) => `Reversed: ${x.reversed}`));
   insSel.addEventListener("change", () => done(bridge.route.setInsertMode(insSel.value)));
@@ -287,6 +294,7 @@ export function createRouteTab(ctx) {
     rev.classList.toggle("is-active", !!v.reversed);
     setText(rev, v.reversed ? "⇅ Reversed" : "⇅ Reverse");
     setValue(showPath.cb, !!ctx.pref("routeShowPath"));
+    bindSteep(v.steep || null);
     const recalls = (v.recalls || []).map((r) => [String(r.id), r.name]);
     fillSelect(recallSel, recalls.length ? recalls : [["", "(no known recall spells)"]]);
     fillSelect(profSel, [["", "(saved routes)"], ...(v.profiles || []).map((p) => [p.name, p.name])]);

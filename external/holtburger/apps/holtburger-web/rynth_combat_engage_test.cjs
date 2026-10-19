@@ -293,6 +293,23 @@ async function main() {
       check("5 toggles without leaving NonCombat, 6th attempt stands down (canEngage false)",
         host.calls.toggle === 5 && loop.canEngage() === false && loop.locked === 0,
         `toggles=${host.calls.toggle} canEngage=${loop.canEngage()} locked=${loop.locked}`);
+      // 10b. The VT ammo slot (rynth/vt/support/ammo.js) clears exactly that
+      // stand-down once ammo is wielded — the missile stance then establishes
+      // on the next toggle instead of after the 60 s window.
+      const other = loop.clearIncapable("no war spell known — cannot fight in Magic mode");
+      check("clearIncapable: another reason is a no-op (still stood down)", other === false && loop.canEngage() === false,
+        `other=${other} canEngage=${loop.canEngage()}`);
+      const cleared = loop.clearIncapable("combat mode will not establish");
+      check("clearIncapable(\"combat mode will not establish\") ends the stand-down",
+        cleared === true && loop.canEngage() === true && loop.status.incapable === null, `incapable=${loop.status.incapable}`);
+      host.ToggleCombatMode = () => { host.calls.toggle++; host.mode = 4; return true; }; // ammo in: Missile holds
+      NOW += 100; loop.tick();
+      check("…the next tick re-locks and toggles the stance again", host.calls.toggle === 6 && loop.locked === 0x8000010b,
+        `toggles=${host.calls.toggle} locked=${loop.locked.toString(16)}`);
+      NOW += 100; loop.tick();
+      check("…the stance establishes and the shot goes out", host.calls.missile.length === 1 && loop.canEngage() === true,
+        `missile=${host.calls.missile.length} state=${loop.state}`);
+      check("clearIncapable with no stand-down in force is a no-op", loop.clearIncapable("combat mode will not establish") === false);
     }
 
     // ── 11. event tap: wired lazily, exactly once, on the kernel path ──
@@ -564,6 +581,89 @@ async function main() {
       host2.IsPortalSpaceActive = () => false;
       NOW += 100; loop2.tick();
       check("…resumes when the world is back", host2.calls.melee.length === 1);
+    }
+
+    // ── 24. a VT helper's Healer's Heart swap holds the loadout ─────────
+    // combat.loadoutHeldFn (the layer wires support/helpers.js holdsWandSlot,
+    // with or without a planner): a melee/missile hybrid on a Default profile
+    // heals a fellow with the heart — Magic stance, the heart in hand, no war
+    // bolt. While held: no "no war spell" / stance stand-down, no toggle, no
+    // swing or bolt, no run-up; the lock is kept. After: the fight resumes.
+    {
+      const rat = { id: 0x8000018a, name: "Rat", x: 96, y: 100 }; // 4 m: melee range
+      const hybrid = (held) => {
+        const host = makeHost({ ents: [{ ...rat }], mode: 8, known: [] });
+        const loop = mk(host);
+        loop.loadoutHeldFn = typeof held === "function" ? held : () => held;
+        return { host, loop };
+      };
+      const acts = (host) => host.calls.toggle + host.calls.cast.length + host.calls.melee.length + host.calls.missile.length + host.calls.stick.length;
+      {
+        let held = true;
+        const { host, loop } = hybrid(() => held);
+        for (let i = 0; i < 20; i++) { NOW += 1000; loop.canEngage(); loop.tick(); }
+        check("held loadout (heart in hand, Magic, no war bolt): no stand-down, no toggle / bolt / swing / run-up, lock kept",
+          loop.canEngage() && acts(host) === 0 && loop.locked === rat.id && loop.state === "ENGAGE",
+          `canEngage=${loop.canEngage()} acts=${acts(host)} locked=${loop.locked.toString(16)} state=${loop.state} incapable=${loop.status.incapable}`);
+        host.mode = 1; // the stance drops while the weapons go back…
+        for (let i = 0; i < 25; i++) { NOW += 1000; loop.tick(); }
+        check("…a NonCombat stance while held is no toggle either (no 'mode will not establish')", host.calls.toggle === 0 && loop.canEngage());
+        held = false;
+        host.mode = 2; // …the sword is back in hand and Melee holds
+        NOW += 100; loop.canEngage(); loop.tick();
+        check("…the hold ends: the fight resumes on the next tick (one melee request)", host.calls.melee.length === 1, `melee=${host.calls.melee.length}`);
+      }
+      {
+        const { host, loop } = hybrid(undefined); // no hook (or never held): today's behaviour
+        loop.loadoutHeldFn = null;
+        NOW += 1000; loop.tick();
+        const thrower = hybrid(() => { throw new Error("helpers gone"); });
+        NOW += 1000; thrower.loop.tick();
+        check("no hook / a throwing hook = not held: the no-war-spell stand-down as before",
+          !loop.canEngage() && !thrower.loop.canEngage() && /no war spell/.test(loop.status.incapable || ""), `incapable=${loop.status.incapable}`);
+        void host;
+      }
+      {
+        // A stand-down judged on the heart before the hold was seen ends with
+        // the hold (the kernel's canEngage() read notices it; a stood-down
+        // loop isn't ticked) — one with no hold episode is left alone.
+        let held = false;
+        const { host, loop } = hybrid(() => held);
+        NOW += 1000; loop.tick();
+        const stoodDown = !loop.canEngage();
+        held = true;
+        NOW += 1000;
+        const duringHold = loop.canEngage();
+        held = false;
+        host.mode = 2;
+        NOW += 1000;
+        const after = loop.canEngage();
+        loop.tick();
+        const other = hybrid(false);
+        NOW += 1000; other.loop.tick();
+        NOW += 1000;
+        check("a stand-down judged on the held loadout is cleared when the hold ends (still stood down during it); no hold episode = not cleared",
+          stoodDown && !duringHold && after && host.calls.melee.length === 1 && !other.loop.canEngage(),
+          `stoodDown=${stoodDown} during=${duringHold} after=${after} melee=${host.calls.melee.length} other=${other.loop.canEngage()}`);
+      }
+      {
+        // The VT no-progress clock is paused while held: 10 s held, then 3 s
+        // fighting with no damage → not parked (5 s timeout); 3 s more → parked.
+        let held = false;
+        const { host, loop } = hybrid(() => held);
+        host.mode = 2;
+        const opts = { TargetLock: false, AttackMinDistance: 0, MonsterDisengageRange: 0, TargetNoProgressTimeoutSec: 5, DoJiggle: false };
+        loop.optFn = (k) => opts[k];
+        NOW += 100; loop.tick(); // lock (melee request)
+        held = true;
+        for (let i = 0; i < 10; i++) { NOW += 1000; loop.tick(); }
+        held = false;
+        for (let i = 0; i < 3; i++) { NOW += 1000; loop.tick(); }
+        const keptAfterHold = !loop.unreachable.has(rat.id);
+        for (let i = 0; i < 3; i++) { NOW += 1000; loop.tick(); }
+        check("the no-progress clock pauses while the loadout is held (kept 3 s after a 10 s hold, parked past 5 s of fighting)",
+          keptAfterHold && loop.unreachable.has(rat.id), `kept=${keptAfterHold} parked=${loop.unreachable.has(rat.id)}`);
+      }
     }
 
     // ── 17. globalDist across a landblock seam ─────────────────────────

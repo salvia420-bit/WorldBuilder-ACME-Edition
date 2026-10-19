@@ -12,7 +12,8 @@
 // C2: no import of another vt package. The few shapes the UI must know are
 // re-implemented here from the §3.2 contracts and kept in step with
 // rynth/vt/combat/monster_list.js (normalizeEntry / fromRynthAiRule /
-// fromLegacyPriorities), rynth/vt/combat/items.js (ITEM_BUFF_DEFAULTS) and
+// fromLegacyPriorities), rynth/vt/combat/items.js (ITEM_BUFF_DEFAULTS),
+// rynth/vt/settings/schema.js (BANE_LETTERS) and
 // rynth/vt/support/consumables.js (CONSUMABLE_TYPES); the models re-normalise
 // whatever the panel writes, so a drift here can never corrupt a list.
 
@@ -83,6 +84,38 @@ export const ITEM_BUFF_DEFAULTS = Object.freeze({
   caster: Object.freeze([]),
   pet: Object.freeze([]),
 });
+// The worn-armor row (2026-10-19): VTank's bane letters in the order the
+// schema codec keeps BuffProfileBanes ("" = none), and each bane family's
+// letter — Impenetrability has none, it is BuffArmorImpen.
+export const BANE_LETTERS = "ALFCBPS";
+export const ITEM_BUFF_LETTERS = Object.freeze({
+  "bane:acid": "A", "bane:lightning": "L", "bane:fire": "F", "bane:cold": "C",
+  "bane:bludgeon": "B", "bane:pierce": "P", "bane:slash": "S",
+});
+// VTank's BuffProfile_Banes enum (1 = Custom: the letters themselves).
+const BANE_ENUM = Object.freeze({ 2: "ALFCBPS", 3: "", 4: "B", 5: "BPS", 6: "BPSA", 7: "BPSAC", 8: "ALFC" });
+
+/** = settings/schema.js baneLetters (the BuffProfileBanes codec): VTank's enum
+ *  2-8, All / None, or letters in any case / order / separators → canonical
+ *  letters ("" = none); null for anything else — e.g. free text stored before
+ *  the codec ("Banes1"). */
+export function baneLetters(raw) {
+  if (raw === null || raw === undefined || typeof raw === "object") return null;
+  if (typeof raw === "boolean") return raw ? BANE_LETTERS : "";
+  const s = String(raw).trim();
+  if (!s || /^none$/i.test(s)) return "";
+  if (/^all$/i.test(s)) return BANE_LETTERS;
+  let n = null;
+  if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) n = Number(s);
+  else if (/^[+-]?0x[0-9a-f]+$/i.test(s)) n = (s.startsWith("-") ? -1 : 1) * parseInt(s.replace(/^[+-]/, ""), 16);
+  if (n !== null) return Object.prototype.hasOwnProperty.call(BANE_ENUM, n) ? BANE_ENUM[n] : null;
+  const up = s.toUpperCase().replace(/[\s,;+]/g, "");
+  if (!/^[ALFCBPS]+$/.test(up)) return null;
+  return [...BANE_LETTERS].filter((c) => up.includes(c)).join("");
+}
+// ACE ItemType Armor (shields too) | Clothing: the worn pieces a self-cast
+// Impenetrability / bane reaches (= buff_loop.js ITEM_TYPE_WORN).
+const ITEM_TYPE_WORN = 0x2 | 0x4;
 
 export const CONSUMABLE_TYPES = Object.freeze([
   "HealthKit", "StaminaKit", "ManaKit", "HealthFood", "StaminaFood", "HealthPotion", "StaminaPotion", "ManaPotion",
@@ -361,6 +394,39 @@ export function itemFamiliesOf(entry, list) {
   }
   const d = ITEM_BUFF_DEFAULTS[entry.kind];
   return d ? d.slice() : [];
+}
+
+/**
+ * The Buffs tab's "Worn armor" row: Impenetrability and the banes the bot
+ * casts on itself, which the server puts on every worn armor and clothing
+ * piece and the shield — BuffArmorImpen and the BuffProfileBanes letters
+ * (the two options buff_loop.js _wornArmor reads). The cells write the
+ * options themselves (opt.set; a bane cell the whole new letters string).
+ */
+export function wornArmorView(options) {
+  const impen = safe(() => options?.getValue?.("BuffArmorImpen"), null) === true;
+  const raw = safe(() => options?.getValue?.("BuffProfileBanes"), null);
+  // a value the codec can't read means every bane — the default (as buff_loop.js)
+  const letters = raw === null ? "" : baneLetters(raw) ?? BANE_LETTERS;
+  return {
+    available: !!options,
+    impen,
+    letters,
+    order: BANE_LETTERS,
+    families: ITEM_BUFF_FAMILIES.map((f) => {
+      const letter = ITEM_BUFF_LETTERS[f] ?? null;
+      return { family: f, label: ITEM_BUFF_LABELS[f], letter, on: letter ? letters.includes(letter) : impen };
+    }),
+  };
+}
+
+/** Guids of the armor / clothing / shield pieces worn now (the worn-armor
+ *  casts reach them); empty when the inventory is unreadable. */
+function wornPieceGuids(host) {
+  const inv = safe(() => (isFn(host?.TryGetPlayerInventoryCached) ? host.TryGetPlayerInventoryCached() : host?.TryGetPlayerInventory?.()), null);
+  const out = new Set();
+  for (const r of Array.isArray(inv) ? inv : []) if (r && u32(r.equipMask) && (u32(r.itemType) & ITEM_TYPE_WORN) !== 0) out.add(u32(r.guid));
+  return out;
 }
 
 function knownSpellIds(host, win) {
@@ -670,17 +736,33 @@ export function createListsBridge(ctx) {
     const options = ctx.optionsOf(vt);
     const list = buffsList(options);
     const items = vt ? safe(() => vt.items?.list?.(), []) || [] : [];
+    const model = vt ? safe(() => vt.items ?? null) : null;
+    const wornArmor = wornArmorView(options);
+    const wornOn = new Set(wornArmor.families.filter((f) => f.on).map((f) => f.family));
+    // An Items-tab piece worn now gets the Worn armor row's casts: for those
+    // families its own boxes are not cast while it is worn (buff_loop.js
+    // _itemPass) — `worn` on a family says so.
+    const wornGuids = items.length ? wornPieceGuids(ctx.hostOf(bot)) : new Set();
     const itemRows = items.map((e) => {
       const g = String(Number(e.guid) >>> 0);
       const fams = new Set(itemFamiliesOf(e, list));
       const dflt = new Set(ITEM_BUFF_DEFAULTS[e.kind] || []);
+      const live = model && isFn(model.resolveGuid) ? u32(safe(() => model.resolveGuid(e), 0)) : Number(e.guid) >>> 0;
+      const equipped = !!live && wornGuids.has(live);
       return {
         guid: Number(e.guid) >>> 0,
         name: String(e.name ?? ""),
         kind: e.kind,
         noBuffs: e.noBuffs === true,
         overridden: Object.prototype.hasOwnProperty.call(list.itemSpells, g),
-        families: ITEM_BUFF_FAMILIES.map((f) => ({ family: f, label: ITEM_BUFF_LABELS[f], on: !e.noBuffs && fams.has(f), dflt: dflt.has(f) })),
+        equipped,
+        families: ITEM_BUFF_FAMILIES.map((f) => ({
+          family: f,
+          label: ITEM_BUFF_LABELS[f],
+          on: !e.noBuffs && fams.has(f),
+          dflt: dflt.has(f),
+          worn: equipped && wornOn.has(f),
+        })),
       };
     });
     if (!buffLib || !ladder) ensureBuffLib();
@@ -706,6 +788,7 @@ export function createListsBridge(ctx) {
       items: itemRows,
       families: ITEM_BUFF_FAMILIES.slice(),
       familyLabels: { ...ITEM_BUFF_LABELS },
+      wornArmor,
     };
   }
 

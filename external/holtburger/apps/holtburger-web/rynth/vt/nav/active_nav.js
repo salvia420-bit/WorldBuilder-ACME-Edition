@@ -20,10 +20,21 @@
 //     kernel runs, or directly under bot.claimMovement("rs-jump") when it does
 //     not and nothing else owns the body (critic B10).
 //
+// NavFarStopDistance (VTank NavFarStopRange, 0 = off): while the active
+// waypoint's walk target (executors.js walkTargetWorld; in-place waypoints
+// never) — on a Follow route, the leader — is farther than that, the route
+// HOLDS: the slot declines the tick (Idle runs, the Doors slot waits too), no
+// leg is issued, status() says why and one chat alert marks the hold; back
+// within range it resumes by itself. EnableNavigation is never touched (it
+// persists into the profile). Follow routes with FollowAroundCorners (on by
+// default) run the leader's own path, corner by corner (follow_trail.js).
+//
 // All persistent state lives in the injected `state` (session.navState):
 // `route`, `exec` {point, mem}, `generation`, `lastResult`, `stuckSkips`,
 // `lastChatAt`, `follow` — so a new ActiveNav on the same state (a bot rebind
 // on the same page, D6) continues at the same index and executor deadlines.
+// The leader trail and the far-stop hold are this instance's (a rebind starts
+// them over).
 //
 // Never throws: public commands return {ok, …}; the slot tick is wrapped.
 
@@ -53,7 +64,8 @@ import {
   minDistM,
 } from "./route_model.js";
 import { parseNavVt, validateNavName } from "./nav_profiles.js";
-import { makeExecutor, posWorld, runJob, jumpArgs, NAV_TUNING, BUDGET_ANCHORS } from "./executors.js";
+import { makeExecutor, posWorld, runJob, jumpArgs, legTimeoutMs, walkTargetWorld, NAV_TUNING, BUDGET_ANCHORS } from "./executors.js";
+import { FollowTrail, trailPoint, TRAIL_TUNING } from "./follow_trail.js";
 
 export const FOLLOW_START_M = 8; // CS/NavigationEngine.cs:1344-1345 (Q21: fixed 8/5 m)
 export const FOLLOW_STOP_M = 5;
@@ -61,6 +73,9 @@ export const FOLLOW_REISSUE_MS = 1_000;
 export const MAX_STUCK_SKIPS = 3;
 export const EXTERNAL_TELEPORT_TICK_GAP_MS = 1_500;
 export const JUMP_QUEUE_MAX_MS = 5_000;
+// A far-stop hold that ends and comes back for the same waypoint (a fight
+// dragging the body across the range) re-alerts in chat at most this often.
+export const FAR_STOP_REALERT_MS = 60_000;
 
 const ODF_PORTAL = 0x40000;
 const ODF_VENDOR = 0x200;
@@ -141,6 +156,10 @@ export class ActiveNav {
     this._lastTick = null;
     this._followRelease = null;
     this._followLabel = null;
+    this._followSeen = 0; // the leader guid the last follow tick resolved (a name-only target)
+    this._trail = null; // FollowTrail of the current leader (FollowAroundCorners)
+    this._far = null; // the far-stop hold: {key, d, limit, what, text} while held
+    this._farAlert = null; // {key, at} of the last far-stop chat alert
     this._jumpReq = null;
     this._jumpJob = null;
     this._jumpRelease = null;
@@ -212,6 +231,11 @@ export class ActiveNav {
   _postPortalDelayMs() {
     const v = Number(this._opt("PostPortalDelaySec", 4));
     return Math.max(0, Number.isFinite(v) ? v : 4) * 1000;
+  }
+  /** NavFarStopDistance in metres; 0 (the default) = off. */
+  _farStopM() {
+    const v = Number(this._opt("NavFarStopDistance", 0));
+    return Number.isFinite(v) && v > 0 ? v : 0;
   }
   _rank() {
     if (!this._opt("BoostNavPriority", false)) return "beforeIdle";
@@ -305,6 +329,7 @@ export class ActiveNav {
     if (portalSpaceActive(this.host)) return "portal space";
     if (this.bot && this.bot.kernel && this.bot.kernel.operatorHeld === true) return "operator hold";
     if (this._orphanBusy()) return "a previous jump is still landing";
+    if (this._far && this._farStopM() > 0) return this._far.text;
     if (this._yieldedTo) return `yielded to ${this._yieldedTo}`;
     return null;
   }
@@ -320,6 +345,8 @@ export class ActiveNav {
     this.state.generation += 1;
     this.state.stuckSkips = 0;
     this.state.follow = { moving: false, lastIssueAt: 0 };
+    this._trail = null;
+    this._followSeen = 0;
     this._extTeleport = false;
   }
 
@@ -633,6 +660,8 @@ export class ActiveNav {
       dirty: true,
     };
     this.state.follow = { moving: false, lastIssueAt: 0 };
+    this._trail = null;
+    this._followSeen = 0; // the far-stop never judges the previous leader
     this.state.generation += 1;
     return { ok: true };
   }
@@ -868,6 +897,9 @@ export class ActiveNav {
     if (this._disposed || !this.slot.enabled()) return false;
     if (this._pinned()) return true;
     if (portalSpaceActive(this.host)) return false;
+    // NavFarStopDistance: off course, the route holds — the tick goes to
+    // whatever else wants it (Idle), and the Doors slot (navWants) waits too.
+    if (this._farHold(this.now())) return false;
     const rank = this._rank();
     const c = ctx || {};
     // D39: boost outranks attacking and looting, never buffing. "Looting"
@@ -906,6 +938,13 @@ export class ActiveNav {
     // re-tried jump, a router leg, a cast) waits until it lands.
     if (this._orphanBusy()) return;
     this._detectTeleport(now);
+    // Off course: no leg (wants() declines first; this covers a tick that
+    // came without it — a pinned executor is never held). Held like a yield:
+    // the waypoint's budget clocks stop.
+    if (this._farHold(now)) {
+      this.yield("far-stop range");
+      return;
+    }
     if (st.route.routeType === ROUTE.Follow) {
       this._tickFollow(now);
       return;
@@ -1085,6 +1124,75 @@ export class ActiveNav {
     return !!(this._exec && this._exec.expectsTeleport) || !!this._jumpJob || this._orphanBusy();
   }
 
+  // ── NavFarStopDistance (VTank NavFarStopRange) ─────────────────────────
+  /** → true while the route holds because its walk target (the leader on a
+   *  Follow route) is beyond NavFarStopDistance. One chat alert per hold (a
+   *  hold of the same waypoint again within FAR_STOP_REALERT_MS only logs);
+   *  back within range it resumes by itself. Same pattern as WebAC
+   *  RoutineEngine visitPoint / walkNav (it holds, it never turns nav off). */
+  _farHold(now) {
+    const limit = this._farStopM();
+    if (!(limit > 0)) {
+      this._far = null;
+      return false;
+    }
+    // A held route never reaches _tickInner: re-sync after an external
+    // teleport (a death, a recall) before the range is judged.
+    this._detectTeleport(now);
+    const hit = this._farCheck(limit);
+    const prev = this._far;
+    this._far = hit;
+    if (!hit) {
+      if (prev) this.log("nav: back within the nav far-stop range — resuming");
+      return false;
+    }
+    if (hit.who) this._followLabel = `following ${hit.who}: ${hit.d.toFixed(1)} m`;
+    if (!prev || prev.key !== hit.key) {
+      // A leader beyond following range: their path out there is never
+      // walked (watchLeader does not record it either).
+      if (hit.who && this._trail) this._trail.reset();
+      const until = hit.who ? "until they are" : "the route until you are";
+      const text = `nav: ${hit.what} is ${Math.round(hit.d)} m away, past the nav far-stop range (${Math.round(limit)} m) — holding ${until} back within range`;
+      const a = this._farAlert;
+      if (a && a.key === hit.key && now - a.at < FAR_STOP_REALERT_MS && now >= a.at) this.log(text);
+      else {
+        this._farAlert = { key: hit.key, at: now };
+        this._alert(text);
+      }
+    }
+    return true;
+  }
+  /** The walk target (or the leader) when it is beyond `limit` metres (2-D):
+   *  {key, d, limit, what, text, who?}; null within range, for an in-place
+   *  waypoint, an action in flight (pinned) or an unknown position. */
+  _farCheck(limit) {
+    if (this._exec && this._exec.pinned) return null;
+    const me = posWorld(this._pose());
+    if (!me) return null;
+    const r = this.state.route;
+    if (r.routeType === ROUTE.Follow) {
+      const t = r.followTarget;
+      let g = t && t.guid ? t.guid >>> 0 : 0;
+      let pos = g ? this._objPos(g) : null;
+      if (!pos && this._followSeen && this._followSeen !== g) {
+        g = this._followSeen >>> 0;
+        pos = this._objPos(g);
+      }
+      const w = posWorld(pos);
+      if (!w) return null; // out of sight: the follow tick says so itself
+      const d = Math.hypot(w.wx - me.wx, w.wy - me.wy);
+      if (!(d > limit)) return null;
+      const who = (t && t.name) || `0x${g.toString(16)}`;
+      return { key: `follow:${g}`, d, limit, who, what: `follow target ${who}`, text: `leader too far: ${Math.round(d)} m > ${Math.round(limit)} m` };
+    }
+    const p = r.points[r.activeIndex];
+    const w = walkTargetWorld(p);
+    if (!w) return null;
+    const d = Math.hypot(w.wx - me.wx, w.wy - me.wy);
+    if (!(d > limit)) return null;
+    return { key: p, d, limit, what: `waypoint ${r.activeIndex + 1}/${r.points.length}`, text: `far off course: ${Math.round(d)} m > ${Math.round(limit)} m` };
+  }
+
   _onSignal(type, sig) {
     if (this._disposed || !sig) return;
     const at = this.now();
@@ -1113,6 +1221,11 @@ export class ActiveNav {
   }
 
   // ── Follow (route type 3): PursueObject > 8 m, stop < 5 m ───────────────
+  // FollowAroundCorners (on by default, VTank's) first runs the leader's own
+  // path: while a corner of their trail lies between us and them, one router
+  // leg per corner (_followTrail); straight at them otherwise. Off: always
+  // straight at them (PursueObject; a MoveToPosition every 1 s while no
+  // pursuit runs), exactly as before.
   _tickFollow(now) {
     const h = this.host;
     const t = this.state.route.followTarget;
@@ -1122,12 +1235,22 @@ export class ActiveNav {
     const pw = posWorld(this._pose());
     const tw = posWorld(tpos);
     const who = (t && t.name) || (guid ? `0x${guid.toString(16)}` : "?");
+    if (tw) this._followSeen = guid;
+    const trail = this._trailFor(guid);
+    if (!trail && f.mode === "trail") {
+      // FollowAroundCorners went off mid-corner: straight at them from here.
+      if (this._issuedLeg && this._issuedLeg.followTrail === true) this._cancelLeg();
+      f.mode = null;
+      f.lastIssueAt = 0;
+    }
     if (!tw || !pw) {
       if (f.moving) this._stopFollow(true);
+      if (trail) trail.reset(); // out of sight: their path is lost
       this._followLabel = "follow target out of range";
       return;
     }
     const d = Math.hypot(tw.wx - pw.wx, tw.wy - pw.wy);
+    if (trail && this._followTrail(now, trail, { guid, tpos, pw, d, who })) return;
     if (f.moving) {
       if (!this._followRelease) this._followRelease = this._claim("vt-nav-follow");
       if (d < FOLLOW_STOP_M) {
@@ -1151,13 +1274,7 @@ export class ActiveNav {
     }
     if (d > FOLLOW_START_M) {
       this._cancelLeg();
-      let sent = false;
-      try {
-        if (typeof h?.PursueObject === "function") sent = h.PursueObject(guid) !== false;
-      } catch (_) {
-        sent = false;
-      }
-      if (!sent) this._moveTo(tpos);
+      this._pursue(guid, tpos);
       f.moving = true;
       f.lastIssueAt = now;
       if (!this._followRelease) this._followRelease = this._claim("vt-nav-follow");
@@ -1165,6 +1282,130 @@ export class ActiveNav {
       return;
     }
     this._followLabel = `following ${who}: holding (${d.toFixed(1)} m)`;
+  }
+  /** Straight at the leader: PursueObject, else one MoveToPosition. */
+  _pursue(guid, tpos) {
+    let sent = false;
+    try {
+      if (typeof this.host?.PursueObject === "function") sent = this.host.PursueObject(guid) !== false;
+    } catch (_) {
+      sent = false;
+    }
+    if (!sent) this._moveTo(tpos);
+  }
+  /** The leader's trail (a new one per leader); null with FollowAroundCorners off. */
+  _trailFor(guid) {
+    if (!guid || this._opt("FollowAroundCorners", true) !== true) {
+      this._trail = null;
+      return null;
+    }
+    if (!this._trail || this._trail.guid !== guid >>> 0) this._trail = new FollowTrail(guid);
+    return this._trail;
+  }
+  /** FollowAroundCorners: sample the leader; while a corner of their path
+   *  lies between us and them, walk to it (one router leg, `followTrail`).
+   *  → true when this tick walked the trail; false hands it to the direct
+   *  follow (the 5-8 m band holds or stops; no corner ahead). */
+  _followTrail(now, trail, { guid, tpos, pw, d, who }) {
+    const f = this.state.follow;
+    const leader = trailPoint(tpos);
+    this._recordLeader(trail, now, leader, pw, d);
+    if (d < FOLLOW_STOP_M) {
+      trail.reset(leader); // beside them: their older corners are behind us
+      return false;
+    }
+    if (!f.moving && d <= FOLLOW_START_M) return false;
+    // A walk that (re)starts — after a hold, a fight, running straight at
+    // them — joins their path where it passes nearest us.
+    trail.prune(pw, f.mode !== "trail");
+    let next = trail.next();
+    // Our leg to it arrived (the router's tighter radius) or failed (stuck at
+    // a corner): on to the next point either way.
+    const ls = next ? this._trailLegState(next) : null;
+    if (ls === "DONE" || ls === "FAILED") {
+      trail.drop(next);
+      next = trail.next();
+    }
+    if (!next) {
+      if (f.mode !== "trail") return false;
+      // Past their last corner: straight at them from here.
+      this._cancelLeg();
+      f.mode = null;
+      f.moving = true;
+      f.lastIssueAt = now;
+      this._pursue(guid, tpos);
+      this._followLabel = `following ${who}: ${d.toFixed(1)} m`;
+      return true;
+    }
+    if (f.moving && f.mode !== "trail") {
+      // Running straight at them, and they turned a corner: end the pursuit.
+      try {
+        this.host?.StopCompletely?.();
+      } catch (_) {
+        /* the corner leg's MoveToPosition replaces it anyway */
+      }
+    }
+    f.moving = true;
+    f.mode = "trail";
+    if (!this._followRelease) this._followRelease = this._claim("vt-nav-follow");
+    const s = this._trailLegState(next);
+    if (s !== "WALK" && s !== "PORTAL") {
+      const dn = Math.hypot(next.wx - pw.wx, next.wy - pw.wy);
+      this._issueLeg({
+        lb: next.cell,
+        x: next.x,
+        y: next.y,
+        z: next.z,
+        arriveM: TRAIL_TUNING.legArriveM,
+        timeoutMs: legTimeoutMs(dn),
+        followTrail: true,
+        trailPoint: next,
+      });
+    }
+    const ahead = trail.size - 1;
+    this._followLabel = `following ${who}: ${d.toFixed(1)} m, on their path (${ahead} corner${ahead === 1 ? "" : "s"} ahead)`;
+    return true;
+  }
+  /** Sample the leader. While we are not walking — holding near them, or a
+   *  fight holds the tick — and they are within FOLLOW_START_M, only their
+   *  last steps are kept: their wander there (a vendor, a melee dance) is
+   *  not on the way; an exit around a corner close by still is. */
+  _recordLeader(trail, now, leader, pw, d) {
+    trail.sample(now, leader, pw);
+    if (!this.state.follow.moving && d <= FOLLOW_START_M) trail.keepLast(TRAIL_TUNING.holdKeep);
+  }
+  /** The router state of our trail leg to `point`; null when none is ours. */
+  _trailLegState(point) {
+    const leg = this._issuedLeg;
+    return leg && leg.followTrail === true && leg.trailPoint === point ? this._legState(leg) : null;
+  }
+  /**
+   * Heartbeat hook (the layer's pre-tick; optional): keep recording a
+   * Follow leader's path (FollowAroundCorners) while another activity holds
+   * the tick — a fight — so the follower runs their path afterwards, not a
+   * straight line. Reads only; never throws.
+   */
+  watchLeader(nowArg) {
+    try {
+      const now = Number.isFinite(nowArg) ? nowArg : this.now();
+      if (this._disposed || !this.enabled || this.paused) return;
+      if (this._far && this._farStopM() > 0) return; // beyond following range: not recorded
+      const r = this.state.route;
+      const t = r.routeType === ROUTE.Follow ? r.followTarget : null;
+      if (!t || portalSpaceActive(this.host)) return;
+      const g = t.guid && this._objPos(t.guid) ? t.guid >>> 0 : this._followSeen >>> 0;
+      const trail = g ? this._trailFor(g) : null;
+      if (!trail) return;
+      const leader = trailPoint(this._objPos(g));
+      if (!leader) {
+        trail.reset();
+        return;
+      }
+      const pw = posWorld(this._pose());
+      if (pw) this._recordLeader(trail, now, leader, pw, Math.hypot(leader.wx - pw.wx, leader.wy - pw.wy));
+    } catch (e) {
+      this.log(`watchLeader threw: ${msg(e)}`);
+    }
   }
   _followGuid(t) {
     if (!t) return 0;
@@ -1188,8 +1429,11 @@ export class ActiveNav {
   }
   _stopFollow(stopBody = true) {
     const f = this.state.follow;
+    // A corner leg of the leader's trail ends with the follow.
+    if (this._issuedLeg && this._issuedLeg.followTrail === true) this._cancelLeg();
     if (f && f.moving) {
       f.moving = false;
+      f.mode = null;
       if (stopBody) {
         try {
           this.host?.StopCompletely?.();

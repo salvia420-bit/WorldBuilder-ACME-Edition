@@ -16,10 +16,17 @@ checklist on the 1070 is still pending.
   the literal grind ladder — byte-for-byte the pre-VTank bot (`docs/url-flags.md`). It holds
   for `?bot=1` and for a HUD START on that page (the HUD then boots with its own saved
   settings, as before the layer).
-- **At the Default profile it changes nothing.** Every new option defaults to today's
-  behaviour (D3); the parity oracle `tests/rynth_vt_parity.test.mjs` (T-P1) runs one
-  scripted world with and without the layer and compares every kernel action and every host
-  action call. The VTank/RynthAi defaults are one click away: **⋯ (profile drawer) → Apply
+- **At the Default profile it changes nothing — except the options made live on
+  2026-10-19** (the former "Not on web" rows, [below](#options-made-live-2026-10-19)): by
+  the owner's decision those take VTank's / RynthAi's defaults, so at Default the layer
+  also loots by VTank's corpse rule (your own kills), helps fellows, buffs worn armor, reads
+  unknown scrolls, salvages with the Ust, refills missile ammo, follows around corners,
+  caps the frame rate and tints steep ground. Each acts only when its situation exists (a
+  fellowship, a scroll, an Ust, a launcher, corpse descriptions…). Every other option
+  defaults to today's behaviour (D3); the parity oracle `tests/rynth_vt_parity.test.mjs`
+  (T-P1) runs one scripted world with and without the layer and compares every kernel
+  action and every host action call (T-P1b: the corpse rule loots the same corpses and
+  items, plus one appraisal each). The VTank/RynthAi defaults are one click away: **⋯ (profile drawer) → Apply
   VTank/RynthAi defaults** (or `/rs settings preset vtank`) writes Autostack, Autocram, Peace
   Mode When Idle, Follow/Nav Min 1.5 m, VTank war spells and pet refill into the active (user)
   profile. These are RynthAi's values (`LegacyUiSettings.cs`, PLAN D3), not read from a
@@ -128,10 +135,12 @@ selector is now labelled "Persona" instead of "Profile".
   until the tab is shown (only the base router has its own 90 s cap). `host_signals.js`
   synthesizes ONE `portalOut` 90 s after the arrival while the flag stays up
   (`PORTAL_OUT_STUCK_MS`), so metas see the exit; movers keep holding.
-- **Kernel slots** (`aux`, priority order inside each rank): `Supplies` (after Vitals, keeps the
-  combat loop), `JumpNow` (after Unwedge), `Pets`, `Doors`, `Navigate`, `BuffItems`,
-  `IdleRebuff`; idle hook `PeaceMode`. By default Navigate ranks just above Idle (it walks
-  when nothing else wants the tick).
+- **Kernel slots** (`aux`, priority order inside each rank): `Supplies` and `Helpers` (after
+  Vitals, keep the combat loop), `Ammo` (before pinned Combat, keeps the combat loop),
+  `JumpNow` (after Unwedge), `Pets`, `ReadScrolls`, `Salvage`, `Doors`, `Navigate`,
+  `BuffItems`, `IdleRebuff`; idle hook `PeaceMode`. By default Navigate ranks just above Idle
+  (it walks when nothing else wants the tick). A slot with nothing to do is invisible
+  (`enabled()` false).
 - **Boost Nav Priority** lifts Navigate above unlocked threats. Gentle (default) never drops a
   locked target; under attack it steps aside only when there is a fight (or the after-kill
   corpse) to run, and keeps walking otherwise. `BoostNavStrict` = VTank-literal (above pinned
@@ -167,7 +176,9 @@ selector is now labelled "Persona" instead of "Profile".
   delayexec, `/ub delay`, give-all and `/mt loot` queues wait for RESUME) — except Mana
   Charges When Off refills. A meta `setmotion[]` cannot press a movement key while held, and
   STOP releases every key one pressed (one `SetMovementInput(0,0,0,false)`); so does
-  `bot.stop()`. VT code never calls `kernel.start/stop`; Run Macro is `bot.control`.
+  `bot.stop()`. VT code never calls `kernel.start/stop`; Run Macro is `bot.control`. The one
+  piece of run state a profile carries is `StartMacroOnLogin` (owner decision 2026-10-19):
+  boot.js presses the HUD's START once per login.
 - **Portal space holds** every mover, caster and item action; the meta watchdog pauses;
   `setmotion[]` keys are released on entering portal space and cannot be pressed in it.
   They are also released when EnableMeta goes off and on a meta load / unload (RYNTH-1).
@@ -240,7 +251,41 @@ Storage (all `localStorage`, try/catch everywhere):
 | `rynth.vt.v1.nav.<name>`, `rynth.vt.v1.meta.<name>`, `rynth.vt.v1.loot.<name>` | nav routes, metas, loot profiles (overwrite on save) |
 | `rynth.vt.v1.pvars.<guid>`, `rynth.vt.v1.gvars` | persistent / global meta variables (scalars); global ones written by another tab are re-read, and a flush merges only this tab's own changes |
 | `rynth.vt.v1.creatures` | learned creature profiles (LRU 2000) |
-| `rynth.vt.ui.v1` | panel prefs (open, tab, opacity, Route tab "Show path" and add kind); its position is `hb.window.ffff0141` |
+| `rynth.vt.ui.v1` | panel prefs (open, tab, opacity, Route tab "Show path" and add kind); its position is `hb.window.ffff0141` (the Route tab's **Steep** is the profile option `ShowTerrainPassability`) |
+
+## Options made live (2026-10-19)
+
+The rows the schema used to keep as "Not on web" (stored and round-tripped only) now act; only
+Show Editor (deprecated in VTank too) stays inert. Owner decisions: VTank's / RynthAi's
+defaults; DoJiggle = strafe between casts; Start on login is the one piece of run state a
+profile carries; the steep-ground tint shows whenever it is on and has its own Route-tab
+switch; worn-armor banes are cast on yourself; Salvage + CombineSalvage go through the Ust;
+VTank's corpse-ownership rule; Healer's Heart support with the jump-out.
+
+| Options (default) | What it does on the web | Panel | Code |
+|---|---|---|---|
+| `LootFellowCorpses` (off), `LootAllCorpses` (off), `LootOnlyRareCorpses` (off) | VTank's corpse rule, read from the corpse's ACE description "Killed by X." (one appraisal per corpse; the corpse never counts as available while that is on its way): your own kills (incl. your pets' — "&lt;you&gt;'s …" — and your own corpse) always; a fellow's at once with LootFellowCorpses; anyone's from 100 s after it appeared with LootAllCorpses; never another player's rare, "misadventure" or a corpse naming no killer; rares only = your own rare. "Do not yet have the right" is retried from 100 s, every 15 s (5×). A host without string reads keeps the old take-every-corpse rule | Loot tab | `loot_loop.js` |
+| `CorpseApproachRangeMin` (4 m) | the reach before a corpse is opened (1 m at the least; the server walks the rest) | Loot tab "open within" | `loot_loop.js` |
+| `ReadUnknownScrolls` (on) | scrolls of spells you don't know but the server lets you learn (ACE `CanReadScroll`: power < 50 or ≥ 300 by anyone, otherwise the school trained and buffed skill ≥ power − 50 — looser than VTank's FAQ −15) are taken whatever their value and read one at a time, never from your own corpse; one your loot profile keeps stays unread; a .utl **Read** rule reads while this is on (as VTank) | Loot tab | `loot_loop.js`, `support/scrolls.js` (ReadScrolls) |
+| the .utl **Salvage** action, `CombineSalvage` (on) | items a Salvage rule takes are salvaged with your Ust (wcid 20646) after the corpse — never items recovered from your own corpse; then partial bags of one material are combined within the profile's SalvageCombine bands (VTClassic's defaults without the block), smallest first, never past 100 units or 75,000 value. A route (even boosted) steps aside while a scroll or salvage job waits | Loot tab | `support/salvage.js` (Salvage) |
+| `DoHelp` (on), `HealOthersAt` / `RestamOthersAt` / `InfuseOthersAt` (50 / 10 / 10 %), `HelperHealDistance` / `HelperRestamDistance` / `HelperInfuseDistance` (30 m), `UseHealersHeart` (on), `JumpOutWandCasting` (off) | in a fellowship, the member furthest below an "others" level within its distance is helped: a Healer's Heart from the Items tab first (a Heal Other caster that must be wielded — wielded, Magic mode, used on the fellow within the heart's own reach; a use counts only once its heal line or the fellow's rising health shows it, three silent uses park the heart; the weapons go back afterwards, or after 5 failed tries one chat alert says which could not; combat holds meanwhile, planner or not; a minimal jump ~0.2 s later with JumpOutWandCasting, never for a PK), else Heal / Revitalize / Mana Boost Other (Infuse Mana Other when no Mana Boost is known), the highest known tier, targeted, within 75 m. Fellow vitals stream only while asked for: the helper and the fellowship panel share one hold (`globalThis.__hbFellowUpdateRefs`), re-asked after a reconnect | Main tab › Vitals (Others %, Others ≤ m, switches) | `support/helpers.js` (Helpers) |
+| `TargetLock` (off), `AttackMinDistance` (0; VTank `AttackMinimumDistance`), `MonsterDisengageRange` (0 = Monster Range + 3 m), `TargetNoProgressTimeoutSec` (0 = off), `DoJiggle` (off), `SpellDiffExcessThresholdHunt` (25) | target the monster you selected (priority first); skip nearer than the minimum; keep an engaged target out to the disengage range (the entity scan widens for it); blacklist a target not damaged for N s; a 300 ms alternating strafe between resolved magic casts (only while no other mover owns the body); in VTank war-spell mode the highest spell whose power + threshold fits the buffed school skill (`combat_spells.json` carries `power`). The same verdicts steer the C# target pick (netBrain "on") | Main tab (Target lock, Attack min, Disengage); Advanced › Combat | `combat_loop.js`, `combat/attack_planner.js` |
+| `BuffArmorImpen` (on), `BuffProfileBanes` (All; VTank's 2-8, All / None or letters ALFCBPS — a `.usd` with both VTank keys takes the enum unless it says Custom) | after the self buffs: Impenetrability and the chosen banes cast on yourself — ACE puts them on every worn armor and clothing piece and the shield — best known tier, confirmed by its "You cast … on …" line, recast like Items-tab item buffs; an equipped shield's own Items-tab casts for those families are skipped | Buffs tab › Worn armor row | `buff_loop.js` B7 |
+| `NavFarStopDistance` (0 = off; VTank's 999999 imports as 100 km), `FollowAroundCorners` (on), `DoorIdentifyRange` (20 m) | hold the route (no legs, one chat alert, walks on once back) while its waypoint — or the Follow leader — is farther than the far-stop; Follow runs the leader's recorded path corner by corner; doors in range are appraised first, so a locked door is picked only with Auto unlock doors and a chance, and never tried blind | Advanced › Navigation; `/rs nav status` "held: …" | `nav/active_nav.js`, `nav/follow_trail.js`, `support/doors.js` |
+| `EnableMissileCrafting` (on) | while the bot fights with a bow / crossbow / atlatl and the ammo slot is empty: wield matching ammo (exact AmmoType), else fletch heads onto shafts (Fletching trained, ≥ 50 %, peace mode first) and wield the product | Advanced › Crafting | `support/ammo.js` (Ammo) |
+| `EnableFPSLimit` (on), `TargetFPSFocused` (60), `TargetFPSBackground` (30) | the 3D frame cap while the window has / hasn't focus (`window.__setFrameCap`), paced softly (the sleep ends 4 ms early and rAF aligns to the refresh, so a cap at the display's own rate never halves it; up to one refresh fast on a faster display). Never applied to a page with `?targetFps=` (it wins; `=0` pins uncapped), an automation-driven page (`navigator.webdriver`) or a window nobody has focused yet (the 1070's off-screen bench Chrome, a fresh rig) — the cap starts at the first focus. Page-level: it also applies on a `?botVt=off` page (that flag is about the bot) | Advanced › Display | `plugins/rynth-vt/display.js`, `scene3d/frame_cap.js` |
+| `ShowTerrainPassability` (on) | ground too steep to walk up (per triangle, the game's diagonal, normal z < 0.664) tinted red within ~130 m, outdoors, whether or not a route is shown | Route tab › **Steep** | `scene3d/passability_overlay.js` |
+| `StartMacroOnLogin` (off) | once per login, when the character's active profile has it: the HUD's START (or boot.js's same steps) — not on a `?bot=1` / `?botVt=off` page. STOP still stops it, but while the option is on a STOP lasts until the next login (reload, relog, takeover — VTank's semantics: the macro starts at login); turn the option off to keep the bot stopped | Main tab › Behaviour | `rynth/boot.js`, `app/client_events.js` |
+
+Fixed on the way: the buff loop's batch rebuff (B11 / Force Buff) never ended once the kernel
+stopped ticking Buffing, so self buffs were not recast after the first batch (`heartbeat()`
+now ends a finished pass); with the layer, Items-tab item enchants count as buffs so a due one
+gets the tick; combat took another module's cast refusal as its own — a refusal arrives after
+ACE's UseDone has cleared the claim (or its owner released it), so the host now remembers who
+cast last: `host.castOwner()` (the live claim's owner, else the last claim's for 6 s), read by
+combat, the planner, vitals, the helper and ammo; the netBrain C# target pick ignored the
+Monsters tab (now fed the planner's verdicts); `clearIncapable` ends combat's 60 s stand-down
+once the Ammo slot wields ammo.
 
 ## Expressions (monster list and metas)
 

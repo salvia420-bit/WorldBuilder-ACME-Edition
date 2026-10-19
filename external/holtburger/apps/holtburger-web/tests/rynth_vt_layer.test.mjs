@@ -210,7 +210,7 @@ await check("Default profile: planner detached, acquireRangeFn set (identity), e
     assert.equal(bot.combat.acquireRangeFn(40), 40);
     assert.equal(bot.combat.acquireRangeFn(17.5), 17.5);
     const aux = bot.kernel.aux;
-    assert.deepEqual(aux.slots.map((s) => s.name), ["Supplies", "JumpNow", "Pets", "Doors", "Navigate", "BuffItems", "IdleRebuff"]);
+    assert.deepEqual(aux.slots.map((s) => s.name), ["Supplies", "Helpers", "Ammo", "JumpNow", "Pets", "ReadScrolls", "Salvage", "Doors", "Navigate", "BuffItems", "IdleRebuff"]);
     for (const s of aux.slots) assert.equal(s.enabled(), false, `${s.name}.enabled() at Default`);
     assert.deepEqual(aux.idleHooks.map((h) => h.name), ["PeaceMode"]);
     for (const h of aux.idleHooks) assert.equal(h.enabled(), false, `${h.name}.enabled() at Default`);

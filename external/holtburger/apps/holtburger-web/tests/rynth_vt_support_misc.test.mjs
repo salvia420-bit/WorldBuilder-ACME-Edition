@@ -5,8 +5,10 @@
 // Pets (pet range with/without the custom range, min monsters, PetDmg essence
 // choice, refill), fellowship recruiting (gates, 30 s rate limit, the "come
 // closer" reply for a sender we cannot see), doors (open, locked + lockpick,
-// cooldown), peace mode (cooldown, anti-thrash), IdleRebuff (window raised for
-// exactly one buff tick and restored), and every slot/hook/reflex inert at the
+// cooldown; door ID: appraisals within DoorIdentifyRange, a known lock picked
+// first / left alone, the stale-percent rule), peace mode (cooldown,
+// anti-thrash), IdleRebuff (window raised for exactly one buff tick and
+// restored), and every slot/hook/reflex inert at the
 // schema defaults; BuffItems/IdleRebuff off when the buff loop is disabled,
 // Pets off when the combat loop is disabled.
 //
@@ -269,7 +271,9 @@ await run.check("fellow: 30 s per sender; out-of-sight sender gets one 'come clo
 const DOOR = 0x7a9b0042;
 const PICK = 0x8000f001;
 function doorWorld({ values = {}, nav = true, rank = "beforeIdle", lists = {} } = {}) {
-  const w = base({ values: { OpenDoors: true, ...values }, inv: [F.row(PICK, "Lockpick")], lists });
+  // Door ID off unless a check turns it on: nothing known of a lock = the
+  // open → lockpick flow (the door-ID checks are further down).
+  const w = base({ values: { OpenDoors: true, DoorIdentifyRange: 0, ...values }, inv: [F.row(PICK, "Lockpick")], lists });
   w.host.nearby = [DOOR];
   w.host.names.set(DOOR, "Door");
   w.host.desc.set(DOOR, 0x1000);
@@ -459,6 +463,195 @@ await run.check("doors + Boost Nav (logic-3): an in-progress door yields a gentl
   u.host.busy = 0;
   assert.equal(u.tick(600), true, "re-targeted, not skipped as failed");
   assert.equal(u.host.actions("UseObject").length, 2);
+});
+
+// ── doors: door ID (DoorIdentifyRange) ────────────────────────────────────
+const PICK_ROW = { guid: PICK, name: "Lockpick", wcid: 0, type: "Lockpick" };
+/** Door ID on at the schema default (20 m), AutoUnlockDoors on, a lockpick on the Consumables tab. */
+function idWorld({ values = {}, lists = { consumables: [PICK_ROW] } } = {}) {
+  return doorWorld({ values: { DoorIdentifyRange: 20, AutoUnlockDoors: true, ...values }, lists });
+}
+/** The server's appraisal answer: the merged properties, then the "appraised" signal. */
+function appraise(w, g, { locked, pct } = {}) {
+  if (locked !== undefined) w.host.setBool(g, 3, locked);
+  if (pct !== undefined) w.host.setInt(g, 173, pct);
+  w.bus.emit({ type: "appraised", guid: g });
+}
+/** Seen from 12 m (appraised there), answered, then walked up to 3 m. */
+function approachAppraised(w, answer) {
+  w.host.dist.set(DOOR, 12);
+  assert.equal(w.tick(), false, "12 m: appraised, not opened");
+  assert.deepEqual(w.host.calls, [["RequestId", DOOR]]);
+  appraise(w, DOOR, answer);
+  w.host.dist.set(DOOR, 3);
+}
+
+await run.check("door ID: closed doors within DoorIdentifyRange are appraised ahead of time — nearest first, ≤ 2 a second, again only after 10 s unanswered; never beyond it, never an open door; it never takes the tick; DoorIdentifyRange 0 or no signal seam = none", () => {
+  const D2 = 0x7a9b0043;
+  const D3 = 0x7a9b0044;
+  const D4 = 0x7a9b0045;
+  const w = idWorld();
+  w.host.nearby = [DOOR, D2, D3, D4];
+  for (const g of [D2, D3, D4]) {
+    w.host.names.set(g, "Door");
+    w.host.desc.set(g, 0x1000);
+  }
+  w.host.dist.set(DOOR, 15);
+  w.host.dist.set(D2, 8);
+  w.host.dist.set(D3, 25);
+  w.host.dist.set(D4, 12);
+  w.host.physState.set(D4, 0x4); // open: nothing to learn
+  assert.equal(w.tick(), false, "nothing within OpenDoorRange: the tick is not taken");
+  assert.deepEqual(w.host.calls, [["RequestId", D2], ["RequestId", DOOR]], "nearest first; 25 m is beyond the 20 m range");
+  for (let i = 0; i < 10; i++) w.tick(600);
+  assert.equal(w.host.actions("RequestId").length, 2, "unanswered: asked again only after 10 s");
+  w.tick(5000);
+  assert.equal(w.host.actions("RequestId").length, 4);
+  assert.equal(w.doors.status().appraisals, 4);
+  // The budget: three doors due at once → two this second, the third the next.
+  const b = idWorld();
+  b.host.nearby = [DOOR, D2, D3];
+  for (const g of [D2, D3]) {
+    b.host.names.set(g, "Door");
+    b.host.desc.set(g, 0x1000);
+  }
+  b.host.dist.set(DOOR, 10);
+  b.host.dist.set(D2, 11);
+  b.host.dist.set(D3, 12);
+  b.tick();
+  assert.equal(b.host.actions("RequestId").length, 2, "≤ 2 per second");
+  b.tick(600);
+  assert.equal(b.host.actions("RequestId").length, 2, "…the third waits");
+  b.tick(600);
+  assert.deepEqual(b.host.actions("RequestId").at(-1), ["RequestId", D3]);
+  // Off: DoorIdentifyRange 0, or a host signal seam without "appraised".
+  const off = idWorld({ values: { DoorIdentifyRange: 0 } });
+  off.host.dist.set(DOOR, 12);
+  off.tick();
+  assert.equal(off.host.actions("RequestId").length, 0);
+  const noSig = idWorld();
+  noSig.doors = D.createDoors({ ...noSig.deps, subscribe: null, navWants: () => true });
+  noSig.host.dist.set(DOOR, 12);
+  noSig.tick();
+  assert.equal(noSig.host.actions("RequestId").length, 0, "no way to see the answer: no request");
+  // Nothing answered yet at the door: the lock is not known — opened as before.
+  const u = idWorld();
+  assert.equal(u.tick(), true);
+  assert.deepEqual(u.host.calls, [["RequestId", DOOR], ["UseObject", DOOR]]);
+});
+
+await run.check("door ID: answered UNLOCKED → opened as before (one use, no lockpick)", () => {
+  const w = idWorld();
+  approachAppraised(w, { locked: false });
+  assert.equal(w.tick(600), true);
+  assert.deepEqual(w.host.calls, [["RequestId", DOOR], ["UseObject", DOOR]]);
+  assert.deepEqual(w.doors.status().lock, { guid: DOOR, name: "Door", locked: false, chance: null });
+  assert.equal(w.doors.status().note, "Door: opening");
+  w.host.physState.set(DOOR, 0x4);
+  w.bus.emit({ type: "useDone" });
+  w.tick();
+  assert.equal(w.doors.status().opens, 1);
+  assert.equal(w.host.actions("UseItemOnTarget").length, 0);
+});
+
+await run.check("door ID: answered LOCKED with a pick chance > 0 → the Consumables lockpick FIRST (no blind use), its answer awaited (busy 0 says nothing), the use once Locked flips; status reports the chance", () => {
+  const w = idWorld();
+  approachAppraised(w, { locked: true, pct: 37 });
+  assert.equal(w.tick(600), true);
+  assert.deepEqual(w.host.calls, [["RequestId", DOOR], ["UseItemOnTarget", PICK, DOOR]], "picked first: a use would only be refused");
+  assert.equal(w.doors.status().state, "unlocking");
+  assert.deepEqual(w.doors.status().lock, { guid: DOOR, name: "Door", locked: true, chance: 37 });
+  assert.equal(w.doors.status().note, "Door: locked, 37% to pick — using Lockpick");
+  w.tick(600);
+  assert.equal(w.doors.status().state, "unlocking", "no answer yet: still waiting for the pick");
+  w.host.setBool(DOOR, 3, false); // the pick worked: ACE broadcasts Locked = false…
+  w.host.useDone(); // …then UseDone
+  w.bus.emit({ type: "useDone" });
+  w.tick();
+  assert.deepEqual(w.host.calls.at(-1), ["UseObject", DOOR]);
+  w.host.physState.set(DOOR, 0x4);
+  w.tick(600);
+  assert.equal(w.doors.status().opens, 1);
+  assert.equal(w.doors.status().unlocks, 1);
+  assert.equal(w.host.actions("UseObject").length, 1);
+});
+
+await run.check("door ID: a failed pick (still locked after its answer) is picked again — the 3 attempts are picks, never a blind use — then the door is skipped", () => {
+  const w = idWorld();
+  approachAppraised(w, { locked: true, pct: 50 });
+  assert.equal(w.tick(600), true);
+  for (let i = 0; i < 10; i++) {
+    if (w.doors.status().state === "unlocking") {
+      w.host.useDone(); // answered: no Locked broadcast, the pick failed
+      w.bus.emit({ type: "useDone" });
+    }
+    w.tick(300);
+  }
+  assert.equal(w.host.actions("UseItemOnTarget").length, 3);
+  assert.equal(w.host.actions("UseObject").length, 0, "never a blind use");
+  assert.ok(["cooldown", "none"].includes(w.doors.status().state));
+  assert.match(w.doors.status().note, /^Door: the lock was not picked in 3 tries — skipped for 60 s$/);
+  w.tick(5100);
+  assert.equal(w.tick(600), false, "skipped");
+  // No answer at all: the attempt timeout re-picks (never a use) — 3 picks, then skipped.
+  const slow = idWorld();
+  approachAppraised(slow, { locked: true, pct: 50 });
+  slow.tick(600);
+  for (let i = 0; i < 20; i++) slow.tick(1000);
+  assert.equal(slow.host.actions("UseItemOnTarget").length, 3);
+  assert.equal(slow.host.actions("UseObject").length, 0);
+});
+
+await run.check("door ID: known LOCKED and Auto unlock doors off, a 0 % chance (or none in the locked answer: no ResistLockpick), or no lockpick → never tried (no use, no pick, the tick is not taken), status says why; unlocked later → opened", () => {
+  const cases = [
+    ["auto-unlock off", { AutoUnlockDoors: false }, undefined, 40, "Door: locked — Auto unlock doors is off"],
+    ["0 %", {}, undefined, 0, "Door: locked, 0% to pick — not tried"],
+    ["no percent in the locked answer", {}, undefined, undefined, "Door: locked, 0% to pick — not tried"],
+    ["no lockpick", {}, { consumables: [] }, 40, "Door: locked, 40% to pick — no lockpick on the Consumables tab"],
+  ];
+  for (const [label, values, lists, pct, note] of cases) {
+    const w = idWorld({ values, lists });
+    approachAppraised(w, { locked: true, pct });
+    for (let i = 0; i < 5; i++) assert.equal(w.tick(600), false, label);
+    assert.equal(w.host.actions("UseObject").length + w.host.actions("UseItemOnTarget").length, 0, label);
+    assert.equal(w.doors.status().state, "none", label);
+    assert.equal(w.doors.status().note, note, label);
+    assert.equal(w.doors.status().lock.locked, true, label);
+    w.host.setBool(DOOR, 3, false); // someone unlocked it (ACE broadcasts Locked)
+    assert.equal(w.tick(600), true, `${label}: unlocked now`);
+    assert.deepEqual(w.host.calls.at(-1), ["UseObject", DOOR], label);
+  }
+});
+
+await run.check("door ID: a door known locked before its answer waits for it (≤ 2 s), then is picked without a chance if none comes; an answer taken while UNLOCKED gives no chance — locked again, it is appraised again first (a stale percent is never used)", () => {
+  const b = idWorld();
+  b.host.setBool(DOOR, 3, true); // Locked known (a broadcast), never appraised
+  assert.equal(b.tick(), false, "its appraisal just asked: waits");
+  assert.deepEqual(b.host.calls, [["RequestId", DOOR]]);
+  assert.equal(b.doors.status().note, "Door: locked — appraising it");
+  for (let i = 0; i < 3; i++) assert.equal(b.tick(600), false);
+  assert.equal(b.tick(600), true, "no answer within 2 s: picked without knowing the chance");
+  assert.deepEqual(b.host.calls.at(-1), ["UseItemOnTarget", PICK, DOOR]);
+  assert.equal(b.host.actions("UseObject").length, 0, "a use would only be refused");
+  assert.equal(b.doors.status().note, "Door: locked — using Lockpick");
+  // The stale percent: answered unlocked with an 80 left over in the merged properties.
+  const w = idWorld();
+  approachAppraised(w, { locked: false, pct: 80 });
+  w.host.setBool(DOOR, 3, true); // ACE re-locked it (the door's reset)
+  assert.equal(w.tick(2100), false, "locked again: appraised again, and waits for that answer");
+  assert.equal(w.host.actions("RequestId").length, 2);
+  assert.equal(w.doors.status().lock.chance, null, "80 % is not trusted");
+  appraise(w, DOOR, { locked: true, pct: 25 });
+  assert.equal(w.tick(600), true);
+  assert.deepEqual(w.host.calls.at(-1), ["UseItemOnTarget", PICK, DOOR]);
+  assert.equal(w.doors.status().lock.chance, 25);
+  // A locked answer is re-read after 60 s (buffs move the skill), not before.
+  const r = idWorld();
+  approachAppraised(r, { locked: true, pct: 0 });
+  for (let i = 0; i < 10; i++) r.tick(600);
+  assert.equal(r.host.actions("RequestId").length, 1);
+  r.tick(60_000);
+  assert.equal(r.host.actions("RequestId").length, 2);
 });
 
 // ── idle: peace mode + idle rebuff ────────────────────────────────────────

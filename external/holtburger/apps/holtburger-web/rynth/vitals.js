@@ -414,9 +414,10 @@ export class RynthVitals {
     const cls = castRefusalClass(e.u32);
     const lc = this._lastCast;
     if (!cls || !lc || lc.refused || Date.now() - lc.at > REFUSAL_WINDOW_MS) return;
-    // Another module's cast in flight? The shared token names its owner.
-    const tok = this.host.castToken;
-    if (tok && tok.owner && tok.owner !== "vitals") return;
+    // Another module's cast? The shared token names its owner (castOwner:
+    // the live claim, else the last one for a few seconds — a refusal comes
+    // after UseDone cleared it; an older host: the raw token).
+    if (this._castIsOthers()) return;
     lc.refused = cls;
     const now = Date.now();
     this.lastRefusal = { code: e.u32 >>> 0, cls, spellId: lc.spell, at: now };
@@ -443,10 +444,17 @@ export class RynthVitals {
     if (!g) return;
     const rec = this._axisCast[g.axis];
     if (!rec || rec.refused || rec.gain != null || Date.now() - rec.at > REFUSAL_WINDOW_MS) return;
-    // Another module's cast in flight? The shared token names its owner.
-    const tok = this.host.castToken;
-    if (tok && tok.owner && tok.owner !== "vitals") return;
+    // Another module's cast? The shared token names its owner.
+    if (this._castIsOthers()) return;
     rec.gain = g.pts;
+  }
+
+  _castIsOthers() {
+    const h = this.host;
+    let owner = null;
+    if (typeof h.castOwner === "function") owner = h.castOwner();
+    else owner = h.castToken ? h.castToken.owner : null;
+    return !!owner && owner !== "vitals";
   }
 
   // A vital back at/above its threshold ends that axis's recovery episode:

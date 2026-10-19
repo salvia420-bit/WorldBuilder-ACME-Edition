@@ -11,11 +11,17 @@
 //               time left — green, yellow (under twice the rebuff threshold),
 //               orange (under it: recast now), red (maintained but not on
 //               you). A group's box turns the whole group on or off.
-//   item buffs  a matrix: the Items tab's weapons and shields × Impenetrability
-//               and the seven banes (a plain-Add shield gets all eight by
-//               default, other kinds none, D38); No-Buffs items greyed (G:157).
+//   item buffs  a matrix of Impenetrability and the seven banes: first "Worn
+//               armor" — cast on yourself, the server puts each on every armor
+//               and clothing piece you wear and on your shield (the options
+//               BuffArmorImpen and BuffProfileBanes' letters, 2026-10-19) —
+//               then the Items tab's weapons and shields (a plain-Add shield
+//               gets all eight by default, other kinds none, D38; a worn
+//               piece's boxes are left to the Worn armor row); No-Buffs items
+//               greyed (G:157).
 // The enabled set is projected to the running bot through bot.setBuffs (list
-// "buffs" = { spec, disabled, itemSpells }).
+// "buffs" = { spec, disabled, itemSpells }); the Worn armor row writes its two
+// options.
 
 import {
   el, btn, setText, setTitle, setValue, shouldRebuild, row, checkbox, fmtSecs, numField, bindRow, iconBtn,
@@ -32,6 +38,14 @@ const timeText = (r) => {
   if (r.remainingS == null) return "missing";
   return fmtSecs(r.remainingS);
 };
+
+const WORN_TIP =
+  "Cast on yourself: the server puts Impenetrability and each bane on every armor and clothing piece you wear, " +
+  "and on your shield — one cast per box, after your self buffs. A worn shield's own boxes below are not cast for these.";
+
+/** The bane letters (BuffProfileBanes) with `letter` switched on or off, in VTank's order. */
+const withLetter = (w, letter, on) =>
+  [...(w.order || "ALFCBPS")].filter((c) => (c === letter ? on : String(w.letters || "").includes(c))).join("");
 
 export function createBuffsTab(ctx) {
   const { doc, bridge } = ctx;
@@ -55,7 +69,7 @@ export function createBuffsTab(ctx) {
   root.appendChild(list);
 
   const itemsHead = el(doc, "div", "rvt-sec", "Item buffs");
-  const itemsMeta = el(doc, "span", "rvt-sec-meta", "shields get Impenetrability + every bane by default; weapons and casters none");
+  const itemsMeta = el(doc, "span", "rvt-sec-meta", "worn armor: one cast on you per box · shields get Impenetrability + every bane by default; weapons and casters none");
   itemsHead.appendChild(itemsMeta);
   root.appendChild(itemsHead);
   const items = el(doc, "div", "rvt-itembuffs");
@@ -161,11 +175,44 @@ export function createBuffsTab(ctx) {
     }
   }
 
+  /** The "Worn armor" row: its cells are the options BuffArmorImpen (Imp) and
+   *  the BuffProfileBanes letters (a bane cell writes the whole new string). */
+  function wornRow(w, fams) {
+    const tr = el(doc, "tr", "rvt-wornarmor");
+    const name = el(doc, "td", "rvt-name", "Worn armor");
+    name.title = WORN_TIP;
+    tr.appendChild(name);
+    const byFamily = new Map((w.families || []).map((f) => [f.family, f]));
+    for (const fam of fams) {
+      const f = byFamily.get(fam);
+      const td = el(doc, "td");
+      if (f) {
+        const cb = el(doc, "input", "hbk-check");
+        cb.type = "checkbox";
+        cb.checked = !!f.on;
+        cb.disabled = !w.available;
+        cb.dataset.worn = f.family;
+        cb.title = `${f.label} on every armor and clothing piece you wear${f.letter ? ` (bane letter ${f.letter})` : ""}`;
+        cb.setAttribute("aria-label", `Worn armor: ${f.label}`);
+        cb.addEventListener("change", () => {
+          const [key, value] = f.letter ? ["BuffProfileBanes", withLetter(w, f.letter, cb.checked)] : ["BuffArmorImpen", cb.checked];
+          done(bridge.opt.set(key, value), (x) => x.echo || `${key} = ${x.value}`);
+        });
+        td.appendChild(cb);
+      }
+      tr.appendChild(td);
+    }
+    tr.appendChild(el(doc, "td"));
+    return tr;
+  }
+
   function buildItems(v) {
     items.textContent = "";
     const rows = v.items || [];
-    if (!rows.length) {
-      items.appendChild(el(doc, "div", "rvt-empty", "No weapons or shields on the Items tab."));
+    const worn = v.wornArmor || null;
+    const none = () => el(doc, "div", "rvt-empty", "No weapons or shields on the Items tab.");
+    if (!rows.length && !worn) {
+      items.appendChild(none());
       return;
     }
     const fams = v.families || [];
@@ -179,20 +226,22 @@ export function createBuffsTab(ctx) {
     }
     head.appendChild(el(doc, "th"));
     t.appendChild(head);
+    if (worn) t.appendChild(wornRow(worn, fams));
     for (const it of rows) {
       const tr = el(doc, "tr", `rvt-itembuff${it.noBuffs ? " is-nobuffs" : ""}`);
       tr.dataset.guid = String(it.guid);
       const name = el(doc, "td", `rvt-name${it.overridden && !it.noBuffs ? " is-custom" : ""}`, it.overridden && !it.noBuffs ? `${it.name} ✱` : it.name);
-      name.title = `${it.name} (${it.kind})${it.noBuffs ? " — No Buffs" : it.overridden ? " — custom banes (⟲ resets to this kind's default)" : ""}`;
+      name.title = `${it.name} (${it.kind})${it.noBuffs ? " — No Buffs" : it.overridden ? " — custom banes (⟲ resets to this kind's default)" : ""}${it.equipped ? " — worn now" : ""}`;
       tr.appendChild(name);
       for (const f of it.families) {
-        const td = el(doc, "td");
+        // worn now, with the Worn armor box on: that cast covers it
+        const td = el(doc, "td", f.worn && !it.noBuffs ? "is-worn" : null);
         const cb = el(doc, "input", "hbk-check");
         cb.type = "checkbox";
         cb.checked = !!f.on;
         cb.disabled = !!it.noBuffs;
         cb.dataset.family = f.family;
-        cb.title = `${f.label}${f.dflt ? " (default for this kind)" : ""}`;
+        cb.title = `${f.label}${f.dflt ? " (default for this kind)" : ""}${f.worn && !it.noBuffs ? " — worn now: the Worn armor row casts it" : ""}`;
         cb.addEventListener("change", () => done(bridge.buffs.setItemSpell(it.guid, f.family, cb.checked)));
         td.appendChild(cb);
         tr.appendChild(td);
@@ -206,6 +255,7 @@ export function createBuffsTab(ctx) {
       t.appendChild(tr);
     }
     items.appendChild(t);
+    if (!rows.length) items.appendChild(none());
   }
 
   function renderSummary(v) {
@@ -254,7 +304,7 @@ export function createBuffsTab(ctx) {
       for (const g of Array.isArray(v.groups) ? v.groups : []) setText(groupMetas.get(g.group), groupMetaText(g));
     }
     renderSummary(v);
-    if (shouldRebuild(items, JSON.stringify(v.items || []), force)) buildItems(v);
+    if (shouldRebuild(items, JSON.stringify([v.items || [], v.wornArmor || null]), force)) buildItems(v);
   }
 
   return { id: "buffs", el: root, snapshotId: () => "buffs", update };

@@ -12,10 +12,12 @@
 //                                 fallback loop.enabled = v; Buffing true with
 //                                 no loop ⇒ bot.setBuffs(profile spec ?? "auto")
 //   MonsterRange                  combat.monsterRangeM (+ host.nearbyRangeM =
-//                                 max(base, MonsterRange+5, ApproachRange+5),
-//                                 each term only when that range exceeds its
-//                                 schema default (40 / 4 m: Default never moves
-//                                 a configured base), base = host.nearbyRangeM
+//                                 max(base, MonsterRange+5, ApproachRange+5,
+//                                 MonsterDisengageRange+5), each term only when
+//                                 that range exceeds its schema default (40 /
+//                                 4 m; the disengage one only past Monster
+//                                 Range: Default never moves a configured
+//                                 base), base = host.nearbyRangeM
 //                                 at creation, 0 = unlimited ⇒ untouched;
 //                                 combat.invalidateScan())
 //   HealAt … ManaRechargeStamFloor vitals.cfg[field]
@@ -170,7 +172,16 @@ export function createLiveCells(bot) {
       // Only a range beyond the schema default (the old literals the bot
       // shipped with) widens the scan: at Default a configured nearbyRangeM
       // below MonsterRange+5 stays exactly as configured (V-2, review regress-2).
-      const need = Math.max(mr > RANGE_DFLT.monster ? mr + 5 : 0, ar > RANGE_DFLT.approach ? ar + 5 : 0);
+      // A Monster disengage range beyond Monster Range widens it too, so the
+      // engaged target stays visible out to it (2026-10-19; 0 = auto, +3 m,
+      // inside the margin).
+      let dr = Number(ctx.getValue?.("MonsterDisengageRange"));
+      if (!Number.isFinite(dr)) dr = 0;
+      const need = Math.max(
+        mr > RANGE_DFLT.monster ? mr + 5 : 0,
+        ar > RANGE_DFLT.approach ? ar + 5 : 0,
+        dr > mr && dr > RANGE_DFLT.monster ? dr + 5 : 0,
+      );
       const want = Math.max(nearbyBase, need);
       if (host.nearbyRangeM !== want) host.nearbyRangeM = want;
     } catch {

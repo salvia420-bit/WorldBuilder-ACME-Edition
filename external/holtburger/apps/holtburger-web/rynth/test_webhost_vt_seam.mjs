@@ -270,7 +270,8 @@ await check("R1 TryGetSpellRecord normalises isSelfTargeted / flags.selfTargeted
   const e = h.TryGetSpellRecord(8);
   assert.equal(e.isSelfTargeted, false);
   assert.equal(e.isUntargeted, false);
-  assert.deepEqual(Object.keys(c).sort(), ["baseRangeConstant", "baseRangeMod", "bitfield", "category", "duration", "id", "isBeneficial", "isSelfTargeted", "isUntargeted", "metaSpellType", "name", "roughLevel", "school"].sort());
+  // `power` (the spell's difficulty) since 2026-10-19: SpellDiffExcessThreshold-Hunt / ReadUnknownScrolls read it
+  assert.deepEqual(Object.keys(c).sort(), ["baseRangeConstant", "baseRangeMod", "bitfield", "category", "duration", "id", "isBeneficial", "isSelfTargeted", "isUntargeted", "metaSpellType", "name", "power", "roughLevel", "school"].sort());
   assert.ok(Object.isFrozen(c));
 });
 

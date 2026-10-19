@@ -33,11 +33,26 @@
 //     with its S / arc / Damage Type unedited ⇒ null (combat_loop's legacy
 //     _pickWarSpell); an edited attack column on DEFAULT is planned like any row.
 //  6. three fizzles of one id ⇒ excluded 10 min.
+//
+// "Castable" (every rung above): WarSpellMode "legacy" = RynthAi's
+// MinSkillLevelTier1-8 by spell level; "vtank" = VTank's
+// SpellDiffExcessThreshold-Hunt — the spell's power (difficulty, the table's
+// column, else the live spell record) + the threshold ≤ the buffed skill of
+// the spell's own school.
+//
+// Items: a Healer's Heart — a caster whose own spell is Heal Other and which is
+// used wielded (The Healer's Heart) — is the helper-healing item: never picked
+// as the debuff wand, and a monster row naming it as its weapon is fought with
+// what is in hand. Pack-usable Heal Other casters (Seed of Mornings, the
+// Derubloom Wand) are casters like any other. While the helpers hold the wand
+// slot with a heart (between heals, until they hand the weapons back)
+// ensureLoadout answers "busy" — the injected `wandSlotHeld` hook
+// (support/helpers.js holdsWandSlot; absent = never held).
 
 import * as spellTables from "./spell_tables.js";
 import { DebuffLedger } from "./debuff_ledger.js";
 import { DEFAULT_ENTRY } from "./monster_list.js";
-import { readTierThresholds, skillCapFn } from "../../skill_cap.js";
+import { SCHOOL_SKILL, readTierThresholds, skillCapFn } from "../../skill_cap.js";
 
 /** The DEFAULT row's attack columns (S, arc, Damage Type) are unedited. */
 function defaultAttackShape(entry) {
@@ -62,6 +77,19 @@ const EM_WEAPON_SLOTS = EM_MELEE | EM_MISSILE | EM_HELD | EM_TWO_HANDED;
 
 // Magic school → skill id, the tier defaults and the tier rule live in
 // rynth/skill_cap.js (shared with the buff/vitals loops' opt-in skill cap).
+const SKILL_TRAINED = 2; // SkillAdvancementClass.Trained (skill_cap.js tierForSkill)
+const SPELL_DIFF_EXCESS_DEFAULT = 25; // SpellDiffExcessThresholdHunt (schema default)
+
+// A Healer's Heart: PropertyDataId.Spell (28) of the item is a Heal Other
+// spell (SpellCategory 79: Heal Other I-VI, Adja's Gift, Incantation — The
+// Healer's Heart wcid 8552 carries 1166) AND PropertyInt.ItemUseable (16) has
+// Wielded in its source half (ACE Usable: The Healer's Heart 0x600004; Seed of
+// Mornings 0x600008 is used from the pack).
+const PDID_SPELL = 28;
+const SC_HEAL_OTHER = 79;
+const HEAL_OTHER_SPELLS = new Set([5, 1162, 1163, 1164, 1165, 1166, 2072, 4310]);
+const PINT_ITEM_USEABLE = 16;
+const USABLE_SOURCE_WIELDED = 0x4;
 
 // WeenieError codes on kind-13 (combat_loop.js CAST_REFUSALS).
 const WE_FIZZLE = 0x0402;
@@ -141,7 +169,7 @@ export class AttackPlanner {
     this.getNav = typeof getNav === "function" ? getNav : () => null;
 
     this._svMemo = { seq: undefined, rev: -1, map: new Map() };
-    this._seqCache = { seq: undefined, known: null, cap: null, wielded: undefined, scan: null };
+    this._seqCache = { seq: undefined, known: null, cap: null, powerCap: null, wielded: undefined, scan: null };
     this._knownSig = null;
     this._fizzles = new Map(); // spellId -> count
     this._excluded = new Map(); // spellId -> untilMs
@@ -153,6 +181,9 @@ export class AttackPlanner {
     this._stance = null; // { want, since, lastAt }
     this._warned = new Set();
     this._unsubs = [];
+    // () => true while the helpers' Healer's Heart swap holds the wand slot
+    // (the layer sets it); null = never held.
+    this.wandSlotHeld = null;
 
     if (typeof subscribe === "function") {
       const on = (type, fn) => {
@@ -247,7 +278,7 @@ export class AttackPlanner {
   _perSeq() {
     const seq = this._seq();
     if (seq === undefined || this._seqCache.seq !== seq) {
-      this._seqCache = { seq, known: null, cap: null, wielded: undefined, scan: null };
+      this._seqCache = { seq, known: null, cap: null, powerCap: null, wielded: undefined, scan: null };
     }
     return this._seqCache;
   }
@@ -295,6 +326,35 @@ export class AttackPlanner {
     return c.cap;
   }
 
+  /** (school) → the highest spell power castable in it under VTank's
+   *  SpellDiffExcessThreshold-Hunt: power + threshold ≤ the buffed (current)
+   *  skill — a positive threshold asks for more skill, a negative one less.
+   *  -Infinity untrained; Infinity when skills are unreadable. Memo per seq. */
+  _powerCapFn() {
+    const c = this._perSeq();
+    if (c.powerCap) return c.powerCap;
+    const stats = this._call("TryGetPlayerStats");
+    const skills = stats && stats.skills ? stats.skills : null;
+    const t = Number(this._opt("SpellDiffExcessThresholdHunt", SPELL_DIFF_EXCESS_DEFAULT));
+    const threshold = Number.isFinite(t) ? t : SPELL_DIFF_EXCESS_DEFAULT;
+    c.powerCap = (school) => {
+      if (!skills) return Infinity;
+      const row = skills[SCHOOL_SKILL[school]] ?? skills[String(SCHOOL_SKILL[school])];
+      if (!row) return Infinity;
+      if (typeof row.training === "number" && row.training < SKILL_TRAINED) return -Infinity;
+      const v = Number(row.current ?? row.base);
+      return Number.isFinite(v) ? v - threshold : Infinity;
+    };
+    return c.powerCap;
+  }
+
+  /** A spell's power from the live record (the table's fallback); 0 = unknown. */
+  _spellPower(id) {
+    const rec = this._call("TryGetSpellRecord", id);
+    const p = rec ? Number(rec.power) : 0;
+    return p > 0 ? p : 0;
+  }
+
   _excludedIds(now) {
     for (const [id, until] of this._excluded) if (until <= now) this._excluded.delete(id);
     return this._excluded;
@@ -302,7 +362,12 @@ export class AttackPlanner {
 
   _best(family, now) {
     if (!family) return null;
-    return this.spells.bestCastable(family, { known: this._known(), maxLevelBySchool: this._capFn(), exclude: this._excludedIds(now) });
+    const known = this._known();
+    const exclude = this._excludedIds(now);
+    if (this._opt("WarSpellMode", "legacy") === "vtank") {
+      return this.spells.bestCastable(family, { known, maxPowerBySchool: this._powerCapFn(), powerOf: (id) => this._spellPower(id), exclude });
+    }
+    return this.spells.bestCastable(family, { known, maxLevelBySchool: this._capFn(), exclude });
   }
 
   /** Wielded rows of the player ({guid, itemType, equipMask}); null when unreadable. Memo per seq. */
@@ -701,13 +766,27 @@ export class AttackPlanner {
     this._svMemo = { seq: undefined, rev: -1, map: new Map() }; // the exclusion predicate may have changed
   }
 
+  /** Whose cast a refusal arriving now belongs to: host.castOwner() (the live
+   *  claim's owner, else the last claim's while it is young — a refusal trails
+   *  its UseDone), else the raw token (older hosts, fakes); null = nobody's. */
+  _castOwner() {
+    const h = this.host;
+    if (!h) return null;
+    try {
+      if (typeof h.castOwner === "function") return h.castOwner() || null;
+      return (h.castToken && h.castToken.owner) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   _onUseFailed(sig) {
     const last = this._last;
     if (!last || last.resolved) return;
     const t = this.now();
     if (t - last.at > CAST_ATTRIBUTION_MS) return;
-    const tok = this.host && this.host.castToken;
-    if (tok && tok.owner && tok.owner !== "combat") return; // another module's cast
+    const owner = this._castOwner();
+    if (owner && owner !== "combat") return; // another module's cast
     const code = (Number(sig && sig.code) >>> 0) & 0xffff;
     if (code !== WE_FIZZLE && code !== WE_UNKNOWN_SPELL && code !== WE_NO_COMPONENTS && code !== WE_NO_MANA) return;
     last.resolved = true;
@@ -749,18 +828,46 @@ export class AttackPlanner {
     return true;
   }
 
-  /** A caster for debuff swaps: an Items-tab caster this character owns, else any caster in the pack. */
+  /** The `wandSlotHeld` hook; absent or throwing = not held (today's path). */
+  _wandSlotHeld() {
+    const f = this.wandSlotHeld;
+    if (typeof f !== "function") return false;
+    try {
+      return f() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** A Healer's Heart — the helper-healing item, never a war/debuff caster:
+   *  its own spell (PropertyDataId.Spell) heals others AND it is used wielded
+   *  (ItemUseable's source half). A pack-usable Heal Other caster is not one;
+   *  with ItemUseable unreadable the spell alone decides. */
+  _isHealersHeart(guid) {
+    const g = guid >>> 0;
+    const sp = Number(this._call("TryGetObjectDataIdProperty", g, PDID_SPELL)) >>> 0;
+    if (!sp) return false;
+    if (!HEAL_OTHER_SPELLS.has(sp)) {
+      const rec = this._call("TryGetSpellRecord", sp);
+      if (!rec || Number(rec.category) !== SC_HEAL_OTHER) return false;
+    }
+    const use = this._call("TryGetObjectIntProperty", g, PINT_ITEM_USEABLE);
+    return typeof use !== "number" || (use & 0xffff & USABLE_SOURCE_WIELDED) !== 0;
+  }
+
+  /** A caster for debuff swaps: an Items-tab caster this character owns, else
+   *  any caster in the pack — never a Healer's Heart (_isHealersHeart). */
   _findWand() {
     const t = this.now();
     if (this.items && typeof this.items.ofKind === "function") {
       for (const e of this.items.ofKind("caster")) {
         const g = typeof this.items.resolveGuid === "function" ? this.items.resolveGuid(e) : e.guid;
-        if (g && this._itemOk(g, t)) return g >>> 0;
+        if (g && this._itemOk(g, t) && !this._isHealersHeart(g)) return g >>> 0;
       }
     }
     const inv = this._inventory();
     if (inv) {
-      const row = inv.find((i) => (Number(i.itemType) >>> 0) & IT_CASTER && this._itemOk(i.guid >>> 0, t));
+      const row = inv.find((i) => (Number(i.itemType) >>> 0) & IT_CASTER && this._itemOk(i.guid >>> 0, t) && !this._isHealersHeart(i.guid));
       if (row) return row.guid >>> 0;
     }
     return 0;
@@ -807,7 +914,11 @@ export class AttackPlanner {
     }
     const isWielded = (guid) => rows.some((r) => r.guid === guid);
     if (entry.weapon) {
-      const w = this._resolveItem(entry.weapon);
+      let w = this._resolveItem(entry.weapon);
+      if (w && this._isHealersHeart(w)) {
+        this._warnOnce(`healer:${w}`, `${w.toString(16)} is a Healer's Heart (a helper item, not a weapon) — fighting with what is in hand`);
+        w = 0;
+      }
       if (w && this._itemOk(w, now)) {
         const it = this.items && typeof this.items.find === "function" ? this.items.find(entry.weapon) : null;
         const melee = it ? it.kind === "melee" : true;
@@ -852,6 +963,9 @@ export class AttackPlanner {
         if (s.purpose === "debuff") this._stance = { want: MODE_MAGIC, since: t, lastAt: 0 };
         else if (s.purpose === "restore") this._stance = { want: MODE_NONCOMBAT, since: t, lastAt: 0 };
       }
+      // The helpers' heart swap owns the wand slot until its weapons are back:
+      // wield (or re-stance) nothing over it meanwhile.
+      if (this._wandSlotHeld()) return "busy";
       const stance = this._stanceStep(t);
       if (stance) return stance;
       const rows = this._wielded();

@@ -186,16 +186,19 @@ function membersOf(snap) {
 }
 
 // Retail OnVisibilityChanged → Event_UpdateRequest(visible). Ref-counted so
-// the main-panel tab and the floaty can both be open.
-let visibleCount = 0;
+// the main-panel tab and the floaty can both be open — and the count is the
+// page's one (globalThis.__hbFellowUpdateRefs), shared with the bot's helper
+// healing (rynth/webhost.js FellowshipHoldUpdates), so closing the panel
+// never switches off the fellow vitals the helper reads.
 function sendUpdateRequest(v) {
   try { getHandle()?.fellowshipUpdateRequest?.(!!v); } catch (_) {}
 }
 function fellowshipVisible(delta) {
-  const before = visibleCount;
-  visibleCount = Math.max(0, visibleCount + delta);
-  if (before === 0 && visibleCount > 0) sendUpdateRequest(true);
-  else if (before > 0 && visibleCount === 0) sendUpdateRequest(false);
+  const before = Math.max(0, Number(globalThis.__hbFellowUpdateRefs) || 0);
+  const after = Math.max(0, before + delta);
+  globalThis.__hbFellowUpdateRefs = after;
+  if (before === 0 && after > 0) sendUpdateRequest(true);
+  else if (before > 0 && after === 0) sendUpdateRequest(false);
 }
 
 // ─── Styles ─────────────────────────────────────────────────────────────

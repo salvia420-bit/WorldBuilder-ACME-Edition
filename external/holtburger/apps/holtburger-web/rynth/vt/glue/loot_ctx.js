@@ -2,13 +2,18 @@
 // the loot loop (PLAN §3.14 `loot.classify`, §3.15 step 12; INT-2).
 //
 // makeLootClassify({ profile, getHost, getRegex, log }) → classify(guid, {host,
-// now}) → "pickup" | "skip" | "pending" | null, built from:
+// now, out}) → "pickup" | "skip" | "pending" | null, built from:
 //   * buildUtlItemCtx(host, guid) — the UtlItemCtx of formats/utl_eval.js over
 //     host reads (int/float/string/bool/DID properties, HasAppraisalData,
 //     appraisal spell ids + names, character skills/level/pack room);
-//   * evaluateUtl(profile, ctx, { getRegex }) + lootVerdict(result, {
+//   * evaluateUtl(profile, ctx, { getRegex }) + lootDecision(result, {
 //     inventoryCount }) — KeepUpTo counts the inventory items (stack-aware)
 //     that the SAME rule matches.
+// `out` (optional, 2026-10-19): an object the verdict's rule action ("keep" |
+// "salvage" | "sell" | "read" | "keepUpTo" | null) and rule name are written
+// to — the loot loop salvages a Salvage pickup and reads a Read one.
+// The object class sees the Spell DataId (28), so ObjectClass 42 (Scroll)
+// rules match.
 //
 // Decal synthetic property keys (FMT review §5.2, binding): VTank .utl files
 // (and UB metas) address some properties through Decal's LongValueKey /
@@ -27,11 +32,13 @@
 //   0x0A00000C AttackBonus   → STypeFloat 62 WeaponOffense (Decal order; values ~1.16 seen)
 //   0x0A00000E DamageBonus   → STypeFloat 63 DamageMod (Decal order)
 
-import { evaluateUtl, lootVerdict } from "../formats/index.js";
+import { evaluateUtl } from "../formats/index.js";
+import { lootDecision } from "../formats/utl_eval.js";
 import { objectClassFrom } from "../cmd/index.js";
 
 const LONG_BLOCK = 0x0d000000;
 const DOUBLE_BLOCK = 0x0a000000;
+const DID_SPELL = 28; // PropertyDataId Spell — a scroll's spell, in the CreateObject header
 
 /** Decal LongValueKey (synthetic) → a reader spec. */
 export const DECAL_LONG_KEYS = Object.freeze({
@@ -108,7 +115,11 @@ export function buildUtlItemCtx(host, guid, { log = null } = {}) {
   const hasAppraisal = call(host, "HasAppraisalData", g) === true;
   const ctx = {
     name: String(call(host, "TryGetObjectName", g) ?? ""),
-    objectClass: objectClassFrom(call(host, "TryGetObjectIntProperty", g, 1), call(host, "TryGetObjectDescFlags", g)),
+    objectClass: objectClassFrom(
+      call(host, "TryGetObjectIntProperty", g, 1),
+      call(host, "TryGetObjectDescFlags", g),
+      call(host, "TryGetObjectDataIdProperty", g, DID_SPELL),
+    ),
     hasAppraisal,
     intProp(id) {
       const k = Number(id) >>> 0;
@@ -185,8 +196,9 @@ export function buildUtlItemCtx(host, guid, { log = null } = {}) {
 }
 
 /**
- * classify(guid, { host }) for RynthLootLoop (INT-1 hook). Never throws (the
- * loop also guards it). `getHost` is a fallback when the loop passes none.
+ * classify(guid, { host, out }) for RynthLootLoop (INT-1 hook). Never throws
+ * (the loop also guards it). `getHost` is a fallback when the loop passes
+ * none; `out` receives { action, rule } of the verdict (header).
  */
 export function makeLootClassify({ profile, getHost = null, getRegex = null, log = null } = {}) {
   if (!profile || typeof profile !== "object") return null;
@@ -196,7 +208,7 @@ export function makeLootClassify({ profile, getHost = null, getRegex = null, log
       const host = (info && info.host) || (typeof getHost === "function" ? getHost() : null);
       if (!host) return null;
       const res = evaluateUtl(profile, buildUtlItemCtx(host, guid, { log }), opts);
-      return lootVerdict(res, {
+      const d = lootDecision(res, {
         inventoryCount: (ruleName) => {
           const inv = typeof host.TryGetPlayerInventoryCached === "function" ? call(host, "TryGetPlayerInventoryCached") : call(host, "TryGetPlayerInventory");
           let n = 0;
@@ -210,6 +222,12 @@ export function makeLootClassify({ profile, getHost = null, getRegex = null, log
           return n;
         },
       });
+      const out = info && info.out;
+      if (out && typeof out === "object") {
+        out.action = d.action;
+        out.rule = d.rule;
+      }
+      return d.verdict;
     } catch (e) {
       try {
         log?.(`loot profile failed on 0x${(Number(guid) >>> 0).toString(16)}: ${e && e.message ? e.message : e}`);

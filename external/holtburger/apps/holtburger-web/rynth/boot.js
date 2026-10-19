@@ -10,6 +10,9 @@
 //   2. plugins/rynth-hud.js START on a page loaded WITHOUT ?bot=1 —
 //      bootBotFromHud(): the same URL-derived config plus the HUD's saved
 //      settings (buffs, monster priorities, loot floor, vitals thresholds).
+//   3. the VTank option StartMacroOnLogin (2026-10-19) — the same kind=7
+//      EnteredWorld, maybeStartMacroOnLogin(): START (the HUD's, else the
+//      same steps here) when the character's active VTank profile asks for it.
 //
 // Behavior of the ?bot=1 path is unchanged: same config, same globals
 // (window.__bot / __botHandle / __botBooting), same console lines, same
@@ -497,6 +500,137 @@ export function bootBotFromHud(targetHandle, overrides, opts = {}) {
   let search = "";
   try { search = win.location?.search ?? ""; } catch (_) { search = ""; }
   return bootBot(targetHandle, readBotUrlParams(search), { ...opts, source: "hud", overrides: overrides || null });
+}
+
+// ── StartMacroOnLogin (2026-10-19) ──────────────────────────────────────
+// VTank's / RynthAi's "Start Macro On Login" (LegacyDashboardRenderer: the
+// macro runs at login iff the option is set): the one piece of run state a
+// profile carries — owner decision, see rynth/vt/settings/profile_store.js.
+// Off (the default) changes nothing: a ?bot=1 page, a held boot and the HUD
+// behave exactly as before.
+
+const START_ON_LOGIN_KEY = "StartMacroOnLogin";
+
+const tryRead = (fn, dflt = null) => {
+  try {
+    const v = fn();
+    return v === undefined ? dflt : v;
+  } catch (_) {
+    return dflt;
+  }
+};
+
+/** The character's VTank session (its active profile): the page entry's
+ *  (window.__rynthVt.session(<guid>), which knows a bot layer's), else the
+ *  same registry session straight from rynth/vt/settings (location.href) —
+ *  without installing the entry the HUD installs lazily (never under
+ *  ?rynthHud=off). null when the layer is absent. */
+async function loginProfileSession(win, scope, importer) {
+  try {
+    const vt = win.__rynthVt;
+    if (vt && typeof vt.session === "function") return vt.session(String(scope)) || null;
+    const set = await importer(moduleUrl(win, "rynth/vt/settings/index.js"));
+    return set.peekVtSession(win, String(scope)) || set.getVtSession(win, String(scope), {}) || null;
+  } catch (_) {
+    return null; // no VTank layer on this page: nothing asks
+  }
+}
+
+/** The operator control of a bot: bot.control, else operator_stop.js's. */
+function controlOf(bot, os) {
+  const c = tryRead(() => bot.control);
+  if (c && typeof c.resume === "function") return c;
+  return os && typeof os.getOperatorControl === "function" ? tryRead(() => os.getOperatorControl(bot)) : null;
+}
+const isHeld = (c) => !!tryRead(() => (typeof c.isStopped === "function" ? c.isStopped() : c.state()?.stopped), false);
+
+/** START the way the RynthSuite HUD's does (rynth/hud_bridge.js start()). →
+ *  "hud" | "resumed" | "running" | "booted" | null; throws on a refusal. */
+async function startMacro(win, targetHandle, scope, session, importer) {
+  const hud = tryRead(() => win.__rynthHud.bridge);
+  if (hud && typeof hud.start === "function") {
+    const r = await hud.start(); // boot-or-resume with the HUD settings + persona; clears the stored stop first
+    if (r && r.ok === false) throw new Error(r.error || "START refused");
+    return "hud";
+  }
+  // No HUD on this page: START's steps here. The character's stored stop goes
+  // first (an explicit START), so a boot does not come up held.
+  let os = null;
+  try {
+    os = await importer(moduleUrl(win, "rynth/ai/operator_stop.js"));
+  } catch (_) {
+    os = null;
+  }
+  try { os?.clearBotStop?.(undefined, scope); } catch (_) { /* latch unavailable */ }
+  const bot = win.__bot;
+  if (bot && win.__botHandle === targetHandle) {
+    const c = controlOf(bot, os);
+    if (c && isHeld(c)) {
+      c.resume();
+      return "resumed";
+    }
+    return "running";
+  }
+  if (win.__botBooting) return null; // another boot owns the page right now
+  // A USER profile boots with its legacy values (rs_entry.js hudProvider:
+  // hudBootOverrides()); Default boots with the page URL's params only.
+  const overrides = tryRead(() => session.profiles.isUserProfileActive() === true, false)
+    ? tryRead(() => session.options.hudBootOverrides())
+    : null;
+  const nb = await bootBotFromHud(targetHandle, overrides, { win, importer });
+  if (!nb) throw new Error("bot boot failed — see the console");
+  const c = controlOf(nb, os);
+  if (c && isHeld(c)) c.resume(); // a latch written in between: START means go
+  return "booted";
+}
+
+/**
+ * app/client_events.js kind=7 entry, right after maybeAutoBootBot: when the
+ * logged-in character's active VTank profile has StartMacroOnLogin on, START
+ * the macro as the RynthSuite HUD's START does — the HUD bridge's start() when
+ * the HUD is mounted (boot-or-resume with its settings and persona), else the
+ * same steps here (clear the stored stop; resume a held bot through
+ * bot.control, or bootBotFromHud with the profile's hudBootOverrides()).
+ *
+ * Once per login: a death respawn re-enters with the same session handle (the
+ * takeover rule's identity), remembered in window.__botLoginStartHandle.
+ * Never on a ?bot=1 page (the URL boots it, under the stored stop) and never
+ * with ?botVt=off (the bot boots without the VTank layer: its profiles drive
+ * nothing). The profile (loginProfileSession) is read after `opts.after`
+ * (the takeover rebind maybeAutoBootBot started) settles, so the HUD's START
+ * finds the rebound bot and resumes it. Synchronous decision, then a promise of
+ * "hud" | "resumed" | "running" | "booted" | null; never rejects.
+ *   opts.after     a promise to wait for first (maybeAutoBootBot's)
+ *   opts.importer  (url) => Promise<module>   — tests; default import()
+ */
+export function maybeStartMacroOnLogin(targetHandle, p, opts = {}) {
+  const win = opts.win || globalThis;
+  if (!targetHandle || (p && (p.bot === "1" || p.botVt === "off"))) return null;
+  if (win.__botLoginStartHandle === targetHandle) return null;
+  win.__botLoginStartHandle = targetHandle;
+  const importer = typeof opts.importer === "function" ? opts.importer : (u) => import(u);
+  return Promise.resolve(opts.after)
+    .catch(() => null)
+    .then(async () => {
+      const scope = latchScopeOf(targetHandle);
+      if (!scope) {
+        // The character is not readable yet: its next EnteredWorld may try again.
+        if (win.__botLoginStartHandle === targetHandle) win.__botLoginStartHandle = null;
+        return null;
+      }
+      const session = await loginProfileSession(win, scope, importer);
+      if (tryRead(() => session.options.getValue(START_ON_LOGIN_KEY), false) !== true) return null;
+      const how = await startMacro(win, targetHandle, scope, session, importer);
+      if (how && how !== "running") {
+        console.log(`[rynth] StartMacroOnLogin: macro started (${how})`);
+        try { win.__appendChatLine?.("[RynthSuite] Start on login: the macro is running (profile option StartMacroOnLogin).", 0); } catch (_) { /* no chat */ }
+      }
+      return how;
+    })
+    .catch((e) => {
+      console.warn("[rynth] StartMacroOnLogin failed:", e);
+      return null;
+    });
 }
 
 // = rynth/ai/llm_client.js KEY_STORAGE (inlined: no ai/ import on the boot path).

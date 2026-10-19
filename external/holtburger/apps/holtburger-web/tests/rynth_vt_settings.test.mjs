@@ -188,17 +188,28 @@ await check("schema: every guide option (G:1-66) and every §4.2 row is present"
     "SplitPeas", "GrenadeMinMonsters", "PetAutoRefill",
     ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => `MinSkillLevelTier${i}`)];
   for (const k of more) assert.ok(findRow(k)?.row.key === k, `${k} row`);
-  const inert = ["LootOnlyRareCorpses", "LootFellowCorpses", "LootAllCorpses", "CorpseApproachRange-Min", "NavFarStopRange",
-    "DoorIDRange", "HelperDistanceHitP", "FollowAroundCorners", "ReadUnknownScrolls", "CombineSalvage",
-    "EnableMissileCrafting", "StartMacroOnLogin", "BuffProfile_Banes", "SpellDiffExcessThreshold-Hunt",
-    "JumpOutWandCasting", "DoJiggle", "AttackMinimumDistance", "TargetLock", "HealOthersAt", "RestamOthersAt",
-    "InfuseOthersAt", "MonsterDisengageRange", "TargetNoProgressTimeoutSec", "EnableFPSLimit", "TargetFPSFocused",
-    "TargetFPSBackground", "ShowTerrainPassability"];
-  for (const n of inert) assert.equal(findRow(n)?.row.consumer, "inert", `${n} is an inert row`);
+  // The former "Not on web" rows went live on 2026-10-19; only Show Editor
+  // (no function in VTank either, G:58) stays inert.
+  assert.deepStrictEqual(SCHEMA.filter((r) => r.consumer === "inert").map((r) => r.key), ["ShowEditor"]);
+  const live = {
+    LootOnlyRareCorpses: "loot", LootFellowCorpses: "loot", LootAllCorpses: "loot", "CorpseApproachRange-Min": "loot",
+    ReadUnknownScrolls: "loot", CombineSalvage: "loot", NavFarStopRange: "nav", FollowAroundCorners: "nav",
+    DoorIDRange: "doors", TargetLock: "combat", AttackMinimumDistance: "combat", MonsterDisengageRange: "combat",
+    TargetNoProgressTimeoutSec: "combat", DoJiggle: "combat", "SpellDiffExcessThreshold-Hunt": "planner",
+    DoHelp: "helpers", HealOthersAt: "helpers", RestamOthersAt: "helpers", InfuseOthersAt: "helpers",
+    "Recharge-Helper-HitP": "helpers", HelperDistanceHitP: "helpers", HelperDistanceStam: "helpers",
+    HelperDistanceMana: "helpers", UseHealersHeart: "helpers", JumpOutWandCasting: "helpers",
+    BuffProfile_Banes: "buff", "BuffProfile-Banes": "buff", BuffArmorImpen: "buff", EnableMissileCrafting: "ammo",
+    StartMacroOnLogin: "login", EnableFPSLimit: "display", TargetFPSFocused: "display", TargetFPSBackground: "display",
+    ShowTerrainPassability: "overlay",
+  };
+  for (const [n, c] of Object.entries(live)) assert.equal(findRow(n)?.row.consumer, c, `${n} is live (${c})`);
+  assert.equal(SCHEMA.some((r) => r.group === "Not on web"), false, "no 'Not on web' group left");
   // VTank's route display widths drive the in-world route (scene3d/route_overlay.js, 2026-10-19)
   for (const n of ["NavRingThickness", "NavLineThickness"]) assert.equal(findRow(n)?.row.consumer, "overlay", `${n} draws the route`);
   for (const n of ["CorpseApproachRange-Min", "NavFarStopRange", "DoorIDRange", "HelperDistanceHitP", "AttackDistance",
-    "ApproachDistance", "RingDistance", "NavCloseStopRange", "CorpseApproachRange-Max", "DoorOpenRange"]) {
+    "ApproachDistance", "RingDistance", "NavCloseStopRange", "CorpseApproachRange-Max", "DoorOpenRange",
+    "HelperDistanceStam", "HelperDistanceMana", "AttackMinimumDistance"]) {
     assert.equal(findRow(n).row.vtUnit, "lbf", `${n} is a landblock-fraction name`);
   }
   assert.deepStrictEqual([...LIST_KEYS], ["monsters", "items", "consumables", "buffs", "legacyPriorities"]);
@@ -221,6 +232,17 @@ await check("defaults() reproduce today's literals; every new toggle is off", ()
     assert.equal(d[S.VITALS_FIELD_KEYS[k]], VITALS_DEFAULT[k], `vitals default ${k} = vitals.js DEFAULTS`);
   }
   const liveToday = new Set(["EnableCombat", "EnableBuffing", "EnableLooting", "PetAutoRefill"]);
+  // Owner decision 2026-10-19: the rows made live that day take VTank's /
+  // RynthAi's defaults — these start ON.
+  const vtankOn = ["DoHelp", "UseHealersHeart", "BuffArmorImpen", "ReadUnknownScrolls", "CombineSalvage",
+    "EnableMissileCrafting", "FollowAroundCorners", "EnableFPSLimit", "ShowTerrainPassability"];
+  for (const k of vtankOn) {
+    assert.equal(d[k], true, `${k} starts on (VTank/RynthAi default)`);
+    liveToday.add(k);
+  }
+  assert.equal(d.BuffProfileBanes, "ALFCBPS", "every bane on worn armor (VTank: All)");
+  assert.deepStrictEqual([d.HealOthersAt, d.RestamOthersAt, d.InfuseOthersAt, d.HelperHealDistance], [50, 10, 10, 30]);
+  assert.deepStrictEqual([d.TargetFPSFocused, d.TargetFPSBackground], [60, 30]);
   for (const row of SCHEMA) {
     if (row.type !== "bool" || row.consumer === "inert" || liveToday.has(row.key)) continue;
     assert.equal(row.dflt, false, `new toggle ${row.key} defaults off`);
@@ -288,7 +310,9 @@ await check("int rounding, numeric clamping, enum/string values", () => {
   assert.equal(coerce(ah, "4").ok, false);
   assert.equal(coerce(findRow("WarSpellMode").row, "VTANK").value, "vtank");
   assert.equal(coerce(findRow("WarSpellMode").row, "nope").ok, false);
-  assert.equal(coerce(findRow("BuffProfile_Banes").row, 12).value, "12");
+  assert.equal(coerce(findRow("ShowEditor").row, 12).value, true, "a bool row takes a number");
+  assert.equal(coerce(findRow("BuffProfile_Banes").row, 7).value, "BPSAC", "the bane profile is VTank's enum or letters");
+  assert.equal(coerce(findRow("BuffProfile_Banes").row, 12).ok, false);
   assert.equal(coerce(findRow("MeleeAttackPower").row, "1.7").value, 1);
 });
 
@@ -363,14 +387,26 @@ await check("unknown option ⇒ error and NO write; meta bag holds unknown names
 
 await check("inert rows store, round-trip and echo '(not implemented on web)'; echo uses the name as typed", () => {
   const { options } = mk();
-  const r = options.set("LootOnlyRareCorpses", "true", { source: "meta" });
+  const r = options.set("ShowEditor", "true", { source: "meta" });
   assert.equal(r.ok, true);
-  assert.equal(r.echo, "[RynthSuite] Set option LootOnlyRareCorpses = true (not implemented on web)");
-  assert.equal(options.getValue("LootOnlyRareCorpses"), true);
-  assert.equal(options.get("lootonlyrarecorpses").value, true);
+  assert.equal(r.echo, "[RynthSuite] Set option ShowEditor = true (not implemented on web)");
+  assert.equal(options.getValue("ShowEditor"), true);
+  assert.equal(options.get("showeditor").value, true);
+  // the rows made live on 2026-10-19 echo plainly, lbf converting as before
+  const live = options.set("LootOnlyRareCorpses", "true", { source: "meta" });
+  assert.equal(live.echo, "[RynthSuite] Set option LootOnlyRareCorpses = true");
   const n = options.set("NavFarStopRange", "0.25");
-  assert.equal(options.getValue("NavFarStopDistance"), 60, "inert lbf row converts too");
-  assert.equal(n.echo, "[RynthSuite] Set option NavFarStopRange = 0.25 (not implemented on web)");
+  assert.equal(options.getValue("NavFarStopDistance"), 60, "lbf row converts");
+  assert.equal(n.echo, "[RynthSuite] Set option NavFarStopRange = 0.25");
+  // VTank's bane profile: its enum, All/None or letters → the canonical letters
+  assert.equal(options.set("BuffProfile_Banes", 5).value, "BPS", "VTank 5 = BPS");
+  assert.equal(options.getValue("BuffProfileBanes"), "BPS");
+  assert.equal(options.set("BuffProfile-Banes", "s, a").value, "AS", "letters, any order");
+  assert.equal(options.set("BuffProfile_Banes", "None").value, "");
+  assert.equal(options.set("BuffProfile_Banes", "All").value, "ALFCBPS");
+  assert.equal(options.set("BuffProfile_Banes", "Banes1").ok, false, "not a bane profile");
+  assert.equal(options.set("BuffProfile_Banes", 1).ok, false, "1 (Custom) names no letters of its own");
+  assert.equal(options.getValue("BuffProfileBanes"), "ALFCBPS", "a refused value leaves it as it was");
   assert.equal(options.set("Recharge-Norm-Mana", 30).echo, "[RynthSuite] Set option Recharge-Norm-Mana = 30");
   assert.equal(options.set("AttackDistance", "0.0833").echo, "[RynthSuite] Set option AttackDistance = 0.0833");
   assert.equal(options.set("EnableNav", "on").echo, "[RynthSuite] Set option EnableNav = true");

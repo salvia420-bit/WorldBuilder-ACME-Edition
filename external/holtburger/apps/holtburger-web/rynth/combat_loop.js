@@ -151,6 +151,10 @@ const STALE_REFUSAL_MS = 500;
 const STICK_REASSERT_MS = 500; // min spacing between StickToObject re-asserts
 const STICK_BLIND_REASSERT_MS = 1500; // re-assert cadence when the stick can't be read back
 const INCAPABLE_PARK_MS = 60_000; // stand-down window when this character can't fight right now
+// The two stand-downs judged on the loadout in hand (a helper's Healer's Heart
+// swap clears them when it ends — _loadoutHeld; the VT ammo slot the second).
+const INCAPABLE_NO_WAR_SPELL = "no war spell known — cannot fight in Magic mode";
+const INCAPABLE_NO_MODE = "combat mode will not establish";
 const DEATH_SEEN_TTL_MS = 10_000; // kind=29 victim memory for the kill confirm
 const MODE_TOGGLE_LIMIT = 5; // combat-mode toggles before standing down
 const WE_MISSILE_OUT_OF_RANGE = 0x0550; // WeenieError.MissileOutOfRange (missile + spell range refusals)
@@ -158,6 +162,13 @@ const WE_YOU_CHARGED_TOO_FAR = 0x003d; // WeenieError.YouChargedTooFar (charge F
 const CLIENT_EVENT_CHAT = 2; // kind=2 chat line (u32 = WeenieError code on failure lines)
 const CLIENT_EVENT_USE_FAILED = 13; // kind=13 UseDone(error) / spell-cast WeenieError (u32 = code)
 const WAR_BOLTS = [27, 28, 58, 64, 75, 86, 92]; // level-1 war spells
+
+// VTank options made live 2026-10-19 (read through the injected optFn — VT
+// layer only, see the constructor):
+const DISENGAGE_AUTO_M = 3; // MonsterDisengageRange 0 = auto: perimeter + 3 m (TargetScoring.cs DisengageDistance)
+const SELECTION_HOLD_MS = 500; // TargetLock: a 0 read this soon after a selection is a rig LOD swap, not a deselect
+const NO_PROGRESS_GAP_MS = 1000; // TargetNoProgressTimeoutSec: a longer gap between combat ticks is not engaged time
+const JIGGLE_STRAFE_MS = 300; // DoJiggle: strafe this long between casts, then the stop (+ FACE_SETTLE_MS)
 
 const KILL_CONFIDENCE = 0.8; // P12 — predict kill if remHP <= avgDmg*0.80
 const KILL_MIN_SAMPLES = 3; // P12 — need >=3 learned hits first
@@ -188,6 +199,18 @@ export function globalDelta(me, pos) {
 export function globalDist(me, pos) {
   const { dx, dy } = globalDelta(me, pos);
   return Math.hypot(dx, dy, (pos.z ?? 0) - (me.z ?? 0));
+}
+
+/** The target scan's range to `pos`. Outdoors the landblocks tile the world,
+ *  so a mob across a seam is measured in the global frame (the old same-LB
+ *  gate hid a drudge 5 m away across Holtburg's A9B3/A9B4 seam — live
+ *  2026-10-12). Indoor (EnvCell, cell index >= 0x100) landblocks are not
+ *  world-contiguous: those need the same landblock — null otherwise. */
+function scanDist(me, pos) {
+  const sameLb = pos.objCellId >>> 16 === me.objCellId >>> 16;
+  const bothOutdoor = (pos.objCellId & 0xffff) < 0x100 && (me.objCellId & 0xffff) < 0x100;
+  if (!sameLb && !bothOutdoor) return null;
+  return sameLb ? Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z) : globalDist(me, pos);
 }
 
 export class RynthCombatLoop {
@@ -289,10 +312,30 @@ export class RynthCombatLoop {
     //   vt              the attack planner (rynth/vt/combat/attack_planner.js)
     //                   while the Monsters/Items tabs are in use; null = the
     //                   legacy war pick + CastSpell, exactly as before.
+    //   optFn           (key) => VtOptions value (the layer binds it, re-bound
+    //                   at 1 Hz): TargetLock, AttackMinDistance,
+    //                   MonsterDisengageRange, TargetNoProgressTimeoutSec,
+    //                   DoJiggle. Absent (?botVt=off) = none of them runs.
+    //   movementClaimedFn  () => true while another mover owns the body
+    //                   (bot.movementClaimed); DoJiggle never strafes without it.
+    //   loadoutHeldFn   () => true while the VT helpers' Healer's Heart swap
+    //                   owns the loadout (support/helpers.js holdsWandSlot) —
+    //                   set whether or not a planner is attached; absent or
+    //                   throwing = not held (_loadoutHeld).
     this.monsterRangeM = opts.monsterRangeM ?? 40;
     this.acquireRangeFn = null;
     this.vt = null;
     this._castKind = null; // planner cast kind in flight ("debuff"|"ring"|"dot"|"attack"), null = legacy
+    this.optFn = null;
+    this.movementClaimedFn = null;
+    this.loadoutHeldFn = null;
+    this._loadoutHold = false; // the last _loadoutHeld() read was held (its end clears the stand-down)
+    this._userPick = 0; // TargetLock: the selection the last JS pass locked (0 = none)
+    this._sel = null; // { guid, at } — the last non-zero selection read (SELECTION_HOLD_MS)
+    this._jiggle = null; // DoJiggle strafe in progress: { side, stopAt, settleUntil }
+    this._jiggleSide = 1; // side of the next jiggle (+1 right, −1 left; alternates)
+    this._jiggleDue = false; // one of our casts resolved since the last jiggle / cast
+    this._jiggleWarned = false;
   }
 
   /** Force the next _scanTargets() to rescan this snapshot (a planner
@@ -336,6 +379,39 @@ export class RynthCombatLoop {
     } catch (_) {
       return m;
     }
+  }
+
+  /** One VtOptions value through the layer's optFn; undefined without the
+   *  layer or on a throw (every caller then keeps its literal path). */
+  _vtOpt(key) {
+    const f = this.optFn;
+    if (typeof f !== "function") return undefined;
+    try {
+      return f(key);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  /** VTank MonsterDisengageRange (RynthAi T3 hysteresis, TargetScoring.cs
+   *  DisengageDistance): the engaged lock stays a candidate — and is fought —
+   *  out to this range while a new target still needs the perimeter. A value
+   *  not beyond the perimeter (0 = auto) is the perimeter + 3 m. Capped at the
+   *  host's entity scan (host.nearbyRangeM, 0 = unlimited): NearbyGuids holds
+   *  nothing farther. Without the VT layer = the perimeter (no hysteresis). */
+  _keepRangeM(perim) {
+    if (typeof this.optFn !== "function") return perim;
+    const d = Number(this._vtOpt("MonsterDisengageRange"));
+    let keep = d > perim ? d : perim + DISENGAGE_AUTO_M;
+    const cap = Number(this.host.nearbyRangeM);
+    if (cap > 0 && keep > cap) keep = Math.max(perim, cap);
+    return keep;
+  }
+
+  /** VTank AttackMinDistance: nothing nearer is engaged (0 = no minimum). */
+  _minDistM() {
+    const m = Number(this._vtOpt("AttackMinDistance"));
+    return m > 0 ? m : 0;
   }
 
   /** Portal space (tunnel through world fade-in) — mirror of
@@ -462,6 +538,11 @@ export class RynthCombatLoop {
     // or kind=13 for the spell-cast subset / UseDone errors). Close in on
     // the current lock before the next try.
     if (e.kind === CLIENT_EVENT_CHAT || e.kind === CLIENT_EVENT_USE_FAILED) {
+      // A kind=13 refusal belonging to ANOTHER module's cast (vitals, buffs,
+      // the VT helpers / supplies — _castIsOthers) is theirs: it neither
+      // resolves or late-judges our cast nor closes in on the lock. With
+      // nobody's cast about (an older host, or no cast for 6 s) it is ours.
+      if (e.kind === CLIENT_EVENT_USE_FAILED && this._castIsOthers()) return;
       const code = e.u32 >>> 0;
       if ((code === WE_MISSILE_OUT_OF_RANGE || code === WE_YOU_CHARGED_TOO_FAR) && this.locked) {
         if (this._closeInFor !== this.locked) {
@@ -488,7 +569,7 @@ export class RynthCombatLoop {
         this._learnDamage(Number(m[2]), 0);
         // Contact only for the LOCK by name (a bolt that flew past it into
         // something else is a miss on the lock).
-        this._noteContact(m[1], now);
+        this._noteContact(m[1], now, false, true);
         return;
       }
       // "<Name> resists your spell" (WorldObject_Magic.cs TryResistSpell): the
@@ -515,7 +596,7 @@ export class RynthCombatLoop {
     switch (d && d.type) {
       case "damageDealt":
         this._learnDamage(d.damage || 0, d.severity || 0);
-        this._noteContact(d.defenderName, now, !!g);
+        this._noteContact(d.defenderName, now, !!g, true);
         if (g) {
           g.lastActivityAt = now;
           g.damageSeen = true;
@@ -561,6 +642,22 @@ export class RynthCombatLoop {
     }
   }
 
+  /** Does a cast refusal arriving now belong to another module? The host's
+   *  castOwner() — the live claim's owner, else the last claim's while it is
+   *  under 6 s old (a refusal trails its UseDone; a claim its owner never
+   *  released ages out) — else the raw token (older hosts / fakes). */
+  _castIsOthers() {
+    const h = this.host;
+    let owner = null;
+    try {
+      if (typeof h.castOwner === "function") owner = h.castOwner();
+      else owner = h.castToken ? h.castToken.owner : null;
+    } catch (_) {
+      owner = null;
+    }
+    return !!owner && owner !== "combat";
+  }
+
   _pruneDeaths(now) {
     for (const [g, at] of this._deaths) if (now - at > DEATH_SEEN_TTL_MS) this._deaths.delete(g);
   }
@@ -584,13 +681,42 @@ export class RynthCombatLoop {
   }
   stop() {
     this._running = false;
+    if (this._jiggle) this._endJiggle();
   }
 
   /** False while this character can't fight right now (no war spell in Magic
    *  mode, combat mode won't establish) — the kernel stops picking Combat for
-   *  the stand-down window instead of starving loot/buff on a dead end. */
+   *  the stand-down window instead of starving loot/buff on a dead end. (A
+   *  held loadout that just ended clears its stand-down first: the kernel asks
+   *  every tick, a stood-down loop isn't ticked.) */
   canEngage(now = Date.now()) {
+    this._loadoutHeld(now);
     return !(this._incapableUntil > now);
+  }
+
+  /** The layer's loadoutHeldFn: the VT helpers' Healer's Heart swap owns the
+   *  loadout (the heart in hand, Magic stance, the weapons in the pack) until
+   *  it hands the weapons back — combat judges nothing about mode or loadout
+   *  meanwhile (tick). Absent or throwing = not held. When a hold ends, a
+   *  stand-down judged on that loadout (no war spell, no stance) is cleared:
+   *  the weapons are back, so the loadout is judged afresh. -> held? */
+  _loadoutHeld(now) {
+    const f = this.loadoutHeldFn;
+    let held = false;
+    if (typeof f === "function") {
+      try {
+        held = f() === true;
+      } catch (_) {
+        held = false;
+      }
+    }
+    if (held) this._loadoutHold = true;
+    else if (this._loadoutHold) {
+      this._loadoutHold = false;
+      this.clearIncapable(INCAPABLE_NO_WAR_SPELL, now);
+      this.clearIncapable(INCAPABLE_NO_MODE, now);
+    }
+    return held;
   }
 
   _setIncapable(now, reason) {
@@ -601,6 +727,18 @@ export class RynthCombatLoop {
     this.incapableReason = reason;
     this._modeAttempts = 0;
     this._dropLock(reason);
+  }
+
+  /** End a stand-down early once its cause is gone (the VT ammo slot, having
+   *  wielded ammo, clears "combat mode will not establish"; the end of a held
+   *  loadout both loadout stand-downs). A no-op unless that exact stand-down
+   *  is in force. -> cleared? */
+  clearIncapable(reason, now = Date.now()) {
+    if (!(this._incapableUntil > now) || this.incapableReason !== reason) return false;
+    this._incapableUntil = 0;
+    this._modeAttempts = 0;
+    this.log(`${reason} — cleared`);
+    return true;
   }
 
   _markKilledAt(guid, at) {
@@ -681,23 +819,27 @@ export class RynthCombatLoop {
     } catch (_) {
       name = null;
     }
-    this._watch = { target, name, hf: this._hfOf(target), misses: [], lastContactAt: now, attackSince: 0 };
+    // lastDamageAt / judgedAt: the TargetNoProgressTimeoutSec clock (lock time
+    // until our damage first reaches it; _judgeNoProgress).
+    this._watch = { target, name, hf: this._hfOf(target), misses: [], lastContactAt: now, attackSince: 0, lastDamageAt: now, judgedAt: 0 };
   }
 
-  _contact(now) {
+  /** `dealt`: the contact was our damage (not an evade / resist). */
+  _contact(now, dealt = false) {
     const w = this._watch;
     if (!w) return;
     w.misses.length = 0;
     w.lastContactAt = now;
+    if (dealt) w.lastDamageAt = now;
   }
 
   /** A damage / evade / resist line or event naming `name`. An UNNAMED
    *  melee/missile result during a live engagement (`engaged`) can only be
    *  the engaged lock's — counted as contact too. */
-  _noteContact(name, now, engaged = false) {
+  _noteContact(name, now, engaged = false, dealt = false) {
     const w = this._watch;
     if (!w) return;
-    if (name ? w.name && w.name === name : engaged) this._contact(now);
+    if (name ? w.name && w.name === name : engaged) this._contact(now, dealt);
   }
 
   _noteAttacker(name, now) {
@@ -720,18 +862,18 @@ export class RynthCombatLoop {
     if (!w || w.target !== target) return;
     const hf = this._hfOf(target);
     if (hf == null) return;
-    if (w.hf != null && hf < w.hf - 1e-6) this._contact(now);
+    if (w.hf != null && hf < w.hf - 1e-6) this._contact(now, true);
     w.hf = hf;
   }
 
   /** Park a target our attacks never reach and drop the lock (the scan skips
    *  it via the unreachable map until the timeout lapses). */
-  _blacklistTarget(target, now, why) {
+  _blacklistTarget(target, now, why, dropReason = "no contact") {
     this.unreachable.set(target, now + this.blacklistTimeoutMs);
     this.blacklisted += 1;
     this._watch = null;
     this.log(`${why} on ${target.toString(16)} — blacklisted ${Math.round(this.blacklistTimeoutMs / 1000)}s`);
-    if (this.locked === target) this._dropLock("no contact");
+    if (this.locked === target) this._dropLock(dropReason);
   }
 
   /** Magic verdict (called every tick before re-selection): park the lock
@@ -748,6 +890,27 @@ export class RynthCombatLoop {
     if (settled < this.blacklistAttempts) return false;
     if (this._isAttackingUs(w.name, now)) return false; // it's hitting us: keep fighting
     this._blacklistTarget(w.target, now, `${settled} resolved casts with no contact`);
+    return true;
+  }
+
+  /** VTank TargetNoProgressTimeoutSec (RynthAi T14, CombatManager.cs
+   *  :1804-1823), any mode, before re-selection: park the lock once it has
+   *  been engaged this long without our damage reaching it — since the last
+   *  damage (a health drop, a damage line or result naming it), else the lock
+   *  time. An evade or a resist is no progress here, unlike the no-contact
+   *  rules; a gap in combat ticks (the kernel gave the tick to buffing, a
+   *  heal, a loot) is not engaged time. 0 = off; never without the layer. */
+  _judgeNoProgress(now) {
+    const sec = Number(this._vtOpt("TargetNoProgressTimeoutSec"));
+    if (!(sec > 0)) return false;
+    const w = this._watch;
+    if (!w || w.target !== this.locked) return false;
+    if (w.judgedAt && now - w.judgedAt > NO_PROGRESS_GAP_MS) w.lastDamageAt += now - w.judgedAt;
+    w.judgedAt = now;
+    this._watchHealth(w.target, now);
+    const quiet = now - w.lastDamageAt;
+    if (quiet < sec * 1000) return false;
+    this._blacklistTarget(w.target, now, `${Math.round(quiet / 1000)}s engaged without damaging it`, "no progress");
     return true;
   }
 
@@ -798,6 +961,7 @@ export class RynthCombatLoop {
    *  server motion dropped it (the unpack preamble unsticks on every self
    *  UpdateMotion without a sticky target). */
   _ensureStick(target, now) {
+    if (this._jiggle) this._endJiggle(now); // never strafe and run up at once
     const cur = this._localStickyTarget();
     if (cur === target) return;
     if (this._stuckTo === target) {
@@ -903,6 +1067,7 @@ export class RynthCombatLoop {
    *  re-evaluates the same target; `cancelAttack:false` leaves ACE's swing
    *  loop running (a heal preempt keeps the fight going meanwhile). */
   disengage({ cancelAttack = true } = {}) {
+    if (this._jiggle) this._endJiggle(); // the body goes to someone else: no strafe key left down
     if (cancelAttack) this._endEngagement("disengage");
     // Unconditional (the pre-2026-10-12 kernel StopStick): the swing motions
     // stick the player server-side even when this loop armed nothing, and a
@@ -937,10 +1102,12 @@ export class RynthCombatLoop {
     // Per-snapshot memo: the kernel asks for threats twice per tick (vitals'
     // inCombat + the action pick) and tick() selects once more — one scan per
     // frozen snapshot is the same answer three times. Keyed on the snapshot
-    // seq + the recentlyKilled epoch; hosts without a snapshot don't memo.
+    // seq + the recentlyKilled epoch (+ the lock with the VT layer: the
+    // disengage range keeps it in); hosts without a snapshot don't memo.
     const seq = h.snap && h.snap.seq;
+    const keepFor = typeof this.optFn === "function" ? this.locked : 0;
     const memo = this._scanMemo;
-    if (seq != null && memo && memo.seq === seq && memo.epoch === this._scanEpoch) return memo.out;
+    if (seq != null && memo && memo.seq === seq && memo.epoch === this._scanEpoch && memo.keepFor === keepFor) return memo.out;
     const me = h.TryGetPlayerPose();
     if (!me) return [];
     const now = Date.now();
@@ -948,7 +1115,10 @@ export class RynthCombatLoop {
     // Acquire perimeter (VTank AttackDistance / Approach Range; 40 m default)
     // and the planner's per-candidate verdict (P = -1 ignore, debuff-only
     // exclusion, P×1000 lexicographic bias) — both inert without the layer.
+    // So are the lock's disengage range (keep = perim) and AttackMinDistance.
     const perim = this._perimeterM();
+    const keep = this._keepRangeM(perim);
+    const minD = this._minDistM();
     const vt = this.vt;
     for (const g of h.NearbyGuids()) {
       // T2 exclusion classes, in order:
@@ -967,16 +1137,9 @@ export class RynthCombatLoop {
       if (hf === 0) continue; // dead-not-corpse
       const pos = h.TryGetObjectPosition(g);
       if (!pos) continue;
-      // Outdoors the landblocks tile the world, so a mob across a seam is
-      // measured in the global frame (the old same-LB gate hid a drudge 5 m
-      // away across Holtburg's A9B3/A9B4 seam — live 2026-10-12). Indoor
-      // (EnvCell, cell index >= 0x100) landblocks are not world-contiguous:
-      // those still need the same landblock.
-      const sameLb = pos.objCellId >>> 16 === me.objCellId >>> 16;
-      const bothOutdoor = (pos.objCellId & 0xffff) < 0x100 && (me.objCellId & 0xffff) < 0x100;
-      if (!sameLb && !bothOutdoor) continue;
-      const d = sameLb ? Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z) : globalDist(me, pos);
-      if (d > perim) continue;
+      const d = scanDist(me, pos); // global frame across outdoor seams; null across indoor landblocks
+      if (d == null) continue;
+      if (d > (g === this.locked ? keep : perim) || d < minD) continue;
       let v = null;
       if (vt) {
         try {
@@ -995,7 +1158,7 @@ export class RynthCombatLoop {
     }
     out.sort((a, b) => b.score - a.score);
     Object.freeze(out); // shared by every caller of this snapshot's memo
-    if (seq != null) this._scanMemo = { seq, epoch: this._scanEpoch, out };
+    if (seq != null) this._scanMemo = { seq, epoch: this._scanEpoch, keepFor, out };
     return out;
   }
 
@@ -1054,6 +1217,18 @@ export class RynthCombatLoop {
     const gY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
     const meGx = gX(me.objCellId >>> 0, me.x);
     const meGy = gY(me.objCellId >>> 0, me.y);
+    // VTank AttackMinDistance rides C#'s user-never-attack exclusion (0 = off).
+    const minD = this._minDistM();
+    // The VT planner's monster-list verdicts (while the Monsters tab has it
+    // attached), as the JS scan applies them: an ignored candidate (priority
+    // −1, or an A-off row with nothing left to cast) is user-never-attack —
+    // never a candidate, and a lock that turns ignored leaves the C# scan as
+    // it leaves the JS one (re-lock, else the grace); the P×1000 bias (+ the
+    // JS legacy priority term) is a rule of its own. C# matches rules by name,
+    // first in list order, so each creature row gets a unique tag in its Name
+    // ("#vt{guid8}") and its tag's rule goes first.
+    const vt = this.vt;
+    const vtRules = [];
     const entities = [];
     for (const g of h.NearbyGuids()) {
       // Fold the JS guid-range player check (:172) into IsPlayer, and force
@@ -1069,10 +1244,23 @@ export class RynthCombatLoop {
       // One desc-flags read feeds Attackable + AttackableUnknown (both sides
       // now fail OPEN on unknown flags — webhost.js ObjectIsAttackable / C# T4).
       const flags = hasFlagsFn ? h._live("GetObjectDescFlags", g) : null;
+      let name = h.TryGetObjectName(g) || "";
+      let neverAttack = dist < minD;
+      if (vt && !isPlayer && itemType === ITEM_TYPE_CREATURE) {
+        const v = this._vtCall("scanVerdict", g, dist);
+        if (v && v.ignore) neverAttack = true;
+        else {
+          const tag = `#vt{${(g >>> 0).toString(16).padStart(8, "0")}}`;
+          const bias = v && typeof v.scoreBias === "number" && Number.isFinite(v.scoreBias) ? v.scoreBias : 0;
+          name = `${name} ${tag}`;
+          // C# priorityScore = max(0, Priority − 1) × 5 (an int field).
+          vtRules.push({ Name: tag, Priority: Math.round((this._priorityTerm(g) + bias) / 5) + 1 });
+        }
+      }
       entities.push({
         _d: g === preLock ? 0 : dist, // transient sort key for the cap (lock always survives), stripped below
         Id: g | 0,
-        Name: h.TryGetObjectName(g) || "",
+        Name: name,
         // C#'s T2 monster filter runs on ObjectClass (5 = Monster); derive it
         // from the same protocol facts the JS filter uses.
         ObjectClass: isPlayer ? 7 : itemType === ITEM_TYPE_CREATURE ? 5 : 0,
@@ -1089,7 +1277,7 @@ export class RynthCombatLoop {
         HostHasIsAttackable: hasFlagsFn,
         LosBlocked: false, // no live LOS input (documented gap)
         Blacklisted: this.unreachable.size > 0 && this._isUnreachable(g, now), // approach-stall park
-        UserNeverAttack: false,
+        UserNeverAttack: neverAttack,
         KilledMsAgo: killedAt ? now - killedAt : -1,
       });
     }
@@ -1116,11 +1304,15 @@ export class RynthCombatLoop {
       // MonsterRange = the JS perimeter (monsterRangeM, 40 m by default) —
       // feeding C#'s default 50 would make every 40-50m mob a guaranteed
       // filter divergence and drown the real signal (the T2 range delta is
-      // already documented in the spike README).
+      // already documented in the spike README). MonsterDisengageRange = the
+      // JS disengage range with the VT layer (beyond MonsterRange, so C#'s
+      // DisengageDistance takes it as is); 0.0 without it (C# keeps its own
+      // +3 m — the known T3 divergence of the literal path). MonsterRules:
+      // the planner's per-creature rules (above) ahead of the name rules.
       Config: {
         MonsterRange: this.monsterRangeM,
-        MonsterDisengageRange: 0.0,
-        MonsterRules: Object.entries(this.priorities).map(([k, v]) => ({ Name: k, Priority: v })),
+        MonsterDisengageRange: typeof this.optFn === "function" ? this._keepRangeM(this._perimeterM()) : 0.0,
+        MonsterRules: vtRules.concat(Object.entries(this.priorities).map(([k, v]) => ({ Name: k, Priority: v }))),
       },
       Lock: {
         LockedTargetId: preLock | 0,
@@ -1152,7 +1344,10 @@ export class RynthCombatLoop {
       ? { locked: this.locked, score: this.lockedScore, seen: this.lastSeenLockedAt }
       : null;
     const jsSel = this._selectTargetJs();
-    if (snap) {
+    // VTank TargetLock: the player's selection outranks the C# pick too (the
+    // slice has no selection input) — the JS lock stands, C# only shadows.
+    const userPick = jsSel !== 0 && jsSel === this._userPick;
+    if (snap && !userPick) {
       this.locked = snap.locked;
       this.lockedScore = snap.score;
       this.lastSeenLockedAt = snap.seen;
@@ -1176,7 +1371,7 @@ export class RynthCombatLoop {
     );
     if (!out) return onMode ? this.locked : jsSel; // brain error: keep C#'s last word in "on"
     this._nbGraceMs = out.TargetLostScanAtMs;
-    if (!onMode) return jsSel;
+    if (!onMode || userPick) return jsSel;
     // mode "on": the C# selection drives the lock.
     const csSel = out.SelectedTargetId ? out.SelectedTargetId >>> 0 : 0;
     if (csSel !== this.locked) {
@@ -1199,6 +1394,19 @@ export class RynthCombatLoop {
       this.lastSeenLockedAt = now;
       this.lockedScore = lockedEntry.score;
     }
+    // VTank TargetLock: the monster the player selected, while it is a
+    // candidate no other one outranks by priority — no stickiness contest.
+    const pick = this._targetLockPick(targets, now);
+    this._userPick = pick ? pick.guid : 0;
+    if (pick) {
+      if (pick.guid !== this.locked) {
+        this.log(`target lock ${pick.guid.toString(16)} (${this.host.TryGetObjectName(pick.guid)})${this.locked ? ` — was ${this.locked.toString(16)}` : ""}`);
+        this.locked = pick.guid;
+      }
+      this.lockedScore = pick.score;
+      this.lastSeenLockedAt = now;
+      return this.locked;
+    }
     if (this.locked && !lockedEntry) {
       // T10 scan grace, C# semantics: the grace only RETAINS the lock while
       // the scan is EMPTY. An absent lock is not a candidate in
@@ -1215,8 +1423,11 @@ export class RynthCombatLoop {
         this.lastSeenLockedAt = now;
         return this.locked;
       }
-      if (now - this.lastSeenLockedAt < TARGET_SCAN_GRACE_MS) return this.locked;
-      this.log(`drop target ${this.locked.toString(16)} (scan grace expired)`);
+      // (VT layer: a lock in sight outside [AttackMinDistance, the disengage
+      // range] is dropped at once — _lockOutOfRange.)
+      const why = now - this.lastSeenLockedAt < TARGET_SCAN_GRACE_MS ? this._lockOutOfRange() : "scan grace expired";
+      if (!why) return this.locked;
+      this.log(`drop target ${this.locked.toString(16)} (${why})`);
       this.locked = 0;
       this.lockedScore = -1;
     }
@@ -1237,6 +1448,62 @@ export class RynthCombatLoop {
       this.lastSeenLockedAt = now;
     }
     return this.locked;
+  }
+
+  /** VTank TargetLock (VT layer, option on): the scan entry of the player's
+   *  selection — a candidate, so attackable, alive, not parked, not P −1 and
+   *  inside [AttackMinDistance, the perimeter] (the disengage range while it
+   *  is the lock) — unless a candidate outranks its priority (MOSS
+   *  CombatTargetSelection: priority first, then the selection). null =
+   *  normal selection. */
+  _targetLockPick(targets, now) {
+    if (!targets.length || this._vtOpt("TargetLock") !== true) return null;
+    const sel = this._selectedGuid(now);
+    const e = sel ? targets.find((t) => t.guid === sel) : null;
+    if (!e) return null;
+    return this._tierOf(e) >= this._tierOf(targets[0]) ? e : null;
+  }
+
+  /** The planner's priority bias of a scan entry (P×1000; 0 without one). */
+  _tierOf(entry) {
+    const v = this.vt ? this._vtCall("scanVerdict", entry.guid, entry.dist) : null;
+    return v && typeof v.scoreBias === "number" && Number.isFinite(v.scoreBias) ? v.scoreBias : 0;
+  }
+
+  /** The player's selection (host.GetSelectedId, an environment capability;
+   *  0 = none). A selected rig's dynamic-LOD swap reads 0 for a frame
+   *  (webhost.js selectionClock): the last selection stands SELECTION_HOLD_MS
+   *  through such a gap, so TargetLock does not flap off it. */
+  _selectedGuid(now) {
+    const h = this.host;
+    let g = 0;
+    try {
+      g = typeof h.GetSelectedId === "function" ? Number(h.GetSelectedId()) >>> 0 : 0;
+    } catch (_) {
+      g = 0;
+    }
+    if (g) {
+      this._sel = { guid: g, at: now };
+      return g;
+    }
+    const s = this._sel;
+    return s && now - s.at < SELECTION_HOLD_MS ? s.guid : 0;
+  }
+
+  /** VT layer: why the lock — gone from the scan but in sight — is outside
+   *  [AttackMinDistance, the disengage range]; C# drops such a lock at once
+   *  ("out of range", TargetScoring.cs validation) where the T10 grace is for
+   *  a lock gone from the snapshot. null = not known to be (or no layer). */
+  _lockOutOfRange() {
+    if (typeof this.optFn !== "function") return null;
+    const h = this.host;
+    const me = h.TryGetPlayerPose();
+    const pos = me ? h.TryGetObjectPosition(this.locked) : null;
+    const d = pos ? scanDist(me, pos) : null;
+    if (d == null) return null;
+    if (d > this._keepRangeM(this._perimeterM())) return `out of range, ${d.toFixed(1)} m`;
+    if (d < this._minDistM()) return `inside the attack minimum distance, ${d.toFixed(1)} m`;
+    return null;
   }
 
   // ── cast serializer (P2/P5/E4) ───────────────────────────────────────
@@ -1272,6 +1539,7 @@ export class RynthCombatLoop {
       this._lastAttempt = { target: this._castTarget, at };
       const w = this._watch;
       if (w && w.target === this._castTarget && kind !== "debuff" && kind !== "ring") w.misses.push(at);
+      this._jiggleDue = true; // DoJiggle: a strafe may go before the next cast
     }
     const h = this.host;
     if (typeof h.releaseCast === "function") h.releaseCast("combat");
@@ -1308,6 +1576,7 @@ export class RynthCombatLoop {
   _markCastIssued() {
     // P5: arm resolution tracking at issue time.
     this.awaitingCast = true;
+    this._jiggleDue = false;
     this.castIssuedAt = Date.now();
     this.useDoneAtIssue = this.host.has("GetUseDoneSeq") ? this.host.GetUseDoneSeq() : 0;
   }
@@ -1360,11 +1629,86 @@ export class RynthCombatLoop {
     return this.warSpell;
   }
 
+  // ── DoJiggle (VTank): a short strafe between magic casts ─────────────
+  // Only in Magic mode, only between a resolved cast and the next one: a cast
+  // queues retail MaybeStopCompletely and goes out after the next movement
+  // tick's stop flush, and a MoveToState inside its windup orphans it (report
+  // 11 §2a) — so never while one of ours or anyone's is in flight. Never in
+  // melee/missile (a MoveToState stops ACE's charge chain, header), never with
+  // our stick armed, never while another mover owns the body.
+
+  /** May a jiggle strafe now (or go on)? DoJiggle on, Magic mode, nothing in
+   *  flight (ours, or anyone's on the shared busy count), no stick, and the
+   *  layer's movementClaimedFn (bot.movementClaimed) answering false —
+   *  without it, never. */
+  _jiggleAllowed() {
+    if (this._vtOpt("DoJiggle") !== true) return false;
+    const claimed = this.movementClaimedFn;
+    if (typeof claimed !== "function") {
+      if (!this._jiggleWarned) {
+        this._jiggleWarned = true;
+        this.log("DoJiggle needs the VT layer's movement-claim hook (movementClaimedFn) — not jiggling");
+      }
+      return false;
+    }
+    try {
+      if (claimed() !== false) return false;
+    } catch (_) {
+      return false;
+    }
+    const h = this.host;
+    if (typeof h.SetMovementInput !== "function" || this.awaitingCast || this._stuckTo || this._approach) return false;
+    if (h.GetCurrentCombatMode() !== 8) return false;
+    if (typeof h.GetBusyState === "function" && h.GetBusyState() !== 0) return false; // vitals'/buff's/loot's windup
+    return !this._localStickyTarget(); // a server motion stuck us to something
+  }
+
+  /** Start one jiggle (sides alternate); true when the strafe went out. */
+  _startJiggle(now) {
+    this._jiggleDue = false;
+    if (!this._jiggleAllowed()) return false;
+    const side = this._jiggleSide;
+    this._jiggleSide = -side;
+    let sent = false;
+    try {
+      sent = this.host.SetMovementInput(0, side, 0, true) !== false;
+    } catch (_) {
+      sent = false;
+    }
+    if (sent) this._jiggle = { side, stopAt: now + JIGGLE_STRAFE_MS, settleUntil: 0 };
+    return sent;
+  }
+
+  /** The jiggle in progress, every tick before anything else: the stop on time
+   *  — or at once when it may no longer run — then FACE_SETTLE_MS before the
+   *  next cast so the stop reaches the server first. */
+  _jiggleTick(now) {
+    const j = this._jiggle;
+    if (j.settleUntil) {
+      if (now >= j.settleUntil) this._jiggle = null;
+      return;
+    }
+    if (now >= j.stopAt || this._portalSpace() || !this._jiggleAllowed()) this._endJiggle(now);
+  }
+
+  /** Stop the strafe (the canonical all-zero stop) and settle. */
+  _endJiggle(now = Date.now()) {
+    const j = this._jiggle;
+    if (!j || j.settleUntil) return;
+    try {
+      this.host.SetMovementInput(0, 0, 0, false);
+    } catch (_) {
+      /* best-effort stop */
+    }
+    j.settleUntil = now + FACE_SETTLE_MS;
+  }
+
   tick() {
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     this._ensureEventTap();
     const now = Date.now();
+    if (this._jiggle) this._jiggleTick(now); // DoJiggle: the stop is never skipped by a return below
     // No requests and no stick in portal space (a teleport's tunnel and its
     // build hold): the body would walk cells whose collision hasn't landed,
     // and the old lock is in the previous location anyway — selection
@@ -1413,6 +1757,10 @@ export class RynthCombatLoop {
       this.state = "ACQUIRE"; // re-stick if selection re-locks below
     }
 
+    // A helper's Healer's Heart swap owns the loadout (read before the
+    // stand-down check: the end of a hold clears a stand-down judged on it).
+    const held = this._loadoutHeld(now);
+
     // Standing down (no war spell in Magic mode / no combat mode): no lock,
     // no requests until the window lapses (canEngage() tells the kernel).
     if (this._incapableUntil > now) {
@@ -1422,8 +1770,10 @@ export class RynthCombatLoop {
     }
 
     // No-contact blacklist: judge before re-selection, so a parked lock is
-    // replaced in this same tick.
+    // replaced in this same tick. So is the VT no-progress timeout (whose
+    // clock a held loadout pauses — we are not fighting).
     if (this._watch) this._judgeWatch(now);
+    if (this._watch && !held) this._judgeNoProgress(now);
 
     const target = this._selectTarget();
     this._watchLock(target, now);
@@ -1458,6 +1808,23 @@ export class RynthCombatLoop {
       this.log(`predicted kill on ${target.toString(16)} — pre-scanning next`);
     }
 
+    // The helpers' Healer's Heart swap holds the loadout (the heart in hand,
+    // Magic stance, the weapons in the pack) until it hands the weapons back:
+    // judge nothing about mode or loadout meanwhile — no stance toggle or
+    // stand-down, no wield, no swing or bolt with the heart, no run-up (a move
+    // would orphan the helper's windup). Keep the lock and wait; the Helpers
+    // slot outranks Combat whenever it has something to do.
+    if (held) {
+      this._releaseStick();
+      const w = this._watch;
+      if (w) {
+        w.attackSince = 0; // the 20 s melee window restarts after the hold
+        if (!w.judgedAt) w.judgedAt = now; // the no-progress clock credits the hold (_judgeNoProgress)
+      }
+      this.state = "ENGAGE";
+      return;
+    }
+
     // ENGAGE: equipment-derived combat mode (the live-confirmed trap).
     // Missile ammo is handled by the toggle itself — the equipment-derived
     // suggested mode (get_suggested_combat_mode + is_missing_missile_ammo,
@@ -1488,7 +1855,7 @@ export class RynthCombatLoop {
         // onto the same dead end.
         this._modeAttempts = (this._modeAttempts || 0) + 1;
         if (this._modeAttempts > MODE_TOGGLE_LIMIT) {
-          this._setIncapable(now, "combat mode will not establish");
+          this._setIncapable(now, INCAPABLE_NO_MODE);
           return;
         }
         if (typeof h.ToggleCombatMode === "function") h.ToggleCombatMode();
@@ -1609,6 +1976,7 @@ export class RynthCombatLoop {
   _magicStep(target, dist, now) {
     const h = this.host;
     if (!this._castResolved()) return; // P2: one cast in flight
+    if (this._jiggle) return; // DoJiggle: strafing / settling between casts (_jiggleTick)
     if (h.GetCastBusyState() !== 0) return; // local cast gesture gate (a HUMAN cast; bot casts never open it)
     // Shared caster contract: the shadow busy count (casts/uses sent minus
     // UseDone) is the gate that sees vitals'/buff's/loot's in-flight actions.
@@ -1639,7 +2007,7 @@ export class RynthCombatLoop {
       // Was `this.stop()` — inert on the kernel path (the kernel ticks the
       // loop directly), so it logged this every tick and held Combat
       // forever. A caster with no bolt can't fight: stand down instead.
-      this._setIncapable(now, "no war spell known — cannot fight in Magic mode");
+      this._setIncapable(now, INCAPABLE_NO_WAR_SPELL);
       return;
     }
     const range = this._closeInFor === target ? CLOSE_IN_RANGE_M : this.magicRangeM;
@@ -1650,6 +2018,8 @@ export class RynthCombatLoop {
     this._approach = null;
     this._releaseStick(); // cast from here
     this.state = "ATTACK";
+    // VTank DoJiggle: after a resolved cast, a short strafe before the next.
+    if (this._jiggleDue && this._startJiggle(now)) return;
     // P3 — settle facing before the cast (don't fire while turning).
     if (this._faceGate(target) !== "cast") return;
     // C3 shared serializer: another module (vitals/buff) may hold an

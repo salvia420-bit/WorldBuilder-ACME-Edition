@@ -14,6 +14,16 @@
 // Live-hit on the 1070: an admin-spawned Drudge stayed at 100 % through 30+
 // Flame Bolts (they flew through it into festival pumpkins) and held the lock
 // forever. Mock host, frozen clock, no infra.
+// B11 (2026-10-19): VTank TargetNoProgressTimeoutSec through the VT layer's
+// optFn (RynthAi T14) — parks a lock engaged that long without OUR DAMAGE
+// reaching it (evades / resists are no progress), the clock paused while the
+// combat loop is not ticking; 0 / no layer = off, and the 20 s rule unchanged.
+// B12 (2026-10-19): a kind=13 refusal while ANOTHER module holds the cast
+// token (host.castToken.owner, e.g. the VT helpers' Heal Other) is theirs —
+// no stand-down for "components", no close-in for 0x0550, nothing un-counted.
+// B13: the owner is host.castOwner() when the host has it (the live claim,
+// else the last one while < 6 s old): a vitals claim never released and aged
+// out no longer swallows combat's own refusals (a missile 0x0550 → close-in).
 //   Run: node rynth_combat_blacklist_test.cjs
 "use strict";
 const fs = require("fs");
@@ -273,6 +283,189 @@ async function main() {
       const loop = mk(host);
       run(loop, host, 45, { onTick: (s) => { if (s % 5 === 0) host.emit(evt(mob.name)); } });
       check(`B10 melee lock kept when it ${label} every 5 s`, !loop.unreachable.has(mob.id) && loop.locked === mob.id);
+    }
+
+    // ── B11: TargetNoProgressTimeoutSec (VT layer optFn) ──
+    const withOpts = (loop, over = {}) => {
+      const opts = { TargetLock: false, AttackMinDistance: 0, MonsterDisengageRange: 0, TargetNoProgressTimeoutSec: 0, DoJiggle: false, ...over };
+      loop.optFn = (k) => opts[k];
+      return loop;
+    };
+    const firstParked = (loop, id) => (s) => loop.unreachable.has(id) ? s : -1;
+    {
+      // Every bolt is resisted: contact (the no-contact rule never parks, B5)
+      // but no damage — parked at the 10 s timeout, and a fresh lock is taken.
+      const drudge = { id: 0x80000610, name: DRUDGE, x: 96, y: 101 };
+      const other = { id: 0x80000611, name: "Mite", x: 96, y: 110 };
+      const host = makeHost({ ents: [drudge, other] });
+      const logs = [];
+      const loop = withOpts(mk(host, { log: (m) => logs.push(m) }), { TargetNoProgressTimeoutSec: 10 });
+      let parkedAt = -1;
+      let next = -1;
+      run(loop, host, 15, {
+        onCast: () => host.emit(chat(`${DRUDGE} resists your spell`)),
+        onTick: (s) => {
+          if (parkedAt < 0) parkedAt = firstParked(loop, drudge.id)(s);
+          if (parkedAt >= 0 && next < 0) next = loop.locked;
+        },
+      });
+      check("B11 resisted every cast: parked at the 10 s no-progress timeout", parkedAt >= 9 && parkedAt <= 11,
+        `parkedAt=${parkedAt}s logs=${JSON.stringify(logs.filter((l) => /blacklisted/.test(l)))}`);
+      check("B11 the park names the reason and the same tick locks the next creature", logs.some((l) => /engaged without damaging it/.test(l)) && next === other.id,
+        `next=${next.toString(16)}`);
+      const plain = makeHost({ ents: [{ ...drudge }] });
+      const off = withOpts(mk(plain), { TargetNoProgressTimeoutSec: 0 });
+      run(off, plain, 30, { onCast: () => plain.emit(chat(`${DRUDGE} resists your spell`)) });
+      const bare = makeHost({ ents: [{ ...drudge }] });
+      const noLayer = mk(bare);
+      run(noLayer, bare, 30, { onCast: () => bare.emit(chat(`${DRUDGE} resists your spell`)) });
+      check("B11 timeout 0 / no VT layer: never parked (B5 unchanged)", !off.unreachable.has(drudge.id) && !noLayer.unreachable.has(drudge.id));
+    }
+    {
+      // Damage lines naming the lock (and the health dropping) are progress.
+      const drudge = { id: 0x80000612, name: DRUDGE, x: 96, y: 101, hf: 1 };
+      const host = makeHost({ ents: [drudge] });
+      const loop = withOpts(mk(host), { TargetNoProgressTimeoutSec: 10 });
+      run(loop, host, 40, {
+        onCast: () => {
+          drudge.hf = Math.max(0.05, drudge.hf - 0.02);
+          host.emit(chat(`You scorch ${DRUDGE} for 3 points with Flame Bolt I.`));
+        },
+      });
+      check("B11 a lock our bolts keep damaging is never parked", !loop.unreachable.has(drudge.id) && loop.locked === drudge.id);
+      // …but damage that names ANOTHER creature (the pumpkin behind it) is not.
+      const d2 = { id: 0x80000613, name: DRUDGE, x: 96, y: 101 };
+      const h2 = makeHost({ ents: [d2] });
+      const l2 = withOpts(mk(h2), { TargetNoProgressTimeoutSec: 5 });
+      let at2 = -1;
+      run(l2, h2, 12, {
+        onCast: () => h2.emit(chat("You incinerate Pumpkin Buffer for 40 points with Flame Bolt I.")),
+        onTick: (s) => { if (at2 < 0) at2 = firstParked(l2, d2.id)(s); },
+      });
+      check("B11 damage naming another creature is no progress (parked at 5 s)", at2 >= 4 && at2 <= 6, `parkedAt=${at2}s`);
+    }
+    {
+      // Melee: every swing evaded (contact — the 20 s rule never fires) →
+      // parked at 8 s with the attack cancelled; an UNNAMED damage result
+      // during the engagement is the lock's damage → never parked.
+      const mob = { id: 0x80000614, name: "Banderling", x: 96, y: 100, hf: 1 };
+      const host = makeHost({ ents: [mob], mode: 2 });
+      const loop = withOpts(mk(host), { TargetNoProgressTimeoutSec: 8 });
+      let parkedAt = -1;
+      run(loop, host, 20, {
+        onTick: (s) => {
+          host.emit(combatEvt("evadedTarget", { defenderName: mob.name }));
+          if (parkedAt < 0) parkedAt = firstParked(loop, mob.id)(s);
+        },
+      });
+      check("B11 melee: evaded every swing → parked at the 8 s timeout + attack cancelled", parkedAt >= 7 && parkedAt <= 9 && host.calls.cancel >= 1,
+        `parkedAt=${parkedAt}s cancel=${host.calls.cancel}`);
+      const m2 = { id: 0x80000615, name: "Banderling", x: 96, y: 100, hf: 1 };
+      const h2 = makeHost({ ents: [m2], mode: 2 });
+      const l2 = withOpts(mk(h2), { TargetNoProgressTimeoutSec: 8 });
+      run(l2, h2, 30, { onTick: (s) => { if (s % 3 === 0) h2.emit(combatEvt("damageDealt", { damage: 4, severity: 0.01 })); } });
+      check("B11 melee: unnamed damage results during the engagement are progress (never parked)", !l2.unreachable.has(m2.id) && l2.locked === m2.id);
+    }
+    {
+      // The clock runs only while the combat loop ticks: 6 s, a 20 s gap (the
+      // kernel gave the tick to buffing), 3 s → 9 s engaged < 10 → kept; 2 s
+      // more → parked.
+      const drudge = { id: 0x80000616, name: DRUDGE, x: 96, y: 101 };
+      const host = makeHost({ ents: [drudge] });
+      const loop = withOpts(mk(host), { TargetNoProgressTimeoutSec: 10 });
+      const resist = () => host.emit(chat(`${DRUDGE} resists your spell`));
+      run(loop, host, 6, { onCast: resist });
+      NOW += 20_000;
+      run(loop, host, 3, { onCast: resist });
+      const keptAfterGap = !loop.unreachable.has(drudge.id) && loop.locked === drudge.id;
+      run(loop, host, 3, { onCast: resist });
+      check("B11 a gap in combat ticks is not engaged time (kept at 9 s engaged, parked past 10)", keptAfterGap && loop.unreachable.has(drudge.id),
+        `keptAfterGap=${keptAfterGap}`);
+    }
+    {
+      // RynthAi T14 has no attacker exemption: a lock that keeps hitting us but
+      // that we cannot damage is still parked by the timeout (the no-contact
+      // rules keep it, B7).
+      const drudge = { id: 0x80000617, name: DRUDGE, x: 96, y: 101 };
+      const host = makeHost({ ents: [drudge] });
+      const loop = withOpts(mk(host), { TargetNoProgressTimeoutSec: 6 });
+      run(loop, host, 10, { onTick: (s) => { if (s % 2 === 0) host.emit(combatEvt("damageTaken", { attackerName: DRUDGE, damage: 5 })); } });
+      check("B11 an attacker we never damage is still parked at the timeout", loop.unreachable.has(drudge.id));
+    }
+    {
+      // The 20 s melee/missile rule is untouched with the layer at defaults.
+      const mob = { id: 0x80000618, name: "Banderling", x: 96, y: 100, hf: 1 };
+      const host = makeHost({ ents: [mob], mode: 2 });
+      const loop = withOpts(mk(host));
+      run(loop, host, 19, { onTick: () => host.emit(combatEvt("attackDone", { error: "None" })) });
+      const at19 = loop.unreachable.has(mob.id);
+      run(loop, host, 3);
+      check("B11 layer at defaults: the 20 s no-contact melee rule as before", !at19 && loop.unreachable.has(mob.id));
+    }
+
+    // ── B12: a kind=13 refusal under ANOTHER module's cast claim is theirs ──
+    // Our bolt resolves (UseDone); on that tick a helper's Heal Other is in
+    // flight (busy) under the "helpers" token; its refusal lands 300 ms later,
+    // inside our 1.5 s late-refusal window.
+    {
+      const late = (owner, code) => {
+        const drudge = { id: 0x80000620, name: DRUDGE, x: 96, y: 101 };
+        const host = makeHost({ ents: [drudge], useDone: true });
+        let busy = 0;
+        host.GetBusyState = () => busy;
+        const loop = mk(host);
+        loop.tick(); // lock + our cast
+        NOW += 2000;
+        host.seq++; // our UseDone…
+        busy = 1; // …and the helper's cast goes out
+        loop.tick(); // resolves ours (counted as an attempt), holds on busy
+        const misses = loop.status.castMisses;
+        host.castToken = owner ? { owner } : null;
+        NOW += 300;
+        host.emit(refusal(code));
+        return { loop, drudge, misses };
+      };
+      const foreign = late("helpers", 0x0400);
+      const ours = late("combat", 0x0400);
+      const none = late(null, 0x0400);
+      check("B12 a 'missing components' refusal under the helpers' token: no stand-down (ours / no token: stand down)",
+        foreign.loop.canEngage() && !ours.loop.canEngage() && !none.loop.canEngage(),
+        `foreign=${foreign.loop.status.incapable} ours=${ours.loop.status.incapable} none=${none.loop.status.incapable}`);
+      const rf = late("helpers", 0x0550);
+      const rn = late(null, 0x0550);
+      check("B12 an out-of-range refusal under another owner's token: no close-in on our lock",
+        rf.loop._closeInFor === 0 && rn.loop._closeInFor === rn.drudge.id, `foreign=${rf.loop._closeInFor} none=${rn.loop._closeInFor}`);
+      const ff = late("vitals", 0x0402);
+      const fo = late(null, 0x0402);
+      check("B12 a fizzle under another owner's token does not un-count our resolved cast",
+        ff.loop.status.castMisses === ff.misses && ff.misses === 1 && fo.loop.status.castMisses === 0,
+        `foreign=${ff.loop.status.castMisses}/${ff.misses} none=${fo.loop.status.castMisses}`);
+    }
+
+    // ── B13: castOwner() decides when the host has it (the raw token is only
+    //         the fallback): a missile engagement's own range refusal ──
+    {
+      const missile = (castOwner, castToken) => {
+        const mob = { id: 0x80000630, name: "Banderling", x: 96, y: 106, hf: 1 };
+        const host = makeHost({ ents: [mob], mode: 4 });
+        if (castOwner !== undefined) host.castOwner = () => castOwner;
+        host.castToken = castToken;
+        const loop = mk(host);
+        loop.tick(); // lock + the shot
+        NOW += 300;
+        host.emit(refusal(0x0550)); // MissileOutOfRange (SendWeenieError → kind 13)
+        return loop._closeInFor === mob.id;
+      };
+      const stale = { owner: "vitals" }; // a vitals claim nobody released
+      const r = {
+        agedOut: missile(null, stale), // castOwner: nobody cast for 6 s → ours
+        vitalsLive: missile("vitals", stale), // castOwner names vitals → theirs
+        ours: missile("combat", stale),
+        rawOnly: missile(undefined, stale), // no castOwner (older host): the raw token → theirs
+        nobody: missile(undefined, null),
+      };
+      check("B13 refusal owner = host.castOwner(): an aged-out vitals claim no longer swallows our missile range refusal",
+        r.agedOut && !r.vitalsLive && r.ours && !r.rawOnly && r.nobody, JSON.stringify(r));
     }
   } finally {
     Date.now = realNow;

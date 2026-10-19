@@ -29,6 +29,10 @@
 // Regexes are .NET patterns, matched case-insensitively. opts.getRegex
 // (EXPR's translator, injected by INT-2 — C2 forbids importing expr/) is used
 // when given; otherwise a small built-in translation + cache.
+//
+// lootDecision(result) is the loop's view of a result: the verdict plus the
+// rule's action, so a Salvage / Read pickup is salvaged / read after the
+// corpse (2026-10-19); lootVerdict is its verdict alone.
 
 import { UTL_ACTIONS, DISABLED_RULE, utlActionCode, utlNodeType } from "./utl.js";
 
@@ -348,16 +352,20 @@ export function evaluateUtl(profile, item, opts = {}) {
 }
 
 /**
- * Loot decision for an evaluateUtl result.
- * keep/salvage/sell/read → "pickup"; keepUpTo → "pickup" iff
+ * Loot decision for an evaluateUtl result: { verdict, action, rule }.
+ * verdict: keep/salvage/sell/read → "pickup"; keepUpTo → "pickup" iff
  * inventoryCount(rule) < keepCount (a missing counter counts 0); no match →
- * "skip"; pending → "pending".
+ * "skip"; pending → "pending". `action` is the matched rule's ("keep" |
+ * "salvage" | "sell" | "read" | "keepUpTo", null when none matched): the loot
+ * loop salvages what a Salvage rule takes and reads what a Read rule takes
+ * (2026-10-19), so the action travels with the pickup.
  */
-export function lootVerdict(result, opts = {}) {
+export function lootDecision(result, opts = {}) {
   const inventoryCount = opts && typeof opts === "object" ? opts.inventoryCount : undefined;
-  if (!result || typeof result !== "object") return "skip";
-  if (result.pending) return "pending";
-  if (!result.action) return "skip";
+  if (!result || typeof result !== "object") return { verdict: "skip", action: null, rule: null };
+  const rule = result.rule === undefined ? null : result.rule;
+  if (result.pending) return { verdict: "pending", action: null, rule };
+  if (!result.action) return { verdict: "skip", action: null, rule };
   if (result.action === "keepUpTo") {
     let have = 0;
     if (typeof inventoryCount === "function") {
@@ -368,9 +376,14 @@ export function lootVerdict(result, opts = {}) {
         have = 0;
       }
     }
-    return have < (Number(result.keepCount) || 0) ? "pickup" : "skip";
+    return { verdict: have < (Number(result.keepCount) || 0) ? "pickup" : "skip", action: "keepUpTo", rule };
   }
-  return "pickup";
+  return { verdict: "pickup", action: result.action, rule };
 }
 
-export default { evaluateUtl, lootVerdict };
+/** lootDecision's verdict alone: "pickup" | "skip" | "pending". */
+export function lootVerdict(result, opts = {}) {
+  return lootDecision(result, opts).verdict;
+}
+
+export default { evaluateUtl, lootVerdict, lootDecision };

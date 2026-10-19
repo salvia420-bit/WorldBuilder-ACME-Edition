@@ -1081,6 +1081,18 @@ const TIER5 = [
   { tier: 5, flag: "rynthVtBuffSpecMigration", file: "tests/rynth_vt_buff_spec_migration.test.mjs" },
   // 2026-10-19 the VTank route drawn in the world (scene3d/route_overlay.js; Route tab › Show path).
   { tier: 5, flag: "rynthRouteOverlay", file: "tests/route_overlay.test.mjs" },
+  // 2026-10-19 the former "Not on web" VTank options made live (panel homes; behaviour suites below as they land).
+  { tier: 5, flag: "rynthVtPanelLiveOptions", file: "tests/rynth_vt_panel_live_options.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportHelpers", file: "tests/rynth_vt_support_helpers.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportAmmo", file: "tests/rynth_vt_support_ammo.test.mjs" },
+  { tier: 5, flag: "rynthLootVtOptions", file: "tests/rynth_loot_vt_options.test.mjs" },
+  { tier: 5, flag: "rynthVtSupportLoot", file: "tests/rynth_vt_support_loot.test.mjs" },
+  { tier: 5, flag: "rynthBuffWornArmor", file: "tests/rynth_buff_worn_armor.test.mjs" },
+  { tier: 5, flag: "rynthBuffBatchComplete", file: "tests/rynth_buff_batch_complete.test.mjs" },
+  { tier: 5, flag: "rynthFrameCap", file: "tests/frame_cap.test.mjs" },
+  { tier: 5, flag: "rynthPassabilityOverlay", file: "tests/passability_overlay.test.mjs" },
+  { tier: 5, flag: "rynthVtDisplay", file: "tests/rynth_vt_display.test.mjs" },
+  { tier: 5, flag: "rynthStartOnLogin", file: "tests/rynth_start_on_login.test.mjs" },
   { tier: 5, flag: "rynthIndoorDoorways", file: "tests/rynth_indoor_doorways.test.mjs" },  // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): scene3d/film/** + tools/film/** suites (SPEC scene3d/film/SPEC.md).
   { tier: 5, flag: "filmMode(audio_lyrics)", file: "tests/film_audio_lyrics.test.mjs" },
   { tier: 5, flag: "filmMode(audio_structure)", file: "tests/film_audio_structure.test.mjs" },

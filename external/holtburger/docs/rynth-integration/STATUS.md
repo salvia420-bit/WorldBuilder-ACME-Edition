@@ -21,6 +21,109 @@ wsbridge). Run the suite with `apps/holtburger-web/rynth_test_all.cjs`.
 > per this project's doc-debt convention (see `HANDOFF-omnibus-2026-07-21.md`'s own
 > banner for the sibling case).
 
+## 2026-10-19 (b) — the "Not on web" VTank options made live
+
+Owner request: make the VTank options the panel listed as "Not on web" (stored and round-tripped
+only, PLAN D19) work in this client, asking about any whose meaning was unclear. Code only (the
+1070 was down); all of it is covered by node tests, none is live-verified yet.
+
+**Owner decisions** (asked one by one): VTank's / RynthAi's defaults for every option made live
+(an explicit exception to D3: fellow healing, worn-armor Impenetrability + all banes, reading
+unknown scrolls, combining salvage, the ammo refill, following around corners, the 60 / 30 fps
+limit and the steep-ground tint start ON); **DoJiggle** = strafe between casts;
+**StartMacroOnLogin** is implemented (the HUD's START once per login — amends "run state is never
+profile data" for this one option); **ShowTerrainPassability** draws whenever it is on, with its
+own switch beside Route › Show path; **BuffProfile_Banes** = banes cast on yourself, which ACE
+puts on every worn armor and clothing piece and the shield (`WorldObject_Magic.cs`
+`TryCastItemEnchantment_WithRedirects`), so ~8 casts, not 8 per piece; the .utl **Salvage** action
+and **CombineSalvage** go through the Ust (ACE has no bag-on-bag combine); **VTank's corpse rule**
+(your own kills unless LootFellowCorpses / LootAllCorpses); **Healer's Heart** support with
+JumpOutWandCasting.
+
+**What each option does now** — the table in `apps/holtburger-web/rynth/vt/README.md` §"Options
+made live (2026-10-19)". In short: corpse ownership from the corpse's "Killed by X." (one
+appraisal each), rares, the 100 s rule and the approach reach (`loot_loop.js`); unknown scrolls
+read (`support/scrolls.js`) and Ust salvage + band combining (`support/salvage.js`); fellow
+healing with spells or a Healer's Heart (`support/helpers.js`); target lock, attack minimum,
+disengage hysteresis, the no-progress blacklist, jiggle and the VTank spell-difficulty threshold
+(`combat_loop.js`, `vt/combat/attack_planner.js`, `combat_spells.json` gains `power`); worn-armor
+Impen / banes (`buff_loop.js` B7); nav far-stop hold, follow-the-leader's-path and door
+appraisal (`vt/nav/active_nav.js`, `vt/nav/follow_trail.js`, `support/doors.js`); the ammo refill
+(`support/ammo.js`); the frame cap (`plugins/rynth-vt/display.js`, `scene3d/frame_cap.js`,
+`window.__setFrameCap`) and the steep-ground tint (`scene3d/passability_overlay.js`); start on
+login (`rynth/boot.js`, `app/client_events.js`). Only Show Editor stays inert. New kernel slots:
+Helpers, Ammo, ReadScrolls, Salvage (each invisible with nothing to do).
+
+**Panel**: Main › Vitals gains the "Others %" / "Others ≤ m" rows and the helper switches, Ranges
+gains Attack min / Disengage, Behaviour gains Target lock / Start on login; Loot gains "open
+within", "Corpses: yours + fellows' / everyone's / rares only" and "After a corpse: read unknown
+scrolls / combine salvage"; Buffs › item matrix gains a "Worn armor" row; Route gains **Steep**;
+Advanced lost its "Not on web" fold (a search still finds Show Editor).
+
+**Fixed on the way** (pre-existing): the buff loop's batch rebuff (B11) / Force Buff never ended
+once the kernel stopped ticking Buffing, so self buffs were not recast after the first batch
+(`heartbeat()` ends a finished pass; the no-layer buff golden re-baselined — same casts and
+statuses every tick); with the layer, Items-tab item enchants count as buffs so a due one gets
+the tick; combat took other modules' cast refusals as its own (a refusal arrives after ACE's
+UseDone cleared the claim: the host now names the last caster for 6 s, `host.castOwner()`, read
+by combat, the planner, vitals, the helper and ammo); the netBrain C# target pick ignored the
+Monsters tab (now fed the planner's verdicts); the fellowship panel and the helper share one
+fellow-vitals hold, re-asked after a reconnect.
+
+**Review** (three read-only reviewers over the whole diff, then fixes by the owning agents):
+scroll reads refused as "too busy" right after a pickup were invisible to the client (now
+re-queued on the bare UseDone); nothing from your own corpse is salvaged or read; the scroll
+rule follows ACE's `CanReadScroll` (power < 50 or ≥ 300 by anyone, else trained and ≥ power −
+50); a Healer's Heart use ACE refuses silently (Life Magic 245 / Arcane Lore 105) no longer
+counts as a heal; the helper keeps its cast claim until its own UseDone; a weapon the helper
+cannot hand back is given up after 5 tries with a chat alert; combat holds while the helper
+holds the heart (planner or not); item / worn-armor casts that fizzle are held 10 min (worn ones
+a tier down) instead of re-cast back to back; the follow trail joins the leader's path at the
+point nearest you; the frame cap paces softly (a 60 fps cap on a 60 Hz screen would otherwise
+run at ~30 fps) and never caps a window nobody has focused; a `.usd` with both VTank bane keys
+takes the enum unless it says Custom.
+
+**Safety valves**: `?botVt=off` is still byte-for-byte the pre-VTank bot; the parity oracle
+T-P1 stays identical at Default (its world has no fellowship, Ust, scroll, launcher or corpse
+descriptions) and T-P1b checks the corpse rule loots the same corpses and items plus one
+appraisal each; the frame cap never applies to an automation-driven page (`navigator.webdriver`:
+headless / CDP Chrome), a window nobody has focused yet (the 1070's off-screen bench Chrome) or a
+page with `?targetFps=` (`=0` pins it uncapped), so perf measurements are never silently capped;
+and it paces softly (wakes 4 ms early, rAF aligns to the refresh) — the exact `?targetFps` pacer
+would run a 60 fps cap on a 60 Hz screen at ~30 fps (`tests/frame_cap.test.mjs` simulates both).
+
+Gate (alone, capped-build, 2026-10-19 11:54-12:05, after the review fixes): JS gate **828 passed /
+0 failed / 0 skipped** (11 new rows: `rynthVtPanelLiveOptions`, `rynthVtSupportHelpers`,
+`rynthVtSupportAmmo`, `rynthLootVtOptions`, `rynthVtSupportLoot`, `rynthBuffWornArmor`,
+`rynthBuffBatchComplete`, `rynthFrameCap`, `rynthPassabilityOverlay`, `rynthVtDisplay`,
+`rynthStartOnLogin`); node runner **70 passed / 0 failed / 32 skipped** (+ `rynth_combat_jiggle_test.cjs`);
+`gen-modulepreload --check` up to date (434 modules — the new modules load lazily);
+`lint-url-flags` 0 undocumented readers. The loop-hooks `buff` golden was re-baselined for the
+B11 fix only (same casts and statuses); combat and loot goldens unchanged. Logs:
+`/mnt/wbterminal1/tmp/vt-notonweb/`. The shell bundle (`scripts/build-shell.mjs`, gitignored
+output) needs a rebuild before the next deploy / bench: `rynth-hud.js`, `client_events.js`,
+`boot.js` and `scene3d/index.js` changed.
+
+### Live checklist for the next 1070 session (2026-10-19 (b) items)
+
+| # | Check | Pass looks like |
+|---|---|---|
+| N1 | Fellowship with a second character, its health dropped below 50 % within 30 m | the bot casts Heal Other on it (console `[helpers]`); with the fellowship panel closed too |
+| N2 | N1 with The Healer's Heart on the Items tab (+ JumpOutWandCasting) | heart wielded, used on the fellow, weapons handed back afterwards; the jump cuts the windup |
+| N3 | Kill monsters beside another player's kills | only your own corpses are opened; "Killed by …" in the console per corpse; LootAllCorpses on → theirs after ~100-120 s |
+| N4 | Loot profile with a Salvage rule, an Ust in the pack | items salvaged after the corpse, partial bags of one material merged (≤ 100 units) |
+| N5 | An unknown scroll you can learn drops | it is looted and read ("You learn …" / the spell appears in the spellbook) |
+| N6 | Item-magic character, buffing | Impenetrability + 7 banes cast on yourself; every worn piece shows them; recast ~25 min later |
+| N7 | Bow with the ammo slot emptied mid-fight | arrows from the pack wielded within ~2 s; with none, heads + shafts fletched and wielded |
+| N8 | Advanced › Combat: Target lock on, select a monster | the bot switches to it (equal priority); DoJiggle on → short strafes between casts only |
+| N9 | Route far away (NavFarStopRange 50 m) | route holds with one chat alert; resumes once walked back |
+| N10 | Follow route behind a leader running around a building | the follower runs the leader's corners, not into the wall |
+| N11 | Locked door on a route (Open doors + Auto unlock doors, lockpicks in Consumables) | door appraised first; picked only when locked; never 3 blind uses |
+| N12 | Window focus on / off | `__frameCapState()` 60 → 30 fps; `?targetFps=0` page and the CDP bench page stay uncapped |
+| N13 | Route › Steep on a hillside | red tint on unwalkable triangles around you; off → gone; cost +1 draw call |
+| N14 | StartMacroOnLogin on, log out and in | the bot starts once after login; not again on death; not on a `?bot=1` page |
+| N15 | 20+ minutes of buffing | self buffs recast when low (the batch-rebuff fix) |
+
 ## 2026-10-19 update — VTank panel v2, the buff scroll ladder, melee re-target, the route in the world
 
 Owner report: the VTank section had redundancy and low information density (Vitals), the buff list

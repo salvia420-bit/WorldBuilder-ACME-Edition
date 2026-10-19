@@ -494,8 +494,19 @@ export function importUsdProfile(options, name, data, opts) {
     const unknown = [];
     const notPlain = [];
     let saveError = null;
+    // VTank keeps the bane profile as two settings — BuffProfile_Banes (1
+    // Custom, 2 All … 8) and BuffProfile-Banes (the Custom letters) — and the
+    // web keeps one row: the letters count only when the profile says Custom
+    // (or names no profile), whatever their order in the file (2026-10-19).
+    const baneEnum = arr(p.settings).find((s) => s && typeof s.vtName === "string" && s.vtName.toLowerCase() === "buffprofile_banes");
+    const baneCustom = !baneEnum || Number(baneEnum.value) === 1;
     for (const s of arr(p.settings)) {
       if (!s || typeof s.vtName !== "string") continue;
+      const lower = s.vtName.toLowerCase();
+      if (lower === "buffprofile-banes" && !baneCustom) continue; // the enum names the banes
+      if (lower === "buffprofile_banes" && baneCustom && baneEnum && arr(p.settings).some((x) => x && typeof x.vtName === "string" && x.vtName.toLowerCase() === "buffprofile-banes")) {
+        continue; // Custom: the letters row carries them
+      }
       if (s.t === "table" || s.t === "ba" || s.t === "n") {
         notPlain.push(s.vtName);
         continue;

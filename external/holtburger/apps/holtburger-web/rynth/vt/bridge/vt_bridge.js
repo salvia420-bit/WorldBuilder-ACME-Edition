@@ -20,6 +20,10 @@
 // Run Macro / Force Buff delegate to the RynthSuite HUD bridge when it is
 // mounted (it owns START = boot-or-resume), else to bot.control (the one
 // operator stop authority, V-6) — this bridge never starts/stops the kernel.
+// Run state is not profile data, with the one exception the owner made
+// (2026-10-19): StartMacroOnLogin — a profile may ask for START when its
+// character logs in (rynth/boot.js maybeStartMacroOnLogin, the HUD's START);
+// whether the bot is running or stopped is never stored in a profile.
 //
 // Module discipline (C1/C2): no `document`, no static `window`; the page
 // globals come through the injected `win`. Imports: own package files,

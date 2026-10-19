@@ -12,7 +12,9 @@
 // Defaults reproduce today's bot (D3): every new behaviour is off, every
 // literal the loops hard-code today (40 m scan, 30 m corpse range, 300 s
 // rebuff window, the vitals.js thresholds) is the default. PRESETS.vtank
-// applies the VTank/RynthAi values to a user profile in one action.
+// applies the VTank/RynthAi values to a user profile in one action. The one
+// exception is the block of rows made live on 2026-10-19 (the former "Not on
+// web" rows): by the owner's decision they take VTank's / RynthAi's defaults.
 //
 // Name resolution (findRow): exact key → exact VTank name → (unless
 // exactCase) case-insensitive VTank name → case-insensitive key → legacy C#
@@ -46,9 +48,6 @@ function num(type, key, vt, unit, dflt, min, max, page, group, label, consumer, 
 }
 const int = (...a) => num("int", ...a);
 const float = (...a) => num("float", ...a);
-function inertBool(key, vt, dflt, label, help) {
-  return bool(key, vt, dflt, "advanced", "Not on web", label, "inert", { help });
-}
 
 const MIN_SKILL_DEFAULTS = [35, 85, 135, 185, 235, 285, 335, 435];
 
@@ -156,45 +155,90 @@ const ROWS = [
     "supplies"),
   bool("PetAutoRefill", ["PetAutoRefill"], true, "advanced", "Pets", "Pet auto refill", "pets"),
 
-  // ── Inert rows: stored and round-tripped (opt / meta), greyed in the UI ──
-  inertBool("LootOnlyRareCorpses", ["LootOnlyRareCorpses"], false, "Loot only rare corpses"),
-  inertBool("LootFellowCorpses", ["LootFellowCorpses"], false, "Loot fellow corpses"),
-  inertBool("LootAllCorpses", ["LootAllCorpses"], false, "Loot all corpses"),
-  float("CorpseApproachRangeMin", ["CorpseApproachRange-Min"], "m", 2, 0.5, 20, "advanced", "Not on web",
-    "Corpse approach range (min)", "inert", { vtUnit: "lbf" }),
-  float("NavFarStopDistance", ["NavFarStopRange"], "m", 0, 0, 1000, "advanced", "Not on web",
-    "Nav far-stop range (0 = off)", "inert", { vtUnit: "lbf", help: "VTank default unverified." }),
-  float("DoorIdentifyRange", ["DoorIDRange"], "m", 20, 0, 200, "advanced", "Not on web", "Door ID range", "inert",
-    { vtUnit: "lbf", help: "VTank default unverified." }),
-  float("HelperHealDistance", ["HelperDistanceHitP"], "m", 30, 0, 200, "advanced", "Not on web",
-    "Helper heal distance", "inert", { vtUnit: "lbf", help: "VTank default unverified." }),
-  inertBool("FollowAroundCorners", ["FollowAroundCorners"], false, "Follow around corners"),
-  inertBool("ReadUnknownScrolls", ["ReadUnknownScrolls"], false, "Read unknown scrolls"),
-  inertBool("CombineSalvage", ["CombineSalvage"], true, "Combine salvage"),
-  inertBool("EnableMissileCrafting", ["EnableMissileCrafting"], true, "Enable missile crafting"),
-  inertBool("StartMacroOnLogin", ["StartMacroOnLogin"], false, "Start macro on login",
-    "Run state is owned by the operator stop (RUN/STOP), never by a profile."),
-  { key: "BuffProfileBanes", vt: ["BuffProfile_Banes"], type: "string", dflt: "", page: "advanced", group: "Not on web",
-    label: "Bane buff profile", consumer: "inert" },
-  int("SpellDiffExcessThresholdHunt", ["SpellDiffExcessThreshold-Hunt"], undefined, 25, -1000, 1000, "advanced",
-    "Not on web", "Spell difficulty excess threshold (hunt)", "inert"),
-  inertBool("JumpOutWandCasting", ["JumpOutWandCasting"], false, "Jump out of wand casting"),
-  inertBool("DoJiggle", ["DoJiggle"], false, "Jiggle"),
-  float("AttackMinimumDistance", ["AttackMinimumDistance"], "m", 0, 0, 200, "advanced", "Not on web",
-    "Attack minimum distance", "inert"),
-  inertBool("TargetLock", ["TargetLock"], false, "Target lock"),
-  int("HealOthersAt", ["HealOthersAt"], "pct", 50, 0, 100, "advanced", "Not on web", "Heal others at", "inert"),
-  int("RestamOthersAt", ["RestamOthersAt"], "pct", 10, 0, 100, "advanced", "Not on web", "Restam others at", "inert"),
-  int("InfuseOthersAt", ["InfuseOthersAt"], "pct", 10, 0, 100, "advanced", "Not on web", "Infuse others at", "inert"),
-  float("MonsterDisengageRange", ["MonsterDisengageRange"], "m", 0, 0, 200, "advanced", "Not on web",
-    "Monster disengage range (0 = auto)", "inert"),
-  int("TargetNoProgressTimeoutSec", ["TargetNoProgressTimeoutSec"], "s", 0, 0, 300, "advanced", "Not on web",
-    "Target no-progress timeout", "inert"),
-  inertBool("EnableFPSLimit", ["EnableFPSLimit"], true, "Enable FPS limit"),
-  int("TargetFPSFocused", ["TargetFPSFocused"], undefined, 60, 10, 240, "advanced", "Not on web", "Target FPS (focused)",
-    "inert"),
-  int("TargetFPSBackground", ["TargetFPSBackground"], undefined, 30, 5, 60, "advanced", "Not on web",
-    "Target FPS (background)", "inert"),
+  // ── Made live 2026-10-19 (the former "Not on web" rows) ──────────────────
+  // Owner decision 2026-10-19: these take VTank's / RynthAi's defaults (helper
+  // healing, worn-armor Impenetrability + banes, reading unknown scrolls,
+  // combining salvage, the missile-ammo refill, following around corners, the
+  // FPS limit and the steep-ground tint start ON) — the D3 "every new
+  // behaviour is off" rule does not cover them.
+  // Looting
+  // 4 m = the loop's old literal reach (loot_loop.js REACH_M), so opening
+  // corpses keeps today's timing; RynthAi ships 2, VTank 3.36 (0.014 lbf).
+  float("CorpseApproachRangeMin", ["CorpseApproachRange-Min"], "m", 4, 0.5, 20, "advanced", "Looting",
+    "Corpse approach range (min)", "loot", { vtUnit: "lbf",
+      help: "Walk to within this of a corpse before opening it (the server walks the last steps itself; 1 m at the least)." }),
+  bool("LootOnlyRareCorpses", ["LootOnlyRareCorpses"], false, "advanced", "Looting", "Loot only rare corpses", "loot",
+    { help: "Loot only the corpse of a rare you discovered (\"<you> has discovered the …!\"); every other corpse is left." }),
+  bool("LootFellowCorpses", ["LootFellowCorpses"], false, "advanced", "Looting", "Loot fellows' corpses", "loot",
+    { help: "Also loot your fellows' kills: at once when they share loot with you, else once 100 s have passed. Off: your own kills only." }),
+  bool("LootAllCorpses", ["LootAllCorpses"], false, "advanced", "Looting", "Loot everyone's corpses", "loot",
+    { help: "Also loot anyone's kills once 100 s have passed (the server decides when they open). Off: your own kills only." }),
+  bool("ReadUnknownScrolls", ["ReadUnknownScrolls"], true, "advanced", "Looting", "Read unknown scrolls", "loot",
+    { help: "Loot and read scrolls of spells you don't know but the server lets you learn (ACE: a level 1, 7 or 8 scroll by anyone; otherwise the school trained and your buffed skill ≥ the spell's difficulty − 50). Scrolls your loot profile keeps are kept, not read." }),
+  bool("CombineSalvage", ["CombineSalvage"], true, "advanced", "Looting", "Combine salvage", "loot",
+    { help: "After a corpse, partial salvage bags of one material are combined with your Ust, within the loot profile's workmanship bands. (Items a Salvage rule takes are always salvaged with the Ust.)" }),
+  // Combat
+  bool("TargetLock", ["TargetLock"], false, "advanced", "Combat", "Target lock", "combat",
+    { help: "Attack the monster you have selected (when it is a valid target in range) and stay on it." }),
+  // VTank reads it beside AttackDistance (a landblock fraction); the key
+  // differs from that lbf name because canonical keys never convert (§4.6).
+  float("AttackMinDistance", ["AttackMinimumDistance"], "m", 0, 0, 200, "advanced", "Combat", "Attack minimum distance", "combat",
+    { vtUnit: "lbf", help: "Monsters nearer than this are not engaged (0 = no minimum)." }),
+  float("MonsterDisengageRange", ["MonsterDisengageRange"], "m", 0, 0, 200, "advanced", "Combat",
+    "Monster disengage range (0 = auto)", "combat",
+    { help: "An engaged target is kept and fought out to this range, so it isn't dropped the moment it steps past Monster Range (0 = Monster Range + 3 m)." }),
+  int("TargetNoProgressTimeoutSec", ["TargetNoProgressTimeoutSec"], "s", 0, 0, 300, "advanced", "Combat",
+    "Target no-progress timeout (0 = off)", "combat",
+    { help: "Blacklist a target (for the Blacklist timeout) after this long engaged without damaging it." }),
+  int("SpellDiffExcessThresholdHunt", ["SpellDiffExcessThreshold-Hunt"], undefined, 25, -1000, 1000, "advanced", "Combat",
+    "Spell difficulty excess (VTank war spells)", "planner",
+    { help: "VTank war-spell mode casts the highest spell whose difficulty + this is within your buffed school skill: higher is safer, negative attempts higher spells. Legacy mode uses Min skill for spell tier." }),
+  bool("DoJiggle", ["DoJiggle"], false, "advanced", "Combat", "Jiggle (strafe between casts)", "combat",
+    { help: "Strafe briefly left or right between spell casts in magic combat, so incoming projectiles miss." }),
+  // Helpers — VTank's "… others at" (Vitals page) and HelperDistance* rows
+  bool("DoHelp", ["DoHelp"], true, "vitals", "Helpers", "Help fellows", "helpers",
+    { help: "Heal, restam and infuse fellowship members whose vitals drop below the 'others' levels, within the helper distances." }),
+  int("HealOthersAt", ["Recharge-Helper-HitP"], "pct", 50, 0, 100, "vitals", "Helpers", "Heal others at", "helpers"),
+  int("RestamOthersAt", ["Recharge-Helper-Stam"], "pct", 10, 0, 100, "vitals", "Helpers", "Restam others at", "helpers"),
+  int("InfuseOthersAt", ["Recharge-Helper-Mana"], "pct", 10, 0, 100, "vitals", "Helpers", "Infuse others at", "helpers"),
+  float("HelperHealDistance", ["HelperDistanceHitP"], "m", 30, 0, 200, "vitals", "Helpers", "Heal others within", "helpers",
+    { vtUnit: "lbf" }),
+  float("HelperRestamDistance", ["HelperDistanceStam"], "m", 30, 0, 200, "vitals", "Helpers", "Restam others within", "helpers",
+    { vtUnit: "lbf" }),
+  float("HelperInfuseDistance", ["HelperDistanceMana"], "m", 30, 0, 200, "vitals", "Helpers", "Infuse others within", "helpers",
+    { vtUnit: "lbf" }),
+  bool("UseHealersHeart", ["UseHealersHeart"], true, "vitals", "Helpers", "Use Healer's Heart", "helpers",
+    { help: "A Healer's Heart on the Items tab heals fellows before any spell." }),
+  bool("JumpOutWandCasting", ["JumpOutWandCasting"], false, "vitals", "Helpers", "Jump out of heart casting", "helpers",
+    { help: "Jump right after using a Healer's Heart, so the heal goes out at once." }),
+  // Buffing — worn armor (ACE puts a self-cast Impenetrability / bane on every
+  // worn armor and clothing piece and shield: WorldObject_Magic.cs
+  // TryCastItemEnchantment_WithRedirects)
+  { key: "BuffProfileBanes", vt: ["BuffProfile_Banes", "BuffProfile-Banes"], type: "string", dflt: "ALFCBPS",
+    page: "advanced", group: "Buffing", label: "Banes on worn armor", consumer: "buff", codec: "banes",
+    help: "Banes cast on yourself, which the server puts on every worn armor and clothing piece and shield: A acid, L lightning, F flame, C cold, B bludgeon, P pierce, S slash (All / None, or VTank's 1-8)." },
+  bool("BuffArmorImpen", [], true, "advanced", "Buffing", "Impenetrability on worn armor", "buff",
+    { help: "Cast Impenetrability on yourself, which the server puts on every worn armor and clothing piece and shield." }),
+  // Navigation
+  float("NavFarStopDistance", ["NavFarStopRange"], "m", 0, 0, 100000, "advanced", "Navigation",
+    "Nav far-stop range (0 = off)", "nav",
+    { vtUnit: "lbf", help: "Hold the route while its next waypoint (or the Follow leader) is farther than this — you ran far off course — and walk on once back within it (0 = never)." }),
+  bool("FollowAroundCorners", ["FollowAroundCorners"], true, "advanced", "Navigation", "Follow around corners", "nav",
+    { help: "Follow routes run the leader's own path, corner by corner; off: straight at the leader." }),
+  float("DoorIdentifyRange", ["DoorIDRange"], "m", 20, 0, 200, "advanced", "Navigation", "Door ID range", "doors",
+    { vtUnit: "lbf", help: "Doors within this range are examined (locked? how hard to pick?) before Open doors / Auto unlock doors reach them." }),
+  // Crafting
+  bool("EnableMissileCrafting", ["EnableMissileCrafting"], true, "advanced", "Crafting", "Refill missile ammo", "ammo",
+    { help: "While the bot fights with a bow, crossbow or atlatl and the ammo slot is empty: wield matching ammo from your pack, else fletch it from heads and shafts (Fletching trained, ≥ 50 % success)." }),
+  // Run
+  bool("StartMacroOnLogin", ["StartMacroOnLogin"], false, "options", "Run", "Start on login", "login",
+    { help: "Start the bot when this character logs in with this profile active — the HUD's START, once per login (not on a ?bot=1 or ?botVt=off page). STOP still stops it. The one piece of run state a profile carries." }),
+  // Display
+  bool("EnableFPSLimit", ["EnableFPSLimit"], true, "advanced", "Display", "Limit frame rate", "display",
+    { help: "Cap the 3D frame rate: the focused rate while the game window has focus, the background rate while it doesn't. A ?targetFps= URL flag wins." }),
+  int("TargetFPSFocused", ["TargetFPSFocused"], undefined, 60, 10, 240, "advanced", "Display", "Target FPS (focused)", "display"),
+  int("TargetFPSBackground", ["TargetFPSBackground"], undefined, 30, 5, 60, "advanced", "Display", "Target FPS (background)",
+    "display"),
   // VTank's route display widths (2026-10-19): scene3d/route_overlay.js draws
   // the route in the world (Route tab › Show path); 1 = a hairline … 16,
   // 0.02 m per step (the default 6 = 0.12 m).
@@ -202,7 +246,8 @@ const ROWS = [
     "overlay", { help: "Width of the waypoint rings the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
   int("NavLineThickness", ["NavLineThickness"], undefined, 6, 1, 16, "advanced", "Navigation", "Route line thickness",
     "overlay", { help: "Width of the lines between waypoints the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
-  inertBool("ShowTerrainPassability", ["ShowTerrainPassability"], true, "Show terrain passability"),
+  bool("ShowTerrainPassability", ["ShowTerrainPassability"], true, "advanced", "Navigation", "Show steep ground", "overlay",
+    { help: "Tint ground too steep to walk up (the game's walkable-slope limit) red around you, whether or not a route is shown (Route tab › Steep)." }),
 ];
 
 function freezeRow(r) {
@@ -395,11 +440,41 @@ export function coerce(row, raw, { viaVt = false } = {}) {
       }
       return { ok: false, error: `${row.key}: expected one of ${values.join("/")}, got "${String(raw)}"` };
     }
-    case "string":
+    case "string": {
+      if (row.codec === "banes") {
+        const letters = baneLetters(raw);
+        return letters === null
+          ? { ok: false, error: `${row.key}: expected All, None, VTank's 2-8 or letters from ALFCBPS, got "${String(raw)}"` }
+          : { ok: true, value: letters };
+      }
       return { ok: true, value: String(raw) };
+    }
     default:
       return { ok: false, error: `${row.key}: unsupported type ${row.type}` };
   }
+}
+
+/** VTank's bane letters, in its order: Acid, Lightning, Flame (fire), Cold,
+ *  Bludgeon, Pierce, Slash. */
+export const BANE_LETTERS = "ALFCBPS";
+/** VTank's BuffProfile_Banes enum (1 = Custom: the BuffProfile-Banes letters). */
+const BANE_ENUM = Object.freeze({ 2: "ALFCBPS", 3: "", 4: "B", 5: "BPS", 6: "BPSA", 7: "BPSAC", 8: "ALFC" });
+
+/** A bane profile in any form VTank writes — its enum (2 All … 8 ALFC), All /
+ *  None, or the letters themselves (any case, any order, spaces or commas) —
+ *  → the canonical letters in BANE_LETTERS order ("" = none); null when it
+ *  is none of those (1 "Custom" names no letters of its own). */
+export function baneLetters(raw) {
+  if (raw === null || raw === undefined || typeof raw === "object") return null;
+  if (typeof raw === "boolean") return raw ? BANE_LETTERS : "";
+  const s = String(raw).trim();
+  if (!s || /^none$/i.test(s)) return "";
+  if (/^all$/i.test(s)) return BANE_LETTERS;
+  const n = parseNumber(s);
+  if (n !== null) return Object.prototype.hasOwnProperty.call(BANE_ENUM, n) ? BANE_ENUM[n] : null;
+  const up = s.toUpperCase().replace(/[\s,;+]/g, "");
+  if (!/^[ALFCBPS]+$/.test(up)) return null;
+  return [...BANE_LETTERS].filter((c) => up.includes(c)).join("");
 }
 
 /** Canonical value → the unit of the name it was addressed by (lbf ÷240). */

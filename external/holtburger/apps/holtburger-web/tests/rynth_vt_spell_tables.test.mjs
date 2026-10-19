@@ -7,14 +7,16 @@
 // L7), Futility 2282 = Yield L7, Lightning bolt = 75-80 (not Shock Wave), every
 // debuff/DoT/bolt/streak/arc/item enchantment targeted, rings untargeted and
 // L6/L7 only, the D38 item families (impen, bane:<el>) all Item school 3, and
-// bestCastable's known-set / school-cap / exclude gates.
+// bestCastable's known-set / school-cap / exclude gates — and (2026-10-19) the
+// power column (the LSD spell power VTank's SpellDiffExcessThreshold compares)
+// with bestCastable's power gate, incl. a stale table without the column.
 //
 // Run from apps/holtburger-web/:  node tests/rynth_vt_spell_tables.test.mjs
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(HERE, "..");
@@ -188,6 +190,62 @@ await check("bestCastable: highest known rung; school cap by the spell's own sch
   assert.equal(T.bestCastable("nope", { known }), null);
   assert.equal(T.bestCastable("imperil", {}), null, "no known set");
   assert.equal(T.bestCastable("imperil", { known, maxLevelBySchool: () => { throw new Error("x"); } }).id, 2074, "a throwing cap = no cap");
+});
+
+await check("power column: every rung > 0 and never decreasing up a family; the war ladder 1/50/…/300/400, debuffs 25 above their tier", () => {
+  for (const f of T.familyNames()) {
+    let last = 0;
+    for (const r of T.familyLadder(f)) {
+      assert.ok(Number.isInteger(r.power) && r.power > 0, `${f} ${r.id} power ${r.power}`);
+      assert.ok(r.power >= last, `${f} ${r.id} power ${r.power} < ${last}`);
+      last = r.power;
+    }
+  }
+  assert.deepEqual(T.familyLadder("bolt:fire").map((r) => r.power), [1, 50, 100, 150, 200, 250, 300, 400]);
+  assert.deepEqual(T.familyLadder("imperil").map((r) => r.power), [25, 75, 125, 175, 225, 275, 325, 400]);
+  assert.deepEqual(T.familyLadder("ring:fire").map((r) => r.power), [200, 300]);
+  assert.equal(T.rungOf(2228).power, 325, "Broadside of a Barn");
+});
+
+await check("bestCastable maxPowerBySchool: power ≤ cap by the spell's own school; -Infinity = none; Infinity / NaN / a throw = no gate", () => {
+  const known = new Set(T.familyLadder("bolt:fire").map((r) => r.id).concat(T.familyLadder("imperil").map((r) => r.id)));
+  const best = (fam, cap) => T.bestCastable(fam, { known, maxPowerBySchool: cap })?.id ?? null;
+  assert.equal(best("bolt:fire", () => 375), 2128, "War 400 − 25");
+  assert.equal(best("bolt:fire", () => 400), 4439);
+  assert.equal(best("bolt:fire", () => 299), 85);
+  assert.equal(best("bolt:fire", () => 0), null, "nothing under power 1");
+  assert.equal(best("bolt:fire", () => -Infinity), null, "untrained");
+  assert.equal(best("bolt:fire", () => Infinity), 4439);
+  assert.equal(best("bolt:fire", () => NaN), 4439);
+  assert.equal(best("bolt:fire", () => { throw new Error("x"); }), 4439);
+  assert.equal(best("imperil", (s) => (s === 2 ? 324 : 0)), 1327, "Life cap 324 ⇒ Imperil Other VI (275)");
+  assert.equal(best("imperil", (s) => (s === 1 ? 0 : 400)), 4312, "a War cap does not gate Life");
+  assert.equal(T.bestCastable("bolt:fire", { known, maxPowerBySchool: () => 375, maxLevelBySchool: () => 5 }).id, 84, "both caps apply");
+});
+
+await check("a stale table without the power column: powerOf (the live spell record) is asked; unknown power is not gated", async () => {
+  const os = await import("node:os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rynth-vt-st-"));
+  try {
+    fs.mkdirSync(path.join(dir, "combat"));
+    fs.mkdirSync(path.join(dir, "data"));
+    fs.copyFileSync(path.join(APP, "rynth", "vt", "combat", "spell_tables.js"), path.join(dir, "combat", "spell_tables.mjs"));
+    const stale = JSON.parse(JSON.stringify(table));
+    for (const rows of Object.values(stale.families)) for (const r of rows) delete r.power;
+    fs.writeFileSync(path.join(dir, "data", "combat_spells.json"), JSON.stringify(stale));
+    const S = await import(pathToFileURL(path.join(dir, "combat", "spell_tables.mjs")).href);
+    await S.loadCombatSpells();
+    assert.equal(S.rungOf(2128).power, 0, "no column ⇒ 0");
+    const known = new Set(S.familyLadder("bolt:fire").map((r) => r.id));
+    const asked = [];
+    const powerOf = (id) => (asked.push(id), { 4439: 400, 2128: 300 }[id] ?? 0);
+    assert.equal(S.bestCastable("bolt:fire", { known, maxPowerBySchool: () => 375, powerOf }).id, 2128, "4439 (400) gated via powerOf");
+    assert.deepEqual(asked, [4439, 2128]);
+    assert.equal(S.bestCastable("bolt:fire", { known, maxPowerBySchool: () => 375 }).id, 4439, "unknown power ⇒ not gated");
+    assert.equal(S.bestCastable("bolt:fire", { known, maxPowerBySchool: () => -Infinity, powerOf }), null, "untrained gates even without a power");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await check("normalizeElement: Electric⇄Lightning, Blade⇄Slash, aliases; Auto/None/garbage → null", () => {

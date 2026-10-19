@@ -39,6 +39,7 @@ import { maybeQueryHouseAtLogin } from "./house_query_login.js";
 import { showPortalStormNotice } from "./portal_storm_notice.js";
 import { acString, loadStringTable } from "../ui/ac_strings.js";
 import { maybeAutoBootBot } from "../rynth/boot.js";
+import { maybeStartMacroOnLogin } from "../rynth/boot.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
  *  pumpNetFrame (kind 4 Disconnected): stop draining this batch. */
@@ -287,10 +288,14 @@ export function dispatchClientEvent(evt, D) {
     // The URL reads stay HERE — the url-flags lint and
     // rynth_ai_persona_test pin them in the app source. Same
     // config, globals and console lines as before.
+    // 2026-10-19: then the VTank option StartMacroOnLogin — the character's
+    // active profile asks for START at login (the HUD's START; once per
+    // login, never on a ?bot=1 or ?botVt=off page; rynth/boot.js
+    // maybeStartMacroOnLogin), after a takeover rebind settles.
     try {
       const botParams = new URLSearchParams(location.search);
       const botTargetHandle = window.__sessionHandle ?? handle;
-      maybeAutoBootBot(botTargetHandle, {
+      const botRebind = maybeAutoBootBot(botTargetHandle, {
         bot: botParams.get("bot"), botAi: botParams.get("botAi"),
         nav: botParams.get("nav"), navEndpoint: botParams.get("navEndpoint"),
         botKernel: botParams.get("botKernel"), explorePressure: botParams.get("explorePressure"),
@@ -298,6 +303,7 @@ export function dispatchClientEvent(evt, D) {
         botModel: botParams.get("botModel"), botInterval: botParams.get("botInterval"),
         botBuffs: botParams.get("botBuffs"), botVt: botParams.get("botVt"),
       });
+      maybeStartMacroOnLogin(botTargetHandle, { bot: botParams.get("bot"), botVt: botParams.get("botVt") }, { after: botRebind });
     } catch (_) { /* flag parse failure = no bot, client unaffected */ }
     // ?streamHud=1 (2026-07-18) — stream-rig dressing: open the
     // inventory pane and shift the buffs HUD below the vitals

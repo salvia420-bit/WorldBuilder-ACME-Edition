@@ -36,6 +36,9 @@
 // statically imported (I-26/I-27); a failed load leaves the HUD as it was.
 // The VT button (selectors row; the titlebar keeps its four buttons) opens
 // the VTank panel; the disposer closes that panel when its module was loaded.
+// With the entry in, mount also installs plugins/rynth-vt/display.js
+// (2026-10-19, lazy): the profile's frame-rate limit and steep-ground tint,
+// page-wide with no bot and the panel closed; the disposer releases them.
 
 import { makeTitlebar } from "../ui/hud_kit.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
@@ -65,6 +68,7 @@ const SP = "./data/ui-sprites";
 // VTank layer modules (page-relative, lazy — never statically imported).
 const VT_ENTRY_PATH = "rynth/vt/rs_entry.js";
 const VT_PANEL_PATH = "plugins/rynth-vt/panel.js";
+const VT_DISPLAY_PATH = "plugins/rynth-vt/display.js";
 const VT_PANEL_ROOT_ID = "hb-rynth-vt"; // = plugins/rynth-vt/styles.js VT_ROOT_ID
 const VT_UI_KEY = "rynth.vt.ui.v1"; // = plugins/rynth-vt/panel.js VT_UI_KEY
 const VT_BTN_TIP = "VTank — options, profiles, vitals, monsters, items, consumables, buffs, route and meta (/rs ui)";
@@ -269,6 +273,7 @@ const S = {
   onHotbarMounted: null,
   onVisibility: null,
   vtPanelUsed: false, // this HUD opened (or reopened) the VTank panel
+  vtDisplay: null, // plugins/rynth-vt/display.js controller (frame-rate limit, steep ground)
 };
 
 // ── the window ─────────────────────────────────────────────────────────
@@ -1200,6 +1205,7 @@ function installVtEntry() {
     .then((m) => {
       if (!S.bridge || !m || typeof m.installRsEntry !== "function") return;
       const api = m.installRsEntry(window);
+      installVtDisplay();
       if (api && typeof api.openPanel === "function" && vtPanelWasOpen()) {
         S.vtPanelUsed = true;
         Promise.resolve(api.openPanel()).catch(() => {});
@@ -1211,6 +1217,20 @@ function installVtEntry() {
       }
     })
     .catch(() => { /* no VTank layer on this page: /rs reports it, the HUD works as before */ });
+}
+/** The VTank profile's display options — the frame-rate limit and the
+ *  steep-ground tint — apply page-wide, with no bot and the panel closed:
+ *  plugins/rynth-vt/display.js (lazy, location.href-relative like the entry),
+ *  disposed with the HUD. Failure = the options stay stored only. */
+function installVtDisplay() {
+  const url = vtModuleUrl(VT_DISPLAY_PATH);
+  if (!url) return;
+  import(url)
+    .then((m) => {
+      if (!S.bridge || S.vtDisplay || !m || typeof m.installVtDisplay !== "function") return;
+      S.vtDisplay = m.installVtDisplay(window);
+    })
+    .catch(() => { /* no display controller on this page: the HUD works as before */ });
 }
 /** HUD dispose: close + dispose the VTank panel when its module was loaded
  *  (this HUD opened it, or its window is in the page). The import is the
@@ -1254,13 +1274,14 @@ export function mount() {
     document.removeEventListener("hb-hotbar-mounted", S.onHotbarMounted);
     destroyAiPanel();
     disposeVtPanelIfLoaded();
+    try { S.vtDisplay?.dispose?.(); } catch { /* ignore */ }
     try { S.root?.remove(); } catch { /* ignore */ }
     try { S.launcher?.remove(); } catch { /* ignore */ }
     try { document.getElementById(FLOAT_ID)?.remove(); } catch { /* ignore */ }
     for (const k of ["__toggleRynthHud", "__openRynthHud", "__closeRynthHud", "__rynthHud"]) {
       try { delete window[k]; } catch { window[k] = undefined; }
     }
-    Object.assign(S, { bridge: null, root: null, refs: null, launcher: null, lastVm: null, lastVmAt: 0, launcherTimer: 0, aiPanel: null, vtPanelUsed: false });
+    Object.assign(S, { bridge: null, root: null, refs: null, launcher: null, lastVm: null, lastVmAt: 0, launcherTimer: 0, aiPanel: null, vtPanelUsed: false, vtDisplay: null });
   };
 }
 
