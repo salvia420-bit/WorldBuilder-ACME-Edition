@@ -311,6 +311,26 @@ function navText(points, { routeType = 4 } = {}) {
     assert.ok(!route.legs[1].noPosition, "a genuinely-positioned pau is never touched by the sentinel cleanup");
   });
 
+  // 2026-10-18 review follow-up (RYNTH-2 class): a NaN / missing EW or NS is
+  // no position for ANY record type — never the map origin, and never the
+  // anchor its neighbouring sentinels are moved to.
+  await t("SENT4", "a movement point with a non-numeric position is repositioned, not sent to the map origin", () => {
+    const { legs, warnings } = NI.parsedNavToLegs({
+      routeType: 1,
+      points: [
+        { type: 0, ew: 20, ns: 20, z: 1 },
+        { type: 0, ew: NaN, ns: 20.1, z: 1 },
+        { type: 4, ew: 0, ns: 0, z: 0, chat: "/vt start" }, // cht sentinel after the bad point
+        { type: 0, ew: 20.2, ns: 20.2, z: 1 },
+      ],
+    });
+    const worldOf = (l) => [((l.lb >>> 24) & 0xff) * 192 + l.x, ((l.lb >>> 16) & 0xff) * 192 + l.y];
+    assert.ok(legs[1].noPosition, "the NaN point is marked noPosition");
+    assert.deepEqual(worldOf(legs[1]), worldOf(legs[0]), "it carries the previous real waypoint");
+    assert.deepEqual(worldOf(legs[2]), worldOf(legs[0]), "the sentinel after it is not anchored at the map origin");
+    assert.ok(warnings.some((w) => /leg 1/.test(w) && /non-numeric position/.test(w)), JSON.stringify(warnings));
+  });
+
   console.log(`\nnav_import: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

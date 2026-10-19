@@ -259,7 +259,7 @@ export function setParticleCulledLeanFlag(on) { _CULLED_LEAN_ON = on == null ? n
 export const PARTICLE_RP6_STATS = {
   // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
   culledForceStopped: 0,
-  // `?particleCellGate=on` (render-only): cumulative emitter·ticks / live
+  // `?particleCellGate` (default ON, render-only): cumulative emitter·ticks / live
   // particle·ticks whose draw was withheld because the anchor's EnvCell was
   // not drawn. The simulation still ran for every one of them.
   cellHiddenEmitterTicks: 0,
@@ -359,8 +359,9 @@ export function _rp6VirtualEmit(emitter, now) {
   return true;
 }
 
-// particles-scripts-3 (2026-10-13) — `?particleCellGate=on` (OPT-IN, default
-// OFF; RENDER-ONLY). Interior (EnvCell) static default_script emitters are
+// particles-scripts-3 (2026-10-13) — `?particleCellGate` (DEFAULT ON since
+// 2026-10-19, flipped ahead of its 1070 eye test; `=off`/`0`/`false`/`no`
+// escape; RENDER-ONLY). Interior (EnvCell) static default_script emitters are
 // anchored in `staticsGroup`, not in their cell container, so they kept
 // writing instances / showing slot meshes while cells.js had HIDDEN their cell
 // (outside the PVS/BFS render set, or rejected by ?occlusionCull) — through a
@@ -381,7 +382,8 @@ export function _rp6VirtualEmit(emitter, now) {
 // containers. An unresolved cellId draws (bail open). WebAC gates its static
 // emitters the same visibility-only way (StaticScriptDriver.ts).
 let _CELL_GATE_ON = null;
-/** `?particleCellGate=on` — exact opt-in; any other value (or none) is OFF. */
+/** `?particleCellGate` — DEFAULT ON (2026-10-19); `off`/`0`/`false`/`no`
+ *  (trimmed, any case) turn it off; absent or any other value (`=on` too) is ON. */
 export function readParticleCellGateFlag(search) {
   try {
     const s =
@@ -392,9 +394,10 @@ export function readParticleCellGateFlag(search) {
         : typeof location !== "undefined" && location
         ? location.search
         : "";
-    return new URLSearchParams(s || "").get("particleCellGate") === "on";
+    const v = (new URLSearchParams(s || "").get("particleCellGate") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 /** Cached flag accessor (parse once per page load). */
@@ -641,20 +644,23 @@ export function setParticleInstancingAlphaFlag(on) { _INST_ALPHA_ON = !!on; }
 // rAF callback). The first append of a frame resets the bucket; EVERY manager's finalize
 // re-sorts and republishes it (so the last one, with every instance, wins); a frame without
 // appends parks it dark; `_INST_BUCKET_IDLE_TICKS` idle frames reap it.
-// `?particleSharedAlpha=on` opts in — DEFAULT OFF until a 1070 look check.
+// DEFAULT ON (2026-10-19, flipped ahead of its §0 1070 look check, which is still owed);
+// `?particleSharedAlpha=off` (or `0`/`false`/`no`, any case) keeps each manager's own alpha
+// buckets. Absent or any other value (`=on` too) is ON.
 let _SHARED_ALPHA_ON = null;
 export function particleSharedAlphaEnabled() {
   if (_SHARED_ALPHA_ON === null) {
     try {
-      const v = (new URLSearchParams(location.search).get("particleSharedAlpha") || "").toLowerCase();
-      _SHARED_ALPHA_ON = v === "on" || v === "1" || v === "true" || v === "yes";
+      const v = (new URLSearchParams(location.search).get("particleSharedAlpha") || "").trim().toLowerCase();
+      _SHARED_ALPHA_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
     } catch (_) {
-      _SHARED_ALPHA_ON = false;
+      _SHARED_ALPHA_ON = true;
     }
   }
   return _SHARED_ALPHA_ON;
 }
-export function setParticleSharedAlphaFlag(on) { _SHARED_ALPHA_ON = !!on; }
+/** Test/A-B seam: force the flag (`null` re-reads the URL on next use). */
+export function setParticleSharedAlphaFlag(on) { _SHARED_ALPHA_ON = on == null ? null : !!on; }
 let _sharedFrameFallback = 0;
 const _defaultFrameId = () => {
   try {
@@ -738,7 +744,7 @@ export class SharedAlphaBuckets {
     }
   }
 }
-/** The registry every ParticleManager shares (`?particleSharedAlpha=on`). */
+/** The registry every ParticleManager shares (`?particleSharedAlpha`, default ON; `=off` escape). */
 export const sharedAlphaBuckets = new SharedAlphaBuckets();
 
 /** Turn a cloned slot material into the shared ALPHA bucket material. */
@@ -846,7 +852,8 @@ function _growBucket(bucket, need, scene) {
 }
 
 // =====================================================================
-// A11-S4 (2026-06-12, `?particleDegrade=retail`) — authored degrade
+// A11-S4 (2026-06-12; DEFAULT ON since 2026-10-19, flipped ahead of its 1070
+// eye test; `?particleDegrade=off` escape) — authored degrade
 // radii folded into the RP6 predicate as an OR-term.
 // =====================================================================
 // Survey: docs/2026-06-11-unification-survey/agents/
@@ -870,14 +877,20 @@ function _growBucket(bucket, need, scene) {
 // (visibility flip + lightweight stop/drain + full restore on
 // re-entry) is observably the retail SetNoDraw+freeze+auto-recover.
 //
-//   - Flag OFF (default): `degradeDistance` stays Infinity and the
-//     OR-term is gated out — byte-identical RP6 behavior.
-//   - Flag ON: `addEmitter` fire-and-forgets the wasm
+//   - `=off`/`0`/`false`/`no` (the escape): `degradeDistance` stays
+//     Infinity and the OR-term is gated out — byte-identical pre-flip
+//     RP6 behavior.
+//   - ON (the default; absent or any non-off value, incl. the old
+//     `=retail`): `addEmitter` fire-and-forgets the wasm
 //     `fetch_particle_degrade_distance(hwGfxObjId)` (ADDITIVE export,
 //     rides manifest v4; typeof-guarded — a stale pkg/ soft-degrades
 //     to RP6-only culling) and stamps the resolved meters onto
 //     `emitter.degradeDistance` (the InitEnd analog). Values cached
-//     per hwGfxObjId.
+//     per hwGfxObjId. The sky chain (`skyGlow`: the moon nebula sheets
+//     and the storm lightning box on sky_dome.js's camera-following
+//     anchor, ~40 m above the eye) is never stamped — same `skyGlow`
+//     predicate that keeps it out of the shared alpha buckets — so a
+//     small authored radius can never hide the sky.
 //   - Retail compares the object's camera distance (CYpt) DIRECTLY to
 //     the radius (no bounding-sphere slack, acclient.c:317195) — the
 //     OR-term mirrors that on the anchor distance already computed for
@@ -885,7 +898,10 @@ function _growBucket(bucket, need, scene) {
 
 let _particleDegradeRetail = null;
 
-/** Read `?particleDegrade=retail` (defensive — never throw). */
+/** Read `?particleDegrade` — DEFAULT ON (2026-10-19, ahead of its 1070 eye
+ *  test); `off`/`0`/`false`/`no` (trimmed, any case) is the escape; absent or
+ *  any other value (the old enable token `retail`, `on`) reads ON. Defensive —
+ *  never throws; an unreadable URL resolves the default (ON). */
 export function readParticleDegradeFlag(search) {
   try {
     const s =
@@ -894,11 +910,10 @@ export function readParticleDegradeFlag(search) {
         : typeof window !== "undefined" && window.location
         ? window.location.search
         : "";
-    return (
-      new URLSearchParams(s).get("particleDegrade")?.toLowerCase() === "retail"
-    );
+    const v = (new URLSearchParams(s).get("particleDegrade") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -1314,13 +1329,13 @@ function _rp6ShouldCull(emitter, camera) {
   const slack = _RP6.maxDistance + radius;
   if (distSq > slack * slack) return true;
 
-  // A11-S4 (?particleDegrade=retail) — authored per-GfxObj degrade
+  // A11-S4 (?particleDegrade, default ON; `=off` escape) — authored per-GfxObj degrade
   // OR-term: retail ShouldDrawParticles culls when the object's camera
   // distance exceeds `degrade_distance` (direct compare, no sphere
   // slack — acclient.c:317195 `CYpt > i_fDegradeDistance`); the culled
   // path's freeze + visibility flip + re-entry restore is the
   // SetNoDraw/degraded_out contract (acclient.c:331097-331139). Gated
-  // on the flag AND a finite stamp so flag-off (ctor Infinity) is
+  // on the flag AND a finite stamp so `=off` (ctor Infinity) is
   // inert; RP6 frustum/cap above stays the superset.
   if (
     (particleDegradeRetailOn() || emitter._forceDegrade === true) &&
@@ -1595,9 +1610,9 @@ export class ParticleManager {
     // a stale pkg without the getter yields undefined → 0 → facing soft-off.
     this._degradeInfoFactory =
       typeof opts.degradeInfoFactory === "function" ? opts.degradeInfoFactory : null;
-    // `?particleCellGate=on` (render-only) — optional `(cellId) => container`
+    // `?particleCellGate` (default ON, render-only) — optional `(cellId) => container`
     // into the EnvCell registry (statics.js passes `scene3d.cellContainers3d`).
-    // Inert without the flag; a manager without a lookup is never gated.
+    // Inert under `?particleCellGate=off`; a manager without a lookup is never gated.
     this._cellLookup = null;
     this.cellHiddenLastTick = 0;
     if (typeof opts.cellLookup === "function") this.setCellLookup(opts.cellLookup);
@@ -1665,7 +1680,7 @@ export class ParticleManager {
   }
 
   /**
-   * `?particleCellGate=on`: install (or with a non-function, remove) the
+   * `?particleCellGate` (default ON): install (or with a non-function, remove) the
    * `(cellId) => container` lookup the render-only cell gate resolves an
    * anchor's `userData.cellId` through. See `_emitterCellHidden`.
    */
@@ -2292,7 +2307,8 @@ export class ParticleManager {
     // emitters (pollen/fireflies/leaves) carry an authored `degradeDistanceMeters`
     // on their emitterInfo POJO. Stamp it onto the emitter with `_forceDegrade`
     // so the RP6/degrade cull honours the radius INDEPENDENTLY of
-    // ?particleDegrade (which is a separate, retail-fidelity, default-off knob).
+    // ?particleDegrade (a separate, retail-fidelity knob: default ON since
+    // 2026-10-19, `=off` escape).
     // Skips update+draw beyond the radius, restores on approach — canopy motes
     // never render across the 1.15 km ring. 0/absent ⇒ no cull (unchanged).
     {
@@ -2303,14 +2319,21 @@ export class ParticleManager {
       }
     }
 
-    // A11-S4 (?particleDegrade=retail) — the InitEnd analog: stamp the
-    // authored degrade radius (retail `degrade_distance =
+    // A11-S4 (?particleDegrade, default ON; `=off` escape) — the InitEnd
+    // analog: stamp the authored degrade radius (retail `degrade_distance =
     // GetMaxDegradeDistance(part_storage[0])`, acclient.c:331265+;
     // part_storage[0] is built from this emitter's hw GfxObj).
     // Fire-and-forget: the field stays at the ctor Infinity (=never
     // degrade-culled) until the cached wasm fetch resolves; a despawned
     // or replaced emitter is skipped via the table identity check.
-    if (particleDegradeRetailOn() && !emitter._forceDegrade) {
+    // Sky chain exempt (2026-10-19, with the default-ON flip): the
+    // `?skyGlow` moon nebula and the storm lightning box ride sky_dome.js's
+    // camera-following anchor ~40 m above the eye (`?skyBirdAlt`), so a
+    // hw GfxObj radius under that would hide the sky on a bare page. Same
+    // `emitter.skyGlow` predicate `_appendInstances` uses to keep the sky
+    // chain out of the shared alpha buckets; it stays at the ctor Infinity
+    // (the RP6 frustum/cap still applies).
+    if (particleDegradeRetailOn() && !emitter._forceDegrade && emitter.skyGlow !== true) {
       _degradeDistanceFor(info.hwGfxObjId)
         .then((meters) => {
           if (meters != null && this.particleTable.get(id) === emitter) {
@@ -2378,8 +2401,8 @@ export class ParticleManager {
     // (?particleBillboard=off) or no camera is resolvable → leave orientations.
     const bbCamera = BILLBOARD_DISABLED ? null : _rp6ResolveCamera();
 
-    // `?particleCellGate=on` — resolved once per tick; false (the default, and
-    // every manager without a lookup) leaves the loop below exactly as before.
+    // `?particleCellGate` (default ON) — resolved once per tick; false (`=off`,
+    // or a manager without a lookup) leaves the loop below exactly as before the gate.
     const cellLookup = this._cellLookup;
     const cellGate = cellLookup !== null && particleCellGateEnabled();
     // ?particleCulledLean — read once per tick (see the culled branch).
@@ -2564,7 +2587,7 @@ export class ParticleManager {
           _setPartsVisible(emitter, false);
         }
       } else if (cellGate && _emitterCellHidden(emitter, cellLookup)) {
-        // `?particleCellGate=on`: the anchor's EnvCell is not drawn this frame.
+        // `?particleCellGate` (default ON): the anchor's EnvCell is not drawn this frame.
         // The simulation above already ran (retail CObjCell::IsInView == 1 —
         // see the flag note); withhold only the draw. Instanced: no append, so
         // its instances vanish with this tick's bucket reset. Per-mesh: hide

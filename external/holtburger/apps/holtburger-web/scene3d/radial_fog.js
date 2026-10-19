@@ -1,12 +1,13 @@
-// scene3d/radial_fog.js — ?radialFog=on: retail RANGE fog. The fog distance is the
-// eye-to-vertex distance, not three's view-plane depth (2026-10-13, OPT-IN).
+// scene3d/radial_fog.js — ?radialFog: retail RANGE fog. The fog distance is the
+// eye-to-vertex distance, not three's view-plane depth. Added 2026-10-13; DEFAULT ON since
+// 2026-10-19 (ahead of its 1070 eye test, still owed), `?radialFog=off|0|false|no` escapes.
 //
 // RETAIL. RenderDeviceD3D::SetDefaultD3DStates (acclient.c) programs D3D fixed-function
 // VERTEX fog: render state 35 D3DRS_FOGTABLEMODE = D3DFOG_NONE, 140 D3DRS_FOGVERTEXMODE =
 // D3DFOG_LINEAR, 48 D3DRS_RANGEFOGENABLE = TRUE. With range fog on, D3D fogs each vertex by
 // its DISTANCE from the eye.
 //
-// OURS (default). three's <fog_vertex> writes `vFogDepth = - mvPosition.z` (the view-plane
+// STOCK (?radialFog=off). three's <fog_vertex> writes `vFogDepth = - mvPosition.z` (the view-plane
 // depth), and both terrain shaders pass the same plane depth (vViewDepth = -mvPos.z) to the
 // shared terrainApplyFog tail. Toward the frame sides, plane depth is SHORTER than range by
 // cos(angle off the view axis). At the 60 deg vertical FOV and 16:9, the side edge is 45.7 deg
@@ -30,11 +31,14 @@
 // (retail's D3DFOG_LINEAR ramp would be a separate opt-in), so the fog_fragment patches in
 // particles/additive_fog.js and materials.js still compose.
 //
-// FLAG. OPT-IN: only the exact value `?radialFog=on` enables it. Range is >= depth everywhere,
-// so the change adds haze toward the frame sides at EVERY yaw. That alters the owner-tuned
-// 0.62 horizonFogNear look, so it needs the 1070 eye-test before being promoted to
-// default-on. With the flag absent or any other value, no chunk is touched and the terrain
-// consumers get the very same strings, so the compiled programs are byte-identical.
+// FLAG. DEFAULT ON since 2026-10-19, flipped ahead of its 1070 eye test (owner: "default on
+// what would be on after a successful eyetest"; the 1070 is unavailable), so that eye test is
+// now an owed post-flip A/B against `=off`. Absent, `on` or any other value reads ON;
+// `?radialFog=off|0|false|no` (trimmed, any case) is the escape. Range is >= depth everywhere,
+// so the change adds haze toward the frame sides at EVERY yaw. horizonFogNear 0.62 was tuned
+// against plane depth; `&horizonFogNear=0.7` is the retune knob if the mid-field washes out.
+// Under an off form no chunk is touched and the terrain consumers get the very same strings,
+// so the compiled programs are byte-identical to the pre-flag build.
 //
 // The fog_vertex rewrite follows WebAC packages/renderer/src/effects/RetailFog.ts
 // patchFogVertex (after WebAC, AGPL-3.0).
@@ -67,14 +71,18 @@ function _search(search) {
 }
 
 /**
- * `?radialFog=on`: OPT-IN, default OFF. Only the exact value "on" enables it.
+ * `?radialFog` — DEFAULT ON (2026-10-19, ahead of its 1070 eye test): absent, `=on` or any
+ * other value reads ON; `off`/`0`/`false`/`no` (trimmed, any case) is the escape back to
+ * three's plane-depth fog. An unreadable URL reads ON.
  * @param {string} [search] defaults to window.location.search
  */
 export function radialFogEnabled(search) {
   try {
-    return new URLSearchParams(_search(search)).get("radialFog") === "on";
+    const v = new URLSearchParams(_search(search)).get("radialFog");
+    const s = v == null ? "" : v.trim().toLowerCase();
+    return !(s === "off" || s === "0" || s === "false" || s === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -156,11 +164,11 @@ function _publish() {
 }
 
 /**
- * The terrain shader pair a terrain module should compile this session. Without
- * `?radialFog=on` it returns the SAME two strings, so the default program is byte-identical.
- * With the flag on it returns the range-fog pair. If an anchor has drifted, it warns, keeps
- * the plane-depth pair and records the reason. Terrain modules call this once at load
- * (session-constant, like their other GLSL flags).
+ * The terrain shader pair a terrain module should compile this session. By default (flag
+ * absent or on) it returns the range-fog pair. Under `?radialFog=off` (or 0/false/no) it
+ * returns the SAME two strings, the byte-identical pre-flag program. If an anchor has
+ * drifted, it warns, keeps the plane-depth pair and records the reason. Terrain modules call
+ * this once at load (session-constant, like their other GLSL flags).
  * @param {string} vertex
  * @param {string} fragment
  * @param {string} [search] defaults to window.location.search
@@ -182,9 +190,9 @@ export function radialFogTerrainGlsl(vertex, fragment, search) {
 }
 
 /**
- * Patch `THREE.ShaderChunk.fog_vertex` in place to range fog when `?radialFog=on`. It must
- * run before the first program compiles (scene3d/index.js preInit3D, right before the
- * WebGLRenderer is built). Programs compiled earlier keep the stock text. Idempotent. Fails
+ * Patch `THREE.ShaderChunk.fog_vertex` in place to range fog unless `?radialFog=off` (the
+ * default is on). It must run before the first program compiles (scene3d/index.js
+ * preInit3D, right before the WebGLRenderer is built). Programs compiled earlier keep the stock text. Idempotent. Fails
  * closed: if the chunk has drifted, the stock chunk is kept and `reason` says why.
  * @param {{ ShaderChunk: Record<string, string> }} three the THREE namespace
  * @param {string} [search] defaults to window.location.search
@@ -193,7 +201,7 @@ export function installRadialFog(three, search) {
   if (radialFogState.installed) return radialFogState;
   radialFogState.enabled = radialFogEnabled(search);
   if (!radialFogState.enabled) {
-    radialFogState.reason = "off (opt-in: ?radialFog=on)";
+    radialFogState.reason = "off (?radialFog=off escape)";
   } else if (!three || !three.ShaderChunk || typeof three.ShaderChunk.fog_vertex !== "string") {
     radialFogState.reason = "no ShaderChunk.fog_vertex";
   } else {
@@ -223,9 +231,9 @@ export function fogSmoothstep(near, far, d) {
 
 /**
  * JS mirror of the shaders' fog factor for a LEVEL camera, used by tests and eye-test notes.
- * By default the distance is the range |pos - cam| (`?radialFog=on`). With
- * `{ radial: false }` it is three's stock plane depth along the view axis. Positions are AC
- * metres (z up). `cam.yaw` is the heading of the view axis in radians from +x.
+ * By default the distance is the range |pos - cam| (the shipped default). With
+ * `{ radial: false }` it is three's stock plane depth along the view axis (the
+ * `?radialFog=off` arm). Positions are AC metres (z up). `cam.yaw` is the heading of the view axis in radians from +x.
  * @param {{x:number, y:number, z?:number}} pos
  * @param {{x:number, y:number, z?:number, yaw:number}} cam
  * @param {{near:number, far:number}} band e.g. far_terrain_flags.js computeFogBand(...)

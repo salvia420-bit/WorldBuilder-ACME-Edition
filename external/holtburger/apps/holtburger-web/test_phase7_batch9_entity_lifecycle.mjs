@@ -414,6 +414,35 @@ function spawnMeta(guid) {
 }
 
 // =====================================================================
+// #24b — 2026-10-18 review §7 follow-up: the chain walker's Sound / SoundTable /
+// Scale timers leave the per-guid array when they fire (only the CallPES timer
+// did), so a long-lived entity's array no longer grows by every hook it plays.
+// =====================================================================
+{
+  const em = makeManager();
+  em._worldParticleManager = {};
+  const guid = 0x7002;
+  const root = new THREE.Group();
+  const inst = new EntityInstance(guid, root, [], null, spawnMeta(guid));
+  em.entityMap.set(guid, inst);
+  // Scale (hookType 12): rampEnd f32 @0, rampTime f32 @4; start_time 0 fires next tick.
+  const buf = new ArrayBuffer(8);
+  const dv = new DataView(buf);
+  dv.setFloat32(0, 1.0, true);
+  dv.setFloat32(4, 0.0, true);
+  const scaleEntry = { hookType: 12, hookData: new Uint8Array(buf), startTime: 0 };
+  em.wasmExports = { fetchPhysicsScript: async () => ({ takeEntries: () => [scaleEntry, scaleEntry] }) };
+  for (let k = 0; k < 3; k++) {
+    await em._attachParticleChainForEntity(guid, root, 0x33000112);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  const arr = em._soundTimeoutsForGuid.get(guid) ?? [];
+  check("#24b fired chain-walker timers leave the per-guid array (3 plays x 2 hooks)", arr.length === 0,
+    `arr.len=${arr.length}`);
+  em.remove(guid);
+}
+
+// =====================================================================
 // em-dispose — dispose() routes per-guid through remove() (frees emitters /
 // timers / activeLights) then clears entityMap + _spawnGen.
 // =====================================================================

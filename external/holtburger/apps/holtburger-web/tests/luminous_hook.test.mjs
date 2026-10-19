@@ -244,8 +244,18 @@ const M = new Function(
   M.applySurfaceRenderState(z, { flags: M.SURFACE_TYPE.Translucent, luminosity: 0 }, { texture: tex });
   check("luminosity 0 is not stamped", z.userData.__surfaceLuminosity === undefined);
 }
+// surfaceUnified is DEFAULT ON since 2026-10-19: with no window the cache and
+// paletted ladders delegate to applySurfaceRenderState. The inline (legacy)
+// ladders below are reached through the explicit `?surfaceUnified=off` escape.
 {
-  check("premise: node runs the legacy (default) cache ladder", M.readSurfaceUnifiedFlag() === false);
+  check("premise: no window (node) runs the unified (default) cache ladder", M.readSurfaceUnifiedFlag() === true);
+  const cache = new M.MaterialCache();
+  const m = cache._materialFromFlags(0, tex, undefined, undefined, undefined, undefined, { luminosity: 0.6 });
+  check("_materialFromFlags default (unified) ladder stamps 0.6", m.userData.__surfaceLuminosity === 0.6 && near(m.emissiveIntensity, 0.6));
+}
+globalThis.window = { location: { search: "?surfaceUnified=off" } };
+{
+  check("premise: ?surfaceUnified=off runs the legacy cache ladder", M.readSurfaceUnifiedFlag() === false);
   const cache = new M.MaterialCache();
   const m = cache._materialFromFlags(0, tex, undefined, undefined, undefined, undefined, { luminosity: 0.6 });
   check("_materialFromFlags inline ladder stamps 0.6", m.userData.__surfaceLuminosity === 0.6 && near(m.emissiveIntensity, 0.6));
@@ -264,7 +274,7 @@ const M = new Function(
   const pal = new Pal();
   const m = new THREE.MeshStandardMaterial({ map: tex });
   pal._applyPalettedSurfaceRenderState(m, { surfaceType: M.SURFACE_TYPE.Base1Image, luminosity: 0.6 });
-  check("paletted ladder (legacy arm) stamps 0.6", m.userData.__surfaceLuminosity === 0.6 && near(m.emissiveIntensity, 0.6));
+  check("paletted ladder (legacy ?surfaceUnified=off arm) stamps 0.6",m.userData.__surfaceLuminosity === 0.6 && near(m.emissiveIntensity, 0.6));
   const z = new THREE.MeshStandardMaterial({ map: tex });
   pal._applyPalettedSurfaceRenderState(z, { surfaceType: M.SURFACE_TYPE.Base1Image, luminosity: 0 });
   check("paletted ladder: luminosity 0 is not stamped", z.userData.__surfaceLuminosity === undefined);
@@ -273,7 +283,15 @@ const M = new Function(
   mgr._applyRampValueToMaterial(8, c, 0);
   check("a recoloured luminous clone keeps its glow through a Luminous ramp to 0",
     c.emissive.getHex() === 0xffffff && near(c.emissiveIntensity, 0.6));
+  // The default arm (no window → surfaceUnified ON): the paletted ladder
+  // delegates to applySurfaceRenderState, which stamps the same value.
+  delete globalThis.window;
+  const d = new THREE.MeshStandardMaterial({ map: tex });
+  pal._applyPalettedSurfaceRenderState(d, { surfaceType: M.SURFACE_TYPE.Base1Image, luminosity: 0.6 });
+  check("paletted ladder (default, unified delegate) stamps 0.6 and attaches the emissiveMap",
+    d.userData.__surfaceLuminosity === 0.6 && near(d.emissiveIntensity, 0.6) && d.emissiveMap === tex);
 }
+delete globalThis.window;
 
 // ---------------------------------------------------------------------------
 console.log("\n-- K5 wiring --------------------------------------------------");

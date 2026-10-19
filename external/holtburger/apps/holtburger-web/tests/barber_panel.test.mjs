@@ -71,13 +71,13 @@ await check("parseStartBarberFields: 16 decimal u32 in wire order, else null", (
   assert.equal(B.parseStartBarberFields(undefined), null);
 });
 
-await check("flags: ?barber default ON (off/0/false disable); ?barberMotionTable only =on", () => {
+await check("flags: ?barber and ?barberMotionTable default ON (off/0/false disable; no also for barberMotionTable)", () => {
   assert.equal(B.barberEnabled(""), true);
   assert.equal(B.barberEnabled("?barber=on"), true);
   for (const v of ["off", "0", "false"]) assert.equal(B.barberEnabled(`?barber=${v}`), false, v);
-  assert.equal(B.barberMotionTableEnabled(""), false);
-  assert.equal(B.barberMotionTableEnabled("?barberMotionTable=1"), false);
-  assert.equal(B.barberMotionTableEnabled("?barberMotionTable=on"), true);
+  assert.equal(B.barberMotionTableEnabled(""), true);
+  for (const v of ["on", "1", "true", "yes", "garbage"]) assert.equal(B.barberMotionTableEnabled(`?barberMotionTable=${v}`), true, v);
+  for (const v of ["off", "0", "false", "no", "OFF", "No"]) assert.equal(B.barberMotionTableEnabled(`?barberMotionTable=${v}`), false, v);
 });
 
 const INIT = Object.freeze({
@@ -154,7 +154,7 @@ await check("Gearknight / Olthoi: nose + mouth hidden, eyes arrows ghosted, reta
   assert.equal(B.barberOptionLabel(null), null);
 });
 
-await check("runBarberLocalEffects: retail order; motion table only with ?barberMotionTable=on", () => {
+await check("runBarberLocalEffects: retail order; motion table only when opts.motionTable", () => {
   const log = [];
   const sinks = {
     setMotionTable: (id) => log.push(["mt", id]),
@@ -339,15 +339,16 @@ await check("[3] Apply (double-clicked) sends FinishBarber exactly once, runs th
   assert.equal(isOpen(), false);
 });
 
-await check("[3] the Empyrean motion table is swapped only with ?barberMotionTable=on", async () => {
+await check("[3] the Empyrean motion table is swapped by default; ?barberMotionTable=off skips it", async () => {
   const meta = globalThis.liveScene3d.entityManager.entityMap.get(PLAYER).meta;
   applyResult = { fields: FIELDS, effects: { motionTableId: 0x0900020E, destroyParticles: false, playScript: 0 }, problems: [] };
+  location.search = "?barberMotionTable=off";
   bus.emit("startBarber", { rest });
   await settle();
   q('[data-action="apply"]').click();
   await settle();
-  assert.equal(meta.mtableId, 0x09000001, "default: unchanged");
-  location.search = "?barberMotionTable=on";
+  assert.equal(meta.mtableId, 0x09000001, "=off: unchanged");
+  location.search = "";
   bus.emit("startBarber", { rest });
   await settle();
   q('[data-action="apply"]').click();

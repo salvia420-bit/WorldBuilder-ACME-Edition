@@ -47,6 +47,14 @@ function makeLog(log, now) {
 
 const stripBom = (s) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s);
 
+// Why route_model.normalizePoint refused a point, for the drop warning
+// (RYNTH-2 follow-up, 2026-10-18: a non-numeric position is refused, not 0).
+function refusal(p) {
+  const t = p && typeof p === "object" ? Number(p.type) : NaN;
+  if (!Number.isInteger(t) || t < 0 || t > 9) return `unknown waypoint type ${p && p.type}`;
+  return `non-numeric position (${p.ew}, ${p.ns}, ${p.z})`;
+}
+
 /** Name rule for nav profiles: non-empty, ≤ 80 chars, no path separators or control chars. */
 export function validateNavName(name) {
   if (typeof name !== "string") return { ok: false, error: "a nav profile needs a name" };
@@ -101,10 +109,11 @@ export function parseNavVt(text) {
     routeType = ROUTE.Circular;
   }
   const points = [];
-  for (const p of parsed.points) {
+  parsed.points.forEach((p, i) => {
     const n = normalizePoint(p);
     if (n) points.push(n);
-  }
+    else warnings.push(`point ${i + 1}: ${refusal(p)}; dropped`);
+  });
   return { ok: true, route: { routeType, points, followTarget: null }, warnings, file: { eol, trailingEol, tail: parsed.tail || [] } };
 }
 
@@ -229,7 +238,9 @@ function scanAfSections(text) {
 
 /**
  * Every NAV:/NAVDATA: route in a metaf `.af` text, re-typed for the VT
- * executors. → { [name]: { routeType, points, followTarget } }
+ * executors. → { [name]: { routeType, points, followTarget, warnings } }
+ * (`warnings`: points dropped for a non-numeric position, a NAVDATA block's
+ * parse stop — RYNTH-2 follow-up, 2026-10-18).
  */
 export function parseAfNavsVt(text) {
   const out = {};
@@ -247,7 +258,7 @@ export function parseAfNavsVt(text) {
     const sec = sections.get(name) || null;
     if (sec && sec.kind === "NAVDATA") {
       const r = parseNavVt(sec.navLines.join("\r\n") + "\r\n");
-      if (r.ok) out[name] = { routeType: r.route.routeType, points: r.route.points, followTarget: r.route.followTarget };
+      if (r.ok) out[name] = { routeType: r.route.routeType, points: r.route.points, followTarget: r.route.followTarget, warnings: r.warnings };
       continue;
     }
     const parsed = base[name];
@@ -255,7 +266,8 @@ export function parseAfNavsVt(text) {
     const fixes = sec ? sec.fixes.slice() : [];
     const prts = sec && Array.isArray(sec.prt) ? sec.prt.slice() : [];
     const points = [];
-    for (const p0 of parsed ? parsed.points : []) {
+    const warnings = [];
+    (parsed ? parsed.points : []).forEach((p0, i) => {
       let p = retypeAfPoint(p0);
       if (p0.type === POINT.PortalLegacy && prts.length) p = { ...p, guid: prts.shift() };
       if (p !== p0 && fixes.length) {
@@ -272,10 +284,11 @@ export function parseAfNavsVt(text) {
       }
       const n = normalizePoint(p);
       if (n) points.push(n);
-    }
+      else warnings.push(`point ${i + 1}: ${refusal(p)}; dropped`);
+    });
     const followTarget = sec && sec.flw ? normalizeFollowTarget(sec.flw) : null;
     const routeType = followTarget ? ROUTE.Follow : normalizeRouteType(parsed ? parsed.routeType : ROUTE.Circular);
-    out[name] = { routeType, points, followTarget };
+    out[name] = { routeType, points, followTarget, warnings };
   }
   return out;
 }
@@ -349,7 +362,7 @@ export function writeNavVt(route, { file = null } = {}) {
   (route && Array.isArray(route.points) ? route.points : []).forEach((p0, i) => {
     const p = normalizePoint(p0);
     if (!p) {
-      warnings.push(`point ${i + 1}: unknown waypoint type ${p0 && p0.type} not written`);
+      warnings.push(`point ${i + 1}: ${refusal(p0)} not written`);
       return;
     }
     if (p.ext && Object.keys(p.ext).length) {
@@ -454,6 +467,7 @@ export class NavProfiles {
       const key = keys.find((k) => k.toLowerCase() === v.name.toLowerCase()) || keys[0];
       if (keys.length > 1) warnings.push(`imported NAV "${key}"; ${keys.length - 1} other section(s) ignored`);
       route = navs[key];
+      if (Array.isArray(route.warnings)) warnings.push(...route.warnings);
     } else {
       const r = parseNavVt(text);
       if (!r.ok) return { ok: false, warnings: r.warnings, error: r.error };

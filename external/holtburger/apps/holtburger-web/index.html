@@ -447,7 +447,8 @@
 
       /* ──────────────────────────────────────────────────────────────
          Agent mode (2026-05-21) — strips chrome to a full-bleed canvas
-         when `?agent=1` or `?autoLogin=1` is set. The login form stays
+         when `?agent=1` or `?autoLogin=1` is set (not with
+         `autoSpawn=select`, the /logout return). The login form stays
          in DOM (display:none doesn't block form.requestSubmit()) so the
          autonomous orchestrator can drive it, but no UI is rendered.
          Movement WASD pad + fullscreen-btn + render-status are hidden
@@ -605,10 +606,25 @@
       // Agent mode toggle — must apply BEFORE the page renders so the
       // CSS rules above kick in on first paint. Reads `?agent=1` or
       // the autoLogin params (since autoLogin implies an agent driver).
+      // SHELL-3 residual (2026-10-18 follow-up): except
+      // `?autoLogin=1&autoSpawn=select` — the /logout return and invite
+      // links hand the retail character screen to a person, so the page
+      // looks as it does after a manual Connect — unless the /logout came
+      // from an agent-mode page (the desktop shortcut), whose return keeps
+      // its full-bleed layout (sessionStorage hbLogoutAgentReturn holds
+      // exactly that query). Same test as agentModeWanted() in
+      // app/popup_string.js (this runs before any module loads);
+      // tests/shell_agent_mode_select.test.mjs pins both.
       (() => {
         try {
           const p = new URLSearchParams(window.location.search);
-          if (p.get("agent") === "1" || p.get("autoLogin") === "1") {
+          const autoLogin = p.get("autoLogin") === "1";
+          const select = p.get("autoSpawn") === "select";
+          let agent = p.get("agent") === "1" || (autoLogin && !select);
+          if (!agent && autoLogin && select) {
+            try { agent = sessionStorage.getItem("hbLogoutAgentReturn") === window.location.search; } catch {}
+          }
+          if (agent) {
             document.documentElement.classList.add("agent-mode");
           }
           if (p.get("hud") === "none") {
@@ -2133,7 +2149,8 @@
           fetch_dye_preview_pixels: (stid, subs) => fetch_dye_preview_pixels(stid >>> 0, subs),
           fetch_gfx_obj_degrade_info: (id) => fetch_gfx_obj_degrade_info(id >>> 0),
           fetch_entity_degrade_for_distance: (sid, dist) => fetch_entity_degrade_for_distance(sid >>> 0, +dist),
-          // A11-S4 (?particleDegrade=retail) — authored particle degrade
+          // A11-S4 (?particleDegrade, DEFAULT ON since 2026-10-19; `=off`
+          // escape) — authored particle degrade
           // radius (retail GetMaxDegradeDistance, acclient.c:314372 /
           // :332193). ADDITIVE v4 rider resolved off the NAMESPACE import
           // (not the named list) so a stale pkg/ yields `undefined` here
@@ -4372,7 +4389,11 @@
       // and answers CharacterLogOff + CharacterList. One world per page load
       // here, so the return is a reload into `?autoLogin=1&autoSpawn=select`
       // (app/character_select.js), the password kept in this tab's
-      // sessionStorage exactly as `?autoLogin` already keeps it.
+      // sessionStorage exactly as `?autoLogin` already keeps it. The return
+      // keeps this page's layout (SHELL-3 residual, 2026-10-18): from a manual
+      // Connect it is a person's page (no agent-mode CSS, PopupString dialogs
+      // on), from an agent-mode page (the desktop shortcut, `?agent=1`) it
+      // stays agent mode.
       window.__logOutToCharacterSelect = async () => {
         const h = window.__sessionHandle;
         if (!h || window.__hbLoggingOff) return false;
@@ -4422,6 +4443,16 @@
           u.searchParams.set("server_host", ep.serverHost);
           u.searchParams.set("server_port", String(ep.serverPort));
         }
+        // The return keeps this page's layout: the inline agent-mode toggle
+        // and app/popup_string.js agentModeWanted read the key back only on
+        // exactly this query, so an invite link in the same tab is unaffected.
+        try {
+          if (document.documentElement.classList.contains("agent-mode")) {
+            sessionStorage.setItem("hbLogoutAgentReturn", u.search);
+          } else {
+            sessionStorage.removeItem("hbLogoutAgentReturn");
+          }
+        } catch (_) {}
         window.location.replace(u.toString());
         return true;
       };
@@ -4767,21 +4798,49 @@
           if (!worldObjectManager) {
             worldObjectManager = new WorldObjectManager({ client: pluginClient });
             window.__wom = worldObjectManager;
-            worldObjectManager
-              .load(
-                "./data/chorizite/world-object-taxonomy.json",
-                "./data/chorizite/chorizite-common-enums.json",
-              )
-              .then(() => {
-                console.info(
-                  "[wom] loaded:",
-                  worldObjectManager.taxonomy.allNames().length,
-                  "classes,",
-                  worldObjectManager.enums.knownEnumNames().length,
-                  "enums",
-                );
-              })
-              .catch((e) => console.error("[wom] load failed:", e));
+            // PLUGINSB-5 follow-up (2026-10-18): a failed load() drops the
+            // manager's buffer and queues nothing more, and a later good
+            // load() classifies again — so retry a failed load (a transient
+            // 404 / 5xx on either JSON) after 2 s, 5 s and 15 s, then give
+            // up. Spawns that arrive while it is failed are not classified.
+            // No retry after pagehide (the session is freed there).
+            const __womRetryDelaysMs = [2000, 5000, 15000];
+            let __womRetryTimer = null;
+            let __womPageGone = false;
+            window.addEventListener("pagehide", () => {
+              __womPageGone = true;
+              if (__womRetryTimer != null) clearTimeout(__womRetryTimer);
+              __womRetryTimer = null;
+            }, { once: true });
+            const __womLoad = (attempt) => {
+              worldObjectManager
+                .load(
+                  "./data/chorizite/world-object-taxonomy.json",
+                  "./data/chorizite/chorizite-common-enums.json",
+                )
+                .then(() => {
+                  console.info(
+                    "[wom] loaded:",
+                    worldObjectManager.taxonomy.allNames().length,
+                    "classes,",
+                    worldObjectManager.enums.knownEnumNames().length,
+                    "enums",
+                  );
+                })
+                .catch((e) => {
+                  const delay = __womRetryDelaysMs[attempt];
+                  if (__womPageGone || delay == null) {
+                    console.error("[wom] load failed:", e);
+                    return;
+                  }
+                  console.warn(`[wom] load failed; retry ${attempt + 1}/${__womRetryDelaysMs.length} in ${delay / 1000} s:`, e);
+                  __womRetryTimer = setTimeout(() => {
+                    __womRetryTimer = null;
+                    __womLoad(attempt + 1);
+                  }, delay);
+                });
+            };
+            __womLoad(0);
           } else {
             // Subsequent logins reuse the manager; refresh the client binding.
             worldObjectManager.attachClient(pluginClient);

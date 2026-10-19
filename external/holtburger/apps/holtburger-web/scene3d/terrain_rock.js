@@ -38,8 +38,9 @@
 //      on a water/ice code"). Making dry rock puff is therefore a DIRT-SIDE
 //      change (a FAM_ROCK branch + a puff-colour row), not a second ring buffer
 //      here — two families cannot both own `onTerrainFootfall` without a
-//      fan-out this wave has no mandate to build. Deliberately deferred to the
-//      wave-4B promotion pass; recorded here so it is not lost.
+//      fan-out this wave has no mandate to build. Still deferred: the family
+//      was promoted on 2026-10-19 without it (ahead of its 1070 eye test), so
+//      it remains a dirt-side follow-up; recorded here so it is not lost.
 //
 // INJECTED THREE (the `terrain_vfx.js` / `terrain_sand.js` / `terrain_snow.js`
 // idiom). This module imports no three: `initTerrainRock({THREE, scene3d, ...})`
@@ -72,7 +73,13 @@
 // shadow depth pass, and pebbles are exactly the "added geometry" that rule is
 // about).
 //
-// FLAGS (plan §2.4, all STRICT `=== "on"` opt-ins that ship OFF):
+// FLAGS (plan §2.4). The MASTER `?terrainRock` is DEFAULT ON at high / ultra
+// since 2026-10-19 (`TERRAIN_VFX_PROMOTED.rock`, promoted ahead of its 1070 eye
+// test, which is still owed as a post-flip A/B against `?terrainRock=off`; the
+// R-list perf check, <= 1.5 ms at ultra, is owed with it). Low / mid stay off
+// per the ladder; `off` / `0` / `false` / `no` is the escape and `=on` forces
+// it at any tier. The two effect flags are exact `=on` / `=off` tristates that
+// follow the tier's counts when absent:
 //   ?terrainRock            family master (also `?terrainVfx=off`, `?visual=off`
 //                                          and `?wireframe=1` kill everything)
 //   ?terrainRockPebbles     ?terrainRockGrit
@@ -1396,7 +1403,10 @@ function _gritProvider() {
  * replayed onto the already-resident ring by `registerTerrainVfx`).
  *
  * Returns `null` (registering nothing, allocating nothing) when the family
- * master is off — a bare-default boot is byte-identical.
+ * master is off — a bare-default boot at low / mid, or any boot under
+ * `?terrainRock=off`, is byte-identical. At high / ultra the master is DEFAULT
+ * ON since 2026-10-19 (ahead of its 1070 eye test), so a bare boot there builds
+ * both fields.
  *
  * @param {object} opts
  * @param {object} [opts.THREE]    the three namespace (injected).
@@ -1413,7 +1423,7 @@ function _gritProvider() {
 export function initTerrainRock(opts = {}) {
   const scene3d = opts.scene3d || null;
   if (wireframeActive(opts.search)) return null;   // plan §8 risk 8
-  if (!terrainRockEnabled()) return null;          // ship-OFF master (plan §5.9)
+  if (!terrainRockEnabled()) return null;          // family master (on at high/ultra; =off escapes)
 
   const pebblesOn = terrainRockPebblesEnabled();
   const gritOn = terrainRockGritEnabled();

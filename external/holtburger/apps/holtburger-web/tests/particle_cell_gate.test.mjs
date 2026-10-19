@@ -1,7 +1,8 @@
 // tests/particle_cell_gate.test.mjs
 //
-// particles-scripts-3 (2026-10-13) — `?particleCellGate=on` (OPT-IN, default
-// OFF), the RENDER-ONLY EnvCell gate for interior static default_script
+// particles-scripts-3 (2026-10-13) — `?particleCellGate` (DEFAULT ON since
+// 2026-10-19, flipped ahead of its 1070 eye test; `=off`/`0`/`false`/`no`
+// escape), the RENDER-ONLY EnvCell gate for interior static default_script
 // emitters (scene3d/particles/particle_manager.js `_emitterCellHidden`).
 //
 // Interior braziers/torches/fountains are anchored in `staticsGroup`, so they
@@ -21,10 +22,12 @@
 //       without cellId, and a throwing lookup all draw (bail open).
 //   G5  per-mesh path (instancing off): occupied slots hidden every tick while
 //       the particles keep aging; shown again by the next live update.
-//   G6  flag OFF (`?particleCellGate` absent or `=off`): a manager WITH a
-//       lookup and a hidden container is instance-buffer identical to a
-//       manager with no lookup at all (today's behaviour).
-//   G7  the flag reader is an exact `=on` opt-in.
+//   G6  flag OFF (`?particleCellGate=off`): a manager WITH a lookup and a
+//       hidden container is instance-buffer identical to a manager with no
+//       lookup at all (the pre-gate behaviour).
+//   G7  the flag reader is default ON; only off/0/false/no (trimmed, any
+//       case) turn it off. A bare page gates a hidden cell's draw through the
+//       real tick with no setter override; `=off` draws it again.
 //   G8  source pins: cells.js scriptedInteriorStatics items carry `cellId`;
 //       statics.js stamps it on the anchor and injects the registry lookup.
 //
@@ -298,7 +301,7 @@ console.log("-- G5 per-mesh path: slots hidden, particles still age ------------
 }
 
 // ---------------------------------------------------------------------------
-console.log("-- G6 flag OFF == today (no lookup) ------------------------------------");
+console.log("-- G6 flag =off == pre-gate (no lookup) --------------------------------");
 setParticleCellGateFlag(false);
 for (const fx of [false, null]) {
   // fx=false: stock buckets, every byte compared. fx=null: the default
@@ -340,13 +343,57 @@ FX.setParticleFxFlag(null);
 
 // ---------------------------------------------------------------------------
 console.log("-- G7 flag reader ------------------------------------------------------");
-check("`?particleCellGate=on` -> on", readParticleCellGateFlag("?particleCellGate=on") === true);
-check("absent -> off (default)", readParticleCellGateFlag("") === false && readParticleCellGateFlag("?foo=on") === false);
-check("`=off` / `=1` / `=true` -> off (exact opt-in only)",
-  !readParticleCellGateFlag("?particleCellGate=off") && !readParticleCellGateFlag("?particleCellGate=1")
-  && !readParticleCellGateFlag("?particleCellGate=true"));
+// DEFAULT ON since 2026-10-19 (flipped ahead of the 1070 eye test); the
+// off forms are the escape.
+check("absent -> ON (default)", readParticleCellGateFlag("") === true && readParticleCellGateFlag("?foo=on") === true);
+check("off forms -> off (the escape; trimmed, any case)",
+  ["off", "0", "false", "no", "OFF", "No", "%20off%20"].every((v) => readParticleCellGateFlag("?particleCellGate=" + v) === false));
+check("`=on` / `=1` / `=true` / garbage / empty -> on",
+  ["on", "1", "true", "yes", "bogus", ""].every((v) => readParticleCellGateFlag("?particleCellGate=" + v) === true));
 setParticleCellGateFlag(null);
-check("bare page (no search) reads OFF", particleCellGateEnabled() === false);
+check("bare page (no search) reads ON", particleCellGateEnabled() === true);
+window.location.search = "?particleCellGate=off";
+setParticleCellGateFlag(null);
+check("page with `?particleCellGate=off` reads OFF (window.location)", particleCellGateEnabled() === false);
+window.location.search = "?particleCellGate=OFF";
+setParticleCellGateFlag(null);
+check("cached: a later URL change is not re-read until the seam clears it", (() => {
+  const first = particleCellGateEnabled();
+  window.location.search = "";
+  return first === false && particleCellGateEnabled() === false;
+})());
+{
+  // No window and no location (node): the reader falls back to "" ⇒ ON.
+  const w = globalThis.window, l = globalThis.location;
+  delete globalThis.window; delete globalThis.location;
+  const v = readParticleCellGateFlag();
+  globalThis.window = w; globalThis.location = l;
+  check("no window / location at all -> the default, ON", v === true);
+}
+setParticleCellGateFlag(null);
+check("bare page again reads ON after the seam clears the cache", particleCellGateEnabled() === true);
+{
+  // The default flows into the tick: a manager with a lookup and a hidden cell,
+  // NO setter override, draws nothing on a bare page and draws under `=off`.
+  setParticleCellGateFlag(null);
+  window.location.search = "";
+  const bare = await buildArm();
+  bare.container.visible = false;
+  await ticks(bare, 5);
+  check("bare page: the default gates a hidden cell's draw (0 instances)",
+    instanceCount(bare.mgr) === 0 && bare.mgr.cellHiddenLastTick === 1 && bare.lookups.n > 0,
+    `instances=${instanceCount(bare.mgr)} hidden=${bare.mgr.cellHiddenLastTick}`);
+  window.location.search = "?particleCellGate=off";
+  setParticleCellGateFlag(null);
+  const esc = await buildArm();
+  esc.container.visible = false;
+  await ticks(esc, 5);
+  check("`?particleCellGate=off`: the hidden cell's emitter draws again (escape)",
+    instanceCount(esc.mgr) > 0 && esc.mgr.cellHiddenLastTick === 0 && esc.lookups.n === 0,
+    `instances=${instanceCount(esc.mgr)} lookups=${esc.lookups.n}`);
+  window.location.search = "";
+  setParticleCellGateFlag(null);
+}
 
 // ---------------------------------------------------------------------------
 console.log("-- G8 source pins ------------------------------------------------------");

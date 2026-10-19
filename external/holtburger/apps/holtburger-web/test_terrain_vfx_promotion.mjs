@@ -14,8 +14,10 @@
 //       shared map and all silently no-op when it was never built. A live
 //       writer now IMPLIES the map (logged once); `?terrainTrail=off` still
 //       wins (warned once).
-//   P3  BARE DEFAULT IS UNCHANGED. Nine masters false on all four tiers, no
-//       writers, no implication, no trail render target, no fade movement.
+//   P3  BARE DEFAULT IS UNCHANGED. Every master follows the switchboard (only
+//       the promoted families — ice, grass and, since 2026-10-19, rock — are on,
+//       and only on the {high, ultra} ladder), no writers, no implication, no
+//       trail render target, no fade movement.
 //   P4  ICE REACHABILITY. `ultra.terrainIceRefraction: true` was dead config
 //       under a master that no tier could set. The promotion switchboard makes
 //       every master one gate away from the ladder, so ultra's stated intent
@@ -34,6 +36,7 @@ import {
   terrainTrailRecoverySec,
   terrainIceEnabled,
   terrainIceRefractionEnabled,
+  terrainRockEnabled,
   VFX_EFFECT_FLAGS,
   _resetVfxFlags,
 } from "./scene3d/vfx_flags.js";
@@ -363,8 +366,8 @@ check("both families' 'map is missing' warnings now name the EXPLICIT off",
 console.log("\n-- P3 bare default is byte-identical ---------------------------");
 // ===========================================================================
 for (const tier of PRESET_NAMES) {
-  check(`${tier}: masters match the switchboard (ice promoted on the `
-    + `{high, ultra} ladder, the other eight false)`,
+  check(`${tier}: masters match the switchboard (ice, grass and rock promoted `
+    + `on the {high, ultra} ladder, the other six false)`,
     Object.keys(MASTERS).every((k) =>
       PRESETS[tier][k] === terrainMaster(MASTERS[k], tier)));
 }
@@ -423,12 +426,23 @@ console.log("\n-- P4 ice reachability + the promotion switchboard -------------"
 // ===========================================================================
 // Owner sign-offs on the 1070: ice 2026-08-01, grass 2026-10-07.
 const SIGNED_OFF = new Set(["ice", "grass"]);
+// DEFAULT ON ahead of the 1070 eye test (owner, 2026-10-19: "default on what
+// would be on after a successful eyetest"): rock. Its R1-R9 look pass and the
+// R-list perf check are still owed, as a post-flip A/B against ?terrainRock=off.
+const FLIPPED_AHEAD = new Set(["rock"]);
+const PROMOTED_SET = new Set([...SIGNED_OFF, ...FLIPPED_AHEAD]);
 check("every master is gated by TERRAIN_VFX_PROMOTED — ice + grass promoted "
-  + "(USER 1070 SIGN-OFFS 2026-08-01 / 2026-10-07), the other seven still false",
+  + "(USER 1070 SIGN-OFFS 2026-08-01 / 2026-10-07), rock promoted 2026-10-19 "
+  + "ahead of its eye test, the other six still false",
   Object.keys(MASTERS).length === 9
   && TERRAIN_VFX_PROMOTED.ice === true && TERRAIN_VFX_PROMOTED.grass === true
+  && TERRAIN_VFX_PROMOTED.rock === true
   && Object.values(MASTERS).every((f) =>
-    TERRAIN_VFX_PROMOTED[f] === SIGNED_OFF.has(f)));
+    TERRAIN_VFX_PROMOTED[f] === PROMOTED_SET.has(f)));
+check("the families held back stay false: swamp (failed its eye test), "
+  + "sand/snow/volcano/dirt (night-specular bug), trail (implied by writers)",
+  ["swamp", "sand", "snow", "volcano", "dirt", "trail"]
+    .every((f) => TERRAIN_VFX_PROMOTED[f] === false));
 check("the gate and the ladder are both frozen",
   Object.isFrozen(TERRAIN_VFX_PROMOTED) && Object.isFrozen(TERRAIN_VFX_TIERS));
 check("the ladder is the documented {high, ultra} promotion target",
@@ -441,6 +455,28 @@ check("promotion is ONE line: terrainMaster follows the gate for every tier",
   terrainMaster("ice", "high") === true       // promoted 2026-08-01
   && ["low", "mid", "high", "ultra"].every((t) =>
     terrainMaster("ice", t) === (TERRAIN_VFX_PROMOTED.ice && TERRAIN_VFX_TIERS[t])));
+check("rock's one-line promotion reaches exactly the {high, ultra} ladder",
+  ["low", "mid", "high", "ultra"].every((t) =>
+    PRESETS[t].terrainRock === (t === "high" || t === "ultra")));
+check("rock through the real reader: a bare high / ultra preset lights it, "
+  + "low / mid leave it off (DEFAULT ON 2026-10-19)",
+  (() => {
+    const want = { low: false, mid: false, high: true, ultra: true };
+    return PRESET_NAMES.every((t) => {
+      setUrlWithPreset("", PRESETS[t]);
+      return terrainRockEnabled() === want[t];
+    });
+  })());
+check("rock's escape: ?terrainRock=off (and 0 / false / no) turns it off at ultra",
+  ["off", "0", "false", "no"].every((v) => {
+    setUrlWithPreset(`?terrainRock=${v}`, PRESETS.ultra);
+    return terrainRockEnabled() === false;
+  }));
+check("...and ?terrainRock=on still forces it on at mid, below the ladder",
+  (() => {
+    setUrlWithPreset("?terrainRock=on", PRESETS.mid);
+    return terrainRockEnabled() === true;
+  })());
 // 2026-10-10: + the tier-2 `fxFields` key (vfx/fx_fields.js), which rides the
 // same ladder through its own `fields` gate — 4 tiers × (9 masters + 1).
 check("each master line in quality.js is a terrainMaster() call, 4 tiers × 9 (+ the tier-2 fxFields key)",

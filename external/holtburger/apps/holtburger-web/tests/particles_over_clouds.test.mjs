@@ -25,8 +25,10 @@
 //   P5  split frame (indoor depth split armed): legacy passes, no late draw.
 //   P6  `__particlesOverClouds.set(false)` A/B without a reload.
 //   P4b `?layerHaze=off`: the first half never swaps and writes the late target.
-//   P7  `=off` (URL and opts): the legacy single EffectPass, no late pass, the
-//       particles drawn in the world pass.
+//   P7  `=off` (URL and opts): the legacy single EffectPass, no split-chain
+//       late pass. 2026-10-18 SKY-1 remainder: that unsplit chain draws the
+//       particles once, after LayeredHaze (`?particlesOverHaze`, default on;
+//       tests/sky1_particles_over_haze.test.mjs), not in the world pass.
 //   P8  `?cloudsMainPass=off`: no split even with the flag on (the legacy
 //       overlay is drawn by the sky pass, already behind the world).
 //   P9  wiring: url-flags.md row, harness registration, the two sources
@@ -234,7 +236,7 @@ const renderer = {
   render(sc, cam) {
     const rec = { scene: sc, target: this._target, mask: cam?.layers?.mask };
     if (sc === scene) rec.visible = new Map(tracked.map((o) => [o, o.visible]));
-    if (sc && sc.name === "ParticlesOverClouds.Scene") rec.children = sc.children.slice();
+    if (sc && /^ParticlesOver(Clouds|Haze)\.Scene$/.test(sc.name)) rec.children = sc.children.slice();
     calls.push(rec);
   },
   clear() {}, clearDepth() {}, setClearColor() {}, getClearColor: (c) => c, getClearAlpha: () => 1, setClearAlpha() {},
@@ -462,16 +464,21 @@ for (const how of ["opts", "url"]) {
   const { p } = built;
   const names = p.composer.passes.map(describe);
   // 2026-10-08 — unsplit chain: the post EffectPass also tone-maps, so the
-  // ?layerHaze pass goes in front of it (after the scrub).
+  // ?layerHaze pass goes in front of it (after the scrub). 2026-10-18 SKY-1
+  // remainder: `?particlesOverHaze` (default on) draws the particles between
+  // the two.
   check(`${how}: ONE post-chain EffectPass with clouds -> aerial -> bloom -> tone map -> dither`,
     /^EffectPass\[(FxDistortEffect,)?(FxDecalEffect,)?CloudsEffect,AerialPerspectiveEffect,(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/.test(names[names.length - 1]) &&
-    names[names.length - 2] === "LayeredHazePass" &&
-    names[names.length - 3] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
-  check(`${how}: no late pass, no post half`, !names.includes("ParticlesOverClouds") &&
+    names[names.length - 2] === "ParticlesOverHaze" &&
+    names[names.length - 3] === "LayeredHazePass" &&
+    names[names.length - 4] === "EffectPass[NanScrub]", names.slice(-4).join(" | "));
+  check(`${how}: no split-chain late pass, no post half`, !names.includes("ParticlesOverClouds") &&
     p.particlesOverCloudsPass === null && p.fxPostPass === null);
   frame(p);
-  check(`${how}: particles drawn in the world pass, no late render`,
-    lateCalls().length === 0 && lateObjects().every((o) => worldCalls()[0].visible.get(o) === true));
+  const hazeLate = calls.filter((c) => c.scene?.name === "ParticlesOverHaze.Scene");
+  check(`${how}: no split-chain late render; the particles drawn once, after the haze, not in the world pass`,
+    lateCalls().length === 0 && hazeLate.length === 1 &&
+    lateObjects().every((o) => worldCalls()[0].visible.get(o) === false && hazeLate[0].children.includes(o)));
   check(`${how}: stats say why`, window.__particlesOverClouds.stats().why === "flag off");
   p.dispose();
 }

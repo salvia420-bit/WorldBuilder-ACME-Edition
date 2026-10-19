@@ -1161,7 +1161,7 @@ const TIER5 = [
   // ENTITIES-5: AnimationCache frees the EntityAnimationData box after copying it.
   { tier: 5, flag: "animCacheBoxFree", file: "tests/anim_cache_box_free.test.mjs" },
   // RENDER-1/2 + draw-sort: the render patches survive a WebGL context restore.
-  { tier: 5, flag: "asyncLink+texUnitPin+drawSortProgram", file: "tests/webgl_restore_render_patches.test.mjs" },
+  { tier: 5, flag: "asyncLink+texUnitPin+unitLimit+drawSortProgram", file: "tests/webgl_restore_render_patches.test.mjs" },
   // RENDER-3: occlusion proxies reset on a context restore.
   { tier: 5, flag: "occlusionCull", file: "tests/occlusion_cull_restore.test.mjs" },
   // RENDER-4: ?farFogFence re-arms after a restore; a dead probe falls back to the authored hex.
@@ -1213,6 +1213,37 @@ const TIER5 = [
   { tier: 5, flag: "interiorBuildShare", file: "tests/cell_containers_evict.test.mjs" },
   // STREAM-TERRAIN-4: the tex-upgrade protocol probe falls back to the navigation entry.
   { tier: 5, flag: "texUpgradeQueue", file: "tests/tex_upgrade_queue_proto.test.mjs" },
+  // 2026-10-18 follow-up pass (the review doc's §10.5 "Still open" and §7 items).
+  // SHELL-3 residual: autoSpawn=select is a person's page unless the /logout came from an
+  // agent-mode page (the return keeps that page's layout).
+  { tier: 5, flag: "agentModeSelect", file: "tests/shell_agent_mode_select.test.mjs" },
+  // index.html retries a failed WorldObjectManager.load (2 s / 5 s / 15 s).
+  { tier: 5, flag: "womLoadRetry", file: "tests/shell_wom_load_retry.test.mjs" },
+  // Render restore gap: ?shadowCasterList / ?shadowStaticCache re-wrap the shadow map a
+  // context restore builds.
+  { tier: 5, flag: "shadowCasterList+shadowStaticCache(restore)", file: "tests/shadow_caster_list_restore.test.mjs" },
+  // §7 stream-terrain: the ?farDiag radius policy holds after a walk or a teleport; the far
+  // ring forgets the landblocks of retired patches.
+  { tier: 5, flag: "farDiag", file: "tests/far_radius_policy.test.mjs" },
+  // §7 stream-statics: a superseded envcell build leaves the LB's pooled cells to the newer one.
+  { tier: 5, flag: "drawPools(cancelGen)", file: "tests/envcell_pool_cancel_gen.test.mjs" },
+  // SKY-1 remainder: ?particlesOverHaze (default on, =off escape) draws the unsplit chain's
+  // particles after the layered haze, exactly once, at no new target.
+  { tier: 5, flag: "particlesOverHaze", file: "tests/sky1_particles_over_haze.test.mjs" },
+  // FILM-5 remainder: nameplates made or re-stamped during a clean take stay hidden.
+  { tier: 5, flag: "film5Remainder", file: "tests/film5_nameplate_take.test.mjs" },
+  // Rynth: a non-numeric waypoint position is refused, never a waypoint at 0N 0E.
+  { tier: 5, flag: "rynthRoutePointNaN", file: "tests/rynth_route_point_nan.test.mjs" },
+  // ?eagerDungeons: every static ParticleManager ticks once per frame; overlapping first
+  // attaches share one manager.
+  { tier: 5, flag: "staticParticleManagers", file: "tests/static_particle_managers_tick.test.mjs" },
+  // The building / static / scenery collider populate stops for an evicted landblock (JS),
+  // and the eviction drops what it already staged (wasm, source pins).
+  { tier: 5, flag: "colliderPopulateEvict", file: "tests/collider_populate_evict.test.mjs" },
+  // §7 plugins-b: rejection tracking re-wraps the SessionHandle a reconnect builds.
+  { tier: 5, flag: "rejectionFeedbackReconnect", file: "tests/rejection_feedback_reconnect.test.mjs" },
+  // §7 entities: remove() drops the motions stashed for a spawn that never committed.
+  { tier: 5, flag: "spawnMotionStash", file: "tests/spawn_motion_stash_remove.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

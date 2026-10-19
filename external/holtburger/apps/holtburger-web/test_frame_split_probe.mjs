@@ -562,6 +562,27 @@ console.log("PART 9 — disarm restores every seam, including the absent ones");
     typeof scene.onBeforeRender === "function" &&
       scene.onBeforeRender === Object3D.prototype.onBeforeRender);
 
+  // 2026-10-18 review follow-up: a WebGL context restore while armed gives the
+  // renderer a NEW shadow map (three r184 initGLContext). Disarm must give the
+  // wrapped map its render back and leave the new map's own render alone: the
+  // dead map's render reads the dead map's autoUpdate/needsUpdate, so on the
+  // new map shadows would never re-raster again.
+  {
+    const scene3 = new Scene();
+    const r3 = makeRenderer(scene3);
+    const deadMap = r3.shadowMap;
+    const deadRender = deadMap.render;
+    armFrameSplit({ renderer: r3, scene: scene3 });
+    const restored = { ...makeRenderer(scene3).shadowMap };
+    const restoredRender = restored.render;
+    r3.shadowMap = restored;
+    disarmFrameSplit();
+    check("restore while armed: the new shadow map keeps its own render",
+      r3.shadowMap.render === restoredRender);
+    check("restore while armed: the wrapped (dead) map gets its render back",
+      deadMap.render === deadRender);
+  }
+
   // A pre-existing own hook must be chained and given back untouched.
   const scene2 = new Scene();
   const mine = function () {};

@@ -853,7 +853,24 @@ export function ensureNameplateForEntity(inst, _scene3d) {
 
   inst.root.add(sprite);
   inst._nameplateSprite = sprite;
+  _filmCleanHide(sprite);
   return sprite;
+}
+
+/**
+ * FILM-5 remainder (2026-10-18 follow-up). Film's clean_frame (`?filmMode=on`)
+ * takes every nameplate and badge sprite off the camera layers for a clean take
+ * (mask stashed in `__filmCleanMask`, put back when the take ends) and flags the
+ * take on the entity manager. A sprite made during the take is hidden the same
+ * way. The flag is never set outside film mode.
+ */
+function _filmCleanHide(sprite) {
+  try {
+    const em = typeof window !== "undefined" ? window.liveScene3d?.entityManager : null;
+    if (!em || em._filmCleanNameplates !== true || !sprite.layers) return;
+    sprite.__filmCleanMask = sprite.layers.mask;
+    sprite.layers.mask = 0;
+  } catch (_) {}
 }
 
 /**
@@ -1054,6 +1071,7 @@ export function refreshBuffBadgeForEntity(inst) {
 
   inst.root.add(sprite);
   inst._buffBadgeSprite = sprite;
+  _filmCleanHide(sprite);
   return sprite;
 }
 

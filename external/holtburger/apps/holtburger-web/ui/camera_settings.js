@@ -17,9 +17,11 @@
 // UI as a hint). Ranges follow the decomp: Camera.Stiffness ∈ [0.2857, 1.0].
 //
 // models-camera-2 (2026-10-13): the retail Field of View preference
-// (Render.FieldOfView, 10..160, default 90) is listed and applied ONLY under
-// the default-OFF `?retailFov=on` opt-in (scene3d/index.js registers
-// `__setGameFov` under the same flag); flag off the tab is unchanged.
+// (Render.FieldOfView, 10..160, default 90) is listed and applied by default:
+// `?retailFov` is DEFAULT ON since 2026-10-19 (flipped ahead of its 1070 eye
+// test, still owed; scene3d/index.js registers `__setGameFov` under the same
+// gate). `?retailFov=off` (or 0/false/no) hides the row and skips the push,
+// leaving the tab as it was before models-camera-2.
 
 // HUD overhaul 2026-10-05 — the row widgets are the shared kit-styled
 // ones from graphics_settings.js (retail orb checkbox, kit slider, <label
@@ -45,15 +47,17 @@ const DEFAULTS = Object.freeze({
   invertY: false,
   autoFollow: true,    // trailing camera behind the character (retail-default)
   autoFollowRate: 4.0, // ease speed (1/s)
-  fieldOfView: RETAIL_GAME_FOV_DEFAULT_DEG, // degrees; `?retailFov=on` only
+  fieldOfView: RETAIL_GAME_FOV_DEFAULT_DEG, // degrees; ignored under `?retailFov=off`
 });
 
-// The Field of View row + setter are opt-in (see the header).
+// The Field of View row + setter are DEFAULT ON (see the header);
+// `?retailFov=off` hides them. No window or an unreadable location reads ON,
+// like the reader (applyCam is a no-op without a window anyway).
 function retailFovOn() {
   try {
-    return typeof window !== "undefined" && retailFovEnabled(window.location?.search);
+    return retailFovEnabled(typeof window !== "undefined" ? window.location?.search : "");
   } catch (_e) {
-    return false;
+    return true;
   }
 }
 

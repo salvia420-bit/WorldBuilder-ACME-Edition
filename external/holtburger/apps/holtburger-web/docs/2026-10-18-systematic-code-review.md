@@ -2,7 +2,7 @@
 
 The owner asked for a systematic code review of holtburger-web. This one covers every production file once, at HEAD `7ae7667a` (clean tree). The earlier rounds (2026-08-03 rounds 1-10, 2026-10-07) were random spots or diff-driven. Here the ~508,000 production lines were split into 14 areas, and every file was assigned to exactly one area. One reviewer per area used the same hazard checklist. A second agent then tried to refute each finding without seeing the first agent's reasoning. Finally the orchestrator re-traced every high-severity finding and the XSS finding, and ran checks across all areas that no single reviewer could see.
 
-**Fix pass (later the same day):** every finding in §5 now has a fix and a test in the working tree, uncommitted. Status, verification and what is still open are in §10. The rest of this document describes the code at review time.
+**Fix pass (later the same day):** every finding in §5 has a fix and a test, committed in `b20cdc37`. Status, verification and what was still open are in §10. **Follow-up pass (the same evening):** the §10.5 list and the tractable §7 items, in §11. **Default-on flips (2026-10-19):** the flags held off only for a pending eye test, in §12. The rest of this document describes the code at review time.
 
 **The review itself changed nothing in the code.** This document was its only new file. Nothing ran in a live client, on the 1070 or in a browser. No builds and no JS gate were run, per the laptop rules. The evidence is source reading, `git` history, the vendored three.js 0.184.0 and pmndrs sources, the retail decomp where parity mattered, and a few reviewer scratch scripts (fake-GL repros, a shot fuzzer, a module evaluation-order walker). Each scratch script is noted where it was used.
 
@@ -1289,7 +1289,7 @@ All 61 are **fixed**. The test column names the suite that covers the fix. "nati
 
 ### 10.5 Still open
 
-None of these are on the list.
+None of these are on the list. Each one's status after the follow-up pass is in §11.1.
 
 - **SHELL-3 residual:** the `/logout` return still forces `?autoLogin=1`, which also switches on agent-mode CSS and `popupDialogAgentSession` (app/popup_string.js). This is pre-existing. A fix would exclude `autoSpawn=select` in both readers.
 - **SHELL-2 residual:** picking a different character after a refusal still needs a reload or EXIT, because the wasm never reassigns the player guid once the eager world is built.
@@ -1305,3 +1305,204 @@ None of these are on the list.
 ### 10.6 Eye tests to queue for the 1070
 
 Hotbar prune, cooldown sweep and icons after login; the barber page; salvage results; a context restore at ultra (materials, occlusion, far fog); the static-script radius at Linvak Tukal 0xA21E; interiors after a park and unpark; the haze over particles at high and ultra (SKY-1); a town at night from outdoors (VFXAUDIO-3); the Town Network `updateMatrixWorld` share after STREAM-STATICS-4.
+
+## 11. Follow-up pass (same evening)
+
+The follow-ups were the §10.5 "Still open" list plus the §7 items that could be fixed and tested without a live client. The 1070 was not available, so **nothing here has been eye-tested**. Per the owner's rule (default-on with an `=off` escape, no eye-test gate), every change ships default-on, and the eye tests are queued in §11.6.
+
+How it ran: four fixer lanes on disjoint file groups (shell, sky, render restore, film/rynth/statics/streaming). Each ran only targeted single tests, one at a time. The orchestrator did the Rust work, the SHELL-2 JS side, the §7 items, a review of every lane diff, the harness and doc rows, then the builds and the gate once, one at a time. Each new test was run against the HEAD copy of the module it covers (a scratch mirror or a loader hook, never by swapping files in the tree) and fails there.
+
+### 11.1 §10.5 items
+
+| Item | Fix | Test |
+|---|---|---|
+| SHELL-3 residual | `?autoLogin=1&autoSpawn=select` is a person's page (no agent-mode CSS, PopupString dialogs on), except that the /logout return keeps the layout of the page that logged out. The desktop shortcut's agent layout stays full-bleed after /logout through sessionStorage `hbLogoutAgentReturn`, which holds exactly the return query; a manual Connect comes back as a person's page. `app/popup_string.js` `agentModeWanted` is the shared rule, mirrored by the inline toggle in index.html. Orchestrator change to the lane fix: the lane dropped agent mode for every select URL, which would have taken full-bleed away from the shortcut after /logout | `tests/shell_agent_mode_select.test.mjs` |
+| SHELL-2 residual | A select before PlayerCreate re-arms kind=1 and hands the eager WorldState to the picked guid (`reassign_eager_world_player`: a fresh PlayerState; the scene and the collision already drained stay). It also drops a PlayerDescription cached for another character. JS re-enables every Spawn button after a refusal, and the plugin WorldState drops the refused character's placeholder Character | `tests/shell_charselect_spawn.test.mjs` (+2), `tests/world-state.test.cjs` (+1), native `reassign_eager_world_player_tests` |
+| SKY-1 remainder | `?particlesOverHaze` (default on, `=off` escape): on the unsplit chain (low/mid, or no clouds in the post chain) a `ParticlesOverHaze` pass draws the particles right after `LayeredHazePass`, into the buffer the haze wrote, depth-tested against `composer.depthTexture`. It owns no render target and adds no full-screen pass, and each particle is drawn exactly once. Split frames are left alone on both chains: drawing late there would test particles against the final depth instead of the depth each was drawn against (doorway seal, landscape gate, cells-pass occlusion). What it changes on low/mid, not yet eye-tested: the particles draw after, not sorted with, water and glass, and leave the MSAA world target, and the second ping-pong buffer switches its depth attachment every frame | `tests/sky1_particles_over_haze.test.mjs` |
+| SKY-4 remainder | `?cloudCoverage` and `__setCloudCoverage` write through `cloud_storm_look.js` `setCloudCoverageKnob`, which marks coverage as knob-owned; the look never writes it again, whatever the value | `tests/sky4_cloud_coverage_knob.test.mjs` (K4-K6) |
+| FILM-5 remainder | A sprite carries the mask it returns to in `__filmCleanMask`. `_stampEntityIndoorLayer` and the mount re-stamp write there instead of the live mask, and `nameplate_sprite.js` hides a sprite made during a clean take (`entityManager._filmCleanNameplates`) | `tests/film5_nameplate_take.test.mjs` |
+| Render restore gaps | `shadow_caster_list` re-wraps the WebGLShadowMap a restore builds (it carries `__hbShadowDynamicRoot` and starts the wrapper's type at PCF, as three's new map does). The static cache re-checks its first blits. `uniform_bind_patch` keeps the boot texture-unit limit across a restore with all three flags off (`_installUnitLimitKeeper`), and re-plans the pins back up to the boot limit when a later restore allows it | `tests/shadow_caster_list_restore.test.mjs`, `tests/webgl_restore_render_patches.test.mjs` (PART 2b) |
+| Rynth NaN | `normalizePoint` refuses a non-numeric ew/ns (and a present non-numeric z; an absent z is 0). Every caller drops the point and reports it. The atlas importer (`rynth/nav_import.js`) now treats a non-numeric position as no position, repositioned like the EW=0,NS=0 sentinel, never the map origin | `tests/rynth_route_point_nan.test.mjs`, `rynth_navimport_test.cjs` SENT4 |
+| Streaming | The building / static / scenery collider populate re-checks eviction after every await (JS). The eviction export also drops the products a populate staged before it (`purge_pending_populate_products`), which the next drain would otherwise insert right after its clear. Eviction-epoch entries live only while a build of their landblock is in flight (`LandblockBuildEpoch`). Plus: the "player's landblock first" sort compared a signed int32, so for an x byte >= 0x80 the centre landblock went fifth | `tests/collider_populate_evict.test.mjs` (P0-P7), native `landblock_evict_epoch_tests` (3) |
+| Statics, `?eagerDungeons` | Every static ParticleManager is ticked once per frame (`_staticParticleMgrs`), by both the rAF loop and the loop-clock driver. Also on the default path: two landblocks reaching their first scripted attach together each built a manager, and the orphaned one froze its emitters. Concurrent first attaches now share one build | `tests/static_particle_managers_tick.test.mjs` |
+| WOM load | index.html retries a failed `worldObjectManager.load` after 2, 5 and 15 s and stops at `pagehide`. The shell bundle is served only by `scripts/proxy.cjs` through `scripts/shell_gate.cjs`, which swaps it in only while every input hash matches the live tree and rebuilds it in the background otherwise, so no manual rebuild is needed | `tests/shell_wom_load_retry.test.mjs` |
+
+### 11.2 §7 items
+
+- **far_terrain `RADIUS POLICY VIOLATION`:** fixed. The invariant is now "a far landblock the player was never within `pvsRingRadius + 1` of" (`notePlayerNear`), since the near ring keeps what it baked after the player moves on. `farLbKeys` drops the landblocks of a retired patch, and a heightmap fetch that lands after its patch retired adds nothing and frees its boxes. `tests/far_radius_policy.test.mjs`.
+- **cells.js cancel path (`?drawPools`):** fixed. A build cancelled because a newer build of the landblock started no longer releases the pooled cells the newer build fed (`releaseCancelledBuildPools` releases only when the landblock was evicted, as `dropOwnWalls` already did). `tests/envcell_pool_cancel_gen.test.mjs`.
+- **rejection_feedback reconnect gap:** fixed. A boot-state listener re-wraps the SessionHandle a reconnect builds and re-points the facade at the proxy. `tests/rejection_feedback_reconnect.test.mjs`.
+- **entities.js `_spawnMotionStash`:** fixed. `remove()` drops the motions stashed for the spawn it invalidates. Before, a spawn that never committed kept its entry, and the next spawn of that guid replayed its stale base motion (only the actions are age-limited). `tests/spawn_motion_stash_remove.test.mjs`.
+- **entities.js legacy chain-walker Sound timers:** fixed. The Sound, SoundTable and Scale timers leave the guid's `_soundTimeoutsForGuid` array when they fire (the CallPES timer already did). One that fires before the walk merges its ids is skipped there. `test_phase7_batch9_entity_lifecycle.mjs` #24b.
+- **camera.js `?camDebug` `cs.sessionHandle`:** not a bug. camera.js defines a `sessionHandle` getter (`Object.defineProperty` in the constructor) that calls `_getSessionHandle()`.
+- **owner_registry `_epochs`:** left as designed. Pruning it was tried and reverted: statics.js `_scheduleStaticCreate` reads the owner epoch for timer-deferred creates, so an entry has to outlive every timer that captured it. It is one number per owner key ever destroyed.
+- **picking.js SERVER_SWING reader:** left. Both readers (loop.js and picking.js) and the url-flags row agree on `!== "off"`; changing one would split them.
+- **Not attempted** (they need design, a live session or an eye test):
+  - rust-core: the MOTION_ACTIONS drain and SHADOW_REFRESHED_AT.
+  - rust-crates: the physics-parity items, and the shard budget default.
+  - blood_decals / carnage default bus handlers: fixing them turns on decals on real traffic. (Done in §12: `?combatFxBus` is now default-on.)
+  - corpse-window target mode and paperdoll self-target (features).
+  - particle `_materialPool`.
+  - film `dispose()` during a take, the cast-table parse, R5#13, `trail_map.dispose`, the double sky evaluation, static_batch_x sizing, streaming-residency-5, and `ensureBakeRig`.
+
+### 11.3 Related defects found by the lanes
+
+- **Fixed:**
+  - `scene3d/frame_split.js` disarm after a restore put the dead map's `render` on the new shadow map, so shadows would never re-raster again (diag only). It now restores onto the map it wrapped (`test_frame_split_probe.mjs` PART 9).
+  - The single-shadow path (`?shadows=on` without CSM) kept an empty sun map for up to 12 frames after a restore. The mover-scope gate now keys on the shadow map object (`tests/shadow_mover_scope.test.mjs` R).
+- **Not fixed:**
+  - three keeps the dead context's dispose listener on reused targets: at most one "object does not belong to this context" log.
+  - `NavProfiles.get` drops a stored point with a null coordinate without a warning (it has no warnings channel).
+  - The portal exit fields (`exitEW/NS/Z`) still default to 0.
+
+### 11.4 Behaviour changes to expect
+
+- **/logout from a manual Connect:** returns to a person's page (no agent-mode CSS, PopupString dialogs). From the desktop shortcut it is unchanged.
+- **After a refused Enter World** (character still in the world, server full): any character can enter, with no reload.
+- **Route imports:** a waypoint with a non-numeric position is dropped with a warning instead of becoming a waypoint at 0N 0E. `.af` NAVDATA imports now report their parse stops.
+- **Static particle effects:** effects on a manager that an overlapping first attach used to orphan now animate (default path).
+- **`?farDiag`:** no longer errors after a walk or a teleport. `farLbsTouched` now counts the far ring's live landblocks, not every landblock it ever fetched.
+- **`?particlesOverHaze` (default on):** on low/mid (the unsplit chain), a near spell or campfire is no longer hazed by the distance of the hills behind it. Particles there now draw after, not sorted with, water and glass, and without the world MSAA. `?particlesOverHaze=off` restores the old frame.
+
+### 11.5 Verification
+
+- **Lanes:** targeted single tests only, one at a time, after checking `free -m`. Every new test was run against HEAD copies of the modules it covers and fails there.
+  - Method trap: a scratch mirror has to copy `harness/` as well when a test loads modules through `harness/lib/import_edited.mjs`, because that helper resolves the app root from its own location. With `harness/` symlinked, the "HEAD" run silently tests the working tree.
+  - Rule slip: the sky lane once started the full gate under plain node, by mistake (a loop over files that mention the cloud modules matched `harness/run-js-headless.mjs`). Its 300 s timeout killed it, available memory stayed at 2.5 GB or more, and its result was discarded.
+- **Full JS gate** (`capped-build node harness/run-js-headless.mjs`): the first run passed 813 of 814 suites.
+  - The one failure was `harness/test_suite_hygiene.mjs`. It rejected the first version of `tests/envcell_pool_cancel_gen.test.mjs` as a new pure source pin.
+  - The decision moved into `cells.js` `releaseCancelledBuildPools`, which the test now executes. The hygiene suite passes (30/30), and so do the 20 suites that load cells.js, each run alone after that edit.
+  - Re-run after that fix: 814 of 814 passed.
+- **Bare-default boot** (headless Chromium, SwiftShader, one tab, the owner's bar: loads, spawns, 0 console errors): `?nosw=1&autoLogin=1&account=…&autoSpawn=first` and nothing else. In world after 13 s, boot state `ready`, 0 console errors, 0 page errors, 13 warnings. Quality resolved `mid`, so the unsplit chain ran: `ParticlesOverHaze` was built and active (22 drawn frames over the window), and the pass list ended `EffectPass[NanScrub], LayeredHazePass, ParticlesOverHaze, EffectPass[…]`. `__farTerrainState().ring.policyOk` was true.
+- **Static checks:**
+  - `--coverage`: 0 unregistered (12 new suites in the 2026-10-18 follow-up block; 9 existing suites gained cases).
+  - `scripts/lint-url-flags.mjs`: 0 undocumented readers. Rows were added or updated for `particlesOverHaze`, `agent`, `autoSpawn=select`, `popupDialog`, `cloudCoverage`, `layerHaze` and `farDiag`.
+  - `scripts/gen-modulepreload.mjs --check`: up to date (434 modules).
+- **Native Rust**, under `capped-build`: `holtburger-web --lib` (landblock_evict_epoch, reassign_eager_world_player, pending_confirmation, degrade_part_frame) 9 passed. The wasm-only changes (`lifecycle.rs`, `purge_pending_populate_products`) are compiled by the release build.
+- **Release wasm**, built once and installed in `pkg/`: 7,600,576 bytes. The JS export surface is unchanged, so no cache-bust stamp bump. The previous build is kept in the session scratchpad.
+- **Outside the gate:** `rynth_navimport_test.cjs` (SENT4) belongs to the 69 root `rynth_*_test.cjs` files the gate does not run. It was run by hand (17/17), together with `rynth_goto_compose_test.cjs` and `rynth_navbatchimport_test.cjs`.
+- **Not run:** a live-client eye test or any 1070 session.
+
+### 11.6 Eye tests to queue for the 1070
+
+1. **Login:** manual Connect, play, `/logout`, ENTER. The layout should match a manual Connect, and `@modifystring popup_motd x` should open a dialog. Then the desktop shortcut and `/logout`: still full-bleed.
+2. **Refused Enter World:** log a character in from a second tab, then press ENTER on it here (refused), then ENTER on another character. It enters, its nameplate is hidden and it moves as the player.
+3. **`?particlesOverHaze` (default on):**
+   - At `?quality=mid` and `?quality=low`: a campfire, portal or spell ~30 m away against distant hills, toggled with `__particlesOverClouds.set(false|true)`. Expect no blue-grey wash and no doubled or missing particles. Check particles near water and glass windows, and compare fps with and without the flag.
+   - At `?quality=ultra&clouds=off`: the same scene.
+   - If it fails, `?particlesOverHaze=off` is the escape; flip the reader back to opt-in.
+4. **Context restore at ultra** (`__loseContext()`, then `__restoreContext()`): `__shadowCasterList.stats.reinstalls === 1`, rig shadows track with no smear, and the static cache keeps refreshing. With `?texUnitPin=off&lightUbo=off&lightUploadOnce=off` there should be no "Trying to use 16 texture units" warning. With `?shadows=on` the sun shadow should be back on the first frame.
+5. **`?eagerDungeons=on`:** dungeon braziers animate together with the outdoor static effects, and a busy town's fountains and braziers animate on every landblock.
+6. **Collision after streaming:** portal out of the Training Academy (0x8602) and back; building and tree collision are still there.
+7. **`?filmMode=on&nameplates=on`:** a take in which an NPC spawns into shot and the player re-equips shows no nameplate, and the plates come back after the take.
+8. **`?farDiag`:** a teleport tour (`@telepoi` x5) leaves no `RADIUS POLICY VIOLATION` in the console, and `__farTerrainState().ring.policyOk` stays true.
+9. **SKY-4:** `?clouds=on&cloudCoverage=0.5`, then `__setWeather({is_storm:true})`. Coverage stays 0.5.
+
+### 11.7 Still open after the follow-up pass
+
+- **SKY-1 on the unsplit chain ships default-on without its eye test** (owner rule), so eye test 3 above is the check. `?particlesOverHaze=off` is the escape.
+- **Every eye test in §10.6 and §11.6 is still pending.** No 1070 was available, so every render-visible fix in §10 and §11 is verified only headless.
+- **Split frames** (indoors with `?indoorDepthSplit`, and `?punchRetail=off`) still haze particles on both chains (§11.1 SKY-1, reasons given there).
+- **§7 items not attempted** and the related defects not fixed: §11.2 and §11.3.
+- **Nothing from the follow-up pass is committed.** The fix pass is `b20cdc37`; `pkg/` holds the release build of the working tree.
+- The flags flipped after this pass, and what they still owe, are in §12.
+
+## 12. Eye-test-gated flags flipped default-on (2026-10-19)
+
+The owner's instruction after §11: "default on what would be on after a successful eyetest". The 1070 is still unavailable, so every flag below now ships default-on **ahead of** its eye test. Each keeps an `=off` escape (`off`/`0`/`false`/`no`, any case), and its eye test becomes a post-flip A/B against `=off`. That check is still owed.
+
+How the list was made:
+- **Sweep.** Four finders searched different sources: url-flags.md rows, JS readers and comments, Rust consts and readers, and handoff and eye-test docs. They returned 125 raw candidates, 44 after merging duplicates.
+- **Verification.** For each candidate, a code skeptic and a history skeptic tried to show it was held off for a reason other than the eye test, and a planner wrote out the flip. A flag ships only when no skeptic found such a reason, or, where the run was repeated, when three of the four votes said flip.
+- **Flipping.** Eight agent lanes flipped 11 of the 14 flags, and the orchestrator flipped `tweenClock`, `barberMotionTable` and `negFace`. Each flip came with its targeted tests and the two flag audits. The orchestrator reviewed every reader diff, ran the native Rust tests and the release wasm build (`negFace` is read in Rust), the full gate and the bare-default boot.
+
+### 12.1 Flipped
+
+| Flag | What changes on a bare-default page | Escape | Eye test still owed |
+|---|---|---|---|
+| `particleSharedAlpha` | Static and world alpha particle buckets with the same key share one sorted bucket (fixes one cutting the other through alphaTest depth writes). | `=off` | Chimney + world plume overlap at Holtburg (0x1000fbf), 360° sweep, no missing or flickering smoke. |
+| `particleCellGate` | Interior static emitters in cells the walk hides stop drawing (the simulation keeps running), as retail's `CObjCell::IsInView`. | `=off` | Big dungeon: flames in hidden rooms do not draw through walls; a lit hearth seen through a door still draws. |
+| `particleDegrade` | Every DAT emitter freezes and hides beyond its authored degrade distance (100 m default) instead of the 220 m RP6 cap. Sky-chain emitters (moon nebula, storm lightning) are exempt. | `=off` | Pop distance of portals, lifestones, braziers, spell effects. |
+| `rigCellGate` | Indoors, a rig in a hidden cell, or an outdoor rig while the walk sees no outside, is not drawn or pickable. | `=off`, live `__setRigCellGate(false)` | Populated multi-room dungeon; cottage turn-to-door case. |
+| `indoorLandscapeGate` | Indoors with no outside view, the landscape, sky and depth wipe are skipped; cracks show the cleared colour, as retail. A throw in its cell state now fails open instead of disarming `?indoorDepthSplit`. | `=off`, live `__setIndoorLandscapeGate(false)` | Holtburg meeting-hall back room; no missing walls or props on skip frames, no flash on a fast turn. |
+| `portalFovFade` | Teleports and the login tunnel use the retail FOV zoom fade instead of the far-plane shrink + black quad. | `=off` | Teleport outdoors; `__adaptiveRenderScale.changes` unchanged across a teleport. |
+| `radialFog` | Range (radial) fog on terrain, far ring and statics, as retail `D3DRS_RANGEFOGENABLE`: no fog shift with yaw, a little more haze at the frame sides. | `=off` | Holtburg clear day A/B; re-check `horizonFogNear` 0.62 (0.7 if the mid-field washes out). |
+| `combatFxBus` | Blood decals and carnage (limp, sever, finisher) fire from real combat for the first time (both were default-on since 2026-08-02 but their bus handlers read the Event, not its detail). | `=off` (`?blood=off`, `?carnage=off` remain the gore switches) | 3-4 mob melee fight: no fps collapse, decals on the right targets. |
+| `terrainRock` (`TERRAIN_VFX_PROMOTED.rock`) | At high / ultra: 18,000 lit pebbles + 600 grit streaks on rock terrain. Low / mid unchanged. | `?terrainRock=off` | R1-R9 look pass and the R-list perf check (<= 1.5 ms at ultra). |
+| `tweenClock` | The Scale-hook tween (and the jump-pose tween under `?jumpPose=overlay`) runs on the loop's dt clock with the mixers, so it pauses through DT_RECOVERY instead of jumping to its end. | `=off` / `=wall` | Alt-tab 5 s mid-ramp; induced hitch `?targetFps=5`. |
+| `negFace` (Rust) | SidesType-2 polys lose the reversed back tri (retail never shows the back texture from behind); NoPos polys on textured surfaces draw with UV slot 0. The same-winding front copy still needs `?perPolyCull=on`, which stays off, so a two-sided wall shows its front face from behind. | `=off` / `=legacy` | Interior wall with distinct front/back textures, both sides; no shimmer, z-fighting or missing geometry. |
+| `barberMotionTable` | An Empyrean barber Apply swaps the local motion table at once (retail `SetMotionTableID`) instead of at the next login. | `=off` | Empyrean `@barbershop` Apply, walk/run/turn; no T-pose or sliding. |
+| `surfaceUnified` | Surfaces decode through the single retail `SetSurface`-style decoder on every path. Headless proof: legacy and unified give identical materials on the cache path (70/70 and 210/210 cells). The one real change, entity-owned recolours stop being flat-opaque, is not reached in production today. With it on, `?luminousEmissiveMap=off` and the stamp half of `?skipDeadBatch=off` need `&surfaceUnified=off`; `surfaceParityV2` stays opt-in. | `=off` | Recolored-luminous lifestone or glow gear; a recoloured NPC in a translucent robe. |
+| `retailFov` | Retail's aspect-derived camera FOV (acclient.c:144897) and the Field of View slider: vertical 60° becomes ~53.6° at 16:9, ~73° at 4:3, ~40° at 21:9; portrait windows go past 100°, as in retail. Things tuned at 60° shift: the moons read ~12% larger at 16:9, `texUpgradeFullM`'s 32 m acts like ~36.5 m, follow framing changes. | `=off` (60°, no Field of View row) | Camera framing, moons, texture-upgrade pop band, near-plane at high slider values. |
+
+### 12.2 Changed along with the flips
+
+- **`particleDegrade`:** sky-chain emitters (the moon nebula and the storm lightning, which ride an anchor 40 m above the camera) are exempt from the authored degrade distance, so the flip cannot hide the sky glow (`test_a11_s4_particle_degrade.mjs`).
+- **`cells.js`:** the landscape gate's cell-state build in `tickCellVisibility3D` has its own try/catch. Before, a throw there fell into the split's outer catch and silently disarmed `?indoorDepthSplit`; now it fails the gate open (`tests/indoor_landscape_gate.test.mjs`, fails against the old code).
+- **`rigCellGate`, `indoorLandscapeGate`:** their live toggles (`__setRigCellGate`, `__setIndoorLandscapeGate`) and diag readers install under `=off` too, so either arm of the A/B can switch live.
+- **`terrainRock` reader:** `on`/`off` are accepted in any case and with whitespace; `=on` still forces rock on at every tier.
+- **`app/popup_string.js` `agentModeWanted`:** restructured with the same logic, so `scripts/audit-flag-defaults.mjs` reads `autoLogin` as the opt-in it is. The §11 version tripped a DEFAULT-POLARITY finding.
+- **Docs:** url-flags.md rows for every flipped flag (values, default, reader, eye-test cell as a post-flip A/B), the 2026-10-13 section's flag-policy paragraph, stale cells for `terrainGrass` / `terrainIce` / `terrainVfx` (grass and ice have shipped at high/ultra since 2026-10-07 and 2026-08-01), the `tweenClock` row (it now covers only the Scale-hook tween, plus the jump-pose tween under `?jumpPose=overlay`), and `docs/quality-presets.md` (rock). An entities.js comment that still called `luminousEmissiveMap` "Default OFF" was corrected.
+
+### 12.3 Kept off, with the reason
+
+Each was checked by a code skeptic, and also by a history skeptic when the code skeptic found nothing. Every one is held by something an eye test alone would not settle.
+
+| Flag | Why it stays off |
+|---|---|
+| `partDegrade` | The 2026-10-13 visuals rule keeps retail's NULL-level hide opt-in ("retail's hide stays behind an opt-in like `?partDegrade`", webac findings render-perf-3), and its flip criteria include a draws/fps A/B nobody has run. Three of four votes against. |
+| `cellStaticMerge` | Its fps gain is unmeasured (2026-10-17 re-evaluation, 6422a96b), and the flip criteria ask for a draw-census delta. |
+| `reversedZ` | Already ran on the 1070 and failed (4bfde09e), and its perf gain is unmeasured. |
+| `selectionFlash` | The flash writes through `_getOrCloneEntityMaterial`, whose plain `clone()` drops the default-on `?lightClamp=retail` patch, so every clicked NPC would keep stock PBR lighting until it despawns. Fix the getter first (webac lighting-materials-6 follow-up 1). |
+| `envDetailTex` | Its own follow-up requires a detail-aware building bucket before any default flip; without it, the flag disables building batching (worse since `?buildingMatBatch`, 78e89aa5). |
+| `negFace` part (2) and `perPolyCull` | `perPolyCull` has a real-GPU regression (R9 290, reverted 2026-07-06); `negFace`'s same-winding front copy needs it. |
+| `defaultScriptPartChild` | A type-18 hook census over client_portal.dat was set as a prerequisite and never run. |
+| `retailDegrade` | Its pass bar includes a 1070 triangle/fps check at 50-150 m. |
+| `aceObjMaint` | A correctness risk ("a predicate bug would drop a live monster mid-fight") that needs a live combat soak, not a look. |
+| `missileImpactScript` | Tied to the open "spell explodes right in front of me" env-sweep bug, which this flag makes visible; also needs a check that bolt PhysicsScriptTables carry a 0x5A row. |
+| `viewerLight` | Already rendered on the 1070 (2026-10-09 `retail7` arm); the owner has the shots and has not decided. |
+| `DEFER_LOGIN_COMPLETE_AFTER_TELEPORT` | A later analysis (openac round 3) found its deferral point is the wrong edge and plans to retire it. |
+| `USE_EXHAUSTION_RUN_RATE` | Its prerequisites are unwired (`report_exhaustion` is staged dead code). |
+| `USE_ETHEREAL_RECHECK` | Ruled wrong: it models the wrong retail path (openac 2026-10-04 doors F4, "keep it OFF"). |
+| `particleClock` | `=sim` freezes particles during the DT_RECOVERY frames, which PROJ-VIS (d17c9b9f) later ruled a bug; and it is an enum whose mode was never chosen. |
+| `surfaceParityV2` | Its remaining parts were mostly absorbed by default-on flags, and a verification ruling says not to flip it. It now rides on `surfaceUnified`. |
+| `castRangeWarn` | Its eye test ran and failed (the far-leg toast never fired, cast-campaign residual 2026-07-13). |
+| `castCamBias` | Does not work even when on: its caller calls `setCastBiasTarget` on the raw camera, not the CameraSwitcher. |
+| `castFacing20` | Dormant: its only consumer runs under three face-target flags the owner turned off (2026-10-07). |
+| `castVfxDedup` | Its double fire is gone (`?castSyntheticCasterVfx` is off), so it would only add non-retail behaviour. |
+| `portalPass2` | An unfinished approximation (24 m building proxy; no `GetClip`, inward flood or `copy_view`). |
+| `stableDepthShare` | Tied to the swamp P6 fog adjudication, and the swamp family failed its eye test. |
+| `wavePrefetch` | A cold-boot perf A/B, not a look; the instrumentation it needs is missing. |
+| `playerDepenetrate` | A deliberate opt-in backstop, only for a regression that has not come back. |
+| `indoorDoorways`, `botPortalAvoid` | Bot navigation that needs a live egress soak, not a look. |
+| `entityLights` | Not joined to the default Setup-light path, so on it would give lit entities a second set of lights. |
+| `sortCenter` | Known inter-object ordering defect (the fixed -100 renderOrder band). |
+| `skyWeather` | A non-retail placeholder (random streak texture instead of the DAT GfxObjs). |
+| `EMIT_READY_FALLBACK` | Obsolete: the local cast no longer animates, so the question it waited on no longer applies. |
+| `statGeomDedup` | Waits for a 1070 perf/memory re-base, not a look. |
+| terrain sand, snow, volcano, dirt | Their speculars still catch the sun at night (no `uSunGlint` term; look-pass 2026-10-08 #85). Volcano would also put a second ember system on volcanic ground (fx_fields embers already ship at high/ultra). |
+| terrain swamp | Failed its eye test ("not really impressed", 2026-08-01): needs a design pass. |
+| terrain trail | Already implied on wherever a writer is on. |
+| `sceneryBake` / `BakeMode` | The browser already defaults to retail (owner, 2026-10-17); only the bake CLI's enum default differs. |
+
+### 12.4 Verification
+
+- **Lanes:** targeted single tests only, one at a time, plus `scripts/audit-flag-defaults.mjs` and `scripts/lint-url-flags.mjs` for each flag. Every test that pinned an old default now pins the new default and the escape in both directions, and executes the shipped reader.
+- **Native Rust** (`capped-build cargo test -p holtburger-web --lib`, filtered to negFace, substitution, geom_bundles and differ tests): 43 passed. `neg_face_flag_parse_defaults_on` pins the new default and the escapes; the other negFace tests keep the legacy arm as their explicit baseline.
+- **Release wasm**, built once for `negFace` and installed in `pkg/`: 7,601,324 bytes. The export surface is unchanged (only a doc comment differs in the `.d.ts`), so no cache-bust stamp bump. The previous build is kept in the session scratchpad.
+- **Full JS gate**, run once after every lane merged (`capped-build node harness/run-js-headless.mjs`): 814 of 814 passed.
+- **Static checks:** flag audit 0 polarity and 0 comment mismatches; `lint-url-flags` 0 undocumented readers (1031 flags); `lint-event-consumers` 0 findings; `gen-modulepreload --check` up to date (434 modules); `--coverage` 0 unregistered.
+- **Boot checks** (headless Chromium, SwiftShader, one tab at a time, the owner's bar: loads, spawns, 0 console errors):
+  - Bare default (`?nosw=1` + login automation only; quality resolved `mid`): in world after 22.6 s, 0 console errors, 0 page errors, 11 warnings. Camera fov 53.64° at 16:9 (`retailFov`), 8 shared alpha buckets, `radialFog` installed with both terrain programs patched, the two indoor gates on and unarmed outdoors, far-ring policy ok.
+  - `&quality=high`: in world after 18.8 s, 0 console errors, 0 page errors, 6 warnings. The rock pebbles and grit fields were built; the split chain ran (`ParticlesOverClouds`).
+  - Indoors: the same boot, then `@teledungeon 0007` (the Town Network) for 80 s, then `@telepoi Holtburg`. 0 console errors, 0 page errors. `rigCellGate` armed (outside count 0); `particleCellGate` hid up to 12 interior emitters. `indoorLandscapeGate` stayed fail-open the whole time (`not-resident`: not every reachable cell was resident under SwiftShader), so its skip frames were not exercised headless.
+- **Not run:** any 1070 session or live eye test.
+
+### 12.5 Still open after the flips
+
+- **Every eye test in §12.1 is owed**, now as a post-flip A/B against `=off`. Until it runs, each flag ships on the strength of headless tests and the boot checks above.
+- **`indoorLandscapeGate` skip frames** were never seen in a browser (§12.4); the first 1070 dungeon check should confirm them.
+- **`surfaceUnified` couples two escapes:** `?luminousEmissiveMap=off` and the stamp half of `?skipDeadBatch=off` need `&surfaceUnified=off` too (documented in their rows).
+- **Work that would let more flags flip** (§12.3): fix `_getOrCloneEntityMaterial` so a clone keeps the light-clamp patch (`selectionFlash`); multiply the sand/snow/obsidian/mud speculars by `uSunGlint` and coordinate the volcano embers with fx_fields (sand, snow, volcano, dirt); run the type-18 hook census (`defaultScriptPartChild`); fix the doorway env-sweep false stop (`missileImpactScript`); re-validate `perPolyCull` on a real GPU (`negFace`'s front copy).
+- **Stale mentions left alone:** the historical records (HANDOFF-webac-comparison-2026-10-13.md, docs/webac-comparison-2026-10-13/*, the film-mode recon docs) still call these flags opt-in. `harness/perf-walk*.mjs`, `harness/diag-1070.mjs` and the film session URL still pass the old enable values (`=on`, `=retail`), which are now redundant but harmless.
+- **Nothing is committed.**

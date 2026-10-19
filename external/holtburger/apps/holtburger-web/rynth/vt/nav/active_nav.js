@@ -337,7 +337,9 @@ export class ActiveNav {
         points: pts,
         followTarget: routeLike.followTarget,
       });
-      if (r.points.length < pts.length) warnings.push(`${pts.length - r.points.length} waypoint(s) of unknown type dropped`);
+      if (r.points.length < pts.length) {
+        warnings.push(`${pts.length - r.points.length} waypoint(s) of unknown type or with a non-numeric position dropped`);
+      }
       r.activeIndex = startIndex(r, posWorld(this._pose()));
       this._replaceRoute(r);
       this.log(

@@ -1,14 +1,15 @@
 // tests/entity_cell_cull.test.mjs — cells-portals-1 (2026-10-13):
-// `?rigCellGate=on` (OPT-IN, default OFF), the indoor cell term of the entity
-// render cull (scene3d/rig_cell_gate.js + entities.js
-// tickEntityRenderVisibility).
+// `?rigCellGate` (DEFAULT ON since 2026-10-19; `=off`/`0`/`false`/`no` is the
+// escape), the indoor cell term of the entity render cull
+// (scene3d/rig_cell_gate.js + entities.js tickEntityRenderVisibility).
 //
 // Retail draws an object only through the cells the portal walk reached
 // (PView::DrawCells → DrawObjCellForDummies, acclient.c:461450) and selection
 // only hit-tests drawn parts (Render::GfxObjUnderSelectionRay, :379997). A rig
 // in an undrawn room was still submitted and pickable through the wall.
 //
-//   C1  flag reader is an exact `=on` opt-in.
+//   C1  flag reader: absent / `=on` / any other value ⇒ ON; off/0/false/no
+//       (trimmed, any case) ⇒ OFF; the bare page reads ON.
 //   C2  rigCellHidden: an EnvCell rig whose resident container is hidden and
 //       whose sphere touches no drawn cell box is hidden.
 //   C3  the same rig with its sphere touching a drawn cell's AABB is kept
@@ -27,6 +28,8 @@
 //   C9  tickEntityRenderVisibility end to end: hides only far rigs in hidden
 //       cells, keeps the exemptions, and does nothing when the flag is off,
 //       the viewer is outdoors, or the indoor split is not armed.
+//   C9c the URL default end to end: a bare page gates through the cached
+//       reader; every `=off` spelling leaves the cull ungated.
 //   C10 source pins: the helper is called only under `_currentCellIndoor &&
 //       _indoorSplitArmed`; spawn stores the full cell; picking still skips
 //       hidden roots (so a gated rig is unpickable with no picking change).
@@ -58,6 +61,9 @@ const {
   isEnvCellId,
   RIG_CELL_GATE_STATS,
 } = gate;
+// C8 isolates the rig gate from ?indoorLandscapeGate (also default ON), which
+// shares tickPortalSeal and the same near-portal box query.
+const { setIndoorLandscapeGateFlag } = await import("../scene3d/indoor_landscape_gate.js");
 const { noteEntityLandcell, tickPortalSeal } = await import("../scene3d/cells.js");
 const { tickEntityRenderVisibility } = await import("../scene3d/entities.js");
 
@@ -89,16 +95,26 @@ const at = (x, y, z) => ({ x, y, z });
 /** A registry entry: attached (has a parent) unless told otherwise. */
 const cont = (visible, attached = true) => ({ visible, parent: attached ? {} : null });
 
-await t("C1 flag reader is an exact =on opt-in", () => {
-  assert.equal(readRigCellGateFlag(""), false);
+await t("C1 flag reader: default ON, off/0/false/no escape", () => {
+  assert.equal(readRigCellGateFlag(""), true);
+  assert.equal(readRigCellGateFlag("?foo=1"), true, "other params only");
   assert.equal(readRigCellGateFlag("?rigCellGate=on"), true);
   assert.equal(readRigCellGateFlag("?foo=1&rigCellGate=on"), true);
-  for (const v of ["off", "0", "1", "true", "ON", "yes", ""]) {
+  for (const v of ["on", "1", "true", "ON", "yes", "", "garbage"]) {
+    assert.equal(readRigCellGateFlag(`?rigCellGate=${v}`), true, v);
+  }
+  for (const v of ["off", "0", "false", "no", "OFF", "No", "FALSE", "%20off%20"]) {
     assert.equal(readRigCellGateFlag(`?rigCellGate=${v}`), false, v);
   }
-  // The bare page (location.search = "") reads OFF.
+  assert.equal(readRigCellGateFlag("?foo=1&rigCellGate=off"), false);
+  // The bare page (location.search = "") reads ON; the seam forces either way.
   setRigCellGateFlag(null);
+  assert.equal(rigCellGateEnabled(), true);
+  setRigCellGateFlag(false);
   assert.equal(rigCellGateEnabled(), false);
+  setRigCellGateFlag(null);
+  assert.equal(rigCellGateEnabled(), true);
+  setRigCellGateFlag(null);
 });
 
 await t("C2 hidden resident EnvCell, sphere reaches no drawn cell → hidden", () => {
@@ -262,6 +278,7 @@ function makeSealScene3d() {
 
 await t("C8 tickPortalSeal publishes the outside-view count only with the flag on", () => {
   try {
+    setIndoorLandscapeGateFlag(false);
     setRigCellGateFlag(false);
     const off = makeSealScene3d();
     let offProbes = 0;
@@ -353,6 +370,7 @@ await t("C8 tickPortalSeal publishes the outside-view count only with the flag o
     assert.equal(s._rigGateOutsideViewCount, null);
   } finally {
     setRigCellGateFlag(null);
+    setIndoorLandscapeGateFlag(null);
   }
 });
 
@@ -455,7 +473,7 @@ await t("C9 tickEntityRenderVisibility hides only far rigs in hidden cells", () 
 await t("C9b no-op when the flag is off, the viewer is outdoors, or the split is not armed", () => {
   try {
     const all = (rigs) => Object.values(rigs).every((r) => r.root.visible === true);
-    // Flag off (the default).
+    // Flag off (the `=off` escape; the default is ON since 2026-10-19).
     setRigCellGateFlag(false);
     let { scene3d, rigs } = makeCullScene();
     let res = tickEntityRenderVisibility(scene3d, ALWAYS);
@@ -494,6 +512,44 @@ await t("C9b no-op when the flag is off, the viewer is outdoors, or the split is
     assert.ok(all(rigs), "runtime off");
     assert.equal(RIG_CELL_GATE_STATS.armed, false);
   } finally {
+    setRigCellGateFlag(null);
+  }
+});
+
+await t("C9c URL default end to end: bare page gates, every =off spelling does not", () => {
+  const prev = globalThis.location.search;
+  try {
+    // Bare page: no param → the cached reader resolves ON and the real cull
+    // gates exactly the C9 set.
+    globalThis.location.search = "";
+    setRigCellGateFlag(null);
+    let { scene3d, rigs } = makeCullScene();
+    let res = tickEntityRenderVisibility(scene3d, ALWAYS);
+    assert.equal(rigCellGateEnabled(), true, "bare page reads ON");
+    assert.equal(res.cellGated, 4);
+    assert.equal(rigs.farC.root.visible, false);
+    assert.equal(rigs.inA.root.visible, true);
+    assert.equal(RIG_CELL_GATE_STATS.armed, true);
+    // The diag/A-B handle is installed on the bare page.
+    assert.equal(typeof globalThis.__rigCellGateDiag, "function");
+    assert.equal(globalThis.__rigCellGateDiag().on, true);
+    // The escape: nothing gated, nothing armed.
+    for (const v of ["off", "0", "false", "no", "OFF"]) {
+      globalThis.location.search = `?rigCellGate=${v}`;
+      setRigCellGateFlag(null);
+      ({ scene3d, rigs } = makeCullScene());
+      res = tickEntityRenderVisibility(scene3d, ALWAYS);
+      assert.equal(rigCellGateEnabled(), false, v);
+      assert.ok(Object.values(rigs).every((r) => r.root.visible === true), `${v}: ${JSON.stringify(shown(rigs))}`);
+      assert.equal(res.cellGated, 0, v);
+      assert.equal(RIG_CELL_GATE_STATS.armed, false, v);
+    }
+    // Live A/B from the =off arm: the handle turns the gate back on.
+    assert.equal(globalThis.__setRigCellGate(true).on, true);
+    ({ scene3d, rigs } = makeCullScene());
+    assert.equal(tickEntityRenderVisibility(scene3d, ALWAYS).cellGated, 4);
+  } finally {
+    globalThis.location.search = prev;
     setRigCellGateFlag(null);
   }
 });

@@ -7863,7 +7863,8 @@ fn tri_stipple_bits(stippling: u8, side_kind: SideKind) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// dat-parser-2 (2026-10-13) — `?negFace=retail` (DEFAULT OFF, exact value)
+// dat-parser-2 (2026-10-13) — `?negFace` retail rules (DEFAULT ON since
+// 2026-10-19, ahead of the 1070 eye test; `?negFace=off` is the escape)
 // ---------------------------------------------------------------------------
 //
 // Retail builds a SidesType-2 polygon's negative side in
@@ -7878,10 +7879,10 @@ fn tri_stipple_bits(stippling: u8, side_kind: SideKind) -> u8 {
 // batches drawn in surface-index order (`DrawMesh`, acclient.c:455154).
 // Buildings take the BSP poly path (`DrawPolyInternal`, acclient.c:455306),
 // which draws `pos_surface` only. Retail never shows `neg_surface` from behind,
-// so the reversed `SideKind::Negative` tri the default path emits (Phase 7 #7,
+// so the reversed `SideKind::Negative` tri the legacy path emits (Phase 7 #7,
 // G16 fix-2) has no retail counterpart.
 //
-// Under the flag:
+// On (the default):
 //  * the reversed back tri is not emitted (GfxObj + EnvCell triangulators; the
 //    HBG1 env assembly drops its `ENV_BACKFACE` subsets; model bundles fall
 //    back to this runtime decode — `geom_bundles.rs`);
@@ -7894,13 +7895,26 @@ fn tri_stipple_bits(stippling: u8, side_kind: SideKind) -> u8 {
 //    acclient.c:359869 `CPolygon::UnPack`) on a TEXTURED pos surface is drawn
 //    with UV slot 0 as `ConstructMesh` / `DrawPolyInternal` draw it, instead of
 //    skipped.
-// Off, every triangulator output is byte-identical to before.
+// The same-winding front copy (the second rule) still needs `?perPolyCull=on`,
+// which stays off (it drops wrongly-wound polys on the R9 290), so on the
+// default a two-sided wall shows its front face from behind (DoubleSide).
+// `?negFace=off|0|false|no|legacy`: every triangulator output is
+// byte-identical to the pre-flip build.
 
-/// `?negFace=retail` — the exact pair only (house rule: no `1`/`on` aliases).
+/// `?negFace` — DEFAULT ON (the retail rules); `negFace=off|0|false|no|legacy`
+/// (any case) keeps the legacy reversed back tri. Absent, the old opt-in value
+/// `retail`, or anything else reads on.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_neg_face_retail_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "negFace=retail")
+    !trimmed.split('&').any(|kv| {
+        kv.split_once('=').is_some_and(|(k, v)| {
+            k == "negFace"
+                && ["off", "0", "false", "no", "legacy"]
+                    .iter()
+                    .any(|off| v.eq_ignore_ascii_case(off))
+        })
+    })
 }
 
 /// `?perPolyCull=on` as the JS reader resolves it (scene3d/index.js:
@@ -7915,7 +7929,7 @@ fn parse_per_poly_cull_flag(search: &str) -> bool {
     })
 }
 
-/// The `?negFace=retail` gate, parsed once per wasm instance over the seeded
+/// The `?negFace` gate, parsed once per wasm instance over the seeded
 /// `flag_search()` (the bake worker decodes geometry in its own instance).
 #[cfg(target_arch = "wasm32")]
 fn neg_face_retail_enabled() -> bool {
@@ -7931,7 +7945,10 @@ fn neg_face_per_poly_cull_enabled() -> bool {
     *FLAG.get_or_init(|| parse_per_poly_cull_flag(&flag_search()))
 }
 
-// Native tests drive both gates per test thread (default OFF).
+// Native tests drive both gates per test thread. The baseline stays OFF (the
+// legacy arm), so the tests written against it keep exercising that arm
+// explicitly; the shipped default is `parse_neg_face_retail_flag`, pinned by
+// `neg_face_flag_parse_defaults_on`.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 thread_local! {
     static NEG_FACE_RETAIL_OVERRIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -8067,8 +8084,9 @@ fn append_gfx_tris_with_tex_swaps(
     const CULL_CLOCKWISE: i32 = 0x2;
     // Resolved once per model, not per polygon.
     let relief_cfg = gfx_relief_config();
-    // dat-parser-2 `?negFace=retail` (see `parse_neg_face_retail_flag`); both
-    // false by default, which leaves every branch below on its old path.
+    // dat-parser-2 `?negFace` (see `parse_neg_face_retail_flag`): the retail
+    // rules are on by default; `?negFace=off` leaves every branch below on its
+    // legacy path. The front copy also needs `?perPolyCull=on` (off).
     let neg_face_retail = neg_face_retail_enabled();
     let neg_front_copy = neg_face_retail && neg_face_per_poly_cull_enabled();
 
@@ -20634,7 +20652,7 @@ fn triangulate_model_per_part_buckets<S: holtburger_dat::ResourceSource + ?Sized
                 .get_file_shared(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
             let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes.as_slice())).ok()?;
-            // `?negFace=retail` only (no-op by default).
+            // `?negFace` (default on; a no-op under `?negFace=off`).
             prime_surface_types(source, &gfx.surfaces);
             let mut tris = Vec::new();
             append_gfx_tris(
@@ -22109,32 +22127,110 @@ pub fn enqueue_clear_landblock_collision(lb_id: u32) {
     let lb_high = lb_id & 0xFFFF_0000;
     bump_landblock_evict_epoch(lb_high);
     purge_pending_env_cell_products(lb_high);
+    purge_pending_populate_products(lb_high);
     LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().push(lb_high));
+}
+
+/// 2026-10-18 follow-up (the STREAM-TERRAIN-3 pattern for the outdoor
+/// populates): the building / static / scenery products a
+/// `populate*ForLandblock` call staged before the eviction would be inserted
+/// right after the drain's clear, leaving the evicted landblock collision the
+/// re-entry populate then stages again. JS stops a populate's later stages
+/// once the landblock is evicted (app/landblock_stream.js); this drops what
+/// it already staged. Every pile is keyed by landblock-high or a cell id of
+/// the landblock. Fail-soft like the EnvCell purge.
+#[cfg(target_arch = "wasm32")]
+fn purge_pending_populate_products(lb_high: u32) {
+    let _ = BUILDING_AABB_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = BUILDING_ORIGIN_PENDING.with(|c| {
+        c.try_borrow_mut()
+            .map(|mut v| v.retain(|(id, _, _)| id.landblock_id & 0xFFFF_0000 != lb_high))
+    });
+    let _ = BUILDING_BSP_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = BUILDING_PORTALS_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = LANDBLOCK_RESTRICTIONS_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = BUILDING_PHYSICS_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = STATIC_AABB_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = STATIC_BSP_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = SCENERY_COLLIDER_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
     /// STREAM-TERRAIN-3 (2026-10-18): per-landblock eviction count (keyed
-    /// `0xXXYY0000`), bumped by `enqueueClearLandblockCollision`. An in-flight
-    /// `fetchEnvCellsInLandblock` compares it with the value it started under
-    /// and stops queueing collision once it moves. One entry per landblock
-    /// ever evicted (at most 65,536 u32 pairs).
-    static LANDBLOCK_EVICT_EPOCH: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+    /// `0xXXYY0000`), bumped by `enqueueClearLandblockCollision`, and the
+    /// number of `fetchEnvCellsInLandblock` builds in flight for it. A build
+    /// compares the count with the value it started under and stops queueing
+    /// collision once it moves. Follow-up (same day): an entry lives only
+    /// while a build of its landblock is in flight ([`LandblockBuildEpoch`]),
+    /// instead of one entry per landblock ever evicted.
+    static LANDBLOCK_EVICT_EPOCH: std::cell::RefCell<std::collections::HashMap<u32, (u32, u32)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn landblock_evict_epoch(lb_high: u32) -> u32 {
-    LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().get(&lb_high).copied().unwrap_or(0))
+    LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().get(&lb_high).map_or(0, |e| e.0))
 }
 
+/// Only a build in flight can be orphaned by an eviction: with none, there is
+/// nothing to tell, and a later build starts under whatever count it finds.
 #[cfg(any(target_arch = "wasm32", test))]
 fn bump_landblock_evict_epoch(lb_high: u32) {
     LANDBLOCK_EVICT_EPOCH.with(|m| {
-        let mut m = m.borrow_mut();
-        let e = m.entry(lb_high).or_insert(0);
-        *e = e.wrapping_add(1);
+        if let Some(e) = m.borrow_mut().get_mut(&lb_high) {
+            e.0 = e.0.wrapping_add(1);
+        }
     });
+}
+
+/// One build's hold on its landblock's eviction count: `live()` turns false
+/// once the landblock is evicted after `begin`. Dropping the last hold of a
+/// landblock (the build returns, fails or is dropped) removes its entry.
+#[cfg(any(target_arch = "wasm32", test))]
+struct LandblockBuildEpoch {
+    lb_high: u32,
+    epoch0: u32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl LandblockBuildEpoch {
+    fn begin(lb_high: u32) -> Self {
+        let epoch0 = LANDBLOCK_EVICT_EPOCH.with(|m| {
+            let mut m = m.borrow_mut();
+            let e = m.entry(lb_high).or_insert((0, 0));
+            e.1 += 1;
+            e.0
+        });
+        Self { lb_high, epoch0 }
+    }
+
+    fn live(&self) -> bool {
+        landblock_evict_epoch(self.lb_high) == self.epoch0
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl Drop for LandblockBuildEpoch {
+    fn drop(&mut self) {
+        let _ = LANDBLOCK_EVICT_EPOCH.try_with(|m| {
+            let mut m = m.borrow_mut();
+            if let Some(e) = m.get_mut(&self.lb_high) {
+                e.1 = e.1.saturating_sub(1);
+                if e.1 == 0 {
+                    m.remove(&self.lb_high);
+                }
+            }
+        });
+    }
 }
 
 /// Drop the cell-keyed entries of landblock `lb_high` from one pending pile.
@@ -22179,11 +22275,34 @@ mod landblock_evict_epoch_tests {
     fn epoch_moves_per_landblock_only() {
         let a = 0x8602_0000;
         let b = 0xA9B4_0000;
-        let a0 = landblock_evict_epoch(a);
-        let b0 = landblock_evict_epoch(b);
+        let build_a = LandblockBuildEpoch::begin(a);
+        let build_b = LandblockBuildEpoch::begin(b);
         bump_landblock_evict_epoch(a);
-        assert_eq!(landblock_evict_epoch(a), a0.wrapping_add(1));
-        assert_eq!(landblock_evict_epoch(b), b0, "another landblock's builds stay live");
+        assert!(!build_a.live(), "the evicted landblock's build is orphaned");
+        assert!(build_b.live(), "another landblock's builds stay live");
+        let rebuilt_a = LandblockBuildEpoch::begin(a);
+        assert!(rebuilt_a.live(), "a build started after the eviction is live");
+    }
+
+    #[test]
+    fn entry_lives_only_while_a_build_is_in_flight() {
+        let lb = 0x1234_0000;
+        let len = || LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().len());
+        let has = || LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().contains_key(&lb));
+        let len0 = len();
+        bump_landblock_evict_epoch(lb);
+        assert!(!has(), "an eviction with no build in flight stores nothing");
+        {
+            let first = LandblockBuildEpoch::begin(lb);
+            let second = LandblockBuildEpoch::begin(lb);
+            bump_landblock_evict_epoch(lb);
+            drop(first);
+            assert!(has(), "the second build still holds the entry");
+            assert!(!second.live(), "and still sees the eviction");
+        }
+        assert!(!has(), "the last build's drop removes the entry");
+        assert_eq!(len(), len0);
+        assert!(LandblockBuildEpoch::begin(lb).live());
     }
 
     #[test]
@@ -24967,12 +25086,36 @@ mod tests_neg_face_retail {
     const C: [f32; 3] = [0.0, 1.0, 0.0];
 
     #[test]
-    fn neg_face_flag_parse_is_exact() {
-        assert!(parse_neg_face_retail_flag("?negFace=retail"));
-        assert!(parse_neg_face_retail_flag("?nosw=1&negFace=retail&wireframe=1"));
-        assert!(parse_neg_face_retail_flag("negFace=retail"));
-        for s in ["", "?negFace=on", "?negFace=1", "?negFace=Retail", "?negFace=retail2", "?xnegFace=retail"] {
-            assert!(!parse_neg_face_retail_flag(s), "{s:?} must not enable");
+    fn neg_face_flag_parse_defaults_on() {
+        // Default ON since 2026-10-19: absent, the old opt-in value and any
+        // other value read on.
+        for s in [
+            "",
+            "?",
+            "?nosw=1",
+            "?negFace=retail",
+            "?nosw=1&negFace=retail&wireframe=1",
+            "negFace=retail",
+            "?negFace=on",
+            "?negFace=1",
+            "?negFace",
+            "?xnegFace=off",
+            "?negFaceX=off",
+        ] {
+            assert!(parse_neg_face_retail_flag(s), "{s:?} must read on");
+        }
+        // The escape: off / 0 / false / no / legacy, any case, anywhere in the query.
+        for s in [
+            "?negFace=off",
+            "?negFace=OFF",
+            "?negFace=0",
+            "?negFace=false",
+            "?negFace=No",
+            "?negFace=legacy",
+            "?nosw=1&negFace=off&wireframe=1",
+            "negFace=off",
+        ] {
+            assert!(!parse_neg_face_retail_flag(s), "{s:?} must read off");
         }
         // perPolyCull mirrors the JS reader: case-insensitive `on`, nothing else.
         assert!(parse_per_poly_cull_flag("?perPolyCull=on"));
@@ -27024,8 +27167,8 @@ pub async fn fetch_env_cells_in_landblock(
     // collision products: those would land after the clear and leave the
     // evicted landblock orphaned collision (doubled on re-entry). Checked
     // after every await, because an eviction can only run while suspended.
-    let evict_epoch0 = landblock_evict_epoch(landblock_high);
-    let lb_live = || landblock_evict_epoch(landblock_high) == evict_epoch0;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
+    let lb_live = || evict_hold.live();
     let info_cell = landblock_high | 0x0000_FFFE;
     let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
     let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
@@ -49131,6 +49274,47 @@ fn fallback_self_movement_capabilities() -> holtburger_world::SelfMovementCapabi
             },
         },
         run_rate_scalar: FALLBACK_RUN_RATE_SCALAR,
+    }
+}
+
+/// SHELL-2 follow-up (2026-10-18): hand the eager world (built on the first
+/// SelectCharacter) to the character picked after a refused Enter World.
+/// ACE sends nothing of the refused character, so only the player record
+/// changes; the scene and its drained collision stay. Returns whether the
+/// world belonged to another character (the caller then re-installs the
+/// fallback movement caps and drops the cached PlayerDescription).
+#[cfg(any(target_arch = "wasm32", test))]
+fn reassign_eager_world_player(
+    w: &mut holtburger_world::WorldState,
+    guid: holtburger_common::Guid,
+) -> bool {
+    if w.player.guid == guid {
+        return false;
+    }
+    w.player = holtburger_world::player::PlayerState::new();
+    w.player.guid = guid;
+    true
+}
+
+#[cfg(test)]
+mod reassign_eager_world_player_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_characters_world_moves_to_the_next_pick() {
+        let bootstrap = std::sync::Arc::new(holtburger_world::WorldBootstrap::synthetic());
+        let mut w = holtburger_world::WorldState::new(bootstrap);
+        let refused = holtburger_common::Guid(0x5000_0001);
+        let picked = holtburger_common::Guid(0x5000_0002);
+        w.player.guid = refused;
+        w.player.server_run_rate = Some(1.5);
+        assert!(reassign_eager_world_player(&mut w, picked));
+        assert_eq!(w.player.guid, picked);
+        assert_eq!(w.player.server_run_rate, None, "nothing of the refused character is kept");
+        assert!(
+            !reassign_eager_world_player(&mut w, picked),
+            "re-selecting the same character keeps its world"
+        );
     }
 }
 

@@ -10,9 +10,12 @@
 //      mid-fade material the permanence clause exists to protect).
 //   2. THE STAMP EXISTS ON THE DEFAULT DECODER PATH. The bug was that
 //      `_materialFromFlags`'s legacy ladder — the path taken when
-//      `?surfaceUnified` is off, i.e. always — set `opacity = 1 - T` and never
-//      stamped `__baseTranslucency`, so every cache material and every bucket
-//      built from one failed clause 5 while sitting at opacity 0.
+//      `?surfaceUnified` was off, i.e. always in 2026-08 — set `opacity = 1 - T`
+//      and never stamped `__baseTranslucency`, so every cache material and
+//      every bucket built from one failed clause 5 while sitting at opacity 0.
+//      surfaceUnified is DEFAULT ON since 2026-10-19: the default stamp now
+//      comes from the unified decoder (not gated by this flag) and the legacy
+//      ladder is the `?surfaceUnified=off` escape. S3 pins every arm at runtime.
 //   3. A BUCKET IS HIDDEN ONLY WHEN EVERY MEMBER IS INVISIBLE. Proven
 //      structurally (buckets are keyed by the material OBJECT), so the test
 //      asserts the structure: a mixed feed must produce SEPARATE buckets, and
@@ -129,10 +132,54 @@ check("P8: NEGATIVE — a MIXED material array does not (every member must quali
 //    it is invisible to a runtime test that cannot construct a MaterialCache.
 // ---------------------------------------------------------------------------
 const stampRe = /!useUnifiedDecoder\s*&&\s*isTranslucent\s*&&\s*sfTranslucency\s*>\s*0\s*&&\s*skipDeadBatchEnabled\(\)/;
-check("S1: _materialFromFlags stamps __baseTranslucency on the LEGACY (default, ?surfaceUnified-off) ladder",
+check("S1: _materialFromFlags stamps __baseTranslucency on the LEGACY (?surfaceUnified=off) ladder",
   stampRe.test(matSrc) && /__baseTranslucency: sfTranslucency/.test(matSrc));
-check("S2: the stamp is gated by ?skipDeadBatch, so =off is a complete restore",
+check("S2: the legacy-ladder stamp is gated by ?skipDeadBatch",
   stampRe.test(matSrc));
+
+// S3 — runtime, per arm, on the REAL `_materialFromFlags` (materials.js spliced
+// whole). A fresh module instance per arm: `skipDeadBatchEnabled` is memoised.
+// surfaceUnified is DEFAULT ON since 2026-10-19, so the default stamp comes from
+// the unified decoder, which ?skipDeadBatch does not gate: `=off` alone removes
+// only the hiding, and `&surfaceUnified=off` is needed for a complete restore.
+{
+  const { spliceModule } = await import("./harness/lib/splice_module.mjs");
+  const { MATERIALS_JS_STUBS } = await import("./harness/lib/scene3d_stubs.mjs");
+  const spliced = spliceModule(matSrc, { stubs: MATERIALS_JS_STUBS, label: "scene3d/materials.js" }) +
+    "\n; return { MaterialCache, SURFACE_TYPE, readSurfaceUnifiedFlag, skipDeadBatchEnabled };";
+  const hadW = "window" in globalThis, prevW = globalThis.window;
+  const hadL = "location" in globalThis, prevL = globalThis.location;
+  const arm = (search) => {
+    // readSurfaceUnifiedFlag reads window.location; skipDeadBatchEnabled reads
+    // globalThis.location — stub both, or neither for the no-window arm.
+    if (search === null) { delete globalThis.window; delete globalThis.location; }
+    else { globalThis.window = { location: { search } }; globalThis.location = { search }; }
+    const M = new Function("THREE", spliced)(THREE);
+    const tex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    const m = new M.MaterialCache()._materialFromFlags(
+      M.SURFACE_TYPE.Translucent, tex, undefined, undefined, undefined, undefined, { translucency: 1.0 },
+    );
+    return { unified: M.readSurfaceUnifiedFlag(), skip: M.skipDeadBatchEnabled(), stamp: m.userData?.__baseTranslucency,
+      dead: MAT.materialRendersNothing(m) };
+  };
+  try {
+    const def = arm(null), bare = arm(""), skipOff = arm("?skipDeadBatch=off");
+    const legacy = arm("?surfaceUnified=off"), restore = arm("?surfaceUnified=off&skipDeadBatch=off");
+    const fmt = (r) => JSON.stringify(r);
+    check("S3a: default (no window / bare URL) — unified decoder stamps T=1, and the material proves it renders nothing",
+      def.unified && bare.unified && def.stamp === 1 && bare.stamp === 1 && def.dead && bare.dead,
+      `${fmt(def)} ${fmt(bare)}`);
+    check("S3b: ?skipDeadBatch=off alone leaves the (unified) stamp — only the hiding is disabled",
+      skipOff.unified && !skipOff.skip && skipOff.stamp === 1, fmt(skipOff));
+    check("S3c: ?surfaceUnified=off — the legacy ladder stamps too (skipDeadBatch default ON)",
+      !legacy.unified && legacy.skip && legacy.stamp === 1, fmt(legacy));
+    check("S3d: ?surfaceUnified=off&skipDeadBatch=off — no stamp: the complete pre-2026-08-06 restore",
+      !restore.unified && !restore.skip && restore.stamp === undefined && !restore.dead, fmt(restore));
+  } finally {
+    if (hadW) globalThis.window = prevW; else delete globalThis.window;
+    if (hadL) globalThis.location = prevL; else delete globalThis.location;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 3 + 4. The batcher: bucket keying, hiding, and lifecycle.

@@ -328,7 +328,10 @@ export function createLandblockStream(D) {
   // build that sees it change across its await was evicted mid-way: the
   // collision clear dropped its earlier cells, so it must not mark the LB
   // populated, and the in-flight bit it held now belongs to any re-entry.
-  const cellContainersEvictGen = new Map();
+  // The building / static / scenery collider populate reads it too (2026-10-18
+  // follow-up).
+  const landblockEvictGen = new Map();
+  const evictGenOf = (lb) => landblockEvictGen.get(lb) || 0;
   // Cell-container registry: stable across LB entries. JS adds
   // entries on `ensureCellContainersForLandblock`, never removes
   // (capture probe walks the map). Phase D's culling toggles
@@ -356,7 +359,7 @@ export function createLandblockStream(D) {
     buildingAabbsPopulateInFlight.delete(lb);
     cellContainersPopulatedLbs.delete(lb);
     cellContainersPopulateInFlight.delete(lb);
-    cellContainersEvictGen.set(lb, (cellContainersEvictGen.get(lb) || 0) + 1);
+    landblockEvictGen.set(lb, evictGenOf(lb) + 1);
     // DAT-01 phase 2e: the scenery colliders were purged wasm-side by
     // `enqueueClearLandblockCollision` -> `clear_landblocks_collision`
     // (the scenery family is wired into that batched clear), so the
@@ -385,8 +388,8 @@ export function createLandblockStream(D) {
       return;
     }
     cellContainersPopulateInFlight.add(lbId);
-    const evictGen = cellContainersEvictGen.get(lbId) || 0;
-    const notEvicted = () => (cellContainersEvictGen.get(lbId) || 0) === evictGen;
+    const evictGen = evictGenOf(lbId);
+    const notEvicted = () => evictGenOf(lbId) === evictGen;
     const markPopulated = () => {
       if (notEvicted()) cellContainersPopulatedLbs.add(lbId);
     };
@@ -603,6 +606,12 @@ export function createLandblockStream(D) {
     const cx = (centreLb >>> 24) & 0xff;
     const cy = (centreLb >>> 16) & 0xff;
     const targets = [];
+    // 2026-10-18 follow-up (the STREAM-TERRAIN-3 pattern): each target's
+    // eviction count when its in-flight bit is claimed. A target evicted while
+    // queued or between the populate's awaits stages no further colliders and
+    // is not marked populated; the eviction hook cleared its marks, so a
+    // revisit populates it afresh.
+    const claimGen = new Map();
     for (let dy = -1; dy <= 1; dy += 1) {
       for (let dx = -1; dx <= 1; dx += 1) {
         const nx = cx + dx;
@@ -617,6 +626,7 @@ export function createLandblockStream(D) {
         }
         buildingAabbsPopulateInFlight.add(lbId);
         targets.push(lbId);
+        claimGen.set(lbId, evictGenOf(lbId));
       }
     }
     if (targets.length === 0) return;
@@ -629,13 +639,19 @@ export function createLandblockStream(D) {
     // collision before its neighbours. Building+statics stay sequential
     // WITHIN each LB (a building failure must not disturb static
     // bookkeeping). Heartbeats remain on the rAF cadence regardless.
-    const CENTRE_LB = (centreLb >>> 0) & 0xffff0000;
+    // `>>> 0` after the mask (2026-10-18 follow-up): `&` yields a signed int32,
+    // so for an x byte >= 0x80 the key matched no target and the centre went
+    // fifth (same trap as `__onLandblockEvicted` above).
+    const CENTRE_LB = ((centreLb >>> 0) & 0xffff0000) >>> 0;
     targets.sort((a, b) => (a === CENTRE_LB ? -1 : b === CENTRE_LB ? 1 : 0));
     const POPULATE_CONC = 3;
     let nextIdx = 0;
     const populateOne = async (lbId) => {
+      const notEvicted = () => evictGenOf(lbId) === claimGen.get(lbId);
       try {
+        if (!notEvicted()) return;
         const count = await populateBuildingAabbsForLandblock(lbId);
+        if (!notEvicted()) return;
         buildingAabbsPopulatedLbs.add(lbId);
         // Diagnostic — cross-check against the recv-loop drain
         // log that prints the running building_aabb_count.
@@ -674,9 +690,10 @@ export function createLandblockStream(D) {
         try {
           const scFn = __hbWasmNs?.populateSceneryCollidersForLandblock;
           if (typeof scFn === "function"
-              && !sceneryCollidersPopulatedLbs.has(lbId)) {
+              && !sceneryCollidersPopulatedLbs.has(lbId)
+              && notEvicted()) {
             const scCount = await scFn(lbId >>> 0);
-            sceneryCollidersPopulatedLbs.add(lbId);
+            if (notEvicted()) sceneryCollidersPopulatedLbs.add(lbId);
             if (scCount > 0) {
               console.log(
                 `[dat01] queued ${scCount} scenery colliders for landblock 0x${lbId.toString(16).padStart(8, "0")}`
@@ -693,7 +710,8 @@ export function createLandblockStream(D) {
           `[phase6.B] populateBuildingAabbsForLandblock(0x${lbId.toString(16)}) failed:`, e
         );
       } finally {
-        buildingAabbsPopulateInFlight.delete(lbId);
+        // After an eviction the bit is a re-entry's (the hook cleared ours).
+        if (notEvicted()) buildingAabbsPopulateInFlight.delete(lbId);
       }
     };
     const worker = async () => {

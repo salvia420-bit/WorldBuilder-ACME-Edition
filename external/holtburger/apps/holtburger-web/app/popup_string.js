@@ -22,10 +22,10 @@
 //
 // The chat line stays (routePopupString returns false) when:
 //   - `?popupDialog=off` (or 0 / false);
-//   - an agent / bot session (`?agent=1`, `?autoLogin=1`, `?bot=1`): a modal
-//     that captures Enter / Esc would sit on a headless driver's screen from
-//     the first-login welcome popup on. `?popupDialog=on` forces the dialog
-//     there too (eye tests);
+//   - an agent / bot session (`?agent=1`, `?autoLogin=1` unless
+//     `autoSpawn=select`, `?bot=1`): a modal that captures Enter / Esc would
+//     sit on a headless driver's screen from the first-login welcome popup
+//     on. `?popupDialog=on` forces the dialog there too (eye tests);
 //   - the dialog could not be opened (no DOM, the open call threw).
 
 import { CHAT_CATEGORY } from "./chat_log.js";
@@ -55,11 +55,47 @@ export function popupDialogEnabled(search) {
   return !(v === "off" || v === "0" || v === "false");
 }
 
+/**
+ * sessionStorage key: the /logout return query that keeps the agent layout.
+ * index.html __logOutToCharacterSelect writes it from an agent-mode page and
+ * clears it from any other.
+ */
+export const LOGOUT_AGENT_RETURN_KEY = "hbLogoutAgentReturn";
+
+/**
+ * Does an agent drive this page? `?agent=1`, or `?autoLogin=1` with any
+ * autoSpawn except `select`. SHELL-3 residual (2026-10-18 follow-up):
+ * `?autoLogin=1&autoSpawn=select` is the /logout return (index.html
+ * __logOutToCharacterSelect) and invite links — a person at the retail
+ * character screen, as app/character_select.js characterSelectWanted already
+ * reads it. The /logout return keeps the layout of the page that logged out,
+ * though: from an agent-mode page (the desktop shortcut's `?autoLogin=1`) it
+ * stays full-bleed, through LOGOUT_AGENT_RETURN_KEY holding exactly its query.
+ * index.html's inline `agent-mode` toggle repeats this test (it runs before
+ * any module loads); tests/shell_agent_mode_select.test.mjs keeps the two in
+ * step.
+ */
+export function agentModeWanted(search, storage) {
+  try {
+    const q = searchOf(search);
+    const p = new URLSearchParams(q);
+    if (p.get("agent") === "1") return true;
+    if (p.get("autoLogin") === "1") {
+      if (p.get("autoSpawn") !== "select") return true;
+      const s = storage === undefined ? globalThis.sessionStorage : storage;
+      return s?.getItem?.(LOGOUT_AGENT_RETURN_KEY) === q;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** An agent / bot driven page (index.html's `agent-mode` test plus `?bot=1`). */
 export function popupDialogAgentSession(search) {
+  if (agentModeWanted(search)) return true;
   try {
-    const p = new URLSearchParams(searchOf(search));
-    return p.get("agent") === "1" || p.get("autoLogin") === "1" || p.get("bot") === "1";
+    return new URLSearchParams(searchOf(search)).get("bot") === "1";
   } catch (_) {
     return false;
   }

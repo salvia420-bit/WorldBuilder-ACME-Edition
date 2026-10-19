@@ -681,6 +681,20 @@ function silentLog() {
     assert.ok(w.get(0x50000003) instanceof Character);
   });
 
+  check('SHELL-2 follow-up: a pick after a refused Enter World drops the refused Character', () => {
+    const w = new WorldState({ logger: silentLog() });
+    bindWorldStateToManager(w, loadedWom(), { enabled: true });
+    w.setLocalPlayerGuid(0x50000004); // the refused pick (eager kind=1)
+    assert.ok(w.get(0x50000004) instanceof Character);
+    w.setLocalPlayerGuid(0x50000005); // the next pick
+    assert.equal(w.exists(0x50000004), false, 'the refused character never entered');
+    const ch = w.get(0x50000005);
+    assert.ok(ch instanceof Character);
+    assert.equal(w.character, ch);
+    w.setLocalPlayerGuid(0x50000005);
+    assert.equal(w.get(0x50000005), ch, 'the same guid again keeps the Character');
+  });
+
   check('corpse open → close: no unknown-container warn once the corpse spawned', () => {
     const warnings = [];
     const w = new WorldState({ logger: { warn(...a) { warnings.push(a.join(' ')); }, error() {}, info() {}, log() {} } });

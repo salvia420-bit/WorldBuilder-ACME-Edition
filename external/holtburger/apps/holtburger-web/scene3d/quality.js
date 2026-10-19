@@ -19,9 +19,13 @@ import { FX_TIER2_PRESETS } from "./vfx/fx_tier2.js";
 
 // ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
 //
-// The nine terrain-VFX FAMILY MASTERS ship OFF on every tier (plan §5.9 "ship
-// OFF, promote deliberately"), and each one is promoted only after the owner
-// eye-tests it on the 1070. Before this switchboard that promotion was FOUR
+// The nine terrain-VFX FAMILY MASTERS shipped OFF on every tier (plan §5.9
+// "ship OFF, promote deliberately") and are promoted one at a time: ice
+// 2026-08-01 and grass 2026-10-07 after the owner's 1070 eye-test, fields
+// 2026-10-10 with particle tier 2, and rock 2026-10-19 AHEAD of its 1070 eye
+// test (owner: "default on what would be on after a successful eyetest"; the
+// R-list look pass and its perf <= 1.5 ms check are still owed, as a post-flip
+// A/B against `?terrainRock=off`). Before this switchboard that promotion was FOUR
 // edits per family (one per tier) with the intended ladder living only in
 // docs/url-flags.md prose — and `terrainIce` showed what that costs: it was
 // false on every tier while `ultra.terrainIceRefraction` said `true`, i.e. the
@@ -29,7 +33,7 @@ import { FX_TIER2_PRESETS } from "./vfx/fx_tier2.js";
 //
 // So the two halves are separated. `TERRAIN_VFX_TIERS` is the LADDER — the
 // tier-by-tier intent each family will run at, written down and testable now.
-// `TERRAIN_VFX_PROMOTED` is the GATE — one boolean per family, all false, and
+// `TERRAIN_VFX_PROMOTED` is the GATE — one boolean per family, and
 // flipping ONE of them to `true` is the whole promotion. Nothing else moves:
 // the sub-effect keys below (`terrainGrassStomp`, `terrainSnowPrints`,
 // `terrainIceRefraction`, …) already carry their own per-tier intent and
@@ -52,7 +56,13 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     volcano: false,
     swamp: false,
     dirt: false,
-    rock: false,
+    // DEFAULT ON (2026-10-19, ahead of its 1070 eye test): the owner's "default
+    // on what would be on after a successful eyetest". The pebbles + grit light
+    // at high / ultra through the ladder below; low / mid stay off. Still owed
+    // on the 1070, as a post-flip A/B against `?terrainRock=off`: the R1-R9
+    // look pass and the R-list perf check (<= 1.5 ms at ultra, 18000 opaque lit
+    // pebbles). `?terrainRock=off` (or 0 / false / no) is the escape.
+    rock: true,
     // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_fields.js): the
     // ambient GPU fields round the camera (fireflies, dungeon dust motes,
     // leaves and pollen, snow, volcanic ash and embers). Promoted with the rest
@@ -271,7 +281,9 @@ export const PRESETS = {
         terrainSwampFireflies: false,
         terrainSwampMidges: false,
         // Terrain ROCK/BARREN (Wave 4A, plan §3.3). `terrainRock` is the FAMILY
-        // MASTER and ships false on every tier (§5.9); `low` is `null` in the
+        // MASTER: DEFAULT ON at high / ultra since 2026-10-19 (promoted ahead of
+        // its 1070 eye test through `TERRAIN_VFX_PROMOTED.rock`; `?terrainRock=off`
+        // escapes) and off here and at mid per the ladder. `low` is `null` in the
         // plan's tier table, so both counts are 0 and even `?terrainRock=on` at
         // low renders nothing. The master and the two effect booleans stay out
         // of BOOL_FLAGS for the `gfxRelief` reason; the three numerics are safe

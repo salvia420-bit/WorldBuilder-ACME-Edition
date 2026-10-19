@@ -1,7 +1,10 @@
-// A5-P2 (unification survey 2026-06-11) — `?tweenClock=dt` headless test.
+// A5-P2 (unification survey 2026-06-11) — `?tweenClock` headless test
+// (DEFAULT ON since 2026-10-19; `=off|0|false|no|wall` keeps the wall clock;
+// the old opt-in token `=dt` still reads on).
 //
-// One clock domain for the four hook-side-effect tweens (`_tickSwingTween` /
-// `_tickJumpPoseTween` / `_tickCastTween` / `_tickScaleHookTween`). Retail
+// One clock domain for the hook-side-effect tweens (`_tickJumpPoseTween` /
+// `_tickScaleHookTween`; the swing/cast tweens were retired in the WS-B
+// teardown). Retail
 // clocks every animation side effect off the single physics quantum in ONE
 // update pass (CSequence::update_internal, acclient.c:340659-340780, on the
 // `Timer::cur_time` static, acclient.c:46992); ours mixed clamped-dt mixers
@@ -10,8 +13,8 @@
 // This is the ROADMAP-required "2s-gap phase test": simulate a tab-throttle —
 // wall clock jumps 2000ms while the loop delivers only small clamped dts —
 // and assert tween phase equals MIXER phase (advanced by accumulated dt),
-// not wall phase, when the flag is on; and that the legacy wall behavior is
-// byte-preserved when off.
+// not wall phase, on the default; and that the legacy wall behavior is
+// byte-preserved under `?tweenClock=off`.
 //
 // Run with:
 //   cd apps/holtburger-web/
@@ -177,24 +180,31 @@ console.log("[1] source wiring asserts");
 console.log("[2] gate parse matrix (factory window injection)");
 {
     wallMs = 100000;
-    const off = makeManager(undefined);          // no window at all
-    const offJunk = makeManager("?tweenClock=on"); // wrong value — only "dt" arms
-    const on = makeManager("?tweenClock=dt");
-    const onCase = makeManager("?tweenClock=DT");  // case-insensitive parse
+    const DT_ARMS = {
+        "no window": undefined,
+        "bare page": "",
+        "?tweenClock=dt": "?tweenClock=dt",
+        "?tweenClock=DT": "?tweenClock=DT",
+        "?tweenClock=on": "?tweenClock=on",
+        "?tweenClock=garbage": "?tweenClock=garbage",
+    };
+    const WALL_ARMS = ["off", "0", "false", "no", "wall", "OFF", " Off "];
+    const dt = Object.entries(DT_ARMS).map(([label, search]) => [label, makeManager(search)]);
+    const wall = WALL_ARMS.map((v) => [`?tweenClock=${v}`, makeManager(`?tweenClock=${encodeURIComponent(v)}`)]);
     // Advance dt clocks 80ms, then jump the wall 2000ms: a dt-clocked
     // manager reads seed+80, a wall-clocked manager reads the new wall.
-    for (const m of [off, offJunk, on, onCase]) {
+    for (const [, m] of [...dt, ...wall]) {
         for (let i = 0; i < 5; i += 1) m.tick(0.016);
     }
     wallMs += 2000;
-    check("default (no window) → wall clock", Math.abs(off._tweenNowMs() - wallMs) < EPS,
-        `${off._tweenNowMs()} vs wall ${wallMs}`);
-    check("?tweenClock=on (junk value) → wall clock",
-        Math.abs(offJunk._tweenNowMs() - wallMs) < EPS);
-    check("?tweenClock=dt → accumulated-dt clock", Math.abs(on._tweenNowMs() - 100080) < 1e-6,
-        `${on._tweenNowMs()} vs 100080`);
-    check("?tweenClock=DT (case-insensitive) → dt clock",
-        Math.abs(onCase._tweenNowMs() - 100080) < 1e-6);
+    for (const [label, m] of dt) {
+        check(`${label} → accumulated-dt clock (default on)`, Math.abs(m._tweenNowMs() - 100080) < 1e-6,
+            `${m._tweenNowMs()} vs 100080`);
+    }
+    for (const [label, m] of wall) {
+        check(`${label} → wall clock (escape)`, Math.abs(m._tweenNowMs() - wallMs) < EPS,
+            `${m._tweenNowMs()} vs wall ${wallMs}`);
+    }
 }
 
 // =====================================================================
@@ -316,10 +326,10 @@ console.log("[9] 2s-gap phase test — scale hook (hookType 12)");
 }
 
 // =====================================================================
-console.log("[10] flag OFF — legacy wall-clock behavior byte-preserved");
+console.log("[10] ?tweenClock=off — legacy wall-clock behavior byte-preserved");
 {
     wallMs = 100000;
-    const em = makeManager(undefined);
+    const em = makeManager("?tweenClock=off");
     const instJ = makeHumanInst(0x200);
     em._applyHumanJumpPose(instJ);
     check("OFF: startMs is the wall clock", Math.abs(instJ._jumpPoseTween.startMs - wallMs) < EPS);

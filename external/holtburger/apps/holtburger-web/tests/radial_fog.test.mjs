@@ -1,4 +1,5 @@
-// tests/radial_fog.test.mjs — `?radialFog=on` (OPT-IN, 2026-10-13): retail RANGE fog.
+// tests/radial_fog.test.mjs — `?radialFog` (added 2026-10-13; DEFAULT ON since 2026-10-19,
+// ahead of its 1070 eye test; `=off|0|false|no` escape): retail RANGE fog.
 //
 // Retail: RenderDeviceD3D::SetDefaultD3DStates (acclient.c) sets D3DRS_FOGTABLEMODE (35) =
 // NONE, D3DRS_RANGEFOGENABLE (48) = TRUE and D3DRS_FOGVERTEXMODE (140) = LINEAR, so retail
@@ -7,15 +8,17 @@
 // 0.62 E, far 0.95 E), that leaves the drawn edge only ~14 % fogged at the frame side when
 // facing a diagonal of the square streaming ring.
 //
-//   R1  flag: OPT-IN, only the exact `?radialFog=on`
+//   R1  flag: DEFAULT ON; only off|0|false|no (trimmed, any case) turn it off
 //   R2  patchFogVertex on three r184's REAL fog_vertex: rewrite, idempotent, throws on drift
-//   R3  installRadialFog: off = chunk untouched; on = every stock ShaderLib program resolves
-//       to range fog; idempotent; fails closed; fog_fragment (the smoothstep curve) untouched
-//   R4  near monolith (terrain.js): vFogDist varying + fog call; nothing else changes (the
-//       terrain_batch anchors survive); default pair is the SAME strings
+//   R3  installRadialFog: =off = chunk untouched; default / on = every stock ShaderLib program
+//       resolves to range fog; idempotent; fails closed; fog_fragment (the smoothstep curve)
+//       untouched
+//   R4  near monolith (terrain.js, loaded under ?radialFog=off): vFogDist varying + fog call;
+//       nothing else changes (the terrain_batch anchors survive); the =off pair is the SAME
+//       strings, the default pair is the range-fog pair
 //   R5  far ring (far_terrain.js): the same edit, so the near/far seam fogs by one metric
-//   R6  session wiring: a fresh terrain.js / far_terrain.js under ?radialFog=on compiles
-//       the patched pair
+//   R6  session wiring: a fresh terrain.js / far_terrain.js with the flag ABSENT (default)
+//       compiles the patched pair
 //   R7  geometry (computeFogBand at R = 5, 60 deg VFOV, 16:9): the side ray to the
 //       near-ring face is fully fogged by range at yaw 0 / 22.5 / 45; plane depth leaks
 //       (< 0.5) at 22.5 and 45 (the bug this documents)
@@ -73,15 +76,23 @@ const STOCK_FOG_VERTEX = THREE.ShaderChunk.fog_vertex;
 const STOCK_FOG_FRAGMENT = THREE.ShaderChunk.fog_fragment;
 
 // ---------------------------------------------------------------------------
-console.log("-- R1 ?radialFog parsing (OPT-IN) ---------------------------------");
+console.log("-- R1 ?radialFog parsing (DEFAULT ON, =off escape) -----------------");
 {
   const e = R.radialFogEnabled;
-  check("absent -> off (DEFAULT OFF)", e("") === false && e("?x=1") === false);
-  check("?radialFog=on -> on", e("?radialFog=on") === true && e("?a=1&radialFog=on") === true);
-  for (const v of ["", "1", "true", "yes", "ON", "On", "off", "0", "garbage"]) {
-    check(`?radialFog=${v} -> off (only the exact "on" opts in)`, e(`?radialFog=${v}`) === false);
+  check("absent -> on (DEFAULT ON)", e("") === true && e("?x=1") === true);
+  check("?radialFog=on -> on (the old enable token still works)",
+    e("?radialFog=on") === true && e("?a=1&radialFog=on") === true);
+  for (const v of ["off", "0", "false", "no", "OFF", "Off", "No", "FALSE", "%20off%20"]) {
+    check(`?radialFog=${v} -> off (escape)`, e(`?radialFog=${v}`) === false);
   }
-  check("no search argument reads window.location.search (Node: empty -> off)", e() === false);
+  check("?a=1&radialFog=off -> off (escape among other params)", e("?a=1&radialFog=off&b=2") === false);
+  for (const v of ["", "1", "true", "yes", "ON", "On", "garbage"]) {
+    check(`?radialFog=${v} -> on (anything but an off form keeps the default)`, e(`?radialFog=${v}`) === true);
+  }
+  check("no search argument reads window.location.search (Node: empty -> on)", e() === true);
+  window.location.search = "?radialFog=off";
+  check("no search argument reads window.location.search (=off -> off)", e() === false);
+  window.location.search = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -106,11 +117,18 @@ console.log("-- R3 installRadialFog --------------------------------------------
 {
   R.__resetRadialFogForTest();
   const fake = { ShaderChunk: { fog_vertex: STOCK_FOG_VERTEX } };
-  const s0 = R.installRadialFog(fake, "");
-  check("default: the chunk is untouched, nothing installed",
+  const s0 = R.installRadialFog(fake, "?radialFog=off");
+  check("?radialFog=off: the chunk is untouched, nothing installed",
     fake.ShaderChunk.fog_vertex === STOCK_FOG_VERTEX && s0.installed === false && s0.enabled === false
-    && /opt-in/.test(String(s0.reason)));
+    && /radialFog=off/.test(String(s0.reason)));
   check("diag surface published as window.__radialFog", window.__radialFog === R.radialFogState);
+
+  R.__resetRadialFogForTest();
+  const fakeDefault = { ShaderChunk: { fog_vertex: STOCK_FOG_VERTEX } };
+  const sd = R.installRadialFog(fakeDefault, "");
+  check("default (flag absent): chunk replaced with range fog",
+    sd.enabled === true && sd.installed === true && sd.reason === null
+    && fakeDefault.ShaderChunk.fog_vertex === R.patchFogVertex(STOCK_FOG_VERTEX));
 
   R.__resetRadialFogForTest();
   const s1 = R.installRadialFog(fake, "?radialFog=on");
@@ -146,19 +164,29 @@ console.log("-- R3 installRadialFog --------------------------------------------
 
 // ---------------------------------------------------------------------------
 console.log("-- R4 near monolith (terrain.js) -------------------------------------");
+// The flag is DEFAULT ON, so the stock (plane-depth) pair is the `=off` arm: load terrain.js and
+// far_terrain.js (R5) under ?radialFog=off. R6 loads fresh copies with the flag absent.
+window.location.search = "?radialFog=off";
 const terrain = await import("../scene3d/terrain.js");
 const stockT = terrain._terrainGlslForTest();
 const patchedT = R.patchTerrainFogGlsl(stockT.vertex, stockT.fragment);
 {
-  check("default (no flag): the assembled pair has no vFogDist and fogs by vViewDepth",
+  check("?radialFog=off: the assembled pair has no vFogDist and fogs by vViewDepth",
     !stockT.vertex.includes("vFogDist") && !stockT.fragment.includes("vFogDist")
     && stockT.fragment.includes("fragColor = vec4(terrainApplyFog(terrainLit, vViewDepth), 1.0);"));
-  const live = R.radialFogTerrainGlsl(stockT.vertex, stockT.fragment, "");
-  check("default: radialFogTerrainGlsl returns the SAME strings (byte-identical program)",
+  const live = R.radialFogTerrainGlsl(stockT.vertex, stockT.fragment, "?radialFog=off");
+  check("?radialFog=off: radialFogTerrainGlsl returns the SAME strings (byte-identical pre-flag program)",
     live.vertex === stockT.vertex && live.fragment === stockT.fragment);
-  for (const v of ["1", "true", "ON", "off"]) {
+  for (const v of ["0", "false", "no", "OFF", "No"]) {
     const o = R.radialFogTerrainGlsl(stockT.vertex, stockT.fragment, `?radialFog=${v}`);
     check(`?radialFog=${v}: same strings`, o.vertex === stockT.vertex && o.fragment === stockT.fragment);
+  }
+  const dflt = R.radialFogTerrainGlsl(stockT.vertex, stockT.fragment, "");
+  check("default (flag absent): radialFogTerrainGlsl returns the range-fog pair",
+    dflt.vertex === patchedT.vertex && dflt.fragment === patchedT.fragment && dflt.vertex !== stockT.vertex);
+  for (const v of ["on", "1", "true", "ON", "garbage"]) {
+    const o = R.radialFogTerrainGlsl(stockT.vertex, stockT.fragment, `?radialFog=${v}`);
+    check(`?radialFog=${v}: the range-fog pair`, o.vertex === patchedT.vertex && o.fragment === patchedT.fragment);
   }
 
   const v = patchedT.vertex;
@@ -216,9 +244,10 @@ const patchedT = R.patchTerrainFogGlsl(stockT.vertex, stockT.fragment);
 console.log("-- R5 far ring (far_terrain.js) ---------------------------------------");
 const far = await import("../scene3d/far_terrain.js");
 const stockF = far._farGlslForTest();
+window.location.search = "";
 const patchedF = R.patchTerrainFogGlsl(stockF.vertex, stockF.fragment);
 {
-  check("default: the material compiles the exported strings unchanged",
+  check("?radialFog=off: the material compiles the exported strings unchanged",
     stockF.vertex === far.FAR_VERTEX_GLSL && stockF.fragment === far.FAR_FRAGMENT_GLSL
     && stockF.fragment.includes("terrainApplyFog(lit, vViewDepth)") && !stockF.fragment.includes("vFogDist"));
   const v = patchedF.vertex;
@@ -238,18 +267,25 @@ const patchedF = R.patchTerrainFogGlsl(stockF.vertex, stockF.fragment);
 }
 
 // ---------------------------------------------------------------------------
-console.log("-- R6 session wiring under ?radialFog=on ------------------------------");
+console.log("-- R6 session wiring, flag ABSENT (DEFAULT ON) ------------------------");
 {
-  window.location.search = "?radialFog=on";
+  window.location.search = "";
   R.__resetRadialFogForTest();
-  const t2 = await import("../scene3d/terrain.js?radialFog=on");
-  const f2 = await import("../scene3d/far_terrain.js?radialFog=on");
+  const t2 = await import("../scene3d/terrain.js?radialFogDefault");
+  const f2 = await import("../scene3d/far_terrain.js?radialFogDefault");
   const lt = t2._terrainGlslForTest();
   const lf = f2._farGlslForTest();
-  check("terrain.js compiles the range-fog pair", lt.vertex === patchedT.vertex && lt.fragment === patchedT.fragment);
-  check("far_terrain.js compiles the range-fog pair", lf.vertex === patchedF.vertex && lf.fragment === patchedF.fragment);
+  check("bare default: terrain.js compiles the range-fog pair", lt.vertex === patchedT.vertex && lt.fragment === patchedT.fragment);
+  check("bare default: far_terrain.js compiles the range-fog pair", lf.vertex === patchedF.vertex && lf.fragment === patchedF.fragment);
   check("both terrain modules reported patched, no drift",
     R.radialFogState.terrainPatched === 2 && R.radialFogState.terrainReason === null);
+  // The old enable token still works.
+  window.location.search = "?radialFog=on";
+  R.__resetRadialFogForTest();
+  const t3 = await import("../scene3d/terrain.js?radialFog=on");
+  check("?radialFog=on: terrain.js compiles the range-fog pair",
+    t3._terrainGlslForTest().vertex === patchedT.vertex && t3._terrainGlslForTest().fragment === patchedT.fragment
+    && R.radialFogState.terrainPatched === 1);
   window.location.search = "";
   R.__resetRadialFogForTest();
 }
@@ -382,7 +418,9 @@ console.log("-- R8 source wiring -----------------------------------------------
   check("the fog CURVE is unchanged: the shared tail keeps three's smoothstep",
     TAIL.includes("float fogFactor = smoothstep( fogNear, fogFar, viewDepth );"));
   check("radial_fog.js never touches fog_fragment", !/fog_fragment\s*=/.test(RF));
-  check("flag reader is exact opt-in", RF.includes('.get("radialFog") === "on"'));
+  check("flag reader is default-on with an off|0|false|no escape (no exact-on opt-in left)",
+    !RF.includes('.get("radialFog") === "on"')
+    && RF.includes('return !(s === "off" || s === "0" || s === "false" || s === "no");'));
   check("WebAC attribution present", /after WebAC, AGPL-3\.0/.test(RF) && RF.includes("RetailFog.ts"));
 }
 

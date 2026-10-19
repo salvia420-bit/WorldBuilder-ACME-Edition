@@ -2292,7 +2292,13 @@ export function scanShadowMovers(scene3d, lights) {
 function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lightsIn, cfg) {
   const shadowMap = renderer.shadowMap;
   let st = scene3d._shadowScope;
-  let same = !!st && st.renderer === renderer && st.src.length === lightsIn.length;
+  // `st.shadowMap` (2026-10-18 review follow-up): a WebGL context restore gives
+  // the renderer a NEW WebGLShadowMap (three r184 initGLContext). Re-taking
+  // control re-rasters every map at once; without it the single-shadow path
+  // (?shadows=on without CSM, whose light set survives the restore) drew an
+  // empty sun map until the staleness ceiling. The CSM path rebuilt csmState.
+  let same = !!st && st.renderer === renderer && st.shadowMap === shadowMap &&
+    st.src.length === lightsIn.length;
   if (same) {
     for (let i = 0; i < lightsIn.length; i += 1) {
       if (st.src[i] !== lightsIn[i]) {
@@ -2319,6 +2325,7 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
     }
     st = scene3d._shadowScope = {
       renderer,
+      shadowMap,
       src: lightsIn.slice(),
       lights,
       stale: new Array(lights.length).fill(0),

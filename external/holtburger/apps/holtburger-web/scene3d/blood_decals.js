@@ -37,15 +37,21 @@ export function bloodEnabled() {
 }
 
 /**
- * `?combatFxBus=on` — STRICT opt-in (2026-10-13). Feeds the bus handlers in
- * `_bind` the event's `detail` (see the note there). Absent ⇒ OFF, so the
- * default arm keeps its shipped behaviour until the owner's eye-test.
+ * `?combatFxBus` — DEFAULT ON (2026-10-19, flipped ahead of its 1070 eye
+ * test, which is still owed; 2026-10-13..18 it needed an exact `=on`). Feeds
+ * the bus handlers in `_bind` the event's `detail` (see the note there).
+ * Escape: `off|0|false|no` (trimmed, case-insensitive) hands them the raw
+ * Event again, so real combat stamps no splatter decal. Absent, `on` or any
+ * other value reads ON.
  */
 export function combatFxBusEnabled() {
   try {
-    return new URLSearchParams(window.location.search).get("combatFxBus") === "on";
+    const v = new URLSearchParams(window.location.search).get("combatFxBus");
+    if (v == null) return true;
+    const s = v.trim().toLowerCase();
+    return s !== "off" && s !== "0" && s !== "false" && s !== "no";
   } catch (_e) {
-    return false;
+    return true;
   }
 }
 
@@ -772,7 +778,7 @@ export function addPool(acX, acY, acZ, radius = 0.6) {
 
 let _installed = false;
 let _bound = false;
-let _busDetail = false; // ?combatFxBus=on, read once in installBloodDecals()
+let _busDetail = true; // ?combatFxBus (DEFAULT ON; =off|0|false|no escape), read once in installBloodDecals()
 let _budget = { windowStart: 0, used: 0 };
 const _critByName = new Map();
 
@@ -808,13 +814,14 @@ function _bind(decodeSplatterId) {
   if (!pc?.events?.on) return false;
   // The plugin bus delivers `new CustomEvent(name, { detail: payload })`
   // (plugins/api.js events.emit), but both handlers below read the payload
-  // fields straight off their argument — i.e. off the Event — so on real
-  // traffic they see `undefined` and never stamp (lint-event-consumers.mjs
-  // DETAIL_KNOWN_BUGS). Under `?combatFxBus=on` each handler is handed
-  // `ev.detail` instead (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake
-  // bus that passes the raw payload still works). Off by default: splatter
-  // decals actually appearing is a visual change pending the owner's
-  // eye-test, so the default arm subscribes the handler itself, as before.
+  // fields straight off their argument. `onBus` therefore hands each handler
+  // `ev.detail` (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake bus that
+  // passes the raw payload still works). DEFAULT ON since 2026-10-19 (ahead of
+  // the 1070 eye test, still owed). `?combatFxBus=off` (also 0/false/no)
+  // subscribes the handler itself, the pre-fix arm: real traffic reads
+  // `undefined` off the Event and no splatter decal is stamped. The lint still
+  // lists both handlers (lint-event-consumers.mjs DETAIL_KNOWN_BUGS) because
+  // its static check cannot see through `onBus`.
   const onBus = (name, fn) =>
     pc.events.on(name, _busDetail ? (ev) => fn(ev?.detail ?? ev ?? {}) : fn);
   onBus("playEffect", ({ targetGuid, scriptId }) => {
@@ -871,9 +878,9 @@ export async function installBloodDecals() {
   if (_installed || !bloodEnabled()) return;
   _installed = true;
   _busDetail = combatFxBusEnabled();
-  if (_busDetail) {
+  if (!_busDetail) {
     // eslint-disable-next-line no-console
-    console.info("[blood] ?combatFxBus=on — bus handlers read the event's detail payload");
+    console.info("[blood] ?combatFxBus=off — bus handlers read the raw Event (legacy arm: real combat stamps no splatter decals)");
   }
   const { decodeSplatterId } = await import("./splatter_decode.js");
   let tries = 0;

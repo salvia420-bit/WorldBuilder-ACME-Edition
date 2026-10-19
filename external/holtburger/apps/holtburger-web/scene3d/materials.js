@@ -414,9 +414,10 @@ let _skipDeadBatchFlag;
  * batchers key by the material OBJECT and pass that object straight to
  * `new THREE.BatchedMesh(..., mat)`, so a bucket material is a member material.
  * The real gap is in `_materialFromFlags` below: the A10-M1 unified decoder
- * (`applySurfaceRenderState`, `?surfaceUnified=on`) stamps `__baseTranslucency`
- * for Translucent>0, and the LEGACY inline ladder — which is the DEFAULT path,
- * `readSurfaceUnifiedFlag()` is opt-in — sets the same `opacity = 1 - T` and
+ * (`applySurfaceRenderState`, `?surfaceUnified`) stamps `__baseTranslucency`
+ * for Translucent>0, and the LEGACY inline ladder — the default path in
+ * 2026-08, now only the `?surfaceUnified=off` escape since surfaceUnified went
+ * DEFAULT ON on 2026-10-19 — sets the same `opacity = 1 - T` and
  * stamps nothing. The two decoders are documented as "byte-identical output";
  * on this one userData field they were not. So there is nothing to "plumb
  * through" the batcher: stamping at the authoring site is the whole fix, and it
@@ -424,13 +425,17 @@ let _skipDeadBatchFlag;
  * record, and inferring a base translucency from the current opacity is exactly
  * the unsound inference the permanence clause exists to forbid.
  *
- * This flag gates BOTH halves — the legacy-ladder stamp and the bucket hiding —
- * so `?skipDeadBatch=off` is a complete restore of the pre-2026-08-06 statics
- * behaviour. `?skipDeadAlpha=off` also disables the hiding (the predicate
+ * This flag gates BOTH halves — the legacy-ladder stamp and the bucket hiding.
+ * Since surfaceUnified went DEFAULT ON (2026-10-19) the default stamp comes from
+ * the unified decoder, which this flag does not gate, so `?skipDeadBatch=off`
+ * alone removes only the hiding; `?skipDeadBatch=off&surfaceUnified=off` is the
+ * complete restore of the pre-2026-08-06 statics behaviour.
+ * `?skipDeadAlpha=off` also disables the hiding (the predicate
  * carries its own gate) but leaves the stamp; that asymmetry is deliberate —
  * the stamp is retail-correct on its own merits (it is what lets a
  * Transparent(20) hook floor its ramp to `translucencyOriginal`,
- * acclient.c:316947-316956) and only this flag rolls it back.
+ * acclient.c:316947-316956) and only this flag rolls it back (together with
+ * `&surfaceUnified=off` since 2026-10-19).
  */
 export function skipDeadBatchEnabled() {
   if (_skipDeadBatchFlag !== undefined) return _skipDeadBatchFlag;
@@ -2091,10 +2096,11 @@ export function applySurfaceRenderState(mat, state, opts) {
   // Default OFF. The remaining two sub-behaviours (additive fog exemption —
   // default-ON in all three ladders since lighting-materials-4, see
   // `additiveObjFogExemptEnabled` — and the true InvAlpha blend) live ONLY
-  // inside this decoder, which is itself only
-  // reached when `?surfaceUnified=on` — so parityV2 is inert without
-  // surfaceUnified (documented in url-flags.md; deliberately no cross-flag
-  // enforcement). The third (ClipMap alpha-test ref 100/200) graduated to the
+  // inside this decoder, which every Surface ladder reaches by default
+  // (surfaceUnified is DEFAULT ON since 2026-10-19) — so parityV2 is inert only
+  // under `?surfaceUnified=off` (documented in url-flags.md; deliberately no
+  // cross-flag enforcement). parityV2 itself stays a default-OFF opt-in.
+  // The third (ClipMap alpha-test ref 100/200) graduated to the
   // default-ON `?clipMapParity` in RND-08/33 and is no longer gated here.
   const parityV2 = readSurfaceParityV2Flag();
   // === FIXUP A10-M1 (2026-06-11) — float-driven lum/diffuse are BIT-INDEPENDENT.
@@ -2233,21 +2239,26 @@ function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
   }
 }
 
-// === A10-M1 (unification, 2026-06-11) — `?surfaceUnified=on` opt-in =========
-// When ON, both Surface-flag decode sites delegate to the single
-// `applySurfaceRenderState` above (the recolored/paletted path then ALSO attaches the
-// luminous emissiveMap, fixing the recolored-luminous wash-to-white). Default OFF
-// keeps the legacy dual-path (byte-identical on the cache path — only the
-// paletted path's emissiveMap differs). JS-live (reload to toggle).
+// === A10-M1 (unification, 2026-06-11) — `?surfaceUnified` ====================
+// All three Surface-flag decode sites (the `_materialFromFlags` cache ladder,
+// the F.41 entity-owned build and entities.js `_applyPalettedSurfaceRenderState`)
+// delegate to the single `applySurfaceRenderState` above (the recolored/paletted
+// path then ALSO attaches the luminous emissiveMap, fixing the recolored-luminous
+// wash-to-white). DEFAULT ON since 2026-10-19, flipped ahead of its 1070 eye
+// test, which is still owed. `?surfaceUnified=off|0|false|no` (trimmed, any
+// case) is the escape back to the legacy multi-path ladders (byte-identical on
+// the cache path). Absent, `on`, any other value, no window or a throw all read
+// ON. JS-live (reload to toggle). NOT memoised: the ESM harness re-stubs
+// `globalThis.window` per case (same reason as `additiveObjFogExemptEnabled`).
 export function readSurfaceUnifiedFlag() {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("surfaceUnified");
-    if (typeof v !== "string") return false;
-    const lv = v.toLowerCase();
-    return lv === "on" || lv === "1" || lv === "true";
+    if (typeof v !== "string") return true;
+    const lv = v.trim().toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false" || lv === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -2332,8 +2343,10 @@ export function surfaceResultDecodeMisses(result) {
 // recolored-luminous surface glows in-colour instead of washing to flat white —
 // WITHOUT the rest of the surfaceUnified render-state unification. The
 // non-recolored (cache) path already does this via `applyFloatLumDiffuse`.
-// DEFAULT-ON since 2026-06-24 (`=off` restores flat-white emissive). Also implied when
-// `?surfaceUnified=on` (that path already attaches the emissiveMap). Memoized.
+// DEFAULT-ON since 2026-06-24 (`=off` restores flat-white emissive). Also implied by
+// surfaceUnified (DEFAULT ON since 2026-10-19), whose decoder always attaches the
+// emissiveMap — so on the paletted path `?luminousEmissiveMap=off` only bites
+// together with `&surfaceUnified=off`. Memoized.
 let _luminousEmissiveMap;
 export function readLuminousEmissiveMapFlag() {
   if (_luminousEmissiveMap === undefined) {
@@ -2352,9 +2365,10 @@ export function readLuminousEmissiveMapFlag() {
 }
 
 // === A10-M3b (2026-06-12) — `?surfaceParityV2=on` opt-in ====================
-// Layered ON TOP of `?surfaceUnified=on`: the parityV2 branches live only
-// inside `applySurfaceRenderState`, which is only invoked when surfaceUnified
-// is on — so this flag is inert by construction without it. Guards the three
+// Layered ON TOP of surfaceUnified (DEFAULT ON since 2026-10-19): the parityV2
+// branches live only inside `applySurfaceRenderState`, which the Surface ladders
+// reach unless `?surfaceUnified=off` — so this flag is inert by construction
+// under that escape. Guards the three
 // A10 §3 row-4/5/6 parity details: (b1) additive fog exemption, (b2) ClipMap
 // alpha-test ref 100/255-vs-200/255 by texture palettedness (needs the M3a
 // `hasPalette` wasm getter; stale pkg → legacy 0.5), (b3) true INVALPHA blend.
@@ -5035,10 +5049,11 @@ export class MaterialCache {
     const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0;
     const hasLum = sfLuminosity > 0;
     // === A10-M1 (2026-06-11) — single-decoder delegation =====================
-    // When `?surfaceUnified=on`, defer the blend/emissive/diffuse ladder to the
-    // shared `applySurfaceRenderState` (post-construction, mutating the built
-    // material) so this path and the recolored/paletted path run ONE decoder. Default
-    // OFF keeps the inline `opts` ladder below — byte-identical output (the
+    // By default (surfaceUnified DEFAULT ON since 2026-10-19), defer the
+    // blend/emissive/diffuse ladder to the shared `applySurfaceRenderState`
+    // (post-construction, mutating the built material) so this path and the
+    // recolored/paletted path run ONE decoder. The `?surfaceUnified=off` escape
+    // keeps the inline `opts` ladder below — byte-identical output (the
     // unified function adopts this path's emissiveMap reading, and the inline
     // writes vs post-construction `needsUpdate` writes resolve to the same
     // MeshStandardMaterial props).
@@ -5149,7 +5164,7 @@ export class MaterialCache {
     if (!useUnifiedDecoder && hasLum) mat.userData.__surfaceLuminosity = sfLuminosity;
 
     // === A10-M1 (2026-06-11) — run the single decoder on the built material ===
-    // When `?surfaceUnified=on` the inline `opts` ladder above was skipped; apply
+    // Unless `?surfaceUnified=off`, the inline `opts` ladder above was skipped; apply
     // the unified render-state now (mutates `mat` + sets `needsUpdate`). The
     // `__baseTranslucency` userData it stamps for Translucent>0 is harmless on
     // the cache path (only the hook-ramp clock reads it). Built with default
@@ -5173,7 +5188,8 @@ export class MaterialCache {
     // === 2026-08-06 (`?skipDeadBatch`) — close the ONE userData divergence
     // between the two decoders. The unified block directly above stamps
     // `__baseTranslucency` for Translucent>0; the legacy inline ladder (the
-    // DEFAULT path — `?surfaceUnified` is opt-in) computed the identical
+    // default path in 2026-08; the `?surfaceUnified=off` escape since
+    // surfaceUnified went DEFAULT ON on 2026-10-19) computed the identical
     // `opacity = 1 - T` at :4203 and stamped nothing, which is why every
     // cache-installed material — and therefore every statics batch bucket built
     // from one — failed the permanence clause of `materialRendersNothing` while
@@ -5983,7 +5999,8 @@ export class MaterialCache {
     // Entity-owned material starts as a plain opaque MeshStandardMaterial —
     // mirrors entities.js line 594-600's existing entity-recolour
     // path which keeps things simple (no normal/height/CSM stack on
-    // recoloured NPC surfaces today). Under `?surfaceUnified=on` the A10-M2
+    // recoloured NPC surfaces today). By default (surfaceUnified DEFAULT ON
+    // since 2026-10-19) the A10-M2
     // block below threads the Surface(0x08) render-state flags through
     // (transparent/additive/clipmap/luminous/diffuse), closing the F.41
     // flat-opaque gap (A10 §3 row 3).
@@ -6024,11 +6041,12 @@ export class MaterialCache {
     tex.wrapS = tex.wrapT = isStippled
       ? THREE.RepeatWrapping
       : wrapModeForSubsetStipple(undefined);
-    // === A10-M2 (2026-06-11) — `?surfaceUnified=on` thread render-state flags ===
+    // === A10-M2 (2026-06-11) — surfaceUnified threads render-state flags ======
     // Retail funnels EVERY drawn surface — including recoloured/entity-owned ones
     // — through the SAME render-state decision (D3DPolyRender::SetSurface,
-    // acclient.c:454385; there is no special recolour path). Default OFF keeps the
-    // legacy plain-opaque material (rollback). When ON, run the single decoder so
+    // acclient.c:454385; there is no special recolour path). surfaceUnified is
+    // DEFAULT ON since 2026-10-19; the `?surfaceUnified=off` escape keeps the
+    // legacy plain-opaque material (rollback). Otherwise run the single decoder so
     // a recoloured NPC/gear surface with Translucent/Additive/ClipMap/luminosity
     // renders correctly instead of flat-opaque (A10 §3 row 3). The decoder is a
     // no-op when `surfaceType === 0` (empty/fallback), so opaque recolours are

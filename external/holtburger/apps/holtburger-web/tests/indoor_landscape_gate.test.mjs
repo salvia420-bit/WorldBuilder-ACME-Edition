@@ -1,13 +1,15 @@
 // tests/indoor_landscape_gate.test.mjs — cells-portals-2 (2026-10-13):
-// `?indoorLandscapeGate=on` (OPT-IN, default OFF). Indoors, the armed split
-// skips the landscape (world pass content, depth wipe, sky) on frames where
-// the portal walk reaches no outside portal.
+// `?indoorLandscapeGate` (DEFAULT ON since 2026-10-19; `=off`/`0`/`false`/`no`
+// is the escape). Indoors, the armed split skips the landscape (world pass
+// content, depth wipe, sky) on frames where the portal walk reaches no outside
+// portal.
 //
 // Retail PView::DrawCells (acclient.c:461450) runs LScape::draw (sky + terrain
 // blocks + weather) and the Clear(4) Z-wipe only under
 // `if (this->outside_view.view_count)` (:461476).
 //
-//   L1  flag reader is an exact `=on` opt-in.
+//   L1  flag reader: absent / `=on` / any other value ⇒ ON; off/0/false/no
+//       (trimmed, any case) ⇒ OFF; the bare page reads ON.
 //   L2  indoorLandscapeSkip: false for flag off, unknown count, count > 0,
 //       fewer than 2 zero frames, non-resident cells, a BFS outdoor portal
 //       (or unknown), a camera within 1 m of an outdoor portal (or unknown);
@@ -18,7 +20,10 @@
 //   L5  widenClipXY / boxQueryMvp matrix helpers.
 //   L6  cells.js end to end (tickCellVisibility3D + tickPortalSeal): settles
 //       for 2 ticks, then skips; every fail-open clause; the flag off never
-//       reaches the pipeline (one `false` after a runtime toggle).
+//       reaches the pipeline (one `false` after a runtime toggle); the URL
+//       default end to end (bare page skips, every `=off` spelling does not);
+//       a throw in the gate's cell state fails the gate open and leaves the
+//       split armed.
 //   L7  REAL pipeline (vendored takram via a resolve hook, recording
 //       renderer): the skip frame keeps the world RenderPass (colour + depth
 //       clear) with an empty layer mask, no depth wipe, no sky pass; the
@@ -107,20 +112,26 @@ const LANDCELL = (LB | 0x0021) >>> 0;
 console.log("indoor landscape gate — cells-portals-2");
 
 // --- L1 ---------------------------------------------------------------------
-await t("L1 flag reader is an exact =on opt-in", () => {
-  assert.equal(readIndoorLandscapeGateFlag(""), false);
+await t("L1 flag reader is default-on with an off/0/false/no escape", () => {
+  assert.equal(readIndoorLandscapeGateFlag(""), true);
+  assert.equal(readIndoorLandscapeGateFlag("?x=1"), true, "other params only");
   assert.equal(readIndoorLandscapeGateFlag("?indoorLandscapeGate=on"), true);
   assert.equal(readIndoorLandscapeGateFlag("?x=1&indoorLandscapeGate=on"), true);
-  for (const s of ["1", "true", "ON", "off", "yes", ""]) {
+  for (const s of ["on", "ON", "1", "true", "yes", "", "garbage"]) {
+    assert.equal(readIndoorLandscapeGateFlag(`?indoorLandscapeGate=${s}`), true, s);
+  }
+  for (const s of ["off", "OFF", "Off", "0", "false", "FALSE", "no", "%20off%20"]) {
     assert.equal(readIndoorLandscapeGateFlag(`?indoorLandscapeGate=${s}`), false, s);
   }
-  // Default (no URL param) is OFF; the seam forces it either way.
+  assert.equal(readIndoorLandscapeGateFlag("?x=1&indoorLandscapeGate=off"), false);
+  // Default (no URL param) is ON; the seam forces it either way.
   setIndoorLandscapeGateFlag(null);
+  assert.equal(indoorLandscapeGateEnabled(), true);
+  setIndoorLandscapeGateFlag(false);
   assert.equal(indoorLandscapeGateEnabled(), false);
-  setIndoorLandscapeGateFlag(true);
+  setIndoorLandscapeGateFlag(null);
   assert.equal(indoorLandscapeGateEnabled(), true);
   setIndoorLandscapeGateFlag(null);
-  assert.equal(indoorLandscapeGateEnabled(), false);
 });
 
 // --- L2 ---------------------------------------------------------------------
@@ -489,6 +500,87 @@ await t("L6 flag off: the pipeline is never told anything (one false after a tog
   tick(s3, sh, state);
   assert.deepEqual(s3.pushed.slice(n), [false]);
   setIndoorLandscapeGateFlag(null);
+});
+
+await t("L6 URL default end to end: a bare page skips, every =off spelling never does", () => {
+  const prev = globalThis.location.search;
+  const fresh = () => ({
+    player: A, indoor: true, bfs: [A, B], frustum: [A, B], walk: [A, B],
+    raw: [0], wide: [0], near: [0], walkCalls: 0,
+  });
+  try {
+    // Bare page: the cached reader resolves ON through cells.js itself.
+    globalThis.location.search = "";
+    setIndoorLandscapeGateFlag(null);
+    let s3 = makeScene3d(cellRegistry([[A, [B]], [B, [A]]]));
+    let state = fresh();
+    const sh = makeSession(state);
+    tick(s3, sh, state);
+    const st = tick(s3, sh, state);
+    assert.equal(indoorLandscapeGateEnabled(), true, "bare page reads ON");
+    assert.equal(st.skip, true, st.reason);
+    assert.equal(s3.pushed.at(-1), true, "the pipeline is told to skip");
+    assert.equal(s3._indoorLandscapeGate, INDOOR_LANDSCAPE_GATE_STATS);
+    assert.equal(typeof globalThis.__indoorLandscapeGateDiag, "function");
+    assert.equal(globalThis.__indoorLandscapeGateDiag().on, true);
+    // The escape: the gate never runs, so the pipeline never hears `true`.
+    for (const v of ["off", "0", "false", "no", "OFF"]) {
+      globalThis.location.search = `?indoorLandscapeGate=${v}`;
+      setIndoorLandscapeGateFlag(null);
+      s3 = makeScene3d(cellRegistry([[A, [B]], [B, [A]]]));
+      state = fresh();
+      const shOff = makeSession(state);
+      for (let i = 0; i < 3; i++) tick(s3, shOff, state);
+      assert.equal(indoorLandscapeGateEnabled(), false, v);
+      assert.equal(s3.pushed.includes(true), false, `${v}: ${JSON.stringify(s3.pushed)}`);
+      assert.equal("_indoorLandscapeGate" in s3, false, v);
+      assert.equal(state.walkCalls, 1, `${v}: only the seal's own walk`);
+    }
+    // Live A/B from the =off arm: the handle turns the gate back on.
+    assert.equal(globalThis.__setIndoorLandscapeGate(true).on, true);
+    state = fresh();
+    const shOn = makeSession(state);
+    tick(s3, shOn, state);
+    assert.equal(tick(s3, shOn, state).skip, true);
+  } finally {
+    globalThis.location.search = prev;
+    setIndoorLandscapeGateFlag(null);
+  }
+});
+
+await t("L6 a throw in the gate's cell state fails the gate open, never the split", () => {
+  // Default-on raises the stakes: the cell-state build runs inside the split's
+  // try in tickCellVisibility3D, whose catch disarms ?indoorDepthSplit.
+  setIndoorLandscapeGateFlag(null);
+  try {
+    const s3 = makeScene3d(cellRegistry([[A, [B]], [B, [A]]]));
+    const state = {
+      player: A, indoor: true, bfs: [A, B], frustum: [A, B], walk: [A, B],
+      raw: [0], wide: [0], near: [0], walkCalls: 0,
+    };
+    const sh = makeSession(state);
+    // The split's own union iterates the depth-1 set fine; the gate's second
+    // pass over it (indoorLandscapeCellState's BFS-only doorway scan) throws.
+    sh.getViewerRenderSet = () => {
+      let passes = 0;
+      return {
+        *[Symbol.iterator]() {
+          if (passes++ > 0) throw new Error("gate pass");
+          yield A;
+          yield B;
+        },
+      };
+    };
+    let st;
+    for (let i = 0; i < 3; i++) st = tick(s3, sh, state);
+    assert.equal(indoorLandscapeGateEnabled(), true);
+    assert.equal(s3._indoorSplitArmed, true, "the split stays armed");
+    assert.equal(st.skip, false);
+    assert.equal(st.reason, "cells-unknown");
+    assert.equal(s3.pushed.at(-1), false, "the world is drawn");
+  } finally {
+    setIndoorLandscapeGateFlag(null);
+  }
 });
 
 // --- L7: the real pipeline --------------------------------------------------

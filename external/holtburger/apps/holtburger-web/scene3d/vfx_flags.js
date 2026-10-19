@@ -1345,9 +1345,13 @@ export function terrainMarshGasCount() {
 // the OLTHOI sub-variant (chitinous shards + the faint sickly emissive) is
 // code 30 alone. Both sets are DERIVED in `terrain_rock.js`, never listed here.
 //
-// ONE family master + two effects, ALL strict exact-match opt-ins that ship OFF
-// (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for the `gfxRelief`
-// reason. Composition:
+// ONE family master + two effects, all kept out of `quality.js BOOL_FLAGS` for
+// the `gfxRelief` reason. The MASTER is DEFAULT ON at high / ultra since
+// 2026-10-19 (`TERRAIN_VFX_PROMOTED.rock`, promoted ahead of its 1070 eye test,
+// which is still owed as a post-flip A/B against `?terrainRock=off`); low / mid
+// stay off per the ladder, and `?terrainRock=off` (or 0 / false / no) is the
+// escape. The two effect flags are exact `=on` / `=off` tristates that fall
+// back to the tier's counts. Composition:
 //     pebbles = terrainRockEnabled() && terrainRockPebblesEnabled()
 //     grit    = terrainRockEnabled() && terrainRockGritEnabled()
 // `?terrainVfx=off`, `?visual=off` and `?wireframe=1` each kill both.
@@ -1362,15 +1366,33 @@ export function terrainMarshGasCount() {
 
 let _terrainRock;
 const _terrainRockWarn = { hit: false };
-/** `?terrainRock=on` — THE family master for ROCK/BARREN (the opaque, lit
- *  pebble/rubble scatter + the grey grit streamers; plan §3.3). STRICT
- *  exact-match opt-in; absent ⇒ the quality preset's `terrainRock`, **false on
- *  all four tiers** this wave (§5.9 ship-OFF; the promotion target is
- *  high/ultra true). */
+/** `?terrainRock` — THE family master for ROCK/BARREN (the opaque, lit
+ *  pebble/rubble scatter + the grey grit streamers; plan §3.3). DEFAULT ON
+ *  (2026-10-19, ahead of its 1070 eye test, which is still owed as a post-flip
+ *  A/B against `?terrainRock=off`) wherever the quality ladder lights it:
+ *  absent ⇒ the quality preset's `terrainRock`, i.e. `TERRAIN_VFX_PROMOTED.rock`
+ *  on the `{high, ultra}` ladder — true at high / ultra, false at low / mid.
+ *  `off` / `0` / `false` / `no` (trimmed, any case) force it OFF at every tier;
+ *  `on` forces it ON at every tier (low still renders nothing: its counts are
+ *  0). Anything else warns once and follows the tier. With no preset bag yet
+ *  (pre-init, node) it reads false and is NOT memoized, the
+ *  `_terrainStrictFlag` rule: caching "not ready" would stick. */
 export function terrainRockEnabled() {
   if (_terrainRock !== undefined) return _terrainRock;
-  const r = _terrainStrictFlag("terrainRock", "terrainRock", false, _terrainRockWarn);
-  return r.memo ? (_terrainRock = r.value) : r.value;
+  const raw = _strFlag("terrainRock");
+  const s = raw === null ? null : raw.trim().toLowerCase();
+  if (s === "off" || s === "0" || s === "false" || s === "no") return (_terrainRock = false);
+  if (s === "on") return (_terrainRock = true);
+  if (raw !== null && !_terrainRockWarn.hit) {
+    _terrainRockWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainRock] ignoring ?terrainRock=${JSON.stringify(raw)} — use =off (or 0/false/no) to turn rock off, or =on to force it on at every tier; the tier decides otherwise.`,
+    );
+  }
+  const flags = _presetFlags();
+  if (!flags) return false;             // deliberately not memoized
+  return (_terrainRock = flags.terrainRock === true);
 }
 
 let _terrainRockPebbles;
@@ -1567,9 +1589,12 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.marshGas": () => terrainSwampEnabled() && terrainMarshGasEnabled(),
   "terrain.swampFireflies": () => terrainSwampEnabled() && terrainSwampFirefliesEnabled(),
   "terrain.swampMidges": () => terrainSwampEnabled() && terrainSwampMidgesEnabled(),
-  // Terrain ROCK / BARREN (Wave 4A, plan §3.3) — same contract again: strict
-  // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all` does
-  // not light them and the DEFAULT-ON count stays 14. Each row composes the
+  // Terrain ROCK / BARREN (Wave 4A, plan §3.3) — same contract again: rows
+  // that do NOT track visualAllEffects(), so `?visual=all` does not light them
+  // and the visual suite's DEFAULT-ON count is unchanged. The master behind
+  // them is DEFAULT ON at high / ultra since 2026-10-19 through the quality
+  // ladder (`?terrainRock=off` escapes), so there these rows resolve true with
+  // no URL at all. Each row composes the
   // family master itself, so `vfxEffectEnabled` answers the same question the
   // effect asks. `terrain.rockPebbles` and `terrain.rockGrit` are also the
   // PROVIDER IDS registered with the terrain-VFX spine. There is deliberately

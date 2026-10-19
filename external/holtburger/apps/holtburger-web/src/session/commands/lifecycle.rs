@@ -92,6 +92,29 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         }
         SessionCommand::SelectCharacter { guid } => {
             let guid = holtburger_common::Guid::from(guid);
+            // SHELL-2 follow-up (2026-10-18): a select before PlayerCreate
+            // follows a refused Enter World (CharacterError: still in the
+            // world, server full, …). ACE keeps the session on character
+            // select and sends nothing of the refused character, so the
+            // eager world below holds no player data yet: give it the new
+            // character in place (its scene keeps the collision already
+            // drained), drop a PlayerDescription cached for another
+            // character, and re-arm kind=1 so JS learns this attempt's guid.
+            if !matches!(state, LoopState::InWorld { .. }) {
+                *local_player_kind1_emitted = false;
+                if let Some(w) = world.borrow_mut().as_mut()
+                    && reassign_eager_world_player(w, guid)
+                {
+                    w.set_self_movement_capabilities_override(
+                        fallback_self_movement_capabilities(),
+                    );
+                    *cached_player_description = None;
+                    console_log_str(&format!(
+                        "[shell-2] eager world re-assigned to guid=0x{:08X} after a refused Enter World",
+                        u32::from(guid),
+                    ));
+                }
+            }
             *state = LoopState::EnteringWorld {
                 guid,
                 account: account_name.clone(),

@@ -608,12 +608,15 @@ export const flags = [
   // statics = liveScene3d._staticParticleManager (statics.js:2846); each holds a
   // particleTable Map<id, emitter> (particle_manager.js:402). PROOF: a persistent
   // authored emitter's .degradeDistance must be FINITE (not Infinity) after the
-  // async fetch resolves. Flag-off keeps it Infinity by design (RP6-only culling).
+  // async fetch resolves. DEFAULT ON since 2026-10-19 (flipped ahead of its 1070
+  // eye test), so this leg boots the BARE default (no particleDegrade param);
+  // `?particleDegrade=off` keeps it Infinity by design (RP6-only culling), and
+  // the `?skyGlow` sky chain is never stamped (stays Infinity under the default).
   {
     key: "particleDegrade",
     name: "A11-S4 authored degrade radius (wasm getter half)",
     tier: "A11-S4",
-    query: "renderer=3d&particleDegrade=retail",
+    query: "renderer=3d",
     composeDeps: [],
     rebuildCoupled: true,
     rustTests: [],
@@ -682,12 +685,12 @@ export const flags = [
             "stand near a persistent authored emitter (lifestone/portal) — presence-only (bridge present)"
         );
       }
-      // Emitters exist. Under ?particleDegrade=retail at least one persistent
+      // Emitters exist. By default (flag ON, bare URL) at least one persistent
       // authored emitter should have a FINITE radius stamped.
       if (snap.finite > 0) {
         return pass(
           `fetch_particle_degrade_distance bridge present; ${snap.finite}/${snap.emitters} live emitter(s) carry a FINITE degradeDistance ` +
-            `(sample ${snap.sampleFinite}m) — authored radius stamped under ?particleDegrade=retail`
+            `(sample ${snap.sampleFinite}m) — authored radius stamped by default (bare URL)`
         );
       }
       // All emitters still Infinity after settle: the in-view emitters may all

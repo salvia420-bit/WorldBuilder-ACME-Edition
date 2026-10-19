@@ -1,5 +1,8 @@
 // tests/retail_fov.test.mjs — models-camera-2 (2026-10-13): retail world
-// camera FOV behind the default-OFF `?retailFov=on` opt-in.
+// camera FOV. `?retailFov` is DEFAULT ON since 2026-10-19 (flipped ahead of
+// its 1070 eye test, still owed); `?retailFov=off` (or 0/false/no) is the
+// escape back to the fixed 60° vertical FOV. Until then only an exact `=on`
+// enabled it.
 //
 // Retail never stores a vertical FOV: the SmartBox draw sets it every frame
 // from the Render.FieldOfView preference, `m_fGameFOV / (aspect - 0.1)` →
@@ -11,12 +14,14 @@
 //   F1  retailVerticalFovDeg: 16:9 / 4:3 / 21:9 values, refused inputs → null.
 //   F2  applyRetailFov on a real THREE.PerspectiveCamera: fovY + the ~83.9°
 //       horizontal FOV at 16:9; a refused value keeps the previous fov.
-//   F3  helpers: the exact-"on" opt-in reader, clampGameFovDeg, the f32
-//       default constant.
-//   F4  ui/camera_settings.js: no Field of View row / setter push with the
-//       flag off; with it on the slider persists + drives __setGameFov.
-//   F5  source pins: index.js still builds the camera at 60° and every
-//       retail-FOV write is gated on RETAIL_FOV_ON.
+//   F3  helpers: the default-ON reader (off/0/false/no escape), clampGameFovDeg,
+//       the f32 default constant.
+//   F4  ui/camera_settings.js: on the bare default the slider is listed,
+//       persists + drives __setGameFov (an explicit `=on` too); under
+//       `?retailFov=off` there is no Field of View row and no setter push.
+//   F5  source pins: index.js still builds the camera at 60° (the `=off` value
+//       and the refused-value fallback) and every retail-FOV write is gated
+//       on RETAIL_FOV_ON.
 //
 // Run: node tests/retail_fov.test.mjs
 
@@ -105,17 +110,41 @@ check("a refused value keeps the previous fov (retail keeps its projection)", ()
   assert.equal(cam.fov, 60);
   assert.equal(M.applyRetailFov(null, 90), false);
 });
+check("bare default: a 16:9 world camera gets 53.64°; ?retailFov=off keeps 60°", () => {
+  // The index.js construction path: build at 60°, then apply the retail
+  // vertical FOV when the gate reads ON.
+  const build = (search) => {
+    const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000);
+    if (M.retailFovEnabled(search) && M.applyRetailFov(cam, M.RETAIL_GAME_FOV_DEFAULT_DEG)) {
+      cam.updateProjectionMatrix();
+    }
+    return cam.fov;
+  };
+  near(build(""), 53.64, 0.01, "bare default");
+  near(build("?retailFov=on"), 53.64, 0.01, "=on");
+  assert.equal(build("?retailFov=off"), 60);
+  assert.equal(build("?retailFov=0"), 60);
+});
 
 console.log("── F3 helpers ──");
 
-check("retailFovEnabled: exactly ?retailFov=on (default OFF)", () => {
-  assert.equal(M.retailFovEnabled(""), false);
-  assert.equal(M.retailFovEnabled(undefined), false);
-  assert.equal(M.retailFovEnabled("?retailFov=off"), false);
-  assert.equal(M.retailFovEnabled("?retailFov=1"), false);
-  assert.equal(M.retailFovEnabled("?retailFov=ON"), false);
+check("retailFovEnabled: DEFAULT ON (absent / on / any other value)", () => {
+  assert.equal(M.retailFovEnabled(""), true);
+  assert.equal(M.retailFovEnabled(undefined), true);
+  assert.equal(M.retailFovEnabled("?nosw=1"), true);
+  assert.equal(M.retailFovEnabled("?retailFov"), true);
+  assert.equal(M.retailFovEnabled("?retailFov="), true);
   assert.equal(M.retailFovEnabled("?retailFov=on"), true);
+  assert.equal(M.retailFovEnabled("?retailFov=ON"), true);
+  assert.equal(M.retailFovEnabled("?retailFov=1"), true);
+  assert.equal(M.retailFovEnabled("?retailFov=true"), true);
   assert.equal(M.retailFovEnabled("?nosw=1&retailFov=on"), true);
+});
+check("retailFovEnabled: off/0/false/no escape (trimmed, any case)", () => {
+  for (const v of ["off", "0", "false", "no", "OFF", "Off", "FALSE", "No", "%20off%20"]) {
+    assert.equal(M.retailFovEnabled(`?retailFov=${v}`), false, `?retailFov=${v}`);
+  }
+  assert.equal(M.retailFovEnabled("?nosw=1&retailFov=off"), false);
 });
 check("clampGameFovDeg: junk → 90, clamped to the retail 10..160 range", () => {
   assert.equal(M.clampGameFovDeg(undefined), 90);
@@ -146,27 +175,45 @@ check("loadCameraState default carries fieldOfView 90", () => {
   localStorage.removeItem("holtburger_camera_v1");
   assert.equal(S.loadCameraState().fieldOfView, 90);
 });
-check("flag off: no Field of View row and no __setGameFov push", () => {
-  globalThis.location = { search: "" };
+check("?retailFov=off: no Field of View row and no __setGameFov push", () => {
+  globalThis.location = { search: "?retailFov=off" };
   const host = document.createElement("div");
   document.body.appendChild(host);
   S.renderCameraTab(host);
   const ls = labels(host);
   assert.ok(ls.includes("Stiffness"), `camera rows rendered: ${ls.join(", ")}`);
-  assert.ok(!ls.includes("Field of View"), "no FOV row with the flag off");
+  assert.ok(!ls.includes("Field of View"), "no FOV row under ?retailFov=off");
   fovCalls.length = 0;
   S.applyCameraState({ fieldOfView: 75 });
   assert.deepEqual(fovCalls, []);
+  for (const v of ["0", "false", "no", "OFF"]) {
+    globalThis.location = { search: `?retailFov=${v}` };
+    S.applyCameraState({ fieldOfView: 75 });
+  }
+  assert.deepEqual(fovCalls, [], "every escape form skips the push");
   host.remove();
+  globalThis.location = { search: "" };
 });
-check("flag on: the slider (10..160, default 90) persists and drives __setGameFov", () => {
+check("explicit ?retailFov=on still lists the row and pushes the setter", () => {
   globalThis.location = { search: "?retailFov=on" };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  S.renderCameraTab(host);
+  assert.ok(labels(host).includes("Field of View"), "FOV row under =on");
+  fovCalls.length = 0;
+  S.applyCameraState({ fieldOfView: 80 });
+  assert.deepEqual(fovCalls, [80]);
+  host.remove();
+  globalThis.location = { search: "" };
+});
+check("bare default: the slider (10..160, default 90) persists and drives __setGameFov", () => {
+  globalThis.location = { search: "" };
   localStorage.removeItem("holtburger_camera_v1");
   const host = document.createElement("div");
   document.body.appendChild(host);
   S.renderCameraTab(host);
   const lbl = host.querySelectorAll("label").find((l) => l.textContent === "Field of View");
-  assert.ok(lbl, "FOV row rendered under the flag");
+  assert.ok(lbl, "FOV row rendered on the bare default");
   const input = lbl.parentNode.querySelector("input");
   assert.equal(input.min, "10");
   assert.equal(input.max, "160");
@@ -184,13 +231,13 @@ check("flag on: the slider (10..160, default 90) persists and drives __setGameFo
 console.log("── F5 source pins ──");
 
 const indexSrc = readFileSync(path.join(APP, "scene3d", "index.js"), "utf8");
-check("index.js still constructs the world camera at 60° (flag-off default)", () => {
+check("index.js still constructs the world camera at 60° (=off value / refused-value fallback)", () => {
   assert.ok(
     indexSrc.includes("new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000)"),
     "60° PerspectiveCamera ctor",
   );
 });
-check("index.js reads the opt-in through retailFovEnabled", () => {
+check("index.js reads the gate through retailFovEnabled", () => {
   assert.match(indexSrc, /const RETAIL_FOV_ON = retailFovEnabled\(/);
 });
 check("every applyRetailFov / __setGameFov write sits under RETAIL_FOV_ON", () => {
@@ -201,7 +248,7 @@ check("every applyRetailFov / __setGameFov write sits under RETAIL_FOV_ON", () =
   assert.match(
     indexSrc,
     /camera\.aspect = newW \/ newH;[\s\S]{0,300}?if \(RETAIL_FOV_ON\) applyRetailFov\(camera, _retailGameFovDeg\);\s*camera\.updateProjectionMatrix\(\);/,
-    "resize handler re-derives fovY only under the flag",
+    "resize handler re-derives fovY only under RETAIL_FOV_ON (skipped under =off)",
   );
   const calls = indexSrc.match(/applyRetailFov\(/g) || [];
   assert.equal(calls.length, 3, "construction + setter + resize only");

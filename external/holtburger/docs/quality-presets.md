@@ -91,7 +91,7 @@ they accept the perf cost.
 | `terrainMarshWisps` | off | off | off | on | Terrain VFX Wave 3A |
 | `terrainSwampFireflies` | off | on | on | on | Terrain VFX Wave 3A |
 | `terrainSwampMidges` | off | on | on | on | Terrain VFX Wave 3A |
-| `terrainRock` | off | off | off | off | Terrain VFX Wave 4A |
+| `terrainRock` | off | off | on | on | Terrain VFX Wave 4A (on at high/ultra since 2026-10-19) |
 | `terrainRockPebbleCount` | 0 | 3000 | 9000 | 18000 | Terrain VFX Wave 4A |
 | `terrainRockGritCount` | 0 | 160 | 400 | 600 | Terrain VFX Wave 4A |
 | `terrainRockRadius` | 32 | 40 | 56 | 72 | Terrain VFX Wave 4A |
@@ -422,9 +422,13 @@ they accept the perf cost.
   (`apps/holtburger-web/docs/2026-07-31-terrain-vfx-plan.md` §3.3). THE family
   master for ROCK/BARREN — terrain codes 0 `BarrenRock`, 13 `SedimentaryRock`,
   14 `SemiBarrenRock`, 30 `olthoi`, derived from `terrain_families.js` and never
-  hardcoded. **OFF on every tier** (§5.9 ship-OFF); the promotion target is
-  `high`/`ultra` on. It composes with both sub-effects, so `?terrainRock=on`
-  lights the tier's intended set. `low` is `null` for the whole family: both
+  hardcoded. **DEFAULT ON at `high`/`ultra` since 2026-10-19** (promoted via
+  `TERRAIN_VFX_PROMOTED.rock` ahead of its 1070 eye test, which is still owed
+  as a post-flip A/B against `?terrainRock=off`, together with the R-list perf
+  check of ≤ 1.5 ms at ultra); `low`/`mid` stay off per the ladder. It
+  composes with both sub-effects, so `?terrainRock=on` lights the tier's
+  intended set at any tier, and `?terrainRock=off` (or `0`/`false`/`no`)
+  turns the family off at every tier. `low` is `null` for the whole family: both
   counts are 0, so `?terrainRock=on` there renders nothing and warns once.
   Nothing in this family touches the terrain fragment shader, and plan §3.3's
   third item (footfall dust puffs) is the wave-3B DIRT mechanism — it is not

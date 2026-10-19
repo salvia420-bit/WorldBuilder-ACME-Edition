@@ -68,15 +68,21 @@ export function carnageEnabled() {
 }
 
 /**
- * `?combatFxBus=on` — STRICT opt-in (2026-10-13). Feeds the bus handlers in
- * `_bind` the event's `detail` (see the note there). Absent ⇒ OFF, so the
- * default arm keeps its shipped behaviour until the owner's eye-test.
+ * `?combatFxBus` — DEFAULT ON (2026-10-19, flipped ahead of its 1070 eye
+ * test, which is still owed; 2026-10-13..18 it needed an exact `=on`). Feeds
+ * the bus handlers in `_bind` the event's `detail` (see the note there).
+ * Escape: `off|0|false|no` (trimmed, case-insensitive) hands them the raw
+ * Event again, so real combat never reaches them. Absent, `on` or any other
+ * value reads ON.
  */
 export function combatFxBusEnabled() {
   try {
-    return new URLSearchParams(window.location.search).get("combatFxBus") === "on";
+    const v = new URLSearchParams(window.location.search).get("combatFxBus");
+    if (v == null) return true;
+    const s = v.trim().toLowerCase();
+    return s !== "off" && s !== "0" && s !== "false" && s !== "no";
   } catch (_e) {
-    return false;
+    return true;
   }
 }
 
@@ -854,7 +860,7 @@ export function carnageOnDeath(inst) {
 /* ── bus wiring ──────────────────────────────────────────────────────── */
 
 let _installed = false;
-let _busDetail = false; // ?combatFxBus=on, read once in installCarnage()
+let _busDetail = true; // ?combatFxBus (DEFAULT ON; =off|0|false|no escape), read once in installCarnage()
 let _critByName = new Map(); // defenderName → ts (same latch idea as combatFx)
 
 function _bind() {
@@ -862,13 +868,14 @@ function _bind() {
   if (!pc?.events?.on) return false;
   // The plugin bus delivers `new CustomEvent(name, { detail: payload })`
   // (plugins/api.js events.emit), but both handlers below read the payload
-  // fields straight off their argument — i.e. off the Event — so on real
-  // traffic they see `undefined` and never fire (lint-event-consumers.mjs
-  // DETAIL_KNOWN_BUGS). Under `?combatFxBus=on` each handler is handed
-  // `ev.detail` instead (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake
-  // bus that passes the raw payload still works). Off by default: carnage
-  // actually firing is a large visual change pending the owner's eye-test, so
-  // the default arm subscribes the handler itself, exactly as before.
+  // fields straight off their argument. `onBus` therefore hands each handler
+  // `ev.detail` (kill_impulse.js's `d?.detail ?? d` unwrap, so a fake bus that
+  // passes the raw payload still works). DEFAULT ON since 2026-10-19 (ahead of
+  // the 1070 eye test, still owed). `?combatFxBus=off` (also 0/false/no)
+  // subscribes the handler itself, the pre-fix arm: real traffic reads
+  // `undefined` off the Event and carnage never fires. The lint still lists
+  // both handlers (lint-event-consumers.mjs DETAIL_KNOWN_BUGS) because its
+  // static check cannot see through `onBus`.
   const onBus = (name, fn) =>
     pc.events.on(name, _busDetail ? (ev) => fn(ev?.detail ?? ev ?? {}) : fn);
   onBus("playEffect", ({ targetGuid, scriptId }) => {
@@ -904,9 +911,9 @@ export function installCarnage() {
   if (_installed || !carnageEnabled()) return;
   _installed = true;
   _busDetail = combatFxBusEnabled();
-  if (_busDetail) {
+  if (!_busDetail) {
     // eslint-disable-next-line no-console
-    console.info("[carnage] ?combatFxBus=on — bus handlers read the event's detail payload");
+    console.info("[carnage] ?combatFxBus=off — bus handlers read the raw Event (legacy arm: real combat never reaches carnage)");
   }
   let tries = 0;
   const attempt = () => {

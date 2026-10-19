@@ -147,6 +147,7 @@ export function createCleanFrame(deps = {}) {
       selection: null,
       brackets: null,
       nameplates: [],
+      nameplatesFlag: null,
       helloCube: null,
     };
     const steps = {};
@@ -244,6 +245,11 @@ export function createCleanFrame(deps = {}) {
     // 7. Nameplate sprites + the hello cube. With ?nameplates=on, nameplate_sprite.js's own
     // rAF LOD rewrites `.visible` of the nearest sprites every frame, so each sprite is also
     // taken off every camera layer (layers.mask 0): the renderer skips it whatever the LOD sets.
+    // FILM-5 remainder (2026-10-18 follow-up): the mask a sprite returns to lives on the
+    // sprite (`__filmCleanMask`), where the indoor-layer re-stamp after an appearance
+    // hot-swap (entities.js `_stampEntityIndoorLayer`) writes instead of the live mask, and
+    // `entityManager._filmCleanNameplates` makes nameplate_sprite.js hide a sprite it creates
+    // mid-take the same way. restore() puts back every stashed mask it finds.
     attempt(steps, "nameplates", () => {
       const map = em && em.entityMap;
       if (!map || typeof map.values !== "function") return { ok: false, skipped: "no entityMap" };
@@ -254,19 +260,22 @@ export function createCleanFrame(deps = {}) {
           const s = inst[key];
           if (!s || typeof s !== "object") continue;
           const entry = { obj: s };
-          if (s.layers && Number.isInteger(s.layers.mask) && s.layers.mask !== 0) {
-            entry.mask = s.layers.mask;
+          if (s.layers && Number.isInteger(s.layers.mask) && s.__filmCleanMask === undefined) {
+            s.__filmCleanMask = s.layers.mask;
             s.layers.mask = 0;
+            entry.masked = true;
           }
           if (s.visible !== false) {
             entry.visible = s.visible;
             s.visible = false;
           }
-          if (entry.mask === undefined && entry.visible === undefined) continue;
+          if (!entry.masked && entry.visible === undefined) continue;
           saved.nameplates.push(entry);
           n += 1;
         }
       }
+      em._filmCleanNameplates = true;
+      saved.nameplatesFlag = em;
       return { ok: true, hidden: n };
     });
     attempt(steps, "helloCube", () => {
@@ -328,9 +337,23 @@ export function createCleanFrame(deps = {}) {
       return true;
     });
     attempt(steps, "nameplates", () => {
+      const unmask = (o) => {
+        if (!o || typeof o !== "object" || o.__filmCleanMask === undefined) return;
+        if (o.layers) o.layers.mask = o.__filmCleanMask;
+        delete o.__filmCleanMask;
+      };
+      const em0 = s.nameplatesFlag;
+      if (em0) delete em0._filmCleanNameplates;
       for (const n of s.nameplates) {
-        if (n.mask !== undefined) n.obj.layers.mask = n.mask;
+        unmask(n.obj);
         if (n.visible !== undefined) n.obj.visible = n.visible;
+      }
+      // Sprites created (or replaced) during the take, hidden by nameplate_sprite.js.
+      const map = em0 && em0.entityMap;
+      if (map && typeof map.values === "function") {
+        for (const inst of map.values()) {
+          if (inst && typeof inst === "object") for (const key of ["_nameplateSprite", "_buffBadgeSprite"]) unmask(inst[key]);
+        }
       }
       return true;
     });

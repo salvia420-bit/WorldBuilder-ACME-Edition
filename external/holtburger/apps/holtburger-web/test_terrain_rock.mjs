@@ -48,11 +48,17 @@
 //   R10 FIREWALL + INVARIANTS over the module source (§5.2 no light count,
 //       §5.3 no `.visible =`, §5.4 no per-instance cache key, §5.5 no
 //       `Math.random`, §5.7 `castShadow = false`).
-//   R11 FLAGS: three strict ship-OFF `=== "on"` opt-ins, keys on all four tiers
-//       in the right coercion sets, docs rows present, the router rows compose
-//       the family master, and the DEFAULT-ON effect count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
-//   R12 BARE DEFAULT IS BYTE-IDENTICAL: `initTerrainRock` registers nothing and
-//       allocates nothing with no flags, and `?wireframe=1` is a hard no-op.
+//   R11 FLAGS: the master is DEFAULT ON at high/ultra since 2026-10-19 (the
+//       promoted `{high, ultra}` ladder, flipped ahead of its 1070 eye test)
+//       and off at low/mid; `off`/`0`/`false`/`no` (trimmed, any case) turn it
+//       off at every tier and `=on` forces it on at every tier. The two effect
+//       flags stay exact `=on`/`=off` tristates. Keys on all four tiers in the
+//       right coercion sets, docs rows present, the router rows compose the
+//       family master, and the DEFAULT-ON effect count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
+//   R12 BARE DEFAULT: with no preset bag, at low/mid, or under `?terrainRock=off`
+//       `initTerrainRock` registers nothing and allocates nothing, and
+//       `?wireframe=1` is a hard no-op; a bare quality=high boot builds both
+//       fields (the 2026-10-19 flip).
 //   R13 HEADLESS: both fields run with no THREE at all (the `?nullRender=1`
 //       path), and with THREE the meshes are `castShadow === false` with their
 //       instance buffers allocated exactly once.
@@ -219,8 +225,10 @@ for (const tier of PRESET_NAMES) {
     check(`PRESETS.${tier} carries ${k}`,
       Object.prototype.hasOwnProperty.call(PRESETS[tier], k));
   }
-  check(`PRESETS.${tier}.terrainRock is false (ship-OFF master, §5.9)`,
-    PRESETS[tier].terrainRock === false);
+  // DEFAULT ON at high / ultra since 2026-10-19 (TERRAIN_VFX_PROMOTED.rock,
+  // flipped ahead of the 1070 eye test); low / mid stay off per the ladder.
+  check(`PRESETS.${tier}.terrainRock follows the promoted {high, ultra} ladder`,
+    PRESETS[tier].terrainRock === (tier === "high" || tier === "ultra"));
 }
 check("low is null for the whole family (plan §5.8)",
   resolveRockQuality(PRESETS.low) === null);
@@ -693,15 +701,50 @@ check("the module derives FAM_ROCK from terrain_families.js",
   ROCK_SRC.includes('from "./terrain_families.js"') && ROCK_SRC.includes("FAM_ROCK"));
 
 // ===========================================================================
-console.log("\n-- R11 flags: three strict ship-OFF opt-ins ---------------------");
+console.log("\n-- R11 flags: master DEFAULT ON at high/ultra, =off escapes -----");
 // ===========================================================================
+/** Run `fn` with console.warn captured; returns the warn lines. */
+function captureWarns(fn) {
+  const orig = console.warn;
+  const lines = [];
+  console.warn = (...a) => { lines.push(a.map(String).join(" ")); };
+  try { fn(); } finally { console.warn = orig; }
+  return lines;
+}
 clearUrl();
-check("no window at all: every rock flag reads false",
+check("no window at all (no preset bag): every rock flag reads false",
   terrainRockEnabled() === false && terrainRockPebblesEnabled() === false
   && terrainRockGritEnabled() === false);
+// DEFAULT ON (2026-10-19, ahead of the 1070 eye test): absent ⇒ the tier.
+for (const [tier, want] of [["low", false], ["mid", false], ["high", true], ["ultra", true]]) {
+  setUrl("", PRESETS[tier]);
+  check(`no flags at quality=${tier}: the master is ${want ? "ON" : "off"} `
+    + "(DEFAULT ON at high/ultra since 2026-10-19)",
+    terrainRockEnabled() === want);
+}
 setUrl("");
-check("no flags at quality=high: the master is OFF (ship-OFF, §5.9)",
-  terrainRockEnabled() === false);
+check("...and a bare quality=high lights both effects at the tier's counts",
+  terrainRockPebblesEnabled() === true && terrainRockGritEnabled() === true
+  && terrainRockPebbleCount() === 9000 && terrainRockGritCount() === 400);
+// The escape: every off spelling wins at the promoted tiers, trimmed, any case,
+// and none of them warns.
+for (const v of ["off", "0", "false", "no", "OFF", "No", " off ", "FALSE"]) {
+  for (const tier of ["high", "ultra"]) {
+    setUrl(`?terrainRock=${encodeURIComponent(v)}`, PRESETS[tier]);
+    const warns = captureWarns(() => terrainRockEnabled());
+    check(`?terrainRock=${JSON.stringify(v)} at quality=${tier} turns the master OFF, silently`,
+      terrainRockEnabled() === false && warns.length === 0, warns.join(" | "));
+  }
+}
+setUrl("?terrainRock=off");
+check("?terrainRock=off kills both effects through the composed rows too",
+  vfxEffectEnabled("terrain.rockPebbles") === false
+  && vfxEffectEnabled("terrain.rockGrit") === false);
+setUrl("?terrainRock=on", PRESETS.mid);
+check("?terrainRock=on still forces the master on where the tier leaves it off (mid)",
+  terrainRockEnabled() === true);
+setUrl("?terrainRock=ON", PRESETS.mid);
+check("...in any case (trimmed, case-insensitive)", terrainRockEnabled() === true);
 setUrl("?terrainRock=on");
 check("?terrainRock=on lights the master", terrainRockEnabled() === true);
 check("...and the tier's non-zero counts light both effects",
@@ -715,9 +758,17 @@ check("at quality=low the tier's zero counts leave both effects off",
 setUrl("?terrainRock=on&terrainRockGrit=off");
 check("?terrainRockGrit=off bisects one effect out",
   terrainRockPebblesEnabled() === true && terrainRockGritEnabled() === false);
+setUrl("?terrainRock=1", PRESETS.mid);
+{
+  const warns = captureWarns(() => terrainRockEnabled());
+  check("a value that is neither an off spelling nor 'on' does NOT force it on: "
+    + "at quality=mid it follows the tier (off)", terrainRockEnabled() === false);
+  check("...and says so once ([terrainRock] ignoring …)",
+    warns.length === 1 && warns[0].includes("[terrainRock] ignoring"), warns.join(" | "));
+}
 setUrl("?terrainRock=1");
-check("a NON-'on' value does NOT enable (strict exact-match, plan §2.4)",
-  terrainRockEnabled() === false);
+check("...while at quality=high it follows the tier (on): only the off spellings "
+  + "turn rock off", terrainRockEnabled() === true);
 setUrl("?terrainRock=off");
 check("?terrainRock=off is honoured", terrainRockEnabled() === false);
 setUrl("?terrainRockDensity=0.5");
@@ -727,10 +778,11 @@ check("an OUT-OF-RANGE density falls back to the default (never a silent clamp)"
   terrainRockDensity() === 1);
 setUrl("");
 check("terrainRockDensity defaults to 1.0", terrainRockDensity() === 1);
-setUrl("?terrainRockPebbleCount=250&terrainRockRadius=30");
+setUrl("?terrainRockPebbleCount=250&terrainRockRadius=30", PRESETS.mid);
 check("the numeric URL overrides win over the tier",
   terrainRockPebbleCount() === 250 && terrainRockRadiusM() === 30);
-check("...but a count alone cannot turn the family on",
+check("...but a count alone cannot turn the family on (quality=mid, where the "
+  + "tier leaves the master off)",
   terrainRockEnabled() === false);
 // The router rows.
 setUrl("?terrainRock=on");
@@ -746,11 +798,24 @@ setUrl("?visual=off&terrainRock=on&terrainRockPebbles=on");
 check("?visual=off kills the family (the firewall composition rule)",
   vfxEffectEnabled("terrain.rockPebbles") === false);
 clearUrl();
-check("no flags: the rock rows are OFF, so the DEFAULT-ON count stays 16 (14 + the 2026-10-10 per-weapon rows)",
+check("no window (no preset bag): the rock rows are OFF, and the DEFAULT-ON count stays 16 (14 + the 2026-10-10 per-weapon rows)",
   ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
     .every((id) => vfxEffectEnabled(id) === false)
   && Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 16);
-check("every rock row is under the `terrain.` ship-OFF prefix",
+setUrl("");
+check("bare default at quality=high: all three rock rows resolve ON (DEFAULT ON since 2026-10-19)",
+  ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
+    .every((id) => vfxEffectEnabled(id) === true));
+setUrl("", PRESETS.mid);
+check("bare default at quality=mid: the rock rows stay OFF (the ladder)",
+  ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
+    .every((id) => vfxEffectEnabled(id) === false));
+setUrl("?visual=all", PRESETS.mid);
+check("the rock rows do not track ?visual=all: at quality=mid it lights none of them",
+  ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
+    .every((id) => vfxEffectEnabled(id) === false));
+clearUrl();
+check("every rock row is under the `terrain.` prefix (outside the visual suite's DEFAULT-ON count)",
   ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
     .every((id) => id.startsWith("terrain.")));
 for (const f of ["terrainRock", "terrainRockPebbles", "terrainRockGrit",
@@ -769,20 +834,63 @@ check("_resetVfxFlags clears the rock memos",
   FLAGS.includes("_terrainRock = _terrainRockPebbles = _terrainRockGrit = undefined;"));
 
 // ===========================================================================
-console.log("\n-- R12 bare default is byte-identical ---------------------------");
+console.log("\n-- R12 bare default: off below high, built at high ---------------");
 // ===========================================================================
 clearUrl();
 _resetTerrainVfx();
 _resetTerrainRock();
 {
   const facade = { terrainGroup: { parent: null } };
-  check("no flags: initTerrainRock returns null", initTerrainRock({ scene3d: facade }) === null);
-  check("no flags: terrainRockStats reports the family off and uninited",
+  check("no window (no preset bag): initTerrainRock returns null",
+    initTerrainRock({ scene3d: facade }) === null);
+  check("no window: terrainRockStats reports the family off and uninited",
     terrainRockStats().enabled === false && terrainRockStats().inited === false);
 }
+for (const [label, search, flags] of [
+  ["bare default at quality=low", "", PRESETS.low],
+  ["bare default at quality=mid", "", PRESETS.mid],
+  ["?terrainRock=off at quality=high", "?terrainRock=off", PRESETS.high],
+  ["?terrainRock=0 at quality=ultra", "?terrainRock=0", PRESETS.ultra],
+]) {
+  _resetTerrainRock();
+  setUrl(search, flags);
+  check(`${label}: initTerrainRock returns null and allocates nothing`,
+    initTerrainRock({ scene3d: { terrainGroup: { parent: null } } }) === null
+    && terrainRockStats().inited === false && terrainRockStats().counters.inits === 0);
+}
+_resetTerrainRock();
+clearUrl();
 check("?wireframe=1 is a hard no-op (plan §8 risk 8)",
   initTerrainRock({ scene3d: {}, search: "?wireframe=1&terrainRock=on" }) === null);
+setUrl("");
+check("...including over the quality=high bare default",
+  initTerrainRock({ scene3d: {}, search: "?wireframe=1" }) === null
+  && terrainRockStats().inited === false);
 _resetTerrainRock();
+clearUrl();
+{
+  // The 2026-10-19 flip: a bare quality=high boot (no URL flags at all) now
+  // builds the family through the real init path.
+  _resetTerrainVfx();
+  _resetTerrainRock();
+  setUrl("");
+  const facade = {
+    terrainGroup: { parent: null },
+    frameTime: { tsSec: 0, dt: 0.016 },
+    quality: { flags: PRESETS.high },
+  };
+  const { initTerrainVfx, terrainVfxStats } = await import("./scene3d/terrain_vfx.js");
+  initTerrainVfx({ scene3d: facade });
+  const surface = initTerrainRock({ scene3d: facade, getOracle: () => fakeOracle(() => 0) });
+  check("bare default at quality=high: initTerrainRock builds the family (DEFAULT ON since 2026-10-19)",
+    !!surface && terrainRockStats().inited === true && terrainRockStats().enabled === true);
+  const ids = terrainVfxStats().providers.map((p) => p.id);
+  check("...registering both rock providers with the spine",
+    ids.includes(PEBBLE_PROVIDER_ID) && ids.includes(GRIT_PROVIDER_ID), ids.join());
+  _resetTerrainRock();
+  _resetTerrainVfx();
+  clearUrl();
+}
 check("index.js imports initTerrainRock",
   INDEX.includes('import { initTerrainRock } from "./terrain_rock.js";'));
 check("index.js registers ROCK after SWAMP (the wave order)",

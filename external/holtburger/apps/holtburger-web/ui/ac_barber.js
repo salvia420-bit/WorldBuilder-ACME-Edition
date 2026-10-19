@@ -22,9 +22,10 @@
 //     BarberActive until the next login, as with retail).
 //
 // Flags: `?barber=off` (default ON) leaves StartBarber as a console line.
-// `?barberMotionTable=on` (default OFF — it changes how the player
-// animates) also swaps the local player's motion table on an Empyrean
-// Apply, as retail's CPhysicsObj::SetMotionTableID does.
+// An Empyrean Apply also swaps the local player's motion table, as retail's
+// CPhysicsObj::SetMotionTableID does (`?barberMotionTable`, DEFAULT ON since
+// 2026-10-19, ahead of its 1070 eye test); `?barberMotionTable=off` skips the
+// swap, and the gait then changes at the next login.
 
 /** GameEventStartBarber / FinishBarber field count. */
 export const BARBER_FIELD_COUNT = 16;
@@ -43,9 +44,13 @@ export function barberEnabled(search) {
   return !isOff(params(search).get("barber"));
 }
 
-/** `?barberMotionTable=on` lets Apply swap the local motion table (default OFF). */
+/**
+ * Apply swaps the local motion table (DEFAULT ON since 2026-10-19);
+ * `?barberMotionTable=off|0|false|no` skips the swap.
+ */
 export function barberMotionTableEnabled(search) {
-  return params(search).get("barberMotionTable") === "on";
+  const v = (params(search).get("barberMotionTable") || "").trim().toLowerCase();
+  return !(v === "off" || v === "0" || v === "false" || v === "no");
 }
 
 /**
@@ -331,7 +336,7 @@ export function runBarberLocalEffects(effects, sinks, opts = {}) {
  *   barberApply(heritage, gender, face) → Promise<JSON string | object>
  *   finishBarber(Uint32Array(16))
  *   sinks: { setMotionTable?, destroyParticles?, playScript? }
- *   motionTable: boolean (?barberMotionTable=on)
+ *   motionTable: boolean (barberMotionTableEnabled(): default on, ?barberMotionTable=off)
  *   stillOpen?(): boolean — checked once barberApply settles; false (the
  *     page was cancelled / closed / superseded meanwhile) → nothing runs
  * Resolves to `{ sent: true, fields, effects }`, or `{ sent: false, reason,

@@ -1,6 +1,8 @@
-// scene3d/rig_cell_gate.js — cells-portals-1 (2026-10-13): `?rigCellGate=on`
-// (OPT-IN, default OFF). Indoors, an entity rig is drawn — and so pickable /
-// hoverable — only while the cell it stands in is drawn.
+// scene3d/rig_cell_gate.js — cells-portals-1 (2026-10-13): `?rigCellGate`
+// (DEFAULT ON since 2026-10-19, flipped ahead of its 1070 eye test, which is
+// still owed; `=off`/`0`/`false`/`no` is the escape). Indoors, an entity rig
+// is drawn — and so pickable / hoverable — only while the cell it stands in is
+// drawn.
 //
 // Retail draws an object only through the cells the portal walk reached:
 // PView::DrawCells (acclient.c:461450) ends with
@@ -45,7 +47,10 @@ import * as THREE from "three";
 
 let _RIG_CELL_GATE_ON = null;
 
-/** `?rigCellGate=on` — exact opt-in; any other value (or none) is OFF. */
+/**
+ * `?rigCellGate` — DEFAULT ON (2026-10-19): absent, `=on` or any other value
+ * reads ON; `off`/`0`/`false`/`no` (trimmed, any case) is the escape.
+ */
 export function readRigCellGateFlag(search) {
   try {
     const s =
@@ -56,9 +61,10 @@ export function readRigCellGateFlag(search) {
         : typeof location !== "undefined" && location
         ? location.search
         : "";
-    return new URLSearchParams(s || "").get("rigCellGate") === "on";
+    const v = new URLSearchParams(s || "").get("rigCellGate")?.trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -66,7 +72,8 @@ export function readRigCellGateFlag(search) {
 export function rigCellGateEnabled() {
   if (_RIG_CELL_GATE_ON === null) {
     _RIG_CELL_GATE_ON = readRigCellGateFlag();
-    if (_RIG_CELL_GATE_ON) _installRigCellGateDiag();
+    // Installed under `=off` too, so either arm of the A/B can toggle live.
+    _installRigCellGateDiag();
   }
   return _RIG_CELL_GATE_ON;
 }

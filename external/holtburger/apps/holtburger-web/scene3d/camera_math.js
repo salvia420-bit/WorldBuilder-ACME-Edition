@@ -483,15 +483,16 @@ export function trackedTargetYaw(pivot, target) {
   return Math.atan2(dx, dy);
 }
 
-// ---- models-camera-2: retail game FOV (`?retailFov=on`) --------------------
+// ---- models-camera-2: retail game FOV (`?retailFov`, DEFAULT ON) ------------
 //
 // Retail never stores a vertical FOV: the SmartBox draw derives it every frame
 // from the Render.FieldOfView preference, `m_fGameFOV / (m_ViewportAspectRatio
 // - 0.1)` → `Render::SetFOVRad` (acclient.c:144897, same at :143950) →
 // `D3DXMatrixPerspectiveFovLH` fovY (PrimD3DRender::SetFOVInternal
 // :453039-453048), so the HORIZONTAL FOV stays near 81-89° across window
-// shapes. Our world camera keeps a fixed 60° vertical FOV unless the default-
-// OFF `?retailFov=on` opt-in is set (pending the batched 1070 eye-test).
+// shapes. Our world camera does the same: DEFAULT ON since 2026-10-19, flipped
+// ahead of its 1070 eye test (still owed). `?retailFov=off` (or 0/false/no)
+// keeps the old fixed 60° vertical FOV.
 
 /** `SmartBox::m_fGameFOV` ctor default π/2 (acclient.c:145517, raw 1070141403). */
 export const RETAIL_GAME_FOV_DEFAULT_DEG = 90;
@@ -504,18 +505,24 @@ export const RETAIL_GAME_FOV_DEFAULT_DEG = 90;
 export const RETAIL_GAME_FOV_MIN_DEG = 10;
 export const RETAIL_GAME_FOV_MAX_DEG = 160;
 
-/** Ours: the fixed vertical FOV the flag-off world camera keeps (index.js). */
+/** Ours: the fixed vertical FOV the world camera keeps under `?retailFov=off` (index.js). */
 export const LEGACY_VERTICAL_FOV_DEG = 60;
 
 /**
- * Default-OFF opt-in reader: true only for exactly `?retailFov=on`.
+ * `?retailFov` reader. DEFAULT ON (2026-10-19, ahead of its 1070 eye test):
+ * absent, `on` or any other value → true; `off`/`0`/`false`/`no` (trimmed,
+ * any case) → false, the escape back to the fixed 60° vertical FOV. An
+ * unreadable search string reads ON. (2026-10-13..19 only an exact `=on`
+ * enabled it.)
  * @param {string} [search] a `location.search` string
  */
 export function retailFovEnabled(search) {
   try {
-    return new URLSearchParams(search || "").get("retailFov") === "on";
+    const v = new URLSearchParams(search || "").get("retailFov");
+    const s = v == null ? "" : v.trim().toLowerCase();
+    return !(s === "off" || s === "0" || s === "false" || s === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

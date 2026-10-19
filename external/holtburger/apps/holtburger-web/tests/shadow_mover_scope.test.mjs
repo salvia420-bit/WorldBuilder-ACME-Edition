@@ -25,6 +25,10 @@
 //   K  `?shadowMoverScope=off`: the RP5 hash — any rig moving anywhere, hidden
 //      or not, re-renders every cascade
 //   L  the flag reader
+//   R  WebGL context restore (2026-10-18 review follow-up): three builds a NEW
+//      WebGLShadowMap; the single-shadow path's light set survives it, so the
+//      gate must re-take control on the new map and re-raster the sun at once
+//      (it used to wait for the 12-frame ceiling with an empty map)
 //
 // Run:  cd apps/holtburger-web && node tests/shadow_mover_scope.test.mjs
 
@@ -79,7 +83,7 @@ function makeRenderer() {
   const sm = new WebGLShadowMap(stub, { update: (o) => o.geometry }, { maxTextureSize: 16384 });
   sm.enabled = true;
   sm.type = THREE.PCFShadowMap;
-  return { renderer: { shadowMap: sm }, sm, rendered, setLights(ls) { lights = ls; } };
+  return { renderer: { shadowMap: sm }, sm, stub, rendered, setLights(ls) { lights = ls; } };
 }
 
 // AC frame (+Z up) under worldRoot, exactly as index.js builds it.
@@ -132,7 +136,7 @@ function makeSession({ csm = true } = {}) {
     r.sm.render(lights, world.scene, world.camera);
     return [...r.rendered].sort().join("");
   }
-  return { world, lighting, lights, scene3d, entityMap, frame, sm: r.sm };
+  return { world, lighting, lights, scene3d, entityMap, frame, sm: r.sm, r };
 }
 
 // Which cascades hold a world-space sphere (three's own frustum test).
@@ -380,6 +384,29 @@ L.__resetRp5ConfigForTest(undefined);
   check("L6 on ⇒ on", read("?shadowMoverScope=on") === true);
   globalThis.location.search = "";
   L.__resetRp5ConfigForTest(undefined);
+}
+
+// ---------------------------------------------------------------- R
+{
+  const S = makeSession({ csm: false });
+  check("R0 single-shadow path: the first gated frame warms the sun map", S.frame() === "0");
+  for (let f = 0; f < 3; f += 1) S.frame(); // a static scene: no raster until the ceiling
+  // three r184 onContextRestore -> initGLContext: a new WebGLShadowMap, with
+  // enabled / autoUpdate / needsUpdate / type copied over.
+  const dead = S.r.renderer.shadowMap;
+  const fresh = new WebGLShadowMap(S.r.stub, { update: (o) => o.geometry }, { maxTextureSize: 16384 });
+  fresh.enabled = dead.enabled;
+  fresh.autoUpdate = dead.autoUpdate;
+  fresh.needsUpdate = dead.needsUpdate;
+  fresh.type = dead.type;
+  S.r.renderer.shadowMap = fresh;
+  L.tickLightingForCellState(S.scene3d, null);
+  S.world.scene.updateMatrixWorld();
+  S.r.rendered.clear();
+  fresh.render(S.lights, S.world.scene, S.world.camera);
+  check("R1 the first frame after a restore re-rasters the sun map", [...S.r.rendered].join("") === "0",
+    `rendered=${[...S.r.rendered].join("")}`);
+  check("R2 the gate runs the new map", fresh.autoUpdate === false && S.scene3d._shadowScope.shadowMap === fresh);
 }
 
 console.log(`\nshadow_mover_scope: ${pass} passed, ${fail} failed`);

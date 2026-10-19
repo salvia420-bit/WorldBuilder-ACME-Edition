@@ -750,6 +750,10 @@ export function armFrameSplit(opts = {}) {
     render: renderer.render,
     rbd: wantRbd ? renderer.renderBufferDirect : null,
     shadowRender: shadowMap && typeof shadowMap.render === "function" ? shadowMap.render : null,
+    // The map that was wrapped: a context restore replaces `renderer.shadowMap`
+    // (three r184 initGLContext), and the dead map's render must not land on
+    // the new one (2026-10-18 review follow-up).
+    shadowMap,
     listInit: list.init,
     listFinish: list.finish,
     listSort: list.sort,
@@ -972,7 +976,7 @@ export function disarmFrameSplit() {
   const { renderer, scene, list, orig } = S;
   renderer.render = orig.render;
   if (orig.rbd) renderer.renderBufferDirect = orig.rbd;
-  if (orig.shadowRender && renderer.shadowMap) renderer.shadowMap.render = orig.shadowRender;
+  if (orig.shadowRender && orig.shadowMap) orig.shadowMap.render = orig.shadowRender;
   list.init = orig.listInit;
   list.finish = orig.listFinish;
   list.sort = orig.listSort;

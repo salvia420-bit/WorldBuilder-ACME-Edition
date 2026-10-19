@@ -547,20 +547,54 @@ function _hookProgram(st, program) {
 // logs three's per-upload "Trying to use N texture units" warning (plain warn,
 // not warnOnce) until reload. Never above the restored context's own combined
 // limit; if that came back lower, the pins are re-planned for it (every program
-// after a restore is a new one).
-function _restoreUnitLimit(st) {
-  const caps = st.renderer.capabilities;
-  if (!caps) return;
-  let max = st.stats.maxTextures;
+// after a restore is a new one), and planned back up to the boot limit by a
+// later restore that allows it.
+function _reapplyUnitLimit(renderer, gl, bootMax) {
+  const caps = renderer.capabilities;
+  if (!caps) return bootMax;
+  let max = bootMax;
   try {
-    const combined = st.gl.getParameter(st.gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) | 0;
+    const combined = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) | 0;
     if (combined > 0 && combined < max) max = combined;
-  } catch (_) { /* keep the planned limit */ }
+  } catch (_) { /* keep the boot limit */ }
   if ((caps.maxTextures | 0) < max) caps.maxTextures = max;
+  return max;
+}
+
+function _restoreUnitLimit(st) {
+  const max = _reapplyUnitLimit(st.renderer, st.gl, st.bootMaxTextures);
   if (max !== st.stats.maxTextures) {
     st.stats.maxTextures = max;
     st.pinUnits.clear();
     for (const [name, unit] of pinUnitsFor(max, st.pinNames)) st.pinUnits.set(name, unit);
+  }
+}
+
+// RENDER restore gap (2026-10-18 follow-up): every restore undoes index.js's
+// boot raise of maxTextures, whether or not a trim here is on. With all three
+// flags off this install returned null and nothing put the limit back, so
+// terrain-batch's sampler on unit 16 (index.js 2026-10-07 note; cells.js
+// "CORRECTED 2026-08-12") warned on every upload again, ~80/s. This keeper only
+// re-applies the boot limit: from the restore event, and from the render tail
+// as a fallback.
+function _installUnitLimitKeeper(renderer, gl) {
+  if (!renderer || !gl || renderer.__hbUnitLimitKeeper) return;
+  let caps = renderer.capabilities;
+  const bootMax = (caps && caps.maxTextures) | 0;
+  if (bootMax <= 0) return;
+  const keep = () => {
+    if (renderer.capabilities === caps) return;
+    caps = renderer.capabilities;
+    _reapplyUnitLimit(renderer, gl, bootMax);
+  };
+  try {
+    Object.defineProperty(renderer, "__hbUnitLimitKeeper", { value: keep, configurable: true });
+  } catch (_) {
+    renderer.__hbUnitLimitKeeper = keep;
+  }
+  const canvas = renderer.domElement;
+  if (canvas && typeof canvas.addEventListener === "function") {
+    try { canvas.addEventListener("webglcontextrestored", keep, false); } catch (_) { /* render tail still keeps it */ }
   }
 }
 
@@ -584,7 +618,8 @@ function _adoptArray(st, arr) {
  * Install on the main renderer, AFTER `renderer.capabilities.maxTextures` has
  * its final value (index.js raises it to MAX_COMBINED_TEXTURE_IMAGE_UNITS).
  * Never throws. Returns the api (also `window.__uniformBindPatch`), or null
- * when both flags are off.
+ * when all three flags are off (the boot unit limit is still kept across a
+ * context restore then; see _installUnitLimitKeeper).
  */
 export function installUniformBindPatch(renderer, opts = {}) {
   const pin = opts.texUnitPin !== undefined ? !!opts.texUnitPin : texUnitPinEnabled();
@@ -598,7 +633,10 @@ export function installUniformBindPatch(renderer, opts = {}) {
   const ubo = (opts.lightUbo !== undefined ? !!opts.lightUbo : lightUboEnabled()) &&
     typeof chunk === "string" && chunk.indexOf(`#ifdef ${LIGHT_UBO_DEFINE}`) !== -1 &&
     !!gl && typeof gl.getUniformBlockIndex === "function";
-  if ((!pin && !light && !ubo) || !renderer || !renderer.info) return null;
+  if ((!pin && !light && !ubo) || !renderer || !renderer.info) {
+    try { _installUnitLimitKeeper(renderer, gl); } catch (_) { /* never throws */ }
+    return null;
+  }
   if (renderer.__hbUniformBindPatch) return renderer.__hbUniformBindPatch;
   const maxTextures = (renderer.capabilities && renderer.capabilities.maxTextures) | 0;
   const st = {
@@ -609,6 +647,7 @@ export function installUniformBindPatch(renderer, opts = {}) {
     blocks: null,
     lightOff: false,
     renderer,
+    bootMaxTextures: maxTextures,
     pinNames: opts.pinNames || PIN_NAMES,
     pinUnits: pinUnitsFor(maxTextures, opts.pinNames || PIN_NAMES),
     cam: null,
@@ -680,6 +719,8 @@ export function installUniformBindPatch(renderer, opts = {}) {
 
 /** Render-tail hook (index.js recordRenderDiag): cheap identity compare. */
 export function uniformBindPatchTick(renderer) {
-  const api = renderer && renderer.__hbUniformBindPatch;
+  if (!renderer) return;
+  const api = renderer.__hbUniformBindPatch;
   if (api) api.tick();
+  else if (renderer.__hbUnitLimitKeeper) renderer.__hbUnitLimitKeeper();
 }

@@ -279,6 +279,13 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   FX.setParticleFxFlag(false);
   const PM = await import("../scene3d/particles/particle_manager.js");
   const { ParticleManager } = PM;
+  // `?particleSharedAlpha` is DEFAULT ON since 2026-10-19 (and this file has no
+  // `location`, which also reads ON): alpha emitters would append to the
+  // module-level shared registry (bucket `...-a-s`, parented to the FIRST
+  // manager's group, so the FX block's g3 would find none). This block checks
+  // each manager's OWN `-a` alpha bucket, so it runs on the `=off` escape; the
+  // shared path has its own suite (test_particle_shared_alpha.mjs).
+  PM.setParticleSharedAlphaFlag(false);
   const cam = new THREE.PerspectiveCamera(60, 1.6, 0.1, 10000);
   cam.updateMatrixWorld(true);
   const prevLive = window.liveScene3d;
@@ -420,6 +427,7 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   check("fx + retail again: FX hook and key restored, unfogged",
     fxAdd.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.particleFxProgramKey(true));
   FX.setParticleFxFlag(null);
+  PM.setParticleSharedAlphaFlag(null);
 
   setCurrentTime(null);
   window.liveScene3d = prevLive;

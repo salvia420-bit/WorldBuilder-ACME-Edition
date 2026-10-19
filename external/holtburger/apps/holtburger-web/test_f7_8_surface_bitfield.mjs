@@ -23,14 +23,22 @@
 //      independent flag decoding (simulates the wasm-side back-face
 //      emission — Rust emits two tris with different surface_dids
 //      and the JS side caches each in MaterialCache).
-//   4. A10-M1 — `?surfaceUnified=on` routes the cache path through the
-//      single `applySurfaceRenderState`; 70/70 flag×float combos prove the
-//      cache path == the unified fn byte-identical.
-//   5. A10-M2 — `?surfaceUnified=on` threads the render-state flags through
+//   4. A10-M1 — surfaceUnified (DEFAULT ON since 2026-10-19, `=off` escape)
+//      routes the cache path through the single `applySurfaceRenderState`;
+//      70/70 flag×float combos prove the cache path == the unified fn
+//      byte-identical, and Stage 4b pins the `?surfaceUnified=off` legacy
+//      ladder against the unified one. The reader is pinned both ways: absent /
+//      no window / garbage → ON, off/0/false/no → OFF.
+//   5. A10-M2 — surfaceUnified threads the render-state flags through
 //      the entity-owned (F.41 recolour) path `_buildEntityOwnedFromPixels`:
-//      default-off stays plain opaque (rollback); ON, an Additive/Translucent/
-//      luminous recolour decodes correctly and matches the unified decode for
-//      the same flags+floats; `surfaceType===0` recolours stay a no-op.
+//      `?surfaceUnified=off` stays plain opaque (rollback); the default (bare
+//      URL and no window), an Additive/Translucent/luminous recolour decodes
+//      correctly and matches the unified decode for the same flags+floats;
+//      `surfaceType===0` recolours stay a no-op.
+//
+// Stages 2-3 run with NO window, i.e. on the bare default — the unified
+// decoder since the 2026-10-19 flip. The legacy ladder is pinned against it
+// explicitly (`?surfaceUnified=off`) in Stage 4b and Stage 6.2.
 //
 // Falls back to the host's installed copy of `three` (Playwright is
 // bundled at ~/.npm/_npx/.../node_modules/three on this box). If
@@ -280,21 +288,29 @@ check(
   matClipTrans.transparent === true && matClipTrans.depthWrite === false,
   `transparent=${matClipTrans.transparent}, depthWrite=${matClipTrans.depthWrite}`,
 );
-// Per-format ref on the LEGACY (non-unified) ladder — the RND-08 fix proper.
-const matClipPal = cache._materialFromFlags(
-  SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
-  { hasPalette: true },
-);
-const matClipDds = cache._materialFromFlags(
-  SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
-  { hasPalette: false },
-);
-check(
-  "Base1ClipMap legacy ladder: paletted → 100/255, non-paletted → 200/255",
-  Math.abs(matClipPal.alphaTest - 100 / 255) < 1e-9 &&
-    Math.abs(matClipDds.alphaTest - 200 / 255) < 1e-9,
-  `paletted=${matClipPal.alphaTest}, dds=${matClipDds.alphaTest}`,
-);
+// Per-format ref — the RND-08 fix proper — on BOTH ladders: the bare default
+// (no window → the unified decoder since 2026-10-19) and the LEGACY inline
+// ladder behind the `?surfaceUnified=off` escape.
+for (const [arm, search] of [["default (unified)", null], ["legacy ?surfaceUnified=off", "?surfaceUnified=off"]]) {
+  const _w = globalThis.window;
+  if (search === null) delete globalThis.window;
+  else globalThis.window = { location: { search } };
+  const matClipPal = cache._materialFromFlags(
+    SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
+    { hasPalette: true },
+  );
+  const matClipDds = cache._materialFromFlags(
+    SURFACE_TYPE.Base1ClipMap, stubTex, undefined, undefined, undefined, undefined,
+    { hasPalette: false },
+  );
+  if (_w === undefined) delete globalThis.window; else globalThis.window = _w;
+  check(
+    `Base1ClipMap ${arm} ladder: paletted → 100/255, non-paletted → 200/255`,
+    Math.abs(matClipPal.alphaTest - 100 / 255) < 1e-9 &&
+      Math.abs(matClipDds.alphaTest - 200 / 255) < 1e-9,
+    `paletted=${matClipPal.alphaTest}, dds=${matClipDds.alphaTest}`,
+  );
+}
 
 // (d) Self-illumination — driven by the luminosity FLOAT, not the 0x40
 // bit. Retail sets the bit on 0/6152 surfaces but 762 carry luminosity>0
@@ -502,7 +518,8 @@ check(
 
 // ---- Stage 4: A10-M1 single-decoder prop-equality -------------------
 // The unified `applySurfaceRenderState` (materials.js) is the JS analogue of
-// retail's sole `D3DPolyRender::SetSurface`. With `?surfaceUnified=on` BOTH
+// retail's sole `D3DPolyRender::SetSurface`. With surfaceUnified on (the
+// default since 2026-10-19) BOTH
 // decode sites delegate to it. This stage asserts byte-identical render-state
 // props across the flag×float matrix between:
 //   (A) `_materialFromFlags` with the flag ON (it builds a fresh material then
@@ -515,11 +532,14 @@ check(
 // color(.getHex). (Normal-map/POM/CSM/detail gates are off on a bare cache,
 // so they don't perturb the comparison.)
 
-// Fake a default-off then default-on `window.location.search` so
-// `readSurfaceUnifiedFlag()` flips. Restored after the stage.
+// Fake an explicit `?surfaceUnified=on` / `?surfaceUnified=off` search so
+// `readSurfaceUnifiedFlag()` flips. The flag is DEFAULT ON since 2026-10-19, so
+// the legacy arm MUST be the explicit `=off` escape — a bare search would run
+// the unified decoder on both sides and the OFF-vs-ON lenses below would test
+// nothing. Restored after the stage.
 const _prevWindow = globalThis.window;
 function setUnifiedFlag(on) {
-  globalThis.window = { location: { search: on ? "?surfaceUnified=on" : "" } };
+  globalThis.window = { location: { search: on ? "?surfaceUnified=on" : "?surfaceUnified=off" } };
 }
 
 setUnifiedFlag(true);
@@ -530,10 +550,53 @@ check(
 );
 setUnifiedFlag(false);
 check(
-  "no flag → readSurfaceUnifiedFlag() false (default off)",
+  "?surfaceUnified=off → readSurfaceUnifiedFlag() false (escape)",
   readSurfaceUnifiedFlag() === false,
   `got=${readSurfaceUnifiedFlag()}`,
 );
+// The reader both ways: absent / no window / garbage / a throwing location all
+// read ON (DEFAULT ON since 2026-10-19); off/0/false/no (trimmed, any case) OFF.
+globalThis.window = { location: { search: "" } };
+check(
+  "no flag → readSurfaceUnifiedFlag() true (DEFAULT ON)",
+  readSurfaceUnifiedFlag() === true,
+  `got=${readSurfaceUnifiedFlag()}`,
+);
+delete globalThis.window;
+check(
+  "no window (node) → readSurfaceUnifiedFlag() true (default)",
+  readSurfaceUnifiedFlag() === true,
+  `got=${readSurfaceUnifiedFlag()}`,
+);
+{
+  const OFF_FORMS = ["off", "0", "false", "no", "OFF", " off ", "No"];
+  const wrong = OFF_FORMS.filter((v) => {
+    globalThis.window = { location: { search: `?surfaceUnified=${encodeURIComponent(v)}` } };
+    return readSurfaceUnifiedFlag() !== false;
+  });
+  check(
+    "off / 0 / false / no / OFF / ' off ' / No → readSurfaceUnifiedFlag() false",
+    wrong.length === 0,
+    wrong.length ? `still ON for ${JSON.stringify(wrong)}` : "",
+  );
+  const ON_FORMS = ["on", "1", "true", "yes", "maybe", ""];
+  const wrongOn = ON_FORMS.filter((v) => {
+    globalThis.window = { location: { search: `?surfaceUnified=${encodeURIComponent(v)}` } };
+    return readSurfaceUnifiedFlag() !== true;
+  });
+  check(
+    "on / 1 / true / yes / garbage / empty value → readSurfaceUnifiedFlag() true (never a silent off)",
+    wrongOn.length === 0,
+    wrongOn.length ? `OFF for ${JSON.stringify(wrongOn)}` : "",
+  );
+  globalThis.window = { get location() { throw new Error("boom"); } };
+  check(
+    "a throwing location → readSurfaceUnifiedFlag() true (default)",
+    readSurfaceUnifiedFlag() === true,
+    `got=${readSurfaceUnifiedFlag()}`,
+  );
+}
+setUnifiedFlag(false);
 
 const DECODER_PROPS = [
   "transparent",
@@ -649,15 +712,16 @@ check(
   );
 }
 
-// Default-off rollback: with no flag the cache path is unchanged (still attaches
-// emissiveMap because that fix predates M1; the point is the inline ladder runs).
+// `?surfaceUnified=off` rollback: the escape runs the inline ladder (still
+// attaches emissiveMap because that fix predates M1; the point is the inline
+// ladder runs).
 {
   setUnifiedFlag(false);
   const matOff = cacheU._materialFromFlags(
     F.Additive | F.Alpha, stubTex, undefined, undefined, undefined, undefined, undefined,
   );
   check(
-    "A10-M1 default-off: cache path inline ladder still resolves Alpha+Additive (CustomBlending)",
+    "A10-M1 =off escape: cache path inline ladder still resolves Alpha+Additive (CustomBlending)",
     matOff.blending === THREE.CustomBlending &&
       matOff.blendSrc === THREE.SrcAlphaFactor &&
       matOff.blendDst === THREE.OneFactor,
@@ -669,7 +733,8 @@ check(
 // FIXUP A10-M1 (2026-06-11): Stage 4 above compares matA (cache, flag ON) vs
 // matB (unified fn applied directly) — but BOTH pass through the same decoder,
 // so they agree even when the decoder diverges from the LEGACY (flag-OFF) path.
-// The load-bearing invariant is OFF-vs-ON parity: flipping ?surfaceUnified on
+// The load-bearing invariant is OFF-vs-ON parity: the 2026-10-19 default-ON
+// flip (and the `?surfaceUnified=off` escape back)
 // must NOT change a material's render-state props (except the intended dyed-
 // luminous emissiveMap fix, which lands on the paletted path, not the cache).
 // In particular the float-driven luminosity-emissive and diffuse-tint are
@@ -685,7 +750,7 @@ check(
   for (const flags of FLAG_COMBOS) {
     for (const floats of FLOAT_COMBOS) {
       offOnCount += 1;
-      // Legacy: flag OFF → the inline `opts` ladder in _materialFromFlags.
+      // Legacy: `?surfaceUnified=off` → the inline `opts` ladder in _materialFromFlags.
       setUnifiedFlag(false);
       const matLegacy = cacheOff._materialFromFlags(
         flags >>> 0, stubTex, undefined, undefined, undefined, undefined, floats,
@@ -765,9 +830,10 @@ check(
 // `_buildEntityOwnedFromPixels` (the F.41 entity recolour path) historically
 // built a plain opaque MeshStandardMaterial — a recoloured NPC/gear surface with
 // Translucent/Additive/ClipMap/luminosity rendered flat-opaque (A10 §3 row 3).
-// Under `?surfaceUnified=on` it now runs the same `applySurfaceRenderState`
-// decoder as every other surface (retail: D3DPolyRender::SetSurface is the SOLE
-// funnel, acclient.c:454385). Default OFF keeps the legacy plain-opaque material.
+// With surfaceUnified on (DEFAULT ON since 2026-10-19) it now runs the same
+// `applySurfaceRenderState` decoder as every other surface (retail:
+// D3DPolyRender::SetSurface is the SOLE funnel, acclient.c:454385). The
+// `?surfaceUnified=off` escape keeps the legacy plain-opaque material.
 //
 // The factory stripped the bare `./adapter.js` import, so inject a minimal
 // `surfacePixelsToTexture` global the closure can resolve. We also need a real
@@ -795,20 +861,37 @@ function makeSP({ surfaceType = 0, translucency = 0, luminosity = 0, diffuse = 0
 
 const cacheM2 = new MaterialCache();
 
-// (5a) Default OFF — entity-owned recolour stays plain opaque even with an
-// Additive surfaceType (legacy / rollback behaviour preserved).
+// (5a) `?surfaceUnified=off` — entity-owned recolour stays plain opaque even
+// with an Additive surfaceType (legacy / rollback behaviour preserved).
 setUnifiedFlag(false);
 const m2Off = cacheM2._buildEntityOwnedFromPixels(
   0x09000A01, makeSP({ surfaceType: SURFACE_TYPE.Additive }),
 );
 check(
-  "A10-M2 default-off: entity-owned Additive surface stays plain opaque (legacy)",
+  "A10-M2 =off escape: entity-owned Additive surface stays plain opaque (legacy)",
   m2Off &&
     m2Off.transparent === false &&
     m2Off.blending === THREE.NormalBlending &&
     m2Off.userData.surfaceTypeFlags === SURFACE_TYPE.Additive,
   `transparent=${m2Off?.transparent}, blending=${m2Off?.blending}`,
 );
+
+// (5a') The bare DEFAULT (no flag, and no window at all) takes the unified
+// decoder since the 2026-10-19 flip — the shipped default, not `=on`.
+for (const [arm, w] of [["bare URL", { location: { search: "" } }], ["no window", undefined]]) {
+  if (w === undefined) delete globalThis.window; else globalThis.window = w;
+  const m2Def = cacheM2._buildEntityOwnedFromPixels(
+    0x09000A06, makeSP({ surfaceType: SURFACE_TYPE.Additive }),
+  );
+  check(
+    `A10-M2 default (${arm}): entity-owned Additive surface → AdditiveBlending (DEFAULT ON)`,
+    m2Def &&
+      m2Def.blending === THREE.AdditiveBlending &&
+      m2Def.transparent === true &&
+      m2Def.depthWrite === false,
+    `blending=${m2Def?.blending}, transparent=${m2Def?.transparent}`,
+  );
+}
 
 // (5b) Flag ON — Additive recolour now blends additively (the row-3 fix).
 setUnifiedFlag(true);
@@ -925,8 +1008,9 @@ for (const [st, fl2] of [
 setUnifiedFlag(false);
 
 // ---- Stage 6: A10-M3b — `?surfaceParityV2=on` parity details -------------
-// Three flag-gated sub-behaviours inside `applySurfaceRenderState` (only ever
-// reached when `?surfaceUnified=on`): (b1) additive fog exemption (retail
+// Three flag-gated sub-behaviours inside `applySurfaceRenderState` (reached
+// by default since surfaceUnified went DEFAULT ON on 2026-10-19; never under
+// `?surfaceUnified=off`; parityV2 itself stays opt-in): (b1) additive fog exemption (retail
 // acclient.c:454551-454553 + 460295-460302 — fog-SKIP, bit-based), (b2)
 // ClipMap alpha-test ref 100/255 paletted vs 200/255 DDS/solid (acclient.c:
 // 454499-454511; needs the M3a `hasPalette` getter, stale pkg → legacy 0.5),
@@ -963,10 +1047,12 @@ check("combined ?surfaceUnified=on&surfaceParityV2=on parses both",
 
 // (6.2) Regression lens (load-bearing): with surfaceUnified=on and parityV2
 // OFF, the FULL flag×float matrix (plus InvAlpha-only / InvAlpha+Additive,
-// already in FLAG_COMBOS) stays byte-identical to the legacy (flag-off) cache
-// ladder — including `fog` (must remain three's default true) and alphaTest
-// 0.5 even when hasPalette is a boolean. Proves M3b is invisible when off,
-// including the (b3) branch-reorder.
+// already in FLAG_COMBOS) stays byte-identical to the legacy
+// (`?surfaceUnified=off`) cache ladder — including `fog` and the per-format
+// alphaTest when hasPalette is a boolean. Proves M3b is invisible when off,
+// including the (b3) branch-reorder. The legacy arm is the EXPLICIT escape:
+// surfaceUnified is DEFAULT ON since 2026-10-19, so a bare search would put
+// the unified decoder on both sides.
 {
   const cacheP = new MaterialCache();
   let pFails = 0;
@@ -976,7 +1062,7 @@ check("combined ?surfaceUnified=on&surfaceParityV2=on parses both",
       for (const hasPalette of [undefined, true, false]) {
         pCount += 1;
         const f2 = floats ? { ...floats, hasPalette } : (hasPalette === undefined ? undefined : { hasPalette });
-        setSearch("");
+        setSearch("?surfaceUnified=off");
         const matLegacy = cacheP._materialFromFlags(
           flags >>> 0, stubTex, undefined, undefined, undefined, undefined, f2,
         );

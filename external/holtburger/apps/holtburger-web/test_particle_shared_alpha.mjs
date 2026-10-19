@@ -93,12 +93,38 @@ console.log("\nwho may share");
   check("the original sharer keeps its bucket", reg.acquire(KEY, staticsGroup, SIG, makeIm, 100) === a);
 }
 
-console.log("\nflag");
+console.log("\nflag (DEFAULT ON since 2026-10-19; `=off` escape)");
 {
+  // The reader reads the bare `location` (globalThis.location). `null` makes the
+  // setter drop the cache so the next call re-reads the URL.
+  const hadLocation = Object.prototype.hasOwnProperty.call(globalThis, "location");
+  const savedLocation = globalThis.location;
+  const readWith = (search) => {
+    if (search === undefined) delete globalThis.location;
+    else globalThis.location = { search };
+    setParticleSharedAlphaFlag(null);
+    return particleSharedAlphaEnabled();
+  };
+  check("bare page (no search) reads ON", readWith("") === true);
+  check("an unrelated param reads ON", readWith("?foo=1") === true);
+  check("no `location` at all (node) falls back to the default, ON", readWith(undefined) === true);
+  for (const s of ["off", "0", "false", "no", "OFF", "No", "%20off%20"]) {
+    check(`=${s} reads OFF (escape)`, readWith(`?particleSharedAlpha=${s}`) === false);
+  }
+  for (const s of ["on", "1", "true", "yes", "garbage", ""]) {
+    check(`=${s} reads ON`, readWith(`?particleSharedAlpha=${s}`) === true);
+  }
+  check("the value is cached until the setter clears it", (() => {
+    readWith("?particleSharedAlpha=off");
+    globalThis.location = { search: "" };
+    return particleSharedAlphaEnabled() === false;
+  })());
+  if (hadLocation) globalThis.location = savedLocation; else delete globalThis.location;
   setParticleSharedAlphaFlag(false);
   check("setter off", particleSharedAlphaEnabled() === false);
   setParticleSharedAlphaFlag(true);
   check("setter on", particleSharedAlphaEnabled() === true);
+  setParticleSharedAlphaFlag(null);
 }
 
 console.log(`\n${passed} passed / ${failed} failed`);

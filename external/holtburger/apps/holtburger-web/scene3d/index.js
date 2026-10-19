@@ -206,6 +206,10 @@ import { SkyDome } from "./sky_dome.js";
 // T3 (terrainplan.md) — sky IBL, opt-in ?ibl=on.
 import { IblEnvironment, readIblFlag, readIblRefreshMs } from "./ibl_environment.js";
 import { CloudOverlay } from "./cloud_overlay.js";
+// SKY-4 remainder (2026-10-18 follow-up): the coverage knobs below mark the
+// effect as knob-owned (same specifier as cloud_overlay/cloud_volume, so the
+// same module instance and the same mark).
+import { setCloudCoverageKnob } from "./cloud_storm_look.js";
 import {
   acToThree,
   loadDetailTileCache,
@@ -341,8 +345,10 @@ import { initTerrainSwamp } from "./terrain_swamp.js";
 // LIT pebble/rubble scatter (the one scatter field in the programme that is not
 // an additive veil, so it reads the sky snapshot for its AC sun/ambient term)
 // plus the grey grit streamers. Same injected-THREE contract; nothing in this
-// family touches the terrain fragment shader. `initTerrainRock` returns null
-// (registering nothing) unless `?terrainRock=on`.
+// family touches the terrain fragment shader. The family master is DEFAULT ON
+// at high / ultra since 2026-10-19 (ahead of its 1070 eye test); at low / mid,
+// or under `?terrainRock=off`, `initTerrainRock` returns null (registering
+// nothing).
 import { initTerrainRock } from "./terrain_rock.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
@@ -842,9 +848,10 @@ function msaaSampleCount() {
   }
 }
 
-// models-camera-2 (2026-10-13) — `?retailFov=on` opt-in (default OFF pending
-// the batched 1070 eye-test; flag off keeps the fixed 60° vertical FOV
-// byte-identical). Retail derives fovY from the Render.FieldOfView preference
+// models-camera-2 (2026-10-13) — `?retailFov`, DEFAULT ON since 2026-10-19
+// (flipped ahead of its 1070 eye test, which is still owed); `?retailFov=off`
+// (or 0/false/no) keeps the fixed 60° vertical FOV byte-identical to the
+// pre-flip build. Retail derives fovY from the Render.FieldOfView preference
 // (`m_fGameFOV / (aspect - 0.1)`, SmartBox draw acclient.c:144897 — see
 // camera_math.retailVerticalFovDeg). Module scope for the same reason as
 // msaaSampleCount: the camera is built in preInit3D, the resize handler that
@@ -1170,11 +1177,12 @@ export async function preInit3D(canvas) {
   // renderer only) injects its define, so the paperdoll / dye viewports keep
   // the stock declarations. Must precede every compile.
   try { installLightUboChunks(THREE); } catch (_) { /* never break boot */ }
-  // ?radialFog=on (OPT-IN, 2026-10-13): retail range fog (acclient.c
+  // ?radialFog (added 2026-10-13; DEFAULT ON since 2026-10-19, ahead of its 1070
+  // eye test; =off|0|false|no escape): retail range fog (acclient.c
   // RenderDeviceD3D::SetDefaultD3DStates, D3DRS_RANGEFOGENABLE = TRUE). three's
   // fog_vertex chunk fogs by eye-to-vertex distance, matching the terrain
   // shaders' vFogDist (scene3d/radial_fog.js). Must precede every compile.
-  // Without the flag nothing is touched.
+  // Under ?radialFog=off nothing is touched.
   installRadialFog(THREE);
   // ?reversedZ=on (OPT-IN, 2026-10-17): reversed-Z depth instead of the
   // logarithmic buffer, so opaque draws keep early depth rejection (the log
@@ -1724,14 +1732,15 @@ export async function preInit3D(canvas) {
   const csmState = lighting.csmState ?? null;
 
   const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
-  // models-camera-2: `?retailFov=on` swaps the fixed 60° for the retail
-  // vertical FOV of the saved Field of View (default 90°). A value
+  // models-camera-2: by default (`?retailFov`, DEFAULT ON since 2026-10-19)
+  // the fixed 60° gives way to the retail vertical FOV of the saved Field of
+  // View (default 90°); `?retailFov=off` keeps 60°. A value
   // Render::SetFOVRad would refuse (≥ π at a very tall viewport) keeps 60°.
   if (RETAIL_FOV_ON) {
     _retailGameFovDeg = storedGameFovDeg();
     if (applyRetailFov(camera, _retailGameFovDeg)) camera.updateProjectionMatrix();
     // Live setter for the Camera tab's Field of View slider
-    // (ui/camera_settings.js); only registered under the flag.
+    // (ui/camera_settings.js); not registered under `?retailFov=off`.
     window.__setGameFov = (deg) => {
       _retailGameFovDeg = clampGameFovDeg(deg);
       if (applyRetailFov(camera, _retailGameFovDeg)) camera.updateProjectionMatrix();
@@ -1979,7 +1988,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
       // models-camera-2: retail re-derives fovY from the new aspect
-      // (`?retailFov=on` only; a refused value keeps the previous fov).
+      // (skipped under `?retailFov=off`; a refused value keeps the previous fov).
       if (RETAIL_FOV_ON) applyRetailFov(camera, _retailGameFovDeg);
       camera.updateProjectionMatrix();
       // Re-derive the ortho frustum width from the new aspect ratio.
@@ -2918,7 +2927,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           if (cloudActive) {
             cloudOverlay.renderOverlay(renderer);
           }
-          renderPortalSpaceOverlay(renderer); // WORLD_FADEIN black fade (no-op otherwise)
+          // WORLD_FADEIN: one black reveal frame under the default
+          // ?portalFovFade zoom (DEFAULT ON 2026-10-19), the black fade with
+          // ?portalFovFade=off; a no-op otherwise.
+          renderPortalSpaceOverlay(renderer);
           recordRenderDiag(renderer, scene);
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -3100,7 +3112,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // color + depth from the clear color in a single shared-depth pass.
         renderer.render(scene, activeCam);
       }
-      renderPortalSpaceOverlay(renderer); // WORLD_FADEIN black fade (no-op otherwise)
+      // WORLD_FADEIN: one black reveal frame under the default ?portalFovFade
+      // zoom (DEFAULT ON 2026-10-19), the black fade with ?portalFovFade=off;
+      // a no-op otherwise.
+      renderPortalSpaceOverlay(renderer);
       recordRenderDiag(renderer, scene);
     } catch (e) {
       // One-shot, on a closure flag rather than `liveScene3dRef` — this path
@@ -4824,10 +4839,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // the retail 15 s light tick, adding NO light object) and the grey grit
   // streamers. Plan §3.3's third item, footfall dust puffs, is the wave-3B
   // DIRT mechanism and is not re-implemented here. No terrain fragment-shader
-  // work in this family, so nothing else needs wiring. Returns null —
-  // registering nothing, allocating nothing — unless `?terrainRock=on` (the
-  // family master ships OFF on every tier, plan §5.9), so a bare-default boot
-  // is byte-identical.
+  // work in this family, so nothing else needs wiring. The family master is
+  // DEFAULT ON at high / ultra since 2026-10-19 (`TERRAIN_VFX_PROMOTED.rock`,
+  // ahead of its 1070 eye test); at low / mid, or under `?terrainRock=off`, it
+  // returns null — registering nothing, allocating nothing — so those boots
+  // are byte-identical.
   try {
     const rockSurface = initTerrainRock({
       THREE,
@@ -5850,7 +5866,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // cloud_volume.js `_applyWeatherToCloudLayers` — verified
           // in-browser 2026-07-06, re-hit 2026-08-01: this knob wrote the
           // dead path and `?cloudCoverage=` never applied).
-          effect.coverage = Math.max(0, Math.min(1, coverageParam));
+          // SKY-4 remainder (2026-10-18 follow-up): written through the look
+          // module, which marks coverage as the knob's, so the storm/fair look
+          // never writes it again — even when it equals the look's 0.5 / 0.55.
+          setCloudCoverageKnob(effect, coverageParam);
         }
         if (qualityParam && ["low", "medium", "high", "ultra"].includes(qualityParam)) {
           effect.qualityPreset = qualityParam;
@@ -5918,14 +5937,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             atmosphereRuntime: window.__atmosphereRuntime ?? null,
             ...(o || {}),
           });
+          // Top-level property — `effect.clouds.coverage` is a dead knob
+          // (no such uniform key; see cloud_volume.js coverage note).
+          // Clamped to [0, 1] and marked as the knob's (SKY-4 remainder).
           // eslint-disable-next-line no-undef
-          window.__setCloudCoverage = (v) => {
-            const c = Math.max(0, Math.min(1, +v));
-            // Top-level property — `effect.clouds.coverage` is a dead knob
-            // (no such uniform key; see cloud_volume.js coverage note).
-            effect.coverage = c;
-            return effect.coverage;
-          };
+          window.__setCloudCoverage = (v) => setCloudCoverageKnob(effect, v);
           // eslint-disable-next-line no-undef
           window.__setCloudQuality = (p) => {
             if (["low", "medium", "high", "ultra"].includes(p)) {

@@ -15,7 +15,11 @@
 //      pins were planned for (no "Trying to use 31 texture units" warning per
 //      upload), the restored programs are adopted in the restore event (light
 //      blocks backed in the first restored frame), and a restored context with
-//      a lower combined limit gets re-planned pins.
+//      a lower combined limit gets re-planned pins (and the boot ones back on
+//      a later restore that allows them).
+//   2b. all three uniform_bind_patch flags off: the boot unit limit index.js
+//      raises is still put back, so a sampler on unit 16 does not warn
+//      (2026-10-18 follow-up).
 //   3. ?drawSortProgram: the comparator reads the restored renderer.info /
 //      renderer.properties, so program keys refresh after the restore.
 //
@@ -192,6 +196,62 @@ console.log("PART 2 — ?texUnitPin + ?lightUbo across a restore (RENDER-2)");
     for (let i = 0; i < 3; i++) frame();
     check("…with no unit warning", warns.length === 0, warns[0]);
     gl.getParameter = getParameter;
+    // Back on a context that allows the boot limit: the pins go back up too.
+    quietRestore(canvas);
+    check("a later restore back at 32 units: the boot limit and pins return", renderer.capabilities.maxTextures === 32 &&
+      api.pinUnits.get("dfgLUT") === 31 && api.stats.maxTextures === 32,
+      `maxTextures=${renderer.capabilities.maxTextures} dfgLUT=${api.pinUnits.get("dfgLUT")}`);
+    for (let i = 0; i < 3; i++) frame();
+    check("…with no unit warning", warns.length === 0, warns[0]);
+  } finally {
+    console.warn = warn;
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("PART 2b — all three uniform_bind_patch flags off: the boot unit limit across a restore (follow-up)");
+// ---------------------------------------------------------------------------
+{
+  // index.js raises maxTextures to MAX_COMBINED at boot so terrain-batch's
+  // sampler on unit 16 does not warn. A restore resets it to
+  // MAX_TEXTURE_IMAGE_UNITS (16) whether or not the trims are on.
+  const { canvas, renderer, camera } = setup();
+  const api = installUniformBindPatch(renderer, { texUnitPin: false, lightUploadOnce: false, lightUbo: false });
+  check("with the three flags off the install returns no api", api === null && !renderer.__hbUniformBindPatch);
+  // 17 samplers: three hands out units 0..16, the last one at the 16-unit limit.
+  const N = 17;
+  const uniforms = {};
+  let decl = "", sum = "vec4 c = vec4(0.0);\n";
+  for (let i = 0; i < N; i++) {
+    const t = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+    t.needsUpdate = true;
+    uniforms[`uTex${i}`] = { value: t };
+    decl += `uniform sampler2D uTex${i};\n`;
+    sum += `c += texture2D(uTex${i}, vec2(0.5));\n`;
+  }
+  const mat = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: "void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: `${decl}void main() {\n${sum}gl_FragColor = c;\n}`,
+  });
+  const scene = new THREE.Scene();
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat));
+  const frame = () => { renderer.render(scene, camera); uniformBindPatchTick(renderer); };
+  const warn = console.warn;
+  const warns = [];
+  console.warn = (...x) => { warns.push(String(x[0])); };
+  try {
+    for (let i = 0; i < 3; i++) frame();
+    check("boot: 17 samplers draw with no unit warning (limit raised to 32)", warns.length === 0 && renderer.info.render.calls === 1,
+      `${warns.length} warnings, calls=${renderer.info.render.calls}`);
+    const oldCaps = renderer.capabilities;
+    quietRestore(canvas);
+    check("three built a new WebGLCapabilities (the premise)", renderer.capabilities !== oldCaps);
+    check("restore: three's limit is back at the boot value, as at boot", renderer.capabilities.maxTextures === 32,
+      `maxTextures=${renderer.capabilities.maxTextures}`);
+    for (let i = 0; i < 3; i++) frame();
+    check("no 'Trying to use 16 texture units' warning after the restore", warns.length === 0,
+      `${warns.length} warnings, e.g. ${warns[0]}`);
   } finally {
     console.warn = warn;
   }

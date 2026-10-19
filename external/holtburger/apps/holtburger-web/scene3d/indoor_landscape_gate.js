@@ -1,5 +1,7 @@
 // scene3d/indoor_landscape_gate.js — cells-portals-2 (2026-10-13):
-// `?indoorLandscapeGate=on` (OPT-IN, default OFF). Indoors, skip the landscape
+// `?indoorLandscapeGate` (DEFAULT ON since 2026-10-19, flipped ahead of its
+// 1070 eye test, which is still owed; `=off`/`0`/`false`/`no` is the escape
+// and restores the full world/sky draw). Indoors, skip the landscape
 // (terrain, other-landblock buildings/statics, sky) on frames where the portal
 // walk reaches no outside portal.
 //
@@ -40,8 +42,9 @@
 //     outdoor portal near it: a doorway closer than the near plane projects to
 //     nothing, so the walk reports no outside view while it fills the screen.
 //
-// Visible difference (why it is opt-in): a crack in the cell geometry shows
-// the cleared background, as in retail, instead of terrain or sky.
+// Visible difference (accepted with the 2026-10-19 default flip; `=off`
+// restores the old draw): a crack in the cell geometry shows the cleared
+// background, as in retail, instead of terrain or sky.
 //
 // WebAC applies the static approximation (no sky for a non-SeenOutside viewer
 // cell, packages/renderer/src/effects/SkyboxRenderer.ts); this module is
@@ -60,7 +63,10 @@ export const INDOOR_LANDSCAPE_NEAR_PORTAL_M = 1.0;
  */
 export const INDOOR_LANDSCAPE_WIDE_CLIP = 0.75;
 
-/** `?indoorLandscapeGate=on` — exact opt-in; any other value (or none) is OFF. */
+/**
+ * `?indoorLandscapeGate` — DEFAULT ON (2026-10-19): absent, `=on` or any other
+ * value reads ON; `off`/`0`/`false`/`no` (trimmed, any case) is the escape.
+ */
 export function readIndoorLandscapeGateFlag(search) {
   try {
     const s =
@@ -71,9 +77,10 @@ export function readIndoorLandscapeGateFlag(search) {
         : typeof location !== "undefined" && location
         ? location.search
         : "";
-    return new URLSearchParams(s || "").get("indoorLandscapeGate") === "on";
+    const v = new URLSearchParams(s || "").get("indoorLandscapeGate")?.trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -81,7 +88,8 @@ export function readIndoorLandscapeGateFlag(search) {
 export function indoorLandscapeGateEnabled() {
   if (_INDOOR_LANDSCAPE_GATE_ON === null) {
     _INDOOR_LANDSCAPE_GATE_ON = readIndoorLandscapeGateFlag();
-    if (_INDOOR_LANDSCAPE_GATE_ON) _installIndoorLandscapeGateDiag();
+    // Installed under `=off` too, so either arm of the A/B can toggle live.
+    _installIndoorLandscapeGateDiag();
   }
   return _INDOOR_LANDSCAPE_GATE_ON;
 }
@@ -131,7 +139,7 @@ function _installIndoorLandscapeGateDiag() {
  * and passing; anything else draws the world.
  *
  * @param {object} s
- * @param {boolean} s.flag            `?indoorLandscapeGate=on`
+ * @param {boolean} s.flag            the resolved `?indoorLandscapeGate` (default on)
  * @param {number|null} s.count       walk outside-view count this tick (raw +
  *                                    wide); null = unknown
  * @param {number} s.zeroFrames       consecutive ticks the count was 0

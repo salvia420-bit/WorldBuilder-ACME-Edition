@@ -83,8 +83,19 @@ const NAV_ROUTE_TYPE_NAME = { 1: "circular", 2: "linear", 3: "follow", 4: "once"
 // real one.
 const NO_POSITION_TYPES = new Set([NavPointType.Pause, NavPointType.Chat]);
 
+// RYNTH-2 follow-up (2026-10-18): a record whose EW / NS is not a number (a
+// NaN `.af` NAV: token, a missing field) has no position whatever its type.
+// pointToLeg's `|| 0` used to put it at the map origin, and a movement point
+// there was then the "real" anchor its neighbouring sentinels were moved to.
+function hasNumericPosition(p) {
+  const num = (v) => v !== null && v !== "" && Number.isFinite(Number(v));
+  return num(p.ew) && num(p.ns);
+}
+
 function isNoPositionSentinel(p) {
-  return p && NO_POSITION_TYPES.has(p.type) && (p.ew || 0) === 0 && (p.ns || 0) === 0;
+  if (!p) return false;
+  if (!hasNumericPosition(p)) return true;
+  return NO_POSITION_TYPES.has(p.type) && (p.ew || 0) === 0 && (p.ns || 0) === 0;
 }
 
 // Repositions any sentinel-flagged leg in place (mutates the `legs` array's
@@ -126,7 +137,12 @@ function fixupSentinelLegs(legs, points) {
     }
   }
   for (let i = 0; i < legs.length; i++) {
-    if (legs[i].noPosition) warnings.push(`leg ${i}: ${tokenFor(points[i].type)} record carries no captured position (VTank/metaf EW=0,NS=0 sentinel) — repositioned to the nearest real waypoint so it doesn't read as a teleport`);
+    if (legs[i].noPosition) {
+      const why = hasNumericPosition(points[i])
+        ? "no captured position (VTank/metaf EW=0,NS=0 sentinel)"
+        : "a non-numeric position";
+      warnings.push(`leg ${i}: ${tokenFor(points[i].type)} record carries ${why} — repositioned to the nearest real waypoint so it doesn't read as a teleport`);
+    }
   }
   return warnings;
 }

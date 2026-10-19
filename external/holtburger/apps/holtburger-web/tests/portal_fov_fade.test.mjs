@@ -1,6 +1,7 @@
 // cells-portals-3 (2026-10-13) — the portal-space fades as retail FOV zooms
-// (scene3d/portal_space.js `?portalFovFade=on`, OPT-IN; absent = today's
-// tunnel far-plane shrink + black world quad).
+// (scene3d/portal_space.js `?portalFovFade`, DEFAULT ON since 2026-10-19,
+// flipped ahead of its 1070 teleport eye test, which is still owed;
+// `=off|0|false|no` = the legacy tunnel far-plane shrink + black world quad).
 //
 // Retail's TUNNEL_FADEOUT / WORLD_FADEIN (gmSmartBoxUI::UseTime states 5/6,
 // acclient.c:262497-262527) lerp the SmartBox view-plane distance between
@@ -39,14 +40,29 @@ const csm = await import("../scene3d/csm.js");
 
 const BASE = 60;
 
-console.log("PART 1 — ?portalFovFade flag (opt-in)");
+console.log("PART 1 — ?portalFovFade flag (default ON since 2026-10-19, =off escape)");
 {
-  check("absent ⇒ off (default)", portalFovFadeEnabled("") === false);
-  check("on ⇒ on", portalFovFadeEnabled("?portalFovFade=on") === true);
+  check("absent ⇒ on (default)", portalFovFadeEnabled("") === true);
+  check("other flags only ⇒ on (default)", portalFovFadeEnabled("?nosw=1&wireframe=1") === true);
+  check("on ⇒ on (the old enable token still works)", portalFovFadeEnabled("?portalFovFade=on") === true);
   check("ON / ' on ' ⇒ on", portalFovFadeEnabled("?portalFovFade=ON") && portalFovFadeEnabled("?portalFovFade=%20on%20"));
-  for (const v of ["1", "true", "yes", "off", "0", "banana", ""]) {
-    check(`${JSON.stringify(v)} ⇒ off (only 'on' opts in)`, portalFovFadeEnabled(`?portalFovFade=${v}`) === false);
+  for (const v of ["1", "true", "yes", "banana", ""]) {
+    check(`${JSON.stringify(v)} ⇒ on (only off/0/false/no opt out)`, portalFovFadeEnabled(`?portalFovFade=${v}`) === true);
   }
+  for (const v of ["off", "0", "false", "no", "OFF", "False", "NO", "%20off%20"]) {
+    check(`${JSON.stringify(v)} ⇒ off (the escape)`, portalFovFadeEnabled(`?portalFovFade=${v}`) === false);
+  }
+  // No search argument: the reader falls back to globalThis.location.
+  const savedLoc = globalThis.location;
+  globalThis.location = { search: "?portalFovFade=off" };
+  check("location ?portalFovFade=off ⇒ off", portalFovFadeEnabled() === false);
+  globalThis.location = { search: "" };
+  check("location bare ⇒ on", portalFovFadeEnabled() === true);
+  globalThis.location = undefined;
+  check("no location (worker / node) ⇒ on (the default)", portalFovFadeEnabled() === true);
+  globalThis.location = { get search() { throw new Error("blocked"); } };
+  check("a throwing location ⇒ on (the catch returns the default)", portalFovFadeEnabled() === true);
+  globalThis.location = savedLoc;
 }
 
 console.log("\nPART 2 — set_vdst: fov = 2·atan(1/vdist), capped");
@@ -187,14 +203,14 @@ async function runTeleport({ search, cam, renderer, onTick }) {
   return sc;
 }
 
-console.log("\nPART 4 — flag OFF: today's tunnel far-plane shrink + black quad (byte-identical)");
+console.log("\nPART 4 — ?portalFovFade=off: the legacy tunnel far-plane shrink + black quad (byte-identical)");
 {
   const cam = new THREE.PerspectiveCamera(BASE, 16 / 9, 0.1, 5000);
   const r = fakeRenderer();
   const fovs = new Set();
   let overlayDraws = 0, fade5 = [];
   await runTeleport({
-    search: "",
+    search: "?portalFovFade=off",
     cam,
     renderer: r,
     onTick: (state) => {
@@ -211,7 +227,7 @@ console.log("\nPART 4 — flag OFF: today's tunnel far-plane shrink + black quad
   check("diag: fovFade off", globalThis.__portalSpace?.fovFade?.on === false);
 }
 
-console.log("\nPART 5 — flag ON: tunnel zooms out, far plane fixed; world zooms in, one black reveal frame");
+console.log("\nPART 5 — bare default (flag absent) = ON: tunnel zooms out, far plane fixed; world zooms in, one black reveal frame");
 {
   const cam = new THREE.PerspectiveCamera(BASE, 16 / 9, 0.1, 5000);
   cam.updateProjectionMatrix();
@@ -221,7 +237,7 @@ console.log("\nPART 5 — flag ON: tunnel zooms out, far plane fixed; world zoom
   let heldFitFov = true, projOk = true, quadDuringFade = 0;
   const quadByFadeTick = [];
   await runTeleport({
-    search: "?portalFovFade=on",
+    search: "",
     cam,
     renderer: r,
     onTick: (state) => {
@@ -261,7 +277,7 @@ console.log("\nPART 5 — flag ON: tunnel zooms out, far plane fixed; world zoom
   check("diag: fovFade on, not holding", globalThis.__portalSpace?.fovFade?.on === true && globalThis.__portalSpace.fovFade.world === 0);
 }
 
-console.log("\nPART 6 — flag ON: teardown paths give the fov back");
+console.log("\nPART 6 — flag ON (explicit =on, the old enable token): teardown paths give the fov back");
 {
   globalThis.location.search = "?portalFovFade=on";
   const cam = new THREE.PerspectiveCamera(BASE, 16 / 9, 0.1, 5000);

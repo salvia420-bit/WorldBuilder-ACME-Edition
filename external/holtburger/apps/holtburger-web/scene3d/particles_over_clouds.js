@@ -62,6 +62,31 @@ export function particlesOverCloudsEnabled(search) {
   }
 }
 
+/**
+ * `?particlesOverHaze` — SKY-1 remainder (2026-10-18 follow-up). DEFAULT ON
+ * (absent / garbage ⇒ on, owner rule: no eye-test gate); `off|0|false|no`
+ * keeps the particles in the world pass. It changes the low / mid frame: the
+ * particles leave the MSAA world target and draw after, not sorted with, the
+ * other world transparents. The UNSPLIT chain (no clouds in the post chain: low / mid, or
+ * `?clouds=off`, `?cloudsMainPass=off`, `?particlesOverClouds=off`) draws the
+ * same particle objects right after the `?layerHaze` pass, into the buffer the
+ * haze wrote, so the haze no longer fogs them by the depth behind them. No
+ * private target there (atmosphere_pipeline.js, ParticlesOverCloudsPass
+ * `ownTarget: false`).
+ * @param {string} [search] test seam; defaults to `location.search`
+ * @returns {boolean}
+ */
+export function particlesOverHazeEnabled(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = new URLSearchParams(s).get("particlesOverHaze");
+    if (v == null) return true;
+    return !OFF_FORMS.has(String(v).trim().toLowerCase());
+  } catch (_) {
+    return true;
+  }
+}
+
 // ── Source registry ──────────────────────────────────────────────────────────
 // A source is `(out: Object3D[]) => void` and pushes candidate draw objects.
 // Registered at module load by particle_manager.js (every ParticleManager plus

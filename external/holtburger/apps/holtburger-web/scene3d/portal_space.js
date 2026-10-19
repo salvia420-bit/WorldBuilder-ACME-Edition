@@ -43,12 +43,14 @@
 //   TICK   loop.js tickPortalSpace (after the camera tick).
 //   RENDER scene3d/index.js: while portalSpaceOwnsFrame() the world submission
 //          is SKIPPED (retail SmartBox::Hide) and renderPortalSpaceFrame draws
-//          the tunnel in its own scene on a black clear. During WORLD_FADEIN the
-//          world renders and renderPortalSpaceOverlay fades a black quad out
-//          (approximation of retail's view-distance grow-in — changing the main
-//          camera's far plane would ripple through CSM/log-depth/culling).
-//   FOV    `?portalFovFade=on` (2026-10-13, cells-portals-3, OPT-IN until a 1070
-//          teleport eye test; absent = the far-plane shrink + black quad above):
+//          the tunnel in its own scene on a black clear. With
+//          `?portalFovFade=off`, during WORLD_FADEIN the world renders and
+//          renderPortalSpaceOverlay fades a black quad out (approximation of
+//          retail's view-distance grow-in — changing the main camera's far
+//          plane would ripple through CSM/log-depth/culling).
+//   FOV    `?portalFovFade` (2026-10-13, cells-portals-3; DEFAULT ON
+//          (2026-10-19, ahead of its 1070 teleport eye test, still owed);
+//          `=off|0|false|no` escape = the far-plane shrink + black quad above):
 //          the retail fades. TUNNEL_FADEOUT widens the tunnel camera's fov
 //          toward 179° (far plane kept), WORLD_FADEIN narrows the world
 //          camera's from 179° back to its own (no black quad) — viewDistFov.
@@ -434,16 +436,18 @@ export function retailAnimLevel(t) {
 export const PORTAL_FOV_MAX_DEG = 179;
 
 /**
- * `?portalFovFade` — OPT-IN: only `on` → true (the retail FOV zoom fades);
- * absent / anything else → false (today's tunnel far-plane shrink + black
+ * `?portalFovFade` — DEFAULT ON (2026-10-19, ahead of its 1070 teleport eye
+ * test, still owed): absent / `on` / anything else → true (the retail FOV zoom
+ * fades); `off|0|false|no` → false (the legacy tunnel far-plane shrink + black
  * world quad). Read per tunnel start, so tests can pass `search`.
  */
 export function portalFovFadeEnabled(search) {
   try {
     const s = typeof search === "string" ? search : (globalThis.location?.search || "");
-    return (new URLSearchParams(s).get("portalFovFade") || "").trim().toLowerCase() === "on";
+    const v = (new URLSearchParams(s).get("portalFovFade") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -1752,7 +1756,7 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
       // ?portalFovFade: TUNNEL_FADEOUT zooms the tunnel out to a point
       // (CreatureMode UseSmartboxFOV -> Render::set_vdst, acclient.c:143942)
       // and leaves its far plane alone (SetFOVInternal keeps Render::zfar);
-      // off: today's far-plane shrink.
+      // `=off`: the legacy far-plane shrink.
       if (_fovFadeOn) {
         const zf = _seq.viewDistFov(cam.fov);
         if (zf != null) cam.fov = zf;

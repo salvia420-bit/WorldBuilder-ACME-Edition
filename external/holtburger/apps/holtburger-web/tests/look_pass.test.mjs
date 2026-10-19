@@ -259,8 +259,10 @@ console.log("\n-- L10 ?ssao ---------------------------------------------------"
     pipe.includes("[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve]"));
   // 2026-10-08 — on the UNSPLIT chain the ?layerHaze pass also goes in front of
   // fxPass (it tone-maps there); AO still runs before it and before fxPass.
-  check("the AO pass is added right before fxPass (only the unsplit-chain haze between)",
-    /if \(ssaoPass\) composer\.addPass\(ssaoPass\);\s*(?:\/\/[^\n]*\n\s*)?(?:if \(layeredHaze && !particlesOverCloudsPass\) composer\.addPass\(layeredHaze\);\s*)?composer\.addPass\(fxPass\);/.test(pipe));
+  // 2026-10-18 SKY-1 remainder: `?particlesOverHaze` draws the particles
+  // between the haze and fxPass (a scene draw, not an AO consumer).
+  check("the AO pass is added right before fxPass (only the unsplit-chain haze and its particle draw between)",
+    /if \(ssaoPass\) composer\.addPass\(ssaoPass\);\s*(?:\/\/[^\n]*\n\s*)?(?:if \(layeredHaze && !particlesOverCloudsPass\) composer\.addPass\(layeredHaze\);\s*)?(?:\/\/[^\n]*\n\s*)?(?:if \(particlesOverHazePass\) composer\.addPass\(particlesOverHazePass\);\s*)?composer\.addPass\(fxPass\);/.test(pipe));
   check("grass is marked only while a composite exists", pipe.includes("SSAO_GRASS_MARKER.value = ssaoComposite ? 1 : 0;"));
   const Gr = await import("../scene3d/terrain_grass.js");
   const sh = {

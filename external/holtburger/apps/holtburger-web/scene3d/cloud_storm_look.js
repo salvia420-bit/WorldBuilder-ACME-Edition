@@ -104,10 +104,38 @@ const LAYER_KEYS = [
 // layer the look does not profile is reset to.
 const DEFAULT_DENSITY_PROFILE = Object.freeze({ expTerm: 0, exponent: 0, linearTerm: 0.75, constantTerm: 0.25 });
 
-// The coverage each effect was last given by the look. A coverage that no
-// longer matches it was set by a knob (`?cloudCoverage`, `__setCloudCoverage`),
-// and the look leaves it alone from then on.
-const _lookCoverage = new WeakMap();
+// SKY-4 remainder (2026-10-18 follow-up): the effects whose coverage a user
+// knob owns. `?cloudCoverage` and `__setCloudCoverage` (index.js) write through
+// setCloudCoverageKnob, which marks the effect; the look never writes coverage
+// on a marked effect, whatever the value. (The fix pass compared values
+// instead, so a knob set to exactly the look's current value — 0.5 fair,
+// 0.55 storm — was taken back at the next storm edge.)
+const _knobCoverage = new WeakSet();
+
+/**
+ * Set an effect's coverage from a user knob (`?cloudCoverage`,
+ * `__setCloudCoverage`) and hand coverage to the knob for good: applyCloudLook
+ * leaves it alone from then on. Clamped to [0, 1]; a value that is not a
+ * number changes nothing and marks nothing.
+ *
+ * @param {Object} effect — takram CloudsEffect (or a test double)
+ * @param {number|string} value
+ * @returns {number|null} the coverage in force afterwards (null: no effect)
+ */
+export function setCloudCoverageKnob(effect, value) {
+  if (!effect || typeof effect !== 'object') return null;
+  const v = Number(value);
+  if (Number.isFinite(v)) {
+    effect.coverage = Math.max(0, Math.min(1, v));
+    _knobCoverage.add(effect);
+  }
+  return typeof effect.coverage === 'number' ? effect.coverage : null;
+}
+
+/** True once a knob has set this effect's coverage (setCloudCoverageKnob). */
+export function cloudCoverageOwnedByKnob(effect) {
+  return !!effect && typeof effect === 'object' && _knobCoverage.has(effect);
+}
 
 /**
  * Write one of the two looks onto a CloudsEffect (or an effect-shaped test
@@ -137,15 +165,12 @@ export function applyCloudLook(effect, isStorm) {
   // Coverage is a TOP-LEVEL CloudsEffect property (`effect.coverage`), NOT
   // on the `effect.clouds` uniform proxy — writing the proxy was the
   // historical dead-knob trap (verified in-browser 2026-07-06).
-  // 2026-10-18: only while nothing else has set it. index.js applies
-  // `?cloudCoverage` right after the overlay's construct-time fair look, and
-  // the boot / adoption / storm-edge re-applies used to put 0.5 back over it.
-  if (typeof effect.coverage === 'number') {
-    const last = _lookCoverage.get(effect);
-    if (last === undefined || effect.coverage === last) {
-      effect.coverage = isStorm ? STORM_COVERAGE : FAIR_COVERAGE;
-      _lookCoverage.set(effect, effect.coverage);
-    }
+  // 2026-10-18: never once a knob owns it (setCloudCoverageKnob). index.js
+  // applies `?cloudCoverage` right after the overlay's construct-time fair
+  // look, and the boot / adoption / storm-edge re-applies used to put 0.5
+  // back over it.
+  if (typeof effect.coverage === 'number' && !_knobCoverage.has(effect)) {
+    effect.coverage = isStorm ? STORM_COVERAGE : FAIR_COVERAGE;
   }
   // takram's built-in ground haze: ensure on (idempotent — one shader
   // recompile at most), density stepped by the storm state.

@@ -22,8 +22,8 @@
 //
 // Apply's local effects (retail, Undead / Shadow / Empyrean only):
 // destroy_particle_manager + play_script on the player run with the page
-// (`?barber=off` turns both off); the Empyrean motion-table swap needs
-// `?barberMotionTable=on`.
+// (`?barber=off` turns both off); the Empyrean motion-table swap runs by
+// default (`?barberMotionTable=off` skips it).
 //
 // Open paths: bus `startBarber` {fields} (app/client_events.js, from the
 // UI_EVENT "barber" tag), window.__openBarberPanel(fields),

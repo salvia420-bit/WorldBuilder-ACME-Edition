@@ -103,8 +103,9 @@ import {
   viewerIndoorOr,
   viewerState,
 } from "./viewer_cell.js";
-// cells-portals-1 — `?rigCellGate=on` (OPT-IN): tickPortalSeal publishes the
-// walk's outside-view count for the gate's landcell-rig clause.
+// cells-portals-1 — `?rigCellGate` (DEFAULT ON since 2026-10-19, `=off`
+// escape): tickPortalSeal publishes the walk's outside-view count for the
+// gate's landcell-rig clause.
 import { rigCellGateEnabled } from "./rig_cell_gate.js";
 // `?reversedZ=on` (shader_logdepth.js REVERSED-Z): every MVP below feeds code
 // written for GL clip space (the wasm frustum + PView walks, portal_clip,
@@ -112,9 +113,10 @@ import { rigCellGateEnabled } from "./rig_cell_gate.js";
 // the log buffer (no copy) and a GL-convention copy under reversed depth.
 import { glClipProjection } from "./shader_logdepth.js";
 const _glClipProj = new THREE.Matrix4();
-// cells-portals-2 — `?indoorLandscapeGate=on` (OPT-IN): tickPortalSeal decides
-// whether the armed indoor frame may skip the landscape (retail LScape::draw
-// runs only under `outside_view.view_count`, acclient.c:461476).
+// cells-portals-2 — `?indoorLandscapeGate` (DEFAULT ON since 2026-10-19, `=off`
+// escape): tickPortalSeal decides whether the armed indoor frame may skip the
+// landscape (retail LScape::draw runs only under `outside_view.view_count`,
+// acclient.c:461476).
 import {
   indoorLandscapeGateEnabled,
   indoorLandscapeSkip,
@@ -1568,6 +1570,21 @@ const ENVCELL_URGENT_ON = (() => {
 })();
 
 /**
+ * ST9 cancel path of buildEnvCellsForLandblock (2026-10-18 review §7): a build
+ * whose generation no longer matches drops its landblock's pooled cells only
+ * when the landblock was evicted (no generation). A newer build of the same
+ * landblock released them at its own Step D and may have fed its cells since;
+ * releasing then took the newer build's interior out of the pools. (The
+ * walls-first `dropOwnWalls` already guarded this.) `release` is a test seam.
+ * @returns {boolean} whether the pools were released
+ */
+export function releaseCancelledBuildPools(scene3d, lbKey, release = releasePooledCellsForLb) {
+  if (scene3d.envCellBuildGen.get(lbKey) !== undefined) return false;
+  release(lbKey);
+  return true;
+}
+
+/**
  * Top-level: load every EnvCell for a single landblock and add the
  * resulting Groups under `scene3d.cellsGroup`. Idempotent — second
  * call for the same `landblockId` no-ops via the
@@ -2563,7 +2580,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // pools. The containers are being thrown away, so the pooled instances must
     // go with them — otherwise an LB that was evicted mid-build leaves interior
     // geometry in a pool that no container, and no later rebuild, accounts for.
-    releasePooledCellsForLb(lbKey);
+    // Only when evicted (releaseCancelledBuildPools).
+    releaseCancelledBuildPools(scene3d, lbKey);
     // `?interiorWallsFirst`: Step C may still be running (nothing attached
     // yet). Whatever geometry it adds after this point goes the same way.
     if (stepCSettled) {
@@ -3309,17 +3327,23 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       // ?indoorLandscapeGate (cells-portals-2): residency + BFS-only doorway
       // state of exactly the set the cells pass draws. Pooled cell surfaces
       // and ?cellBugParity (every EnvCell drawn) are not modelled → unknown.
+      // Own try: the gate is default-on, and a throw here must fail the GATE
+      // open (null state → the world is drawn), never disarm the split.
       if (lsGate && splitArmed) {
-        _lsCellState = envCellPoolsActive() || CELL_BUG_PARITY
-          ? null
-          : indoorLandscapeCellState(
-            scene3d.cellContainers3d,
-            portalSet,
-            bfs,
-            splitWalk,
-            frustumSetThisTick,
-            viewerCell || cellId,
-          );
+        try {
+          _lsCellState = envCellPoolsActive() || CELL_BUG_PARITY
+            ? null
+            : indoorLandscapeCellState(
+              scene3d.cellContainers3d,
+              portalSet,
+              bfs,
+              splitWalk,
+              frustumSetThisTick,
+              viewerCell || cellId,
+            );
+        } catch (_) {
+          _lsCellState = null;
+        }
       }
     } catch (_) {
       splitArmed = false;
@@ -4204,10 +4228,11 @@ function resolveSealPass(scene3d) {
  */
 let _sealStalePkgWarned = false;
 export function tickPortalSeal(scene3d, sessionHandle) {
-  // ?indoorLandscapeGate=on (cells-portals-2): the seal body captures its
-  // walk's raw outside-view count, then the gate decides this tick's landscape
-  // skip whichever way the body returned. Flag off: the body alone (plus one
-  // `false` to the pipeline if a runtime toggle left a skip set).
+  // ?indoorLandscapeGate (cells-portals-2, default ON): the seal body captures
+  // its walk's raw outside-view count, then the gate decides this tick's
+  // landscape skip whichever way the body returned. Under `=off`: the body
+  // alone (plus one `false` to the pipeline if a runtime toggle left a skip
+  // set).
   if (!indoorLandscapeGateEnabled()) {
     if (_lsSkipPushed) _pushIndoorLandscapeSkip(scene3d, false);
     _tickPortalSealBody(scene3d, sessionHandle);
@@ -4250,7 +4275,7 @@ function _lsFlatCount(flat) {
 }
 
 /**
- * ?indoorLandscapeGate=on — may this tick's armed indoor frame skip the
+ * ?indoorLandscapeGate (default ON) — may this tick's armed indoor frame skip the
  * landscape (retail draws LScape::draw only under `outside_view.view_count`,
  * PView::DrawCells acclient.c:461476)? Hands the answer to the pipeline
  * (`setIndoorLandscapeSkip`, honoured only on an armed indoor frame) and
@@ -4350,7 +4375,7 @@ export function tickIndoorLandscapeGate(scene3d, sessionHandle, rawCount) {
 }
 
 /**
- * ?rigCellGate=on — the outside-view count the gate's landcell clause reads:
+ * ?rigCellGate (default ON) — the outside-view count the gate's landcell clause reads:
  * the walk's raw `flat[0]`, except that a 0 is only trusted when the camera is
  * NOT within INDOOR_LANDSCAPE_NEAR_PORTAL_M of an outdoor portal. A doorway
  * closer than the 0.1 m near plane projects to nothing (pview_project_polygon
@@ -4386,12 +4411,13 @@ function _rigGateOutsideCount(flat, sessionHandle, camera, worldRoot) {
 }
 
 function _tickPortalSealBody(scene3d, sessionHandle) {
-  // ?rigCellGate=on (cells-portals-1): retail's `outside_view.view_count` for
-  // the gate's landcell-rig clause (rig_cell_gate.js) — the raw count of the
-  // walk's outside portals, before the punch clip below drops straddles. Reset
-  // every frame; null (unknown: no seal pass, stale pkg, a throw, or a 0 with
-  // the camera near an outdoor portal — see _rigGateOutsideCount) fails the
-  // clause open. Flag off: never written.
+  // ?rigCellGate (cells-portals-1, default ON): retail's
+  // `outside_view.view_count` for the gate's landcell-rig clause
+  // (rig_cell_gate.js) — the raw count of the walk's outside portals, before
+  // the punch clip below drops straddles. Reset every frame; null (unknown: no
+  // seal pass, stale pkg, a throw, or a 0 with the camera near an outdoor
+  // portal — see _rigGateOutsideCount) fails the clause open. Under `=off`:
+  // never written.
   const rigGate = !!scene3d && rigCellGateEnabled();
   if (rigGate) scene3d._rigGateOutsideViewCount = null;
   const pass = resolveSealPass(scene3d);

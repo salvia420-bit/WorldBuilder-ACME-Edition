@@ -13,13 +13,18 @@
 // so additive object surfaces were mixed toward fogColor in the ADD term.
 //
 //   F1  flag parsing (`additiveObjFogExemptEnabled`).
-//   F2  the legacy cache ladder (real materials.js `_materialFromFlags`).
+//   F2  the cache ladder (real materials.js `_materialFromFlags`), on both
+//       surfaceUnified arms: the LEGACY inline ladder (`?surfaceUnified=off`)
+//       and the default (unified delegate, DEFAULT ON since 2026-10-19).
 //   F3  the unified decoder (real `applySurfaceRenderState`), incl. the
 //       `?surfaceParityV2=on` force past the escape.
 //   F4  the recoloured/paletted ladder (real entities.js
 //       `_applyPalettedSurfaceRenderState`, spliced), both arms.
 //   F5  the three decoders agree on `fog` for every flag, both flag states,
-//       and nothing but `fog` moves between the default and the escape.
+//       and nothing but `fog` moves between the default and the escape. The
+//       cache and paletted decoders run their LEGACY ladders here
+//       (`?surfaceUnified=off`), or the lens would compare the unified decoder
+//       with itself.
 //   F6  wiring.
 //
 // Fails on the pre-change code: `additiveObjFogExemptEnabled` does not exist,
@@ -45,8 +50,15 @@ function check(label, cond, extra = "") {
 }
 
 const _prevWindow = globalThis.window;
+// surfaceUnified is DEFAULT ON since 2026-10-19, so a bare search sends the
+// cache and paletted ladders through the unified decoder. While `LEGACY_ARM`
+// is set, `setSearch` pins the legacy ladders with `surfaceUnified=off` unless
+// the case names surfaceUnified itself; clear it to run the shipped default.
+let LEGACY_ARM = true;
 function setSearch(s) {
-  globalThis.window = { location: { search: s } };
+  let q = s;
+  if (LEGACY_ARM && !/[?&]surfaceUnified=/.test(s)) q = s ? `${s}&surfaceUnified=off` : "?surfaceUnified=off";
+  globalThis.window = { location: { search: q } };
 }
 function clearWindow() {
   delete globalThis.window;
@@ -134,27 +146,32 @@ check("a throwing location -> on (default)", M.additiveObjFogExemptEnabled() ===
 // ---------------------------------------------------------------------------
 const DECODERS = [["_materialFromFlags", viaCache], ["applySurfaceRenderState", viaUnified],
   ["_applyPalettedSurfaceRenderState", viaPaletted]];
-for (const [dname, decode] of DECODERS) {
-  console.log(`\n-- ${dname} ${"-".repeat(Math.max(1, 56 - dname.length))}`);
-  setSearch("");
-  check(`${dname}: premise — node runs the default (non-unified) arm`, M.readSurfaceUnifiedFlag() === false);
-  for (const [label, flags] of ADDITIVE) {
+for (const [arm, legacy] of [["?surfaceUnified=off legacy arm", true], ["default arm (surfaceUnified DEFAULT ON)", false]]) {
+  LEGACY_ARM = legacy;
+  for (const [dname, decode] of DECODERS) {
+    const tag = `${dname} [${arm}]`;
+    console.log(`\n-- ${tag} ${"-".repeat(Math.max(1, 56 - tag.length))}`);
     setSearch("");
-    const on = decode(flags);
-    setSearch("?additiveObjFog=off");
-    const off = decode(flags);
-    check(`${dname}: ${label} -> fog === false by default`, on.fog === false, `got ${on.fog}`);
-    check(`${dname}: ${label} -> fog === true under ?additiveObjFog=off`, off.fog === true, `got ${off.fog}`);
-  }
-  for (const [label, flags] of PLAIN) {
-    setSearch("");
-    const on = decode(flags);
-    setSearch("?additiveObjFog=off");
-    const off = decode(flags);
-    check(`${dname}: ${label} (non-additive) keeps fog === true in both`, on.fog === true && off.fog === true,
-      `default=${on.fog} escape=${off.fog}`);
+    check(`${tag}: premise — readSurfaceUnifiedFlag() is ${!legacy}`, M.readSurfaceUnifiedFlag() === !legacy);
+    for (const [label, flags] of ADDITIVE) {
+      setSearch("");
+      const on = decode(flags);
+      setSearch("?additiveObjFog=off");
+      const off = decode(flags);
+      check(`${tag}: ${label} -> fog === false by default`, on.fog === false, `got ${on.fog}`);
+      check(`${tag}: ${label} -> fog === true under ?additiveObjFog=off`, off.fog === true, `got ${off.fog}`);
+    }
+    for (const [label, flags] of PLAIN) {
+      setSearch("");
+      const on = decode(flags);
+      setSearch("?additiveObjFog=off");
+      const off = decode(flags);
+      check(`${tag}: ${label} (non-additive) keeps fog === true in both`, on.fog === true && off.fog === true,
+        `default=${on.fog} escape=${off.fog}`);
+    }
   }
 }
+LEGACY_ARM = true;
 
 // ---------------------------------------------------------------------------
 console.log("\n-- F3b unified arm specifics ----------------------------------");
@@ -163,7 +180,8 @@ console.log("\n-- F3b unified arm specifics ----------------------------------")
   check("?surfaceParityV2=on still forces the exemption past the escape",
     viaUnified(F.Additive).fog === false && viaUnified(F.Additive | F.Alpha).fog === false);
   check("...and never exempts a non-additive surface", viaUnified(F.Translucent).fog === true);
-  // The paletted ladder delegates to the unified decoder under ?surfaceUnified=on.
+  // The paletted ladder delegates to the unified decoder under ?surfaceUnified=on
+  // (and by default since 2026-10-19 — the default arm above covers that).
   setSearch("?surfaceUnified=on");
   check("paletted ladder under ?surfaceUnified=on (delegate arm): Additive -> fog false",
     viaPaletted(F.Additive).fog === false && viaPaletted(F.Additive | F.Alpha).fog === false);
@@ -177,6 +195,9 @@ console.log("\n-- F3b unified arm specifics ----------------------------------")
 // ---------------------------------------------------------------------------
 console.log("\n-- F5 cross-decoder agreement + nothing else moves --------------");
 {
+  // LEGACY_ARM is set: viaCache / viaPaletted run their LEGACY ladders
+  // (`?surfaceUnified=off`) against the unified decoder, not unified vs unified.
+  LEGACY_ARM = true;
   const PROPS = ["transparent", "depthWrite", "blending", "blendSrc", "blendDst", "blendEquation",
     "opacity", "alphaTest", "side"];
   const FLOATS = [undefined, { translucency: 0.4 }, { luminosity: 0.5 }, { diffuse: 0.6 }];

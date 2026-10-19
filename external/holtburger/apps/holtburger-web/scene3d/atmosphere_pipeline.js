@@ -71,7 +71,7 @@ import { createFxDistortEffect, installFxDistortHandle } from "./vfx/fx_distort_
 import { createFxGlowEffect, installFxGlowHandle } from "./vfx/fx_glow_effect.js";
 import { createFxDecalEffect, installFxDecalHandle } from "./vfx/fx_decal_effect.js";
 import { fxDecalStats } from "./vfx/fx_decals.js";
-import { particlesOverCloudsEnabled, collectLateFx, runLateFxBefore, runLateFxAfter } from "./particles_over_clouds.js";
+import { particlesOverCloudsEnabled, particlesOverHazeEnabled, collectLateFx, runLateFxBefore, runLateFxAfter } from "./particles_over_clouds.js";
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
 import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
@@ -492,6 +492,20 @@ class SkyCapturePass extends Pass {
 // world/cells split) skip the late draw and leave the particles in their
 // legacy passes: the doorway seal relies on the world pass drawing outdoor
 // particles before the depth wipe, and nothing there is against the sky.
+//
+// THE UNSPLIT CHAIN (`?particlesOverHaze`, SKY-1 remainder, 2026-10-18
+// follow-up). Without the clouds in the post chain (low / mid, `?clouds=off`,
+// `?cloudsMainPass=off`, `?particlesOverClouds=off`) there is no T: the haze is
+// its own swapping pass in front of the one post EffectPass. The same pass
+// class (`ownTarget: false`) draws the particles right after it, into the
+// composer buffer the haze wrote, which carries composer.depthTexture (pmndrs
+// attaches it to the input buffer before every pass). That needs single-sample
+// ping-pong buffers (`?msaaWorldOnly`, or `?msaa=0`): a multisampled buffer
+// depth-tests against its own renderbuffer, not the scene depth. No soft
+// particles there (their depth copy is a full-screen pass), so the particles
+// shade exactly as they did in the world pass. The aerial perspective still
+// runs after them on this chain (it shares the EffectPass with bloom and tone
+// mapping); only the layered haze is moved off them.
 
 /**
  * First half of the split post chain: renders into the late target instead of
@@ -591,10 +605,12 @@ const _lateNow = () => (typeof performance !== "undefined" ? performance.now() :
  * always) restores anything still hidden.
  */
 class ParticlesOverCloudsPass extends Pass {
-  constructor(worldScene, camera, { stencil = false, depthSource = () => null } = {}) {
+  constructor(worldScene, camera, {
+    stencil = false, depthSource = () => null, ownTarget = true, name = "ParticlesOverClouds",
+  } = {}) {
     const lateScene = new THREE.Scene();
-    super("ParticlesOverClouds", lateScene, camera);
-    lateScene.name = "ParticlesOverClouds.Scene";
+    super(name, lateScene, camera);
+    lateScene.name = `${name}.Scene`;
     // No graph walk of its own: `children` is handed the collected objects for
     // the one render call. They keep their real parents and the matrixWorld the
     // world pass's updateMatrixWorld computed this frame.
@@ -603,19 +619,24 @@ class ParticlesOverCloudsPass extends Pass {
     this.needsSwap = false;
     this.needsDepthBlit = false;
     this._depthSource = depthSource;
-    this.renderTarget = new THREE.WebGLRenderTarget(1, 1, {
-      type: THREE.HalfFloatType,
-      depthBuffer: true,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-    });
-    // Mirrors the composer buffers (a packed depth-stencil texture when
-    // `?punchOcclusion` / `?portalStencil` allocate stencil). Assigned, not
-    // passed as an option: tests/portal_punch_occlusion_flag anchors on the
-    // composer's own stencil option being the file's first one.
-    this.renderTarget.stencilBuffer = !!stencil;
-    this.renderTarget.texture.name = "ParticlesOverClouds.Target";
-    this.renderTarget.texture.generateMipmaps = false;
+    // `ownTarget: false` (the unsplit chain, `?particlesOverHaze`): no T — the
+    // draw goes into the composer buffer handed to render().
+    this.renderTarget = null;
+    if (ownTarget) {
+      this.renderTarget = new THREE.WebGLRenderTarget(1, 1, {
+        type: THREE.HalfFloatType,
+        depthBuffer: true,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+      });
+      // Mirrors the composer buffers (a packed depth-stencil texture when
+      // `?punchOcclusion` / `?portalStencil` allocate stencil). Assigned, not
+      // passed as an option: tests/portal_punch_occlusion_flag anchors on the
+      // composer's own stencil option being the file's first one.
+      this.renderTarget.stencilBuffer = !!stencil;
+      this.renderTarget.texture.name = "ParticlesOverClouds.Target";
+      this.renderTarget.texture.generateMipmaps = false;
+    }
     this.objects = [];
     this._noChildren = lateScene.children;
     this._hidden = false;
@@ -628,10 +649,13 @@ class ParticlesOverCloudsPass extends Pass {
     };
   }
 
-  /** Attach the composer's scene depth texture to T (the depth test source). */
-  attachSceneDepth() {
+  /**
+   * Attach the composer's scene depth texture to the draw target (T, or the
+   * composer buffer on the unsplit chain, which pmndrs already gave it).
+   */
+  attachSceneDepth(target = this.renderTarget) {
     const d = this._depthSource();
-    if (d && this.renderTarget.depthTexture !== d) this.renderTarget.depthTexture = d;
+    if (d && target && target.depthTexture !== d) target.depthTexture = d;
     return !!d;
   }
 
@@ -669,11 +693,14 @@ class ParticlesOverCloudsPass extends Pass {
     this._hidden = false;
   }
 
-  render(renderer, _inputBuffer, _outputBuffer) {
+  render(renderer, inputBuffer, _outputBuffer) {
     const t0 = _lateNow();
     this._show();
     const objs = this.objects;
-    if (objs.length === 0 || !this.camera || !this.attachSceneDepth()) {
+    // T, or (unsplit chain) the composer buffer the haze just wrote.
+    const own = this.renderTarget !== null;
+    const target = own ? this.renderTarget : inputBuffer;
+    if (objs.length === 0 || !this.camera || !target || !this.attachSceneDepth(target)) {
       this.stats.drawMs = 0;
       return;
     }
@@ -689,13 +716,15 @@ class ParticlesOverCloudsPass extends Pass {
     try {
       // `?particleFx` soft particles: the hooks copy the scene depth (attached
       // to T, so not sampleable during the draw) into a linear-depth texture
-      // BEFORE T is bound, and switch the soft term off again after.
-      runLateFxBefore(renderer, this._depthSource(), cam, this.renderTarget.width, this.renderTarget.height);
-      renderer.setRenderTarget(this.renderTarget);
+      // BEFORE T is bound, and switch the soft term off again after. Not on
+      // the unsplit chain: that copy is a full-screen pass, and its particles
+      // were never soft (the world pass does not run the hooks either).
+      if (own) runLateFxBefore(renderer, this._depthSource(), cam, target.width, target.height);
+      renderer.setRenderTarget(target);
       renderer.render(scene, cam);
       this.stats.drawnFrames++;
     } finally {
-      runLateFxAfter();
+      if (own) runLateFxAfter();
       scene.children = this._noChildren;
       cam.layers.mask = prevMask;
       renderer.setRenderTarget(prevTarget);
@@ -713,13 +742,13 @@ class ParticlesOverCloudsPass extends Pass {
   }
 
   setSize(width, height) {
-    this.renderTarget.setSize(width, height);
+    this.renderTarget?.setSize(width, height);
   }
 
   dispose() {
     // T borrows the composer's depth texture; three disposes an attached
     // depth texture with its render target.
-    this.renderTarget.depthTexture = null;
+    if (this.renderTarget) this.renderTarget.depthTexture = null;
     super.dispose();
   }
 }
@@ -1428,9 +1457,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // cellsMaskPass / cellsRenderPass slots that have existed (disabled) since
   // the Phase 5 PView work.
   let indoorSplitArmed = false;
-  // cells-portals-2 `?indoorLandscapeGate=on` (OPT-IN). Published once per
-  // tick by cells.js `tickPortalSeal` via `setIndoorLandscapeSkip`; honoured
-  // only on an armed indoor frame. Stays `false` forever when the flag is off.
+  // cells-portals-2 `?indoorLandscapeGate` (DEFAULT ON since 2026-10-19,
+  // `=off` escape). Published once per tick by cells.js `tickPortalSeal` via
+  // `setIndoorLandscapeSkip`; honoured only on an armed indoor frame. Stays
+  // `false` forever under `=off`.
   let indoorLandscapeSkip = false;
 
   // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
@@ -1774,6 +1804,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   let lateScrubPass = null;
   let lateHazePass = null;
   let particlesOverCloudsPass = null;
+  // SKY-1 remainder (2026-10-18 follow-up): the unsplit chain's late draw.
+  let particlesOverHazePass = null;
   let fxPostPass = null;
   let fxPass;
   if (particlesOverCloudsFlag && cloudsMain) {
@@ -1836,6 +1868,23 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // attribute sort seats it after horizonDissolve, ahead of fxGlow.
       ...(filmDof ? [filmDof.effect] : []),
     );
+    // SKY-1 remainder (2026-10-18 follow-up), `?particlesOverHaze` (default
+    // on, `=off` escape): the haze runs as its own pass here, after the world
+    // pass drew the particles, and fogged a near spell by the depth of the
+    // hills behind it (particles write no depth). Draw them after it instead,
+    // into the buffer it wrote: one more particle draw set, no target, no
+    // full-screen pass. Only on single-sample ping-pong buffers (see THE
+    // UNSPLIT CHAIN above); `opts.particlesOverHaze` (boolean) wins for tests.
+    const overHazeFlag = typeof opts?.particlesOverHaze === "boolean"
+      ? opts.particlesOverHaze
+      : particlesOverHazeEnabled();
+    if (overHazeFlag && layeredHaze && !(composer.multisampling > 0)) {
+      particlesOverHazePass = new ParticlesOverCloudsPass(scene, camera, {
+        depthSource: () => composer.depthTexture,
+        ownTarget: false,
+        name: "ParticlesOverHaze",
+      });
+    }
   }
   if (nanScrubOn) {
     const scrub = makeNanScrub();
@@ -1846,6 +1895,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (ssaoPass) composer.addPass(ssaoPass);
   // Unsplit chain: fxPass also tone-maps, so the haze has to go in front of it.
   if (layeredHaze && !particlesOverCloudsPass) composer.addPass(layeredHaze);
+  // ... and `?particlesOverHaze` draws the particles over the haze's output.
+  if (particlesOverHazePass) composer.addPass(particlesOverHazePass);
   composer.addPass(fxPass);
   if (particlesOverCloudsPass) {
     // Split chain: after clouds + aerial perspective, before the late
@@ -1928,10 +1979,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
   // world pass, under the clouds; the split chain itself stays). preFrameSkySync
   // decides `lateThisFrame` (false on split frames).
+  // SKY-1 remainder (2026-10-18 follow-up): `latePass` is whichever late draw
+  // this chain has — the split chain's, or the unsplit chain's
+  // `?particlesOverHaze` pass (same A/B seam; also off on frames the haze
+  // leaves alone, `skippedNoHazeFrames`).
+  const latePass = particlesOverCloudsPass ?? particlesOverHazePass;
   let lateArmed = true;
-  let lateThisFrame = !!particlesOverCloudsPass;
+  let lateThisFrame = !!latePass;
   let lateSkippedSplit = 0;
   let lateSkippedDisarmed = 0;
+  let lateSkippedNoHaze = 0;
   if (typeof window !== "undefined") {
     const describe = (p) => p.name +
       (Array.isArray(p.effects) ? `[${p.effects.map((e) => e.name).join(", ")}]` : "") +
@@ -1946,9 +2003,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       /** A/B without a reload: false = particles drawn in the world pass again. */
       set(on) {
         lateArmed = !!on;
-        if (!lateArmed && particlesOverCloudsPass) {
+        if (!lateArmed && latePass) {
           lateThisFrame = false;
-          particlesOverCloudsPass.enabled = false;
+          latePass.enabled = false;
         }
         return this.stats();
       },
@@ -1959,20 +2016,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
           flag: particlesOverCloudsFlag,
           built: !!p,
           why: p ? "split chain" : (!particlesOverCloudsFlag ? "flag off" : "clouds not in the main pass (legacy overlay is already behind the world)"),
+          // `?particlesOverHaze` (unsplit chain): the late draw after the haze.
+          overHaze: !!particlesOverHazePass,
           armed: lateArmed,
           activeThisFrame: lateThisFrame,
           skippedSplitFrames: lateSkippedSplit,
           skippedDisarmedFrames: lateSkippedDisarmed,
-          ...(p ? p.stats : {}),
-          target: rt ? `${rt.width}x${rt.height} RGBA16F, depth=${rt.depthTexture ? (rt.depthTexture === composer.depthTexture ? "composer.depthTexture" : "OTHER") : "none"}` : null,
+          skippedNoHazeFrames: lateSkippedNoHaze,
+          ...(latePass ? latePass.stats : {}),
+          target: rt ? `${rt.width}x${rt.height} RGBA16F, depth=${rt.depthTexture ? (rt.depthTexture === composer.depthTexture ? "composer.depthTexture" : "OTHER") : "none"}`
+            : (particlesOverHazePass ? "composer buffer after LayeredHaze, depth=composer.depthTexture" : null),
         };
       },
       passes() { return composer.passes.map(describe); },
       reset() {
         lateSkippedSplit = 0;
         lateSkippedDisarmed = 0;
-        if (particlesOverCloudsPass) {
-          const s = particlesOverCloudsPass.stats;
+        lateSkippedNoHaze = 0;
+        if (latePass) {
+          const s = latePass.stats;
           for (const k of Object.keys(s)) s[k] = 0;
         }
         return this.stats();
@@ -2026,7 +2088,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass.mainCamera = cam;
     if (fxPostPass) fxPostPass.mainCamera = cam;
     // `.camera`: ParticlesOverCloudsPass is a base Pass (no-op mainCamera).
-    if (particlesOverCloudsPass) particlesOverCloudsPass.camera = cam;
+    if (latePass) latePass.camera = cam;
     // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): the EffectPass setters
     // above already fan `mainCamera` out to the DoF (its own setter re-copies
     // near/far + PERSPECTIVE_CAMERA into the CoC material and moves the
@@ -2133,6 +2195,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass,
     fxPostPass,
     particlesOverCloudsPass,
+    // SKY-1 remainder (2026-10-18 follow-up): the unsplit chain's late draw
+    // after LayeredHaze (`?particlesOverHaze`); null on the split chain, with
+    // the haze off, or on multisampled ping-pong buffers.
+    particlesOverHazePass,
     // ?msaaWorldOnly (2026-10-17): the multisampled target the scene passes
     // draw into (null with the flag off or `?msaa=0`, when the composer's own
     // buffers carry any samples as before). Diag: `window.__msaaWorld()`.
@@ -2162,12 +2228,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     },
 
     /**
-     * cells-portals-2 `?indoorLandscapeGate=on` — skip the landscape on the
-     * NEXT armed indoor frame (the walk reaches no outside portal; retail
-     * draws LScape::draw only under `outside_view.view_count`, PView::DrawCells
-     * acclient.c:461476). Called once per tick by cells.js `tickPortalSeal`,
-     * which owns every fail-open clause (scene3d/indoor_landscape_gate.js).
-     * Never called with the flag off.
+     * cells-portals-2 `?indoorLandscapeGate` (default ON) — skip the landscape
+     * on the NEXT armed indoor frame (the walk reaches no outside portal;
+     * retail draws LScape::draw only under `outside_view.view_count`,
+     * PView::DrawCells acclient.c:461476). Called once per tick by cells.js
+     * `tickPortalSeal`, which owns every fail-open clause
+     * (scene3d/indoor_landscape_gate.js). Under `=off` it is never called,
+     * except for one `false` after a runtime toggle to off.
      *
      * @param {boolean} skip
      */
@@ -2203,10 +2270,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // the sky's sun (it was (0,0,0); see aerialSunEnabled). Two vec3 compares.
       if (aerialSunOn && atmosphereSky) syncAerialSun(aerialPerspective, atmosphereSky);
       const isIndoor = !!skyDome?._lastIsIndoor;
-      // cells-portals-2 `?indoorLandscapeGate=on`: this armed indoor frame
-      // draws no landscape — retail's sky (GameSky::Draw) is inside
+      // cells-portals-2 `?indoorLandscapeGate` (default ON): this armed indoor
+      // frame draws no landscape — retail's sky (GameSky::Draw) is inside
       // LScape::draw, so the sky, sky-capture and horizon passes go with it.
-      // Always false with the flag off.
+      // Always false under `=off`.
       const landscapeSkip = indoorLandscapeSkip && indoorSplitArmed && isIndoor;
       // SKY-SEEN-OUTSIDE (2026-08-04): the SKY gates read the composite flag
       // (indoor AND not SeenOutside — sky_dome.js tick) so a cottage interior
@@ -2406,12 +2473,18 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // legacy world/cells passes: the doorway seal keeps the layer-0 outdoor
       // particles the world pass drew before the depth wipe, and nothing in a
       // split frame is against the sky.
-      if (particlesOverCloudsPass) {
+      // SKY-1 remainder (2026-10-18 follow-up): the same gate for the unsplit
+      // chain's `?particlesOverHaze` draw, which also stays off while the haze
+      // is a pass-through (sky-blocked cell, strength 0): there it would only
+      // reorder the particles against the other transparent draws.
+      if (latePass) {
         const split = punchActive || (indoorSplitArmed && isIndoor);
-        lateThisFrame = lateArmed && !split;
+        const noHaze = latePass === particlesOverHazePass && !(layeredHaze.strength > 0 && !skyBlocked);
+        lateThisFrame = lateArmed && !split && !noHaze;
         if (!lateArmed) lateSkippedDisarmed++;
         else if (split) lateSkippedSplit++;
-        particlesOverCloudsPass.enabled = lateThisFrame;
+        else if (noHaze) lateSkippedNoHaze++;
+        latePass.enabled = lateThisFrame;
       }
     },
 
@@ -2439,15 +2512,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // `?particlesOverClouds` — hide this frame's particle draw objects from
       // the world pass (the world pass draws with mask BOTH on an unsplit
       // frame), draw them in the late pass, and restore them whatever happens.
+      // (Either chain's late pass: the split chain's, or `?particlesOverHaze`.)
       let lateOpen = false;
-      if (particlesOverCloudsPass && lateThisFrame && particlesOverCloudsPass.enabled) {
-        particlesOverCloudsPass.camera = activeCamera;
-        lateOpen = particlesOverCloudsPass.beginFrame(CAM_LAYER_MASK_BOTH);
+      if (latePass && lateThisFrame && latePass.enabled) {
+        latePass.camera = activeCamera;
+        lateOpen = latePass.beginFrame(CAM_LAYER_MASK_BOTH);
       }
       try {
         composer.render(dt);
       } finally {
-        if (lateOpen) particlesOverCloudsPass.endFrame();
+        if (lateOpen) latePass.endFrame();
       }
     },
 

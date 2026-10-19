@@ -222,7 +222,15 @@ export class WorldState extends EventTarget {
    */
   setLocalPlayerGuid(guid) {
     const g = (guid | 0) >>> 0;
+    const prev = this._localPlayerGuid;
     this._localPlayerGuid = g;
+    // SHELL-2 follow-up (2026-10-18): a page plays one character, so a new
+    // guid here is a pick after a refused Enter World. The refused character
+    // never entered; drop the Character registered for it.
+    if (prev !== 0 && prev !== g) {
+      if (this.character?.id === prev) this.character = null;
+      this.dispatchItemDeleteObject(prev);
+    }
     const existing = this.weenies.get(g);
     if (existing && !(existing instanceof Character)) {
       // Retro-upgrade: build a Character and copy over the property

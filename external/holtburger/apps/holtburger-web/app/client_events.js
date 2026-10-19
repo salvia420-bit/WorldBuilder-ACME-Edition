@@ -638,19 +638,20 @@ export function dispatchClientEvent(evt, D) {
     // Spawn click — retail drops back to a usable character select. The wasm
     // reports kind=1 PlayerSpawned eagerly on SelectCharacter (lifecycle.rs,
     // Workstream A), so spawningCharId is usually null by now and
-    // spawnedPlayerGuid holds the refused id; kind=7 refills it on a retry.
-    // Only that character is offered again: this session's WorldState was
-    // built for its guid (another character needs a reload). Not a
-    // boot-state 'error': auto_login's char-in-world retry reads the stash
-    // above. The character screen (app/character_select.js) shows the
-    // ID_CHAR_ERROR dialog off the event below.
+    // spawnedPlayerGuid holds the refused id; the next select's kind=1
+    // refills it. Every character is offered again: the next select hands
+    // this session's WorldState to the picked guid (SHELL-2 follow-up,
+    // lifecycle.rs SelectCharacter). Not a boot-state 'error': auto_login's
+    // char-in-world retry reads the stash above. The character screen
+    // (app/character_select.js) shows the ID_CHAR_ERROR dialog off the
+    // event below.
     const refusedId = D.enteredWorld ? null : (D.spawningCharId ?? D.spawnedPlayerGuid);
     if (refusedId != null) {
       D.spawningCharId = null;
       D.spawnedPlayerGuid = null;
       try {
         for (const b of characterUl?.querySelectorAll?.("button[data-id]") ?? []) {
-          b.disabled = Number(b.dataset.id) !== refusedId;
+          b.disabled = false;
           b.textContent = "Spawn";
         }
       } catch (_) { /* best-effort */ }

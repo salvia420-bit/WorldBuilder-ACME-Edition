@@ -1515,9 +1515,10 @@ const RIG_MODULE_ON = readRigModuleFlag();
 // via `tickEntityRenderVisibility`.
 import { CULL_DIST_SQ } from "./culling.js";
 import { getOcclusionCuller, ENTITY_PAD_M } from "./occlusion_cull.js";
-// cells-portals-1 (2026-10-13) — `?rigCellGate=on` (OPT-IN): indoors, a rig in
-// a cell that is not drawn this frame is not drawn (nor pickable). Leaf module;
-// consulted only inside tickEntityRenderVisibility.
+// cells-portals-1 (2026-10-13) — `?rigCellGate` (DEFAULT ON since 2026-10-19,
+// `=off` escape): indoors, a rig in a cell that is not drawn this frame is not
+// drawn (nor pickable). Leaf module; consulted only inside
+// tickEntityRenderVisibility.
 import {
   rigCellGateEnabled,
   rigCellHidden,
@@ -1600,7 +1601,9 @@ const CREATURE_GAIT_RETAIL_ON = (() => {
   }
 })();
 
-// A5-P2 (unification survey 2026-06-11) — `?tweenClock=dt` (default OFF).
+// A5-P2 (unification survey 2026-06-11) — `?tweenClock` (DEFAULT ON since
+// 2026-10-19, ahead of its 1070 eye test; `=off|0|false|no|wall` keeps the
+// legacy wall clock; `=dt`, the old opt-in token, still reads on).
 // One clock domain for the hook-side-effect tweens
 // (`_tickJumpPoseTween` / `_tickScaleHookTween`; the swing/cast pose tickers
 // were retired in the WS-B teardown). Retail clocks EVERY animation side effect off the
@@ -1609,10 +1612,10 @@ const CREATURE_GAIT_RETAIL_ON = (() => {
 // elapsed-time quantum, on the single `Timer::cur_time` static,
 // acclient.c:46992). Ours split-brains two clock domains (A5 divergence #8):
 // the mixer + `_tickHookOmega` + `_tickMaterialHooks` advance on the loop's
-// CLAMPED dt, while these four tweens read `performance.now()` wall clock —
+// CLAMPED dt, while these tweens read `performance.now()` wall clock —
 // so a tab-throttle / DT_RECOVERY freeze (or any dt clamping) advances the
 // tween family 2s of wall time while the mixer advances ~16ms, desyncing pose
-// tweens from the clip state they overlay. ON → the four tickers AND their
+// tweens from the clip state they overlay. ON → the tickers AND their
 // stamp sites (`startMs`) run off `EntityManager._tweenClockMs`, an
 // accumulated-dt clock advanced at the top of `tick(dt)` by the SAME dt the
 // mixers consume (`_tweenNowMs()` is the single read point); tween phase then
@@ -1625,10 +1628,11 @@ const CREATURE_GAIT_RETAIL_ON = (() => {
 // windows), and `actionLastUsedMs` (LRU bookkeeping).
 const TWEEN_CLOCK_DT = (() => {
   try {
-    return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("tweenClock")?.toLowerCase() === "dt";
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("tweenClock") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no" || v === "wall");
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 
@@ -3039,11 +3043,17 @@ function _applyEntityVisible(inst) {
  * was overpainted by the room shell; monsters spawned inside the dungeon
  * (stamped at spawn, never re-dressed) stayed visible. Re-stamp after every
  * rebuild. Same no-op guard as the spawn stamp (`entitiesGroup` present).
+ * FILM-5 remainder (2026-10-18 follow-up): a nameplate / badge sprite that
+ * film's clean_frame took off every layer (`?filmMode=on`) keeps mask 0; the
+ * stamp lands in `__filmCleanMask`, the mask clean_frame restores at take end.
  */
 function _stampEntityIndoorLayer(scene3d, obj) {
   if (!obj || !scene3d?.entitiesGroup) return;
   try {
-    obj.traverse((o) => o.layers.set(1));
+    obj.traverse((o) => {
+      if (o.__filmCleanMask !== undefined) o.__filmCleanMask = 1 << 1;
+      else o.layers.set(1);
+    });
   } catch (_) {}
 }
 
@@ -3133,9 +3143,10 @@ function _entityOwnsLight(inst) {
  * `culler` is the shared AC-space FrustumCuller, already `.update()`d this
  * frame by loop.js. Fail-soft on every missing input.
  *
- * `?rigCellGate=on` (opt-in, rig_cell_gate.js) adds an indoor cell term after
- * the frustum/distance test: a rig whose cell is not drawn this frame is
- * hidden. The exemptions above apply to it unchanged.
+ * `?rigCellGate` (DEFAULT ON since 2026-10-19, `=off` escape; rig_cell_gate.js)
+ * adds an indoor cell term after the frustum/distance test: a rig whose cell
+ * is not drawn this frame is hidden. The exemptions above apply to it
+ * unchanged.
  */
 export function tickEntityRenderVisibility(scene3d, culler) {
   const em = scene3d?.entityManager;
@@ -3177,8 +3188,8 @@ export function tickEntityRenderVisibility(scene3d, culler) {
   let occluded = 0;
   const occ = getOcclusionCuller(scene3d, THREE);
   const frameNo = occ ? occ.frame : 0;
-  // ?rigCellGate=on (cells-portals-1, OPT-IN) — retail draws an object only
-  // through the cells the portal walk reached (PView::DrawCells →
+  // ?rigCellGate (cells-portals-1, DEFAULT ON; =off escape) — retail draws an
+  // object only through the cells the portal walk reached (PView::DrawCells →
   // DrawObjCellForDummies, acclient.c:461450), and the indoor ?occlusionCull
   // is disarmed. Only while the viewer is indoors AND the ?indoorDepthSplit is
   // armed: its narrowed cell set is our cell_draw_list. See rig_cell_gate.js.
@@ -4087,9 +4098,9 @@ export class EntityManager {
   constructor(scene3d, wasmExports) {
     this.scene3d = scene3d;
     this.wasmExports = wasmExports;
-    // A5-P2 (`?tweenClock=dt`) — accumulated-dt tween clock (ms). Advanced
-    // at the top of `tick(dt)` by the same dt the mixers consume; read via
-    // `_tweenNowMs()` by the four pose-tween tickers + their stamp sites.
+    // A5-P2 (`?tweenClock`, default on) — accumulated-dt tween clock (ms).
+    // Advanced at the top of `tick(dt)` by the same dt the mixers consume;
+    // read via `_tweenNowMs()` by the pose-tween tickers + their stamp sites.
     // Seeded from wall now so stamps made before the first tick (and any
     // flag-off → flag-on comparison) stay monotonic. Inert when the flag is
     // off (`_tweenNowMs()` returns `performance.now()`, the legacy clock).
@@ -6723,14 +6734,15 @@ export class EntityManager {
     const sfLuminosity = +(state.luminosity ?? 0.0);
     const sfDiffuse = +(state.diffuse ?? 0.0);
     // === A10-M1 (2026-06-11) — delegate to the single decoder ================
-    // When `?surfaceUnified=on`, route through the shared
+    // By default (surfaceUnified DEFAULT ON since 2026-10-19, flipped ahead of
+    // its 1070 eye test), route through the shared
     // `applySurfaceRenderState` (materials.js) so the recolored/paletted path and the
     // cache path run ONE decoder. This ALSO attaches the luminous emissiveMap
     // (the diffuse-recoloured map, `mat.map`) — the resolved reading that fixes
     // recolored luminous gear washing to white (A10 §3 row 2; ROADMAP §7 item 2).
-    // Default OFF keeps the legacy inline ladder below (NO emissiveMap — the
-    // wrong reading, kept for byte-identical rollback only). The userData
-    // surfaceTypeFlags stamp above is preserved for the hook-ramp clock.
+    // The `?surfaceUnified=off` escape keeps the legacy inline ladder below
+    // (rollback; its emissiveMap comes only from `?luminousEmissiveMap`). The
+    // userData surfaceTypeFlags stamp above is preserved for the hook-ramp clock.
     if (readSurfaceUnifiedFlag()) {
       applySurfaceRenderState(
         mat,
@@ -6812,18 +6824,21 @@ export class EntityManager {
       // (acclient.c:454691-454697 + 454429-454432), so omitting the emissiveMap
       // washes a COLOURED recolored-luminous surface to white (A10 §3 row 2). The
       // correct reading (emissiveMap = mat.map) lives in
-      // `applySurfaceRenderState` (materials.js) and is taken when
-      // `?surfaceUnified=on`. Kept here only for byte-identical flag-off
-      // rollback. Clamp to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
+      // `applySurfaceRenderState` (materials.js) and is taken by default
+      // (surfaceUnified DEFAULT ON since 2026-10-19). Kept here only for the
+      // `?surfaceUnified=off` rollback. Clamp to (0, 2] (ACE ~[0,1] with
+      // occasional HDR pushes).
       mat.emissive = new THREE.Color(0xffffff);
       mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
       // R1 (2026-06-24, `?luminousEmissiveMap`): attach the (recoloured)
       // diffuse map as emissiveMap so a COLOURED recolored-luminous surface glows
       // in-colour (FF texture×emissive) instead of washing to white — the same
-      // resolved reading `?surfaceUnified` takes, as a narrow opt-in. The
+      // resolved reading `?surfaceUnified` takes, as a narrow flag. The
       // non-recolored cache path already does this (applyFloatLumDiffuse:1284), so the
       // emissiveMap program variant already exists (no net new program expected).
-      // Default OFF = byte-identical (flat white).
+      // DEFAULT ON since 2026-06-24; `=off` = flat white. This ladder only runs
+      // under `?surfaceUnified=off`, so `?luminousEmissiveMap=off` only bites
+      // together with it.
       if (readLuminousEmissiveMapFlag() && mat.map) mat.emissiveMap = mat.map;
       // ?surfaceLumWins (luminous_hook.js): the authored luminosity, which a
       // Luminous hook must leave alone (`_applyRampValueToMaterial`). Data only.
@@ -6839,14 +6854,17 @@ export class EntityManager {
       mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
     // Retail draws a surface ONCE (`?surfaceSinglePass`, materials.js
-    // `applyRetailSinglePass`). THIS LADDER IS THE PATH THAT ACTUALLY RUNS:
-    // `readSurfaceUnifiedFlag()` is default-OFF, so the `applySurfaceRenderState`
-    // delegate above is NOT taken and recolored/paletted entity materials never reach
-    // that funnel. Putting the parity call only on the funnel left the dominant
-    // population (403 of 451 transparent DoubleSide meshes at Holtburg are
-    // `paletted-*`) still double-submitted — caught by field verification, where
-    // the scene-wide arm still found 26 materials to flip and still gained +40%
-    // fps AFTER the "fix" had supposedly landed. A no-op unless the ladder above
+    // `applyRetailSinglePass`). Until 2026-10-19 THIS LADDER WAS THE PATH THAT
+    // ACTUALLY RAN: `readSurfaceUnifiedFlag()` was an opt-in then, so the
+    // `applySurfaceRenderState` delegate above was NOT taken and recolored/paletted
+    // entity materials never reached that funnel. Putting the parity call only on
+    // the funnel left the dominant population (403 of 451 transparent DoubleSide
+    // meshes at Holtburg are `paletted-*`) still double-submitted — caught by field
+    // verification, where the scene-wide arm still found 26 materials to flip and
+    // still gained +40% fps AFTER the "fix" had supposedly landed. surfaceUnified
+    // is DEFAULT ON since 2026-10-19 (the delegate calls applyRetailSinglePass
+    // itself), so this ladder now runs only under `?surfaceUnified=off`; the call
+    // stays so the escape keeps single-pass parity. A no-op unless the ladder above
     // actually made this material transparent.
     applyRetailSinglePass(mat);
     mat.needsUpdate = true;
@@ -7649,9 +7667,13 @@ export class EntityManager {
     // a direct mount (both rigs present) supersedes any earlier parked
     // attach for this child. No-op when the flag is off (buffer empty).
     this._preCreate.removeMatching((g, ev) => g === cGuid && ev.kind === "attach");
-    // Keep the child subtree on the indoor render layer (matches spawn).
+    // Keep the child subtree on the indoor render layer (matches spawn). A
+    // film-hidden sprite keeps mask 0 (FILM-5 remainder, see `_stampEntityIndoorLayer`).
     try {
-      c.root.traverse((o) => o.layers.set(1));
+      c.root.traverse((o) => {
+        if (o.__filmCleanMask !== undefined) o.__filmCleanMask = 1 << 1;
+        else o.layers.set(1);
+      });
     } catch (_) {}
     // B5 (2026-06-09): second equip step — re-pose the child weapon's own
     // parts into the grip frame named by `placement`. Runs after the
@@ -11506,13 +11528,13 @@ export class EntityManager {
   }
 
   /**
-   * A5-P2 (`?tweenClock=dt`) — the single clock read for the pose-tween
+   * A5-P2 (`?tweenClock`, default on) — the single clock read for the pose-tween
    * tickers (`_tickJumpPoseTween` / `_tickScaleHookTween`; swing/cast pose
    * tickers retired in the WS-B teardown) and their `startMs` stamp sites. Flag on →
    * the accumulated-dt clock advanced in `tick(dt)` (one clock domain with
    * the mixers, retail's single-quantum contract, acclient.c:340659-340780);
-   * flag off → `performance.now()`, byte-identical to the legacy wall-clock
-   * behavior. Stamp sites MUST use this too: mixing a wall-clock `startMs`
+   * `?tweenClock=off` → `performance.now()`, byte-identical to the legacy
+   * wall-clock behavior. Stamp sites MUST use this too: mixing a wall-clock `startMs`
    * with a dt-clock `nowMs` would corrupt the tween phase.
    */
   _tweenNowMs() {
@@ -13926,6 +13948,11 @@ export class EntityManager {
     // :309999, which sits inside the hit branch opened at :309995.
     // Keyed by g only — no `inst` dependency.
     this._pendingAttach.delete(g);
+    // 2026-10-18 review §7 follow-up: motions stashed for the spawn the
+    // generation bump above just invalidated (Bug 15 `_stashSpawnMotion`).
+    // Only a commit used to delete them, so a spawn that never committed left
+    // its entry, and the next spawn of the guid replayed its stale base motion.
+    this._spawnMotionStash?.delete(g);
     // A8-M4 (2026-06-12): retail RemoveObjectToBeDestroyed cancels the
     // placeholder's timer on real removal (acclient.c:309906-309915).
     // Parked attaches keyed by OTHER child guids that name this guid as
@@ -15451,6 +15478,18 @@ export class EntityManager {
 
     const emitterIds = [];
     const timeoutIds = [];
+    // 2026-10-18 review §7 follow-up: the Sound / SoundTable / Scale timers
+    // below leave the guid's `_soundTimeoutsForGuid` bucket when they fire
+    // (as the CallPES timer already did); one that fires before this walk
+    // merges `timeoutIds` into the bucket is skipped there. Before, a
+    // long-lived entity's bucket grew by every hook it ever played.
+    const firedTimeoutIds = new Set();
+    const timerFired = (tid) => {
+      firedTimeoutIds.add(tid);
+      const arr = this._soundTimeoutsForGuid.get(guid);
+      const i = arr ? arr.indexOf(tid) : -1;
+      if (i !== -1) arr.splice(i, 1);
+    };
     // Phase F.C — runtime event log probe (shared across the H2 walker's
     // Sound hook + CreateParticle hook arms).
     const pushEventRecord = this.scene3d?._pushEventRecord;
@@ -15470,6 +15509,7 @@ export class EntityManager {
           // Coin-flip on probability (only SoundTweaked has !=1.0).
           if (probability >= 1.0 || Math.random() < probability) {
             const tid = setTimeout(() => {
+              timerFired(tid);
               // Read the entity's current world position at fire-time.
               // The rig was passed in; .position tracks the entity if
               // it has moved between attach + fire. Three.js listener
@@ -15562,6 +15602,7 @@ export class EntityManager {
           if (soundEnum === 0) continue;
           const cache = this.scene3d?.soundTableCache ?? null;
           const tid = setTimeout(() => {
+            timerFired(tid);
             if (!this.entityMap.has(guid >>> 0)) return;
             // Adapter mirrors the AnimationHookJs shape `_fireHook` reads.
             this._fireHook(inst, { hookType: 2, soundEnum, time: +e.startTime }, audioMgr, cache);
@@ -15576,6 +15617,7 @@ export class EntityManager {
           const rampEnd = dv.getFloat32(0, true);
           const rampTime = dv.getFloat32(4, true);
           const tid = setTimeout(() => {
+            timerFired(tid);
             if (!this.entityMap.has(guid >>> 0)) return;
             this._fireHook(inst, { hookType: 12, rampEnd, rampTime, time: +e.startTime }, null, null);
           }, startDelayMs);
@@ -15878,7 +15920,7 @@ export class EntityManager {
         this._soundTimeoutsForGuid.set(guid, bucket);
       }
       for (const tid of timeoutIds) {
-        if (bucket.indexOf(tid) === -1) bucket.push(tid);
+        if (!firedTimeoutIds.has(tid) && bucket.indexOf(tid) === -1) bucket.push(tid);
       }
       // eslint-disable-next-line no-console
       console.log(
@@ -17235,7 +17277,7 @@ export class EntityManager {
       if (particleClockMode() === "off") this.tickParticlesAndScripts();
       return;
     }
-    // A5-P2 (`?tweenClock=dt`) — advance the unified tween clock by the SAME
+    // A5-P2 (`?tweenClock`, default on) — advance the unified tween clock by the SAME
     // dt every mixer below consumes (retail: one elapsed-time quantum for the
     // whole update pass, acclient.c:340659-340780). Placed after the dt>0
     // guard: a skipped frame advances neither mixers nor tweens. When the

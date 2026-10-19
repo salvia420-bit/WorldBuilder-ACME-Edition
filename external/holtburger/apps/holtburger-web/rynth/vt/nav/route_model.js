@@ -62,6 +62,10 @@ export const JUMP_DIRECTIONS = Object.freeze(["none", "forward", "strafeleft", "
 const NAV_DEG_TO_M = 240; // 1 /loc degree = 240 m; nav Z unit = m/240
 
 const finite = (v, d = 0) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : d);
+// RYNTH-2 follow-up (2026-10-18): a waypoint position is never defaulted. A NaN
+// or non-numeric ew / ns / z (an `.af` NAV: token, a JSON null) used to become
+// 0 — a waypoint at 0N / 0E the bot walks toward.
+const coord = (v) => finite(v, NaN);
 
 /** Normalise a route type to 1..4 (anything else → Circular, VTank's default). */
 export function normalizeRouteType(t) {
@@ -85,14 +89,20 @@ export function normalizeFollowTarget(t) {
 
 /**
  * Validate + copy one waypoint (the nav_file.parseNav point shape plus the VT
- * `ext`). Returns null for an unknown type. `raw` (the source lines, for a
+ * `ext`). Returns null for an unknown type or a position that is not numeric
+ * (ew / ns missing, null or non-finite; z non-finite — an absent z is 0); the
+ * caller drops the point and reports it. `raw` (the source lines, for a
  * byte-stable `.nav` round trip) is kept only when it is an array of strings.
  */
 export function normalizePoint(p) {
   if (!p || typeof p !== "object") return null;
   const type = Number(p.type);
   if (!Number.isInteger(type) || type < 0 || type > 9) return null;
-  const out = { type, ew: finite(p.ew), ns: finite(p.ns), z: finite(p.z) };
+  const ew = coord(p.ew);
+  const ns = coord(p.ns);
+  const z = p.z === undefined ? 0 : coord(p.z);
+  if (!Number.isFinite(ew) || !Number.isFinite(ns) || !Number.isFinite(z)) return null;
+  const out = { type, ew, ns, z };
   if (p.flag != null) out.flag = String(p.flag);
   if (Array.isArray(p.raw) && p.raw.length && p.raw.every((l) => typeof l === "string")) out.raw = p.raw.slice();
   switch (type) {
@@ -156,9 +166,9 @@ export function cloneRoute(route) {
 }
 
 /**
- * A fresh RouteState. Points are validated and copied (an unknown type is
- * dropped — the caller reports it); the active index starts at 0 (ActiveNav
- * applies startIndex() against the live pose).
+ * A fresh RouteState. Points are validated and copied (an unknown type or a
+ * non-numeric position is dropped — the caller reports it); the active index
+ * starts at 0 (ActiveNav applies startIndex() against the live pose).
  */
 export function makeRoute({ name = null, routeType = ROUTE.Circular, points = [], followTarget = null } = {}) {
   const pts = [];

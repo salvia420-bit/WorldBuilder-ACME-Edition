@@ -461,7 +461,7 @@ export function initCharacterSelect(deps) {
     }
   });
   // A CharacterError (app/client_events.js `holtburger:charerror`, which also
-  // frees the refused character's Spawn button): retail RecvNotice_
+  // frees the Spawn buttons): retail RecvNotice_
   // CharacterError shows the ID_CHAR_ERROR text and the screen stays usable,
   // so a refused Enter ends "Entering game..." here. 2 / 7 / 22 have no text
   // and show nothing.

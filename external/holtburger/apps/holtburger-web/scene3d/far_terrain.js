@@ -547,10 +547,10 @@ void main() {
 }
 `;
 
-// ?radialFog=on (scene3d/radial_fog.js, OPT-IN 2026-10-13) — the same range-fog
-// varying the near monolith gets (terrain.js TERRAIN_LIVE_GLSL), so the near/far
-// seam fogs by one metric. vViewDepth stays plane depth for paint light.
-// Session-constant. Without the flag these are the exported strings unchanged.
+// ?radialFog (scene3d/radial_fog.js, DEFAULT ON since 2026-10-19, =off escape) — the
+// same range-fog varying the near monolith gets (terrain.js TERRAIN_LIVE_GLSL), so the
+// near/far seam fogs by one metric. vViewDepth stays plane depth for paint light.
+// Session-constant. Under ?radialFog=off these are the exported strings unchanged.
 const FAR_LIVE_GLSL = radialFogTerrainGlsl(FAR_VERTEX_GLSL, FAR_FRAGMENT_GLSL);
 
 /** Test seam: the far-patch GLSL pair the material compiles this session. */
@@ -1051,8 +1051,8 @@ function ensureFarMaterial(scene3d) {
     // The handoff overlap is biased in the shader instead (uFarDepthBias).
     fog: terrainFogEnabled(),
   });
-  // ?radialFog=on — compile the range-fog pair (FAR_LIVE_GLSL; fog lines only,
-  // the log-depth write survives). Flag off: the same string objects.
+  // ?radialFog (default on) — compile the range-fog pair (FAR_LIVE_GLSL; fog lines
+  // only, the log-depth write survives). ?radialFog=off: the same string objects.
   if (FAR_LIVE_GLSL.vertex !== FAR_VERTEX_GLSL) mat.vertexShader = FAR_LIVE_GLSL.vertex;
   if (FAR_LIVE_GLSL.fragment !== FAR_FRAGMENT_GLSL) mat.fragmentShader = FAR_LIVE_GLSL.fragment;
   mat.name = "far-terrain";
@@ -1138,9 +1138,10 @@ function nearRingBusy(scene3d) {
  *
  * The existing plumbing fires terrain + statics + buildings from ONE site
  * (cells.js:1861-1900), so the natural way to implement "extend the ring" drags
- * 42-58 ms of statics and 415-613 draw calls along with it. This records every
- * LB the far path ever touched; the probe surface cross-checks it against the
- * statics/buildings/LRU baked sets, and a violation is a loud console error.
+ * 42-58 ms of statics and 415-613 draw calls along with it. This records the
+ * LBs the far path holds; the probe surface cross-checks the ones the player
+ * was never near against the statics/buildings/LRU baked sets, and a violation
+ * is a loud console error.
  */
 function assertRadiusPolicy(scene3d) {
   if (!farDiagEnabled() || !_state) return;
@@ -1155,15 +1156,24 @@ function assertRadiusPolicy(scene3d) {
   // The real invariant is about DISTANCE: a landblock currently BEYOND the near
   // ring must have no statics, no buildings, no LRU entry and no per-LB terrain
   // material. `+1` of hysteresis absorbs the frame or two after an LB crossing.
+  // 2026-10-18 review §7 follow-up: distance alone fired after every walk or
+  // teleport. The near ring keeps what it baked once the player moves on (the
+  // LRU cap holds the trailing rows past the gate, a teleport leaves the old
+  // town resident until it ages out), so the invariant is "never within the
+  // gate of the player": the near ring cannot have asked for such a landblock.
   const nominal = Number.isFinite(scene3d?.pvsRingRadius) ? scene3d.pvsRingRadius : 5;
   const gate = nominal + 1;
+  notePlayerNear(scene3d, st, plb, gate);
   const beyond = [];
+  let farOnly = 0;
   for (const key of st.farLbKeys) {
     const lbX = (key >>> 24) & 0xff;
     const lbY = (key >>> 16) & 0xff;
-    if (Math.max(Math.abs(lbX - plb.x), Math.abs(lbY - plb.y)) > gate) beyond.push(key);
+    if (Math.max(Math.abs(lbX - plb.x), Math.abs(lbY - plb.y)) <= gate) continue;
+    farOnly += 1;
+    if (!st.nearSeenLbs.has(key)) beyond.push(key);
   }
-  st.farOnlyLbCount = beyond.length;
+  st.farOnlyLbCount = farOnly;
   const violations = [];
   const check = (setName, set) => {
     if (!(set instanceof Set)) return;
@@ -1194,6 +1204,42 @@ function assertRadiusPolicy(scene3d) {
       + "call fetch_landblock_heightmaps and nothing else.",
       violations,
     );
+  }
+}
+
+/** Whether a near-ring system (statics, buildings, terrain, the LRU) holds `key`. */
+function nearRingHolds(scene3d, key) {
+  if (scene3d?.staticsBakedLbs?.has?.(key)) return true;
+  if (scene3d?.buildingsBakedLbs?.has?.(key)) return true;
+  if (scene3d?.terrainBakedLbs?.has?.(key)) return true;
+  try {
+    if (scene3d?.landblockLru?.entries?.has?.(key)) return true;
+  } catch (_) { /* no lru */ }
+  return false;
+}
+
+/**
+ * Record every landblock within `gate` of the player (`st.nearSeenLbs`), the
+ * set the near ring may legitimately hold. Runs once per landblock crossing.
+ * A recorded landblock the near ring has let go of and the player is no
+ * longer near is dropped (a return re-records it), so the set stays the size
+ * of the near ring's residency.
+ */
+function notePlayerNear(scene3d, st, plb, gate) {
+  const at = ((plb.x << 24) | (plb.y << 16)) >>> 0;
+  if (st.nearSeenAt === at && st.nearSeenGate === gate) return;
+  st.nearSeenAt = at;
+  st.nearSeenGate = gate;
+  for (const key of st.nearSeenLbs) {
+    const lbX = (key >>> 24) & 0xff;
+    const lbY = (key >>> 16) & 0xff;
+    if (Math.max(Math.abs(lbX - plb.x), Math.abs(lbY - plb.y)) <= gate) continue;
+    if (!nearRingHolds(scene3d, key)) st.nearSeenLbs.delete(key);
+  }
+  for (let x = Math.max(0, plb.x - gate); x <= Math.min(0xff, plb.x + gate); x += 1) {
+    for (let y = Math.max(0, plb.y - gate); y <= Math.min(0xff, plb.y + gate); y += 1) {
+      st.nearSeenLbs.add(((x << 24) | (y << 16)) >>> 0);
+    }
   }
 }
 
@@ -1236,7 +1282,10 @@ export function initFarTerrain(scene3d, { parent, renderer } = {}) {
     texels: farTexelsPerLb(),
     texMergeEnabled: scene3d?.terrainOpts?.texMergeEnabled !== false,
     patches: new Map(),      // patchKey -> patch record
-    farLbKeys: new Set(),    // every LB the far path has ever fetched
+    farLbKeys: new Set(),    // the LBs of the live patches (a retired patch drops its own)
+    nearSeenLbs: new Set(),  // ?farDiag: LBs within the gate of the player (notePlayerNear)
+    nearSeenAt: -1,
+    nearSeenGate: -1,
     patchMaterials: new Set(),
     material: null,
     bake: null,
@@ -1425,6 +1474,14 @@ function startPatchFetch(scene3d, sessionHandle, patch) {
     .then((meshes) => {
       if (!_state || _state !== st) return;
       if (!meshes) throw new Error("fetch_landblock_heightmaps returned null");
+      // The patch retired while its fetch was out: keep nothing of it (its
+      // landblocks would otherwise sit in farLbKeys for the session).
+      if (patch.disposed) {
+        for (const m of meshes) {
+          if (typeof m?.free === "function") { try { m.free(); } catch (_) { /* already freed */ } }
+        }
+        return;
+      }
       for (let i = 0; i < lbs.length && i < meshes.length; i += 1) {
         const m = meshes[i];
         if (!m) continue;
@@ -1539,6 +1596,15 @@ function finishPatch(scene3d, patch) {
 }
 
 function disposePatch(patch) {
+  patch.disposed = true;
+  for (let dx = 0; dx < PATCH_LB; dx += 1) {
+    for (let dy = 0; dy < PATCH_LB; dy += 1) {
+      const lbX = patch.px * PATCH_LB + dx;
+      const lbY = patch.py * PATCH_LB + dy;
+      if (lbX > 0xff || lbY > 0xff) continue;
+      _state?.farLbKeys.delete((((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0);
+    }
+  }
   try {
     if (patch.mesh) {
       patch.mesh.parent?.remove(patch.mesh);
@@ -1698,9 +1764,11 @@ export function farTerrainState(scene3d) {
     // on a parked camera means the stream guard is leaking in-flight entries.
     starvationAdmits: st.starvationAdmits ?? 0,
     uNearFadeLb: st.nearFadeLb ?? null,
+    // The far ring's live landblocks (pruned as patches retire since the
+    // 2026-10-18 follow-up; before, every landblock it ever fetched).
     farLbsTouched: st.farLbKeys.size,
-    // Far landblocks CURRENTLY beyond the near ring + 1 — the set the radius
-    // policy is asserted over.
+    // Far landblocks CURRENTLY beyond the near ring + 1. The radius policy is
+    // asserted over the ones of them the player was never near.
     farOnlyLbCount: st.farOnlyLbCount ?? null,
     epoch: st.epoch,
     stats: { ...st.stats },

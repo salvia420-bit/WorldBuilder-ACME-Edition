@@ -103,20 +103,22 @@ export const KNOWN_GAPS = {
 // known-good: each names the fix. An entry whose finding disappears is
 // reported STALE so the list cannot outlive its bug.
 export const DETAIL_KNOWN_BUGS = {
-  // The four blood/carnage entries below are fixed BEHIND `?combatFxBus=on`
-  // (2026-10-13): each module's `onBus` helper hands the handler `ev.detail`
-  // under the flag and the raw Event otherwise, so the handler text — which is
-  // all this static check sees — still reads off the Event, and the default
-  // arm really does. Remove the four together once the owner's eye-test flips
-  // the fix to default (the unwrap then moves into the handlers themselves).
+  // The four blood/carnage entries below are FIXED ON THE DEFAULT PAGE: the
+  // `?combatFxBus` unwrap went DEFAULT ON 2026-10-19 (ahead of its 1070 eye
+  // test, which is still owed). Each module's `onBus` helper hands the handler
+  // `ev.detail` unless `?combatFxBus=off` (also 0/false/no), and then the raw
+  // Event. The handler text, which is all this static check sees, still reads
+  // off its argument, so the finding still fires and the entries stay. Remove
+  // the four together when the escape is retired and the unwrap moves into the
+  // handlers themselves.
   "scene3d/blood_decals.js:playEffect":
-    "destructures {targetGuid, scriptId} off the Event → decodeSplatterId(undefined) is null → _splatterFromHit (its only caller) never runs on a real hit. Fix exists behind ?combatFxBus=on (opt-in, onBus unwraps ev.detail) pending the owner's eye-test — VISUAL change; default arm unchanged (tests/combat_fx_bus_detail.test.mjs)",
+    "destructures {targetGuid, scriptId} off its argument. Default arm (?combatFxBus DEFAULT ON 2026-10-19): onBus unwraps ev.detail first, so a real hit reaches _splatterFromHit. Only the ?combatFxBus=off escape hands it the Event → decodeSplatterId(undefined) is null → no stamp (tests/combat_fx_bus_detail.test.mjs pins both arms)",
   "scene3d/blood_decals.js:damageDealt":
-    "crit latch reads dd.criticalHit / dd.defenderName off the Event → never latches. Fix exists behind ?combatFxBus=on (same onBus unwrap as the playEffect handler above) pending the owner's eye-test; default arm unchanged",
+    "crit latch reads dd.criticalHit / dd.defenderName off its argument. Default arm (?combatFxBus DEFAULT ON 2026-10-19): the same onBus unwrap as the playEffect handler above, so it latches. Only the ?combatFxBus=off escape reads the Event and never latches",
   "scene3d/carnage.js:playEffect":
-    "destructures {targetGuid, scriptId} off the Event → the finisher never sees a real splatter; tests/carnage_hit_guard.test.mjs's fake bus passes the raw payload, which hid it. Fix exists behind ?combatFxBus=on (opt-in, onBus unwraps ev.detail) pending the owner's eye-test — VISUAL change; default arm unchanged (tests/combat_fx_bus_detail.test.mjs)",
+    "destructures {targetGuid, scriptId} off its argument; tests/carnage_hit_guard.test.mjs's fake bus passes the raw payload, which hid the original bug. Default arm (?combatFxBus DEFAULT ON 2026-10-19): onBus unwraps ev.detail first, so the limb automation and the finisher see real splatter. Only the ?combatFxBus=off escape hands it the Event and nothing fires (tests/combat_fx_bus_detail.test.mjs pins both arms)",
   "scene3d/carnage.js:damageDealt":
-    "crit latch reads d.criticalHit / d.defenderName off the Event → never latches. Fix exists behind ?combatFxBus=on (kill_impulse.js's `d?.detail ?? d` unwrap, via onBus) pending the owner's eye-test; default arm unchanged",
+    "crit latch reads d.criticalHit / d.defenderName off its argument. Default arm (?combatFxBus DEFAULT ON 2026-10-19): kill_impulse.js's `d?.detail ?? d` unwrap, via onBus, so it latches. Only the ?combatFxBus=off escape reads the Event and never latches",
 };
 
 // Properties a handler may legitimately read off the Event object itself.

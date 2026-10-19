@@ -16,9 +16,10 @@
 //     Spawn buttons) never released. The wasm reports kind=1 PlayerSpawned
 //     eagerly on the first SelectCharacter, BEFORE the server answers, so the
 //     latch the 0x0D meets is spawnedPlayerGuid, not spawningCharId. Now the
-//     CharacterError releases it for the refused character (the session's
-//     WorldState was built for that guid) and the screen shows retail's text
-//     and lets the player press ENTER again.
+//     CharacterError releases it and the screen shows retail's text and lets
+//     the player press ENTER again. Follow-up (same day): any character, not
+//     only the refused one — the next SelectCharacter hands the session's
+//     eager WorldState to the picked guid and re-arms kind=1 (lifecycle.rs).
 //   SHELL-7: with site data blocked the `localStorage` getter throws; the
 //     preview read it outside a try, so show() threw and every later row
 //     change threw from the preview timer.
@@ -217,11 +218,38 @@ await check("CharacterError 0x0D after the eager kind=1: latch released for the 
   assert.equal(L.scope.spawnedPlayerGuid, null, "index.html's spawnedPlayerGuid cleared (kind=7 refills it)");
   assert.equal(L.spawn.disabled, false);
   assert.equal(L.spawn.textContent, "Spawn");
-  assert.equal(L.other.disabled, true, "another character stays out: the WorldState was built for this guid");
+  assert.equal(L.other.disabled, false, "SHELL-2 follow-up: every character is offered again");
   assert.equal(window.__lastCharacterError.code, 0x0d, "auto_login's stash is still written");
   assert.ok(!L.calls.some((c) => c[0] === "boot" && c[1] === "error"), "no 'error' boot state (agents read it)");
   L.spawn.click();
   assert.equal(L.calls.filter((c) => c[0] === "selectCharacter").length, 2, "a retry sends a second request");
+});
+await check("SHELL-2 follow-up: after a refusal another character can enter", () => {
+  const L = mountList();
+  L.spawn.click();
+  dispatch(L.D, ClientEventKind.PLAYER_SPAWNED, CHAR.id);
+  dispatch(L.D, ClientEventKind.CHARACTER_ERROR, 0x0d, "EnterGameCharacterInWorld");
+  L.other.click();
+  assert.deepEqual(L.calls.filter((c) => c[0] === "selectCharacter").at(-1), ["selectCharacter", OTHER.id]);
+  assert.equal(L.scope.spawningCharId, OTHER.id);
+  // The wasm re-arms kind=1 for the new pick (lifecycle.rs SelectCharacter).
+  dispatch(L.D, ClientEventKind.PLAYER_SPAWNED, OTHER.id);
+  assert.equal(L.scope.spawnedPlayerGuid, OTHER.id);
+  assert.equal(L.other.textContent, "Spawned");
+});
+await check("SHELL-2 follow-up: the wasm hands the eager world to the next pick (source pins)", () => {
+  const src = readFileSync(path.join(APP, "src", "session", "commands", "lifecycle.rs"), "utf8");
+  const arm = src.slice(src.indexOf("SessionCommand::SelectCharacter { guid } =>"));
+  const reassign = arm.indexOf("reassign_eager_world_player(w, guid)");
+  assert.ok(reassign > 0, "the select re-assigns an existing eager world");
+  const gate = arm.lastIndexOf("if !matches!(state, LoopState::InWorld { .. })", reassign);
+  assert.ok(gate > 0 && gate < reassign, "only before PlayerCreate");
+  const rearm = arm.indexOf("*local_player_kind1_emitted = false;", gate);
+  assert.ok(rearm > gate && rearm < reassign, "kind=1 is re-armed for every pre-world select");
+  assert.ok(arm.indexOf("*cached_player_description = None;", reassign) > reassign, "another character's description is dropped");
+  assert.ok(reassign < arm.indexOf("*state = LoopState::EnteringWorld"), "decided before the state moves to the new guid");
+  const lib = readFileSync(path.join(APP, "src", "lib.rs"), "utf8");
+  assert.match(lib, /fn reassign_eager_world_player\(\s*w: &mut holtburger_world::WorldState,/);
 });
 await check("a second refusal (no kind=1 any more this session): released again", () => {
   const L = mountList();
@@ -278,12 +306,10 @@ await check("character screen: ENTER → 0x0D → retail dialog, ENTER works aga
   ok().dispatchEvent(new FakeEvent("click", { button: 0 }));
   page._select(OTHER.id);
   enter.dispatchEvent(new FakeEvent("click", { button: 0 }));
-  assert.match(veil.textContent, /cannot enter the world right now/, "another character needs a reload");
-  assert.equal(L.calls.filter((c) => c[0] === "selectCharacter").length, 1);
-  ok().dispatchEvent(new FakeEvent("click", { button: 0 }));
-  page._select(CHAR.id);
-  enter.dispatchEvent(new FakeEvent("click", { button: 0 }));
+  assert.equal(veil.dataset.open, "0", "SHELL-2 follow-up: another character needs no reload");
+  assert.deepEqual(L.calls.filter((c) => c[0] === "selectCharacter").at(-1), ["selectCharacter", OTHER.id]);
   assert.equal(L.calls.filter((c) => c[0] === "selectCharacter").length, 2, "the second ENTER reached the server");
+  assert.equal(rootEl().querySelector(".hcs-status").textContent, "Entering game...");
   page.hide();
 });
 await check("character screen: a fatal code (0x15 server full) also ends the entering state", async () => {

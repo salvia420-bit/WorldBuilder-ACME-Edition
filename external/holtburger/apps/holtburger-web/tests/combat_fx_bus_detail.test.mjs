@@ -1,6 +1,7 @@
-// combat_fx_bus_detail.test.mjs — `?combatFxBus=on`: the carnage and blood
-// bus handlers read the payload off `CustomEvent.detail`, behind a strict
-// opt-in, with the default arm left exactly as shipped.
+// combat_fx_bus_detail.test.mjs — `?combatFxBus` (DEFAULT ON since
+// 2026-10-19): the carnage and blood bus handlers read the payload off
+// `CustomEvent.detail`; `?combatFxBus=off` (also 0/false/no) restores the
+// legacy non-firing arm.
 //
 // NEW 2026-10-13. The plugin bus delivers `new CustomEvent(name, { detail:
 // payload })` (plugins/api.js events.emit), but scene3d/carnage.js and
@@ -12,20 +13,23 @@
 // never saw it because their fake bus calls `fn(payload)` directly
 // (tests/carnage_hit_guard.test.mjs).
 //
-// Both modules are documented default-ON but have never actually fired in
-// real play, so making them fire is a large visual change the owner has not
-// eye-tested. The fix therefore ships behind `?combatFxBus=on` (exact), read
-// once at install time; this suite pins both arms against a REAL EventTarget
-// bus built the way plugins/api.js builds it:
-//   §1 the flag is a strict opt-in in both modules
-//   §2 carnage, default arm — a real CustomEvent still reaches nothing, the
-//      raw-payload call the fake buses make still lands (unchanged)
-//   §3 carnage, `?combatFxBus=on` — a real CustomEvent lands a hit, the crit
-//      latch sets from a real `damageDealt` and is consumed, raw payloads and
-//      malformed events are still survived
-//   §4 blood, default arm — unchanged, as §2
-//   §5 blood, `?combatFxBus=on` — a real splatter reaches `_splatterFromHit`
-//      (3-ray fan) and a real crit widens it to the 6-ray crit fan
+// Both modules are documented default-ON but had never actually fired in
+// real play, so making them fire is a large visual change. The fix shipped
+// 2026-10-13 behind an exact `?combatFxBus=on` and went DEFAULT ON
+// 2026-10-19, ahead of its 1070 eye test (still owed). The flag is read once
+// at install time; this suite pins both arms against a REAL EventTarget bus
+// built the way plugins/api.js builds it:
+//   §1 the flag is DEFAULT ON with an off/0/false/no escape in both modules
+//   §2 carnage, `=off` escape arm — a real CustomEvent reaches nothing, the
+//      raw-payload call the fake buses make still lands (the legacy arm)
+//   §3 carnage, bare default (and an explicit `=on`) — a real CustomEvent
+//      lands a hit, the crit latch sets from a real `damageDealt` and is
+//      consumed, raw payloads and malformed events are still survived
+//   §4 blood, `=off` escape arm — as §2
+//   §5 blood, bare default (and an explicit `=on`) — a real splatter reaches
+//      `_splatterFromHit` (3-ray fan) and a real crit widens it to the 6-ray
+//      crit fan
+//   §2-§5 also pin the console tell: it fires only on the `=off` escape
 //
 // `three` resolves to the shared `_three_stub.mjs` plus the few members the
 // blood ray path touches (Raycaster/Sphere/Vector3 transforms); the stub
@@ -154,14 +158,17 @@ function section(n) {
   console.log(`\n— ${n}`);
 }
 const tick = async (n = 20) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
-const quiet = async (fn) => {
+/** Runs `fn` with console.info captured; returns the `combatFxBus` tell lines. */
+const busTells = async (fn) => {
   const realInfo = console.info;
-  console.info = () => {};
+  const lines = [];
+  console.info = (...a) => { lines.push(a.map(String).join(" ")); };
   try {
-    return await fn();
+    await fn();
   } finally {
     console.info = realInfo;
   }
+  return lines.filter((l) => l.includes("combatFxBus"));
 };
 const raySets = () => globalThis.__combatFxRaySets || 0;
 
@@ -211,106 +218,130 @@ const dealt = (defenderName, criticalHit) => ({
 const legHits = (inst) => [...(inst._carnage?.hits?.values() ?? [])];
 
 /* ── 1. flag polarity ─────────────────────────────────────────────────── */
-section("?combatFxBus is a STRICT opt-in (`=== \"on\"`) in both modules");
+section("?combatFxBus is DEFAULT ON (2026-10-19) with an off|0|false|no escape in both modules");
 {
   const carnage = await import("../scene3d/carnage.js?arm=polarity");
   const blood = await import("../scene3d/blood_decals.js?arm=polarity");
   for (const [label, fn] of [["carnage", carnage.combatFxBusEnabled], ["blood", blood.combatFxBusEnabled]]) {
     window.location.search = "";
-    ok(fn() === false, `${label}: an ABSENT ?combatFxBus reads OFF (default arm unchanged)`);
-    window.location.search = "?combatFxBus=on";
-    ok(fn() === true, `${label}: ?combatFxBus=on opts in`);
-    for (const v of ["1", "true", "ON", "off", ""]) {
+    ok(fn() === true, `${label}: an ABSENT ?combatFxBus reads ON (the bare default fires)`);
+    window.location.search = "?other=1";
+    ok(fn() === true, `${label}: a query without ?combatFxBus reads ON`);
+    for (const v of ["on", "ON", "1", "true", "yes", "", "garbage"]) {
       window.location.search = `?combatFxBus=${v}`;
-      ok(fn() === false, `${label}: ?combatFxBus=${v} is NOT the opt-in`);
+      ok(fn() === true, `${label}: ?combatFxBus=${v} reads ON (only the off forms escape)`);
+    }
+    for (const v of ["off", "0", "false", "no", "OFF", "No", "FALSE", "%20off%20"]) {
+      window.location.search = `?combatFxBus=${v}`;
+      ok(fn() === false, `${label}: ?combatFxBus=${v} is the escape (trimmed, case-insensitive)`);
+    }
+    // No `window` at all (a worker, a test without the shim): the catch arm
+    // must return the default, i.e. ON.
+    const realWindow = globalThis.window;
+    globalThis.window = undefined;
+    try {
+      ok(fn() === true, `${label}: a missing window falls back to the default (ON)`);
+    } finally {
+      globalThis.window = realWindow;
     }
   }
   window.location.search = "";
 }
 
-/* ── 2. carnage, default arm ──────────────────────────────────────────── */
-section("carnage — default arm: real bus traffic still reaches nothing (unchanged)");
+/* ── 2. carnage, ?combatFxBus=off escape ──────────────────────────────── */
+section("carnage — ?combatFxBus=off escape: real bus traffic reaches nothing (the legacy arm)");
 {
-  window.location.search = "";
+  window.location.search = "?combatFxBus=off";
   const pc = makePluginClient();
   window.__pluginClient = pc;
   const { installCarnage } = await import("../scene3d/carnage.js?arm=off");
-  await quiet(() => installCarnage());
+  const tells = await busTells(() => installCarnage());
+  ok(tells.length === 1 && tells[0].startsWith("[carnage] ?combatFxBus=off"),
+    `the escape logs its one console tell (got ${JSON.stringify(tells)})`);
   ok((pc.listeners.get("playEffect") ?? []).length === 1, "the splatter listener is subscribed");
   ok((pc.listeners.get("damageDealt") ?? []).length === 1, "…and the crit latch");
 
   const GUID = 0x2001;
-  const inst = makeInst(GUID, "Drudge Default");
+  const inst = makeInst(GUID, "Drudge Escaped");
   entityMap.gets.length = 0;
-  pc.events.emit("damageDealt", dealt("Drudge Default", true));
+  pc.events.emit("damageDealt", dealt("Drudge Escaped", true));
   pc.events.emit("playEffect", splatter(GUID));
   await tick();
   ok(!entityMap.gets.includes(GUID), "a real CustomEvent never gets as far as the entity lookup");
-  ok(inst._carnage === undefined, "…so no hit lands (the shipped, non-firing default)");
+  ok(inst._carnage === undefined, "…so no hit lands (the legacy non-firing escape arm)");
 
   // The fake-bus shape (fn(payload)) the older suites use still lands — the
-  // default arm subscribes the very same handler it always did.
+  // escape subscribes the very same handler the pre-flip default did.
   pc.listeners.get("playEffect")[0](splatter(GUID));
   await tick();
   ok(inst._carnage?.totalHits === 1, `a raw-payload call still lands one hit (got ${inst._carnage?.totalHits})`);
   ok(inst._carnage?.lastCritAt === 0,
-    "…and it is NOT a crit: the real damageDealt above never latched on the default arm");
+    "…and it is NOT a crit: the real damageDealt above never latched on the =off arm");
   ok(legHits(inst).join() === "1", `…so the leg took a single hit (got [${legHits(inst)}])`);
 }
 
-/* ── 3. carnage, ?combatFxBus=on ──────────────────────────────────────── */
-section("carnage — ?combatFxBus=on: a real CustomEvent reaches the splatter and crit logic");
-{
-  window.location.search = "?combatFxBus=on";
+/* ── 3. carnage, bare default (and an explicit =on) ───────────────────── */
+// Two passes over fresh module instances: the BARE URL pins the new default,
+// `?combatFxBus=on` keeps the 2026-10-13 spelling working.
+for (const [k, search, armLabel] of [[0, "", "bare default"], [1, "?combatFxBus=on", "?combatFxBus=on"]]) {
+  section(`carnage — ${armLabel} (combatFxBus DEFAULT ON): a real CustomEvent reaches the splatter and crit logic`);
+  window.location.search = search;
   const pc = makePluginClient();
   window.__pluginClient = pc;
-  const { installCarnage } = await import("../scene3d/carnage.js?arm=on");
-  await quiet(() => installCarnage());
-  ok((pc.listeners.get("playEffect") ?? []).length === 1, "the splatter listener is subscribed");
-  ok((pc.listeners.get("damageDealt") ?? []).length === 1, "…and the crit latch");
+  const { installCarnage } = await import(`../scene3d/carnage.js?arm=on${k}`);
+  const tells = await busTells(() => installCarnage());
+  ok(tells.length === 0, `${armLabel}: no combatFxBus console tell on the default arm (got ${JSON.stringify(tells)})`);
+  ok((pc.listeners.get("playEffect") ?? []).length === 1, `${armLabel}: the splatter listener is subscribed`);
+  ok((pc.listeners.get("damageDealt") ?? []).length === 1, `${armLabel}: …and the crit latch`);
 
   // A crit rolls for a dislocation (dismember, not under test here) — pin the
   // roll high so the escalation draw is always "nothing".
   const realRandom = Math.random;
   Math.random = () => 0.999;
   try {
-    const GUID = 0x3001;
-    const inst = makeInst(GUID, "Drudge Crit");
-    pc.events.emit("damageDealt", dealt("Drudge Crit", true));
+    const base = 0x3000 + k * 0x100;
+    const GUID = base + 1;
+    const critName = `Drudge Crit ${k}`;
+    const inst = makeInst(GUID, critName);
+    pc.events.emit("damageDealt", dealt(critName, true));
     pc.events.emit("playEffect", splatter(GUID));
     await tick();
-    ok(inst._carnage?.totalHits === 1, `a real splatter CustomEvent lands a hit (got ${inst._carnage?.totalHits})`);
-    ok(inst._carnage?.lastCritAt > 0, "…flagged CRITICAL by a real damageDealt CustomEvent (the latch set)");
-    ok(legHits(inst).join() === "2", `…so the leg took the crit's double hit (got [${legHits(inst)}])`);
+    ok(inst._carnage?.totalHits === 1,
+      `${armLabel}: a real splatter CustomEvent lands a hit (got ${inst._carnage?.totalHits})`);
+    ok(inst._carnage?.lastCritAt > 0,
+      `${armLabel}: …flagged CRITICAL by a real damageDealt CustomEvent (the latch set)`);
+    ok(legHits(inst).join() === "2", `${armLabel}: …so the leg took the crit's double hit (got [${legHits(inst)}])`);
     ok(inst._limbDamage instanceof Map && inst._limbDamage.size === 1,
-      "…which is already a limp (2 leg hits) — the visible effect the default arm never reaches");
+      `${armLabel}: …which is already a limp (2 leg hits) — the visible effect the =off arm never reaches`);
 
     pc.events.emit("playEffect", splatter(GUID));
     await tick();
-    ok(inst._carnage?.totalHits === 2, "a second real splatter lands too");
-    ok(legHits(inst).join() === "3", `…as a plain hit: the latch was consumed by the first (got [${legHits(inst)}])`);
+    ok(inst._carnage?.totalHits === 2, `${armLabel}: a second real splatter lands too`);
+    ok(legHits(inst).join() === "3",
+      `${armLabel}: …as a plain hit: the latch was consumed by the first (got [${legHits(inst)}])`);
 
-    const CALM = 0x3002;
-    const calm = makeInst(CALM, "Drudge Calm");
-    pc.events.emit("damageDealt", dealt("Drudge Calm", false));
+    const CALM = base + 2;
+    const calmName = `Drudge Calm ${k}`;
+    const calm = makeInst(CALM, calmName);
+    pc.events.emit("damageDealt", dealt(calmName, false));
     pc.events.emit("playEffect", splatter(CALM));
     await tick();
     ok(calm._carnage?.totalHits === 1 && calm._carnage.lastCritAt === 0,
-      "a non-critical damageDealt does not latch");
+      `${armLabel}: a non-critical damageDealt does not latch`);
 
     // kill_impulse.js's `d?.detail ?? d`: a fake bus passing the raw payload
-    // still works under the flag (carnage_hit_guard's shape).
-    const RAW = 0x3003;
-    const raw = makeInst(RAW, "Drudge Raw");
+    // still works on the default arm (carnage_hit_guard's shape).
+    const RAW = base + 3;
+    const raw = makeInst(RAW, `Drudge Raw ${k}`);
     pc.listeners.get("playEffect")[0](splatter(RAW));
     await tick();
-    ok(raw._carnage?.totalHits === 1, "a raw-payload call still lands under the flag");
+    ok(raw._carnage?.totalHits === 1, `${armLabel}: a raw-payload call still lands`);
 
     const SELF = 0xdeadbeef;
     const self = makeInst(SELF, "Me");
     pc.events.emit("playEffect", splatter(SELF));
     await tick();
-    ok(self._carnage === undefined, "the local player stays exempt");
+    ok(self._carnage === undefined, `${armLabel}: the local player stays exempt`);
 
     pc.events.emit("playEffect", undefined);
     pc.events.emit("playEffect", {});
@@ -318,32 +349,34 @@ section("carnage — ?combatFxBus=on: a real CustomEvent reaches the splatter an
     pc.listeners.get("playEffect")[0](undefined);
     pc.listeners.get("damageDealt")[0](undefined);
     await tick();
-    ok(true, "empty / malformed events are swallowed, never thrown into the bus");
+    ok(true, `${armLabel}: empty / malformed events are swallowed, never thrown into the bus`);
   } finally {
     Math.random = realRandom;
   }
 }
 
-/* ── 4. blood, default arm ────────────────────────────────────────────── */
-section("blood — default arm: real bus traffic still stamps nothing (unchanged)");
+/* ── 4. blood, ?combatFxBus=off escape ────────────────────────────────── */
+section("blood — ?combatFxBus=off escape: real bus traffic stamps nothing (the legacy arm)");
 {
-  window.location.search = "";
+  window.location.search = "?combatFxBus=off";
   const pc = makePluginClient();
   window.__pluginClient = pc;
   const blood = await import("../scene3d/blood_decals.js?arm=off");
-  await quiet(() => blood.installBloodDecals());
+  const tells = await busTells(() => blood.installBloodDecals());
+  ok(tells.length === 1 && tells[0].startsWith("[blood] ?combatFxBus=off"),
+    `the escape logs its one console tell (got ${JSON.stringify(tells)})`);
   ok((pc.listeners.get("playEffect") ?? []).length === 1, "the splatter listener is subscribed");
   ok((pc.listeners.get("damageDealt") ?? []).length === 1, "…and the crit latch");
   ok(window.__diag?.blood?.stats().bound === true, "__diag.blood.stats().bound reports the subscription");
 
   const GUID = 0x4001;
-  makeInst(GUID, "Bleeder Default");
+  makeInst(GUID, "Bleeder Escaped");
   const before = raySets();
   entityMap.gets.length = 0;
-  pc.events.emit("damageDealt", dealt("Bleeder Default", true));
+  pc.events.emit("damageDealt", dealt("Bleeder Escaped", true));
   pc.events.emit("playEffect", splatter(GUID));
   ok(!entityMap.gets.includes(GUID), "a real CustomEvent never gets as far as the entity lookup");
-  ok(raySets() === before, "…so no ray is cast (the shipped, non-firing default)");
+  ok(raySets() === before, "…so no ray is cast (the legacy non-firing escape arm)");
 
   pc.listeners.get("playEffect")[0](splatter(GUID));
   ok(raySets() - before === blood.BLOOD_RAYS_HIT,
@@ -351,37 +384,40 @@ section("blood — default arm: real bus traffic still stamps nothing (unchanged
     `damageDealt never latched (got ${raySets() - before})`);
 }
 
-/* ── 5. blood, ?combatFxBus=on ────────────────────────────────────────── */
-section("blood — ?combatFxBus=on: a real CustomEvent reaches the splatter and crit logic");
-{
-  window.location.search = "?combatFxBus=on";
+/* ── 5. blood, bare default (and an explicit =on) ─────────────────────── */
+for (const [k, search, armLabel] of [[0, "", "bare default"], [1, "?combatFxBus=on", "?combatFxBus=on"]]) {
+  section(`blood — ${armLabel} (combatFxBus DEFAULT ON): a real CustomEvent reaches the splatter and crit logic`);
+  window.location.search = search;
   const pc = makePluginClient();
   window.__pluginClient = pc;
-  const blood = await import("../scene3d/blood_decals.js?arm=on");
-  await quiet(() => blood.installBloodDecals());
-  ok((pc.listeners.get("playEffect") ?? []).length === 1, "the splatter listener is subscribed");
+  const blood = await import(`../scene3d/blood_decals.js?arm=on${k}`);
+  const tells = await busTells(() => blood.installBloodDecals());
+  ok(tells.length === 0, `${armLabel}: no combatFxBus console tell on the default arm (got ${JSON.stringify(tells)})`);
+  ok((pc.listeners.get("playEffect") ?? []).length === 1, `${armLabel}: the splatter listener is subscribed`);
 
-  const GUID = 0x5001;
-  makeInst(GUID, "Bleeder On");
+  const base = 0x5000 + k * 0x100;
+  const GUID = base + 1;
+  const name = `Bleeder On ${k}`;
+  makeInst(GUID, name);
   let before = raySets();
   entityMap.gets.length = 0;
   pc.events.emit("playEffect", splatter(GUID));
-  ok(entityMap.gets.includes(GUID), "a real splatter CustomEvent reaches the entity lookup");
+  ok(entityMap.gets.includes(GUID), `${armLabel}: a real splatter CustomEvent reaches the entity lookup`);
   ok(raySets() - before === blood.BLOOD_RAYS_HIT,
-    `…and _splatterFromHit casts the normal ${blood.BLOOD_RAYS_HIT}-ray fan (got ${raySets() - before})`);
+    `${armLabel}: …and _splatterFromHit casts the normal ${blood.BLOOD_RAYS_HIT}-ray fan (got ${raySets() - before})`);
 
   before = raySets();
-  pc.events.emit("damageDealt", dealt("Bleeder On", true));
+  pc.events.emit("damageDealt", dealt(name, true));
   pc.events.emit("playEffect", splatter(GUID));
   ok(raySets() - before === blood.BLOOD_RAYS_CRIT,
-    `a real crit damageDealt widens the next splatter to the ${blood.BLOOD_RAYS_CRIT}-ray crit fan ` +
+    `${armLabel}: a real crit damageDealt widens the next splatter to the ${blood.BLOOD_RAYS_CRIT}-ray crit fan ` +
     `(got ${raySets() - before})`);
 
-  const RAW = 0x5002;
-  makeInst(RAW, "Bleeder Raw");
+  const RAW = base + 2;
+  makeInst(RAW, `Bleeder Raw ${k}`);
   before = raySets();
   pc.listeners.get("playEffect")[0](splatter(RAW));
-  ok(raySets() - before === blood.BLOOD_RAYS_HIT, "a raw-payload call still splatters under the flag");
+  ok(raySets() - before === blood.BLOOD_RAYS_HIT, `${armLabel}: a raw-payload call still splatters`);
 
   before = raySets();
   pc.events.emit("playEffect", undefined);
@@ -389,7 +425,7 @@ section("blood — ?combatFxBus=on: a real CustomEvent reaches the splatter and 
   pc.events.emit("damageDealt", null);
   pc.listeners.get("playEffect")[0](undefined);
   pc.listeners.get("damageDealt")[0](undefined);
-  ok(raySets() === before, "empty, malformed and non-Splatter events cast nothing and never throw");
+  ok(raySets() === before, `${armLabel}: empty, malformed and non-Splatter events cast nothing and never throw`);
 }
 
 console.log(`\ncombat_fx_bus_detail: ${pass} passed, ${fail} failed`);

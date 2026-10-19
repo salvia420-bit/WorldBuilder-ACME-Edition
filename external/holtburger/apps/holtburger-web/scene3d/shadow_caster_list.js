@@ -44,6 +44,15 @@
 //     no lights) — so a gated-off frame (RP5) pays nothing for the walk;
 //   * the frame `shadowMap.type` changes: three traverses the scene it is given
 //     to flag every material for recompilation, and must see the real one.
+//
+// CONTEXT RESTORE (RENDER restore gap, 2026-10-18 follow-up). three r184's
+// onContextRestore -> initGLContext builds a NEW WebGLShadowMap and assigns it
+// to `renderer.shadowMap` (WebGLRenderer.js:456/508), carrying over only
+// enabled / autoUpdate / needsUpdate / type (:1110-1121). The wrapper sat on
+// the dead map, so after a restore ?shadowCasterList and ?shadowStaticCache
+// were silently off. A `webglcontextrestored` listener (three's own, registered
+// in its constructor, has already swapped the map) wraps the new map and
+// carries the dynamic root over; the dead map's wrapper is left unreferenced.
 
 import * as THREE from "three";
 // ?swayShadow (2026-10-07): swaying trees cast swaying shadows.
@@ -70,7 +79,12 @@ const stats = {
   lastListed: 0,   // candidates handed to three by the last walk
   visited: 0,      // cumulative
   listed: 0,       // cumulative
+  reinstalls: 0,   // wrappers put on the new map a context restore built
 };
+
+// renderer -> the shadow map its wrapper is on / its restore listener.
+const _wrappedMap = new WeakMap();
+const _restoreHooks = new WeakMap();
 
 /**
  * three's shadow-visit rules, collecting the first candidate on each path.
@@ -128,7 +142,38 @@ function standInRoot(name) {
 export function installShadowCasterList(renderer, { force = false } = {}) {
   if ((!FLAG && !force) || !renderer || !renderer.shadowMap) return false;
   const sm = renderer.shadowMap;
-  if (sm.__hbCasterList) return true;
+  if (!sm.__hbCasterList && !_wrapShadowMap(renderer, sm, sm.type)) return false;
+  _wrappedMap.set(renderer, sm);
+  _hookRestore(renderer);
+  return true;
+}
+
+/** Re-wrap `renderer.shadowMap` once a context restore has replaced it. */
+function _hookRestore(renderer) {
+  const el = renderer.domElement;
+  if (_restoreHooks.has(renderer) || !el || typeof el.addEventListener !== "function") return;
+  const onRestored = () => {
+    const sm = renderer.shadowMap;
+    const old = _wrappedMap.get(renderer);
+    if (!sm || sm === old || sm.__hbCasterList) return;
+    // lighting.js re-stamps it every gate tick; carried so the first restored
+    // raster already has it.
+    if (old && old.__hbShadowDynamicRoot && !sm.__hbShadowDynamicRoot) sm.__hbShadowDynamicRoot = old.__hbShadowDynamicRoot;
+    // The new map's private `_previousType` is three's constructor default
+    // (PCFShadowMap): if the restored type differs, three's first raster
+    // re-creates the maps and walks the scene, so it must get the real one.
+    if (_wrapShadowMap(renderer, sm, THREE.PCFShadowMap)) {
+      _wrappedMap.set(renderer, sm);
+      stats.reinstalls += 1;
+    }
+  };
+  try {
+    el.addEventListener("webglcontextrestored", onRestored, false);
+    _restoreHooks.set(renderer, onRestored);
+  } catch (_) { /* no restore re-wrap */ }
+}
+
+function _wrapShadowMap(renderer, sm, prevType) {
   const orig = sm.render;
   if (typeof orig !== "function") return false;
   const list = [];
@@ -138,7 +183,7 @@ export function installShadowCasterList(renderer, { force = false } = {}) {
   root.matrixAutoUpdate = false;
   root.matrixWorldAutoUpdate = false;
   root.children = list;
-  let lastType = sm.type;
+  let lastType = prevType;
   // ?shadowStaticCache context: three's method, the two walkers, and three
   // stand-in roots (static + dynamic, static only, dynamic only).
   const cacheCtx = {
@@ -197,8 +242,14 @@ export function installShadowCasterList(renderer, { force = false } = {}) {
   return true;
 }
 
-/** Test hook: restore three's method. */
+/** Test hook: restore three's method (and stop re-wrapping on a restore). */
 export function uninstallShadowCasterList(renderer) {
+  const onRestored = renderer && _restoreHooks.get(renderer);
+  if (onRestored) {
+    try { renderer.domElement.removeEventListener("webglcontextrestored", onRestored, false); } catch (_) {}
+    _restoreHooks.delete(renderer);
+  }
+  if (renderer) _wrappedMap.delete(renderer);
   const sm = renderer?.shadowMap;
   const saved = sm && sm.__hbCasterList;
   if (!saved) return;
@@ -392,7 +443,12 @@ function _hookContext(renderer) {
     sscStats.invalidations += 1;
   };
   el.addEventListener("webglcontextlost", bump, false);
-  el.addEventListener("webglcontextrestored", bump, false);
+  // A restore may land on another backend (Chrome falls back after a GPU
+  // process loss): check its first blits again (RENDER restore gap,
+  // 2026-10-18 follow-up). The cache targets themselves are reused: three's
+  // new WebGLProperties gives them fresh GL objects at the REFRESH that the
+  // generation bump forces, as it does for every shadow.map.
+  el.addEventListener("webglcontextrestored", () => { bump(); _blitChecks = 0; }, false);
 }
 
 /** A light three will raster on this call (its own per-light predicate). */

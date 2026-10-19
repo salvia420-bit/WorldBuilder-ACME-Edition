@@ -702,10 +702,12 @@ mod exports {
     /// a resident GEOM payload come back `missing` (JS runtime-decode
     /// fallback, counted).
     ///
-    /// dat-parser-2 `?negFace=retail`: model payloads bake the reversed back
-    /// faces with no per-subset marker (only env subsets carry
-    /// `ENV_BACKFACE`), so under that flag every model comes back `missing`
-    /// and takes the counted runtime-decode fallback, which honours it.
+    /// dat-parser-2 `?negFace` (default on since 2026-10-19): model payloads
+    /// bake the reversed back faces with no per-subset marker (only env
+    /// subsets carry `ENV_BACKFACE`), so while it is on every model comes back
+    /// `missing` and takes the counted runtime-decode fallback, which honours
+    /// it. `?geomBundles=on` measurements should add `&negFace=off` until the
+    /// baked model payloads carry a back-face marker.
     #[wasm_bindgen]
     pub fn assemble_model_geometry(model_ids: &[u32]) -> Result<JsValue, JsValue> {
         let neg_face_retail = crate::neg_face_retail_enabled();

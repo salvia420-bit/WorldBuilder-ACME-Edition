@@ -5502,7 +5502,11 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
   // ?staticScriptRadius: the per-frame tick runs on the liveScene3d facade,
   // which never gets `_staticParticleManager`; both share this staticsGroup.
   if (scene3d.staticsGroup?.userData) scene3d.staticsGroup.userData.__staticsHost = scene3d;
-  if (scene3d._staticParticleManager) { _staticParticleMgrRef = scene3d._staticParticleManager; return scene3d._staticParticleManager; }
+  if (scene3d._staticParticleManager) {
+    _staticParticleMgrRef = scene3d._staticParticleManager;
+    _staticParticleMgrs.add(scene3d._staticParticleManager);
+    return scene3d._staticParticleManager;
+  }
   // Phase 3 — expose the per-LB particle evictor on scene3d so landblock_lru
   // (same object as `this.scene3d`, a zero-import leaf) can tear down THIS LB's
   // synthesized emitters on eviction. Mirrors spawns.js `_evictSpawnsInjectedLb`
@@ -5529,6 +5533,26 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
     scene3d._rebuildStaticParticlesForAnchors = (anchors) =>
       rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wasmExports);
   }
+  // 2026-10-18 follow-up: two landblocks reaching their first scripted attach
+  // together both passed the check above during the build's awaits and each
+  // built a manager; the earlier one, orphaned, held its emitters. Concurrent
+  // first calls now share one build.
+  const pending = _staticParticleMgrPending.get(scene3d);
+  if (pending) return pending;
+  const build = _buildStaticParticleManager(scene3d, wasmExports);
+  _staticParticleMgrPending.set(scene3d, build);
+  try {
+    return await build;
+  } finally {
+    _staticParticleMgrPending.delete(scene3d);
+  }
+}
+
+/** Scene → its in-flight `_buildStaticParticleManager` (see the caller). */
+const _staticParticleMgrPending = new WeakMap();
+
+/** The construction half of `_ensureStaticParticleManager` (its first await on). */
+async function _buildStaticParticleManager(scene3d, wasmExports) {
   const { ParticleManager } = await import("./particles/index.js");
   const adapter = await import("./adapter.js");
   const meshToGeometryGroups = adapter.meshToGeometryGroups;
@@ -5617,11 +5641,12 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       const r = await wasmExports.fetchModelDidDegrades(new Uint32Array([hwGfxObjId >>> 0]));
       return (r && r[0]) >>> 0;
     },
-    // `?particleCellGate=on` (render-only, default OFF) — an interior anchor's
+    // `?particleCellGate` (render-only, DEFAULT ON since 2026-10-19; `=off`
+    // escape) — an interior anchor's
     // `userData.cellId` resolves to its EnvCell container here; the manager
     // withholds the draw while cells.js has that container hidden. Read
     // through the registry on every call (never cached): LRU re-bake and
-    // warm-park swap the containers. Inert unless the flag is on.
+    // warm-park swap the containers. Inert under `?particleCellGate=off`.
     cellLookup: (cellId) => {
       const reg = scene3d.cellContainers3d;
       return reg instanceof Map ? reg.get(cellId >>> 0) : undefined;
@@ -5641,6 +5666,7 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
     },
   });
   _staticParticleMgrRef = scene3d._staticParticleManager; // decouple the tick driver from the scene-facade
+  _staticParticleMgrs.add(scene3d._staticParticleManager);
   return scene3d._staticParticleManager;
 }
 
@@ -6173,7 +6199,8 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
  * container. A follow-up could parent to the EnvCell container so the
  * effect inherits the cell's enter-to-show visibility gate; for now the
  * emitter sits at the brazier's world position regardless of cell BFS.
- * `?particleCellGate=on` (2026-10-13, opt-in) is that gate, render-only:
+ * `?particleCellGate` (2026-10-13; DEFAULT ON since 2026-10-19, `=off`
+ * escape) is that gate, render-only:
  * the anchor carries `userData.cellId` (from the item's `cellId`) and the
  * particle manager skips the DRAW while the cell's container is hidden,
  * while the emitters keep simulating (see particle_manager.js).
@@ -6253,7 +6280,7 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     if (it.landblockId != null) {
       anchor.userData.landblockId = it.landblockId >>> 0;
     }
-    // particles-scripts-3: the owning EnvCell, so `?particleCellGate=on` can
+    // particles-scripts-3: the owning EnvCell, so `?particleCellGate` (default ON) can
     // withhold the draw while cells.js has this cell hidden (render-only; the
     // emitters keep simulating — retail CObjCell::IsInView is `return 1`).
     if (it.cellId != null) {
@@ -6423,6 +6450,10 @@ export function disposeStaticParticles(scene3d) {
   }
   _staticCallPesTimeouts.clear();
   const mgr = scene3d?._staticParticleManager;
+  if (mgr) {
+    _staticParticleMgrs.delete(mgr);
+    if (_staticParticleMgrRef === mgr) _staticParticleMgrRef = null;
+  }
   if (mgr && typeof mgr.particleTable?.forEach === "function") {
     try {
       const ids = [...mgr.particleTable.keys()];
@@ -6459,10 +6490,21 @@ export function disposeStaticParticles(scene3d) {
 // (visible:0 in __diag.particlesDebug). This ref decouples the tick from that facade
 // mismatch, so it works regardless of which scene object the loop/window carry.
 let _staticParticleMgrRef = null;
+// Every static manager ensured (2026-10-18 follow-up). Managers are per scene
+// object, and `?eagerDungeons=on` attaches its dungeons on `scene3dForBuilders`
+// while the per-LB loaders use the liveScene3d facade: two managers. Until
+// statics.js loaded once (2026-10-18) each copy's loop ticked its own; the one
+// loop then ticked only the last manager ensured (the ref above) and froze the
+// other. Both drivers below tick each live manager once; disposeStaticParticles
+// drops its scene's.
+const _staticParticleMgrs = new Set();
 
 export function tickStaticParticles(scene3d) {
   const mgr = scene3d?._staticParticleManager || _staticParticleMgrRef;
   if (mgr) { try { mgr.tick(); } catch (_) {} }
+  for (const other of _staticParticleMgrs) {
+    if (other !== mgr) { try { other.tick(); } catch (_) {} }
+  }
 }
 
 // Self-managed rAF to advance the static ParticleManager every frame —
@@ -6479,13 +6521,21 @@ if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMod
   // `ts` (the rAF timestamp) lets the manager drop a second tick of the same
   // frame — this file loaded twice on the unbundled page until 2026-10-18
   // (`?particleTickOnce`, particle_manager.js tickFrame).
+  const tickOne = (mgr, ts) => {
+    try {
+      if (typeof mgr.tickFrame === "function") mgr.tickFrame(ts);
+      else mgr.tick();
+    } catch (_) {}
+  };
   const _spLoop = (ts) => {
     if (_spDisposed) return;
     try {
-      const mgr = _staticParticleMgrRef || window.liveScene3d?._staticParticleManager;
-      if (mgr) {
-        if (typeof mgr.tickFrame === "function") mgr.tickFrame(ts);
-        else mgr.tick();
+      // Each live static manager once (see `_staticParticleMgrs`).
+      if (_staticParticleMgrs.size > 0) {
+        for (const mgr of _staticParticleMgrs) tickOne(mgr, ts);
+      } else {
+        const mgr = _staticParticleMgrRef || window.liveScene3d?._staticParticleManager;
+        if (mgr) tickOne(mgr, ts);
       }
     } catch (_) {}
     _spRafId = window.requestAnimationFrame(_spLoop);

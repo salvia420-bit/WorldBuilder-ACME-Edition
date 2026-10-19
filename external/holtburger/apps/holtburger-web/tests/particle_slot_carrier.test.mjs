@@ -60,7 +60,15 @@ const {
   setParticleSlotCarrierFlag,
   particleSlotCarrierEnabled,
   _isSlotCarrier,
+  setParticleSharedAlphaFlag,
 } = PM;
+// `?particleSharedAlpha` is DEFAULT ON since 2026-10-19: alpha emitters would
+// append to the module-level shared registry, not to this manager's own
+// `_instBuckets`. This suite compares each manager's OWN alpha bucket (and in
+// node the shared frame id never advances, so a shared bucket would also carry
+// over between arms) — so it runs on the `=off` escape. The shared path has
+// its own suite: test_particle_shared_alpha.mjs.
+setParticleSharedAlphaFlag(false);
 
 let t = 1000;
 setCurrentTime(() => t);
