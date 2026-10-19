@@ -30,6 +30,7 @@
 import * as THREE from "three";
 import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 import { wrapOnBeforeRenderPerCamera } from "./batched_indirect_per_camera.js";
+import { markBatchedRuns } from "./batched_runs.js";
 
 let _flag;
 /** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
@@ -2381,6 +2382,10 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // Held until `_reapBucketIfEmpty`: the last release takes the variant out of
   // the per-frame sync set (and stops it pinning `mat`).
   if (typeof holdBatchedMaterial === "function") holdBatchedMaterial(bm);
+  // ?batchedRuns: the bucket's materials use three's batching chunks, and a
+  // feed adds every placement of a model under one geometry id, so its ranges
+  // repeat — draw them as per-geometry instanced runs when unsorted.
+  if (typeof markBatchedRuns === "function") markBatchedRuns(bm);
   // OPAQUE: skip the per-frame instance depth sort (CPU win; statAtlas
   // precedent). Transparent buckets keep the sort for blend order — unless
   // `?statBatchNoSort=on` proves this material's blend is order-independent

@@ -1452,7 +1452,7 @@ Each was checked by a code skeptic, and also by a history skeptic when the code 
 |---|---|
 | `partDegrade` | The 2026-10-13 visuals rule keeps retail's NULL-level hide opt-in ("retail's hide stays behind an opt-in like `?partDegrade`", webac findings render-perf-3), and its flip criteria include a draws/fps A/B nobody has run. Three of four votes against. |
 | `cellStaticMerge` | Its fps gain is unmeasured (2026-10-17 re-evaluation, 6422a96b), and the flip criteria ask for a draw-census delta. |
-| `reversedZ` | Already ran on the 1070 and failed (4bfde09e), and its perf gain is unmeasured. |
+| `reversedZ` | ~~Already ran on the 1070 and failed (4bfde09e), and its perf gain is unmeasured.~~ **Superseded 2026-10-19 (fps review, `docs/2026-10-19-fps-review.md`): flipped DEFAULT ON.** 4bfde09e is the FIX for that failure (cloud-shadow frustum under reversed NDC), d3bd9bb7 fixed the base-Camera bake throw, and `harness/glsl_smoke/reversed_z_smoke.mjs` passes both modes on SwiftShader. Its perf stays unmeasured on the 1070 (`?reversedZ=off` is the A/B arm); the June "no-win" was a CPU-bound measurement. |
 | `selectionFlash` | The flash writes through `_getOrCloneEntityMaterial`, whose plain `clone()` drops the default-on `?lightClamp=retail` patch, so every clicked NPC would keep stock PBR lighting until it despawns. Fix the getter first (webac lighting-materials-6 follow-up 1). |
 | `envDetailTex` | Its own follow-up requires a detail-aware building bucket before any default flip; without it, the flag disables building batching (worse since `?buildingMatBatch`, 78e89aa5). |
 | `negFace` part (2) and `perPolyCull` | `perPolyCull` has a real-GPU regression (R9 290, reverted 2026-07-06); `negFace`'s same-winding front copy needs it. |

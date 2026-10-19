@@ -1,5 +1,7 @@
 // hbbench.mjs — interleaved fresh-profile 1070 bench against a FROZEN snapshot server.
-//   node hbbench.mjs --arms arms.json --reps 2 --port 8766 --out DIR
+//   node hbbench.mjs --arms arms.json --reps 2 --port 8766 --out DIR [--uncapped]
+// --uncapped: Chrome runs without the vblank cap (box launcher reads D:\Temp\hbbench\uncapped.txt;
+// deploy box/*.bat to D:\Temp\hbbench\ first) — fps then tracks the slowest stage continuously.
 // arms.json: [{name, quality, flags}]. Per run: boot -> Holtburg -> settle -> FIRST TURN (12 s
 // third-person 360 sweep) -> orbit warm-up -> STILL 20 s + MOVING 20 s (orbit) -> cold teleport tour
 // (poi:Shoushi 35 s, back 35 s).
@@ -16,6 +18,7 @@ const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] :
 const ARMS = JSON.parse(readFileSync(opt("--arms"), "utf8"));
 const REPS = +opt("--reps", 2), PORT = opt("--port", "8766");
 const TOUR = opt("--tour", "poi:Shoushi"), HOLD = +opt("--hold", 35000);
+const UNCAPPED = argv.includes("--uncapped");
 const OUT = opt("--out", `/mnt/wbterminal1/tmp/claude-scratch/perf/hbbench-${Date.now()}`);
 mkdirSync(OUT, { recursive: true });
 const APP = `http://127.0.0.1:${PORT}/apps/holtburger-web/index.html`;
@@ -48,6 +51,10 @@ async function runOne(arm, rep) {
   killBench();
   ssh(`echo hbb-bench-${arm.name}-${rep}-${Date.now()}> D:\\Temp\\hbbench\\profile.txt`);
   ssh("echo 1280,720> D:\\Temp\\hbbench\\winsize.txt");
+  // --uncapped (2026-10-19): the launcher adds --disable-frame-rate-limit --disable-gpu-vsync, so a
+  // frame that takes 9 ms reads 111 fps instead of snapping to 60 on the box's 120 Hz grid.
+  res.uncapped = UNCAPPED;
+  ssh(UNCAPPED ? "echo 1> D:\\Temp\\hbbench\\uncapped.txt" : "if exist D:\\Temp\\hbbench\\uncapped.txt del D:\\Temp\\hbbench\\uncapped.txt");
   ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const browser = await chromium.connectOverCDP(CDP);

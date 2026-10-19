@@ -171,9 +171,9 @@ const PANE_WINDOW_ID = {
 };
 
 // ── URL flags ────────────────────────────────────────────────────────
-// Both are exact-match reads. `vitalsOrbs` is the opt-in; `orbCaustics`
-// is an ESCAPE from a default-on sub-feature, so it is the one flag
-// here allowed to read `=== "off"` for its negative.
+// Exact-match reads. `vitalsOrbs` is the opt-in; `orbCaustics` and
+// `orbAnimSync` are ESCAPES from default-on sub-features, so they are the
+// flags here allowed to read an off-form for their negative.
 function urlParam(name) {
   try {
     return new URLSearchParams(window.location?.search ?? "").get(name);
@@ -198,6 +198,19 @@ export function isVitalsOrbsActive() {
 function causticsEnabled() {
   return urlParam("orbCaustics") !== "off";
 }
+
+/** The ambient CSS loops sampled at the orb cadence (see makeOrbAnimSync).
+ *  Default ON; `?orbAnimSync=off` (or 0/false/no, any case) leaves them on
+ *  Blink's own display-rate clock. Read once. */
+let _animSyncFlag;
+export function orbAnimSyncEnabled() {
+  if (_animSyncFlag !== undefined) return _animSyncFlag;
+  const v = String(urlParam("orbAnimSync") ?? "").trim().toLowerCase();
+  _animSyncFlag = !(v === "off" || v === "0" || v === "false" || v === "no");
+  return _animSyncFlag;
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setOrbAnimSyncForTest(v) { _animSyncFlag = v; }
 
 // Wave updates run at a CADENCE, not at vsync. Every wave write dirties
 // an SVG subtree wrapped in blurs, blends and (optionally) a turbulence
@@ -826,13 +839,80 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
+// ── the CSS ambient loops, on the orb cadence ───────────────────────
+//
+// The specular drift, the bubbles, the mana shimmer, the fracture glints
+// and bloom and the low-HP heartbeat are CSS `infinite` animations on
+// SVG children, so Blink advances them — and re-rasters the vessel — at
+// DISPLAY rate (120 Hz on the owner's monitor), on top of the 30 Hz wave
+// tick. A changed layer is rastered on the GPU process's main thread,
+// the same thread that executes every WebGL call (fps review 2026-10-19:
+// the 2026-10-06 gpu.angle trace measured ~4.7 ms/frame of DOM raster
+// there). `?orbAnimSync` (default on) pauses each one and, on the
+// driver's cadence ticks only, sets its currentTime from the document
+// timeline — the same keyframes at the same phase, sampled 30 times a
+// second instead of 120. Finite animations (the one-shot damage glare)
+// keep Blink's clock. The set is re-collected every tick, so a loop that
+// starts later (`.beat`, the lazily built fracture web) is picked up on
+// the next one. Returns null when off or when `getAnimations` is missing.
+const _animStart = new WeakMap();  // Animation -> its timeline start (ms)
+
+export function makeOrbAnimSync(roots) {
+  if (!orbAnimSyncEnabled()) return null;
+  if (!roots || !roots.some((r) => r && typeof r.getAnimations === "function")) return null;
+  let live = [];
+  return {
+    /** Sample every infinite loop under `roots` at timeline time `now`. */
+    step(now) {
+      const next = [];
+      for (const root of roots) {
+        if (!root || typeof root.getAnimations !== "function") continue;
+        let anims;
+        try { anims = root.getAnimations({ subtree: true }); } catch (_) { continue; }
+        for (const a of anims) {
+          let start = _animStart.get(a);
+          if (start === undefined) {
+            let inf = false;
+            try { inf = a.effect?.getTiming?.().iterations === Infinity; } catch (_) {}
+            const ct = a.currentTime;
+            if (!inf || ct == null) continue;
+            // Adopt: remember where on the timeline it started, so the phase
+            // stays exactly what Blink's own clock would show.
+            start = now - Number(ct);
+            _animStart.set(a, start);
+          }
+          try {
+            if (a.playState !== "paused") a.pause();
+            a.currentTime = now - start;
+            next.push(a);
+          } catch (_) {}
+        }
+      }
+      live = next;
+    },
+    /** Hand the loops back to Blink's clock at their current phase. */
+    release(now) {
+      for (const a of live) {
+        try {
+          const start = _animStart.get(a);
+          if (start !== undefined) a.currentTime = now - start;
+          a.play();
+        } catch (_) {}
+      }
+      live = [];
+    },
+    get count() { return live.length; },
+  };
+}
+
 // ── the shared animation driver ──────────────────────────────────────
 //
 // ONE rAF for the whole overlay. `orbs` are plain records — no DOM
-// reads happen in the loop, only attribute writes, so nothing here can
-// force a layout. Stopped entirely under prefers-reduced-motion and
-// while the tab is hidden.
-function createDriver(orbs, reducedMotion, hz) {
+// reads happen in the loop, only attribute writes (plus ?orbAnimSync's
+// getAnimations, a style flush), so nothing here can force a layout.
+// Stopped entirely under prefers-reduced-motion and while the tab is
+// hidden.
+function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
   // STEP 6 (21 samples across 120 units) instead of the card's 4: at HUD
   // scale the extra samples are invisible and every one of them is
   // geometry the SVG layout has to re-measure on all five paths.
@@ -902,6 +982,13 @@ function createDriver(orbs, reducedMotion, hz) {
   // is an answerable question in a live session instead of a guess.
   let tickMs = 0;
   let frames = 0;
+  // ?orbAnimSync: the CSS loops follow this cadence too (makeOrbAnimSync).
+  // Never built under reduced motion — the stylesheet turns them off there.
+  const sync = reducedMotion ? null : makeOrbAnimSync(syncRoots);
+  const timelineNow = (t) => {
+    const ct = typeof document !== "undefined" ? document.timeline?.currentTime : null;
+    return Number.isFinite(ct) ? ct : t;
+  };
 
   function frame(t) {
     raf = 0;
@@ -915,6 +1002,9 @@ function createDriver(orbs, reducedMotion, hz) {
     if (acc < minStep) return;
     clock += acc;
     const t0 = performance.now();
+    // Before the wave writes: getAnimations() flushes style, and here it
+    // only finds what other callbacks dirtied this frame.
+    if (sync) sync.step(timelineNow(t));
     tick(clock, acc);
     tickMs += (performance.now() - t0 - tickMs) * 0.05;  // EMA
     acc = 0;
@@ -930,14 +1020,19 @@ function createDriver(orbs, reducedMotion, hz) {
       acc = minStep;  // paint the first cadence step immediately
       raf = requestAnimationFrame(frame);
     },
+    // A pause (hidden tab) leaves the loops paused where they were: nothing
+    // is drawn meanwhile, and the next cadence tick puts each one back at
+    // the phase Blink's own clock would show.
     pause() {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
     },
     stop() {
       stopped = true;
       this.pause();
+      if (sync) sync.release(timelineNow(performance.now()));
     },
     get running() { return raf !== 0; },
+    get animSynced() { return sync ? sync.count : 0; },
     get tickMs() { return tickMs; },
     get frames() { return frames; },
   };
@@ -1408,7 +1503,7 @@ export function mount(ctx) {
 
   const reduceQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
   const reduced = !!reduceQuery?.matches;
-  const driver = createDriver(orbs, reduced, orbHz());
+  const driver = createDriver(orbs, reduced, orbHz(), paneList);
   // Paint the still frame immediately so the vessels are never empty
   // rectangles for a frame, then hand over to the loop.
   driver.still();
@@ -1522,6 +1617,8 @@ export function mount(ctx) {
       // EMA of the shared rAF's JS self-time, in ms per frame.
       tickMs: () => +driver.tickMs.toFixed(4),
       frames: () => driver.frames,
+      // ?orbAnimSync: CSS loops currently sampled at the orb cadence.
+      animSynced: () => driver.animSynced,
       state: () => orbs.map((o) => ({
         kind: o.kind, current: o.current, buffedMax: o.buffedMax, base: o.base,
         ceiling: o.ceiling, level: +o.level.toFixed(4), target: +o.levelTarget.toFixed(4),

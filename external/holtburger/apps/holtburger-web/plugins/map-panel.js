@@ -839,9 +839,66 @@ function setTip(tipEl, title, sub) {
   }
 }
 
+// Marker writes land only when the value changed (fps review 2026-10-19).
+// The compact tick runs every animation frame and used to rewrite each
+// marker's transform, display, title, data-kind and opacity even with the
+// player standing still. Every write is style work Blink has to parse and
+// diff, and a changed marker layer is re-rastered on the GPU process's main
+// thread — the thread that also executes every WebGL call (the 2026-10-06
+// gpu.angle trace measured ~4.7 ms/frame of DOM raster there). Only this
+// module writes these properties on these elements, so the last value it
+// wrote IS the live value. Output-identical.
+const _markWrites = new WeakMap(); // element -> last-written values
+
+function markRecord(el) {
+  let r = _markWrites.get(el);
+  if (!r) {
+    r = { transform: null, display: null, opacity: null, title: null, kind: null, stale: null };
+    _markWrites.set(el, r);
+  }
+  return r;
+}
+
+/** `el.style[prop] = value` unless it is the value last written. `prop` is
+ *  one of transform / display / opacity. Returns true when it wrote. */
+export function markStyle(el, prop, value) {
+  const r = markRecord(el);
+  if (r[prop] === value) return false;
+  r[prop] = value;
+  el.style[prop] = value;
+  return true;
+}
+
+/** `el.title = value` unless unchanged. */
+export function markTitle(el, value) {
+  const r = markRecord(el);
+  if (r.title === value) return false;
+  r.title = value;
+  el.title = value;
+  return true;
+}
+
+/** `el.dataset.kind = value` unless unchanged (the roster CSS keys on it). */
+export function markKind(el, value) {
+  const r = markRecord(el);
+  if (r.kind === value) return false;
+  r.kind = value;
+  el.dataset.kind = value;
+  return true;
+}
+
+/** `el.classList.toggle("is-stale", on)` unless unchanged. */
+export function markStale(el, on) {
+  const r = markRecord(el);
+  if (r.stale === on) return false;
+  r.stale = on;
+  el.classList.toggle("is-stale", on);
+  return true;
+}
+
 function placeMark(el, x, y) {
-  el.style.transform = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)`;
-  el.style.display = "block";
+  markStyle(el, "transform", `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)`);
+  markStyle(el, "display", "block");
 }
 
 function townSub(loc) {
@@ -939,15 +996,15 @@ function mountCompact(parentEl) {
     if (Number.isFinite(fix.ew)) {
       const p = coordsToMapPx(fix.ew, fix.ns);
       placeMark(playerEl, p.x, p.y);
-      playerEl.classList.toggle("is-stale", !fix.live);
+      markStale(playerEl, !fix.live);
       if (fix.bearing != null) {
-        headingEl.style.display = "block";
-        headingEl.style.transform = `rotate(${fix.bearing.toFixed(1)}deg)`;
+        markStyle(headingEl, "display", "block");
+        markStyle(headingEl, "transform", `rotate(${fix.bearing.toFixed(1)}deg)`);
       } else {
-        headingEl.style.display = "none";
+        markStyle(headingEl, "display", "none");
       }
     } else {
-      playerEl.style.display = "none";
+      markStyle(playerEl, "display", "none");
     }
     const strip = describeFix(fix);
     if (strip !== lastStrip) {
@@ -973,9 +1030,9 @@ function mountCompact(parentEl) {
     if (shared.house) {
       const h = coordsToMapPx(shared.house.ew, shared.house.ns);
       placeMark(houseEl, h.x, h.y);
-      houseEl.title = "Your house";
+      markTitle(houseEl, "Your house");
     } else {
-      houseEl.style.display = "none";
+      markStyle(houseEl, "display", "none");
     }
 
     if (shared.waypointRev !== lastPinRev) {
@@ -985,7 +1042,7 @@ function mountCompact(parentEl) {
         const q = coordsToMapPx(wp.ew, wp.ns);
         placeMark(pinEl, q.x, q.y);
       } else {
-        pinEl.style.display = "none";
+        markStyle(pinEl, "display", "none");
       }
     }
 
@@ -994,11 +1051,11 @@ function mountCompact(parentEl) {
     for (let i = 0; i < rosterPool.length; i++) {
       const el = rosterPool[i];
       const m = markers[i];
-      if (!m) { el.style.display = "none"; continue; }
+      if (!m) { markStyle(el, "display", "none"); continue; }
       const c = worldToCoords(m.x, m.y);
       const q = coordsToMapPx(c.ew, c.ns);
-      el.dataset.kind = m.kind;
-      el.style.opacity = m.source === "cached" ? String(Math.max(0.25, 1 - m.ageMs / ROSTER_STALE_MS)) : "1";
+      markKind(el, m.kind);
+      markStyle(el, "opacity", m.source === "cached" ? String(Math.max(0.25, 1 - m.ageMs / ROSTER_STALE_MS)) : "1");
       placeMark(el, q.x, q.y);
     }
   };

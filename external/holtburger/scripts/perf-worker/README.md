@@ -171,3 +171,22 @@ Frame times on this panel quantize to 8.33 ms (120 Hz): read means/lows, not p50
 | `box/hbprobe-launch.bat` | now logs Chrome to `D:\Temp\hbbench\logs\<profile>.log` (mid-boot deaths) |
 
 Box rule (owner, 2026-10-06): if someone is using the 1070, stop — see HANDOFF-1070-perf-2026-10-06.md §1b.
+
+## Uncapped benches and the three-stage split (2026-10-19)
+
+The 1070's display is 120 Hz, so rAF intervals snap to an 8.33 ms grid: a frame that takes 9 ms
+reads 60 fps, and a 2 ms saving that does not cross a grid line reads as +0 fps.
+
+- `node hbbench.mjs ... --uncapped` writes `D:\Temp\hbbench\uncapped.txt` before each launch; the
+  launchers in `box/` then add `--disable-frame-rate-limit --disable-gpu-vsync` (deploy the updated
+  `box/*.bat` to `D:\Temp\hbbench\` first). fps then tracks the slowest stage continuously.
+- A frame has three stages: the renderer main thread (CPU profile), Chrome's GPU-process main thread
+  `CrGpuMain` (WebGL command execution via ANGLE/D3D11 **and** the DOM/HUD raster), and the GPU
+  (timer queries). `python3 -I gpu_thread_split.py TRACE.json` splits CrGpuMain per presented frame
+  into WEBGL / RASTER / PRESENT and prints CrRendererMain's busy time next to it (trace categories at
+  least `toplevel,gpu`; `gputrace.mjs` writes them). 2026-10-06 first-turn trace: CrGpuMain 79% busy,
+  WebGL 15.2 + raster 4.7 ms/frame, renderer main 98%.
+- In page: `__batchedRuns.frame()` (BatchedMesh ranges asked for vs issued — `renderer.info` counts a
+  multidraw as one call), `await __skipHiddenMatrix.census(120)`, `__adaptiveRenderScale.gpuState()`
+  (fence: is the GPU behind), `__radar.paintStats()`, `__diag.vitalsOrbs.animSynced()`.
+  See `apps/holtburger-web/docs/2026-10-19-fps-review.md`.

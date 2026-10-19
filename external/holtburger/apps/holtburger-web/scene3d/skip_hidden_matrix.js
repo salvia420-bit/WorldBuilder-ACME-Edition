@@ -70,6 +70,7 @@ export function installSkipHiddenMatrix(THREE, { force = false } = {}) {
   };
   Object.defineProperty(proto, "__hbSkipHidden", { value: orig, configurable: true });
   Object.defineProperty(sceneProto, "__hbSkipHiddenScene", { value: sceneOwn, configurable: true });
+  _walkHooks = { proto, isSceneWalk: () => sceneWalk > 0, skipOn: () => ctl.on };
   if (typeof window !== "undefined") {
     try {
       window.__skipHiddenMatrix = {
@@ -78,16 +79,97 @@ export function installSkipHiddenMatrix(THREE, { force = false } = {}) {
         // Turning it back ON is safe at any time; turning it OFF simply resumes
         // three's full walk (stale flags clear on the next forced update).
         set on(v) { ctl.on = !!v; },
+        /** Per-frame census of the scene walk over `frames` rAF frames (see walkCensus). */
+        census: (frames = 120) => walkCensusFrames(frames),
       };
     } catch (_) {}
   }
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// WALK CENSUS (fps review 2026-10-19) — what the scene walk spends its visits
+// on, so the "freeze the static containers" idea is decided by a number. The
+// Scene, worldRoot and the five world groups compose every frame, which sets
+// `force` for every node below them; a root freeze would only save the
+// `forcedOnly` multiplies (a node that neither composes nor was flagged, i.e.
+// recomputed purely because an ancestor forced it). It is NOT shipped because
+// it is not exact: manual-matrix nodes that never flag themselves get their
+// world matrix ONLY from that cascade (fx_ribbons / fx_showcase meshes under
+// frozen script anchors would stay at identity), and every `matrixAutoUpdate`
+// node — the animated rigs — composes and forces its own subtree anyway.
+// Armed only for the census window (the counting wrapper is installed and
+// removed around it), so it costs nothing otherwise.
+// ---------------------------------------------------------------------------
+let _walkHooks = null;
+const _census = { walks: 0, visited: 0, hidden: 0, composed: 0, multiplied: 0, forcedOnly: 0, frozen: 0 };
+
+/** Start counting scene-walk visits. Returns false when the patch is not installed. */
+export function startWalkCensus() {
+  if (!_walkHooks || _walkHooks.counting) return false;
+  const { proto } = _walkHooks;
+  const patched = proto.updateMatrixWorld;
+  const hooks = _walkHooks;
+  for (const k of Object.keys(_census)) _census[k] = 0;
+  proto.updateMatrixWorld = function (force) {
+    if (hooks.isSceneWalk()) {
+      _census.visited += 1;
+      if (this.parent === null) _census.walks += 1;
+      if (this.visible === false && this.parent !== null && hooks.skipOn()) {
+        _census.hidden += 1;
+      } else {
+        const auto = this.matrixAutoUpdate === true;
+        if (auto) _census.composed += 1;
+        if ((auto || this.matrixWorldNeedsUpdate || force) && this.matrixWorldAutoUpdate === true) {
+          _census.multiplied += 1;
+          if (!auto && !this.matrixWorldNeedsUpdate && force) _census.forcedOnly += 1;
+        }
+        if (!auto && this.matrixWorldAutoUpdate === false) _census.frozen += 1;
+      }
+    }
+    return patched.call(this, force);
+  };
+  hooks.counting = { patched };
+  return true;
+}
+
+/** Stop counting; returns the totals since start (null if not counting). */
+export function stopWalkCensus() {
+  if (!_walkHooks || !_walkHooks.counting) return null;
+  _walkHooks.proto.updateMatrixWorld = _walkHooks.counting.patched;
+  _walkHooks.counting = null;
+  return { ..._census };
+}
+
+function walkCensusFrames(frames) {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function" || !startWalkCensus()) { resolve(null); return; }
+    let n = 0;
+    const tick = () => {
+      if (++n <= frames) { requestAnimationFrame(tick); return; }
+      const t = stopWalkCensus();
+      const per = (v) => +(v / frames).toFixed(1);
+      resolve({
+        frames,
+        walksPerFrame: per(t.walks),
+        visitedPerFrame: per(t.visited),
+        hiddenSkippedPerFrame: per(t.hidden),
+        composedPerFrame: per(t.composed),
+        multipliedPerFrame: per(t.multiplied),
+        forcedOnlyPerFrame: per(t.forcedOnly),
+        frozenPerFrame: per(t.frozen),
+      });
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
 /** Test hook: restore three's method. */
 export function uninstallSkipHiddenMatrix(THREE) {
   const proto = THREE?.Object3D?.prototype;
   if (!proto || !proto.__hbSkipHidden) return;
+  if (_walkHooks && _walkHooks.counting) stopWalkCensus();
+  _walkHooks = null;
   proto.updateMatrixWorld = proto.__hbSkipHidden;
   delete proto.__hbSkipHidden;
   const sp = THREE.Scene.prototype;

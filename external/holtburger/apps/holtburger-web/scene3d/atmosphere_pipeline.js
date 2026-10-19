@@ -788,10 +788,42 @@ function _punchPhase(obj) {
   return p;
 }
 
+// ?terrainLast (2026-10-19, DEFAULT ON, `=off` escape) — the terrain family
+// draws LAST among the opaque phases on a frame that draws no doorway punch,
+// under reversed-Z only. The punch is the one thing that needs terrain depth
+// first (it erases terrain in front of a below-grade doorway, then everything
+// nearer draws over it); with no aperture in view the order is free, and with
+// reversed-Z early depth rejection works, so the terrain — the single most
+// expensive draw (one BatchedMesh, 6.1 ms GPU of a 25 ms frame in the 1070
+// census of 2026-10-17) — stops shading the pixels that the buildings, statics
+// and entities drawn after it would cover. The log buffer writes gl_FragDepth
+// in every program (no early-Z), so there the order buys nothing and it is left
+// exactly as before. Set once per frame by pipeline.render().
+export function terrainLastEnabled() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("terrainLast") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+const TERRAIN_LAST_PHASE = 3;
+let _terrainLastNow = false;
+function _phaseOf(obj) {
+  const p = _punchPhase(obj);
+  return p === 0 && _terrainLastNow ? TERRAIN_LAST_PHASE : p;
+}
+/** Test seam: the phase of an object under a given terrain-last state. */
+export function __phaseOfForTest(obj, terrainLast) {
+  const prev = _terrainLastNow;
+  _terrainLastNow = !!terrainLast;
+  try { return _phaseOf(obj); } finally { _terrainLastNow = prev; }
+}
+
 // three r184 `painterSortStable`, with the punch phase as the primary key.
 function punchPhaseOpaqueSort(a, b) {
-  const pa = _punchPhase(a.object);
-  const pb = _punchPhase(b.object);
+  const pa = _phaseOf(a.object);
+  const pb = _phaseOf(b.object);
   if (pa !== pb) return pa - pb;
   if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
   if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
@@ -1440,7 +1472,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // The phase is the program sort's PRIMARY key (draw_sort_program.js), not
       // a replacement for it; punchPhaseOpaqueSort only serves the
       // ?drawSortProgram=off arm.
-      setDrawSortPhase(renderer, _punchPhase, punchPhaseOpaqueSort);
+      setDrawSortPhase(renderer, _phaseOf, punchPhaseOpaqueSort);
     } else {
       portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
         stencil: _punchStencil,
@@ -2121,6 +2153,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // space animates near/far). Two compares per pass per frame; never runs on
   // the log buffer.
   const reversedZ = renderer.state?.buffers?.depth?.getReversed?.() === true;
+  // ?terrainLast — read once; only ever acts under reversed-Z (see _phaseOf).
+  const terrainLastOn = reversedZ && terrainLastEnabled();
   function _syncFxNearFar(cam) {
     if (!cam) return;
     for (const p of [fxPass, fxPostPass]) {
@@ -2501,6 +2535,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     render(cam, dt = 0) {
       if (cam && cam !== activeCamera) _switchCamera(cam);
       if (reversedZ) _syncFxNearFar(activeCamera);
+      // ?terrainLast: terrain after its occluders unless a doorway punch draws.
+      _terrainLastNow = terrainLastOn && !(portalPunchPass && portalPunchPass.hasApertures);
       // Portal-stencil pass draws with the CURRENT render camera — set every
       // frame (not only on a switch) so its mainCamera can never be undefined
       // when it has work (the "reading 'layers' of undefined" freeze).

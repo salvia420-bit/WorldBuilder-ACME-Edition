@@ -668,6 +668,22 @@ const TIER5 = [
   // overlay pass (depth-content model over three's real WebGLShadowMap).
   { tier: 5, flag: "shadowStaticCache", file: "tests/shadow_static_cache.test.mjs" },
   { tier: 5, flag: "skip_empty_multidraw", file: "test_skip_empty_multidraw.mjs" },
+  // 2026-10-19 fps review: an unsorted static bucket's repeated ranges drawn as per-geometry
+  // instanced runs (ANGLE/D3D11 loops a multidraw range by range on CrGpuMain).
+  { tier: 5, flag: "batchedRuns", file: "tests/batched_runs.test.mjs" },
+  // 2026-10-19 fps review: reversed-Z default-on, and the terrain sorts after its occluders
+  // when no doorway punch draws (early-Z skips covered terrain).
+  { tier: 5, flag: "terrainLast", file: "tests/terrain_last.test.mjs" },
+  { tier: 5, flag: "cloudResScale", file: "tests/cloud_res_scale.test.mjs" },
+  // 2026-10-19 fps review: the DOM HUD rasters on Chrome's GPU-process main thread (the one that
+  // executes WebGL) — minimap writes only on change, radar repaints only on change, the vitals
+  // orbs' CSS loops follow the orb cadence instead of the display rate.
+  { tier: 5, flag: "hud_map_marks", file: "tests/hud_map_marks.test.mjs" },
+  { tier: 5, flag: "hud_radar_paint", file: "tests/hud_radar_paint.test.mjs" },
+  { tier: 5, flag: "orbAnimSync", file: "tests/hud_orb_anim_sync.test.mjs" },
+  // 2026-10-19 fps review: the scene-walk census (__skipHiddenMatrix.census) — what a static
+  // container freeze could save (`forcedOnly`) before anyone builds one.
+  { tier: 5, flag: "matrix_walk_census", file: "tests/matrix_walk_census.test.mjs" },
   { tier: 5, flag: "static_atlas_growth", file: "test_static_atlas_growth.mjs" },
   { tier: 5, flag: "static_atlas_pages", file: "test_static_atlas_pages.mjs" },
   { tier: 5, flag: "static_geom_cache", file: "test_static_geom_cache.mjs" },
@@ -1316,6 +1332,7 @@ const NEEDS_BROWSER = [
   { file: "test_particle_fx_tier2_gpu.cjs", why: `particle FX tier 2 — ${BROWSER_WHY}` },
   { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/batched_runs_smoke.mjs", why: `batchedRuns — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },
 ];

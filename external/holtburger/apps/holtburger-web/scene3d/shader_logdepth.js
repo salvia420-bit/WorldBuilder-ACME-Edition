@@ -217,14 +217,29 @@ export const REVERSED_Z_GUARD = "#ifdef USE_REVERSED_DEPTH_BUFFER";
 export const REVERSED_BIAS_NOMINAL_FAR = 5000;
 
 /**
- * `?reversedZ=on` — OPT-IN (exact `=== "on"`). Absent / anything else ⇒ the log
- * buffer, byte-identical to before.
+ * `?reversedZ` — DEFAULT ON since 2026-10-19 (fps review: towns at ultra are
+ * fill-bound on the 1070 — Linvak Tukal's buildings 6.3 ms GPU, 2.4 ms at half
+ * resolution — and the log buffer turns early-Z off for every opaque draw).
+ * `=off` / `0` / `false` / `no` (any case) keep the logarithmic buffer,
+ * byte-identical to before. Without EXT_clip_control the log buffer stays.
  * @param {string} [search] test seam; defaults to location.search
  */
 export function reversedZRequested(search) {
   try {
     const s = typeof search === "string" ? search : (globalThis.location?.search || "");
-    return new URLSearchParams(s).get("reversedZ") === "on";
+    const v = (new URLSearchParams(s).get("reversedZ") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** `?reversedZ=on` spelled out — the one case a missing EXT_clip_control is a
+ *  warning rather than an info line (the default falls back quietly). */
+export function reversedZExplicit(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    return (new URLSearchParams(s).get("reversedZ") || "").toLowerCase() === "on";
   } catch (_) {
     return false;
   }

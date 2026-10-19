@@ -178,6 +178,7 @@ import { installLightLoops } from "./light_loops.js";
 import { installRadialFog } from "./radial_fog.js";
 import {
   reversedZRequested,
+  reversedZExplicit,
   threeContextAttributes,
   probeClipControl,
   resolveDepthMode,
@@ -189,6 +190,8 @@ import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
 import { installShadowCasterList } from "./shadow_caster_list.js";
 import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
+import { installBatchedRunsChunks, installBatchedRuns, batchedRunsFrameTotals } from "./batched_runs.js";
+import { parseCloudResScale, applyCloudResScale } from "./cloud_res_scale.js";
 import { installUniformBindPatch, uniformBindPatchTick, installLightUboChunks } from "./uniform_bind_patch.js";
 import { syncBatchMatVariants, batchMatVariantStats } from "./batched_material_variant.js";
 import {
@@ -638,6 +641,12 @@ function recordRenderDiag(renderer, scene) {
     }
     if (!window.__diag) window.__diag = {};
     const info = renderer.info;
+    // `calls` counts a BatchedMesh multidraw as ONE call however many ranges it
+    // carries (ANGLE/D3D11 draws them one by one on the GPU-process thread). The
+    // batched_runs.js totals give this frame's real range counts: `subDraws` =
+    // ranges three was asked to draw, `issuedSubDraws` = ranges sent after
+    // ?batchedRuns regrouped them (equal with the flag off).
+    const br = batchedRunsFrameTotals();
     window.__diag.render = {
       ts:
         typeof performance !== "undefined" && performance.now
@@ -650,6 +659,9 @@ function recordRenderDiag(renderer, scene) {
       textures: info.memory?.textures ?? 0,
       sceneNodes: nodes,
       meshNodes: meshes,
+      batchedCalls: br.batchedCalls,
+      subDraws: br.subDraws,
+      issuedSubDraws: br.issued,
     };
   } catch (_) {
     /* a diagnostic must never break the frame */
@@ -1187,6 +1199,11 @@ export async function preInit3D(canvas) {
   // ?lightLoops (2026-10-06): point / spot light loops stay real loops, so a lit program is
   // ~4x less fragment code (D3DCompile ~3 s per program on the 1070). Must precede every compile.
   installLightLoops(THREE);
+  // ?batchedRuns (2026-10-19, DEFAULT ON, `=off` escape): the batching chunks
+  // learn the instanced RUN layout (scene3d/batched_runs.js), so an opted-in
+  // static bucket draws one range per geometry, not per instance. Inert for
+  // every other BatchedMesh. Must precede every compile.
+  try { installBatchedRunsChunks(THREE); } catch (_) { /* never break boot */ }
   // ?lightUbo (fps wave 2, 2026-10-17, DEFAULT ON, `=off` escape): the dir /
   // point / spot / hemisphere light arrays become std140 uniform blocks, one
   // buffer write per render() instead of ~26 uniform calls per lit program.
@@ -1201,12 +1218,13 @@ export async function preInit3D(canvas) {
   // shaders' vFogDist (scene3d/radial_fog.js). Must precede every compile.
   // Under ?radialFog=off nothing is touched.
   installRadialFog(THREE);
-  // ?reversedZ=on (OPT-IN, 2026-10-17): reversed-Z depth instead of the
-  // logarithmic buffer, so opaque draws keep early depth rejection (the log
-  // buffer makes every program write gl_FragDepth). Needs EXT_clip_control,
-  // probed on THIS canvas with three's own context attributes (the same
-  // context three then gets back); without it the log buffer stays, logged
-  // once. Absent flag: no probe, today's exact renderer parameters.
+  // ?reversedZ (2026-10-17; DEFAULT ON since 2026-10-19, `=off` escape):
+  // reversed-Z depth instead of the logarithmic buffer, so opaque draws keep
+  // early depth rejection (the log buffer makes every program write
+  // gl_FragDepth). Needs EXT_clip_control, probed on THIS canvas with three's
+  // own context attributes (the same context three then gets back); without it
+  // the log buffer stays, logged once (a warning only for an explicit `=on`).
+  // `=off`: no probe, the pre-flip renderer parameters exactly.
   // See shader_logdepth.js "REVERSED-Z" for what three does and what we fix.
   const _rendererAntialias = !!quality.flags.antialias && (wireframeMode || _canvasMsaa);
   let _depthMode = resolveDepthMode({ requested: false });
@@ -1215,9 +1233,12 @@ export async function preInit3D(canvas) {
       requested: true,
       clipControl: probeClipControl(canvas, threeContextAttributes({ antialias: _rendererAntialias })),
     });
-    if (!_depthMode.reversed) {
+    if (!_depthMode.reversed && reversedZExplicit()) {
       // eslint-disable-next-line no-console
       console.warn(`[reversedZ] ?reversedZ=on but ${_depthMode.reason} — keeping the logarithmic depth buffer`);
+    } else if (!_depthMode.reversed) {
+      // eslint-disable-next-line no-console
+      console.info(`[reversedZ] ${_depthMode.reason} — keeping the logarithmic depth buffer`);
     }
   }
   let renderer = new THREE.WebGLRenderer({
@@ -1590,6 +1611,12 @@ export async function preInit3D(canvas) {
   try { installBatchedIndirectPerCamera(THREE); } catch (_) { /* never break boot */ }
   try { installShadowCasterList(renderer); } catch (_) { /* never break boot */ }
   try { installSkipEmptyMultiDraw(renderer); } catch (_) { /* never break boot */ }
+  // ?batchedRuns (2026-10-19) — the draw half: an opted-in, unsorted static
+  // bucket is regrouped into per-geometry instanced runs at draw time. ANGLE
+  // D3D11 loops a multidraw range by range on Chrome's GPU-process thread (a
+  // draw + a vertex-uniform-buffer upload each); 2026-07-15 Holtburg measured
+  // 5,838 ranges/frame behind 1,921 counted calls. `__batchedRuns.frame()`.
+  try { installBatchedRuns(renderer); } catch (_) { /* never break boot */ }
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
   // home of this URL parse, but it's `await import()`'d from
   // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
@@ -5933,6 +5960,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         if (qualityParam && ["low", "medium", "high", "ultra"].includes(qualityParam)) {
           effect.qualityPreset = qualityParam;
         }
+        // ?cloudResScale=N (2026-10-19, absent = takram's 1): the clouds' render
+        // resolution (cloud_res_scale.js). After the preset — a preset assigns
+        // resolutionScale 1 back.
+        const cloudResScale = parseCloudResScale(window.location.search);
+        if (cloudResScale !== null) applyCloudResScale(effect, cloudResScale);
         // takram's native crepuscular rays — physically driven by the
         // existing cascaded cloud-shadow maps, routed through
         // AerialPerspective. Cheaper and more correct than a separate
@@ -6005,10 +6037,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           window.__setCloudQuality = (p) => {
             if (["low", "medium", "high", "ultra"].includes(p)) {
               effect.qualityPreset = p;
+              // The preset reset resolutionScale to 1; keep the URL's scale.
+              if (cloudResScale !== null) applyCloudResScale(effect, cloudResScale);
               return p;
             }
             return null;
           };
+          // eslint-disable-next-line no-undef
+          window.__setCloudResScale = (n) => applyCloudResScale(effect, n);
           // eslint-disable-next-line no-undef
           window.__setLightShafts = (on) => {
             effect.lightShafts = !!on;

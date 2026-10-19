@@ -124,6 +124,7 @@ import { heightTexForMaterial } from "./materials.js";
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
 // Perf T4 — report new GPU arrays to the `?frameWork` slot (no-op when OFF).
 import { frameWorkCharge } from "./frame_work.js";
+import { markBatchedRuns } from "./batched_runs.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -1340,6 +1341,9 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   const arrays = { diff: diffArray, nra: nraArray };
   const material = makeArrayMaterial(diffArray, stateKey, nraArray, arrays);
   const bm = new THREE.BatchedMesh(_ATLAS_INIT_INST, _ATLAS_INIT_VERTS, _ATLAS_INIT_VERTS * 2, material);
+  // ?batchedRuns: stock batching chunks (the array layer rides in the vertex
+  // data), so an unsorted atlas bucket can draw repeated models as instanced runs.
+  if (typeof markBatchedRuns === "function") markBatchedRuns(bm);
   // OPAQUE: skip the per-frame depth sort of every instance (the CPU win we are
   // here for). Transparent buckets keep the sort for correct blending order —
   // EXCEPT alpha-tested ones (RND-08/33 made ClipMap `transparent = true`): the

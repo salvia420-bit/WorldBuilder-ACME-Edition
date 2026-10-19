@@ -626,6 +626,9 @@ const _snapRaw = {
   drawn: null, blank: false,
 };
 let _snapFormat = null;
+// update() runs vs canvas repaints it actually did (see `paintKey` in mount);
+// `window.__radar.paintStats()` reads them in a live session.
+const _paintStats = { updates: 0, paints: 0 };
 
 function setRadarHostileOnly(enabled) {
   _radarHostileOnly = !!enabled;
@@ -865,11 +868,62 @@ export function mount(_ctx) {
     return _backingK;
   }
 
-  function drawPixels(k, offsets, x, y, color) {
-    ctx.fillStyle = color;
-    for (let i = 0; i < offsets.length; i += 2) {
-      ctx.fillRect((x + offsets[i]) * k, (y + offsets[i + 1]) * k, k, k);
+  // Repaint the blip canvas only when what it shows changed (fps review
+  // 2026-10-19). update() runs every 25 ms and used to clear and redraw the
+  // canvas each time, standing still or not. A redrawn canvas is a fresh
+  // raster on the GPU process's main thread — the thread that also executes
+  // every WebGL call (the 2026-10-06 gpu.angle trace measured ~4.7 ms/frame
+  // of DOM raster there). So drawPixels() only RECORDS each call, and
+  // flushPixels() replays the recorded list after a clear only when its key
+  // (backing size + every call's pixel set, position and colour, in order)
+  // differs from the list it last painted: an equal key is identical pixels.
+  // Resizing the backing store clears the canvas, so it drops the key.
+  let paintKey = "";
+  const ops = [];   // reused per update: { offsets, x, y, color }
+  let nOps = 0;
+  const pixelsIds = new Map(); // offsets array -> small id for the key
+  const pixelsId = (offsets) => {
+    // An empty set draws nothing (blipPixels hands out a fresh [] for an
+    // unknown shape — never key those, or the map grows 40 times a second).
+    if (offsets.length === 0) return -1;
+    let id = pixelsIds.get(offsets);
+    if (id === undefined) {
+      // The pixel sets are module constants; this only guards against a future
+      // caller building arrays per call. New ids just force one repaint.
+      if (pixelsIds.size >= 256) { pixelsIds.clear(); paintKey = ""; }
+      id = pixelsIds.size;
+      pixelsIds.set(offsets, id);
     }
+    return id;
+  };
+
+  function drawPixels(_k, offsets, x, y, color) {
+    let op = ops[nOps];
+    if (!op) { op = { offsets: null, x: 0, y: 0, color: "" }; ops[nOps] = op; }
+    op.offsets = offsets; op.x = x; op.y = y; op.color = color;
+    nOps++;
+  }
+
+  function flushPixels(k, W) {
+    let key = `${W}`;
+    for (let i = 0; i < nOps; i++) {
+      const op = ops[i];
+      key += `|${pixelsId(op.offsets)},${op.x},${op.y},${op.color}`;
+    }
+    _paintStats.updates += 1;
+    if (key !== paintKey) {
+      paintKey = key;
+      _paintStats.paints += 1;
+      ctx.clearRect(0, 0, W, W);
+      for (let i = 0; i < nOps; i++) {
+        const { offsets, x, y, color } = ops[i];
+        ctx.fillStyle = color;
+        for (let j = 0; j < offsets.length; j += 2) {
+          ctx.fillRect((x + offsets[j]) * k, (y + offsets[j + 1]) * k, k, k);
+        }
+      }
+    }
+    nOps = 0;
   }
 
   function update(now) {
@@ -892,14 +946,14 @@ export function mount(_ctx) {
     }
     // Unhide BEFORE setAcText: <ac-text> skips rendering while invisible and
     // would otherwise keep a stale canvas from the last outdoor cell.
-    coords.hidden = !coordsText;
+    if (coords.hidden !== !coordsText) coords.hidden = !coordsText;
     if (coordsText) setAcText(coords, coordsText);
 
     // Canvas backing store tracks HUD zoom × DPR.
     const k = backingScale();
     const W = RADAR_GEOMETRY.size * k;
-    if (canvas.width !== W) { canvas.width = W; canvas.height = W; }
-    ctx.clearRect(0, 0, W, W);
+    if (canvas.width !== W) { canvas.width = W; canvas.height = W; paintKey = ""; }
+    nOps = 0;
 
     const drawn = [];
     let source = "none";
@@ -945,6 +999,7 @@ export function mount(_ctx) {
     }
     // Player marker last, over everything (DrawChildren).
     drawPixels(k, CENTRE_PIXELS, RADAR_GEOMETRY.cx, RADAR_GEOMETRY.cy, BRIGHT_GREEN);
+    flushPixels(k, W);
 
     blips = drawn;
     if (mouse || hoverGuid) refreshHover();
@@ -1023,5 +1078,6 @@ if (typeof window !== "undefined") {
     setRadarHostileOnly,
     snapshot: () => (_snapFormat && _snapRaw.valid ? _snapFormat() : null),
     isMounted: () => !!_overlayEl,
+    paintStats: () => ({ ..._paintStats }),
   };
 }

@@ -75,14 +75,18 @@ const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h 
 console.log("-- Z1 flag reader ----------------------------------------------------");
 {
   const R = Z.reversedZRequested;
-  check("absent / empty -> off", R("") === false && R("?foo=1") === false);
-  check("exact `on` -> on", R("?reversedZ=on") === true && R("?a=1&reversedZ=on") === true);
-  check("anything else -> off (ON / 1 / true / yes / off)",
-    ["ON", "1", "true", "yes", "off", "0"].every((x) => R(`?reversedZ=${x}`) === false));
-  window.location.search = "?reversedZ=on";
-  check("no argument reads location.search", R() === true);
+  // DEFAULT ON since 2026-10-19 (fps review); `=off` / `0` / `false` / `no`, any case, escape.
+  check("absent / empty -> on (default)", R("") === true && R("?foo=1") === true);
+  check("`on` and other non-escape values -> on", ["on", "ON", "1", "true", "yes"].every((x) => R(`?reversedZ=${x}`) === true));
+  check("escapes -> off (off / 0 / false / no, any case)",
+    ["off", "OFF", "0", "false", "False", "no", "NO"].every((x) => R(`?reversedZ=${x}`) === false));
+  window.location.search = "?reversedZ=off";
+  check("no argument reads location.search", R() === false);
   window.location.search = "";
-  check("no argument, bare URL -> off", R() === false);
+  check("no argument, bare URL -> on", R() === true);
+  const X = Z.reversedZExplicit;
+  check("explicit: only `=on` (any case) is an explicit request",
+    X("?reversedZ=on") === true && X("?reversedZ=ON") === true && X("") === false && X("?reversedZ=1") === false);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,13 +572,15 @@ const REV_DECODE = /\(\s*(\w+(?:\.\w+)?)\s*\*\s*(\w+(?:\.\w+)?)\s*\)\s*\/\s*\(\s
 console.log("-- Z10 source wiring --------------------------------------------------");
 {
   const idx = src("scene3d/index.js");
-  check("index.js: probe only when ?reversedZ=on, renderer params from depthRendererParams",
+  check("index.js: probe unless ?reversedZ=off, renderer params from depthRendererParams",
     /if \(reversedZRequested\(\)\) \{\s*_depthMode = resolveDepthMode\(\{\s*requested: true,\s*clipControl: probeClipControl\(canvas, threeContextAttributes/.test(idx) &&
     /let renderer = new THREE\.WebGLRenderer\(\{\s*canvas,\s*antialias: !!quality\.flags\.antialias && \(wireframeMode \|\| _canvasMsaa\),\s*\.\.\.depthRendererParams\(_depthMode\.mode\),\s*\}\);/.test(idx) &&
     !/logarithmicDepthBuffer: true,/.test(idx.slice(idx.indexOf("installRadialFog(THREE);"), idx.indexOf("Goal-1 (2026-06-22)"))));
   check("index.js: installReversedZ right after construction, log rebuild if three did not arm it, one console line per outcome",
     /const _rz = installReversedZ\(THREE, renderer\);/.test(idx) && /renderer\.dispose\(\);[\s\S]{0,200}depthRendererParams\("log"\)/.test(idx) &&
-    /console\.warn\(`\[reversedZ\] \?reversedZ=on but/.test(idx) && /console\.log\(`\[reversedZ\] on/.test(idx) && /window\.__depthMode = Object\.freeze/.test(idx));
+    /if \(!_depthMode\.reversed && reversedZExplicit\(\)\) \{\s*\/\/[^\n]*\n\s*console\.warn\(`\[reversedZ\] \?reversedZ=on but/.test(idx) &&
+    /\} else if \(!_depthMode\.reversed\) \{\s*\/\/[^\n]*\n\s*console\.info\(`\[reversedZ\] /.test(idx) &&
+    /console\.log\(`\[reversedZ\] on/.test(idx) && /window\.__depthMode = Object\.freeze/.test(idx));
   const cells = src("scene3d/cells.js");
   check("cells.js: every camera MVP goes through glClipProjection (wasm frustum / PView / aperture walks)",
     (cells.match(/glClipProjection\((camera|cam), _glClipProj\)/g) || []).length === 6 &&
@@ -606,8 +612,9 @@ console.log("-- Z10 source wiring ----------------------------------------------
     /const reversedZ = renderer\.state\?\.buffers\?\.depth\?\.getReversed\?\.\(\) === true;/.test(ap) &&
     /if \(reversedZ\) _syncFxNearFar\(activeCamera\);/.test(ap));
   const doc = src("docs/url-flags.md");
-  check("docs/url-flags.md: reversedZ row (opt-in, default off) + §0 adjudication row",
-    /^\| `reversedZ` \| `on` \| \*\*off\*\*/m.test(doc) && /^> \| `reversedZ` \|/m.test(doc));
+  check("docs/url-flags.md: reversedZ row (default ON since 2026-10-19, `=off` escape) + §0 row marked flipped",
+    /^\| `reversedZ` \| `off`\/`0`\/`false`\/`no` \(escape, any case\); `on` = explicit \| \*\*ON\*\* \(2026-10-19/m.test(doc) &&
+    /^> \| `reversedZ` \|[^\n]*FLIPPED DEFAULT-ON 2026-10-19/m.test(doc));
   const h = src("harness/run-js-headless.mjs");
   check("harness registers this suite as tier 5", /\{ tier: 5, flag: "reversedZ", file: "tests\/reversed_z\.test\.mjs" \}/.test(h));
 }
