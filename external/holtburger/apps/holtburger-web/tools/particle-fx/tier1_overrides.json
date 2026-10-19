@@ -1,6 +1,11 @@
 {
-  "_note": "Per-DID tier-1 corrections (tier1.py merges them over the generated terms; null removes a term). 2026-10-16: the Destroyed Portals' (Setup 0x020019E4, 39 towns) sputter swirls were portal-tagged vortexes and got the live purple portal's x1.3 light — a 36-intensity, 9 m purple pool that flashed on for 0.5 s every 3.3 s / 5 s as each sputter fired. Retail gives a destroyed portal no light at all (its Setup has no LightInfo); the dead portal now glows at the level of its own ring layers (0x320009D9/DA: 13.5 over 4.2 m), so the sputters still flicker on the ground but no longer strobe the square.",
+  "_note": "Per-DID tier-1 corrections (tier1.py merges them over the generated terms; null removes a term). 2026-10-16: the Destroyed Portals' (Setup 0x020019E4, 39 towns) sputter swirls were portal-tagged vortexes and got the live purple portal's x1.3 light — a 36-intensity, 9 m purple pool that flashed on for 0.5 s every 3.3 s / 5 s as each sputter fired. Retail gives a destroyed portal no light at all (its Setup has no LightInfo); the dead portal now glows at the level of its own ring layers (0x320009D9/DA: 13.5 over 4.2 m), so the sputters still flicker on the ground but no longer strobe the square. 2026-10-19 (waterfalls): the five falling-water sheet emitters (water_sheet family: 0x32000031 Cragstone Falls / Nanto Blue Ghost Falls spouts, 0x320004A2 the tall falls, 0x320004A4 Cataracts of Sabella / Timaru, 0x3200063A + 0x3200063B the Marae Lassel plateau falls) lose the smoke-only terms: no noise erosion (it dissolved each 13 m sheet into wisps as it aged), no back-lit rim, and a 0.1 sun-shadow tap instead of 0.6 (ONE CSM tap per sheet darkened or lit a whole 13 m sheet at once as its centre crossed a cliff shadow). Retail particles take no shadow at all.",
   "emitters": {
+    "0x32000031": { "noise": null, "shadow": 0.1, "rim": null },
+    "0x320004A2": { "noise": null, "shadow": 0.1, "rim": null },
+    "0x320004A4": { "noise": null, "shadow": 0.1, "rim": null },
+    "0x3200063A": { "noise": null, "shadow": 0.1, "rim": null },
+    "0x3200063B": { "noise": null, "shadow": 0.1, "rim": null },
     "0x320009D7": { "light": 12.0, "lightRange": 4.5 },
     "0x320009DB": { "light": 12.0, "lightRange": 4.5 }
   }

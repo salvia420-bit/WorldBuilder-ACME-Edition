@@ -17,7 +17,7 @@
 import * as THREE from "three";
 
 import { currentTime, rng } from "./time_rng.js";
-import { normalizeCheckSmall } from "./particle.js";
+import { normalizeCheckSmall, ParticleType } from "./particle.js";
 
 // E2 (2026-05-18): module-private scratches for `getRandomOffset()`'s
 // internal math (random unit vector, OffsetDir projection). Both are
@@ -38,6 +38,101 @@ export const EmitterType = Object.freeze({
 /** ACE `float.Clamp(lo, hi)` extension. */
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/**
+ * `?rp6TravelReach` (2026-10-19) — an upper bound on how far ONE particle of
+ * this emitter gets from its spawn anchor during its life, and on its speed,
+ * per ParticleType, from the same terms `Particle.update` (particle.js) moves
+ * it with. Pure; takes a ParticleEmitterInfo or any object with its fields.
+ *
+ * WHY. RP6 (particle_manager.js `rp6CullSphere`) hides and freezes a whole
+ * emitter when a sphere round its anchor leaves the frustum, and that sphere
+ * was the retail sorting sphere, max(max_offset, max_a · lifespan)
+ * (`initEnd`). `max_a` is only the random MULTIPLIER of A (|A| never enters)
+ * and gravity B is ignored, so it is no travel bound: a waterfall spout
+ * (0x320004A2: A = (0, 22.5, 0.5) × 0.5, B = (0, 0, −40) × 0.5, 3 s) throws
+ * 13 m sheets 34 m out and 89 m down behind a 4 m sphere, and the whole fall
+ * vanished whenever the camera saw the water but not the lip. Retail has no
+ * such emitter cull (ParticleEmitter::UpdateParticles, acclient.c:331097, only
+ * asks CPhysicsObj::ShouldDrawParticles: degrade distance + the anchor cell).
+ *
+ * Terms (T = lifespan + |lifespanRand|, the longest life `getRandomLifespan`
+ * draws; off = max(|minOffset|, |maxOffset|), the spawn offset; |A|, |B|, |C|
+ * scaled by the largest |random multiplier| `getRandomA/B/C` can draw):
+ *   Still                     off
+ *   Local/GlobalVelocity      off + |A|·T
+ *   Parabolic* (3/4/8/9/10/11) off + |A|·T + ½·|B|·T²
+ *   Swarm                     off + |A|·T + |C|          (cos/sin · C amplitude)
+ *   Explode                   off + |B|·T² + (|A.x| + |A.z|)·T   (C is a unit dir)
+ *   Implode                   2·off·max|C_i| + |B|·T²     (offset ⊙ C, ×(1 + cos))
+ *   Unknown / other           off                       (update() never moves it)
+ * The hook's parentOffset is added by the caller (`rp6CullSphere`): ×1, except
+ * Implode, whose offset is multiplied by C — `offsetGain` = max(1, 2·max|C_i|).
+ * `maxSpeed` bounds |d position / dt| the same way (`particleFxSlotVelocity`
+ * uses it so a genuinely fast particle is not mistaken for a teleport). The
+ * `?swarmAce=on` legacy swarm arm (amplitude pinned to 1) is not covered.
+ *
+ * @returns {{reach: number, offsetGain: number, maxSpeed: number}}
+ */
+export function particleTravelBound(info) {
+  const num = (v, d) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : d;
+  };
+  const vec = (v) => (v ? [num(v.x, 0), num(v.y, 0), num(v.z, 0)] : [0, 0, 0]);
+  const len = (v) => Math.hypot(v[0], v[1], v[2]);
+  const maxComp = (v) => Math.max(Math.abs(v[0]), Math.abs(v[1]), Math.abs(v[2]));
+  if (!info) return { reach: 0, offsetGain: 1, maxSpeed: 0 };
+  const T = Math.max(0, num(info.lifespan, 0) + Math.abs(num(info.lifespanRand, 0)));
+  const off = Math.max(Math.abs(num(info.minOffset, 0)), Math.abs(num(info.maxOffset, 0)));
+  const mA = Math.max(Math.abs(num(info.minA, 1)), Math.abs(num(info.maxA, 1)));
+  const mB = Math.max(Math.abs(num(info.minB, 1)), Math.abs(num(info.maxB, 1)));
+  const mC = Math.max(Math.abs(num(info.minC, 1)), Math.abs(num(info.maxC, 1)));
+  const a = vec(info.a), b = vec(info.b), c = vec(info.c);
+  const aM = len(a) * mA, bM = len(b) * mB, cM = len(c) * mC;
+  let reach = off, offsetGain = 1, maxSpeed = 0;
+  switch (info.particleType | 0) {
+    case ParticleType.LocalVelocity:
+    case ParticleType.GlobalVelocity:
+      reach = off + aM * T;
+      maxSpeed = aM;
+      break;
+    case ParticleType.ParabolicLVGA:
+    case ParticleType.ParabolicLVGAGR:
+    case ParticleType.ParabolicLVLA:
+    case ParticleType.ParabolicLVLALR:
+    case ParticleType.ParabolicGVGA:
+    case ParticleType.ParabolicGVGAGR:
+      reach = off + aM * T + 0.5 * bM * T * T;
+      maxSpeed = aM + bM * T;
+      break;
+    case ParticleType.Swarm:
+      reach = off + aM * T + cM;
+      maxSpeed = aM + bM * cM;
+      break;
+    case ParticleType.Explode: {
+      const axz = (Math.abs(a[0]) + Math.abs(a[2])) * mA;
+      reach = off + bM * T * T + axz * T;
+      maxSpeed = 2 * bM * T + axz;
+      break;
+    }
+    case ParticleType.Implode: {
+      const cC = maxComp(c) * mC;
+      reach = 2 * off * cC + bM * T * T;
+      offsetGain = Math.max(1, 2 * cC);
+      maxSpeed = Math.abs(a[0]) * mA * off * cC + 2 * bM * T;
+      break;
+    }
+    default:
+      // Still, Unknown and any out-of-range type: no motion term.
+      break;
+  }
+  return {
+    reach: Number.isFinite(reach) ? reach : 0,
+    offsetGain: Number.isFinite(offsetGain) ? offsetGain : 1,
+    maxSpeed: Number.isFinite(maxSpeed) ? maxSpeed : 0,
+  };
 }
 
 /**
@@ -120,9 +215,15 @@ export class ParticleEmitterInfo {
     // profile (e.g. "particle.gemSparkle"); DAT emitters are looked up by `id`.
     this.fxProfile = typeof wasmInfo.fxProfile === "string" ? wasmInfo.fxProfile : null;
 
-    // SortingSphere: bounded by max(maxOffset, maxA * lifespan). Used by
-    // the renderer for frustum-culling the emitter as a whole.
+    // SortingSphere: retail's max(maxOffset, maxA * lifespan) — retail DATA,
+    // kept exact. It is NOT a travel bound (see `particleTravelBound` below):
+    // the RP6 frustum cull (particle_manager.js `rp6CullSphere`) takes the
+    // larger of it and `cullReach` under `?rp6TravelReach`.
     this.sortingSphere = { center: new THREE.Vector3(0, 0, 0), radius: 0 };
+    // ?rp6TravelReach (2026-10-19): set by initEnd from particleTravelBound.
+    this.cullReach = 0;
+    this.cullOffsetGain = 1;
+    this.maxSpeed = 0;
     this.initEnd();
   }
 
@@ -135,6 +236,12 @@ export class ParticleEmitterInfo {
     }
     this.sortingSphere.center.set(0, 0, 0);
     this.sortingSphere.radius = maxOff;
+    // Not retail: the per-type travel bound and top speed (particleTravelBound),
+    // recomputed with the sorting sphere so a re-run of initEnd refreshes both.
+    const tb = particleTravelBound(this);
+    this.cullReach = tb.reach;
+    this.cullOffsetGain = tb.offsetGain;
+    this.maxSpeed = tb.maxSpeed;
   }
 
   // P1 fidelity fix (2026-05-29) — these 5 helpers target RETAIL, not ACE.

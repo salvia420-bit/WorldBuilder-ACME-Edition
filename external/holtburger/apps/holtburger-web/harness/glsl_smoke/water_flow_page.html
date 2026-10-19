@@ -1,0 +1,313 @@
+<!doctype html><html><body><canvas id="c" width="256" height="256"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// harness/glsl_smoke/water_flow_page.html — driven by water_flow_smoke.mjs.
+// ?v=<n> picks the assembled program the runner dumped for one URL (the live
+// per-LB pair terrain.js compiles + the batched pair terrain_batch.js derives).
+// Compiles both on a real WebGL2 stack and MEASURES the water's motion: a
+// top-down orthographic view of one landblock of water, two frames 0.3 s apart,
+// the shift that best re-aligns them (sum of squared differences) is the
+// direction the pattern travelled. Screen +x = AC east, screen +y = AC north.
+import * as THREE from "three";
+
+const out = { errors: [], checks: [], arms: {} };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 600)); origErr(...a); };
+const check = (name, ok, detail = "") => out.checks.push({ name, ok: !!ok, detail: String(detail) });
+
+try {
+  const v = new URLSearchParams(location.search).get("v") || "0";
+  const G = await (await fetch(`/glsl/${v}.json`)).json();
+  out.search = G.search; out.flow = G.flow; out.bank = G.bank; out.cols = G.cols;
+
+  const canvas = document.getElementById("c");
+  const S = 256;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  renderer.setPixelRatio(1);
+  renderer.setClearColor(0x000000, 1);
+  out.renderer = renderer.getContext().getParameter(renderer.getContext().RENDERER);
+
+  // ---- textures ------------------------------------------------------------
+  const WATER = 17, ATLAS = 64;
+  function smoothNoise(seed) {
+    // value noise on a 16-cell lattice, wrapped to the 64-texel tile
+    let s = seed >>> 0;
+    const r = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+    const L = new Float32Array(16 * 16).map(() => r());
+    const at = (x, y) => L[((y + 16) % 16) * 16 + ((x + 16) % 16)];
+    const f = (t) => t * t * (3 - 2 * t);
+    return (px, py) => {
+      const gx = (px / ATLAS) * 16, gy = (py / ATLAS) * 16;
+      const ix = Math.floor(gx), iy = Math.floor(gy), u = f(gx - ix), w = f(gy - iy);
+      return (at(ix, iy) * (1 - u) + at(ix + 1, iy) * u) * (1 - w) + (at(ix, iy + 1) * (1 - u) + at(ix + 1, iy + 1) * u) * w;
+    };
+  }
+  function atlasArray(layers, fillFn) {
+    const d = new Uint8Array(ATLAS * ATLAS * layers * 4);
+    for (let L = 0; L < layers; L++) for (let y = 0; y < ATLAS; y++) for (let x = 0; x < ATLAS; x++) {
+      const o = ((L * ATLAS + y) * ATLAS + x) * 4;
+      const c = fillFn(L, x, y);
+      d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = c[3];
+    }
+    const t = new THREE.DataArrayTexture(d, ATLAS, ATLAS, layers);
+    t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType;
+    t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter; t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  }
+  const n1 = smoothNoise(7), n2 = smoothNoise(91);
+  const atlas = atlasArray(33, (L, x, y) => {
+    if (L !== WATER) return [120, 120, 120, 255];
+    const a = n1(x, y), b = n2(x * 2 % ATLAS, y * 2 % ATLAS);
+    const g = Math.round(255 * (0.65 * a + 0.35 * b));
+    return [g, Math.round(g * 0.8 + 30), 255 - g, 255];
+  });
+  const flatArr = (layers, c) => atlasArray(layers, () => c);
+  const tex2D = (w, h, c) => {
+    const d = new Uint8Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) { d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = c[3]; }
+    const t = new THREE.DataTexture(d, w, h); t.needsUpdate = true; return t;
+  };
+  const cube = (() => {
+    const faces = [];
+    for (let f = 0; f < 6; f++) { const dt = tex2D(4, 4, [128, 128, 128, 255]); faces.push(dt); }
+    const t = new THREE.CubeTexture(faces); t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType;
+    t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; t.needsUpdate = true; return t;
+  })();
+  const tex3D = () => { const t = new THREE.Data3DTexture(new Uint8Array(4 * 4 * 4 * 4).fill(128), 4, 4, 4); t.needsUpdate = true; return t; };
+
+  // The per-LB vertex-types block: code everywhere, then the water columns.
+  function vtBytes(code, flowE, flowN, weight, foam) {
+    const cols = G.cols, d = new Uint8Array(cols * 9 * 4);
+    for (let y = 0; y < 9; y++) for (let x = 0; x < cols; x++) {
+      const o = (y * cols + x) * 4;
+      if (x < 9) { d[o] = code; d[o + 1] = 0; d[o + 2] = 0; d[o + 3] = 255; }
+      else if (x < 18) { d[o] = 128; d[o + 1] = 128; d[o + 2] = 0; d[o + 3] = 255; }
+      else if (x < 27) { d[o] = flowE; d[o + 1] = flowN; d[o + 2] = 0; d[o + 3] = 255; }
+      else { d[o] = weight; d[o + 1] = foam; d[o + 2] = 0; d[o + 3] = 255; }
+    }
+    return d;
+  }
+  function vtTexture(bytes, batched) {
+    let t;
+    if (batched) { t = new THREE.DataArrayTexture(bytes, G.cols, 9, 1); t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType; }
+    else t = new THREE.DataTexture(bytes, G.cols, 9);
+    t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false;
+    t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true;
+    return t;
+  }
+  function mergeTexture(batched) {
+    // 48x8: per cell slot 0 = [layer, mask, rot, valid] base only.
+    const d = new Uint8Array(48 * 8 * 4);
+    for (let row = 0; row < 8; row++) for (let cell = 0; cell < 8; cell++) {
+      const o = (row * 48 + cell * 6) * 4; d[o] = WATER; d[o + 3] = 255;
+    }
+    let t;
+    if (batched) { t = new THREE.DataArrayTexture(d, 48, 8, 1); t.format = THREE.RGBAFormat; t.type = THREE.UnsignedByteType; }
+    else t = new THREE.DataTexture(d, 48, 8);
+    t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+    return t;
+  }
+
+  // ---- uniforms auto-built from the declarations -----------------------------
+  function buildUniforms(vs, fs) {
+    const u = {};
+    const src = vs + "\n" + fs;
+    const defines = {};
+    for (const m of src.matchAll(/#define\s+(\w+)\s+(\d+)/g)) defines[m[1]] = Number(m[2]);
+    for (const m of src.matchAll(/const\s+int\s+(\w+)\s*=\s*(\d+)\s*;/g)) defines[m[1]] = Number(m[2]);
+    const re = /uniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)\s*(?:\[\s*(\w+)\s*\])?\s*;/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const [, type, name, arrRaw] = m;
+      if (u[name]) continue;
+      const n = arrRaw == null ? 0 : (/^\d+$/.test(arrRaw) ? Number(arrRaw) : (defines[arrRaw] ?? 8));
+      const one = () => {
+        switch (type) {
+          case "float": case "int": case "uint": return 0;
+          case "bool": return false;
+          case "vec2": case "ivec2": return new THREE.Vector2();
+          case "vec3": case "ivec3": return new THREE.Vector3(0, 0, 1);
+          case "vec4": case "ivec4": return new THREE.Vector4();
+          case "mat3": return new THREE.Matrix3();
+          case "mat4": return new THREE.Matrix4();
+          case "sampler2D": case "sampler2DShadow": return tex2D(4, 4, [255, 255, 255, 255]);
+          case "sampler2DArray": return flatArr(4, [128, 128, 255, 255]);
+          case "samplerCube": return cube;
+          case "sampler3D": return tex3D();
+          default: return null;
+        }
+      };
+      u[name] = { value: n ? Array.from({ length: n }, one) : one() };
+    }
+    return u;
+  }
+  function baseUniforms(vs, fs, batched, vt) {
+    const u = buildUniforms(vs, fs);
+    const set = (k, val) => { if (u[k]) u[k].value = val; };
+    set("uAtlas", atlas);
+    set("uAtlasNormalAo", flatArr(33, [128, 128, 255, 255]));
+    set("uAlphaMasks", flatArr(8, [255, 255, 255, 255]));
+    set("uTerrainDetailNormalArray", flatArr(5, [128, 128, 255, 255]));
+    set("uTerrainDetailTex", flatArr(4, [128, 128, 128, 255]));
+    set("uEnvCube", cube);
+    set("uTerrainPalette", tex2D(32, 1, [255, 255, 255, 255]));
+    set("uVertexTypes", vtTexture(vt, batched));
+    set("uMergeData", mergeTexture(batched));
+    set("uBaseTexTiling", new Array(33).fill(2));
+    set("uCodeToSlice", new Array(32).fill(255));
+    set("uCodeToDetailTexSlice", new Array(33).fill(255));
+    set("uDetailTexTiling", new Array(33).fill(1));
+    const swell = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20);
+    set("uWaterCodeMask", swell);
+    set("uWaterSurfaceCodeMask", swell | (1 << 22));
+    set("uTexMergeEnabled", 1.0);
+    set("uTexMergeAlphaRound", 1.0);
+    set("uRoadSlotsEnabled", 1.0);
+    set("uWaterScrollEnabled", 1.0);
+    set("uDisplacementEnabled", 0.0);
+    set("uWaterEnvEnabled", 0.0);
+    set("uBakeAlbedo", 1.0);
+    set("uAcSunColor", new THREE.Color(1, 1, 1));
+    set("uAcAmbColor", new THREE.Color(1, 1, 1));
+    set("uAcAmbLevel", 0.6);
+    set("uAcSunVec", new THREE.Vector3(0.3, 0.3, 0.9));
+    set("uSunDir", new THREE.Vector3(0.3, 0.3, 0.9).normalize());
+    set("uLbOriginXy", new THREE.Vector2(0, 33408));
+    set("uWaterSheenFade", new THREE.Vector2(30, 160));
+    set("uWaterFlow", new THREE.Vector4(1, 4.8, 1.6, 0.0));
+    set("uWaterFoam", new THREE.Vector4(0, 3.5, 7.0, 0));
+    return u;
+  }
+
+  // ---- geometry: one LB-local 192 m patch (AC frame, z-up) ---------------------
+  function makeGeom(seg, slotAttr) {
+    const g = new THREE.PlaneGeometry(192, 192, seg, seg);
+    g.translate(96, 96, 0);
+    const n = g.attributes.position.count;
+    const f = (val) => new THREE.BufferAttribute(new Float32Array(n).fill(val), 1);
+    g.setAttribute("terrainCode", f(WATER));
+    g.setAttribute("vertexBrightness", f(1));
+    g.setAttribute("vertexSaturate", f(1));
+    g.setAttribute("vertexHue", f(1));
+    const ln = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) ln[i * 3 + 2] = 1;
+    g.setAttribute("acLightNormal", new THREE.BufferAttribute(ln, 3));
+    g.setAttribute("aRoundZ", f(0));
+    if (slotAttr) g.setAttribute("aLbSlot", f(0));
+    return g;
+  }
+
+  const scene = new THREE.Scene();
+  const worldRoot = new THREE.Group();
+  worldRoot.rotation.x = -Math.PI / 2;   // the client's ac(x,y,z) -> world(x,z,-y) bridge
+  scene.add(worldRoot);
+  const W = 48; // metres across the frame -> 0.1875 m per pixel
+  const top = new THREE.OrthographicCamera(-W / 2, W / 2, W / 2, -W / 2, 0.1, 2000);
+  top.position.set(96, 400, -96);          // above AC (96, 96)
+  top.up.set(0, 0, -1);                    // screen up = world -z = AC north
+  top.lookAt(96, 0, -96);
+  const oblique = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  oblique.position.set(96, 26, 60);
+  oblique.lookAt(96, 0, -130);
+
+  function makeObject(batched, vt, tweak, seg = 16) {
+    const vs = batched ? G.batchedVertex : G.vertex;
+    const fs = batched ? G.batchedFragment : G.fragment;
+    const u = baseUniforms(vs, fs, batched, vt);
+    tweak(u);
+    const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: vs, fragmentShader: fs, glslVersion: THREE.GLSL3, side: THREE.DoubleSide });
+    let obj;
+    if (batched) {
+      const g = makeGeom(seg, true);
+      obj = new THREE.BatchedMesh(1, g.attributes.position.count, g.index.count, mat);
+      const gid = obj.addGeometry(g);
+      obj.addInstance(gid);
+      obj.perObjectFrustumCulled = false;
+      obj.frustumCulled = false;
+    } else {
+      obj = new THREE.Mesh(makeGeom(seg, false), mat);
+      obj.frustumCulled = false;
+    }
+    return { obj, u };
+  }
+  function frame(o, cam, t) {
+    o.u.uTime.value = t;
+    worldRoot.clear();
+    worldRoot.add(o.obj);
+    renderer.render(scene, cam);
+    const buf = new Uint8Array(S * S * 4);
+    const gl = renderer.getContext();
+    gl.readPixels(0, 0, S, S, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    const lum = new Float32Array(S * S);
+    for (let i = 0; i < S * S; i++) lum[i] = 0.299 * buf[i * 4] + 0.587 * buf[i * 4 + 1] + 0.114 * buf[i * 4 + 2];
+    return lum;
+  }
+  // Best (dx, dy) with B(x, y) ~ A(x - dx, y - dy); +x east, +y north (readPixels rows run bottom-up).
+  function motion(A, B, R = 12) {
+    let best = null;
+    const M = R + 4;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      let ssd = 0, n = 0;
+      for (let y = M; y < S - M; y += 2) for (let x = M; x < S - M; x += 2) {
+        const d = B[y * S + x] - A[(y - dy) * S + (x - dx)];
+        ssd += d * d; n++;
+      }
+      ssd /= n;
+      if (!best || ssd < best.ssd) best = { dx, dy, ssd };
+    }
+    let mad = 0;
+    for (let i = 0; i < S * S; i++) mad += Math.abs(A[i] - B[i]);
+    best.meanAbsDiff = +(mad / (S * S)).toFixed(3);
+    best.ssd = +best.ssd.toFixed(2);
+    let sum = 0, sq = 0;
+    for (let i = 0; i < S * S; i++) { sum += A[i]; sq += A[i] * A[i]; }
+    best.contrast = +Math.sqrt(sq / (S * S) - (sum / (S * S)) ** 2).toFixed(2);
+    best.mean = +(sum / (S * S)).toFixed(2);
+    return best;
+  }
+  const DT = 0.3, T0 = 37.0;
+  function arm(name, batched, vt, tweak, cam = top, t0 = T0, t1 = T0 + DT) {
+    try {
+      const o = makeObject(batched, vt, tweak);
+      const A = frame(o, cam, t0), B = frame(o, cam, t1);
+      out.arms[name] = motion(A, B);
+    } catch (e) {
+      out.arms[name] = { error: String(e && e.stack || e).slice(0, 400) };
+    }
+    return out.arms[name];
+  }
+
+  const E = 128 + 64; // flow byte: +64/127 of full scale
+  // Expected travel: 64/127 * 4.8 m/s * 0.3 s / 0.1875 m/px = 3.87 px
+  if (G.flow) {
+    arm("east_merge", false, vtBytes(WATER, E, 128, 255, 0), () => {});
+    arm("north_bilinear", false, vtBytes(WATER, 128, E, 255, 0), (u) => { u.uTexMergeEnabled.value = 0; });
+    arm("west_merge", false, vtBytes(WATER, 128 - 64, 128, 255, 0), () => {});
+    arm("still_zero", false, vtBytes(WATER, 128, 128, 255, 0), () => {});
+    arm("still_eddy", false, vtBytes(WATER, 128, 128, 255, 0), (u) => { u.uWaterFlow.value.w = 0.35; });
+    arm("east_batched", true, vtBytes(WATER, E, 128, 255, 0), () => {});
+    arm("north_batched_bilinear", true, vtBytes(WATER, 128, E, 255, 0), (u) => { u.uTexMergeEnabled.value = 0; });
+    arm("flow_uniform_off", false, vtBytes(WATER, E, 128, 255, 0), (u) => { u.uWaterFlow.value.x = 0; });
+    // Whitewater: same frame with and without, brightness must rise.
+    const foamOff = arm("foam_off", false, vtBytes(WATER, E, 128, 255, 255), () => {}, top, T0, T0);
+    const foamOn = arm("foam_on", false, vtBytes(WATER, E, 128, 255, 255), (u) => { u.uWaterFoam.value.x = 1; }, top, T0, T0);
+    out.foamLift = foamOn.mean - foamOff.mean;
+  } else {
+    arm("legacy_merge", false, vtBytes(WATER, 128, 128, 255, 0), () => {});
+    arm("legacy_batched", true, vtBytes(WATER, 128, 128, 255, 0), () => {});
+  }
+  // Swell (oblique view, surface effects frozen): weight 255 moves, 0 must not.
+  const swellTweak = (u) => { u.uWaterScrollEnabled.value = 0; u.uDisplacementEnabled.value = 1; };
+  arm("swell_w255", false, vtBytes(WATER, 128, 128, 255, 0), swellTweak, oblique, 0, 5);
+  arm("swell_w0", false, vtBytes(WATER, 128, 128, 0, 0), swellTweak, oblique, 0, 5);
+  arm("swell_w255_batched", true, vtBytes(WATER, 128, 128, 255, 0), swellTweak, oblique, 0, 5);
+  arm("swell_w0_batched", true, vtBytes(WATER, 128, 128, 0, 0), swellTweak, oblique, 0, 5);
+
+  out.programs = renderer.info.programs ? renderer.info.programs.length : -1;
+} catch (e) {
+  out.errors.push("page threw: " + String(e && e.stack || e).slice(0, 800));
+}
+window.__smoke = out;
+</script></body></html>

@@ -747,12 +747,54 @@ export class SharedAlphaBuckets {
 /** The registry every ParticleManager shares (`?particleSharedAlpha`, default ON; `=off` escape). */
 export const sharedAlphaBuckets = new SharedAlphaBuckets();
 
+// ── ?particleAlphaRetail (2026-10-19, DEFAULT ON — owner: default-on; `=off` escape) ──
+// Retail draws an Alpha (0x100) particle surface blended with NO alpha test and
+// NO depth write: D3DPolyRender::SetSurface (acclient.c:454385) leaves alpha
+// test off for a non-clipmap surface and passes `singlePassDetailing || !blend`
+// = false as SetDepthBufferMode's `_DepthWriteEnable` (acclient.c:460185), and
+// sorts every blended poly back to front. Our alpha particles (the shared alpha
+// bucket a static waterfall sheet draws through, and the per-mesh clone) keep
+// alphaTest 0.1 + depthWrite, and three orders the identity-placed buckets by
+// creation id, so a sheet bucket can cut the additive mist/spray behind it with
+// hard 10%-alpha edges, or paint over mist in front of it. ON: alpha particle
+// materials take alphaTest 1/255 (the USE_ALPHATEST program variant is kept, so
+// no new program) and depthWrite false, and alpha buckets/slot meshes take
+// renderOrder −1 so they draw before the additive ones (and the children, 1).
+// renderOrder also reorders them against other renderOrder-0 transparents when
+// particles draw in the world pass (`?particlesOverClouds/Haze=off`).
+// Escape: `off`/`0`/`false`/`no` restores alphaTest 0.1 + depthWrite. Known
+// trade-off (owed the 1070 eye test): with no depth write, two overlapping
+// alpha BUCKETS (different textures/emitters) draw in creation order, not back
+// to front (three sorts identity-placed buckets by renderOrder then id), so a
+// far smoke bucket can paint over a near one; inside a bucket the instances
+// stay sorted back to front.
+export const PARTICLE_ALPHA_RETAIL_TEST = 1 / 255;
+export const PARTICLE_ALPHA_RETAIL_ORDER = -1;
+let _ALPHA_RETAIL_ON = null;
+export function readParticleAlphaRetailFlag(search) {
+  try {
+    const s = typeof search === "string" ? search : (typeof location !== "undefined" && location ? location.search : "");
+    const v = (new URLSearchParams(s || "").get("particleAlphaRetail") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+export function particleAlphaRetailEnabled() {
+  if (_ALPHA_RETAIL_ON === null) _ALPHA_RETAIL_ON = readParticleAlphaRetailFlag();
+  return _ALPHA_RETAIL_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleAlphaRetailFlag(on) { _ALPHA_RETAIL_ON = on == null ? null : !!on; }
+
 /** Turn a cloned slot material into the shared ALPHA bucket material. */
 export function _configureAlphaBucketMaterial(mat) {
   mat.transparent = true;
   mat.blending = THREE.NormalBlending;
-  mat.alphaTest = 0.1;
-  mat.depthWrite = true;
+  // ?particleAlphaRetail: retail's blended alpha state (no z-write, ~no alpha test).
+  const retail = particleAlphaRetailEnabled();
+  mat.alphaTest = retail ? PARTICLE_ALPHA_RETAIL_TEST : 0.1;
+  mat.depthWrite = !retail;
   mat.opacity = 1; // carried per instance in instanceColor.r
   mat.vertexColors = true;
   mat.onBeforeCompile = (shader) => {
@@ -834,6 +876,8 @@ function _growBucket(bucket, need, scene) {
   // indoor bucket silently fell back to the world layer the first time it
   // outgrew `_INST_BUCKET_MIN_CAP`, i.e. exactly when the effect got busy.
   im.layers.mask = old.layers.mask;
+  // Same for the draw order (`?particleAlphaRetail` stamps the alpha buckets).
+  im.renderOrder = old.renderOrder;
   im.setColorAt(0, _instColor.setRGB(1, 1, 1));
   // CRITICAL: growth happens MID-TICK, after earlier emitters already wrote
   // `bucket.n` instances into the old buffer. `bucket.n` survives the swap, so
@@ -1075,10 +1119,19 @@ function _rp6PrepareFrustum() {
 //              down the viewer line — axis-constrained billboard)
 // DAT survey (2026-07-28, all 2051 ParticleEmitters in client_portal.dat →
 // 341 unique hw GfxObjs → 238 with a degrade chain): band-0 modes are
-// 154x mode 2, 21x mode 5, 63x mode 1. The Nanto waterfall sheet
-// (0x32000829 → hw 0x010016FD → 0x11000126) is mode 2; its base mist
-// (0x3200002F → 0x01001689 → 0x11000127) and the water-golem spray
-// (0x3200048E/F → 0x01001BBE → 0x11000985) are mode 5. All these quads
+// 154x mode 2, 21x mode 5, 63x mode 1. The Sho lantern / torch glow
+// (0x32000829 → hw 0x010016FD → 0x11000126) is mode 2; the wall-torch flame
+// tongue (0x3200002F → 0x01001689 → 0x11000127) and the water-golem spray
+// (0x3200048E/F → 0x01001BBE → 0x11000985) are mode 5 — the 2026-07-28 live
+// check used the lantern and the golem. (This note used to call 0x32000829
+// and 0x3200002F the "Nanto waterfall sheet" and "its base mist";
+// data/particle-fx-catalog.json files them as a torch/candle glow and a wall
+// torch.) The waterfalls themselves — Nanto's Blue Ghost Falls (LB 0xE43D)
+// and Cragstone Falls (0xB6A3) spouts 0x32000031, the Cataracts of Sabella /
+// Timaru spouts 0x320004A4, the tall falls 0x320004A2 + streaks 0x320004A3,
+// the pool mist curtains 0x3200000C — draw their sheets on hw 0x0100109E
+// (→ 0x11000400) and their streaks/mist on 0x0100141C (→ 0x110003B0): both
+// band-0 mode 2, max degrade distance 392 m. All these quads
 // are authored in the local X–Z plane (normal −Y), so without the
 // reorientation they render EDGE-ON from perpendicular azimuths — the
 // system-wide "particles look flat from the side" defect (waterfalls,
@@ -1321,12 +1374,14 @@ function _rp6ShouldCull(emitter, camera) {
 
   // Distance cap — measured anchor-to-camera, slackened by the sphere
   // radius so a large-radius emitter near the cap edge isn't culled
-  // while part of its reach is still in range.
+  // while part of its reach is still in range. ?rp6DegradeCap: the cap is
+  // the emitter's own authored degrade distance when that is further than
+  // `_RP6.maxDistance` (rp6DistanceCap; the OR-term below still culls at it).
   const dx = _rp6WorldPos.x - camera.position.x;
   const dy = _rp6WorldPos.y - camera.position.y;
   const dz = _rp6WorldPos.z - camera.position.z;
   const distSq = dx * dx + dy * dy + dz * dz;
-  const slack = _RP6.maxDistance + radius;
+  const slack = rp6DistanceCap(emitter) + radius;
   if (distSq > slack * slack) return true;
 
   // A11-S4 (?particleDegrade, default ON; `=off` escape) — authored per-GfxObj degrade
@@ -1382,16 +1437,91 @@ export function rp6TrueSphereEnabled() {
 /** Test/A-B seam (`null` re-reads the URL on next use). */
 export function setRp6TrueSphereFlag(on) { _RP6_TRUE_SPHERE_ON = on == null ? null : !!on; }
 
+// ?rp6TravelReach (2026-10-19, DEFAULT ON; `=off`/`0`/`false`/`no` escape) — the
+// cull sphere covers how far the particles actually TRAVEL. Its travel term was
+// the retail sorting radius, max(maxOffset, maxA·lifespan), where maxA is only
+// A's random multiplier and gravity B never enters, so a waterfall spout's
+// sheets — thrown 20-37 m out and falling 25-90 m — sat outside a 12-18 m
+// sphere round the lip: look at the falling water or the pool without the lip
+// in frame and RP6 hid AND froze the whole fall (a node probe with the real
+// manager and the six retail waterfall emitters: hidden in 17-31% of close
+// views with water on screen). ON: the travel term is the larger of the
+// sorting radius and `info.cullReach` (particle_emitter_info.js
+// `particleTravelBound`: the per-ParticleType bound from particle.js's own
+// motion terms), a parentOffset that an Implode multiplies by C is scaled by
+// `info.cullOffsetGain`, and the sprite reach is measured from the PARTICLE
+// ORIGIN (`_gfxOriginRadius`) instead of the quad's own centre — the streak and
+// mist quads (0x0100141C) hang 0..2 m above their origin, ×10 scale. Only ever
+// widens the sphere. Retail has no emitter frustum cull at all
+// (ParticleEmitter::UpdateParticles, acclient.c:331097).
+let _RP6_TRAVEL_REACH_ON = null;
+export function rp6TravelReachEnabled() {
+  if (_RP6_TRAVEL_REACH_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("rp6TravelReach") || "").trim().toLowerCase();
+      _RP6_TRAVEL_REACH_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _RP6_TRAVEL_REACH_ON = true;
+    }
+  }
+  return _RP6_TRAVEL_REACH_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setRp6TravelReachFlag(on) { _RP6_TRAVEL_REACH_ON = on == null ? null : !!on; }
+
+// ?rp6DegradeCap (2026-10-19, DEFAULT ON; `=off`/`0`/`false`/`no` escape) — an
+// emitter whose stamped degrade distance (`?particleDegrade`, the hw GfxObj's
+// GetMaxDegradeDistance) is beyond the 220 m RP6 cap draws out to that distance,
+// as retail does (CPhysicsObj::ShouldDrawParticles, acclient.c:317184, compares
+// the camera distance with it and nothing else). Every waterfall GfxObj
+// (sheets 0x0100109E, streaks/mist 0x0100141C) carries 392 m, so beyond ~234 m
+// the falls drew nothing — at the Cataracts of Sabella portal drop 30 of the 65
+// spouts within 392 m. Emitters at or under 220 m are untouched; `=off` keeps
+// the flat cap.
+let _RP6_DEGRADE_CAP_ON = null;
+export function rp6DegradeCapEnabled() {
+  if (_RP6_DEGRADE_CAP_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("rp6DegradeCap") || "").trim().toLowerCase();
+      _RP6_DEGRADE_CAP_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _RP6_DEGRADE_CAP_ON = true;
+    }
+  }
+  return _RP6_DEGRADE_CAP_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setRp6DegradeCapFlag(on) { _RP6_DEGRADE_CAP_ON = on == null ? null : !!on; }
+
+/**
+ * The RP6 distance cap for one emitter: `_RP6.maxDistance`, raised to the
+ * emitter's own finite degrade distance under `?rp6DegradeCap` when that is
+ * further (and the degrade term is live for it — `?particleDegrade` or a
+ * `_forceDegrade` stamp, the same gate as the OR-term in `_rp6ShouldCull`).
+ */
+export function rp6DistanceCap(emitter) {
+  const cap = _RP6.maxDistance;
+  if (!rp6DegradeCapEnabled() || !emitter) return cap;
+  const d = emitter.degradeDistance;
+  if (!Number.isFinite(d) || !(d > cap)) return cap;
+  if (!(particleDegradeRetailOn() || emitter._forceDegrade === true)) return cap;
+  return d;
+}
+
 /**
  * The largest distance a drawn sprite reaches from its particle's centre:
  * the emitter GfxObj's bounding radius (stamped by addEmitter as
  * `_gfxRadius`) times the largest scale over its life — start/final scale
  * plus the random spread, clamped like retail (0.1..10). Cached on the
- * emitter; 0 when the geometry is unknown.
+ * emitter; 0 when the geometry is unknown. `?rp6TravelReach`: measured from the
+ * particle ORIGIN (`_gfxOriginRadius` = |bounding centre| + bounding radius),
+ * which is where the particle position — and so the sphere's travel term — is.
  */
 export function rp6SpriteReach(emitter) {
   if (typeof emitter._rp6Reach === "number") return emitter._rp6Reach;
-  const r = emitter._gfxRadius;
+  const r = rp6TravelReachEnabled() && Number.isFinite(emitter._gfxOriginRadius)
+    ? emitter._gfxOriginRadius
+    : emitter._gfxRadius;
   const info = emitter.info;
   let reach = 0;
   if (Number.isFinite(r) && r > 0 && info) {
@@ -1448,21 +1578,30 @@ export function rp6CullSphere(emitter, out) {
     return -1; // no position → bail open
   }
 
-  // sortingSphere.radius bounds how far this emitter's particles travel
-  // from the anchor (InitEnd: max(maxOffset, maxA·lifespan)). Adding it
-  // to the frustum-test radius is what keeps projectile-trajectory
-  // emitters live: a burst that spawns at the anchor and flies outward
-  // stays "in" until its WHOLE reachable sphere clears the frustum.
-  let radius = emitter.info?.sortingSphere?.radius ?? 0;
+  // The particles' travel from the anchor. Adding it to the frustum-test
+  // radius is what keeps projectile-trajectory emitters live: a burst that
+  // spawns at the anchor and flies outward stays "in" until its WHOLE
+  // reachable sphere clears the frustum. The retail sorting radius
+  // (InitEnd: max(maxOffset, maxA·lifespan)) under-reads it badly for
+  // anything with gravity; ?rp6TravelReach takes the larger of it and the
+  // per-type travel bound `info.cullReach` (particle_emitter_info.js).
+  const info = emitter.info;
+  let radius = info?.sortingSphere?.radius ?? 0;
+  const travelOn = rp6TravelReachEnabled();
+  if (travelOn && Number.isFinite(info?.cullReach) && info.cullReach > radius) {
+    radius = info.cullReach;
+  }
 
   // RP6 (2026-06-08): a part-anchored emitter (isParentLocal / partIndex
   // >= 0) and any emitter with a non-zero parentOffset emits at a point
   // OFFSET from the sphere centre — a weapon tip, a far attachment on a large
   // rig. Inflate the test radius by the static offset magnitude so the sphere
   // conservatively covers the real anchor (only ever MORE conservative).
+  // ?rp6TravelReach: an Implode multiplies that offset by C (cullOffsetGain).
   const off = emitter.parentOffset?.position;
   if (off && typeof off.length === "function") {
-    radius += off.length();
+    const gain = travelOn && Number.isFinite(info?.cullOffsetGain) ? Math.max(1, info.cullOffsetGain) : 1;
+    radius += off.length() * gain;
   }
   if (trueSphere) radius += rp6SpriteReach(emitter);
   return radius;
@@ -1819,9 +1958,12 @@ export class ParticleManager {
       // for those pixels, which is most of the depth-write win
       // even on soft-edged sprites. Default `mat.blending` stays
       // at `THREE.NormalBlending` from the clone.
+      // ?particleAlphaRetail (default on): retail's state instead — see
+      // `particleAlphaRetailEnabled`.
+      const retail = particleAlphaRetailEnabled();
       mat.transparent = true;
-      mat.alphaTest = 0.1;
-      mat.depthWrite = true;
+      mat.alphaTest = retail ? PARTICLE_ALPHA_RETAIL_TEST : 0.1;
+      mat.depthWrite = !retail;
     }
     // Perf (2026-07-15) — THE second draw call per particle. three r184
     // submits a material TWICE, BackSide then FrontSide with a
@@ -2218,20 +2360,29 @@ export class ParticleManager {
         // children that pass `nodeInLandblock`, and a particle mesh carries
         // neither `landblockId` nor `coversLbKeys`, so it is always skipped.
         if (layer > 0) mesh.layers.set(layer);
+        // ?particleAlphaRetail (default on): an alpha slot mesh draws before
+        // the additive ones, as the alpha buckets do (see `_makeBucketIm`).
+        if (!baseIsAdditive && particleAlphaRetailEnabled()) mesh.renderOrder = PARTICLE_ALPHA_RETAIL_ORDER;
         return mesh;
       },
     });
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
     // ?rp6TrueSphere: one sprite's bounding radius (the shared GfxObj quad).
+    // ?rp6TravelReach: and its reach from the particle ORIGIN (an off-centre
+    // quad such as the streak/mist 0x0100141C, 0..2 m above its origin).
     try {
       if (geometry && !geometry.boundingSphere && typeof geometry.computeBoundingSphere === "function") {
         geometry.computeBoundingSphere();
       }
-      const gr = geometry?.boundingSphere?.radius;
+      const bs = geometry?.boundingSphere;
+      const gr = bs?.radius;
       emitter._gfxRadius = Number.isFinite(gr) ? gr : 0;
+      const gc = bs?.center ? bs.center.length() : 0;
+      emitter._gfxOriginRadius = Number.isFinite(gr) && Number.isFinite(gc) ? gr + gc : emitter._gfxRadius;
     } catch (_) {
       emitter._gfxRadius = 0;
+      emitter._gfxOriginRadius = 0;
     }
     // `?particleFx`: this emitter's profile row (synthesized `fxProfile` name,
     // else the retail 0x32 DID, else the neutral row 0). Resolved once.
@@ -2824,6 +2975,11 @@ export class ParticleManager {
       skyChain: emitter.skyGlow === true, particleFx: fxMat === true };
     // Same emission-time layer the singleton slot meshes get (meshFactory).
     if (layer > 0) im.layers.set(layer);
+    // ?particleAlphaRetail (default on): with no depth write the alpha buckets
+    // must draw BEFORE the additive ones (three sorts these identity-placed
+    // buckets by renderOrder, then creation id) — additive adds on top in any
+    // order, a later alpha bucket would paint over spray in front of it.
+    if (alpha && particleAlphaRetailEnabled()) im.renderOrder = PARTICLE_ALPHA_RETAIL_ORDER;
     im.setColorAt(0, _instColor.setRGB(1, 1, 1));
     return im;
   }

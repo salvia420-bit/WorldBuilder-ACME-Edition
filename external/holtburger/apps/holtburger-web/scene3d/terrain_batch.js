@@ -134,6 +134,19 @@ const ROUND_FETCH_ANCHOR =
   "  vec2 roundE = texelFetch(uVertexTypes, ivec2(9 + x, y), 0).rg * 2.0 - 1.0;";
 const ROUND_FETCH_BATCHED =
   "  vec2 roundE = texelFetch(uVertexTypes, ivec3(9 + x, y, int(vLbSlot + 0.5)), 0).rg * 2.0 - 1.0;";
+// 2026-10-19 — ?waterBank / ?waterFlow (scene3d/terrain_water_flow.js): the
+// swell weights are read in the VERTEX stage (its own sampler declaration and
+// fetch, slot from the aLbSlot attribute), the flow and whitewater in the
+// fragment stage. MUST equal the module's *_ANCHOR / *_BATCHED exports
+// (test_terrain_water_flow.mjs asserts it); inlined like the bevel's.
+const WATER_BANK_VDECL_ANCHOR = "uniform highp sampler2D uVertexTypes;";
+const WATER_BANK_VDECL_BATCHED = "uniform highp sampler2DArray uVertexTypes;";
+const WATER_BANK_FETCH_ANCHOR = "  return texelFetch(uVertexTypes, ivec2(27 + x, y), 0).r;";
+const WATER_BANK_FETCH_BATCHED = "  return texelFetch(uVertexTypes, ivec3(27 + x, y, int(aLbSlot + 0.5)), 0).r;";
+const WATER_FLOW_FETCH_ANCHOR = "  vec2 e = texelFetch(uVertexTypes, ivec2(18 + x, y), 0).rg;";
+const WATER_FLOW_FETCH_BATCHED = "  vec2 e = texelFetch(uVertexTypes, ivec3(18 + x, y, int(vLbSlot + 0.5)), 0).rg;";
+const WATER_FOAM_FETCH_ANCHOR = "  return texelFetch(uVertexTypes, ivec2(27 + x, y), 0).g;";
+const WATER_FOAM_FETCH_BATCHED = "  return texelFetch(uVertexTypes, ivec3(27 + x, y, int(vLbSlot + 0.5)), 0).g;";
 // 2026-10-07 — with the terrain shading bevel on (scene3d/terrain_round.js)
 // the per-LB vertex-types texture is 18 wide (columns 9..17 = retail normals).
 // The batch takes the layer width from the first texture it sees
@@ -226,6 +239,15 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
     "vertex placement",
   );
   if (v == null) return null;
+  // 3b. 2026-10-19 — ?waterBank: the vertex stage reads the swell weights off
+  //     the same per-LB vertex-types layer (scene3d/terrain_water_flow.js).
+  //     Conditional: an absent declaration is the bank being off, not drift.
+  if (v.includes(WATER_BANK_VDECL_ANCHOR)) {
+    v = _replaceOnce(v, WATER_BANK_VDECL_ANCHOR, WATER_BANK_VDECL_BATCHED, "vertex water bank decl");
+    if (v == null) return null;
+    v = _replaceOnce(v, WATER_BANK_FETCH_ANCHOR, WATER_BANK_FETCH_BATCHED, "vertex water bank fetch");
+    if (v == null) return null;
+  }
 
   // --- fragment stage ---
   let f = fragmentGlsl;
@@ -322,6 +344,14 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
     f = _replaceOnce(f, ROUND_FETCH_ANCHOR, ROUND_FETCH_BATCHED, "frag round bevel fetch");
     if (f == null) return null;
   }
+  // 10. 2026-10-19 — ?waterFlow: the flow + whitewater fetches read the same
+  //     layer. Present only when the flag is on, hence conditional.
+  if (f.includes(WATER_FLOW_FETCH_ANCHOR)) {
+    f = _replaceOnce(f, WATER_FLOW_FETCH_ANCHOR, WATER_FLOW_FETCH_BATCHED, "frag water flow fetch");
+    if (f == null) return null;
+    f = _replaceOnce(f, WATER_FOAM_FETCH_ANCHOR, WATER_FOAM_FETCH_BATCHED, "frag water foam fetch");
+    if (f == null) return null;
+  }
 
   return { vertexShader: v, fragmentShader: f };
 }
@@ -361,7 +391,8 @@ function _writeVtLayer(state, slot, vtTex, mergeValid, gouraudValid) {
   const b = mergeValid ? 255 : 0;
   const a = gouraudValid ? 255 : 0;
   // B/A of EVERY texel carry the two validity bits; the bevel's normal texels
-  // (columns 9..17) only use R/G, so this overwrite is harmless to them.
+  // (columns 9..17) and the water flow / swell-weight / whitewater texels
+  // (columns 18..35) only use R/G, so this overwrite is harmless to them.
   for (let i = 0; i < vtW * VT_H; i += 1) {
     dst[slot * stride + i * 4 + 2] = b;
     dst[slot * stride + i * 4 + 3] = a;
@@ -499,7 +530,11 @@ function _createState(scene3d, lbMesh, opts, extras) {
   if (!glsl) return null; // anchors drifted — warned already
 
   // 2026-10-07 — 9 (pre-wave) or 18 (terrain shading bevel); see VT_W note.
-  const vtW = lbMesh?.userData?.vertexTypesTexture?.image?.width === VT_W * 2 ? VT_W * 2 : VT_W;
+  // 2026-10-19 — or 36 (?waterFlow / ?waterBank, scene3d/terrain_water_flow.js).
+  // Any other width would make _writeVtLayer refuse EVERY LB — a silent fall
+  // back to per-LB draws — so it is matched explicitly.
+  const vtImgW = lbMesh?.userData?.vertexTypesTexture?.image?.width;
+  const vtW = vtImgW === VT_W * 2 || vtImgW === VT_W * 4 ? vtImgW : VT_W;
   const state = {
     bm: null,
     material: null,

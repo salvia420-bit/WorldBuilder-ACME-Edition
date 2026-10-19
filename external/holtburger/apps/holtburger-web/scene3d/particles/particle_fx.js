@@ -1353,12 +1353,35 @@ export function particleFxSeed(emitter, slot, lifetime) {
   return seeds[slot];
 }
 
+/** The teleport floor of `particleFxSlotVelocity` (m/s). */
+export const FX_TELEPORT_SPEED = 60;
+
+/**
+ * The squared speed above which a slot's finite difference reads as a teleport
+ * rather than motion: 60 m/s, or 1.25 × the emitter's own top speed when that
+ * is higher (`info.maxSpeed`, particle_emitter_info.js `particleTravelBound`).
+ * A waterfall's spray streaks (0x320004A3: B up to 28 m/s² for 3 s) pass 60 m/s
+ * after ~2 s of their life, so a flat 60 m/s floor zeroed and then halved their
+ * stretch every frame for the rest of it. Cached on the emitter.
+ */
+export function particleFxTeleportSpeedSq(emitter) {
+  if (!emitter) return FX_TELEPORT_SPEED * FX_TELEPORT_SPEED;
+  let l = emitter._fxVelLimSq;
+  if (l === undefined) {
+    const s = Number(emitter.info?.maxSpeed);
+    const v = Math.max(FX_TELEPORT_SPEED, Number.isFinite(s) ? 1.25 * s : 0);
+    l = emitter._fxVelLimSq = v * v;
+  }
+  return l;
+}
+
 /**
  * Tier 2 `?fxMotion`: a slot's velocity (`_scene`-local m/s) from its position
- * history, lightly smoothed. A changed seed (the slot respawned) or a jump over
- * 60 m/s (a respawn the seed missed, a teleport) restarts it at rest; a second
- * call in the same tick returns the last value. `e` = the slot mesh's local
- * matrix elements. Writes `out[0..2]`, returns `out`.
+ * history, lightly smoothed. A changed seed (the slot respawned) or a jump
+ * faster than the teleport speed (60 m/s, or 1.25 × the emitter's own top speed
+ * — `particleFxTeleportSpeedSq`; a respawn the seed missed, a teleport)
+ * restarts it at rest; a second call in the same tick returns the last value.
+ * `e` = the slot mesh's local matrix elements. Writes `out[0..2]`, returns `out`.
  */
 export function particleFxSlotVelocity(emitter, slot, e, seed, nowSec, out) {
   const n = emitter.parts ? emitter.parts.length : 0;
@@ -1379,7 +1402,7 @@ export function particleFxSlotVelocity(emitter, slot, e, seed, nowSec, out) {
     }
     if (dt < 0.5) {
       let rx = (x - c[o]) / dt, ry = (y - c[o + 1]) / dt, rz = (z - c[o + 2]) / dt;
-      if (rx * rx + ry * ry + rz * rz > 3600) { rx = 0; ry = 0; rz = 0; }
+      if (rx * rx + ry * ry + rz * rz > particleFxTeleportSpeedSq(emitter)) { rx = 0; ry = 0; rz = 0; }
       const px = c[o + 5], py = c[o + 6], pz = c[o + 7];
       if (Number.isFinite(px) && (px !== 0 || py !== 0 || pz !== 0)) {
         vx = 0.5 * (px + rx); vy = 0.5 * (py + ry); vz = 0.5 * (pz + rz);

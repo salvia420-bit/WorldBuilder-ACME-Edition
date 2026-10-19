@@ -510,6 +510,10 @@ const TIER5 = [
   { tier: 5, flag: "particle_clock", file: "test_particle_clock.mjs" },
   { tier: 5, flag: "particle_null_slot_stall", file: "test_particle_null_slot_stall.mjs" },
   { tier: 5, flag: "particle_rp6_cull_authority", file: "test_particle_rp6_cull_authority.mjs" },
+  // 2026-10-19 — waterfalls: ?rp6TravelReach (cull sphere = particle travel),
+  // ?rp6DegradeCap (draw to the authored 392 m), the stretch teleport speed,
+  // ?particleAlphaRetail states — real retail waterfall emitters.
+  { tier: 5, flag: "particle_waterfall_reach", file: "test_particle_waterfall_reach.mjs" },
   // 2026-10-08 PLIFECYCLE-2/-5: retail degrade freeze for RP6-culled emitters;
   // static default_script hooks fire at their start_time.
   { tier: 5, flag: "particleCullFreeze", file: "tests/particle_cull_freeze.test.mjs" },
@@ -584,6 +588,10 @@ const TIER5 = [
   { tier: 5, flag: "terrain_vfx_promotion", file: "test_terrain_vfx_promotion.mjs" },
   { tier: 5, flag: "terrain_volcano", file: "test_terrain_volcano.mjs" },
   { tier: 5, flag: "terrain_water", file: "test_terrain_water.mjs" },
+  // 2026-10-19 — water flows downstream (?waterFlow) + banked swell (?waterBank):
+  // real-DAT Marae Lassel dam decks, crack-free shores, the shipped flow table,
+  // the real batched derivation, flag variants.
+  { tier: 5, flag: "terrain_water_flow", file: "test_terrain_water_flow.mjs" },
   { tier: 5, flag: "tradeskill", file: "test_tradeskill.mjs" },
   { tier: 5, flag: "trail_map", file: "test_trail_map.mjs" },
   { tier: 5, flag: "trail_map_stamp_falloff", file: "test_trail_map_stamp_falloff.mjs" },
@@ -1309,6 +1317,7 @@ const NEEDS_BROWSER = [
   { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 

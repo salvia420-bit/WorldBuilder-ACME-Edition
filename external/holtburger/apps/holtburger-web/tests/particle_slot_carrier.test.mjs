@@ -273,9 +273,10 @@ console.log("-- S3 runtime toggle OFF / ON -------------------------------------
   check("OFF: additive branch — AdditiveBlending, depthWrite off, forceSinglePass, unfogged (retail)",
     addSlots.every((m) => m.material.blending === THREE.AdditiveBlending && m.material.depthWrite === false &&
       m.material.forceSinglePass === true && m.material.fog === false));
-  check("OFF: alpha branch — NormalBlending, alphaTest 0.1, depthWrite on, forceSinglePass",
-    alphaSlots.every((m) => m.material.blending === THREE.NormalBlending && m.material.alphaTest === 0.1 &&
-      m.material.depthWrite === true && m.material.forceSinglePass === true));
+  // 2026-10-19 — ?particleAlphaRetail (DEFAULT ON): retail blended alpha state.
+  check("OFF: alpha branch — NormalBlending, retail alpha state (alphaTest 1/255, depthWrite off), forceSinglePass",
+    alphaSlots.every((m) => m.material.blending === THREE.NormalBlending && m.material.alphaTest > 0 &&
+      m.material.alphaTest < 0.01 && m.material.depthWrite === false && m.material.forceSinglePass === true));
   check("OFF: live meshes rejoined the scene", liveBefore.length > 0 && liveBefore.every((m) => m.parent === group),
     `${liveBefore.length} live`);
   check("OFF: buckets dropped", mgr._instBuckets.size === 0);

@@ -157,6 +157,35 @@ import {
   writeTerrainRoundNormals,
   installTerrainRoundDiag,
 } from "./terrain_round.js";
+// 2026-10-19 — terrain water that flows downstream (owner: "a system which
+// understands which way the water needs to flow") and a swell that stays off
+// what retail built flush with the water (the Marae Lassel dams). Flow comes
+// from an offline bake (data/water_flow.bin); both ride columns 18..35 of
+// uVertexTypes — no new sampler. Rationale and data layout in the module
+// header. `?waterFlow=off&waterBank=off` compiles none of the module's code
+// (the sheen's ripple field is now a shared function either way; same maths).
+import {
+  WATER_FLOW,
+  waterTypesCols,
+  computeWaterBankWeights,
+  waterFlowTable,
+  waterFlowEntry,
+  writeWaterColumns,
+  loadWaterFlowTable,
+  waterFlowUniforms,
+  installWaterFlowDiag,
+  WATER_BANK_VERTEX_DECL_GLSL,
+  WATER_BANK_VERTEX_FN_GLSL,
+  WATER_BANK_VERTEX_APPLY_GLSL,
+  WATER_FLOW_FRAG_DECL_GLSL,
+  WATER_FLOW_FRAG_GLSL,
+  WATER_FLOW_MAIN_GLSL,
+  WATER_FLOW_MERGE_BASE_GLSL,
+  WATER_FLOW_MERGE_SLOT_GLSL,
+  WATER_FLOW_BILINEAR_TAPS_GLSL,
+  WATER_FOAM_APPLY_GLSL,
+  WATER_FLOW_RIPPLE_SLOPE_GLSL,
+} from "./terrain_water_flow.js";
 // 2026-10-07 — terrain rounding step 3: each attached LB publishes what it now
 // DRAWS (factor + the uploaded aRoundZ) so things standing on it are drawn on
 // the rounded surface (scene3d/visual_ground.js; `?terrainRoundObjects=off`).
@@ -214,7 +243,11 @@ const TERRAIN_FS_ON = TERRAIN_FAR_SIMPLIFY.on;
 // 18 wide (columns 9..17 carry the 81 retail normals) and the fragment shader
 // gains terrainRoundBevel(). Session-constant (module load).
 const TERRAIN_ROUND_BEVEL_ON = TERRAIN_ROUND.enabled && TERRAIN_ROUND.bevel;
-const VERTEX_TYPES_COLS = terrainRoundTypesCols();
+// 2026-10-19 — ?waterFlow / ?waterBank (scene3d/terrain_water_flow.js) widen
+// the same texture to 36 (columns 18..35 = flow, swell weight, whitewater).
+const WATER_FLOW_ON = WATER_FLOW.flow;
+const WATER_BANK_ON = WATER_FLOW.bank;
+const VERTEX_TYPES_COLS = waterTypesCols(terrainRoundTypesCols());
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -487,8 +520,8 @@ function _installPoolDispose(tex, freeList) {
  * G=roadCode*64, B=0, A=255) — the warm-path fill below mirrors it exactly so
  * a re-baked LB is byte-identical to a cold-baked one.
  */
-function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
-  if (VERTEX_TYPES_COLS !== 9) return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals);
+function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
+  if (VERTEX_TYPES_COLS !== 9) return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water);
   const tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
     // Cold miss — build via the shared adapter helper (correct dims, filters,
@@ -521,8 +554,11 @@ function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
  * reconstructs z). Widening an existing texture instead of adding one keeps
  * the terrain program inside the 1070's 16 fragment texture units. Same pool
  * discipline (one width per session, so pooled textures always fit).
+ * 2026-10-19 — with ?waterFlow / ?waterBank the texture is 36 wide: columns
+ * 18..35 carry this LB's flow, swell weights and whitewater (`water` =
+ * { entry, bank } from bakeTerrainForLandblock; scene3d/terrain_water_flow.js).
  */
-function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
+function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
   const cols = VERTEX_TYPES_COLS;
   let tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
@@ -546,6 +582,7 @@ function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
   }
   const f = roundNormals && roundNormals.factor ? roundNormals.factor : 0;
   writeTerrainRoundNormals(bytes, cols, roundNormals ? roundNormals.acLight : null, f * 8 + 1, f);
+  writeWaterColumns(bytes, cols, water ? water.entry : null, water ? water.bank : null);
   tex.userData.__parked = false; // checked out
   tex.needsUpdate = true;
   return tex;
@@ -1330,7 +1367,7 @@ uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
 uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of SWELL-eligible water codes (retail SurfChar set; the fragment stage uses the wider uWaterSurfaceCodeMask for the surface look)
 uniform int uLavaCodeMask;            // Phase 2.2 — bitmask of lava terrain codes (Region 0x13 = 0)
 uniform float uDisplacementEnabled;   // Phase 2.2 — 0.0 OFF / 1.0 ON (2026-07-31: plain ?waterWave=off escape; NO subdiv gate, the wave is lattice-locked and level-independent)
-uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin (lbX*192, lbY*192); ensures wave-phase continuity across LB seams
+uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin (lbX*192, lbY*192); ensures wave-phase continuity across LB seams${WATER_BANK_ON ? WATER_BANK_VERTEX_DECL_GLSL.replace(/\n$/, "") : ""}
 
 out vec2 vGridUv;
 out vec3 vWorldPos;  // Clouds-L: terrain world-space position for cloud-shadow projection
@@ -1431,7 +1468,7 @@ float waterSwellLattice(vec2 wxy) {
   float s01 = waterSwellAt(c0 + vec2(0.0, 24.0));
   float s11 = waterSwellAt(c0 + vec2(24.0, 24.0));
   return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
-}
+}${WATER_BANK_ON ? WATER_BANK_VERTEX_FN_GLSL.replace(/\n$/, "") : ""}
 
 // 2026-07-31 (water-fix) — same lattice lock for the (currently inactive)
 // lava branch, so a region-aware extension that populates uLavaCodeMask
@@ -1480,7 +1517,7 @@ void main() {
   if (uDisplacementEnabled > 0.5 && code >= 0 && code < 32) {
     int bit = 1 << code;
     if ((uWaterCodeMask & bit) != 0) {
-      appliedSwell = waterSwellLattice(worldXy);
+      appliedSwell = ${WATER_BANK_ON ? "0.0" : "waterSwellLattice(worldXy)"};
       displacedPos.z += appliedSwell;
       isWater = 1;
     } else if ((uLavaCodeMask & bit) != 0) {
@@ -1490,7 +1527,7 @@ void main() {
       appliedSwell = lavaSwellLattice(worldXy) * 0.4;
       displacedPos.z += appliedSwell;
     }
-  }
+  }${WATER_BANK_ON ? WATER_BANK_VERTEX_APPLY_GLSL.replace(/\n$/, "") : ""}
   vWaveModulation = vec2(waveModX, appliedSwell);
   vIsWater = isWater;
 
@@ -1551,7 +1588,7 @@ const TERRAIN_BILINEAR_TAPS_GLSL = `  // 2026-10-07 — atlas taps go through te
   vec3 c00 = terrainAtlasTex(clamp(t00, 0, 32), uv00).rgb;
   vec3 c10 = terrainAtlasTex(clamp(t10, 0, 32), uv10).rgb;
   vec3 c01 = terrainAtlasTex(clamp(t01, 0, 32), uv01).rgb;
-  vec3 c11 = terrainAtlasTex(clamp(t11, 0, 32), uv11).rgb;`;
+  vec3 c11 = terrainAtlasTex(clamp(t11, 0, 32), uv11).rgb;${WATER_FLOW_ON ? WATER_FLOW_BILINEAR_TAPS_GLSL : ""}`;
 function terrainBilinearBlendGlsl(out) {
   return `  vec3 ${out};
   if (uPaintMode > 0.5 && !allSameType) {
@@ -1677,7 +1714,7 @@ uniform float uIblEnabled;            // 0.0 OFF / 1.0 ON (default)
 uniform float uEnvIntensity;
 uniform float uWaterEnvEnabled;       // terrainplan s4 default tier: water sheen gate
 uniform float uWaterReflect;          // 2026-10-08 — sky reflection strength over water (?waterReflect, default 0.35)
-uniform vec2 uWaterSheenFade;         // 2026-10-15 — ripple + glint view-depth fade (?waterSheenFade=near,far, default 30,160)
+uniform vec2 uWaterSheenFade;         // 2026-10-15 — ripple + glint view-depth fade (?waterSheenFade=near,far, default 30,160)${WATER_FLOW_ON ? WATER_FLOW_FRAG_DECL_GLSL.replace(/\n$/, "") : ""}
 uniform float uSunGlint;              // 2026-10-08 — water sun-glint multiplier: 1 by day, 0 once the sky's sun is down (loop.js light tick)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
@@ -2394,6 +2431,22 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
 }
 ${terrainDetailFragGlsl().replace(/\n$/, "")}${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_FRAG_GLSL.replace(/\n$/, "") : ""}
 
+// 2026-10-08 — the water sheen's ripple field: two value-noise octaves (1.1 m
+// and 0.47 m) drifting different ways, sampled in the AC ground plane (east,
+// north); returns the surface slope. 2026-10-19 — a function so ?waterFlow can
+// evaluate it at two flow-advected positions (the sheen block in main()).
+vec2 waterRippleSlope(vec2 gp) {
+  vec2 wuv = gp * 0.9 + vec2(uTime * 0.35, uTime * 0.22);
+  vec2 wuv2 = gp * 2.13 + vec2(-uTime * 0.29, uTime * 0.41);
+  float wh0 = fragValueNoise2D(wuv);
+  float whx = fragValueNoise2D(wuv + vec2(0.35, 0.0));
+  float why = fragValueNoise2D(wuv + vec2(0.0, 0.35));
+  float vh0 = fragValueNoise2D(wuv2);
+  float vhx = fragValueNoise2D(wuv2 + vec2(0.35, 0.0));
+  float vhy = fragValueNoise2D(wuv2 + vec2(0.0, 0.35));
+  return (vec2(wh0 - whx, wh0 - why) + 0.5 * vec2(vh0 - vhx, vh0 - vhy)) * 0.5;
+}${WATER_FLOW_ON ? WATER_FLOW_FRAG_GLSL.replace(/\n$/, "") : ""}
+
 // Wave 2.A — sample the 32×1 terrain palette LUT at the given code.
 // Codes 0..31 clamp to the palette length; the 32-tile (road) layer
 // has no palette entry and falls through to (1,1,1) so road colour
@@ -2722,7 +2775,7 @@ void main() {
   vec2 waterCellUv = cellUv;
   if (uWaterScrollEnabled > 0.5) {
     waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
-  }
+  }${WATER_FLOW_ON ? WATER_FLOW_MAIN_GLSL : ""}
 
   // Per-corner cellUv: water-typed corners get the scrolled UV, others
   // stay on the static path. This keeps the blend across the water /
@@ -2839,7 +2892,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     // overlay flowing over a static land base at a blended cell border.
     vec3 merged = terrainAtlasTex(clamp(baseLayer, 0, 32),
       isWaterCode(baseLayer) ? waterCellUv : cellUv).rgb;
-    vec3 mergedMean = terrainTypeMean(baseLayer);${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
+    vec3 mergedMean = terrainTypeMean(baseLayer);${WATER_FLOW_ON ? WATER_FLOW_MERGE_BASE_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
     // R4.a 2026-05-28 — explicit all-road corner case. Per
     // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
     // texture_merge_info, an all-road cell is packed with base layer
@@ -2926,7 +2979,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         // the mask is the cell's authored coverage shape and must not drift,
         // only the water texels inside it do.
         vec3 overlayCol = terrainAtlasTex(clamp(layer, 0, 32),
-          isWaterCode(layer) ? waterCellUv : cellUv).rgb;${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
+          isWaterCode(layer) ? waterCellUv : cellUv).rgb;${WATER_FLOW_ON ? WATER_FLOW_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
         merged = mix(overlayCol, merged, baseW);
         mergedMean = mix(terrainTypeMean(layer), mergedMean, baseW);
       }
@@ -3019,7 +3072,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * vWaveModulation.x);
     result *= mix(vec3(1.0), tint, waterW);
-  }
+  }${WATER_FLOW_ON ? WATER_FOAM_APPLY_GLSL : ""}
 
   // T7 — terrain detail-diffuse modulation (near-camera, MODULATE2X).
   // Applied to the merged base colour BEFORE the road overlay (road art
@@ -3522,16 +3575,10 @@ ${TERRAIN_MICRO.gradUv
     vec3 wN = vec3(0.0, 0.0, 1.0);
     if (sheenFade > 0.001) {
       // AC ground-plane position (east, north) — the sand sparkle's frame.
+      // 2026-10-19 — ?waterFlow evaluates the ripples at both flow-advected
+      // positions, so they ride the current with the texture.
       vec2 gp = vec2(vWorldPos.x, -vWorldPos.z);
-      vec2 wuv = gp * 0.9 + vec2(uTime * 0.35, uTime * 0.22);
-      vec2 wuv2 = gp * 2.13 + vec2(-uTime * 0.29, uTime * 0.41);
-      float wh0 = fragValueNoise2D(wuv);
-      float whx = fragValueNoise2D(wuv + vec2(0.35, 0.0));
-      float why = fragValueNoise2D(wuv + vec2(0.0, 0.35));
-      float vh0 = fragValueNoise2D(wuv2);
-      float vhx = fragValueNoise2D(wuv2 + vec2(0.35, 0.0));
-      float vhy = fragValueNoise2D(wuv2 + vec2(0.0, 0.35));
-      vec2 slope = (vec2(wh0 - whx, wh0 - why) + 0.5 * vec2(vh0 - vhx, vh0 - vhy)) * 0.5;
+      vec2 slope = ${WATER_FLOW_ON ? WATER_FLOW_RIPPLE_SLOPE_GLSL : "waterRippleSlope(gp)"};
       // AC tangent frame (z-up). The slope is scaled by sheenFade so the
       // surface relaxes to flat with distance instead of shimmering.
       wN = normalize(vec3(slope * sheenFade, 1.0));
@@ -4314,6 +4361,7 @@ export async function resolveTerrainRingOpts(
   // shading bevel needs no subdivision at all.
   const roundMinLevel = canSubdivide ? terrainRoundMinLevel() : 1;
   if (TERRAIN_ROUND.enabled) installTerrainRoundDiag(scene3d);
+  if (WATER_FLOW_ON || WATER_BANK_ON) installWaterFlowDiag(scene3d);
   // 2026-10-07 — terrain fine detail live handle (window.__terrainMicro).
   installTerrainMicroDiag(scene3d);
   installTerrainFarSimplifyDiag(scene3d);
@@ -4543,6 +4591,17 @@ export async function resolveTerrainRingOpts(
   } catch (_) {
     // Already logged inside the loader; suppress to keep the boot path
     // resilient.
+  }
+
+  // 2026-10-19 — ?waterFlow: the offline flow table (data/water_flow.bin,
+  // ~210 KB, memoised session-wide) must be resident before the first LB
+  // writes its vertex-types texture. Fail-soft: null = still water everywhere.
+  if (WATER_FLOW_ON) {
+    try {
+      await loadWaterFlowTable();
+    } catch (_) {
+      // Already logged inside the loader.
+    }
   }
 
   // T1 (2026-05-29) — base terrain tex_tiling LUT (DEFAULT-ON, fail-soft).
@@ -6215,6 +6274,15 @@ export async function bakeTerrainForLandblock(
       TERRAIN_ROUND_BEVEL_ON
         ? { acLight: geom.getAttribute("acLightNormal")?.array ?? null, factor: effectiveSubdiv }
         : null,
+      // 2026-10-19 — columns 18..35: this LB's baked flow + whitewater
+      // (data/water_flow.bin, null when the LB has no moving water) and its
+      // banked-swell weights (scene3d/terrain_water_flow.js).
+      WATER_FLOW_ON || WATER_BANK_ON
+        ? {
+          entry: WATER_FLOW_ON ? waterFlowEntry(waterFlowTable(), (lbX << 8) | lbY) : null,
+          bank: computeWaterBankWeights(terrainCodesCopy, wasmMesh.heights, opts.waterCodeMask),
+        }
+        : null,
     );
 
     // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built
@@ -6635,6 +6703,11 @@ export async function bakeTerrainForLandblock(
       // the uniform set stays the pre-wave one. Cloned into the batch
       // material by terrain_batch._buildBatchMaterial like every uniform.
       ...terrainRoundUniforms(THREE.Vector2),
+      // 2026-10-19 — ?waterFlow tunables (scene3d/terrain_water_flow.js):
+      // uWaterFlow = (on, m/s at full scale, period, still-water eddy m/s),
+      // uWaterFoam = (whitewater strength, fast-water foam ramp). Live-tunable
+      // through window.__waterFlow.set(); cloned into the batch material.
+      ...waterFlowUniforms(THREE.Vector4),
       // 2026-10-07 — terrain fine detail (scene3d/terrain_micro.js): micro-
       // relief + height-blend tunables. Only the features whose GLSL is
       // compiled get entries; quality `low` holds both amounts at 0 unless

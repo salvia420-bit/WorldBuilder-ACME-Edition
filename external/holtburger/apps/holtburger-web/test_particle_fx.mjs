@@ -196,8 +196,10 @@ async function run() {
       add.material.userData.__particleFx === "add" && alp.material.userData.__particleFx === "alpha");
     check("6. additive bucket keeps additive blend / no depth write",
       add.material.blending === THREE.AdditiveBlending && add.material.depthWrite === false && add.material.transparent === true);
-    check("6. alpha bucket keeps normal blend / alphaTest 0.1 / depth write",
-      alp.material.blending === THREE.NormalBlending && alp.material.alphaTest === 0.1 && alp.material.depthWrite === true);
+    // 2026-10-19 — ?particleAlphaRetail (DEFAULT ON): retail blended alpha state.
+    check("6. alpha bucket keeps normal blend / retail alpha state (alphaTest 1/255, no depth write)",
+      alp.material.blending === THREE.NormalBlending && alp.material.alphaTest < 0.01 && alp.material.alphaTest > 0
+      && alp.material.depthWrite === false);
     const fireRow = prof.FX_DID_ROWS.get(fireDid >>> 0);
     const c = add.instanceColor.array;
     let goodRows = true, goodAge = true, goodOp = true;

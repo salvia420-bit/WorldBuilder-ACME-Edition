@@ -5142,8 +5142,11 @@ function _freezeStaticScriptAnchor(anchor) {
 // object-ring landblock keeps its emitters, as before). Static default_script
 // EMITTERS only exist for landblocks within N (Chebyshev) of the player's; the
 // anchors stay (frozen, above). RP6 never draws a static emitter past
-// `_RP6.maxDistance` = 220 m, and every point within 220 m of the player lies in
-// a landblock at distance <= 2, so N = 2 drops nothing that could be drawn. The
+// `_RP6.maxDistance` = 220 m — or, under `?rp6DegradeCap` (2026-10-19), past its
+// own authored degrade distance, at most 392 m for a static script emitter (the
+// waterfalls) — and every point within 384 m of the player lies in a landblock
+// at distance <= 2, so N = 2 drops nothing short of 384 m that could be drawn
+// (N = 3 measured +4,039 scripted drizzle anchors round Linvak; not worth it). The
 // rest of the 9x9 ring (79 landblocks at Linvak) only cost per-frame cull and
 // bookkeeping. Hysteresis like ?objRadius: attach and rebuild at d <= N, tear
 // down at d > N + 1. The teardown removes only the default_script

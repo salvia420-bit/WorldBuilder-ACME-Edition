@@ -737,6 +737,15 @@ function ensureBakeRig(scene3d) {
   // to the far shader.)
   if (mat.uniforms.uMudWetEnabled) mat.uniforms.uMudWetEnabled.value = 0.0;
   if (mat.uniforms.uMudWetness) mat.uniforms.uMudWetness.value = 0.0;
+  // 2026-10-19 — ?waterFlow / ?waterBank (scene3d/terrain_water_flow.js) read
+  // columns 18..35 of uVertexTypes; this rig binds its own 9-wide scratch
+  // texture, so both must stay off here. Neither belongs in a frozen albedo
+  // anyway: the flow map and whitewater animate, and the swell only moves the
+  // geometry vertically under a top-down ortho camera. uWaterScrollEnabled is
+  // left alone (the frozen blue tint keeps the near/far colour match).
+  if (mat.uniforms.uWaterFlow && mat.uniforms.uWaterFlow.value) mat.uniforms.uWaterFlow.value.x = 0.0;
+  if (mat.uniforms.uWaterFoam && mat.uniforms.uWaterFoam.value) mat.uniforms.uWaterFoam.value.x = 0.0;
+  if (mat.uniforms.uDisplacementEnabled) mat.uniforms.uDisplacementEnabled.value = 0.0;
   mat.fog = false;          // fog is applied live by the far shader
   mat.side = THREE.FrontSide;
 

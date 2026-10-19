@@ -6,7 +6,10 @@
 //   node test_particle_inst_alpha.mjs
 
 import * as THREE from "three";
-import { _configureAlphaBucketMaterial, _sortBucketBackToFront } from "./scene3d/particles/particle_manager.js";
+import {
+  _configureAlphaBucketMaterial, _sortBucketBackToFront,
+  particleAlphaRetailEnabled, setParticleAlphaRetailFlag, PARTICLE_ALPHA_RETAIL_TEST,
+} from "./scene3d/particles/particle_manager.js";
 
 let failed = 0, passed = 0;
 function check(name, ok, detail) {
@@ -19,7 +22,14 @@ console.log("PART 1 — the alpha bucket material");
   const base = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.37, alphaTest: 0.1 });
   const m = _configureAlphaBucketMaterial(base.clone());
   check("NormalBlending, transparent", m.blending === THREE.NormalBlending && m.transparent === true);
-  check("same alphaTest / depthWrite as the per-mesh alpha branch", m.alphaTest === 0.1 && m.depthWrite === true);
+  // 2026-10-19 — ?particleAlphaRetail (DEFAULT ON): retail blended alpha state,
+  // the same one the per-mesh alpha branch takes; `=off` = the old 0.1 + depth write.
+  check("default: retail alpha state (alphaTest 1/255, no depth write), same as the per-mesh alpha branch",
+    particleAlphaRetailEnabled() === true && m.alphaTest === PARTICLE_ALPHA_RETAIL_TEST && m.depthWrite === false);
+  setParticleAlphaRetailFlag(false);
+  const legacy = _configureAlphaBucketMaterial(base.clone());
+  check("?particleAlphaRetail=off: alphaTest 0.1 + depth write", legacy.alphaTest === 0.1 && legacy.depthWrite === true);
+  setParticleAlphaRetailFlag(null);
   check("opacity is carried per instance, not on the material", m.opacity === 1);
   check("vertexColors so instanceColor reaches the fragment", m.vertexColors === true);
   check("ONE constant program key for every alpha bucket", m.customProgramCacheKey() === "hbParticleInstAlpha"
