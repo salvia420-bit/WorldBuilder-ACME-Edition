@@ -574,10 +574,10 @@ console.log("-- Z10 source wiring ----------------------------------------------
   const idx = src("scene3d/index.js");
   check("index.js: probe unless ?reversedZ=off, renderer params from depthRendererParams",
     /if \(reversedZRequested\(\)\) \{\s*_depthMode = resolveDepthMode\(\{\s*requested: true,\s*clipControl: probeClipControl\(canvas, threeContextAttributes/.test(idx) &&
-    /let renderer = new THREE\.WebGLRenderer\(\{\s*canvas,\s*antialias: !!quality\.flags\.antialias && \(wireframeMode \|\| _canvasMsaa\),\s*\.\.\.depthRendererParams\(_depthMode\.mode\),\s*\}\);/.test(idx) &&
+    /let renderer = new THREE\.WebGLRenderer\(\{\s*canvas,\s*antialias: !!quality\.flags\.antialias && \(wireframeMode \|\| _canvasMsaa\),\s*depth: _canvasDepth\.depth,\s*\.\.\.depthRendererParams\(_depthMode\.mode\),\s*\}\);/.test(idx) &&
     !/logarithmicDepthBuffer: true,/.test(idx.slice(idx.indexOf("installRadialFog(THREE);"), idx.indexOf("Goal-1 (2026-06-22)"))));
   check("index.js: installReversedZ right after construction, log rebuild if three did not arm it, one console line per outcome",
-    /const _rz = installReversedZ\(THREE, renderer\);/.test(idx) && /renderer\.dispose\(\);[\s\S]{0,200}depthRendererParams\("log"\)/.test(idx) &&
+    /const _rz = installReversedZ\(THREE, renderer\);/.test(idx) && /renderer\.dispose\(\);[\s\S]{0,260}depthRendererParams\("log"\)/.test(idx) &&
     /if \(!_depthMode\.reversed && reversedZExplicit\(\)\) \{\s*\/\/[^\n]*\n\s*console\.warn\(`\[reversedZ\] \?reversedZ=on but/.test(idx) &&
     /\} else if \(!_depthMode\.reversed\) \{\s*\/\/[^\n]*\n\s*console\.info\(`\[reversedZ\] /.test(idx) &&
     /console\.log\(`\[reversedZ\] on/.test(idx) && /window\.__depthMode = Object\.freeze/.test(idx));

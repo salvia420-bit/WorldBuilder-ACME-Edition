@@ -91,15 +91,15 @@ export function installSkipHiddenMatrix(THREE, { force = false } = {}) {
 // WALK CENSUS (fps review 2026-10-19) — what the scene walk spends its visits
 // on, so the "freeze the static containers" idea is decided by a number. The
 // Scene, worldRoot and the five world groups compose every frame, which sets
-// `force` for every node below them; a root freeze would only save the
+// `force` for every node below them; a root freeze can only save the
 // `forcedOnly` multiplies (a node that neither composes nor was flagged, i.e.
-// recomputed purely because an ancestor forced it). It is NOT shipped because
-// it is not exact: manual-matrix nodes that never flag themselves get their
-// world matrix ONLY from that cascade (fx_ribbons / fx_showcase meshes under
-// frozen script anchors would stay at identity), and every `matrixAutoUpdate`
-// node — the animated rigs — composes and forces its own subtree anyway.
-// Armed only for the census window (the counting wrapper is installed and
-// removed around it), so it costs nothing otherwise.
+// recomputed purely because an ancestor forced it) — every `matrixAutoUpdate`
+// node, the animated rigs, composes and forces its own subtree anyway. That
+// freeze is the opt-in `?freezeWorldRoots` (freeze_world_roots.js), which also
+// flags every add()ed child: a node parented without a flag of its own (the
+// animated-scenery InstancedMesh at identity) gets its world matrix ONLY from
+// the cascade. Armed only for the census window (the counting wrapper is
+// installed and removed around it), so it costs nothing otherwise.
 // ---------------------------------------------------------------------------
 let _walkHooks = null;
 const _census = { walks: 0, visited: 0, hidden: 0, composed: 0, multiplied: 0, forcedOnly: 0, frozen: 0 };

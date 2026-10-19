@@ -357,7 +357,10 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-19 (fps review, docs/2026-10-19-fps-review.md): + scene3d/batched_runs.js,
   // scene3d/cloud_res_scale.js (index.js), + scene3d/terrain_water_flow.js (added by the
   // d817f9c3 water commit without a regen) (generator --check: up to date, 437 modules) → 416.
-  const NON_APP_PRELOADS = 416;
+  // 2026-10-19 (fps review, second pass — the three A/B arms): + scene3d/canvas_depth.js,
+  // scene3d/depth_band_sort.js, scene3d/freeze_world_roots.js (index.js) (generator --check:
+  // up to date, 440 modules) → 419.
+  const NON_APP_PRELOADS = 419;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

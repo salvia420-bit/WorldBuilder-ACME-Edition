@@ -95,6 +95,7 @@
 // the login entry included.
 
 import * as THREE from "three";
+import { screenTarget, presentScreenTarget } from "./canvas_depth.js";
 import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
 import { withLogDepth } from "./shader_logdepth.js";
 import { playUiSound, rollProbability, retailVolume } from "./audio/retail_sound_rules.js";
@@ -926,17 +927,19 @@ async function ensureTunnel(scene3d) {
 
 // ── ?portalSpacePrecompile ─────────────────────────────────────────────
 // renderer.compile with the canvas bound (the tunnel and the overlay draw to
-// it), returning every program the compiled materials own — not just
-// currentProgram: three compiles a transparent DoubleSide material as a Back
-// and a Front program. Must run outside render() (compile resets three's
-// render state); ensureTunnel's continuation is.
+// it; under ?canvasDepth=off the tunnel draws to canvas_depth.js's offscreen
+// stand-in, whose program variant differs), returning every program the
+// compiled materials own — not just currentProgram: three compiles a
+// transparent DoubleSide material as a Back and a Front program. Must run
+// outside render() (compile resets three's render state); ensureTunnel's
+// continuation is.
 function _compileForCanvas(renderer, scene, cam) {
   const out = [];
   if (!renderer || typeof renderer.compile !== "function" || !scene || !cam) return out;
   const prev = typeof renderer.getRenderTarget === "function" ? renderer.getRenderTarget() : null;
   let mats = null;
   try {
-    if (typeof renderer.setRenderTarget === "function") renderer.setRenderTarget(null);
+    if (typeof renderer.setRenderTarget === "function") renderer.setRenderTarget(scene === _tunnelScene ? screenTarget(renderer) : null);
     mats = renderer.compile(scene, cam);
   } catch (e) {
     console.warn("[portalSpace] precompile failed (links at first draw):", e);
@@ -1742,8 +1745,11 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
   const prevColor = new THREE.Color();
   renderer.getClearColor?.(prevColor);
   const prevAlpha = renderer.getClearAlpha?.() ?? 1;
+  // ?canvasDepth=off: no canvas depth buffer — draw into the offscreen stand-in
+  // and present it (canvas_depth.js); null (the canvas) otherwise.
+  const target = screenTarget(renderer);
   try {
-    renderer.setRenderTarget(null);
+    renderer.setRenderTarget(target);
     renderer.setClearColor(0x000000, 1);
     renderer.clear(true, true, true);
     // ?portalSpacePrecompile: black until the tunnel's programs have linked.
@@ -1772,6 +1778,7 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
       renderer.autoClear = false;
       renderer.render(_tunnelScene, cam);
     }
+    if (target) presentScreenTarget(renderer, target);
     return true;
   } catch (e) {
     console.warn("[portalSpace] tunnel render failed:", e);

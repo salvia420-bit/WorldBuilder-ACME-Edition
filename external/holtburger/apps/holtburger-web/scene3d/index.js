@@ -192,6 +192,9 @@ import { installShadowCasterList } from "./shadow_caster_list.js";
 import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
 import { installBatchedRunsChunks, installBatchedRuns, batchedRunsFrameTotals } from "./batched_runs.js";
 import { parseCloudResScale, applyCloudResScale } from "./cloud_res_scale.js";
+import { installDepthBandSort } from "./depth_band_sort.js";
+import { freezeWorldRoots, installFreezeWorldRootsSeam } from "./freeze_world_roots.js";
+import { resolveCanvasDepth, installCanvasDepthSeam, screenTarget, presentScreenTarget } from "./canvas_depth.js";
 import { installUniformBindPatch, uniformBindPatchTick, installLightUboChunks } from "./uniform_bind_patch.js";
 import { syncBatchMatVariants, batchMatVariantStats } from "./batched_material_variant.js";
 import {
@@ -1227,11 +1230,21 @@ export async function preInit3D(canvas) {
   // `=off`: no probe, the pre-flip renderer parameters exactly.
   // See shader_logdepth.js "REVERSED-Z" for what three does and what we fix.
   const _rendererAntialias = !!quality.flags.antialias && (wireframeMode || _canvasMsaa);
+  // ?canvasDepth (fps review 2026-10-19, DEFAULT ON = three's default canvas
+  // depth buffer; `=off` drops it, pmndrs' recommended setting: the composer's
+  // targets carry their own depth and the canvas only receives fullscreen
+  // quads). Without it the direct path and the portal tunnel draw through
+  // canvas_depth.js screenTarget(). Refused under ?wireframe=1 / ?canvasMsaa=on.
+  const _canvasDepth = resolveCanvasDepth({
+    search: globalThis.location?.search || "",
+    wireframe: wireframeMode,
+    canvasMsaa: _canvasMsaa,
+  });
   let _depthMode = resolveDepthMode({ requested: false });
   if (reversedZRequested()) {
     _depthMode = resolveDepthMode({
       requested: true,
-      clipControl: probeClipControl(canvas, threeContextAttributes({ antialias: _rendererAntialias })),
+      clipControl: probeClipControl(canvas, threeContextAttributes({ antialias: _rendererAntialias, depth: _canvasDepth.depth })),
     });
     if (!_depthMode.reversed && reversedZExplicit()) {
       // eslint-disable-next-line no-console
@@ -1244,6 +1257,7 @@ export async function preInit3D(canvas) {
   let renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: !!quality.flags.antialias && (wireframeMode || _canvasMsaa),
+    depth: _canvasDepth.depth,
     ...depthRendererParams(_depthMode.mode),
   });
   let _rzFixes = null;
@@ -1260,6 +1274,7 @@ export async function preInit3D(canvas) {
       renderer = new THREE.WebGLRenderer({
         canvas,
         antialias: _rendererAntialias,
+        depth: _canvasDepth.depth,
         ...depthRendererParams("log"),
       });
     } else {
@@ -1267,6 +1282,13 @@ export async function preInit3D(canvas) {
       console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix}, baseCameraFix=${_rz.baseCameraFix})`, _rz.notes.length ? _rz.notes : "");
     }
   }
+  if (_canvasDepth.requestedOff) {
+    // eslint-disable-next-line no-console
+    console.info(_canvasDepth.depth
+      ? `[canvasDepth] ?canvasDepth=off ${_canvasDepth.reason} — keeping the canvas depth buffer`
+      : "[canvasDepth] off — no canvas depth buffer; direct-path and portal-tunnel frames draw through an offscreen target");
+  }
+  installCanvasDepthSeam(renderer, _canvasDepth);
   try {
     if (typeof window !== "undefined") {
       window.__depthMode = Object.freeze({
@@ -1357,6 +1379,11 @@ export async function preInit3D(canvas) {
     // Perf T10 — program-grouped opaque sort (`?drawSortProgram=on`) and the
     // `window.__drawSort` live A/B seam (always installed; sort off by default).
     installDrawSortProgram(renderer);
+    // ?depthBandSort (fps review 2026-10-19, DEFAULT OFF): a coarse depth band
+    // ahead of the program key, nearer first, under reversed-Z only. Always
+    // installed (inert at 0 bands) so `window.__depthBandSort.set(n)` can A/B it
+    // live; see depth_band_sort.js.
+    installDepthBandSort(renderer);
     if (SHADER_PREWARM_ON) {
       // eslint-disable-next-line no-console
       console.log(
@@ -1713,6 +1740,14 @@ export async function preInit3D(canvas) {
   const cellsGroup = new THREE.Group(); cellsGroup.name = "cells";
   const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
+  // ?freezeWorldRoots (fps review 2026-10-19, DEFAULT OFF): these seven never
+  // move, so armed they compose once and stop forcing their subtrees through
+  // every frame's matrix walk (freeze_world_roots.js). The verify seam is
+  // installed either way: `await __freezeWorldRoots.verify()`.
+  try {
+    freezeWorldRoots(THREE, [scene, worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup]);
+    installFreezeWorldRootsSeam(renderer, scene);
+  } catch (_) { /* never break boot */ }
   // ?punchRetail (2026-10-05) draw-order phase tags, read by the opaque sort in
   // atmosphere_pipeline.js (nearest tag up the parent chain wins). ONLY the
   // terrain surface draws before the doorway punch (phase 0) — it is the one
@@ -3057,6 +3092,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       scheduleNext();
       return;
     }
+    // ?canvasDepth=off: the canvas has no depth buffer, so this path draws into
+    // canvas_depth.js's offscreen stand-in (null — the canvas — otherwise) and
+    // presents it before the portal fade below. The two seal calls that drew to
+    // the canvas (`null`) take `directTarget` instead.
+    const directTarget = screenTarget(renderer);
+    if (directTarget) renderer.setRenderTarget(directTarget);
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
@@ -3135,7 +3176,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           const sealPassPre = liveScene3dRef?._directPortalSealPass;
           if (sealPassPre && sealPassPre.wantsRemainder) {
             try {
-              sealPassPre.drawOutdoorRemainder(renderer, activeCam, null);
+              sealPassPre.drawOutdoorRemainder(renderer, activeCam, directTarget);
             } catch (e) {
               sealPassPre._errored = true;
             }
@@ -3165,7 +3206,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         const sealPass = liveScene3dRef?._directPortalSealPass;
         if (sealPass && !sealPass._errored && sealPass.hasApertures) {
           sealPass.camera = activeCam;
-          sealPass.render(renderer, null);
+          sealPass.render(renderer, directTarget);
         }
         // (3) the room shell + props + EnvCells + entities, fresh depth.
         //
@@ -3198,6 +3239,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // color + depth from the clear color in a single shared-depth pass.
         renderer.render(scene, activeCam);
       }
+      if (directTarget) presentScreenTarget(renderer, directTarget);
       // WORLD_FADEIN: one black reveal frame under the default ?portalFovFade
       // zoom (DEFAULT ON 2026-10-19), the black fade with ?portalFovFade=off;
       // a no-op otherwise.
@@ -3213,6 +3255,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
     } finally {
       renderer.autoClear = prevAutoClear;
+      if (directTarget && renderer.getRenderTarget() === directTarget) renderer.setRenderTarget(null);
       // Restore the camera's layer mask so downstream consumers
       // (raycasters, CSM matrices) observe the outdoor-equivalent state.
       activeCam.layers.mask = camLayersBefore;

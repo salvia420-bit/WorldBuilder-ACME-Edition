@@ -28,6 +28,11 @@
 // Cost: the program id is read through `renderer.properties` (a WeakMap) at most
 // once per material per render() call — memoized on the material itself with a
 // frame stamp — not twice per comparison. An uncompiled material sorts last within its renderOrder.
+//
+// `?depthBandSort` (2026-10-19, default off) adds a second key ahead of the
+// program: the item's coarse depth band (depth_band_sort.js), nearer first.
+
+import { depthBandsLive } from "./depth_band_sort.js";
 
 let _flag;
 /** The program-grouped opaque sort. DEFAULT-ON (2026-10-05); only an explicit
@@ -82,6 +87,7 @@ export function makeProgramSort(renderer, phaseOf = null) {
     }
     if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
     if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
+    if (depthBandsLive && a.__hbBand !== b.__hbBand) return a.__hbBand - b.__hbBand;
     if (a.material.id !== b.material.id) {
       const pa = programKey(a.material), pb = programKey(b.material);
       if (pa !== pb) return pa - pb;

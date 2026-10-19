@@ -684,6 +684,12 @@ const TIER5 = [
   // 2026-10-19 fps review: the scene-walk census (__skipHiddenMatrix.census) — what a static
   // container freeze could save (`forcedOnly`) before anyone builds one.
   { tier: 5, flag: "matrix_walk_census", file: "tests/matrix_walk_census.test.mjs" },
+  // 2026-10-19 fps review, the three A/B arms (all default off): the frozen world containers
+  // (exact vs three's cascade), a depth band ahead of the program key in the opaque sort, and
+  // a canvas without a depth buffer (direct path + portal tunnel through an offscreen target).
+  { tier: 5, flag: "freezeWorldRoots", file: "tests/freeze_world_roots.test.mjs" },
+  { tier: 5, flag: "depthBandSort", file: "tests/depth_band_sort.test.mjs" },
+  { tier: 5, flag: "canvasDepth", file: "tests/canvas_depth.test.mjs" },
   { tier: 5, flag: "static_atlas_growth", file: "test_static_atlas_growth.mjs" },
   { tier: 5, flag: "static_atlas_pages", file: "test_static_atlas_pages.mjs" },
   { tier: 5, flag: "static_geom_cache", file: "test_static_geom_cache.mjs" },
@@ -1333,6 +1339,7 @@ const NEEDS_BROWSER = [
   { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/batched_runs_smoke.mjs", why: `batchedRuns — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/fps_arms_smoke.mjs", why: `canvasDepth / depthBandSort / freezeWorldRoots — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },
 ];

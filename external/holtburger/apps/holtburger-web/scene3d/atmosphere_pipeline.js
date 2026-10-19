@@ -58,6 +58,7 @@ import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atm
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
 import { PortalStencilPass } from "./portal_stencil.js";
 import { setDrawSortPhase } from "./draw_sort_program.js";
+import { depthBandsLive } from "./depth_band_sort.js";
 import {
   PortalPunchPass,
   SealRemainderPass,
@@ -820,13 +821,15 @@ export function __phaseOfForTest(obj, terrainLast) {
   try { return _phaseOf(obj); } finally { _terrainLastNow = prev; }
 }
 
-// three r184 `painterSortStable`, with the punch phase as the primary key.
+// three r184 `painterSortStable`, with the punch phase as the primary key (and,
+// under `?depthBandSort`, the depth band after renderOrder — depth_band_sort.js).
 function punchPhaseOpaqueSort(a, b) {
   const pa = _phaseOf(a.object);
   const pb = _phaseOf(b.object);
   if (pa !== pb) return pa - pb;
   if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
   if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
+  if (depthBandsLive && a.__hbBand !== b.__hbBand) return a.__hbBand - b.__hbBand;
   if (a.material.id !== b.material.id) return a.material.id - b.material.id;
   if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
   if (a.z !== b.z) return a.z - b.z;

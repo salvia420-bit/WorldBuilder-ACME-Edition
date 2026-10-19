@@ -250,12 +250,13 @@ export function reversedZExplicit(search) {
  * constructor: `alpha: true` always; the rest from its defaults). The probe asks
  * for exactly these, so the context it creates IS the context three's own
  * `canvas.getContext("webgl2", …)` returns (the first request on a canvas fixes
- * the attributes; later ones get the same object back).
+ * the attributes; later ones get the same object back). `depth` follows the
+ * renderer's own `depth` parameter (`?canvasDepth=off`, canvas_depth.js).
  */
-export function threeContextAttributes({ antialias = false } = {}) {
+export function threeContextAttributes({ antialias = false, depth = true } = {}) {
   return {
     alpha: true,
-    depth: true,
+    depth: depth !== false,
     stencil: false,
     antialias: !!antialias,
     premultipliedAlpha: true,

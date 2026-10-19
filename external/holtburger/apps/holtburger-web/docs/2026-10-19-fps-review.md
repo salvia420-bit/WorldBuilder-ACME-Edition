@@ -50,20 +50,32 @@ measure is near saturation too:
 | Minimap writes marker styles only on change; radar repaints only on change (`__radar.paintStats()`) | — (HUD fixes apply direct) | — | `tests/hud_map_marks.test.mjs`, `tests/hud_radar_paint.test.mjs` |
 | Scene-walk census `await __skipHiddenMatrix.census(120)` | — | — | `tests/matrix_walk_census.test.mjs` |
 | Bench: `hbbench.mjs --uncapped` (launchers add `--disable-frame-rate-limit --disable-gpu-vsync` via `D:\Temp\hbbench\uncapped.txt` — deploy `box/*.bat`) and `scripts/perf-worker/gpu_thread_split.py` (CrGpuMain WebGL / raster / present per frame) | — | — | validated on the 2026-10-06 trace |
+| Scene, worldRoot and the five world groups frozen; `add()` flags the child so the freeze stays exact | `?freezeWorldRoots=on` | off (A/B arm) | `tests/freeze_world_roots.test.mjs`, GPU smoke `harness/glsl_smoke/fps_arms_smoke.mjs` |
+| A coarse depth band ahead of the program key in the opaque sort, near first (reversed-Z only) | `?depthBandSort=on` / `=N`, live `__depthBandSort.set(n)` | off (A/B arm) | `tests/depth_band_sort.test.mjs`, same smoke |
+| No canvas depth buffer (pmndrs' setting); the direct path and the portal tunnel draw through an offscreen target | `?canvasDepth=off` | on = depth kept (A/B arm) | `tests/canvas_depth.test.mjs`, same smoke |
 
-## Declined, with the reason
+## Built as A/B arms, not defaults
 
-- **Freezing Scene / worldRoot / the five world groups** (stop the root's per-frame `force` cascade).
-  Not exact: manual-matrix FX meshes under frozen script anchors (fx_ribbons, fx_showcase) get their
-  world matrix only from that cascade and would stay at identity. And it saves little: every
-  `matrixAutoUpdate` node (the animated rigs) composes and forces its own subtree anyway, and the frozen
-  cell / anchor subtrees already skip their multiplies. The census (`forcedOnly`) gives the number
-  that would have to be large to reopen it.
-- **A front-to-back depth band ahead of the program key in the opaque sort.** Trades program switches
-  (CPU) for early-Z (GPU) with neither side measured; terrain-last takes the largest case (the terrain
-  under everything) at zero CPU cost.
-- **`depth: false` on the canvas** (pmndrs' recommended renderer settings): the direct render path
-  (the pre-bake window, `?wireframe=1`, `?atmosphere=off`) draws the world to the canvas and needs it.
+The first pass declined these three. They are built now (second pass, same day), each behind a flag
+that leaves the bare default untouched, because none has a measured win yet:
+
+- **Freezing Scene / worldRoot / the five world groups** (`?freezeWorldRoots=on`). The first pass's
+  objection named the wrong nodes: fx_ribbons / fx_showcase hang off the Scene at identity and never
+  needed the cascade. The real dependents are nodes parented under the frozen chain with no flag of
+  their own — the animated-scenery InstancedMesh (`matrixAutoUpdate = false`, identity, under
+  staticsGroup) would keep an identity world matrix and lose worldRoot's axis flip. The arm therefore
+  also wraps `Object3D.prototype.add` to flag the child. The audit of scene3d found every manual
+  `.matrix` writer calls `updateMatrix()`, flags, writes its own matrixWorld, or lives in its own
+  scene. Exactness is tested frame by frame against three's cascade (bit-identical), with a negative
+  control, and checkable live with `await __freezeWorldRoots.verify()`. The saving is small where it
+  was counted: 41 forced-only multiplies of 1,151 visits a frame at the laptop spawn.
+- **A depth band ahead of the program key in the opaque sort** (`?depthBandSort=on`, or `=N` bands
+  per octave). It still trades program switches (renderer main thread and CrGpuMain) for overdraw
+  (GPU), with neither side measured; `__depthBandSort.set(n)` makes it a no-reload A/B.
+- **`depth: false` on the canvas** (`?canvasDepth=off`, pmndrs' recommended setting). The direct path
+  (the ~8 s bake window, the pipeline-failure fallback) and the portal tunnel draw 3D to the canvas,
+  so under the flag they draw into an offscreen target with depth and present it. `?wireframe=1` and
+  `?canvasMsaa=on` refuse the flag. Expected gain: the canvas depth allocation and its clear.
 
 ## Owed on the 1070 (one session, MODE T, fresh profile per arm)
 
@@ -76,10 +88,17 @@ Town at ultra (Holtburg / Linvak Tukal), `hbbench.mjs --uncapped` so fps is cont
 4. `&orbAnimSync=off` — CrGpuMain raster ms/frame
 5. `&cloudResScale=0.5` and `&cloudShadowRes=256` — clouds+AP GPU ms
 6. `await __skipHiddenMatrix.census(120)` in arm 1 — `forcedOnly` vs `composed`
+7. `&freezeWorldRoots=on` — the census again (`forcedOnly` → ~0), renderCPU, and
+   `await __freezeWorldRoots.verify()` (must report 0 mismatches)
+8. `&depthBandSort=on` (or `__depthBandSort.set(1)` / `.set(0)` live) — `await __drawSort.probe(240)`
+   switches per frame vs world-pass GPU ms
+9. `&canvasDepth=off` — frame time and GPU memory; eye check the login/teleport tunnel and the first
+   seconds in world
 
 Eye checks owed by the flips: `reversedZ` (distant z-fighting, sky/cloud brightness, doorway punch,
 decals, soft particles), `terrainLast` (no change expected; town with and without a door in view),
-`batchedRuns` (static scenery identical to `=off`), `orbAnimSync` (orbs look the same).
+`batchedRuns` (static scenery identical to `=off`), `orbAnimSync` (orbs look the same). The three
+arms above change no default, so they owe numbers, not eye checks — except `canvasDepth=off`'s tunnel.
 
 Laptop check so far (SwiftShader, rendering on): the bare URL reaches the world with 0 console errors
 and reversed depth active. At the spawn point no opted-in bucket drew more than one range, so the run

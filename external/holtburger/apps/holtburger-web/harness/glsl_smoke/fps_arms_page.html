@@ -1,0 +1,147 @@
+<!doctype html><html><body>
+<canvas id="cd" width="64" height="64"></canvas><canvas id="cb" width="64" height="64"></canvas>
+<canvas id="cf" width="64" height="64"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// harness/glsl_smoke/fps_arms_page.html — driven by fps_arms_smoke.mjs. The three
+// 2026-10-19 A/B arms against three r184's real renderer, read from this page's
+// URL like the app reads them: ?canvasDepth=off, ?depthBandSort=on,
+// ?freezeWorldRoots=on. Each section returns a frame the runner compares with
+// the all-defaults load.
+import * as THREE from "three";
+import * as Z from "/app/scene3d/shader_logdepth.js";
+import { resolveCanvasDepth, screenTarget, presentScreenTarget } from "/app/scene3d/canvas_depth.js";
+import { installDepthBandSort, getDepthBandSortStats } from "/app/scene3d/depth_band_sort.js";
+import { makeProgramSort } from "/app/scene3d/draw_sort_program.js";
+import { freezeWorldRoots, freezeWorldRootsEnabled, verifyWorldMatrices } from "/app/scene3d/freeze_world_roots.js";
+import { installSkipHiddenMatrix } from "/app/scene3d/skip_hidden_matrix.js";
+
+const out = { errors: [], checks: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+const check = (name, ok, detail = "") => out.checks.push({ name, ok: !!ok, detail: String(detail) });
+const S = 64;
+const readCanvas = (renderer) => {
+  const gl = renderer.getContext();
+  const b = new Uint8Array(S * S * 4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.readPixels(0, 0, S, S, gl.RGBA, gl.UNSIGNED_BYTE, b);
+  renderer.state.reset(); // three's cached framebuffer binding is stale after the raw bind
+  return Array.from(b);
+};
+const at = (frame, x, y) => frame.slice((y * S + x) * 4, (y * S + x) * 4 + 4);
+const quad = (z, x, color) => {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color }));
+  m.position.set(x, 0, z);
+  return m;
+};
+
+try {
+  const search = location.search;
+  // ---- canvasDepth: a near red quad drawn FIRST, a far blue one overlapping it after.
+  {
+    const canvas = document.getElementById("cd");
+    const decision = resolveCanvasDepth({ search });
+    const renderer = new THREE.WebGLRenderer({ canvas, depth: decision.depth });
+    renderer.debug.checkShaderErrors = true;
+    out.canvasDepth = { decision, contextDepth: renderer.getContext().getContextAttributes().depth };
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x202020);
+    const near = quad(-3, -0.4, 0xff0000); near.renderOrder = 0;
+    const far = quad(-6, 0.6, 0x0000ff); far.renderOrder = 1; far.scale.setScalar(2);
+    scene.add(near, far);
+    const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    const t = screenTarget(renderer);
+    if (t) renderer.setRenderTarget(t);
+    renderer.render(scene, cam);
+    if (t) presentScreenTarget(renderer, t);
+    out.canvasDepth.redirected = !!t;
+    out.canvasDepth.frame = readCanvas(renderer);
+    out.canvasDepth.overlap = at(out.canvasDepth.frame, 30, 32);
+    if (!decision.depth) {
+      // negative control: the same draw straight to the depthless canvas
+      renderer.setRenderTarget(null);
+      renderer.render(scene, cam);
+      out.canvasDepth.rawOverlap = at(readCanvas(renderer), 30, 32);
+    }
+    out.canvasDepth.glError = renderer.getContext().getError();
+  }
+
+  // ---- depthBandSort: reversed-Z, the program sort, two programs at four depths.
+  {
+    const canvas = document.getElementById("cb");
+    const clip = Z.probeClipControl(canvas, Z.threeContextAttributes());
+    const dm = Z.resolveDepthMode({ requested: true, clipControl: clip });
+    const renderer = new THREE.WebGLRenderer({ canvas, ...Z.depthRendererParams(dm.mode) });
+    renderer.debug.checkShaderErrors = true;
+    if (dm.reversed) Z.installReversedZ(THREE, renderer);
+    renderer.setOpaqueSort(makeProgramSort(renderer, null));
+    out.band = { reversed: renderer.state.buffers.depth.getReversed() === true, installed: installDepthBandSort(renderer) };
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101010);
+    // program A: MeshBasicMaterial; program B: MeshLambertMaterial (lit: needs a light)
+    scene.add(new THREE.AmbientLight(0xffffff, 3));
+    const order = [];
+    const mk = (name, z, x, mat) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+      m.position.set(x, 0, z); m.name = name;
+      m.onBeforeRender = () => order.push(name);
+      scene.add(m);
+    };
+    mk("far-A", -300, 0.5, new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+    mk("near-B", -3.5, 0.2, new THREE.MeshLambertMaterial({ color: 0xff8800 }));
+    mk("near-A", -3, -0.3, new THREE.MeshBasicMaterial({ color: 0x00ffff }));
+    mk("far-B", -280, -0.6, new THREE.MeshLambertMaterial({ color: 0xff00ff }));
+    scene.children.filter((o) => o.isMesh && /far/.test(o.name)).forEach((o) => o.scale.setScalar(150));
+    const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+    renderer.render(scene, cam); // compiles: the program sort keys need compiled programs
+    order.length = 0;
+    renderer.render(scene, cam);
+    out.band.order = order.slice();
+    out.band.stats = getDepthBandSortStats();
+    out.band.frame = readCanvas(renderer);
+    out.band.glError = renderer.getContext().getError();
+  }
+
+  // ---- freezeWorldRoots: the app's container layout, a walking rig, late adds.
+  {
+    installSkipHiddenMatrix(THREE);
+    const canvas = document.getElementById("cf");
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.debug.checkShaderErrors = true;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101820);
+    const worldRoot = new THREE.Group(); worldRoot.rotation.x = -Math.PI / 2; scene.add(worldRoot);
+    const groups = [0, 1, 2, 3, 4].map(() => new THREE.Group());
+    worldRoot.add(...groups);
+    out.freeze = { enabled: freezeWorldRootsEnabled(), frozen: freezeWorldRoots(THREE, [scene, worldRoot, ...groups]) };
+    const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    cam.position.set(0, 6, 9); cam.lookAt(0, 0, 0);
+    const box = (color) => new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color }));
+    const rig = box(0xffaa00); groups[4].add(rig);
+    const placed = box(0x44ff44); placed.position.set(-2, 1, 0.5); placed.updateMatrix(); placed.matrixAutoUpdate = false; groups[1].add(placed);
+    let mismatches = 0, checked = 0;
+    for (let f = 0; f < 4; f++) {
+      rig.position.set(f * 0.5, -1, 0.5);
+      if (f === 1) {
+        // the animated-scenery pattern: non-auto, identity matrix, added late
+        const late = new THREE.InstancedMesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ color: 0x3399ff }), 2);
+        late.matrixAutoUpdate = false;
+        late.setMatrixAt(0, new THREE.Matrix4().makeTranslation(2, 2, 0.3));
+        late.setMatrixAt(1, new THREE.Matrix4().makeTranslation(-1, -2, 0.3));
+        groups[2].add(late);
+      }
+      renderer.render(scene, cam);
+      const v = verifyWorldMatrices(scene);
+      mismatches += v.mismatches; checked += v.checked;
+    }
+    out.freeze.mismatches = mismatches;
+    out.freeze.checked = checked;
+    out.freeze.frame = readCanvas(renderer);
+    out.freeze.glError = renderer.getContext().getError();
+  }
+} catch (e) {
+  out.errors.push(`page threw: ${e && e.stack ? e.stack.slice(0, 600) : e}`);
+}
+window.__smoke = out;
+</script></body></html>
