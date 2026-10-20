@@ -10,6 +10,9 @@ import { createRequire } from "node:module";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
+// 2026-10-20: every URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core");
@@ -219,7 +222,7 @@ function aggProfile(profile) {
 
 // ---- main -----------------------------------------------------------------------
 const res = { label: LABEL, quality: QUALITY, flags: FLAGS, startedAt: new Date().toISOString() };
-const url = `${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${QUALITY}${FLAGS ? "&" + FLAGS : ""}`;
+const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${QUALITY}${FLAGS ? "&" + FLAGS : ""}`);
 res.url = url;
 res.accountFree = await waitAccountFree();
 await launch(`hbb-probe-${LABEL}-${Date.now()}`);

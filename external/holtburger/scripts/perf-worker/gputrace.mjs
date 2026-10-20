@@ -18,8 +18,15 @@ const r = await pg.evaluate(async (ms) => {
   await new Promise((res) => setTimeout(res, 1500));
   const d = fr.slice(1).map((t, i) => [Math.round(t - fr[i]), Math.round(fr[i] - t0)]).sort((a, b) => b[0] - a[0]);
   const all = fr.slice(1).map((t, i) => t - fr[i]);
-  return { frames: fr.length, fps: +(fr.length / (ms / 1000)).toFixed(1), over100: all.filter((x) => x > 100).length, over50: all.filter((x) => x > 50).length, jank: Math.round(all.filter((x) => x > 50).reduce((a, x) => a + x - 33.3, 0)), worst: d.slice(0, 8), t0 };
+  // 2026-10-20: the page's render-loop pace (`__frameCapState`). This script attaches to a page
+  // another driver loaded; booted through lib/bench-url.mjs it reads fps 0 (pinned uncapped). A 60/30
+  // here means the VTank frame cap paced the loop under this sweep, whose own rAF chain still counts
+  // every vsync.
+  let frameCap = null;
+  try { frameCap = window.__frameCapState?.() ?? null; } catch (_) {}
+  return { frames: fr.length, fps: +(fr.length / (ms / 1000)).toFixed(1), over100: all.filter((x) => x > 100).length, over50: all.filter((x) => x > 50).length, jank: Math.round(all.filter((x) => x > 50).reduce((a, x) => a + x - 33.3, 0)), worst: d.slice(0, 8), t0, frameCap };
 }, 12000);
 await browser.stopTracing();
+if (r.frameCap && r.frameCap.fps > 0) console.error(`gputrace: the render loop was capped at ${r.frameCap.fps} fps — boot the page with ?targetFps=0 (lib/bench-url.mjs)`);
 console.log(JSON.stringify(r));
 process.exit(0);

@@ -127,8 +127,11 @@ console.log("\n-- E2 flag OFF: no-op ------------------------------------------"
   check("no marker stamped", fb.userData.__envDetailKind === undefined && cb.userData.__envDetailKind === undefined);
   check("no hook chained", fb.onBeforeCompile === fbHook && cb.onBeforeCompile === cbHook);
   check("program keys unchanged", fb.customProgramCacheKey() === fbKey && cb.customProgramCacheKey() === cbKey);
+  // 2026-10-20 (building-fill-2): the cell-baked key carries `k1d` on the
+  // default arm (`#undef RE_Direct` compiled in, ?bakedDirectOut). Still no |e.
+  // 2026-10-20 (shadows-restore-2/-4): the CSM token is the hook version `|c2`.
   check("default keys carry no |e bit (byte-identical to pre-change)",
-    fbKey === "hb|d0|c1|p0|l0|a0|b0|f1|s0|k0|v" && cbKey === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k1|v",
+    fbKey === "hb|d0|c2|p0|l0|a0|b0|f1|s0|k0|v" && cbKey === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k1d|v",
     `fb=${fbKey} cb=${cbKey}`);
   const sh = compile(fb);
   check("compiled shader has no env-detail text", !sh.fragmentShader.includes("uAcEnvDetail"));
@@ -159,7 +162,7 @@ console.log("\n-- E3 flag ON: one program per kind -----------------------------
   check("environment variants share ONE key, ending |e2", ke1 === ke2 && ke1.endsWith("|e2"), `${ke1} / ${ke2}`);
   check("the two kinds never share a key", kb1 !== ke1);
   check("key = the unpatched variant key + the kind bit only",
-    kb1 === "hb|d0|c1|p0|l0|a0|b0|f1|s0|k0|v|e1" && ke1 === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k1|v|e2", `${kb1} ${ke1}`);
+    kb1 === "hb|d0|c2|p0|l0|a0|b0|f1|s0|k0|v|e1" && ke1 === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k1d|v|e2", `${kb1} ${ke1}`);
   check("key codes", M.ENV_DETAIL_KIND_CODE.building === 1 && M.ENV_DETAIL_KIND_CODE.environment === 2);
 
   // Idempotent.

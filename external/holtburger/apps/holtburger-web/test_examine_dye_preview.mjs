@@ -170,7 +170,9 @@ check("imports PaperdollViewport from ui/ac_paperdoll_viewport.js", () => {
 });
 
 check("defines renderEntityPaperdoll helper", () => {
-  if (!/function\s+renderEntityPaperdoll\s*\(\s*wrapEl\s*,\s*guid\s*\)/.test(examineSrc)) {
+  // hud-audio-2 (2026-10-20): an optional trailing `viewport` (the mounted,
+  // reused instance) joined the signature for the appearance refresh.
+  if (!/function\s+renderEntityPaperdoll\s*\(\s*wrapEl\s*,\s*guid\s*(?:,\s*viewport\s*=\s*null\s*)?\)/.test(examineSrc)) {
     throw new Error("renderEntityPaperdoll helper not found");
   }
 });
@@ -210,9 +212,12 @@ check("renderEntityPaperdoll is called only in fromEntity branch", () => {
   }
 });
 
-check("disposes PaperdollViewport on unmount", () => {
-  if (!/paperdollViewport\.dispose\(\)/.test(examineSrc)) {
-    throw new Error("dispose() call missing in cleanup");
+check("hands the PaperdollViewport back on unmount", () => {
+  // hud-audio-2 (2026-10-20): the examine doll is the consumer's long-lived
+  // viewport — cleanup release()s it (detach + park; disposes when not
+  // pooled) instead of dispose()-ing a per-examine WebGL context.
+  if (!/paperdollViewport\.release\(\)/.test(examineSrc)) {
+    throw new Error("release() call missing in cleanup");
   }
 });
 

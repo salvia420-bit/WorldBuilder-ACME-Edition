@@ -16,8 +16,10 @@
 //       blit, rigs pass
 //   S3  a rig walking (camera still): OVERLAY — cache→map blit, ZERO static
 //       draws, no clear, no whole-scene walk; every rastered map exact
-//   S4  camera move: NORMAL again (cache dropped); next rig frame REFRESH,
-//       then OVERLAY
+//   S4  camera move: every refit cascade REFRESHes in that raster (cache
+//       rebuilt at once — 2026-10-20 shadows-restore-1; it used to be NORMAL
+//       and the next rig frame paid a second static raster); next rig frame
+//       OVERLAY straight away
 //   S5  a static added while standing still shows up by the next ceiling
 //       (≤12 frames — the RP5 bound), not before it is due
 //   S6  WebGL context loss/restore: the next rig frame rebuilds (REFRESH)
@@ -37,7 +39,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 globalThis.window = globalThis.window || {};
-globalThis.location = { search: "" };
+// ?csmStable=off (2026-10-20, shadows-restore-1): these scenarios are written
+// against the view-slice cascade fit (every camera move refits all three; 12-frame
+// ceilings on every cascade). The stable cascades' refits, ceilings and overlay
+// frames are pinned in tests/csm_stable.test.mjs.
+globalThis.location = { search: "?csmStable=off" };
 window.location = globalThis.location;
 
 const L = await import("../scene3d/lighting.js");
@@ -275,10 +281,14 @@ L.__resetRp5ConfigForTest(undefined);
   const f = S.frame(() => {});
   void f;
   S.world.camera.position.x += 4;
+  const fr0 = SSC.getShadowStaticCacheStats().frustumRefresh;
   const fc = S.frame(() => { rig.root.position.y += 0.4; });
-  check("S4 camera move: all 3 in the plain pass (no cache use), exact", fc.rastered === "012" && fc.refresh === 0 && fc.overlay === 0 && fc.blits.length === 0 && S.allRasteredExact(fc), JSON.stringify({ r: fc.rastered, n: fc.normal, rf: fc.refresh, o: fc.overlay, b: fc.blits.length }));
+  // 2026-10-20 (shadows-restore-1): FRUSTUM rasters as REFRESH — statics pass,
+  // map→cache blit, rigs pass — same depth as the old single NORMAL pass.
+  check("S4 camera move: all 3 REFRESH in that raster (cache rebuilt at once), exact", fc.rastered === "012" && fc.refresh === 3 && fc.normal === 0 && fc.overlay === 0 && fc.blits.length === 3 && S.allRasteredExact(fc), JSON.stringify({ r: fc.rastered, n: fc.normal, rf: fc.refresh, o: fc.overlay, b: fc.blits.length }));
+  check("S4 ...counted as FRUSTUM refreshes", SSC.getShadowStaticCacheStats().frustumRefresh - fr0 === 3);
   const fr = S.frame(() => { rig.root.position.y += 0.4; });
-  check("S4 next rig frame (camera settled): REFRESH rebuilds the cache, exact", fr.refresh > 0 && fr.overlay === 0 && S.allRasteredExact(fr), JSON.stringify({ r: fr.rastered, n: fr.normal, rf: fr.refresh, o: fr.overlay }));
+  check("S4 next rig frame (camera settled): OVERLAY at once — no second static raster, exact", fr.overlay > 0 && fr.refresh === 0 && fr.normal === 0 && !fr.draws.some((d) => isStatic(d.object, S.world)) && S.allRasteredExact(fr), JSON.stringify({ r: fr.rastered, n: fr.normal, rf: fr.refresh, o: fr.overlay }));
   const fo = S.frame(() => { rig.root.position.y += 0.4; });
   check("S4 then OVERLAY again, exact", fo.overlay > 0 && fo.refresh === 0 && fo.normal === 0 && S.allRasteredExact(fo));
 
@@ -371,8 +381,9 @@ L.__resetRp5ConfigForTest(undefined);
     S.R.renderer.getContext = () => gl;
     const copy = S.R.renderer.copyTextureToTexture;
     S.R.renderer.copyTextureToTexture = function (...args) { copy.apply(this, args); pendingErr = GL_INVALID_OPERATION; };
-    S.world.camera.position.x += 1; // FRUSTUM now, so the next rig frame REFRESHes (its blit is checked)
-    S.frame(() => { rig.root.position.y += 0.2; });
+    // FRUSTUM now: since 2026-10-20 (shadows-restore-1) that very raster
+    // REFRESHes, so ITS blit is the checked one.
+    S.world.camera.position.x += 1;
     const warn0 = console.warn; console.warn = () => {};
     const fe = S.frame(() => { rig.root.position.y += 0.2; });
     console.warn = warn0;

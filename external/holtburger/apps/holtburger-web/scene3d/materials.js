@@ -89,6 +89,9 @@ import {
   // seam. Arming is what lets the 128 MB record budget actually free heap.
   registerFullTierMirror,
   unregisterFullTierMirror,
+  // streaming-hitch-4 (2026-10-20) — an HD re-point bumps needsUpdate only
+  // when the slot's program-relevant state (presence / uv channel) changes.
+  hdSwapNeedsUpdate,
 } from "./bc7_textures.js";
 import { transcodeXu7WithNra, warmTextureWorker } from "./xu7_textures.js";
 // ?texUpgradeQueue (2026-10-09) — progressive HD textures: the full/pre/twin/
@@ -599,7 +602,15 @@ function _patchSetCacheKey(material) {
   return (
     "hb" +
     "|d" + (u.detailEnabled ? 1 : 0) +
-    "|c" + (u.csmEnabled ? 1 : 0) +
+    // 2026-10-20 (improvement hunt shadows-restore-2/-4) — the CSM token is a
+    // hook VERSION, not a bool: `|c2` = receiver world position through
+    // batchingMatrix / instanceMatrix + textureLod(…, 0.0) cascade taps (`|c1`
+    // was the modelMatrix-only, implicit-LOD hook). three's program cache is
+    // per renderer and a build ships one hook text, so this changes no
+    // sharing; it keeps program-key dumps / census captures taken across the
+    // fix distinguishable. Un-patched materials keep `|c0` (CSM off in every
+    // preset), so the default key is unchanged.
+    "|c" + (u.csmEnabled ? 2 : 0) +
     "|p" + (u.pomEnabled ? 1 : 0) +
     "|l" + (u.lightClampRetail ? 1 : 0) +
     "|a" + (u.__aoPatched ? 1 : 0) +
@@ -619,6 +630,14 @@ function _patchSetCacheKey(material) {
     // `uAcBakedGain`). One bit each; the un-patched key is unchanged.
     "|s" + (u.__staticBiased ? 1 : 0) +
     "|k" + (u.__acBakedLight ? 1 : 0) +
+    // 2026-10-20 (improvement hunt building-fill-2) — `d` = the bake patch
+    // compiled the direct-light loops out (`#undef RE_Direct`, default arm).
+    // Defensive: today every baked material in a session shares one
+    // suppressDirect + one boot-time ?bakedDirectOut, so `|k1` alone was
+    // unambiguous; this keeps a future caller with a different setting off
+    // the shared program. Appended INSIDE the k token only when set, so every
+    // un-baked key (and ?vertexBake=lit / ?bakedDirectOut=off) is unchanged.
+    (u.__acBakedDirectOut ? "d" : "") +
     // VFX component-SET key (Visual-Behavior Suite, spec §2.4). Encodes the
     // component SET + each component's linkVariant() — NEVER per-instance
     // config/hash — so program count ≈ distinct sets, not 10k DIDs. Empty ""
@@ -904,6 +923,47 @@ export function readVertexBakeFlag() {
 
 export const VERTEX_BAKE = readVertexBakeFlag();
 
+// 2026-10-20 (improvement hunt building-fill-2) — `?bakedDirectOut` (default
+// ON, `=off|0|false|no` escape). Under the retail arm (`suppressDirect`) the
+// baked EnvCell program still ran three's WHOLE direct pipeline — both
+// directional RE_Direct calls, 16 point + 2 spot light-info evaluations and an
+// RE_Direct BRDF per lit torch — and then multiplied all of it by 0 after
+// `<lights_fragment_end>` (`acKeepDirect` below). Every direct loop in three
+// r184 `lights_fragment_begin` is gated on `defined( RE_Direct )` (point :58,
+// spot :84, directional :132; light_loops.js keeps the guards), ambient / SH /
+// hemisphere sit under RE_IndirectDiffuse, and no other three chunk or scene3d
+// patch tests or calls the macro. So `#undef RE_Direct` right before
+// `void main() {` (after `lights_*_pars_fragment` defined it) compiles every
+// direct loop out: same image — the direct terms were exactly 0 either way,
+// except that a NaN/Inf direct term can no longer survive `* 0` — with
+// roughly 60% less fragment ALU on interior walls / floors / ceilings and
+// shorter interior programs to link. The uniform and the multiply stay, so
+// `?vertexBake=lit` (suppressDirect false: no #undef) is byte-identical.
+// Guarded on `!USE_CLEARCOAT && !USE_SHEEN`: those two accumulate DIRECT light
+// into globals (`clearcoatSpecularDirect`, `sheenSpecularDirect`) the
+// multiply never touched. No cell surface carries either, but the guard keeps
+// "same image" exact for any material this patch lands on.
+// Boot-time constant like VERTEX_BAKE: it changes the shader string, so it
+// must never move mid-session (the `d` key bit in `_patchSetCacheKey` and the
+// pool key carry it). Design note: this locks in drop-ALL-direct on baked
+// cells; a future retail minimize_envcell_lighting arm that keeps DYNAMIC
+// lights on cell walls must drop the #undef (or run with `=off`).
+export function readBakedDirectOutFlag(search) {
+  try {
+    const s =
+      search !== undefined
+        ? search
+        : typeof globalThis !== "undefined" && globalThis.location
+          ? globalThis.location.search || ""
+          : "";
+    const raw = (new URLSearchParams(s).get("bakedDirectOut") || "").toLowerCase();
+    if (raw === "off" || raw === "false" || raw === "0" || raw === "no") return false;
+  } catch (_) {}
+  return true;
+}
+
+export const BAKED_DIRECT_OUT = readBakedDirectOutFlag();
+
 // Installs the bake term on a material. Idempotent (userData guard) and
 // chained, so it composes with the detail / CSM / light-clamp patches.
 //
@@ -911,9 +971,15 @@ export const VERTEX_BAKE = readVertexBakeFlag();
 // clamp expands `<lights_pars_begin>` + `<lights_fragment_begin>`, so we take
 // `<lights_fragment_end>`, which nothing patches and which runs after every
 // RE_Direct/RE_IndirectDiffuse has accumulated into `reflectedLight`.
+//
+// `opts.directOut` (building-fill-2) is a test seam; production callers pass
+// only `suppressDirect` and inherit the boot-time BAKED_DIRECT_OUT. It never
+// applies without suppressDirect.
 export function applyBakedVertexLightPatch(material, opts = {}) {
   if (!material || material.userData?.__acBakedLight) return;
   const suppressDirect = opts.suppressDirect === true;
+  const directOut =
+    suppressDirect && (opts.directOut === undefined ? BAKED_DIRECT_OUT : opts.directOut === true);
   _chainBeforeCompile(material, (shader) => {
     // Uniforms rather than #defines so a future light tick can cross-fade the
     // bake without a shader relink (relink-freeze rule).
@@ -995,6 +1061,22 @@ export function applyBakedVertexLightPatch(material, opts = {}) {
         ].join("\n"),
       );
 
+    // building-fill-2: compile the discarded direct terms out (see
+    // readBakedDirectOutFlag). First `void main() {` only — the fragment
+    // template has one, and a patch chained later that inserts declarations
+    // before main lands between this #undef and main, which is harmless.
+    if (directOut) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "void main() {",
+        [
+          "#if !defined( USE_CLEARCOAT ) && !defined( USE_SHEEN )",
+          "#undef RE_Direct",
+          "#endif",
+          "void main() {",
+        ].join("\n"),
+      );
+    }
+
     // Stash for post-compile introspection by tests / capture scripts, same
     // convention as lightClampShaderUniforms.
     _defineLiveUserData(material, "acBakedLightUniforms", shader.uniforms);
@@ -1002,6 +1084,9 @@ export function applyBakedVertexLightPatch(material, opts = {}) {
   material.userData = material.userData ?? {};
   material.userData.__acBakedLight = true;
   material.userData.__acBakedSuppressDirect = suppressDirect;
+  // Program-key input (the `d` after `|k1`): set at INSTALL time because three
+  // reads customProgramCacheKey() before it runs onBeforeCompile.
+  material.userData.__acBakedDirectOut = directOut;
 }
 
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
@@ -1273,6 +1358,41 @@ export function installEnvDetailPatch(material, kind) {
   return _installEnvDetailPatch(material, kind);
 }
 
+// 2026-10-20 (improvement hunt shadows-restore-5, `?csmDirectOnly`, default on
+// under ?csm; csm.js header) — the CSM sun-term hook. Declared after
+// `_csmShadowFactor` and before main(): a wrapper around three r184's
+// `getDirectionalLightInfo` (lights_pars_begin) that scales the incident colour
+// by the shadow factor, then a function-like macro that points the light
+// loop's one call at it (the wrapper's own call precedes the #define, so it
+// still reaches three's function). No chunk text is rewritten, so it composes
+// with ?lightLoops / ?csmDeadLights / ?lightRangeSkip / the light clamp (all
+// string patches of the same loop) in any order. Every directional light goes
+// through it, but the csm.js cascade lights upload colour 0, so only the sun
+// (the lighting.js sun and the takram sun, whichever is lit) changes: point /
+// spot lights, the hemisphere, the sky probe, IBL, emissive and fog never see
+// the factor. Its RE_Direct uses the colour for diffuse AND specular, so the
+// sun's highlight goes out in shade too. Evaluated once per fragment, at the
+// first directional light; strength 0 (night) skips the taps. With bakedDirectOut
+// (`#undef RE_Direct`) the loop is compiled out and the wrapper is unused.
+// No backticks in this GLSL (template literal).
+const CSM_SUN_HOOK_GLSL = `
+// shadows-restore-5 (?csmDirectOnly): the cast shadow shades the SUN's direct light only.
+#if NUM_DIR_LIGHTS > 0
+float _hbCsmSun = -1.0;
+void _hbCsmDirLightInfo( const in DirectionalLight directionalLight, out IncidentLight light ) {
+  getDirectionalLightInfo( directionalLight, light );
+  if ( _hbCsmSun < 0.0 ) {
+    _hbCsmSun = 1.0;
+    if ( uCsmStrength > 0.0 ) {
+      _hbCsmSun = mix( 1.0 - uCsmShade * uCsmStrength, 1.0, _csmShadowFactor( vCsmWorldPos, vCsmViewDepth ) );
+    }
+  }
+  light.color *= _hbCsmSun;
+}
+#define getDirectionalLightInfo(dl, il) _hbCsmDirLightInfo(dl, il)
+#endif
+`;
+
 // Visual-fidelity Phase 3.3 — install the CSM cascade-sample shader
 // patch on a `MeshStandardMaterial`. Sampling pattern:
 //
@@ -1309,6 +1429,14 @@ function _installCsmShaderPatch(material, csmState) {
     csmEnabled: true,
   };
   const shared = csmState.uniforms || null;
+  // 2026-10-20 (improvement hunt shadows-restore-5) — csm.js decides once per
+  // bundle (lighting.js `?csmDirectOnly`) whether the shadow shades the sun's
+  // direct term (true) or the whole colour (legacy). Every receiver of a
+  // session therefore carries the same hook text, so the program key needs no
+  // new bit. `csmShade` only seeds per-program uniforms for bundles without
+  // the shared `uCsmShade` (stubs / the legacy registry path).
+  const directOnly = csmState.directOnly === true;
+  const csmShade = Number.isFinite(csmState.shade) ? csmState.shade : (directOnly ? 1.0 : 0.55);
   _chainBeforeCompile(material, (shader) => {
     if (shared) {
       // csm.js `setupCsm` — the ONE set of uniform objects every receiver's
@@ -1324,6 +1452,12 @@ function _installCsmShaderPatch(material, csmState) {
       shader.uniforms.uCsmSplits = shared.uCsmSplits;
       shader.uniforms.uCsmFar = shared.uCsmFar;
       shader.uniforms.uCsmBlend = shared.uCsmBlend;
+      // shadows-restore-1 (?csmStable): 1 = select by distance from the camera.
+      shader.uniforms.uCsmSelDist = shared.uCsmSelDist || { value: 0 };
+      // shadows-restore-5: time-of-day strength + full-shadow darkness. A
+      // bundle without them (older stubs) shades exactly as before: 1 / 0.55.
+      shader.uniforms.uCsmStrength = shared.uCsmStrength || { value: 1 };
+      shader.uniforms.uCsmShade = shared.uCsmShade || { value: csmShade };
     } else {
       // Legacy bundle without shared uniforms: allocate per program (texture
       // refs filled in by refreshCsmUniforms each frame; init to whatever's
@@ -1338,7 +1472,23 @@ function _installCsmShaderPatch(material, csmState) {
       shader.uniforms.uCsmSplits = { value: new THREE.Vector2(csmState.splits[0], csmState.splits[1]) };
       shader.uniforms.uCsmFar = { value: csmState.splits[2] };
       shader.uniforms.uCsmBlend = { value: csmState.blendFrac };
+      shader.uniforms.uCsmSelDist = { value: csmState.stable === true ? 1 : 0 };
+      shader.uniforms.uCsmStrength = { value: Number.isFinite(csmState.strength) ? csmState.strength : 1 };
+      shader.uniforms.uCsmShade = { value: csmShade };
     }
+
+    // shadows-restore-5 (?csmDirectOnly, csm.js header): the sun-term hook
+    // needs three's directional-light declarations (lights_pars_begin, still an
+    // #include or already expanded by the light clamp) ahead of main(), where
+    // the wrapper below is declared. An unlit shader has no direct term to
+    // shade, so it keeps the whole-colour multiply.
+    const _fs0 = shader.fragmentShader;
+    const _mainAt = _fs0.indexOf("void main() {");
+    const _parsAt = Math.max(
+      _fs0.indexOf("#include <lights_pars_begin>"),
+      _fs0.indexOf("void getDirectionalLightInfo("),
+    );
+    const sunHook = directOnly && _mainAt >= 0 && _parsAt >= 0 && _parsAt < _mainAt;
 
     // Declare uniforms + the sampling helper. Inject right after the
     // existing `void main() {` insertion point — the detail patch puts
@@ -1355,6 +1505,9 @@ uniform mat4 uCsmMatrix2;
 uniform vec2 uCsmSplits;
 uniform float uCsmFar;
 uniform float uCsmBlend;
+uniform float uCsmSelDist;
+uniform float uCsmStrength;
+uniform float uCsmShade;
 
 // Sample one cascade's shadow map at worldPos. Returns 1.0 for fully
 // lit, 0.0 for fully shadowed. Standard PCF-1-tap (3-tap unrolled for
@@ -1396,11 +1549,18 @@ float _csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   float ref = shadowCoord.z - bias;
 #endif
   vec2 tx = 0.5 / vec2(textureSize(sm, 0));
+  // 2026-10-20 (improvement hunt shadows-restore-4): explicit LOD 0. These
+  // taps sit inside the cascade if-chain below; an implicit-LOD sample there
+  // is a gradient op a compiler may hoist out of the branches (every cascade
+  // sampled). Same pixels: three r184 allocates the cascade depth texture
+  // without mips and with minFilter == magFilter (Linear/Linear under PCF),
+  // so the implicit LOD only ever picked between two identical filters.
+  // terrain.js csmSampleCascade carries the same four taps.
   return 0.25 * (
-      texture(sm, vec3(shadowCoord.xy + vec2(-tx.x, -tx.y), ref))
-    + texture(sm, vec3(shadowCoord.xy + vec2( tx.x, -tx.y), ref))
-    + texture(sm, vec3(shadowCoord.xy + vec2(-tx.x,  tx.y), ref))
-    + texture(sm, vec3(shadowCoord.xy + vec2( tx.x,  tx.y), ref)));
+      textureLod(sm, vec3(shadowCoord.xy + vec2(-tx.x, -tx.y), ref), 0.0)
+    + textureLod(sm, vec3(shadowCoord.xy + vec2( tx.x, -tx.y), ref), 0.0)
+    + textureLod(sm, vec3(shadowCoord.xy + vec2(-tx.x,  tx.y), ref), 0.0)
+    + textureLod(sm, vec3(shadowCoord.xy + vec2( tx.x,  tx.y), ref), 0.0));
 }
 
 // CSM main entry — pick cascade by view-space depth and sample with
@@ -1408,6 +1568,11 @@ float _csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
 float _csmShadowFactor(vec3 worldPos, float viewDepth) {
   // Hard-decide cascade by depth; near < splits.x => 0, < splits.y => 1,
   // < uCsmFar => 2, else => unshadowed (we're beyond the last cascade).
+  // 2026-10-20 (improvement hunt shadows-restore-1, ?csmStable, default on
+  // under ?csm): stable cascades are spheres about the camera, so they hold
+  // every point within a split by DISTANCE, not view depth (a screen corner
+  // at view depth 28 m is ~40 m away). terrain.js csmShadowFactor: same line.
+  if (uCsmSelDist > 0.5) viewDepth = length(worldPos - cameraPosition);
   float blendW0 = uCsmSplits.x * uCsmBlend; // width of blend zone end of cascade 0
   float blendW1 = uCsmSplits.y * uCsmBlend; // width of blend zone end of cascade 1
   if (viewDepth > uCsmFar) {
@@ -1438,7 +1603,7 @@ float _csmShadowFactor(vec3 worldPos, float viewDepth) {
   // Solidly in cascade 2 (far range).
   return _csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
 }
-
+${sunHook ? CSM_SUN_HOOK_GLSL : ""}
 void main() {`
     );
 
@@ -1448,6 +1613,22 @@ void main() {`
     // by piggy-backing on the existing `worldpos_vertex` chunk, which
     // computes `worldPosition` in vertex shader for shadow path; mirror
     // that into a varying we can read in fragment.
+    //
+    // 2026-10-20 (improvement hunt shadows-restore-2): the world position
+    // must apply the SAME transform chain as three r184 `worldpos_vertex` /
+    // `project_vertex`: `transformed` is pre-batching and pre-instancing, so
+    // batchingMatrix (USE_BATCHING) then instanceMatrix (USE_INSTANCING) then
+    // modelMatrix. The old `modelMatrix * transformed` dropped the first two,
+    // so every BatchedMesh / InstancedMesh receiver that carries this hook
+    // (static_batch_x region buckets of getCached materials — the batched
+    // variant mirrors onBeforeCompile —, ring-baker InstancedMesh statics)
+    // looked its shadow up near its bucket origin: outside every cascade, so
+    // never shadowed. vCsmViewDepth (from mvPosition) was always right.
+    // batching_vertex declares `batchingMatrix` before project_vertex (also
+    // under batched_runs.js's getIndirectIndex rewrite), and
+    // anim_scenery_gpu.js `#define`s instanceMatrix to the posed matrix, so
+    // both terms read exactly what three's own chain reads. A plain Mesh
+    // (neither define) compiles to the old single multiply.
     shader.vertexShader = shader.vertexShader.replace(
       "#include <common>",
       `#include <common>
@@ -1458,7 +1639,14 @@ varying float vCsmViewDepth;`
       "#include <project_vertex>",
       `#include <project_vertex>
 {
-  vec4 _wp = modelMatrix * vec4(transformed, 1.0);
+  vec4 _wp = vec4(transformed, 1.0);
+#ifdef USE_BATCHING
+  _wp = batchingMatrix * _wp;
+#endif
+#ifdef USE_INSTANCING
+  _wp = instanceMatrix * _wp;
+#endif
+  _wp = modelMatrix * _wp;
   vCsmWorldPos = _wp.xyz;
   // mvPosition is in view space (camera-relative). View-space depth
   // is -mvPosition.z (z is negative in front of camera).
@@ -1495,18 +1683,33 @@ varying float vCsmViewDepth;`
     // for ambient + directional, then we modulate by shadow factor.
     // Ambient gets a 0.45 floor so deep shadows don't crush to black
     // (matches Phase 0.1's ambient baseline contribution feel).
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <dithering_fragment>",
-      `{
-  float _csmShadow = _csmShadowFactor(vCsmWorldPos, vCsmViewDepth);
-  // Floor shadow at 0.45 so receivers in shadow keep some ambient
-  // lift — matches the visual feel of Phase 0.1's PCFShadowMap path
-  // (which also doesn't crush to 0 because of ambient + hemisphere).
-  float _csmAtten = mix(0.45, 1.0, _csmShadow);
+    //
+    // 2026-10-20 (improvement hunt shadows-restore-5): this whole-colour
+    // multiply runs after emissive, IBL and fog_fragment, so lit windows and
+    // fogged distance went 55% dark in shade. With the sun-term hook
+    // (?csmDirectOnly, `sunHook` above) the factor already scaled the sun's
+    // light in the loop and nothing is injected here. Without it (=off, direct
+    // callers, unlit shaders) it stays, scaled by the time-of-day strength:
+    // shade 0.55 and strength 1 give 1.0 - 0.55 * 1.0 = 0.45 exactly in float32
+    // (Sterbenz: 0.55f and 1 are within 2x, so the subtraction is exact), i.e.
+    // the old `mix(0.45, 1.0, s)`. Strength 0 skips the taps (same output: 1).
+    if (!sunHook) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <dithering_fragment>",
+        `{
+  float _csmAtten = 1.0;
+  if (uCsmStrength > 0.0) {
+    float _csmShadow = _csmShadowFactor(vCsmWorldPos, vCsmViewDepth);
+    // Floor shadow at 1 - shade (0.45) so receivers in shadow keep some
+    // ambient lift — matches the visual feel of Phase 0.1's PCFShadowMap path
+    // (which also doesn't crush to 0 because of ambient + hemisphere).
+    _csmAtten = mix(1.0 - uCsmShade * uCsmStrength, 1.0, _csmShadow);
+  }
   gl_FragColor.rgb *= _csmAtten;
 }
 #include <dithering_fragment>`
-    );
+      );
+    }
 
     // Legacy path only: stash the uniforms so `refreshCsmUniforms` can
     // update the texture + matrix references each frame post-compile.
@@ -3210,7 +3413,8 @@ export const MATERIAL_SURFACE_FIELDS = Object.freeze(_RESEAT_FIELDS.slice());
 // chain. three's `Material.copy()` copies userData but NOT onBeforeCompile, so a
 // `.clone()` keeps these flags while losing the patches they name — and
 // `_patchSetCacheKey` builds the program key from the flags. `makeOwnedVariant`
-// strips them and re-installs the ones it can (CSM, light clamp).
+// strips them and re-installs the ones it can (CSM, light clamp); the four cache
+// clone families re-install CSM only (`_reinstallCloneCsm`, gpu-shading-2).
 const _CLONE_LOST_PATCH_FLAGS = [
   "detailEnabled", "csmEnabled", "pomEnabled", "pomForced", "lightClampRetail",
   "__lightClampPatched", "__aoPatched", "__depthBiased", "__floorBiased",
@@ -3230,6 +3434,51 @@ const _LIVE_USERDATA_KEYS = [
   "pomShaderUniforms", "lightClampShaderUniforms",
 ];
 
+// === 2026-10-20 (improvement hunt gpu-shading-2, CSM half) — clone CSM =======
+// The four cache-owned clone families — getCachedFloorBias (EVERY building
+// shell surface: buildings.js applies it to all groups), getCachedStaticBias
+// (cell décor), getCachedCellBaked (baked EnvCell structure, vertexBake default
+// on) and getCachedVariant (VFX variants, incl. the windSwayGpu trees) — are
+// `base.clone()`s. `Material.copy()` keeps the base's `csmEnabled` flag, so the
+// program key says `|c2`, but drops onBeforeCompile, so the CSM receiver hook
+// was never in their programs: under `?csm=on` building shells, cell props and
+// swaying trees never received a sun shadow and sat fully lit (no 0.45..1 shade)
+// beside shadowed terrain and plain statics. Strip-and-reinstall, as
+// makeOwnedVariant does: the CSM hook goes on FIRST (the base composes CSM
+// before its light clamp) and the clone's own patch chains after it.
+//
+// CSM ONLY. POM and the retail light clamp are lost on these clones too, but
+// re-installing either changes the DEFAULT look (light clamp is default-on; POM
+// wants gpu-shading-1 first + an eye test), so their flags are left exactly as
+// the clone copied them and default program keys do not move.
+//
+// The hook is GATED on `this.userData.csmEnabled` at compile time — the very
+// flag the program key reads — so `_reseatSurfaceState` can switch it off when
+// a clone first built from the CSM-carrying fallback re-seats onto a base that
+// has no CSM (additive / translucent / alpha surfaces never get it). A batched
+// or anim-scenery variant shares the clone's userData, so it gates the same way.
+//
+// Without a csmState (CSM is off in every preset) this returns at once:
+// userData, program key and shader string are byte-identical to before.
+const _cloneCsmGated = new WeakSet();
+function _reinstallCloneCsm(clone, base, csmState) {
+  if (!csmState || !clone || _cloneCsmGated.has(clone)) return;
+  if (!(base && base.userData && base.userData.csmEnabled)) return;
+  // Install onto an EMPTY chain so the captured hook is the CSM patch alone,
+  // then splice it (gated) after whatever the clone already carried. On a
+  // fresh clone `prev` is the prototype no-op.
+  const prev = clone.onBeforeCompile;
+  clone.onBeforeCompile = THREE.Material.prototype.onBeforeCompile;
+  if (clone.userData) delete clone.userData.csmEnabled; // the copied, unbacked claim
+  _installCsmShaderPatch(clone, csmState); // sets csmEnabled again (now backed)
+  const csmHook = clone.onBeforeCompile;
+  clone.onBeforeCompile = prev;
+  _chainBeforeCompile(clone, function cloneCsmGate(shader, renderer) {
+    if (this.userData && this.userData.csmEnabled) csmHook.call(this, shader, renderer);
+  });
+  _cloneCsmGated.add(clone);
+}
+
 function _reseatSurfaceState(clone, base) {
   for (const k of _RESEAT_FIELDS) clone[k] = base[k];
   // Colour-valued fields are objects — copy VALUES so the clone never aliases
@@ -3241,6 +3490,18 @@ function _reseatSurfaceState(clone, base) {
   const keep = {};
   for (const k of _RESEAT_KEEP_USERDATA) if (k in prev) keep[k] = prev[k];
   clone.userData = { ...(base.userData || {}), ...keep, __cacheOwned: true };
+  // gpu-shading-2: a clone carrying the gated CSM hook turns it OFF when it
+  // re-seats onto a base without CSM (key and compile both read this flag;
+  // needsUpdate below re-resolves the program). ONE-WAY on purpose: three r184
+  // getProgram reuses a material's cached program for a key it compiled before
+  // WITHOUT re-running onBeforeCompile, keeping the LAST compile's uniforms
+  // object — so flipping back to `|c2` after a `|c0` compile would run the CSM
+  // program with no uCsm* uniforms bound. The realistic flip is fallback (CSM)
+  // -> additive / translucent / alpha base, once; a DID's base keeps its flags
+  // across re-installs. Clones without the hook keep the old behaviour.
+  if (_cloneCsmGated.has(clone) && !(base.userData && base.userData.csmEnabled)) {
+    clone.userData.csmEnabled = false;
+  }
   // Carry the clone's own live handles across — the spread above skips
   // non-enumerable keys, and csm.js reads csmShaderUniforms every frame.
   for (const k of _LIVE_USERDATA_KEYS) {
@@ -4084,6 +4345,8 @@ export class MaterialCache {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
       _inheritHeightTex(base, v);
+      // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
+      _reinstallCloneCsm(v, base, this.csmState);
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
     }
@@ -4116,6 +4379,8 @@ export class MaterialCache {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
       _inheritHeightTex(base, v);
+      // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
+      _reinstallCloneCsm(v, base, this.csmState);
       applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
       this.cellBakedMaterials.set(key, v);
     }
@@ -4164,6 +4429,8 @@ export class MaterialCache {
       v = base.clone();
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
       _inheritHeightTex(base, v);
+      // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
+      _reinstallCloneCsm(v, base, this.csmState);
       applyStaticDepthBias(v);
       this.staticBiasMaterials.set(key, v);
     }
@@ -4200,6 +4467,11 @@ export class MaterialCache {
       // onBeforeCompile/userData). See scene3d/vfx/shadow_guard.js.
       v.userData = { ...(base.userData || {}), __cacheOwned: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
       _inheritHeightTex(base, v);
+      // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off),
+      // ahead of the component patches — a windSwayGpu shear edits
+      // `transformed` at begin_vertex, so the receiver's world position (read
+      // after project_vertex) follows the swaying geometry.
+      _reinstallCloneCsm(v, base, this.csmState);
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
       v.needsUpdate = true;
       this.vfxVariants.set(key, v);
@@ -6358,9 +6630,18 @@ export class MaterialCache {
     // 2026-08-03 — the Luminous path ALIASES the albedo as `emissiveMap`
     // (`applyFloatLumDiffuse`), so every alias must move with `map` or the
     // emissive term samples the RGBA8 twin freed below.
+    //
+    // streaming-hitch-4 (2026-10-20 improvement hunt): each re-pointed slot
+    // bumps `needsUpdate` only when `hdSwapNeedsUpdate` says the swap can move
+    // the program (map presence / uv channel; `?hdSwapBump=on` = always, the
+    // old behaviour). An HD re-seat is map-to-map, so the bump bought nothing
+    // but a skipped asyncLink draw per clone — and, through the batched /
+    // anim-scenery `version` hot key, per bucket. The new texture still lands:
+    // three re-reads `map` / `emissiveMap` into the uniforms on the material's
+    // first draw each frame, and the variant mirrors copy both every frame.
     if (mat.emissiveMap === old) {
       mat.emissiveMap = tex;
-      mat.needsUpdate = true;
+      if (hdSwapNeedsUpdate(old, tex)) mat.needsUpdate = true;
     }
     for (const m of [
       this.frontSideMaterials,
@@ -6372,11 +6653,11 @@ export class MaterialCache {
       if (!clone) continue;
       if (clone.map === old) {
         clone.map = tex;
-        clone.needsUpdate = true;
+        if (hdSwapNeedsUpdate(old, tex)) clone.needsUpdate = true;
       }
       if (clone.emissiveMap === old) {
         clone.emissiveMap = tex;
-        clone.needsUpdate = true;
+        if (hdSwapNeedsUpdate(old, tex)) clone.needsUpdate = true;
       }
     }
     // VFX component variants are keyed by a composite `(did|setKey|configKey)`
@@ -6387,11 +6668,11 @@ export class MaterialCache {
         if (!v) continue;
         if (v.map === old) {
           v.map = tex;
-          v.needsUpdate = true;
+          if (hdSwapNeedsUpdate(old, tex)) v.needsUpdate = true;
         }
         if (v.emissiveMap === old) {
           v.emissiveMap = tex;
-          v.needsUpdate = true;
+          if (hdSwapNeedsUpdate(old, tex)) v.needsUpdate = true;
         }
       }
     }

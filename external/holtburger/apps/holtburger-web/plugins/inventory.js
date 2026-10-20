@@ -831,7 +831,11 @@ function doMount(parentEl, _ctx) {
   const paperdollToast = makePaperdollToast(paperdoll);
   // Wave 14 — 3D character doll viewport (retail gmPaperDollUI::
   // RedressCreature). Renders BEHIND the slot squares.
-  const paperdollViewport = new PaperdollViewport({ width: PAPERDOLL_W, height: PAPERDOLL_H });
+  // 2026-10-20 (improvement hunt hud-audio-2): the inventory's long-lived
+  // viewport, re-parented here on every mount (released, not disposed, in
+  // cleanup) — no WebGL2 context create / program re-link / palette
+  // re-composite per inventory open; an unchanged doll is a loadPlayer no-op.
+  const paperdollViewport = PaperdollViewport.acquire("inventory", { width: PAPERDOLL_W, height: PAPERDOLL_H });
   const viewportWrap = document.createElement("div");
   viewportWrap.className = "hb-inv-paperdoll-viewport";
   viewportWrap.appendChild(paperdollViewport.dom);
@@ -1933,8 +1937,10 @@ function doMount(parentEl, _ctx) {
     for (const o of observers) o.disconnect();
     if (mountedApi) mountedApi = null;
     hideItemTooltip();
-    // Wave 14 — release the WebGL context (Chrome caps live contexts ~16).
-    try { paperdollViewport.dispose(); } catch (_) {}
+    // Wave 14 / hud-audio-2 — hand the doll back: the canvas leaves the
+    // overlay, the context parks for the next open (`?paperdollPersist=off`
+    // restores the old dispose + forceContextLoss here).
+    try { paperdollViewport.release(); } catch (_) {}
     overlay.remove();
   };
 }

@@ -6,6 +6,9 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync, existsSync } from "node:fs";
+// 2026-10-20: the URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (../lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "../lib/bench-url.mjs";
 const require = createRequire(import.meta.url);
 const { chromium } = require("/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core");
 const a = process.argv.slice(2);
@@ -56,7 +59,7 @@ const cdp = await ctx.newCDPSession(pg);
 await cdp.send("Page.enable");
 await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{performance.setResourceTimingBufferSize(1000000)}catch(e){}; window.__coldErr=[]; addEventListener('error',e=>{try{window.__coldErr.push(String(e.message).slice(0,200))}catch(_){}});" });
 const base = `http://${HOSTNAME}:${PORT}/apps/holtburger-web/index.html`;
-const url = `${base}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&bridge_url=ws://${HOSTNAME}:${PORT}/wsbridge&server_host=127.0.0.1&server_port=9000${FLAGS ? "&" + FLAGS : ""}`;
+const url = uncappedBenchUrl(`${base}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&bridge_url=ws://${HOSTNAME}:${PORT}/wsbridge&server_host=127.0.0.1&server_port=9000${FLAGS ? "&" + FLAGS : ""}`);
 const consoleErrors = [];
 pg.on("console", (m) => { if (m.type() === "error" && consoleErrors.length < 200) consoleErrors.push(m.text().slice(0, 300)); });
 const tNav = Date.now();

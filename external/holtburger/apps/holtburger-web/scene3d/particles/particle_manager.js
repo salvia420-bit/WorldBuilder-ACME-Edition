@@ -17,7 +17,7 @@
 
 import * as THREE from "three";
 
-import { ParticleEmitter } from "./particle_emitter.js";
+import { ParticleEmitter, particleFrozenPartFastEnabled } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 // Same mockable physics clock the emitters age on (seconds) — used by the
 // culled count-bounded stop bound below so tests can drive it deterministically.
@@ -723,7 +723,8 @@ export class SharedAlphaBuckets {
       const im = b.im;
       if (b.frame !== frameId || b.n === 0) {
         if (b.idleFrame !== frameId) { b.idleFrame = frameId; b.idle++; }
-        if (im.count !== 0) { im.count = 0; im.instanceMatrix.needsUpdate = true; }
+        // ?particleUploadRange: park = count 0 only (no upload of nothing).
+        _parkBucket(im);
         if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
           try { im.parent?.remove(im); } catch (_) {}
           try { im.material?.dispose?.(); } catch (_) {}
@@ -738,9 +739,9 @@ export class SharedAlphaBuckets {
         try { b.scene.worldToLocal(_sharedCamLocal); } catch (_) {}
         sortFn(im, b.n, _sharedCamLocal);
       }
-      im.count = b.n;
-      im.instanceMatrix.needsUpdate = true;
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      // ?particleUploadRange: count = n and upload only [0, n) (every manager's
+      // finalize re-clears the range, so the last one — with every instance — wins).
+      _publishBucket(im, b.n);
     }
   }
 }
@@ -858,6 +859,72 @@ const _INST_BUCKET_MIN_CAP = 256;
 // enough that a briefly-empty emitter set doesn't thrash the realloc.
 const _INST_BUCKET_IDLE_TICKS = 180;
 
+// ?particleUploadRange (2026-10-20, improvement hunt main-thread-3 / gl-driver-4 /
+// entities-fx-4; DEFAULT ON, `=off`/`0`/`false`/`no` escape) — upload only the
+// DRAWN span of a bucket's instance buffers.
+// Both finalize paths (SharedAlphaBuckets.finalize, _finalizeInstBuckets) set
+// instanceMatrix/instanceColor.needsUpdate with no update range, and three r184
+// WebGLAttributes.updateBuffer then sends `gl.bufferSubData(target, 0, array)` —
+// the WHOLE capacity (≥ `_INST_BUCKET_MIN_CAP` = 256 slots × 76 B = 19.5 KB per
+// bucket per frame; `_growBucket` doubles and never shrinks while the bucket
+// lives) even when n = 4. A parked bucket (count → 0) also flagged one more
+// full upload just to draw nothing. ON: before each needsUpdate the range is
+// re-set to `[0, n × itemSize)` (three clears ranges after every ranged upload,
+// so they are re-added each tick, and clearUpdateRanges first so the shared
+// buckets' several finalizes per frame don't stack them), the park sets
+// count = 0 only, and fresh bucket buffers get the DynamicDraw usage hint the
+// sibling FX buffers carry (particle_fx_kids.js, fx_ribbons.js, fx_showcase.js,
+// animated_scenery.js). Pixel-identical: drawElementsInstanced(count) never
+// reads an instance at or past count, every write (setMatrixAt/setColorAt, the
+// ?fxMotion bottom row, the back-to-front sort) stays inside [0, n), and every
+// upload therefore covers what is drawn when it happens. A fresh buffer (new
+// bucket, `_growBucket`'s replacement, a context restore) still gets its full
+// initial `gl.bufferData` — three's createBuffer ignores update ranges. The
+// fx glow twins share these attribute objects (fx_glow_effect.js _twin), so
+// they ride the same one upload. `=off` restores the old GL call stream exactly
+// (full uploads, park upload, STATIC_DRAW). Read once (memoised).
+let _UPLOAD_RANGE_ON = null;
+export function particleUploadRangeEnabled() {
+  if (_UPLOAD_RANGE_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleUploadRange") || "").trim().toLowerCase();
+      _UPLOAD_RANGE_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _UPLOAD_RANGE_ON = true;
+    }
+  }
+  return _UPLOAD_RANGE_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleUploadRangeFlag(on) { _UPLOAD_RANGE_ON = on == null ? null : !!on; }
+
+/** Publish a bucket's first `n` (> 0) instances: count + this tick's upload. */
+function _publishBucket(im, n) {
+  im.count = n;
+  const m = im.instanceMatrix, c = im.instanceColor;
+  if (particleUploadRangeEnabled()) {
+    m.clearUpdateRanges();
+    m.addUpdateRange(0, n * m.itemSize);
+    if (c) { c.clearUpdateRanges(); c.addUpdateRange(0, n * c.itemSize); }
+  }
+  m.needsUpdate = true;
+  if (c) c.needsUpdate = true;
+}
+/** Park a bucket dark (a stale count would keep drawing last tick's instances). */
+function _parkBucket(im) {
+  if (im.count === 0) return;
+  im.count = 0;
+  // ?particleUploadRange: nothing is drawn, so nothing needs uploading; the next
+  // publish re-uploads [0, n) of whatever it then draws.
+  if (!particleUploadRangeEnabled()) im.instanceMatrix.needsUpdate = true;
+}
+/** ?particleUploadRange: DynamicDraw hint on a FRESH bucket's buffers (before their first upload). */
+function _markBucketDynamic(im) {
+  if (!particleUploadRangeEnabled()) return;
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (im.instanceColor) im.instanceColor.setUsage(THREE.DynamicDrawUsage);
+}
+
 /** Grow a bucket's InstancedMesh in place (double until it fits). */
 function _growBucket(bucket, need, scene) {
   let cap = bucket.im.instanceMatrix.count;
@@ -879,6 +946,7 @@ function _growBucket(bucket, need, scene) {
   // Same for the draw order (`?particleAlphaRetail` stamps the alpha buckets).
   im.renderOrder = old.renderOrder;
   im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+  _markBucketDynamic(im); // ?particleUploadRange (its first upload is the full bufferData)
   // CRITICAL: growth happens MID-TICK, after earlier emitters already wrote
   // `bucket.n` instances into the old buffer. `bucket.n` survives the swap, so
   // without carrying those writes over, slots [0, n) would render whatever the
@@ -1493,6 +1561,35 @@ export function rp6DegradeCapEnabled() {
 /** Test/A-B seam (`null` re-reads the URL on next use). */
 export function setRp6DegradeCapFlag(on) { _RP6_DEGRADE_CAP_ON = on == null ? null : !!on; }
 
+// ?rp6Stagger (2026-10-20, improvement hunt entities-fx-2; DEFAULT ON;
+// `=off`/`0`/`false`/`no` escape) — spread the RP6 re-check over the interval.
+// Every emitter in a manager was re-checked on the SAME tick
+// (`_rp6Frame % interval === 0`), and the statics live in one manager: ~5,000
+// part-anchored drizzle emitters at Linvak Tukal landed one 6-8 ms lump on
+// every 6th frame (laptop node bench). ON: emitter `id` re-checks when
+// `(_rp6Frame + id) % interval === 0`, so each tick carries ~1/interval of
+// them. Each emitter still re-checks exactly once per interval, so the
+// re-entry/cull latency window (0..interval-1 ticks) is unchanged; what moves
+// is WHICH tick inside it a given emitter's cull flip lands on. The frustum is
+// then built every tick (one matrix multiply + six planes). Under
+// ?particleTickOnce's halved interval (a deduplicated second driver) the phase
+// is `id >> 1`, so the re-check lands on the same FRAME the double tick's
+// `(_rp6Frame + id)` phase did (tests/particle_tick_once.test.mjs lock 3).
+let _RP6_STAGGER_ON = null;
+export function rp6StaggerEnabled() {
+  if (_RP6_STAGGER_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("rp6Stagger") || "").trim().toLowerCase();
+      _RP6_STAGGER_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _RP6_STAGGER_ON = true;
+    }
+  }
+  return _RP6_STAGGER_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setRp6StaggerFlag(on) { _RP6_STAGGER_ON = on == null ? null : !!on; }
+
 /**
  * The RP6 distance cap for one emitter: `_RP6.maxDistance`, raised to the
  * emitter's own finite degrade distance under `?rp6DegradeCap` when that is
@@ -1559,23 +1656,54 @@ export function rp6CullSphere(emitter, out) {
   // parents (tests) fall back to their raw position. ?rp6TrueSphere: a
   // part-anchored emitter is centred on its PART (partFrames[i] is WORLD).
   const pi = emitter.partIndex;
-  const partFrame =
-    trueSphere && pi !== -1 && (pi >>> 0) !== 0xffffffff && parent.partFrames
-      ? parent.partFrames[pi]
-      : null;
-  if (partFrame && partFrame.position) {
-    out.copy(partFrame.position);
-  } else if (parent.userData && parent.userData.__anchorFrozen === true && parent.matrixWorld) {
-    // ?staticAnchorFreeze (statics.js): a frozen static anchor's matrixWorld is
-    // exact and constant; getWorldPosition would recompose its parent chain on
-    // every call (3.6% of the main thread at Linvak Tukal, ~10k emitters).
-    out.setFromMatrixPosition(parent.matrixWorld);
-  } else if (typeof parent.getWorldPosition === "function") {
-    parent.getWorldPosition(out);
-  } else if (parent.position) {
-    out.set(parent.position.x ?? 0, parent.position.y ?? 0, parent.position.z ?? 0);
+  // ?frozenPartFast (2026-10-20, improvement hunt entities-fx-2; DEFAULT ON,
+  // `=off` escape — reader in particle_emitter.js, documented in setup_rig.js).
+  // The bf474c67 frozen-anchor read below is an else-if AFTER the
+  // ?rp6TrueSphere part-frame branch, and every Setup static anchor carries
+  // part frames (statics.js attachStaticPartFrames), so for the part-anchored
+  // statics — 6,860 of 7,579 default-script hooks, all of Linvak's drizzle on
+  // part 0 — it never fired: each recheck went through the partFrames proxy
+  // (three updateWorldMatrix walks up to the Scene before setup_rig's frozen
+  // read). A frozen anchor never moves (its subtree stopped auto-updating), so
+  // its centre — part frame or matrixWorld, whichever branch picks it — is
+  // computed once per emitter and copied after that. Keyed on the anchor, the
+  // part index, the ?rp6TrueSphere branch and the anchor's `__scriptEpoch`
+  // (statics.js bumps it on every park / teardown / rebuild claim; those
+  // rebuild the emitters anyway, so a per-emitter cache dies with them).
+  // Bit-identical: the cached value is the very float the branch computed.
+  const pud = parent.userData;
+  const frozenFast = !!pud && pud.__anchorFrozen === true && particleFrozenPartFastEnabled();
+  const fc = frozenFast ? emitter._rp6FrozenCentre : null;
+  if (fc && fc.parent === parent && fc.pi === pi && fc.trueSphere === trueSphere
+      && fc.epoch === (pud.__scriptEpoch | 0)) {
+    out.copy(fc.v);
   } else {
-    return -1; // no position → bail open
+    const partFrame =
+      trueSphere && pi !== -1 && (pi >>> 0) !== 0xffffffff && parent.partFrames
+        ? parent.partFrames[pi]
+        : null;
+    if (partFrame && partFrame.position) {
+      out.copy(partFrame.position);
+    } else if (parent.userData && parent.userData.__anchorFrozen === true && parent.matrixWorld) {
+      // ?staticAnchorFreeze (statics.js): a frozen static anchor's matrixWorld is
+      // exact and constant; getWorldPosition would recompose its parent chain on
+      // every call (3.6% of the main thread at Linvak Tukal, ~10k emitters).
+      out.setFromMatrixPosition(parent.matrixWorld);
+    } else if (typeof parent.getWorldPosition === "function") {
+      parent.getWorldPosition(out);
+    } else if (parent.position) {
+      out.set(parent.position.x ?? 0, parent.position.y ?? 0, parent.position.z ?? 0);
+    } else {
+      return -1; // no position → bail open
+    }
+    if (frozenFast) {
+      const c = fc || (emitter._rp6FrozenCentre = { v: new THREE.Vector3(), parent: null, pi: 0, trueSphere: false, epoch: 0 });
+      c.v.copy(out);
+      c.parent = parent;
+      c.pi = pi;
+      c.trueSphere = trueSphere;
+      c.epoch = pud.__scriptEpoch | 0;
+    }
   }
 
   // The particles' travel from the anchor. Adding it to the frustum-test
@@ -2544,7 +2672,12 @@ export class ParticleManager {
       ? Math.max(1, Math.round(_RP6.recheckInterval / 2))
       : _RP6.recheckInterval;
     const recheck = (this._rp6Frame % interval) === 0;
-    const camera = recheck ? _rp6PrepareFrustum() : null;
+    // ?rp6Stagger: each emitter re-checks on its own phase of the interval
+    // (`(_rp6Frame + id) % interval`, below), so some emitter may be due on
+    // any tick — build the frustum every tick there is one to test.
+    const stagger = rp6StaggerEnabled();
+    const halfPhase = this._frameDupDrivers === true;
+    const camera = (stagger ? this.particleTable.size > 0 : recheck) ? _rp6PrepareFrustum() : null;
 
     // Billboard (2026-06-24): the active camera, resolved EVERY tick (cheap —
     // a single global read), used to face synthesized sprite emitters' flat
@@ -2581,7 +2714,12 @@ export class ParticleManager {
     }
 
     for (const [id, emitter] of this.particleTable) {
-      if (recheck) {
+      // ?rp6Stagger: this emitter's own re-check phase (ids are the manager's
+      // integer counter or the caller's emitter id; anything else → phase 0).
+      const due = stagger
+        ? ((this._rp6Frame + (halfPhase ? ((id >>> 0) >>> 1) : (id >>> 0))) % interval) === 0
+        : recheck;
+      if (due) {
         // Bail open when no camera (camera===null) — never cull on a
         // frame where we can't see the camera.
         const wasCulled = emitter._rp6Culled === true;
@@ -2908,14 +3046,21 @@ export class ParticleManager {
    * emitters — minus the sky chain. Shared alpha buckets are pushed once by
    * `collectParticlesOverClouds`. Filtering (visibility, layers, lit
    * materials) is the collector's job (particles_over_clouds.js).
+   * 2026-10-20 (streaming-hitch-1, `?lateFxWarm`): `all` (the program warm,
+   * particles_over_clouds.js warmLateFx) also pushes the parked buckets
+   * (count 0), every kids layer mesh and every claimed slot mesh, drawn or
+   * not — still never the sky chain.
    */
-  _collectParticlesOverClouds(out) {
+  _collectParticlesOverClouds(out, all = false) {
     for (const b of this._instBuckets.values()) {
       const im = b.im;
-      if (im && im.count > 0 && im.userData?.skyChain !== true) out.push(im);
+      if (im && (all || im.count > 0) && im.userData?.skyChain !== true) out.push(im);
     }
     // Tier 1 `?fxKids`: the children draw with their parents (after the clouds).
-    if (this._kids) this._kids.collect(out);
+    if (this._kids) {
+      if (all) { for (const l of this._kids.layers.values()) if (l.mesh) out.push(l.mesh); }
+      else this._kids.collect(out);
+    }
     for (const e of this.particleTable.values()) {
       // Instanced emitters keep their slot meshes off the graph (_NOOP seams).
       if (e.skyGlow === true || e._onMeshActive === _NOOP) continue;
@@ -2923,7 +3068,7 @@ export class ParticleManager {
       if (!parts) continue;
       for (let i = 0; i < parts.length; i++) {
         const m = parts[i];
-        if (m && m.visible === true && m.parent) out.push(m);
+        if (m && (all || (m.visible === true && m.parent))) out.push(m);
       }
     }
   }
@@ -2981,6 +3126,7 @@ export class ParticleManager {
     // order, a later alpha bucket would paint over spray in front of it.
     if (alpha && particleAlphaRetailEnabled()) im.renderOrder = PARTICLE_ALPHA_RETAIL_ORDER;
     im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+    _markBucketDynamic(im); // ?particleUploadRange — before the first upload
     return im;
   }
 
@@ -3107,11 +3253,9 @@ export class ParticleManager {
       if (b.n === 0) {
         // Idle: park it dark first (a stale `count` would keep drawing last
         // tick's instances), then reap once the idle window elapses so the
-        // grown instance buffers are actually released.
-        if (im.count !== 0) {
-          im.count = 0;
-          im.instanceMatrix.needsUpdate = true;
-        }
+        // grown instance buffers are actually released. ?particleUploadRange:
+        // the park sets count 0 only (no upload of nothing).
+        _parkBucket(im);
         b.idle = (b.idle | 0) + 1;
         if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
           try { im.parent?.remove(im); } catch (_) {}
@@ -3126,9 +3270,8 @@ export class ParticleManager {
       }
       b.idle = 0;
       if (b.alpha && this._instSortCam) _sortBucketBackToFront(im, b.n, this._instSortCam);
-      im.count = b.n;
-      im.instanceMatrix.needsUpdate = true;
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      // ?particleUploadRange: count = n and upload only [0, n), not the capacity.
+      _publishBucket(im, b.n);
     }
   }
 
@@ -3189,11 +3332,14 @@ export class ParticleManager {
  * every manager, for the composer's late pass (drawn after the cloud +
  * aerial composite instead of under it). Registered once at module load;
  * the pipeline filters and hides what it takes. The sky chain is excluded.
+ * `opts.all` (2026-10-20, the `?lateFxWarm` program warm): every bucket,
+ * parked or not (see `_collectParticlesOverClouds`).
  */
-export function collectParticlesOverClouds(out) {
-  for (const m of _allManagers) m._collectParticlesOverClouds(out);
+export function collectParticlesOverClouds(out, opts) {
+  const all = opts?.all === true;
+  for (const m of _allManagers) m._collectParticlesOverClouds(out, all);
   for (const b of sharedAlphaBuckets.buckets.values()) {
-    if (b.im && b.im.count > 0 && b.im.userData?.skyChain !== true) out.push(b.im);
+    if (b.im && (all || b.im.count > 0) && b.im.userData?.skyChain !== true) out.push(b.im);
   }
 }
 registerLateFxSource(collectParticlesOverClouds);
@@ -3202,14 +3348,18 @@ registerLateFxSource(collectParticlesOverClouds);
  * Tier 1 `?fxGlow` (2026-10-10): the composer's glow effect draws every
  * additive FX bucket again, into its glow buffer, through this provider (see
  * particles_over_clouds.js `registerFxGlowProvider`). Alpha buckets are matter,
- * not light, and the sky chain stays as authored.
+ * not light, and the sky chain stays as authored. `opts.all` (2026-10-20, the
+ * `?lateFxWarm` program warm): parked buckets too. Only EXISTING FX buckets —
+ * their tier variants are latched already, so the glow material the warm asks
+ * `materialFor` for latches nothing new (particle_fx.js `_tier1Variant`).
  */
 registerFxGlowProvider({
-  collect(out) {
+  collect(out, opts) {
+    const all = opts?.all === true;
     for (const m of _allManagers) {
       for (const b of m._instBuckets.values()) {
         const im = b.im;
-        if (im && im.count > 0 && !b.alpha && im.userData?.particleFx === true && im.userData?.skyChain !== true) out.push(im);
+        if (im && (all || im.count > 0) && !b.alpha && im.userData?.particleFx === true && im.userData?.skyChain !== true) out.push(im);
       }
     }
   },

@@ -24,8 +24,9 @@
 // `refreshMs` (default 15000 — matches the retail 15 s light tick that
 // tickTerrainSunDir already quantises to). Zero per-frame draw calls.
 // First `scene.environment` assignment recompiles standard materials once
-// (envMap define toggles on); subsequent refreshes swap texture objects
-// only — no recompiles.
+// (envMap define toggles on); subsequent refreshes copy into that same
+// texture object (`?iblStableEnv`, default on) — no recompiles AND no
+// per-material program re-resolve (see readIblStableEnvFlag).
 
 import * as THREE from "three";
 // NIGHT RAMP (2026-08-02, ?nightRamp / ?nightEnv). `lastProbeIntensity` is
@@ -129,6 +130,54 @@ export function readWaterCloudsFlag(search) {
   }
 }
 
+/**
+ * 2026-10-20 (improvement hunt main-thread-1) `?iblStableEnv` (DEFAULT ON;
+ * `off|0|false|no` escape) — `scene.environment` keeps ONE texture object for
+ * the session. three r184's PMREMGenerator.fromScene takes no output target:
+ * every call allocates a new cubeUV target (`_allocateTargets`), so each 15 s
+ * refresh used to hand scene.environment a NEW texture. On the next frame
+ * setProgram saw `materialProperties.envMap !== envMap` for every MeshStandard /
+ * Lambert / Phong material it drew and ran getProgram — programCache
+ * .getParameters + getProgramCacheKey, which run BEFORE its "same program"
+ * early-out — only to land on the program the material already had. No
+ * compile (the old "swap does not recompile" note was right), but measured
+ * ~16 us per material on real r184 over tests/helpers/fake_webgl2.mjs (800
+ * materials: +12.8 ms on that frame) and ~18.6 us per redundant getProgram on
+ * the 1070: a ~10 ms hitch every 15 s at town scale (~600 drawn materials).
+ *
+ * ON: the first refresh's target stays scene.environment; every later
+ * fromScene result is copied into it with `renderer.copyTextureToTexture` and
+ * then freed. For a level-0 render-target texture r184 copies with
+ * copyTexSubImage2D from a read framebuffer: both targets are built by the same
+ * `_createRenderTarget` call shape — 768x1024, RGBA16F half float (copyable
+ * under EXT_color_buffer_float, which three enables at init and which these
+ * half-float targets already need to be rendered at all), same filters, same
+ * CubeUV mapping — so it is an exact texel copy and every material samples the
+ * same values it sampled from the fresh target before. (The fresh fromScene
+ * target is still allocated and freed per refresh, as before: fromScene has no
+ * target parameter, and fromCubemap(…, target) — which has one — is a
+ * different filter chain, not pixel-identical.)
+ * Off, or no copyTextureToTexture / a shape mismatch / a lost-and-restored
+ * context (the kept texture has no GL object) / a throw / a GL error on the
+ * session's first copy (gl.getError-checked once; then off for the session):
+ * the fresh target becomes scene.environment and the old one is disposed (as
+ * before).
+ */
+export function readIblStableEnvFlag(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("iblStableEnv");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** ?iblStableEnv: the session's first N copies are gl.getError()-checked (each a sync). */
+export const STABLE_ENV_GL_CHECKS = 1;
+
 /** Terrain-cube cadence while clouds are composited (the PMREM keeps refreshMs). */
 export const CLOUD_CUBE_REFRESH_MS = 1000;
 
@@ -208,6 +257,12 @@ export class IblEnvironment {
     this._pmrem = new THREE.PMREMGenerator(renderer);
     this._pmrem.compileCubemapShader();
     this._pmremRT = null;
+    // ?iblStableEnv — see readIblStableEnvFlag. Diag
+    // (liveScene3d.iblEnvironment.stableEnvStats): refreshes copied into the
+    // kept target, and refreshes that had to swap although the flag is on.
+    this.stableEnv = readIblStableEnvFlag();
+    this.stableEnvStats = { copies: 0, fallbacks: 0, glError: 0 };
+    this._copyGlChecks = 0;
 
     // HDR half-float — the takram sky writes physical radiance well above
     // 1.0; an RGBA8 cube would clip the sun-side sky and kill the sparkle
@@ -488,18 +543,84 @@ export class IblEnvironment {
     this.cloudComposites += 1;
   }
 
+  /**
+   * ?iblStableEnv: copy a fresh fromScene target into the kept one that is
+   * scene.environment, then free the fresh one. Returns false when the caller
+   * must swap as before: flag off, first refresh, scene.environment replaced
+   * elsewhere, no copy API, a shape mismatch, a kept texture with no GL object
+   * (context lost + restored: three rebuilt its properties, and a refresh is
+   * what re-creates the env — as before), the copy threw, or the session's
+   * first copy raised a GL error (the flag then latches off).
+   */
+  _copyIntoStableEnv(rt) {
+    const keep = this._pmremRT;
+    if (!this.stableEnv || !keep || !rt || keep === rt) return false;
+    const r = this.renderer;
+    const src = rt.texture;
+    const dst = keep.texture;
+    if (!src || !dst || this.scene.environment !== dst || typeof r.copyTextureToTexture !== "function") return false;
+    let dstGl = null;
+    try { dstGl = r.properties?.get?.(dst)?.__webglTexture ?? null; } catch (_) { dstGl = null; }
+    if (!dstGl || rt.width !== keep.width || rt.height !== keep.height ||
+        src.type !== dst.type || src.format !== dst.format || src.mapping !== dst.mapping) {
+      this.stableEnvStats.fallbacks += 1;
+      return false;
+    }
+    const prevTarget = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace();
+    const prevMip = r.getActiveMipmapLevel();
+    // The session's first copy is checked with gl.getError() (shadow_caster_list
+    // .js's depth-blit idiom): a copy the driver rejects raises no exception and
+    // would leave the env frozen at an old sky. One check — each is a pipeline
+    // sync — then the path is trusted.
+    const gl = this._copyGlChecks < STABLE_ENV_GL_CHECKS && typeof r.getContext === "function" ? r.getContext() : null;
+    const checkGl = !!gl && typeof gl.getError === "function";
+    let glErr = 0;
+    try {
+      if (checkGl) for (let k = 0; k < 8 && gl.getError() !== gl.NO_ERROR; k += 1); // drain earlier errors
+      r.copyTextureToTexture(src, dst);
+      if (checkGl) {
+        this._copyGlChecks += 1;
+        glErr = gl.getError();
+      }
+    } catch (_) {
+      this.stableEnvStats.fallbacks += 1;
+      return false;
+    } finally {
+      // r184's copy leaves READ / DRAW framebuffer bound to null (its state
+      // cache knows); re-bind the target fromScene's _cleanup restored.
+      try { r.setRenderTarget(prevTarget, prevFace, prevMip); } catch (_) { /* next setRenderTarget rebinds */ }
+    }
+    if (checkGl && glErr !== gl.NO_ERROR) {
+      // Rejected: stop copying for the session; this refresh swaps (the fresh
+      // target holds the right sky).
+      this.stableEnv = false;
+      this.stableEnvStats.fallbacks += 1;
+      this.stableEnvStats.glError = glErr;
+      return false;
+    }
+    rt.dispose();
+    this.stableEnvStats.copies += 1;
+    return true;
+  }
+
   /** Re-render both environment products from the current sky. */
   refresh(nowMs) {
     this._updateViewPos();
     const hidden = this._hideClipSpace();
     try {
-      // PMREM for standard materials. New RT per call (three has no reuse
-      // API for fromScene); texture-object swap does not recompile programs.
+      // PMREM for standard materials. New RT per call (three r184 has no
+      // reuse API for fromScene).
       const rt = this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7, { position: this._viewPos });
-      const old = this._pmremRT;
-      this.scene.environment = rt.texture;
-      this._pmremRT = rt;
-      if (old) old.dispose();
+      // ?iblStableEnv (default): copy it into the target scene.environment
+      // already holds, so the env texture object never changes and no
+      // material re-resolves its program. First refresh / off: swap.
+      if (!this._copyIntoStableEnv(rt)) {
+        const old = this._pmremRT;
+        this.scene.environment = rt.texture;
+        this._pmremRT = rt;
+        if (old) old.dispose();
+      }
     } finally {
       for (let i = 0; i < hidden.length; i += 1) hidden[i].visible = true;
     }

@@ -79,6 +79,11 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   // functions' "nothing to do" answers.
   registerFullTierMirror: "() => false",
   unregisterFullTierMirror: "() => false",
+  // ./bc7_textures.js — streaming-hitch-4 (2026-10-20): the HD re-point's
+  // needsUpdate decision. Only `_repointAlbedoForDid` calls it, which needs a
+  // landed BC7 / ST5 swap (both unreachable here); true = always bump, the
+  // pre-2026-10-20 answer, so nothing a suite asserts changes shape.
+  hdSwapNeedsUpdate: "() => true",
   // ./xu7_textures.js — ST5 lane-T transcode entry; unreachable flag-OFF.
   transcodeXu7WithNra: "async () => null",
   // ./xu7_textures.js — `?texWorkerEager` (D3-b, 2026-10-09): the production

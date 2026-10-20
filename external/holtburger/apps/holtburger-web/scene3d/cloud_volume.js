@@ -74,6 +74,229 @@ function readCloudWeatherAutoFlag() {
   return _cloudWeatherAutoCache;
 }
 
+// ---------------------------------------------------------------------------
+// 2026-10-20 (improvement hunt gpu-shading-4, OWNER-APPROVED look trade) —
+// `?cloudShadowEvery=N`, DEFAULT 2: march the takram cloud-shadow cascades
+// (ShadowPass: 3 × 512² at `high`, + its temporal resolve) every Nth cloud
+// frame instead of every frame.
+//
+// Why it is cheap in look: the shadow resolve runs at temporalAlpha 0.05 (the
+// constructor below, anti-cycling 2026-08-01), so each fresh march only moves
+// ~5% of a ~20-run exponential history. Marching every 2nd frame keeps the
+// same steady state; the time constant goes ~20 → ~40 frames (≈0.3 s more lag
+// on a drifting shadow edge). Estimated 0.3-0.6 ms GPU at N=2, high/ultra
+// outdoors (verifier's figure; NOT measured — 1070 arm queued).
+//
+// How (no vendor edit): instance-method wrappers on `effect.shadowMaps.update`
+// (the cascade fit, called from CloudsEffect.updateSharedUniforms) and
+// `effect.shadowPass.update` (march + resolve + copyReprojection + swap). On a
+// skipped frame BOTH are held, so the cascade matrices (→ cloudsPass.copyShadow
+// → clouds march, AerialPerspective shafts, the terrain push below) and
+// `shadowPass.outputBuffer` (no swap → same texture) stay a consistent pair in
+// world space. The shadow march gets its OWN frame counter (+1 per executed
+// march) instead of effect.frame, so the shader's `frame % 64` STBN slice still
+// advances one slice per march — handing it effect.frame at N=2 would only ever
+// sample the even slices (the 64-frame cycling fight, constructor comment).
+//
+// Forced runs (and the cadence restarts from them): the first frame after
+// install; any change of cascade count / map size / the shadow render target
+// (quality preset, ?cloudShadowRes, temporalPass toggle — a resized target has
+// lost its contents and a new cascade starts as identity); a camera jump of
+// more than CLOUD_SHADOW_JUMP_M since the last march (teleport / camera cut —
+// running moves < 1 m per frame).
+//
+// Precedent to respect: 6638fd9b frame-skipped the whole cloud composer and was
+// reverted (928841d5, owner: "30 Hz … looks awful") — that held the VISIBLE
+// clouds. This holds only the EMA-filtered shadow map; the clouds still march
+// every frame. Eye test (1070): cloud shadows sweeping over Holtburg fields,
+// shafts during a fast 360° spin, a storm DayGroup.
+//
+// `=1` (or `off`/`0`/`false`) installs NOTHING — the vendor prototype methods
+// run with effect.frame, i.e. exactly the pre-2026-10-20 path. Live A/B:
+// `window.__setCloudShadowEvery(n)` (n ≤ 1 uninstalls). Diag:
+// `window.__cloudStateDiag().shadowCadence`.
+// ---------------------------------------------------------------------------
+export const CLOUD_SHADOW_EVERY_DEFAULT = 2;
+export const CLOUD_SHADOW_EVERY_MAX = 8;
+export const CLOUD_SHADOW_JUMP_M = 25;
+
+/**
+ * `?cloudShadowEvery=N` → the march cadence (integer 1..CLOUD_SHADOW_EVERY_MAX).
+ * Absent / empty / junk / negative → the default (2); `off|false|no|0|1` → 1
+ * (every frame, nothing installed); fractions floor; > MAX clamps.
+ */
+export function parseCloudShadowEvery(search) {
+  let raw = null;
+  try {
+    raw = new URLSearchParams(search ?? '').get('cloudShadowEvery');
+  } catch (_) {
+    raw = null;
+  }
+  if (raw == null) return CLOUD_SHADOW_EVERY_DEFAULT;
+  const s = String(raw).trim().toLowerCase();
+  if (s === '') return CLOUD_SHADOW_EVERY_DEFAULT;
+  if (s === 'off' || s === 'false' || s === 'no') return 1;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return CLOUD_SHADOW_EVERY_DEFAULT;
+  if (n <= 1) return 1;
+  return Math.min(CLOUD_SHADOW_EVERY_MAX, Math.floor(n));
+}
+
+/**
+ * Install the cloud-shadow cadence on a takram CloudsEffect (see the block
+ * above). Returns a controller: `every`, `installed`, `setEvery(n)` (n ≤ 1
+ * uninstalls → vendor path), `uninstall()`, `diag()`. Zero allocation per
+ * frame. If the effect has no shadowMaps/shadowPass update methods (vendor
+ * change), nothing is installed and `every` reads 1.
+ * @param {object} effect — a takram CloudsEffect (or a duck-typed stub)
+ * @param {number} every
+ */
+export function installCloudShadowCadence(effect, every) {
+  const sm = effect && effect.shadowMaps;
+  const sp = effect && effect.shadowPass;
+  const ok = !!(sm && sp && typeof sm.update === 'function' && typeof sp.update === 'function');
+  const c = {
+    every: 1,
+    installed: false,
+    frames: 0,       // shadowPass.update calls seen while installed
+    runs: 0,         // executed marches
+    skips: 0,        // held frames
+    forced: 0,       // runs forced off-cadence
+    lastForced: null, // 'install' | 'resize' | 'jump'
+    marchFrame: 0,   // own frame counter handed to ShadowPass.update (STBN slice)
+    sinceRun: 0,
+    // per-frame decision (shadowMaps.update decides, shadowPass.update obeys)
+    run: true,
+    why: null,
+    decided: false,
+    forceNext: null,
+    // signature at the last executed march
+    cascadeCount: -1, mapW: -1, mapH: -1,
+    target: null, targetW: -1, targetH: -1, targetD: -1,
+    camX: 0, camY: 0, camZ: 0,
+  };
+  let smOrig = null, smOrigOwn = false, smWrap = null;
+  let spOrig = null, spOrigOwn = false, spWrap = null;
+
+  const decide = (camera) => {
+    let why = c.forceNext;
+    const rt = sp.currentRenderTarget || null;
+    const ms = sm.mapSize;
+    const mapW = ms ? ms.x : -1;
+    const mapH = ms ? ms.y : -1;
+    if (why === null && (
+      sm.cascadeCount !== c.cascadeCount || mapW !== c.mapW || mapH !== c.mapH || rt !== c.target ||
+      (rt !== null && (rt.width !== c.targetW || rt.height !== c.targetH || rt.depth !== c.targetD))
+    )) {
+      why = 'resize';
+    }
+    const e = camera && camera.matrixWorld && camera.matrixWorld.elements;
+    if (why === null && e) {
+      const dx = e[12] - c.camX, dy = e[13] - c.camY, dz = e[14] - c.camZ;
+      if (dx * dx + dy * dy + dz * dz > CLOUD_SHADOW_JUMP_M * CLOUD_SHADOW_JUMP_M) why = 'jump';
+    }
+    const run = why !== null || c.sinceRun + 1 >= c.every;
+    c.run = run;
+    c.why = why;
+    c.decided = true;
+    if (run) {
+      c.forceNext = null;
+      c.cascadeCount = sm.cascadeCount;
+      c.mapW = mapW;
+      c.mapH = mapH;
+      c.target = rt;
+      c.targetW = rt ? rt.width : -1;
+      c.targetH = rt ? rt.height : -1;
+      c.targetD = rt ? rt.depth : -1;
+      if (e) { c.camX = e[12]; c.camY = e[13]; c.camZ = e[14]; }
+    }
+  };
+
+  const install = () => {
+    if (c.installed) return;
+    smOrigOwn = Object.prototype.hasOwnProperty.call(sm, 'update');
+    spOrigOwn = Object.prototype.hasOwnProperty.call(sp, 'update');
+    smOrig = sm.update;
+    spOrig = sp.update;
+    smWrap = function cloudShadowMapsCadence(camera, sunDirection, distance) {
+      decide(camera);
+      if (c.run) return smOrig.call(sm, camera, sunDirection, distance);
+      return undefined;
+    };
+    spWrap = function cloudShadowPassCadence(renderer, _frame, deltaTime) {
+      // Fallback: decide here if the cascade fit was not called this frame.
+      if (!c.decided) decide(effect.camera);
+      c.decided = false;
+      c.frames++;
+      if (!c.run) {
+        c.skips++;
+        c.sinceRun++;
+        return undefined;
+      }
+      c.runs++;
+      c.sinceRun = 0;
+      if (c.why !== null) { c.forced++; c.lastForced = c.why; }
+      return spOrig.call(sp, renderer, ++c.marchFrame, deltaTime);
+    };
+    sm.update = smWrap;
+    sp.update = spWrap;
+    c.forceNext = 'install';
+    c.decided = false;
+    c.sinceRun = 0;
+    c.installed = true;
+  };
+
+  const uninstall = () => {
+    if (!c.installed) return;
+    if (sm.update === smWrap) {
+      if (smOrigOwn) sm.update = smOrig;
+      else delete sm.update;
+    }
+    if (sp.update === spWrap) {
+      if (spOrigOwn) sp.update = spOrig;
+      else delete sp.update;
+    }
+    smWrap = spWrap = smOrig = spOrig = null;
+    c.installed = false;
+    c.decided = false;
+  };
+
+  const ctl = {
+    get every() { return c.every; },
+    get installed() { return c.installed; },
+    /** n ≤ 1 → uninstall (vendor path); junk / negative → unchanged. Returns the cadence in force. */
+    setEvery(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v) || v < 0) return c.every;
+      const N = v <= 1 ? 1 : Math.min(CLOUD_SHADOW_EVERY_MAX, Math.floor(v));
+      c.every = ok ? N : 1;
+      if (c.every > 1) install();
+      else uninstall();
+      return c.every;
+    },
+    uninstall() {
+      uninstall();
+      c.every = 1;
+    },
+    /** Plain snapshot for `__cloudStateDiag().shadowCadence` (console use). */
+    diag() {
+      return {
+        every: c.every,
+        installed: c.installed,
+        frames: c.frames,
+        runs: c.runs,
+        skips: c.skips,
+        forced: c.forced,
+        lastForced: c.lastForced,
+        marchFrame: c.marchFrame,
+        jumpM: CLOUD_SHADOW_JUMP_M,
+      };
+    },
+  };
+  ctl.setEvery(every);
+  return ctl;
+}
+
 /**
  * @typedef {Object} SkyState
  * @property {number} dirColorArgb    — sun color u32 ARGB
@@ -225,6 +448,21 @@ export class CloudVolume {
         this.effect.shapeVelocity.set(wx * sr, 0, wz * sr);
         this.effect.shapeDetailVelocity.set(wx * dr, 0, wz * dr);
       }
+    }
+
+    // 2026-10-20 (improvement hunt gpu-shading-4, owner-approved) — march the
+    // cloud-shadow cascades every Nth frame (`?cloudShadowEvery=N`, default 2;
+    // `=1` installs nothing). Read once here; rationale at
+    // installCloudShadowCadence above.
+    {
+      let every = CLOUD_SHADOW_EVERY_DEFAULT;
+      try {
+        every = parseCloudShadowEvery(window.location.search);
+      } catch (_) {}
+      this._shadowCadence = installCloudShadowCadence(this.effect, every);
+      // eslint-disable-next-line no-console
+      console.log('[clouds] cloud-shadow march every ' + this._shadowCadence.every +
+        ' frame(s) (?cloudShadowEvery, default ' + CLOUD_SHADOW_EVERY_DEFAULT + ') — gpu-shading-4 2026-10-20');
     }
 
     // Scratch vec3 so tick() doesn't allocate per-frame.
@@ -578,6 +816,20 @@ export class CloudVolume {
   }
 
   /**
+   * 2026-10-20 (gpu-shading-4) — live cloud-shadow march cadence for the 1070
+   * A/B (`window.__setCloudShadowEvery`). n ≤ 1 restores the vendor path
+   * (wrappers removed); junk leaves it unchanged. Returns the cadence in force.
+   */
+  setShadowCadence(n) {
+    return this._shadowCadence ? this._shadowCadence.setEvery(n) : null;
+  }
+
+  /** `window.__cloudStateDiag().shadowCadence` — {every, installed, runs, skips, …}. */
+  shadowCadenceDiag() {
+    return this._shadowCadence ? this._shadowCadence.diag() : null;
+  }
+
+  /**
    * Read back the current uniform values as a plain object. Used by
    * `cloud_bridge_test.html` to assert the tick() mapping is correct.
    *
@@ -629,6 +881,11 @@ export class CloudVolume {
     this.effect = null;
     this.material = null;
     this._lastState = null;
+    // Drop the shadow-cadence wrappers (back to the vendor methods).
+    if (this._shadowCadence) {
+      this._shadowCadence.uninstall();
+      this._shadowCadence = null;
+    }
     if (effect && typeof effect.dispose === 'function') {
       effect.dispose();
     }
@@ -684,6 +941,13 @@ if (typeof window !== 'undefined') {
     if (!window.liveScene3d) return null;
     window.liveScene3d.__cloudShadowDisabled = !on;
     return !!on;
+  };
+  // 2026-10-20 (gpu-shading-4): live ?cloudShadowEvery — march the cloud
+  // shadow every N frames; 1 = every frame (vendor path, wrappers removed).
+  // eslint-disable-next-line no-undef
+  window.__setCloudShadowEvery = (n) => {
+    const vol = window.liveScene3d?.cloudOverlay?.volume;
+    return vol && typeof vol.setShadowCadence === 'function' ? vol.setShadowCadence(n) : null;
   };
 }
 

@@ -377,10 +377,18 @@ export class ClassMaterialRegistry {
     // precisely the failure mode the atlas's per-bucket key exists to prevent.
     if (material && material.userData && material.userData.__acBakedLight === true) {
       const atlasKey = material2.customProgramCacheKey;
+      // 2026-10-20 (improvement hunt building-fill-2): the same call also
+      // emits `#undef RE_Direct` under suppressDirect + ?bakedDirectOut (the
+      // default), so the pooled interior compiles its discarded direct-light
+      // loops out exactly like the singleton cell-baked material. The composed
+      // key gains a trailing `d` for it (read lazily from the install-time
+      // marker), so `=off` / ?vertexBake=lit keep their old `|k1s` / `|k1`.
       applyBakedVertexLightPatch(material2, { suppressDirect: VERTEX_BAKE.suppressDirect });
       const composed = typeof atlasKey === "function" ? atlasKey.bind(material2) : null;
       material2.customProgramCacheKey = composed
-        ? () => `${composed()}|k1${VERTEX_BAKE.suppressDirect ? "s" : ""}`
+        ? () =>
+            `${composed()}|k1${VERTEX_BAKE.suppressDirect ? "s" : ""}` +
+            `${material2.userData && material2.userData.__acBakedDirectOut ? "d" : ""}`
         : material2.customProgramCacheKey;
       material2.userData.__poolClassBaked = true;
     }

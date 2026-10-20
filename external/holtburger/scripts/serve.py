@@ -874,7 +874,20 @@ class Handler(SimpleHTTPRequestHandler):
              # (default-ON, and until today on the blocking boot path)
              # re-downloaded in full on EVERY page load — brutal over a
              # tunnel. Same revalidating contract as JS: 304 when unchanged.
-             ".png", ".jpg", ".jpeg", ".webp", ".ktx2", ".exr")
+             ".png", ".jpg", ".jpeg", ".webp", ".ktx2", ".exr",
+             # 2026-10-20 (improvement hunt boot-cache-1): the terrain BC7
+             # tiers (scene3d/assets/terrain_bc7/t{128,512,1024}/*.hbc7,
+             # 81 MB at t1024) fell to the no-store branch below by
+             # oversight: a5d5961a put .hbc7 in BIN_COMPRESS_EXTS and never
+             # here. So every warm boot re-downloaded its tier set (in the
+             # foreground under ?nosw=1, the 1070 play URL), the SW's SWR
+             # refresh re-transferred full bodies, and the first context-loss
+             # restore re-fetched ~78 MB (terrain_bc7.js _rebuildTierMips)
+             # with the frame pump parked. Revalidating like the rest: an
+             # unchanged tier collapses to a 304 on both the compressed
+             # path's If-Modified-Since check and the stdlib one. The tier
+             # manifest.json stays no-store (excluded just below).
+             ".hbc7")
         ) and not path.endswith("manifest.json"):
             # Login-boot diagnosis 2026-06-11: no-store forced a full ~23MB /
             # 150-request re-download on EVERY reload and retry cycle.

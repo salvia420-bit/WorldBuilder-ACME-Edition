@@ -702,9 +702,10 @@ function _mipsFromAssembled(assembled) {
  * synchronous path. Worker failure is NEVER silent: `workerTerrainAssemble`
  * counts `terrainFallbacks` on `__texWorkerStats` before throwing, and the
  * catch below warns with the channel name. The transferred payload buffers
- * die with a failed job, so the fallback RE-FETCHES the channel (immutable
- * HTTP cache — the same re-supply rehydrate v3 leans on) before assembling
- * on the main thread.
+ * die with a failed job, so the fallback RE-FETCHES the channel (the SW's
+ * Cache Storage copy, else a revalidating HTTP cache — the same re-supply
+ * rehydrate v3 leans on; see `_rebuildTierMips` for what that costs) before
+ * assembling on the main thread.
  *
  * Flag OFF ⇒ exactly `buildTerrainBc7Array(ch, opts)`, nothing else runs.
  * May THROW (from the sync builder) — callers keep their existing catch.
@@ -828,8 +829,9 @@ function _makeCompressedArrayTexture(mipmaps, size, chLevels, opts = {}) {
 // on the next frame, each its own upload task.
 //
 // MIRRORS. D-05.7 row 1: terrain arrays are FREED post-upload (−88 MiB
-// heap at t1024) and rehydrate by re-fetching their payloads (immutable
-// HTTP cache) → re-assemble → re-upload. The register-the-way-back-FIRST
+// heap at t1024) and rehydrate by re-fetching their payloads (SW Cache
+// Storage, else the HTTP cache revalidated to 304s — NOT immutable, see
+// `_rebuildTierMips`) → re-assemble → re-upload. The register-the-way-back-FIRST
 // ordering is non-negotiable (texture_release.js:117-124 states it; T15R
 // re-states it in bc7_textures.js:294-297): a context loss landing between
 // "dropped the bytes" and "registered the restore" is a permanently black
@@ -1365,9 +1367,24 @@ function _releaseArrayMirror(tex, label, rebuild) {
   return bytes;
 }
 
-/** Re-supply source for a released array: re-fetch the tier's payloads
- *  (immutable HTTP cache) and re-assemble. Shared by the restore pass and,
- *  by construction, identical to what the promotion did. */
+/** Re-supply source for a released array: re-fetch the tier's payloads and
+ *  re-assemble. Shared by the restore pass and, by construction, identical
+ *  to what the promotion did.
+ *
+ *  2026-10-20 (improvement hunt boot-cache-1): this used to say "immutable
+ *  HTTP cache". Nothing makes these URLs immutable (they are stable names,
+ *  not content-addressed), and until today serve.py sent .hbc7 `no-store`,
+ *  so the HTTP cache held NOTHING. The first context loss after promotion
+ *  (the release is one-shot) therefore re-downloaded the whole tier (~78 MB
+ *  at t1024) while the frame pump sat parked under texture_rehydrate.js's
+ *  15 s deadline. Where the bytes come from now:
+ *   - SW active (secure origin, no `?nosw=1`): /scene3d/assets/ is SWR in
+ *     service-worker.js, so Cache Storage answers at once, and the
+ *     background refresh is a conditional request (304, no re-put).
+ *   - No SW (`?nosw=1`, the 1070 play URL, or plain http): the HTTP cache.
+ *     serve.py now sends .hbc7 `no-cache`, i.e. stored but REVALIDATED: one
+ *     If-Modified-Since round trip per payload, answered 304 from the cached
+ *     body. It is a full download only if the browser evicted that body. */
 function _rebuildTierMips(tier, channel) {
   return async () => {
     if (tier === "t128") {

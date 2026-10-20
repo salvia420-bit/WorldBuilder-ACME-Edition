@@ -360,7 +360,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-19 (fps review, second pass — the three A/B arms): + scene3d/canvas_depth.js,
   // scene3d/depth_band_sort.js, scene3d/freeze_world_roots.js (index.js) (generator --check:
   // up to date, 440 modules) → 419.
-  const NON_APP_PRELOADS = 419;
+  // 2026-10-20 (improvement hunt wave 1, A3): + scene3d/bulk_child_remove.js (landblock_lru.js)
+  // (generator --check: up to date, 441 modules) → 420.
+  const NON_APP_PRELOADS = 420;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

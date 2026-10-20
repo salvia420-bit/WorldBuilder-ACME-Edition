@@ -527,17 +527,22 @@ export function createFxFieldsProvider() {
 
 // The additive fields draw with the particles in the late pass; the alpha
 // fields stay in the world pass (they are matter, under the clouds like smoke
-// would be without the late pass). Only visible fields are pushed.
-registerLateFxSource((out) => {
+// would be without the late pass). Only visible fields are pushed — except to
+// the `?lateFxWarm` program warm (2026-10-20, `opts.all`): every field is built
+// at once and most sit hidden (density 0) until their biome / the night comes,
+// so the warm takes the hidden ones too.
+registerLateFxSource((out, opts) => {
   if (!_fields) return;
-  for (const f of _fields) if (f.def.blend === 0 && f.mesh.visible && f.mesh.parent) out.push(f.mesh);
+  const all = opts?.all === true;
+  for (const f of _fields) if (f.def.blend === 0 && (all || (f.mesh.visible && f.mesh.parent))) out.push(f.mesh);
 });
 
-// Fireflies and embers also glow (`?fxGlow`).
+// Fireflies and embers also glow (`?fxGlow`); `opts.all`: the warm, as above.
 registerFxGlowExtras({
-  collect(out) {
+  collect(out, opts) {
     if (!_fields) return;
-    for (const f of _fields) if (f.glowMat && f.mesh.visible) out.push({ object: f.mesh, material: f.glowMat });
+    const all = opts?.all === true;
+    for (const f of _fields) if (f.glowMat && (all || f.mesh.visible)) out.push({ object: f.mesh, material: f.glowMat });
   },
   setFrame({ depthTexture, width, height, camera, isLog, scale }) {
     _glowFrame.uGlowDepth.value = depthTexture || null;

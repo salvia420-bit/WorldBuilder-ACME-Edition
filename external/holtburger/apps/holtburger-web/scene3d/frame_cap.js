@@ -6,12 +6,20 @@
 // (0 = uncapped) once the 3D scene is up; `?targetFps=N` pins the pace for the
 // page and wins — then nothing here calls the setter (`?targetFps=0` pins it
 // uncapped). A page driven by automation (navigator.webdriver: headless and
-// CDP-driven Chrome — the agent, bench and verify pages) is never capped by
-// the policy either, and neither is a page whose window has never had focus
-// (the 1070's off-screen bench Chrome is launched with a debugging port but
-// no automation switch, and nobody ever clicks into it): the cap starts the
-// first time a person focuses the window. So a measurement can't be silently
-// held at 60 / 30 fps; `?targetFps=N` still caps it. This module turns a
+// Playwright-launched Chrome — the local agent and verify pages) is never
+// capped by the policy either, and neither is a page whose window has never
+// had focus: the cap starts the first time the document has focus.
+// 2026-10-20 (improvement hunt recent-rynth-diff-1): neither exemption covers
+// the 1070 bench / probe drivers, so they pin `?targetFps=0` instead
+// (scripts/perf-worker/lib/bench-url.mjs, on every URL they load). Their
+// Chrome is started with only a debugging port (navigator.webdriver false),
+// and Playwright's connectOverCDP turns on Emulation.setFocusEmulationEnabled
+// for every page it attaches to (playwright-core 1.59.1
+// lib/server/chromium/crPage.js:418), so document.hasFocus() is true from the
+// first frame although nobody ever clicks into that window — the cap would
+// hold every arm at 60 fps. A docked DevTools taking focus blurs the page:
+// a manual Performance recording runs at the 30 fps background cap unless the
+// page has `?targetFps=0`. This module turns a
 // policy { enabled, focusedFps, backgroundFps } into that call and follows
 // the window's focus the way scene3d/audio/audio_manager.js tracks activity:
 // focused = !document.hidden && document.hasFocus(), kept current by
@@ -90,7 +98,7 @@ export function createFrameCapDriver({ win = globalThis, doc = null, onPinned = 
   const automated = safe(() => w.navigator?.webdriver === true, false) === true;
   let policy = null;
   let focused = documentFocused(d);
-  let everFocused = focused; // a window nobody ever focused (bench / rig) runs uncapped
+  let everFocused = focused; // a window never focused runs uncapped (a CDP-attached bench reads focused: see the header)
   let applied = { fps: 0, setter: null }; // what this driver last handed to the setter
   let pinnedSaid = false;
   let disposed = false;

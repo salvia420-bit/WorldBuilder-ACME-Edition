@@ -115,7 +115,11 @@ const SKY = { dirHeading: 180, dirPitch: 60, dirBright: 1, dirColorArgb: 0xfffff
 
 // The eye-test URL's frozen drift: with drift on, the weather / shape offsets
 // advance per march and differ by the number of marches, not by the order.
-const BASE = "?cloudDrift=0&cloudShadow=off";
+// 2026-10-20: likewise `cloudShadowEvery=1` — at the default N=2 the recorded
+// frame marches the cloud shadow or holds it by the PHASE of the march count
+// (legacy-first boots run extra marches), not by the boot order
+// (tests/cloud_shadow_cadence.test.mjs covers the cadence itself).
+const BASE = "?cloudDrift=0&cloudShadow=off&cloudShadowEvery=1";
 function session(search, { skyFirst = 0, frames = 20, storm = false } = {}) {
   window.location.search = BASE + (search ? "&" + search.replace(/^\?/, "") : "");
   WX.setWeatherOverride({ is_storm: storm });

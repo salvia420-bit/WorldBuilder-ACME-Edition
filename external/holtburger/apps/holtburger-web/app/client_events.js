@@ -691,9 +691,17 @@ export function dispatchClientEvent(evt, D) {
   } else if (evt.kind === ClientEventKind.INVENTORY_UPDATED) {
     // Phase 4 step 4 follow-on: InventoryUpdated.
     // ObjectCreate / ObjectDelete / WieldObject /
-    // ViewContents / IdentifyObjectResponse all funnel
-    // here. The wasm-side filter excludes entities not
-    // owned by the player.
+    // ViewContents / IdentifyObjectResponse / property
+    // updates all funnel here.
+    // 2026-10-20 (improvement hunt A11): the old line here ("the
+    // wasm-side filter excludes entities not owned by the player")
+    // was false — only the SNAPSHOT filtered by ownership; the signal
+    // fired for every object in view. The recv loop now raises it only
+    // when the subject was or becomes owned / viewed (the player, an
+    // owned item, an open container's contents, a vendor / trade
+    // listing — src/inventory_signal.rs, `?invSignalOwned`, `=off`
+    // restores the every-object signal). ContainerOpened / Closed and
+    // identify responses still always raise it.
     // latency (2026-10-05): coalesced per drain batch like kind=8 above
     // (a full inventory DOM rebuild + MutationObserver paperdoll rebuild
     // per packet was the burst-frame cost).

@@ -99,6 +99,26 @@
 // the per-layer write differ. The bucket KEY gains a format field because a
 // compressed array's format is fixed at allocation and cannot be mixed with
 // RGBA8 layers. See BC7-CLIENT-REPORT.md for the compatibility analysis.
+//
+// memory-1 (2026-10-20 improvement hunt, `?nraSourceRes`, DEFAULT-ON, owner
+// approved the near-field look change) — the nra array is sized at its
+// SOURCES' resolution, not the diffuse's. On BPTC hardware `mat.map` is the x4
+// Remacri BC7 full tier, so a DAT-128 surface made a 512² bucket and the nra
+// array was allocated at 512² too, while every plane packed into it (the wasm
+// Sobel normal, the seam height, the texchan roughness/AO) is DAT size:
+// `_liftChannel` filled each layer with 16 nearest-neighbour copies of every
+// real texel. Measured 150.9 MB of nra arrays on the 1070 at Nanto, ~97% of it
+// in f7 buckets (docs/2026-10-20-improvement-hunt.md §3). Now `_nraDimsFor`
+// takes the max over the member's planes (clamped to the diffuse dims, so a
+// layer can never cost MORE than before), that size joins the bucket key
+// (`|n<w>x<h>`, only when it differs from the diffuse), and every nra
+// allocation / pack / grow / repack / byte count uses it. No shader change:
+// every sample is `textureGrad` in normalized UV with derivatives of
+// `vMapUv`, so each array's own size picks its own mip. Up close the
+// atlased normals and statPom relief become bilinear over the real texels
+// (singleton parity) instead of 4x4 NN blocks; mip >= 2 of an exact x4
+// bucket is unchanged. `?nraSourceRes=off` restores the old sizing exactly
+// (no suffix on any key, nra at the diffuse dims).
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
@@ -222,6 +242,25 @@ export function statAtlasPagesEnabled() {
     }
   } catch (_) { on = true; }
   return (_pagesFlag = on);
+}
+
+// memory-1 (2026-10-20) — `?nraSourceRes`, DEFAULT-ON; `=off|0|false|no` is
+// the escape back to nra arrays sized at the DIFFUSE dims (the x4 BC7 full
+// tier on BPTC hardware). See the header and `_nraDimsFor`. Read once.
+let _nraSrcResFlag;
+export function nraSourceResEnabled() {
+  if (_nraSrcResFlag !== undefined) return _nraSrcResFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = new URLSearchParams(window.location.search).get("nraSourceRes");
+      if (v != null) {
+        const s = String(v).toLowerCase();
+        on = !(s === "off" || s === "0" || s === "false" || s === "no");
+      }
+    }
+  } catch (_) { on = true; }
+  return (_nraSrcResFlag = on);
 }
 
 // === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
@@ -355,8 +394,10 @@ export function buildDiffuseArray(textures, w, h, layerCount) {
 }
 
 // === X5 — the parallel normal/rough/AO ("nra") array =======================
-// Same w/h/capacity/layer-index as the bucket's diffuse array, so ONE `aLayer`
-// attribute and ONE `vMapUv` address both. Linear (NoColorSpace): vector +
+// Same capacity/layer-index as the bucket's diffuse array, so ONE `aLayer`
+// attribute and ONE `vMapUv` address both (normalized UV, so the two arrays
+// need not share w/h — memory-1 sizes this one at its planes' resolution,
+// see `_nraDimsFor`; `?nraSourceRes=off` = the diffuse's w/h). Linear (NoColorSpace): vector +
 // scalar data, never colour. Layers default to the FLAT texel so an unpacked or
 // recycled layer shades exactly like albedo-only v1.
 const _NRA_FLAT_N = 128; // 0.5 -> tangent normal (0,0,1) after decode
@@ -386,11 +427,16 @@ export function buildNraArray(w, h, layerCount) {
   return arr;
 }
 
-// Nearest-neighbour channel lift. The normalMap always matches the albedo's
+// Nearest-neighbour channel lift. The normalMap matches the RGBA8 albedo's
 // dimensions (both go through adapter.js `downscaleRgba` with the same divisor),
 // but the Phase-5 texchan roughness/AO come from a SEPARATE bake whose tile size
 // need not match — resample instead of dropping them. Runs once per unique
 // surface, never per frame.
+// memory-1 (2026-10-20): that "always matches" stopped being true once the BC7
+// swap made `mat.map` the x4 full tier — every plane here is DAT size. With
+// `?nraSourceRes` (default) the layer IS the planes' size (`_nraDimsFor`), so
+// the common case is the `sw === dw` copy below and this lift only resamples
+// a plane whose size genuinely differs from its siblings.
 function _liftChannel(src, sw, sh, srcStride, ch, dw, dh) {
   const out = new Uint8Array(dw * dh);
   if (sw === dw && sh === dh) {
@@ -1091,16 +1137,22 @@ if (typeof window !== "undefined") {
     // BE `capacity`), `capLayers` is the ceiling it is allowed to reach.
     let allocLayers = 0;
     let capLayers = 0;
+    // memory-1 — the nra arrays' CPU-mirror bytes (the GPU holds the same
+    // plus ~1/3 for mips): THE number the `?nraSourceRes` A/B reads.
+    let nraBytes = 0;
     for (const b of _buckets.values()) {
       const ud = b.bm?.userData;
       liveLayers += ud?.layerOf?.size || 0;
       allocLayers += ud?.allocLayers || 0;
       capLayers += ud?.capacity || 0;
+      nraBytes += ud?.nraArray?.image?.data?.length || 0;
     }
     return {
       ..._atlasStats,
       allocLayers,
       capLayers,
+      nraMB: +(nraBytes / (1024 * 1024)).toFixed(1),
+      nraSourceRes: nraSourceResEnabled(),
       growEnabled: statAtlasGrowEnabled(),
       pagesEnabled: statAtlasPagesEnabled(),
       // X5 — the before/after dedup headline. `surfaceRefs` in, `uniqueSurfacesEver`
@@ -1120,6 +1172,7 @@ if (typeof window !== "undefined") {
           capacity: ud.capacity ?? null, alloc: ud.allocLayers ?? null, // X7: alloc <= capacity
           layersUsed: ud.layerOf ? ud.layerOf.size : null,
           nra: !!ud.nraArray, bc7: !!ud.bc7,
+          nraW: ud.nraArray ? (ud.nraW ?? b.w) : null, nraH: ud.nraArray ? (ud.nraH ?? b.h) : null,
           full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
       }),
     };
@@ -1208,9 +1261,70 @@ export function isBc7AtlasTexture(tex) {
 // NOTE the deliberate asymmetry: the `f8` suffix is appended ONLY when the BC7
 // path is live, so with `?texBc7` absent every bucket key is character-identical
 // to the pre-X6 key (bucket identity is used in `bm.name` and `__atlasStats`).
-export function _bucketKeyFor(w, h, stateKey, bc7) {
-  if (!bc7Available()) return `${w}x${h}|${stateKey}`;
-  return `${w}x${h}|${stateKey}|${bc7 ? "f7" : "f8"}`;
+// memory-1 (2026-10-20): the optional trailing (nw, nh) is the bucket's NRA
+// layer size (`_nraDimsFor`). A texture array's dims are fixed by
+// `texStorage3D`, so members whose nra planes differ in size must not share a
+// bucket — the smaller one would be NN-upsampled or the larger one squashed.
+// The `|n<w>x<h>` field is appended ONLY when it differs from the diffuse
+// dims, so every key the pre-memory-1 code could produce (and every key under
+// `?nraSourceRes=off`, where nw/nh always equal w/h) is character-identical.
+// It goes LAST: harness/census-class.mjs parses fields 0..5 positionally and
+// the `|f7` test is `(\||$)`-anchored, so a trailing field is invisible to it.
+export function _bucketKeyFor(w, h, stateKey, bc7, nw, nh) {
+  const n = _nraKeyToken(w, h, nw, nh);
+  if (!bc7Available()) return `${w}x${h}|${stateKey}${n}`;
+  return `${w}x${h}|${stateKey}|${bc7 ? "f7" : "f8"}${n}`;
+}
+
+/** memory-1 — the `|n<w>x<h>` key field, or "" when the nra layer is the
+ *  diffuse size (or no nra size was given). Exported so static_array_pool.js
+ *  composes its pool key from the SAME token rather than a transcription. */
+export function _nraKeyToken(w, h, nw, nh) {
+  if (nw == null || nh == null) return "";
+  if ((nw | 0) === (w | 0) && (nh | 0) === (h | 0)) return "";
+  return `|n${nw | 0}x${nh | 0}`;
+}
+
+/**
+ * memory-1 (2026-10-20, `?nraSourceRes`) — the size of the nra layer a member
+ * whose DIFFUSE layer is w x h should be packed at: the per-axis max over the
+ * planes `packNraLayer` reads (normal, seam height, texchan roughness, AO),
+ * clamped per axis to (w, h) so an nra layer can never cost more than it did
+ * when it was sized at the diffuse. Dims come from `image.width/height`, which
+ * survive a released CPU copy (texture_release.js nulls only `image.data`).
+ *
+ * Members with NO normal and NO height plane get (w, h) — today's size, i.e.
+ * no key field: their nra is flat or texchan-only, and the texchan bake lands
+ * asynchronously (`_nraPending`), so sizing them off a plane that may not exist
+ * yet would make the same surface key differently feed to feed. Texchan dims
+ * only WIDEN a size that a normal/height plane already fixed. (Known, bounded
+ * consequence: a texchan plane LARGER than its normal that lands between two
+ * feeds of one surface keys the second feed into the wider family — one extra
+ * layer for that surface while both are resident, never wrong pixels, and the
+ * served sidecars are DAT size like the normal, so it should not arise.)
+ *
+ * Returns { w, h } = the diffuse dims, unchanged, when nra is off or
+ * `?nraSourceRes=off`.
+ */
+export function _nraDimsFor(mat, w, h) {
+  const dw = w | 0, dh = h | 0;
+  if (!mat || !statNraEnabled() || !nraSourceResEnabled()) return { w: dw, h: dh };
+  let nw = 0, nh = 0;
+  const take = (tex) => {
+    const img = tex && tex.image;
+    const tw = img ? img.width | 0 : 0;
+    const th = img ? img.height | 0 : 0;
+    if (tw > 0 && th > 0) {
+      if (tw > nw) nw = tw;
+      if (th > nh) nh = th;
+    }
+  };
+  take(mat.normalMap);
+  take(heightTexForMaterial(mat));
+  if (!nw || !nh) return { w: dw, h: dh };
+  take(mat.roughnessMap);
+  take(mat.aoMap);
+  return { w: Math.min(dw, nw), h: Math.min(dh, nh) };
 }
 
 /**
@@ -1218,11 +1332,15 @@ export function _bucketKeyFor(w, h, stateKey, bc7) {
  * (diffuse + nra). Lifted verbatim out of `_layerCapacityFor` so the growth
  * sizing and the ceiling arithmetic can never drift apart; the expressions are
  * unchanged, including the `Math.max(1, …)` guard.
+ * memory-1: (nw, nh) is the nra layer size, defaulting to the diffuse's — with
+ * the defaults both arms are the old values exactly (w*h*4*2 === w*h*4 +
+ * w*h*4 in integers).
  */
-export function _perLayerBytesFor(w, h, bc7) {
+export function _perLayerBytesFor(w, h, bc7, nw = w, nh = h) {
   const nra = statNraEnabled();
-  if (bc7) return Math.max(1, bc7LevelBytes(w, h) + (nra ? (w | 0) * (h | 0) * 4 : 0));
-  return Math.max(1, (w | 0) * (h | 0) * 4 * (nra ? 2 : 1));
+  const nraBytes = nra ? (nw | 0) * (nh | 0) * 4 : 0;
+  if (bc7) return Math.max(1, bc7LevelBytes(w, h) + nraBytes);
+  return Math.max(1, (w | 0) * (h | 0) * 4 + nraBytes);
 }
 
 /**
@@ -1232,9 +1350,9 @@ export function _perLayerBytesFor(w, h, bc7) {
  * allocate 4), never below 1. Exported for the regression suite so the sizing
  * is tested where it lives rather than through a transcription of it.
  */
-export function _atlasStartLayersFor(w, h, bc7, capacity) {
+export function _atlasStartLayersFor(w, h, bc7, capacity, nw = w, nh = h) {
   const cap = Math.max(1, capacity | 0);
-  const affordable = Math.floor(_ATLAS_GROW_START_BYTES / _perLayerBytesFor(w, h, bc7));
+  const affordable = Math.floor(_ATLAS_GROW_START_BYTES / _perLayerBytesFor(w, h, bc7, nw, nh));
   return Math.max(1, Math.min(_ATLAS_GROW_START_LAYERS, cap, affordable || 1));
 }
 
@@ -1258,13 +1376,17 @@ export function _atlasGrowTargetFor(alloc, needed, capacity) {
 }
 
 /** The per-bucket layer CEILING (X7: no longer the allocated depth — see the
- *  header). Exported for the regression suite. */
-export function _layerCapacityFor(w, h, bc7) {
+ *  header). Exported for the regression suite.
+ *  memory-1: (nw, nh) = the bucket's nra layer size (default: the diffuse's,
+ *  i.e. the old arithmetic exactly). A smaller nra layer is a cheaper layer, so
+ *  the same per-bucket byte budget affords more of them (still clamped to the
+ *  same `_ATLAS_NRA_MAX_LAYERS` ceiling). */
+export function _layerCapacityFor(w, h, bc7, nw = w, nh = h) {
   // X6 — BC7 layers are 8 bpp, not 32, so the same byte budget buys 4x the
   // layers. The RGBA8 arithmetic below is left untouched (flag-off parity).
   if (bc7) {
     const nra = statNraEnabled();
-    const per = _perLayerBytesFor(w, h, bc7);
+    const per = _perLayerBytesFor(w, h, bc7, nw, nh);
     const ceiling = nra ? _ATLAS_NRA_MAX_LAYERS : _ATLAS_MAX_LAYERS;
     let c = Math.floor(_ATLAS_LAYER_BUDGET_BYTES / per);
     // BYTE-AWARE FLOOR (the trap the RGBA8 path never hit): the flat 32/16-layer
@@ -1282,7 +1404,7 @@ export function _layerCapacityFor(w, h, bc7) {
   // and the ceiling halves — see _ATLAS_NRA_MAX_LAYERS. Flag-off arithmetic is
   // unchanged (arrays === 1, ceiling === _ATLAS_MAX_LAYERS).
   const arrays = statNraEnabled() ? 2 : 1;
-  const per = _perLayerBytesFor(w, h, bc7);
+  const per = _perLayerBytesFor(w, h, bc7, nw, nh);
   const floor = arrays === 2 ? _ATLAS_NRA_MIN_LAYERS : _ATLAS_MIN_LAYERS;
   const ceiling = arrays === 2 ? _ATLAS_NRA_MAX_LAYERS : _ATLAS_MAX_LAYERS;
   let c = Math.floor(_ATLAS_LAYER_BUDGET_BYTES / per);
@@ -1296,19 +1418,19 @@ export function hasAtlasLb(lbKey) {
   return _atlasBakedLbs.has((lbKey >>> 0));
 }
 
-function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth = 0) {
+function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth = 0, nw = w, nh = h) {
   let b = _buckets.get(bucketKey);
   if (b) return b;
   // Perf T5 — a PAGE is allocated at its final depth and is its own ceiling,
   // which makes `_growBucketLayers` unreachable for it (`nextLayer < capacity`
   // fails once `nextLayer === allocLayers`).
-  const capacity = pageDepth > 0 ? pageDepth : _layerCapacityFor(w, h, bc7);
+  const capacity = pageDepth > 0 ? pageDepth : _layerCapacityFor(w, h, bc7, nw, nh);
   // X7 — `capacity` is the CEILING; `alloc` is what is actually allocated now.
   // Disarmed (`?statAtlasGrow=off`) the two are equal, which both restores the
   // pre-X7 allocation byte for byte AND makes `_growBucketLayers` unreachable
   // (the feed's `nextLayer < allocLayers` branch then spans the whole range).
   const alloc = pageDepth > 0 ? pageDepth
-    : statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity;
+    : statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity, nw, nh) : capacity;
   // X6 — a BC7 bucket's array is a CompressedArrayTexture allocated EMPTY at the
   // bucket's fixed (w, h, depth); layers are written with
   // `compressedTexSubImage3D` via `addLayerUpdate` (bc7_textures.js). That is
@@ -1331,11 +1453,13 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   // same per-bucket byte budget the albedo-only arm used (the un-halved first cut
   // OOM-killed the renderer — see _ATLAS_NRA_MAX_LAYERS). X7 grows them TOGETHER,
   // in one `_growBucketLayers` call, so the two depths can never diverge.
-  const nraArray = statNraEnabled() ? buildNraArray(w, h, alloc) : null;
+  // memory-1 — same DEPTH, but its own (nw, nh): the planes' size, which the
+  // bucket key carries, so every member of this bucket packs at exactly it.
+  const nraArray = statNraEnabled() ? buildNraArray(nw, nh, alloc) : null;
   // Perf T4 — one texStorage3D per array, the indivisible spike the slot's
   // allocation cap is for. Counted against the next slot when this feed runs
   // as a W6 continuation (outside the slot).
-  frameWorkCharge({ allocs: nraArray ? 2 : 1, bytes: alloc * _perLayerBytesFor(w, h, bc7) });
+  frameWorkCharge({ allocs: nraArray ? 2 : 1, bytes: alloc * _perLayerBytesFor(w, h, bc7, nw, nh) });
   // X7 — the mutable holder the material's onBeforeCompile closure reads. Owned
   // by the bucket record so a grow-swap is visible to a later RECOMPILE.
   const arrays = { diff: diffArray, nra: nraArray };
@@ -1362,6 +1486,8 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
     diffArray,
     bc7: !!bc7,          // X6: diffArray is a CompressedArrayTexture, not RGBA8
     nraArray,            // X5: null unless ?statNra=on
+    nraW: nw,            // memory-1: the nra layer size (=== w, h when the key
+    nraH: nh,            //   carries no `|n` field, e.g. ?nraSourceRes=off)
     layerOf: new Map(),  // texUuid -> { layer, refs }
     freeLayers: [],      // recycled layer indices (pixels overwritten on reuse)
     capacity,            // X7: the CEILING the doubling clamps to — not the allocation
@@ -1375,7 +1501,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
-  b = { bm, w, h, stateKey, bc7: !!bc7, arrays };
+  b = { bm, w, h, nw, nh, stateKey, bc7: !!bc7, arrays };
   if (bc7) {
     _atlasStats.bc7Buckets++;
     _bumpBc7Stat("atlasBuckets");
@@ -1393,7 +1519,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
  * page with a free or never-used layer; then a NEW page, sized so the family
  * total lands where X7's growth would have put it. Nothing resident moves.
  */
-function _pickAtlasPage(familyKey, w, h, stateKey, scene3d, bc7, uuid) {
+function _pickAtlasPage(familyKey, w, h, stateKey, scene3d, bc7, uuid, nw = w, nh = h) {
   let fam = _families.get(familyKey);
   if (!fam) { fam = { keys: [], seq: 0 }; _families.set(familyKey, fam); }
   let total = 0;
@@ -1409,14 +1535,16 @@ function _pickAtlasPage(familyKey, w, h, stateKey, scene3d, bc7, uuid) {
     }
   }
   if (open) return open;
-  const capacity = _layerCapacityFor(w, h, bc7);
+  // memory-1 — (nw, nh) is part of `familyKey`, so every page of a family
+  // shares one nra size and the family ceiling prices that size.
+  const capacity = _layerCapacityFor(w, h, bc7, nw, nh);
   const depth = total === 0
-    ? (statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity)
+    ? (statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity, nw, nh) : capacity)
     : _atlasGrowTargetFor(total, total + 1, capacity) - total;
   if (depth <= 0) return null;
   const key = fam.seq === 0 ? familyKey : `${familyKey}#p${fam.seq}`;
   fam.seq += 1;
-  const b = _getOrCreateBucket(key, w, h, stateKey, scene3d, bc7, depth);
+  const b = _getOrCreateBucket(key, w, h, stateKey, scene3d, bc7, depth, nw, nh);
   fam.keys.push(key);
   _atlasStats.atlasPages++;
   return { key, b };
@@ -1469,6 +1597,10 @@ function _growBucketLayers(b, needed) {
   if (target <= ud.allocLayers) return false; // at the ceiling — caller passthroughs
   const w = b.w, h = b.h;
   const rgbaStride = (w | 0) * (h | 0) * 4;
+  // memory-1 — the nra array has its OWN layer size (`ud.nraW/H`, === w, h
+  // under `?nraSourceRes=off`), so its prefix copy uses its own stride.
+  const nw = ud.nraW ?? w, nh = ud.nraH ?? h;
+  const nraStride = (nw | 0) * (nh | 0) * 4;
   let newDiff = null;
   let newNra = null;
   try {
@@ -1493,9 +1625,9 @@ function _growBucketLayers(b, needed) {
     if (ud.nraArray) {
       // buildNraArray pre-fills the FLAT texel, so the tail beyond the copied
       // prefix keeps the "unpacked layer shades like albedo-only v1" contract.
-      newNra = buildNraArray(w, h, target);
+      newNra = buildNraArray(nw, nh, target);
       newNra.image.data.set(
-        ud.nraArray.image.data.subarray(0, ud.allocLayers * rgbaStride), 0);
+        ud.nraArray.image.data.subarray(0, ud.allocLayers * nraStride), 0);
     }
   } catch (e) {
     // Out of memory / allocation refused: drop the partial pair and leave the
@@ -1530,7 +1662,7 @@ function _growBucketLayers(b, needed) {
   try { oldNra && oldNra.dispose && oldNra.dispose(); } catch (_) {}
   _atlasStats.layerGrows++;
   _atlasStats.layerGrowUploads += ud.nextLayer;
-  frameWorkCharge({ allocs: newNra ? 2 : 1, bytes: target * _perLayerBytesFor(w, h, ud.bc7) }); // perf T4
+  frameWorkCharge({ allocs: newNra ? 2 : 1, bytes: target * _perLayerBytesFor(w, h, ud.bc7, nw, nh) }); // perf T4
   return true;
 }
 
@@ -1672,15 +1804,19 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       if (!w || !h) { _atlasStats.ptNoWH++; passthrough.push(n); continue; }
       const stateKey = _stateKeyOf(mat);
       const uuid = tex.uuid;
-      let bucketKey = _bucketKeyFor(w, h, stateKey, bc7Tex);
+      // memory-1 — the nra layer size joins the key (and only differs from
+      // (w, h) under `?nraSourceRes` when the member's planes are smaller than
+      // its diffuse, i.e. the x4 BC7 full tier over DAT-size planes).
+      const nraDims = _nraDimsFor(mat, w, h);
+      let bucketKey = _bucketKeyFor(w, h, stateKey, bc7Tex, nraDims.w, nraDims.h);
       let b;
       if (statAtlasPagesEnabled()) {
-        const page = _pickAtlasPage(bucketKey, w, h, stateKey, scene3d, bc7Tex, uuid);
+        const page = _pickAtlasPage(bucketKey, w, h, stateKey, scene3d, bc7Tex, uuid, nraDims.w, nraDims.h);
         if (!page) { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // family at its ceiling
         bucketKey = page.key;
         b = page.b;
       } else {
-        b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7Tex);
+        b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7Tex, 0, nraDims.w, nraDims.h);
       }
       const bm = b.bm;
       const ud = bm.userData;
@@ -1761,7 +1897,9 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         // pixels above: same texture ⇒ same DID ⇒ same category ⇒ same
         // normalScale/roughness, so the first-writer choice carries no drift.
         if (ud.nraArray) {
-          const full = packNraLayer(ud.nraArray, entry.layer, mat, w, h, _atlasStats);
+          // memory-1 — packed at the bucket's nra size, not the diffuse's.
+          const nw = ud.nraW ?? w, nh = ud.nraH ?? h;
+          const full = packNraLayer(ud.nraArray, entry.layer, mat, nw, nh, _atlasStats);
           // Same single-layer dirty mark as the diffuse write above.
           if (typeof ud.nraArray.addLayerUpdate === "function") ud.nraArray.addLayerUpdate(entry.layer);
           touchedNra.add(ud.nraArray);
@@ -1770,7 +1908,8 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           // S3: with a seam-height field in hand the alpha channel never wants
           // the texchan AO, so only the roughness bake is worth waiting for.
           if (!mat.roughnessMap || (!heightTexForMaterial(mat) && !mat.aoMap)) {
-            _nraPending.push({ ud, layer: entry.layer, mat, w, h, texUuid: uuid, tries: 0, full });
+            // w/h here are the NRA layer dims — the only thing the drain packs.
+            _nraPending.push({ ud, layer: entry.layer, mat, w: nw, h: nh, texUuid: uuid, tries: 0, full });
           }
         }
       }
@@ -2080,7 +2219,9 @@ function _drainNraPending() {
       // Scratch tally: the layer's normal was already counted at first pack;
       // only the newly-arrived rough/AO channels are added to the census.
       const s = { nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0, nraResampled: 0, nraMetalDropped: 0 };
-      packNraLayer(p.ud.nraArray, p.layer, p.mat, p.w, p.h, s);
+      // memory-1 — the bucket's nra layer size (the feed queued the same
+      // dims in p.w/p.h; the bucket record is the authority).
+      packNraLayer(p.ud.nraArray, p.layer, p.mat, p.ud.nraW ?? p.w, p.ud.nraH ?? p.h, s);
       // Single-layer dirty mark — see the feed path; keeps the ~10 Hz repack
       // from re-uploading the whole nra array per drained entry.
       if (typeof p.ud.nraArray.addLayerUpdate === "function") p.ud.nraArray.addLayerUpdate(p.layer);
@@ -2663,7 +2804,8 @@ if (typeof window !== "undefined") {
 /**
  * Reset the cross-LB bucket state and (optionally) force the flag memos.
  * `opts.grow` / `opts.nra` accept a boolean to pin `statAtlasGrowEnabled()` /
- * `statNraEnabled()`; omitted leaves the memo cleared, so the next call
+ * `statNraEnabled()` (and `opts.pages` / `opts.nraSourceRes` the same for
+ * their flags); omitted leaves the memo cleared, so the next call
  * re-resolves from the URL (i.e. the armed defaults under node).
  */
 export function _resetStatAtlasForTest(opts = {}) {
@@ -2685,6 +2827,7 @@ export function _resetStatAtlasForTest(opts = {}) {
   _growFlag = typeof opts.grow === "boolean" ? opts.grow : undefined;
   _pagesFlag = typeof opts.pages === "boolean" ? opts.pages : undefined;
   _nraFlag = typeof opts.nra === "boolean" ? opts.nra : undefined;
+  _nraSrcResFlag = typeof opts.nraSourceRes === "boolean" ? opts.nraSourceRes : undefined; // memory-1
 }
 
 /** The live bucket map (bucketKey -> { bm, w, h, stateKey, bc7, arrays }). */

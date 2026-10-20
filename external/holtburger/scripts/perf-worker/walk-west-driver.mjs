@@ -18,6 +18,9 @@
 
 import pw from '/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core/index.js';
 import fs from 'fs';
+// 2026-10-20: the URL pins ?targetFps=0 so the page's 60/30 VTank frame cap
+// never paces the walk (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from './lib/bench-url.mjs';
 const { chromium } = pw;
 
 const OUT = process.env.OUT || `/mnt/wbterminal1/tmp/claude-scratch/perf/walk-west-${Date.now()}`;
@@ -171,11 +174,11 @@ let phase = 'boot';
     } catch (e) {}
   });
 
-  const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html`
+  const url = uncappedBenchUrl(`http://127.0.0.1:8765/apps/holtburger-web/index.html`
     + `?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first`
     + `&renderer=3d&quality=${QUALITY}&agentic=${AGENTIC}&pvsRingRadius=${PVS}&nosw=1&renderDiag=on`
     + (BAKE_WORKER ? '&bakeWorker=1' : '')
-    + (WIREFRAME ? '&wireframe=1' : '');
+    + (WIREFRAME ? '&wireframe=1' : ''));
   log(`goto ${url}`);
   await page.goto(url, { waitUntil: 'commit', timeout: 60000 });
 

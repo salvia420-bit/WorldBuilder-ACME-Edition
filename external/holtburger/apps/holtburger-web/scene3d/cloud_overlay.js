@@ -1313,6 +1313,9 @@ export function cloudStateSnapshot(overlay, renderer, opts = {}) {
     };
     out.mainPass = overlay.mainPassActive === true;
     out.frame = eff.frame ?? null;
+    // 2026-10-20 (gpu-shading-4): ?cloudShadowEvery — the cloud-shadow march
+    // cadence in force (every, installed, runs/skips/forced, own march frame).
+    out.shadowCadence = typeof vol.shadowCadenceDiag === 'function' ? vol.shadowCadenceDiag() : null;
     out.stbn = diagTextureInfo(cm && cm.uniforms && cm.uniforms.stbnTexture && cm.uniforms.stbnTexture.value);
     out.depth = diagTextureInfo(cm && cm.uniforms && cm.uniforms.depthBuffer && cm.uniforms.depthBuffer.value);
     out.resolution = cm && cm.uniforms && cm.uniforms.resolution ? cm.uniforms.resolution.value.toArray() : null;

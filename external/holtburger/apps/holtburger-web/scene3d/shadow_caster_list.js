@@ -32,6 +32,42 @@
 // anyway; identity of order is a stronger property than the output needs.) The
 // stand-in root itself is never drawn — it is a plain Object3D, not a Mesh.
 //
+// SORTED BY DEPTH PROGRAM (2026-10-20, improvement hunt shadows-restore-6;
+// `?shadowCasterSort`, DEFAULT ON, `=off` escape, live seam
+// `window.__shadowCasterList.sortOff`). three r184 draws every opaque caster
+// with ONE shared depth material (WebGLShadowMap.getDepthMaterial's
+// `_depthMaterial`; the swaying ones with sway_shadow.js's), and
+// WebGLRenderer.setProgram re-resolves a material's program — getParameters +
+// getProgramCacheKey + a uniform-list rebuild — whenever the object kind it is
+// drawn for changes (BatchedMesh vs not, its colour texture, InstancedMesh vs
+// not, instance colours / morphs, skinning, morph targets) or its version moved
+// (the shared material's alphaTest crossing 0). Walk order interleaves per-LB
+// batches, singletons and instanced statics, so a raster paid one re-resolve
+// per kind change, per light. The list handed to three is now stable-sorted by
+// that kind (`depthProgramKind`), so each depth material sees each kind once
+// per light. Depth is order-free (LessEqual / GreaterEqual keeps the min / max
+// either way) and the receivers read only the depth texture, so every map is
+// the same; draws, frustum tests and onBeforeShadow calls are the same set,
+// in kind order (walk order within a kind; a candidate's own subtree still
+// follows it). VSM rasters (they also take receivers, and blur the colour) are
+// left in walk order. `stats.lastRunsBefore` / `lastRunsAfter` count kind runs
+// in walk order / as handed over — the re-resolves a depth material could pay
+// per light, before / after. The real count is opt-in (`?shadowProgramStats=on`
+// or `__shadowCasterList.programStats = true`): renderBufferDirect is wrapped
+// for the raster and three's own predicate is evaluated per draw against
+// `renderer.properties` → `stats.programChanges` / `lastProgramChanges`.
+//
+// OFF-SCREEN RIGS (2026-10-20, improvement hunt shadows-restore-8,
+// `?csmOffscreenCasters=on`, DEFAULT OFF; the selection is lighting.js
+// selectOffscreenCasters). lighting.js stamps `shadowMap.__hbShadowOnlyRoots`:
+// rig roots the render cull hid for being off the screen whose shadow can
+// still reach it. Both raster paths collect the meshes BELOW each such root
+// (the root's own `visible === false` is the cull's, not the rig's) after
+// refreshing its world matrices, as long as it is still hidden, still under the
+// dynamic root and every ancestor is drawn. three's renderObject never looks
+// above the node it is handed, so those meshes draw like any other caster.
+// Never stamped without the flag: nothing changes.
+//
 // ?shadowStaticCache (fps wave 1, 2026-10-17; the second half of this file)
 // runs INSIDE this wrapper, first: for the managed CSM lights it may split a
 // raster into a static-only pass, depth blits and a dynamic-only pass (stand-in
@@ -71,7 +107,33 @@ export function shadowCasterListEnabled() {
   return FLAG;
 }
 
-const ctl = { off: false };
+/** `?shadowCasterSort` (shadows-restore-6) — default ON; `off`/`0`/`false`/`no` disables. */
+export function shadowCasterSortFlag(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("shadowCasterSort") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+const SORT_FLAG = shadowCasterSortFlag();
+
+/** `?shadowProgramStats` (shadows-restore-6) — OPT-IN, exact `on`. */
+export function shadowProgramStatsFlag(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    return (new URLSearchParams(s).get("shadowProgramStats") || "").toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+export function shadowCasterSortEnabled() {
+  return SORT_FLAG;
+}
+
+const ctl = { off: false, sortOff: !SORT_FLAG, programStats: shadowProgramStatsFlag() };
 const stats = {
   walks: 0,        // rasters served from the candidate list
   passthrough: 0,  // rasters handed to three unchanged (off / type change)
@@ -80,6 +142,22 @@ const stats = {
   visited: 0,      // cumulative
   listed: 0,       // cumulative
   reinstalls: 0,   // wrappers put on the new map a context restore built
+  // shadows-restore-6 — ?shadowCasterSort (see the header).
+  sorts: 0,          // candidate lists stable-sorted by depth-program kind
+  reorders: 0,       // ...of which were not already one run per kind
+  lastKinds: 0,      // distinct kinds in the last sorted list
+  lastRunsBefore: 0, // kind runs of the last list in walk order
+  lastRunsAfter: 0,  // ...as handed to three (= lastKinds when sorted)
+  runsBefore: 0,     // cumulative
+  runsAfter: 0,      // cumulative
+  // Opt-in (?shadowProgramStats=on / programStats seam): three's own
+  // needsProgramChange predicate per shadow draw.
+  programChanges: 0,
+  lastProgramChanges: 0,
+  programDraws: 0,
+  // shadows-restore-8 — ?csmOffscreenCasters (lighting.js stamps the roots).
+  lastShadowOnly: 0, // shadow-only rig roots collected by the last raster
+  shadowOnly: 0,     // cumulative
 };
 
 // renderer -> the shadow map its wrapper is on / its restore listener.
@@ -133,6 +211,178 @@ function standInRoot(name) {
   r.matrixAutoUpdate = false;
   r.matrixWorldAutoUpdate = false;
   return r;
+}
+
+// --- shadows-restore-6: depth-program kind sort ------------------------------
+
+const KIND_N = 256;
+const _kindStart = new Uint32Array(KIND_N);
+let _kindKeys = new Uint8Array(1024);
+const _sortScratch = [];
+
+/**
+ * The part of three r184's per-draw program state a shadow caster decides
+ * (WebGLRenderer.setProgram's needsProgramChange chain, the bits a depth
+ * material can see change between objects), plus whether it puts an alphaTest
+ * > 0 on the SHARED depth material (a 0-crossing bumps its version). Casters
+ * three gives a per-material depth variant (map / alphaMap + alphaTest,
+ * alphaToCoverage, displacement) never flip the shared one. Bits:
+ *   1 BatchedMesh, 2 its colour texture, 4 InstancedMesh, 8 instance colours,
+ *   16 instance morphs, 32 SkinnedMesh, 64 morph targets, 128 shared alphaTest.
+ */
+export function depthProgramKind(o) {
+  let k = 0;
+  if (o.isBatchedMesh === true) {
+    k = 1;
+    if (o._colorsTexture != null) k |= 2;
+  } else if (o.isInstancedMesh === true) {
+    k = 4;
+    if (o.instanceColor != null) k |= 8;
+    if (o.morphTexture != null) k |= 16;
+  }
+  if (o.isSkinnedMesh === true) k |= 32;
+  if (o.morphTargetInfluences !== undefined) k |= 64;
+  if (o.customDepthMaterial === undefined) {
+    const m = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (m && m.alphaTest > 0 && !m.map && !m.alphaMap && m.alphaToCoverage !== true &&
+      !(m.displacementMap && m.displacementScale !== 0)) k |= 128;
+  }
+  return k;
+}
+
+/**
+ * Stable counting sort of a candidate list by depthProgramKind, in place.
+ * Lists already one run per kind (the common single-kind case) are left as
+ * they are. Records the run counts on `stats`.
+ */
+function sortByDepthKind(list) {
+  const n = list.length;
+  if (n === 0) return;
+  if (_kindKeys.length < n) _kindKeys = new Uint8Array(Math.max(n, _kindKeys.length * 2));
+  const keys = _kindKeys;
+  _kindStart.fill(0);
+  let runs = 0;
+  let prev = -1;
+  for (let i = 0; i < n; i += 1) {
+    const k = depthProgramKind(list[i]);
+    keys[i] = k;
+    _kindStart[k] += 1;
+    if (k !== prev) runs += 1;
+    prev = k;
+  }
+  let kinds = 0;
+  let acc = 0;
+  for (let k = 0; k < KIND_N; k += 1) {
+    const c = _kindStart[k];
+    if (c) kinds += 1;
+    _kindStart[k] = acc;
+    acc += c;
+  }
+  stats.sorts += 1;
+  stats.lastKinds = kinds;
+  stats.lastRunsBefore = runs;
+  stats.runsBefore += runs;
+  stats.lastRunsAfter = kinds;
+  stats.runsAfter += kinds;
+  if (runs === kinds) return; // each kind is already one run
+  stats.reorders += 1;
+  _sortScratch.length = n;
+  for (let i = 0; i < n; i += 1) _sortScratch[_kindStart[keys[i]]++] = list[i];
+  for (let i = 0; i < n; i += 1) list[i] = _sortScratch[i];
+  _sortScratch.length = 0; // hold no scene references
+}
+
+/** Sort when the seam allows it (never for VSM rasters). */
+function maybeSort(list, vsm) {
+  if (ctl.sortOff || vsm) return;
+  sortByDepthKind(list);
+}
+
+/**
+ * three r184's needsProgramChange chain for one draw (WebGLRenderer.setProgram),
+ * the terms a shadow raster can trip: the material's version, and the object
+ * kind its program was resolved for. The rest (lights, colour space, env map,
+ * fog, clipping, vertex alphas / tangents, tone mapping, probe grid) are fixed
+ * for a depth material inside a shadow pass.
+ */
+function wouldChangeProgram(mp, material, object, geometry) {
+  if (!mp || mp.currentProgram === undefined || material.version !== mp.__version) return true;
+  const batched = object.isBatchedMesh === true;
+  if (batched !== (mp.batching === true)) return true;
+  if (batched && ((mp.batchingColor === true && object.colorTexture === null) ||
+    (mp.batchingColor === false && object.colorTexture !== null))) return true;
+  const inst = object.isInstancedMesh === true;
+  if (inst !== (mp.instancing === true)) return true;
+  if ((object.isSkinnedMesh === true) !== (mp.skinning === true)) return true;
+  if (inst && ((mp.instancingColor === true && object.instanceColor === null) ||
+    (mp.instancingColor === false && object.instanceColor !== null))) return true;
+  if (inst && ((mp.instancingMorph === true && object.morphTexture === null) ||
+    (mp.instancingMorph === false && object.morphTexture !== null))) return true;
+  const ma = geometry && geometry.morphAttributes;
+  if (ma) {
+    if (mp.morphTargets !== !!ma.position || mp.morphNormals !== !!ma.normal || mp.morphColors !== !!ma.color) return true;
+    const attr = ma.position || ma.normal || ma.color;
+    if (mp.morphTargetsCount !== (attr !== undefined ? attr.length : 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Opt-in counter (?shadowProgramStats=on): wrap `renderer.renderBufferDirect`
+ * for one raster and count the draws whose program three re-resolves. Returns
+ * the restore function, or null when not armed / not possible. Reads
+ * `renderer.properties` live (three replaces it on a context restore).
+ */
+function armProgramCount(renderer) {
+  if (!ctl.programStats || !renderer) return null;
+  const orig = renderer.renderBufferDirect;
+  const props = renderer.properties;
+  if (typeof orig !== "function" || !props || typeof props.get !== "function") return null;
+  let n = 0;
+  renderer.renderBufferDirect = function renderBufferDirectCounted(camera, scene, geometry, material, object, group) {
+    stats.programDraws += 1;
+    if (material && object) {
+      let mp = null;
+      try { mp = props.get(material); } catch (_) { mp = null; }
+      if (wouldChangeProgram(mp, material, object, geometry)) n += 1;
+    }
+    return orig.call(this, camera, scene, geometry, material, object, group);
+  };
+  return () => {
+    renderer.renderBufferDirect = orig;
+    stats.lastProgramChanges = n;
+    stats.programChanges += n;
+  };
+}
+
+// --- shadows-restore-8: shadow-only rigs ------------------------------------
+
+/**
+ * Append the casters below each still-hidden shadow-only root (lighting.js
+ * `__hbShadowOnlyRoots`) to `out`, world matrices refreshed first. A root that
+ * is visible again (the main pass walks it), left the dynamic root, or sits
+ * under a hidden ancestor is skipped. Returns the roots collected.
+ */
+function collectShadowOnly(sm, scene, camLayers, vsm, out) {
+  const roots = sm.__hbShadowOnlyRoots;
+  stats.lastShadowOnly = 0;
+  if (!roots || roots.length === 0) return 0;
+  const dynRoot = sm.__hbShadowDynamicRoot;
+  if (!dynRoot) return 0;
+  let n = 0;
+  for (let i = 0; i < roots.length; i += 1) {
+    const r = roots[i];
+    if (!r || r.visible !== false || !r.parent || !_under(r, dynRoot) || !_drawnUnder(r.parent, scene)) continue;
+    // ?skipHiddenMatrix skipped this subtree in the scene walk: bring the
+    // root and every part up to this frame's pose (three's on-demand path).
+    try { r.updateWorldMatrix(false, true); } catch (_) { continue; }
+    const ch = r.children;
+    for (let k = 0, l = ch.length; k < l; k += 1) collect(ch[k], camLayers, vsm, out);
+    n += 1;
+  }
+  stats.lastShadowOnly = n;
+  stats.shadowOnly += n;
+  return n;
 }
 
 /**
@@ -202,30 +452,42 @@ function _wrapShadowMap(renderer, sm, prevType) {
       stats.passthrough += 1;
       return orig.call(this, lights, scene, camera);
     }
-    // Cached statics + dynamic overlay, when it applies (returns false to fall
-    // through to the single pass below — off, not applicable, all NORMAL).
-    if (shadowStaticCacheRender(cacheCtx, this, lights, scene, camera)) {
-      stats.walks += 1;
-      return undefined;
-    }
-    list.length = 0;
-    let visited = 0;
+    // shadows-restore-6 (opt-in): count three's program re-resolves for this
+    // raster; restored before returning, whichever path draws.
+    const endCount = armProgramCount(renderer);
     try {
-      visited = collect(scene, camera.layers, sm.type === THREE.VSMShadowMap, list);
-    } catch (_) {
+      // Cached statics + dynamic overlay, when it applies (returns false to fall
+      // through to the single pass below — off, not applicable, all NORMAL).
+      if (shadowStaticCacheRender(cacheCtx, this, lights, scene, camera)) {
+        stats.walks += 1;
+        return undefined;
+      }
       list.length = 0;
-      stats.passthrough += 1;
-      return orig.call(this, lights, scene, camera);
-    }
-    stats.walks += 1;
-    stats.lastVisited = visited;
-    stats.lastListed = list.length;
-    stats.visited += visited;
-    stats.listed += list.length;
-    try {
-      return orig.call(this, lights, root, camera);
+      let visited = 0;
+      const vsm = sm.type === THREE.VSMShadowMap;
+      try {
+        visited = collect(scene, camera.layers, vsm, list);
+        // shadows-restore-8 (?csmOffscreenCasters=on): shadow-only rigs.
+        if (sm.__hbShadowOnlyRoots) collectShadowOnly(sm, scene, camera.layers, vsm, list);
+        // shadows-restore-6: one run per depth-program kind.
+        maybeSort(list, vsm);
+      } catch (_) {
+        list.length = 0;
+        stats.passthrough += 1;
+        return orig.call(this, lights, scene, camera);
+      }
+      stats.walks += 1;
+      stats.lastVisited = visited;
+      stats.lastListed = list.length;
+      stats.visited += visited;
+      stats.listed += list.length;
+      try {
+        return orig.call(this, lights, root, camera);
+      } finally {
+        list.length = 0; // hold no scene references between frames
+      }
     } finally {
-      list.length = 0; // hold no scene references between frames
+      if (endCount) endCount();
     }
   };
   Object.defineProperty(sm, "__hbCasterList", { value: { orig, root }, configurable: true });
@@ -236,6 +498,13 @@ function _wrapShadowMap(renderer, sm, prevType) {
         stats,
         get off() { return ctl.off; },
         set off(v) { ctl.off = !!v; },
+        // shadows-restore-6: live A/B of the kind sort, and the opt-in
+        // re-resolve counter (stats.programChanges / lastProgramChanges).
+        sortEnabled: SORT_FLAG,
+        get sortOff() { return ctl.sortOff; },
+        set sortOff(v) { ctl.sortOff = !!v; },
+        get programStats() { return ctl.programStats; },
+        set programStats(v) { ctl.programStats = !!v; },
       };
     } catch (_) {}
   }
@@ -264,6 +533,9 @@ export function getShadowCasterListStats() {
 
 /** Test seam. */
 export function __setShadowCasterListOffForTest(v) { ctl.off = !!v; }
+/** Test seams (shadows-restore-6): the kind sort and the re-resolve counter. */
+export function __setShadowCasterSortOffForTest(v) { ctl.sortOff = !!v; }
+export function __setShadowProgramStatsForTest(v) { ctl.programStats = !!v; }
 
 // ===========================================================================
 // ?shadowStaticCache — keep each shadow cascade's STATIC depth in a cache and,
@@ -286,17 +558,22 @@ export function __setShadowCasterListOffForTest(v) { ctl.off = !!v; }
 // (which owns the caster walk), each managed light three is about to raster
 // takes one of three modes:
 //
-//   NORMAL  three's own single pass, static + dynamic casters. Used when the
-//           frame's reason includes FRUSTUM (camera/sun refit, indoor flip,
-//           single-shadow recentre, CSM error, first raster): static casters
-//           depend on the camera too (LOD levels, interior visibility, culls),
-//           so nothing is cached while the camera moves. Also for anything not
-//           a managed 2D depth map (other lights, VSM, point lights).
+//   NORMAL  three's own single pass, static + dynamic casters. Used for a
+//           light's first raster (three has not made its map yet) and for
+//           anything not a managed 2D depth map (other lights, VSM, point
+//           lights).
 //   REFRESH pass 1 draws the static casters alone into the light's own map;
 //           its depth is blitted into the light's cache; pass 2 draws the
 //           dynamic casters on top. Used for the STATIC reason (the per-cascade
-//           ?shadowMaxStale ceiling: sway, streaming, idle limbs) or whenever
-//           the cache cannot stand in for this frustum.
+//           ?shadowMaxStale ceiling: sway, streaming, idle limbs), for the
+//           FRUSTUM reason (camera/sun refit, indoor flip, single-shadow
+//           recentre, CSM error) and whenever the cache cannot stand in for
+//           this frustum.
+//           (2026-10-20, improvement hunt shadows-restore-1: FRUSTUM used to
+//           take NORMAL, which saved nothing, so the next rig-only frame paid
+//           a second static raster as REFRESH — after every idle sun step,
+//           ~every 1.2 s. A REFRESH writes the same depth, min(static,
+//           dynamic), for one extra blit, and leaves the cache valid at once.)
 //   OVERLAY the cache is blitted into the light's map and pass 2 draws the
 //           dynamic casters on top. Used when only rigs changed (the MOVER
 //           reason) and the cache was made for exactly this frustum.
@@ -373,6 +650,7 @@ const sscStats = {
   refresh: 0, // light-rasters in REFRESH mode (static pass + save)
   overlay: 0, // light-rasters in OVERLAY mode (blit + dynamics only)
   passthrough: 0, // calls handed back to the single-pass path (all NORMAL)
+  frustumRefresh: 0, // of `refresh`: FRUSTUM-reason maps (refit) rastered as REFRESH (shadows-restore-1)
   blits: 0,
   allocs: 0,
   disposes: 0,
@@ -589,6 +867,7 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
   _normal.length = 0;
   _refresh.length = 0;
   _overlay.length = 0;
+  let frustumN = 0;
   try {
     for (let i = 0; i < lights.length; i += 1) {
       const l = lights[i];
@@ -605,9 +884,15 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
       }
       const st = _stateOf(l);
       _fillKey(l, st._key);
-      if (reason & SHADOW_REASON_FRUSTUM || !map) {
+      if (!map) {
+        // First raster: three makes the map inside its pass — nothing to blit.
         st.valid = false;
         _normal.push(l);
+      } else if (reason & SHADOW_REASON_FRUSTUM) {
+        // shadows-restore-1: a refit rebuilds the cache in the same raster.
+        st.valid = false;
+        _refresh.push(l);
+        frustumN += 1;
       } else if (!(reason & SHADOW_REASON_STATIC) && _usable(st, l, camera.layers.mask)) {
         _overlay.push(l);
       } else {
@@ -648,10 +933,18 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
     if (_normal.length || _refresh.length) {
       ctx.collectSplit(scene, camLayers, false, _staticList, dynRoot, _found);
       sscStats.lastStatic = _staticList.length;
+      // shadows-restore-6: one run per depth-program kind (PCF / Basic only here).
+      maybeSort(_staticList, false);
     } else {
       _found.hit = _drawnUnder(dynRoot, scene);
     }
-    if (_found.hit) ctx.collect(dynRoot, camLayers, false, _dynList);
+    if (_found.hit) {
+      ctx.collect(dynRoot, camLayers, false, _dynList);
+      // shadows-restore-8 (?csmOffscreenCasters=on): rigs hidden only for
+      // being off the screen still cast (lighting.js stamps the roots).
+      if (sm.__hbShadowOnlyRoots) collectShadowOnly(sm, scene, camLayers, false, _dynList);
+      maybeSort(_dynList, false);
+    }
     sscStats.lastDynamic = _dynList.length;
     roots.stat.children = _staticList;
     roots.dyn.children = _dynList;
@@ -661,6 +954,7 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
       _fullList.length = 0;
       for (let i = 0; i < _staticList.length; i += 1) _fullList.push(_staticList[i]);
       for (let i = 0; i < _dynList.length; i += 1) _fullList.push(_dynList[i]);
+      maybeSort(_fullList, false);
       roots.full.children = _fullList;
       raster(_normal, roots.full);
       sscStats.normal += _normal.length;
@@ -683,6 +977,7 @@ export function shadowStaticCacheRender(ctx, smThis, lights, scene, camera) {
         st.valid = true;
       }
       sscStats.refresh += _refresh.length;
+      sscStats.frustumRefresh += frustumN;
     }
     // OVERLAY — restore the saved statics.
     for (let i = 0; i < _overlay.length; i += 1) {

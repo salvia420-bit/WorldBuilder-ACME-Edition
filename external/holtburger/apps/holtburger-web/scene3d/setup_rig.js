@@ -51,6 +51,48 @@ export function readRigModuleFlag() {
   }
 }
 
+// ?frozenPartFast (2026-10-20, improvement hunt entities-fx-1/-2; DEFAULT ON;
+// `=off`/`0`/`false`/`no` escape). ONE switch for three bit-identical shortcuts
+// on the part-frame read path:
+//   - here, `createPartFramesProxy`: a FROZEN part (statics.js
+//     `_freezeStaticScriptAnchor` clears both auto-update flags on the whole
+//     anchor subtree) is read straight off its matrixWorld with no
+//     updateWorldMatrix walk — the walk only recomposes the ancestors
+//     (staticsGroup / worldRoot / Scene) and never rewrites a part whose
+//     matrixWorldAutoUpdate is false. Any other part does ONE
+//     updateWorldMatrix(true,false) and decomposes matrixWorld once, where
+//     getWorldPosition + getWorldQuaternion each re-walked the chain (three r184
+//     Object3D.js: both call updateWorldMatrix(true,false) again) — three walks
+//     for one frame;
+//   - particle_manager.js `rp6CullSphere`: a frozen anchor's cull centre is
+//     cached per emitter (keyed on the anchor's `__scriptEpoch`);
+//   - particle_emitter.js `updateParticles`: the parent-local anchor is
+//     resolved once per tick instead of once per live particle.
+// bf474c67 gave RP6 a frozen-matrixWorld read, but rp6TrueSphere's part-frame
+// branch runs first, so every part-anchored static emitter — all of Linvak's
+// drizzle (hooks on part 0) — still went through this proxy's three walks on
+// every recheck (refuter's node bench, 5,000 frozen anchors: 7.6 ms per
+// recheck through the proxy, 0.8 ms through the frozen matrixWorld read).
+// Each module reads the flag once (memoised) — the particle modules keep their
+// own reader because test_particles.mjs concatenates them without this file.
+let _FROZEN_PART_FAST_ON = null;
+export function frozenPartFastEnabled() {
+  if (_FROZEN_PART_FAST_ON === null) {
+    try {
+      const v = (new URLSearchParams(globalThis.location?.search || "").get("frozenPartFast") || "").trim().toLowerCase();
+      _FROZEN_PART_FAST_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _FROZEN_PART_FAST_ON = true;
+    }
+  }
+  return _FROZEN_PART_FAST_ON;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setFrozenPartFastFlag(on) { _FROZEN_PART_FAST_ON = on == null ? null : !!on; }
+
+// Throwaway scale for the proxy's matrixWorld decompose (nothing reads it).
+let _decomposeScale = null;
+
 /**
  * Compose a part's rest-pose frame onto its part Group. Mirrors the inline
  * block at entities.js spawn (the `if (hasRestPose) { … }` body) and the
@@ -206,6 +248,21 @@ export function createPartFramesProxy(THREE, parts) {
       // World-space (composes root ⊗ local). updateWorldMatrix(true,…)
       // ensures the part's world matrix reflects this frame's mixer pose
       // even if the renderer hasn't flushed the scene graph yet.
+      // ?frozenPartFast (see the reader above): a frozen part skips the walk
+      // (it cannot change its matrixWorld), anything else walks ONCE; both then
+      // decompose matrixWorld once. Bit-identical to the three-walk path below:
+      // decompose writes position from elements 12-14 exactly as
+      // setFromMatrixPosition does, and the quaternion is the same decompose
+      // getWorldQuaternion runs. A part without a real matrixWorld (the
+      // headless fake THREE in test_a9_stage2_setup_rig.mjs) keeps the old calls.
+      if (part.matrixWorld && typeof part.matrixWorld.decompose === "function" && frozenPartFastEnabled()) {
+        if (part.matrixWorldAutoUpdate !== false || part.matrixAutoUpdate !== false) {
+          part.updateWorldMatrix(true, false);
+        }
+        part.matrixWorld.decompose(frame.position, frame.quaternion,
+          _decomposeScale || (_decomposeScale = new THREE.Vector3()));
+        return frame;
+      }
       part.updateWorldMatrix(true, false);
       part.getWorldPosition(frame.position);
       part.getWorldQuaternion(frame.quaternion);

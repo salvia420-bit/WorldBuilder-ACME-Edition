@@ -307,7 +307,8 @@ ok("the clone shares the base's texture", mat.map === base.map);
 ok("★ lost-patch flags stripped, CSM re-installed (the key now tells the truth)",
   mat.userData.detailEnabled === undefined && mat.userData.csmEnabled === true);
 const key = mat.customProgramCacheKey();
-ok("program key: |d0, |c1, and the weapon SET", key.includes("|d0") && key.includes("|c1") && key.endsWith("|vdeformation.weaponFlex+emissive.weaponAura"), key);
+// 2026-10-20 (shadows-restore-2/-4): the CSM token is the hook version `|c2`.
+ok("program key: |d0, |c2, and the weapon SET", key.includes("|d0") && key.includes("|c2") && key.endsWith("|vdeformation.weaponFlex+emissive.weaponAura"), key);
 {
   const sh = freshShader();
   mat.onBeforeCompile(sh, null);

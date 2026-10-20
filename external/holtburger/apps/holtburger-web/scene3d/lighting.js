@@ -295,6 +295,23 @@ export function setupSceneLighting(scene, opts = {}) {
     const csmOpts = { sunDir: { x: sunPos.x, y: sunPos.y, z: sunPos.z } };
     if (rp5.csmCamEps !== null) csmOpts.camDeltaSqEps = rp5.csmCamEps;
     if (rp5.csmSunEps !== null) csmOpts.sunDeltaSqEps = rp5.csmSunEps;
+    // 2026-10-20 (improvement hunt shadows-restore-1) — `?csmStable`, default
+    // ON: camera-centred cascades with per-cascade slack and staggered sun
+    // refits (csm.js header), so a moving / turning camera stops refitting all
+    // three and the static cache can overlay. `=off` keeps the view-slice fit.
+    csmOpts.stable = rp5.csmStable === true;
+    // 2026-10-20 (improvement hunt shadows-restore-5) — `?csmDirectOnly`,
+    // default ON: receivers shade the sun's direct term only (csm.js header);
+    // `?csmShade` overrides the full-shadow darkness. Fixed for the bundle's
+    // life: the receivers compile it in.
+    csmOpts.directOnly = rp5.csmDirectOnly === true;
+    if (rp5.csmShade !== null && rp5.csmShade !== undefined) csmOpts.shade = rp5.csmShade;
+    // 2026-10-20 (improvement hunt shadows-restore-7) — `?csmBias`, default ON:
+    // per-cascade depth range (the far cascade's sun-side cap in range) and a
+    // texel-scaled receiver bias folded into the cascade matrices (csm.js
+    // header); `?csmBiasTexels` sets the texel count. `=legacy` keeps both fixed.
+    csmOpts.depthFit = rp5.csmDepthFit === true;
+    if (rp5.csmBiasTexels !== null && rp5.csmBiasTexels !== undefined) csmOpts.biasTexels = rp5.csmBiasTexels;
     csmState = setupCsm(scene, csmOpts);
   }
 
@@ -466,6 +483,43 @@ const LIGHT_SORT_INTERVAL = 4;
 //                           gate reuses the refit decision) fewer rasters,
 //                           at the cost of shadow swim on slow pans. Omit
 //                           to keep csm.js's validated defaults.
+//                           (Stable cascades ignore ?csmCamEps — they refit on
+//                           their slack zone — and take ?csmSunEps as the near
+//                           cascades' sun epsilon, ×4 for the far one.)
+//   ?csmStable=off          (improvement hunt shadows-restore-1, 2026-10-20;
+//                           DEFAULT ON under ?csm) back to the view-slice cascade
+//                           fit. Stable cascades: camera-centred spheres with
+//                           5/10/28 m slack, refit one at a time (csm.js
+//                           `refitMask`), so the gate marks only refit cascades
+//                           FRUSTUM and the rest overlay their static cache; and
+//                           per-cascade ceilings ?shadowMaxStale ×1/×2/×5.
+//   ?csmSunFade=off         (improvement hunt shadows-restore-5, 2026-10-20;
+//                           DEFAULT ON under ?csm) keep the cascades at full
+//                           strength all night. On: csmState.strength = the sky's
+//                           time-of-day direct factor (cloud_night.js
+//                           cloudDirectFactor of the art elevation, through
+//                           ?cloudShadowFadeDeg): 1 by day, 0 for the night block,
+//                           and at 0 the gate below rasters no cascade at all.
+//   ?csmDirectOnly=off      (shadows-restore-5; DEFAULT ON under ?csm) back to the
+//                           whole-colour ×0.45 multiply (after emissive / IBL /
+//                           fog). On: the shadow shades the sun's direct term only.
+//   ?csmShade=<0..1>        (shadows-restore-5) how much of the shaded term a full
+//                           shadow removes. Default 1 with ?csmDirectOnly, 0.55
+//                           (the old 0.45 floor) without.
+//   ?csmBias=legacy         (improvement hunt shadows-restore-7, 2026-10-20;
+//                           DEFAULT ON under ?csm; `off`/`0`/`false`/`no` too) back to
+//                           the fixed cascade depth range (light 200 m back, far =
+//                           400 m + radius) and the receivers' fixed 0.0007 depth
+//                           bias. On: per-cascade back / far (the far cascade's
+//                           sun-side cap in range) and a bias of ?csmBiasTexels
+//                           texels (ground; casters ×2), capped at the old metres
+//                           (csm.js header "DEPTH FIT + TEXEL BIAS").
+//   ?csmBiasTexels=<k>      (shadows-restore-7) the ground receivers' bias in texels
+//                           of each cascade, 0.25..16, default 2 (eye-test knob).
+//   ?csmOffscreenCasters=on (improvement hunt shadows-restore-8, 2026-10-20; DEFAULT
+//                           OFF) rigs the render cull hid only because they sit
+//                           outside the camera frustum still cast when their
+//                           shadow can reach the view (see selectOffscreenCasters).
 
 const RP5_DEFAULT_SHADOW_MAX_STALE = 12;
 // RP5 (review fix) — hard floor for the staleness ceiling. `?shadowMaxStale=off`
@@ -500,6 +554,88 @@ function _shadowMoverScopeFlag() {
   }
 }
 
+/** `?csmStable` (shadows-restore-1, 2026-10-20) — default ON; `off`/`0`/`false`/`no` disables. */
+function _csmStableFlag() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("csmStable") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * `?csmSunFade` / `?csmDirectOnly` (shadows-restore-5, 2026-10-20) — default ON;
+ * `off`/`0`/`false`/`no` disables. Read once through getRp5Config.
+ */
+function _csmDefaultOnFlag(name) {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get(name) || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * `?csmBias` (shadows-restore-7, 2026-10-20) — default ON (depth fit + texel
+ * bias); `legacy` (the documented escape) or `off`/`0`/`false`/`no` disables.
+ */
+function _csmDepthFitFlag() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("csmBias") || "").trim().toLowerCase();
+    return !(v === "legacy" || v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** `?csmOffscreenCasters` (shadows-restore-8, 2026-10-20) — OPT-IN, exact `on`. */
+function _csmOffscreenCastersFlag() {
+  try {
+    return (new URLSearchParams(globalThis.location?.search || "").get("csmOffscreenCasters") || "").trim().toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// shadows-restore-5 — cloud_night.js CLOUD_SHADOW_FADE_DEG_DEFAULT and the
+// [0.5, 45] clamp of its `?cloudShadowFadeDeg` reader (night_ramp.js
+// nightNumFlag): the cascades fade on the very knob the cloud shadows use.
+const CSM_SUN_FADE_DEG_DEFAULT = 6.0;
+const _CSM_DEG_TO_RAD = Math.PI / 180;
+
+/**
+ * shadows-restore-5 — the CSM shadow strength for a sun at `artPitchDeg`: 1 at
+ * or above `fadeDeg`, linear in sin(elevation) down to 0 at the horizon, 0 below.
+ * This IS cloud_night.js `cloudDirectFactor` (same expression, same 0.5 deg
+ * floor on the fade); it is restated rather than imported because legacy suites
+ * evaluate lighting.js with only its three / csm.js / landblock_lru.js imports
+ * stripped. tests/csm_sun_fade.test.mjs pins the two equal.
+ * @param {number} artPitchDeg the sky's art elevation (night_ramp.js)
+ * @param {number} [fadeDeg=6]
+ */
+export function csmSunStrength(artPitchDeg, fadeDeg = CSM_SUN_FADE_DEG_DEFAULT) {
+  const e = Number.isFinite(artPitchDeg) ? artPitchDeg : 0;
+  const f = Math.max(0.5, Number.isFinite(fadeDeg) ? fadeDeg : CSM_SUN_FADE_DEG_DEFAULT);
+  const t = Math.sin(e * _CSM_DEG_TO_RAD) / Math.sin(f * _CSM_DEG_TO_RAD);
+  return Math.min(1, Math.max(0, t));
+}
+
+/**
+ * shadows-restore-5 — the elevation the cascades fade on: the sky's ART pitch
+ * (atmosphere_sky.js `_artPitchDeg` = night_ramp.js artSunPitchDeg of the same
+ * SkyState snapshot — what cloud_night.js feeds cloudDirectFactor), else the
+ * raw authored pitch (no atmosphere sky yet / at all: night_ramp's identity
+ * arm), else NaN (no sky state: the caller keeps full strength).
+ */
+function _csmSunPitchDeg(scene3d) {
+  const art = scene3d?.atmosphereSky?._artPitchDeg;
+  if (Number.isFinite(art)) return art;
+  const raw = scene3d?.skyLightingController?._lastState?.dirPitch;
+  return Number.isFinite(raw) ? raw : NaN;
+}
+
 let _rp5Config;
 function getRp5Config() {
   if (_rp5Config !== undefined) return _rp5Config;
@@ -508,6 +644,21 @@ function getRp5Config() {
     // fps wave 1 (2026-10-17) — per-cascade mover scope; `?shadowMoverScope=off`
     // restores the RP5 global caster hash.
     shadowMoverScope: _shadowMoverScopeFlag(),
+    // shadows-restore-1 — stable CSM cascades; read at setupSceneLighting.
+    csmStable: _csmStableFlag(),
+    // shadows-restore-5 — time-of-day cascade strength (per tick) and the
+    // sun-term shade (read at setupSceneLighting); csmShade null ⇒ csm.js's
+    // per-mode default; csmFadeDeg = ?cloudShadowFadeDeg.
+    csmSunFade: _csmDefaultOnFlag("csmSunFade"),
+    csmDirectOnly: _csmDefaultOnFlag("csmDirectOnly"),
+    csmShade: null,
+    csmFadeDeg: CSM_SUN_FADE_DEG_DEFAULT,
+    // shadows-restore-7 — per-cascade depth range + texel bias (read at
+    // setupSceneLighting); csmBiasTexels null ⇒ csm.js's default (2).
+    csmDepthFit: _csmDepthFitFlag(),
+    csmBiasTexels: null,
+    // shadows-restore-8 — off-screen rig shadow casters (per gate tick).
+    csmOffscreenCasters: _csmOffscreenCastersFlag(),
     lightSortInterval: RP5_DEFAULT_LIGHT_SORT_INTERVAL,
     shadowMaxStaleFrames: RP5_DEFAULT_SHADOW_MAX_STALE,
     csmCamEps: null, // null ⇒ use csm.js's validated default
@@ -555,6 +706,25 @@ function getRp5Config() {
     if (Number.isFinite(camEps) && camEps >= 0) cfg.csmCamEps = camEps;
     const sunEps = parseFloat(ps.get("csmSunEps"));
     if (Number.isFinite(sunEps) && sunEps >= 0) cfg.csmSunEps = sunEps;
+    // shadows-restore-5 — numeric knobs: out-of-range clamps, garbage = default
+    // (night_ramp.js nightNumFlag semantics for the shared fade knob).
+    const shadeRaw = ps.get("csmShade");
+    if (shadeRaw !== null && shadeRaw !== "") {
+      const k = Number(shadeRaw);
+      if (Number.isFinite(k)) cfg.csmShade = Math.min(1, Math.max(0, k));
+    }
+    const fadeRaw = ps.get("cloudShadowFadeDeg");
+    if (fadeRaw !== null && fadeRaw !== "") {
+      const f = Number(fadeRaw);
+      if (Number.isFinite(f)) cfg.csmFadeDeg = Math.min(45, Math.max(0.5, f));
+    }
+    // shadows-restore-7 — same semantics: out-of-range clamps (csm.js clamps
+    // to 0.25..16 as well), garbage / absent = csm.js's default.
+    const btRaw = ps.get("csmBiasTexels");
+    if (btRaw !== null && btRaw !== "") {
+      const bt = Number(btRaw);
+      if (Number.isFinite(bt)) cfg.csmBiasTexels = Math.min(16, Math.max(0.25, bt));
+    }
   }
   _rp5Config = cfg;
   return _rp5Config;
@@ -1544,6 +1714,10 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // end of this tick (applyStaticShadowGate). Starts false; any of the
   // contributing levers flips it true.
   let shadowDirty = false;
+  // shadows-restore-1 — stable CSM cascades refit one at a time: the cascades
+  // csm.js refit this tick (its `refitMask`), re-rastered alone. The view-slice
+  // fit still raises shadowDirty (all three) as before.
+  let csmRefitMask = 0;
 
   // === Indoor/outdoor toggle (sun + ambient) ==========================
   const lighting = scene3d.lighting;
@@ -1709,6 +1883,27 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // same player-position resolver (they're mutually exclusive in
   // practice — `setupSceneLighting` only attaches one or the other).
   if (lighting && lighting.csmState) {
+    // 2026-10-20 (improvement hunt shadows-restore-5, `?csmSunFade`, default on
+    // under ?csm) — the cascades follow the RAW authored sun, which sits 0.9 deg
+    // up for the whole night block, so every caster threw a ~200 m streak at
+    // full strength all night. Scale the shadow by the sky's time-of-day direct
+    // factor (csmSunStrength); refreshCsmUniforms below pushes it to every
+    // receiver as uCsmStrength. A plain uniform value: no light count,
+    // castShadow or program-key change. At 0 the receivers skip their taps and
+    // applyStaticShadowGate rasters no cascade; coming back from 0 every map is
+    // as old as the night, so all of them re-raster before anything samples.
+    {
+      const cs5 = lighting.csmState;
+      const cfg5 = getRp5Config();
+      const prev = Number.isFinite(cs5.strength) ? cs5.strength : 1;
+      let next = 1;
+      if (cfg5.csmSunFade) {
+        const pitch = _csmSunPitchDeg(scene3d);
+        if (Number.isFinite(pitch)) next = csmSunStrength(pitch, cfg5.csmFadeDeg);
+      }
+      cs5.strength = next;
+      if (prev === 0 && next > 0) shadowDirty = true;
+    }
     const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
     if (cam) {
       try {
@@ -1727,8 +1922,13 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         // the CSM-path "shadows changed → re-raster" signal. Skipped
         // refits leave the previous frame's shadow maps valid, so we can
         // skip the raster (subject to the staleness bound below).
-        if (lighting.csmState.didRefitThisTick) {
-          shadowDirty = true;
+        // shadows-restore-1: stable cascades say WHICH cascades refit; only
+        // those re-raster their statics (a refit with no mask errs to all).
+        const cs = lighting.csmState;
+        if (cs.didRefitThisTick) {
+          const rm = cs.stable === true ? cs.refitMask & 0b111 : 0;
+          if (rm) csmRefitMask |= rm;
+          else shadowDirty = true;
         }
       } catch (e) {
         if (!scene3d._csmTickWarned) {
@@ -1748,7 +1948,7 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // re-rendering all (1 or 3) shadow maps. Runs AFTER both shadow paths
   // have updated their frusta this frame. See applyStaticShadowGate (and,
   // per cascade by default, applyMoverScopedShadowGate).
-  applyStaticShadowGate(scene3d, lighting, shadowDirty);
+  applyStaticShadowGate(scene3d, lighting, shadowDirty, csmRefitMask);
 
   // === Per-SetupModel light cap (top-32 by squared distance) ==========
   // We cap regardless of whether the indoor toggle ran (capture scripts
@@ -1821,8 +2021,10 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
  * @param {Object} scene3d - the live `liveScene3d` shape.
  * @param {Object|null} lighting - the lighting bundle (sun + csmState).
  * @param {boolean} shadowDirty - accumulated "shadows changed this frame".
+ * @param {number} [csmRefitMask=0] - shadows-restore-1: the stable CSM
+ *   cascades refit this tick (bit i = cascade i); only those re-raster.
  */
-function applyStaticShadowGate(scene3d, lighting, shadowDirty) {
+function applyStaticShadowGate(scene3d, lighting, shadowDirty, csmRefitMask = 0) {
   const cfg = getRp5Config();
   if (!cfg.shadowStaticGate) {
     // RP5 (review fix) — renderer-state-leak heal. The renderer is owned
@@ -1853,14 +2055,23 @@ function applyStaticShadowGate(scene3d, lighting, shadowDirty) {
   const hasSingleShadow = !!(lighting && lighting.sun && lighting.sun.castShadow);
   const hasCsm = !!(lighting && lighting.csmState);
   if (!hasSingleShadow && !hasCsm) return;
+  // 2026-10-20 (improvement hunt shadows-restore-5, ?csmSunFade) — the CSM sun
+  // has faded out (csmState.strength exactly 0, the night block): no receiver
+  // samples a cascade, so none rasters — the whole shadow cost goes for ~20% of
+  // the AC day. Skipped through THIS gate only (needsUpdate never armed), never
+  // by toggling castShadow (that relinks every lit material). The lighting tick
+  // forces a full raster the frame the strength leaves 0.
+  const csmFaded = hasCsm && lighting.csmState.strength === 0;
 
   // fps wave 1 (2026-10-17) — per-cascade mover scope (default). The RP5
   // body below stays as the `?shadowMoverScope=off` escape, byte-identical.
   if (cfg.shadowMoverScope) {
     const lights = hasCsm ? lighting.csmState.lights : [lighting.sun];
-    applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lights, cfg);
+    applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lights, cfg, hasCsm ? csmRefitMask : 0, csmFaded);
     return;
   }
+  // The all-or-nothing RP5 body: a stable cascade's refit is a refit.
+  if (csmRefitMask) shadowDirty = true;
 
   // One-time: take manual control of the raster. We flip autoUpdate off
   // exactly once (guarded so a third party flipping it back on mid-session
@@ -1879,6 +2090,8 @@ function applyStaticShadowGate(scene3d, lighting, shadowDirty) {
     // the scene3d-keyed state above).
     if (lighting) lighting._rp5GatedRenderer = renderer;
   }
+  // shadows-restore-5 — faded CSM sun: arm nothing (see csmFaded above).
+  if (csmFaded) return;
 
   // RED-LINE — re-raster whenever ANY DYNAMIC CASTER MOVED. Entity rigs
   // (NPCs / local player / projectiles) are tagged castShadow and DO get
@@ -2024,7 +2237,9 @@ function scanDynamicCasterMovement(scene3d) {
 //     cascade still refreshes every ?shadowMaxStale frames for in-place limb
 //     animation, tree sway and streaming, mover or no mover.
 // Camera/sun refits, the indoor flip, the single-shadow recentre and a thrown
-// CSM tick still mark every cascade at once, exactly as before.
+// CSM tick still mark every cascade at once, exactly as before — except a
+// stable cascade's refit (?csmStable, shadows-restore-1, default on under
+// ?csm), which marks that cascade alone.
 //
 // LAG — the RP5 bound, per cascade. This tick runs BEFORE entityManager.tick,
 // so it compares a rig's previous-frame pose (P[t-1]) with the one before
@@ -2167,9 +2382,12 @@ function _remeasureMover(rec, root, cx, cy, cz, epoch) {
  * @param {Object} scene3d - the live `liveScene3d` shape (reads
  *   `entityManager.entityMap`; keeps its records on `scene3d._shadowMovers`).
  * @param {THREE.Light[]} lights - the managed shadow lights (cascades or sun).
+ * @param {Set<THREE.Object3D>|null} [shadowOnly] - shadows-restore-8
+ *   (?csmOffscreenCasters): rig roots the render cull hid that still cast
+ *   (selectOffscreenCasters) — counted as drawn. Absent: unchanged.
  * @returns {number}
  */
-export function scanShadowMovers(scene3d, lights) {
+export function scanShadowMovers(scene3d, lights, shadowOnly = null) {
   const n = lights.length;
   let st = scene3d._shadowMovers;
   if (!st) {
@@ -2201,6 +2419,9 @@ export function scanShadowMovers(scene3d, lights) {
       let vis = true;
       for (let o = root; o; o = o.parent) {
         if (o.visible === false) {
+          // shadows-restore-8: a shadow-only rig's hidden root still casts
+          // (its ancestors must be drawn, as for any other rig).
+          if (o === root && shadowOnly !== null && shadowOnly.has(root)) continue;
           vis = false;
           break;
         }
@@ -2274,6 +2495,141 @@ export function scanShadowMovers(scene3d, lights) {
   return mask;
 }
 
+// === shadows-restore-8 (2026-10-20, improvement hunt; `?csmOffscreenCasters=on`,
+// DEFAULT OFF) — rigs off the screen keep casting onto it =====================
+//
+// WHY. The per-entity render cull (entities.js tickEntityRenderVisibility: a
+// fixed 6 m sphere at the rig root against the camera frustum, then the
+// distance horizon, ?rigCellGate and ?occlusionCull) hides the rig ROOT, and a
+// hidden root puts nothing in any shadow map (shadow_caster_list.js collect and
+// three's renderObject both stop at `visible === false`). A shadow is h / tan(e)
+// long: it leaves the 6 m pad below ~17 deg of sun for a 1.8 m human and below
+// 34-53 deg for 4-8 m creatures, so the shadows of rigs beside or behind the
+// camera popped in and out of the view as it turned.
+//
+// WHAT. Each gate tick on the CSM path (sun not faded), `selectOffscreenCasters`
+// picks the rigs whose root the cull hid and nothing else hid (state-visible,
+// not film-hidden, not attached, every ancestor drawn), whose own 6 m sphere is
+// OUTSIDE the camera frustum (one hidden with its sphere on screen was hidden by
+// the distance horizon, the cell gate or the occlusion test: its shadow stays
+// behind the same wall, so it is left out), and whose shadow volume — a sphere
+// half a shadow length down-sun of the root, radius h + L/2 with L = min(h /
+// tan e, the last cascade split) — meets the frustum within the cascades'
+// reach of the camera. h is the mover record's measured radius (the 6 m cull
+// radius until the rig has been measured). At most OFFSCREEN_MAX_RIGS, nearest
+// first.
+//   * shadow_caster_list.js draws them as dynamic casters (the gate stamps
+//     `shadowMap.__hbShadowOnlyRoots` every tick): the meshes below each hidden
+//     root, with its world matrices refreshed first (the per-frame matrix walk
+//     skips hidden roots, ?skipHiddenMatrix). The main pass never draws them —
+//     root.visible stays the cull's.
+//   * scanShadowMovers counts them as drawn: a shadow-only rig walking dirties
+//     the cascades it touches; entering or leaving the set is a visibility flip.
+// COST: depth draws for the selected rigs' parts in each raster that draws
+// rigs, mostly at low sun, plus two sphere tests per hidden rig per tick.
+// Without the flag nothing is stamped and the scan is unchanged.
+const OFFSCREEN_CULL_RADIUS_M = 6; // entities.js ENTITY_CULL_RADIUS
+const OFFSCREEN_MAX_RIGS = 32;
+// sin(elevation) below which nothing is selected (~2.9 deg; ?csmSunFade has
+// faded the cascades out by then, and every shadow would be the reach cap).
+const OFFSCREEN_MIN_SIN = 0.05;
+const _offFrustum = new THREE.Frustum();
+const _offViewProj = new THREE.Matrix4();
+const _offSphere = new THREE.Sphere();
+const _offCand = [];
+const _offPool = [];
+const _offByDist = (a, b) => a.d2 - b.d2;
+
+/**
+ * shadows-restore-8 — fill `outRoots` / `outSet` with the rig roots that are
+ * hidden only for being off the screen but whose shadow can reach it (see the
+ * block comment above). Reads the camera matrices updateCsm refreshed this tick.
+ * @param {Object} scene3d - live scene3d (entityManager.entityMap, the camera,
+ *   `_shadowMovers` records for measured radii)
+ * @param {Object} csmState - csm.js bundle (sunDir toward the sun, splits)
+ * @param {THREE.Object3D[]} outRoots - cleared and filled
+ * @param {Set<THREE.Object3D>} outSet - cleared and filled (same roots)
+ * @returns {number} roots selected
+ */
+export function selectOffscreenCasters(scene3d, csmState, outRoots, outSet) {
+  outRoots.length = 0;
+  outSet.clear();
+  const map = scene3d?.entityManager?.entityMap;
+  const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
+  if (!map || typeof map.forEach !== "function" || !cam || !cam.isPerspectiveCamera || !csmState) return 0;
+  const sd = csmState.sunDir;
+  const sl = sd ? Math.hypot(sd.x, sd.y, sd.z) : 0;
+  if (!(sl > 0)) return 0;
+  const lx = sd.x / sl;
+  const ly = sd.y / sl;
+  const lz = sd.z / sl;
+  if (!(ly > OFFSCREEN_MIN_SIN)) return 0;
+  const horiz = Math.hypot(lx, lz);
+  // Down-sun on the ground, and tan(elevation).
+  const gx = horiz > 1e-6 ? -lx / horiz : 0;
+  const gz = horiz > 1e-6 ? -lz / horiz : 0;
+  const tanE = horiz > 1e-6 ? ly / horiz : Infinity;
+  const reach = Array.isArray(csmState.splits) && csmState.splits[2] > 0 ? csmState.splits[2] : 300;
+  _offViewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  _offFrustum.setFromProjectionMatrix(_offViewProj, cam.coordinateSystem, cam.reversedDepth === true);
+  const ce = cam.matrixWorld.elements;
+  const camX = ce[12];
+  const camY = ce[13];
+  const camZ = ce[14];
+  const recs = scene3d._shadowMovers ? scene3d._shadowMovers.recs : null;
+  let used = 0;
+  map.forEach((inst, guid) => {
+    const root = inst && inst.root;
+    if (!root || root.visible !== false || !root.position) return;
+    if (inst._renderCullHidden !== true || inst._stateVisible === false || inst._filmHidden === true) return;
+    if (inst._attachedParentGuid != null) return;
+    const par = root.parent;
+    if (!par || !par.matrixWorld) return;
+    for (let o = par; o; o = o.parent) if (o.visible === false) return;
+    const p = root.position;
+    const e = par.matrixWorld.elements;
+    const cx = e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12];
+    const cy = e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13];
+    const cz = e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14];
+    if (!(Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(cz))) return;
+    _offSphere.center.set(cx, cy, cz);
+    _offSphere.radius = OFFSCREEN_CULL_RADIUS_M;
+    // On screen yet hidden: another cull hid it (horizon, cell gate, occlusion).
+    if (_offFrustum.intersectsSphere(_offSphere)) return;
+    const rec = recs ? recs.get(guid) : null;
+    const h = rec && rec.measured === true && rec.r > 0 ? rec.r : OFFSCREEN_CULL_RADIUS_M;
+    const half = 0.5 * Math.min(h / tanE, reach);
+    const sx = cx + gx * half;
+    const sz = cz + gz * half;
+    const sr = h + half;
+    const dx = sx - camX;
+    const dy = cy - camY;
+    const dz = sz - camZ;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    // Past the last cascade no receiver samples a shadow.
+    if (Math.sqrt(d2) - sr > reach) return;
+    _offSphere.center.set(sx, cy, sz);
+    _offSphere.radius = sr;
+    if (!_offFrustum.intersectsSphere(_offSphere)) return;
+    let c = _offPool[used];
+    if (!c) c = _offPool[used] = { root: null, d2: 0 };
+    used += 1;
+    c.root = root;
+    c.d2 = d2;
+    _offCand.push(c);
+  });
+  if (_offCand.length > OFFSCREEN_MAX_RIGS) _offCand.sort(_offByDist);
+  const n = Math.min(_offCand.length, OFFSCREEN_MAX_RIGS);
+  for (let i = 0; i < n; i += 1) {
+    outRoots.push(_offCand[i].root);
+    outSet.add(_offCand[i].root);
+  }
+  // Hold no scene references between ticks.
+  for (let i = 0; i < _offCand.length; i += 1) _offCand[i].root = null;
+  _offCand.length = 0;
+  return n;
+}
+
 /**
  * The mover-scoped static-shadow gate (default; `?shadowMoverScope=off` runs
  * the RP5 body of applyStaticShadowGate instead). Same contract as RP5 — the
@@ -2288,8 +2644,12 @@ export function scanShadowMovers(scene3d, lights) {
  * @param {THREE.WebGLRenderer} renderer
  * @param {THREE.Light[]} lightsIn - csmState.lights, or [sun].
  * @param {Object} cfg - getRp5Config().
+ * @param {number} [refitMask=0] - shadows-restore-1: stable CSM cascades refit
+ *   this tick — those (only) re-raster with the FRUSTUM reason.
+ * @param {boolean} [faded=false] - shadows-restore-5: the CSM sun's strength
+ *   is 0 — nothing rasters (applyStaticShadowGate `csmFaded`).
  */
-function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lightsIn, cfg) {
+function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, lightsIn, cfg, refitMask = 0, faded = false) {
   const shadowMap = renderer.shadowMap;
   let st = scene3d._shadowScope;
   // `st.shadowMap` (2026-10-18 review follow-up): a WebGL context restore gives
@@ -2332,6 +2692,12 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
       stats: {
         ticks: 0, rasterTicks: 0, fullTicks: 0, moverTicks: 0, staleTicks: 0,
         cascadeMarks: new Array(lights.length).fill(0), lastMask: 0,
+        // shadows-restore-1 — ticks whose only frustum reason was a stable
+        // cascade's own refit, and how often each cascade was marked so.
+        refitTicks: 0,
+        refitMarks: new Array(lights.length).fill(0),
+        // shadows-restore-5 — ticks the faded CSM sun skipped outright.
+        fadedTicks: 0,
       },
     };
     shadowDirty = true;
@@ -2344,22 +2710,71 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
   const stats = st.stats;
   stats.ticks += 1;
 
+  // shadows-restore-5 — the CSM sun has faded out: arm no cascade and disarm a
+  // mark three has not consumed yet (no receiver samples a map at strength 0),
+  // skip the mover scan and hold the ceilings. The lighting tick forces a full
+  // raster the frame the strength leaves 0, so nothing stale is ever sampled.
+  if (faded) {
+    for (let i = 0; i < n; i += 1) {
+      const sh = lights[i].shadow;
+      if (sh.needsUpdate === true) sh.needsUpdate = false;
+    }
+    // shadows-restore-8: nothing rasters; drop the off-screen set too.
+    if (st.offscreen) {
+      st.offscreen.roots.length = 0;
+      st.offscreen.set.clear();
+    }
+    stats.fadedTicks = (stats.fadedTicks | 0) + 1;
+    stats.lastMask = 0;
+    scene3d._rp5ShadowStaleFrames = (scene3d._rp5ShadowStaleFrames | 0) + 1;
+    return;
+  }
+
+  // 2026-10-20 (improvement hunt shadows-restore-8, `?csmOffscreenCasters=on`,
+  // DEFAULT OFF) — rigs the render cull hid for being off the screen whose
+  // shadow can still reach it (selectOffscreenCasters). Selected BEFORE the
+  // scan, which counts them as drawn; shadow_caster_list.js draws them in the
+  // dynamic pass from `shadowMap.__hbShadowOnlyRoots` (never stamped without
+  // the flag). CSM only: the cascades are what reach the view.
+  let shadowOnly = null;
+  const csmLive = lighting && lighting.csmState;
+  if (cfg.csmOffscreenCasters === true && csmLive && lightsIn === csmLive.lights) {
+    if (!st.offscreen) st.offscreen = { roots: [], set: new Set() };
+    const picked = selectOffscreenCasters(scene3d, csmLive, st.offscreen.roots, st.offscreen.set);
+    shadowOnly = st.offscreen.set;
+    if (shadowMap.__hbShadowOnlyRoots !== st.offscreen.roots) shadowMap.__hbShadowOnlyRoots = st.offscreen.roots;
+    stats.offscreenCasters = picked;
+    if (!(stats.offscreenMax >= picked)) stats.offscreenMax = picked;
+  } else if (shadowMap.__hbShadowOnlyRoots && shadowMap.__hbShadowOnlyRoots.length) {
+    // The CSM bundle went away (quality flip to the single shadow): a set
+    // stamped by an earlier tick must not keep drawing into the sun's map.
+    shadowMap.__hbShadowOnlyRoots.length = 0;
+  }
+
   // Always scan, so each rig's record holds last frame's pose even across a
   // run of full rasters (a camera pan) — the next scan then compares
   // neighbouring frames, not a pose from before the pan.
-  const moverMask = scanShadowMovers(scene3d, lights) & all;
-  const fullMask = shadowDirty ? all : 0;
+  const moverMask = scanShadowMovers(scene3d, lights, shadowOnly) & all;
+  // shadows-restore-1: a stable cascade's refit marks that cascade alone.
+  const refitOnly = shadowDirty ? 0 : refitMask & all;
+  const fullMask = shadowDirty ? all : refitOnly;
   // The ceiling counts frames since a cascade last re-rastered its STATIC
   // casters (a full or ceiling raster). A mover's raster does not reset it:
   // under ?shadowStaticCache that raster redraws only the rigs over cached
   // statics, so sway / streaming / animated scenery still need the ceiling.
   // (Without the cache, a ceiling mark landing on a mover frame merges into
   // the same raster.)
+  // shadows-restore-1: stable CSM cascades keep their cache while the camera
+  // moves, so their ceilings scale per cascade (csm.js
+  // DEFAULT_CSM_STABLE_STALE_SCALE: ×1 / ×2 / ×5 = 12 / 24 / 60 frames).
   const maxStale = cfg.shadowMaxStaleFrames | 0;
+  const cs = lighting && lighting.csmState;
+  const staleScale = cs && cs.stable === true && lightsIn === cs.lights ? cs.stableStaleScale : null;
   let staleMask = 0;
   if (maxStale > 0) {
     for (let i = 0; i < n; i += 1) {
-      if (!(fullMask & (1 << i)) && st.stale[i] + 1 >= maxStale) staleMask |= 1 << i;
+      const ceil = staleScale && staleScale[i] > 0 ? maxStale * staleScale[i] : maxStale;
+      if (!(fullMask & (1 << i)) && st.stale[i] + 1 >= ceil) staleMask |= 1 << i;
     }
   }
   const mask = fullMask | staleMask | moverMask;
@@ -2383,6 +2798,7 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
         (staleMask & bit ? SHADOW_REASON_STATIC : 0) |
         (moverMask & bit ? SHADOW_REASON_MOVER : 0);
       stats.cascadeMarks[i] += 1;
+      if ((refitOnly & bit) && stats.refitMarks) stats.refitMarks[i] += 1;
     }
     // A full raster restarts every cascade's ceiling at once; stagger the
     // restart (cascade i starts i/n of the way in) so the ceiling rasters of
@@ -2399,6 +2815,7 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
   if (mask) {
     stats.rasterTicks += 1;
     if (shadowDirty) stats.fullTicks += 1;
+    else if (refitOnly) stats.refitTicks = (stats.refitTicks | 0) + 1;
     else if (moverMask) stats.moverTicks += 1;
     else stats.staleTicks += 1;
   }

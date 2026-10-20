@@ -178,7 +178,9 @@ const STUBS = {
   uiEffectBadgesEnabled: "() => false",
   uiEffectIconsFor: "() => []",
   uiEffectTintCss: "() => null",
-  PaperdollViewport: "class { constructor() { this.dom = document.createElement('canvas'); } loadPlayer() { return Promise.resolve(false); } start() {} dispose() {} }",
+  // hud-audio-2 (2026-10-20): inventory.js acquires its long-lived doll via
+  // PaperdollViewport.acquire(...) and hands it back with release().
+  PaperdollViewport: "class { static acquire() { return new this(); } constructor() { this.dom = document.createElement('canvas'); } loadPlayer() { return Promise.resolve(false); } start() {} release() {} dispose() {} }",
   ...real([
     "aetheriaSlotIsLocked", "formatBurdenText", "burdenMeterFraction", "computeInventoryTitle",
     "parseSlotsViewChecked", "canEquipInSlot", "buildPlayerEquipState", "formatAppraisalTooltip",

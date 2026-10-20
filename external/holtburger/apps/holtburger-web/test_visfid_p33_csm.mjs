@@ -381,9 +381,11 @@ check(
 // 2026-10-07 — the receivers must compare against the cascade DEPTH texture.
 // three r184 writes `1 - depth` (8-bit) into the shadow map's colour buffer;
 // reading that `.r` as depth inverted every compare (no shadow anywhere).
+// 2026-10-20 (improvement hunt shadows-restore-4): the taps are explicit LOD 0
+// (textureLod(sm, vec3(uv, ref), 0.0)); still the hardware compare.
 check(
-    "cascade sample is a hardware compare: texture(sm, vec3(uv, ref)), no colour .r read",
-    /texture\(sm, vec3\(/.test(stubShader.fragmentShader) &&
+    "cascade sample is a hardware compare: textureLod(sm, vec3(uv, ref), 0.0), no colour .r read",
+    /textureLod\(sm, vec3\(/.test(stubShader.fragmentShader) &&
         !/texture2D\(sm, shadowCoord\.xy\)\.r/.test(stubShader.fragmentShader),
     "compare sampling"
 );

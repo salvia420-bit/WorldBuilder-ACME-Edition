@@ -151,7 +151,8 @@ export function withLogDepth(params) {
 // `camera._reversedDepth` and re-runs updateProjectionMatrix); depth funcs go
 // through `ReversedDepthFuncs` (LessEqual -> GreaterEqual, ...); clearDepth(1)
 // clears to 0; shadow cameras are reversed, their depth textures compare with
-// GreaterEqual and three's own shadow chunks shift their bias; polygon offset
+// GreaterEqual and three's VSM / Basic / point-light shadow chunks flip the
+// sign of their bias (the 2D PCF one does not — item 9); polygon offset
 // FACTOR is negated; `#define USE_REVERSED_DEPTH_BUFFER` goes into every
 // non-raw program; Frustum/BatchedMesh read `camera.reversedDepth`.
 //
@@ -206,6 +207,22 @@ export function withLogDepth(params) {
 //      installReversedZ gives the base Camera a no-op
 //      updateProjectionMatrix: a plain Camera has no parameters to rebuild
 //      from, and its (identity / user-set) matrix stays as it is.
+//   9. (2026-10-20, improvement hunt recent-render-diff-2) three r184's 2D PCF
+//      `getShadow( sampler2DShadow … )` (ShaderChunk.shadowmap_pars_fragment)
+//      does `shadowCoord.z += shadowBias;` with no reversed branch, while its
+//      VSM, Basic and point-light twins do `-=` under the define. A negative
+//      `shadow.bias` is meant to pull the reference toward the light; on a
+//      reversed shadow camera (GreaterEqual compare, near = 1) `+=` pushes it
+//      AWAY instead, so a caster's lit face fails its own compare. `?shadows=on`
+//      (the single sun shadow, bias -0.0005 over a 2400 m ortho range) lost the
+//      sun on every face of a caster thinner than ~1.2 m along the light and on
+//      every DoubleSide surface (most AC statics). installReversedZ gives that
+//      one function the same branch the others have, plus the reversed twin of
+//      its far-plane test (`z >= 0`, as the CSM receivers do). The CSM path
+//      never reads three's getShadow (its receivers compare themselves and the
+//      cascade lights are dark), so ?csm is untouched. Anchored on the function
+//      and both lines found exactly once in it; anything else (three changed
+//      the chunk, or already branches there) leaves the chunk alone with a note.
 
 /** The preprocessor guard of every reversed-Z branch in this tree. */
 export const REVERSED_Z_GUARD = "#ifdef USE_REVERSED_DEPTH_BUFFER";
@@ -314,18 +331,84 @@ export function conventionalPackingChunk(src) {
   return out;
 }
 
+// Item 9 anchors (three r184 shadowmap_pars_fragment, 2D PCF getShadow).
+const PCF_GETSHADOW_HEAD = "float getShadow( sampler2DShadow shadowMap";
+const PCF_GETSHADOW_END = "#elif defined( SHADOWMAP_TYPE_VSM )";
+const PCF_BIAS_LINE = "shadowCoord.z += shadowBias;";
+const PCF_FRUSTUM_LINE = "bool frustumTest = inFrustum && shadowCoord.z <= 1.0;";
+
+function _countOf(hay, needle) {
+  let n = 0;
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length)) n += 1;
+  return n;
+}
+
+/** Replace the one line of `body` whose trimmed text is `line` with a guarded
+ *  reversed / conventional pair (directives on their own lines, the original
+ *  line verbatim in the #else), so stripReversedZBranches gives `body` back. */
+function _guardLine(body, line, reversedLine) {
+  const at = body.indexOf(line);
+  const start = body.lastIndexOf("\n", at) + 1;
+  let end = body.indexOf("\n", at);
+  if (end < 0) end = body.length;
+  const orig = body.slice(start, end);
+  if (orig.trim() !== line) return null;
+  const ind = orig.slice(0, orig.length - orig.trimStart().length);
+  return body.slice(0, start) +
+    `${ind}${REVERSED_Z_GUARD}\n${ind}${reversedLine}\n${ind}#else\n${orig}\n${ind}#endif` +
+    body.slice(end);
+}
+
 /**
- * Install the reversed-Z fixes three r184 does not make itself (items 1, 2, 7
- * and 8 in the header). Call ONCE, right after the renderer is built and before
+ * Header item 9: three r184's shadowmap_pars_fragment with a reversed branch
+ * in the 2D PCF getShadow only — `shadowCoord.z -= shadowBias;` and the far
+ * test `shadowCoord.z >= 0.0` under USE_REVERSED_DEPTH_BUFFER, the stock lines
+ * in the #else. Returns null (and the caller leaves the chunk alone) unless
+ * the function is found exactly once, carries no reversed branch yet, and holds
+ * each of the two lines exactly once. The VSM / Basic / point-light functions
+ * (already branched) are never touched. With the define absent the result
+ * strips back to `src` byte for byte (stripReversedZBranches).
+ * @param {string} src
+ * @returns {string|null}
+ */
+export function reversedPcfShadowChunk(src) {
+  if (typeof src !== "string") return null;
+  const a = src.indexOf(PCF_GETSHADOW_HEAD);
+  if (a < 0 || src.indexOf(PCF_GETSHADOW_HEAD, a + PCF_GETSHADOW_HEAD.length) >= 0) return null;
+  const b = src.indexOf(PCF_GETSHADOW_END, a);
+  if (b < 0) return null;
+  let body = src.slice(a, b);
+  if (body.indexOf("USE_REVERSED_DEPTH_BUFFER") >= 0) return null;
+  if (_countOf(body, PCF_BIAS_LINE) !== 1 || _countOf(body, PCF_FRUSTUM_LINE) !== 1) return null;
+  body = _guardLine(body, PCF_BIAS_LINE, "shadowCoord.z -= shadowBias;");
+  if (body === null) return null;
+  body = _guardLine(body, PCF_FRUSTUM_LINE, "bool frustumTest = inFrustum && shadowCoord.z >= 0.0;");
+  if (body === null) return null;
+  return src.slice(0, a) + body + src.slice(b);
+}
+
+/** Is item 9 already in this chunk (a second install, or three fixed it)? */
+function _pcfShadowAlreadyReversed(src) {
+  if (typeof src !== "string") return false;
+  const a = src.indexOf(PCF_GETSHADOW_HEAD);
+  const b = a >= 0 ? src.indexOf(PCF_GETSHADOW_END, a) : -1;
+  return b > a && /shadowCoord\.z -= shadowBias;/.test(src.slice(a, b)) &&
+    src.slice(a, b).indexOf("USE_REVERSED_DEPTH_BUFFER") >= 0;
+}
+
+/**
+ * Install the reversed-Z fixes three r184 does not make itself (items 1, 2, 7,
+ * 8 and 9 in the header). Call ONCE, right after the renderer is built and before
  * anything compiles. No-op (returns `installed: false`) unless the renderer
  * really runs a reversed depth buffer. A WebGL context restore rebuilds three's
  * state + render lists, so items 1 and 7 re-install on `webglcontextrestored`
  * (three's own listener, registered first, has rebuilt them by then).
  * @returns {{installed:boolean, depthFuncFix:boolean, packing:boolean,
- *            sortKeyFix:boolean, baseCameraFix:boolean, notes:string[]}}
+ *            sortKeyFix:boolean, baseCameraFix:boolean, pcfShadowFix:boolean,
+ *            notes:string[]}}
  */
 export function installReversedZ(THREE, renderer) {
-  const res = { installed: false, depthFuncFix: false, packing: false, sortKeyFix: false, baseCameraFix: false, notes: [] };
+  const res = { installed: false, depthFuncFix: false, packing: false, sortKeyFix: false, baseCameraFix: false, pcfShadowFix: false, notes: [] };
   const depth = renderer && renderer.state && renderer.state.buffers && renderer.state.buffers.depth;
   if (!THREE || !depth || typeof depth.getReversed !== "function" || depth.getReversed() !== true) {
     res.notes.push("renderer is not reversed");
@@ -347,6 +430,25 @@ export function installReversedZ(THREE, renderer) {
     }
   } catch (e) {
     res.notes.push(`packing patch failed: ${e && e.message}`);
+  }
+
+  // (9) The 2D PCF shadow lookup's bias sign (and far test) under reversed depth.
+  try {
+    const chunks = THREE.ShaderChunk;
+    const cur = chunks && chunks.shadowmap_pars_fragment;
+    if (_pcfShadowAlreadyReversed(cur)) {
+      res.pcfShadowFix = true;
+    } else {
+      const next = reversedPcfShadowChunk(cur);
+      if (next) {
+        chunks.shadowmap_pars_fragment = next;
+        res.pcfShadowFix = true;
+      } else {
+        res.notes.push("shadowmap_pars_fragment not in the r184 shape — 2D PCF shadow bias left unflipped");
+      }
+    }
+  } catch (e) {
+    res.notes.push(`PCF shadow patch failed: ${e && e.message}`);
   }
 
   try {

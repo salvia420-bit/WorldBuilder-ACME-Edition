@@ -504,19 +504,101 @@ export function pacerDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) {
 
 /**
  * The pace of a cap set at runtime (`window.__setFrameCap` — the VTank
- * profile's EnableFPSLimit, 2026-10-19): the sleep ends SOFT_CAP_WAKE_EARLY_MS
- * early and requestAnimationFrame aligns the frame to the display's refresh.
- * The exact pacer above sleeps a cap at the display's own rate (60 fps on a
- * 60 Hz screen) for one whole refresh, so the timer lands just past the next
- * vsync and every frame waits one more — 30 fps. Waking early keeps a cap at
- * or below the refresh rate exact (60 → 60, 30 → 30 on 60 Hz); on a faster
- * display the cap can run up to one refresh fast (60 → 72 on 144 Hz). The URL
- * cap (?targetFps, which tooling measures with) keeps the exact pacer.
- * Pure: exported for the unit harness.
+ * profile's EnableFPSLimit, 2026-10-19). The exact pacer above sleeps a cap at
+ * the display's own rate (60 fps on a 60 Hz screen) for one whole refresh, so
+ * the timer lands just past the next vsync and every frame waits one more —
+ * 30 fps. The URL cap (?targetFps, which tooling measures with) keeps the exact
+ * pacer; a runtime cap runs this gate instead.
+ *
+ * 2026-10-20 (improvement hunt recent-rynth-diff-3): a timeline gate replaces
+ * the 10-19 soft sleep (`softCapDelayMs`: the exact delay minus 4 ms, then
+ * rAF). That sleep was exact only where the refresh period divides the
+ * interval; elsewhere its wake-up missed the vsync before the target, so a 60
+ * cap ran 37.5 fps on 75 Hz, 50 on 100 Hz, 72 on 144 Hz and 55 on 165 Hz (a 30
+ * cap: 25 / 25 / 28.8 / 27.5). Now requestAnimationFrame runs every refresh
+ * while a runtime cap is set (init3D scheduleNext → softCapTick), and each
+ * callback asks `shouldRender(ts, intervalMs)` before any frame work:
+ *   - skip the refresh while ts < due - half a refresh;
+ *   - after a render, due = max(due + I, ts - I): the timeline moves one
+ *     interval per frame, so the average is the cap on any refresh rate (60 on
+ *     75 / 100 / 144 / 165 Hz), and a stall carries at most one interval of
+ *     catch-up, never the whole stall;
+ *   - a cap within SOFT_CAP_LOCK_TOLERANCE of a whole number n of refreshes
+ *     (60 or 30 on 60 / 120 / 240 Hz — and on a 59.94 or 120.05 Hz screen)
+ *     re-anchors on the vsync it rendered instead, due = ts + n refreshes: the
+ *     screen's own rate / n, every gap exactly n refreshes, as the 10-19 sleep
+ *     gave there. A bare timeline beats against a screen a hair off its
+ *     nominal rate — at the default 60 cap, one doubled or halved gap every
+ *     20-60 s, and a run of them while rAF jitter straddles the threshold.
+ * The refresh period is measured from the rAF deltas the gate sees: an EMA over
+ * single-refresh deltas; two clearly shorter deltas within 8 calls re-seed it
+ * down (the first sample was a multi-refresh gap after a long frame — a lone
+ * short one is jitter), 32 longer ones in a row re-seed it up (the window moved
+ * to a slower screen). Before the first delta the gate runs the timeline with
+ * no slack. A change of interval (the 60 ↔ 30 focus switch, the portal
+ * tunnel's 30 fps pace) keeps the phase: due moves by the difference. A gap of
+ * 250 ms or more between calls starts a new timeline (renders at once).
+ * Pure: exported for the unit harness (tests/frame_cap.test.mjs).
  */
-export const SOFT_CAP_WAKE_EARLY_MS = 4;
-export function softCapDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) {
-  return Math.max(0, pacerDelayMs(frameIntervalMs, lastFrameStartMs, nowMs) - SOFT_CAP_WAKE_EARLY_MS);
+export const SOFT_CAP_LOCK_TOLERANCE = 0.02;
+export function createSoftCapGate() {
+  let due = null; // the rAF time the next frame is due (null: render the next call)
+  let dueIntervalMs = 0; // the interval `due` was laid with
+  let lastTs = null; // the previous call's rAF time
+  let periodMs = 0; // the measured refresh period (0: not yet)
+  let longRun = 0; // multi-refresh deltas in a row
+  let shortWindow = 0; // calls left in which a second short delta re-seeds the period
+  let lockN = 0; // refreshes per frame while locked (0: on the timeline)
+  return {
+    /** Render on this rAF callback (`ts`, ms) under a cap of `intervalMs`? */
+    shouldRender(ts, intervalMs) {
+      if (!(intervalMs > 0) || !Number.isFinite(ts)) return true;
+      if (lastTs !== null) {
+        const d = ts - lastTs;
+        if (d >= 250) {
+          due = null; // a hidden tab, a long hitch, a cap set again after a stretch uncapped
+        } else if (d > 0.5) {
+          if (periodMs === 0) {
+            periodMs = d;
+          } else if (d < periodMs * 0.7) {
+            longRun = 0;
+            if (shortWindow > 0) {
+              periodMs = d;
+              shortWindow = 0;
+            } else {
+              shortWindow = 8;
+            }
+          } else {
+            if (shortWindow > 0) shortWindow -= 1;
+            if (d < periodMs * 1.4) {
+              periodMs += (d - periodMs) / 8;
+              longRun = 0;
+            } else if (++longRun >= 32) {
+              periodMs = d;
+              longRun = 0;
+            }
+          }
+        }
+      }
+      lastTs = ts;
+      if (due !== null && intervalMs !== dueIntervalMs) due += intervalMs - dueIntervalMs;
+      dueIntervalMs = intervalMs;
+      if (due !== null && ts < due - periodMs / 2) return false;
+      const n = periodMs > 0 ? Math.round(intervalMs / periodMs) : 0;
+      if (n >= 1 && Math.abs(intervalMs - n * periodMs) <= SOFT_CAP_LOCK_TOLERANCE * intervalMs) {
+        lockN = n;
+        due = ts + n * periodMs;
+      } else {
+        lockN = 0;
+        due = due === null ? ts + intervalMs : Math.max(due + intervalMs, ts - intervalMs);
+      }
+      return true;
+    },
+    /** Diagnostics (`window.__softCapGateState()`). */
+    state() {
+      return { periodMs, lockN, due, intervalMs: dueIntervalMs };
+    },
+  };
 }
 
 function terrainInFlightLbKeys(streamGuardState) {
@@ -1279,7 +1361,7 @@ export async function preInit3D(canvas) {
       });
     } else {
       // eslint-disable-next-line no-console
-      console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix}, baseCameraFix=${_rz.baseCameraFix})`, _rz.notes.length ? _rz.notes : "");
+      console.log(`[reversedZ] on — EXT_clip_control reversed float depth, no log-depth writes (depthFuncFix=${_rz.depthFuncFix}, packing=${_rz.packing}, sortKeyFix=${_rz.sortKeyFix}, baseCameraFix=${_rz.baseCameraFix}, pcfShadowFix=${_rz.pcfShadowFix})`, _rz.notes.length ? _rz.notes : "");
     }
   }
   if (_canvasDepth.requestedOff) {
@@ -1301,6 +1383,8 @@ export async function preInit3D(canvas) {
           packing: _rzFixes.packing,
           sortKeyFix: _rzFixes.sortKeyFix,
           baseCameraFix: _rzFixes.baseCameraFix,
+          // 2026-10-20 (recent-render-diff-2): three's 2D PCF shadow bias sign.
+          pcfShadowFix: _rzFixes.pcfShadowFix === true,
           notes: _rzFixes.notes.slice(),
         } : null,
       });
@@ -2514,8 +2598,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // drives via __renderOnce). Bare rAF stays the default. `let`: the
   // frame cap below (window.__setFrameCap) re-paces it at runtime.
   let _frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
-  // A runtime cap paces softly (softCapDelayMs); the URL cap stays exact.
+  // A runtime cap paces through the timeline gate (createSoftCapGate, one per
+  // loop: the measured refresh period outlives a cap change); the URL cap stays
+  // exact. `window.__softCapGateState()` → { periodMs, lockN, due, intervalMs }.
   let _frameCapSoft = false;
+  const _softCapGate = createSoftCapGate();
+  if (typeof window !== "undefined") window.__softCapGateState = () => _softCapGate.state();
   // #14 (2026-06-07): the dt-recovery freeze must scale with the loop's
   // cadence, otherwise a slow paced loop (e.g. ?targetFps=1 → 1000 ms
   // raw dt EVERY frame) permanently trips the >0.5 s recovery arm and
@@ -2539,8 +2627,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // above keeps its 0.5 s floor (1.5 × 0.25 s < 0.5 s), so that const stays
   // exact; the portal-space pace (scheduleNext) and the frame-work reference
   // period (_postRenderStreamSlot) read _frameIntervalMs per frame. A cap
-  // change applies from the next scheduleNext (a pending pacer sleep runs
-  // out at the old pace — at most one frame). The adaptive render-scale
+  // change applies at the next refresh (the gate's rAF re-reads the interval
+  // every vsync, 2026-10-20). The adaptive render-scale
   // controller is not misled by a cap: it times its OWN rAF chain
   // (adaptive_render_scale.js start()), which keeps the display rate between
   // capped frames, and its GPU fence is read one rendered frame later — a cap
@@ -2557,7 +2645,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         return false;
       }
       _frameIntervalMs = n > 0 ? 1000 / Math.min(240, Math.max(FRAME_CAP_MIN_FPS, n)) : 0;
-      _frameCapSoft = _frameIntervalMs > 0; // softCapDelayMs: never halves a cap at the display's rate
+      _frameCapSoft = _frameIntervalMs > 0; // the timeline gate: never halves a cap at the display's rate
       return true;
     };
     window.__frameCapState = () => ({
@@ -2665,12 +2753,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Returns _frameIntervalMs unchanged otherwise (and for `=off`).
     const _ivl = portalSpaceFrameIntervalMs(_frameIntervalMs);
     if (_ivl > 0) {
+      // A runtime cap (2026-10-20): rAF every refresh through the timeline
+      // gate (softCapTick below); the exact sleep is the URL cap's.
+      if (_frameCapSoft) {
+        _schedRafId = requestAnimationFrame(softCapTick);
+        return;
+      }
       const now = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
       // F3: budget charged against THIS frame's start (`lastFrameTs`, stamped
       // at the top of tick), so period → _frameIntervalMs exactly. Charging it
       // against the previous scheduleNext double-counted the sleep.
-      const delay = _frameCapSoft ? softCapDelayMs(_ivl, lastFrameTs, now) : pacerDelayMs(_ivl, lastFrameTs, now);
+      const delay = pacerDelayMs(_ivl, lastFrameTs, now);
       if (delay > 0) {
         _schedTimeoutId = setTimeout(() => {
           _schedTimeoutId = null;
@@ -2682,6 +2776,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       return;
     }
     _schedRafId = requestAnimationFrame(tick);
+  }
+  // The runtime cap's per-refresh gate (2026-10-20, createSoftCapGate): a
+  // refresh the gate skips re-arms the rAF and does no frame work; one it lets
+  // through runs tick() with that rAF time. The interval is read per call, so a
+  // cap change or the portal pace applies at the next refresh, and a released
+  // cap renders at once. _schedRafId always holds the pending callback, so
+  // _cancelSchedule (stop / onPause / film __renderOnce) cancels the chain.
+  function softCapTick(nowTs) {
+    _schedRafId = null;
+    if (!running) return;
+    const ivl = _frameCapSoft ? portalSpaceFrameIntervalMs(_frameIntervalMs) : 0;
+    const ts = typeof nowTs === "number" ? nowTs : performance.now();
+    if (ivl > 0 && !_softCapGate.shouldRender(ts, ivl)) {
+      _schedRafId = requestAnimationFrame(softCapTick);
+      return;
+    }
+    tick(nowTs);
   }
   // A1-O3 phase #0 — shared by tick() and the ?netDrainHz interval. The
   // enqueue + one-microtask hop described at the syncPhysicsTick parse

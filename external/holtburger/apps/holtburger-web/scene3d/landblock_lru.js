@@ -43,8 +43,37 @@
 // stay candidates and go next tick). Flag OFF the read is Infinity and every
 // loop below keeps its own private budget — byte-identical.
 import { frameWorkSlotRemainingMs, frameWorkNoteSlotYield } from "./frame_work.js";
+// 2026-10-20 (improvement hunt A3 / open-frontier-perf-2 step 1) — pure leaf
+// (no imports), so landblock_lru stays a leaf for lighting.js's lbKeyOf import.
+import { removeChildrenBulk } from "./bulk_child_remove.js";
 
 const LB_KEY_MASK = 0xffff_0000 >>> 0;
+
+// 2026-10-20 (improvement hunt A3 / open-frontier-perf-2 step 1) — evict and
+// park detach an LB's terrain / buildings / statics children with ONE
+// order-preserving compaction pass per group (scene3d/bulk_child_remove.js)
+// instead of `group.remove(c)` per child. three's remove is indexOf + splice,
+// so the per-child loop was O(k·n): since staticAnchorFreeze (10-17) the
+// frozen static-script anchors keep ~14k direct staticsGroup children at
+// Linvak's 9×9 ring, and one ~290-child LB measured ~10 ms at 14k children
+// (~14 ms at 23k) on the laptop once the children array has grown past ~16k
+// slots (V8 then memmoves it on every splice), up to MAX_PARKS_PER_TICK LBs
+// per tick; the pass is ~0.25-0.5 ms. Same survivors in the same order, same
+// `parent = null`, same 'removed' / 'childremoved' events in the same sequence
+// (the helper's header has the exact contract; tests/bulk_child_remove.test.mjs
+// pins it against repeated remove()). Kills under BULK_CHILD_REMOVE_MIN_KILL
+// (16) stay on three's remove(). Pixel-identical. DEFAULT ON;
+// `?bulkChildRemove=off` (or 0/false) restores the per-child remove() loops.
+// Headless (no window) reads ON. Cells (step ④) and the refcounted instanced
+// nodes keep their per-node remove — few nodes per LB.
+const BULK_CHILD_REMOVE_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("bulkChildRemove");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
 
 // Sealed-dungeon purge budget (2026-07-08): max LBs evicted per frame when
 // entering a fully-enclosed dungeon (see tickEviction's sealedKeepLbKey path).
@@ -718,6 +747,15 @@ export class LandblockLRU {
     // removes is the documented park↔unpark storm driver (SEALED_KEEP_RING_ON
     // note above). Stays 0 outdoors and under ?dungeonStreamGate=off.
     this._streamGateHolds = 0;
+
+    // 2026-10-20 (improvement hunt A3) — time spent detaching LB children
+    // from terrainGroup / buildingsGroup / statics in evict + park
+    // (`_detachChildren`). Timed on BOTH arms so `?bulkChildRemove=off` vs the
+    // default is a direct A/B off `getStats()` (detachMsTotal / detachMsMax).
+    this._detachMsTotal = 0;
+    this._detachMsMax = 0;
+    this._detachCalls = 0;
+    this._detachedChildren = 0;
 
     // ── ST7 `?slotGrid` ASSERT-ONLY mode (T20, SPEC §1.4) ─────────────────
     // Non-null when the slot grid (scene3d/residency_grid.js) is the
@@ -1698,6 +1736,37 @@ export class LandblockLRU {
     return buckets;
   }
 
+  // 2026-10-20 (improvement hunt A3) — detach `kill` from `group` for evict /
+  // park. Flag ON: one order-preserving compaction pass (removeChildrenBulk —
+  // same survivors/order, parent = null, same event sequence as the loop).
+  // `?bulkChildRemove=off`: the per-child `group.remove(c)` loop verbatim.
+  // `failSoft` = the park steps' per-child try/catch. `group` may be absent
+  // (the call sites used `s.xGroup?.remove(c)`), which is a no-op.
+  _detachChildren(group, kill, failSoft = false) {
+    if (!group || !kill || kill.length === 0) return;
+    const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const before = Array.isArray(group.children) ? group.children.length : 0;
+    try {
+      if (BULK_CHILD_REMOVE_ON) {
+        removeChildrenBulk(group, kill, failSoft);
+      } else if (failSoft) {
+        for (const c of kill) { try { group.remove(c); } catch (_) {} }
+      } else {
+        for (const c of kill) group.remove(c);
+      }
+    } catch (e) {
+      if (!failSoft) throw e;
+    } finally {
+      const ms = ((typeof performance !== "undefined") ? performance.now() : Date.now()) - t0;
+      this._detachMsTotal += ms;
+      if (ms > this._detachMsMax) this._detachMsMax = ms;
+      this._detachCalls += 1;
+      if (Array.isArray(group.children)) {
+        this._detachedChildren += Math.max(0, before - group.children.length);
+      }
+    }
+  }
+
   // Remove the LB's containers from the scene + dispose the per-LB
   // resources we own. Cross-LB shares (MaterialCache surfaces, statics
   // InstancedMesh, terrain atlas / road texture) are NEVER touched.
@@ -1721,7 +1790,7 @@ export class LandblockLRU {
     //    matches. Wire-fill companion meshes (userData.lbX/lbY also
     //    set) are caught by the same filter.
     if (bucket) {
-      for (const c of bucket.terrain) s.terrainGroup?.remove(c);
+      this._detachChildren(s.terrainGroup, bucket.terrain);
     } else if (s.terrainGroup?.children) {
       const kill = [];
       for (const c of s.terrainGroup.children) {
@@ -1729,7 +1798,7 @@ export class LandblockLRU {
         if (!ud) continue;
         if (ud.lbX === lbX && ud.lbY === lbY) kill.push(c);
       }
-      for (const c of kill) s.terrainGroup.remove(c);
+      this._detachChildren(s.terrainGroup, kill);
     }
 
     // 2. Buildings — per-placement Groups with userData.landblockId
@@ -1739,14 +1808,14 @@ export class LandblockLRU {
       const kill = [];
       if (bucket) {
         kill.push(...bucket.buildings);
-        for (const c of kill) s.buildingsGroup?.remove(c);
+        this._detachChildren(s.buildingsGroup, kill);
       } else {
         for (const c of s.buildingsGroup.children) {
           const lb = c.userData?.landblockId;
           if (lb == null) continue;
           if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
         }
-        for (const c of kill) s.buildingsGroup.remove(c);
+        this._detachChildren(s.buildingsGroup, kill);
       }
       // ?buildingMatBatch (2026-10-17) — a per-(LB, material) building
       // BatchedMesh owns its batch buffers + per-instance DataTextures (its
@@ -1795,8 +1864,12 @@ export class LandblockLRU {
           if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
         }
       }
+      // 2026-10-20 (improvement hunt A3): detach the whole LB first (one pass
+      // with the flag on), THEN dispose — the dispose walk reads only each
+      // node's own subtree, never staticsGroup, so the old interleaved
+      // remove-then-dispose order bought nothing.
+      this._detachChildren(s.staticsGroup, kill);
       for (const c of kill) {
-        s.staticsGroup?.remove(c);
         // A per-LB BatchedMesh owns a GPU vertex buffer + per-instance
         // DataTextures that the geometry-disposables list does NOT cover (its
         // source group geoms are tracked separately). Dispose it here so
@@ -2190,7 +2263,9 @@ export class LandblockLRU {
         if (ud && ud.lbX === lbX && ud.lbY === lbY) p.terrain.push(c);
       }
     }
-    for (const c of p.terrain) { try { s.terrainGroup?.remove(c); } catch (_) {} }
+    // 2026-10-20 (improvement hunt A3): one pass (failSoft = the old per-child
+    // try/catch); same for ② and ③ below.
+    this._detachChildren(s.terrainGroup, p.terrain, true);
     // ?terrainBatch (default-ON) — detaching the proxies is NOT enough: an
     // absorbed LB renders from the cross-LB BatchedMesh, and its proxy is a
     // hidden data-carrier. Without this the parked LB kept painting from the
@@ -2214,8 +2289,8 @@ export class LandblockLRU {
         if (lb != null && lbKeyOf(lb >>> 0) === lbKey) p.buildings.push(c);
       }
     }
+    this._detachChildren(s.buildingsGroup, p.buildings, true);
     for (const c of p.buildings) {
-      try { s.buildingsGroup?.remove(c); } catch (_) {}
       const k = c.userData?.placementKey;
       if (k && s.buildingMap3d instanceof Map) s.buildingMap3d.delete(k);
     }
@@ -2231,7 +2306,7 @@ export class LandblockLRU {
         if (lb != null && lbKeyOf(lb >>> 0) === lbKey) p.statics.push(c);
       }
     }
-    for (const c of p.statics) { try { s.staticsGroup?.remove(c); } catch (_) {} }
+    this._detachChildren(s.staticsGroup, p.statics, true);
 
     // ④ EnvCells.
     if (s.cellContainers3d instanceof Map && s.cellsGroup) {
@@ -2634,6 +2709,14 @@ export class LandblockLRU {
       // because the player was indoors (see noteStreamGateHold). The richer
       // per-effect breakdown lives on `scene3d._dungeonStreamGate`.
       streamGateHolds: this._streamGateHolds,
+      // 2026-10-20 (improvement hunt A3): evict/park child-detach cost, timed
+      // on both `?bulkChildRemove` arms (A/B: compare detachMsMax/Total over
+      // the same route).
+      bulkChildRemove: BULK_CHILD_REMOVE_ON,
+      detachMsTotal: this._detachMsTotal,
+      detachMsMax: this._detachMsMax,
+      detachCalls: this._detachCalls,
+      detachedChildren: this._detachedChildren,
       // #11 sealedPark warm-return reserve (2026-08-03). Same object as
       // `window.__sealedPark()`; see sealedParkStats().
       sealedPark: this.sealedParkStats(),

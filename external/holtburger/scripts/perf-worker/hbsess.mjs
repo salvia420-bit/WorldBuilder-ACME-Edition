@@ -8,7 +8,9 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-
+// 2026-10-20: the boot URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 import { statSync, openSync, readSync, closeSync } from "node:fs";
 const ACE_LOG = "/home/wbterminal/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE_Log.txt";
@@ -58,7 +60,7 @@ if (cmd === "boot") {
   ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const { pg } = await page();
-  const url = `${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? "&" + flags : ""}`;
+  const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? "&" + flags : ""}`);
   await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   console.log("gpu", await pg.evaluate(() => { const gl = document.createElement("canvas").getContext("webgl2"); const e = gl.getExtension("WEBGL_debug_renderer_info"); return gl.getParameter(e.UNMASKED_RENDERER_WEBGL); }));
   console.log("wake", await pg.evaluate(async () => { try { window.__benchWake = await navigator.wakeLock.request("screen"); return "held"; } catch (e) { return String(e); } }));

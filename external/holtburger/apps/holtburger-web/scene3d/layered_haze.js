@@ -20,9 +20,20 @@
 // at the far plane) and sky-blocked cells (dungeons) pass through. One
 // full-screen pass, no new scene render; sits after the clouds/aerial
 // perspective pass and before bloom/tone mapping (HDR in, HDR out).
+//
+// 2026-10-20 (improvement hunt A7, gpu-shading-5) — `?postFuse` (default on,
+// `=off` escape; atmosphere_pipeline.js). On the split chain (high/ultra) the
+// haze is no longer a full-screen pass of its own: LayeredHazeEffect runs the
+// same math as the LAST effect of the atmosphere EffectPass, which writes the
+// late target itself — one RGBA16F read + write and a depth read less per
+// frame. The pass object stays the one state owner (strength, params, camera,
+// fog / sky-blocked feeds, `window.__layerHaze`); the effect holds the SAME
+// uniform objects and refreshes them through `syncUniforms()`, so both paths
+// compute identical values. The unsplit chain keeps the pass (bloom shares the
+// post EffectPass there and blurs its raw input).
 
 import * as THREE from "three";
-import { Pass } from "postprocessing";
+import { BlendFunction, Effect, Pass } from "postprocessing";
 
 export const LAYER_HAZE_DEFAULT = 0.4;
 export const LAYER_HAZE_DEFAULTS = Object.freeze({
@@ -141,9 +152,14 @@ export class LayeredHazePass extends Pass {
 
   setCamera(cam) { if (cam) this.camera = cam; }
 
-  render(renderer, inputBuffer, outputBuffer) {
+  /**
+   * Every uniform except `inputBuffer`, from the live state: the strength 0
+   * rule (sky-blocked cell, no depth yet, non-perspective camera), the camera
+   * matrices, the fog tint and the params. Shared by render() and
+   * LayeredHazeEffect.update() (`?postFuse`), which holds these same objects.
+   */
+  syncUniforms() {
     const u = this.material.uniforms;
-    u.inputBuffer.value = inputBuffer ? inputBuffer.texture : null;
     const cam = this.camera;
     let strength = this.strength;
     try { if (this.isSkyBlocked()) strength = 0; } catch (_) { /* haze on */ }
@@ -159,6 +175,11 @@ export class LayeredHazePass extends Pass {
     const p = this.params;
     u.uHaze.value.set(strength, p.nearM, p.distScaleM, p.heightScaleM);
     u.uHazeTone.value.set(p.blue, p.maxHaze);
+  }
+
+  render(renderer, inputBuffer, outputBuffer) {
+    this.material.uniforms.inputBuffer.value = inputBuffer ? inputBuffer.texture : null;
+    this.syncUniforms();
     renderer.setRenderTarget(this.renderToScreen ? null : outputBuffer);
     renderer.render(this.scene, this.orthoCam);
     this.stats.frames += 1;
@@ -167,6 +188,94 @@ export class LayeredHazePass extends Pass {
   dispose() {
     this.material.dispose();
     this.quad.geometry.dispose();
+  }
+}
+
+// `?postFuse` (2026-10-20): LAYER_HAZE_FRAG as a pmndrs mainImage, line for
+// line (tests/post_fuse.test.mjs compares the two). The only differences are
+// the I/O: the colour arrives as inputColor (the finished cloud / aerial / AO
+// composite of the same pass, where the pass read it from the composer buffer
+// that composite was written to) and the depth is the EffectMaterial's own
+// depthBuffer uniform, the stable depth copy the composer hands every
+// depth-reading pass (EffectPass.setDepthTexture), so the same texture the
+// pass samples as tDepth and NOT a 17th sampler on a pass ANGLE/D3D11 caps at
+// 16. Both are sampled at the material's vUv, never the mainUv-warped UV the
+// pass hands mainImage, exactly as the standalone quad does. Basic depth
+// packing, as the pass assumes (depthBuffer is the raw .r there too).
+export const LAYER_HAZE_EFFECT_FRAG = /* glsl */ `
+uniform float uLogFar;
+uniform float uSkyM;
+uniform mat4 uInvProj;
+uniform mat4 uCamWorld;
+uniform vec3 uHazeColor;
+uniform vec4 uHaze;      // strength, nearM, distScaleM, heightScaleM
+uniform vec2 uHazeTone;  // blue shift, max haze
+#ifdef USE_REVERSED_DEPTH_BUFFER
+uniform vec2 uNearFar;   // ?reversedZ=on: raw reversed depth -> metres
+#endif
+void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+  vec4 src = inputColor;
+  if (uHaze.x <= 0.0) { outputColor = src; return; }
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  float rd = texture2D(depthBuffer, vUv).r;
+  float w = (uNearFar.x * uNearFar.y) / (rd * (uNearFar.y - uNearFar.x) + uNearFar.x);
+#else
+  float w = exp2(texture2D(depthBuffer, vUv).r * uLogFar) - 1.0;
+#endif
+  if (w >= uSkyM) { outputColor = src; return; }
+  vec4 r = uInvProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+  vec3 ray = r.xyz / r.w;
+  vec3 vpos = ray * (w / max(-ray.z, 1e-4));
+  vec3 wpos = (uCamWorld * vec4(vpos, 1.0)).xyz;
+  float far = 1.0 - exp(-max(length(vpos) - uHaze.y, 0.0) / max(uHaze.z, 1.0));
+  float low = exp(-max(wpos.y, 0.0) / max(uHaze.w, 1.0));
+  float h = clamp(uHaze.x * far * mix(0.3, 1.0, low), 0.0, uHazeTone.y);
+  vec3 hc = mix(uHazeColor, uHazeColor * vec3(0.80, 0.93, 1.20), uHazeTone.x);
+  outputColor = vec4(mix(src.rgb, hc, h), src.a);
+}`;
+
+/** The pass uniforms the effect shares BY REFERENCE (not inputBuffer, not tDepth). */
+export const LAYER_HAZE_EFFECT_UNIFORMS = Object.freeze([
+  "uLogFar", "uNearFar", "uSkyM", "uInvProj", "uCamWorld", "uHazeColor", "uHaze", "uHazeTone",
+]);
+
+/**
+ * `?postFuse` — the haze as the trailing effect of the split chain's
+ * atmosphere EffectPass. Attribute NONE: pmndrs 6.39.1 EffectPass sorts its
+ * effects by attribute DESCENDING (stable), so appended last it runs after
+ * every DEPTH effect (clouds, aerial perspective, horizon dissolve) and after
+ * the NONE AO composite — today's AP -> AO -> haze order. SRC blend: the
+ * output IS the hazed colour (NORMAL would mix(dst, src, 1.0), which is not
+ * bit-exact and re-NaNs a NaN dst; wall 93).
+ *
+ * `haze` is the LayeredHazePass that owns the state; it is never added to the
+ * composer, and as an own Pass property pmndrs Effect.dispose disposes it with
+ * this effect (EffectPass.dispose -> effect.dispose).
+ */
+export class LayeredHazeEffect extends Effect {
+  constructor(haze) {
+    const u = haze.material.uniforms;
+    super("LayeredHazeEffect", LAYER_HAZE_EFFECT_FRAG, {
+      blendFunction: BlendFunction.SRC,
+      // The pass's own uniform objects: one write in syncUniforms() reaches the
+      // compound shader (pmndrs merges effect uniforms by reference) and every
+      // reader of `haze.material.uniforms` (tests, diag) alike.
+      uniforms: new Map(LAYER_HAZE_EFFECT_UNIFORMS.map((k) => [k, u[k]])),
+    });
+    this.haze = haze;
+    haze.stats.fused = true;
+  }
+
+  // EffectPass.setDepthTexture hands every effect the stable depth copy it
+  // binds as depthBuffer; keeping it on the pass's tDepth too keeps the "no
+  // depth yet -> strength 0" rule in syncUniforms() the pass's own.
+  setDepthTexture(depthTexture /* , depthPacking */) {
+    this.haze.setDepthTexture(depthTexture);
+  }
+
+  update(/* renderer, inputBuffer, deltaTime */) {
+    this.haze.syncUniforms();
+    this.haze.stats.frames += 1;
   }
 }
 

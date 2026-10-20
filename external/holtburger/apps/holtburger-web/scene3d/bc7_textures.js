@@ -1036,6 +1036,9 @@ const _stats = {
   upgradesDropped: 0,        // full asks the queue dropped (no live waiter, no holder)
   preDropped: 0,             // pre asks dropped or cancelled (full dispatched first)
   twinsDropped: 0,           // CLIP twins dropped before their fetch
+  // ── streaming-hitch-4 (2026-10-20) — HD map swaps vs material.version ──
+  swapBumps: 0,              // swaps that bumped needsUpdate (key-changing, or ?hdSwapBump=on)
+  swapBumpsSkipped: 0,       // map-to-map swaps that left material.version alone
 };
 
 // --------------------------------------------------------------------------
@@ -2012,11 +2015,98 @@ export function _resetBc7ForTest() {
   // memoised once and then silently decided every later case in the same
   // process regardless of what the test set up.
   _preFlag = undefined;
+  _hdSwapBumpFlag = undefined;
   _supported = null;
   _detectNote = "not probed";
   _hdLog.length = 0;
   _verdictAt.clear();
   _resetClipAlphaGuardForTest();
+}
+
+// --------------------------------------------------------------------------
+// streaming-hitch-4 (2026-10-20 improvement hunt) — HD swaps keep material.version
+// --------------------------------------------------------------------------
+//
+// WHY. Every HD swap (`buildAndSwap` pre + full here, the clone / alias walk in
+// materials.js `_repointAlbedoForDid`) used to set `needsUpdate`, which only
+// bumps `material.version`. A map-to-map swap cannot change a three r184
+// program: WebGLPrograms.getParameters reads a map slot only for its PRESENCE
+// (HAS_MAP :124, HAS_EMISSIVEMAP :132), its uv CHANNEL (mapUv :269,
+// emissiveMapUv :275) and the video-decode switch (decodeVideoTexture
+// :359-360), and `_patchSetCacheKey` has no texture bit. The new texture
+// reaches the GPU without the bump: refreshUniformsCommon re-reads
+// `material.map` on the first draw of the material every frame (the
+// renderer resets `_currentMaterialId` at the end of each render), the
+// batched / anim-scenery variants mirror `map` + `emissiveMap` as hot keys
+// every frame, and the atlas refeed rides `_rsVerdictResolved`, not version.
+// What the bump DID do: async_link_guard saw `version !== __version` with no
+// trust yet and SKIPPED the draw for a frame (deferred compile + 10 ms poll) —
+// on each of the first two swaps of a surface (pre, then full), for the
+// material, its clones, and through the mirrored `version` hot key every
+// batched / anim bucket using it. Hundreds of one-frame dropouts in the first
+// minute after arrival while textures sharpen, for compiles that were cache
+// hits. Now a swap bumps only when presence or channel (or the video switch)
+// actually changes. Same program, same uniforms, same pixels once drawn.
+
+/**
+ * `?hdSwapBump=on` — OPT-IN escape (`on`/`1`/`true`/`yes`): every HD map swap
+ * sets `needsUpdate` again, the pre-2026-10-20 behaviour. Absent / anything
+ * else = bump only on a key-changing swap. Memoised for the page (one read per
+ * swap would parse the URL hundreds of times during arrival); an explicit
+ * `search` is never memoised (tests).
+ */
+let _hdSwapBumpFlag;
+export function hdSwapBumpAlways(search) {
+  if (search === undefined && _hdSwapBumpFlag !== undefined) return _hdSwapBumpFlag;
+  let on = false;
+  try {
+    const s =
+      search !== undefined
+        ? search
+        : typeof window !== "undefined" && window.location
+          ? window.location.search
+          : "";
+    const v = new URLSearchParams(s).get("hdSwapBump");
+    const t = v == null ? "" : String(v).toLowerCase();
+    on = t === "on" || t === "1" || t === "true" || t === "yes";
+  } catch (_) {
+    on = false;
+  }
+  if (search === undefined) _hdSwapBumpFlag = on;
+  return on;
+}
+
+/**
+ * Can putting `tex` where `old` was, in ONE map slot, change the three r184
+ * program? Only through what getParameters reads off the slot: presence, the
+ * uv channel, and the video-decode switch (isVideoTexture + the colour-space
+ * transfer, which is only read when the texture IS a video). Format, size,
+ * filters, mip count, compressed-vs-DataTexture are texture-side state
+ * (WebGLTextures uploads on texture.version), never program state.
+ * @param {THREE.Texture|null|undefined} old
+ * @param {THREE.Texture|null|undefined} tex
+ */
+export function mapSwapChangesProgram(old, tex) {
+  if (!old !== !tex) return true; // a map appears or disappears
+  if (!old) return false; // empty -> empty
+  if ((old.channel | 0) !== (tex.channel | 0)) return true;
+  const ov = old.isVideoTexture === true;
+  if (ov !== (tex.isVideoTexture === true)) return true;
+  return ov && old.colorSpace !== tex.colorSpace;
+}
+
+/**
+ * The needsUpdate decision for an HD map swap (buildAndSwap below, and every
+ * slot materials.js `_repointAlbedoForDid` re-points). True = the caller must
+ * set `needsUpdate`. Tallied into `bc7Stats().swapBumps / swapBumpsSkipped`.
+ */
+export function hdSwapNeedsUpdate(old, tex) {
+  if (hdSwapBumpAlways() || mapSwapChangesProgram(old, tex)) {
+    _stats.swapBumps += 1;
+    return true;
+  }
+  _stats.swapBumpsSkipped += 1;
+  return false;
 }
 
 // --------------------------------------------------------------------------
@@ -2099,7 +2189,10 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
       colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
     });
     mat.map = tex;
-    mat.needsUpdate = true;
+    // streaming-hitch-4: RGBA8 -> pre -> full is map-to-map (same presence,
+    // channel 0 both sides), so the program cannot change and a version bump
+    // would only make asyncLink skip this material's draws for a frame.
+    if (hdSwapNeedsUpdate(old, tex)) mat.needsUpdate = true;
     _stats.texturesBuilt += 1;
     if (phase === "pre") _stats.preSwaps += 1;
     else _stats.singletonUpgrades += 1;

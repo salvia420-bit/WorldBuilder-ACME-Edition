@@ -27,6 +27,9 @@
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { statSync, openSync, readSync, closeSync, readFileSync, writeFileSync } from "node:fs";
+// 2026-10-20: the URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (../lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "../lib/bench-url.mjs";
 const require = createRequire(import.meta.url);
 const { chromium } = require("/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core");
 const a = process.argv.slice(2);
@@ -50,7 +53,7 @@ for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok
 const browser = await chromium.connectOverCDP(CDP);
 const pg = browser.contexts()[0].pages()[0];
 const flags = opt("--flags", "");
-const url = `http://${HOST}:${PORT}/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&bridge_url=ws://${HOST}:${PORT}/wsbridge&server_host=127.0.0.1&server_port=9000${flags ? "&" + flags : ""}`;
+const url = uncappedBenchUrl(`http://${HOST}:${PORT}/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&bridge_url=ws://${HOST}:${PORT}/wsbridge&server_host=127.0.0.1&server_port=9000${flags ? "&" + flags : ""}`);
 await pg.addInitScript(() => { try { performance.setResourceTimingBufferSize(200000); } catch (_) {} });
 if (a.includes("--longtasks")) await pg.addInitScript(() => {
   const lt = []; window.__longTasks = lt;

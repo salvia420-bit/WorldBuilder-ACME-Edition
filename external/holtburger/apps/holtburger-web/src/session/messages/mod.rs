@@ -13,6 +13,7 @@
 //! [`dispatch_game_message`] routes each variant, `misc` keeps the catch-all.
 
 use crate::*;
+use crate::inventory_signal as inv_signal;
 use crate::session::{LoopCtx, LoopFlags, LoopFlow};
 use holtburger_protocol::messages::GameMessage;
 use holtburger_protocol::traits::ProtocolUnpack;
@@ -539,6 +540,28 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             _ => {}
         }
     }
+    // 2026-10-20 (improvement hunt A11, net-session-1, `?invSignalOwned`,
+    // DEFAULT ON, `=off|0|false|no` escape): kind=11 InventoryUpdated used to
+    // fire for every routed create / delete / parent / property / wield
+    // event in view, so an arrival burst or a combat round re-ran the whole
+    // inventory refresh fan-out nearly every frame. It now fires only when
+    // the subject touches the owned or viewed item set BEFORE or AFTER this
+    // message (inventory_signal.rs). The before-state is captured HERE, pre
+    // route: ACE's drop (`PublicUpdateInstanceID(Container -> 0)`) leaves the
+    // item unowned after routing, so an after-only test would skip the
+    // snapshot dirty mark. `None` (flag off) = the old unconditional signal
+    // at every site below.
+    let inv_signal_pre: Option<inv_signal::PreRouteSubjects> =
+        if inv_signal::inv_signal_owned_flag() {
+            world.borrow().as_ref().map(|w| {
+                inv_signal::PreRouteSubjects::capture(
+                    &inv_signal::WorldInventoryView(w),
+                    inv_signal::message_subject_guids(&message),
+                )
+            })
+        } else {
+            None
+        };
     if should_route_message_to_world(
         &message,
         world_lifecycle_on,
@@ -714,15 +737,31 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                         f32_payload: None,
                     });
                 }
-                WorldEvent::EntitySpawned(_)
-                | WorldEvent::EntityReplaced(_)
-                | WorldEvent::EntityDespawned(_)
-                | WorldEvent::ContainerOpened(_) => {
-                    // Could affect inventory if the entity
-                    // is owned by the player; the snapshot
-                    // builder filters by ownership so a
-                    // false positive here just refreshes
-                    // the panel one extra time.
+                // 2026-10-20 (improvement hunt A11): a spawn / replace /
+                // despawn signals only when its subject was or is owned /
+                // viewed (`?invSignalOwned`). The old "false positive just
+                // refreshes the panel one extra time" was one full JS
+                // inventory fan-out per creature create (~300 per arrival).
+                WorldEvent::EntitySpawned(entity) | WorldEvent::EntityReplaced(entity) => {
+                    if inv_signal::should_signal(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        u32::from(entity.guid),
+                    ) {
+                        inventory_changed = true;
+                    }
+                }
+                WorldEvent::EntityDespawned(guid) => {
+                    if inv_signal::should_signal(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        u32::from(*guid),
+                    ) {
+                        inventory_changed = true;
+                    }
+                }
+                // Opening a container changes what is viewed: unconditional.
+                WorldEvent::ContainerOpened(_) => {
                     inventory_changed = true;
                 }
                 WorldEvent::PropertiesUpdated { guid, updates } => {
@@ -815,13 +854,34 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                             });
                         }
                     }
-                    inventory_changed = true;
+                    // 2026-10-20 (improvement hunt A11): only an owned /
+                    // viewed subject (before or after) refreshes the
+                    // inventory; a creature's property churn does not.
+                    if inv_signal::should_signal(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        u32::from(*guid),
+                    ) {
+                        inventory_changed = true;
+                    }
                 }
                 WorldEvent::EntityDetached {
                     entity_guid,
                     prior_wielder_guid,
                 } => {
-                    inventory_changed = true;
+                    // 2026-10-20 (improvement hunt A11): the item or its
+                    // prior wielder must touch the owned / viewed set — an
+                    // NPC dequip no longer raises kind=11 (it defeated the
+                    // 2026-10-07 `wieldEventTouchesLocal` kind:47/49 filter
+                    // in plugins/inventory.js). kind=47 itself still fires.
+                    if inv_signal::should_signal_with_holder(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        *entity_guid,
+                        *prior_wielder_guid,
+                    ) {
+                        inventory_changed = true;
+                    }
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_ENTITY_DETACHED,
                         string_payload: None,
@@ -838,7 +898,16 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                     entity_guid,
                     new_wielder_guid,
                 } => {
-                    inventory_changed = true;
+                    // 2026-10-20 (improvement hunt A11): same gate as
+                    // EntityDetached; kind=49 itself still fires.
+                    if inv_signal::should_signal_with_holder(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        *entity_guid,
+                        *new_wielder_guid,
+                    ) {
+                        inventory_changed = true;
+                    }
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_ENTITY_ATTACHED,
                         string_payload: None,
@@ -1291,11 +1360,11 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             // indexes are maintained here. `inventory_changed`
             // for the create case comes from the routed
             // `WorldEvent::EntitySpawned/EntityReplaced` arm
-            // in the scan above; for deletes we set it
-            // unconditionally (the snapshot builder filters
-            // by ownership, so a false positive just
-            // refreshes the panel one extra time — same
-            // rationale as that arm).
+            // in the scan above; for deletes it is set here.
+            // 2026-10-20 (improvement hunt A11, `?invSignalOwned`):
+            // only for a subject that was owned / viewed before
+            // the delete (the pre-route capture — the routed
+            // handler has already unfiled it) or still is.
             GameMessage::ObjectCreate(data) if world_lifecycle_on => {
                 maintain_bridge_indexes_on_routed_create(
                     w,
@@ -1318,7 +1387,13 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                         &wielder_index,
                         &per_guid_bridge_indexes,
                     );
-                    inventory_changed = true;
+                    if inv_signal::should_signal(
+                        inv_signal_pre.as_ref(),
+                        &inv_signal::WorldInventoryView(&*w),
+                        u32::from(data.guid),
+                    ) {
+                        inventory_changed = true;
+                    }
                 }
             }
             GameMessage::InventoryRemoveObject(data) if world_lifecycle_on => {
@@ -1327,7 +1402,13 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                     &wielder_index,
                     &per_guid_bridge_indexes,
                 );
-                inventory_changed = true;
+                if inv_signal::should_signal(
+                    inv_signal_pre.as_ref(),
+                    &inv_signal::WorldInventoryView(&*w),
+                    u32::from(data.object_guid),
+                ) {
+                    inventory_changed = true;
+                }
             }
             GameMessage::ObjectCreate(data) => {
                 if apply_inventory_object_create(w, data, &wielder_index, &projectile_index, &physics_script_table_index, &per_guid_bridge_indexes) {
@@ -1437,7 +1518,20 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 } else {
                     strip_wielder_index_item(data.child_guid, &wielder_index);
                 }
-                inventory_changed = true;
+                // 2026-10-20 (improvement hunt A11, `?invSignalOwned`): a
+                // monster's weapon swap no longer raises kind=11; the
+                // child or the parent must touch the owned / viewed set.
+                // (The scene3d `playerInventoryChanged` wield-retry kick
+                // follows: remote wielders keep their timer rungs, kind=49
+                // re-marks and `_flushPendingAttach`.)
+                if inv_signal::should_signal_with_holder(
+                    inv_signal_pre.as_ref(),
+                    &inv_signal::WorldInventoryView(&*w),
+                    u32::from(data.child_guid),
+                    u32::from(data.parent_guid),
+                ) {
+                    inventory_changed = true;
+                }
             }
             // HUD rec #56 (2026-06-16): a Sanctuary
             // PrivateUpdatePosition carries the player's

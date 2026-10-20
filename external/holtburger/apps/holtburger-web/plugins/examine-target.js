@@ -692,11 +692,19 @@ function populateFromInventory(body, ctx, model) {
 // `ObjectCreate` / `EntityUpdate` wire flow (see
 // `entities.js:_applyAppearanceHotSwap` for the contract).
 //
-// Returns the PaperdollViewport instance (caller disposes on unmount)
+// Returns the PaperdollViewport instance (caller releases it on unmount)
 // or null when the entity is missing / has no usable setupId. The
 // wrapper element is mutated in-place: on success, the viewport canvas
 // is appended; on failure, an "(no preview available)" sentinel is
 // rendered instead.
+//
+// 2026-10-20 (improvement hunt hud-audio-2): the canvas comes from the
+// examine consumer's long-lived viewport (`PaperdollViewport.acquire
+// ("examine")`) instead of a new WebGL2 context per examine, and a refresh
+// passes the mounted `viewport` back in: it stays in place and only
+// loadPlayer re-runs (its `_lastLoadKey` debounce makes an unchanged
+// appearance a no-op). A refresh that can no longer preview (the entity
+// left PVS) releases it and shows the sentinel, as before.
 //
 // Visibility note: NPCs + remote players ALWAYS have their visible
 // armor in `meta.subPalettes` + `meta.modelChanges` /
@@ -707,11 +715,26 @@ function populateFromInventory(body, ctx, model) {
 // nameplate visible rendering.
 function setNoteText(el, text) { el.textContent = text; }
 
-function renderEntityPaperdoll(wrapEl, guid) {
+function renderEntityPaperdoll(wrapEl, guid, viewport = null) {
   if (!wrapEl) return null;
-  wrapEl.innerHTML = "";
+  // A reused viewport keeps its canvas in the wrap; anything else goes.
+  // Every sentinel branch below hands the viewport back first.
+  const keep = viewport?.dom ?? null;
+  if (!keep) {
+    wrapEl.innerHTML = "";
+  } else {
+    for (const c of Array.from(wrapEl.childNodes ?? [])) {
+      if (c !== keep) wrapEl.removeChild(c);
+    }
+  }
+  const dropViewport = () => {
+    if (viewport) { try { viewport.release(); } catch (_) {} }
+    viewport = null;
+    wrapEl.innerHTML = "";
+  };
   const g = (Number(guid) >>> 0);
   if (!g) {
+    dropViewport();
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
     setNoteText(note, "(nothing selected)");
@@ -723,6 +746,7 @@ function renderEntityPaperdoll(wrapEl, guid) {
   const meta = inst?.meta;
   const setupId = (meta?.modelId ?? meta?.setupId ?? 0) >>> 0;
   if (!meta || setupId === 0) {
+    dropViewport();
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
     setNoteText(note, meta
@@ -741,6 +765,7 @@ function renderEntityPaperdoll(wrapEl, guid) {
   const ITEM_TYPE_CREATURE = 0x00000010;
   const itemType = (meta.itemType >>> 0) || 0;
   if (itemType !== 0 && (itemType & ITEM_TYPE_CREATURE) === 0) {
+    dropViewport();
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
     setNoteText(note, "(no preview for items)");
@@ -750,8 +775,12 @@ function renderEntityPaperdoll(wrapEl, guid) {
   // Match the inventory paperdoll dimensions so the viewport reads
   // consistently across panels. Width clamped to the body slot's
   // ~284px usable interior (300 minus left/right body padding).
-  const viewport = new PaperdollViewport({ width: 224, height: 178 });
-  wrapEl.appendChild(viewport.dom);
+  if (!viewport) {
+    viewport = PaperdollViewport.acquire("examine", { width: 224, height: 178 });
+    wrapEl.appendChild(viewport.dom);
+  } else if (viewport.dom?.parentNode !== wrapEl) {
+    wrapEl.appendChild(viewport.dom);
+  }
   // Pull the examined entity's wielded items and thread them into
   // loadPlayer so the examine popover shows held weapons (not just
   // armor). Same wasm + meta-source contract as the local player path
@@ -1535,18 +1564,21 @@ export function mountExamineBody(parentEl, ctx, opts = {}) {
   // Wave 3.B — refresh the paperdoll when the examined entity's
   // appearance changes (e.g. NPC equips a new item via ACE's
   // applyAppearance broadcast).
-  const onAppearanceRefresh = () => {
+  // 2026-10-20 (improvement hunt hud-audio-2): entities.js emits
+  // `entityAppearanceChanged` {guid} for EVERY entity (each ObjDescEvent ACE
+  // broadcasts), and this used to dispose + re-create the doll's whole WebGL
+  // context for any of them — a nearby player's equip while a creature
+  // examine was open. Now: only the examined guid, and the mounted viewport
+  // is reused (renderEntityPaperdoll → loadPlayer on the same instance, so
+  // the `_lastLoadKey` debounce really no-ops an unchanged appearance).
+  // Called with no event from onAppraised (a late creature reveal).
+  const onAppearanceRefresh = (ev) => {
     if (!examineGuid || ctx?.fromInventory) return;
+    const d = ev?.detail ?? ev ?? null;
+    if (d && d.guid != null && (Number(d.guid) >>> 0) !== (examineGuid >>> 0)) return;
     if (!(model.kind === "creature" || model.kind === "player")) return;
-    // Tear down + rebuild the viewport so the new substitutions land.
-    // PaperdollViewport's _lastLoadKey debounce will no-op when
-    // nothing meaningful changed.
-    if (paperdollViewport) {
-      try { paperdollViewport.dispose(); } catch (_) {}
-      paperdollViewport = null;
-    }
     paperdollWrap.style.display = "";
-    paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
+    paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid, paperdollViewport);
   };
   if (pc?.events?.on) {
     pc.events.on("bookUpdated", onRefresh);
@@ -1570,8 +1602,10 @@ export function mountExamineBody(parentEl, ctx, opts = {}) {
     clearTimeout(pendingTimer);
     // books-journal-3: an inscription being written is saved on close.
     if (_inscEdit && _inscEdit.guid === ((examineGuid ?? 0) >>> 0)) commitInscriptionEdit();
+    // hud-audio-2: hand the examine viewport back (canvas detached, context
+    // parked for the next examine; `?paperdollPersist=off` disposes here).
     if (paperdollViewport) {
-      try { paperdollViewport.dispose(); } catch (_) {}
+      try { paperdollViewport.release(); } catch (_) {}
       paperdollViewport = null;
     }
     root.remove();

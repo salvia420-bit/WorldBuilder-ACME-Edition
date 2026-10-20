@@ -274,8 +274,10 @@ console.log("\n-- W3 the real pipeline at msaa=4 -------------------------------
   check("no post draw targets a composer buffer that carries samples",
     renders.every((x) => x.target === null || x.target === rt || samplesOf(x.target) === 0));
   const describe = (pass) => pass.name + (Array.isArray(pass.effects) ? `[${pass.effects.map((e) => e.name).join(",")}]` : "");
-  const firstScrub = comp.passes.find((x) => describe(x) === "EffectPass[NanScrub]");
-  check("the first post pass (NanScrub) read the world target's resolved colour",
+  // 2026-10-20 `?postFuse` (default on): on this split chain the first scrub is
+  // the leading effect of the atmosphere pass, `EffectPass[NanScrub,…]`.
+  const firstScrub = comp.passes.find((x) => /^EffectPass\[NanScrub\b/.test(describe(x)));
+  check("the first post pass (NanScrub, fused into the atmosphere pass) read the world target's resolved colour",
     firstScrub && firstScrub.fullscreenMaterial.uniforms.inputBuffer.value === rt.texture);
   const late = p.particlesOverCloudsPass;
   check("late particle target and world target share composer.depthTexture",

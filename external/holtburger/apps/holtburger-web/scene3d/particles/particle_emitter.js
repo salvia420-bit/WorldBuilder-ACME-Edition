@@ -69,6 +69,27 @@ function _initialParticlesRetail() {
 /** Test-only: forget the cached `?initialParticlesRetail` read. */
 export function _resetInitialParticlesRetailForTests() { _initialRetailFlag = undefined; }
 
+// ?frozenPartFast (2026-10-20, improvement hunt entities-fx-1/-2; DEFAULT ON;
+// `=off`/`0`/`false`/`no` escape) — the particle-side reader of the switch
+// setup_rig.js documents (`frozenPartFastEnabled`; the proxy half lives there).
+// Here it gates the per-tick anchor hoist in `updateParticles`, and
+// particle_manager.js imports it for the RP6 frozen-centre cache. A separate
+// memo, not an import of setup_rig.js: test_particles.mjs concatenates the
+// particle modules into one closure and strips their local imports.
+let _frozenPartFastFlag = null;
+export function particleFrozenPartFastEnabled() {
+  if (_frozenPartFastFlag !== null) return _frozenPartFastFlag;
+  let on = true;
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("frozenPartFast") || "").trim().toLowerCase();
+    on = !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) { on = true; }
+  _frozenPartFastFlag = on;
+  return on;
+}
+/** Test/A-B seam (`null` re-reads the URL on next use). */
+export function setParticleFrozenPartFastFlag(on) { _frozenPartFastFlag = on == null ? null : !!on; }
+
 // E4 (2026-05-18): per-tick scratch for the BirthratePerMeter branch of
 // shouldEmitParticle(). The Vector3 is filled via subVectors(parent.position,
 // lastEmitOffset) and only `.lengthSq()` is read downstream by
@@ -158,6 +179,30 @@ export class ParticleEmitter {
     this._scene = opts.scene ?? null;
     this._onMeshActive = opts.onMeshActive ?? null;
     this._onMeshFree = opts.onMeshFree ?? null;
+
+    // ?frozenPartFast — the per-tick anchor memo (`_tickAnchorFrame`).
+    // `undefined` outside updateParticles (every read resolves fresh), `null`
+    // inside it until the first read resolves, then that tick's frame.
+    this._tickAnchor = undefined;
+  }
+
+  /**
+   * `_resolveAnchorFrame()`, resolved at most ONCE per `updateParticles` tick
+   * (2026-10-20, improvement hunt entities-fx-1; `?frozenPartFast`, default ON).
+   * The loop re-resolved it for EVERY live slot of a parent-local emitter, then
+   * twice or three times more for the emit (`shouldEmitParticle` per metre,
+   * `emitParticle`, `recordParticleEmission`) — each a partFrames read plus two
+   * `_scene` walks — though nothing in the tick can move it: Particle.update
+   * and the emit only write the slot meshes (children of `_scene`, never an
+   * ancestor of the anchor or of `_scene`). Same `_anchorScratch` object, same
+   * floats, so the hoist is bit-identical. Outside a tick (initEnd's burst,
+   * setParenting, RP6's virtual emit, the tier-1 light resolver) every call
+   * still resolves fresh.
+   */
+  _tickAnchorFrame() {
+    const f = this._tickAnchor;
+    if (f === undefined) return this._resolveAnchorFrame();
+    return f !== null ? f : (this._tickAnchor = this._resolveAnchorFrame());
   }
 
   /**
@@ -330,7 +375,7 @@ export class ParticleEmitter {
    * standing still. Root-anchored emitters with no offset are unchanged.
    */
   _emitterOrigin(out) {
-    const f = this._resolveAnchorFrame();
+    const f = this._tickAnchorFrame();
     out.copy(this.parentOffset.position);
     if (f.quaternion) out.applyQuaternion(f.quaternion);
     return out.add(f.position);
@@ -488,8 +533,9 @@ export class ParticleEmitter {
       // 2026-06-20: the emitter's anchor frame already converted to
       // `_scene`-LOCAL space (partFrames are WORLD; see _resolveAnchorFrame).
       // Particle.init snapshots this as startFrame instead of re-reading the
-      // WORLD-space partFrames directly.
-      this._resolveAnchorFrame(),
+      // WORLD-space partFrames directly. `_tickAnchorFrame`: inside a tick, the
+      // frame this tick already resolved (?frozenPartFast).
+      this._tickAnchorFrame(),
     );
 
     this.recordParticleEmission();
@@ -504,41 +550,51 @@ export class ParticleEmitter {
    */
   updateParticles() {
     if (this.info === null) return false;
-    if (this.info.maxParticles > 0) {
-      for (let i = 0; i < this.info.maxParticles; i++) {
-        const mesh = this.parts[i];
-        if (mesh === null) continue;
-        let frame;
-        if (this.info.isParentLocal) {
-          // T4: anchor to the named part's frame via the `partFrames` per-part
-          // accessor entities.js attaches to inst.root (the emitter `parent`).
-          // partFrames[i] is WORLD space; `_resolveAnchorFrame` converts it
-          // into `_scene`-LOCAL (the space the particle meshes live in) so the
-          // worldRoot −π/2 X rotation isn't re-applied (2026-06-20 fix). Root
-          // sentinels (−1 / 0xFFFFFFFF) and missing/out-of-range entries fall
-          // back to the root `parent` frame. The static `parentOffset` is
-          // applied separately in particle.js:init and is NOT touched here.
-          frame = this._resolveAnchorFrame();
-        } else {
-          frame = this.particles[i].startFrame;
+    // ?frozenPartFast: open the per-tick anchor memo (`_tickAnchorFrame`) —
+    // resolved lazily by the first live parent-local slot, or by the emit when
+    // there is none — and always close it again, so no frame outlives the tick.
+    const hoist = particleFrozenPartFastEnabled();
+    if (hoist) this._tickAnchor = null;
+    try {
+      if (this.info.maxParticles > 0) {
+        for (let i = 0; i < this.info.maxParticles; i++) {
+          const mesh = this.parts[i];
+          if (mesh === null) continue;
+          let frame;
+          if (this.info.isParentLocal) {
+            // T4: anchor to the named part's frame via the `partFrames` per-part
+            // accessor entities.js attaches to inst.root (the emitter `parent`).
+            // partFrames[i] is WORLD space; `_resolveAnchorFrame` converts it
+            // into `_scene`-LOCAL (the space the particle meshes live in) so the
+            // worldRoot −π/2 X rotation isn't re-applied (2026-06-20 fix). Root
+            // sentinels (−1 / 0xFFFFFFFF) and missing/out-of-range entries fall
+            // back to the root `parent` frame. The static `parentOffset` is
+            // applied separately in particle.js:init and is NOT touched here.
+            // ?frozenPartFast: once per tick, not once per live slot.
+            frame = hoist ? this._tickAnchorFrame() : this._resolveAnchorFrame();
+          } else {
+            frame = this.particles[i].startFrame;
+          }
+          const firstParticle = this.info.totalParticles === 0
+                             && this.info.totalSeconds === 0;
+          this.particles[i].update(this.info.particleType, firstParticle, mesh, frame);
+          this.killParticle(i);
         }
-        const firstParticle = this.info.totalParticles === 0
-                           && this.info.totalSeconds === 0;
-        this.particles[i].update(this.info.particleType, firstParticle, mesh, frame);
-        this.killParticle(i);
       }
-    }
-    let hasParticles = true;
-    if (!this.stopped) {
-      if (this.shouldEmitParticle()) {
-        this.emitParticle();
+      let hasParticles = true;
+      if (!this.stopped) {
+        if (this.shouldEmitParticle()) {
+          this.emitParticle();
+        }
+        this.stopEmitter();
+      } else {
+        hasParticles = this.numParticles !== 0;
       }
-      this.stopEmitter();
-    } else {
-      hasParticles = this.numParticles !== 0;
+      this.lastUpdateTime = currentTime();
+      return hasParticles;
+    } finally {
+      if (hoist) this._tickAnchor = undefined;
     }
-    this.lastUpdateTime = currentTime();
-    return hasParticles;
   }
 
   /**

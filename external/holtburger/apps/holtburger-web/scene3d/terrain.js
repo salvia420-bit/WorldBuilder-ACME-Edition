@@ -2147,6 +2147,10 @@ uniform mat4 uCsmMatrix2;
 uniform vec2 uCsmSplits;
 uniform float uCsmFar;
 uniform float uCsmBlend;
+uniform float uCsmSelDist;
+// shadows-restore-5 (csm.js header): time-of-day strength + full-shadow darkness.
+uniform float uCsmStrength;
+uniform float uCsmShade;
 
 float csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   vec4 sc = m * vec4(worldPos, 1.0);
@@ -2176,14 +2180,23 @@ float csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   float ref = sc.z - bias;
 #endif
   vec2 tx = 0.5 / vec2(textureSize(sm, 0));
+  // 2026-10-20 (improvement hunt shadows-restore-4): explicit LOD 0, same as
+  // materials.js _csmSampleCascade. The taps sit inside csmShadowFactor's
+  // cascade if-chain; an implicit-LOD sample there is a gradient op a
+  // compiler may hoist out of the branches. Same pixels: the cascade depth
+  // texture has no mips and minFilter == magFilter (three r184, PCF).
   return 0.25 * (
-      texture(sm, vec3(sc.xy + vec2(-tx.x, -tx.y), ref))
-    + texture(sm, vec3(sc.xy + vec2( tx.x, -tx.y), ref))
-    + texture(sm, vec3(sc.xy + vec2(-tx.x,  tx.y), ref))
-    + texture(sm, vec3(sc.xy + vec2( tx.x,  tx.y), ref)));
+      textureLod(sm, vec3(sc.xy + vec2(-tx.x, -tx.y), ref), 0.0)
+    + textureLod(sm, vec3(sc.xy + vec2( tx.x, -tx.y), ref), 0.0)
+    + textureLod(sm, vec3(sc.xy + vec2(-tx.x,  tx.y), ref), 0.0)
+    + textureLod(sm, vec3(sc.xy + vec2( tx.x,  tx.y), ref), 0.0));
 }
 
 float csmShadowFactor(vec3 worldPos, float viewDepth) {
+  // 2026-10-20 (improvement hunt shadows-restore-1, ?csmStable): stable
+  // cascades are spheres about the camera — select by distance (materials.js
+  // _csmShadowFactor carries the same line). 0 = view depth, the legacy fit.
+  if (uCsmSelDist > 0.5) viewDepth = length(worldPos - cameraPosition);
   float blendW0 = uCsmSplits.x * uCsmBlend;
   float blendW1 = uCsmSplits.y * uCsmBlend;
   if (viewDepth > uCsmFar) return 1.0;
@@ -3715,11 +3728,28 @@ ${TERRAIN_MICRO.gradUv
   // 1.0 (fully lit); mix with a 0.45 floor so shadowed terrain keeps
   // ambient lift, matching the MeshStandardMaterial CSM patch in
   // materials.js (same visual feel for cast shadows across surfaces).
+  // 2026-10-20 (improvement hunt shadows-restore-5, csm.js header): the floor
+  // is 1 - uCsmShade * uCsmStrength. uCsmStrength is the time-of-day direct
+  // factor (0 at night: no taps, csmShadow stays 1); at strength 1 and the
+  // legacy shade 0.55 it is the old mix(0.45, 1.0, s) exactly (float32 1 - 0.55
+  // is exact). Under HB_TERRAIN_CSM_DIRECT (?csmDirectOnly) the shadow shades
+  // only the SUN term of the retail Gouraud below (csmSun, at uCsmShade), and
+  // csmShadow keeps the legacy 0.45-floor shape for the sun glint and the
+  // sparkles, whose expressions below read it (and, off the retail Gouraud —
+  // ?terrainGouraud=off, no separable sun term —, as the whole multiply).
   float csmShadow = 1.0;
 #ifdef HB_TERRAIN_CSM
-  if (uCsmEnabled > 0.5) {
+#ifdef HB_TERRAIN_CSM_DIRECT
+  float csmSun = 1.0;
+#endif
+  if (uCsmEnabled > 0.5 && uCsmStrength > 0.0) {
     float s = csmShadowFactor(vWorldPos, vViewDepth);
-    csmShadow = mix(0.45, 1.0, s);
+#ifdef HB_TERRAIN_CSM_DIRECT
+    csmShadow = mix(1.0 - 0.55 * uCsmStrength, 1.0, s);
+    csmSun = mix(1.0 - uCsmShade * uCsmStrength, 1.0, s);
+#else
+    csmShadow = mix(1.0 - uCsmShade * uCsmStrength, 1.0, s);
+#endif
   }
 #endif
 
@@ -3773,7 +3803,13 @@ ${TERRAIN_MICRO.gradUv
   if (acGouraud) {
     vec3 acShadeN = ${TERRAIN_ROUND_BEVEL_ON ? "terrainRoundBevel(vAcLightNormal)" : "vAcLightNormal"};${TERRAIN_MICRO.micro ? TERRAIN_MICRO_APPLY_GLSL : ""}
     modulated = terrainAcGouraud(modulated, acShadeN, uAcSunVec,
-                                 uAcSunColor, uAcAmbColor, uAcAmbLevel);
+#ifdef HB_TERRAIN_CSM_DIRECT
+                                 // shadows-restore-5: c = min(1, sun * L * csmSun + amb).
+                                 uAcSunColor * csmSun,
+#else
+                                 uAcSunColor,
+#endif
+                                 uAcAmbColor, uAcAmbLevel);
   }
 
   // === Wave 2A — SNOW FOOTPRINT DARKENING (plan §3.4 item 3) =============
@@ -4051,6 +4087,18 @@ ${TERRAIN_MICRO.gradUv
       }
     }
   }
+
+#ifdef HB_TERRAIN_CSM_DIRECT
+  // 2026-10-20 (improvement hunt shadows-restore-5, ?csmDirectOnly): with the
+  // retail Gouraud the cast shadow already rode the sun term (csmSun above), so
+  // the whole-colour multiply below must not darken the ambient again. The sand
+  // sparkle keeps exactly its csmShadow factor, applied here instead; the glint
+  // and the snow sparkle have read csmShadow already.
+  if (acGouraud) {
+    sandSparkle *= csmShadow;
+    csmShadow = 1.0;
+  }
+#endif
 
   // === FAR COMPOSITE RING albedo bake (2026-08-02) =======================
   // The ONE insertion into the monolith. modulated is the finished albedo;
@@ -6782,6 +6830,20 @@ export async function bakeTerrainForLandblock(
       uCsmBlend: {
         value: scene3d?.csmState?.blendFrac ?? 0.1,
       },
+      // shadows-restore-1 — cascade selection by distance (1, ?csmStable) or
+      // view depth (0); refreshCsmUniforms keeps it current.
+      uCsmSelDist: {
+        value: scene3d?.csmState?.stable === true ? 1 : 0,
+      },
+      // shadows-restore-5 — time-of-day strength (lighting.js) + full-shadow
+      // darkness; refreshCsmUniforms keeps both current. Only declared in the
+      // GLSL under HB_TERRAIN_CSM, so inert without CSM.
+      uCsmStrength: {
+        value: Number.isFinite(scene3d?.csmState?.strength) ? scene3d.csmState.strength : 1,
+      },
+      uCsmShade: {
+        value: Number.isFinite(scene3d?.csmState?.shade) ? scene3d.csmState.shade : 0.55,
+      },
       // FAR COMPOSITE RING — 0.0 in every shipped frame. Only the far ring's
       // cloned scratch material ever sets this to 1.0 (see far_terrain.js).
       uBakeAlbedo: { value: 0.0 },
@@ -6816,6 +6878,9 @@ export async function bakeTerrainForLandblock(
     // (4 units on a mid-tier / no-CSM session: 18 -> 14) go away.
     defines: {
       ...(scene3d?.csmState ? { HB_TERRAIN_CSM: "" } : {}),
+      // shadows-restore-5 (?csmDirectOnly, csm.js header): the cast shadow
+      // shades the retail Gouraud SUN term only. Fixed per csmState (per session).
+      ...(scene3d?.csmState?.directOnly === true ? { HB_TERRAIN_CSM_DIRECT: "" } : {}),
       ...(terrainTrailEnabled() ? { HB_TERRAIN_TRAIL_MAP: "" } : {}),
     },
     // S1 — participate in scene.fog exactly as statics do. `false` (or a null

@@ -667,6 +667,13 @@ const TIER5 = [
   // fps wave 1 (2026-10-17): cached static cascade depth + a dynamic-only
   // overlay pass (depth-content model over three's real WebGLShadowMap).
   { tier: 5, flag: "shadowStaticCache", file: "tests/shadow_static_cache.test.mjs" },
+  // 2026-10-20 improvement hunt (shadows lane): caster list sorted by depth-program
+  // kind (shadows-restore-6), CSM depth fit + texel bias (-7), off-screen rig casters
+  // (-8), three r184's 2D PCF bias sign under reversed-Z (recent-render-diff-2).
+  { tier: 5, flag: "shadowCasterSort+shadowProgramStats", file: "tests/shadow_caster_sort.test.mjs" },
+  { tier: 5, flag: "csmBias+csmBiasTexels", file: "tests/csm_depth_fit.test.mjs" },
+  { tier: 5, flag: "csmOffscreenCasters", file: "tests/csm_offscreen_casters.test.mjs" },
+  { tier: 5, flag: "reversedZ(pcfShadowFix)", file: "tests/reversed_pcf_shadow.test.mjs" },
   { tier: 5, flag: "skip_empty_multidraw", file: "test_skip_empty_multidraw.mjs" },
   // 2026-10-19 fps review: an unsorted static bucket's repeated ranges drawn as per-geometry
   // instanced runs (ANGLE/D3D11 loops a multidraw range by range on CrGpuMain).
@@ -1049,6 +1056,8 @@ const TIER5 = [
   { tier: 5, flag: "defaultScriptPartChild", file: "tests/default_script_part_child.test.mjs" },
   { tier: 5, flag: "particleCellGate", file: "tests/particle_cell_gate.test.mjs" },
   { tier: 5, flag: "particleSlotCarrier", file: "tests/particle_slot_carrier.test.mjs" },
+  // 2026-10-20 A14: ?particleUploadRange (default on, =off escape) uploads only [0, n) of the buckets.
+  { tier: 5, flag: "particleUploadRange", file: "tests/particle_upload_range.test.mjs" },
   { tier: 5, flag: "particleInitFrameAce", file: "tests/particle_init_frame.test.mjs" },
   { flag: "missileObjSweep", file: "tests/projectile_object_sweep.test.mjs" },
   { tier: 5, flag: "projectileScenerySweep", file: "tests/projectile_scenery_sweep.test.mjs" },
@@ -1219,6 +1228,26 @@ const TIER5 = [
   { tier: 5, flag: "adaptiveResBootGrace", file: "tests/adaptive_res_boot_grace_cap.test.mjs" },
   // SKY-1/3/5: the late haze runs before the late particles, on every camera.
   { tier: 5, flag: "layerHaze", file: "tests/sky_late_haze_camera.test.mjs" },
+  // 2026-10-20 A7: ?postFuse (default on, =off escape) folds the first scrub and the haze
+  // into the split chain's atmosphere pass — two full-screen passes fewer.
+  { tier: 5, flag: "postFuse", file: "tests/post_fuse.test.mjs" },
+  // 2026-10-20 improvement hunt wave 1 (docs/2026-10-20-improvement-hunt.md §3).
+  { tier: 5, flag: "bakedDirectOut", file: "tests/baked_direct_out.test.mjs" },
+  { tier: 5, flag: "hdSwapBump", file: "tests/hd_swap_no_bump.test.mjs" },
+  { tier: 5, flag: "csm(receiverWorldPos+textureLod)", file: "tests/csm_receiver_worldpos.test.mjs" },
+  { tier: 5, flag: "csm(clone receivers)", file: "tests/clone_csm_receiver.test.mjs" },
+  { tier: 5, flag: "swayShadow(depth variants)", file: "tests/sway_shadow_depth_variants.test.mjs" },
+  { tier: 5, flag: "csmStable", file: "tests/csm_stable.test.mjs" },
+  { tier: 5, flag: "csmSunFade+csmDirectOnly", file: "tests/csm_sun_fade.test.mjs" },
+  { tier: 5, flag: "lightRangeSkip", file: "tests/light_range_skip.test.mjs" },
+  { tier: 5, flag: "csmDeadLights", file: "tests/csm_dead_lights.test.mjs" },
+  { tier: 5, flag: "frozenPartFast+rp6Stagger", file: "tests/frozen_part_fast.test.mjs" },
+  { tier: 5, flag: "lateFxWarm", file: "tests/late_fx_warm.test.mjs" },
+  { tier: 5, flag: "cloudShadowEvery", file: "tests/cloud_shadow_cadence.test.mjs" },
+  { tier: 5, flag: "bulkChildRemove", file: "tests/bulk_child_remove.test.mjs" },
+  { tier: 5, flag: "iblStableEnv", file: "tests/ibl_stable_env.test.mjs" },
+  { tier: 5, flag: "paperdollPersist", file: "tests/paperdoll_persist_viewport.test.mjs" },
+  { tier: 5, flag: "nraSourceRes", file: "tests/nra_source_res.test.mjs" },
   // SKY-2: the SAO sky sentinel fits a half-float target.
   { tier: 5, flag: "ssao", file: "tests/sky2_ssao_sky_sentinel.test.mjs" },
   // SKY-4: the cloud look stops overwriting a knob-set coverage.

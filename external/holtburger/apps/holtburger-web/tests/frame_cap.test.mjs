@@ -10,15 +10,22 @@
 //      FROM THE SHIPPED SOURCE and run in a scope (the tests/film_hooks.test.mjs
 //      technique): the clamp, the URL / renderOnDemand refusals, and the
 //      dt-recovery threshold staying exact for every rate it can set.
-//   3. scene3d/adaptive_render_scale.js: a capped loop does not make the
+//      2026-10-20: the runtime cap's timeline gate (createSoftCapGate,
+//      scheduleNext → softCapTick), lifted the same way and driven on a
+//      simulated vsync clock: the cap on 60-240 Hz, the vsync lock on whole
+//      numbers of refreshes, stalls, cap changes, the refresh-period estimate.
+//   3. the 1070 bench / probe drivers (scripts/perf-worker, coldboot): every
+//      index.html URL passes through lib/bench-url.mjs (?targetFps=0), since
+//      connectOverCDP's focus emulation defeats the never-focused exemption.
+//   4. scene3d/adaptive_render_scale.js: a capped loop does not make the
 //      controller lower the resolution (it times its own rAF chain).
 //
 // Run from apps/holtburger-web/:  node tests/frame_cap.test.mjs
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FC = await import("../scene3d/frame_cap.js");
@@ -311,18 +318,42 @@ await check("__setFrameCap(fps): 1000/fps ms, 0 = bare rAF, clamped to [4, 240];
   near(s._frameIntervalMs, 1000 / 45, 1e-12);
 });
 
-await check("a runtime cap paces softly: a 60 fps cap on a 60 Hz screen renders every refresh (the exact pacer halves it); the URL cap keeps the exact pacer", () => {
-  const PACER = [lift(/export function pacerDelayMs\([\s\S]*?\n}\n/), lift(/export const SOFT_CAP_WAKE_EARLY_MS = [^;]+;/), lift(/export function softCapDelayMs\([\s\S]*?\n}\n/)]
-    .join("\n").replace(/export /g, "");
-  const P = runLifted(PACER, {}, "{ pacerDelayMs, softCapDelayMs, SOFT_CAP_WAKE_EARLY_MS }");
-  assert.equal(P.SOFT_CAP_WAKE_EARLY_MS, 4);
-  near(P.softCapDelayMs(1000 / 60, 0, 8), 1000 / 60 - 8 - 4, 1e-9, "wakes 4 ms early");
-  assert.equal(P.softCapDelayMs(1000 / 60, 0, 14), 0, "late work: rAF at once");
-  assert.equal(P.softCapDelayMs(1000 / 60, null, 5), 0, "no baseline yet");
-  assert.match(INDEX_SRC, /const delay = _frameCapSoft \? softCapDelayMs\(_ivl, lastFrameTs, now\) : pacerDelayMs\(_ivl, lastFrameTs, now\);/);
-  // One second on a vsync clock: a frame starts at a refresh, works `work` ms,
-  // sleeps the pacer's delay (+ timer slop), and its rAF runs at the first
-  // refresh after the wake-up.
+// The runtime cap's timeline gate (2026-10-20, improvement hunt recent-rynth-diff-3),
+// lifted from the shipped source like the setter above.
+const GATE_SRC = [lift(/export function pacerDelayMs\([\s\S]*?\n}\n/), lift(/export const SOFT_CAP_LOCK_TOLERANCE = [^;]+;/), liftBlock(INDEX_SRC, "export function createSoftCapGate() {")]
+  .join("\n").replace(/export /g, "");
+const G = runLifted(GATE_SRC, {}, "{ pacerDelayMs, createSoftCapGate, SOFT_CAP_LOCK_TOLERANCE }");
+/** A display refreshing at `hz` drives the gate as softCapTick does: a callback at every vsync the
+ *  loop asked for; a rendered frame works `work` ms and its rAF lands on the first vsync after
+ *  that, a skipped one re-arms at once (the next vsync). rAF timestamps carry ±`jitter` ms.
+ *  Measured after a 2 s warm-up. */
+function vsyncRun({ hz, cap, seconds = 30, work = 6, jitter = 0, seed = 1, workFn = null, capAt = null, gate = G.createSoftCapGate() }) {
+  const P = 1000 / hz;
+  let rnd = seed >>> 0;
+  const rand = () => ((rnd = (Math.imul(rnd, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const renders = [];
+  for (let k = 0; k * P < seconds * 1000;) {
+    const t = k * P;
+    const ts = t + (jitter ? (rand() * 2 - 1) * jitter : 0);
+    if (gate.shouldRender(ts, 1000 / (capAt ? capAt(t) : cap))) {
+      renders.push(k);
+      const w = workFn ? workFn(renders.length, rand, t) : work;
+      k = Math.max(k + 1, Math.ceil((t + w) / P - 1e-9));
+    } else {
+      k += 1;
+    }
+  }
+  const warm = renders.filter((k) => k * P >= 2000);
+  const gaps = new Map();
+  for (let i = 1; i < warm.length; i += 1) gaps.set(warm[i] - warm[i - 1], (gaps.get(warm[i] - warm[i - 1]) || 0) + 1);
+  const fps = (warm.length - 1) / (((warm.at(-1) - warm[0]) * P) / 1000);
+  return { fps, gaps: Object.fromEntries([...gaps].sort((a, b) => a[0] - b[0])), renders, gate };
+}
+const HZ = [60, 75, 100, 120, 144, 165, 240];
+
+await check("the 10-19 soft sleep (the bug, kept here as the reference): a 60 cap missed on 75 / 100 / 144 / 165 Hz; the exact pacer halves a cap at the display's rate", () => {
+  // softCapDelayMs as it shipped 2026-10-19, in the model the old check used (work 6 ms, timer slop 1 ms).
+  const softCapDelayMs1019 = (ivl, last, now) => Math.max(0, G.pacerDelayMs(ivl, last, now) - 4);
   const fpsOver = (delayFn, hz, capFps, work = 6, slop = 1) => {
     const vs = 1000 / hz;
     let t = 0;
@@ -334,12 +365,158 @@ await check("a runtime cap paces softly: a 60 fps cap on a 60 Hz screen renders 
     }
     return frames;
   };
-  assert.ok(fpsOver(P.pacerDelayMs, 60, 60) <= 31, "the exact pacer: 60 fps cap on 60 Hz → ~30 fps (the bug a URL cap never hits in tooling)");
-  assert.ok(fpsOver(P.softCapDelayMs, 60, 60) >= 59, "soft: 60 on 60 Hz → 60");
-  const bg = fpsOver(P.softCapDelayMs, 60, 30);
-  assert.ok(bg >= 29 && bg <= 31, `soft: 30 on 60 Hz → 30 (${bg})`);
-  const fast = fpsOver(P.softCapDelayMs, 144, 60);
-  assert.ok(fast >= 55 && fast <= 73, `soft: 60 on 144 Hz → about 60, at most one refresh fast (${fast})`);
+  assert.ok(fpsOver(G.pacerDelayMs, 60, 60) <= 31, "the exact pacer: 60 fps cap on 60 Hz → ~30 fps (the bug a URL cap never hits in tooling)");
+  const old = Object.fromEntries([75, 100, 144, 165].map((hz) => [hz, fpsOver(softCapDelayMs1019, hz, 60)]));
+  for (const [hz, f] of Object.entries(old)) assert.ok(Math.abs(f - 60) >= 5, `the 10-19 sleep, 60 cap on ${hz} Hz: ${f} fps`);
+  assert.deepEqual(old, { 75: 38, 100: 50, 144: 72, 165: 55 }, "37.5 / 50 / 72 / 55 fps (frame counts in 1 s)");
+  for (const hz of [75, 100, 144, 165]) near(vsyncRun({ hz, cap: 60 }).fps, 60, 0.05, `the gate, 60 cap on ${hz} Hz`);
+});
+
+await check("the gate: a 60 or 30 cap is the cap on 60 / 75 / 100 / 120 / 144 / 165 / 240 Hz, gaps only ⌊hz/cap⌋ or ⌈hz/cap⌉ refreshes", () => {
+  for (const cap of [60, 30]) {
+    for (const hz of HZ) {
+      for (const jitter of [0, 0.5]) {
+        const r = vsyncRun({ hz, cap, jitter, seed: hz + cap });
+        near(r.fps, cap, 0.05, `${cap} cap on ${hz} Hz, rAF jitter ±${jitter} ms (gaps ${JSON.stringify(r.gaps)})`);
+        const allowed = new Set([Math.floor(hz / cap), Math.ceil(hz / cap)]);
+        for (const g of Object.keys(r.gaps)) assert.ok(allowed.has(+g), `${cap} on ${hz} Hz ±${jitter}: a ${g}-refresh gap (${JSON.stringify(r.gaps)})`);
+      }
+    }
+  }
+});
+
+await check("the gate on a whole number of refreshes locks to the vsync: 60 / 30 on 60 / 120 / 240 Hz and on 59.94 / 60.02 / 119.98 / 120.05 Hz screens — every gap exactly n refreshes", () => {
+  for (const cap of [60, 30]) {
+    for (const hz of [60, 120, 240, 59.94, 60.02, 119.98, 120.05, 239.76]) {
+      const n = Math.round(hz / cap);
+      for (const jitter of [0, 0.5]) {
+        const r = vsyncRun({ hz, cap, jitter, seed: 7 });
+        assert.deepEqual(Object.keys(r.gaps), [String(n)], `${cap} cap on ${hz} Hz ±${jitter} ms: ${JSON.stringify(r.gaps)} (a bare timeline beats against the screen)`);
+        near(r.fps, hz / n, 0.01, `${cap} on ${hz} Hz runs the screen's rate / ${n}`);
+        assert.equal(r.gate.state().lockN, n);
+      }
+    }
+  }
+  assert.equal(G.SOFT_CAP_LOCK_TOLERANCE, 0.02);
+  assert.equal(vsyncRun({ hz: 144, cap: 60 }).gate.state().lockN, 0, "2.4 refreshes: on the timeline");
+});
+
+await check("the gate under load: frames that take longer than the cap's gaps run as fast as the work allows; a stall carries at most one interval of catch-up (none when locked)", () => {
+  near(vsyncRun({ hz: 60, cap: 60, work: 12 }).fps, 60, 0.01, "60 Hz, 12 ms frames");
+  near(vsyncRun({ hz: 60, cap: 60, work: 20 }).fps, 30, 0.01, "60 Hz, 20 ms frames: two refreshes each");
+  near(vsyncRun({ hz: 144, cap: 60, work: 10 }).fps, 60, 0.05, "144 Hz, 10 ms frames");
+  near(vsyncRun({ hz: 120, cap: 30, work: 10 }).fps, 30, 0.01, "120 Hz, 10 ms frames, 30 cap");
+  // one 80 ms stall at t = 5 s
+  const stall = (hz, cap) => vsyncRun({ hz, cap, seconds: 16, workFn: (_i, _r, t) => (t >= 5000 && t < 5000 + 1000 / hz ? 80 : 6) });
+  for (const [hz, cap] of [[144, 60], [165, 60], [100, 60], [75, 60], [120, 60], [60, 30], [240, 60]]) {
+    const r = stall(hz, cap);
+    const P = 1000 / hz;
+    const I = 1000 / cap;
+    const at = r.renders.findIndex((k) => k * P >= 5000); // the stall frame
+    const back = r.renders[at + 1] * P; // the first frame after it
+    const inWindow = r.renders.filter((k) => k * P >= back && k * P < back + 5 * I).length;
+    if (Number.isInteger(hz / cap)) {
+      const gaps = r.renders.slice(at + 1, at + 12).map((k, i, a) => (i ? k - a[i - 1] : hz / cap)).slice(1);
+      assert.ok(gaps.every((g) => g === hz / cap), `${cap} on ${hz} Hz (locked) after an 80 ms stall: gaps ${gaps}, no catch-up`);
+    } else {
+      // the timeline lags the late frame by at most one interval: over the cap's 5 frames, that
+      // frame, one interval of debt and one for the window's alignment — never the 80 ms stall's 4-5
+      assert.ok(inWindow <= 8, `${cap} on ${hz} Hz after an 80 ms stall: ${inWindow} frames in the next 5 intervals`);
+    }
+    near((r.renders.filter((k) => k * P >= 6000).length - 1) / ((r.renders.at(-1) - r.renders.find((k) => k * P >= 6000)) * P / 1000), cap, 0.1, `${cap} on ${hz} Hz: back on the cap a second later`);
+  }
+});
+
+await check("the gate: a cap change keeps the phase and applies at the next refresh; a 250 ms gap starts a new timeline; a bad interval renders", () => {
+  const r = vsyncRun({ hz: 120, cap: 60, seconds: 6, capAt: (t) => (t < 3000 ? 60 : 30) });
+  const gapsAfter = r.renders.filter((k) => (k * 1000) / 120 >= 3000).map((k, i, a) => (i ? k - a[i - 1] : 4));
+  assert.ok(gapsAfter.length > 80 && gapsAfter.every((g) => g === 4), `60 → 30 on 120 Hz: every 4th refresh from the switch on (${gapsAfter.length} frames)`);
+  const t2 = vsyncRun({ hz: 144, cap: 60, seconds: 10, capAt: (t) => (t < 5000 ? 60 : 30) });
+  const after = t2.renders.filter((k) => (k * 1000) / 144 >= 5000);
+  near((after.length - 1) / ((after.at(-1) - after[0]) / 144), 30, 0.1, "60 → 30 on 144 Hz: 30 fps after");
+  const P = 1000 / 144;
+  const I = 1000 / 60;
+  const g = G.createSoftCapGate();
+  let t = 0;
+  for (; t < 1000; t += P) g.shouldRender(t, I);
+  t += 300;
+  assert.equal(g.shouldRender(t, I), true, "back after 300 ms (a hidden tab): render at once");
+  near(g.state().due, t + I, 1e-9, "…on a new timeline: the next frame one interval on");
+  assert.equal(g.shouldRender(t + P, I), false, "no catch-up frame on the next refresh");
+  assert.equal(g.shouldRender(NaN, I), true);
+  assert.equal(g.shouldRender(t + 2 * P, 0), true);
+});
+
+await check("the gate's refresh period: a first multi-refresh sample re-seeds down, a lone short (jitter) delta does not, a slower screen re-seeds up", () => {
+  const P = 1000 / 144;
+  const r = vsyncRun({ hz: 144, cap: 60, seconds: 3, workFn: (i) => (i === 1 ? 10 : 6) });
+  near(r.gate.state().periodMs, P, 0.01, "first delta two refreshes (a 10 ms first frame), then one");
+  const g = G.createSoftCapGate();
+  let t = 0;
+  for (let i = 0; i < 40; i += 1) { g.shouldRender(t, 1000 / 60); t += P; }
+  g.shouldRender(t - P * 0.6, 1000 / 60); // a lone short delta
+  t += P * 0.4;
+  for (let i = 0; i < 20; i += 1) { g.shouldRender(t, 1000 / 60); t += P; }
+  near(g.state().periodMs, P, 0.2, "a lone short delta is jitter");
+  const P60 = 1000 / 60;
+  for (let i = 0; i < 40; i += 1) { g.shouldRender(t, 1000 / 60); t += P60; }
+  near(g.state().periodMs, P60, 0.01, "moved to a 60 Hz screen: 32 long deltas in a row re-seed it");
+  assert.equal(g.state().lockN, 1, "…and a 60 cap now locks to every refresh");
+});
+
+await check("scheduleNext: a runtime cap re-arms through softCapTick every refresh; the URL cap keeps the exact sleep", () => {
+  assert.match(INDEX_SRC, /if \(_frameCapSoft\) \{\n\s*_schedRafId = requestAnimationFrame\(softCapTick\);\n\s*return;\n\s*\}/);
+  assert.match(INDEX_SRC, /const delay = pacerDelayMs\(_ivl, lastFrameTs, now\);/);
+  assert.match(INDEX_SRC, /\n {2}const _softCapGate = createSoftCapGate\(\);\n/);
+  assert.doesNotMatch(INDEX_SRC, /softCapDelayMs\(/, "the 10-19 sleep is gone");
+  const SCHEDULE = liftBlock(INDEX_SRC, "function scheduleNext() {");
+  const scope = (soft) => {
+    const s = {
+      adaptiveGpuProbe: null, renderOnDemand: false, liveScene3dRef: {}, portalSpaceFrameIntervalMs: (x) => x,
+      _frameIntervalMs: 1000 / 60, _frameCapSoft: soft, pacerDelayMs: () => 9, lastFrameTs: 0, performance: { now: () => 5 },
+      _schedTimeoutId: null, _schedRafId: null, tick() {}, softCapTick() {}, rafs: [], timeouts: [],
+    };
+    s.requestAnimationFrame = (f) => { s.rafs.push(f); return 7; };
+    s.setTimeout = (f, ms) => { s.timeouts.push(ms); return 3; };
+    return s;
+  };
+  const soft = scope(true);
+  runLifted(SCHEDULE, soft, "scheduleNext")();
+  assert.deepEqual([soft.rafs.length, soft.rafs[0] === soft.softCapTick, soft.timeouts.length, soft._schedRafId], [1, true, 0, 7]);
+  const url = scope(false);
+  runLifted(SCHEDULE, url, "scheduleNext")();
+  assert.deepEqual([url.rafs.length, url.timeouts], [0, [9]], "?targetFps: the exact pacer's sleep");
+});
+
+await check("softCapTick: a skipped refresh re-arms itself and does no frame work; a let-through one runs tick(ts); a released cap renders at once; stopped → nothing", () => {
+  const TICK = liftBlock(INDEX_SRC, "function softCapTick(nowTs) {");
+  const scope = ({ soft = true, verdict = false, running = true } = {}) => {
+    const s = {
+      running, _frameCapSoft: soft, _frameIntervalMs: 1000 / 60, portalSpaceFrameIntervalMs: (x) => Math.max(x, s.portal || 0),
+      performance: { now: () => 1 }, _schedRafId: 99, asked: [], ticks: [], rafs: [],
+      _softCapGate: { shouldRender: (ts, ivl) => { s.asked.push([ts, ivl]); return verdict; } },
+    };
+    s.tick = (ts) => s.ticks.push(ts);
+    s.requestAnimationFrame = (f) => { s.rafs.push(f); return 11; };
+    return s;
+  };
+  const skip = scope();
+  const fn = runLifted(TICK, skip, "softCapTick");
+  fn(100);
+  assert.deepEqual([skip.asked, skip.ticks, skip.rafs.length, skip.rafs[0] === fn, skip._schedRafId], [[[100, 1000 / 60]], [], 1, true, 11]);
+  const go = scope({ verdict: true });
+  runLifted(TICK, go, "softCapTick")(116);
+  assert.deepEqual([go.ticks, go.rafs.length, go._schedRafId], [[116], 0, null]);
+  const portal = scope({ verdict: true });
+  portal.portal = 1000 / 30;
+  runLifted(TICK, portal, "softCapTick")(5);
+  assert.deepEqual(portal.asked, [[5, 1000 / 30]], "the portal tunnel's pace reaches the gate");
+  const released = scope({ soft: false });
+  runLifted(TICK, released, "softCapTick")(200);
+  assert.deepEqual([released.asked.length, released.ticks], [0, [200]], "no cap: render now, no gate");
+  const stopped = scope({ running: false, verdict: true });
+  runLifted(TICK, stopped, "softCapTick")(300);
+  assert.deepEqual([stopped.asked.length, stopped.ticks.length, stopped.rafs.length, stopped._schedRafId], [0, 0, 0, null]);
 });
 
 await check("?targetFps wins and ?renderOnDemand has no pace: the setter refuses, the interval stays", () => {
@@ -364,6 +541,80 @@ await check("the dt-recovery threshold (a const derived once) is exact for every
     assert.equal(threshold(s._frameIntervalMs), atBoot, `${fps} fps → ${s._frameIntervalMs} ms`);
   }
   assert.equal(threshold(250, true), Infinity, "renderOnDemand unchanged");
+});
+
+console.log("\n— the 1070 bench / probe drivers pin ?targetFps=0 (scripts/perf-worker)");
+
+// 2026-10-20 (improvement hunt recent-rynth-diff-1): connectOverCDP's focus emulation makes
+// document.hasFocus() true on the bench Chrome, so the "never focused" exemption above never
+// applies there; every driver URL goes through lib/bench-url.mjs instead.
+const PERF = path.resolve(APP, "..", "..", "scripts", "perf-worker");
+const { uncappedBenchUrl } = await import(pathToFileURL(path.join(PERF, "lib", "bench-url.mjs")).href);
+
+await check("uncappedBenchUrl: appends targetFps=0 unless the query names targetFps; the rest byte for byte", () => {
+  const base = "http://100.116.47.66:7093/apps/holtburger-web/index.html";
+  const q = "?autoLogin=1&nosw=1&bridge_url=ws://100.116.47.66:7093/wsbridge&quality=mid";
+  assert.equal(uncappedBenchUrl(base + q), `${base}${q}&targetFps=0`, "no re-encoding of bridge_url");
+  assert.equal(uncappedBenchUrl(`${base}${q}&targetFps=60`), `${base}${q}&targetFps=60`, "an arm benching a cap keeps it");
+  assert.equal(uncappedBenchUrl(`${base}?targetFps=0&nosw=1`), `${base}?targetFps=0&nosw=1`);
+  assert.equal(uncappedBenchUrl(base), `${base}?targetFps=0`);
+  assert.equal(uncappedBenchUrl(`${base}?`), `${base}?targetFps=0`);
+  assert.equal(uncappedBenchUrl(`${base}?a=1&`), `${base}?a=1&targetFps=0`);
+  assert.equal(uncappedBenchUrl(`${base}?a=1#x`), `${base}?a=1&targetFps=0#x`);
+  assert.equal(uncappedBenchUrl(`${base}?targetfps=30`), `${base}?targetfps=30&targetFps=0`, "the page reads targetFps case-sensitively");
+});
+
+await check("a bench URL never gets the policy's cap — even focused (focus emulation), with the 60 / 30 policy set", () => {
+  const url = new URL(uncappedBenchUrl("http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&nosw=1&quality=mid"));
+  assert.equal(FC.urlNamesFrameCap(url.search), true);
+  assert.equal(FC.urlFrameCapFps(url.search), 0, "an uncapped pin, not a pace");
+  const p = page({ search: url.search, focused: true });
+  const said = [];
+  const d = FC.createFrameCapDriver({ win: p.win, doc: p.doc, onPinned: (fps, why) => said.push([fps, why]) });
+  d.setPolicy(POLICY);
+  p.win.fire("focus");
+  p.setFocus(false);
+  p.win.fire("blur");
+  d.refresh();
+  assert.deepEqual(p.calls, [], "the loop stays bare rAF");
+  assert.deepEqual(said, [[0, "url"]]);
+  d.dispose();
+  // the same page without the pin: focus emulation → capped at 60 at once (the trap)
+  const trap = page({ search: "?autoLogin=1&nosw=1", focused: true });
+  const d2 = FC.createFrameCapDriver({ win: trap.win, doc: trap.doc });
+  d2.setPolicy(POLICY);
+  assert.deepEqual(trap.calls, [60]);
+  d2.dispose();
+});
+
+await check("every perf-worker / coldboot driver that loads index.html passes its URL through uncappedBenchUrl", () => {
+  const files = [
+    ...readdirSync(PERF).filter((n) => /\.(mjs|cjs)$/.test(n)),
+    ...readdirSync(path.join(PERF, "coldboot")).filter((n) => n.endsWith(".mjs")).map((n) => `coldboot/${n}`),
+  ];
+  const builders = [];
+  for (const rel of files) {
+    const src = readFileSync(path.join(PERF, rel), "utf8");
+    if (!/holtburger-web\/index\.html/.test(src)) continue;
+    builders.push(rel);
+    const imp = /import\(?[^;\n]*?["'](\.{1,2}\/lib\/bench-url\.mjs)["']/.exec(src) || /path\.join\(__dirname, "lib", "bench-url\.mjs"\)/.exec(src);
+    assert.ok(imp, `${rel}: imports lib/bench-url.mjs`);
+    if (imp[1]) assert.ok(existsSync(path.resolve(PERF, path.dirname(rel), imp[1])), `${rel}: ${imp[1]} resolves`);
+    assert.doesNotMatch(src, /\.goto\(\s*[`"']/, `${rel}: no goto() of a bare URL literal`);
+    const names = [...src.matchAll(/\.goto\(\s*([A-Za-z_$][\w$]*)\s*,/g)].map((m) => m[1]);
+    assert.ok(names.length > 0, `${rel}: a goto()`);
+    for (const n of new Set(names)) {
+      assert.match(src, new RegExp(`(?:const|let)\\s+${n}\\s*=\\s*uncappedBenchUrl\\(`), `${rel}: goto(${n}) — ${n} is built by uncappedBenchUrl`);
+    }
+  }
+  for (const want of ["flag-bench.mjs", "hbbench.mjs", "hbprobe.mjs", "hbsess.mjs", "biome-eyetest.mjs", "tour-lbs.mjs", "walk-west-driver.mjs",
+    "indoor-outdoor-fps.cjs", "coldboot/academy.mjs", "coldboot/coldboot.mjs", "coldboot/sess.mjs"]) {
+    assert.ok(builders.includes(want), `${want} found among the URL builders (${builders})`);
+  }
+  const poi = readFileSync(path.join(PERF, "poi-battery.mjs"), "utf8");
+  assert.match(poi, /launchAndEnter\(\{ query: \{[^}]*targetFps: "0"/, "poi-battery: the harness boot query pins targetFps=0");
+  const trace = readFileSync(path.join(PERF, "gputrace.mjs"), "utf8");
+  assert.match(trace, /window\.__frameCapState\?\.\(\)/, "gputrace (attaches to a booted page): reports the loop's cap");
 });
 
 console.log("\n— the adaptive render-scale controller under a cap");

@@ -127,7 +127,11 @@ const lateScene = (p) => p.particlesOverCloudsPass.scene;
 // ---------------------------------------------------------------------------
 console.log("-- SKY-1 the haze lands in the late target before the late particles --");
 {
-  const p = build();
+  // 2026-10-20: SKY-1 / SKY-5 pin the haze as its own pass — the
+  // `?postFuse=off` chain. Fused (the default) the haze is the last effect of
+  // the atmosphere pass that writes T: tests/post_fuse.test.mjs F3 / F5.
+  // SKY-3 below runs the fused default.
+  const p = build({ postFuse: false });
   const T = p.particlesOverCloudsPass?.renderTarget;
   check("fixture: split chain built with the default haze", !!T && !!p.layeredHaze && p.cloudsMainPass === true);
   frame(p);
@@ -151,7 +155,7 @@ console.log("-- SKY-1 the haze lands in the late target before the late particle
 // ---------------------------------------------------------------------------
 console.log("\n-- SKY-5 ?nanScrub=off: the post half reads what the haze wrote -------");
 {
-  const p = build({}, "?nanScrub=off");
+  const p = build({ postFuse: false }, "?nanScrub=off");
   const T = p.particlesOverCloudsPass.renderTarget;
   const names = p.composer.passes.map(describe);
   check("fixture: no scrub passes", !names.some((n) => /NanScrub/.test(n)), names.join(" | "));

@@ -18,8 +18,12 @@
  * applyAppearance). The viewport tears down the previous rig contents
  * before rebuilding so subPalette deltas land instantly.
  *
- * WebGL contexts are bounded (Chrome caps ~16); inventory mount/unmount
- * lifecycle disposes the viewport on view swap so contexts don't leak.
+ * WebGL contexts are bounded (Chrome caps ~16). 2026-10-20 (improvement hunt
+ * hud-audio-2): consumers no longer build + destroy a context per mount —
+ * `PaperdollViewport.acquire(consumer, size)` / `vp.release()` keep ONE
+ * long-lived viewport per consumer (inventory, examine), re-parented on each
+ * mount and destroyed only on pagehide, its own context loss or past a
+ * parked-texture budget. See the pool block below.
  */
 
 import * as THREE from "three";
@@ -64,13 +68,181 @@ export function paperdollHeldEnabled(search) {
   return !(v === "off" || v === "0" || v === "false");
 }
 
+// 2026-10-20 (improvement hunt hud-audio-2) — one long-lived viewport per
+// consumer instead of a WebGL2 context per mount. Before: every inventory
+// open built `new THREE.WebGLRenderer` (a fresh context + a fresh three
+// program cache, so the doll's MeshStandardMaterial programs re-linked),
+// re-ran the wasm palette composite + one texture upload per doll surface,
+// and every close ran `renderer.dispose()` + `forceContextLoss()`
+// (main-panel hide/closeView → inventory cleanup). Every creature / player
+// examine did the same, and examine's onAppearanceRefresh did it again on
+// ANY entity's appearance change. Now `PaperdollViewport.acquire(consumer,
+// {width, height})` hands back that consumer's parked viewport, the caller
+// re-parents `vp.dom` into its host, and `vp.release()` detaches the canvas
+// instead of destroying the context; the `_lastLoadKey` debounce then makes
+// an unchanged doll a no-op. One viewport PER CONSUMER ("inventory",
+// "examine"), not one shared canvas: the examine floaty and the inventory
+// panel are on screen together. A second acquire of a consumer that is still
+// held (a main-panel examine + the floaty) gets a transient viewport —
+// today's per-mount behaviour, disposed on release. The context is destroyed
+// only on `pagehide`, a `webglcontextlost` on its own canvas, or a release
+// past the parked-texture budget (PAPERDOLL_PARK_MAX_TEXTURES below).
+//
+// Pixel-identical by construction: a re-acquired viewport hides its parked
+// rig until the consumer's first loadPlayer says whether it is still current
+// (same key → shown at once; new key → blank until the new rig lands, exactly
+// what a fresh instance shows), and a build that fell back to a placeholder
+// material (surface not decoded yet, composite failed, held item not fetched)
+// re-loads on the next acquire, as a fresh instance would have.
+//
+// `?paperdollPersist=off|0|false` restores per-mount construction + dispose.
+export function paperdollPersistEnabled(search) {
+  let v = null;
+  try { v = new URLSearchParams(search ?? globalThis.location?.search ?? "").get("paperdollPersist"); }
+  catch (_) { v = null; }
+  return !(v === "off" || v === "0" || v === "false");
+}
+let _persistMemo = null; // read once per page (acquire runs per mount, not per frame)
+function paperdollPersistOn() {
+  if (_persistMemo === null) _persistMemo = paperdollPersistEnabled();
+  return _persistMemo;
+}
+
+/** consumer key → its long-lived PaperdollViewport (held or parked). */
+const _pool = new Map();
+/** Console / test live-check: how many WebGL contexts the doll has cost. */
+export const paperdollPoolStats = { constructed: 0, reused: 0, transient: 0, recycled: 0, disposed: 0 };
+// Parking keeps every GPU copy the context has made. The doll's own
+// composited textures are freed on each rebuild, but the shared MaterialCache
+// textures a non-paletted creature (or a held item) draws with are never
+// disposed while the cache holds them (unbounded unless `?matBudgetMB`), so a
+// parked examine context would keep a second GPU copy of every such creature
+// ever examined. Past this many live textures (`renderer.info.memory`, read
+// live) a release destroys the context instead and the next acquire builds a
+// fresh one — today's cost, once per many examines. The inventory doll (one
+// player, ~10-30 surfaces) stays well under it.
+export const PAPERDOLL_PARK_MAX_TEXTURES = 64;
+// Seam for node tests (no WebGL there); production always builds the real one.
+let _createRenderer = (opts) => new THREE.WebGLRenderer(opts);
+let _pagehideInstalled = false;
+function installPagehide() {
+  if (_pagehideInstalled) return;
+  _pagehideInstalled = true;
+  try { globalThis.addEventListener?.("pagehide", disposePaperdollPool); } catch (_) {}
+}
+
+/**
+ * pagehide: destroy every parked viewport's context now. A held one leaves
+ * the pool and is destroyed when its consumer releases it.
+ */
+export function disposePaperdollPool() {
+  for (const [key, vp] of [..._pool]) {
+    _pool.delete(key);
+    if (!vp._held) vp.dispose();
+  }
+}
+
+/** Test seam: swap the renderer factory / pin the flag; empties the pool. */
+export function _configurePaperdollPoolForTests({ createRenderer, persist } = {}) {
+  for (const vp of [..._pool.values()]) { vp._held = false; vp.dispose(); }
+  _pool.clear();
+  if (typeof createRenderer === "function") _createRenderer = createRenderer;
+  _persistMemo = persist === undefined ? null : !!persist;
+  for (const k of Object.keys(paperdollPoolStats)) paperdollPoolStats[k] = 0;
+}
+
 export class PaperdollViewport {
+  /**
+   * hud-audio-2 (2026-10-20): the consumer's long-lived viewport (see the
+   * pool block above). The caller appends `vp.dom` to its host, calls
+   * `loadPlayer`, and calls `vp.release()` on unmount — never `dispose()`.
+   * @param {string} consumer — pool key ("inventory" | "examine")
+   * @param {{width?: number, height?: number}} [size]
+   * @returns {PaperdollViewport}
+   */
+  static acquire(consumer, { width = DEFAULT_W, height = DEFAULT_H } = {}) {
+    const key = consumer ? String(consumer) : "";
+    if (key && paperdollPersistOn()) {
+      let vp = _pool.get(key);
+      if (vp && (vp._disposed || vp._contextLost)) { _pool.delete(key); vp = null; }
+      if (vp && !vp._held) {
+        vp._held = true;
+        vp._unpark(width, height);
+        paperdollPoolStats.reused += 1;
+        return vp;
+      }
+      if (!vp) {
+        vp = new PaperdollViewport({ width, height });
+        vp._poolKey = key;
+        vp._held = true;
+        _pool.set(key, vp);
+        installPagehide();
+        return vp;
+      }
+      // Held by another live mount → a transient viewport, below.
+    }
+    const t = new PaperdollViewport({ width, height });
+    t._held = true;
+    paperdollPoolStats.transient += 1;
+    return t;
+  }
+
+  /**
+   * hud-audio-2: unmount. A pooled viewport detaches its canvas and parks
+   * (context, programs, textures and rig kept); anything else (transient,
+   * `?paperdollPersist=off`, dropped from the pool by pagehide / context
+   * loss, or built with `new`) is disposed, and so is a pooled one holding
+   * more than PAPERDOLL_PARK_MAX_TEXTURES GPU textures. Idempotent.
+   */
+  release() {
+    if (this._disposed) return;
+    const pooled = this._poolKey != null && _pool.get(this._poolKey) === this;
+    if (!pooled) { this.dispose(); return; }
+    if (!this._held) return;
+    let liveTextures = 0;
+    try { liveTextures = this.renderer.info?.memory?.textures ?? 0; } catch (_) { liveTextures = 0; }
+    if (liveTextures > PAPERDOLL_PARK_MAX_TEXTURES) {
+      paperdollPoolStats.recycled += 1;
+      this.dispose();
+      return;
+    }
+    this._held = false;
+    this.stop();
+    const el = this.canvas;
+    if (el?.parentNode) el.parentNode.removeChild(el);
+  }
+
+  /** hud-audio-2: re-acquire a parked viewport at (width, height). */
+  _unpark(width, height) {
+    // Same end state as the constructor's setSize → setPixelRatio.
+    const dpr = window.devicePixelRatio || 1;
+    try {
+      if (this.renderer.getPixelRatio() !== dpr) this.renderer.setPixelRatio(dpr);
+      if (this.size.w !== width || this.size.h !== height) {
+        this.size = { w: width, h: height };
+        this.renderer.setSize(width, height);
+        this.canvas.style.width = `${width}px`;
+        this.canvas.style.height = `${height}px`;
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+      }
+    } catch (_) {}
+    // A degraded build (placeholder material) re-loads, as a fresh instance would.
+    if (this._degraded) this._lastLoadKey = null;
+    // A fresh instance shows nothing until its first load lands: hide the
+    // parked rig until loadPlayer confirms (or replaces) it, and clear the
+    // preserved drawing buffer so the previous doll never flashes.
+    this.rigRoot.visible = false;
+    this.renderNow();
+  }
+
   /**
    * @param {{width?: number, height?: number}} [opts]
    */
   constructor({ width = DEFAULT_W, height = DEFAULT_H } = {}) {
     this.size = { w: width, h: height };
-    this.renderer = new THREE.WebGLRenderer({
+    paperdollPoolStats.constructed += 1;
+    this.renderer = _createRenderer({
       alpha: true,
       antialias: true,
       // 2026-05-29 — preserveDrawingBuffer:true so the single render
@@ -145,6 +317,28 @@ export class PaperdollViewport {
     // keyed by wielder setupId. Mirrors `entities.js::_holdingLocCache`
     // pattern; populated lazily inside loadPlayer's wielded pass.
     this._holdingLocCache = new Map();
+    // hud-audio-2 (2026-10-20) pool state — see PaperdollViewport.acquire.
+    this._poolKey = null;      // consumer key while this is the pooled viewport
+    this._held = false;        // acquired by a mounted consumer (vs parked)
+    this._contextLost = false;
+    this._degraded = false;    // last build used a placeholder material
+    // A lost context is never handed out again: it leaves the pool at once
+    // (the next acquire builds a fresh one); a parked one is destroyed now, a
+    // held one when its consumer releases it. three's own listener (added
+    // first) preventDefault()s, so a restore can still happen — repaint then.
+    this._onContextLost = () => {
+      if (this._disposed) return;
+      this._contextLost = true;
+      if (this._poolKey != null && _pool.get(this._poolKey) === this) _pool.delete(this._poolKey);
+      if (!this._held) this.dispose();
+    };
+    this._onContextRestored = () => {
+      if (!this._disposed && this._held) this.renderNow();
+    };
+    try {
+      el.addEventListener("webglcontextlost", this._onContextLost);
+      el.addEventListener("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     // 2026-10-07 — re-render when the canvas becomes visible (the panel opens).
     // This covers a load that finished while the panel was display:none. It
     // replaces the 2026-05-29 workaround, where inventory.js called start()
@@ -236,7 +430,15 @@ export class PaperdollViewport {
     // paperdollHeldEnabled) — the held items leave both the key and the build.
     if (!paperdollHeldEnabled()) wieldedItems = null;
     const key = this._loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance);
-    if (key === this._lastLoadKey) return true;
+    if (key === this._lastLoadKey) {
+      // hud-audio-2 (2026-10-20): the doll asked for is the one built, so a
+      // build still in flight is for a key the consumer has moved off (it
+      // would land over this one) — cancel it. And a re-acquired viewport
+      // keeps its parked rig hidden until this confirmation (`_unpark`).
+      ++this._inflightLoadToken;
+      if (!this.rigRoot.visible) { this.rigRoot.visible = true; this.renderNow(); }
+      return true;
+    }
     // Wave C / PR8 — race-cancel token captured at entry.
     const token = ++this._inflightLoadToken;
 
@@ -275,6 +477,11 @@ export class PaperdollViewport {
     // Tear down prior rig + owned materials/textures before rebuild.
     // Geometries are AnimationCache-shared — do NOT dispose those.
     this._clearRig();
+    // hud-audio-2: from here the rig is this build — the empty, visible
+    // rigRoot a fresh instance starts with. `_degraded` collects placeholder
+    // materials so the next acquire re-loads rather than keeping them.
+    this.rigRoot.visible = true;
+    this._degraded = false;
 
     // Build entity-owned materials via wasm compositor (mirrors
     // entities.js:1437-1462 spawn path) so substitutions land.
@@ -288,6 +495,7 @@ export class PaperdollViewport {
       for (const did of pg.surfaceDids) allSurfaceDids.add(did >>> 0);
     }
     const matByDid = new Map();
+    let composited = false;
     if (hasSubs && typeof em.wasmExports?.fetchEntitySurfacesPixels === "function") {
       try {
         const dids = new Uint32Array([...allSurfaceDids]);
@@ -295,6 +503,14 @@ export class PaperdollViewport {
           const results = await em.wasmExports.fetchEntitySurfacesPixels(
             dids, paletteId >>> 0, subPalettes ?? new Uint32Array(0),
           );
+          // hud-audio-2: a newer load started during the composite. Without
+          // this check both builds added meshes to the one rigRoot (a double
+          // doll) — reachable within one inventory mount before, and across
+          // examines now that the examine viewport is reused.
+          if (token !== this._inflightLoadToken) {
+            for (const sp of (results ?? [])) { if (sp?.free) try { sp.free(); } catch (_) {} }
+            return false;
+          }
           for (let i = 0; i < dids.length; i += 1) {
             const did = dids[i] >>> 0;
             const sp = results[i];
@@ -314,8 +530,11 @@ export class PaperdollViewport {
             matByDid.set(did, mat);
           }
         }
+        composited = true;
       } catch (_) { /* fall through to cache fallback */ }
     }
+    // Un-recoloured cache materials stand in for a missing / failed composite.
+    if (hasSubs && !composited) this._degraded = true;
 
     // Build per-part Group + child meshes. Mirrors entities.js's rig-build
     // loop (simplified — no restPose extras, no mixer, no shadows; this
@@ -348,6 +567,9 @@ export class PaperdollViewport {
           let mat = matByDid.get(did)
             ?? em.materialCache?.getCached?.(did)
             ?? this._fallbackMaterial();
+          // getCached hands back the cache's shared fallback for a surface
+          // not decoded yet (did 0 is the permanent no-surface sentinel).
+          if (did !== 0 && mat === em.materialCache?.fallbackMaterial) this._degraded = true;
           const mesh = new THREE.Mesh(grp.geometry, mat);
           partGroup.add(mesh);
         }
@@ -418,7 +640,7 @@ export class PaperdollViewport {
           });
         }
         this._holdingLocCache.set(wielderSetupId, locTable);
-      } catch (_) { /* fall through */ }
+      } catch (_) { this._degraded = true; /* fall through; retried on the next acquire */ }
     }
     // Only items with the "Selectable" mask (equipMask & 0x3700000) — held
     // weapons / shields. Armor/clothing/ammo (equipMask without held bits)
@@ -440,9 +662,9 @@ export class PaperdollViewport {
             paletteSubsFlat: w.meta.subPalettes ?? new Uint32Array(0),
           },
         );
-      } catch (_) { continue; }
+      } catch (_) { this._degraded = true; continue; }
       if (token !== this._inflightLoadToken) return;
-      if (!childEntry || !Array.isArray(childEntry.partGroups)) continue;
+      if (!childEntry || !Array.isArray(childEntry.partGroups)) { this._degraded = true; continue; }
       const childRoot = new THREE.Group();
       childRoot.name = `paperdoll-wielded-${(w.itemGuid >>> 0)}`;
       for (let p = 0; p < childEntry.partGroups.length; p += 1) {
@@ -463,6 +685,7 @@ export class PaperdollViewport {
         for (const grp of (pg.groups ?? [])) {
           const did = grp.surfaceDid >>> 0;
           const mat = em.materialCache?.getCached?.(did) ?? this._fallbackMaterial();
+          if (did !== 0 && mat === em.materialCache?.fallbackMaterial) this._degraded = true;
           partGroup.add(new THREE.Mesh(grp.geometry, mat));
         }
         childRoot.add(partGroup);
@@ -529,6 +752,7 @@ export class PaperdollViewport {
   }
 
   _fallbackMaterial() {
+    this._degraded = true; // hud-audio-2: a placeholder → re-load on the next acquire
     if (!this._fallback) {
       this._fallback = new THREE.MeshStandardMaterial({
         color: 0x888888, roughness: 0.9, metalness: 0.0,
@@ -582,17 +806,29 @@ export class PaperdollViewport {
     }
   }
 
-  /** Dispose renderer + force WebGL context loss. Idempotent. */
+  /**
+   * Dispose renderer + force WebGL context loss. Idempotent. Consumers call
+   * `release()` (hud-audio-2); this runs for transient viewports, on
+   * pagehide and on context loss.
+   */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    this._held = false;
+    if (this._poolKey != null && _pool.get(this._poolKey) === this) _pool.delete(this._poolKey);
+    paperdollPoolStats.disposed += 1;
     this.stop();
     try { this._io?.disconnect(); } catch (_) {}
     this._io = null;
     this._clearRig();
-    try { this.renderer.dispose(); } catch (_) {}
-    try { this.renderer.forceContextLoss(); } catch (_) {}
     const el = this.renderer.domElement;
+    try {
+      el?.removeEventListener?.("webglcontextlost", this._onContextLost);
+      el?.removeEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
+    try { this.renderer.dispose(); } catch (_) {}
+    // An already-lost context has nothing left to lose.
+    if (!this._contextLost) { try { this.renderer.forceContextLoss(); } catch (_) {} }
     if (el?.parentNode) el.parentNode.removeChild(el);
   }
 }

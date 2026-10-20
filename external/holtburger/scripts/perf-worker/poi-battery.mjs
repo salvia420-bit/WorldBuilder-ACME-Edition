@@ -26,7 +26,9 @@ const POIS = [
 
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a);
 
-const { page, helpers } = await boot.launchAndEnter({ query: { nosw: "1" }, timeoutMs: 90_000 });
+// 2026-10-20: targetFps=0 pins the page uncapped — the 60/30 VTank frame cap
+// never paces a battery (scripts/perf-worker/lib/bench-url.mjs says why).
+const { page, helpers } = await boot.launchAndEnter({ query: { nosw: "1", targetFps: "0" }, timeoutMs: 90_000 });
 
 // running console counters
 let totalWarns = 0, totalErrs = 0;

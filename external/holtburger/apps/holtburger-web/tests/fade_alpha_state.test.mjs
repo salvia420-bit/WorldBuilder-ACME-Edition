@@ -22,6 +22,17 @@
 //   7. real EntityManager: Transparent(20) hook ramps through the tween clock;
 //      a value-0 hook keeps an Alpha surface blended; ethereal toggle.
 //   8. wiring: all four owners snapshot before they write and sync after.
+//   9. module, `?fadeFunnelFix` (2026-10-20, improvement hunt
+//      open-frontier-perf-1): a faded DoubleSide part gets forceSinglePass;
+//      at opacity 0 its material is invisible (not under the shadow gate, not
+//      Additive); one version bump at the fade's start and one at its end; a
+//      foreign bump mid-fade is re-published; `=off` is the old funnel.
+//  10. three r184's real WebGLRenderer over tests/helpers/fake_webgl2.mjs:
+//      draws and program re-resolves per frame for a faded DoubleSide part
+//      (2 + 2 under `=off`, 1 + 0 now; 0 draws at opacity 0), and the program
+//      after the restore (`=off`: FrontSide, no OPAQUE — the stale-program
+//      bug; now the authored DOUBLE_SIDED + OPAQUE program, the same object).
+//  11. real EntityManager: an in-head round trip on DoubleSide parts.
 //
 // Run from apps/holtburger-web/:  node tests/fade_alpha_state.test.mjs
 
@@ -391,6 +402,320 @@ await check("8: the four owners snapshot before they write and sync after", () =
   for (const k of ["__preCamFadeOpacity", "__preCamFadeDepthWrite", "__preObjTransOpacity", "__preEtherealOpacity"]) {
     assert.ok(src.includes(k), k);
   }
+});
+
+console.log("-- 9 ?fadeFunnelFix, the module -------------------------------");
+
+const OFF = "?fadeFunnelFix=off";
+const dsOpaque = () => new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
+const dsClip = () => new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, alphaTest: DDS_REF });
+// What an owner does: snapshot, write opacity / transparent / depthWrite, sync.
+const ownerFade = (m, o, search = "") => {
+  F.snapshotAuthoredAlpha(m, search);
+  m.opacity = o;
+  m.transparent = o < 1;
+  if (o < 1) m.depthWrite = false;
+  return F.syncFadeAlpha(m, search);
+};
+
+await check("9a: a faded DoubleSide opaque part is single-pass; the restore gives back the authored flag", () => {
+  const m = dsOpaque();
+  assert.equal(m.forceSinglePass, false);
+  ownerFade(m, 0.5);
+  assert.equal(m.forceSinglePass, true, "three would draw it BackSide then FrontSide");
+  assert.equal(m.visible, true, "opacity 0.5 is drawn");
+  ownerFade(m, 1);
+  assert.equal(m.forceSinglePass, false);
+  assert.equal(m.userData.__authoredAlpha, undefined);
+  // A FrontSide part is never two-passed: left alone.
+  const f = opaque();
+  ownerFade(f, 0.5);
+  assert.equal(f.forceSinglePass, false);
+});
+
+await check("9b: one version bump publishes the fade, one the restore — none per ramp frame", () => {
+  const m = dsOpaque();
+  const v0 = m.version;
+  for (let i = 1; i <= 64; i++) ownerFade(m, 1 - i / 128);
+  assert.equal(m.version, v0 + 1, "the OPAQUE define must go once (three never re-checks `transparent`)");
+  ownerFade(m, 1);
+  assert.equal(m.version, v0 + 2, "the OPAQUE / DOUBLE_SIDED program must come back");
+  // A ClipMap part: three's alpha-test setter already bumps at both ends.
+  const c = dsClip();
+  const c0 = c.version;
+  for (let i = 1; i <= 8; i++) ownerFade(c, 1 - i / 16);
+  assert.equal(c.version, c0 + 1);
+  ownerFade(c, 1);
+  assert.equal(c.version, c0 + 2);
+  // An Alpha surface already single-pass (applyRetailSinglePass): no program
+  // change at all, so no bump either way.
+  const a = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, transparent: true, depthWrite: false });
+  a.forceSinglePass = true;
+  const a0 = a.version;
+  ownerFade(a, 0.5);
+  F.snapshotAuthoredAlpha(a, ""); a.opacity = 1; F.syncFadeAlpha(a, "");
+  assert.equal(a.version, a0);
+  assert.equal(a.transparent, true);
+});
+
+await check("9c: an authored-transparent part three was two-passing is re-published when it goes single-pass", () => {
+  const m = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, transparent: true, depthWrite: false });
+  const v0 = m.version;
+  ownerFade(m, 0.5);
+  assert.equal(m.forceSinglePass, true);
+  assert.equal(m.version, v0 + 1, "its last two-pass draw left the FrontSide program");
+  F.snapshotAuthoredAlpha(m, ""); m.opacity = 1; F.syncFadeAlpha(m, "");
+  assert.equal(m.forceSinglePass, false, "authored value back (three two-passes it again)");
+  assert.equal(m.version, v0 + 1, "two-passed again: three re-resolves every draw, no bump needed");
+});
+
+await check("9d: at opacity 0 the material is invisible; it comes back when the opacity rises", () => {
+  const m = dsOpaque();
+  ownerFade(m, 0);
+  assert.equal(m.visible, false, "retail: draw_state |= 1 at translucency 1 (acclient.c:315497-315503)");
+  assert.equal(m.userData.__authoredAlpha.hid, true);
+  ownerFade(m, 0.25);
+  assert.equal(m.visible, true);
+  ownerFade(m, 0);
+  assert.equal(m.visible, false);
+  ownerFade(m, 1);
+  assert.equal(m.visible, true);
+  assert.equal(m.userData.__authoredAlpha, undefined);
+  // restoreAuthoredAlpha (whatever the opacity) brings it back too.
+  const r = dsOpaque();
+  ownerFade(r, 0);
+  F.restoreAuthoredAlpha(r);
+  assert.equal(r.visible, true);
+});
+
+await check("9e: opacity 0 stays drawn when it is not provably invisible", () => {
+  // Additive keeps its own blend while faded: not the NormalBlending clause.
+  const add = additive();
+  ownerFade(add, 0);
+  assert.equal(add.visible, true);
+  // An authored-invisible material is neither hidden nor shown by the fade.
+  const hidden = dsOpaque();
+  hidden.visible = false;
+  ownerFade(hidden, 0);
+  ownerFade(hidden, 1);
+  assert.equal(hidden.visible, false);
+  // The lifestone crystal patch rewrites diffuseColor.a (vfx/lifestone_fx.js).
+  const ls = dsOpaque();
+  ls.userData.__lsCrystal = 1;
+  ownerFade(ls, 0);
+  assert.equal(ls.visible, true);
+  // Shadow maps on (CSM / ?shadows=on): material.visible would also drop the
+  // part's shadow — an owner look call, so (b) stays off. (a) still applies.
+  F.__setFadeShadowMapsForTest(true);
+  try {
+    const s = dsOpaque();
+    ownerFade(s, 0);
+    assert.equal(s.visible, true);
+    assert.equal(s.forceSinglePass, true);
+  } finally {
+    F.__setFadeShadowMapsForTest(null);
+  }
+});
+
+await check("9f: the shadow gate reads the page's boot answer, else the boot rule", () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window");
+  const prev = globalThis.window;
+  const hiddenAt0 = () => { const m = dsOpaque(); ownerFade(m, 0); return m.visible === false; };
+  try {
+    globalThis.window = { location: { search: "" } };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), false, "before preInit3D: unknown, keep drawing");
+    globalThis.window = { location: { search: "" }, __quality: { flags: { csm: false } } };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), true, "no csm, no ?shadows=on");
+    globalThis.window = { location: { search: "" }, __quality: { flags: { csm: true } } };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), false, "csm preset");
+    globalThis.window = { location: { search: "?shadows=off" }, __quality: { flags: { csm: true } } };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), true, "?shadows=off gates CSM off");
+    globalThis.window = { location: { search: "?shadows=on" }, __quality: { flags: { csm: false } } };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), false, "?shadows=on");
+    // liveScene3d wins (a settings toggle may have mutated __quality since boot).
+    globalThis.window = {
+      location: { search: "" }, __quality: { flags: { csm: true } },
+      liveScene3d: { shadowsEnabled: false, csmEnabled: false },
+    };
+    F.__setFadeShadowMapsForTest(null);
+    assert.equal(hiddenAt0(), true);
+    globalThis.window.liveScene3d.csmEnabled = true; // memoised: boot-fixed
+    assert.equal(hiddenAt0(), true);
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+    F.__setFadeShadowMapsForTest(null);
+  }
+});
+
+await check("9g: a foreign bump mid-fade is re-published; a quiet sync bumps nothing", () => {
+  const m = dsOpaque();
+  ownerFade(m, 0.5);
+  const v1 = m.version;
+  ownerFade(m, 0.4);
+  assert.equal(m.version, v1);
+  // An in-place re-seat: copies the base's flags and bumps (a render may now
+  // resolve the unfaded OPAQUE program before the owner's next write).
+  m.transparent = false; m.forceSinglePass = false; m.needsUpdate = true;
+  const v2 = m.version;
+  ownerFade(m, 0.4);
+  assert.equal(m.forceSinglePass, true);
+  assert.equal(m.version, v2 + 1);
+  ownerFade(m, 0.3);
+  assert.equal(m.version, v2 + 1);
+});
+
+await check("9h: a clone of a hidden faded material is restorable from its own record", () => {
+  const m = dsOpaque();
+  ownerFade(m, 0);
+  const c = m.clone();
+  assert.equal(c.visible, false);
+  ownerFade(c, 1);
+  assert.equal(c.visible, true);
+  assert.equal(c.forceSinglePass, false);
+});
+
+await check("9i: ?fadeFunnelFix=off is the pre-change funnel", () => {
+  const m = dsOpaque();
+  const v0 = m.version;
+  ownerFade(m, 0, OFF);
+  assert.equal(m.forceSinglePass, false);
+  assert.equal(m.visible, true);
+  assert.equal(m.version, v0, "no publish (the two-pass churn hid the stale OPAQUE)");
+  ownerFade(m, 1, OFF);
+  assert.equal(m.version, v0, "no restore bump");
+  assert.equal(m.transparent, false);
+});
+
+await check("9j: fadeFunnelFixEnabled parses the escape", () => {
+  assert.equal(F.fadeFunnelFixEnabled(""), true);
+  assert.equal(F.fadeFunnelFixEnabled("?fadeFunnelFix=on"), true);
+  assert.equal(F.fadeFunnelFixEnabled("?fadeFunnelFix=off"), false);
+  assert.equal(F.fadeFunnelFixEnabled("?fadeFunnelFix=OFF"), false);
+  assert.equal(F.fadeFunnelFixEnabled("?a=1&fadeFunnelFix=0"), false);
+  assert.equal(F.fadeFunnelFixEnabled("?fadeFunnelFix=no"), false);
+  assert.equal(F.fadeFunnelFixEnabled(), true, "node has no window: the default");
+});
+
+console.log("-- 10 three r184's renderer (fake WebGL2) ---------------------");
+
+const { createFakeWebGL2, fakeCanvas } = await import("./helpers/fake_webgl2.mjs");
+
+/** One faded DoubleSide opaque part in a real three r184 renderer. */
+function rig(search) {
+  const gl = createFakeWebGL2();
+  const renderer = new THREE.WebGLRenderer({ canvas: fakeCanvas(gl), context: gl });
+  const scene = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+  cam.position.set(0, 0, 5);
+  const mat = dsOpaque();
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat));
+  let draws = 0, resolves = 0;
+  const rbd = renderer.renderBufferDirect.bind(renderer);
+  renderer.renderBufferDirect = (...a) => { draws++; return rbd(...a); };
+  // three calls customProgramCacheKey once per getParameters, i.e. once per
+  // getProgram (three.module.js:7752) — a program re-resolve counter.
+  const key = mat.customProgramCacheKey.bind(mat);
+  mat.customProgramCacheKey = () => { resolves++; return key(); };
+  const frame = () => {
+    draws = 0; resolves = 0;
+    renderer.render(scene, cam);
+    return { draws, resolves };
+  };
+  const program = () => renderer.properties.get(mat).currentProgram;
+  const fragDefines = () => {
+    const src = gl.getShaderSource(program().fragmentShader);
+    return { opaque: src.includes("#define OPAQUE"), doubleSided: src.includes("#define DOUBLE_SIDED") };
+  };
+  const fade = (o) => ownerFade(mat, o, search);
+  return { mat, frame, program, fragDefines, fade };
+}
+
+await check("10a: =off — two draws and two program re-resolves per faded frame, even at opacity 0", () => {
+  const r = rig(OFF);
+  r.frame();
+  r.fade(0.5);
+  r.frame();
+  assert.deepEqual(r.frame(), { draws: 2, resolves: 2 });
+  r.fade(0);
+  assert.deepEqual(r.frame(), { draws: 2, resolves: 2 });
+});
+
+await check("10b: a faded DoubleSide part draws once, with no re-resolve on a steady frame", () => {
+  const r = rig("");
+  r.frame();
+  r.fade(0.5);
+  assert.deepEqual(r.frame(), { draws: 1, resolves: 1 }, "the fade-start publish");
+  assert.deepEqual(r.frame(), { draws: 1, resolves: 0 });
+  r.fade(0.3); // a ramp frame
+  assert.deepEqual(r.frame(), { draws: 1, resolves: 0 });
+  const d = r.fragDefines();
+  assert.equal(d.opaque, false, "no OPAQUE while faded: else it draws at alpha 1");
+  assert.equal(d.doubleSided, true);
+});
+
+await check("10c: at opacity 0 it is not drawn at all", () => {
+  const r = rig("");
+  r.frame();
+  r.fade(0);
+  assert.deepEqual(r.frame(), { draws: 0, resolves: 0 });
+  assert.deepEqual(r.frame(), { draws: 0, resolves: 0 });
+  r.fade(0.2);
+  assert.equal(r.frame().draws, 1);
+});
+
+await check("10d: =off leaves the restored part on the faded FrontSide program (the bug)", () => {
+  const r = rig(OFF);
+  r.frame();
+  const authored = r.program();
+  r.fade(0.5); r.frame();
+  r.fade(1);
+  assert.deepEqual(r.frame(), { draws: 1, resolves: 0 });
+  assert.notEqual(r.program(), authored);
+  assert.deepEqual(r.fragDefines(), { opaque: false, doubleSided: false });
+});
+
+await check("10e: the restore puts the part back on its authored DOUBLE_SIDED + OPAQUE program", () => {
+  for (const o of [0.5, 0]) {
+    const r = rig("");
+    r.frame();
+    const authored = r.program();
+    assert.deepEqual(r.fragDefines(), { opaque: true, doubleSided: true });
+    r.fade(o); r.frame(); r.frame();
+    r.fade(1);
+    assert.deepEqual(r.frame(), { draws: 1, resolves: 1 });
+    assert.equal(r.program(), authored, `same program object as its never-faded peers (fade to ${o})`);
+    assert.deepEqual(r.frame(), { draws: 1, resolves: 0 });
+  }
+});
+
+console.log("-- 11 the real EntityManager: in-head ----------------------------");
+
+await check("11: camera fade 1 → 0 → 0.5 → 1 on DoubleSide parts", () => {
+  const { em, mat } = setup();
+  for (const m of [mat(CLIP_DID), mat(OPAQUE_DID), mat(ALPHA_DID)]) m.side = THREE.DoubleSide;
+  em.setLocalPlayerCameraOpacity(P, 0);
+  const clip = mat(CLIP_DID), opq = mat(OPAQUE_DID), alpha = mat(ALPHA_DID);
+  for (const m of [clip, opq, alpha]) {
+    assert.equal(m.opacity, 0);
+    assert.equal(m.visible, false, "in-head parts are not submitted");
+    assert.equal(m.forceSinglePass, true);
+  }
+  assert.equal(mat(ADD_DID).visible, true, "Additive keeps its own blend: still drawn");
+  em.setLocalPlayerCameraOpacity(P, 0.5);
+  for (const m of [clip, opq, alpha]) assert.equal(m.visible, true);
+  em.setLocalPlayerCameraOpacity(P, 1);
+  for (const m of [clip, opq]) {
+    assert.equal(m.visible, true);
+    assert.equal(m.forceSinglePass, false);
+    assert.equal(m.transparent, false);
+  }
+  assert.equal(alpha.transparent, true);
+  assert.equal(alpha.visible, true);
 });
 
 console.log(`\nfade_alpha_state: ${passed} passed, ${failed} failed`);

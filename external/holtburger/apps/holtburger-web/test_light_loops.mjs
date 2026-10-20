@@ -86,7 +86,16 @@ const norm = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""
 // The plain loops call RE_Direct only for a light with a non-zero colour (`directLight.visible`);
 // stock adds that light's zero contribution instead. Drop the guard, then hand-unroll the
 // plain loops, so "same statements, same order" is checkable against stock.
-const unguard = (active) => active.replace(/if \( directLight\.visible \) \{\s*(RE_Direct\([^;]*;|\{ \/\*clamp\*\/ RE_Direct\([^;]*; \})\s*\}/g, "$1");
+// 2026-10-20 (?lightRangeSkip, default on): the plain loops also test the light's range before
+// its info call, the directional RE_Direct runs only for a non-zero colour and the probe SH only
+// for a non-zero DC term. Those guards are stripped too; tests/light_range_skip.test.mjs proves
+// they only ever skip exact-zero contributions.
+const RE_CALL = String.raw`(RE_Direct\([^;]*;|\{ \/\*clamp\*\/ RE_Direct\([^;]*; \})`;
+const unguard = (active) => active
+  .replace(new RegExp(String.raw`if \( directLight\.visible \) \{\s*` + RE_CALL + String.raw`\s*\}`, "g"), "$1")
+  .replace(new RegExp(String.raw`vec3 hbRangeL = [^;]*;\s*if \( !\( [^{]*\) \) \{\s*(get(?:Point|Spot)LightInfo\([^;]*;)\s*` + RE_CALL + String.raw`\s*\}`, "g"), "$1\n$2")
+  .replace(new RegExp(String.raw`if \( any\( notEqual\( directLight\.color, vec3\( 0\.0 \) \) \) \) \{\s*` + RE_CALL + String.raw`\s*\}`, "g"), "$1")
+  .replace(/if \( any\( notEqual\( lightProbe\[ 0 \], vec3\( 0\.0 \) \) \) \) \{\s*(irradiance \+= getLightProbeIrradiance\([^;]*;)\s*\}/g, "$1");
 const handUnroll = (active) => unrollLoops(unguard(active).replace(/(for \( int i = 0; i < \d+; i \+\+ \) \{[^{}]*\})/g, "#pragma unroll_loop_start\n$1\n#pragma unroll_loop_end"));
 const count = (s, needle) => s.split(needle).length - 1;
 const BASE = { point: 16, spot: 2, dir: 2, hemi: 1, rect: 0, pointShadows: 0, spotShadows: 0, spotMaps: 0, spotShadowsWithMaps: 0, dirShadows: 0 };
@@ -113,7 +122,10 @@ console.log("\nno shadows, no light maps (this client: 16 point, 2 spot, 2 dir, 
   check("patched: one point + one spot copy", count(o, "getPointLightInfo(") === 1 && count(o, "getSpotLightInfo(") === 1, `${count(o, "getPointLightInfo(")} / ${count(o, "getSpotLightInfo(")}`);
   check("RE_Direct copies 20 -> 4", count(s, "RE_Direct(") === 20 && count(o, "RE_Direct(") === 4, `${count(s, "RE_Direct(")} -> ${count(o, "RE_Direct(")}`);
   check("same statements in the same order once unrolled by hand", norm(handUnroll(o)) === norm(s));
-  check("active code shrinks", norm(o).length * 3 < norm(s).length, `${norm(s).length} -> ${norm(o).length} chars`);
+  // the 2026-10-06 claim, on the ?lightRangeSkip=off text (the range / zero gates add ~500 chars back)
+  const o0 = active(patchLightLoopsChunk(stock, { rangeSkip: false }).text, BASE);
+  check("active code shrinks", norm(o0).length * 3 < norm(s).length && norm(o).length * 2 < norm(s).length,
+    `${norm(s).length} -> ${norm(o0).length} chars (${norm(o).length} with ?lightRangeSkip)`);
   check("plain loops skip zero-colour lights", count(o, "if ( directLight.visible ) {") === 2);
 }
 

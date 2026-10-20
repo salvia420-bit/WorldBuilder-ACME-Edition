@@ -164,14 +164,17 @@ check(
     keyA !== keyB,
     `A=${keyA}, B=${keyB}`
 );
+// 2026-10-20 (improvement hunt shadows-restore-2/-4): the CSM token is now a
+// hook version, `|c2` (batched/instanced world position + textureLod taps);
+// un-patched materials keep `|c0`.
 check(
     "CSM+POM key has the exact expected shape",
-    keyA === "hb|d0|c1|p1|l0|a0|b0|f0|s0|k0|v",
+    keyA === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|v",
     `keyA=${keyA}`
 );
 check(
     "CSM+lightClamp key has the exact expected shape",
-    keyB === "hb|d0|c1|p0|l1|a0|b0|f0|s0|k0|v",
+    keyB === "hb|d0|c2|p0|l1|a0|b0|f0|s0|k0|v",
     `keyB=${keyB}`
 );
 
@@ -183,7 +186,7 @@ installCsmShaderPatch(matSingle, csmState);
 check(
     "single CSM-only patch still installs a customProgramCacheKey",
     typeof matSingle.customProgramCacheKey === "function" &&
-        matSingle.customProgramCacheKey() === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k0|v",
+        matSingle.customProgramCacheKey() === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v",
     `key=${typeof matSingle.customProgramCacheKey === "function" ? matSingle.customProgramCacheKey() : "(none)"}`
 );
 
@@ -245,8 +248,8 @@ installPomShaderPatch(matLazy, stubHeight, { forced: true });
 const keyAfterPom = matLazy.customProgramCacheKey();
 check(
     "key is read LAZILY: adding POM after CSM flips the p bit on the existing key",
-    keyBeforePom === "hb|d0|c1|p0|l0|a0|b0|f0|s0|k0|v" &&
-        keyAfterPom === "hb|d0|c1|p1|l0|a0|b0|f0|s0|k0|v",
+    keyBeforePom === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v" &&
+        keyAfterPom === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|v",
     `before=${keyBeforePom}, after=${keyAfterPom}`
 );
 

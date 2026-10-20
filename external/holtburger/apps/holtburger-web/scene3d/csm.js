@@ -50,6 +50,97 @@
 // path stays in effect (low/mid quality presets). The two paths are
 // mutually exclusive: when CSM is on, the sun's own shadow is OFF;
 // when CSM is off, the sun's shadow is whatever Phase 0.1 set.
+//
+// STABLE CASCADES (2026-10-20, improvement hunt shadows-restore-1; `setupCsm(…,
+// { stable: true })`, which lighting.js passes under `?csmStable`, DEFAULT ON on
+// the CSM path, `=off` restores the view-slice fit above). The view-slice fit
+// moves with every turn of the camera, so any 1 cm / 1e-3 rad change refit all
+// three cascades, which marked every map FRUSTUM and kept shadowStaticCache from
+// ever engaging while the player moved or looked around (~12 ms of shadow raster
+// on every moving frame, 1070 10-17). Stable mode instead makes cascade i a
+// sphere of CONSTANT radius `splits[i] + margins[i]` (5 / 10 / 28 m: today's
+// texel size at the default retail fov, 3.4 / 10.7 / 64 cm) about a
+// texel-snapped point in the same world-anchored light frame, and refits it only
+//   - when the camera has left that cascade's slack zone (the margin, less a
+//     2-texel PCF guard) — at a 12 m/s run every ~0.4 / 0.8 / 2.3 s; turning in
+//     place or a fov / aspect / zoom change: never;
+//   - when the sun has stepped past that cascade's epsilon (?csmSunEps, 1e-3
+//     rad; 2e-3 for the far cascade) — staggered, at most one cascade per frame
+//     and never on a frame another cascade refits, unless the sun JUMPED (time
+//     set, teleport: > 0.02 rad), which refits every stale cascade at once.
+// `refitMask` says which cascades moved, so lighting.js re-rasters only those
+// (the others overlay their static cache). Receivers must then pick a cascade
+// by DISTANCE from the camera, not view depth (a sphere about the camera holds
+// every point within splits[i], in any direction, but not the far corners of
+// the view slice): the shared `uCsmSelDist` uniform switches materials.js
+// _csmShadowFactor and terrain.js csmShadowFactor over (0 = view depth, the
+// legacy fit). The cost: the near cascade no longer stretches to 43 m at the
+// screen corners — they drop to the mid cascade past 30 m.
+//
+// SUN FADE + DIRECT-ONLY SHADE (2026-10-20, improvement hunt shadows-restore-5).
+// Dereth's sun never sets: the authored pitch bottoms at 0.9 deg for the whole
+// 23:02h -> 03:50h block (night_ramp.js header), and the cascades follow that raw
+// sun, so all night every caster threw a ~64x-height streak (clipped only by
+// BACK_DIST_M) at full strength. Two shared uniforms, written by
+// `refreshCsmUniforms` like the rest (no light count, castShadow or program key
+// moves at runtime):
+//   - `uCsmStrength` = `csmState.strength`, which lighting.js sets each tick to
+//     cloud_night.js's directFactor (the sky's art elevation through
+//     ?cloudShadowFadeDeg: 1 by day, 0 once the art sun reaches the horizon) under
+//     `?csmSunFade` (default on with CSM). Receivers skip the cascade taps while
+//     it is 0, and lighting.js's shadow gate stops rastering the cascades then.
+//   - `uCsmShade` = `csmState.shade`, how much of the shaded term a FULL shadow
+//     removes. The receivers apply `mix(1 - shade * strength, 1, s)`.
+// Where that factor lands is `csmState.directOnly` (`setupCsm(…, { directOnly:
+// true })`, lighting.js `?csmDirectOnly`, default on with CSM): on the SUN's
+// direct term only (materials.js: every directional light's colour in the light
+// loop — the cascade lights are colour 0 —, terrain.js: the sun term inside the
+// retail Gouraud), so emissive windows, baked cell light, IBL / the sky probe and
+// fog keep their authored values in shade. Its shade defaults to 1 (a shadow
+// blocks the direct sun; the old 0.45 floor only existed because the multiply
+// also hit the ambient). Without `directOnly` (direct callers, `=off`) the legacy
+// whole-colour multiply stays at shade 0.55 — at strength 1 that is the old
+// `mix(0.45, 1.0, s)` bit for bit.
+//
+// DEPTH FIT + TEXEL BIAS (2026-10-20, improvement hunt shadows-restore-7;
+// `setupCsm(…, { depthFit: true })`, which lighting.js passes under `?csmBias`,
+// DEFAULT ON on the CSM path, `=legacy` / `=off` restores the fixed range and
+// bias). Both were sized once and applied to all three cascades:
+//   - DEPTH RANGE. Each cascade's light sat BACK_DIST_M (200 m) sunward of its
+//     centre with far = 2 * BACK_DIST_M + radius, so the last 200 m past the
+//     sphere's far side covered nothing, and the far cascade's sphere (radius
+//     ~325 m) reached in front of the near plane: no caster in its sun-side cap
+//     was rastered and every receiver there read lit. Now
+//     back = max(BACK_DIST_M, radius + lead) with lead = CSM_LEAD_H_M / sin(sun
+//     elevation) capped at CSM_LEAD_MAX_M (how far sunward of a receiver a 50 m
+//     caster can stand and still shade it), and far = back + radius +
+//     CSM_FAR_PAD_M. The near cascade keeps its 200 m lead-in above an ~18 deg
+//     sun, the mid one above ~34 deg (radius + lead < 200; below that their
+//     light moves back too); every cascade drops the dead 200 m behind its
+//     sphere, and the far cascade's whole sphere is in range.
+//   - BIAS. The receivers subtract a fixed 0.0007 of the [0, 1] depth range
+//     (materials.js / terrain.js `float bias = 0.0007;`): 0.30 / 0.36 / 0.51 m
+//     along the light over the old 434 / 509 / 725 m ranges, 9 texels of the
+//     near cascade. A receiver within that distance of its occluder reads lit:
+//     a ~0.26 m lit seam along the base of every wall in its own shadow at a
+//     30 deg sun, and feet detached from their shadows. The bias is now a count
+//     of each cascade's TEXELS (`?csmBiasTexels`, default 2), in metres along the
+//     light, per receiver class:
+//       ground (the materials registered on `patchedMaterials` = the terrain:
+//         it never casts, so it cannot shadow itself and needs no acne margin):
+//         k texels — 6.8 / 21 cm for the near / mid cascades;
+//       casters (the shared uniform set: statics, rigs, particles — AC surfaces
+//         are DoubleSide, so a lit face compares against its own depth across
+//         the 4-tap PCF footprint): 2k texels — 13.7 cm near;
+//     each capped at the old metric bias, so no receiver leaks more than before
+//     (the far cascade keeps 0.51 m, the mid cascade's casters 0.36 m).
+//     No shader or program-key change: the receivers' constant stays and
+//     refreshCsmUniforms folds the difference into the z translation of each
+//     cascade's `uCsmMatrix` (an ortho shadow matrix is affine with w = 1, so a
+//     z shift moves every reference depth by exactly that much). The sign comes
+//     from the matrix's own depth row, so it holds for the conventional and the
+//     reversed cascade cameras alike. Needs an eye test (acne on DoubleSide
+//     walls at the near cascade, ?csmBiasTexels sweeps it).
 
 import * as THREE from "three";
 
@@ -139,6 +230,71 @@ const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
 // position threshold above was tuned to.
 const CAM_ROT_DELTA_SQ_EPS = 2e-6; // unit-basis², ≈1e-3 rad
 
+// Stable cascades (shadows-restore-1, see the header). Per-cascade translation
+// slack in metres: radius = splits[i] + margin. 5 / 10 / 28 m reproduce the
+// view-slice fit's sphere at the default retail fov (90° game fov → 53.6°
+// vertical at 16:9: radii 34.3 / 108.8 / 324.9 m) to within 2%, so texel
+// density per cascade is today's (3.4 / 10.7 / 64 cm at 2048 / 2048 / 1024).
+export const DEFAULT_CSM_STABLE_MARGINS = Object.freeze([5, 10, 28]);
+// Sun epsilon per cascade, as a multiple of the (squared) ?csmSunEps base:
+// the far cascade's 64 cm texels take 2e-3 rad (×4 squared) without a visible
+// step.
+const STABLE_SUN_EPS_SCALE = Object.freeze([1, 1, 4]);
+// A sun step this large (squared unit-vector delta, 0.02 rad) is a jump — the
+// sky was set, not drifting — and refits every stale cascade on the same frame
+// instead of staggering, so no cascade shows the old direction for a frame.
+const STABLE_SUN_JUMP_SQ = 4e-4;
+// Texels of PCF footprint kept inside the map edge: the receivers' four taps sit
+// ±0.5 texel off the lookup and each is a bilinear 2×2.
+const STABLE_GUARD_TEXELS = 2;
+// Per-cascade multiple of the ?shadowMaxStale ceiling lighting.js applies to
+// stable cascades (12 / 24 / 60 frames at the default 12). Stable cascades keep
+// their static cache while the player moves, so the ceiling is what bounds the
+// cached statics' lag (sway, streaming, camera-dependent LOD); the mid and far
+// cascades' 10.7 / 64 cm texels hide most of it.
+export const DEFAULT_CSM_STABLE_STALE_SCALE = Object.freeze([1, 2, 5]);
+
+// shadows-restore-5 (header) — fraction of the shaded term a full shadow
+// removes. Legacy whole-colour multiply: 0.55 (the historic 0.45 floor, which
+// kept the ambient it also darkened from crushing). Direct-only: 1 (the sun's
+// direct light is blocked; ambient, IBL and emissive are not touched).
+export const CSM_SHADE_LEGACY = 0.55;
+export const CSM_SHADE_DIRECT = 1.0;
+
+// shadows-restore-7 (header) — depth fit + texel bias.
+// The receivers' fixed reference shift toward the light, in [0, 1] shadow depth
+// (materials.js _csmSampleCascade / terrain.js csmSampleCascade `float bias`;
+// tests/csm_depth_fit.test.mjs pins the two equal to this).
+export const CSM_RECEIVER_BIAS = 0.0007;
+// Ground receivers' bias in texels of the cascade (casters: ×CSM_CASTER_BIAS_SCALE).
+export const DEFAULT_CSM_BIAS_TEXELS = 2;
+const CSM_CASTER_BIAS_SCALE = 2;
+const CSM_BIAS_TEXELS_MIN = 0.25;
+const CSM_BIAS_TEXELS_MAX = 16;
+// Caster height the lead-in past the sphere must cover, and its cap (a sun
+// below ~7 deg would ask for more; csmSunFade fades the cascades out there).
+const CSM_LEAD_H_M = 50;
+const CSM_LEAD_MAX_M = 400;
+// Slack past the sphere's far side (float error, and the folded bias shifting a
+// far-edge reference by a fraction of a metre).
+const CSM_FAR_PAD_M = 2;
+// The cascade cameras' near plane (both fits).
+const CSM_NEAR_M = 0.1;
+
+/**
+ * shadows-restore-7 — how far sunward of a cascade's centre its light sits:
+ * the legacy BACK_DIST_M, or enough for the whole sphere plus a 50 m caster's
+ * lead at this sun elevation, whichever is more.
+ * @param {number} radius - the cascade sphere's radius (m)
+ * @param {number} sinElev - sin of the sun's elevation (the normalised light
+ *   direction's y, three Y-up)
+ */
+export function csmBackDistance(radius, sinElev) {
+  const s = Number.isFinite(sinElev) && sinElev > 1e-3 ? sinElev : 1e-3;
+  const lead = Math.min(CSM_LEAD_MAX_M, CSM_LEAD_H_M / s);
+  return Math.max(BACK_DIST_M, radius + lead);
+}
+
 /**
  * Construct the CSM bundle and attach the shadow-only cascade lights
  * to `scene`. The caller is responsible for:
@@ -171,6 +327,26 @@ const CAM_ROT_DELTA_SQ_EPS = 2e-6; // unit-basis², ≈1e-3 rad
  *   squared camera-orientation-delta threshold (matrixWorld basis columns)
  *   below which `updateCsm` may skip the refit. Defaults to the validated
  *   CAM_ROT_DELTA_SQ_EPS.
+ * @param {boolean} [opts.stable=false] - shadows-restore-1 stable cascades
+ *   (camera-centred, rotation-invariant, per-cascade slack + staggered sun
+ *   refits; see the header). Only an explicit `true` enables it: lighting.js
+ *   passes `?csmStable` (default on); direct callers keep the view-slice fit.
+ * @param {number[]} [opts.stableMargins=DEFAULT_CSM_STABLE_MARGINS] - stable
+ *   mode's per-cascade slack in metres (radius = split + margin).
+ * @param {boolean} [opts.directOnly=false] - shadows-restore-5: receivers
+ *   attenuate the sun's direct term only (see the header). Only an explicit
+ *   `true` enables it: lighting.js passes `?csmDirectOnly` (default on); direct
+ *   callers keep the legacy whole-colour multiply.
+ * @param {number} [opts.shade] - shadows-restore-5: fraction of the shaded term
+ *   a full shadow removes, [0, 1]. Default CSM_SHADE_DIRECT with `directOnly`,
+ *   else CSM_SHADE_LEGACY.
+ * @param {boolean} [opts.depthFit=false] - shadows-restore-7: per-cascade depth
+ *   range (back / far from the sphere and the sun) and a texel-scaled receiver
+ *   bias (see the header). Only an explicit `true` enables it: lighting.js
+ *   passes `?csmBias` (default on); direct callers keep the fixed range + bias.
+ * @param {number} [opts.biasTexels=DEFAULT_CSM_BIAS_TEXELS] - shadows-restore-7:
+ *   ground receivers' bias in texels of each cascade (casters get twice it),
+ *   clamped to [0.25, 16].
  * @returns {{
  *   lights: THREE.DirectionalLight[3],
  *   splits: number[],
@@ -211,6 +387,25 @@ export function setupCsm(scene, opts = {}) {
   const camRotDeltaSqEps = Number.isFinite(opts.camRotDeltaSqEps)
     ? opts.camRotDeltaSqEps
     : CAM_ROT_DELTA_SQ_EPS;
+  // shadows-restore-1 — stable cascades: explicit opt-in (lighting.js reads the
+  // URL flag). A margin must be a positive finite number of metres.
+  const stable = opts.stable === true;
+  const stableMargins = (opts.stableMargins ?? DEFAULT_CSM_STABLE_MARGINS).slice();
+  if (stableMargins.length !== 3 || !stableMargins.every((m) => Number.isFinite(m) && m > 0)) {
+    throw new Error("setupCsm: stableMargins must be 3 positive numbers");
+  }
+  // shadows-restore-5 — where the shadow lands (explicit opt-in, lighting.js
+  // reads the URL flag) and how dark a full shadow is.
+  const directOnly = opts.directOnly === true;
+  const shade = Number.isFinite(opts.shade)
+    ? Math.min(1, Math.max(0, opts.shade))
+    : (directOnly ? CSM_SHADE_DIRECT : CSM_SHADE_LEGACY);
+  // shadows-restore-7 — depth fit + texel bias (explicit opt-in, lighting.js
+  // reads the URL flag) and the ground receivers' texel count.
+  const depthFit = opts.depthFit === true;
+  const biasTexels = Number.isFinite(opts.biasTexels)
+    ? Math.min(CSM_BIAS_TEXELS_MAX, Math.max(CSM_BIAS_TEXELS_MIN, opts.biasTexels))
+    : DEFAULT_CSM_BIAS_TEXELS;
 
   const csmGroup = new THREE.Group();
   csmGroup.name = "csm-cascades";
@@ -250,6 +445,19 @@ export function setupCsm(scene, opts = {}) {
   }
   scene.add(csmGroup);
 
+  // 2026-10-20 (improvement hunt shadows-restore-3, `?csmDeadLights`, default on): these
+  // intensity-0 casters sort first in every lit program's directional loop and each unrolled
+  // copy adds exactly zero (plus three's 5-tap getShadow on receivers). light_loops.js
+  // installCsmDeadLights drops their copies from three's lights_fragment_begin, keyed in the GLSL
+  // on exactly lights.length directional shadows, so it stays inert for any other caster set.
+  // Installed here — CSM owns the casters, and no program with their shadow count exists yet —
+  // through a global, not an import (legacy tests eval this file in `new Function`). Same image;
+  // no light count or castShadow change. No hook (light_loops.js not loaded): stock loop.
+  try {
+    const installDeadLights = globalThis.__hbInstallCsmDeadLights;
+    if (typeof installDeadLights === "function") installDeadLights(THREE, lights.length);
+  } catch (_) { /* fail-soft: the stock directional loop stays */ }
+
   const state = {
     lights,
     splits,
@@ -271,6 +479,63 @@ export function setupCsm(scene, opts = {}) {
     // very first frame after setup re-rasters (matches the NaN-sentinel
     // first-frame rebuild below).
     didRefitThisTick: true,
+    // shadows-restore-1 — WHICH cascades this tick refit (bit i = cascade i).
+    // The view-slice fit always refits all three (0b111) or none; stable mode
+    // refits each on its own (lighting.js marks only those maps FRUSTUM).
+    refitMask: 0b111,
+    stable,
+    stableMargins,
+    // shadows-restore-5 (header). `directOnly` is read by the receiver builders
+    // (materials.js hook, terrain.js defines) at compile time; `shade` and
+    // `strength` are uniform values (`uCsmShade` / `uCsmStrength`) that
+    // refreshCsmUniforms writes every frame. lighting.js owns `strength` (the
+    // time-of-day direct factor, 1 until it says otherwise); 0 = no receiver
+    // samples the cascades, so its shadow gate skips their rasters.
+    directOnly,
+    shade,
+    strength: 1,
+    // shadows-restore-7 (header). `depthFit` is read by the fits (back / far)
+    // and by refreshCsmUniforms (the folded bias); `bias` is what the last
+    // refresh applied, per cascade, in metres along the light (read live:
+    // `liveScene3d.csmState.bias`): ground = terrain receivers, caster = the
+    // shared set; folds / unfoldable count cascade refreshes (an unfoldable
+    // one — no map yet, or a non-affine matrix — keeps the receivers' fixed
+    // bias that frame).
+    depthFit,
+    biasTexels,
+    bias: {
+      ground: [0, 0, 0],
+      caster: [0, 0, 0],
+      folds: 0,
+      unfoldable: 0,
+    },
+    _biasFold: null,
+    // Stable mode only: per-cascade ?shadowMaxStale multiple (lighting.js).
+    stableStaleScale: stable ? DEFAULT_CSM_STABLE_STALE_SCALE.slice() : null,
+    // Stable mode only: per cascade [centreX, centreY, centreZ, sunX, sunY,
+    // sunZ] of its current fit (world; the snapped centre and the normalised
+    // sun it was fit for). NaN = not fit yet → refit on the next tick.
+    _stableFit: new Float64Array(18).fill(NaN),
+    _stableFitTick: new Float64Array(3),
+    _tick: 0,
+    // shadows-restore-1 counters (read live: `liveScene3d.csmState.stats`).
+    //   ticks       updateCsm calls        refitTicks  ticks that refit any
+    //   refits[i]   cascade i refits (all three per refit tick on the
+    //               view-slice fit)
+    //   forced[i] / move[i] / sun[i]  stable mode: why cascade i refit (first
+    //               fit or invalidate / camera left its slack / sun stepped)
+    //   sunDeferred ticks a stale-sun cascade waited (stagger)
+    //   sunJumps    ticks the sun jumped (every stale cascade at once)
+    stats: {
+      ticks: 0,
+      refitTicks: 0,
+      refits: [0, 0, 0],
+      forced: [0, 0, 0],
+      move: [0, 0, 0],
+      sun: [0, 0, 0],
+      sunDeferred: 0,
+      sunJumps: 0,
+    },
     // Receivers' materials register here once patched, so we can refresh
     // uniforms after each `updateCsm` without re-walking the scene. Since
     // 2026-10-07 only the per-landblock terrain ShaderMaterials (whose own
@@ -296,6 +561,13 @@ export function setupCsm(scene, opts = {}) {
       uCsmSplits: { value: new THREE.Vector2(splits[0], splits[1]) },
       uCsmFar: { value: splits[2] },
       uCsmBlend: { value: blendFrac },
+      // shadows-restore-1 — receivers pick the cascade by distance from the
+      // camera (1, stable cascades) or by view depth (0, the view-slice fit).
+      uCsmSelDist: { value: stable ? 1 : 0 },
+      // shadows-restore-5 — time-of-day strength (lighting.js) and full-shadow
+      // darkness; the receivers shade by mix(1 - shade * strength, 1, s).
+      uCsmStrength: { value: 1 },
+      uCsmShade: { value: shade },
     },
     _uniformRefs: null,
     // Perf C4 — skip-rebuild cache. `updateCsm` compares the camera
@@ -347,10 +619,13 @@ export function setupCsm(scene, opts = {}) {
       this._lastCamAspect = NaN;
       this._lastCamNear = NaN;
       this._lastCamZoom = NaN;
+      // shadows-restore-1 — stable mode: every cascade refits next tick.
+      if (this._stableFit) this._stableFit.fill(NaN);
       // RP5 — a forced rebuild WILL refit on the next updateCsm, so the
       // static-shadow gate must re-raster that frame. Mark it now so even
       // if the gate is read before updateCsm runs, it errs toward drawing.
       this.didRefitThisTick = true;
+      this.refitMask = 0b111;
     },
     dispose() {
       // Reset the skip-rebuild cache too, so a future re-setup that
@@ -411,12 +686,16 @@ function _fitFov(camera) {
  */
 export function updateCsm(csmState, camera, sunDir) {
   if (!csmState || !camera) return;
+  const stats = csmState.stats || null;
+  if (stats) stats.ticks += 1;
+  csmState._tick = (csmState._tick || 0) + 1;
   if (!camera.isPerspectiveCamera) {
     // Top-down ortho path — cascades can't sensibly fit an ortho view
     // frustum's depth slices. Skip; the cached defaults from setupCsm
     // remain. RP5 — no refit happened, so the static-shadow gate must
     // NOT treat this frame as a re-raster trigger on its own.
     csmState.didRefitThisTick = false;
+    csmState.refitMask = 0;
     return;
   }
   const dir = sunDir ?? csmState.sunDir;
@@ -439,6 +718,13 @@ export function updateCsm(csmState, camera, sunDir) {
   const lx = dir.x / lightDirLen;
   const ly = dir.y / lightDirLen;
   const lz = dir.z / lightDirLen;
+
+  // shadows-restore-1 — stable cascades decide per cascade (camera slack, sun
+  // epsilon); none of the view-slice thresholds below apply to them.
+  if (csmState.stable === true) {
+    _updateStableCsm(csmState, camera, lx, ly, lz, stats);
+    return;
+  }
 
   // Perf C4 — skip the per-cascade refit when neither the camera nor
   // the sun moved meaningfully since last frame. The cascade lights'
@@ -503,6 +789,7 @@ export function updateCsm(csmState, camera, sunDir) {
     // can skip the re-raster (unless something else, e.g. an indoor/
     // outdoor flip or the staleness bound, forces it).
     csmState.didRefitThisTick = false;
+    csmState.refitMask = 0;
     return;
   }
 
@@ -518,7 +805,8 @@ export function updateCsm(csmState, camera, sunDir) {
       prevSplit,
       splitFar,
       lx, ly, lz,
-      csmState.mapSizes[i]
+      csmState.mapSizes[i],
+      csmState.depthFit === true
     );
     prevSplit = splitFar;
   }
@@ -546,6 +834,116 @@ export function updateCsm(csmState, camera, sunDir) {
   // static-scene shadow-raster gate treats this as "shadows changed →
   // re-raster this frame".
   csmState.didRefitThisTick = true;
+  csmState.refitMask = 0b111;
+  if (stats) {
+    stats.refitTicks += 1;
+    for (let i = 0; i < 3; i += 1) stats.refits[i] += 1;
+  }
+}
+
+/**
+ * shadows-restore-1 — the stable-cascade tick (see the header): cascade i is a
+ * sphere of radius `splits[i] + stableMargins[i]` about a texel-snapped point
+ * near the camera, refit only when the camera leaves its slack zone, the sun
+ * steps past its epsilon (staggered: one cascade per frame, none on a frame
+ * another refits, all at once on a jump), or it was never fit / invalidated.
+ * Leaves `refitMask` / `didRefitThisTick` for lighting.js.
+ */
+function _updateStableCsm(csmState, camera, lx, ly, lz, stats) {
+  // World position from matrixWorld (fresh — updateCsm ran updateMatrixWorld),
+  // so a parented camera still centres where it renders from.
+  const me = camera.matrixWorld.elements;
+  const px = me[12];
+  const py = me[13];
+  const pz = me[14];
+  const fit = csmState._stableFit;
+  const age = csmState._stableFitTick;
+  const margins = csmState.stableMargins || DEFAULT_CSM_STABLE_MARGINS;
+  const sunBase = Number.isFinite(csmState.sunDeltaSqEps)
+    ? csmState.sunDeltaSqEps
+    : SUN_DELTA_SQ_EPS;
+  let forcedMask = 0;
+  let moveMask = 0;
+  let sunMask = 0;
+  let jump = false;
+  let sunPick = -1;
+  let sunScore = 0;
+  for (let i = 0; i < 3; i += 1) {
+    const o = i * 6;
+    if (Number.isNaN(fit[o])) {
+      forcedMask |= 1 << i;
+      continue;
+    }
+    const radius = csmState.splits[i] + margins[i];
+    const guard = STABLE_GUARD_TEXELS * ((radius * 2) / csmState.mapSizes[i]);
+    const slack = Math.max(0, margins[i] - guard);
+    const dx = px - fit[o];
+    const dy = py - fit[o + 1];
+    const dz = pz - fit[o + 2];
+    // `!(a <= b)` — a NaN camera position refits rather than freezing.
+    if (!(dx * dx + dy * dy + dz * dz <= slack * slack)) {
+      moveMask |= 1 << i;
+      continue;
+    }
+    const sx = lx - fit[o + 3];
+    const sy = ly - fit[o + 4];
+    const sz = lz - fit[o + 5];
+    const sunSq = sx * sx + sy * sy + sz * sz;
+    const eps = sunBase * STABLE_SUN_EPS_SCALE[i];
+    if (!(sunSq < eps)) {
+      sunMask |= 1 << i;
+      if (!(sunSq <= STABLE_SUN_JUMP_SQ)) jump = true;
+      // The most-overdue cascade goes first; on a tie the longest-unfit one.
+      const score = sunSq / Math.max(eps, 1e-30);
+      if (sunPick < 0 || score > sunScore || (score === sunScore && age[i] < age[sunPick])) {
+        sunPick = i;
+        sunScore = score;
+      }
+    }
+  }
+  let mask = forcedMask | moveMask;
+  let sunTaken = 0;
+  if (sunMask) {
+    if (jump) sunTaken = sunMask;
+    else if (mask === 0) sunTaken = 1 << sunPick;
+    mask |= sunTaken;
+  }
+  for (let i = 0; i < 3; i += 1) {
+    if (!(mask & (1 << i))) continue;
+    _tmpCenter.set(px, py, pz);
+    _placeCascade(
+      csmState.lights[i],
+      _tmpCenter,
+      csmState.splits[i] + margins[i],
+      lx, ly, lz,
+      csmState.mapSizes[i],
+      csmState.depthFit === true
+    );
+    // Record AFTER placing, so a throw leaves the cascade due again next tick.
+    const o = i * 6;
+    fit[o] = _tmpSnap.x;
+    fit[o + 1] = _tmpSnap.y;
+    fit[o + 2] = _tmpSnap.z;
+    fit[o + 3] = lx;
+    fit[o + 4] = ly;
+    fit[o + 5] = lz;
+    age[i] = csmState._tick;
+  }
+  csmState.refitMask = mask;
+  csmState.didRefitThisTick = mask !== 0;
+  if (stats) {
+    if (mask) stats.refitTicks += 1;
+    for (let i = 0; i < 3; i += 1) {
+      const bit = 1 << i;
+      if (!(mask & bit)) continue;
+      stats.refits[i] += 1;
+      if (forcedMask & bit) stats.forced[i] += 1;
+      else if (moveMask & bit) stats.move[i] += 1;
+      else stats.sun[i] += 1;
+    }
+    if (sunMask & ~sunTaken) stats.sunDeferred += 1;
+    if (jump) stats.sunJumps += 1;
+  }
 }
 
 /**
@@ -584,6 +982,12 @@ function _refsOf(u) {
     splits: u.uCsmSplits || null,
     far: u.uCsmFar || null,
     blend: u.uCsmBlend || null,
+    // shadows-restore-1 — absent on a receiver built without it (its GLSL
+    // then reads the uniform's default 0 = view-depth selection).
+    selDist: u.uCsmSelDist || null,
+    // shadows-restore-5 — same: absent ⇒ the receiver keeps its own defaults.
+    strength: u.uCsmStrength || null,
+    shade: u.uCsmShade || null,
   };
 }
 
@@ -604,15 +1008,94 @@ function _csmUniformRefs(mat) {
 
 export function refreshCsmUniforms(csmState) {
   if (!csmState) return;
+  // shadows-restore-7 (depthFit) — the cascade matrices with each receiver
+  // class's bias folded in (null = the fixed bias: plain copies, as before).
+  const fold = csmState.depthFit === true ? _prepareBiasFold(csmState) : null;
   if (csmState.uniforms) {
     if (!csmState._uniformRefs) csmState._uniformRefs = _refsOf(csmState.uniforms);
-    _writeCsmRefs(csmState._uniformRefs, csmState);
+    _writeCsmRefs(csmState._uniformRefs, csmState, fold ? fold.caster : null, null);
   }
   if (!csmState.patchedMaterials) return;
+  const shared = fold ? csmState._uniformRefs || null : null;
   for (const mat of csmState.patchedMaterials) {
     const refs = _csmUniformRefs(mat);
-    if (refs) _writeCsmRefs(refs, csmState);
+    if (!refs) continue;
+    // A registered material with materials.js's patch (a legacy bundle's
+    // MeshStandard receiver, which also casts) is a caster; the rest are the
+    // terrain ShaderMaterials (terrain.js / terrain_batch.js), which never cast.
+    const folded = fold ? (mat.userData && mat.userData.csmEnabled === true ? fold.caster : fold.ground) : null;
+    _writeCsmRefs(refs, csmState, folded, shared);
   }
+}
+
+/**
+ * shadows-restore-7 — fill `csmState._biasFold` with each cascade's shadow
+ * matrix twice, once per receiver class, its z translation shifted so the
+ * receivers' fixed CSM_RECEIVER_BIAS lands as that class's bias in metres
+ * (see the header). Records the metres on `csmState.bias`.
+ */
+function _prepareBiasFold(csmState) {
+  let f = csmState._biasFold;
+  if (!f) {
+    f = csmState._biasFold = {
+      caster: [new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4()],
+      ground: [new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4()],
+    };
+  }
+  const b = csmState.bias || (csmState.bias = { ground: [0, 0, 0], caster: [0, 0, 0], folds: 0, unfoldable: 0 });
+  const k = Number.isFinite(csmState.biasTexels) && csmState.biasTexels > 0 ? csmState.biasTexels : DEFAULT_CSM_BIAS_TEXELS;
+  // Toward the sun (the cascade lights sit at centre + sunDir * back).
+  const sd = csmState.sunDir || { x: 0, y: 1, z: 0 };
+  const sl = Math.hypot(sd.x, sd.y, sd.z) || 1;
+  const ux = sd.x / sl;
+  const uy = sd.y / sl;
+  const uz = sd.z / sl;
+  const lights = csmState.lights;
+  for (let i = 0; i < 3; i += 1) {
+    const light = lights[i];
+    if (!light || !light.shadow) continue;
+    const src = light.shadow.matrix;
+    const cam = light.shadow.camera;
+    const width = cam.right - cam.left;
+    const texel = width / csmState.mapSizes[i];
+    // The metres the fixed bias was worth over the legacy range for this
+    // radius — the cap: no class leaks more than it did.
+    const legacyM = CSM_RECEIVER_BIAS * (BACK_DIST_M * 2 + width * 0.5 - CSM_NEAR_M);
+    const groundM = Math.min(k * texel, legacyM);
+    const casterM = Math.min(k * CSM_CASTER_BIAS_SCALE * texel, legacyM);
+    b.ground[i] = groundM;
+    b.caster[i] = casterM;
+    // No map yet ⇒ three has not computed this light's matrix: copy it as is.
+    const okC = !!light.shadow.map && _foldBias(f.caster[i], src, ux, uy, uz, casterM);
+    const okG = !!light.shadow.map && _foldBias(f.ground[i], src, ux, uy, uz, groundM);
+    if (!okC) f.caster[i].copy(src);
+    if (!okG) f.ground[i].copy(src);
+    if (okC && okG) b.folds += 1;
+    else b.unfoldable += 1;
+  }
+  return f;
+}
+
+/**
+ * `out` = `src` (a cascade's world → [0, 1] shadow matrix) with its z
+ * translation moved so that a receiver applying CSM_RECEIVER_BIAS toward the
+ * light compares at `biasM` metres toward the light instead. The depth row's
+ * length is the [0, 1] depth per metre along the light; its sign against the
+ * sun direction tells conventional (depth grows away from the light) from
+ * reversed. False (out untouched beyond the copy) when the matrix is not
+ * affine or its depth row is not along the light.
+ */
+function _foldBias(out, src, ux, uy, uz, biasM) {
+  out.copy(src);
+  const e = out.elements;
+  if (e[3] !== 0 || e[7] !== 0 || e[11] !== 0 || e[15] !== 1) return false;
+  const len = Math.hypot(e[2], e[6], e[10]);
+  const dot = e[2] * ux + e[6] * uy + e[10] * uz;
+  if (!(len > 0) || !(Math.abs(dot) > 0.5 * len) || !Number.isFinite(biasM)) return false;
+  // [0, 1] depth change per metre moved toward the sun: −len conventional, +len reversed.
+  const g = dot > 0 ? len : -len;
+  e[14] += biasM * g - (g > 0 ? CSM_RECEIVER_BIAS : -CSM_RECEIVER_BIAS);
+  return true;
 }
 
 /**
@@ -624,7 +1107,14 @@ export function csmShadowSampleTexture(light) {
   return light?.shadow?.map?.depthTexture ?? null;
 }
 
-function _writeCsmRefs(refs, csmState) {
+/**
+ * @param {Object|null} folded - shadows-restore-7: per-cascade matrices with
+ *   this receiver class's bias folded in (null = copy the shadow matrix).
+ * @param {Object|null} sharedRefs - with `folded`: the shared set's refs, whose
+ *   matrix objects already hold the caster fold (a receiver that binds them by
+ *   reference must not overwrite them with its own class).
+ */
+function _writeCsmRefs(refs, csmState, folded, sharedRefs) {
   const lights = csmState.lights;
   // splits + blendFrac don't change per frame in the common case
   // (splits are a setup-time choice); the per-frame work is the shadow
@@ -653,7 +1143,9 @@ function _writeCsmRefs(refs, csmState) {
       //   biasMatrix * cam.projectionMatrix * cam.matrixWorldInverse
       // so it transforms world → shadow-NDC[0,1]: `xy` addresses the
       // depth texture and `z` is the reference depth for the compare.
-      matU.value.copy(light.shadow.matrix);
+      // shadows-restore-7: with `folded`, z also carries the class's bias.
+      if (!folded) matU.value.copy(light.shadow.matrix);
+      else if (!(sharedRefs && sharedRefs.mats[i] === matU)) matU.value.copy(folded[i]);
     }
   }
   if (refs.splits) {
@@ -664,6 +1156,19 @@ function _writeCsmRefs(refs, csmState) {
   }
   if (refs.blend) {
     refs.blend.value = csmState.blendFrac;
+  }
+  if (refs.selDist) {
+    refs.selDist.value = csmState.stable === true ? 1 : 0;
+  }
+  // shadows-restore-5 — a missing / non-finite strength is the old full
+  // strength (1), never a NaN in the shade mix.
+  if (refs.strength) {
+    const s = csmState.strength;
+    refs.strength.value = Number.isFinite(s) ? Math.min(1, Math.max(0, s)) : 1;
+  }
+  if (refs.shade) {
+    const k = csmState.shade;
+    refs.shade.value = Number.isFinite(k) ? Math.min(1, Math.max(0, k)) : CSM_SHADE_LEGACY;
   }
 }
 
@@ -685,7 +1190,7 @@ const _ORIGIN = new THREE.Vector3(0, 0, 0);
 const _tmpProj = new THREE.Matrix4();
 const _tmpInvProj = new THREE.Matrix4();
 
-function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize) {
+function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize, depthFit) {
   // Step 1 — Compute the 8 corners of the camera's sub-frustum between
   // `near` and `far` in WORLD space.
   _frustumCornersWorld(camera, near, far, _tmpFrustumCorners);
@@ -719,6 +1224,20 @@ function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize) {
   }
   const radius = Math.max(1e-3, Math.sqrt(radiusSq));
 
+  _placeCascade(light, _tmpCenter, radius, lx, ly, lz, mapSize, depthFit);
+}
+
+/**
+ * Steps 3-6 of the fit, shared by the view-slice fit (`_fitCascade`) and the
+ * stable cascades (shadows-restore-1; same operations in the same order, so
+ * the view-slice fit is bit-identical to before the split): snap `center` to
+ * whole texels of a `radius`-sphere's map in the world-anchored light frame,
+ * then place the light, its target and the ortho frustum about it. Leaves the
+ * snapped world centre in `_tmpSnap`. `depthFit` (shadows-restore-7): the light
+ * sits `csmBackDistance` sunward and far = back + radius + pad, instead of the
+ * fixed BACK_DIST_M / 2 * BACK_DIST_M + radius (unchanged, bit for bit, without).
+ */
+function _placeCascade(light, center, radius, lx, ly, lz, mapSize, depthFit) {
   // Step 3 — Light basis anchored at the WORLD ORIGIN. Anchoring it at the
   // frustum centre (as before) makes the centre trivially (0,0,-BACK_DIST_M)
   // in light space, so there is nothing left to snap; the snap has to happen
@@ -733,17 +1252,19 @@ function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize) {
   // bring it back to world. Texel size is constant now, so the shadow map's
   // texels stop sliding under stationary geometry (anti-shimmer, for real).
   const texel = (radius * 2) / mapSize;
-  _tmpSnap.copy(_tmpCenter).applyMatrix4(_tmpLightRotInv);
+  _tmpSnap.copy(center).applyMatrix4(_tmpLightRotInv);
   _tmpSnap.x = Math.round(_tmpSnap.x / texel) * texel;
   _tmpSnap.y = Math.round(_tmpSnap.y / texel) * texel;
   _tmpSnap.applyMatrix4(_tmpLightRot);
 
   // Step 5 — Position the light BACK_DIST_M behind the snapped centre along
-  // +lightDir (i.e. opposite the direction the light shines).
+  // +lightDir (i.e. opposite the direction the light shines). shadows-restore-7
+  // (depthFit): `back` instead — the whole sphere plus the caster lead.
+  const back = depthFit === true ? csmBackDistance(radius, ly) : BACK_DIST_M;
   _tmpLightPos.set(
-    _tmpSnap.x + lx * BACK_DIST_M,
-    _tmpSnap.y + ly * BACK_DIST_M,
-    _tmpSnap.z + lz * BACK_DIST_M
+    _tmpSnap.x + lx * back,
+    _tmpSnap.y + ly * back,
+    _tmpSnap.z + lz * back
   );
   _tmpLightTarget.copy(_tmpSnap);
   light.position.copy(_tmpLightPos);
@@ -762,8 +1283,10 @@ function _fitCascade(light, camera, near, far, lx, ly, lz, mapSize) {
   cam.right = radius;
   cam.bottom = -radius;
   cam.top = radius;
-  cam.near = 0.1;
-  cam.far = BACK_DIST_M * 2 + radius;
+  cam.near = CSM_NEAR_M;
+  // shadows-restore-7 (depthFit): nothing past the sphere's far side can shade
+  // a receiver inside it, so the range ends there (plus float slack).
+  cam.far = depthFit === true ? back + radius + CSM_FAR_PAD_M : BACK_DIST_M * 2 + radius;
   cam.updateProjectionMatrix();
 }
 

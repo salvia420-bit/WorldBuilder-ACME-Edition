@@ -2266,6 +2266,13 @@ mod last_outside_death;
 #[cfg(any(target_arch = "wasm32", test))]
 mod inventory_request;
 
+// 2026-10-20 (improvement hunt A11, net-session-1, `?invSignalOwned`): the
+// owned-or-viewed predicate that gates kind=11 InventoryUpdated. Same
+// `wasm32 OR test` gate (`cargo test -p holtburger-web --lib
+// inventory_signal`); session/messages/mod.rs only calls in.
+#[cfg(any(target_arch = "wasm32", test))]
+mod inventory_signal;
+
 // hud-ui-1 (2026-10-13): the HouseData / HouseProfile buy + rent
 // `HousePayment` lists for the house panel (gmHouseUI / gmSlumlordUI). Same
 // `wasm32 OR test` gate so `cargo test -p holtburger-web --lib

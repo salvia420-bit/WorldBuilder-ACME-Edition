@@ -37,7 +37,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 globalThis.window = globalThis.window || {};
-globalThis.location = { search: "" };
+// ?csmStable=off (2026-10-20, shadows-restore-1): A (12-frame ceilings on every
+// cascade) and I (a camera move refits all three) are the view-slice cascade
+// fit's behaviour; the stable cascades' partial refits and 12/24/60 ceilings are
+// pinned in tests/csm_stable.test.mjs. The L flag cases restore this search.
+globalThis.location = { search: "?csmStable=off" };
 window.location = globalThis.location;
 
 const L = await import("../scene3d/lighting.js");
@@ -382,7 +386,7 @@ L.__resetRp5ConfigForTest(undefined);
   check("L4 false ⇒ off", read("?shadowMoverScope=false") === false);
   check("L5 no ⇒ off", read("?shadowMoverScope=no") === false);
   check("L6 on ⇒ on", read("?shadowMoverScope=on") === true);
-  globalThis.location.search = "";
+  globalThis.location.search = "?csmStable=off";
   L.__resetRp5ConfigForTest(undefined);
 }
 

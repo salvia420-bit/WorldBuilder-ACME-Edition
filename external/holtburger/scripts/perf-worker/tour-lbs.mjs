@@ -7,6 +7,9 @@
 
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "fs";
+// 2026-10-20: the URL pins ?targetFps=0 so the page's 60/30 VTank frame cap
+// never paces the tour (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 const HOLT_DOCS = "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree";
 mkdirSync(HOLT_DOCS, { recursive: true });
@@ -38,10 +41,10 @@ const log = (...args) => {
   console.log(`[${ts}]`, ...args);
 };
 
-const URL =
+const URL = uncappedBenchUrl(
   "http://127.0.0.1:8765/apps/holtburger-web/index.html?" +
   "autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&" +
-  "renderer=3d&quality=low&agentic=low&wireframe=1";
+  "renderer=3d&quality=low&agentic=low&wireframe=1");
 
 const t0 = Date.now();
 log("OUT_DIR =", HOLT_DOCS);

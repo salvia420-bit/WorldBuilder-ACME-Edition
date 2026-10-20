@@ -79,7 +79,10 @@
 //          main scene into the composer buffer, the sky into a PMREM-class
 //          target) — the reveal frame no longer links them. The release waits
 //          ≤ 1.5 s for a still-linking program the async-link guard would not
-//          defer (`nohold`: never). See warmWorldPrograms.
+//          defer (`nohold`: never). See warmWorldPrograms. `?lateFxWarm`
+//          (2026-10-20, default on): each pass also warms the particle / FX
+//          programs of the late pass and the glow buffer in THEIR light-less
+//          scenes (particles_over_clouds.js warmLateFx).
 //   DRONE  `?portalDrone` (2026-10-13, cells-portals-5, default on, `=off`
 //          escape): the tunnel animation's Sound / SoundTweaked hooks, read
 //          from the DAT (wasm fetchAnimation soundHook*) — retail frame 2's
@@ -102,6 +105,9 @@ import { playUiSound, rollProbability, retailVolume } from "./audio/retail_sound
 import { hookFiresInDirection } from "./hook_windows.js";
 import { wireframeFlagOn } from "./wireframe_flag.js";
 import { getWarmTarget, compileWithTarget, programsOf, programPending, prunePending, warmSceneMaterials } from "./shader_prewarm.js";
+// 2026-10-20 `?lateFxWarm` (streaming-hitch-1) — dependency-free registry (no
+// imports), so the tunnel does not pull the particles chunk.
+import { warmLateFx } from "./particles_over_clouds.js";
 
 // ── retail constants ───────────────────────────────────────────────────
 export const PORTAL_SETUP_ENUM = 0x10000001; // portalspace_background
@@ -674,7 +680,8 @@ let _warmHoldFrom = -1; // tunnel clock the release hold began (-1 = not holding
 let _warmHoldSpent = false; // one bounded hold per run
 const _warmHeld = new Set(); // unguarded programs still linking (the hold set)
 const _warmSeen = new WeakMap(); // material -> keys compiled (whole session)
-const _warmZero = () => ({ passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0, lastMs: 0, maxMs: 0, totalMs: 0, holdMs: 0, holdCapped: false, errors: 0 });
+// (`late`: late-pass + glow materials compiled by `?lateFxWarm`, also in `compiled`.)
+const _warmZero = () => ({ passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0, late: 0, lastMs: 0, maxMs: 0, totalMs: 0, holdMs: 0, holdCapped: false, errors: 0 });
 let _warmStats = _warmZero();
 let _warmRuns = 0;
 // ?portalDrone (cells-portals-5). The hook clock is the retail sequence's own:
@@ -1319,6 +1326,55 @@ function _compileFullscreen(renderer, map, offTarget, stats) {
   return out;
 }
 
+// ?lateFxWarm (2026-10-20, improvement hunt streaming-hitch-1). The late
+// particle pass (atmosphere_pipeline.js ParticlesOverCloudsPass: the split
+// chain's, or `?particlesOverHaze`'s on the unsplit one) and the `?fxGlow`
+// buffer draw in their OWN light-less scenes, so the program key their first
+// draw derives (no lights; the world fog / none) is one the composer-pass loop
+// above can never build: it compiles the late pass's scene empty (between
+// frames its children are the empty `_noChildren`) and the buckets in the main
+// scene with the world's lights — the split-frame variant, still needed
+// indoors, so that one stays. warmLateFx lends every FX object to those scenes
+// (particles_over_clouds.js has the why). The async-link guard never defers a
+// late / glow draw (main scene only), so whatever still links joins the
+// release hold — unless its pass is switched off right now (an indoor split
+// frame keeps the particles in the world pass), as for any other pass.
+// The `?fxGlow` effect (vfx/fx_glow_effect.js FxGlowEffect) is found by shape
+// in an EffectPass's `effects` — the tunnel never imports the composer chunk.
+function _fxGlowOf(comp) {
+  for (const pass of comp.passes) {
+    const effs = pass && Array.isArray(pass.effects) ? pass.effects : null;
+    if (!effs) continue;
+    for (const e of effs) {
+      if (e && e.glowScene && e.glowScene.isScene === true && e.glowTarget) return { effect: e, pass };
+    }
+  }
+  return null;
+}
+
+function _warmLateFxPass(renderer, sc, comp, off, res, hold) {
+  res.late = 0;
+  const ap = sc.atmospherePipeline;
+  const lp = ap ? (ap.particlesOverCloudsPass ?? ap.particlesOverHazePass ?? null) : null;
+  const late = lp && lp.scene && lp.scene.isScene === true && comp.passes.includes(lp) ? lp : null;
+  const glow = _fxGlowOf(comp);
+  if (!late && !glow) return;
+  const camera = (late && late.camera) || (glow && glow.effect.camera) || sc.camera || null;
+  const r = warmLateFx(renderer, camera, {
+    scene: late ? late.scene : null,
+    // The late draw sets `scene.fog = worldScene.fog` — the same Fog OBJECT.
+    fog: late ? (late.worldScene?.fog ?? null) : null,
+    target: off,
+    warm: warmSceneMaterials,
+    seen: _warmSeen,
+    glowScene: glow ? glow.effect.glowScene : null,
+  });
+  res.late = r.compiled + r.glowCompiled;
+  res.compiled += res.late;
+  if (late && late.enabled !== false) hold(r.materials, false);
+  if (glow && glow.pass.enabled !== false) hold(r.glowMaterials, false);
+}
+
 /**
  * One warm pass over the world `sc` (the liveScene3d facade: renderer, scene,
  * atmospherePipeline.composer, iblEnvironment). Starts links only — never
@@ -1330,7 +1386,7 @@ export function warmWorldPrograms(sc) {
   const renderer = sc?.renderer;
   if (!renderer || typeof renderer.compile !== "function") return null;
   const t0 = now();
-  const res = { passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0 };
+  const res = { passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0, late: 0 };
   const guard = renderer.__hbAsyncLink;
   const guarded = guard && typeof guard.guards === "function" ? guard.guards : null;
   const hold = (mats, isMain) => {
@@ -1375,6 +1431,7 @@ export function warmWorldPrograms(sc) {
       res.compiled += mats.length;
       hold(mats.filter((m) => (fs.get(m) & FS_HOLD) !== 0), false);
     }
+    _warmLateFxPass(renderer, sc, comp, off, res, hold);
   }
   const ibl = sc.iblEnvironment;
   if (ibl && typeof ibl.warmPrograms === "function") {
@@ -1389,6 +1446,7 @@ export function warmWorldPrograms(sc) {
   s.fullscreen += res.fullscreen;
   s.held = res.held;
   s.sky = res.sky;
+  s.late += res.late | 0;
   s.lastMs = Math.round(ms * 10) / 10;
   s.maxMs = Math.max(s.maxMs, s.lastMs);
   s.totalMs = Math.round((s.totalMs + ms) * 10) / 10;
@@ -1848,7 +1906,7 @@ export function endPortalSpace() {
     try { ib = _scene3d?.iblEnvironment?.warmStats ?? null; } catch (_) { ib = null; }
     console.info(
       `[portalSpace] tunnel world warm (${_warmMode}): ${w.passes} passes, ${w.compiled} materials ` +
-      `(${w.fullscreen} fullscreen, ${w.deferred} deferred), ${w.totalMs} ms main thread (max ${w.maxMs}), ` +
+      `(${w.fullscreen} fullscreen, ${w.late} late-fx/glow, ${w.deferred} deferred), ${w.totalMs} ms main thread (max ${w.maxMs}), ` +
       `release hold ${w.holdMs} ms${w.holdCapped ? " (capped)" : ""}, ${prunePending(_warmHeld)} still linking` +
       (ib ? `; ibl: first refresh waited ${ib.firstWaitMs} ms, waits ${ib.waitTicks}/${ib.waitCapped} capped, pmrem internals ${ib.pmremInternals}` : ""),
     );

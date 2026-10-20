@@ -66,7 +66,8 @@
 // the nra normal/roughness/height unpack, statPom, `customProgramCacheKey`),
 // `buildDiffuseArray` / `buildNraArray` (colour space, wrap, filter, mip
 // policy), `packNraLayer`, `_stateKeyOf`, `_bucketKeyFor`, `_perLayerBytesFor`,
-// `_layerCapacityFor`, `_atlasStartLayersFor`, `_atlasGrowTargetFor`. A pool
+// `_layerCapacityFor`, `_atlasStartLayersFor`, `_atlasGrowTargetFor`, and
+// (memory-1, 2026-10-20) the nra layer sizing `_nraDimsFor` / `_nraKeyToken`. A pool
 // array and an atlas bucket array are the same object by construction, so the
 // two populations cannot drift.
 //
@@ -97,6 +98,8 @@ import {
   packNraLayer,
   _stateKeyOf,
   _bucketKeyFor,
+  _nraKeyToken,
+  _nraDimsFor,
   _perLayerBytesFor,
   _layerCapacityFor,
   _atlasStartLayersFor,
@@ -367,13 +370,25 @@ export function admitToArrayPool(mat, node) {
     // The VFX set + its config join the key. This is what makes membership and
     // material one decision: a bucket cannot hold a member whose variant its
     // material does not carry, because they are the same key.
-    const stateStrict = _strictStateKeyOf(mat, node) + (vfx ? `|x${vfx.token}` : "|x-");
+    const strict = _strictStateKeyOf(mat, node);
+    const vfxTok = vfx ? `|x${vfx.token}` : "|x-";
+    const stateStrict = strict + vfxTok;
+    // memory-1 (2026-10-20, `?nraSourceRes`) — the atlas twin: the pool's nra
+    // array is sized at the member's PLANES (`_nraDimsFor`, the same function
+    // the atlas keys on), so that size must be in the pool key too. The token
+    // (`|n<w>x<h>`, "" when it equals the diffuse dims — always under
+    // `=off`) goes BEFORE the VFX token, not after the format field as in the
+    // atlas: harness/census-class.mjs reads the pool's VFX token as
+    // "everything after `|x` minus a trailing `|f7|f8`", and a trailing nra
+    // field would be read into it. `stateStrict` itself (the material's state
+    // and the drift check's input) is unchanged.
+    const nraDims = _nraDimsFor(mat, w, h);
     // Otherwise the SAME key function the read-only projection uses for its
     // `regionStrict` row, so the live collapse this ships can be compared
     // against the number that justified it without a transcription in between.
-    const poolKey = _bucketKeyFor(w, h, stateStrict, bc7);
+    const poolKey = _bucketKeyFor(w, h, strict + _nraKeyToken(w, h, nraDims.w, nraDims.h) + vfxTok, bc7);
     _stats.admitted++;
-    return { poolKey, w, h, bc7, stateStrict, mat, node, vfx };
+    return { poolKey, w, h, nw: nraDims.w, nh: nraDims.h, bc7, stateStrict, mat, node, vfx };
   } catch (_) {
     _stats.rejectUnreplicated++;
     return null; // fail-soft: an unexpected material shape keeps its own bucket
@@ -411,13 +426,16 @@ function _strictStateKeyOf(mat, node) {
 
 function _createPool(handle) {
   const { poolKey, w, h, bc7, stateStrict, mat, vfx } = handle;
-  const capacity = _layerCapacityFor(w, h, bc7);
+  // memory-1 — the nra layer size the pool key carries (a handle minted
+  // before this field existed reads as the diffuse size, i.e. today).
+  const nw = handle.nw ?? w, nh = handle.nh ?? h;
+  const capacity = _layerCapacityFor(w, h, bc7, nw, nh);
   // X7 semantics, unchanged: `capacity` is a CEILING, `alloc` is what is
   // allocated now. Disarmed (`?statAtlasGrow=off`) the two are equal and
   // `_growPoolLayers` is unreachable.
-  const alloc = statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity;
+  const alloc = statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity, nw, nh) : capacity;
   const diffArray = bc7 ? makeBc7ArrayTexture(w, h, alloc) : buildDiffuseArray([], w, h, alloc);
-  const nraArray = statNraEnabled() ? buildNraArray(w, h, alloc) : null;
+  const nraArray = statNraEnabled() ? buildNraArray(nw, nh, alloc) : null;
   // The strict key carries the member's sampler filtering, so REPLICATE it
   // rather than merely fragmenting on it: a surface authored at anisotropy 16
   // must not go blurry because it moved into a shared array. Diffuse only — the
@@ -474,7 +492,7 @@ function _createPool(handle) {
   // and 27 triangles not saved (measured), which is below this workload's noise
   // floor and the correct side to err on.
   const pool = {
-    key: poolKey, w, h, bc7, stateStrict,
+    key: poolKey, w, h, nw, nh, bc7, stateStrict, // nw/nh: memory-1 nra layer size
     diffArray, nraArray, arrays, material,
     capacity,
     allocLayers: alloc,
@@ -538,6 +556,10 @@ function _growPoolLayers(pool, needed) {
   if (target <= pool.allocLayers) return false; // at the ceiling
   const { w, h } = pool;
   const rgbaStride = (w | 0) * (h | 0) * 4;
+  // memory-1 — the nra array's own layer size and stride (=== w, h when the
+  // pool key carries no `|n` field).
+  const nw = pool.nw ?? w, nh = pool.nh ?? h;
+  const nraStride = (nw | 0) * (nh | 0) * 4;
   let newDiff = null;
   let newNra = null;
   try {
@@ -552,9 +574,9 @@ function _growPoolLayers(pool, needed) {
         pool.diffArray.image.data.subarray(0, pool.allocLayers * rgbaStride), 0);
     }
     if (pool.nraArray) {
-      newNra = buildNraArray(w, h, target);
+      newNra = buildNraArray(nw, nh, target);
       newNra.image.data.set(
-        pool.nraArray.image.data.subarray(0, pool.allocLayers * rgbaStride), 0);
+        pool.nraArray.image.data.subarray(0, pool.allocLayers * nraStride), 0);
     }
   } catch (_) {
     try { newDiff && newDiff.dispose && newDiff.dispose(); } catch (_2) {}
@@ -667,7 +689,8 @@ export function acquireArrayPoolLayer(handle) {
   }
   _touched.add(pool.diffArray);
   if (pool.nraArray) {
-    packNraLayer(pool.nraArray, layer, mat, w, h, null);
+    // memory-1 — packed at the pool's nra layer size, not the diffuse's.
+    packNraLayer(pool.nraArray, layer, mat, pool.nw ?? w, pool.nh ?? h, null);
     if (typeof pool.nraArray.addLayerUpdate === "function") pool.nraArray.addLayerUpdate(layer);
     _touched.add(pool.nraArray);
   }
@@ -780,7 +803,7 @@ export function getStatArrayPoolStats() {
   let layers = 0, allocLayers = 0, layerBytes = 0, allocBytes = 0, buckets = 0;
   const pools = [];
   for (const p of _pools.values()) {
-    const per = _perLayerBytesFor(p.w, p.h, p.bc7);
+    const per = _perLayerBytesFor(p.w, p.h, p.bc7, p.nw ?? p.w, p.nh ?? p.h); // memory-1
     layers += p.layerOf.size;
     allocLayers += p.allocLayers;
     layerBytes += p.layerOf.size * per;
@@ -788,6 +811,7 @@ export function getStatArrayPoolStats() {
     buckets += p.buckets.size;
     pools.push({
       key: p.key, w: p.w, h: p.h, bc7: p.bc7,
+      nraW: p.nraArray ? (p.nw ?? p.w) : null, nraH: p.nraArray ? (p.nh ?? p.h) : null,
       layersUsed: p.layerOf.size, alloc: p.allocLayers, capacity: p.capacity,
       free: p.freeLayers.length, buckets: p.buckets.size,
       perLayerKiB: Math.round(per / 1024),

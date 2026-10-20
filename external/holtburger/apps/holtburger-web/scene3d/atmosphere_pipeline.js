@@ -77,7 +77,7 @@ import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
 import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
 // 2026-10-08 — ?layerHaze: painterly distance + altitude haze over all geometry.
-import { LayeredHazePass, layerHazeStrength, installLayerHazeHandle } from "./layered_haze.js";
+import { LayeredHazePass, LayeredHazeEffect, layerHazeStrength, installLayerHazeHandle } from "./layered_haze.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 // cells-portals-2 — `?indoorLandscapeGate` diag counter (skipped frames).
 import { INDOOR_LANDSCAPE_GATE_STATS } from "./indoor_landscape_gate.js";
@@ -458,6 +458,9 @@ class SkyCapturePass extends Pass {
 // EffectPass writes the composer buffer and LayeredHaze draws it into T, so
 // the particles land on a hazed scene. A haze drawn after them would fog a
 // near spell by the distance of the hills behind it (they write no depth).
+// (2026-10-20 `?postFuse`, default on: the first NanScrub and the haze are
+// effects of the atmosphere EffectPass instead, which then writes T itself —
+// see postFuseEnabled below. The diagram above is the `=off` chain.)
 //
 // WHY A PRIVATE TARGET AND NOT A RenderPass ON THE PING-PONG BUFFERS. The
 // composer's buffers are MSAA (`?msaa`, default 2): a RenderPass's depth test
@@ -507,6 +510,46 @@ class SkyCapturePass extends Pass {
 // shade exactly as they did in the world pass. The aerial perspective still
 // runs after them on this chain (it shares the EffectPass with bloom and tone
 // mapping); only the layered haze is moved off them.
+//
+// `?postFuse` (2026-10-20, improvement hunt A7 / gpu-shading-5, DEFAULT ON,
+// `=off` escape) — THE SPLIT CHAIN, TWO FULL-SCREEN PASSES FEWER. Above, the
+// split chain is
+//   EffectPass[NanScrub] -> (AO) -> EffectPass[atmos] -> LayeredHaze -> T ...
+// and each of the scrub and the haze is a full-screen RGBA16F read + write
+// (the haze also reads depth) plus a render submission. Neither has to be its
+// own pass here:
+// - the scrub is a separate pass only because bloom blurs its RAW input in its
+//   own update(), before any merged effect runs (see makeNanScrub). On this
+//   chain bloom sits in the post half, behind the late scrub; nothing between
+//   the first scrub and the atmosphere pass reads colour (the AO pass reads
+//   depth only), and no atmosphere effect samples inputBuffer itself or reads
+//   it in update(). So the scrub becomes the pass's FIRST effect (DEPTH
+//   attribute, so the attribute-descending sort keeps it ahead of the other
+//   DEPTH effects; its output alpha is clamped to [0, 1] as the standalone
+//   pass's EffectMaterial did on write).
+// - the haze is purely per pixel (colour, depth, uniforms), so it becomes the
+//   pass's LAST effect (LayeredHazeEffect, attribute NONE: after the AO
+//   composite), and the pass writes T itself — the haze-off arm's
+//   PostChainTargetPass. The late particles still land on the hazed scene.
+// Output equals the unfused chain up to the one dropped fp16 rounding of the
+// composite the haze used to read back, except where a mainUv warp (heat
+// haze, fxDistort) samples across a non-finite, negative or alpha > 1 texel:
+// the fused pass filters the raw texels and then scrubs, the standalone pass
+// scrubbed first. The late scrub on T stays the safety net before bloom. The
+// unsplit chain is untouched (bloom shares its post pass with the atmosphere,
+// so the scrub must stay a pass, and the haze must precede that pass).
+// Read once at build time; `opts.postFuse` (boolean) wins for tests.
+export function postFuseEnabled(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = new URLSearchParams(s).get("postFuse");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
 
 /**
  * First half of the split post chain: renders into the late target instead of
@@ -535,7 +578,8 @@ class PostChainTargetPass extends EffectPass {
  * `latePass = null`) reads the composer input the scrub wrote; with it off, the
  * post half reads the late target itself. Under `?layerHaze` the atmosphere
  * half is one too (`latePass = null`): it writes the composer buffer the haze
- * then draws into the late target (PostChainHazePass).
+ * then draws into the late target (PostChainHazePass) — `?postFuse=off` only;
+ * fused (the default) the haze is an effect of the PostChainTargetPass.
  */
 class PostChainSourcePass extends EffectPass {
   constructor(camera, latePass, ...effects) {
@@ -575,6 +619,8 @@ class PostChainSourcePass extends EffectPass {
  * from the finished cloud + aerial composite (the composer input) INTO the
  * late target, ahead of the late particle draw. It samples the stable depth
  * copy, never T's depth attachment, and never swaps the ping-pong buffers.
+ * (`?postFuse=off` only: fused, LayeredHazeEffect does this inside the
+ * atmosphere pass.)
  */
 class PostChainHazePass extends Pass {
   constructor(haze, latePass) {
@@ -1664,7 +1710,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const ssaoPass = ssaoOpt ? new SsaoPass(camera) : null;
   // 2026-10-08 — ?layerHaze (default 0.4): after the clouds / aerial
   // perspective pass, before bloom + tone mapping (see layered_haze.js); on the
-  // split chain also before the late particles (PostChainHazePass).
+  // split chain also before the late particles (PostChainHazePass, or under
+  // `?postFuse` the last effect of the atmosphere pass: LayeredHazeEffect).
   const layerHazeStr = layerHazeStrength();
   const layeredHaze = layerHazeStr > 0
     ? new LayeredHazePass(camera, {
@@ -1805,6 +1852,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // effects merged into fxPass run, so the scrub must be its OWN pass ahead of
   // fxPass, not an effect inside it. Worst case a bad shader now costs single
   // black pixels instead of patches. One cheap fullscreen pass.
+  // (2026-10-20 `?postFuse`: on the split chain bloom is NOT in that pass, so
+  // there the scrub is its first effect instead — makeFusedNanScrub below.)
   const nanScrubOn = (() => {
     try {
       return new URLSearchParams(globalThis.location?.search || "").get("nanScrub")?.toLowerCase() !== "off";
@@ -1830,6 +1879,31 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     }`,
     { blendFunction: BlendFunction.SRC },
   );
+  // 2026-10-20 `?postFuse` (split chain only, see postFuseEnabled): the same
+  // scrub as the FIRST effect of the atmosphere EffectPass. DEPTH attribute so
+  // the attribute-descending sort keeps it ahead of the other DEPTH effects
+  // (its mainImage takes no depth, so none is passed). The alpha clamp is the
+  // one the standalone pass's EffectMaterial applied on write
+  // (`color0.a = clamp(color0.a, 0.0, 1.0)`), which the effects after it read
+  // (the AO composite's grass marker); additive draws can push alpha past 1.
+  const makeFusedNanScrub = () => new Effect(
+    "NanScrub",
+    /* glsl */ `
+    bool hbNonFinite(const in vec4 c) {
+      uvec4 e = floatBitsToUint(c) & uvec4(0x7f800000u);
+      return any(equal(e, uvec4(0x7f800000u)));
+    }
+    void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+      outputColor = hbNonFinite(inputColor) ? vec4(0.0, 0.0, 0.0, 1.0)
+        : vec4(max(inputColor.rgb, vec3(0.0)), clamp(inputColor.a, 0.0, 1.0));
+    }`,
+    { blendFunction: BlendFunction.SRC, attributes: EffectAttribute.DEPTH },
+  );
+  const postFuseFlag = typeof opts?.postFuse === "boolean" ? opts.postFuse : postFuseEnabled();
+  // Set on the split chain under `?postFuse`: the scrub inside fxPass (null
+  // with `?nanScrub=off`) and the haze effect (null with `?layerHaze=off`).
+  let fusedScrub = null;
+  let layeredHazeEffect = null;
   // 2026-10-07 (later) — the late target T is written AFTER the scrub above, and
   // bloom blurs T: the 1070 readback found persistent negative-radiance pixels
   // in T (rows ~720 / ~792, 13 of 583 sampled strips) and the owner saw the
@@ -1859,7 +1933,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // Film mode (2026-10-13, ?filmDof=on, DEFAULT OFF): DoF over the finished
     // clouds + aerial + late particles, sorted ahead of fxGlow / bloom.
     if (filmDof) postEffects.push(filmDof.effect);
-    if (layeredHaze) {
+    if (postFuseFlag) {
+      // 2026-10-20 `?postFuse` (default on): [NanScrub, ...atmosEffects,
+      // LayeredHaze] in ONE pass that writes T — the haze-off arm below with
+      // the scrub leading and the haze trailing (postFuseEnabled has the why).
+      // No PostChainHazePass, no standalone first scrub.
+      fusedScrub = nanScrubOn ? makeFusedNanScrub() : null;
+      layeredHazeEffect = layeredHaze ? new LayeredHazeEffect(layeredHaze) : null;
+      fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass,
+        ...[fusedScrub, ...atmosEffects, layeredHazeEffect].filter(Boolean));
+    } else if (layeredHaze) {
       // 2026-10-18: the haze writes T from the finished composite, so the late
       // particles are drawn over it rather than hazed by the depth behind them.
       fxPass = new PostChainSourcePass(camera, null, ...atmosEffects);
@@ -1921,7 +2004,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       });
     }
   }
-  if (nanScrubOn) {
+  // (`?postFuse` split chain: the scrub already leads fxPass.)
+  if (nanScrubOn && !fusedScrub) {
     const scrub = makeNanScrub();
     composer.addPass(new EffectPass(camera, scrub));
   }
@@ -2228,10 +2312,17 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // AerialPerspective] into the late target (under `?layerHaze`, into the
     // composer buffer the haze draws into it), fxPostPass = [Bloom, …,
     // Dithering] from it. Otherwise fxPass is the single legacy pass and both
-    // others are null.
+    // others are null. (`?postFuse`, default on: the split chain's fxPass is
+    // [NanScrub?, …, AerialPerspective, AO?, LayeredHaze?] writing the late
+    // target itself.)
     fxPass,
     fxPostPass,
     particlesOverCloudsPass,
+    // 2026-10-20 `?postFuse`: true when the split chain was built fused;
+    // `layeredHazeEffect` is the haze inside fxPass then (null otherwise —
+    // `layeredHaze` stays the state owner and `window.__layerHaze` either way).
+    postFuse: !!(particlesOverCloudsPass && postFuseFlag),
+    layeredHazeEffect,
     // SKY-1 remainder (2026-10-18 follow-up): the unsplit chain's late draw
     // after LayeredHaze (`?particlesOverHaze`); null on the split chain, with
     // the haze off, or on multisampled ping-pong buffers.

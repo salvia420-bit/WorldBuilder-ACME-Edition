@@ -443,11 +443,74 @@ function isSwrCacheable(url) {
   return url.pathname.includes("/scene3d/assets/");
 }
 
+// 2026-10-20 (improvement hunt boot-cache-1): the SWR refresh is CONDITIONAL.
+// It used to be a plain `fetch(event.request)` + `cache.put` on every hit. For
+// the terrain BC7 tiers (scene3d/assets/terrain_bc7/*.hbc7, ~79 MB per warm
+// high-tier boot), which serve.py sent `no-store`, that re-transferred every
+// body on every warm boot and rewrote it into Cache Storage. Even for the
+// revalidating PNG/EXR sets, the HTTP cache turned its own 304 into a full 200
+// for this worker, which then re-put the whole body. Now the refresh asks the
+// origin with the cached copy's validator under `cache: "no-store"`. That skips
+// the HTTP cache: the 304 has to reach this code, Cache Storage is the copy
+// that matters, and a second HTTP-cache copy of the same bytes buys nothing. A
+// 304 costs one header round trip and NO put. A changed asset still comes back
+// 200 and is put as before. An entry with no validator keeps the old
+// unconditional `fetch(event.request)` exactly.
+//
+// The validator: Last-Modified -> If-Modified-Since. If-None-Match is sent ONLY
+// when the entry has an ETag and no Last-Modified. serve.py (stdlib
+// SimpleHTTPRequestHandler, and its own compressed path) never emits an ETag
+// and IGNORES If-Modified-Since whenever If-None-Match is present. So if
+// anything in front ever added an ETag, sending both would turn every 304 into
+// a 200 again. No CONTENT_CACHE bump: the keys and cached bytes are unchanged,
+// and the byte-changed script is what makes clients install this worker.
+// Caveat (the same one the HTTP cache's own revalidation of the JS/PNG tier
+// already has): serve.py answers 304 whenever the file's mtime is not NEWER
+// than the validator. So a file replaced by one with an OLDER mtime (`rsync -a`
+// or `cp -p` of an older copy) keeps the cached bytes until it is touched or
+// the page loads with `?nosw=1`.
+function swrConditionalHeaders(cached) {
+  const h = cached && cached.headers;
+  if (!h || typeof h.get !== "function") return null;
+  const lastModified = h.get("last-modified");
+  if (lastModified) return { "If-Modified-Since": lastModified };
+  const etag = h.get("etag");
+  if (etag) return { "If-None-Match": etag };
+  return null;
+}
+
+/** The background refresh for an SWR hit (runs under waitUntil). */
+function swrRefresh(event, cache, cached) {
+  const conditional = swrConditionalHeaders(cached);
+  // A fresh same-origin request rather than `new Request(event.request, …)`:
+  // a `no-cors` page request (a CSS image) would silently drop the
+  // non-safelisted conditional headers, and a cors fetch of our own origin is
+  // still a "basic" response.
+  const pending = conditional
+    ? fetch(event.request.url, { cache: "no-store", credentials: "same-origin", headers: conditional })
+    : fetch(event.request);
+  return pending
+    .then((network) => {
+      if (network.status === 304) {
+        // Unchanged: keep the cached entry as is. Release the empty body.
+        try {
+          if (network.body) network.body.cancel().catch(() => {});
+        } catch (_) { /* nothing to release */ }
+        return undefined;
+      }
+      if (network.ok && network.type === "basic") {
+        return cache.put(event.request, network);
+      }
+      return undefined;
+    })
+    .catch(() => {});
+}
+
 // Test hooks (harness/test_service_worker_v3.mjs vm-loads this file and
 // asserts the v2/v3 predicate split; worker-scope only, inert in production).
 self.__swTestHooks = {
   SW_V3, CONTENT_CACHE, isContentAddressed, isBakeVersioned, isSwrCacheable, isCacheable,
-  casHashFromPath, cacheBypassRequested,
+  casHashFromPath, cacheBypassRequested, swrConditionalHeaders,
 };
 
 // Coalesce concurrent fetches for the same URL. Without this, two
@@ -481,16 +544,9 @@ self.addEventListener("fetch", (event) => {
         const cached = await cache.match(event.request).catch(() => null);
         if (cached) {
           if (swr) {
-            // Serve stale now, refresh in the background for next load.
-            event.waitUntil(
-              fetch(event.request)
-                .then((network) => {
-                  if (network.ok && network.type === "basic") {
-                    return cache.put(event.request, network);
-                  }
-                })
-                .catch(() => {})
-            );
+            // Serve stale now, refresh in the background for next load
+            // (conditionally: a 304 skips the put, see swrRefresh).
+            event.waitUntil(swrRefresh(event, cache, cached));
           }
           return cached;
         }

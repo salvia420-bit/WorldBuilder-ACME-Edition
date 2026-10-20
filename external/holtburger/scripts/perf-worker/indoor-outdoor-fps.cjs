@@ -53,7 +53,10 @@ function log(o) { console.log(JSON.stringify({ t: new Date().toISOString(), labe
     "nosw=1", "autoLogin=1", `account=${ACCOUNT}`, `password=${ACCOUNT}`,
     "autoSpawn=first", "renderer=3d",
   ].concat(EXTRA ? [EXTRA] : []).join("&");
-  const url = `${APP}?${q}`;
+  // 2026-10-20: the URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+  // engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+  const { uncappedBenchUrl } = await import(require("url").pathToFileURL(path.join(__dirname, "lib", "bench-url.mjs")).href);
+  const url = uncappedBenchUrl(`${APP}?${q}`);
   log({ phase: "goto", url });
   await page.goto(url, { waitUntil: "domcontentloaded" });
 

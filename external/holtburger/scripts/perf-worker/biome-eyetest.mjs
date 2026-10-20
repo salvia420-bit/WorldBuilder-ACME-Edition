@@ -1,8 +1,11 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
+// 2026-10-20: the URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 const OUT = "./eyetest"; fs.mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const URL = "http://127.0.0.1:8765/apps/holtburger-web/index.html?renderer=3d&quality=high&nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1&agent=1&pbrTerrain=on&ibl=on";
+const URL = uncappedBenchUrl("http://127.0.0.1:8765/apps/holtburger-web/index.html?renderer=3d&quality=high&nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1&agent=1&pbrTerrain=on&ibl=on");
 const SPOTS = [
   ["grass-holtburg", "@telepoi Holtburg"],
   ["snow-neydisa", "@telepoi Neydisa"],

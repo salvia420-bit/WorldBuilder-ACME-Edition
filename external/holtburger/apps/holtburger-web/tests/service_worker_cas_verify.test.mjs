@@ -26,6 +26,19 @@
 //   V8  a body that cannot be read in full is never put
 //   V9  non-CAS classes unchanged: SWR assets ignore reload (cache-first), catalogs put unverified
 //
+// 2026-10-20 (improvement hunt boot-cache-1): the SWR background refresh is
+// conditional. Before, every hit on /scene3d/assets/ ran `fetch(event.request)`
+// + `cache.put`, which re-transferred the ~79 MB terrain BC7 tier set
+// (serve.py sent it no-store) on every warm boot and rewrote it into Cache
+// Storage:
+//   S1  an entry with Last-Modified: refresh carries If-Modified-Since and cache:'no-store';
+//       the origin's 304 is NOT put (entry, bytes and put count unchanged); .hbc7 + .png alike
+//   S2  a changed asset: the 200 is put, and the next refresh sends the NEW validator
+//   S3  validator choice: Last-Modified wins (never both: serve.py ignores IMS when
+//       If-None-Match is present); ETag-only -> If-None-Match, and its 304 is not put
+//   S4  an entry with no validator keeps the old unconditional fetch(event.request)
+//   S5  a failed refresh (404) never touches the entry
+//
 // Run: node tests/service_worker_cas_verify.test.mjs
 
 import { createHash } from "node:crypto";
@@ -66,26 +79,54 @@ const shardPath = (hash) => `shards/${hash.slice(0, 2)}/${hash}.bin`;
 // ── fake origin ────────────────────────────────────────────────────────────
 function makeOrigin() {
   const files = new Map();
+  const meta = new Map(); // url -> { lastModified?, etag? } (the S* validator cases)
   const hits = new Map();
   const modes = [];
   return {
     modes,
-    set(p, body) { files.set(new URL(p, BASE).href, body); },
+    /** `validators` = { lastModified, etag }: sent on 200s, honoured as a 304. */
+    set(p, body, validators) {
+      const u = new URL(p, BASE).href;
+      files.set(u, body);
+      if (validators) meta.set(u, validators); else meta.delete(u);
+    },
+    unset(p) { const u = new URL(p, BASE).href; files.delete(u); meta.delete(u); },
     hitCount(p) { return hits.get(new URL(p, BASE).href) ?? 0; },
     resetHits() { hits.clear(); modes.length = 0; },
     async fetch(input, init) {
-      const url = typeof input === "string" ? new URL(input, SW_URL).href : input.url;
+      const viaRequest = typeof input !== "string";
+      const url = viaRequest ? input.url : new URL(input, SW_URL).href;
       hits.set(url, (hits.get(url) ?? 0) + 1);
-      modes.push({ url, cache: (init && init.cache) || (typeof input === "string" ? "default" : input.cache) });
+      const hdrs = new Headers((init && init.headers) || (viaRequest ? input.headers : undefined));
+      const rec = {
+        url,
+        cache: (init && init.cache) || (viaRequest ? input.cache : "default"),
+        viaRequest,
+        ims: hdrs.get("if-modified-since"),
+        inm: hdrs.get("if-none-match"),
+        status: 0,
+      };
+      modes.push(rec);
       const body = files.get(url);
-      if (body === undefined) return mkRes("not found", 404);
-      return mkRes(typeof body === "function" ? body() : body, 200);
+      if (body === undefined) { rec.status = 404; return mkRes("not found", 404); }
+      // Validators, the way serve.py answers: If-None-Match (when present)
+      // decides alone; else If-Modified-Since against Last-Modified.
+      const v = meta.get(url);
+      const headers = {};
+      if (v && v.lastModified) headers["last-modified"] = v.lastModified;
+      if (v && v.etag) headers.etag = v.etag;
+      const notModified = v && (rec.inm != null
+        ? (v.etag != null && rec.inm === v.etag)
+        : (rec.ims != null && v.lastModified != null && Date.parse(v.lastModified) <= Date.parse(rec.ims)));
+      if (notModified) { rec.status = 304; return mkRes(null, 304, headers); }
+      rec.status = 200;
+      return mkRes(typeof body === "function" ? body() : body, 200, headers);
     },
   };
 }
 
-function mkRes(body, status = 200) {
-  const r = new Response(body, { status });
+function mkRes(body, status = 200, headers = undefined) {
+  const r = new Response(body, { status, headers });
   // Cache Storage only stores same-origin ("basic") responses; undici
   // defaults to "default", so force the field the SW gates on.
   Object.defineProperty(r, "type", { value: "basic", configurable: true });
@@ -99,10 +140,11 @@ class FakeCache {
   constructor() { this.m = new Map(); this.puts = 0; }
   async match(req) { const v = this.m.get(keyOf(req)); return v ? v.clone() : undefined; }
   async put(req, res) {
-    // Store the bytes (a real Cache reads the body to completion on put).
+    // Store the bytes (a real Cache reads the body to completion on put) and
+    // the headers (a real Cache keeps them; the S* cases read Last-Modified).
     const buf = await res.arrayBuffer();
     this.puts += 1;
-    this.m.set(keyOf(req), new Response(buf, { status: res.status }));
+    this.m.set(keyOf(req), new Response(buf, { status: res.status, headers: res.headers }));
   }
   async delete(req) { return this.m.delete(keyOf(req)); }
   async keys() { return [...this.m.keys()].map((u) => new Request(u)); }
@@ -390,6 +432,121 @@ await t("V9 non-CAS classes unchanged: SWR ignores reload; catalogs put unverifi
   eq(await bodyOf(await sw.get("manifest/eor-portal.bin")), "CATALOG-A");
   await sw.settle();
   eq(await cache.text("manifest/eor-portal.bin"), "CATALOG-A", "bake-versioned put has no hash check");
+});
+
+// ── SWR conditional refresh (2026-10-20, boot-cache-1) ─────────────────────
+const APP = `${ORIGIN}/apps/holtburger-web/`;
+const HBC7 = `${APP}scene3d/assets/terrain_bc7/t1024/0x06006D06_color.hbc7`;
+const MACRO_PNG = `${APP}scene3d/assets/terrain_macro/m.png`;
+const LM1 = "Tue, 20 Oct 2026 10:00:00 GMT";
+const LM2 = "Tue, 20 Oct 2026 11:30:00 GMT";
+const last = (sw) => sw.origin.modes[sw.origin.modes.length - 1];
+
+await t("S1 Last-Modified entry: refresh is If-Modified-Since + no-store, and its 304 is NOT put", async () => {
+  for (const [asset, bytes] of [[HBC7, "HBC7-T1024-BYTES"], [MACRO_PNG, "MACRO-PNG-BYTES"]]) {
+    const sw = loadSw();
+    const cache = await sw.cache();
+    sw.origin.set(asset, bytes, { lastModified: LM1 });
+    // Cold boot: a miss goes to the network and is put WITH its headers.
+    eq(await bodyOf(await sw.get(asset)), bytes, "cold: network bytes");
+    await sw.settle();
+    eq(cache.puts, 1, "cold: put once");
+    sw.origin.resetHits();
+    // Warm boot: cached bytes now, one conditional background refresh.
+    const res = await sw.get(asset);
+    eq(await bodyOf(res), bytes, "warm: served from Cache Storage");
+    eq(res.headers.get("last-modified"), LM1, "the cached entry kept its validator");
+    await sw.settle();
+    eq(sw.origin.hitCount(asset), 1, "exactly one background refresh");
+    const m = last(sw);
+    eq(m.viaRequest, false, "a fresh request, not event.request");
+    eq(m.ims, LM1, "If-Modified-Since = the cached Last-Modified");
+    eq(m.inm, null, "no If-None-Match");
+    eq(m.cache, "no-store", "past the HTTP cache, so the 304 reaches the SW");
+    eq(m.status, 304, "the origin answered 304");
+    eq(cache.puts, 1, "304 -> no put (no Cache Storage rewrite)");
+    eq(await cache.text(asset), bytes, "entry unchanged");
+    // And again: every warm boot costs one 304, never a body.
+    await bodyOf(await sw.get(asset));
+    await sw.settle();
+    eq(cache.puts, 1, "a second warm boot still puts nothing");
+  }
+});
+
+await t("S2 a changed asset: the 200 is put, and the next refresh sends the NEW validator", async () => {
+  const sw = loadSw();
+  const cache = await sw.cache();
+  sw.origin.set(HBC7, "TIER-V1", { lastModified: LM1 });
+  await bodyOf(await sw.get(HBC7));
+  await sw.settle();
+  sw.origin.set(HBC7, "TIER-V2-REDERIVED", { lastModified: LM2 });
+  eq(await bodyOf(await sw.get(HBC7)), "TIER-V1", "stale served now");
+  await sw.settle();
+  eq(last(sw).ims, LM1, "asked with the old validator");
+  eq(last(sw).status, 200, "the origin sent the new body");
+  eq(cache.puts, 2, "the changed body was put");
+  eq(await cache.text(HBC7), "TIER-V2-REDERIVED", "for the next load");
+  const res = await sw.get(HBC7);
+  eq(await bodyOf(res), "TIER-V2-REDERIVED", "next load serves the new bytes");
+  eq(res.headers.get("last-modified"), LM2, "with the new validator");
+  await sw.settle();
+  eq(last(sw).ims, LM2, "the following refresh sends the NEW validator");
+  eq(last(sw).status, 304);
+  eq(cache.puts, 2, "and its 304 puts nothing");
+});
+
+await t("S3 validator choice: Last-Modified wins, never both; ETag-only -> If-None-Match", async () => {
+  const { hooks } = loadSw();
+  const pick = (headers) => JSON.stringify(hooks.swrConditionalHeaders(new Response("x", { headers })));
+  eq(pick({ "last-modified": LM1 }), JSON.stringify({ "If-Modified-Since": LM1 }), "Last-Modified only");
+  eq(pick({ "last-modified": LM1, etag: '"abc"' }), JSON.stringify({ "If-Modified-Since": LM1 }),
+    "both: IMS alone (serve.py ignores IMS whenever If-None-Match is present)");
+  eq(pick({ etag: '"abc"' }), JSON.stringify({ "If-None-Match": '"abc"' }), "ETag only");
+  eq(hooks.swrConditionalHeaders(new Response("x")), null, "no validator");
+  eq(hooks.swrConditionalHeaders(null), null, "no entry");
+
+  const sw = loadSw();
+  const cache = await sw.cache();
+  await cache.put(new Request(HBC7), new Response("ETAG-ENTRY", { headers: { etag: 'W/"t1"' } }));
+  const putsBefore = cache.puts;
+  sw.origin.set(HBC7, "ETAG-ENTRY", { etag: 'W/"t1"' });
+  eq(await bodyOf(await sw.get(HBC7)), "ETAG-ENTRY");
+  await sw.settle();
+  eq(last(sw).inm, 'W/"t1"', "If-None-Match = the cached ETag");
+  eq(last(sw).ims, null, "no If-Modified-Since");
+  eq(last(sw).status, 304);
+  eq(cache.puts, putsBefore, "ETag 304 -> no put");
+});
+
+await t("S4 an entry with no validator keeps the old unconditional fetch(event.request)", async () => {
+  const sw = loadSw();
+  const cache = await sw.cache();
+  await cache.put(new Request(HBC7), new Response("LEGACY-NO-HEADERS"));
+  const putsBefore = cache.puts;
+  sw.origin.set(HBC7, "FRESH", { lastModified: LM1 });
+  eq(await bodyOf(await sw.get(HBC7)), "LEGACY-NO-HEADERS", "stale served now");
+  await sw.settle();
+  const m = last(sw);
+  eq(m.viaRequest, true, "the page's own request object, as before");
+  eq(m.ims, null, "no If-Modified-Since");
+  eq(m.inm, null, "no If-None-Match");
+  eq(m.cache, "default", "the request's own cache mode, as before");
+  eq(cache.puts, putsBefore + 1, "the 200 is put");
+  eq(await cache.text(HBC7), "FRESH");
+});
+
+await t("S5 a failed refresh (404) never touches the entry", async () => {
+  const sw = loadSw();
+  const cache = await sw.cache();
+  sw.origin.set(HBC7, "KEEP-ME", { lastModified: LM1 });
+  await bodyOf(await sw.get(HBC7));
+  await sw.settle();
+  sw.origin.unset(HBC7);
+  eq(await bodyOf(await sw.get(HBC7)), "KEEP-ME");
+  await sw.settle();
+  eq(last(sw).status, 404);
+  eq(cache.puts, 1, "no put");
+  eq(await cache.text(HBC7), "KEEP-ME", "entry intact");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

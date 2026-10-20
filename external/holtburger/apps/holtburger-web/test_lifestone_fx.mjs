@@ -259,7 +259,8 @@ async function run() {
     stone.parts.slice(0, 3).every((p) => p.children[0].material === clawMat));
   const key1 = v1.customProgramCacheKey();
   check("4. program key: CSM re-installed, the lost detail flag dropped, the lifestone SET (never the instance)",
-    v1.userData.csmEnabled === true && v1.userData.detailEnabled === undefined && key1.includes("|c1") && key1.includes("|d0") &&
+    // 2026-10-20 (shadows-restore-2/-4): the CSM token is the hook version `|c2`.
+    v1.userData.csmEnabled === true && v1.userData.detailEnabled === undefined && key1.includes("|c2") && key1.includes("|d0") &&
     key1.endsWith("|v" + ls.LS_SET_KEY), key1);
   const shV = freshShader();
   v1.onBeforeCompile(shV, null);

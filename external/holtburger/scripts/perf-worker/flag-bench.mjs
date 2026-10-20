@@ -26,6 +26,9 @@ import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
+// 2026-10-20: every URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
+// engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_CORE ||
@@ -189,8 +192,8 @@ async function runOne(arm, rep) {
   mkdirSync(dir, { recursive: true });
   const runT0 = Date.now();
   const res = { arm: arm.name, rep, quality: arm.quality, flags: arm.flags, startedAt: new Date().toISOString() };
-  const url = `${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on` +
-    `&adaptiveRes=off&quality=${arm.quality}${arm.flags ? "&" + arm.flags : ""}`;
+  const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on` +
+    `&adaptiveRes=off&quality=${arm.quality}${arm.flags ? "&" + arm.flags : ""}`);
   res.url = url;
   res.accountFreeWait = await waitAccountFree() ? "ok" : "timeout";
   await launch(`hbb-${tag}-${Date.now()}`);

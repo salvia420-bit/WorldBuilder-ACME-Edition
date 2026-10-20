@@ -169,7 +169,10 @@ scene.fog = new THREE.Fog(0x8899aa, 10, 900);
 const staticsGroup = new THREE.Group(); staticsGroup.name = "staticsGroup"; scene.add(staticsGroup);
 const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entitiesGroup"; scene.add(entitiesGroup);
 const anchor = new THREE.Object3D(); anchor.position.set(0, 0, -30); staticsGroup.add(anchor);
-const skyAnchor = new THREE.Object3D(); skyAnchor.position.set(0, 0, -600); staticsGroup.add(skyAnchor);
+// 2026-10-20: inside RP6's 220 m cap (the real sky chain rides ~40 m above the
+// eye). At -600 the sky bucket only had instances because no RP6 re-check had
+// landed in the first three ticks; `?rp6Stagger` re-checks emitter 3 on tick 3.
+const skyAnchor = new THREE.Object3D(); skyAnchor.position.set(0, 0, -200); staticsGroup.add(skyAnchor);
 const anchor2 = new THREE.Object3D(); anchor2.position.set(0, 0, -20); entitiesGroup.add(anchor2);
 // A non-particle world mesh, for the "world pass still draws the world" check.
 const terrain = new THREE.Mesh(quad, new THREE.MeshStandardMaterial()); terrain.name = "terrain"; scene.add(terrain);
@@ -250,9 +253,13 @@ function build(opts = {}) {
   const skyCamera = new THREE.PerspectiveCamera();
   const overlay = new CloudOverlay({ camera, proceduralTextures: true });
   overlay.attachToSkyScene(skyScene);
+  // 2026-10-20: `postFuse: false` — this suite pins the split chain's passes
+  // one by one (scrub pass, haze pass), i.e. the `?postFuse=off` chain; the
+  // fused default (scrub + haze inside the atmosphere pass) is pinned against
+  // it in tests/post_fuse.test.mjs.
   const p = createAtmospherePipeline(renderer, scene, camera, {
     atmosphereRuntime: { textures: {} }, cloudOverlay: overlay, skyScene, skyCamera,
-    bloom: true, vignette: false, msaa: 2, portalPunch: true, punchRetail: true, ...opts,
+    bloom: true, vignette: false, msaa: 2, portalPunch: true, punchRetail: true, postFuse: false, ...opts,
   });
   return { p, overlay, skyScene };
 }
