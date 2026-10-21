@@ -527,6 +527,27 @@ const USE_AP_CONTACT_PLANE_RESEND: bool = false;
 /// triangle change is 8-17 m of running apart, so this never delays one.
 const AP_PLANE_RESEND_MIN_GAP: Duration = Duration::from_millis(100);
 
+/// SLOW-RUN 2 (2026-10-21) — OURS, not retail: an IN-window AutonomousPosition
+/// re-send once the pose is [`AP_TRAVEL_RESEND_M`] from the last AP.
+/// [`USE_AP_CONTACT_PLANE_RESEND`]'s triangle trigger fires 8-17 m apart, so at
+/// ACE's run-rate cap (Run skill >= 800 → 4.5, i.e. 18 m/s;
+/// `MovementSystem.GetRunRate`) the travel since the last echo still passes the
+/// 10 m outdoor leash start (`GetStartConstraintDistance`, acclient.c:315885)
+/// before most echoes and `ConstraintManager::adjust_offset` (:389478) scales
+/// the run — live on the 1070, 109 `cause=leash` slow-run incidents with leash
+/// ratios 0.40-0.80, felt as a pulse. Retail runners never reached this speed.
+/// Shares the [`AP_PLANE_RESEND_MIN_GAP`] floor (≤ 10 APs/s).
+///
+/// The BROWSER carrier `?apTravelResend` is DEFAULT ON (`=off` escape); this
+/// native const stays off (carrier split, the [`USE_AP_CONTACT_PLANE_RESEND`]
+/// precedent).
+const USE_AP_TRAVEL_RESEND: bool = false;
+
+/// The travel since the last AP that fires [`USE_AP_TRAVEL_RESEND`]: a quarter
+/// of the outdoor leash start (10 m) and half the indoor one (5 m), leaving
+/// room for the echo's round trip. 7 APs/s at 18 m/s.
+const AP_TRAVEL_RESEND_M: f32 = 2.5;
+
 /// Track B1 — bounded age after which a server-controlled projection
 /// (installed by a MoveToObject during a cast) is abandoned if the
 /// server never sent a terminating Stop/Invalid. A MoveToObject install
@@ -2396,6 +2417,9 @@ pub(crate) struct MovementSystem {
     /// R1 outbound-1 part 2 — runtime override of
     /// [`USE_AP_CONTACT_PLANE_RESEND`] (test seam; no URL flag yet).
     ap_contact_plane_resend_runtime: Option<bool>,
+    /// SLOW-RUN 2 (2026-10-21) — runtime carrier of `?apTravelResend=off`.
+    /// `None` = the [`USE_AP_TRAVEL_RESEND`] const default (OFF).
+    ap_travel_resend_runtime: Option<bool>,
     /// death-1 (R2 2026-10-08) — runtime carrier of `?deadInputGate=off`.
     /// `None` = the [`USE_DEAD_INPUT_GATE`] const default (ON). Combined by
     /// [`Self::dead_input_gate_enabled`].
@@ -3017,6 +3041,7 @@ impl MovementSystem {
             jump_load_gate_runtime: None,
             retail_position_event_gate_runtime: None,
             ap_contact_plane_resend_runtime: None,
+            ap_travel_resend_runtime: None,
             dead_input_gate_runtime: None,
             server_moveto_driver_runtime: None,
             sticky_idle_step_runtime: None,
@@ -3249,6 +3274,18 @@ impl MovementSystem {
     fn ap_contact_plane_resend_enabled(&self) -> bool {
         self.ap_contact_plane_resend_runtime
             .unwrap_or(USE_AP_CONTACT_PLANE_RESEND)
+    }
+
+    /// SLOW-RUN 2 (2026-10-21) — install the `?apTravelResend` runtime carrier
+    /// (browser DEFAULT ON, `=off` escape; see [`USE_AP_TRAVEL_RESEND`]).
+    pub(crate) fn set_ap_travel_resend(&mut self, on: bool) {
+        self.ap_travel_resend_runtime = Some(on);
+    }
+
+    /// [`USE_AP_TRAVEL_RESEND`] effective predicate. Only meaningful under
+    /// [`Self::retail_position_event_gate_enabled`].
+    fn ap_travel_resend_enabled(&self) -> bool {
+        self.ap_travel_resend_runtime.unwrap_or(USE_AP_TRAVEL_RESEND)
     }
 
     /// F2 (2026-07-27) — install the `?serverMoveToDriver=off` runtime
@@ -11012,6 +11049,13 @@ impl MovementSystem {
             {
                 return true;
             }
+            // SLOW-RUN 2 (`?apTravelResend`): same landblock here, so the
+            // coords distance is the travel since the last AP.
+            if self.ap_travel_resend_enabled()
+                && pulse.position.coords.distance(&last_pose.coords) > AP_TRAVEL_RESEND_M
+            {
+                return true;
+            }
         } else {
             // Legacy in-window branch: the wire `last_contact` byte
             // (grounded vs airborne) as the contact signal.
@@ -11116,7 +11160,7 @@ impl MovementSystem {
         // [`AP_PLANE_RESEND_MIN_GAP`]. Polling continues; the next tick past
         // the floor sends if the plane (or cell) still differs.
         if !past_window
-            && self.ap_contact_plane_resend_enabled()
+            && (self.ap_contact_plane_resend_enabled() || self.ap_travel_resend_enabled())
             && self
                 .last_autonomous_position_sent_at
                 .is_some_and(|at| now.saturating_duration_since(at) < AP_PLANE_RESEND_MIN_GAP)

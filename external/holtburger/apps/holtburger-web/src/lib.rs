@@ -973,6 +973,19 @@ fn parse_ap_plane_resend_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "apPlaneResend=off")
 }
 
+/// SLOW-RUN 2 (2026-10-21): parse `?apTravelResend=off` (or `&…`). DEFAULT-ON
+/// off-escape shape. When on, an AutonomousPosition also goes out INSIDE the
+/// 1 s window once the pose is 2.5 m from the last AP (ours, not retail), so an
+/// 18 m/s runner's echoes re-arm the local leash before its travel budget
+/// reaches the 10 m slowdown band. Shares the plane re-send's 100 ms floor.
+/// Native carrier: `USE_AP_TRAVEL_RESEND` (movement/system.rs, OFF — carrier
+/// split). Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_ap_travel_resend_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "apTravelResend=off")
+}
+
 /// death-1 (R2 2026-10-08): parse `?deadInputGate=off` (or `&…`). DEFAULT-ON
 /// off-escape shape (`off`/`0`/`false`). When on, retail
 /// `CommandInterpreter::PlayerIsDead` (acclient.c:717695-717705) gates input:
@@ -38275,6 +38288,10 @@ mod wire_state_packs_routing_tests {
         assert!(parse_ap_plane_resend_flag("?apPlaneResend=on"));
         assert!(!parse_ap_plane_resend_flag("?apPlaneResend=off"));
         assert!(!parse_ap_plane_resend_flag("?nosw=1&apPlaneResend=off"));
+        assert!(super::parse_ap_travel_resend_flag(""));
+        assert!(super::parse_ap_travel_resend_flag("?apTravelResend=on"));
+        assert!(!super::parse_ap_travel_resend_flag("?apTravelResend=off"));
+        assert!(!super::parse_ap_travel_resend_flag("?nosw=1&apTravelResend=off"));
         assert!(parse_cast_lock_revive_flag(""));
         assert!(parse_cast_lock_revive_flag("?castLockRevive=on"));
         assert!(!parse_cast_lock_revive_flag("?castLockRevive=off"));
@@ -51919,6 +51936,9 @@ async fn recv_loop(
     // the local leash at every terrain-triangle change); see
     // `parse_ap_plane_resend_flag`.
     movement.set_ap_contact_plane_resend(parse_ap_plane_resend_flag(&flag_search()));
+    // SLOW-RUN 2 (2026-10-21): `?apTravelResend=off` — drop the in-window AP
+    // every 2.5 m of travel; see `parse_ap_travel_resend_flag`.
+    movement.set_ap_travel_resend(parse_ap_travel_resend_flag(&flag_search()));
     // outbound-5 remainder (2026-10-08 follow-ups): `?rawDefaultOmission=off`
     // — see `parse_raw_default_omission_flag`.
     movement.set_retail_raw_default_omission(parse_raw_default_omission_flag(&flag_search()));

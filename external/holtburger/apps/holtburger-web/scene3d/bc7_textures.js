@@ -74,6 +74,7 @@ import * as THREE from "three";
 // values, so the cycle is safe.
 import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats, xu7TranscoderUp } from "./xu7_textures.js";
 import { holdForInterior } from "./bandwidth_tier.js";
+import { getAdapterMaxAnisotropy } from "./adapter.js";
 import {
   textureRehydrateStats,
   registerReleasedTexture,
@@ -2187,6 +2188,10 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
       wrapS: old ? old.wrapS : undefined,
       wrapT: old ? old.wrapT : undefined,
       colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
+      // The preset's anisotropy cap, like the RGBA8 twin it replaces and the
+      // materials.js preview-swap path. Omitting it left every HD singleton
+      // (buildings, statics, creatures) at aniso 1 — smeared at grazing angles.
+      anisotropy: getAdapterMaxAnisotropy(),
     });
     mat.map = tex;
     // streaming-hitch-4: RGBA8 -> pre -> full is map-to-map (same presence,

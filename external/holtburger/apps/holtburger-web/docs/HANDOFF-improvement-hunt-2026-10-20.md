@@ -141,6 +141,21 @@ Bench URLs now carry `targetFps=0` automatically through `scripts/perf-worker/li
    - `fadeFunnelFix` (near-band fade, back out to a never-faded body)
    - `hdSwapBump` default (no one-frame dropouts while textures sharpen in the first minute)
 
+**1070 result, 2026-10-21 (MODE P, owner playing, ultra then high):**
+
+- `?csm=on` **fails the eye check while moving.** In a dense retail forest (~LB 0x98A6) the owner saw the shadows
+  "bug out" whenever the camera moved: the lit ground between the tree shadows flickered. Standing still was fine.
+  - Confirmed as CSM: zeroing `csmState.uniforms.uCsmShade` live made it disappear.
+  - Ruled out live, one at a time: all three cascades re-rastered every frame (`stableStaleScale` = 1/12 each),
+    `__setCloudShadowEvery(1)`, `__shadowStaticCache.off = true`, `__ssao.off = true`.
+  - Screenshots also showed almost no CSM shadow near the player (none under the near trunks or the rigs), while
+    trees ~25-30 m out had shadows.
+  - Leading suspect: the §3 refit item above (`refreshCsmUniforms` copies `light.shadow.matrix` before the frame's
+    raster recomputes it, so a refit frame samples the new map with the old matrix). Moving is what makes refits.
+  - Cost at the time, settled, ultra: about 50 fps with it on, about the same off standing; 38.6 fps in a moving sample.
+- Not CSM, but found in the same session: every HD singleton BC7 map (buildings, statics, creatures) was at
+  anisotropy 1. `upgradeMaterialToBc7`'s swap never passed the preset cap. Fixed in `bc7_textures.js`.
+
 ## 6. Resume prompt
 
 > Continue the 2026-10-20 improvement hunt. Read docs/HANDOFF-improvement-hunt-2026-10-20.md and docs/2026-10-20-improvement-hunt.md §3. Wave 1 shipped tier A, the shadow prerequisites (C), B1 and D7/E2. Next: run the §5 1070 session (if the box is free, MODE T), then implement wave 2 — F1 (Windows right-click), D1-D5, E1, F2-F4 and the tier B items — in file-disjoint lanes with targeted tests, then one gate and one release wasm build, then a whole-diff review.

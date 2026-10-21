@@ -410,6 +410,15 @@ impl MovementSystemHandle {
         self.inner.set_ap_contact_plane_resend(on);
     }
 
+    /// SLOW-RUN 2 (2026-10-21): install the `?apTravelResend` runtime carrier
+    /// (the browser passes ON unless `=off` — an in-window AutonomousPosition
+    /// every 2.5 m of travel, so ACE's echo re-arms the local leash before an
+    /// 18 m/s runner reaches its slowdown band; the native const stays OFF).
+    /// Forwards to `MovementSystem::set_ap_travel_resend`.
+    pub fn set_ap_travel_resend(&mut self, on: bool) {
+        self.inner.set_ap_travel_resend(on);
+    }
+
     /// outbound-5 remainder (2026-10-08 follow-ups): install the
     /// `?rawDefaultOmission=off` runtime carrier (default-ON — every outbound
     /// MoveToState omits the ACE-neutral retail defaults: a None current

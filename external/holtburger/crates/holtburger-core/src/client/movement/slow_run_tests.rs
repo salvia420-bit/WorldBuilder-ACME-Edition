@@ -409,6 +409,51 @@ async fn ap_plane_resend_sends_on_an_in_window_plane_change_with_a_floor() {
     assert_eq!(aps(&sink), 1, "off: in-window plane changes never send");
 }
 
+/// `?apTravelResend` (browser default ON): an in-window AP once the pose is
+/// 2.5 m from the last AP (`AP_TRAVEL_RESEND_M`, system.rs), so an 18 m/s
+/// runner's echoes re-arm the leash before its 10 m slowdown band. The contact
+/// plane never changes here, so only travel can send. `=off` (the native
+/// default) stays quiet in-window.
+#[tokio::test]
+async fn ap_travel_resend_sends_every_few_metres_in_window() {
+    let ms = Duration::from_millis;
+    let start = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, 40.0, 1.5),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    let cell = u32::from(start.landblock_id);
+    for on in [true, false] {
+        let mut world = ap_world(start);
+        world.player.last_contact_plane = Some((flat(-1.5), cell));
+        let mut movement = MovementSystem::new();
+        movement.set_ap_contact_plane_resend(true);
+        movement.set_ap_travel_resend(on);
+        let mut sink = RecordingSink::default();
+        let t0 = Instant::now();
+        movement.tick(t0, &mut world, &mut sink).await.expect("tick");
+        assert_eq!(aps(&sink), 1, "the first grounded frame sends");
+
+        // 18 m/s for 900 ms in 30 ms ticks (0.54 m each), inside the 1 s
+        // window and the same cell: 16.2 m, one AP per 2.7 m of it.
+        for k in 1..=30u64 {
+            let mut pose = start;
+            pose.coords.x += 0.54 * k as f32;
+            let _ = world.set_player_position(pose);
+            movement
+                .tick(t0 + ms(30 * k), &mut world, &mut sink)
+                .await
+                .expect("tick");
+        }
+        let sent = aps(&sink) - 1;
+        if on {
+            assert!((5..=7).contains(&sent), "on: an AP every ~2.7 m, got {sent}");
+        } else {
+            assert_eq!(sent, 0, "off: travel alone never sends in-window");
+        }
+    }
+}
+
 /// `?castLockRevive` (browser default ON). W pressed into a cast runs; ACE's
 /// gesture echo (castTakesControl) stops it. After the gesture's 2.0 s the
 /// post-anim reclaim returns control, but `?castHoldReclaim` keeps the held W

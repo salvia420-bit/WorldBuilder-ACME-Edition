@@ -196,6 +196,26 @@ next session.
   - It prints at most one `[slow-run]` console warning every 5 s.
 - **Open.** `player_motions_pending()` also counts the projection and interpolation, where retail counts only the
   motion queue. That only matters with `?leashEchoGate=off`.
+- **Follow-up 2026-10-21 (1070, owner playing).** Confirmed live, and `?apPlaneResend` was not enough.
+  - The owner felt "a pulse of something slowing me down and then i speed up again". The detector logged 109
+    `cause=leash` incidents: leash ratio 0.40-0.80, echo age 0.7-2.1 s, run rate 4.5 (ACE caps Run >= 800 at
+    18 m/s, `MovementSystem.GetRunRate`).
+  - Correction to "Why we run out" above: ACE does echo EVERY applied AP to its own session
+    (`UpdatePlayerPosition`, the `else` of the 1 s broadcast threshold). The 1 s limit is only the broadcast to
+    other players.
+  - **New `?apTravelResend` (default on):** an in-window AP every 2.5 m of travel. It ships, but it is not the fix.
+    APs went out every ~150 ms and the incidents stayed at ~18 per 30 s.
+  - **Root cause: the transport.** A WebSocket capture on the 1070 (wrap `WebSocket.prototype.send`; match AP
+    0xF7B1/0xF753 to the self 0xF748 echo by exact position) showed AP-to-echo p50 277-721 ms, p90 0.9-2.9 s,
+    max 4 s. Echoes arrived in bursts 0.3 ms apart, and 32-50 % of APs were never echoed (collapsed into one tick).
+  - None of these explain it: the laptop was ~90 % idle with no swap traffic, ACE logged no NAKs and no client
+    retransmits, and the outgoing sequence had no gaps.
+  - The laptop hosting ACE is on Wi-Fi at -74 dBm (5 GHz). `ss -tin '( sport = :8080 )'` showed srtt 132 ms with
+    min 4 ms, rto 394 ms, and 19 of 20 retransmits spurious (dsack). That is TCP head-of-line stalls on a thin
+    stream.
+  - Bypassing the SSH tunnel (`?bridge_url=ws://<laptop-tailscale-ip>:8080/`) did not help.
+  - **Fix: wire the ACE host.** Do NOT use `?retailLeash=off`: it removes the slowdown, but jumps snap back to the
+    take-off point and soon stop working.
 
 ## 8. Verification
 
